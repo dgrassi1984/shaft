@@ -130,6 +130,55 @@ class CloudTranslationTest(unittest.TestCase):
         self.assertEqual(ctx.exception.status, 429)
 
 
+class RunToolTest(unittest.TestCase):
+    """`run`: commands in a stricter sandbox — working areas only, no mind, no network, bounded."""
+
+    def setUp(self):
+        # Inside the home folder like real instances (regression: python3 failed there because path
+        # resolution could not stat the parent directories; the /var temp dir hid it).
+        base = Path(__file__).resolve().parents[2] / ".supervisor"
+        base.mkdir(exist_ok=True)
+        self.tmp = Path(tempfile.mkdtemp(prefix="test-run-", dir=base)).resolve()
+        self.root = self.tmp / "instances" / "r"
+        for d in ("shaft", "notes", "memory", "self"):
+            (self.root / d).mkdir(parents=True)
+        (self.root / "memory" / "journal.md").write_text("journal\n")
+        self.outside = self.tmp / "outside.txt"
+        self.outside.write_text("secret\n")
+        self.b = broker.Broker("r", self.tmp, {}, self.tmp / "broker.log")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def run_cmd(self, command, **kw):
+        out = self.b.call("run", {"command": command, **kw})
+        self.assertTrue(out["ok"], out)
+        return out["result"]
+
+    def test_works_in_the_working_areas(self):
+        r = self.run_cmd("echo hi > notes/x.txt && cat notes/x.txt && python3 -c 'print(6*7)'")
+        self.assertTrue(r.startswith("exit 0"), r)
+        self.assertIn("hi", r)
+        self.assertIn("42", r)
+
+    def test_cannot_touch_its_mind(self):
+        r = self.run_cmd("echo forged > memory/journal.md; echo x > self/self.md; echo $?")
+        self.assertEqual((self.root / "memory" / "journal.md").read_text(), "journal\n")
+        self.assertFalse((self.root / "self" / "self.md").exists())
+
+    def test_no_network_and_no_reading_outside(self):
+        r = self.run_cmd(f"python3 -c \"import urllib.request; urllib.request.urlopen('http://example.com', timeout=5)\"")
+        self.assertNotIn("exit 0", r.splitlines()[0])
+        plan = Path(__file__).resolve().parents[2] / "PLAN.md"   # in the home folder, outside the instance
+        r = self.run_cmd(f"head -c 200 {plan}")
+        self.assertNotIn("SHAFT", r)
+        self.assertIn("Operation not permitted", r)
+
+    def test_runaway_is_killed(self):
+        r = self.run_cmd("sleep 30 & sleep 30", timeout_s=1)
+        self.assertIn("killed after 1 s", r)
+
+
 class SymlinkEscapeTest(unittest.TestCase):
     """An instance may create symlinks in its own folder; the unsandboxed supervisor must never
     follow them when it writes (journal notes, inbox deliveries, stats, coder changes)."""

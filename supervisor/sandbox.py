@@ -28,6 +28,7 @@ def profile(instance_root: Path, home: Path, llm_ports: list[int], any_localhost
         # Reads: nothing of the operator's home except its own directory.
         f"(deny file-read* (subpath {_q(home)}))",
         f"(allow file-read* (subpath {_q(root)}))",
+        _ancestors_metadata(root, home),
         # Network: only the LLM endpoint(s) on localhost.
         "(deny network*)",
     ]
@@ -36,6 +37,33 @@ def profile(instance_root: Path, home: Path, llm_ports: list[int], any_localhost
     for port in llm_ports:
         lines.append(f'(allow network-outbound (remote ip "localhost:{int(port)}"))')
     return "\n".join(lines) + "\n"
+
+
+RUN_WRITABLE = ("notes", "plugins", "skills", "tests", "shaft", ".tmp")
+
+
+def _ancestors_metadata(root: Path, home: Path) -> str:
+    """Path resolution (realpath) stats every parent directory; allow only their metadata."""
+    parents = [p for p in root.parents if p == home or home in p.parents]
+    return "(allow file-read-metadata " + " ".join(f"(literal {_q(p)})" for p in parents) + ")" if parents else ""
+
+
+def run_profile(instance_root: Path, home: Path) -> str:
+    """Stricter than the agent's own sandbox, for commands the agent runs via the broker's `run`:
+    writes only to its working areas (never self/, memory/, inbox/, config.env, .git), reads only its
+    own folder in the home directory, and no network at all."""
+    root, home = Path(instance_root).resolve(), Path(home).resolve()
+    writable = " ".join(f"(subpath {_q(root / d)})" for d in RUN_WRITABLE)
+    return "\n".join([
+        "(version 1)",
+        "(allow default)",
+        "(deny file-write*)",
+        f'(allow file-write* {writable} (literal "/dev/null") (literal "/dev/tty") (subpath "/dev/fd"))',
+        f"(deny file-read* (subpath {_q(home)}))",
+        f"(allow file-read* (subpath {_q(root)}))",
+        _ancestors_metadata(root, home),
+        "(deny network*)",
+    ]) + "\n"
 
 
 # Environment variables an instance may inherit. Everything else — API keys,

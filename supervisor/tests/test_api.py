@@ -37,6 +37,7 @@ class FakeProc:
 
 
 def fake_run_agent(name, kind, args, interactive, driver=None, **kw):
+    fake_run_agent.args = args
     proc = FakeProc()
     driver(proc)
     fake_run_agent.request = json.loads(proc.stdin.kept)
@@ -125,6 +126,23 @@ class ApiTest(unittest.TestCase):
             busy["value"] = None                                   # the conversation ends
             time.sleep(2.5)
         self.assertEqual(calls, [])
+
+    def test_the_agent_accepts_the_arguments_the_api_sends(self):
+        # Regression: the API ran `answer --json`, the agent's parser rejected --json (exit 2), and clients
+        # got "the model returned an empty response". The fake agent above hid it; ask the real parser.
+        import subprocess
+        import sys
+        from pathlib import Path
+        self.req("/chat/completions", {"model": "shaft", "messages": [{"role": "user", "content": "x"}]}).read()
+        import tempfile
+        template = Path(__file__).resolve().parents[2] / "template"
+        empty = tempfile.mkdtemp(prefix="shaft-args-")      # no config: it stops after parsing the arguments
+        r = subprocess.run([sys.executable, "-E", "-s", "-m", "shaft", *fake_run_agent.args], cwd=template,
+                           env={"SHAFT_ROOT": empty, "PATH": "/usr/bin:/bin"}, input="{}",
+                           capture_output=True, text=True)
+        for rejection in ("unrecognized arguments", "invalid choice", "the following arguments are required"):
+            self.assertNotIn(rejection, r.stderr)
+        self.assertIn("config error", r.stderr)               # it got past argument parsing
 
     def test_unknown_model_is_refused(self):
         with self.assertRaises(urllib.error.HTTPError) as ctx:

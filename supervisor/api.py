@@ -175,11 +175,15 @@ class Handler(BaseHTTPRequestHandler):
             proc.stdin.close()
             for line in proc.stdout:
                 try:
-                    events.put(json.loads(line))
+                    ev = json.loads(line)
                 except ValueError:
-                    pass
+                    continue
+                if ev.get("type") in ("content", "turn_end"):
+                    answered.set()
+                events.put(ev)
 
         cancelled = threading.Event()
+        answered = threading.Event()
 
         def work():
             try:
@@ -194,7 +198,11 @@ class Handler(BaseHTTPRequestHandler):
                         time.sleep(1)
                 if cancelled.is_set():
                     return
-                run_agent(model, "api", ["answer", "--json"], interactive=True, driver=driver)
+                code = run_agent(model, "api", ["answer"], interactive=True, driver=driver)
+                if not answered.is_set():   # the agent ended without a reply: say why, never an empty answer
+                    err = (procs[0].stderr.read() if procs and procs[0].stderr else "")[-800:].strip()
+                    events.put({"type": "error", "message": f"{model} stopped without answering (exit {code})"
+                                                           + (f": {err}" if err else "")})
             except Exception as e:   # surface, never hang the client
                 events.put({"type": "error", "message": f"{type(e).__name__}: {e}"})
             finally:

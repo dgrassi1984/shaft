@@ -12,6 +12,8 @@ import ipaddress
 import json
 import re
 import secrets
+import os
+import signal
 import socket
 import subprocess
 import threading
@@ -52,6 +54,15 @@ SPECS = {
                                     "description": "for the operator: question (wants an answer) or note"}},
                           ["to", "text"]),
     "list_instances": _spec("list_instances", "List the other SHAFT instances you can message.", {}, []),
+    "run": _spec(
+        "run",
+        "Run a shell command (zsh) inside your folder, in a stricter sandbox: it can read your folder and the "
+        "system, write only to notes/, plugins/, skills/, tests/, shaft/ and .tmp/, and has NO network. Use it "
+        "to run your tests, scripts and plugins, inspect files, or compute things. Python 3 is `python3`. "
+        "Returns the exit code and output (truncated). Code you change is still tested by the supervisor.",
+        {"command": S, "timeout_s": {"type": "integer", "description": f"default 60, max {300}"},
+         "cwd": {"type": "string", "description": "directory inside your folder, default '.'"}},
+        ["command"]),
     "delegate_coding": _spec(
         "delegate_coding",
         "Hand a coding task to an Opus-class model. Describe WHAT you want changed in your code, plugins, "
@@ -62,6 +73,8 @@ SPECS = {
         {"task": S}),
 }
 MAX_HANDOFFS_PER_RUN = 2
+MAX_COMMANDS_PER_RUN = 40
+RUN_OUTPUT_CHARS = 12000
 
 
 def notify(title: str, text: str) -> None:
@@ -323,6 +336,58 @@ class Broker:
         else:
             raise ValueError(f"unknown recipient {to!r}; try list_instances or 'operator'")
         return f"delivered to {to}"
+
+    def _run(self, command: str, timeout_s: int = 60, cwd: str = ".") -> str:
+        import resource
+        import shutil as _shutil
+        import tempfile
+        from . import sandbox
+        from .core import HOME, PYTHON, contained, safe_mkdir
+        if self.counts["run"] > MAX_COMMANDS_PER_RUN:
+            raise RuntimeError(f"at most {MAX_COMMANDS_PER_RUN} commands per run")
+        if not command.strip():
+            raise ValueError("empty command")
+        timeout_s = max(1, min(int(timeout_s), 300))
+        root = (self.project / "instances" / self.name).resolve()
+        workdir = contained(root, *Path(cwd).parts) if cwd not in ("", ".") else root
+        if not workdir.is_dir():
+            raise ValueError(f"no directory {cwd!r} in your folder")
+        home = safe_mkdir(root, ".tmp/home")                 # tools that write to $HOME write here
+        fd, prof = tempfile.mkstemp(prefix=f"shaft-run-{self.name}-", suffix=".sb")
+        with os.fdopen(fd, "w") as f:
+            f.write(sandbox.run_profile(root, HOME))
+        bindir = Path(PYTHON).parent
+        env = {"PATH": f"{bindir}:/usr/bin:/bin:/usr/sbin:/sbin", "HOME": str(home), "TMPDIR": str(home),
+               "LANG": "en_US.UTF-8", "PYTHONDONTWRITEBYTECODE": "1", "TERM": "dumb"}
+        if not (bindir / "python3").exists():                 # make `python3` the system Python
+            env["PATH"] = f"{home}:{env['PATH']}"
+            link = home / "python3"
+            if not link.exists():
+                link.symlink_to(PYTHON)
+
+        def limits():
+            resource.setrlimit(resource.RLIMIT_CPU, (timeout_s + 5, timeout_s + 5))
+            resource.setrlimit(resource.RLIMIT_FSIZE, (100 * 1024 ** 2, 100 * 1024 ** 2))   # 100 MB per file
+
+        started = time.monotonic()
+        proc = subprocess.Popen(sandbox.wrap(Path(prof), ["/bin/zsh", "-f", "-c", command]), cwd=workdir, env=env,
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                start_new_session=True, preexec_fn=limits)
+        try:
+            out, err = proc.communicate(timeout=timeout_s)
+            status = f"exit {proc.returncode}"
+        except subprocess.TimeoutExpired:
+            os.killpg(proc.pid, signal.SIGKILL)               # the whole process group, children included
+            out, err = proc.communicate()
+            status = f"killed after {timeout_s} s timeout"
+        finally:
+            os.unlink(prof)
+        half = RUN_OUTPUT_CHARS // 2
+        def cap(t):
+            return t if len(t) <= half else t[:half // 2] + f"\n[... {len(t) - half} chars cut ...]\n" + t[-half // 2:]
+        _shutil.rmtree(home / ".cache", ignore_errors=True)
+        return (f"{status} · {time.monotonic() - started:.1f} s\n--- stdout ---\n{cap(out or '')}"
+                + (f"\n--- stderr ---\n{cap(err)}" if err else ""))
 
     def _delegate_coding(self, task: str) -> str:
         from . import coder
