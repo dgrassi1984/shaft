@@ -130,6 +130,19 @@ class CloudTranslationTest(unittest.TestCase):
         self.assertEqual(ctx.exception.status, 429)
 
 
+class FinetuneGuardTest(unittest.TestCase):
+    def test_memorising_adapter_is_rejected_before_judging(self):
+        # Regression: the first Bonsai adapter was "kept" by a noisy single-sample judgment although its
+        # validation loss rose from 2.93 to 3.68 — it had memorised 5 conversations.
+        from supervisor import finetune
+        d = Path(tempfile.mkdtemp(prefix="shaft-ft-"))
+        self.addCleanup(shutil.rmtree, d, True)
+        (d / "adapter_config.json").write_text(json.dumps({"history": {"val": [[0, 2.93], [60, 2.65], [120, 3.68]]}}))
+        self.assertIn("2.93 to 3.68", finetune.overfit(d))
+        (d / "adapter_config.json").write_text(json.dumps({"history": {"val": [[0, 2.93], [120, 2.40]]}}))
+        self.assertIsNone(finetune.overfit(d))
+
+
 class ProbationTest(unittest.TestCase):
     def setUp(self):
         import subprocess

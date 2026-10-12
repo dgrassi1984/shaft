@@ -139,6 +139,19 @@ COMPARE_SCHEMA = {
     "required": ["items", "reason"], "additionalProperties": False,
 }
 EFFECTIVENESS_WEIGHT = 2   # effectiveness counts double: a more in-character but less useful agent is worse
+SAMPLES = 2                # answers per question per model: one sampled answer per question was noise
+MARGIN = 0.05              # the adapter must beat the base by 5% on the weighted total
+
+
+def overfit(adapter: Path) -> str | None:
+    """Reason to reject without judging: validation loss ended above where it started."""
+    cfg = adapter / "adapter_config.json"
+    if not cfg.exists():
+        return None
+    val = json.loads(cfg.read_text()).get("history", {}).get("val", [])
+    if len(val) >= 2 and val[-1][1] > val[0][1]:
+        return f"validation loss rose from {val[0][1]:.2f} to {val[-1][1]:.2f} (memorisation, not learning)"
+    return None
 
 
 def evaluate(name: str, adapter: Path, model: str | None = None) -> dict:
@@ -147,7 +160,7 @@ def evaluate(name: str, adapter: Path, model: str | None = None) -> dict:
     root, model = instance_root(name), model or FT_BASE_MODEL
     system = _identity(root)
     rng, rows, truth = random.Random(), [], []
-    probes = PROBES + TASK_PROBES
+    probes = (PROBES + TASK_PROBES) * SAMPLES
     if backend() == "bonsai":
         tmp = adapter / "eval"
         tmp.mkdir(exist_ok=True)
@@ -184,14 +197,19 @@ def evaluate(name: str, adapter: Path, model: str | None = None) -> dict:
         voice["tuned"] += item[t]["voice"]
         voice["base"] += item[other]["voice"]
     total = {k: EFFECTIVENESS_WEIGHT * eff[k] + voice[k] for k in eff}
-    keep = eff["tuned"] >= eff["base"] and total["tuned"] > total["base"]
-    result = {"keep": keep, "effectiveness": eff, "voice": voice, "weighted_total": total,
+    rejected = overfit(adapter)
+    keep = (not rejected and eff["tuned"] >= eff["base"]
+            and total["tuned"] >= total["base"] * (1 + MARGIN))
+    if not keep and not rejected:
+        rejected = "not clearly better than the base model (effectiveness first, 5% margin on the total)"
+    result = {"keep": keep, "rejected_because": rejected, "effectiveness": eff, "voice": voice,
+              "weighted_total": total, "samples_per_question": SAMPLES,
               "probes": len(probes), "verdict": verdict, "pairs": rows, "truth": truth,
               "evaluated_at": datetime.now().isoformat(timespec="seconds")}
     (adapter / "verdict.json").write_text(json.dumps(result, indent=1, ensure_ascii=False))
     (adapter / "DISCARDED").unlink(missing_ok=True)
     if not keep:
-        (adapter / "DISCARDED").write_text("not better than the base model in the judged comparison\n")
+        (adapter / "DISCARDED").write_text(rejected + "\n")
     log(f"{name}: adapter {adapter.name}: effectiveness {eff['tuned']} vs {eff['base']}, voice {voice['tuned']} vs "
         f"{voice['base']} -> {'KEPT' if keep else 'discarded'}")
     return result
@@ -203,7 +221,9 @@ def cmd_evaluate(name: str, adapter: str) -> int:
         print("cannot evaluate:\n- " + "\n- ".join(problems))
         return 2
     r = evaluate(name, Path(adapter))
-    print(f"adapter {'KEPT' if r['keep'] else 'discarded'} — over {r['probes']} questions:\n"
+    print(f"adapter {'KEPT' if r['keep'] else 'discarded'}"
+          + (f" ({r['rejected_because']})" if r.get("rejected_because") else "")
+          + f" — over {r['probes']} answers per model:\n"
           f"  effectiveness  tuned {r['effectiveness']['tuned']}  vs base {r['effectiveness']['base']}\n"
           f"  voice          tuned {r['voice']['tuned']}  vs base {r['voice']['base']}\n{r['verdict']['reason']}")
     return 0 if r["keep"] else 1
