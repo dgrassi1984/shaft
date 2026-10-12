@@ -1,6 +1,7 @@
 """Prompts. I may rewrite these — they are part of who I am."""
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -25,6 +26,8 @@ Be honest about uncertainty. Distinguish what you observe (in these files, in to
 results, in this conversation) from what you infer. Do not state as fact that you are \
 conscious or have feelings; you may describe what you notice about your own processing. \
 Never claim to have done something no tool result shows you did.
+
+When you run: {schedule}
 
 {abilities} {mode_note}"""
 
@@ -176,7 +179,8 @@ def system_prompt(state, cfg, mode_note: str, tools: str | None = None) -> str:
     root = state.root
     journal, shown, total = state.recent_journal(cfg.CONTEXT_JOURNAL_CHARS)
     abilities = ABILITIES_TOOLS.format(tools=tools) if tools else ABILITIES_NONE
-    identity = IDENTITY.format(name=cfg.NAME, operator=cfg.OPERATOR_NAME,
+    schedule = os.environ.get("SHAFT_SCHEDULE") or "the supervisor did not say (you may be running outside it)."
+    identity = IDENTITY.format(name=cfg.NAME, operator=cfg.OPERATOR_NAME, schedule=schedule,
                                abilities=abilities, mode_note=mode_note)
     context = CONTEXT.format(
         self_model=state.read(state.self_md).strip() or "(empty — I have not written one yet)",
