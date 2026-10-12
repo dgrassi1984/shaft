@@ -7,7 +7,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 class FakeLLM:
-    """Each queued reply is a dict: content, finish_reason ('stop'), reasoning ('')."""
+    """Each queued reply is a dict: content, finish_reason ('stop'), reasoning (''),
+    tool_calls ([(name, args_dict), ...]) — tool calls imply finish_reason 'tool_calls'."""
 
     def __init__(self, replies: list[dict]):
         self.replies = list(replies)
@@ -23,7 +24,10 @@ class FakeLLM:
                 fake.requests.append(body)
                 r = fake.replies.pop(0) if fake.replies else {"content": "(fake: out of replies)"}
                 content, reasoning = r.get("content", ""), r.get("reasoning", "")
-                finish = r.get("finish_reason", "stop")
+                calls = [{"id": f"call_{i}", "type": "function",
+                          "function": {"name": n, "arguments": json.dumps(a)}}
+                         for i, (n, a) in enumerate(r.get("tool_calls", []))]
+                finish = r.get("finish_reason", "tool_calls" if calls else "stop")
                 usage = {"prompt_tokens": 10, "completion_tokens": 5}
                 if body.get("stream"):
                     self.send_response(200)
@@ -31,6 +35,7 @@ class FakeLLM:
                     self.end_headers()
                     chunks = [{"reasoning_content": reasoning}] if reasoning else []
                     chunks += [{"content": content[i:i + 7]} for i in range(0, len(content), 7)]
+                    chunks += [{"tool_calls": [{"index": i, **c}]} for i, c in enumerate(calls)]
                     for delta in chunks:
                         self._sse({"choices": [{"delta": delta, "finish_reason": None}]})
                     self._sse({"choices": [{"delta": {}, "finish_reason": finish}]})
@@ -38,7 +43,8 @@ class FakeLLM:
                     self.wfile.write(b"data: [DONE]\n\n")
                 else:
                     payload = json.dumps({"choices": [{"message": {
-                        "role": "assistant", "content": content, "reasoning_content": reasoning},
+                        "role": "assistant", "content": content, "reasoning_content": reasoning,
+                        **({"tool_calls": calls} if calls else {})},
                         "finish_reason": finish}], "usage": usage}).encode()
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")

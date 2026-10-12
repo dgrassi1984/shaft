@@ -1,201 +1,41 @@
 """SHAFT supervisor — the part of the system the agents cannot edit.
 
-It runs any number of SHAFT instances, each inside its own macOS sandbox;
-enforces the time budget; gates changes an instance makes to its own code
-(tests pass or the change is reverted); commits each instance's state to its
-own branch; and owns the pause switch. It never imports agent code.
+It runs any number of SHAFT instances, each inside its own macOS sandbox, lends each
+run a broker (web, messages) that holds the secrets the instances never see, enforces
+budgets and invariants, gates changes an instance makes to its own code (tests pass or
+the change is reverted; kept changes go on probation), judges autonomous cycles,
+commits each instance's state to its own branch, and owns the schedule and the pause
+switch. It never imports agent code.
 
-Git layout: `main` holds the supervisor; the `template` branch holds the
-pristine agent (worktree: template/); each instance lives on its own branch
-`instance/<name>`, forked from `template` (worktree: instances/<name>/), so
-instances evolve independently and can later be compared and recombined.
+Git layout: `main` holds the supervisor; the `template` branch holds the pristine agent
+(worktree: template/); each instance lives on its own branch `instance/<name>`, forked
+from `template` (worktree: instances/<name>/).
 """
 from __future__ import annotations
 
 import argparse
 import json
-import os
-import re
 import shutil
-import subprocess
 import sys
 from datetime import date, datetime
-from pathlib import Path
 
-from . import gate, sandbox
-
-PROJECT = Path(__file__).resolve().parent.parent
-INSTANCES = PROJECT / "instances"
-TEMPLATE = PROJECT / "template"
-SUP_DIR = PROJECT / ".supervisor"
-HOME = Path.home()
-STATE_PATHS = ("self", "memory", "notes", "skills")
-DEFAULT_INSTANCE = "shaft"
-NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
+from . import autonomy, gate, messages, metrics
+from .core import (DEFAULT_INSTANCE, HOME, INSTANCES, NAME_RE, PROJECT, SUP_DIR, TEMPLATE, git, git_wt,
+                   instance_names, instance_root, journal_entries, journal_note, log, paused)
+from .runner import is_busy, run_agent
 
 
-def _knob(name: str, default: str, parse) -> tuple[object, str]:
-    raw = os.environ.get(name)
-    if raw is None:
-        return parse(default), "default"
-    try:
-        return parse(raw), "env"
-    except ValueError:
-        print(f"warning: {name}={raw!r} is invalid; using {default} [default]", file=sys.stderr)
-        return parse(default), "default"
-
-
-CYCLE_TIMEOUT_S, _cycle_src = _knob("SHAFT_CYCLE_TIMEOUT_S", "1800", int)
-LLM_PORTS, _ports_src = _knob("SHAFT_LLM_PORTS", "1337", lambda s: [int(p) for p in s.split(",")])
-
-
-# -- helpers ------------------------------------------------------------------
-def log(msg: str) -> None:
-    SUP_DIR.mkdir(exist_ok=True)
-    with (SUP_DIR / "supervisor.log").open("a") as f:
-        f.write(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}\n")
-
-
-def git(*args: str, check: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", "-C", str(PROJECT), *args], capture_output=True, text=True, check=check)
-
-
-def git_wt(root: Path, *args: str, check: bool = True, project: Path | None = None) -> subprocess.CompletedProcess:
-    """Run git in an instance worktree without trusting anything inside it.
-
-    The worktree's `.git` file is writable by the instance, which could point it at
-    a fake repository whose config runs commands (hooks, fsmonitor). So the git dir
-    is taken from the main repository's own worktree registry, and hooks are off.
-    """
-    admin = _worktree_admin_dir(root, project or PROJECT)
-    return subprocess.run(
-        ["git", f"--git-dir={admin}", f"--work-tree={root}", "-c", "core.hooksPath=/dev/null",
-         "-c", "core.fsmonitor=false", *args],
-        cwd=root, capture_output=True, text=True, check=check)
-
-
-def _worktree_admin_dir(root: Path, project: Path) -> Path:
-    for admin in (project / ".git" / "worktrees").glob("*"):
-        gitdir = admin / "gitdir"
-        if gitdir.exists() and Path(gitdir.read_text().strip()).resolve() == (root / ".git").resolve():
-            return admin
-    raise SystemExit(f"{root} is not a registered worktree of {project} (try: shaft setup)")
-
-
-def instance_root(name: str) -> Path:
-    root = INSTANCES / name
-    if not (root / "shaft").is_dir() or not (root / ".git").exists():
-        known = ", ".join(instance_names()) or "none"
-        raise SystemExit(f"no instance named {name!r} (instances: {known})")
-    return root
-
-
-def instance_names() -> list[str]:
-    return sorted(p.name for p in INSTANCES.iterdir() if (p / "shaft").is_dir()) if INSTANCES.exists() else []
-
-
-def paused(name: str) -> bool:
-    return (SUP_DIR / "paused").exists() or (SUP_DIR / f"paused-{name}").exists()
-
-
-def journal_entries(root: Path) -> list[str]:
-    journal = root / "memory" / "journal.md"
-    if not journal.exists():
-        return []
-    return [b.strip() for b in journal.read_text().split("\n---\n") if b.strip().startswith("## ")]
-
-
-def journal_note(root: Path, title: str, body: str) -> None:
-    """Supervisor's own minimal journal append (deliberately not the agent's code)."""
-    with (root / "memory" / "journal.md").open("a") as f:
-        f.write(f"\n---\n## {datetime.now():%Y-%m-%d %H:%M} — {title}\n\n{body.strip()}\n")
-
-
-def commit_state(name: str, kind: str, kept_code: list[str], root: Path | None = None,
-                 project: Path | None = None) -> bool:
-    """Commit the instance's mind (always) and its code changes that passed the gate.
-
-    Only files git actually staged are named in the commit: an empty directory
-    (notes/, skills/ on a young instance) is unknown to git and would fail as a pathspec.
-    Returns False — after logging git's own error — if the commit failed.
-    """
-    root = root or INSTANCES / name
-    wt = lambda *a, check=True: git_wt(root, *a, check=check, project=project)  # noqa: E731
-    paths = [p for p in STATE_PATHS if (root / p).exists()] + kept_code
-    try:
-        wt("add", "-A", "--", *paths)
-        staged = wt("diff", "--cached", "--name-only", "-z", "--", *paths).stdout.split("\0")
-        staged = [p for p in staged if p]
-        if not staged:
-            return True
-        msg = f"{name}: {kind} {datetime.now():%Y-%m-%d %H:%M}"
-        if kept_code:
-            msg += "\n\nCode changes made by the instance (tests passed):\n" + "\n".join(f"- {p}" for p in kept_code)
-        wt("-c", f"user.name=SHAFT/{name}", "-c", f"user.email={name}@shaft.localhost",
-           "commit", "-q", "-m", msg, "--", *staged)
-    except subprocess.CalledProcessError as e:
-        detail = (e.stderr or e.stdout or "").strip()
-        log(f"{name}: COMMIT FAILED after {kind}: {detail}")
-        print(f"{name}: could not commit its state after {kind} — files are on disk, uncommitted.\n"
-              f"git said: {detail}", file=sys.stderr)
-        return False
-    log(f"{name}: committed {kind} on instance/{name} ({len(staged)} files)")
-    return True
-
-
-# -- running an instance -------------------------------------------------------
-def run_agent(name: str, kind: str, agent_args: list[str], interactive: bool) -> int:
-    if not (PROJECT / ".git").exists():
-        print(f"{PROJECT} is not a git repository; the supervisor needs one to record changes.", file=sys.stderr)
-        return 2
-    root = instance_root(name)
-    log(f"{name}: start {kind} cycle_timeout_s={CYCLE_TIMEOUT_S} [{_cycle_src}] "
-        f"llm_ports={LLM_PORTS} [{_ports_src}] python={sys.executable}")
-    before = gate.snapshot(root)
-    SUP_DIR.mkdir(exist_ok=True)
-    prof = SUP_DIR / f"{name}.sb"
-    prof.write_text(sandbox.profile(root, HOME, LLM_PORTS))
-    (root / ".tmp").mkdir(exist_ok=True)
-    cmd = sandbox.wrap(prof, [sys.executable, "-E", "-s", "-m", "shaft", *agent_args])
-    env = sandbox.agent_env(os.environ, SHAFT_ROOT=str(root), TMPDIR=str(root / ".tmp"))
-    try:
-        code = subprocess.run(cmd, cwd=root, env=env,
-                              timeout=None if interactive else CYCLE_TIMEOUT_S).returncode
-    except subprocess.TimeoutExpired:
-        log(f"{name}: {kind} killed after {CYCLE_TIMEOUT_S}s budget")
-        print(f"{name}: {kind} exceeded its {CYCLE_TIMEOUT_S}s budget and was stopped.", file=sys.stderr)
-        code = 124
-    except KeyboardInterrupt:
-        code = 130
-    log(f"{name}: end {kind} exit={code}")
-
-    touched = gate.changed(before, gate.snapshot(root))
-    kept: list[str] = []
-    if touched:
-        ok, output = gate.run_tests(root, HOME)
-        if ok:
-            kept = touched
-            log(f"{name}: code change passed tests: {touched}")
-        else:
-            gate.restore(root, before, touched)
-            log(f"{name}: code change FAILED tests, reverted: {touched}")
-            journal_note(root, "Supervisor: code change reverted",
-                         "My changes to " + ", ".join(touched) + " were reverted because the tests "
-                         "failed. Last lines of the test output:\n\n```\n" + output[-1500:] + "\n```")
-    if not commit_state(name, kind, kept):
-        return code or 1
-    return code
-
-
-# -- commands -------------------------------------------------------------------
+# -- instances -------------------------------------------------------------------
 def cmd_new(name: str, source: str | None) -> int:
     """Create instance/<name> forked from `template` (or from another instance's branch).
 
-    A fork inherits code and skills (its "genes"), never the parent's mind: self-model,
-    goals, journal, episodes and notes start fresh. The lineage stays in git history.
+    A fork inherits code, skills and plugins (its "genes"), never the parent's mind:
+    self-model, personality, goals, journal, episodes and notes start fresh. The lineage
+    stays in git history.
     """
-    if not NAME_RE.match(name):
-        print("instance names: lowercase letters, digits and '-', starting with a letter", file=sys.stderr)
+    if not NAME_RE.match(name) or name == "operator":
+        print("instance names: lowercase letters, digits and '-', starting with a letter (not 'operator')",
+              file=sys.stderr)
         return 2
     root = INSTANCES / name
     if root.exists() or git("rev-parse", "--verify", "-q", f"refs/heads/instance/{name}", check=False).stdout:
@@ -206,15 +46,15 @@ def cmd_new(name: str, source: str | None) -> int:
     base = f"instance/{source}" if source else "template"
     INSTANCES.mkdir(exist_ok=True)
     git("worktree", "add", "-q", "-b", f"instance/{name}", str(root), base)
-    for d in ("self", "memory", "notes"):
+    for d in ("self", "memory", "notes", "inbox"):
         shutil.rmtree(root / d, ignore_errors=True)
-        (root / d).mkdir()
-    (root / "skills").mkdir(exist_ok=True)
+    for d in ("self", "memory", "notes", "skills"):
+        (root / d).mkdir(exist_ok=True)
     (root / "self" / "self.md").write_text(
         f"# Self-Model\n\nI am {name}. I have just been created and have no experiences yet; "
         "this self-model is for me to write.\n")
     (root / "self" / "goals.md").write_text("# Goals & Open Questions\n\n(none yet — mine to set)\n")
-    origin = f"forked from {source} (code and skills only, not its memories)" if source \
+    origin = f"forked from {source} (code, skills and plugins only, not its memories)" if source \
         else "from the SHAFT template"
     (root / "memory" / "journal.md").write_text(f"# {name} — journal\n")
     journal_note(root, "Created", f"I was created by the supervisor {origin}. My memory starts here.")
@@ -249,39 +89,50 @@ def cmd_setup() -> int:
 
 
 def cmd_status(names: list[str]) -> int:
-    usage_today = {}
+    pending = messages.pending()
+    questions = [m for m in pending if m["kind"] == "question"]
+    print(f"SHAFT supervisor · {len(names)} instance(s) · "
+          f"{'ALL PAUSED' if (SUP_DIR / 'paused').exists() else 'running'} · "
+          f"operator inbox: {len(questions)} question(s), {len(pending) - len(questions)} note(s)")
+    today = date.today().isoformat()
     for name in names:
         root = INSTANCES / name
         calls = errors = tokens = 0
         usage = root / "logs" / "llm_usage.jsonl"
-        if usage.exists():
-            today = date.today().isoformat()
-            for line in usage.read_text().splitlines():
-                rec = json.loads(line)
-                if rec["ts"].startswith(today):
-                    calls, errors = calls + 1, errors + bool(rec.get("error"))
-                    tokens += rec.get("completion_tokens") or 0
-        usage_today[name] = (calls, tokens, errors)
-
-    print(f"SHAFT supervisor · {len(names)} instance(s) · "
-          f"{'ALL PAUSED' if (SUP_DIR / 'paused').exists() else 'running'} · autonomous schedule: not yet (M1)")
-    for name in names:
-        root = INSTANCES / name
+        for line in usage.read_text().splitlines() if usage.exists() else []:
+            rec = json.loads(line)
+            if rec["ts"].startswith(today):
+                calls, errors = calls + 1, errors + bool(rec.get("error"))
+                tokens += rec.get("completion_tokens") or 0
         entries = journal_entries(root)
+        js = metrics.judgments(name)
+        rate = (sum(metrics.SCORE[j["criterion_met"]] for j in js) / len(js)) if js else None
         last_self = git_wt(root, "log", "-1", "--format=%cr", "--", "self/self.md", check=False).stdout.strip()
-        calls, tokens, errors = usage_today[name]
-        print(f"\n■ {name}{' (paused)' if paused(name) else ''}  ·  branch instance/{name}")
-        print(f"  journal     {len(entries)} entries")
-        print(f"  self-model  last changed {last_self or 'never'}")
+        flags = [f for f, on in (("paused", paused(name)), ("busy", is_busy(name))) if on]
+        print(f"\n■ {name}{' (' + ', '.join(flags) + ')' if flags else ''}  ·  branch instance/{name}")
+        print(f"  journal     {len(entries)} entries · self-model last changed {last_self or 'never'}")
+        print(f"  judged      {len(js)} cycles" + (f" · success {rate:.0%}" if rate is not None else ""))
         print(f"  LLM today   {calls} calls · {tokens} completion tokens · {errors} errors")
         if entries:
             lines = entries[-1].splitlines()
             print("  latest:     " + lines[0].lstrip("# "))
-            for line in lines[1:9]:
-                print("    " + line)
-            if len(lines) > 9:
+            for line in lines[1:8]:
+                print("    " + line[:160])
+            if len(lines) > 8:
                 print("    …")
     return 0
+
+
+def run_many(kind: str, names: list[str], every: bool) -> int:
+    names = instance_names() if every else (names or [DEFAULT_INSTANCE])
+    worst = 0
+    for name in names:
+        if kind != "talk" and paused(name):
+            print(f"{name} is paused (shaft resume {name}).", file=sys.stderr)
+            worst = max(worst, 3)
+            continue
+        worst = max(worst, run_agent(name, kind, [kind], interactive=False))
+    return worst
 
 
 def main(argv: list[str]) -> int:
@@ -290,19 +141,34 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("talk", help="chat with an instance in the terminal")
     p.add_argument("name", nargs="?", default=DEFAULT_INSTANCE)
     p.add_argument("--show-thinking", action="store_true")
-    p = sub.add_parser("reflect", help="run one reflection cycle")
-    p.add_argument("names", nargs="*")
-    p.add_argument("--all", action="store_true")
+    for verb, text in (("live", "one autonomous cycle with tools"), ("reflect", "one reflection (no tools)"),
+                       ("sleep", "consolidate memory, personality, goals")):
+        p = sub.add_parser(verb, help=text)
+        p.add_argument("names", nargs="*")
+        p.add_argument("--all", action="store_true")
+    sub.add_parser("tick", help="one autonomous round over all awake, idle instances (run by launchd)")
+    p = sub.add_parser("autonomy", help="install/remove the launchd schedule")
+    p.add_argument("action", choices=["on", "off", "status"])
     p = sub.add_parser("status", help="how the instances are doing")
     p.add_argument("names", nargs="*")
     p = sub.add_parser("log", help="recent journal entries")
     p.add_argument("name", nargs="?", default=DEFAULT_INSTANCE)
     p.add_argument("-n", type=int, default=3)
+    p = sub.add_parser("stats", help="an instance's measured performance (judge + calibration)")
+    p.add_argument("name", nargs="?", default=DEFAULT_INSTANCE)
+    p = sub.add_parser("inbox", help="messages instances sent you")
+    p.add_argument("--clear", action="store_true", help="archive notes (questions stay until answered)")
+    p = sub.add_parser("reply", help="answer an instance's open question (or message it)")
+    p.add_argument("name")
+    p.add_argument("text")
+    p = sub.add_parser("send", help="message an instance")
+    p.add_argument("name")
+    p.add_argument("text")
     sub.add_parser("list", help="list instances")
     sub.add_parser("setup", help="create missing worktrees for template and instance branches")
     p = sub.add_parser("new", help="create an instance")
     p.add_argument("name")
-    p.add_argument("--from", dest="source", help="fork code and skills (not memory) from this instance")
+    p.add_argument("--from", dest="source", help="fork code, skills and plugins (not memory) from this instance")
     for verb in ("pause", "resume"):
         p = sub.add_parser(verb, help=f"{verb} autonomous runs (all, or one instance)")
         p.add_argument("name", nargs="?")
@@ -312,22 +178,31 @@ def main(argv: list[str]) -> int:
 
     if args.cmd == "talk":
         extra = ["--show-thinking"] if args.show_thinking else []
+        if is_busy(args.name):
+            print(f"{args.name} is in the middle of a cycle; waiting for it to finish…", file=sys.stderr)
         return run_agent(args.name, "talk", ["talk", *extra], interactive=True)
-    if args.cmd == "reflect":
-        names = instance_names() if args.all else (args.names or [DEFAULT_INSTANCE])
-        worst = 0
-        for name in names:
-            if paused(name):
-                print(f"{name} is paused (shaft resume).", file=sys.stderr)
-                worst = max(worst, 3)
-                continue
-            worst = max(worst, run_agent(name, "reflect", ["reflect"], interactive=False))
-        return worst
+    if args.cmd in ("live", "reflect", "sleep"):
+        return run_many(args.cmd, args.names, args.all)
+    if args.cmd == "tick":
+        return autonomy.tick()
+    if args.cmd == "autonomy":
+        return autonomy.autonomy(args.action)
     if args.cmd == "status":
         return cmd_status(args.names or instance_names())
     if args.cmd == "log":
         print("\n\n---\n\n".join(journal_entries(instance_root(args.name))[-args.n:]))
         return 0
+    if args.cmd == "stats":
+        instance_root(args.name)
+        metrics.judge_pending(args.name)
+        print(metrics.stats_text(args.name))
+        return 0
+    if args.cmd == "inbox":
+        return messages.clear_notes() if args.clear else messages.show_inbox()
+    if args.cmd == "reply":
+        return messages.reply(args.name, args.text)
+    if args.cmd == "send":
+        return messages.send(args.name, args.text)
     if args.cmd == "list":
         print("\n".join(instance_names()))
         return 0

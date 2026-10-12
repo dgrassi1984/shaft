@@ -1,0 +1,147 @@
+"""Shared supervisor plumbing: paths, knobs, logging, git, instance lookup, commits."""
+from __future__ import annotations
+
+import os
+import re
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+
+PROJECT = Path(__file__).resolve().parent.parent
+INSTANCES = PROJECT / "instances"
+TEMPLATE = PROJECT / "template"
+SUP_DIR = PROJECT / ".supervisor"
+HOME = Path.home()
+STATE_PATHS = ("self", "memory", "notes", "skills", "inbox")
+DEFAULT_INSTANCE = "shaft"
+NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
+
+
+def knob(name: str, default: str, parse):
+    """CLI-less operator knob: env var > default; a bad value warns and falls back."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return parse(default), "default"
+    try:
+        return parse(raw), "env"
+    except ValueError:
+        print(f"warning: {name}={raw!r} is invalid; using {default} [default]", file=sys.stderr)
+        return parse(default), "default"
+
+
+CYCLE_TIMEOUT_S, CYCLE_SRC = knob("SHAFT_CYCLE_TIMEOUT_S", "2400", int)
+LLM_PORTS, PORTS_SRC = knob("SHAFT_LLM_PORTS", "1337", lambda s: [int(p) for p in s.split(",")])
+CORE_MIN_HOURS, CORE_SRC = knob("SHAFT_CORE_MIN_HOURS", "72", int)
+BROKER_MAX_CALLS, BROKER_SRC = knob("SHAFT_BROKER_MAX_CALLS", "60", int)
+
+
+def describe_knobs() -> str:
+    return (f"cycle_timeout_s={CYCLE_TIMEOUT_S} [{CYCLE_SRC}] llm_ports={LLM_PORTS} [{PORTS_SRC}] "
+            f"core_min_hours={CORE_MIN_HOURS} [{CORE_SRC}] broker_max_calls={BROKER_MAX_CALLS} [{BROKER_SRC}] "
+            f"python={sys.executable}")
+
+
+def log(msg: str) -> None:
+    SUP_DIR.mkdir(exist_ok=True)
+    with (SUP_DIR / "supervisor.log").open("a") as f:
+        f.write(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}\n")
+
+
+def secrets_env() -> dict[str, str]:
+    """Supervisor-only secrets from PROJECT/.env (never passed to instances)."""
+    out: dict[str, str] = {}
+    path = PROJECT / ".env"
+    for line in path.read_text().splitlines() if path.exists() else []:
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            out[k.strip()] = v.strip().strip('"\'')
+    return out
+
+
+def git(*args: str, check: bool = True) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", "-C", str(PROJECT), *args], capture_output=True, text=True, check=check)
+
+
+def git_wt(root: Path, *args: str, check: bool = True, project: Path | None = None) -> subprocess.CompletedProcess:
+    """Run git in an instance worktree without trusting anything inside it.
+
+    The worktree's `.git` file is writable by the instance, which could point it at
+    a fake repository whose config runs commands (hooks, fsmonitor). So the git dir
+    is taken from the main repository's own worktree registry, and hooks are off.
+    """
+    admin = _worktree_admin_dir(root, project or PROJECT)
+    return subprocess.run(
+        ["git", f"--git-dir={admin}", f"--work-tree={root}", "-c", "core.hooksPath=/dev/null",
+         "-c", "core.fsmonitor=false", *args],
+        cwd=root, capture_output=True, text=True, check=check)
+
+
+def _worktree_admin_dir(root: Path, project: Path) -> Path:
+    for admin in (project / ".git" / "worktrees").glob("*"):
+        gitdir = admin / "gitdir"
+        if gitdir.exists() and Path(gitdir.read_text().strip()).resolve() == (root / ".git").resolve():
+            return admin
+    raise SystemExit(f"{root} is not a registered worktree of {project} (try: shaft setup)")
+
+
+def instance_root(name: str) -> Path:
+    root = INSTANCES / name
+    if not (root / "shaft").is_dir() or not (root / ".git").exists():
+        known = ", ".join(instance_names()) or "none"
+        raise SystemExit(f"no instance named {name!r} (instances: {known})")
+    return root
+
+
+def instance_names() -> list[str]:
+    return sorted(p.name for p in INSTANCES.iterdir() if (p / "shaft").is_dir()) if INSTANCES.exists() else []
+
+
+def paused(name: str) -> bool:
+    return (SUP_DIR / "paused").exists() or (SUP_DIR / f"paused-{name}").exists()
+
+
+def journal_entries(root: Path) -> list[str]:
+    journal = root / "memory" / "journal.md"
+    if not journal.exists():
+        return []
+    return [b.strip() for b in journal.read_text().split("\n---\n") if b.strip().startswith("## ")]
+
+
+def journal_note(root: Path, title: str, body: str) -> None:
+    """Supervisor's own minimal journal append (deliberately not the agent's code)."""
+    with (root / "memory" / "journal.md").open("a") as f:
+        f.write(f"\n---\n## {datetime.now():%Y-%m-%d %H:%M} — {title}\n\n{body.strip()}\n")
+
+
+def commit_state(name: str, kind: str, kept_code: list[str], root: Path | None = None,
+                 project: Path | None = None) -> bool:
+    """Commit the instance's mind (always) and its code changes that passed the gate.
+
+    Only files git actually staged are named in the commit: an empty directory
+    (notes/, skills/ on a young instance) is unknown to git and would fail as a pathspec.
+    Returns False — after logging git's own error — if the commit failed.
+    """
+    root = root or INSTANCES / name
+    wt = lambda *a, check=True: git_wt(root, *a, check=check, project=project)  # noqa: E731
+    paths = [p for p in STATE_PATHS if (root / p).exists()] + kept_code
+    try:
+        wt("add", "-A", "--", *paths)
+        staged = wt("diff", "--cached", "--name-only", "-z", "--", *paths).stdout.split("\0")
+        staged = [p for p in staged if p]
+        if not staged:
+            return True
+        msg = f"{name}: {kind} {datetime.now():%Y-%m-%d %H:%M}"
+        if kept_code:
+            msg += "\n\nCode changes made by the instance (tests passed):\n" + "\n".join(f"- {p}" for p in kept_code)
+        wt("-c", f"user.name=SHAFT/{name}", "-c", f"user.email={name}@shaft.localhost",
+           "commit", "-q", "-m", msg, "--", *staged)
+    except subprocess.CalledProcessError as e:
+        detail = (e.stderr or e.stdout or "").strip()
+        log(f"{name}: COMMIT FAILED after {kind}: {detail}")
+        print(f"{name}: could not commit its state after {kind} — files are on disk, uncommitted.\n"
+              f"git said: {detail}", file=sys.stderr)
+        return False
+    log(f"{name}: committed {kind} on instance/{name} ({len(staged)} files)")
+    return True

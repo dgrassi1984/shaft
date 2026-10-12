@@ -13,7 +13,7 @@ from pathlib import Path
 
 from . import sandbox
 
-CODE_PATHS = ("shaft", "tests", "config.env")
+CODE_PATHS = ("shaft", "tests", "plugins", "config.env")
 PROJECT = Path(__file__).resolve().parent.parent
 
 
@@ -56,12 +56,18 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = 900) -> tuple[bo
     outputs.append("== supervisor invariants ==\n" + sup.stderr[-3000:])
     ok &= sup.returncode == 0
 
+    prof = tmp / "tests.sb"
+    prof.write_text(sandbox.profile(instance_root, home, [], any_localhost=True))
+    env = sandbox.agent_env(os.environ, TMPDIR=str(tmp))
+    if (instance_root / "plugins").is_dir():
+        plug = subprocess.run(sandbox.wrap(prof, [py, "-E", "-s", "-m", "shaft.plugin_runner", "--check"]),
+                              cwd=instance_root, env=env, capture_output=True, text=True, timeout=120)
+        outputs.append("== plugins ==\n" + (plug.stdout + plug.stderr)[-2000:])
+        ok &= plug.returncode == 0
     if (instance_root / "tests").is_dir():
-        prof = tmp / "tests.sb"
-        prof.write_text(sandbox.profile(instance_root, home, [], any_localhost=True))
         agent = subprocess.run(
             sandbox.wrap(prof, [py, "-E", "-s", "-m", "unittest", "discover", "-s", "tests", "-t", "."]),
-            cwd=instance_root, env=sandbox.agent_env(os.environ, TMPDIR=str(tmp)),
+            cwd=instance_root, env=env,
             capture_output=True, text=True, timeout=timeout_s)
         outputs.append("== instance tests ==\n" + agent.stderr[-3000:])
         ok &= agent.returncode == 0

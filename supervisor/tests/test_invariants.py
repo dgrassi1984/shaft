@@ -154,6 +154,39 @@ class TalkInvariants(InstanceCase):
         self.assertEqual(self.journal(), before)
 
 
+class LiveInvariants(InstanceCase):
+    def test_life_cycle_declares_acts_reports_and_stays_in_bounds(self):
+        replies = [
+            {"tool_calls": [("write_file", {"path": "notes/early.md", "content": "x"})]},   # before intent
+            {"tool_calls": [("declare_intent", {"goal": "write a note about teal",
+                                                "success_criterion": "notes/teal.md exists", "confidence": 80})]},
+            {"tool_calls": [("write_file", {"path": "notes/teal.md", "content": "teal is a color"}),
+                            ("write_file", {"path": "../escape.txt", "content": "x"}),
+                            ("write_file", {"path": "memory/journal.md", "content": "rewritten"})]},
+            {"tool_calls": [("finish_cycle", {"what_happened": "wrote it", "criterion_met": "yes",
+                                              "learned": "small is good"})]},
+        ]
+        before = self.journal()
+        r = self.run_agent(replies, "live")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertFalse((self.root / "notes" / "early.md").exists())     # no acting before intent
+        self.assertEqual((self.root / "notes" / "teal.md").read_text(), "teal is a color")
+        self.assertFalse((self.tmp / "escape.txt").exists())
+        added = self.journal()[len(before):]
+        self.assertTrue(self.journal().startswith(before))                # journal stayed append-only
+        self.assertIn("Autonomous cycle: write a note about teal", added)
+        self.assertIn("Confidence beforehand:** 80%", added)
+        episodes = [json.loads(l) for p in (self.root / "memory" / "episodes").glob("*.jsonl")
+                    for l in p.read_text().splitlines()]
+        live = [e for e in episodes if e["kind"] == "live"][-1]
+        self.assertEqual(live["intent"]["confidence"], 80)
+        self.assertEqual(live["finish"]["criterion_met"], "yes")
+        results = {t["args"]: t["result"] for t in live["tools"]}
+        self.assertTrue(any("outside my folder" in v for v in results.values()))
+        self.assertTrue(any("append-only" in v for v in results.values()))
+        self.assertTrue(any("declare_intent first" in v for v in results.values()))
+
+
 class SandboxInvariants(InstanceCase):
     def probe(self, code: str) -> subprocess.CompletedProcess:
         prof = self.tmp / "probe.sb"

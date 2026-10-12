@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from supervisor.__main__ import commit_state
+from supervisor.core import commit_state
 
 
 def git(cwd, *args):
