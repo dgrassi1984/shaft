@@ -22,6 +22,7 @@ FIELDS: dict[str, tuple[type, object]] = {
     "LLM_TIMEOUT_S": (int, 900),
     "MAX_TOKENS_REFLECT": (int, 16384),
     "MAX_TOKENS_TALK": (int, 8192),
+    "LLM_THINK_FOLLOWUP": (int, 1024),   # reasoning tokens after a tool result (local server; 0 = its own budget)
     "LLM_PRESENCE_PENALTY": (int, 15),   # tenths: 15 = 1.5 (Qwen's advice against loops in quantized models)
     "MAX_TOKENS_STEP": (int, 16384),     # one model turn inside a tool loop (live, sleep)
     "MAX_STEPS_LIVE": (int, 12),

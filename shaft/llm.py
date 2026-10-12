@@ -51,12 +51,13 @@ class Reply:
 
 class Client:
     def __init__(self, base_url: str, model: str, api_key: str, timeout_s: int, usage_log: Path,
-                 broker_token: str = "", presence_penalty: float = 0.0):
+                 broker_token: str = "", presence_penalty: float = 0.0, think_followup: int = 0):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
         self.broker_token = broker_token
         self.presence_penalty = presence_penalty
+        self.think_followup = think_followup
         self.timeout_s = timeout_s
         self.usage_log = usage_log
 
@@ -71,7 +72,8 @@ class Client:
             base, token = broker_url.rstrip("/") + "/llm/v1", os.environ.get("SHAFT_BROKER_TOKEN", "")
         return cls(base, cfg.LLM_MODEL, cfg.LLM_API_KEY, cfg.LLM_TIMEOUT_S,
                    cfg.root / "logs" / "llm_usage.jsonl", broker_token=token,
-                   presence_penalty=cfg.LLM_PRESENCE_PENALTY / 10)
+                   presence_penalty=cfg.LLM_PRESENCE_PENALTY / 10,
+                   think_followup=0 if token else cfg.LLM_THINK_FOLLOWUP)   # SHAFT's own server only
 
     # -- public -------------------------------------------------------------
     def complete(self, messages: list[dict], max_tokens: int, purpose: str,
@@ -124,6 +126,10 @@ class Client:
             body["presence_penalty"] = self.presence_penalty
         if not think:   # Qwen-style templates (llama.cpp): answer directly, no hidden reasoning
             body["chat_template_kwargs"] = {"enable_thinking": False}
+        elif self.think_followup and messages and messages[-1].get("role") == "tool":
+            # After a tool result I mostly need to read it, not deliberate from scratch: SHAFT's server
+            # forces </think> after this many reasoning tokens (its own budget stays the ceiling).
+            body["chat_template_kwargs"] = {"thinking_budget": self.think_followup}
         if tools:
             body["tools"] = tools
         if stream:
