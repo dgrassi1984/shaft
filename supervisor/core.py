@@ -31,13 +31,14 @@ def knob(name: str, default: str, parse):
 
 
 CYCLE_TIMEOUT_S, CYCLE_SRC = knob("SHAFT_CYCLE_TIMEOUT_S", "2400", int)
+SLEEP_TIMEOUT_S, SLEEP_SRC = knob("SHAFT_SLEEP_TIMEOUT_S", "5400", int)   # nightly, nobody waiting
 LLM_PORTS, PORTS_SRC = knob("SHAFT_LLM_PORTS", "1337", lambda s: [int(p) for p in s.split(",")])
 CORE_MIN_HOURS, CORE_SRC = knob("SHAFT_CORE_MIN_HOURS", "72", int)
 BROKER_MAX_CALLS, BROKER_SRC = knob("SHAFT_BROKER_MAX_CALLS", "60", int)
 
 
 def describe_knobs() -> str:
-    return (f"cycle_timeout_s={CYCLE_TIMEOUT_S} [{CYCLE_SRC}] llm_ports={LLM_PORTS} [{PORTS_SRC}] "
+    return (f"cycle_timeout_s={CYCLE_TIMEOUT_S} [{CYCLE_SRC}] sleep_timeout_s={SLEEP_TIMEOUT_S} [{SLEEP_SRC}] llm_ports={LLM_PORTS} [{PORTS_SRC}] "
             f"core_min_hours={CORE_MIN_HOURS} [{CORE_SRC}] broker_max_calls={BROKER_MAX_CALLS} [{BROKER_SRC}] "
             f"python={sys.executable}")
 

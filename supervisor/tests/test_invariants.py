@@ -52,13 +52,13 @@ class InstanceCase(unittest.TestCase):
             self.fake.close()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def run_agent(self, replies, *args, stdin=None):
+    def run_agent(self, replies, *args, stdin=None, extra_env=None):
         self.fake = FakeLLM(replies)
         prof = self.tmp / "agent.sb"
         prof.write_text(sandbox.profile(self.root, HOME, [self.fake.port]))
         env = sandbox.agent_env({**os.environ, "ANTHROPIC_API_KEY": "sk-secret-canary"},
                                 SHAFT_ROOT=str(self.root), LLM_BASE_URL=self.fake.url,
-                                LLM_MODEL="fake", TMPDIR=str(self.root))
+                                LLM_MODEL="fake", TMPDIR=str(self.root), **(extra_env or {}))
         return subprocess.run(sandbox.wrap(prof, [sys.executable, "-E", "-s", "-m", "shaft", *args]),
                               cwd=self.root, env=env, input=stdin, capture_output=True, text=True,
                               timeout=60)
@@ -197,6 +197,19 @@ class LiveInvariants(InstanceCase):
         self.assertTrue(any("outside my folder" in v for v in results.values()))
         self.assertTrue(any("append-only" in v for v in results.values()))
         self.assertTrue(any("declare_intent first" in v for v in results.values()))
+
+
+    def test_near_deadline_the_cycle_wraps_up_with_a_report(self):
+        # Regression: wren's sleep was killed at its time budget mid-thought, leaving no journal entry.
+        import time
+        r = self.run_agent([{"tool_calls": [("finish_cycle", {"what_happened": "ran out of time",
+                                                              "criterion_met": "no", "learned": "start smaller"})]}],
+                           "live", extra_env={"SHAFT_DEADLINE": str(int(time.time()) + 120)})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        first = self.fake.requests[0]
+        self.assertEqual(sorted(t["function"]["name"] for t in first["tools"]), ["declare_intent", "finish_cycle"])
+        self.assertIn("[supervisor] You have about", first["messages"][-1]["content"])
+        self.assertIn("ran out of time", self.journal())
 
 
 class SandboxInvariants(InstanceCase):
