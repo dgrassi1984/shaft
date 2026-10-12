@@ -5,7 +5,7 @@
 
 Each request is a normal sandboxed run (broker, run lock, gate, commit). The client's conversation
 is the dialogue; the instance's own identity and memory come first. A conversation (same instance,
-same first user message) keeps one id; after IDLE_MINUTES without a message its journal entry is
+same first user message) keeps one id; after IDLE_MINUTES (SHAFT_IDLE_MINUTES) without a message it is closed and its journal entry is
 written. Tool activity and status are sent as `reasoning_content`, which "thinking"-aware clients
 show and others ignore.
 
@@ -30,12 +30,10 @@ import uuid
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from .core import SUP_DIR, instance_names, knob, log, secrets_env
+from .core import API_TALKS as TALKS, IDLE_MINUTES, instance_names, knob, log, secrets_env
 from .runner import busy_with, request_yield, run_agent, spawn_recover
 
 PORT, _ = knob("SHAFT_API_PORT", "8781", int)
-IDLE_MINUTES, _ = knob("SHAFT_API_IDLE_MINUTES", "20", int)
-TALKS = SUP_DIR / "api_talks.json"
 
 
 def allowed_logins() -> set[str]:

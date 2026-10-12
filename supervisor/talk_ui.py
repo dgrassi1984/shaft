@@ -2,7 +2,9 @@
 
 The agent runs sandboxed and headless (`talk --json`); this client edits your input and renders
 its events. It is UI only: the supervisor's runner still owns the sandbox, the broker, the run
-lock, the gate and the commit.
+lock, the gate and the commit. The instance is held only while it replies — while this waits for
+you, the API and journal write-ups can use it. A conversation quiet for SHAFT_IDLE_MINUTES closes
+itself and is written up.
 
 Keys: Enter sends · Shift-Enter / Option-Enter / Ctrl-J new line · ↑/↓ history
       Ctrl-C stops a reply; at the prompt it clears your text, or ends the conversation if empty
@@ -12,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 import queue
 import signal
 import sys
@@ -32,8 +35,8 @@ from rich.spinner import Spinner
 from rich.text import Text
 
 from . import messages
-from .core import SUP_DIR, instance_root
-from .runner import run_agent, spawn_recover
+from .core import IDLE_MINUTES, SUP_DIR, instance_root
+from .runner import run_conversation, spawn_recover
 
 # Shift-Enter as sent by terminals that report modifiers (iTerm2 "CSI u", kitty, xterm
 # modifyOtherKeys) — map it to Ctrl-J, which inserts a new line. iTerm2's other common setups send
@@ -61,10 +64,26 @@ class Client:
         self.info: dict = {}
         self.interrupts: list[float] = []
         self.quit = False
+        self.prompting, self.idle_closed, self.last_activity = False, False, time.monotonic()
         SUP_DIR.mkdir(exist_ok=True)
         self.session = PromptSession(history=FileHistory(str(SUP_DIR / f"talk-history-{name}")),
                                      multiline=True, key_bindings=self._keys(), prompt_continuation=self._cont,
                                      bottom_toolbar=self._toolbar, enable_history_search=False)
+        self.session.default_buffer.on_text_changed += lambda _: self._touch()
+
+    def _touch(self) -> None:
+        self.last_activity = time.monotonic()
+
+    def _idle_watch(self) -> None:
+        """Close a conversation left quiet at the prompt (nothing typed) for IDLE_MINUTES."""
+        while not self.quit:
+            time.sleep(5)
+            app = self.session.app
+            if (IDLE_MINUTES > 0 and self.prompting and app.is_running
+                    and time.monotonic() - self.last_activity > IDLE_MINUTES * 60):
+                self.idle_closed = True
+                app.loop.call_soon_threadsafe(lambda: app.exit(exception=EOFError()))
+                return
 
     # -- input ---------------------------------------------------------------------
     def _keys(self) -> KeyBindings:
@@ -265,11 +284,13 @@ class Client:
         return True
 
     # -- the conversation --------------------------------------------------------------------
-    def drive(self, proc) -> None:
+    def drive(self, proc, turn) -> None:
+        """turn(): the runner's hold on the instance — taken for start-up and for each reply only."""
         self.proc = proc
         threading.Thread(target=self._reader, daemon=True).start()
         threading.Thread(target=self._drain_stderr, daemon=True).start()
-        ready = self._wait_for("ready", timeout=120)
+        with turn():
+            ready = self._wait_for("ready", timeout=120)
         if ready["type"] != "ready":
             time.sleep(0.5)
             self.console.print(f"[red]the agent did not start[/red]\n{getattr(self, 'stderr_tail', '')[-1500:]}")
@@ -277,11 +298,15 @@ class Client:
         self.info = ready
         self.console.print(f"[bold cyan]{self.name}[/bold cyan] [dim]· {ready['model'].split('/')[-1]} · "
                            f"{ready['journal_entries']} journal entries · {ready['tools']} tools · /help[/dim]\n")
+        threading.Thread(target=self._idle_watch, daemon=True).start()
         while not self.quit:
+            self.prompting, self.last_activity = True, time.monotonic()
             try:
                 text = self.session.prompt(HTML("<ansicyan><b>you ›</b></ansicyan> "))
             except (EOFError, KeyboardInterrupt):
                 break
+            finally:
+                self.prompting = False
             text = text.strip()
             if not text:
                 continue
@@ -289,8 +314,16 @@ class Client:
                 if not self._command(text):
                     break
                 continue
-            self._send(type="user", text=text)
-            self._reply()
+            try:
+                with turn(on_wait=lambda who: self.console.print(
+                        f"[dim]{self.name} is busy ({who}) — your message goes as soon as it is free…[/dim]")):
+                    self._send(type="user", text=text)
+                    self._reply()
+            except KeyboardInterrupt:
+                self.console.print("[dim]not sent[/dim]")
+        if self.idle_closed:
+            self.console.print(f"\n[dim]closed after {IDLE_MINUTES} quiet minutes (SHAFT_IDLE_MINUTES).[/dim]")
+        self.quit = True
         self._send(type="exit")
         bye = self._wait_for("bye", timeout=20) if proc.poll() is None else {}
         if bye.get("journal_pending"):
@@ -306,8 +339,9 @@ def main(argv: list[str]) -> int:
     show_thinking = "--show-thinking" in argv
     instance_root(name)
     client = Client(name, show_thinking)
-    code = run_agent(name, "talk", ["talk", "--json"], interactive=True, driver=client.drive)
-    spawn_recover(name)
+    talk_id = uuid.uuid4().hex[:12]
+    code = run_conversation(name, "talk", ["talk", "--json", "--talk-id", talk_id], talk_id, client.drive)
+    spawn_recover(name)   # after the conversation is closed: it is no longer "open", so it gets written up
     return 0 if code in (0, None) else code
 
 

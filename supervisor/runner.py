@@ -4,6 +4,12 @@ Before: take the instance's run lock, snapshot its code, journal and core person
 start a broker. After: stop the broker, restore the journal if it was rewritten
 (append-only), restore the core personality if it changed too soon, run the test gate
 on code changes (revert on failure), commit the instance's state to its branch.
+
+A terminal conversation is different: its process stays up while it waits for the operator,
+so it holds the lock (and is checked and committed) one reply at a time — an open but quiet
+`shaft talk` never blocks the API or a write-up. Open conversations register themselves
+(open_conversations): autonomous cycles wait while one is open, and no journal write-up
+closes a conversation that is still going on.
 """
 from __future__ import annotations
 
@@ -15,13 +21,13 @@ import signal
 import subprocess
 import sys
 import time
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import gate, sandbox
 from .broker import Broker
-from .core import (BROKER_MAX_CALLS, CORE_MIN_HOURS, CYCLE_TIMEOUT_S, HOME, INSTANCES, LLM_PORTS, PROJECT, PYTHON,
+from .core import (IDLE_MINUTES, API_TALKS, BROKER_MAX_CALLS, CORE_MIN_HOURS, CYCLE_TIMEOUT_S, HOME, INSTANCES, LLM_PORTS, PROJECT, PYTHON,
                    SLEEP_TIMEOUT_S, SUP_DIR, UnsafePath,
                    commit_state, describe_knobs, git_wt, instance_root, journal_note, log, safe_mkdir,
                    safe_write, secrets_env)
@@ -91,10 +97,72 @@ def request_yield(names: list[str]) -> None:
         log(f"{n}: asked to yield the model (operator conversation)")
 
 
+class Presence:
+    """An open terminal conversation, registered for as long as it lasts. The file's lock is held by
+    the conversation's process, so a crashed conversation stops counting at once."""
+
+    def __init__(self, name: str, talk_id: str, kind: str = "talk"):
+        self.path = SUP_DIR / "conversations" / name / f"{talk_id}.{kind}"
+        self.f = None
+
+    def __enter__(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        while True:
+            f = self.path.open("a+")
+            fcntl.flock(f, fcntl.LOCK_EX)
+            try:
+                mine = os.stat(self.path).st_ino == os.fstat(f.fileno()).st_ino
+            except FileNotFoundError:
+                mine = False
+            if mine:
+                self.f = f
+                return self
+            f.close()   # a cleaner removed it between our open and lock: register again
+
+    def __exit__(self, *exc):
+        self.path.unlink(missing_ok=True)
+        fcntl.flock(self.f, fcntl.LOCK_UN)
+        self.f.close()
+
+
+def open_conversations(name: str) -> dict[str, str]:
+    """{talk_id: 'talk' | 'api'} for the instance's conversations still going on: terminal talks whose
+    client is running, and API conversations not yet written up that had a message recently."""
+    found: dict[str, str] = {}
+    folder = SUP_DIR / "conversations" / name
+    for p in sorted(folder.glob("*.*")) if folder.is_dir() else []:
+        try:
+            f = p.open("r")
+        except FileNotFoundError:
+            continue
+        with f:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                found[p.stem] = p.suffix[1:]
+                continue
+            try:   # nobody holds it: its conversation ended without cleaning up
+                if os.stat(p).st_ino == os.fstat(f.fileno()).st_ino:
+                    p.unlink()
+            except FileNotFoundError:
+                pass
+            fcntl.flock(f, fcntl.LOCK_UN)
+    try:
+        talks = json.loads(API_TALKS.read_text()) if API_TALKS.exists() else {}
+    except (OSError, ValueError):
+        talks = {}
+    for t in talks.values():
+        if (t.get("model") == name and not t.get("written")
+                and time.time() - t.get("last", 0) <= IDLE_MINUTES * 60):
+            found[t["talk_id"]] = "api"
+    return found
+
+
 def talking() -> list[str]:
-    """Instances currently in a conversation with the operator."""
+    """Instances in a conversation with the operator (open, even if quiet right now)."""
     from .core import instance_names
-    return [n for n in instance_names() if (busy_with(n) or "").startswith(("talk", "api"))]
+    return [n for n in instance_names()
+            if open_conversations(n) or (busy_with(n) or "").startswith(("talk", "api"))]
 
 
 def is_busy(name: str) -> bool:
@@ -155,7 +223,7 @@ def run_agent(name: str, kind: str, agent_args: list[str], interactive: bool, wa
               output: list[str] | None = None, driver=None) -> int:
     """Run the instance once. If `output` is given, the agent's stdout is captured into it.
     If `driver` is given, the agent runs in its own process group with pipes on stdin/stdout/stderr
-    and driver(proc) talks to it (the terminal client); it returns when the conversation ends."""
+    and driver(proc) talks to it; it returns when the run ends."""
     if not (PROJECT / ".git").exists():
         print(f"{PROJECT} is not a git repository; the supervisor needs one to record changes.", file=sys.stderr)
         return 2
@@ -164,16 +232,14 @@ def run_agent(name: str, kind: str, agent_args: list[str], interactive: bool, wa
         return _run(name, root, kind, agent_args, interactive, output, driver)
 
 
-def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: bool,
-         output: list[str] | None = None, driver=None) -> int:
-    log(f"{name}: start {kind} {describe_knobs()}")
-    code_before = gate.snapshot(root)
-    journal_path = root / "memory" / "journal.md"
-    journal_before = journal_path.read_text() if journal_path.exists() else ""
-    pers_path = root / "self" / "personality.md"
-    pers_before = pers_path.read_text() if pers_path.exists() else ""
-    core_before = _core(root)
+def _snapshot(root: Path) -> dict:
+    journal, pers = root / "memory" / "journal.md", root / "self" / "personality.md"
+    return {"code": gate.snapshot(root), "journal": journal.read_text() if journal.exists() else "",
+            "personality": pers.read_text() if pers.exists() else "", "core": _core(root)}
 
+
+def _launch(name: str, root: Path, kind: str, agent_args: list[str], budget: int | None):
+    """Start the run's broker and return (broker, command, environment) for the agent."""
     broker = Broker(name, PROJECT, secrets_env(), SUP_DIR / "broker.log", max_calls=BROKER_MAX_CALLS)
     broker_url = broker.start()
     SUP_DIR.mkdir(exist_ok=True)
@@ -181,29 +247,46 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
     prof.write_text(sandbox.profile(root, HOME, LLM_PORTS + [broker.port]))
     safe_mkdir(root, ".tmp")
     cmd = sandbox.wrap(prof, [PYTHON, "-E", "-s", "-m", "shaft", *agent_args])
-    budget = None if interactive else (SLEEP_TIMEOUT_S if kind == "sleep" else CYCLE_TIMEOUT_S)
     extra = {"SHAFT_DEADLINE": f"{time.time() + budget - 60:.0f}"} if budget else {}
     from .autonomy import describe_schedule
     extra["SHAFT_SCHEDULE"] = describe_schedule()
+    extra["SHAFT_OPEN_TALKS"] = ",".join(open_conversations(name))   # not to be written up yet
     env = sandbox.agent_env(os.environ, SHAFT_ROOT=str(root), TMPDIR=str(root / ".tmp"),
                             SHAFT_BROKER_URL=broker_url, SHAFT_BROKER_TOKEN=broker.token, **extra)
+    return broker, cmd, env
+
+
+def _popen(cmd, root: Path, env: dict) -> subprocess.Popen:
+    # Own process group: the terminal's Ctrl-C reaches the client, which decides what it means.
+    return subprocess.Popen(cmd, cwd=root, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, bufsize=1, start_new_session=True)
+
+
+def _finish(proc: subprocess.Popen) -> None:
+    if proc.poll() is None:
+        try:
+            proc.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            proc.terminate()
+            proc.wait(timeout=10)
+
+
+def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: bool,
+         output: list[str] | None = None, driver=None) -> int:
+    log(f"{name}: start {kind} {describe_knobs()}")
+    before = _snapshot(root)
+    budget = None if interactive else (SLEEP_TIMEOUT_S if kind == "sleep" else CYCLE_TIMEOUT_S)
+    broker, cmd, env = _launch(name, root, kind, agent_args, budget)
     # In a conversation Ctrl-C belongs to the agent (it ends the talk and writes its journal
     # entry). If the supervisor took it too, subprocess.run would kill the agent mid-entry.
     old_sigint = signal.signal(signal.SIGINT, signal.SIG_IGN) if interactive and not driver else None
     try:
         if driver:
-            # Own process group: the terminal's Ctrl-C reaches the client, which decides what it means.
-            proc = subprocess.Popen(cmd, cwd=root, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE, text=True, bufsize=1, start_new_session=True)
+            proc = _popen(cmd, root, env)
             try:
                 driver(proc)
             finally:
-                if proc.poll() is None:
-                    try:
-                        proc.wait(timeout=15)
-                    except subprocess.TimeoutExpired:
-                        proc.terminate()
-                        proc.wait(timeout=10)
+                _finish(proc)
             code = proc.returncode
         else:
             proc = subprocess.run(cmd, cwd=root, env=env, timeout=budget,
@@ -228,13 +311,25 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
     if code < 0 and not interactive:
         journal_note(root, "Supervisor: run stopped", f"My {kind} run was stopped from outside (signal {-code}) "
                      "before I finished it. Whatever I had already written to my files was kept.")
+    if not _settle(name, root, kind, before, broker.handoffs):
+        return code or 1
+    if kind == "live":
+        from . import metrics
+        metrics.after_cycle(name)
+    commit_state(name, "measurement", [])
+    return code
 
-    for note in (enforce_journal(root, journal_before), enforce_core(name, root, core_before)):
+
+def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]) -> bool:
+    """Everything enforced after the instance acted: append-only journal, core-personality pace, the
+    test gate on code (revert on failure), the commit, probation and the personality check.
+    Returns False if the commit failed."""
+    for note in (enforce_journal(root, before["journal"]), enforce_core(name, root, before["core"])):
         if note:
             log(f"{name}: {note}")
             journal_note(root, "Supervisor", note)
 
-    touched = gate.changed(code_before, gate.snapshot(root))
+    touched = gate.changed(before["code"], gate.snapshot(root))
     kept: list[str] = []
     if touched:
         ok, test_log = gate.run_tests(root, HOME)
@@ -242,12 +337,12 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
             kept = touched
             log(f"{name}: code change passed tests: {touched}")
         else:
-            gate.restore(root, code_before, touched)
+            gate.restore(root, before["code"], touched)
             log(f"{name}: code change FAILED tests, reverted: {touched}")
             journal_note(root, "Supervisor: code change reverted",
                          "My changes to " + ", ".join(touched) + " were reverted because the tests "
                          "failed. Last lines of the test output:\n\n```\n" + test_log[-1500:] + "\n```")
-    applied = [h for h in broker.handoffs if h.get("applied")]
+    applied = [h for h in handoffs if h.get("applied")]
     note = "\n".join(f"Delegated to {h['model']} at the instance's request (${h['usd']:.2f}): {h['summary'][:300]} "
                      f"[{', '.join(h['files'])}]" for h in applied)
     if kept:
@@ -258,18 +353,98 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
         with (SUP_DIR / "code_changes" / f"{name}.jsonl").open("a") as f:
             f.write(json.dumps(record) + "\n")
     if not commit_state(name, kind, kept, note=note):
-        return code or 1
+        return False
     from . import metrics   # judged outcomes, calibration stats, probation of self-changes
     if kept:
         head = git_wt(root, "rev-parse", "HEAD").stdout.strip()
         metrics.start_probation(name, head, kept)
-    if pers_path.exists() and pers_path.read_text() != pers_before and judge_ok():
+    pers_path = root / "self" / "personality.md"
+    if pers_path.exists() and pers_path.read_text() != before["personality"] and judge_ok():
         try:
             metrics.check_personality(name)
             metrics.write_stats(name)
         except Exception as e:   # measurement never breaks a run
             log(f"{name}: personality check failed: {type(e).__name__}: {e}")
-    if kind == "live":
-        metrics.after_cycle(name)
-    commit_state(name, "measurement", [])
+    return True
+
+
+class Turn:
+    """The instance, held for one reply of an open conversation: `with turn():` takes the run lock
+    (waiting for another run if needed), and on leaving checks and commits what the reply changed."""
+
+    def __init__(self, name: str, root: Path, kind: str):
+        self.name, self.root, self.kind = name, root, kind
+        self.broker: Broker | None = None
+        self.held: ExitStack | None = None
+
+    def begin(self, on_wait=None) -> None:
+        if self.held:
+            return
+        stack = ExitStack()
+        try:
+            stack.enter_context(run_lock(self.name, wait=False, kind=self.kind))
+        except Busy:
+            holder = busy_with(self.name) or "another run"
+            if not holder.startswith(("talk", "api")):
+                request_yield([self.name])   # an autonomous run wraps up at its next turn
+            if on_wait:
+                on_wait(holder)
+            stack.enter_context(run_lock(self.name, wait=True, kind=self.kind))
+        self.held = stack
+        self.before = _snapshot(self.root)
+        self.handoffs_seen = len(self.broker.handoffs) if self.broker else 0
+
+    def end(self) -> None:
+        if not self.held:
+            return
+        try:
+            handoffs = self.broker.handoffs[self.handoffs_seen:] if self.broker else []
+            _settle(self.name, self.root, self.kind, self.before, handoffs)
+        finally:
+            self.held.close()
+            self.held = None
+
+    @contextmanager
+    def __call__(self, on_wait=None):
+        self.begin(on_wait)
+        try:
+            yield
+        finally:
+            self.end()
+
+
+def run_conversation(name: str, kind: str, agent_args: list[str], talk_id: str, driver) -> int:
+    """A conversation whose agent process stays up between messages (the terminal client).
+
+    It is registered as open for its whole length, but holds the instance only while it works:
+    driver(proc, turn) wraps each reply in `with turn():`. The process starts holding the lock
+    (its start-up reads my state), and the driver's first `with turn():` — waiting for the agent
+    to be ready — releases it."""
+    if not (PROJECT / ".git").exists():
+        print(f"{PROJECT} is not a git repository; the supervisor needs one to record changes.", file=sys.stderr)
+        return 2
+    root = instance_root(name)
+    with Presence(name, talk_id, kind):
+        turn = Turn(name, root, kind)
+        turn.begin()
+        log(f"{name}: start {kind} {talk_id} {describe_knobs()}")
+        try:
+            broker, cmd, env = _launch(name, root, kind, agent_args, None)
+        except BaseException:
+            turn.held.close()
+            raise
+        turn.broker = broker
+        try:
+            proc = _popen(cmd, root, env)
+            try:
+                driver(proc, turn)
+            finally:
+                turn.end()
+                _finish(proc)
+            code = proc.returncode
+        except KeyboardInterrupt:
+            code = 130
+        finally:
+            broker.stop()
+    log(f"{name}: end {kind} {talk_id} exit={code} broker_calls={broker.counts or {}}")
     return code
