@@ -60,26 +60,26 @@ def git(*args: str, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(["git", "-C", str(PROJECT), *args], capture_output=True, text=True, check=check)
 
 
-def git_wt(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+def git_wt(root: Path, *args: str, check: bool = True, project: Path | None = None) -> subprocess.CompletedProcess:
     """Run git in an instance worktree without trusting anything inside it.
 
     The worktree's `.git` file is writable by the instance, which could point it at
     a fake repository whose config runs commands (hooks, fsmonitor). So the git dir
     is taken from the main repository's own worktree registry, and hooks are off.
     """
-    admin = _worktree_admin_dir(root)
+    admin = _worktree_admin_dir(root, project or PROJECT)
     return subprocess.run(
         ["git", f"--git-dir={admin}", f"--work-tree={root}", "-c", "core.hooksPath=/dev/null",
          "-c", "core.fsmonitor=false", *args],
         cwd=root, capture_output=True, text=True, check=check)
 
 
-def _worktree_admin_dir(root: Path) -> Path:
-    for admin in (PROJECT / ".git" / "worktrees").glob("*"):
+def _worktree_admin_dir(root: Path, project: Path) -> Path:
+    for admin in (project / ".git" / "worktrees").glob("*"):
         gitdir = admin / "gitdir"
         if gitdir.exists() and Path(gitdir.read_text().strip()).resolve() == (root / ".git").resolve():
             return admin
-    raise SystemExit(f"{root} is not a registered worktree of {PROJECT} (try: shaft setup)")
+    raise SystemExit(f"{root} is not a registered worktree of {project} (try: shaft setup)")
 
 
 def instance_root(name: str) -> Path:
@@ -111,21 +111,36 @@ def journal_note(root: Path, title: str, body: str) -> None:
         f.write(f"\n---\n## {datetime.now():%Y-%m-%d %H:%M} — {title}\n\n{body.strip()}\n")
 
 
-def commit_state(name: str, kind: str, kept_code: list[str]) -> None:
-    """Commit the instance's mind (always) and its code changes that passed the gate."""
-    root = INSTANCES / name
+def commit_state(name: str, kind: str, kept_code: list[str], root: Path | None = None,
+                 project: Path | None = None) -> bool:
+    """Commit the instance's mind (always) and its code changes that passed the gate.
+
+    Only files git actually staged are named in the commit: an empty directory
+    (notes/, skills/ on a young instance) is unknown to git and would fail as a pathspec.
+    Returns False — after logging git's own error — if the commit failed.
+    """
+    root = root or INSTANCES / name
+    wt = lambda *a, check=True: git_wt(root, *a, check=check, project=project)  # noqa: E731
     paths = [p for p in STATE_PATHS if (root / p).exists()] + kept_code
-    if not paths:
-        return
-    git_wt(root, "add", "-A", "--", *paths)
-    if git_wt(root, "diff", "--cached", "--quiet", "--", *paths, check=False).returncode == 0:
-        return
-    msg = f"{name}: {kind} {datetime.now():%Y-%m-%d %H:%M}"
-    if kept_code:
-        msg += "\n\nCode changes made by the instance (tests passed):\n" + "\n".join(f"- {p}" for p in kept_code)
-    git_wt(root, "-c", f"user.name=SHAFT/{name}", "-c", f"user.email={name}@shaft.localhost",
-           "commit", "-q", "-m", msg, "--", *paths)
-    log(f"{name}: committed {kind} on instance/{name}")
+    try:
+        wt("add", "-A", "--", *paths)
+        staged = wt("diff", "--cached", "--name-only", "-z", "--", *paths).stdout.split("\0")
+        staged = [p for p in staged if p]
+        if not staged:
+            return True
+        msg = f"{name}: {kind} {datetime.now():%Y-%m-%d %H:%M}"
+        if kept_code:
+            msg += "\n\nCode changes made by the instance (tests passed):\n" + "\n".join(f"- {p}" for p in kept_code)
+        wt("-c", f"user.name=SHAFT/{name}", "-c", f"user.email={name}@shaft.localhost",
+           "commit", "-q", "-m", msg, "--", *staged)
+    except subprocess.CalledProcessError as e:
+        detail = (e.stderr or e.stdout or "").strip()
+        log(f"{name}: COMMIT FAILED after {kind}: {detail}")
+        print(f"{name}: could not commit its state after {kind} — files are on disk, uncommitted.\n"
+              f"git said: {detail}", file=sys.stderr)
+        return False
+    log(f"{name}: committed {kind} on instance/{name} ({len(staged)} files)")
+    return True
 
 
 # -- running an instance -------------------------------------------------------
@@ -167,7 +182,8 @@ def run_agent(name: str, kind: str, agent_args: list[str], interactive: bool) ->
             journal_note(root, "Supervisor: code change reverted",
                          "My changes to " + ", ".join(touched) + " were reverted because the tests "
                          "failed. Last lines of the test output:\n\n```\n" + output[-1500:] + "\n```")
-    commit_state(name, kind, kept)
+    if not commit_state(name, kind, kept):
+        return code or 1
     return code
 
 
