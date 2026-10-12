@@ -12,6 +12,7 @@ Rules this module enforces:
 from __future__ import annotations
 
 import json
+import os
 import time
 import urllib.error
 import urllib.request
@@ -49,17 +50,26 @@ class Reply:
 
 
 class Client:
-    def __init__(self, base_url: str, model: str, api_key: str, timeout_s: int, usage_log: Path):
+    def __init__(self, base_url: str, model: str, api_key: str, timeout_s: int, usage_log: Path,
+                 broker_token: str = ""):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
+        self.broker_token = broker_token
         self.timeout_s = timeout_s
         self.usage_log = usage_log
 
     @classmethod
     def from_config(cls, cfg) -> "Client":
-        return cls(cfg.LLM_BASE_URL, cfg.LLM_MODEL, cfg.LLM_API_KEY, cfg.LLM_TIMEOUT_S,
-                   cfg.root / "logs" / "llm_usage.jsonl")
+        """LLM_BASE_URL="broker" means: a cloud model through the supervisor's broker (no key here)."""
+        base, token = cfg.LLM_BASE_URL, ""
+        if base == "broker":
+            broker_url = os.environ.get("SHAFT_BROKER_URL")
+            if not broker_url:
+                raise LLMError("LLM_BASE_URL is 'broker' but no broker is running (SHAFT_BROKER_URL unset)")
+            base, token = broker_url.rstrip("/") + "/llm/v1", os.environ.get("SHAFT_BROKER_TOKEN", "")
+        return cls(base, cfg.LLM_MODEL, cfg.LLM_API_KEY, cfg.LLM_TIMEOUT_S,
+                   cfg.root / "logs" / "llm_usage.jsonl", broker_token=token)
 
     # -- public -------------------------------------------------------------
     def complete(self, messages: list[dict], max_tokens: int, purpose: str,
@@ -118,6 +128,8 @@ class Client:
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
+        if self.broker_token:
+            headers["X-Shaft-Token"] = self.broker_token
         url = f"{self.base_url}/chat/completions"
         request = urllib.request.Request(url, data=json.dumps(body).encode(), headers=headers)
         started = time.monotonic()
