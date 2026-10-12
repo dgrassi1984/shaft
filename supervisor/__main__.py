@@ -68,6 +68,35 @@ def cmd_new(name: str, source: str | None) -> int:
     return 0
 
 
+def _env_values(text: str) -> dict[str, str]:
+    out = {}
+    for line in text.splitlines():
+        if "=" in line and not line.lstrip().startswith("#"):
+            k, v = line.split("=", 1)
+            out[k.strip()] = v
+    return out
+
+
+def _resolve_config_conflict(root) -> bool:
+    """A conflict only in config.env: take the template's file, keep each value the instance changed.
+    (wren's Haiku model conflicted with every template change near those lines.)"""
+    conflicted = git_wt(root, "diff", "--name-only", "--diff-filter=U").stdout.split()
+    if conflicted != ["config.env"]:
+        return False
+    show = lambda rev: git_wt(root, "show", f"{rev}:config.env", check=False).stdout  # noqa: E731
+    base_rev = git_wt(root, "merge-base", "HEAD", "template").stdout.strip()
+    base, mine, theirs = _env_values(show(base_rev)), _env_values(show("HEAD")), show("template")
+    own = {k: v for k, v in mine.items() if base.get(k) != v}          # what the instance customised
+    lines = []
+    for line in theirs.splitlines():
+        key = line.split("=", 1)[0].strip() if "=" in line and not line.lstrip().startswith("#") else None
+        lines.append(f"{key}={own.pop(key)}" if key in own else line)
+    lines += [f"{k}={v}" for k, v in own.items()]                        # customised keys the template dropped
+    safe_write(root, "config.env", "\n".join(lines) + "\n")
+    git_wt(root, "add", "config.env")
+    return True
+
+
 def cmd_update(names: list[str]) -> int:
     """Merge `template` into instances — only while holding each instance's run lock, so an
     operator update is never mistaken for a change the instance made to itself mid-run."""
@@ -79,11 +108,15 @@ def cmd_update(names: list[str]) -> int:
                 r = git_wt(root, "-c", "user.name=SHAFT supervisor", "-c", "user.email=supervisor@shaft.localhost",
                            "merge", "--no-edit", "-m", f"{name}: merge template (operator update)", "template",
                            check=False)
-                if r.returncode != 0:
+                if r.returncode != 0 and not _resolve_config_conflict(root):
                     git_wt(root, "merge", "--abort", check=False)
                     print(f"{name}: merge conflict with template, nothing changed:\n{(r.stdout + r.stderr)[-800:]}")
                     worst = 1
                     continue
+                if r.returncode != 0:
+                    git_wt(root, "-c", "user.name=SHAFT supervisor", "-c", "user.email=supervisor@shaft.localhost",
+                           "commit", "-q", "--no-edit", "-m",
+                           f"{name}: merge template (config.env merged key by key, its own settings kept)")
                 if "Already up to date" in r.stdout:
                     print(f"{name}: already up to date")
                     continue
