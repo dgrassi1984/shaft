@@ -146,6 +146,18 @@ class TalkInvariants(InstanceCase):
         self.assertIn("hello there", episodes)
         self.assertIn("I remember teal", episodes)
 
+    def test_talk_uses_tools_while_streaming(self):
+        replies = [{"reasoning": "store it", "tool_calls": [("remember", {"fact": "Daniele likes teal"})]},
+                   {"content": "Noted: you like teal."},
+                   {"content": "Daniele told me he likes teal; I stored it."}]
+        r = self.run_agent(replies, "talk", stdin="remember that I like teal\n/exit\n")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("✓ remember", r.stdout)
+        self.assertIn("Noted: you like teal.", r.stdout)
+        self.assertIn("Daniele likes teal", (self.root / "memory" / "facts.md").read_text())
+        second = self.fake.requests[1]["messages"]
+        self.assertEqual(second[-1]["role"], "tool")          # the tool result went back to the model
+
     def test_failed_summary_is_reported_not_silent(self):
         replies = [{"content": "Hi."}, {"content": "", "reasoning": "..."}]
         before = self.journal()
