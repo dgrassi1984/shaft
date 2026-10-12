@@ -45,6 +45,28 @@ if __name__ == "__main__":
 
 
 @unittest.skipIf(mx is None, "needs MLX (.venv-bonsai)")
+class WrapUpTest(unittest.TestCase):
+    def test_wrap_up_phrase_then_end_of_thinking(self):
+        # Regression: a bare </think> mid-thought made Bonsai go on thinking in its answer (4,435 chars of
+        # it stored as shaft's reply). Now the early-stopping phrase is forced first, then </think>.
+        from supervisor.bonsai_server import THINK_END, THINK_START, ThinkingBudget
+        b, logits = ThinkingBudget(3, wrap_up=[7, 8]), mx.zeros((1, 248100))
+        seq = [1, THINK_START]
+        b(mx.array(seq), logits)
+        forced = []
+        for _ in range(8):
+            out = b(mx.array(seq), logits)
+            tok = int(mx.argmax(out, axis=-1).item()) if bool(mx.isinf(out).any().item()) else 5
+            forced.append(tok)
+            seq.append(tok)
+            if tok == THINK_END:
+                break
+        self.assertEqual(forced[-3:], [7, 8, THINK_END])
+        after = b(mx.array(seq + [9]), logits)
+        self.assertFalse(bool(mx.isinf(after).any().item()))   # the answer is free again
+
+
+@unittest.skipIf(mx is None, "needs MLX (.venv-bonsai)")
 class PromptCacheCapTest(unittest.TestCase):
     def test_cap_holds_right_after_a_reply_is_cached(self):
         # Regression: mlx_lm trimmed only when the next request started; the cache sat at 6.0 GB against 4 GB.

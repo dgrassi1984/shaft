@@ -111,3 +111,31 @@ class HistoryToolTest(unittest.TestCase):
                      {"commit": "--output=/tmp/pwn"}):
             with self.subTest(args=args):
                 self.assertFalse(self.broker.call("history", args)["ok"])
+
+
+class RecordToolTest(unittest.TestCase):
+    """shaft asked for the supervisor's record of what it did (to check its own claims) — its own only."""
+
+    def test_own_record_only(self):
+        import json
+        from unittest import mock
+        from supervisor import core
+        from supervisor.broker import Broker
+        sup = Path(tempfile.mkdtemp(prefix="shaft-rec-"))
+        self.addCleanup(shutil.rmtree, sup, True)
+        (sup / "judgments").mkdir()
+        (sup / "judgments" / "x.jsonl").write_text(json.dumps(
+            {"episode_ts": "2026-10-12T20:34:45", "goal": "g", "claimed": "yes", "confidence": 75,
+             "criterion_met": "partial", "reasoning": "only half done"}) + "\n")
+        (sup / "judgments" / "y.jsonl").write_text(json.dumps({"reasoning": "Y SECRET"}) + "\n")
+        (sup / "supervisor.log").write_text("[t] x: start live\n[t] y: start live Y SECRET\n[t] tick: y busy\n")
+        log = sup / "broker.log"
+        log.write_text("[t] x run {} -> ok\n[t] y fetch_page {Y SECRET} -> ok\n")
+        with mock.patch.object(core, "SUP_DIR", sup):
+            b = Broker("x", sup, {}, log)
+            out = {k: b.call("record", {"kind": k})["result"] for k in ("judgments", "runs", "tools")}
+        self.assertIn("only half done", out["judgments"])
+        self.assertIn("x: start live", out["runs"])
+        self.assertIn("x run", out["tools"])
+        self.assertNotIn("SECRET", "".join(out.values()))
+        self.assertNotIn("tick: y", out["runs"])

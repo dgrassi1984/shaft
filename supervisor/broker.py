@@ -33,6 +33,14 @@ OPERATOR_DAILY_LIMIT = 3
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
 
 
+def _tail_lines(path: Path, limit: int, keep=None) -> list[str]:
+    try:
+        lines = [l for l in path.read_text(errors="replace").splitlines() if l.strip()]
+    except OSError:
+        return []
+    return [l for l in lines if keep is None or keep(l)][-limit:]
+
+
 def _spec(name, description, properties, required=None):
     return {"type": "function", "function": {"name": name, "description": description, "parameters": {
         "type": "object", "properties": properties,
@@ -74,6 +82,17 @@ SPECS = {
          "path": {"type": "string", "description": "a file or folder in your folder, e.g. self/self.md (optional)"},
          "limit": {"type": "integer", "description": "log entries, default 15, max 100"}},
         []),
+    "record": _spec(
+        "record",
+        "The supervisor's own record about you — what it saw you do, not what you remember. kind: "
+        "'judgments' (the judge's verdict on each autonomous cycle, with its full reasoning), 'runs' (your runs: "
+        "start, end, exit code, reverted or kept code changes, notes), 'tools' (every supervisor tool you "
+        "called, with arguments and outcome), 'code_changes' (code changes of yours that passed the tests). "
+        "Newest last. Use it to check your claims about yourself. (Your own tool traces are also in "
+        "memory/episodes/*.jsonl.)",
+        {"kind": {"type": "string", "enum": ["judgments", "runs", "tools", "code_changes"]},
+         "limit": {"type": "integer", "description": "entries, default 20, max 200"}},
+        ["kind"]),
     "delegate_coding": _spec(
         "delegate_coding",
         "Hand a coding task to an Opus-class model. Describe WHAT you want changed in your code, plugins, "
@@ -446,6 +465,32 @@ class Broker:
             raise RuntimeError(out.stderr.strip()[:300])
         text = out.stdout
         return text if len(text) <= RUN_OUTPUT_CHARS else text[:RUN_OUTPUT_CHARS] + f"\n[... {len(text)} chars in all]"
+
+    def _record(self, kind: str, limit: int = 20) -> str:
+        from .core import SUP_DIR
+        limit = max(1, min(int(limit), 200))
+        if kind == "judgments":
+            lines = []
+            for line in _tail_lines(SUP_DIR / "judgments" / f"{self.name}.jsonl", limit):
+                j = json.loads(line)
+                lines.append(f"- {j.get('episode_ts', '?')[:16]} · goal: {j.get('goal', '')[:200]}\n"
+                             f"  I claimed {j.get('claimed')} at {j.get('confidence')}% confidence; judge: criterion met "
+                             f"{j.get('criterion_met')}, claim supported {j.get('claim_supported')}, criterion "
+                             f"{j.get('criterion_quality')}{', failure: ' + j['failure_mode'] if j.get('failure_mode') else ''}"
+                             f"\n  reasoning: {j.get('reasoning', '')}")
+            text = "\n".join(lines)
+        elif kind == "runs":
+            mine = f"] {self.name}: "
+            text = "\n".join(l for l in _tail_lines(SUP_DIR / "supervisor.log", 20000, keep=lambda l: mine in l)[-limit:])
+        elif kind == "tools":
+            mine = f"] {self.name} "
+            text = "\n".join(l for l in _tail_lines(self.log_path, 20000, keep=lambda l: mine in l)[-limit:])
+        elif kind == "code_changes":
+            text = "\n".join(_tail_lines(SUP_DIR / "code_changes" / f"{self.name}.jsonl", limit))
+        else:
+            raise ValueError("kind must be judgments, runs, tools or code_changes")
+        text = text or "(nothing recorded yet)"
+        return text if len(text) <= RUN_OUTPUT_CHARS else "[... older entries cut]\n" + text[-RUN_OUTPUT_CHARS:]
 
     def _list_instances(self) -> str:
         base = self.project / "instances"

@@ -200,6 +200,10 @@ class Client:
                         if first_token is None:
                             first_token = time.monotonic()
                         content += ev["text"]
+                        if "</think>" in content:   # thinking that ran past the budget, closed late: not the answer
+                            late, _, content = content.rpartition("</think>")
+                            reasoning += late
+                            content = content.lstrip()
                         phase, detail = "", ""
                     elif t == "tool_start":
                         if content:                      # text before a tool call stays on screen

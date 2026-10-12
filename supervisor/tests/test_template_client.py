@@ -23,6 +23,20 @@ class StreamTest(unittest.TestCase):
         self.assertEqual(reply.content, "hi")
 
 
+class LeakedThinkingTest(unittest.TestCase):
+    def test_thinking_closed_late_is_not_the_answer(self):
+        # Regression: cut at its budget, Bonsai went on thinking in the answer and closed the block itself;
+        # shaft's stored reply began with 4,435 chars of reasoning.
+        wire = (b'data: {"choices":[{"delta":{"reasoning":"plan A"}}]}\n\n'
+                b'data: {"choices":[{"delta":{"content":"Hmm, let me tighten it.\\n</think>\\n\\nThe answer."}}]}\n\n'
+                b"data: [DONE]\n\n")
+        reply = Reply(content="", max_tokens=10)
+        Client._read_stream(io.BytesIO(wire), reply, None, None)
+        self.assertEqual(reply.content, "The answer.")
+        self.assertIn("let me tighten it", reply.reasoning)
+        self.assertTrue(reply.reasoning.startswith("plan A"))
+
+
 class FollowupBudgetTest(unittest.TestCase):
     """Bonsai used its whole 4,096-token thinking budget on every tool round (~4.5 min each, 30+ min for one
     reply); after a tool result the client asks SHAFT's server for a smaller budget."""
