@@ -18,6 +18,7 @@ def main(argv: list[str] | None = None) -> int:
     t.add_argument("--show-thinking", action="store_true", help="stream my reasoning, dimmed")
     t.add_argument("--json", action="store_true", help="headless: JSON-lines events (for the terminal client)")
     t.add_argument("--talk-id", default="", help="the conversation's id (given by the supervisor)")
+    t.add_argument("--speaker", default="", help="who is talking, when it is not the operator")
     sub.add_parser("reflect", help="run one reflection cycle")
     sub.add_parser("live", help="run one autonomous cycle with tools")
     sub.add_parser("sleep", help="consolidate memory, personality and goals")
@@ -52,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.cmd == "talk":
             talk.run(cfg, state, client, show_thinking=args.show_thinking, json_mode=args.json,
-                     talk_id=args.talk_id)
+                     talk_id=args.talk_id, speaker=args.speaker)
         elif args.cmd == "reflect":
             print(reflect.run(cfg, state, client))
         elif args.cmd == "live":

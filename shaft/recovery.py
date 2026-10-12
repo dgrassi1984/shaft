@@ -43,12 +43,12 @@ def orphan_talks(state: State, include_open: bool = False) -> list[tuple[str, li
             if tid not in still_open and any(t["role"] == "assistant" for t in turns)]
 
 
-def unwritten_context(state: State, max_chars: int = 6000, exclude: str = "") -> str:
+def unwritten_context(state: State, operator: str, max_chars: int = 6000, exclude: str = "") -> str:
     """Transcripts of conversations still missing their journal entry (also ones going on elsewhere right
     now), newest last — so a conversation that starts before they are written up still remembers them."""
     parts = []
     for _, turns in [o for o in orphan_talks(state, include_open=True) if o[0] != exclude][-3:]:
-        lines = [f"{'Daniele' if t['role'] == 'user' else 'me'}: {t['content']}" for t in turns]
+        lines = [f"{t.get('speaker') or operator if t['role'] == 'user' else 'me'}: {t['content']}" for t in turns]
         parts.append(f"### Conversation {turns[0]['ts'][:16].replace('T', ' ')} (no journal entry yet)\n" + "\n".join(lines))
     text = "\n\n".join(parts)
     return text[-max_chars:] if text else ""
@@ -58,14 +58,18 @@ def run(cfg, state: State, client: Client) -> int:
     written = 0
     for talk_id, turns in orphan_talks(state):
         started, ended = turns[0]["ts"], turns[-1]["ts"]
+        speaker = next((t["speaker"] for t in turns if t.get("speaker")), "")   # not the operator: say so
+        who = speaker or cfg.OPERATOR_NAME
+        about = (f"{speaker} (not {cfg.OPERATOR_NAME}: someone acting for them — do not attribute what "
+                 f"{speaker} said or did to {cfg.OPERATOR_NAME})") if speaker else who
         dialogue = [{"role": "user" if t["role"] == "user" else "assistant", "content": t["content"]}
                     for t in turns]
         while sum(len(m["content"]) for m in dialogue) > MAX_TRANSCRIPT_CHARS and len(dialogue) > 2:
             dialogue.pop(0)
         system = prompts.system_prompt(state, cfg, prompts.RECOVERY_MODE.format(
-            operator=cfg.OPERATOR_NAME, started=started.replace("T", " ")[:16], ended=ended.replace("T", " ")[:16]))
+            operator=about, started=started.replace("T", " ")[:16], ended=ended.replace("T", " ")[:16]))
         messages = [{"role": "system", "content": system}, *dialogue,
-                    {"role": "user", "content": prompts.TALK_SUMMARY.format(operator=cfg.OPERATOR_NAME)}]
+                    {"role": "user", "content": prompts.TALK_SUMMARY.format(operator=who)}]
         when = started[:16].replace("T", " ")
         ui = Status(sys.stderr)
         ui.show(f"conversation of {when} has no journal entry yet · waiting for the model")
@@ -82,7 +86,8 @@ def run(cfg, state: State, client: Client) -> int:
             print(f"could not write the missing entry for conversation {talk_id}: {e}", file=sys.stderr)
             continue
         state.append_journal(
-            f"Conversation with {cfg.OPERATOR_NAME} ({started[:16].replace('T', ' ')}–{ended[11:16]})",
+            f"Conversation with {who}{f' (for {cfg.OPERATOR_NAME})' if speaker else ''} "
+            f"({started[:16].replace('T', ' ')}–{ended[11:16]})",
             reply.content)
         state.append_episode({"kind": "talk_recovered", "talk_id": talk_id, "content": reply.content})
         written += 1
