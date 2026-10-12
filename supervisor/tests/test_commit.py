@@ -76,3 +76,38 @@ class ConfigMergeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HistoryToolTest(unittest.TestCase):
+    """`git` cannot run in an instance's sandbox (its repository lives outside its folder); shaft retried
+    `git log` for 15 minutes. The broker's history tool shows its own branch — and only that."""
+
+    def setUp(self):
+        from supervisor.broker import Broker
+        self.project = Path(tempfile.mkdtemp(prefix="shaft-hist-")).resolve()
+        self.addCleanup(shutil.rmtree, self.project, True)
+        git(self.project, "init", "-q")
+        git(self.project, "commit", "-q", "--allow-empty", "-m", "main: supervisor secret")
+        self.main = git(self.project, "rev-parse", "--short", "HEAD").strip()
+        for name in ("x", "y"):
+            root = self.project / "instances" / name
+            git(self.project, "worktree", "add", "-q", "--orphan", "-b", f"instance/{name}", str(root))
+            (root / "self").mkdir()
+            (root / "self" / "self.md").write_text(f"I am {name}\n")
+            git(root, "add", "-A")
+            git(root, "commit", "-q", "-m", f"{name}: reflect")
+        self.other = git(self.project / "instances" / "y", "rev-parse", "--short", "HEAD").strip()
+        self.broker = Broker("x", self.project, {}, self.project / "broker.log")
+
+    def test_own_log_and_changes(self):
+        log = self.broker.call("history", {"path": "self/self.md"})
+        self.assertTrue(log["ok"], log)
+        self.assertIn("x: reflect", log["result"])
+        commit = log["result"].split()[0]
+        self.assertIn("+I am x", self.broker.call("history", {"commit": commit})["result"])
+
+    def test_nothing_outside_its_branch(self):
+        for args in ({"commit": self.main}, {"commit": self.other}, {"path": "../y/self/self.md"},
+                     {"commit": "--output=/tmp/pwn"}):
+            with self.subTest(args=args):
+                self.assertFalse(self.broker.call("history", args)["ok"])

@@ -59,10 +59,21 @@ SPECS = {
         "Run a shell command (zsh) inside your folder, in a stricter sandbox: it can read your folder and the "
         "system, write only to notes/, plugins/, skills/, tests/, shaft/ and .tmp/, and has NO network. Use it "
         "to run your tests, scripts and plugins, inspect files, or compute things. Python 3 is `python3`. "
-        "Returns the exit code and output (truncated). Code you change is still tested by the supervisor.",
+        "Returns the exit code and output (truncated). Code you change is still tested by the supervisor. "
+        "`git` does not work here (your repository lives outside your folder): use `history`.",
         {"command": S, "timeout_s": {"type": "integer", "description": f"default 60, max {300}"},
          "cwd": {"type": "string", "description": "directory inside your folder, default '.'"}},
         ["command"]),
+    "history": _spec(
+        "history",
+        "Your own history in git: every run of yours is a commit on your branch. Without `commit`: the log "
+        "(newest first), optionally only commits that touched `path`. With `commit`: what that commit changed "
+        "(stat and diff, truncated). Only your own branch. Use it to see how you have changed and when. "
+        "(`git` itself does not work inside `run`: your repository lives outside your folder.)",
+        {"commit": {"type": "string", "description": "a commit id from the log (optional)"},
+         "path": {"type": "string", "description": "a file or folder in your folder, e.g. self/self.md (optional)"},
+         "limit": {"type": "integer", "description": "log entries, default 15, max 100"}},
+        []),
     "delegate_coding": _spec(
         "delegate_coding",
         "Hand a coding task to an Opus-class model. Describe WHAT you want changed in your code, plugins, "
@@ -411,6 +422,30 @@ class Broker:
         if r["applied"]:
             lines.append("The new code takes effect in your next cycle; plugins appear as tools then.")
         return "\n".join(lines)
+
+    def _history(self, commit: str = "", path: str = "", limit: int = 15) -> str:
+        from .core import git_wt
+        root = (self.project / "instances" / self.name).resolve()
+        if path and (path.startswith(("-", "/")) or ".." in Path(path).parts):
+            raise ValueError("path must be relative to your folder")
+        pathspec = ["--", path] if path else []
+        if not commit:
+            out = git_wt(root, "log", f"-n{max(1, min(int(limit), 100))}", "--date=format:%Y-%m-%d %H:%M",
+                         "--format=%h %ad %an: %s", "HEAD", *pathspec, check=False, project=self.project)
+            if out.returncode:
+                raise RuntimeError(out.stderr.strip()[:300])
+            return out.stdout.strip() or "(no commits" + (f" touching {path}" if path else "") + ")"
+        if not re.fullmatch(r"[0-9a-f]{4,40}", commit):
+            raise ValueError("commit must be a commit id (hex) from the log")
+        mine = git_wt(root, "merge-base", "--is-ancestor", commit, "HEAD", check=False, project=self.project)
+        if mine.returncode:
+            raise ValueError(f"{commit} is not a commit of your branch")
+        out = git_wt(root, "show", "--stat", "--patch", "--date=format:%Y-%m-%d %H:%M",
+                     "--format=%h %ad %an%n%n%B", commit, *pathspec, check=False, project=self.project)
+        if out.returncode:
+            raise RuntimeError(out.stderr.strip()[:300])
+        text = out.stdout
+        return text if len(text) <= RUN_OUTPUT_CHARS else text[:RUN_OUTPUT_CHARS] + f"\n[... {len(text)} chars in all]"
 
     def _list_instances(self) -> str:
         base = self.project / "instances"
