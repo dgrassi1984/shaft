@@ -22,7 +22,8 @@ from datetime import date, datetime
 
 from . import autonomy, evolution, finetune, gate, messages, metrics
 from .core import (DEFAULT_INSTANCE, HOME, INSTANCES, NAME_RE, PROJECT, SUP_DIR, TEMPLATE, git, git_wt,
-                   instance_names, instance_root, journal_entries, journal_note, log, paused)
+                   instance_names, instance_root, journal_entries, journal_note, log, paused,
+                   safe_mkdir, safe_write)
 from .runner import Busy, busy_with, is_busy, request_yield, run_agent, run_lock
 
 
@@ -50,14 +51,14 @@ def cmd_new(name: str, source: str | None) -> int:
     for d in ("self", "memory", "notes", "inbox"):
         shutil.rmtree(root / d, ignore_errors=True)
     for d in ("self", "memory", "notes", "skills"):
-        (root / d).mkdir(exist_ok=True)
-    (root / "self" / "self.md").write_text(
+        safe_mkdir(root, d)
+    safe_write(root, "self/self.md", 
         f"# Self-Model\n\nI am {name}. I have just been created and have no experiences yet; "
         "this self-model is for me to write.\n")
-    (root / "self" / "goals.md").write_text("# Goals & Open Questions\n\n(none yet — mine to set)\n")
+    safe_write(root, "self/goals.md", "# Goals & Open Questions\n\n(none yet — mine to set)\n")
     origin = f"forked from {source} (code, skills and plugins only, not its memories)" if source \
         else "from the SHAFT template"
-    (root / "memory" / "journal.md").write_text(f"# {name} — journal\n")
+    safe_write(root, "memory/journal.md", f"# {name} — journal\n")
     journal_note(root, "Created", f"I was created by the supervisor {origin}. My memory starts here.")
     git_wt(root, "add", "-A", ".")
     git_wt(root, "commit", "-q", "-m", f"{name}: created {origin}")

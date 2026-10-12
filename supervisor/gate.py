@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from . import sandbox
@@ -23,6 +24,8 @@ def snapshot(instance_root: Path) -> dict[str, bytes]:
         base = instance_root / name
         paths = [base] if base.is_file() else base.rglob("*") if base.is_dir() else []
         for path in paths:
+            if path.is_symlink() or any(p.is_symlink() for p in path.parents if instance_root in p.parents):
+                continue   # never read through links the instance planted
             if path.is_file() and "__pycache__" not in path.parts:
                 files[str(path.relative_to(instance_root))] = path.read_bytes()
     return files
@@ -33,10 +36,14 @@ def changed(before: dict[str, bytes], after: dict[str, bytes]) -> list[str]:
 
 
 def restore(instance_root: Path, before: dict[str, bytes], paths: list[str]) -> None:
+    from .core import UnsafePath, contained
     for rel in paths:
-        target = instance_root / rel
+        try:
+            target = contained(instance_root, *Path(rel).parts)
+        except UnsafePath:
+            continue
         if rel in before:
-            target.parent.mkdir(parents=True, exist_ok=True)
+            contained(instance_root, *Path(rel).parent.parts).mkdir(parents=True, exist_ok=True)
             target.write_bytes(before[rel])
         elif target.exists():
             target.unlink()
@@ -46,8 +53,8 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = 900) -> tuple[bo
     """Supervisor invariants against this instance's code (trusted test code; it sandboxes
     the agent itself), then the instance's own tests inside its sandbox."""
     py = sys.executable
-    tmp = instance_root / ".tmp"
-    tmp.mkdir(exist_ok=True)
+    from .core import safe_mkdir
+    tmp = safe_mkdir(instance_root, ".tmp")
     outputs, ok = [], True
 
     sup_env = {**os.environ, "SHAFT_UNDER_TEST": str(instance_root)}
@@ -56,8 +63,10 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = 900) -> tuple[bo
     outputs.append("== supervisor invariants ==\n" + sup.stderr[-3000:])
     ok &= sup.returncode == 0
 
-    prof = tmp / "tests.sb"
-    prof.write_text(sandbox.profile(instance_root, home, [], any_localhost=True))
+    fd, prof_name = tempfile.mkstemp(prefix="shaft-tests-", suffix=".sb")   # outside the instance
+    prof = Path(prof_name)
+    with os.fdopen(fd, "w") as f:
+        f.write(sandbox.profile(instance_root, home, [], any_localhost=True))
     env = sandbox.agent_env(os.environ, TMPDIR=str(tmp))
     if (instance_root / "plugins").is_dir():
         plug = subprocess.run(sandbox.wrap(prof, [py, "-E", "-s", "-m", "shaft.plugin_runner", "--check"]),
@@ -71,4 +80,5 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = 900) -> tuple[bo
             capture_output=True, text=True, timeout=timeout_s)
         outputs.append("== instance tests ==\n" + agent.stderr[-3000:])
         ok &= agent.returncode == 0
+    prof.unlink(missing_ok=True)
     return ok, "\n".join(outputs)

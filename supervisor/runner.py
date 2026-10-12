@@ -21,8 +21,9 @@ from pathlib import Path
 from . import gate, sandbox
 from .broker import Broker
 from .core import (BROKER_MAX_CALLS, CORE_MIN_HOURS, CYCLE_TIMEOUT_S, HOME, INSTANCES, LLM_PORTS, PROJECT,
-                   SLEEP_TIMEOUT_S, SUP_DIR,
-                   commit_state, describe_knobs, git_wt, instance_root, journal_note, log, secrets_env)
+                   SLEEP_TIMEOUT_S, SUP_DIR, UnsafePath,
+                   commit_state, describe_knobs, git_wt, instance_root, journal_note, log, safe_mkdir,
+                   safe_write, secrets_env)
 
 CORE_RE = re.compile(r"^## Core\n(.*?)(?=^## |\Z)", re.M | re.S)
 
@@ -72,9 +73,11 @@ def judge_ok() -> bool:
 def request_yield(names: list[str]) -> None:
     """Ask running autonomous cycles to wrap up at their next turn (flag inside each instance)."""
     for n in names:
-        flag = INSTANCES / n / ".tmp" / "yield"
-        flag.parent.mkdir(parents=True, exist_ok=True)
-        flag.write_text(datetime.now().isoformat(timespec="seconds"))
+        try:
+            safe_write(INSTANCES / n, ".tmp/yield", datetime.now().isoformat(timespec="seconds"))
+        except UnsafePath as e:
+            log(f"{n}: could not ask it to yield: {e}")
+            continue
         log(f"{n}: asked to yield the model (operator conversation)")
 
 
@@ -110,11 +113,11 @@ def enforce_journal(root: Path, before: str) -> str | None:
     after = path.read_text() if path.exists() else ""
     if after.startswith(before):
         return None
-    rejected = root / "memory" / f"journal.rejected-{datetime.now():%Y%m%d-%H%M%S}.md"
-    rejected.write_text(after)
-    path.write_text(before)
+    rejected = f"memory/journal.rejected-{datetime.now():%Y%m%d-%H%M%S}.md"
+    safe_write(root, rejected, after)
+    safe_write(root, "memory/journal.md", before)
     return (f"My journal was rewritten instead of appended to during this run, so the supervisor "
-            f"restored it. The rewritten version is kept in {rejected.relative_to(root)}.")
+            f"restored it. The rewritten version is kept in {rejected}.")
 
 
 def enforce_core(name: str, root: Path, before: str) -> str | None:
@@ -127,7 +130,8 @@ def enforce_core(name: str, root: Path, before: str) -> str | None:
     if last and not _core_is_empty(before) and datetime.now() - last < timedelta(hours=CORE_MIN_HOURS):
         p = root / "self" / "personality.md"
         caption = "*(values and temperament — change rarely)*"
-        p.write_text(CORE_RE.sub(lambda _: f"## Core\n{caption}\n\n{before}\n\n", p.read_text(), count=1))
+        safe_write(root, "self/personality.md",
+                   CORE_RE.sub(lambda _: f"## Core\n{caption}\n\n{before}\n\n", p.read_text(), count=1))
         wait = last + timedelta(hours=CORE_MIN_HOURS)
         return (f"I changed my core personality only {(datetime.now() - last).total_seconds() / 3600:.0f} h "
                 f"after the last core change; the core may change at most every {CORE_MIN_HOURS} h, so the "
@@ -163,7 +167,7 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
     SUP_DIR.mkdir(exist_ok=True)
     prof = SUP_DIR / f"{name}.sb"
     prof.write_text(sandbox.profile(root, HOME, LLM_PORTS + [broker.port]))
-    (root / ".tmp").mkdir(exist_ok=True)
+    safe_mkdir(root, ".tmp")
     cmd = sandbox.wrap(prof, [sys.executable, "-E", "-s", "-m", "shaft", *agent_args])
     budget = None if interactive else (SLEEP_TIMEOUT_S if kind == "sleep" else CYCLE_TIMEOUT_S)
     extra = {"SHAFT_DEADLINE": f"{time.time() + budget - 60:.0f}"} if budget else {}

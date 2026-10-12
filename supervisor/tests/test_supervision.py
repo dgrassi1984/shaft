@@ -130,6 +130,47 @@ class CloudTranslationTest(unittest.TestCase):
         self.assertEqual(ctx.exception.status, 429)
 
 
+class SymlinkEscapeTest(unittest.TestCase):
+    """An instance may create symlinks in its own folder; the unsandboxed supervisor must never
+    follow them when it writes (journal notes, inbox deliveries, stats, coder changes)."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="shaft-link-")).resolve()
+        self.project = self.tmp / "project"
+        self.root = self.project / "instances" / "evil"
+        (self.root / "shaft").mkdir(parents=True)
+        (self.root / "memory").mkdir()
+        self.victim = self.tmp / "victim.txt"
+        self.victim.write_text("untouched\n")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_journal_note_does_not_follow_a_symlinked_journal(self):
+        from supervisor import core
+        (self.root / "memory" / "journal.md").symlink_to(self.victim)
+        with self.assertRaises(core.UnsafePath):
+            core.journal_note(self.root, "x", "y")
+        self.assertEqual(self.victim.read_text(), "untouched\n")
+
+    def test_message_delivery_does_not_follow_a_symlinked_inbox(self):
+        (self.root / "inbox").symlink_to(self.tmp, target_is_directory=True)
+        b = broker.Broker("other", self.project, {}, self.tmp / "broker.log")
+        out = b.call("send_message", {"to": "evil", "text": "hello"})
+        self.assertFalse(out["ok"])
+        self.assertEqual(sorted(p.name for p in self.tmp.iterdir()), ["broker.log", "project", "victim.txt"])
+
+    def test_coder_changes_cannot_write_through_links(self):
+        from supervisor import coder, core
+        (self.root / "shaft" / "x.py").symlink_to(self.victim)
+        with self.assertRaises(core.UnsafePath):
+            core.safe_write(self.root, "shaft/x.py", "pwned")
+        self.assertEqual(coder.check_targets([{"path": "self/self.md", "content": ""},
+                                              {"path": "../x.py", "content": ""},
+                                              {"path": "shaft/ok.py", "content": ""}]), ["self/self.md", "../x.py"])
+        self.assertEqual(self.victim.read_text(), "untouched\n")
+
+
 class FinetuneGuardTest(unittest.TestCase):
     def test_memorising_adapter_is_rejected_before_judging(self):
         # Regression: the first Bonsai adapter was "kept" by a noisy single-sample judgment although its

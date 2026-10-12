@@ -19,7 +19,7 @@ from pathlib import Path
 
 from . import gate, judge, metrics
 from .core import (HOME, INSTANCES, LLM_PORTS, NAME_RE, PROJECT, SUP_DIR, git, git_wt, instance_names,
-                   instance_root, journal_note, log)
+                   instance_root, journal_note, log, safe_mkdir, safe_write)
 from .runner import run_agent
 
 GENES = ("shaft", "plugins", "skills", "tests", "config.env")
@@ -233,12 +233,12 @@ def _build_child(a: str, b: str, child: str, choices: list[dict], summary: str) 
             git_wt(root, "rm", "-r", "-q", "--ignore-unmatch", "--", d)
             shutil.rmtree(root / d, ignore_errors=True)
         for d in ("self", "memory", "notes"):
-            (root / d).mkdir(exist_ok=True)
-        (root / "self" / "self.md").write_text(
+            safe_mkdir(root, d)
+        safe_write(root, "self/self.md", 
             f"# Self-Model\n\nI am {child}. I have just been born and have no experiences yet; "
             "this self-model is for me to write.\n")
-        (root / "self" / "goals.md").write_text("# Goals & Open Questions\n\n(none yet — mine to set)\n")
-        (root / "memory" / "journal.md").write_text(f"# {child} — journal\n")
+        safe_write(root, "self/goals.md", "# Goals & Open Questions\n\n(none yet — mine to set)\n")
+        safe_write(root, "memory/journal.md", f"# {child} — journal\n")
         picks = "\n".join(f"- `{c['path']}` from {c['take']}: {c['reason']}" for c in choices) or "- (none differed)"
         journal_note(root, "Born", f"I was born from {a} and {b}: my code, prompts, plugins and skills are a "
                                    f"recombination of theirs; my mind starts empty.\n\nWhy these genes: {summary}\n\n{picks}")

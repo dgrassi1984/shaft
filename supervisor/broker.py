@@ -307,12 +307,11 @@ class Broker:
             notify(f"SHAFT · {self.name} {'asks' if kind == 'question' else 'says'}", text)
             return f"delivered to the operator ({kind}); his reply, if any, will arrive in your inbox"
         elif NAME_RE.match(to) and to != self.name and (self.project / "instances" / to / "shaft").is_dir():
-            inbox = self.project / "instances" / to / "inbox"
+            from .core import safe_write   # the recipient's folder is instance-controlled: no symlinks followed
+            safe_write(self.project / "instances" / to, f"inbox/{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}.md",
+                       f"From: {self.name}\nTo: {to}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{text.strip()}\n")
         else:
             raise ValueError(f"unknown recipient {to!r}; try list_instances or 'operator'")
-        inbox.mkdir(parents=True, exist_ok=True)
-        path = inbox / f"{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}.md"
-        path.write_text(f"From: {self.name}\nTo: {to}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{text.strip()}\n")
         return f"delivered to {to}"
 
     def _list_instances(self) -> str:

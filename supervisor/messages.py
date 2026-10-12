@@ -5,7 +5,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-from .core import SUP_DIR, instance_root, log
+from .core import SUP_DIR, instance_root, log, safe_write
 
 OPERATOR_INBOX = SUP_DIR / "operator-inbox"
 
@@ -38,14 +38,11 @@ def show_inbox() -> int:
 
 def _deliver(name: str, text: str, kind: str, in_reply_to: str | None = None) -> Path:
     root = instance_root(name)
-    inbox = root / "inbox"
-    inbox.mkdir(exist_ok=True)
     stamp = datetime.now()
-    path = inbox / f"{stamp:%Y%m%d-%H%M%S-%f}-from-operator.md"
     ref = f"In-Reply-To: {in_reply_to}\n" if in_reply_to else ""
-    path.write_text(f"From: operator (Daniele)\nTo: {name}\nKind: {kind}\n{ref}Date: {stamp:%Y-%m-%d %H:%M}\n\n"
-                    f"{text.strip()}\n")
-    return path
+    return safe_write(root, f"inbox/{stamp:%Y%m%d-%H%M%S-%f}-from-operator.md",
+                      f"From: operator (Daniele)\nTo: {name}\nKind: {kind}\n{ref}Date: {stamp:%Y-%m-%d %H:%M}\n\n"
+                      f"{text.strip()}\n")
 
 
 def reply(name: str, text: str) -> int:

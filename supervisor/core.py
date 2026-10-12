@@ -110,10 +110,49 @@ def journal_entries(root: Path) -> list[str]:
     return [b.strip() for b in journal.read_text().split("\n---\n") if b.strip().startswith("## ")]
 
 
+class UnsafePath(Exception):
+    pass
+
+
+def contained(root: Path, *parts: str) -> Path:
+    """A path inside an instance folder that is safe for the (unsandboxed) supervisor to write.
+
+    Instances can create symlinks in their own folder; following one would let an instance aim a
+    supervisor write anywhere on the Mac. So no component may be a symlink, and the result must
+    resolve inside the folder."""
+    root = Path(root)
+    if root.is_symlink():
+        raise UnsafePath(f"{root} is a symlink")
+    path = root.joinpath(*parts)
+    probe = root
+    for part in path.relative_to(root).parts:
+        probe = probe / part
+        if probe.is_symlink():
+            raise UnsafePath(f"{probe} is a symlink; the supervisor does not follow links inside instances")
+    if path.resolve() != root.resolve() and root.resolve() not in path.resolve().parents:
+        raise UnsafePath(f"{path} resolves outside {root}")
+    return path
+
+
+def safe_write(root: Path, rel: str, text: str, append: bool = False) -> Path:
+    path = contained(root, *Path(rel).parts)
+    contained(root, *Path(rel).parent.parts).mkdir(parents=True, exist_ok=True)
+    contained(root, *Path(rel).parts)            # re-check after creating parents
+    with path.open("a" if append else "w") as f:
+        f.write(text)
+    return path
+
+
+def safe_mkdir(root: Path, rel: str) -> Path:
+    path = contained(root, *Path(rel).parts)
+    path.mkdir(parents=True, exist_ok=True)
+    return contained(root, *Path(rel).parts)
+
+
 def journal_note(root: Path, title: str, body: str) -> None:
     """Supervisor's own minimal journal append (deliberately not the agent's code)."""
-    with (root / "memory" / "journal.md").open("a") as f:
-        f.write(f"\n---\n## {datetime.now():%Y-%m-%d %H:%M} — {title}\n\n{body.strip()}\n")
+    safe_write(root, "memory/journal.md",
+               f"\n---\n## {datetime.now():%Y-%m-%d %H:%M} — {title}\n\n{body.strip()}\n", append=True)
 
 
 def commit_state(name: str, kind: str, kept_code: list[str], root: Path | None = None,

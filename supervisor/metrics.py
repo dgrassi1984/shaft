@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import judge
-from .core import INSTANCES, SUP_DIR, git_wt, journal_note, knob, log
+from .core import INSTANCES, SUP_DIR, git_wt, journal_note, knob, log, safe_write
 
 PROBATION_CYCLES, _ = knob("SHAFT_PROBATION_CYCLES", "6", int)
 PROBATION_MARGIN = 0.15   # revert only on a clear drop, not noise
@@ -230,9 +230,7 @@ def stats_text(name: str) -> str:
 
 
 def write_stats(name: str) -> None:
-    path = INSTANCES / name / "self" / "stats.md"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(stats_text(name))
+    safe_write(INSTANCES / name, "self/stats.md", stats_text(name))
 
 
 # -- probation of self-modifications --------------------------------------------
