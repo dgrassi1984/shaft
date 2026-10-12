@@ -21,7 +21,7 @@ FIELDS: dict[str, tuple[type, object]] = {
     "LLM_API_KEY": (str, ""),
     "LLM_TIMEOUT_S": (int, 900),
     "MAX_TOKENS_REFLECT": (int, 16384),
-    "MAX_TOKENS_TALK": (int, 4096),
+    "MAX_TOKENS_TALK": (int, 8192),
     "MAX_TOKENS_STEP": (int, 16384),     # one model turn inside a tool loop (live, sleep)
     "MAX_STEPS_LIVE": (int, 12),
     "MAX_STEPS_SLEEP": (int, 14),
