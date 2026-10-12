@@ -188,44 +188,36 @@ def _gene_diff(a: str, b: str) -> list[str]:
     return [p for p in out.splitlines() if p]
 
 
-def breed(a: str, b: str, child: str) -> int:
-    for parent in (a, b):
-        instance_root(parent)
-    if not NAME_RE.match(child) or (INSTANCES / child).exists():
-        print(f"bad or existing child name {child!r}")
-        return 2
-    differing = _gene_diff(a, b)
-    choices: list[dict] = []
-    summary = "The parents' genes are identical; the child inherits them unchanged."
-    if differing:
-        if not judge.available():
-            print("the judge is needed to recombine differing genes, but no ANTHROPIC_API_KEY is set")
-            return 2
-        diffs = "\n\n".join(
-            f"### {p}\n```diff\n{git('diff', f'instance/{a}', f'instance/{b}', '--', p).stdout[:6000]}\n```"
-            for p in differing)
-        prompt = (f"Two autonomous agents, '{a}' (side a) and '{b}' (side b), forked from a common template "
-                  f"and changed their own code, prompts, plugins and skills. Choose, for each differing file, "
-                  f"which version the child inherits: 'a', 'b', or 'template' (the original). Prefer versions "
-                  f"backed by better measured results; keep safety-relevant behaviour; keep changes that work "
-                  f"together (don't split a coherent change across files).\n\n"
-                  f"## Measured results of {a}\n{metrics.stats_text(a)}\n\n## Measured results of {b}\n"
-                  f"{metrics.stats_text(b)}\n\n## Differing files (diff from a to b)\n{diffs}")
-        verdict = judge.ask("You are the geneticist of a population of software agents. Decide on evidence.",
-                            prompt, BREED_SCHEMA, purpose=f"breed {a}x{b}")
-        summary = verdict["summary"]
-        choices = [c for c in verdict["choices"] if c["path"] in differing]
-        missing = set(differing) - {c["path"] for c in choices}
-        choices += [{"path": p, "take": "a", "reason": "not addressed by the judge; kept side a"} for p in missing]
+def _choose_genes(a: str, b: str, differing: list[str], feedback: str = "") -> tuple[list[dict], str]:
+    diffs = "\n\n".join(
+        f"### {p}\n```diff\n{git('diff', f'instance/{a}', f'instance/{b}', '--', p).stdout[:6000]}\n```"
+        for p in differing)
+    prompt = (f"Two autonomous agents, '{a}' (side a) and '{b}' (side b), forked from a common template "
+              f"and changed their own code, prompts, plugins and skills. Choose, for each differing file, "
+              f"which version the child inherits: 'a', 'b', or 'template' (the original). Prefer versions "
+              f"backed by better measured results; keep safety-relevant behaviour; files that change "
+              f"together (one calls what the other defines) must come from the same side.\n\n"
+              f"## Measured results of {a}\n{metrics.stats_text(a)}\n\n## Measured results of {b}\n"
+              f"{metrics.stats_text(b)}\n\n## Differing files (diff from a to b)\n{diffs}"
+              + (f"\n\n## Your previous choice failed the test gate\n{feedback}\nChoose again so the child "
+                 f"passes." if feedback else ""))
+    verdict = judge.ask("You are the geneticist of a population of software agents. Decide on evidence.",
+                        prompt, BREED_SCHEMA, purpose=f"breed {a}x{b}")
+    choices = [c for c in verdict["choices"] if c["path"] in differing]
+    missing = set(differing) - {c["path"] for c in choices}
+    choices += [{"path": p, "take": "a", "reason": "not addressed by the judge; kept side a"} for p in sorted(missing)]
+    return choices, verdict["summary"]
 
+
+def _build_child(a: str, b: str, child: str, choices: list[dict], summary: str) -> tuple[bool, str]:
+    """Create instance/<child>; returns (passed_gate, test_log). Removes it again on failure."""
     root = INSTANCES / child
     git("worktree", "add", "-q", "-b", f"instance/{child}", str(root), f"instance/{a}")
     try:
         git_wt(root, "merge", "-q", "--no-ff", "--no-commit", "-s", "ours", f"instance/{b}", check=False)
         for c in choices:
             source = {"b": f"instance/{b}", "template": "template", "a": f"instance/{a}"}[c["take"]]
-            exists = git("cat-file", "-e", f"{source}:{c['path']}", check=False).returncode == 0
-            if exists:
+            if git("cat-file", "-e", f"{source}:{c['path']}", check=False).returncode == 0:
                 git_wt(root, "checkout", source, "--", c["path"])
             else:
                 git_wt(root, "rm", "-q", "--ignore-unmatch", "--", c["path"])
@@ -243,16 +235,49 @@ def breed(a: str, b: str, child: str) -> int:
         journal_note(root, "Born", f"I was born from {a} and {b}: my code, prompts, plugins and skills are a "
                                    f"recombination of theirs; my mind starts empty.\n\nWhy these genes: {summary}\n\n{picks}")
         ok, test_log = gate.run_tests(root, HOME)
-        if not ok:
-            raise RuntimeError("child failed the test gate:\n" + test_log[-1500:])
-        git_wt(root, "add", "-A", ".")
-        git_wt(root, "commit", "-q", "-m", f"{child}: born from {a} × {b}\n\n{summary}\n\n{picks}")
+        if ok:
+            git_wt(root, "add", "-A", ".")
+            git_wt(root, "commit", "-q", "-m", f"{child}: born from {a} × {b}\n\n{summary}\n\n{picks}")
+            return True, test_log
     except Exception as e:
-        git("worktree", "remove", "--force", str(root), check=False)
-        git("branch", "-D", f"instance/{child}", check=False)
-        print(f"breeding failed, no child created: {e}")
-        log(f"breed {a}x{b} -> {child} FAILED: {e}")
+        test_log = f"{type(e).__name__}: {e}"
+    git("worktree", "remove", "--force", str(root), check=False)
+    git("branch", "-D", f"instance/{child}", check=False)
+    return False, test_log
+
+
+def breed(a: str, b: str, child: str, attempts: int = 2) -> int:
+    for parent in (a, b):
+        instance_root(parent)
+    if not NAME_RE.match(child) or (INSTANCES / child).exists():
+        print(f"bad or existing child name {child!r}")
+        return 2
+    differing = _gene_diff(a, b)
+    if differing and not judge.available():
+        print("the judge is needed to recombine differing genes, but no ANTHROPIC_API_KEY is set")
+        return 2
+    record = {"a": a, "b": b, "child": child, "at": datetime.now().isoformat(timespec="seconds"),
+              "differing": differing, "attempts": []}
+    out = SUP_DIR / "evals" / f"breed-{a}-{b}-{child}-{datetime.now():%Y%m%d-%H%M%S}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    feedback, born = "", False
+    for attempt in range(1, attempts + 1):
+        if differing:
+            choices, summary = _choose_genes(a, b, differing, feedback)
+        else:
+            choices, summary = [], "The parents' genes are identical; the child inherits them unchanged."
+        born, test_log = _build_child(a, b, child, choices, summary)
+        record["attempts"].append({"choices": choices, "summary": summary, "passed": born,
+                                   "gate": test_log[-3000:]})
+        out.write_text(json.dumps(record, indent=1, ensure_ascii=False))
+        if born:
+            break
+        feedback = test_log[-2500:]
+        print(f"attempt {attempt}: the child failed the test gate" + ("; asking the judge again" if attempt < attempts else ""))
+    log(f"breed {a}x{b} -> {child}: {'born' if born else 'FAILED'} after {len(record['attempts'])} attempt(s); {out.name}")
+    if not born:
+        print(f"no child: every recombination failed the gate. Record: {out.relative_to(PROJECT)}")
         return 1
-    log(f"breed {a}x{b} -> {child}: {len(choices)} gene choices")
-    print(f"{child} was born from {a} × {b} ({len(differing)} differing gene files).\n{summary}")
+    print(f"{child} was born from {a} × {b} ({len(differing)} differing gene files, attempt {attempt}).\n"
+          f"{summary}\nRecord: {out.relative_to(PROJECT)}")
     return 0

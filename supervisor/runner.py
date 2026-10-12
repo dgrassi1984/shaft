@@ -20,7 +20,8 @@ from pathlib import Path
 
 from . import gate, sandbox
 from .broker import Broker
-from .core import (BROKER_MAX_CALLS, CORE_MIN_HOURS, CYCLE_TIMEOUT_S, HOME, LLM_PORTS, PROJECT, SLEEP_TIMEOUT_S, SUP_DIR,
+from .core import (BROKER_MAX_CALLS, CORE_MIN_HOURS, CYCLE_TIMEOUT_S, HOME, INSTANCES, LLM_PORTS, PROJECT,
+                   SLEEP_TIMEOUT_S, SUP_DIR,
                    commit_state, describe_knobs, git_wt, instance_root, journal_note, log, secrets_env)
 
 CORE_RE = re.compile(r"^## Core\n(.*?)(?=^## |\Z)", re.M | re.S)
@@ -61,6 +62,21 @@ def busy_with(name: str) -> str | None:
         return f"{kind} since {since}"
     except (OSError, ValueError):
         return "a run"
+
+
+def request_yield(names: list[str]) -> None:
+    """Ask running autonomous cycles to wrap up at their next turn (flag inside each instance)."""
+    for n in names:
+        flag = INSTANCES / n / ".tmp" / "yield"
+        flag.parent.mkdir(parents=True, exist_ok=True)
+        flag.write_text(datetime.now().isoformat(timespec="seconds"))
+        log(f"{n}: asked to yield the model (operator conversation)")
+
+
+def talking() -> list[str]:
+    """Instances currently in a conversation with the operator."""
+    from .core import instance_names
+    return [n for n in instance_names() if (busy_with(n) or "").startswith("talk")]
 
 
 def is_busy(name: str) -> bool:
@@ -168,6 +184,10 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
             signal.signal(signal.SIGINT, old_sigint)
         broker.stop()
     log(f"{name}: end {kind} exit={code} broker_calls={broker.counts or {}}")
+    (root / ".tmp" / "yield").unlink(missing_ok=True)
+    if code < 0 and not interactive:
+        journal_note(root, "Supervisor: run stopped", f"My {kind} run was stopped from outside (signal {-code}) "
+                     "before I finished it. Whatever I had already written to my files was kept.")
 
     for note in (enforce_journal(root, journal_before), enforce_core(name, root, core_before)):
         if note:

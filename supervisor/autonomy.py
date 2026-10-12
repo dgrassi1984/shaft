@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from .core import PROJECT, SUP_DIR, instance_names, log, paused
-from .runner import Busy, is_busy, run_agent
+from .runner import Busy, is_busy, run_agent, talking
 
 AGENTS = Path.home() / "Library" / "LaunchAgents"
 JOBS = {
@@ -22,6 +22,9 @@ def tick() -> int:
     the model serves one request at a time)."""
     if (SUP_DIR / "paused").exists():
         log("tick skipped: all paused")
+        return 0
+    if (busy := talking()):
+        log(f"tick skipped: the operator is in a conversation with {', '.join(busy)}")
         return 0
     worst = 0
     for name in instance_names():
