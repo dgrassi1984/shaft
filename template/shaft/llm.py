@@ -5,6 +5,8 @@ Rules this module enforces:
   with twice the room; if it is still cut off, `Truncated` is raised and the
   caller must not save anything.
 - An empty answer is an error, never a silent "".
+- Transient failures (backend restarting: 502/503/504, connection refused)
+  are retried with backoff, but never after any text has already streamed.
 - Every call — including failed ones — is recorded in logs/llm_usage.jsonl.
 """
 from __future__ import annotations
@@ -25,6 +27,14 @@ class LLMError(Exception):
 
 class Truncated(LLMError):
     pass
+
+
+class Transient(LLMError):
+    """The backend is temporarily unavailable; nothing was generated."""
+
+
+TRANSIENT_HTTP = {502, 503, 504}
+BACKOFF_S = (10, 30)  # waits before the 2nd and 3rd attempt
 
 
 @dataclass
@@ -64,11 +74,11 @@ class Client:
 
     # -- internals ----------------------------------------------------------
     def _with_retry(self, messages, max_tokens, purpose, stream, on_retry=None, **callbacks) -> Reply:
-        reply = self._call(messages, max_tokens, purpose, stream, **callbacks)
+        reply = self._resilient(messages, max_tokens, purpose, stream, **callbacks)
         if reply.finish_reason == "length":
             if on_retry:
                 on_retry(max_tokens, max_tokens * 2)
-            reply = self._call(messages, max_tokens * 2, purpose, stream, **callbacks)
+            reply = self._resilient(messages, max_tokens * 2, purpose, stream, **callbacks)
             reply.attempts = 2
             if reply.finish_reason == "length":
                 raise Truncated(
@@ -79,6 +89,16 @@ class Client:
                            f"(finish_reason={reply.finish_reason!r}, "
                            f"reasoning_chars={len(reply.reasoning)})")
         return reply
+
+    def _resilient(self, messages, max_tokens, purpose, stream, **callbacks) -> Reply:
+        for wait in (*BACKOFF_S, None):
+            try:
+                return self._call(messages, max_tokens, purpose, stream, **callbacks)
+            except Transient:
+                if wait is None:
+                    raise
+                time.sleep(wait)
+        raise AssertionError("unreachable")
 
     def _call(self, messages, max_tokens, purpose, stream, on_content=None, on_reasoning=None) -> Reply:
         body = {"model": self.model, "messages": messages, "max_tokens": max_tokens}
@@ -109,10 +129,12 @@ class Client:
         except urllib.error.HTTPError as e:
             detail = e.read().decode(errors="replace")[:500]
             error = f"HTTP {e.code} from {url}: {detail}"
-            raise LLMError(error) from e
+            transient = e.code in TRANSIENT_HTTP and not reply.content
+            raise (Transient if transient else LLMError)(error) from e
         except urllib.error.URLError as e:
             error = f"cannot reach LLM at {url} (model={self.model}): {e.reason}"
-            raise LLMError(error) from e
+            refused = isinstance(e.reason, ConnectionRefusedError)
+            raise (Transient if refused else LLMError)(error) from e
         except (TimeoutError, OSError) as e:
             error = f"LLM call to {url} failed after {time.monotonic() - started:.0f}s: {e}"
             raise LLMError(error) from e
