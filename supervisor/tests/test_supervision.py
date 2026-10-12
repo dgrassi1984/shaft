@@ -100,5 +100,51 @@ class StatsTest(unittest.TestCase):
         self.assertIn("overconfident", text)
 
 
+class ProbationTest(unittest.TestCase):
+    def setUp(self):
+        import subprocess
+        self.sp = subprocess
+        self.project = Path(tempfile.mkdtemp(prefix="shaft-prob-")).resolve()
+        self.git(self.project, "init", "-q")
+        self.git(self.project, "commit", "-q", "--allow-empty", "-m", "main")
+        self.root = self.project / "instances" / "p"
+        self.git(self.project, "worktree", "add", "-q", "--orphan", "-b", "instance/p", str(self.root))
+        (self.root / "memory").mkdir()
+        (self.root / "memory" / "journal.md").write_text("# j\n")
+        (self.root / "prompts.py").write_text("GOOD = True\n")
+        self.git(self.root, "add", "-A")
+        self.git(self.root, "commit", "-q", "-m", "good")
+        (self.root / "prompts.py").write_text("GOOD = False\n")
+        self.git(self.root, "commit", "-q", "-am", "self-change")
+        self.change = self.git(self.root, "rev-parse", "HEAD").strip()
+
+    def tearDown(self):
+        shutil.rmtree(self.project, ignore_errors=True)
+
+    def git(self, cwd, *args):
+        return self.sp.run(["git", "-C", str(cwd), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                           check=True, capture_output=True, text=True).stdout
+
+    def run_probation(self, after: list[str]):
+        from supervisor import core
+        js = [{"criterion_met": "yes"}] * 3 + [{"criterion_met": m} for m in after]
+        wt = lambda root, *a, **k: core.git_wt(root, *a, **{**k, "project": self.project})  # noqa: E731
+        with mock.patch.object(metrics, "INSTANCES", self.project / "instances"), \
+             mock.patch.object(metrics, "judgments", return_value=js[:3]), mock.patch.object(metrics, "git_wt", wt):
+            metrics.start_probation("p", self.change, ["prompts.py"])
+        with mock.patch.object(metrics, "INSTANCES", self.project / "instances"), \
+             mock.patch.object(metrics, "judgments", return_value=js), mock.patch.object(metrics, "git_wt", wt):
+            metrics.check_probation("p")
+
+    def test_worse_results_revert_the_change(self):
+        self.run_probation(["no"] * metrics.PROBATION_CYCLES)
+        self.assertEqual((self.root / "prompts.py").read_text(), "GOOD = True\n")
+        self.assertIn("failed probation", (self.root / "memory" / "journal.md").read_text())
+
+    def test_equal_results_keep_the_change(self):
+        self.run_probation(["yes"] * metrics.PROBATION_CYCLES)
+        self.assertEqual((self.root / "prompts.py").read_text(), "GOOD = False\n")
+
+
 if __name__ == "__main__":
     unittest.main()
