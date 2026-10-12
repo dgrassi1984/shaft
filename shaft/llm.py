@@ -70,10 +70,12 @@ class Client:
                on_content: Callable[[str], None] | None = None,
                on_reasoning: Callable[[str], None] | None = None,
                on_retry: Callable[[int, int], None] | None = None,
-               tools: list[dict] | None = None) -> Reply:
+               tools: list[dict] | None = None,
+               on_progress: Callable[[int, int], None] | None = None) -> Reply:
+        """on_progress(processed, total) reports prompt reading, where the server supports it."""
         return self._with_retry(messages, max_tokens, purpose, stream=True, tools=tools,
                                 on_content=on_content, on_reasoning=on_reasoning,
-                                on_retry=on_retry)
+                                on_retry=on_retry, on_progress=on_progress)
 
     # -- internals ----------------------------------------------------------
     def _with_retry(self, messages, max_tokens, purpose, stream, on_retry=None, **callbacks) -> Reply:
@@ -104,13 +106,15 @@ class Client:
         raise AssertionError("unreachable")
 
     def _call(self, messages, max_tokens, purpose, stream, tools=None,
-              on_content=None, on_reasoning=None) -> Reply:
+              on_content=None, on_reasoning=None, on_progress=None) -> Reply:
         body = {"model": self.model, "messages": messages, "max_tokens": max_tokens}
         if tools:
             body["tools"] = tools
         if stream:
             body["stream"] = True
             body["stream_options"] = {"include_usage": True}
+            if on_progress:
+                body["return_progress"] = True   # llama.cpp: prompt-processing progress chunks
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -122,7 +126,7 @@ class Client:
         try:
             with urllib.request.urlopen(request, timeout=self.timeout_s) as resp:
                 if stream:
-                    self._read_stream(resp, reply, on_content, on_reasoning)
+                    self._read_stream(resp, reply, on_content, on_reasoning, on_progress)
                 else:
                     data = json.load(resp)
                     choice = data["choices"][0]
@@ -155,7 +159,7 @@ class Client:
             self._log(purpose, reply, time.monotonic() - started, error)
 
     @staticmethod
-    def _read_stream(resp, reply: Reply, on_content, on_reasoning) -> None:
+    def _read_stream(resp, reply: Reply, on_content, on_reasoning, on_progress=None) -> None:
         content, reasoning = [], []
         calls: dict[int, dict] = {}
         for raw in resp:
@@ -168,6 +172,9 @@ class Client:
             chunk = json.loads(payload)
             if chunk.get("usage"):
                 reply.usage = chunk["usage"]
+            progress = chunk.get("prompt_progress")
+            if progress and on_progress:
+                on_progress(int(progress.get("processed", 0)), int(progress.get("total", 0)))
             for choice in chunk.get("choices") or []:
                 delta = choice.get("delta") or {}
                 if delta.get("reasoning_content"):

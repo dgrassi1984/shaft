@@ -9,6 +9,7 @@ from . import agent, prompts
 from .llm import Client, LLMError
 from .state import State
 from .tools import Toolbox
+from .ui import Status
 
 DIM, RED, CYAN, RESET = "\033[2m", "\033[31m", "\033[36m", "\033[0m"
 EXIT_WORDS = {"/exit", "/quit", "/bye"}
@@ -79,61 +80,91 @@ def run(cfg, state: State, client: Client, show_thinking: bool = False, input_fn
         _summarise(client, cfg, state, system, history, talk_id)
 
 
+def _brief(args: str, n: int) -> str:
+    return re.sub(r"\s+", " ", args)[:n]
+
+
 def _respond(client: Client, cfg, toolbox: Toolbox, messages: list[dict], show_thinking: bool):
-    status = {"thinking": False, "speaking": False}
+    """Stream one reply, keeping a live status line until words appear:
+    waiting for the model → reading my memory (prompt %) → thinking (~tokens) → answer."""
+    ui = Status()
+    st = {"speaking": False, "reasoning": 0}
     tools = toolbox.specs()
 
+    def on_progress(processed: int, total: int) -> None:
+        if total:
+            ui.show("reading my memory", f"{processed * 100 // total}% of {total / 1000:.1f}k tokens")
+
     def on_reasoning(chunk: str) -> None:
+        st["reasoning"] += len(chunk)
         if show_thinking:
-            _out(f"{DIM}{chunk}{RESET}")
-        elif not status["thinking"]:
-            _out(f"{DIM}(thinking…){RESET}")
-        status["thinking"] = True
+            ui.clear()
+            ui.write(f"{DIM}{chunk}{RESET}")
+        else:
+            ui.show("thinking", f"~{st['reasoning'] / 4000:.1f}k tokens")
 
     def on_content(chunk: str) -> None:
-        if not status["speaking"]:
-            _out("\n" if show_thinking and status["thinking"] else "\r\033[K")
-            _out(f"{cfg.NAME} › ")
-            status["speaking"] = True
-        _out(chunk)
+        if not st["speaking"]:
+            ui.clear()
+            ui.write(("\n" if show_thinking and st["reasoning"] else "") + f"{cfg.NAME} › ")
+            st["speaking"] = True
+        ui.write(chunk)
 
     def on_retry(old: int, new: int) -> None:
-        _out(f"\n{DIM}[reply cut off at {old} tokens — asking again with {new}]{RESET}\n")
-        status["thinking"] = status["speaking"] = False
+        ui.clear()
+        ui.write(f"\n{DIM}[reply cut off at {old} tokens — asking again with {new}]{RESET}\n")
+        st["speaking"], st["reasoning"] = False, 0
+        ui.show("waiting for the model")
+
+    def on_tool_start(name: str, args: str) -> None:
+        if st["speaking"]:
+            ui.write("\n")
+        st["speaking"] = False
+        ui.show(f"running {name}", _brief(args, 60))
 
     def on_tool(name: str, args: str, result: str) -> None:
-        brief = re.sub(r"\s+", " ", args)[:100]
+        ui.clear()
         ok = "✗" if result.startswith("ERROR") else "✓"
-        _out(f"\r\033[K{DIM}  {ok} {name} {brief}{RESET}\n")
-        status["thinking"] = status["speaking"] = False
+        ui.write(f"{DIM}  {ok} {name} {_brief(args, 100)}{RESET}\n")
+        st["reasoning"] = 0
+        ui.show("waiting for the model")
 
     def call(msgs, t=tools):
-        return client.stream(msgs, cfg.MAX_TOKENS_TALK, purpose="talk", tools=t,
-                             on_content=on_content, on_reasoning=on_reasoning, on_retry=on_retry)
+        return client.stream(msgs, cfg.MAX_TOKENS_TALK, purpose="talk", tools=t, on_content=on_content,
+                             on_reasoning=on_reasoning, on_retry=on_retry, on_progress=on_progress)
 
+    ui.show("waiting for the model")
     try:
         outcome = agent.run(client, messages, toolbox, max_tokens=cfg.MAX_TOKENS_TALK, purpose="talk",
-                            max_steps=cfg.MAX_STEPS_TALK, call=call, on_tool=on_tool)
+                            max_steps=cfg.MAX_STEPS_TALK, call=call, on_tool=on_tool,
+                            on_tool_start=on_tool_start)
+        ui.clear()
         if outcome.ended_by != "answer":
             _out(f"\n{DIM}[stopped after {outcome.steps} tool rounds without a final answer]{RESET}")
         _out("\n\n")
         return outcome.reply
     except KeyboardInterrupt:
+        ui.clear()
         _out(f"\n{DIM}[interrupted — that reply is discarded]{RESET}\n\n")
     except LLMError as e:
+        ui.clear()
         _out(f"\n{RED}error: {e}{RESET}\n{DIM}(that message was not kept; try again){RESET}\n\n")
     return None
 
 
 def _summarise(client: Client, cfg, state: State, system: str, history: list[dict], talk_id: str) -> None:
-    _out(f"{DIM}writing my journal entry about this conversation… (Ctrl-C to skip — I'll write it next time){RESET}\n")
+    ui = Status()
+    _out(f"{DIM}writing my journal entry about this conversation (Ctrl-C to skip — I'll write it next time){RESET}\n")
+    ui.show("writing")
     # The summary needs the dialogue, not raw tool payloads.
     dialogue = [m for m in history if m["role"] in ("user", "assistant") and m.get("content")]
     messages = [{"role": "system", "content": system}, *dialogue,
                 {"role": "user", "content": prompts.TALK_SUMMARY.format(operator=cfg.OPERATOR_NAME)}]
     try:
         reply = client.complete(messages, cfg.MAX_TOKENS_REFLECT, purpose="talk_summary")
+        ui.clear()
     except (LLMError, KeyboardInterrupt) as e:
+        ui.clear()
         state.append_episode({"kind": "talk_summary_failed", "talk_id": talk_id, "error": str(e)})
         _out(f"{RED}journal entry NOT written: {e or 'interrupted'}{RESET}\n"
              f"{DIM}the full transcript is saved in memory/episodes/ (talk {talk_id}){RESET}\n")

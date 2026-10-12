@@ -12,6 +12,7 @@ import sys
 from . import prompts
 from .llm import Client, LLMError
 from .state import State
+from .ui import Status
 
 MAX_TRANSCRIPT_CHARS = 24000
 
@@ -45,9 +46,13 @@ def run(cfg, state: State, client: Client) -> int:
             operator=cfg.OPERATOR_NAME, started=started.replace("T", " ")[:16], ended=ended.replace("T", " ")[:16]))
         messages = [{"role": "system", "content": system}, *dialogue,
                     {"role": "user", "content": prompts.TALK_SUMMARY.format(operator=cfg.OPERATOR_NAME)}]
+        ui = Status(sys.stderr)
+        ui.show(f"writing up our conversation of {started[:16].replace('T', ' ')} first (it has no journal entry yet)")
         try:
             reply = client.complete(messages, cfg.MAX_TOKENS_REFLECT, purpose="talk_recovery")
+            ui.clear()
         except LLMError as e:
+            ui.clear()
             print(f"could not write the missing entry for conversation {talk_id}: {e}", file=sys.stderr)
             continue
         state.append_journal(

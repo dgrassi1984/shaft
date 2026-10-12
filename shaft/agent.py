@@ -40,6 +40,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
         max_steps: int, controls: dict[str, Control] | None = None,
         call: Callable[..., Reply] | None = None,
         on_tool: Callable[[str, str, str], None] | None = None,
+        on_tool_start: Callable[[str, str], None] | None = None,
         wrap_up: str | None = None) -> Outcome:
     """Run until the model answers without calling tools, a stopping control is called,
     or max_steps model turns have been used. `call` defaults to client.complete; pass a
@@ -72,6 +73,8 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
             return Outcome(reply, "answer", step, toolbox.log)
         stop = False
         for c in reply.tool_calls:
+            if on_tool_start:
+                on_tool_start(c["name"], c["arguments"])
             if c["name"] in controls:
                 try:
                     args = json.loads(c["arguments"] or "{}")
