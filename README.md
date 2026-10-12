@@ -75,6 +75,7 @@ shaft inbox [--clear]           # questions and notes instances sent you (you al
 shaft reply <name> "…"          # answer its open question
 shaft send <name> "…"           # message it
 
+shaft update [name|--all]       # merge template fixes into instances — only when idle, gate-tested
 shaft new <name> [--from <i>]   # new instance from the template, or forked from <i> (genes, not memories)
 shaft breed <a> <b> <child>     # child from two instances' recombined genes, fresh mind (judge picks)
 shaft drift [name]              # how its personality changed; distance to other instances

@@ -22,7 +22,7 @@ from datetime import date, datetime
 from . import autonomy, evolution, finetune, gate, messages, metrics
 from .core import (DEFAULT_INSTANCE, HOME, INSTANCES, NAME_RE, PROJECT, SUP_DIR, TEMPLATE, git, git_wt,
                    instance_names, instance_root, journal_entries, journal_note, log, paused)
-from .runner import busy_with, is_busy, run_agent
+from .runner import Busy, busy_with, is_busy, run_agent, run_lock
 
 
 # -- instances -------------------------------------------------------------------
@@ -63,6 +63,39 @@ def cmd_new(name: str, source: str | None) -> int:
     log(f"created instance {name} on instance/{name} {origin}")
     print(f"created {name} (branch instance/{name}, worktree {root.relative_to(PROJECT)})")
     return 0
+
+
+def cmd_update(names: list[str]) -> int:
+    """Merge `template` into instances — only while holding each instance's run lock, so an
+    operator update is never mistaken for a change the instance made to itself mid-run."""
+    worst = 0
+    for name in names:
+        root = instance_root(name)
+        try:
+            with run_lock(name, wait=False, kind="update"):
+                r = git_wt(root, "-c", "user.name=SHAFT supervisor", "-c", "user.email=supervisor@shaft.localhost",
+                           "merge", "--no-edit", "-m", f"{name}: merge template (operator update)", "template",
+                           check=False)
+                if r.returncode != 0:
+                    git_wt(root, "merge", "--abort", check=False)
+                    print(f"{name}: merge conflict with template, nothing changed:\n{(r.stdout + r.stderr)[-800:]}")
+                    worst = 1
+                    continue
+                if "Already up to date" in r.stdout:
+                    print(f"{name}: already up to date")
+                    continue
+                ok, test_log = gate.run_tests(root, HOME)
+                if not ok:
+                    git_wt(root, "reset", "-q", "--hard", "ORIG_HEAD")
+                    print(f"{name}: merged template failed the gate; rolled back:\n{test_log[-800:]}")
+                    worst = 1
+                    continue
+                log(f"{name}: updated from template")
+                print(f"{name}: updated from template ({git_wt(root, 'rev-parse', '--short', 'HEAD').stdout.strip()})")
+        except Busy:
+            print(f"{name} is busy ({busy_with(name)}); update it when it is idle.")
+            worst = max(worst, 3)
+    return worst
 
 
 def cmd_setup() -> int:
@@ -176,6 +209,9 @@ def main(argv: list[str]) -> int:
     p.add_argument("child")
     sub.add_parser("list", help="list instances")
     sub.add_parser("setup", help="create missing worktrees for template and instance branches")
+    p = sub.add_parser("update", help="merge the template into instances (only when idle; gate-tested)")
+    p.add_argument("names", nargs="*")
+    p.add_argument("--all", action="store_true")
     p = sub.add_parser("new", help="create an instance")
     p.add_argument("name")
     p.add_argument("--from", dest="source", help="fork code, skills and plugins (not memory) from this instance")
@@ -232,6 +268,8 @@ def main(argv: list[str]) -> int:
         return 0
     if args.cmd == "setup":
         return cmd_setup()
+    if args.cmd == "update":
+        return cmd_update(instance_names() if args.all else (args.names or [DEFAULT_INSTANCE]))
     if args.cmd == "new":
         return cmd_new(args.name, args.source)
     if args.cmd in ("pause", "resume"):
