@@ -100,6 +100,36 @@ class StatsTest(unittest.TestCase):
         self.assertIn("overconfident", text)
 
 
+class CloudTranslationTest(unittest.TestCase):
+    def test_history_is_resent_verbatim_and_tool_results_lead(self):
+        from supervisor import cloudllm
+        original = [{"type": "thinking", "thinking": "", "signature": "sig"},
+                    {"type": "tool_use", "id": "t1", "name": "remember", "input": {"fact": "x"}}]
+        remembered = {cloudllm._turn_key("", ["t1"]): original}
+        body = {"model": "claude-haiku-5-5", "max_tokens": 100, "messages": [
+            {"role": "system", "content": "S"}, {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "t1", "type": "function", "function": {"name": "remember", "arguments": '{"fact": "x"}'}}]},
+            {"role": "tool", "tool_call_id": "t1", "content": "stored"},
+            {"role": "user", "content": "[supervisor] wrap up"}]}
+        out = cloudllm.to_anthropic(body, remembered)
+        self.assertEqual(out["system"], "S")
+        self.assertEqual(out["messages"][1]["content"], original)            # thinking block kept, unmodified
+        last = out["messages"][2]
+        self.assertEqual([b["type"] for b in last["content"]], ["tool_result", "text"])
+        self.assertEqual(last["role"], "user")
+
+    def test_disallowed_model_and_budget_refused_before_any_call(self):
+        from supervisor import cloudllm
+        with self.assertRaises(cloudllm.CloudError) as ctx:
+            cloudllm.complete("x", {"model": "claude-opus-5-5", "messages": []}, "key", {})
+        self.assertEqual(ctx.exception.status, 403)
+        with mock.patch.object(cloudllm, "spent_today", return_value=cloudllm.DAILY_USD):
+            with self.assertRaises(cloudllm.CloudError) as ctx:
+                cloudllm.complete("x", {"model": "claude-haiku-5-5", "messages": []}, "key", {})
+        self.assertEqual(ctx.exception.status, 429)
+
+
 class ProbationTest(unittest.TestCase):
     def setUp(self):
         import subprocess

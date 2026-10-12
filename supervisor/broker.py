@@ -142,6 +142,7 @@ class Broker:
         self.token = secrets.token_hex(16)
         self.calls = 0
         self.counts: dict[str, int] = {}
+        self.remembered: dict[str, list] = {}    # original cloud-model turns, resent verbatim
         self.server: ThreadingHTTPServer | None = None
 
     # -- lifecycle -------------------------------------------------------------
@@ -176,6 +177,8 @@ class Broker:
             def do_POST(self):
                 if not self._authorised():
                     return
+                if self.path.rstrip("/") == "/llm/v1/chat/completions":
+                    return self._llm()
                 m = re.fullmatch(r"/tools/([a-z_]+)", self.path)
                 if not m or m.group(1) not in SPECS:
                     return self._reply(404, {"ok": False, "error": f"no tool {self.path!r}"})
@@ -184,6 +187,31 @@ class Broker:
                 except ValueError:
                     return self._reply(400, {"ok": False, "error": "body must be JSON"})
                 self._reply(200, broker.call(m.group(1), args if isinstance(args, dict) else {}))
+
+            def _llm(self):
+                from . import cloudllm
+                body: dict = {}
+                try:
+                    body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+                    reply = cloudllm.complete(broker.name, body, broker.secrets.get("ANTHROPIC_API_KEY", ""),
+                                              broker.remembered)
+                except cloudllm.CloudError as e:
+                    broker._log(f"{broker.name} llm {body.get('model', '?')} -> ERROR {e}")
+                    return self._reply(e.status, {"error": {"message": str(e)}})
+                except ValueError:
+                    return self._reply(400, {"error": {"message": "body must be JSON"}})
+                u = reply["usage"]
+                broker._log(f"{broker.name} llm {body.get('model')} -> {reply['choices'][0]['finish_reason']} "
+                            f"(in {u['prompt_tokens']}, out {u['completion_tokens']})")
+                if body.get("stream"):
+                    payload = cloudllm.as_sse(reply)
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                else:
+                    self._reply(200, reply)
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
