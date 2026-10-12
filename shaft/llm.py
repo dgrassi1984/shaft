@@ -41,6 +41,7 @@ BACKOFF_S = (10, 30)  # waits before the 2nd and 3rd attempt
 class Reply:
     content: str
     reasoning: str = ""
+    tool_calls: list = field(default_factory=list)   # [{"id", "name", "arguments": str}]
     finish_reason: str = ""
     usage: dict = field(default_factory=dict)
     attempts: int = 1
@@ -61,14 +62,16 @@ class Client:
                    cfg.root / "logs" / "llm_usage.jsonl")
 
     # -- public -------------------------------------------------------------
-    def complete(self, messages: list[dict], max_tokens: int, purpose: str) -> Reply:
-        return self._with_retry(messages, max_tokens, purpose, stream=False)
+    def complete(self, messages: list[dict], max_tokens: int, purpose: str,
+                 tools: list[dict] | None = None) -> Reply:
+        return self._with_retry(messages, max_tokens, purpose, stream=False, tools=tools)
 
     def stream(self, messages: list[dict], max_tokens: int, purpose: str,
                on_content: Callable[[str], None] | None = None,
                on_reasoning: Callable[[str], None] | None = None,
-               on_retry: Callable[[int, int], None] | None = None) -> Reply:
-        return self._with_retry(messages, max_tokens, purpose, stream=True,
+               on_retry: Callable[[int, int], None] | None = None,
+               tools: list[dict] | None = None) -> Reply:
+        return self._with_retry(messages, max_tokens, purpose, stream=True, tools=tools,
                                 on_content=on_content, on_reasoning=on_reasoning,
                                 on_retry=on_retry)
 
@@ -84,7 +87,7 @@ class Client:
                 raise Truncated(
                     f"{purpose}: reply cut off at max_tokens={max_tokens * 2} twice "
                     f"(completion_tokens={reply.usage.get('completion_tokens')}); nothing saved")
-        if not reply.content.strip():
+        if not reply.content.strip() and not reply.tool_calls:
             raise LLMError(f"{purpose}: model returned an empty answer "
                            f"(finish_reason={reply.finish_reason!r}, "
                            f"reasoning_chars={len(reply.reasoning)})")
@@ -100,8 +103,11 @@ class Client:
                 time.sleep(wait)
         raise AssertionError("unreachable")
 
-    def _call(self, messages, max_tokens, purpose, stream, on_content=None, on_reasoning=None) -> Reply:
+    def _call(self, messages, max_tokens, purpose, stream, tools=None,
+              on_content=None, on_reasoning=None) -> Reply:
         body = {"model": self.model, "messages": messages, "max_tokens": max_tokens}
+        if tools:
+            body["tools"] = tools
         if stream:
             body["stream"] = True
             body["stream_options"] = {"include_usage": True}
@@ -125,6 +131,10 @@ class Client:
                     reply.reasoning = message.get("reasoning_content") or ""
                     reply.finish_reason = choice.get("finish_reason") or ""
                     reply.usage = data.get("usage") or {}
+                    reply.tool_calls = [
+                        {"id": c.get("id") or f"call_{i}", "name": c["function"]["name"],
+                         "arguments": c["function"].get("arguments") or "{}"}
+                        for i, c in enumerate(message.get("tool_calls") or [])]
             return reply
         except urllib.error.HTTPError as e:
             detail = e.read().decode(errors="replace")[:500]
@@ -147,6 +157,7 @@ class Client:
     @staticmethod
     def _read_stream(resp, reply: Reply, on_content, on_reasoning) -> None:
         content, reasoning = [], []
+        calls: dict[int, dict] = {}
         for raw in resp:
             line = raw.decode(errors="replace").strip()
             if not line.startswith("data:"):
@@ -167,10 +178,18 @@ class Client:
                     content.append(delta["content"])
                     if on_content:
                         on_content(delta["content"])
+                for tc in delta.get("tool_calls") or []:
+                    slot = calls.setdefault(tc.get("index", 0), {"id": "", "name": "", "arguments": ""})
+                    slot["id"] = tc.get("id") or slot["id"]
+                    fn = tc.get("function") or {}
+                    slot["name"] += fn.get("name") or ""
+                    slot["arguments"] += fn.get("arguments") or ""
                 if choice.get("finish_reason"):
                     reply.finish_reason = choice["finish_reason"]
         reply.content = "".join(content)
         reply.reasoning = "".join(reasoning)
+        reply.tool_calls = [{**c, "id": c["id"] or f"call_{i}", "arguments": c["arguments"] or "{}"}
+                            for i, c in sorted(calls.items())]
 
     def _log(self, purpose: str, reply: Reply, duration_s: float, error: str | None) -> None:
         record = {
@@ -182,6 +201,7 @@ class Client:
             "prompt_tokens": reply.usage.get("prompt_tokens"),
             "completion_tokens": reply.usage.get("completion_tokens"),
             "content_chars": len(reply.content),
+            "tool_calls": [c["name"] for c in reply.tool_calls],
             "reasoning_chars": len(reply.reasoning),
             "duration_s": round(duration_s, 2),
             "error": error,

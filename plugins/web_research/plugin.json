@@ -1,0 +1,12 @@
+{
+  "name": "web_research",
+  "description": "Research a question on the web: search, read the top pages, and return a digest of what each source says, with URLs. Slower than web_search but gives real page content instead of snippets.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "question": {"type": "string", "description": "what you want to find out"},
+      "pages": {"type": "integer", "description": "how many top results to read (1-5, default 3)"}
+    },
+    "required": ["question"]
+  }
+}

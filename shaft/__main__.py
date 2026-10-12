@@ -6,7 +6,7 @@ import sys
 from datetime import datetime
 
 from . import config as config_mod
-from . import reflect, talk
+from . import live, reflect, sleep, talk
 from .llm import Client, LLMError
 from .state import State
 
@@ -17,6 +17,8 @@ def main(argv: list[str] | None = None) -> int:
     t = sub.add_parser("talk", help="chat in the terminal")
     t.add_argument("--show-thinking", action="store_true", help="stream my reasoning, dimmed")
     sub.add_parser("reflect", help="run one reflection cycle")
+    sub.add_parser("live", help="run one autonomous cycle with tools")
+    sub.add_parser("sleep", help="consolidate memory, personality and goals")
     sub.add_parser("config", help="print the resolved configuration")
     args = parser.parse_args(argv)
 
@@ -41,6 +43,10 @@ def main(argv: list[str] | None = None) -> int:
             talk.run(cfg, state, client, show_thinking=args.show_thinking)
         elif args.cmd == "reflect":
             print(reflect.run(cfg, state, client))
+        elif args.cmd == "live":
+            print(live.run(cfg, state, client))
+        elif args.cmd == "sleep":
+            print(sleep.run(cfg, state, client))
     except (LLMError, ValueError) as e:
         print(f"{args.cmd} failed, nothing saved: {e}", file=sys.stderr)
         return 1
