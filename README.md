@@ -21,8 +21,10 @@ Design, milestones and decisions: [PLAN.md](PLAN.md).
 ## Requirements
 
 - macOS (the sandbox uses `sandbox-exec`), Python 3.12+, git 2.42+ — no Python packages.
-- An OpenAI-compatible chat endpoint with tool calling on localhost (llama.cpp, Ollama,
-  LM Studio, Atomic Chat…), set in each instance's `config.env`.
+- A model per instance, set in its `config.env`: an OpenAI-compatible chat endpoint with tool
+  calling on localhost (llama.cpp, Ollama, LM Studio, Atomic Chat…), or `LLM_BASE_URL="broker"`
+  + e.g. `LLM_MODEL="claude-haiku-5-5"` for a cloud model through the supervisor (the instance
+  never sees the key; allowed models `SHAFT_CLOUD_MODELS`, daily cap `SHAFT_CLOUD_DAILY_USD`).
 - Optional, in `.env` at the root (supervisor-only, never visible to instances):
   `SCRAPEBADGER_API_KEY` (web search), `ANTHROPIC_API_KEY` (the judge).
 - Optional for fine-tuning (M6): `mlx-lm` and an MLX base model (`SHAFT_FT_BASE_MODEL`).
@@ -106,8 +108,14 @@ shaft pause [name] · shaft resume [name] · shaft check [name] · shaft setup �
 - **Git**: after every run the instance's state is committed to its branch (author
   `SHAFT/<name>`), with the main repo's worktree registry and hooks off, so an instance
   cannot redirect the supervisor's git calls.
-- **Budgets**: one run per instance at a time; a cycle is killed after
-  `SHAFT_CYCLE_TIMEOUT_S` (2400 s).
+- **Budgets**: one run per instance at a time; a cycle is stopped after
+  `SHAFT_CYCLE_TIMEOUT_S` (2400 s), a sleep after `SHAFT_SLEEP_TIMEOUT_S` (5400 s). Runs know
+  their deadline and wrap up with a report before it; a stopped run leaves a journal note.
+- **Your conversation comes first**: `shaft talk` asks other instances' running cycles to wrap
+  up at their next turn, and no scheduled cycle starts while a conversation is open. Ctrl-C in
+  a conversation ends it cleanly (the instance still writes its journal entry).
+- **Updates**: template fixes reach an instance only through `shaft update`, under its run lock
+  and the test gate — never mid-run.
 
 ## Status
 
