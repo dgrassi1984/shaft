@@ -11,6 +11,7 @@ judged success rate fell clearly below the rate before the change, the change is
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -69,6 +70,27 @@ def live_episodes(name: str) -> list[dict]:
     return out
 
 
+def _written_files(name: str, ep: dict) -> str:
+    """Current content of files the cycle wrote — tool-log arguments are truncated, files aren't."""
+    root = (INSTANCES / name).resolve()
+    paths = []
+    for t in ep.get("tools", []):
+        if t["tool"] == "write_file" and not t.get("result", "").startswith("ERROR"):
+            try:
+                rel = json.loads(t["args"]).get("path", "")
+            except ValueError:
+                m = re.search(r'"path":\s*"([^"]+)"', t["args"])
+                rel = m.group(1) if m else ""
+            if rel and rel not in paths:
+                paths.append(rel)
+    parts = []
+    for rel in paths:
+        p = (root / rel).resolve()
+        if root in p.parents and p.is_file():
+            parts.append(f"### {rel} (now, {p.stat().st_size} bytes)\n{p.read_text(errors='replace')[:6000]}")
+    return "\n\n".join(parts)
+
+
 def judge_pending(name: str) -> int:
     done = {j["episode_ts"] for j in judgments(name)}
     new = 0
@@ -84,7 +106,8 @@ def judge_pending(name: str) -> int:
             break
         else:
             try:
-                verdict = judge.ask(JUDGE_SYSTEM, _case(ep), JUDGE_SCHEMA, purpose=f"judge {name}")
+                verdict = judge.ask(JUDGE_SYSTEM, _case(ep, _written_files(name, ep)), JUDGE_SCHEMA,
+                                    purpose=f"judge {name}")
                 verdict["judge"] = judge.JUDGE_MODEL
             except judge.JudgeError as e:
                 log(f"{name}: judging {ep['ts']} failed: {e}")
@@ -100,12 +123,14 @@ def judge_pending(name: str) -> int:
     return new
 
 
-def _case(ep: dict) -> str:
+def _case(ep: dict, files: str = "") -> str:
     tools = "\n\n".join(f"### {i}. {t['tool']}({t.get('args', '')[:1500]})\n→ {t.get('result', '')[:2500]}"
                         for i, t in enumerate(ep.get("tools", []), 1))
     return (f"## Declared before acting\n{json.dumps(ep.get('intent'), indent=1, ensure_ascii=False)}\n\n"
             f"## Claimed afterwards\n{json.dumps(ep.get('finish'), indent=1, ensure_ascii=False)}\n\n"
-            f"## Ended by\n{ep.get('ended_by')} after {ep.get('steps')} turns\n\n## Tool log\n{tools or '(no tool calls)'}")
+            f"## Ended by\n{ep.get('ended_by')} after {ep.get('steps')} turns\n\n## Tool log\n{tools or '(no tool calls)'}"
+            + (f"\n\n## Files written in this cycle, as they are now (later cycles may have changed them)\n{files}"
+               if files else ""))
 
 
 def stats_text(name: str) -> str:
