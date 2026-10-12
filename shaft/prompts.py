@@ -213,7 +213,9 @@ def last_sleep(state, shown_journal: str = "") -> str:
     for entry in reversed(state.journal_entries()):
         title = entry.splitlines()[0].lstrip("# ").strip()
         what = title.partition(" — ")[2]
-        if what.startswith("Sleep") or (what.startswith("Supervisor") and "sleep" in entry.lower()):
+        about_sleep = what.startswith("Sleep") or (what.startswith("Supervisor") and (
+            "sleep" in what.lower() or "My sleep run" in entry))   # "sleep failed", "no sleep tonight", stopped
+        if about_sleep:
             try:
                 ago = datetime.now() - datetime.strptime(title[:16], "%Y-%m-%d %H:%M")
                 when = f"{title[:16]} ({ago.total_seconds() / 3600:.0f} h ago)"
