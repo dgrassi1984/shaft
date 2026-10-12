@@ -219,6 +219,9 @@ def main(argv: list[str]) -> int:
     p.add_argument("name", nargs="?", default=DEFAULT_INSTANCE)
     p.add_argument("--show-thinking", action="store_true")
     p.add_argument("--plain", action="store_true", help="plain line-by-line mode instead of the terminal client")
+    p.add_argument("--as", dest="speaker", default="", metavar="NAME",
+                   help="you are not the operator (e.g. --as \"Claude Code\"): recorded, so nothing you say is "
+                        "remembered as the operator's")
     for verb, text in (("live", "one autonomous cycle with tools"), ("reflect", "one reflection (no tools)"),
                        ("sleep", "consolidate memory, personality, goals"),
                        ("recover", "write journal entries for conversations that have none yet")):
@@ -278,7 +281,7 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     if args.cmd == "talk":
-        extra = ["--show-thinking"] if args.show_thinking else []
+        extra = (["--show-thinking"] if args.show_thinking else []) + (["--as", args.speaker] if args.speaker else [])
         if (mine := busy_with(args.name)):
             print(f"{args.name} is busy ({mine}); your conversation starts when it finishes…", file=sys.stderr)
         others = {n: b for n in instance_names() if n != args.name and (b := busy_with(n))}
@@ -294,7 +297,9 @@ def main(argv: list[str]) -> int:
         if not args.plain and sys.stdin.isatty() and not ui_python.exists():
             print(f"(plain mode: the terminal client needs {ui_python} — python3 -m venv .venv-ui && "
                   f".venv-ui/bin/pip install prompt_toolkit rich)", file=sys.stderr)
-        code = run_agent(args.name, "talk", ["talk", *extra], interactive=True)
+        plain_args = ["talk"] + (["--show-thinking"] if args.show_thinking else []) + \
+            (["--speaker", args.speaker] if args.speaker else [])
+        code = run_agent(args.name, "talk", plain_args, interactive=True)
         spawn_recover(args.name)   # the journal entry is written in the background — leaving is instant
         return code
     if args.cmd in ("live", "reflect", "sleep", "recover"):

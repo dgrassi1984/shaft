@@ -113,9 +113,34 @@ class WriteUpTest(unittest.TestCase):
         self.assertEqual(out, "[('old', ['back again', 'yes'])]")
 
     def test_api_reply_does_not_get_its_own_conversation_twice(self):
-        out = self.run_template(self.CODE + "print(recovery.unwritten_context(s, exclude='open1'))", self.root)
+        out = self.run_template(self.CODE + "print(recovery.unwritten_context(s, 'Daniele', exclude='open1'))", self.root)
         self.assertNotIn("hello", out)
         self.assertIn("back again", out)
+
+
+class SpeakerTest(unittest.TestCase):
+    def test_conversation_with_someone_else_is_not_remembered_as_the_operator(self):
+        # Regression: Claude Code talked to shaft for Daniele (saying so); the write-up was titled
+        # "Conversation with Daniele" and filed "what I learned about Daniele" from what Claude Code did.
+        from supervisor.tests.fakellm import FakeLLM
+        fake = FakeLLM([{"content": "Claude Code added a history tool."}])
+        self.addCleanup(fake.close)
+        root = Path(tempfile.mkdtemp(prefix="shaft-inst-"))
+        (root / "memory" / "episodes").mkdir(parents=True)
+        (root / "config.env").write_text(f'LLM_BASE_URL="{fake.url}"\nLLM_MODEL="m"\n')
+        recs = [{"kind": "talk", "talk_id": "t1", "role": "user", "content": "I added a history tool for you.",
+                 "speaker": "Claude Code", "ts": "2026-10-12T23:38:00"},
+                {"kind": "talk", "talk_id": "t1", "role": "assistant", "content": "thanks", "ts": "2026-10-12T23:44:00"}]
+        (root / "memory" / "episodes" / "2026-10-12.jsonl").write_text("".join(json.dumps(r) + "\n" for r in recs))
+        r = subprocess.run([sys.executable, "-E", "-s", "-m", "shaft", "recover"], cwd=TEMPLATE,
+                           env={"PATH": "/usr/bin:/bin", "SHAFT_ROOT": str(root)}, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        journal = (root / "memory" / "journal.md").read_text()
+        self.assertIn("Conversation with Claude Code (for Daniele)", journal)
+        self.assertNotIn("Conversation with Daniele", journal)
+        sent = json.dumps(fake.requests[-1]["messages"])
+        self.assertIn("do not attribute what Claude Code said or did to Daniele", sent)
+        self.assertIn("what you learned about Claude Code", sent)
 
 
 if __name__ == "__main__":

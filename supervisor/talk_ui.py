@@ -344,10 +344,12 @@ class Client:
 def main(argv: list[str]) -> int:
     name = argv[0] if argv and not argv[0].startswith("-") else "shaft"
     show_thinking = "--show-thinking" in argv
+    speaker = argv[argv.index("--as") + 1] if "--as" in argv[:-1] else ""   # not the operator (shaft talk --as)
     instance_root(name)
     client = Client(name, show_thinking)
     talk_id = uuid.uuid4().hex[:12]
-    code = run_conversation(name, "talk", ["talk", "--json", "--talk-id", talk_id], talk_id, client.drive)
+    code = run_conversation(name, "talk", ["talk", "--json", "--talk-id", talk_id]
+                            + (["--speaker", speaker] if speaker else []), talk_id, client.drive)
     spawn_recover(name)   # after the conversation is closed: it is no longer "open", so it gets written up
     return 0 if code in (0, None) else code
 
