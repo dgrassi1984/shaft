@@ -11,7 +11,7 @@ from pathlib import Path
 PROJECT = Path(__file__).resolve().parent.parent
 INSTANCES = PROJECT / "instances"
 TEMPLATE = PROJECT / "template"
-SUP_DIR = PROJECT / ".supervisor"
+SUP_DIR = Path(os.environ.get("SHAFT_SUPERVISOR_DIR") or PROJECT / ".supervisor")  # tests point it elsewhere
 HOME = Path.home()
 STATE_PATHS = ("self", "memory", "notes", "skills", "inbox")
 DEFAULT_INSTANCE = "shaft"

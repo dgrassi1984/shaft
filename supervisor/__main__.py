@@ -19,7 +19,7 @@ import shutil
 import sys
 from datetime import date, datetime
 
-from . import autonomy, gate, messages, metrics
+from . import autonomy, evolution, finetune, gate, messages, metrics
 from .core import (DEFAULT_INSTANCE, HOME, INSTANCES, NAME_RE, PROJECT, SUP_DIR, TEMPLATE, git, git_wt,
                    instance_names, instance_root, journal_entries, journal_note, log, paused)
 from .runner import is_busy, run_agent
@@ -164,6 +164,16 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("send", help="message an instance")
     p.add_argument("name")
     p.add_argument("text")
+    for verb, text in (("drift", "how an instance's personality changed, and distance to others"),
+                       ("distinct", "blind test: can the judge tell the instance from the bare base model?"),
+                       ("dataset", "export an instance's experiences for fine-tuning"),
+                       ("finetune", "train + judge a LoRA adapter on an instance's experiences (MLX)")):
+        p = sub.add_parser(verb, help=text)
+        p.add_argument("name", nargs="?", default=DEFAULT_INSTANCE)
+    p = sub.add_parser("breed", help="a child from two instances' recombined genes, with a fresh mind")
+    p.add_argument("a")
+    p.add_argument("b")
+    p.add_argument("child")
     sub.add_parser("list", help="list instances")
     sub.add_parser("setup", help="create missing worktrees for template and instance branches")
     p = sub.add_parser("new", help="create an instance")
@@ -203,6 +213,16 @@ def main(argv: list[str]) -> int:
         return messages.reply(args.name, args.text)
     if args.cmd == "send":
         return messages.send(args.name, args.text)
+    if args.cmd == "drift":
+        return evolution.drift(args.name)
+    if args.cmd == "distinct":
+        return evolution.distinct(args.name)
+    if args.cmd == "breed":
+        return evolution.breed(args.a, args.b, args.child)
+    if args.cmd == "dataset":
+        return finetune.cmd_dataset(args.name)
+    if args.cmd == "finetune":
+        return finetune.cmd_finetune(args.name)
     if args.cmd == "list":
         print("\n".join(instance_names()))
         return 0

@@ -98,16 +98,19 @@ def enforce_core(name: str, root: Path, before: str) -> str | None:
     return None
 
 
-def run_agent(name: str, kind: str, agent_args: list[str], interactive: bool, wait_lock: bool = True) -> int:
+def run_agent(name: str, kind: str, agent_args: list[str], interactive: bool, wait_lock: bool = True,
+              output: list[str] | None = None) -> int:
+    """Run the instance once. If `output` is given, the agent's stdout is captured into it."""
     if not (PROJECT / ".git").exists():
         print(f"{PROJECT} is not a git repository; the supervisor needs one to record changes.", file=sys.stderr)
         return 2
     root = instance_root(name)
     with run_lock(name, wait=wait_lock):
-        return _run(name, root, kind, agent_args, interactive)
+        return _run(name, root, kind, agent_args, interactive, output)
 
 
-def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: bool) -> int:
+def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: bool,
+         output: list[str] | None = None) -> int:
     log(f"{name}: start {kind} {describe_knobs()}")
     code_before = gate.snapshot(root)
     journal_path = root / "memory" / "journal.md"
@@ -124,8 +127,11 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
     env = sandbox.agent_env(os.environ, SHAFT_ROOT=str(root), TMPDIR=str(root / ".tmp"),
                             SHAFT_BROKER_URL=broker_url, SHAFT_BROKER_TOKEN=broker.token)
     try:
-        code = subprocess.run(cmd, cwd=root, env=env,
-                              timeout=None if interactive else CYCLE_TIMEOUT_S).returncode
+        proc = subprocess.run(cmd, cwd=root, env=env, timeout=None if interactive else CYCLE_TIMEOUT_S,
+                              stdout=subprocess.PIPE if output is not None else None, text=True)
+        code = proc.returncode
+        if output is not None:
+            output.append(proc.stdout or "")
     except subprocess.TimeoutExpired:
         log(f"{name}: {kind} killed after {CYCLE_TIMEOUT_S}s budget")
         print(f"{name}: {kind} exceeded its {CYCLE_TIMEOUT_S}s budget and was stopped.", file=sys.stderr)
@@ -144,7 +150,7 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
     touched = gate.changed(code_before, gate.snapshot(root))
     kept: list[str] = []
     if touched:
-        ok, output = gate.run_tests(root, HOME)
+        ok, test_log = gate.run_tests(root, HOME)
         if ok:
             kept = touched
             log(f"{name}: code change passed tests: {touched}")
@@ -153,7 +159,7 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
             log(f"{name}: code change FAILED tests, reverted: {touched}")
             journal_note(root, "Supervisor: code change reverted",
                          "My changes to " + ", ".join(touched) + " were reverted because the tests "
-                         "failed. Last lines of the test output:\n\n```\n" + output[-1500:] + "\n```")
+                         "failed. Last lines of the test output:\n\n```\n" + test_log[-1500:] + "\n```")
     if not commit_state(name, kind, kept):
         return code or 1
     from . import metrics   # judged outcomes, calibration stats, probation of self-changes
