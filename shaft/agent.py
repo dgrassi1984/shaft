@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+import time
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -25,19 +27,41 @@ class Outcome:
     transcript: list = field(default_factory=list)
 
 
+WRAP_UP_RESERVE_S = 900   # one heavy turn of a thinking model can take ~12 minutes
+
+
+def time_left() -> float | None:
+    """Seconds until the supervisor stops this run (SHAFT_DEADLINE), or None if unbounded."""
+    deadline = os.environ.get("SHAFT_DEADLINE")
+    return float(deadline) - time.time() if deadline else None
+
+
 def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: int, purpose: str,
         max_steps: int, controls: dict[str, Control] | None = None,
         call: Callable[..., Reply] | None = None,
-        on_tool: Callable[[str, str, str], None] | None = None) -> Outcome:
+        on_tool: Callable[[str, str, str], None] | None = None,
+        wrap_up: str | None = None) -> Outcome:
     """Run until the model answers without calling tools, a stopping control is called,
     or max_steps model turns have been used. `call` defaults to client.complete; pass a
-    streaming wrapper for conversations."""
+    streaming wrapper for conversations.
+
+    On the last turn — or when the supervisor's deadline is near — the model is told to
+    wrap up (`wrap_up`) and only the controls stay available, so a cycle ends with a
+    report instead of being cut off mid-thought."""
     controls = controls or {}
     tools = toolbox.specs() + [c.spec for c in controls.values()]
-    call = call or (lambda msgs: client.complete(msgs, max_tokens, purpose, tools=tools))
+    final_tools = [c.spec for c in controls.values()] or None
+    call = call or (lambda msgs, t=tools: client.complete(msgs, max_tokens, purpose, tools=t))
     reply = None
     for step in range(1, max_steps + 1):
-        reply = call(messages)
+        left = time_left()
+        last = step == max_steps or (left is not None and left < WRAP_UP_RESERVE_S)
+        if last and wrap_up:
+            why = f"about {left / 60:.0f} minutes" if left is not None and left < WRAP_UP_RESERVE_S else "one turn"
+            messages.append({"role": "user", "content": f"[supervisor] You have {why} left. {wrap_up}"})
+            reply = call(messages, final_tools)
+        else:
+            reply = call(messages)
         turn = {"role": "assistant", "content": reply.content or ""}
         if reply.tool_calls:
             turn["tool_calls"] = [{"id": c["id"], "type": "function",
@@ -63,4 +87,6 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
             messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
         if stop:
             return Outcome(reply, "control", step, toolbox.log)
-    return Outcome(reply, "steps", max_steps, toolbox.log)
+        if last and wrap_up:
+            break
+    return Outcome(reply, "steps", step, toolbox.log)

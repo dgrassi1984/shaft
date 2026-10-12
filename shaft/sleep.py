@@ -17,7 +17,9 @@ def run(cfg, state: State, client: Client) -> str:
         {"role": "user", "content": prompts.SLEEP.format(operator=cfg.OPERATOR_NAME, operator_file=operator_file)},
     ]
     outcome = agent.run(client, messages, toolbox, max_tokens=cfg.MAX_TOKENS_STEP, purpose="sleep",
-                        max_steps=cfg.MAX_STEPS_SLEEP)
+                        max_steps=cfg.MAX_STEPS_SLEEP,
+                        wrap_up="Do not call any more tools: write your sleep journal entry now, "
+                                "including what you did not get to.")
     changes = [e["tool"] for e in toolbox.log if not e["result"].startswith("ERROR")]
     if outcome.ended_by != "answer":
         summary = (f"I ran out of turns ({outcome.steps}) before writing my sleep entry. "

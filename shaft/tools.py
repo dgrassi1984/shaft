@@ -13,7 +13,7 @@ from pathlib import Path
 
 from . import broker, memory, personality, selfedit
 
-MAX_RESULT_CHARS = 12000
+MAX_RESULT_CHARS = 6000   # every result stays in context for the rest of the cycle
 PLUGIN_TIMEOUT_S = 120
 
 # Paths I may not overwrite with write_file: append-only history, files with their own

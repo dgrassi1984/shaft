@@ -107,8 +107,8 @@ def _respond(client: Client, cfg, toolbox: Toolbox, messages: list[dict], show_t
         _out(f"\r\033[K{DIM}  {ok} {name} {brief}{RESET}\n")
         status["thinking"] = status["speaking"] = False
 
-    def call(msgs):
-        return client.stream(msgs, cfg.MAX_TOKENS_TALK, purpose="talk", tools=tools,
+    def call(msgs, t=tools):
+        return client.stream(msgs, cfg.MAX_TOKENS_TALK, purpose="talk", tools=t,
                              on_content=on_content, on_reasoning=on_reasoning, on_retry=on_retry)
 
     try:

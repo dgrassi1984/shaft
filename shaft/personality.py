@@ -67,6 +67,8 @@ def update(root: Path, layer: str, text: str) -> str:
     title = LAYERS[layer]
     note = "*(values and temperament — change rarely)*" if layer == "core" else \
         "*(current interests, opinions, moods)*"
+    text = "\n".join(l for l in text.strip().splitlines()
+                     if l.strip() not in (note, f"## {title}"))   # I sometimes repeat the caption/heading
     body = f"## {title}\n{note}\n\n{text.strip()}\n\n"
     if re.search(rf"^## {title}\n", current, re.M):
         new = re.sub(rf"^## {title}\n.*?(?=^## |\Z)", lambda _: body, current, flags=re.M | re.S)

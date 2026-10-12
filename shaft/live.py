@@ -53,9 +53,7 @@ def run(cfg, state: State, client: Client) -> str:
                             "confidence": conf, "at": datetime.now().isoformat(timespec="seconds")}
         return "intent recorded — now act"
 
-    def finish(args: dict) -> str:
-        if not record["intent"]:
-            return "ERROR: declare_intent first"
+    def finish(args: dict) -> str:   # allowed without an intent: a report beats silence (judged 'no')
         met = str(args.get("criterion_met", "")).lower()
         if met not in ("yes", "partial", "no"):
             return "ERROR: criterion_met must be yes, partial or no"
@@ -91,7 +89,9 @@ def run(cfg, state: State, client: Client) -> str:
         {"role": "user", "content": prompts.LIVE.format(steps=cfg.MAX_STEPS_LIVE, inbox=inbox_text(inbox))},
     ]
     outcome = agent.run(client, messages, toolbox, max_tokens=cfg.MAX_TOKENS_STEP, purpose="live",
-                        max_steps=cfg.MAX_STEPS_LIVE, controls=controls)
+                        max_steps=cfg.MAX_STEPS_LIVE, controls=controls,
+                        wrap_up="Stop working now and call finish_cycle with an honest report "
+                                "(criterion_met: partial or no if you did not get there).")
 
     intent, fin = record["intent"], record["finish"]
     actions = [e["tool"] for e in toolbox.log if e["tool"] not in controls]
