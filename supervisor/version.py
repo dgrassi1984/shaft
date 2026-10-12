@@ -12,6 +12,7 @@ from datetime import datetime
 from .core import SUP_DIR, git, git_wt, instance_root
 
 SERVICES = SUP_DIR / "services"
+CODE = {"model": ["supervisor/bonsai_server.py", "supervisor/bonsai_lora.py"], "api": ["supervisor"]}   # what each runs
 
 
 def supervisor_commit() -> str:
@@ -47,8 +48,9 @@ def service(name: str) -> dict | None:
         return None
     if not _alive(rec.get("pid", 0)):
         return None
-    current = supervisor_commit()
-    rec["stale"] = rec["commit"].split("+")[0] != current.split("+")[0]
+    changed = git("diff", "--name-only", rec["commit"].split("+")[0], "--", *CODE.get(name, ["supervisor"]),
+                  check=False)
+    rec["stale"] = changed.returncode == 0 and bool(changed.stdout.strip())   # its code changed since it started
     return rec
 
 
@@ -66,8 +68,14 @@ def describe(name: str) -> str:
     behind = inst["template_behind"]
     parts.append(f"{name} code {inst['commit']}"
                  + ("" if not behind else f" ({behind} template change(s) not merged: shaft update {name})"))
+    cfg = _config(name)
+    if cfg.get("LLM_BASE_URL") == "broker":
+        parts.append(f"model {cfg.get('LLM_MODEL', '?')} via the broker (cloud)")
+        return " · ".join(parts)
     model = service("model")
-    if model:
+    if model and ":8780" not in cfg.get("LLM_BASE_URL", ":8780"):
+        parts.append(f"model {cfg.get('LLM_MODEL', '?')} at {cfg.get('LLM_BASE_URL')}")
+    elif model:
         s = model.get("settings", {})
         parts.append(f"model server {model['commit']} since {model['started'][11:16]} "
                      f"(temp {s.get('temp')}, think {s.get('think_budget')})"
@@ -75,3 +83,18 @@ def describe(name: str) -> str:
     else:
         parts.append("model server: not running")
     return " · ".join(parts)
+
+
+def _config(name: str) -> dict[str, str]:
+    """The instance's config.env (KEY="value"  # comment), read as text — never executed."""
+    out: dict[str, str] = {}
+    try:
+        text = (instance_root(name) / "config.env").read_text()
+    except OSError:
+        return out
+    for line in text.splitlines():
+        key, eq, value = line.partition("=")
+        if eq and key.strip().isidentifier():
+            value = value.split("#")[0].strip() if not value.strip().startswith('"') else value.strip()[1:].split('"')[0]
+            out[key.strip()] = value
+    return out
