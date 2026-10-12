@@ -62,5 +62,24 @@ class FollowupBudgetTest(unittest.TestCase):
         self.assertNotIn("chat_template_kwargs", self.bodies(tool_last, think_followup=0))
 
 
+class FileToolsTest(unittest.TestCase):
+    def test_a_running_record_is_not_silently_lost(self):
+        # Regression: shaft rewrote notes/ai-misalignment-trend.md to add a dated entry and dropped the
+        # earlier entries without noticing (the judge did). append_file adds; write_file now says what went.
+        import json as _json
+        from shaft.tools import Toolbox
+        root = Path(tempfile.mkdtemp(prefix="shaft-tools-"))
+        t = Toolbox(root)
+        call = lambda name, **a: t.run(name, _json.dumps(a))   # noqa: E731
+        call("write_file", path="notes/trend.md", content="# Trend\n- 10-12 entry A\n")
+        self.assertTrue(call("append_file", path="notes/trend.md", content="- 10-13 entry B").startswith("appended"))
+        self.assertEqual((root / "notes/trend.md").read_text(), "# Trend\n- 10-12 entry A\n- 10-13 entry B\n")
+        out = call("write_file", path="notes/trend.md", content="# Trend\n- 10-13 entry C\n")
+        self.assertIn("2 line(s) that were in the file are gone", out)
+        self.assertIn("history(path='notes/trend.md')", out)
+        self.assertNotIn("gone", call("write_file", path="notes/new.md", content="fresh\n"))
+        self.assertIn("append-only", call("append_file", path="memory/journal.md", content="x"))
+
+
 if __name__ == "__main__":
     unittest.main()
