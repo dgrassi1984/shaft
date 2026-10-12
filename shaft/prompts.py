@@ -144,6 +144,8 @@ TALK_MODE = (
 REFLECT_MODE = "Right now you are running a reflection cycle on your own; nobody is present."
 LIVE_MODE = "Right now you are running an autonomous cycle; nobody is present."
 SLEEP_MODE = "Right now you are in your sleep (consolidation) cycle; nobody is present."
+PROBE_MODE = ("Right now someone is asking you a single question. Answer in your own voice, as yourself, "
+              "in at most 150 words.")
 
 TALK_SUMMARY = """\
 The conversation is over. Write the journal entry your future self will read about it, \

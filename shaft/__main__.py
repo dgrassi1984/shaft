@@ -6,7 +6,7 @@ import sys
 from datetime import datetime
 
 from . import config as config_mod
-from . import live, reflect, sleep, talk
+from . import live, prompts, reflect, sleep, talk
 from .llm import Client, LLMError
 from .state import State
 
@@ -20,6 +20,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("live", help="run one autonomous cycle with tools")
     sub.add_parser("sleep", help="consolidate memory, personality and goals")
     sub.add_parser("config", help="print the resolved configuration")
+    pr = sub.add_parser("probe", help="answer one question in my own voice, without tools (used by evals)")
+    pr.add_argument("question")
     args = parser.parse_args(argv)
 
     try:
@@ -47,6 +49,12 @@ def main(argv: list[str] | None = None) -> int:
             print(live.run(cfg, state, client))
         elif args.cmd == "sleep":
             print(sleep.run(cfg, state, client))
+        elif args.cmd == "probe":
+            system = prompts.system_prompt(state, cfg, prompts.PROBE_MODE)
+            reply = client.complete([{"role": "system", "content": system},
+                                     {"role": "user", "content": args.question}],
+                                    cfg.MAX_TOKENS_TALK, purpose="probe")
+            print(reply.content.strip())
     except (LLMError, ValueError) as e:
         print(f"{args.cmd} failed, nothing saved: {e}", file=sys.stderr)
         return 1
