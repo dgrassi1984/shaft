@@ -34,6 +34,17 @@ def orphan_talks(state: State) -> list[tuple[str, list[dict]]]:
             if tid not in closed and any(t["role"] == "assistant" for t in turns)]
 
 
+def unwritten_context(state: State, max_chars: int = 6000) -> str:
+    """Transcripts of conversations still missing their journal entry, newest last — so a
+    conversation that starts before they are written up still remembers them."""
+    parts = []
+    for _, turns in orphan_talks(state)[-3:]:
+        lines = [f"{'Daniele' if t['role'] == 'user' else 'me'}: {t['content']}" for t in turns]
+        parts.append(f"### Conversation {turns[0]['ts'][:16].replace('T', ' ')} (no journal entry yet)\n" + "\n".join(lines))
+    text = "\n\n".join(parts)
+    return text[-max_chars:] if text else ""
+
+
 def run(cfg, state: State, client: Client) -> int:
     written = 0
     for talk_id, turns in orphan_talks(state):

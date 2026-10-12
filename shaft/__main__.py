@@ -40,7 +40,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     state, client = State(cfg.root), Client.from_config(cfg)
-    if args.cmd in ("talk", "live", "sleep", "reflect"):
+    if args.cmd in ("live", "sleep", "reflect"):   # a conversation never waits: talk does this at its end
         n = recovery.run(cfg, state, client)   # conversations that ended without a journal entry
         if n:
             print(f"(wrote {n} missing journal entr{'y' if n == 1 else 'ies'} for earlier conversations)",

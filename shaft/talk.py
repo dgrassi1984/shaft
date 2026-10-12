@@ -5,7 +5,7 @@ import re
 import sys
 import uuid
 
-from . import agent, prompts
+from . import agent, prompts, recovery
 from .llm import Client, LLMError
 from .state import State
 from .tools import Toolbox
@@ -47,6 +47,9 @@ def run(cfg, state: State, client: Client, show_thinking: bool = False, input_fn
     toolbox = Toolbox(state.root)
     mode = prompts.TALK_MODE.format(operator=cfg.OPERATOR_NAME, since=since_last_talk(state, cfg.OPERATOR_NAME))
     system = prompts.system_prompt(state, cfg, mode, toolbox.describe())
+    unwritten = recovery.unwritten_context(state)
+    if unwritten:   # remembered now, written up into the journal when this conversation ends
+        system += "\n\n## Recent conversations I have not written up yet (transcripts)\n\n" + unwritten
     history: list[dict] = []
     _, _, total = state.recent_journal(cfg.CONTEXT_JOURNAL_CHARS)
     _out(f"{DIM}{cfg.NAME} · {cfg.LLM_MODEL} · {total} journal entries · "
@@ -78,6 +81,11 @@ def run(cfg, state: State, client: Client, show_thinking: bool = False, input_fn
 
     if any(m["role"] == "assistant" and m.get("content") for m in history):
         _summarise(client, cfg, state, system, history, talk_id)
+    if recovery.orphan_talks(state):
+        try:
+            recovery.run(cfg, state, client)
+        except KeyboardInterrupt:
+            _out(f"{DIM}(the remaining write-ups will happen in my next cycle){RESET}\n")
 
 
 def _brief(args: str, n: int) -> str:
