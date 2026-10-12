@@ -100,6 +100,32 @@ class ApiTest(unittest.TestCase):
         self.req("/chat/completions", body).read()
         self.assertEqual(fake_run_agent.request["talk_id"], first)
 
+    def test_request_whose_client_left_while_waiting_never_runs(self):
+        # Regression: my test request waited behind Daniele's conversation; after the client gave up,
+        # the queued run would still have happened later, with nobody listening.
+        import http.client
+        import time
+        busy = {"value": "talk since 22:04"}
+        calls = []
+        with mock.patch.object(api, "busy_with", side_effect=lambda n: busy["value"]), \
+             mock.patch.object(api, "run_agent", side_effect=lambda *a, **k: calls.append(1)):
+            conn = http.client.HTTPConnection("127.0.0.1", self.server.server_address[1], timeout=5)
+            conn.request("POST", "/v1/chat/completions", json.dumps(
+                {"model": "shaft", "stream": True, "messages": [{"role": "user", "content": "hi"}]}),
+                {"Authorization": f"Bearer {KEY}", "Tailscale-User-Login": ME, "Content-Type": "application/json"})
+            resp = conn.getresponse()
+            first = resp.fp.readline() + resp.fp.readline()        # role chunk
+            status = b""
+            while b"waiting" not in status:
+                status += resp.fp.readline()
+            self.assertIn(b"another conversation", status)
+            resp.close()                                           # the client gives up
+            conn.close()
+            time.sleep(3)                                          # noticed within a second
+            busy["value"] = None                                   # the conversation ends
+            time.sleep(2.5)
+        self.assertEqual(calls, [])
+
     def test_unknown_model_is_refused(self):
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             self.req("/chat/completions", {"model": "nobody", "messages": [{"role": "user", "content": "x"}]})

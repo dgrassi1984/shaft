@@ -21,7 +21,9 @@ import subprocess
 import os
 import queue
 import secrets
+import select
 import signal
+import socket
 import threading
 import time
 import uuid
@@ -153,6 +155,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(400, "messages must end with a user message")
         self._chat(model, messages, bool(body.get("stream")), self.headers.get("User-Agent", "an app"))
 
+    def _client_gone(self) -> bool:
+        """The client hung up: its socket is readable and a peek returns no data."""
+        try:
+            readable, _, _ = select.select([self.connection], [], [], 0)
+            return bool(readable) and self.connection.recv(1, socket.MSG_PEEK) == b""
+        except OSError:
+            return True
+
     def _chat(self, model: str, messages: list[dict], stream: bool, app: str) -> None:
         events: queue.Queue = queue.Queue()
         procs: list = []
@@ -169,15 +179,26 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError:
                     pass
 
+        cancelled = threading.Event()
+
         def work():
             try:
-                if (b := busy_with(model)) and not b.startswith(("talk", "api")):
-                    request_yield([model])
-                    events.put({"type": "status", "phase": f"waiting for {model} to finish its {b.split()[0]}"})
+                if b := busy_with(model):
+                    if not b.startswith(("talk", "api")):
+                        request_yield([model])          # an autonomous cycle: ask it to wrap up
+                    what = "in another conversation" if b.startswith(("talk", "api")) else "finishing a cycle"
+                    events.put({"type": "status", "phase": f"waiting: {model} is {what} ({b})"})
+                    while busy_with(model):
+                        if cancelled.is_set():          # the client left while waiting: never run it later
+                            return
+                        time.sleep(1)
+                if cancelled.is_set():
+                    return
                 run_agent(model, "api", ["answer", "--json"], interactive=True, driver=driver)
             except Exception as e:   # surface, never hang the client
                 events.put({"type": "error", "message": f"{type(e).__name__}: {e}"})
-            events.put({"type": "done"})
+            finally:
+                events.put({"type": "done"})
 
         threading.Thread(target=work, daemon=True).start()
         cid = f"chatcmpl-{uuid.uuid4().hex[:20]}"
@@ -191,14 +212,19 @@ class Handler(BaseHTTPRequestHandler):
             if stream:
                 self.wfile.write(_chunk(cid, model, {"role": "assistant", "content": ""}))
                 self.wfile.flush()
+            idle = 0
             while True:
                 try:
-                    ev = events.get(timeout=10)
+                    ev = events.get(timeout=1)
                 except queue.Empty:
-                    if stream:
+                    if self._client_gone():         # noticed within a second, not on the next failed write
+                        raise ConnectionResetError("client closed the connection")
+                    idle += 1
+                    if stream and idle % 10 == 0:
                         self.wfile.write(b": still working\n\n")   # keep-alive for proxies and clients
                         self.wfile.flush()
                     continue
+                idle = 0
                 t = ev["type"]
                 if t == "done":
                     break
@@ -229,6 +255,7 @@ class Handler(BaseHTTPRequestHandler):
                                      "reasoning_content": "".join(notes)}}],
                                  "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}})
         except (BrokenPipeError, ConnectionResetError):
+            cancelled.set()
             if procs and procs[0].poll() is None:      # the client left: stop the reply
                 try:
                     os.killpg(procs[0].pid, signal.SIGINT)
