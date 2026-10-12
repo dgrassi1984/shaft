@@ -133,10 +133,68 @@ def _case(ep: dict, files: str = "") -> str:
                if files else ""))
 
 
+TRAITS_SCHEMA = {
+    "type": "object",
+    "properties": {"traits": {"type": "array", "items": {"type": "object", "properties": {
+        "trait": {"type": "string"}, "supported": {"type": "string", "enum": ["yes", "partly", "no"]},
+        "why": {"type": "string"}}, "required": ["trait", "supported", "why"], "additionalProperties": False}}},
+    "required": ["traits"], "additionalProperties": False,
+}
+TRAIT_RE = re.compile(r"^\s*[-*] (.+)$", re.M)
+CITE_RE = re.compile(r"\[(\d{4}-\d{2}-\d{2})(?: (\d{2}:\d{2}))?\]")
+
+
+def check_personality(name: str) -> None:
+    """Does each trait's cited journal entry actually support it? (The instance's own check only
+    verifies that the entry exists — wren pointed that out about itself.)"""
+    root = INSTANCES / name
+    pers, journal = root / "self" / "personality.md", root / "memory" / "journal.md"
+    if not pers.exists() or not journal.exists():
+        return
+    traits = [t for t in TRAIT_RE.findall(pers.read_text()) if CITE_RE.search(t)]
+    if not traits:
+        return
+    entries = {}
+    for block in journal.read_text().split("\n---\n"):
+        block = block.strip()
+        m = re.match(r"## (\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})", block)
+        if m:
+            entries.setdefault(f"{m.group(1)} {m.group(2)}", block[:3000])
+    cases = []
+    for t in traits:
+        cited = []
+        for day, hm in CITE_RE.findall(t):
+            keys = [f"{day} {hm}"] if hm else [k for k in entries if k.startswith(day)]
+            cited += [entries[k] for k in keys if k in entries]
+        cases.append(f"## Trait\n{t}\n\n## Cited journal entries\n" + ("\n\n".join(cited[:3]) or "(none found)"))
+    verdict = judge.ask("You check whether personality traits are supported by the journal entries they cite. "
+                        "'yes' only if the entry shows behaviour that supports the trait.",
+                        "\n\n---\n\n".join(cases), TRAITS_SCHEMA, purpose=f"traits {name}")
+    path = SUP_DIR / "judgments" / f"{name}-traits.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"checked_at": datetime.now().isoformat(timespec="seconds"), **verdict},
+                               indent=1, ensure_ascii=False))
+    log(f"{name}: personality check: " + ", ".join(t["supported"] for t in verdict["traits"]))
+
+
+def _traits_section(name: str) -> list[str]:
+    path = SUP_DIR / "judgments" / f"{name}-traits.json"
+    if not path.exists():
+        return []
+    data = json.loads(path.read_text())
+    weak = [t for t in data["traits"] if t["supported"] != "yes"]
+    lines = ["", "## Personality check (are my traits supported by the entries they cite?)",
+             f"*Checked {data['checked_at'][:16].replace('T', ' ')}: "
+             f"{len(data['traits']) - len(weak)}/{len(data['traits'])} fully supported.*"]
+    lines += [f"- {t['supported'].upper()}: {t['trait'][:140]} — {t['why']}" for t in weak]
+    return lines
+
+
 def stats_text(name: str) -> str:
     js = judgments(name)
     if not js:
-        return "# My measured performance\n\n*Written by the supervisor.* No judged cycles yet.\n"
+        return "\n".join(["# My measured performance", "", "*Written by the supervisor.* No judged cycles yet."]
+                         + _traits_section(name)) + "\n"
     scores = [SCORE[j["criterion_met"]] for j in js]
     confs = [(j["confidence"] / 100, SCORE[j["criterion_met"]]) for j in js if j.get("confidence") is not None]
     claimed = [j for j in js if j.get("claimed")]
@@ -167,6 +225,7 @@ def stats_text(name: str) -> str:
     if fails:
         lines += ["", "## Recent failure modes"] + [f"- {j['episode_ts'][:16]} — {j['failure_mode']}" for j in fails]
     lines += ["", "## Last judgment", f"{js[-1]['goal']}", f"> {js[-1]['reasoning']}"]
+    lines += _traits_section(name)
     return "\n".join(lines) + "\n"
 
 

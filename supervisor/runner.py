@@ -64,6 +64,11 @@ def busy_with(name: str) -> str | None:
         return "a run"
 
 
+def judge_ok() -> bool:
+    from . import judge
+    return judge.available()
+
+
 def request_yield(names: list[str]) -> None:
     """Ask running autonomous cycles to wrap up at their next turn (flag inside each instance)."""
     for n in names:
@@ -149,6 +154,8 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
     code_before = gate.snapshot(root)
     journal_path = root / "memory" / "journal.md"
     journal_before = journal_path.read_text() if journal_path.exists() else ""
+    pers_path = root / "self" / "personality.md"
+    pers_before = pers_path.read_text() if pers_path.exists() else ""
     core_before = _core(root)
 
     broker = Broker(name, PROJECT, secrets_env(), SUP_DIR / "broker.log", max_calls=BROKER_MAX_CALLS)
@@ -213,7 +220,13 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
     if kept:
         head = git_wt(root, "rev-parse", "HEAD").stdout.strip()
         metrics.start_probation(name, head, kept)
+    if pers_path.exists() and pers_path.read_text() != pers_before and judge_ok():
+        try:
+            metrics.check_personality(name)
+            metrics.write_stats(name)
+        except Exception as e:   # measurement never breaks a run
+            log(f"{name}: personality check failed: {type(e).__name__}: {e}")
     if kind == "live":
         metrics.after_cycle(name)
-        commit_state(name, "measurement", [])
+    commit_state(name, "measurement", [])
     return code
