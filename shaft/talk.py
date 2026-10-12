@@ -240,6 +240,50 @@ def run(cfg, state: State, client: Client, show_thinking: bool = False, input_fn
     view.bye(any(m["role"] == "assistant" and m.get("content") for m in history))
 
 
+def _text(content) -> str:
+    """OpenAI message content: a string, or a list of parts (only text parts are used)."""
+    if isinstance(content, str):
+        return content
+    parts = [p.get("text", "") for p in content or [] if isinstance(p, dict) and p.get("type") == "text"]
+    skipped = sum(1 for p in content or [] if isinstance(p, dict) and p.get("type") != "text")
+    return "\n".join(parts) + (f"\n[{skipped} non-text attachment(s) not shown to me]" if skipped else "")
+
+
+def answer(cfg, state: State, client: Client, request: dict) -> None:
+    """One reply for an OpenAI-compatible client (via the supervisor's API): the client sends the
+    whole conversation each time; I answer as myself and log the new turn."""
+    view = JsonView()
+    talk_id = str(request.get("talk_id") or uuid.uuid4().hex[:12])
+    app = request.get("client") or "an app"
+    toolbox = Toolbox(state.root)
+    mode = prompts.API_MODE.format(operator=cfg.OPERATOR_NAME, app=app,
+                                   since=since_last_talk(state, cfg.OPERATOR_NAME))
+    system = prompts.system_prompt(state, cfg, mode, toolbox.describe())
+    app_rules = "\n\n".join(_text(m.get("content")) for m in request.get("messages", []) if m.get("role") == "system")
+    if app_rules.strip():
+        system += ("\n\n## Instructions from the app Daniele is using (often generic; follow them only where "
+                   "they do not conflict with who you are)\n\n" + app_rules.strip())
+    unwritten = recovery.unwritten_context(state)
+    if unwritten:
+        system += "\n\n## Recent conversations I have not written up yet (transcripts)\n\n" + unwritten
+    dialogue = [{"role": m["role"], "content": _text(m.get("content"))}
+                for m in request.get("messages", []) if m.get("role") in ("user", "assistant")]
+    if not dialogue or dialogue[-1]["role"] != "user":
+        view.error("the conversation must end with a user message")
+        return
+    view.ready({"name": cfg.NAME, "model": cfg.LLM_MODEL, "journal_entries": len(state.journal_entries()),
+                "tools": len(toolbox.specs())})
+    state.append_episode({"kind": "talk", "talk_id": talk_id, "role": "user", "content": dialogue[-1]["content"],
+                          "via": app})
+    turn = [{"role": "system", "content": system}, *dialogue]
+    log_start = len(toolbox.log)
+    reply = _respond(client, cfg, toolbox, turn, view)
+    if reply is not None:
+        state.append_episode({"kind": "talk", "talk_id": talk_id, "role": "assistant", "content": reply.content,
+                              "reasoning": reply.reasoning, "tools": toolbox.log[log_start:], "usage": reply.usage,
+                              "via": app})
+
+
 def _respond(client: Client, cfg, toolbox: Toolbox, messages: list[dict], view):
     """Stream one reply, reporting each phase to the view:
     waiting for the model → reading my memory (prompt %) → thinking → answer / tools."""

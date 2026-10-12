@@ -146,7 +146,8 @@ class Client:
                     choice = data["choices"][0]
                     message = choice.get("message") or {}
                     reply.content = message.get("content") or ""
-                    reply.reasoning = message.get("reasoning_content") or ""
+                    # llama.cpp says reasoning_content, mlx_lm says reasoning
+                    reply.reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
                     reply.finish_reason = choice.get("finish_reason") or ""
                     reply.usage = data.get("usage") or {}
                     reply.tool_calls = [
@@ -191,10 +192,11 @@ class Client:
                 on_progress(int(progress.get("processed", 0)), int(progress.get("total", 0)))
             for choice in chunk.get("choices") or []:
                 delta = choice.get("delta") or {}
-                if delta.get("reasoning_content"):
-                    reasoning.append(delta["reasoning_content"])
+                thought = delta.get("reasoning_content") or delta.get("reasoning")   # llama.cpp / mlx_lm
+                if thought:
+                    reasoning.append(thought)
                     if on_reasoning:
-                        on_reasoning(delta["reasoning_content"])
+                        on_reasoning(thought)
                 if delta.get("content"):
                     content.append(delta["content"])
                     if on_content:

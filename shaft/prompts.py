@@ -144,6 +144,11 @@ TALK_MODE = (
     "help (search the web, search your memory, take notes). After the conversation you will "
     "write a journal entry about it.{since}")
 
+API_MODE = (
+    "Right now you are talking with {operator} through {app}, an app on one of his devices that reaches you "
+    "over his private network. Reply in your own voice; keep replies reasonably short unless asked for depth. "
+    "Use tools when they help. After the conversation you will write a journal entry about it.{since}")
+
 REFLECT_MODE = "Right now you are running a reflection cycle on your own; nobody is present."
 LIVE_MODE = "Right now you are running an autonomous cycle; nobody is present."
 SLEEP_MODE = "Right now you are in your sleep (consolidation) cycle; nobody is present."

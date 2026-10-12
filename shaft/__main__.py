@@ -22,6 +22,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("sleep", help="consolidate memory, personality and goals")
     sub.add_parser("config", help="print the resolved configuration")
     sub.add_parser("recover", help="write journal entries for conversations that have none yet")
+    sub.add_parser("answer", help="one reply for an API client: a JSON request on stdin, JSON events out")
     pr = sub.add_parser("probe", help="answer one question in my own voice, without tools (used by evals)")
     pr.add_argument("question")
     args = parser.parse_args(argv)
@@ -56,6 +57,9 @@ def main(argv: list[str] | None = None) -> int:
             print(live.run(cfg, state, client))
         elif args.cmd == "sleep":
             print(sleep.run(cfg, state, client))
+        elif args.cmd == "answer":
+            import json as _json
+            talk.answer(cfg, state, client, _json.loads(sys.stdin.read() or "{}"))
         elif args.cmd == "recover":
             print(f"wrote {recovery.run(cfg, state, client)} journal entr(y/ies)")
         elif args.cmd == "probe":
