@@ -22,7 +22,7 @@ from datetime import date, datetime
 from . import autonomy, evolution, finetune, gate, messages, metrics
 from .core import (DEFAULT_INSTANCE, HOME, INSTANCES, NAME_RE, PROJECT, SUP_DIR, TEMPLATE, git, git_wt,
                    instance_names, instance_root, journal_entries, journal_note, log, paused)
-from .runner import is_busy, run_agent
+from .runner import busy_with, is_busy, run_agent
 
 
 # -- instances -------------------------------------------------------------------
@@ -188,8 +188,12 @@ def main(argv: list[str]) -> int:
 
     if args.cmd == "talk":
         extra = ["--show-thinking"] if args.show_thinking else []
-        if is_busy(args.name):
-            print(f"{args.name} is in the middle of a cycle; waiting for it to finish…", file=sys.stderr)
+        if (mine := busy_with(args.name)):
+            print(f"{args.name} is busy ({mine}); your conversation starts when it finishes…", file=sys.stderr)
+        others = [f"{n} ({b})" for n in instance_names() if n != args.name and (b := busy_with(n))]
+        if others:
+            print(f"note: the model is also serving {', '.join(others)} — it answers one request at a time, "
+                  f"so replies may wait for it.", file=sys.stderr)
         return run_agent(args.name, "talk", ["talk", *extra], interactive=True)
     if args.cmd in ("live", "reflect", "sleep"):
         return run_many(args.cmd, args.names, args.all)

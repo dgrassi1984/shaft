@@ -31,23 +31,36 @@ class Busy(Exception):
 
 
 @contextmanager
-def run_lock(name: str, wait: bool):
+def run_lock(name: str, wait: bool, kind: str = ""):
     """One run per instance at a time (a conversation and an autonomous cycle never overlap)."""
     locks = SUP_DIR / "locks"
     locks.mkdir(parents=True, exist_ok=True)
-    f = (locks / f"{name}.lock").open("w")
+    f = (locks / f"{name}.lock").open("a+")   # not "w": a failed attempt must not wipe the holder's info
     try:
         fcntl.flock(f, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
     except BlockingIOError:
         f.close()
         raise Busy(name) from None
     try:
-        f.write(f"{os.getpid()}\n")
+        f.seek(0)
+        f.truncate()
+        f.write(f"{os.getpid()} {kind} {datetime.now():%H:%M}\n")
         f.flush()
         yield
     finally:
         fcntl.flock(f, fcntl.LOCK_UN)
         f.close()
+
+
+def busy_with(name: str) -> str | None:
+    """'sleep since 18:06' if another run holds the instance, else None."""
+    if not is_busy(name):
+        return None
+    try:
+        _, kind, since = (SUP_DIR / "locks" / f"{name}.lock").read_text().split()
+        return f"{kind} since {since}"
+    except (OSError, ValueError):
+        return "a run"
 
 
 def is_busy(name: str) -> bool:
@@ -110,7 +123,7 @@ def run_agent(name: str, kind: str, agent_args: list[str], interactive: bool, wa
         print(f"{PROJECT} is not a git repository; the supervisor needs one to record changes.", file=sys.stderr)
         return 2
     root = instance_root(name)
-    with run_lock(name, wait=wait_lock):
+    with run_lock(name, wait=wait_lock, kind=kind):
         return _run(name, root, kind, agent_args, interactive, output)
 
 
