@@ -51,6 +51,16 @@ class LastSleepTest(unittest.TestCase):
         self.assertIn("sleep failed", last_sleep([SLEEP, note] + [CHAT.format(h=h) for h in range(10, 20)], 6000))
 
 
+    def test_a_supervisor_note_that_merely_mentions_sleep_is_not_a_sleep(self):
+        note = ("## 2026-10-12 05:00 — Supervisor: code change reverted\n\nMy changes to shaft/sleep.py were "
+                "reverted because the tests failed.")
+        stopped = ("## 2026-10-12 04:30 — Supervisor: run stopped\n\nMy sleep run was stopped after its 90-minute "
+                   "budget, before I finished it.")
+        out = last_sleep([SLEEP, stopped, note] + [CHAT.format(h=h) for h in range(10, 20)], 6000)
+        self.assertIn("2026-10-12 04:30", out)
+        self.assertNotIn("05:00", out)
+
+
 class FailedRunTest(unittest.TestCase):
     def test_failed_run_is_noted_in_the_journal_with_its_reason(self):
         # Regression: a sleep that died (e.g. model server down) left no trace the instance could see.
