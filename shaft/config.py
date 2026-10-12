@@ -20,7 +20,7 @@ FIELDS: dict[str, tuple[type, object]] = {
     "LLM_MODEL": (str, None),
     "LLM_API_KEY": (str, ""),
     "LLM_TIMEOUT_S": (int, 900),
-    "MAX_TOKENS_REFLECT": (int, 8192),
+    "MAX_TOKENS_REFLECT": (int, 16384),
     "MAX_TOKENS_TALK": (int, 4096),
     "CONTEXT_JOURNAL_CHARS": (int, 16000),
     "OPERATOR_NAME": (str, "Daniele"),
