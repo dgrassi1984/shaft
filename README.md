@@ -71,6 +71,7 @@ notes/        its own work
 ln -s "$PWD/bin/shaft" ~/.local/bin/shaft   # once
 
 shaft talk [name]               # chat with its tools, in the terminal client (see below); --plain for line mode
+shaft talk [name] --as "NAME"   # you are not the operator: recorded as NAME, never remembered as the operator
 shaft live|reflect|sleep [name|--all]   # one autonomous cycle / reflection / consolidation
 shaft autonomy on|off|status    # launchd: `shaft tick` every 2 h, `shaft sleep --all` at 04:00
 shaft status [name]             # how each instance is doing, open conversations, which code is running
@@ -126,8 +127,11 @@ same, and is written up into the journal after `SHAFT_IDLE_MINUTES` without a me
 `supervisor/bonsai_server.py`: mlx_lm's server with Bonsai's own loader (and a kept LoRA adapter, if
 any). Context 262,144 tokens; hybrid attention (48 linear + 16 full layers). Settings:
 `SHAFT_MODEL_TEMP` (0.1), top-p 0.95, top-k 20, max 16,384 tokens per reply, a thinking budget
-`SHAFT_THINK_BUDGET` (4,096 reasoning tokens, then `</think>` is forced — 0 turns it off), and a prompt
-cache capped at `SHAFT_PROMPT_CACHE_GB` (4). Agents send a presence penalty (`LLM_PRESENCE_PENALTY`)
+`SHAFT_THINK_BUDGET` (4,096 reasoning tokens; then Qwen's early-stopping phrase and `</think>` are forced —
+0 turns it off; a request may ask for less, never more), and a prompt cache capped at
+`SHAFT_PROMPT_CACHE_GB` (4, enforced on every insert). After a tool result the agent asks for
+`LLM_THINK_FOLLOWUP` (1,024) reasoning tokens: Bonsai spent its full budget on every tool round (~4.5 min
+each); now a follow-up takes ~20–75 s. Agents send a presence penalty (`LLM_PRESENCE_PENALTY`)
 against loops. Prompt reading is reported as progress (`reading my memory · N%`).
 
 ## Rules the supervisor enforces
@@ -145,7 +149,10 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
   delegated. **`run`**: shell commands (`zsh`) in a stricter sandbox — writes only to `notes/`,
   `plugins/`, `skills/`, `tests/`, `shaft/` and `.tmp/`, no network, reads only its own folder;
   60 s default time limit (the whole process group is killed), 100 MB file-size limit, output capped,
-  40 commands per run. So an instance can build and test its own tools and plugins.
+  40 commands per run. So an instance can build and test its own tools and plugins. **`history`**: its
+  own branch's git log and diffs (git cannot run inside its sandbox, and `.git` holds other instances'
+  minds). **`record`**: the supervisor's own record about it — the judge's verdicts with reasoning, its
+  runs, its tool calls, its kept code changes — so it can check its claims about itself.
   Per-run token, call budget
   (`SHAFT_BROKER_MAX_CALLS`, default 60), everything logged in `.supervisor/broker.log`.
 - **Append-only journal**: if a run rewrote history instead of appending, the journal is
