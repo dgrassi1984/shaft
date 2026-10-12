@@ -1,0 +1,5 @@
+# runtime artefacts (not part of an agent's mind or code)
+logs/
+.tmp/
+__pycache__/
+.DS_Store
