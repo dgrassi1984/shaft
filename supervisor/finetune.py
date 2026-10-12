@@ -28,6 +28,13 @@ MIN_EXAMPLES = 20
 FT_PYTHON, _ = knob("SHAFT_FT_PYTHON", str(PROJECT / ".venv-ft" / "bin" / "python"), str)
 FT_BASE_MODEL, _ = knob("SHAFT_FT_BASE_MODEL", "mlx-community/Qwen3.8-27B-4bit", str)
 NO_THINKING = '{"enable_thinking": false}'   # Qwen chat template: answer directly
+# Preferred backend: LoRA on Ternary-Bonsai itself (keeps its speed and memory) — see bonsai_lora.py.
+BONSAI_PACK = PROJECT / ".models" / "bonsai2-27b-mlx"
+BONSAI_PYTHON, _ = knob("SHAFT_BONSAI_PYTHON", str(PROJECT / ".venv-bonsai" / "bin" / "python"), str)
+
+
+def backend() -> str:
+    return "bonsai" if (BONSAI_PACK / "model.safetensors").exists() and Path(BONSAI_PYTHON).exists() else "mlx_lm"
 
 
 def _episodes(root: Path) -> list[dict]:
@@ -88,6 +95,11 @@ def cmd_dataset(name: str) -> int:
 
 def _prereqs() -> list[str]:
     problems = []
+    if backend() == "bonsai":
+        if subprocess.run([BONSAI_PYTHON, "-c", "import mlx_lm, tokenizers, jinja2"], capture_output=True).returncode:
+            problems.append(f"the Bonsai venv {BONSAI_PYTHON} lacks its runtime packages "
+                            f"(pip install -r {BONSAI_PACK}/runtime/requirements.txt)")
+        return problems
     if not Path(FT_PYTHON).exists():
         problems.append(f"no fine-tuning Python at {FT_PYTHON} (python3 -m venv .venv-ft && .venv-ft/bin/pip install mlx-lm)")
     elif subprocess.run([FT_PYTHON, "-c", "import mlx_lm"], capture_output=True).returncode != 0:
@@ -136,8 +148,22 @@ def evaluate(name: str, adapter: Path, model: str | None = None) -> dict:
     system = _identity(root)
     rng, rows, truth = random.Random(), [], []
     probes = PROBES + TASK_PROBES
-    for i, q in enumerate(probes, 1):
-        base, tuned = _generate(model, None, q, system), _generate(model, adapter, q, system)
+    if backend() == "bonsai":
+        tmp = adapter / "eval"
+        tmp.mkdir(exist_ok=True)
+        (tmp / "system.txt").write_text(system)
+        (tmp / "questions.json").write_text(json.dumps(probes))
+        run = subprocess.run([BONSAI_PYTHON, "-u", "-E", "-s", "-m", "supervisor.bonsai_lora", "answers",
+                              "--adapter", str(adapter), "--system-file", str(tmp / "system.txt"),
+                              "--questions-file", str(tmp / "questions.json"), "--out", str(tmp / "answers.json")],
+                             cwd=PROJECT, text=True)
+        if run.returncode != 0:
+            raise RuntimeError("Bonsai answer generation failed")
+        got = json.loads((tmp / "answers.json").read_text())
+        pairs = list(zip(got["base"], got["tuned"]))
+    else:
+        pairs = [(_generate(model, None, q, system), _generate(model, adapter, q, system)) for q in probes]
+    for i, (q, (base, tuned)) in enumerate(zip(probes, pairs), 1):
         tuned_is = rng.choice(["A", "B"])
         a, b = (tuned, base) if tuned_is == "A" else (base, tuned)
         rows.append(f"## Question {i}: {q}\n### A\n{a}\n### B\n{b}")
@@ -200,7 +226,16 @@ def cmd_finetune(name: str, iters: int | None = None, min_examples: int = MIN_EX
     model = FT_BASE_MODEL
     iters = iters or min(300, max(30, n * 20))
     adapter = SUP_DIR / "adapters" / f"{name}-{datetime.now():%Y%m%d-%H%M%S}"
-    log(f"{name}: finetune start model={model} examples={n} iters={iters} pipeline_check={pipeline_check} -> {adapter}")
+    log(f"{name}: finetune start backend={backend()} examples={n} iters={iters} "
+        f"pipeline_check={pipeline_check} -> {adapter}")
+    if backend() == "bonsai":
+        train = subprocess.run([BONSAI_PYTHON, "-u", "-E", "-s", "-m", "supervisor.bonsai_lora", "train",
+                                "--data", str(data), "--out", str(adapter), "--iters", str(iters)],
+                               cwd=PROJECT, text=True)
+        if train.returncode != 0:
+            print("training failed")
+            return 1
+        return cmd_evaluate(name, str(adapter))
     train = subprocess.run([FT_PYTHON, "-m", "mlx_lm", "lora", "--model", model, "--train", "--data", str(data),
                             "--fine-tune-type", "lora", "--mask-prompt", "--grad-checkpoint",
                             "--max-seq-length", "2048", "--iters", str(iters), "--batch-size", "1",
