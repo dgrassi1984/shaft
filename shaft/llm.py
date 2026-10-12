@@ -158,6 +158,7 @@ class Client:
                     reply.content = message.get("content") or ""
                     # llama.cpp says reasoning_content, mlx_lm says reasoning
                     reply.reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
+                    _move_leaked_thinking(reply)
                     reply.finish_reason = choice.get("finish_reason") or ""
                     reply.usage = data.get("usage") or {}
                     reply.tool_calls = [
@@ -226,6 +227,7 @@ class Client:
                     reply.finish_reason = choice["finish_reason"]
         reply.content = "".join(content)
         reply.reasoning = "".join(reasoning)
+        _move_leaked_thinking(reply)
         reply.tool_calls = [{**c, "id": c["id"] or f"call_{i}", "arguments": c["arguments"] or "{}"}
                             for i, c in sorted(calls.items())]
 
@@ -247,3 +249,12 @@ class Client:
         self.usage_log.parent.mkdir(parents=True, exist_ok=True)
         with self.usage_log.open("a") as f:
             f.write(json.dumps(record) + "\n")
+
+
+def _move_leaked_thinking(reply: Reply) -> None:
+    """When the server cuts my thinking at its budget, I sometimes go on thinking in the answer and close
+    the block again myself: everything up to that `</think>` is reasoning, not what I said."""
+    if "</think>" in reply.content:
+        thought, _, said = reply.content.rpartition("</think>")
+        reply.reasoning = (reply.reasoning + "\n" + thought).strip()
+        reply.content = said.lstrip()
