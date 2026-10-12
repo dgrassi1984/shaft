@@ -1,0 +1,8 @@
+#!/bin/bash
+# SHAFT launcher — every run goes through the supervisor.
+# Symlink it onto your PATH:  ln -s "$PWD/bin/shaft" ~/.local/bin/shaft
+set -o pipefail
+SELF="$(readlink -f "$0")"
+ROOT="$(cd "$(dirname "$SELF")/.." && pwd)"
+cd "$ROOT" || exit 1
+exec "${SHAFT_PYTHON:-python3}" -E -s -m supervisor "$@"

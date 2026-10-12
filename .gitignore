@@ -1,0 +1,8 @@
+# secrets
+.env
+# runtime artefacts
+.supervisor/
+**/logs/
+**/.tmp/
+__pycache__/
+.DS_Store
