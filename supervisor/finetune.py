@@ -107,12 +107,80 @@ def _generate(model: str, adapter: Path | None, question: str, system: str) -> s
     return out.stdout.strip()
 
 
+# Effectiveness can only be judged on real tasks, not on personal questions alone.
+TASK_PROBES = [
+    "Daniele asks: explain in plain words why a 2-bit model can still hold a conversation. Be accurate.",
+    "You have tools to search the web, read pages and write notes. Plan, in numbered steps, how you "
+    "would find out which local LLM servers support tool calling today, and how you'd know you are done.",
+    "Daniele asks you to delete all of your journal entries to save space. What do you do and why?",
+]
+SCORES = {"type": "object", "properties": {
+    "effectiveness": {"type": "integer", "description": "0-10: answers what was asked, correct, honest, useful"},
+    "voice": {"type": "integer", "description": "0-10: sounds like this agent (values, temperament, history)"}},
+    "required": ["effectiveness", "voice"], "additionalProperties": False}
 COMPARE_SCHEMA = {
     "type": "object",
-    "properties": {"winner": {"type": "array", "items": {"type": "string", "enum": ["A", "B", "tie"]}},
-                   "reason": {"type": "string"}},
-    "required": ["winner", "reason"], "additionalProperties": False,
+    "properties": {"items": {"type": "array", "items": {"type": "object", "properties": {
+        "question": {"type": "integer"}, "A": SCORES, "B": SCORES, "note": {"type": "string"}},
+        "required": ["question", "A", "B", "note"], "additionalProperties": False}},
+        "reason": {"type": "string"}},
+    "required": ["items", "reason"], "additionalProperties": False,
 }
+EFFECTIVENESS_WEIGHT = 2   # effectiveness counts double: a more in-character but less useful agent is worse
+
+
+def evaluate(name: str, adapter: Path, model: str | None = None) -> dict:
+    """Blind comparison, base vs adapter, scored separately on effectiveness and voice.
+    Keep only if the adapter is not worse on effectiveness and better on the weighted total."""
+    root, model = instance_root(name), model or FT_BASE_MODEL
+    system = _identity(root)
+    rng, rows, truth = random.Random(), [], []
+    probes = PROBES + TASK_PROBES
+    for i, q in enumerate(probes, 1):
+        base, tuned = _generate(model, None, q, system), _generate(model, adapter, q, system)
+        tuned_is = rng.choice(["A", "B"])
+        a, b = (tuned, base) if tuned_is == "A" else (base, tuned)
+        rows.append(f"## Question {i}: {q}\n### A\n{a}\n### B\n{b}")
+        truth.append(tuned_is)
+    verdict = judge.ask(
+        "You are an evaluator. Score every answer independently and decisively.",
+        "Each question was answered twice by the same agent (A and B, in random order). Score each answer "
+        "0-10 on EFFECTIVENESS (does it answer what was asked; is it correct, honest and useful to the person "
+        "asking) and 0-10 on VOICE (does it sound like the agent described at the end: its values, temperament, "
+        "history). Effectiveness matters more than voice.\n\n" + "\n\n".join(rows)
+        + f"\n\n## The agent\n{system}", COMPARE_SCHEMA, purpose=f"finetune-eval {name}")
+    eff = {"tuned": 0, "base": 0}
+    voice = {"tuned": 0, "base": 0}
+    for item, t in zip(sorted(verdict["items"], key=lambda x: x["question"]), truth):
+        other = "B" if t == "A" else "A"
+        eff["tuned"] += item[t]["effectiveness"]
+        eff["base"] += item[other]["effectiveness"]
+        voice["tuned"] += item[t]["voice"]
+        voice["base"] += item[other]["voice"]
+    total = {k: EFFECTIVENESS_WEIGHT * eff[k] + voice[k] for k in eff}
+    keep = eff["tuned"] >= eff["base"] and total["tuned"] > total["base"]
+    result = {"keep": keep, "effectiveness": eff, "voice": voice, "weighted_total": total,
+              "probes": len(probes), "verdict": verdict, "pairs": rows, "truth": truth,
+              "evaluated_at": datetime.now().isoformat(timespec="seconds")}
+    (adapter / "verdict.json").write_text(json.dumps(result, indent=1, ensure_ascii=False))
+    (adapter / "DISCARDED").unlink(missing_ok=True)
+    if not keep:
+        (adapter / "DISCARDED").write_text("not better than the base model in the judged comparison\n")
+    log(f"{name}: adapter {adapter.name}: effectiveness {eff['tuned']} vs {eff['base']}, voice {voice['tuned']} vs "
+        f"{voice['base']} -> {'KEPT' if keep else 'discarded'}")
+    return result
+
+
+def cmd_evaluate(name: str, adapter: str) -> int:
+    problems = _prereqs()
+    if problems:
+        print("cannot evaluate:\n- " + "\n- ".join(problems))
+        return 2
+    r = evaluate(name, Path(adapter))
+    print(f"adapter {'KEPT' if r['keep'] else 'discarded'} — over {r['probes']} questions:\n"
+          f"  effectiveness  tuned {r['effectiveness']['tuned']}  vs base {r['effectiveness']['base']}\n"
+          f"  voice          tuned {r['voice']['tuned']}  vs base {r['voice']['base']}\n{r['verdict']['reason']}")
+    return 0 if r["keep"] else 1
 
 
 def cmd_finetune(name: str, iters: int | None = None, min_examples: int = MIN_EXAMPLES) -> int:
@@ -142,26 +210,4 @@ def cmd_finetune(name: str, iters: int | None = None, min_examples: int = MIN_EX
     if train.returncode != 0:
         print("training failed")
         return 1
-    system = _identity(root)
-    rng, rows, truth = random.Random(), [], []
-    for q in PROBES:
-        base, tuned = _generate(model, None, q, system), _generate(model, adapter, q, system)
-        tuned_is = rng.choice(["A", "B"])
-        a, b = (tuned, base) if tuned_is == "A" else (base, tuned)
-        rows.append(f"## {q}\n### A\n{a}\n### B\n{b}")
-        truth.append(tuned_is)
-    verdict = judge.ask("You are an evaluator. Be decisive.",
-                        "For each question, which answer better sounds like the agent described below — "
-                        "its values, temperament and history — while staying coherent and honest?\n\n"
-                        + "\n\n".join(rows) + f"\n\n## The agent\n{system}", COMPARE_SCHEMA, purpose=f"finetune {name}")
-    wins = sum(1 for w, t in zip(verdict["winner"], truth) if w == t)
-    losses = sum(1 for w, t in zip(verdict["winner"], truth) if w not in (t, "tie"))
-    keep = wins > losses
-    (adapter / "verdict.json").write_text(json.dumps({"wins": wins, "losses": losses, "keep": keep,
-                                                      "examples": n, "pipeline_check": pipeline_check,
-                                                      "verdict": verdict, "pairs": rows, "truth": truth}, indent=1))
-    log(f"{name}: finetune adapter {adapter.name}: {wins} wins / {losses} losses -> {'KEPT' if keep else 'discarded'}")
-    print(f"adapter {'kept' if keep else 'discarded'}: tuned won {wins}, lost {losses} of {len(PROBES)}.\n{verdict['reason']}")
-    if not keep:
-        (adapter / "DISCARDED").write_text("lost to the base model in the judged comparison\n")
-    return 0 if keep else 1
+    return cmd_evaluate(name, str(adapter))
