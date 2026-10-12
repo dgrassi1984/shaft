@@ -10,6 +10,7 @@ from __future__ import annotations
 import fcntl
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -132,6 +133,9 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
     extra = {"SHAFT_DEADLINE": f"{time.time() + budget - 60:.0f}"} if budget else {}
     env = sandbox.agent_env(os.environ, SHAFT_ROOT=str(root), TMPDIR=str(root / ".tmp"),
                             SHAFT_BROKER_URL=broker_url, SHAFT_BROKER_TOKEN=broker.token, **extra)
+    # In a conversation Ctrl-C belongs to the agent (it ends the talk and writes its journal
+    # entry). If the supervisor took it too, subprocess.run would kill the agent mid-entry.
+    old_sigint = signal.signal(signal.SIGINT, signal.SIG_IGN) if interactive else None
     try:
         proc = subprocess.run(cmd, cwd=root, env=env, timeout=budget,
                               stdout=subprocess.PIPE if output is not None else None, text=True)
@@ -147,6 +151,8 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
     except KeyboardInterrupt:
         code = 130
     finally:
+        if old_sigint is not None:
+            signal.signal(signal.SIGINT, old_sigint)
         broker.stop()
     log(f"{name}: end {kind} exit={code} broker_calls={broker.counts or {}}")
 

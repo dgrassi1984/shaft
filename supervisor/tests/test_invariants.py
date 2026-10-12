@@ -158,6 +158,23 @@ class TalkInvariants(InstanceCase):
         second = self.fake.requests[1]["messages"]
         self.assertEqual(second[-1]["role"], "tool")          # the tool result went back to the model
 
+    def test_conversation_without_journal_entry_is_written_up_later(self):
+        # Regression: Ctrl-C killed the agent while it wrote its entry; the next talk did not
+        # remember the conversation at all, although the transcript was saved.
+        ep = self.root / "memory" / "episodes" / "2026-10-12.jsonl"
+        ep.parent.mkdir(parents=True, exist_ok=True)
+        ep.write_text("".join(json.dumps(r) + "\n" for r in [
+            {"ts": "2026-10-12T16:59:05", "kind": "talk", "talk_id": "t1", "role": "user", "content": "do no harm"},
+            {"ts": "2026-10-12T17:04:50", "kind": "talk", "talk_id": "t1", "role": "assistant", "content": "agreed"}]))
+        r = self.run_agent([{"content": "Daniele set 'do no harm' as my boundary."}, {"content": REFLECTION}],
+                           "reflect")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("2026-10-12 16:59–17:04, written later from the transcript", self.journal())
+        self.assertIn("'do no harm' as my boundary", self.journal())
+        self.assertIn("do no harm", json.dumps(self.fake.requests[0]["messages"]))
+        r = self.run_agent([{"content": REFLECTION}], "reflect")          # once written, never again
+        self.assertEqual(self.journal().count("written later from the transcript"), 1)
+
     def test_failed_summary_is_reported_not_silent(self):
         replies = [{"content": "Hi."}, {"content": "", "reasoning": "..."}]
         before = self.journal()
