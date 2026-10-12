@@ -6,7 +6,7 @@ import sys
 from datetime import datetime
 
 from . import config as config_mod
-from . import live, prompts, reflect, sleep, talk
+from . import live, prompts, recovery, reflect, sleep, talk
 from .llm import Client, LLMError
 from .state import State
 
@@ -40,6 +40,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     state, client = State(cfg.root), Client.from_config(cfg)
+    if args.cmd in ("talk", "live", "sleep", "reflect"):
+        n = recovery.run(cfg, state, client)   # conversations that ended without a journal entry
+        if n:
+            print(f"(wrote {n} missing journal entr{'y' if n == 1 else 'ies'} for earlier conversations)",
+                  file=sys.stderr)
     try:
         if args.cmd == "talk":
             talk.run(cfg, state, client, show_thinking=args.show_thinking)

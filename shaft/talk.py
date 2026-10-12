@@ -126,7 +126,7 @@ def _respond(client: Client, cfg, toolbox: Toolbox, messages: list[dict], show_t
 
 
 def _summarise(client: Client, cfg, state: State, system: str, history: list[dict], talk_id: str) -> None:
-    _out(f"{DIM}writing my journal entry about this conversation…{RESET}\n")
+    _out(f"{DIM}writing my journal entry about this conversation… (Ctrl-C to skip — I'll write it next time){RESET}\n")
     # The summary needs the dialogue, not raw tool payloads.
     dialogue = [m for m in history if m["role"] in ("user", "assistant") and m.get("content")]
     messages = [{"role": "system", "content": system}, *dialogue,
