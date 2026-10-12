@@ -13,3 +13,5 @@ __pycache__/
 
 # fine-tuning toolchain (M6), not part of the supervisor
 /.venv-ft/
+/.models/
+/.venv-bonsai/
