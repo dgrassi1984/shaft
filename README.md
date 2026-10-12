@@ -105,7 +105,7 @@ shaft pause [name] · shaft resume [name] · shaft check [name] · shaft setup �
 - **Probation**: a kept self-change is reverted if the judged success rate over the next
   `SHAFT_PROBATION_CYCLES` (6) cycles falls clearly below the rate before it.
 - **Judge**: every autonomous cycle is graded from its tool log by a cloud model
-  (`SHAFT_JUDGE_MODEL`, default `claude-opus-5-5`); results feed `self/stats.md`.
+  (`SHAFT_JUDGE_MODEL`, default `claude-sonnet-5-5`); results feed `self/stats.md`.
 - **Git**: after every run the instance's state is committed to its branch (author
   `SHAFT/<name>`), with the main repo's worktree registry and hooks off, so an instance
   cannot redirect the supervisor's git calls.

@@ -13,7 +13,7 @@ import urllib.request
 
 from .core import SUP_DIR, knob, secrets_env
 
-JUDGE_MODEL, JUDGE_SRC = knob("SHAFT_JUDGE_MODEL", "claude-opus-5-5", str)
+JUDGE_MODEL, JUDGE_SRC = knob("SHAFT_JUDGE_MODEL", "claude-sonnet-5-5", str)   # Daniele, 2026-10-12
 API = "https://api.anthropic.com/v1/messages"
 
 
