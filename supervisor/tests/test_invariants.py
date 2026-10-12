@@ -219,6 +219,25 @@ class TalkInvariants(InstanceCase):
         self.assertIn("Found it after nine searches.", r.stdout)
         self.assertNotIn("without a final answer", r.stdout)
 
+    def test_answer_mode_for_api_clients(self):
+        request = {"talk_id": "api-t1", "client": "Enchanted", "messages": [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"},
+            {"role": "user", "content": [{"type": "text", "text": "what colour?"}, {"type": "image_url"}]}]}
+        r = self.run_agent([{"content": "Teal."}], "answer", stdin=json.dumps(request))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        events = [json.loads(l) for l in r.stdout.splitlines() if l.strip()]
+        self.assertEqual("".join(e["text"] for e in events if e["type"] == "content"), "Teal.")
+        sent = self.fake.requests[0]["messages"]
+        self.assertIn(SELF_SENTINEL, sent[0]["content"])                       # its own identity first
+        self.assertIn("Instructions from the app", sent[0]["content"])         # the app's prompt, labelled
+        self.assertEqual([m["role"] for m in sent[1:]], ["user", "assistant", "user"])
+        self.assertIn("1 non-text attachment", sent[-1]["content"])
+        episodes = [json.loads(l) for p in (self.root / "memory" / "episodes").glob("*.jsonl")
+                    for l in p.read_text().splitlines()]
+        self.assertEqual([(e["talk_id"], e["role"], e["via"]) for e in episodes if e["kind"] == "talk"],
+                         [("api-t1", "user", "Enchanted"), ("api-t1", "assistant", "Enchanted")])
+
     def test_ctrl_c_at_the_prompt_ends_at_once(self):
         r = self.run_agent([{"content": "Hi."}], "talk", stdin="hi\n")   # EOF after one exchange = Ctrl-D
         self.assertEqual(r.returncode, 0, r.stderr)

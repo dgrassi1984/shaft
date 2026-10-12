@@ -94,7 +94,7 @@ def request_yield(names: list[str]) -> None:
 def talking() -> list[str]:
     """Instances currently in a conversation with the operator."""
     from .core import instance_names
-    return [n for n in instance_names() if (busy_with(n) or "").startswith("talk")]
+    return [n for n in instance_names() if (busy_with(n) or "").startswith(("talk", "api"))]
 
 
 def is_busy(name: str) -> bool:

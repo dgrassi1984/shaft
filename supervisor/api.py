@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 import os
 import queue
 import secrets
@@ -258,4 +259,69 @@ def serve() -> int:
     log(f"api listening on 127.0.0.1:{PORT} (logins {sorted(allowed_logins())}, idle write-up {IDLE_MINUTES} min)")
     print(f"SHAFT API on http://127.0.0.1:{PORT}/v1 — {datetime.now():%H:%M}")
     server.serve_forever()
+    return 0
+
+
+# -- operator commands: shaft api on | off | status | key | serve ---------------------------
+HTTPS_PORT, _ = knob("SHAFT_API_HTTPS_PORT", "8443", int)
+
+
+def _tailscale(*args: str) -> "subprocess.CompletedProcess":
+    import shutil
+    import subprocess
+    exe = shutil.which("tailscale") or "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+    return subprocess.run([exe, *args], capture_output=True, text=True)
+
+
+def _set_secret(name: str, value: str) -> None:
+    path = SUP_DIR.parent / ".env"
+    lines = [l for l in (path.read_text().splitlines() if path.exists() else []) if not l.startswith(f"{name}=")]
+    path.write_text("\n".join(lines + [f"{name}={value}"]) + "\n")
+    path.chmod(0o600)
+
+
+def url() -> str:
+    st = json.loads(_tailscale("status", "--json").stdout or "{}")
+    host = (st.get("Self", {}).get("DNSName") or "").rstrip(".")
+    return f"https://{host}:{HTTPS_PORT}/v1" if host else "(tailscale is not running)"
+
+
+def command(action: str) -> int:
+    from . import autonomy
+    if action == "serve":
+        return serve()
+    if action == "key":
+        key = secrets_env().get("SHAFT_API_KEY")
+        print(key or "no key yet — run: shaft api on")
+        return 0 if key else 1
+    if action == "on":
+        env = secrets_env()
+        if not env.get("SHAFT_API_KEY"):
+            _set_secret("SHAFT_API_KEY", "sk-shaft-" + secrets.token_urlsafe(32))
+        if not env.get("SHAFT_API_LOGINS"):
+            st = json.loads(_tailscale("status", "--json").stdout or "{}")
+            me = st.get("User", {}).get(str(st.get("Self", {}).get("UserID")), {}).get("LoginName")
+            if not me:
+                print("cannot read your Tailscale login (is Tailscale running?)")
+                return 1
+            _set_secret("SHAFT_API_LOGINS", me)
+        if autonomy.service("api", "on"):
+            return 1
+        r = _tailscale("serve", "--bg", f"--https={HTTPS_PORT}", f"http://127.0.0.1:{PORT}")
+        if r.returncode != 0:
+            print(f"tailscale serve failed: {(r.stderr or r.stdout).strip()}")
+            return 1
+        log(f"api exposed on the tailnet at {url()} (tailscale serve, tailnet only)")
+        print(f"\nSHAFT API (tailnet only): {url()}\n  models: {', '.join(instance_names())}\n"
+              f"  key:    shaft api key   (prints it here, in your terminal)\n"
+              f"  allowed tailnet user(s): {', '.join(sorted(allowed_logins())) or secrets_env().get('SHAFT_API_LOGINS')}")
+        return 0
+    if action == "off":
+        _tailscale("serve", f"--https={HTTPS_PORT}", "off")
+        autonomy.service("api", "off")
+        print("SHAFT API removed from the tailnet and stopped")
+        return 0
+    autonomy.service("api", "status")
+    print(_tailscale("serve", "status").stdout.strip())
+    print(f"endpoint: {url()}  ·  allowed: {', '.join(sorted(allowed_logins())) or '(none)'}")
     return 0
