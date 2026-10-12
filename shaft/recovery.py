@@ -8,6 +8,7 @@ conversation is instant, and no conversation is ever forgotten.
 from __future__ import annotations
 
 import json
+import os
 import sys
 
 from . import prompts
@@ -18,9 +19,15 @@ from .ui import Status
 MAX_TRANSCRIPT_CHARS = 24000
 
 
-def orphan_talks(state: State) -> list[tuple[str, list[dict]]]:
+def open_talks() -> set[str]:
+    """Conversations still going on (the supervisor lists them): not finished, so not written up yet."""
+    return {t for t in os.environ.get("SHAFT_OPEN_TALKS", "").split(",") if t}
+
+
+def orphan_talks(state: State, include_open: bool = False) -> list[tuple[str, list[dict]]]:
+    """Conversation turns that no journal entry covers yet, per conversation. Turns that come after a
+    conversation was written up (it was picked up again) form a new piece, so they are not lost."""
     talks: dict[str, list[dict]] = {}
-    closed: set[str] = set()
     for path in sorted(state.episodes_dir.glob("*.jsonl")):
         for line in path.read_text().splitlines():
             try:
@@ -30,16 +37,17 @@ def orphan_talks(state: State) -> list[tuple[str, list[dict]]]:
             if rec.get("kind") == "talk" and rec.get("content"):
                 talks.setdefault(rec["talk_id"], []).append(rec)
             elif rec.get("kind") in ("talk_summary", "talk_recovered"):
-                closed.add(rec["talk_id"])
+                talks[rec["talk_id"]] = []
+    still_open = set() if include_open else open_talks()
     return [(tid, turns) for tid, turns in talks.items()
-            if tid not in closed and any(t["role"] == "assistant" for t in turns)]
+            if tid not in still_open and any(t["role"] == "assistant" for t in turns)]
 
 
-def unwritten_context(state: State, max_chars: int = 6000) -> str:
-    """Transcripts of conversations still missing their journal entry, newest last — so a
-    conversation that starts before they are written up still remembers them."""
+def unwritten_context(state: State, max_chars: int = 6000, exclude: str = "") -> str:
+    """Transcripts of conversations still missing their journal entry (also ones going on elsewhere right
+    now), newest last — so a conversation that starts before they are written up still remembers them."""
     parts = []
-    for _, turns in orphan_talks(state)[-3:]:
+    for _, turns in [o for o in orphan_talks(state, include_open=True) if o[0] != exclude][-3:]:
         lines = [f"{'Daniele' if t['role'] == 'user' else 'me'}: {t['content']}" for t in turns]
         parts.append(f"### Conversation {turns[0]['ts'][:16].replace('T', ' ')} (no journal entry yet)\n" + "\n".join(lines))
     text = "\n\n".join(parts)

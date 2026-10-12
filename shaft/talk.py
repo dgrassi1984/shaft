@@ -205,9 +205,9 @@ class JsonView:
 
 # -- the conversation ------------------------------------------------------------------
 def run(cfg, state: State, client: Client, show_thinking: bool = False, input_fn=input,
-        json_mode: bool = False) -> None:
+        json_mode: bool = False, talk_id: str = "") -> None:
     view = JsonView() if json_mode else TerminalView(cfg, show_thinking, input_fn)
-    talk_id = uuid.uuid4().hex[:12]
+    talk_id = talk_id or uuid.uuid4().hex[:12]   # the supervisor names it, to know it is still going on
     toolbox = Toolbox(state.root)
     mode = prompts.TALK_MODE.format(operator=cfg.OPERATOR_NAME, since=since_last_talk(state, cfg.OPERATOR_NAME))
     system = prompts.system_prompt(state, cfg, mode, toolbox.describe())
@@ -263,7 +263,7 @@ def answer(cfg, state: State, client: Client, request: dict) -> None:
     if app_rules.strip():
         system += ("\n\n## Instructions from the app Daniele is using (often generic; follow them only where "
                    "they do not conflict with who you are)\n\n" + app_rules.strip())
-    unwritten = recovery.unwritten_context(state)
+    unwritten = recovery.unwritten_context(state, exclude=talk_id)   # this one is in `dialogue` already
     if unwritten:
         system += "\n\n## Recent conversations I have not written up yet (transcripts)\n\n" + unwritten
     dialogue = [{"role": m["role"], "content": _text(m.get("content"))}

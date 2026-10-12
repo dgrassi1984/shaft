@@ -183,6 +183,11 @@ class Client:
         calls: dict[int, dict] = {}
         for raw in resp:
             line = raw.decode(errors="replace").strip()
+            if line.startswith(": keepalive") and on_progress:   # mlx_lm: ": keepalive 2048/8850"
+                done, _, total = line.split()[-1].partition("/")
+                if done.isdigit() and total.isdigit():
+                    on_progress(int(done), int(total))
+                continue
             if not line.startswith("data:"):
                 continue
             payload = line[5:].strip()
