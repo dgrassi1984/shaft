@@ -10,7 +10,8 @@ Run with the Bonsai venv:  .venv-bonsai/bin/python -m supervisor.bonsai_server [
 Normally started by launchd (shaft model on).
 
 Settings (environment): SHAFT_MODEL_TEMP (0.1), SHAFT_THINK_BUDGET (4096 reasoning tokens, then </think> is
-forced; 0 = off), SHAFT_PROMPT_CACHE_GB (4). Presence penalty is sent per request by the agent.
+forced; 0 = off; a request may ask for less with chat_template_kwargs.thinking_budget), SHAFT_PROMPT_CACHE_GB (4,
+enforced on every insert). Presence penalty is sent per request by the agent.
 """
 from __future__ import annotations
 
@@ -57,6 +58,26 @@ class ThinkingBudget:
         return logits
 
 
+def request_budget(gen_args, budget: int) -> int:
+    """A request may ask for a smaller thinking budget (chat_template_kwargs.thinking_budget — the agent does
+    after a tool result), never a larger one; 0 (off) stays off."""
+    asked = (getattr(gen_args, "chat_template_kwargs", None) or {}).get("thinking_budget")
+    if budget > 0 and isinstance(asked, int) and not isinstance(asked, bool) and asked > 0:
+        return min(budget, asked)
+    return budget
+
+
+def capped_prompt_cache(cap: int):
+    """mlx_lm trims its prompt cache to --prompt-cache-bytes only when a new request starts, so a finished
+    reply's cache sat above the cap until then (6.0 GB against 4 GB). This class enforces it on every insert."""
+    from mlx_lm.models.cache import LRUPromptCache
+
+    class CappedPromptCache(LRUPromptCache):
+        def __init__(self, max_size: int = 10, max_bytes: int = 1 << 63):
+            super().__init__(max_size, min(max_bytes, cap))
+    return CappedPromptCache
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="bonsai_server")
     ap.add_argument("--port", type=int, default=PORT)
@@ -89,14 +110,17 @@ def main(argv: list[str]) -> int:
     original = S._make_logits_processors
 
     def with_budget(gen_args):
-        return list(original(gen_args) or []) + ([ThinkingBudget(budget)] if budget > 0 else [])
+        b = request_budget(gen_args, budget)
+        return list(original(gen_args) or []) + ([ThinkingBudget(b)] if b > 0 else [])
     S._make_logits_processors = with_budget
     temp = os.environ.get("SHAFT_MODEL_TEMP", "0.1")                   # Daniele, 2026-10-12 (pack default 1.0)
     cache_gb = float(os.environ.get("SHAFT_PROMPT_CACHE_GB", "4"))      # the cache grew to 8.3 GB uncapped
+    cap = int(cache_gb * 1024 ** 3)
+    S.LRUPromptCache = capped_prompt_cache(cap)
     sys.argv = ["bonsai_server", "--model", str(pack), "--host", "127.0.0.1", "--port", str(args.port),
                 "--temp", temp, "--top-p", str(gen.get("top_p", 0.95)),
                 "--top-k", str(gen.get("top_k", 20)), "--max-tokens", "16384",
-                "--prompt-cache-bytes", str(int(cache_gb * 1024 ** 3))]
+                "--prompt-cache-bytes", str(cap)]
     from .version import record_service   # `shaft talk` shows which code and settings are serving
     record_service("model", {"temp": float(temp), "think_budget": budget, "prompt_cache_gb": cache_gb,
                              "adapter": args.adapter, "port": args.port})

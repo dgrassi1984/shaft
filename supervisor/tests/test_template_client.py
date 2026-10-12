@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -20,6 +21,31 @@ class StreamTest(unittest.TestCase):
         Client._read_stream(io.BytesIO(wire), reply, None, None, lambda d, t: seen.append((d, t)))
         self.assertEqual(seen, [(2048, 8850), (8850, 8850)])
         self.assertEqual(reply.content, "hi")
+
+
+class FollowupBudgetTest(unittest.TestCase):
+    """Bonsai used its whole 4,096-token thinking budget on every tool round (~4.5 min each, 30+ min for one
+    reply); after a tool result the client asks SHAFT's server for a smaller budget."""
+
+    def bodies(self, messages, **client_kw):
+        from supervisor.tests.fakellm import FakeLLM
+        fake = FakeLLM([{"content": "ok"}])
+        self.addCleanup(fake.close)
+        Client(fake.url, "m", "", 30, Path(tempfile.mkdtemp()) / "u.jsonl", **client_kw).complete(messages, 100, "test")
+        return fake.requests[-1]
+
+    def test_after_a_tool_result_the_budget_is_smaller(self):
+        msgs = [{"role": "user", "content": "x"},
+                {"role": "assistant", "content": "", "tool_calls": [{"id": "1", "type": "function",
+                                                                     "function": {"name": "f", "arguments": "{}"}}]},
+                {"role": "tool", "tool_call_id": "1", "content": "result"}]
+        body = self.bodies(msgs, think_followup=1024)
+        self.assertEqual(body["chat_template_kwargs"], {"thinking_budget": 1024})
+
+    def test_first_call_and_cloud_get_the_full_budget(self):
+        self.assertNotIn("chat_template_kwargs", self.bodies([{"role": "user", "content": "x"}], think_followup=1024))
+        tool_last = [{"role": "tool", "tool_call_id": "1", "content": "r"}]
+        self.assertNotIn("chat_template_kwargs", self.bodies(tool_last, think_followup=0))
 
 
 if __name__ == "__main__":
