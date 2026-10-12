@@ -21,13 +21,16 @@ Design, milestones and decisions: [PLAN.md](PLAN.md).
 ## Requirements
 
 - macOS (the sandbox uses `sandbox-exec`), Python 3.12+, git 2.42+ — no Python packages.
-- A model per instance, set in its `config.env`: an OpenAI-compatible chat endpoint with tool
-  calling on localhost (llama.cpp, Ollama, LM Studio, Atomic Chat…), or `LLM_BASE_URL="broker"`
-  + e.g. `LLM_MODEL="claude-haiku-5-5"` for a cloud model through the supervisor (the instance
-  never sees the key; allowed models `SHAFT_CLOUD_MODELS`, daily cap `SHAFT_CLOUD_DAILY_USD`).
+- A model per instance, set in its `config.env`. The default is SHAFT's own model server:
+  Ternary-Bonsai-2-27B (MLX, 2-bit) behind mlx_lm's OpenAI-compatible server on `127.0.0.1:8780`
+  (`shaft model on` installs it as a launchd service; needs `.venv-bonsai/` and the pack below).
+  Any other OpenAI-compatible endpoint with tool calling on localhost works too, or
+  `LLM_BASE_URL="broker"` + e.g. `LLM_MODEL="claude-haiku-5-5"` for a cloud model through the
+  supervisor (the instance never sees the key; allowed models `SHAFT_CLOUD_MODELS`, daily cap
+  `SHAFT_CLOUD_DAILY_USD`).
 - Optional, in `.env` at the root (supervisor-only, never visible to instances):
   `SCRAPEBADGER_API_KEY` (web search), `ANTHROPIC_API_KEY` (the judge).
-- Optional for fine-tuning (M6) on Bonsai itself: the MLX pack `prism-ml/Ternary-Bonsai-2-27B-mlx-2bit`
+- For the local model and fine-tuning (M6): the MLX pack `prism-ml/Ternary-Bonsai-2-27B-mlx-2bit`
   in `.models/bonsai2-27b-mlx/` and a venv `.venv-bonsai/` with its `runtime/requirements.txt`.
 
 ## Quick start
@@ -70,7 +73,9 @@ ln -s "$PWD/bin/shaft" ~/.local/bin/shaft   # once
 shaft talk [name]               # chat with its tools, in the terminal client (see below); --plain for line mode
 shaft live|reflect|sleep [name|--all]   # one autonomous cycle / reflection / consolidation
 shaft autonomy on|off|status    # launchd: `shaft tick` every 2 h, `shaft sleep --all` at 04:00
-shaft status [name]             # how each instance is doing
+shaft status [name]             # how each instance is doing, open conversations, which code is running
+shaft model on|off|status       # SHAFT's own Bonsai 2 server (launchd, :8780)
+shaft api on|off|status|key     # OpenAI-compatible API on your tailnet (see below)
 shaft log [name] -n 5           # recent journal entries
 shaft stats [name]              # judged success, calibration, honesty, failure modes
 
@@ -98,15 +103,38 @@ sandboxed agent over JSON lines (`talk --json`); pipes and `--plain` get line mo
 - Markdown rendered live while the answer streams; tool calls as compact lines; a status line with phase,
   elapsed time and speed (waiting for the model → reading my memory % → thinking → answer)
 - **Ctrl-C** stops a reply; at the prompt it clears your text, or ends the conversation if empty; Ctrl-D ends
-- `/help` · `/thinking` · `/status` · `/inbox` · `/clear` · `/exit`
+- `/help` · `/thinking` · `/status` · `/version` · `/inbox` · `/clear` · `/exit`
+- The banner's second line says which code is running: the supervisor's commit, the instance's code (and
+  template changes not merged yet), and the running model server's commit and settings — flagged when it
+  runs older code than is checked out (`shaft model on` restarts it). `shaft status` shows the same.
+- The instance is held only while it replies: an open chat waiting for you does not block the API or a
+  journal write-up. A chat left with nothing typed for `SHAFT_IDLE_MINUTES` (30) closes itself.
 - No limit on tool rounds in a conversation (Ctrl-C is the brake). Shift-Enter in iTerm2 needs
   Settings → Profiles → Keys → General → "Report modifiers using CSI u" (Option-Enter always works).
+
+### The API (`shaft api on`)
+
+Each instance is a "model" of an OpenAI-compatible API (`GET /v1/models`, `POST /v1/chat/completions`,
+streaming or not), served on `127.0.0.1:8781` and exposed by `tailscale serve` on port 8443 of this Mac's
+tailnet name — tailnet only, never Funnel. Every request needs the key (`shaft api key`) and a
+Tailscale login listed in `SHAFT_API_LOGINS`. The instance answers as itself, with its tools; tool
+activity arrives as `reasoning_content`. A conversation keeps one id while its first message stays the
+same, and is written up into the journal after `SHAFT_IDLE_MINUTES` without a message.
+
+### The model server (`shaft model on`)
+
+`supervisor/bonsai_server.py`: mlx_lm's server with Bonsai's own loader (and a kept LoRA adapter, if
+any). Context 262,144 tokens; hybrid attention (48 linear + 16 full layers). Settings:
+`SHAFT_MODEL_TEMP` (0.1), top-p 0.95, top-k 20, max 16,384 tokens per reply, a thinking budget
+`SHAFT_THINK_BUDGET` (4,096 reasoning tokens, then `</think>` is forced — 0 turns it off), and a prompt
+cache capped at `SHAFT_PROMPT_CACHE_GB` (4). Agents send a presence penalty (`LLM_PRESENCE_PENALTY`)
+against loops. Prompt reading is reported as progress (`reading my memory · N%`).
 
 ## Rules the supervisor enforces
 
 - **Sandbox** (macOS `sandbox-exec`): an instance writes only inside `instances/<name>/`,
   reads nothing else in your home, and connects only to the LLM port(s) (`SHAFT_LLM_PORTS`,
-  default 1337) and its run's broker. It inherits no secrets from the environment.
+  default 8780) and its run's broker. It inherits no secrets from the environment.
 - **Broker**: the only door to the outside — web search (ScrapeBadger), page fetching
   (public addresses only, re-checked on every redirect), messages between instances and to
   you (max 3 per instance per day, with a macOS notification), and **`delegate_coding`**: an
@@ -114,7 +142,11 @@ sandboxed agent over JSON lines (`talk --json`); pipes and `--plain` get line mo
   read-only and writes the change; the supervisor tests it on a scratch copy and applies it only if
   the gate passes — code only, never `self/`, `memory/` or `config.env`; max 2 per cycle and
   `SHAFT_CODER_DAILY_USD` (5) per instance per day; commits and `self/stats.md` record what was
-  delegated. Per-run token, call budget
+  delegated. **`run`**: shell commands (`zsh`) in a stricter sandbox — writes only to `notes/`,
+  `plugins/`, `skills/`, `tests/`, `shaft/` and `.tmp/`, no network, reads only its own folder;
+  60 s default time limit (the whole process group is killed), 100 MB file-size limit, output capped,
+  40 commands per run. So an instance can build and test its own tools and plugins.
+  Per-run token, call budget
   (`SHAFT_BROKER_MAX_CALLS`, default 60), everything logged in `.supervisor/broker.log`.
 - **Append-only journal**: if a run rewrote history instead of appending, the journal is
   restored and the rewrite kept aside.
@@ -132,8 +164,14 @@ sandboxed agent over JSON lines (`talk --json`); pipes and `--plain` get line mo
   `SHAFT_CYCLE_TIMEOUT_S` (2400 s), a sleep after `SHAFT_SLEEP_TIMEOUT_S` (5400 s). Runs know
   their deadline and wrap up with a report before it; a stopped run leaves a journal note.
 - **Your conversation comes first**: `shaft talk` asks other instances' running cycles to wrap
-  up at their next turn, and no scheduled cycle starts while a conversation is open. Ctrl-C in
-  a conversation ends it cleanly (the instance still writes its journal entry).
+  up at their next turn, and no scheduled cycle starts while a conversation is open (terminal or
+  API). A conversation holds its instance only while it replies, so you can chat in the terminal and
+  through the API at the same time. Open conversations are never written up early; a conversation
+  picked up again after its write-up gets a further entry. Ctrl-C in a conversation ends it cleanly
+  (the instance still writes its journal entry).
+- **Nothing fails silently**: a run that ends in an error leaves a journal note with what it printed
+  last; a nightly sleep skipped because the instance is paused is noted too. Every instance's context
+  says when it last slept and what came of it, even after the entry scrolled out of its recent journal.
 - **Updates**: template fixes reach an instance only through `shaft update`, under its run lock
   and the test gate — never mid-run.
 
