@@ -51,11 +51,12 @@ class Reply:
 
 class Client:
     def __init__(self, base_url: str, model: str, api_key: str, timeout_s: int, usage_log: Path,
-                 broker_token: str = ""):
+                 broker_token: str = "", presence_penalty: float = 0.0):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
         self.broker_token = broker_token
+        self.presence_penalty = presence_penalty
         self.timeout_s = timeout_s
         self.usage_log = usage_log
 
@@ -69,7 +70,8 @@ class Client:
                 raise LLMError("LLM_BASE_URL is 'broker' but no broker is running (SHAFT_BROKER_URL unset)")
             base, token = broker_url.rstrip("/") + "/llm/v1", os.environ.get("SHAFT_BROKER_TOKEN", "")
         return cls(base, cfg.LLM_MODEL, cfg.LLM_API_KEY, cfg.LLM_TIMEOUT_S,
-                   cfg.root / "logs" / "llm_usage.jsonl", broker_token=token)
+                   cfg.root / "logs" / "llm_usage.jsonl", broker_token=token,
+                   presence_penalty=cfg.LLM_PRESENCE_PENALTY / 10)
 
     # -- public -------------------------------------------------------------
     def complete(self, messages: list[dict], max_tokens: int, purpose: str,
@@ -118,6 +120,8 @@ class Client:
     def _call(self, messages, max_tokens, purpose, stream, tools=None,
               on_content=None, on_reasoning=None, on_progress=None, think=True) -> Reply:
         body = {"model": self.model, "messages": messages, "max_tokens": max_tokens}
+        if self.presence_penalty:   # Qwen's advice for quantized models: curbs endless repetition
+            body["presence_penalty"] = self.presence_penalty
         if not think:   # Qwen-style templates (llama.cpp): answer directly, no hidden reasoning
             body["chat_template_kwargs"] = {"enable_thinking": False}
         if tools:
