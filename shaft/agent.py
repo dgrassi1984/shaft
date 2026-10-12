@@ -30,6 +30,12 @@ class Outcome:
 WRAP_UP_RESERVE_S = 900   # one heavy turn of a thinking model can take ~12 minutes
 
 
+def yield_requested() -> bool:
+    """The supervisor asks me to finish early (Daniele started a conversation and needs the model)."""
+    root = os.environ.get("SHAFT_ROOT")
+    return bool(root) and os.path.exists(os.path.join(root, ".tmp", "yield"))
+
+
 def time_left() -> float | None:
     """Seconds until the supervisor stops this run (SHAFT_DEADLINE), or None if unbounded."""
     deadline = os.environ.get("SHAFT_DEADLINE")
@@ -56,9 +62,11 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
     reply = None
     for step in range(1, max_steps + 1):
         left = time_left()
-        last = step == max_steps or (left is not None and left < WRAP_UP_RESERVE_S)
+        yielding = step > 1 and yield_requested()
+        last = step == max_steps or yielding or (left is not None and left < WRAP_UP_RESERVE_S)
         if last and wrap_up:
-            why = f"about {left / 60:.0f} minutes" if left is not None and left < WRAP_UP_RESERVE_S else "one turn"
+            why = ("one turn: Daniele needs the model for a conversation" if yielding else
+                   f"about {left / 60:.0f} minutes" if left is not None and left < WRAP_UP_RESERVE_S else "one turn")
             messages.append({"role": "user", "content": f"[supervisor] You have {why} left. {wrap_up}"})
             reply = call(messages, final_tools)
         else:

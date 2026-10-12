@@ -46,10 +46,16 @@ def run(cfg, state: State, client: Client) -> int:
             operator=cfg.OPERATOR_NAME, started=started.replace("T", " ")[:16], ended=ended.replace("T", " ")[:16]))
         messages = [{"role": "system", "content": system}, *dialogue,
                     {"role": "user", "content": prompts.TALK_SUMMARY.format(operator=cfg.OPERATOR_NAME)}]
+        when = started[:16].replace("T", " ")
         ui = Status(sys.stderr)
-        ui.show(f"writing up our conversation of {started[:16].replace('T', ' ')} first (it has no journal entry yet)")
+        ui.show(f"conversation of {when} has no journal entry yet · waiting for the model")
         try:
-            reply = client.complete(messages, cfg.MAX_TOKENS_REFLECT, purpose="talk_recovery")
+            reply = client.stream(
+                messages, cfg.MAX_TOKENS_REFLECT, purpose="talk_recovery",
+                on_progress=lambda done, total: ui.show(
+                    f"conversation of {when} · reading the transcript", f"{done * 100 // max(total, 1)}%"),
+                on_reasoning=lambda _: ui.show(f"conversation of {when} · writing my journal entry"),
+                on_content=lambda _: None)
             ui.clear()
         except LLMError as e:
             ui.clear()
