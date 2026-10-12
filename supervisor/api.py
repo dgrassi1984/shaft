@@ -276,6 +276,8 @@ def serve() -> int:
     if not allowed_logins():
         print("no SHAFT_API_LOGINS — run: shaft api on")
         return 2
+    from .version import record_service
+    record_service("api", {"port": PORT, "idle_minutes": IDLE_MINUTES})
     Handler.conversations = Conversations()
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     server.daemon_threads = True

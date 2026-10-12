@@ -65,15 +65,19 @@ class OpenConversationTest(unittest.TestCase):
         self.assertEqual(runner.open_conversations("shaft"), {})
         self.assertFalse((folder / "dead.talk").exists())
 
-    def test_api_conversation_is_open_until_quiet_for_the_idle_time(self):
+    def test_api_conversation_is_open_until_the_api_closes_it(self):
+        # The API alone decides when its conversation ended (its idle time); a reader with another
+        # SHAFT_IDLE_MINUTES (a test shell's 2) once wrote up a conversation still going on.
         now = time.time()
         (self.sup / "api_talks.json").write_text(json.dumps({
             "a": {"talk_id": "api-recent", "model": "shaft", "last": now - 60, "written": False},
-            "b": {"talk_id": "api-quiet", "model": "shaft", "last": now - runner.IDLE_MINUTES * 60 - 5,
-                  "written": False},
+            "b": {"talk_id": "api-long-quiet", "model": "shaft", "last": now - 10 * 3600, "written": False},
             "c": {"talk_id": "api-done", "model": "shaft", "last": now, "written": True},
             "d": {"talk_id": "api-wren", "model": "wren", "last": now, "written": False}}))
-        self.assertEqual(runner.open_conversations("shaft"), {"api-recent": "api"})
+        with mock.patch("supervisor.version.service", return_value={"pid": 1}):
+            self.assertEqual(runner.open_conversations("shaft"), {"api-recent": "api", "api-long-quiet": "api"})
+        with mock.patch("supervisor.version.service", return_value=None):   # API not running: nobody to close them
+            self.assertEqual(runner.open_conversations("shaft"), {})
 
 
 class WriteUpTest(unittest.TestCase):

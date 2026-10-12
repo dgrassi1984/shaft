@@ -97,6 +97,9 @@ def main(argv: list[str]) -> int:
                 "--temp", temp, "--top-p", str(gen.get("top_p", 0.95)),
                 "--top-k", str(gen.get("top_k", 20)), "--max-tokens", "16384",
                 "--prompt-cache-bytes", str(int(cache_gb * 1024 ** 3))]
+    from .version import record_service   # `shaft talk` shows which code and settings are serving
+    record_service("model", {"temp": float(temp), "think_budget": budget, "prompt_cache_gb": cache_gb,
+                             "adapter": args.adapter, "port": args.port})
     S.main()
     return 0
 

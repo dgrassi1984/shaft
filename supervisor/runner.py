@@ -27,7 +27,7 @@ from pathlib import Path
 
 from . import gate, sandbox
 from .broker import Broker
-from .core import (IDLE_MINUTES, API_TALKS, BROKER_MAX_CALLS, CORE_MIN_HOURS, CYCLE_TIMEOUT_S, HOME, INSTANCES, LLM_PORTS, PROJECT, PYTHON,
+from .core import (API_TALKS, BROKER_MAX_CALLS, CORE_MIN_HOURS, CYCLE_TIMEOUT_S, HOME, INSTANCES, LLM_PORTS, PROJECT, PYTHON,
                    SLEEP_TIMEOUT_S, SUP_DIR, UnsafePath,
                    commit_state, describe_knobs, git_wt, instance_root, journal_note, log, safe_mkdir,
                    safe_write, secrets_env)
@@ -127,7 +127,7 @@ class Presence:
 
 def open_conversations(name: str) -> dict[str, str]:
     """{talk_id: 'talk' | 'api'} for the instance's conversations still going on: terminal talks whose
-    client is running, and API conversations not yet written up that had a message recently."""
+    client is running, and conversations the running API has not closed and written up yet."""
     found: dict[str, str] = {}
     folder = SUP_DIR / "conversations" / name
     for p in sorted(folder.glob("*.*")) if folder.is_dir() else []:
@@ -147,14 +147,15 @@ def open_conversations(name: str) -> dict[str, str]:
             except FileNotFoundError:
                 pass
             fcntl.flock(f, fcntl.LOCK_UN)
-    try:
-        talks = json.loads(API_TALKS.read_text()) if API_TALKS.exists() else {}
-    except (OSError, ValueError):
-        talks = {}
-    for t in talks.values():
-        if (t.get("model") == name and not t.get("written")
-                and time.time() - t.get("last", 0) <= IDLE_MINUTES * 60):
-            found[t["talk_id"]] = "api"
+    from .version import service
+    if service("api"):   # the API decides when its conversations end (idle time) — not this process's knob
+        try:
+            talks = json.loads(API_TALKS.read_text()) if API_TALKS.exists() else {}
+        except (OSError, ValueError):
+            talks = {}
+        for t in talks.values():
+            if t.get("model") == name and not t.get("written"):
+                found[t["talk_id"]] = "api"
     return found
 
 
@@ -256,6 +257,26 @@ def _launch(name: str, root: Path, kind: str, agent_args: list[str], budget: int
     return broker, cmd, env
 
 
+def _tee(stream, echo, keep: list[str]):
+    """Copy a child's stream to `echo` (if any) as it arrives, keeping the last ~4 KB in `keep`
+    (all of it when nothing is echoed: that is a captured output)."""
+    import threading
+
+    def pump():
+        for chunk in iter(lambda: stream.read(512), ""):
+            if echo:
+                echo.write(chunk)
+                echo.flush()
+                keep.append(chunk)
+                while sum(map(len, keep)) > 4096 and len(keep) > 1:
+                    keep.pop(0)
+            else:
+                keep.append(chunk)
+    t = threading.Thread(target=pump, daemon=True)
+    t.start()
+    return t
+
+
 def _popen(cmd, root: Path, env: dict) -> subprocess.Popen:
     # Own process group: the terminal's Ctrl-C reaches the client, which decides what it means.
     return subprocess.Popen(cmd, cwd=root, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -280,6 +301,8 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
     # In a conversation Ctrl-C belongs to the agent (it ends the talk and writes its journal
     # entry). If the supervisor took it too, subprocess.run would kill the agent mid-entry.
     old_sigint = signal.signal(signal.SIGINT, signal.SIG_IGN) if interactive and not driver else None
+    err_tail: list[str] = []
+    out_all: list[str] = []
     try:
         if driver:
             proc = _popen(cmd, root, env)
@@ -289,11 +312,22 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
                 _finish(proc)
             code = proc.returncode
         else:
-            proc = subprocess.run(cmd, cwd=root, env=env, timeout=budget,
-                                  stdout=subprocess.PIPE if output is not None else None, text=True)
-            code = proc.returncode
+            proc = subprocess.Popen(cmd, cwd=root, env=env, stderr=subprocess.PIPE, text=True,
+                                    stdout=subprocess.PIPE if output is not None else None)
+            readers = [_tee(proc.stderr, sys.stderr, err_tail)]   # still shown live; the tail explains a failure
             if output is not None:
-                output.append(proc.stdout or "")
+                readers.append(_tee(proc.stdout, None, out_all))
+            try:
+                code = proc.wait(timeout=budget)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+                raise
+            finally:
+                for r in readers:
+                    r.join(timeout=5)
+            if output is not None:
+                output.append("".join(out_all))
     except subprocess.TimeoutExpired:
         log(f"{name}: {kind} killed after {budget}s budget")
         print(f"{name}: {kind} exceeded its {budget}s budget and was stopped.", file=sys.stderr)
@@ -311,6 +345,10 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
     if code < 0 and not interactive:
         journal_note(root, "Supervisor: run stopped", f"My {kind} run was stopped from outside (signal {-code}) "
                      "before I finished it. Whatever I had already written to my files was kept.")
+    elif code not in (0, 124, 130) and not interactive and not driver:
+        why = "".join(err_tail).strip()[-1200:] or "(it printed nothing)"
+        journal_note(root, f"Supervisor: {kind} failed", f"My {kind} run ended with an error (exit {code}), so it "
+                     f"did not complete. What it printed last:\n\n```\n{why}\n```")
     if not _settle(name, root, kind, before, broker.handoffs):
         return code or 1
     if kind == "live":

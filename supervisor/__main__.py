@@ -21,8 +21,8 @@ import subprocess
 import sys
 from datetime import date, datetime
 
-from . import autonomy, evolution, finetune, gate, messages, metrics
-from .core import (DEFAULT_INSTANCE, HOME, INSTANCES, NAME_RE, PROJECT, SUP_DIR, TEMPLATE, git, git_wt,
+from . import autonomy, evolution, finetune, gate, messages, metrics, runner, version
+from .core import (DEFAULT_INSTANCE, HOME, INSTANCES, NAME_RE, PROJECT, SUP_DIR, TEMPLATE, commit_state, git, git_wt,
                    instance_names, instance_root, journal_entries, journal_note, log, paused,
                    safe_mkdir, safe_write)
 from .runner import Busy, busy_with, is_busy, request_yield, run_agent, run_lock, spawn_recover
@@ -177,11 +177,14 @@ def cmd_status(names: list[str]) -> int:
         js = metrics.judgments(name)
         rate = (sum(metrics.SCORE[j["criterion_met"]] for j in js) / len(js)) if js else None
         last_self = git_wt(root, "log", "-1", "--format=%cr", "--", "self/self.md", check=False).stdout.strip()
-        flags = [f for f, on in (("paused", paused(name)), ("busy", is_busy(name))) if on]
+        convs = runner.open_conversations(name)
+        flags = [f for f, on in (("paused", paused(name)), ("busy", is_busy(name)),
+                                 (f"{len(convs)} conversation(s) open", convs)) if on]
         print(f"\n■ {name}{' (' + ', '.join(flags) + ')' if flags else ''}  ·  branch instance/{name}")
         print(f"  journal     {len(entries)} entries · self-model last changed {last_self or 'never'}")
         print(f"  judged      {len(js)} cycles" + (f" · success {rate:.0%}" if rate is not None else ""))
         print(f"  LLM today   {calls} calls · {tokens} completion tokens · {errors} errors")
+        print(f"  versions    {version.describe(name)}")
         if entries:
             lines = entries[-1].splitlines()
             print("  latest:     " + lines[0].lstrip("# "))
@@ -198,6 +201,11 @@ def run_many(kind: str, names: list[str], every: bool) -> int:
     for name in names:
         if kind not in ("talk", "recover") and paused(name):   # writing journal entries is housekeeping
             print(f"{name} is paused (shaft resume {name}).", file=sys.stderr)
+            if kind == "sleep" and every:   # the nightly run: tell it why it did not sleep
+                with run_lock(name, wait=True, kind="sleep"):
+                    journal_note(instance_root(name), "Supervisor: no sleep tonight",
+                                 "My nightly sleep cycle did not run: the operator had paused me.")
+                    commit_state(name, "sleep skipped", [])
             worst = max(worst, 3)
             continue
         worst = max(worst, run_agent(name, kind, [kind], interactive=False))

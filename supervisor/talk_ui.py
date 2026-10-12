@@ -34,7 +34,7 @@ from rich.markdown import Markdown
 from rich.spinner import Spinner
 from rich.text import Text
 
-from . import messages
+from . import messages, version
 from .core import IDLE_MINUTES, SUP_DIR, instance_root
 from .runner import run_conversation, spawn_recover
 
@@ -48,7 +48,7 @@ HELP = """\
 **Keys** — Enter sends · **Shift-Enter**, **Option-Enter** or **Ctrl-J** new line · ↑/↓ history · \
 Ctrl-C stops a reply (at the prompt: clears your text, or ends if empty) · Ctrl-D ends
 
-**Commands** — `/thinking` show or hide its reasoning · `/status` how it is doing · `/inbox` messages \
+**Commands** — `/thinking` show or hide its reasoning · `/status` how it is doing · `/version` which code is running · `/inbox` messages \
 it sent you · `/clear` clear the screen · `/exit` end
 
 *Shift-Enter in iTerm2:* if it sends instead of adding a line, turn on Settings → Profiles → Keys → \
@@ -276,6 +276,8 @@ class Client:
             for m in pending:
                 self.console.print(f"[bold]{m['kind']}[/bold] from {m['from']} · {m['date']}")
                 self.console.print(Markdown(m["body"]))
+        elif cmd == "/version":
+            self.console.print(version.describe(self.name))
         elif cmd == "/status":
             from .__main__ import cmd_status
             cmd_status([self.name])
@@ -297,7 +299,8 @@ class Client:
             return
         self.info = ready
         self.console.print(f"[bold cyan]{self.name}[/bold cyan] [dim]· {ready['model'].split('/')[-1]} · "
-                           f"{ready['journal_entries']} journal entries · {ready['tools']} tools · /help[/dim]\n")
+                           f"{ready['journal_entries']} journal entries · {ready['tools']} tools · /help[/dim]")
+        self.console.print(f"[dim]{version.describe(self.name)}[/dim]\n")
         threading.Thread(target=self._idle_watch, daemon=True).start()
         while not self.quit:
             self.prompting, self.last_activity = True, time.monotonic()
