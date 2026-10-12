@@ -167,6 +167,8 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
     cmd = sandbox.wrap(prof, [sys.executable, "-E", "-s", "-m", "shaft", *agent_args])
     budget = None if interactive else (SLEEP_TIMEOUT_S if kind == "sleep" else CYCLE_TIMEOUT_S)
     extra = {"SHAFT_DEADLINE": f"{time.time() + budget - 60:.0f}"} if budget else {}
+    from .autonomy import describe_schedule
+    extra["SHAFT_SCHEDULE"] = describe_schedule()
     env = sandbox.agent_env(os.environ, SHAFT_ROOT=str(root), TMPDIR=str(root / ".tmp"),
                             SHAFT_BROKER_URL=broker_url, SHAFT_BROKER_TOKEN=broker.token, **extra)
     # In a conversation Ctrl-C belongs to the agent (it ends the talk and writes its journal

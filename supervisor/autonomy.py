@@ -17,6 +17,19 @@ JOBS = {
 }
 
 
+def describe_schedule() -> str:
+    """What an instance should know about when it runs — derived from the installed jobs."""
+    installed = all((AGENTS / f"{label}.plist").exists() for label in JOBS)
+    if not installed:
+        return ("Your autonomous schedule is off: you run only when Daniele talks to you or starts a cycle "
+                "by hand.")
+    hours = JOBS["com.shaft.tick"]["schedule"]["StartInterval"] // 3600
+    at = JOBS["com.shaft.sleep"]["schedule"]["StartCalendarInterval"]
+    return (f"The supervisor wakes you for an autonomous cycle every {hours} hours and for your sleep cycle every "
+            f"day at {at['Hour']:02d}:{at['Minute']:02d} (no cycle starts while Daniele is talking with you). "
+            f"You cannot change this clock; within a cycle, what you do is up to you.")
+
+
 def tick() -> int:
     """One autonomous round: a life cycle for every awake, idle instance (sequentially —
     the model serves one request at a time)."""

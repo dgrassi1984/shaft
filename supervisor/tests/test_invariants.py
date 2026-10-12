@@ -73,10 +73,12 @@ class InstanceCase(unittest.TestCase):
 class ReflectInvariants(InstanceCase):
     def test_context_reaches_the_model(self):
         # Regression: the bash harness wrote the context to /tmp but never sent it to the LLM.
-        r = self.run_agent([{"content": REFLECTION}], "reflect")
+        r = self.run_agent([{"content": REFLECTION}], "reflect",
+                           extra_env={"SHAFT_SCHEDULE": "The supervisor wakes you every 2 hours."})
         self.assertEqual(r.returncode, 0, r.stderr)
         sent = json.dumps(self.fake.requests[0]["messages"])
         self.assertIn(SELF_SENTINEL, sent)
+        self.assertIn("wakes you every 2 hours", sent)   # shaft believed it had no scheduler
         self.assertIn(JOURNAL_SENTINEL, sent)
         self.assertNotIn("tail -n", sent)  # regression: the harness sent the literal command
         self.assertIn("— Reflection", self.journal())
