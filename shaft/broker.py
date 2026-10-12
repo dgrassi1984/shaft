@@ -44,8 +44,11 @@ def tools() -> list[dict]:
     return _request("/tools")["tools"]
 
 
+SLOW_TOOLS = {"delegate_coding": 1800}   # a coding handoff runs a model loop and the test gate: minutes
+
+
 def call(name: str, **args) -> str:
-    out = _request(f"/tools/{name}", args)
+    out = _request(f"/tools/{name}", args, timeout=SLOW_TOOLS.get(name, 120))
     if not out.get("ok"):
         raise BrokerError(out.get("error") or f"{name} failed")
     return out["result"]
