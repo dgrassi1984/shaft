@@ -20,6 +20,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("live", help="run one autonomous cycle with tools")
     sub.add_parser("sleep", help="consolidate memory, personality and goals")
     sub.add_parser("config", help="print the resolved configuration")
+    sub.add_parser("recover", help="write journal entries for conversations that have none yet")
     pr = sub.add_parser("probe", help="answer one question in my own voice, without tools (used by evals)")
     pr.add_argument("question")
     args = parser.parse_args(argv)
@@ -54,6 +55,8 @@ def main(argv: list[str] | None = None) -> int:
             print(live.run(cfg, state, client))
         elif args.cmd == "sleep":
             print(sleep.run(cfg, state, client))
+        elif args.cmd == "recover":
+            print(f"wrote {recovery.run(cfg, state, client)} journal entr(y/ies)")
         elif args.cmd == "probe":
             system = prompts.system_prompt(state, cfg, prompts.PROBE_MODE)
             reply = client.complete([{"role": "system", "content": system},

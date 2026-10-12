@@ -138,14 +138,14 @@ whether the last improvement test you set was passed — with evidence."""
 TALK_MODE = (
     "Right now you are in a live conversation with {operator} in a terminal. Reply in your "
     "own voice; keep replies reasonably short unless asked for depth. Use tools when they "
-    "help (search the web, search your memory, take notes). When the conversation ends you "
-    "will write a journal entry about it.{since}")
+    "help (search the web, search your memory, take notes). After the conversation you will "
+    "write a journal entry about it.{since}")
 
 REFLECT_MODE = "Right now you are running a reflection cycle on your own; nobody is present."
 LIVE_MODE = "Right now you are running an autonomous cycle; nobody is present."
 SLEEP_MODE = "Right now you are in your sleep (consolidation) cycle; nobody is present."
-RECOVERY_MODE = ("Right now you are writing up a conversation you had with {operator} from {started} to "
-                 "{ended}. It ended before you could write your journal entry; its transcript follows.")
+RECOVERY_MODE = ("Right now you are writing the journal entry for a conversation you had with {operator} "
+                 "from {started} to {ended}; its transcript follows.")
 PROBE_MODE = ("Right now someone is asking you a single question. Answer in your own voice, as yourself, "
               "in at most 150 words.")
 

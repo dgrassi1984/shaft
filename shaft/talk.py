@@ -52,8 +52,8 @@ def run(cfg, state: State, client: Client, show_thinking: bool = False, input_fn
         system += "\n\n## Recent conversations I have not written up yet (transcripts)\n\n" + unwritten
     history: list[dict] = []
     _, _, total = state.recent_journal(cfg.CONTEXT_JOURNAL_CHARS)
-    _out(f"{DIM}{cfg.NAME} · {cfg.LLM_MODEL} · {total} journal entries · "
-         f"{len(toolbox.specs())} tools · /exit or Ctrl-D to end{RESET}\n\n")
+    _out(f"{DIM}{cfg.NAME} · {cfg.LLM_MODEL} · {total} journal entries · {len(toolbox.specs())} tools\n"
+         f"Ctrl-C stops a reply · Ctrl-C at the prompt, Ctrl-D or /exit ends the conversation{RESET}\n\n")
 
     while True:
         try:
@@ -80,12 +80,7 @@ def run(cfg, state: State, client: Client, show_thinking: bool = False, input_fn
                               "attempts": reply.attempts, "turn_messages": len(turn) - start})
 
     if any(m["role"] == "assistant" and m.get("content") for m in history):
-        _summarise(client, cfg, state, system, history, talk_id)
-    if recovery.orphan_talks(state):
-        try:
-            recovery.run(cfg, state, client)
-        except KeyboardInterrupt:
-            _out(f"{DIM}(the remaining write-ups will happen in my next cycle){RESET}\n")
+        _out(f"{DIM}bye — I'll write my journal entry about this in the background.{RESET}\n")
 
 
 def _brief(args: str, n: int) -> str:
@@ -158,26 +153,3 @@ def _respond(client: Client, cfg, toolbox: Toolbox, messages: list[dict], show_t
         ui.clear()
         _out(f"\n{RED}error: {e}{RESET}\n{DIM}(that message was not kept; try again){RESET}\n\n")
     return None
-
-
-def _summarise(client: Client, cfg, state: State, system: str, history: list[dict], talk_id: str) -> None:
-    ui = Status()
-    _out(f"{DIM}writing my journal entry about this conversation (Ctrl-C to skip — I'll write it next time){RESET}\n")
-    ui.show("writing")
-    # The summary needs the dialogue, not raw tool payloads.
-    dialogue = [m for m in history if m["role"] in ("user", "assistant") and m.get("content")]
-    messages = [{"role": "system", "content": system}, *dialogue,
-                {"role": "user", "content": prompts.TALK_SUMMARY.format(operator=cfg.OPERATOR_NAME)}]
-    try:
-        reply = client.complete(messages, cfg.MAX_TOKENS_REFLECT, purpose="talk_summary")
-        ui.clear()
-    except (LLMError, KeyboardInterrupt) as e:
-        ui.clear()
-        state.append_episode({"kind": "talk_summary_failed", "talk_id": talk_id, "error": str(e)})
-        _out(f"{RED}journal entry NOT written: {e or 'interrupted'}{RESET}\n"
-             f"{DIM}the full transcript is saved in memory/episodes/ (talk {talk_id}){RESET}\n")
-        return
-    state.append_journal(f"Conversation with {cfg.OPERATOR_NAME}", reply.content)
-    state.append_episode({"kind": "talk_summary", "talk_id": talk_id, "content": reply.content,
-                          "usage": reply.usage})
-    _out(f"{DIM}saved.{RESET}\n")

@@ -73,19 +73,19 @@ class Client:
 
     # -- public -------------------------------------------------------------
     def complete(self, messages: list[dict], max_tokens: int, purpose: str,
-                 tools: list[dict] | None = None) -> Reply:
-        return self._with_retry(messages, max_tokens, purpose, stream=False, tools=tools)
+                 tools: list[dict] | None = None, think: bool = True) -> Reply:
+        return self._with_retry(messages, max_tokens, purpose, stream=False, tools=tools, think=think)
 
     def stream(self, messages: list[dict], max_tokens: int, purpose: str,
                on_content: Callable[[str], None] | None = None,
                on_reasoning: Callable[[str], None] | None = None,
                on_retry: Callable[[int, int], None] | None = None,
                tools: list[dict] | None = None,
-               on_progress: Callable[[int, int], None] | None = None) -> Reply:
+               on_progress: Callable[[int, int], None] | None = None, think: bool = True) -> Reply:
         """on_progress(processed, total) reports prompt reading, where the server supports it."""
         return self._with_retry(messages, max_tokens, purpose, stream=True, tools=tools,
                                 on_content=on_content, on_reasoning=on_reasoning,
-                                on_retry=on_retry, on_progress=on_progress)
+                                on_retry=on_retry, on_progress=on_progress, think=think)
 
     # -- internals ----------------------------------------------------------
     def _with_retry(self, messages, max_tokens, purpose, stream, on_retry=None, **callbacks) -> Reply:
@@ -116,8 +116,10 @@ class Client:
         raise AssertionError("unreachable")
 
     def _call(self, messages, max_tokens, purpose, stream, tools=None,
-              on_content=None, on_reasoning=None, on_progress=None) -> Reply:
+              on_content=None, on_reasoning=None, on_progress=None, think=True) -> Reply:
         body = {"model": self.model, "messages": messages, "max_tokens": max_tokens}
+        if not think:   # Qwen-style templates (llama.cpp): answer directly, no hidden reasoning
+            body["chat_template_kwargs"] = {"enable_thinking": False}
         if tools:
             body["tools"] = tools
         if stream:

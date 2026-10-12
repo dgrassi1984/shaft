@@ -1,8 +1,9 @@
-"""Write journal entries for conversations that ended without one.
+"""Write the journal entries for conversations.
 
-A conversation is saved turn by turn in memory/episodes/. If it ended before I wrote my
-journal entry (interrupted, crashed, killed), the transcript is still there — so before
-any run I write the missing entry from it. Otherwise I would not remember the conversation.
+A conversation is saved turn by turn in memory/episodes/. Its journal entry is written
+afterwards, from the transcript — by a background run the supervisor starts when the
+conversation ends, or at the start of my next cycle if that did not happen. So leaving a
+conversation is instant, and no conversation is ever forgotten.
 """
 from __future__ import annotations
 
@@ -62,7 +63,7 @@ def run(cfg, state: State, client: Client) -> int:
         ui.show(f"conversation of {when} has no journal entry yet · waiting for the model")
         try:
             reply = client.stream(
-                messages, cfg.MAX_TOKENS_REFLECT, purpose="talk_recovery",
+                messages, cfg.MAX_TOKENS_REFLECT, purpose="talk_recovery", think=False,
                 on_progress=lambda done, total: ui.show(
                     f"conversation of {when} · reading the transcript", f"{done * 100 // max(total, 1)}%"),
                 on_reasoning=lambda _: ui.show(f"conversation of {when} · writing my journal entry"),
@@ -73,8 +74,7 @@ def run(cfg, state: State, client: Client) -> int:
             print(f"could not write the missing entry for conversation {talk_id}: {e}", file=sys.stderr)
             continue
         state.append_journal(
-            f"Conversation with {cfg.OPERATOR_NAME} ({started[:16].replace('T', ' ')}–{ended[11:16]}, "
-            "written later from the transcript)",
+            f"Conversation with {cfg.OPERATOR_NAME} ({started[:16].replace('T', ' ')}–{ended[11:16]})",
             reply.content)
         state.append_episode({"kind": "talk_recovered", "talk_id": talk_id, "content": reply.content})
         written += 1
