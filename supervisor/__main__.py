@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import subprocess
 import sys
 from datetime import date, datetime
 
@@ -156,11 +157,19 @@ def cmd_status(names: list[str]) -> int:
     return 0
 
 
+def _spawn_recover(name: str) -> None:
+    SUP_DIR.mkdir(exist_ok=True)
+    out = (SUP_DIR / "recover.log").open("a")
+    subprocess.Popen([sys.executable, "-E", "-s", "-m", "supervisor", "recover", name], cwd=PROJECT,
+                     stdin=subprocess.DEVNULL, stdout=out, stderr=out, start_new_session=True)
+    log(f"{name}: background journal write-up started")
+
+
 def run_many(kind: str, names: list[str], every: bool) -> int:
     names = instance_names() if every else (names or [DEFAULT_INSTANCE])
     worst = 0
     for name in names:
-        if kind != "talk" and paused(name):
+        if kind not in ("talk", "recover") and paused(name):   # writing journal entries is housekeeping
             print(f"{name} is paused (shaft resume {name}).", file=sys.stderr)
             worst = max(worst, 3)
             continue
@@ -175,7 +184,8 @@ def main(argv: list[str]) -> int:
     p.add_argument("name", nargs="?", default=DEFAULT_INSTANCE)
     p.add_argument("--show-thinking", action="store_true")
     for verb, text in (("live", "one autonomous cycle with tools"), ("reflect", "one reflection (no tools)"),
-                       ("sleep", "consolidate memory, personality, goals")):
+                       ("sleep", "consolidate memory, personality, goals"),
+                       ("recover", "write journal entries for conversations that have none yet")):
         p = sub.add_parser(verb, help=text)
         p.add_argument("names", nargs="*")
         p.add_argument("--all", action="store_true")
@@ -237,8 +247,10 @@ def main(argv: list[str]) -> int:
             print(f"note: {', '.join(f'{n} ({others[n]})' for n in background)} is using the model; asked to "
                   f"wrap up at its next turn so you get it — the first reply may still wait for that turn.",
                   file=sys.stderr)
-        return run_agent(args.name, "talk", ["talk", *extra], interactive=True)
-    if args.cmd in ("live", "reflect", "sleep"):
+        code = run_agent(args.name, "talk", ["talk", *extra], interactive=True)
+        _spawn_recover(args.name)   # the journal entry is written in the background — leaving is instant
+        return code
+    if args.cmd in ("live", "reflect", "sleep", "recover"):
         return run_many(args.cmd, args.names, args.all)
     if args.cmd == "tick":
         return autonomy.tick()

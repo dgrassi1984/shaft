@@ -133,13 +133,16 @@ class ReflectInvariants(InstanceCase):
 
 class TalkInvariants(InstanceCase):
     def test_talk_streams_and_journals_the_conversation(self):
-        replies = [{"content": "Hello Daniele, I remember teal.", "reasoning": "hmm"},
-                   {"content": "We said hello; I mentioned teal."}]
-        r = self.run_agent(replies, "talk", stdin="hello there\n/exit\n")
+        r = self.run_agent([{"content": "Hello Daniele, I remember teal.", "reasoning": "hmm"}],
+                           "talk", stdin="hello there\n/exit\n")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("I remember teal", r.stdout)
         self.assertTrue(self.fake.requests[0].get("stream"))
         self.assertIn(SELF_SENTINEL, json.dumps(self.fake.requests[0]["messages"]))
+        self.assertEqual(len(self.fake.requests), 1)           # leaving never waits for the model
+        self.fake.close()
+        r = self.run_agent([{"content": "We said hello; I mentioned teal."}], "recover")   # the background write-up
+        self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("— Conversation with", self.journal())
         self.assertIn("I mentioned teal", self.journal())
         episodes = "".join(p.read_text() for p in (self.root / "memory" / "episodes").glob("*.jsonl"))
@@ -148,8 +151,7 @@ class TalkInvariants(InstanceCase):
 
     def test_talk_uses_tools_while_streaming(self):
         replies = [{"reasoning": "store it", "tool_calls": [("remember", {"fact": "Daniele likes teal"})]},
-                   {"content": "Noted: you like teal."},
-                   {"content": "Daniele told me he likes teal; I stored it."}]
+                   {"content": "Noted: you like teal."}]
         r = self.run_agent(replies, "talk", stdin="remember that I like teal\n/exit\n")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("✓ remember", r.stdout)
@@ -169,11 +171,12 @@ class TalkInvariants(InstanceCase):
         r = self.run_agent([{"content": "Daniele set 'do no harm' as my boundary."}, {"content": REFLECTION}],
                            "reflect")   # autonomous runs write it up first
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("2026-10-12 16:59–17:04, written later from the transcript", self.journal())
+        self.assertIn("Conversation with Daniele (2026-10-12 16:59–17:04)", self.journal())
+        self.assertEqual(self.fake.requests[0].get("chat_template_kwargs"), {"enable_thinking": False})
         self.assertIn("'do no harm' as my boundary", self.journal())
         self.assertIn("do no harm", json.dumps(self.fake.requests[0]["messages"]))
         r = self.run_agent([{"content": REFLECTION}], "reflect")          # once written, never again
-        self.assertEqual(self.journal().count("written later from the transcript"), 1)
+        self.assertEqual(self.journal().count("Conversation with Daniele (2026-10-12 16:59"), 1)
 
     def test_talk_starts_at_once_and_remembers_unwritten_conversations(self):
         ep = self.root / "memory" / "episodes" / "2026-10-12.jsonl"
@@ -181,22 +184,18 @@ class TalkInvariants(InstanceCase):
         ep.write_text("".join(json.dumps(r) + "\n" for r in [
             {"ts": "2026-10-12T16:59:05", "kind": "talk", "talk_id": "old", "role": "user", "content": "do no harm"},
             {"ts": "2026-10-12T17:04:50", "kind": "talk", "talk_id": "old", "role": "assistant", "content": "agreed"}]))
-        replies = [{"content": "You said: do no harm."}, {"content": "We talked about my boundary."},
-                   {"content": "Earlier: Daniele set 'do no harm'."}]
-        r = self.run_agent(replies, "talk", stdin="what did I say before?\n/exit\n")
+        r = self.run_agent([{"content": "You said: do no harm."}], "talk", stdin="what did I say before?\n/exit\n")
         self.assertEqual(r.returncode, 0, r.stderr)
         first = self.fake.requests[0]
         self.assertTrue(first.get("stream"))                                   # the first call is the reply
         self.assertIn("do no harm", json.dumps(first["messages"]))           # ...and it already knows
-        self.assertIn("written later from the transcript", self.journal())   # written up at the end
+        self.assertEqual(len(self.fake.requests), 1)
 
-    def test_failed_summary_is_reported_not_silent(self):
-        replies = [{"content": "Hi."}, {"content": "", "reasoning": "..."},
-                   {"content": "", "reasoning": "..."}]   # the end-of-talk retry fails as well
-        before = self.journal()
-        r = self.run_agent(replies, "talk", stdin="hi\n/exit\n")
-        self.assertIn("NOT written", r.stdout)
-        self.assertEqual(self.journal(), before)
+    def test_ctrl_c_at_the_prompt_ends_at_once(self):
+        r = self.run_agent([{"content": "Hi."}], "talk", stdin="hi\n")   # EOF after one exchange = Ctrl-D
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("in the background", r.stdout)
+        self.assertEqual(len(self.fake.requests), 1)
 
 
 class LiveInvariants(InstanceCase):
