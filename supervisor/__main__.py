@@ -203,6 +203,10 @@ def main(argv: list[str]) -> int:
                        ("finetune", "train + judge a LoRA adapter on an instance's experiences (MLX)")):
         p = sub.add_parser(verb, help=text)
         p.add_argument("name", nargs="?", default=DEFAULT_INSTANCE)
+        if verb == "finetune":
+            p.add_argument("--iters", type=int)
+            p.add_argument("--min-examples", type=int, default=finetune.MIN_EXAMPLES,
+                           help="lower only for a pipeline check; the result is labelled as such")
     p = sub.add_parser("breed", help="a child from two instances' recombined genes, with a fresh mind")
     p.add_argument("a")
     p.add_argument("b")
@@ -262,7 +266,7 @@ def main(argv: list[str]) -> int:
     if args.cmd == "dataset":
         return finetune.cmd_dataset(args.name)
     if args.cmd == "finetune":
-        return finetune.cmd_finetune(args.name)
+        return finetune.cmd_finetune(args.name, args.iters, args.min_examples)
     if args.cmd == "list":
         print("\n".join(instance_names()))
         return 0

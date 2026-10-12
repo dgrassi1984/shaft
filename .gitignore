@@ -10,3 +10,6 @@ __pycache__/
 # branch worktrees (template, instance/<name>) — see supervisor/__main__.py
 /template/
 /instances/
+
+# fine-tuning toolchain (M6), not part of the supervisor
+/.venv-ft/
