@@ -74,11 +74,19 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = 900) -> tuple[bo
         outputs.append("== plugins ==\n" + (plug.stdout + plug.stderr)[-2000:])
         ok &= plug.returncode == 0
     if (instance_root / "tests").is_dir():
-        agent = subprocess.run(
-            sandbox.wrap(prof, [py, "-E", "-s", "-m", "unittest", "discover", "-s", "tests", "-t", "."]),
-            cwd=instance_root, env=env,
-            capture_output=True, text=True, timeout=timeout_s)
-        outputs.append("== instance tests ==\n" + agent.stderr[-3000:])
-        ok &= agent.returncode == 0
+        passed, out = run_instance_tests(instance_root, prof, env, py, timeout_s)
+        outputs.append("== instance tests ==\n" + out)
+        ok &= passed
     prof.unlink(missing_ok=True)
     return ok, "\n".join(outputs)
+
+
+def run_instance_tests(instance_root: Path, prof: Path, env: dict, py: str, timeout_s: int = 900) -> tuple[bool, str]:
+    """The instance's own tests, inside its sandbox. `-t .` only when tests/ is a package:
+    a plain folder of test files must work too (a correct coder-written test was rejected
+    because tests/ had no __init__.py)."""
+    top = ["-t", "."] if (instance_root / "tests" / "__init__.py").exists() else []
+    agent = subprocess.run(
+        sandbox.wrap(prof, [py, "-E", "-s", "-m", "unittest", "discover", "-s", "tests", *top]),
+        cwd=instance_root, env=env, capture_output=True, text=True, timeout=timeout_s)
+    return agent.returncode == 0, agent.stderr[-3000:]

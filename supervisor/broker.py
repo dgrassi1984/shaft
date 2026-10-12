@@ -52,7 +52,16 @@ SPECS = {
                                     "description": "for the operator: question (wants an answer) or note"}},
                           ["to", "text"]),
     "list_instances": _spec("list_instances", "List the other SHAFT instances you can message.", {}, []),
+    "delegate_coding": _spec(
+        "delegate_coding",
+        "Hand a coding task to an Opus-class model. Describe WHAT you want changed in your code, plugins, "
+        "skills or tests and WHY. It reads your files, writes the change; the supervisor tests it on a copy "
+        "and applies it to your folder only if all tests pass. It cannot touch your self/, memory/ or "
+        "config.env. Slow (minutes) and costs real money: at most 2 per cycle, for real coding work only. "
+        "Your commit will record that the code was delegated.",
+        {"task": S}),
 }
+MAX_HANDOFFS_PER_RUN = 2
 
 
 def notify(title: str, text: str) -> None:
@@ -143,6 +152,7 @@ class Broker:
         self.calls = 0
         self.counts: dict[str, int] = {}
         self.remembered: dict[str, list] = {}    # original cloud-model turns, resent verbatim
+        self.handoffs: list[dict] = []           # coding tasks delegated during this run
         self.server: ThreadingHTTPServer | None = None
 
     # -- lifecycle -------------------------------------------------------------
@@ -313,6 +323,29 @@ class Broker:
         else:
             raise ValueError(f"unknown recipient {to!r}; try list_instances or 'operator'")
         return f"delivered to {to}"
+
+    def _delegate_coding(self, task: str) -> str:
+        from . import coder
+        if len(self.handoffs) >= MAX_HANDOFFS_PER_RUN:
+            raise RuntimeError(f"at most {MAX_HANDOFFS_PER_RUN} coding handoffs per cycle")
+        if len(task.strip()) < 20:
+            raise ValueError("describe the task: what to change and why")
+        try:
+            r = coder.delegate(self.project / "instances" / self.name, self.name, task)
+        except coder.CoderError as e:
+            self.handoffs.append({"task": task, "applied": False, "error": str(e)})
+            raise
+        r["task"] = task
+        self.handoffs.append(r)
+        lines = [f"{'APPLIED' if r['applied'] else 'NOT applied'} — {r['model']}, ${r['usd']:.2f}",
+                 f"files: {', '.join(r['files']) or '(none)'}", f"summary: {r['summary']}"]
+        if r.get("error"):
+            lines.append(f"problem: {r['error']}")
+        if r.get("test_output"):
+            lines.append(f"test output (end):\n{r['test_output'][-1500:]}")
+        if r["applied"]:
+            lines.append("The new code takes effect in your next cycle; plugins appear as tools then.")
+        return "\n".join(lines)
 
     def _list_instances(self) -> str:
         base = self.project / "instances"

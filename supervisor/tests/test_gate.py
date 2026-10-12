@@ -43,5 +43,24 @@ class GateTest(unittest.TestCase):
         self.assertFalse((self.root / "shaft" / "new.py").exists())
 
 
+class InstanceTestsTest(unittest.TestCase):
+    def test_plain_tests_folder_without_init_is_discovered(self):
+        # Regression: the first coder handoff wrote tests/test_word_count.py into an instance with no
+        # tests/ package; discovery with -t . failed and correct code was rejected.
+        import os
+        import sys
+        from supervisor import sandbox
+        root = Path(tempfile.mkdtemp(prefix="shaft-itests-")).resolve()
+        self.addCleanup(shutil.rmtree, root, True)
+        (root / "tests").mkdir()
+        (root / "tests" / "test_x.py").write_text("import unittest\n\nclass T(unittest.TestCase):\n"
+                                                  "    def test_ok(self):\n        self.assertTrue(True)\n")
+        prof = root / "p.sb"
+        prof.write_text(sandbox.profile(root, Path.home(), []))
+        ok, out = gate.run_instance_tests(root, prof, sandbox.agent_env(os.environ, TMPDIR=str(root)), sys.executable)
+        self.assertTrue(ok, out)
+        self.assertIn("Ran 1 test", out)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -156,7 +156,7 @@ def journal_note(root: Path, title: str, body: str) -> None:
 
 
 def commit_state(name: str, kind: str, kept_code: list[str], root: Path | None = None,
-                 project: Path | None = None) -> bool:
+                 project: Path | None = None, note: str = "") -> bool:
     """Commit the instance's mind (always) and its code changes that passed the gate.
 
     Only files git actually staged are named in the commit: an empty directory
@@ -175,6 +175,8 @@ def commit_state(name: str, kind: str, kept_code: list[str], root: Path | None =
         msg = f"{name}: {kind} {datetime.now():%Y-%m-%d %H:%M}"
         if kept_code:
             msg += "\n\nCode changes made by the instance (tests passed):\n" + "\n".join(f"- {p}" for p in kept_code)
+        if note:
+            msg += "\n\n" + note
         wt("-c", f"user.name=SHAFT/{name}", "-c", f"user.email={name}@shaft.localhost",
            "commit", "-q", "-m", msg, "--", *staged)
     except subprocess.CalledProcessError as e:

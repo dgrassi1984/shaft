@@ -95,7 +95,12 @@ shaft pause [name] · shaft resume [name] · shaft check [name] · shaft setup �
   default 1337) and its run's broker. It inherits no secrets from the environment.
 - **Broker**: the only door to the outside — web search (ScrapeBadger), page fetching
   (public addresses only, re-checked on every redirect), messages between instances and to
-  you (max 3 per instance per day, with a macOS notification). Per-run token, call budget
+  you (max 3 per instance per day, with a macOS notification), and **`delegate_coding`**: an
+  Opus-class model (`SHAFT_CODER_MODEL`, default `claude-opus-5-5`) reads the instance's code
+  read-only and writes the change; the supervisor tests it on a scratch copy and applies it only if
+  the gate passes — code only, never `self/`, `memory/` or `config.env`; max 2 per cycle and
+  `SHAFT_CODER_DAILY_USD` (5) per instance per day; commits and `self/stats.md` record what was
+  delegated. Per-run token, call budget
   (`SHAFT_BROKER_MAX_CALLS`, default 60), everything logged in `.supervisor/broker.log`.
 - **Append-only journal**: if a run rewrote history instead of appending, the journal is
   restored and the rewrite kept aside.

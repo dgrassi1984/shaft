@@ -8,6 +8,7 @@ on code changes (revert on failure), commit the instance's state to its branch.
 from __future__ import annotations
 
 import fcntl
+import json
 import os
 import re
 import signal
@@ -220,7 +221,17 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
             journal_note(root, "Supervisor: code change reverted",
                          "My changes to " + ", ".join(touched) + " were reverted because the tests "
                          "failed. Last lines of the test output:\n\n```\n" + test_log[-1500:] + "\n```")
-    if not commit_state(name, kind, kept):
+    applied = [h for h in broker.handoffs if h.get("applied")]
+    note = "\n".join(f"Delegated to {h['model']} at the instance's request (${h['usd']:.2f}): {h['summary'][:300]} "
+                     f"[{', '.join(h['files'])}]" for h in applied)
+    if kept:
+        delegated = sorted({f for h in applied for f in h["files"]} & set(kept))
+        record = {"ts": datetime.now().isoformat(timespec="seconds"), "files": kept, "delegated_files": delegated,
+                  "handoffs": len(applied)}
+        (SUP_DIR / "code_changes").mkdir(parents=True, exist_ok=True)
+        with (SUP_DIR / "code_changes" / f"{name}.jsonl").open("a") as f:
+            f.write(json.dumps(record) + "\n")
+    if not commit_state(name, kind, kept, note=note):
         return code or 1
     from . import metrics   # judged outcomes, calibration stats, probation of self-changes
     if kept:

@@ -177,6 +177,19 @@ def check_personality(name: str) -> None:
     log(f"{name}: personality check: " + ", ".join(t["supported"] for t in verdict["traits"]))
 
 
+def _code_section(name: str) -> list[str]:
+    """How much of my own code change was mine, and how much was delegated."""
+    path = SUP_DIR / "code_changes" / f"{name}.jsonl"
+    if not path.exists():
+        return []
+    rows = [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
+    files = sum(len(r["files"]) for r in rows)
+    delegated = sum(len(r["delegated_files"]) for r in rows)
+    return ["", "## Changes to my own code",
+            f"- {len(rows)} kept change(s), {files} file(s): {files - delegated} written by me, "
+            f"{delegated} delegated to the coding model"]
+
+
 def _traits_section(name: str) -> list[str]:
     path = SUP_DIR / "judgments" / f"{name}-traits.json"
     if not path.exists():
@@ -194,7 +207,7 @@ def stats_text(name: str) -> str:
     js = judgments(name)
     if not js:
         return "\n".join(["# My measured performance", "", "*Written by the supervisor.* No judged cycles yet."]
-                         + _traits_section(name)) + "\n"
+                         + _code_section(name) + _traits_section(name)) + "\n"
     scores = [SCORE[j["criterion_met"]] for j in js]
     confs = [(j["confidence"] / 100, SCORE[j["criterion_met"]]) for j in js if j.get("confidence") is not None]
     claimed = [j for j in js if j.get("claimed")]
@@ -225,7 +238,7 @@ def stats_text(name: str) -> str:
     if fails:
         lines += ["", "## Recent failure modes"] + [f"- {j['episode_ts'][:16]} — {j['failure_mode']}" for j in fails]
     lines += ["", "## Last judgment", f"{js[-1]['goal']}", f"> {js[-1]['reasoning']}"]
-    lines += _traits_section(name)
+    lines += _code_section(name) + _traits_section(name)
     return "\n".join(lines) + "\n"
 
 
