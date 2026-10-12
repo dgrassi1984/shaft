@@ -25,7 +25,7 @@ FIELDS: dict[str, tuple[type, object]] = {
     "MAX_TOKENS_STEP": (int, 16384),     # one model turn inside a tool loop (live, sleep)
     "MAX_STEPS_LIVE": (int, 12),
     "MAX_STEPS_SLEEP": (int, 14),
-    "MAX_STEPS_TALK": (int, 6),
+    "MAX_STEPS_TALK": (int, 0),        # 0 = no limit (conversations)
     "CONTEXT_JOURNAL_CHARS": (int, 16000),
     "OPERATOR_NAME": (str, "Daniele"),
 }

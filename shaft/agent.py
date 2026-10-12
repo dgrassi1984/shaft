@@ -49,8 +49,9 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
         on_tool_start: Callable[[str, str], None] | None = None,
         wrap_up: str | None = None) -> Outcome:
     """Run until the model answers without calling tools, a stopping control is called,
-    or max_steps model turns have been used. `call` defaults to client.complete; pass a
-    streaming wrapper for conversations.
+    or max_steps model turns have been used (max_steps <= 0: no limit — conversations, where
+    Daniele stops a reply with Ctrl-C). `call` defaults to client.complete; pass a streaming
+    wrapper for conversations.
 
     On the last turn — or when the supervisor's deadline is near — the model is told to
     wrap up (`wrap_up`) and only the controls stay available, so a cycle ends with a
@@ -60,7 +61,9 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
     final_tools = [c.spec for c in controls.values()] or None
     call = call or (lambda msgs, t=tools: client.complete(msgs, max_tokens, purpose, tools=t))
     reply = None
-    for step in range(1, max_steps + 1):
+    step = 0
+    while max_steps <= 0 or step < max_steps:
+        step += 1
         left = time_left()
         yielding = step > 1 and yield_requested()
         last = step == max_steps or yielding or (left is not None and left < WRAP_UP_RESERVE_S)
