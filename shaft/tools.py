@@ -41,7 +41,11 @@ BUILTINS = [
           {"path": S, "offset": {"type": "integer", "description": "start character, default 0"}}, ["path"]),
     _spec("write_file", "Create or overwrite a text file inside my own folder. Use it for notes/, "
           "skills/, plugins/, self/goals.md and my own code. Code changes are tested by the "
-          "supervisor after the run and reverted if tests fail.", {"path": S, "content": S}),
+          "supervisor after the run and reverted if tests fail. It replaces the whole file: to add an "
+          "entry to a log or record, use append_file.", {"path": S, "content": S}),
+    _spec("append_file", "Add text to the end of a text file inside my own folder (created if missing) — "
+          "the safe way to add a dated entry to a running record such as a notes/ log; nothing already "
+          "in the file can be lost.", {"path": S, "content": S}),
     _spec("list_files", "List files under a directory of my folder.", {"path": S}, []),
     _spec("search_memory", "Search everything I remember (journal, facts, notes, conversations) "
           "and return the most relevant passages with their dates.",
@@ -145,8 +149,25 @@ class Toolbox:
     def _t_write_file(self, path: str, content: str) -> str:
         target = self._path(path, for_write=True)
         target.parent.mkdir(parents=True, exist_ok=True)
+        old = target.read_text(errors="replace").splitlines() if target.is_file() else []
         target.write_text(content)
-        return f"wrote {len(content)} chars to {path}"
+        kept = set(content.splitlines())
+        gone = [l for l in old if l.strip() and l not in kept]
+        if not gone:
+            return f"wrote {len(content)} chars to {path}"
+        # I once rewrote a running record and silently dropped its earlier entries: say what went.
+        return (f"wrote {len(content)} chars to {path}. Note: {len(gone)} line(s) that were in the file are "
+                f"gone now, e.g. {gone[0][:120]!r}. If that was not intended: the old version is in "
+                f"history(path={path!r}); and append_file adds without replacing.")
+
+    def _t_append_file(self, path: str, content: str) -> str:
+        target = self._path(path, for_write=True)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        before = target.read_text(errors="replace") if target.is_file() else ""
+        sep = "" if not before or before.endswith("\n") else "\n"
+        with target.open("a") as f:
+            f.write(sep + content + ("" if content.endswith("\n") else "\n"))
+        return f"appended {len(content)} chars to {path}"
 
     def _t_list_files(self, path: str = ".") -> str:
         base = self._path(path)
