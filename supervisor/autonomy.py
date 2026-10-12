@@ -17,6 +17,46 @@ JOBS = {
 }
 
 
+# Long-running services (KeepAlive): SHAFT's own model server and the OpenAI-compatible API.
+SERVICES = {
+    "model": {"label": "com.shaft.model",
+              "args": [str(PROJECT / ".venv-bonsai" / "bin" / "python"), "-E", "-s", "-m", "supervisor.bonsai_server"]},
+    "api": {"label": "com.shaft.api", "args": [PYTHON, "-E", "-s", "-m", "supervisor", "api", "serve"]},
+}
+
+
+def service(name: str, action: str) -> int:
+    svc = SERVICES[name]
+    label, domain = svc["label"], f"gui/{os.getuid()}"
+    path = AGENTS / f"{label}.plist"
+    if action == "status":
+        r = _launchctl("print", f"{domain}/{label}")
+        state = next((l.strip() for l in r.stdout.splitlines() if l.strip().startswith("state =")), "not loaded")
+        pid = next((l.strip() for l in r.stdout.splitlines() if l.strip().startswith("pid =")), "")
+        print(f"{label:16} {state} {pid} · {'installed' if path.exists() else 'not installed'}")
+        return 0
+    _launchctl("bootout", f"{domain}/{label}")
+    if action == "off":
+        path.unlink(missing_ok=True)
+        log(f"service {name} off")
+        print(f"{label} stopped and removed")
+        return 0
+    SUP_DIR.mkdir(exist_ok=True)
+    AGENTS.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(plistlib.dumps({
+        "Label": label, "ProgramArguments": svc["args"], "WorkingDirectory": str(PROJECT),
+        "StandardOutPath": str(SUP_DIR / f"{label}.log"), "StandardErrorPath": str(SUP_DIR / f"{label}.log"),
+        "EnvironmentVariables": {"PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"},
+        "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 30}))
+    r = _launchctl("bootstrap", domain, str(path))
+    if r.returncode != 0:
+        print(f"{label}: launchctl bootstrap failed: {r.stderr.strip()}", file=sys.stderr)
+        return 1
+    log(f"service {name} on")
+    print(f"{label} installed: starts at login, restarted if it stops")
+    return 0
+
+
 def describe_schedule() -> str:
     """What an instance should know about when it runs — derived from the installed jobs."""
     installed = all((AGENTS / f"{label}.plist").exists() for label in JOBS)

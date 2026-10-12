@@ -185,6 +185,8 @@ def main(argv: list[str]) -> int:
         p.add_argument("names", nargs="*")
         p.add_argument("--all", action="store_true")
     sub.add_parser("tick", help="one autonomous round over all awake, idle instances (run by launchd)")
+    p = sub.add_parser("model", help="SHAFT's own Bonsai 2 model server (launchd service)")
+    p.add_argument("action", choices=["on", "off", "status"])
     p = sub.add_parser("autonomy", help="install/remove the launchd schedule")
     p.add_argument("action", choices=["on", "off", "status"])
     p = sub.add_parser("status", help="how the instances are doing")
@@ -256,6 +258,8 @@ def main(argv: list[str]) -> int:
         return run_many(args.cmd, args.names, args.all)
     if args.cmd == "tick":
         return autonomy.tick()
+    if args.cmd == "model":
+        return autonomy.service("model", args.action)
     if args.cmd == "autonomy":
         return autonomy.autonomy(args.action)
     if args.cmd == "status":
