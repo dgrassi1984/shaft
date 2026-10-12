@@ -69,6 +69,10 @@ CONTEXT = """\
 
 {journal}
 
+## My last sleep
+
+{sleep}
+
 ## Now
 
 {now}"""
@@ -198,5 +202,25 @@ def system_prompt(state, cfg, mode_note: str, tools: str | None = None) -> str:
         shown=shown,
         total=total,
         now=f"{datetime.now():%A %Y-%m-%d %H:%M}",
+        sleep=last_sleep(state, journal),
     )
     return f"{identity}\n\n{context}"
+
+
+def last_sleep(state, shown_journal: str = "") -> str:
+    """When I last slept and what came of it — so I can tell anyone who asks, even after the entry
+    has scrolled out of my recent journal. Supervisor notes about a sleep that failed count too."""
+    for entry in reversed(state.journal_entries()):
+        title = entry.splitlines()[0].lstrip("# ").strip()
+        what = title.partition(" — ")[2]
+        if what.startswith("Sleep") or (what.startswith("Supervisor") and "sleep" in entry.lower()):
+            try:
+                ago = datetime.now() - datetime.strptime(title[:16], "%Y-%m-%d %H:%M")
+                when = f"{title[:16]} ({ago.total_seconds() / 3600:.0f} h ago)"
+            except ValueError:
+                when = title[:16]
+            if entry in shown_journal:
+                return f"{when}: the entry \"{what}\" in my recent journal above."
+            body = entry.split("\n", 1)[1].strip() if "\n" in entry else ""
+            return f"{when} — {what}\n\n{body[:2500]}{' […]' if len(body) > 2500 else ''}"
+    return "I have not slept yet (no sleep entry in my journal)."
