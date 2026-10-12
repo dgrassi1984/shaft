@@ -1,6 +1,18 @@
-"""Interactive terminal conversation with the operator — with my tools available."""
+"""Conversation with the operator — with my tools available.
+
+Two front ends share one conversation loop:
+- the plain terminal (default; also what pipes and tests use);
+- `--json`: a headless protocol for the supervisor's terminal client (bin/shaft talk), which
+  renders Markdown, edits multi-line input and keeps history. Events go to stdout as JSON
+  lines; messages arrive on stdin as JSON lines; SIGINT stops the reply in progress.
+
+  in : {"type": "user", "text": "..."}  |  {"type": "exit"}
+  out: ready, status{phase,detail}, reasoning{text}, content{text}, tool_start{name,args},
+       tool_end{name,ok,brief}, retry{old,new}, turn_end{steps,ended_by}, interrupted, error{message}, bye
+"""
 from __future__ import annotations
 
+import json
 import re
 import sys
 import uuid
@@ -13,11 +25,6 @@ from .ui import Status
 
 DIM, RED, CYAN, RESET = "\033[2m", "\033[31m", "\033[36m", "\033[0m"
 EXIT_WORDS = {"/exit", "/quit", "/bye"}
-
-
-def _out(text: str) -> None:
-    sys.stdout.write(text)
-    sys.stdout.flush()
 
 
 def since_last_talk(state: State, operator: str) -> str:
@@ -37,12 +44,169 @@ def since_last_talk(state: State, operator: str) -> str:
     return "".join(parts)
 
 
-def run(cfg, state: State, client: Client, show_thinking: bool = False, input_fn=input) -> None:
-    try:
-        import readline  # noqa: F401  (line editing for input())
-    except ImportError:
-        pass
+def _brief(args: str, n: int) -> str:
+    return re.sub(r"\s+", " ", args)[:n]
 
+
+# -- views ---------------------------------------------------------------------------
+class TerminalView:
+    """Plain terminal: one line per message, a live status line, raw text."""
+
+    def __init__(self, cfg, show_thinking: bool, input_fn=input):
+        self.cfg, self.show_thinking, self.input_fn = cfg, show_thinking, input_fn
+        self.ui = Status()
+        self.speaking, self.reasoning = False, 0
+        try:
+            import readline  # noqa: F401  (line editing for input())
+        except ImportError:
+            pass
+
+    def _out(self, text: str) -> None:
+        sys.stdout.write(text)
+        sys.stdout.flush()
+
+    def ready(self, info: dict) -> None:
+        self._out(f"{DIM}{info['name']} · {info['model']} · {info['journal_entries']} journal entries · "
+                  f"{info['tools']} tools\nCtrl-C stops a reply · Ctrl-C at the prompt, Ctrl-D or /exit ends "
+                  f"the conversation{RESET}\n\n")
+
+    def next_message(self) -> str | None:
+        try:
+            return self.input_fn(f"{CYAN}you ›{RESET} ").strip()
+        except (EOFError, KeyboardInterrupt):
+            self._out("\n")
+            return None
+
+    def status(self, phase: str, detail: str = "") -> None:
+        self.ui.show(phase, detail)
+
+    def reasoning_chunk(self, chunk: str) -> None:
+        self.reasoning += len(chunk)
+        if self.show_thinking:
+            self.ui.clear()
+            self.ui.write(f"{DIM}{chunk}{RESET}")
+        else:
+            self.ui.show("thinking", f"~{self.reasoning / 4000:.1f}k tokens")
+
+    def content_chunk(self, chunk: str) -> None:
+        if not self.speaking:
+            self.ui.clear()
+            self.ui.write(("\n" if self.show_thinking and self.reasoning else "") + f"{self.cfg.NAME} › ")
+            self.speaking = True
+        self.ui.write(chunk)
+
+    def retry(self, old: int, new: int) -> None:
+        self.ui.clear()
+        self.ui.write(f"\n{DIM}[reply cut off at {old} tokens — asking again with {new}]{RESET}\n")
+        self.speaking, self.reasoning = False, 0
+        self.ui.show("waiting for the model")
+
+    def tool_start(self, name: str, args: str) -> None:
+        if self.speaking:
+            self.ui.write("\n")
+        self.speaking = False
+        self.ui.show(f"running {name}", _brief(args, 60))
+
+    def tool_end(self, name: str, args: str, ok: bool, result: str) -> None:
+        self.ui.clear()
+        self.ui.write(f"{DIM}  {'✓' if ok else '✗'} {name} {_brief(args, 100)}{RESET}\n")
+        self.reasoning = 0
+        self.ui.show("waiting for the model")
+
+    def turn_end(self, steps: int, ended_by: str) -> None:
+        self.ui.clear()
+        if ended_by != "answer":
+            self._out(f"\n{DIM}[stopped after {steps} tool rounds without a final answer]{RESET}")
+        self._out("\n\n")
+        self.speaking, self.reasoning = False, 0
+
+    def interrupted(self) -> None:
+        self.ui.clear()
+        self._out(f"\n{DIM}[interrupted — that reply is discarded]{RESET}\n\n")
+        self.speaking, self.reasoning = False, 0
+
+    def error(self, message: str) -> None:
+        self.ui.clear()
+        self._out(f"\n{RED}error: {message}{RESET}\n{DIM}(that message was not kept; try again){RESET}\n\n")
+        self.speaking, self.reasoning = False, 0
+
+    def bye(self, had_conversation: bool) -> None:
+        if had_conversation:
+            self._out(f"{DIM}bye — I'll write my journal entry about this in the background.{RESET}\n")
+
+
+class JsonView:
+    """Headless: JSON-lines events for the supervisor's terminal client."""
+
+    def __init__(self, inp=None, out=None):
+        self.inp, self.out = inp or sys.stdin, out or sys.stdout
+        self.reasoning = 0
+
+    def _emit(self, **event) -> None:
+        self.out.write(json.dumps(event, ensure_ascii=False) + "\n")
+        self.out.flush()
+
+    def ready(self, info: dict) -> None:
+        self._emit(type="ready", **info)
+
+    def next_message(self) -> str | None:
+        while True:
+            try:
+                line = self.inp.readline()
+            except KeyboardInterrupt:     # a stray interrupt while idle is not an exit
+                continue
+            if not line:
+                return None
+            try:
+                msg = json.loads(line)
+            except ValueError:
+                continue
+            if msg.get("type") == "exit":
+                return None
+            if msg.get("type") == "user" and str(msg.get("text", "")).strip():
+                return str(msg["text"]).strip()
+
+    def status(self, phase: str, detail: str = "") -> None:
+        self._emit(type="status", phase=phase, detail=detail)
+
+    def reasoning_chunk(self, chunk: str) -> None:
+        self.reasoning += len(chunk)
+        self._emit(type="reasoning", text=chunk, total_chars=self.reasoning)
+
+    def content_chunk(self, chunk: str) -> None:
+        self._emit(type="content", text=chunk)
+
+    def retry(self, old: int, new: int) -> None:
+        self.reasoning = 0
+        self._emit(type="retry", old=old, new=new)
+
+    def tool_start(self, name: str, args: str) -> None:
+        self._emit(type="tool_start", name=name, args=_brief(args, 300))
+
+    def tool_end(self, name: str, args: str, ok: bool, result: str) -> None:
+        self.reasoning = 0
+        self._emit(type="tool_end", name=name, args=_brief(args, 300), ok=ok, brief=_brief(result, 200))
+
+    def turn_end(self, steps: int, ended_by: str) -> None:
+        self.reasoning = 0
+        self._emit(type="turn_end", steps=steps, ended_by=ended_by)
+
+    def interrupted(self) -> None:
+        self.reasoning = 0
+        self._emit(type="interrupted")
+
+    def error(self, message: str) -> None:
+        self.reasoning = 0
+        self._emit(type="error", message=message)
+
+    def bye(self, had_conversation: bool) -> None:
+        self._emit(type="bye", journal_pending=had_conversation)
+
+
+# -- the conversation ------------------------------------------------------------------
+def run(cfg, state: State, client: Client, show_thinking: bool = False, input_fn=input,
+        json_mode: bool = False) -> None:
+    view = JsonView() if json_mode else TerminalView(cfg, show_thinking, input_fn)
     talk_id = uuid.uuid4().hex[:12]
     toolbox = Toolbox(state.root)
     mode = prompts.TALK_MODE.format(operator=cfg.OPERATOR_NAME, since=since_last_talk(state, cfg.OPERATOR_NAME))
@@ -52,25 +216,19 @@ def run(cfg, state: State, client: Client, show_thinking: bool = False, input_fn
         system += "\n\n## Recent conversations I have not written up yet (transcripts)\n\n" + unwritten
     history: list[dict] = []
     _, _, total = state.recent_journal(cfg.CONTEXT_JOURNAL_CHARS)
-    _out(f"{DIM}{cfg.NAME} · {cfg.LLM_MODEL} · {total} journal entries · {len(toolbox.specs())} tools\n"
-         f"Ctrl-C stops a reply · Ctrl-C at the prompt, Ctrl-D or /exit ends the conversation{RESET}\n\n")
+    view.ready({"name": cfg.NAME, "model": cfg.LLM_MODEL, "journal_entries": total, "tools": len(toolbox.specs())})
 
     while True:
-        try:
-            user = input_fn(f"{CYAN}you ›{RESET} ").strip()
-        except (EOFError, KeyboardInterrupt):
-            _out("\n")
+        user = view.next_message()
+        if user is None or user in EXIT_WORDS:
             break
         if not user:
             continue
-        if user in EXIT_WORDS:
-            break
-
         state.append_episode({"kind": "talk", "talk_id": talk_id, "role": "user", "content": user})
         turn = [{"role": "system", "content": system}, *history, {"role": "user", "content": user}]
         start = len(turn)
         log_start = len(toolbox.log)
-        reply = _respond(client, cfg, toolbox, turn, show_thinking)
+        reply = _respond(client, cfg, toolbox, turn, view)
         if reply is None:
             continue  # that turn never happened
         history = turn[1:]  # keep tool calls and results in the conversation
@@ -79,77 +237,36 @@ def run(cfg, state: State, client: Client, show_thinking: bool = False, input_fn
                               "tools": toolbox.log[log_start:], "usage": reply.usage,
                               "attempts": reply.attempts, "turn_messages": len(turn) - start})
 
-    if any(m["role"] == "assistant" and m.get("content") for m in history):
-        _out(f"{DIM}bye — I'll write my journal entry about this in the background.{RESET}\n")
+    view.bye(any(m["role"] == "assistant" and m.get("content") for m in history))
 
 
-def _brief(args: str, n: int) -> str:
-    return re.sub(r"\s+", " ", args)[:n]
-
-
-def _respond(client: Client, cfg, toolbox: Toolbox, messages: list[dict], show_thinking: bool):
-    """Stream one reply, keeping a live status line until words appear:
-    waiting for the model → reading my memory (prompt %) → thinking (~tokens) → answer."""
-    ui = Status()
-    st = {"speaking": False, "reasoning": 0}
+def _respond(client: Client, cfg, toolbox: Toolbox, messages: list[dict], view):
+    """Stream one reply, reporting each phase to the view:
+    waiting for the model → reading my memory (prompt %) → thinking → answer / tools."""
     tools = toolbox.specs()
 
     def on_progress(processed: int, total: int) -> None:
         if total:
-            ui.show("reading my memory", f"{processed * 100 // total}% of {total / 1000:.1f}k tokens")
-
-    def on_reasoning(chunk: str) -> None:
-        st["reasoning"] += len(chunk)
-        if show_thinking:
-            ui.clear()
-            ui.write(f"{DIM}{chunk}{RESET}")
-        else:
-            ui.show("thinking", f"~{st['reasoning'] / 4000:.1f}k tokens")
-
-    def on_content(chunk: str) -> None:
-        if not st["speaking"]:
-            ui.clear()
-            ui.write(("\n" if show_thinking and st["reasoning"] else "") + f"{cfg.NAME} › ")
-            st["speaking"] = True
-        ui.write(chunk)
-
-    def on_retry(old: int, new: int) -> None:
-        ui.clear()
-        ui.write(f"\n{DIM}[reply cut off at {old} tokens — asking again with {new}]{RESET}\n")
-        st["speaking"], st["reasoning"] = False, 0
-        ui.show("waiting for the model")
-
-    def on_tool_start(name: str, args: str) -> None:
-        if st["speaking"]:
-            ui.write("\n")
-        st["speaking"] = False
-        ui.show(f"running {name}", _brief(args, 60))
-
-    def on_tool(name: str, args: str, result: str) -> None:
-        ui.clear()
-        ok = "✗" if result.startswith("ERROR") else "✓"
-        ui.write(f"{DIM}  {ok} {name} {_brief(args, 100)}{RESET}\n")
-        st["reasoning"] = 0
-        ui.show("waiting for the model")
+            view.status("reading my memory", f"{processed * 100 // total}% of {total / 1000:.1f}k tokens")
 
     def call(msgs, t=tools):
-        return client.stream(msgs, cfg.MAX_TOKENS_TALK, purpose="talk", tools=t, on_content=on_content,
-                             on_reasoning=on_reasoning, on_retry=on_retry, on_progress=on_progress)
+        return client.stream(msgs, cfg.MAX_TOKENS_TALK, purpose="talk", tools=t,
+                             on_content=view.content_chunk, on_reasoning=view.reasoning_chunk,
+                             on_retry=view.retry, on_progress=on_progress)
 
-    ui.show("waiting for the model")
+    def on_tool(name: str, args: str, result: str) -> None:
+        view.tool_end(name, args, not result.startswith("ERROR"), result)
+        view.status("waiting for the model")
+
+    view.status("waiting for the model")
     try:
         outcome = agent.run(client, messages, toolbox, max_tokens=cfg.MAX_TOKENS_TALK, purpose="talk",
                             max_steps=cfg.MAX_STEPS_TALK, call=call, on_tool=on_tool,
-                            on_tool_start=on_tool_start)
-        ui.clear()
-        if outcome.ended_by != "answer":
-            _out(f"\n{DIM}[stopped after {outcome.steps} tool rounds without a final answer]{RESET}")
-        _out("\n\n")
+                            on_tool_start=view.tool_start)
+        view.turn_end(outcome.steps, outcome.ended_by)
         return outcome.reply
     except KeyboardInterrupt:
-        ui.clear()
-        _out(f"\n{DIM}[interrupted — that reply is discarded]{RESET}\n\n")
+        view.interrupted()
     except LLMError as e:
-        ui.clear()
-        _out(f"\n{RED}error: {e}{RESET}\n{DIM}(that message was not kept; try again){RESET}\n\n")
+        view.error(str(e))
     return None
