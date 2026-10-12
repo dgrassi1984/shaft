@@ -27,7 +27,8 @@ Design, milestones and decisions: [PLAN.md](PLAN.md).
   never sees the key; allowed models `SHAFT_CLOUD_MODELS`, daily cap `SHAFT_CLOUD_DAILY_USD`).
 - Optional, in `.env` at the root (supervisor-only, never visible to instances):
   `SCRAPEBADGER_API_KEY` (web search), `ANTHROPIC_API_KEY` (the judge).
-- Optional for fine-tuning (M6): `mlx-lm` and an MLX base model (`SHAFT_FT_BASE_MODEL`).
+- Optional for fine-tuning (M6) on Bonsai itself: the MLX pack `prism-ml/Ternary-Bonsai-2-27B-mlx-2bit`
+  in `.models/bonsai2-27b-mlx/` and a venv `.venv-bonsai/` with its `runtime/requirements.txt`.
 
 ## Quick start
 
