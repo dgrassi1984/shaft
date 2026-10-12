@@ -6,3 +6,7 @@
 **/.tmp/
 __pycache__/
 .DS_Store
+
+# branch worktrees (template, instance/<name>) — see supervisor/__main__.py
+/template/
+/instances/

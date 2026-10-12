@@ -1,9 +1,14 @@
 """SHAFT supervisor — the part of the system the agents cannot edit.
 
-It runs any number of SHAFT instances (instances/<name>/), each inside its own
-macOS sandbox; enforces the time budget; gates changes an instance makes to its
-own code (tests pass or the change is reverted); commits each instance's state
-to git; and owns the pause switch. It never imports agent code.
+It runs any number of SHAFT instances, each inside its own macOS sandbox;
+enforces the time budget; gates changes an instance makes to its own code
+(tests pass or the change is reverted); commits each instance's state to its
+own branch; and owns the pause switch. It never imports agent code.
+
+Git layout: `main` holds the supervisor; the `template` branch holds the
+pristine agent (worktree: template/); each instance lives on its own branch
+`instance/<name>`, forked from `template` (worktree: instances/<name>/), so
+instances evolve independently and can later be compared and recombined.
 """
 from __future__ import annotations
 
@@ -55,9 +60,31 @@ def git(*args: str, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(["git", "-C", str(PROJECT), *args], capture_output=True, text=True, check=check)
 
 
+def git_wt(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
+    """Run git in an instance worktree without trusting anything inside it.
+
+    The worktree's `.git` file is writable by the instance, which could point it at
+    a fake repository whose config runs commands (hooks, fsmonitor). So the git dir
+    is taken from the main repository's own worktree registry, and hooks are off.
+    """
+    admin = _worktree_admin_dir(root)
+    return subprocess.run(
+        ["git", f"--git-dir={admin}", f"--work-tree={root}", "-c", "core.hooksPath=/dev/null",
+         "-c", "core.fsmonitor=false", *args],
+        cwd=root, capture_output=True, text=True, check=check)
+
+
+def _worktree_admin_dir(root: Path) -> Path:
+    for admin in (PROJECT / ".git" / "worktrees").glob("*"):
+        gitdir = admin / "gitdir"
+        if gitdir.exists() and Path(gitdir.read_text().strip()).resolve() == (root / ".git").resolve():
+            return admin
+    raise SystemExit(f"{root} is not a registered worktree of {PROJECT} (try: shaft setup)")
+
+
 def instance_root(name: str) -> Path:
     root = INSTANCES / name
-    if not (root / "shaft").is_dir():
+    if not (root / "shaft").is_dir() or not (root / ".git").exists():
         known = ", ".join(instance_names()) or "none"
         raise SystemExit(f"no instance named {name!r} (instances: {known})")
     return root
@@ -85,18 +112,20 @@ def journal_note(root: Path, title: str, body: str) -> None:
 
 
 def commit_state(name: str, kind: str, kept_code: list[str]) -> None:
+    """Commit the instance's mind (always) and its code changes that passed the gate."""
     root = INSTANCES / name
-    rel = lambda p: str((root / p).relative_to(PROJECT))  # noqa: E731
-    paths = [rel(p) for p in STATE_PATHS if (root / p).exists()] + [rel(p) for p in kept_code]
-    git("add", "-A", "--", *paths)
-    if git("diff", "--cached", "--quiet", "--", *paths, check=False).returncode == 0:
+    paths = [p for p in STATE_PATHS if (root / p).exists()] + kept_code
+    if not paths:
+        return
+    git_wt(root, "add", "-A", "--", *paths)
+    if git_wt(root, "diff", "--cached", "--quiet", "--", *paths, check=False).returncode == 0:
         return
     msg = f"{name}: {kind} {datetime.now():%Y-%m-%d %H:%M}"
     if kept_code:
         msg += "\n\nCode changes made by the instance (tests passed):\n" + "\n".join(f"- {p}" for p in kept_code)
-    git("-c", f"user.name=SHAFT/{name}", "-c", f"user.email={name}@shaft.localhost",
-        "commit", "-q", "-m", msg, "--", *paths)
-    log(f"{name}: committed {kind}")
+    git_wt(root, "-c", f"user.name=SHAFT/{name}", "-c", f"user.email={name}@shaft.localhost",
+           "commit", "-q", "-m", msg, "--", *paths)
+    log(f"{name}: committed {kind} on instance/{name}")
 
 
 # -- running an instance -------------------------------------------------------
@@ -144,35 +173,62 @@ def run_agent(name: str, kind: str, agent_args: list[str], interactive: bool) ->
 
 # -- commands -------------------------------------------------------------------
 def cmd_new(name: str, source: str | None) -> int:
+    """Create instance/<name> forked from `template` (or from another instance's branch).
+
+    A fork inherits code and skills (its "genes"), never the parent's mind: self-model,
+    goals, journal, episodes and notes start fresh. The lineage stays in git history.
+    """
     if not NAME_RE.match(name):
         print("instance names: lowercase letters, digits and '-', starting with a letter", file=sys.stderr)
         return 2
     root = INSTANCES / name
-    if root.exists():
-        print(f"{root} already exists", file=sys.stderr)
+    if root.exists() or git("rev-parse", "--verify", "-q", f"refs/heads/instance/{name}", check=False).stdout:
+        print(f"instance {name!r} already exists", file=sys.stderr)
         return 2
-    code_from = instance_root(source) if source else TEMPLATE
-    root.mkdir(parents=True)
-    ignore = shutil.ignore_patterns("__pycache__", ".tmp")
-    shutil.copytree(code_from / "shaft", root / "shaft", ignore=ignore)
-    if (code_from / "tests").is_dir():
-        shutil.copytree(code_from / "tests", root / "tests", ignore=ignore)
-    shutil.copy2(code_from / "config.env", root / "config.env")
-    for d in ("self", "memory", "notes", "skills"):
+    if source:
+        instance_root(source)
+    base = f"instance/{source}" if source else "template"
+    INSTANCES.mkdir(exist_ok=True)
+    git("worktree", "add", "-q", "-b", f"instance/{name}", str(root), base)
+    for d in ("self", "memory", "notes"):
+        shutil.rmtree(root / d, ignore_errors=True)
         (root / d).mkdir()
+    (root / "skills").mkdir(exist_ok=True)
     (root / "self" / "self.md").write_text(
         f"# Self-Model\n\nI am {name}. I have just been created and have no experiences yet; "
         "this self-model is for me to write.\n")
     (root / "self" / "goals.md").write_text("# Goals & Open Questions\n\n(none yet — mine to set)\n")
-    origin = f"with code copied from {source}" if source else "from the SHAFT template"
+    origin = f"forked from {source} (code and skills only, not its memories)" if source \
+        else "from the SHAFT template"
     (root / "memory" / "journal.md").write_text(f"# {name} — journal\n")
     journal_note(root, "Created", f"I was created by the supervisor {origin}. My memory starts here.")
-    log(f"created instance {name} {origin}")
-    print(f"created {root}")
-    if (PROJECT / ".git").exists():
-        rel = str(root.relative_to(PROJECT))
-        git("add", "--", rel)
-        git("commit", "-q", "-m", f"{name}: created {origin}", "--", rel)
+    git_wt(root, "add", "-A", ".")
+    git_wt(root, "commit", "-q", "-m", f"{name}: created {origin}")
+    log(f"created instance {name} on instance/{name} {origin}")
+    print(f"created {name} (branch instance/{name}, worktree {root.relative_to(PROJECT)})")
+    return 0
+
+
+def cmd_setup() -> int:
+    """Recreate missing worktrees from branches — e.g. after a fresh clone."""
+    branches = git("for-each-ref", "--format=%(refname:short)", "refs/heads/template",
+                   "refs/heads/instance/").stdout.split()
+    remote = git("for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/template",
+                 "refs/remotes/origin/instance/").stdout.split()
+    for ref in remote:
+        local = ref.removeprefix("origin/")
+        if local not in branches:
+            git("branch", "-q", "--track", local, ref)
+            branches.append(local)
+    git("worktree", "prune")
+    for branch in sorted(branches):
+        path = TEMPLATE if branch == "template" else INSTANCES / branch.removeprefix("instance/")
+        if (path / ".git").exists():
+            print(f"ok      {branch:24} {path.relative_to(PROJECT)}")
+            continue
+        path.parent.mkdir(exist_ok=True)
+        git("worktree", "add", "-q", str(path), branch)
+        print(f"created {branch:24} {path.relative_to(PROJECT)}")
     return 0
 
 
@@ -196,10 +252,9 @@ def cmd_status(names: list[str]) -> int:
     for name in names:
         root = INSTANCES / name
         entries = journal_entries(root)
-        rel = str((root / "self" / "self.md").relative_to(PROJECT))
-        last_self = git("log", "-1", "--format=%cr", "--", rel, check=False).stdout.strip()
+        last_self = git_wt(root, "log", "-1", "--format=%cr", "--", "self/self.md", check=False).stdout.strip()
         calls, tokens, errors = usage_today[name]
-        print(f"\n■ {name}{' (paused)' if paused(name) else ''}")
+        print(f"\n■ {name}{' (paused)' if paused(name) else ''}  ·  branch instance/{name}")
         print(f"  journal     {len(entries)} entries")
         print(f"  self-model  last changed {last_self or 'never'}")
         print(f"  LLM today   {calls} calls · {tokens} completion tokens · {errors} errors")
@@ -228,9 +283,10 @@ def main(argv: list[str]) -> int:
     p.add_argument("name", nargs="?", default=DEFAULT_INSTANCE)
     p.add_argument("-n", type=int, default=3)
     sub.add_parser("list", help="list instances")
+    sub.add_parser("setup", help="create missing worktrees for template and instance branches")
     p = sub.add_parser("new", help="create an instance")
     p.add_argument("name")
-    p.add_argument("--from", dest="source", help="copy code (not memory) from this instance")
+    p.add_argument("--from", dest="source", help="fork code and skills (not memory) from this instance")
     for verb in ("pause", "resume"):
         p = sub.add_parser(verb, help=f"{verb} autonomous runs (all, or one instance)")
         p.add_argument("name", nargs="?")
@@ -259,6 +315,8 @@ def main(argv: list[str]) -> int:
     if args.cmd == "list":
         print("\n".join(instance_names()))
         return 0
+    if args.cmd == "setup":
+        return cmd_setup()
     if args.cmd == "new":
         return cmd_new(args.name, args.source)
     if args.cmd in ("pause", "resume"):
