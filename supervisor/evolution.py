@@ -112,6 +112,14 @@ def _config(root: Path) -> dict:
 def _base_answer(root: Path, question: str) -> str:
     """The same base model with no identity at all."""
     cfg = _config(root)
+    if cfg["LLM_BASE_URL"] == "broker":       # a cloud-brained instance: same cloud model, no identity
+        from . import cloudllm
+        from .core import secrets_env
+        reply = cloudllm.complete(f"{root.name}-baseline", {
+            "model": cfg["LLM_MODEL"], "max_tokens": 4000,
+            "messages": [{"role": "user", "content": question + " (Answer in at most 150 words.)"}]},
+            secrets_env().get("ANTHROPIC_API_KEY", ""), {})
+        return reply["choices"][0]["message"]["content"].strip()
     url = urllib.parse.urlsplit(cfg["LLM_BASE_URL"])
     # config.env is instance-editable: never let it aim the (unsandboxed) supervisor elsewhere.
     if url.hostname not in ("127.0.0.1", "localhost") or url.port not in LLM_PORTS:
