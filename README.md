@@ -67,7 +67,7 @@ notes/        its own work
 ```bash
 ln -s "$PWD/bin/shaft" ~/.local/bin/shaft   # once
 
-shaft talk [name]               # chat (with its tools); /exit or Ctrl-D to end; --show-thinking
+shaft talk [name]               # chat with its tools, in the terminal client (see below); --plain for line mode
 shaft live|reflect|sleep [name|--all]   # one autonomous cycle / reflection / consolidation
 shaft autonomy on|off|status    # launchd: `shaft tick` every 2 h, `shaft sleep --all` at 04:00
 shaft status [name]             # how each instance is doing
@@ -87,6 +87,20 @@ shaft dataset|finetune [name]   # M6: export experiences / train a judged LoRA a
 
 shaft pause [name] · shaft resume [name] · shaft check [name] · shaft setup · shaft list
 ```
+
+### The terminal client (`shaft talk`)
+
+On a terminal, `shaft talk` opens a client (in `.venv-ui/`: `prompt_toolkit` + `rich`) that talks to the
+sandboxed agent over JSON lines (`talk --json`); pipes and `--plain` get line mode.
+
+- **Enter** sends · **Shift-Enter**, **Option-Enter** or **Ctrl-J** new line · multi-line paste · ↑/↓ history
+  (kept per instance in `.supervisor/`)
+- Markdown rendered live while the answer streams; tool calls as compact lines; a status line with phase,
+  elapsed time and speed (waiting for the model → reading my memory % → thinking → answer)
+- **Ctrl-C** stops a reply; at the prompt it clears your text, or ends the conversation if empty; Ctrl-D ends
+- `/help` · `/thinking` · `/status` · `/inbox` · `/clear` · `/exit`
+- No limit on tool rounds in a conversation (Ctrl-C is the brake). Shift-Enter in iTerm2 needs
+  Settings → Profiles → Keys → General → "Report modifiers using CSI u" (Option-Enter always works).
 
 ## Rules the supervisor enforces
 

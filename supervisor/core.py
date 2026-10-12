@@ -9,6 +9,10 @@ from datetime import datetime
 from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent.parent
+# The system interpreter, even when the supervisor itself runs inside a venv (the terminal client
+# runs in .venv-ui): sandboxed agents cannot read a venv inside the home folder, and agents and
+# launchd jobs must not depend on one.
+PYTHON = str(getattr(sys, "_base_executable", None) or sys.executable)
 INSTANCES = PROJECT / "instances"
 TEMPLATE = PROJECT / "template"
 SUP_DIR = Path(os.environ.get("SHAFT_SUPERVISOR_DIR") or PROJECT / ".supervisor")  # tests point it elsewhere
@@ -40,7 +44,7 @@ BROKER_MAX_CALLS, BROKER_SRC = knob("SHAFT_BROKER_MAX_CALLS", "60", int)
 def describe_knobs() -> str:
     return (f"cycle_timeout_s={CYCLE_TIMEOUT_S} [{CYCLE_SRC}] sleep_timeout_s={SLEEP_TIMEOUT_S} [{SLEEP_SRC}] llm_ports={LLM_PORTS} [{PORTS_SRC}] "
             f"core_min_hours={CORE_MIN_HOURS} [{CORE_SRC}] broker_max_calls={BROKER_MAX_CALLS} [{BROKER_SRC}] "
-            f"python={sys.executable}")
+            f"python={PYTHON}")
 
 
 def log(msg: str) -> None:

@@ -193,6 +193,32 @@ class TalkInvariants(InstanceCase):
         self.assertIn("do no harm", json.dumps(first["messages"]))           # ...and it already knows
         self.assertEqual(len(self.fake.requests), 1)
 
+    def test_json_protocol_for_the_terminal_client(self):
+        replies = [{"reasoning": "hm", "tool_calls": [("remember", {"fact": "Daniele uses iTerm2"})]},
+                   {"content": "Noted: **iTerm2**."}]
+        stdin = json.dumps({"type": "user", "text": "line one\nline two"}) + "\n" + json.dumps({"type": "exit"}) + "\n"
+        r = self.run_agent(replies, "talk", "--json", stdin=stdin)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        events = [json.loads(l) for l in r.stdout.splitlines() if l.strip()]
+        types = [e["type"] for e in events]
+        self.assertEqual(types[0], "ready")
+        for t in ("status", "reasoning", "tool_start", "tool_end", "content", "turn_end", "bye"):
+            self.assertIn(t, types)
+        self.assertEqual("".join(e["text"] for e in events if e["type"] == "content"), "Noted: **iTerm2**.")
+        self.assertTrue(next(e for e in events if e["type"] == "tool_end")["ok"])
+        self.assertEqual(self.fake.requests[0]["messages"][-1]["content"], "line one\nline two")   # multi-line kept
+        episodes = "".join(p.read_text() for p in (self.root / "memory" / "episodes").glob("*.jsonl"))
+        self.assertIn("line one", episodes)
+
+    def test_conversation_has_no_tool_round_limit(self):
+        # Daniele hit "[stopped after 6 tool rounds without a final answer]" in a conversation.
+        rounds = [{"tool_calls": [("search_memory", {"query": f"q{i}"})]} for i in range(9)]
+        r = self.run_agent(rounds + [{"content": "Found it after nine searches."}], "talk",
+                           stdin="search hard\n/exit\n")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Found it after nine searches.", r.stdout)
+        self.assertNotIn("without a final answer", r.stdout)
+
     def test_ctrl_c_at_the_prompt_ends_at_once(self):
         r = self.run_agent([{"content": "Hi."}], "talk", stdin="hi\n")   # EOF after one exchange = Ctrl-D
         self.assertEqual(r.returncode, 0, r.stderr)

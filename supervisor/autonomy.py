@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .core import PROJECT, SUP_DIR, instance_names, log, paused
+from .core import PROJECT, PYTHON, SUP_DIR, instance_names, log, paused
 from .runner import Busy, is_busy, run_agent, talking
 
 AGENTS = Path.home() / "Library" / "LaunchAgents"
@@ -57,7 +57,7 @@ def tick() -> int:
 def _plist(label: str, job: dict) -> dict:
     return {
         "Label": label,
-        "ProgramArguments": [sys.executable, "-E", "-s", "-m", "supervisor", *job["args"]],
+        "ProgramArguments": [PYTHON, "-E", "-s", "-m", "supervisor", *job["args"]],
         "WorkingDirectory": str(PROJECT),
         "StandardOutPath": str(SUP_DIR / f"{label}.log"),
         "StandardErrorPath": str(SUP_DIR / f"{label}.log"),

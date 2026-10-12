@@ -21,7 +21,7 @@ from pathlib import Path
 
 from . import gate, sandbox
 from .broker import Broker
-from .core import (BROKER_MAX_CALLS, CORE_MIN_HOURS, CYCLE_TIMEOUT_S, HOME, INSTANCES, LLM_PORTS, PROJECT,
+from .core import (BROKER_MAX_CALLS, CORE_MIN_HOURS, CYCLE_TIMEOUT_S, HOME, INSTANCES, LLM_PORTS, PROJECT, PYTHON,
                    SLEEP_TIMEOUT_S, SUP_DIR, UnsafePath,
                    commit_state, describe_knobs, git_wt, instance_root, journal_note, log, safe_mkdir,
                    safe_write, secrets_env)
@@ -69,6 +69,15 @@ def busy_with(name: str) -> str | None:
 def judge_ok() -> bool:
     from . import judge
     return judge.available()
+
+
+def spawn_recover(name: str) -> None:
+    """Write the journal entry for a finished conversation in the background — leaving is instant."""
+    SUP_DIR.mkdir(exist_ok=True)
+    out = (SUP_DIR / "recover.log").open("a")
+    subprocess.Popen([PYTHON, "-E", "-s", "-m", "supervisor", "recover", name], cwd=PROJECT,
+                     stdin=subprocess.DEVNULL, stdout=out, stderr=out, start_new_session=True)
+    log(f"{name}: background journal write-up started")
 
 
 def request_yield(names: list[str]) -> None:
@@ -143,18 +152,20 @@ def enforce_core(name: str, root: Path, before: str) -> str | None:
 
 
 def run_agent(name: str, kind: str, agent_args: list[str], interactive: bool, wait_lock: bool = True,
-              output: list[str] | None = None) -> int:
-    """Run the instance once. If `output` is given, the agent's stdout is captured into it."""
+              output: list[str] | None = None, driver=None) -> int:
+    """Run the instance once. If `output` is given, the agent's stdout is captured into it.
+    If `driver` is given, the agent runs in its own process group with pipes on stdin/stdout/stderr
+    and driver(proc) talks to it (the terminal client); it returns when the conversation ends."""
     if not (PROJECT / ".git").exists():
         print(f"{PROJECT} is not a git repository; the supervisor needs one to record changes.", file=sys.stderr)
         return 2
     root = instance_root(name)
     with run_lock(name, wait=wait_lock, kind=kind):
-        return _run(name, root, kind, agent_args, interactive, output)
+        return _run(name, root, kind, agent_args, interactive, output, driver)
 
 
 def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: bool,
-         output: list[str] | None = None) -> int:
+         output: list[str] | None = None, driver=None) -> int:
     log(f"{name}: start {kind} {describe_knobs()}")
     code_before = gate.snapshot(root)
     journal_path = root / "memory" / "journal.md"
@@ -169,7 +180,7 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
     prof = SUP_DIR / f"{name}.sb"
     prof.write_text(sandbox.profile(root, HOME, LLM_PORTS + [broker.port]))
     safe_mkdir(root, ".tmp")
-    cmd = sandbox.wrap(prof, [sys.executable, "-E", "-s", "-m", "shaft", *agent_args])
+    cmd = sandbox.wrap(prof, [PYTHON, "-E", "-s", "-m", "shaft", *agent_args])
     budget = None if interactive else (SLEEP_TIMEOUT_S if kind == "sleep" else CYCLE_TIMEOUT_S)
     extra = {"SHAFT_DEADLINE": f"{time.time() + budget - 60:.0f}"} if budget else {}
     from .autonomy import describe_schedule
@@ -178,13 +189,28 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
                             SHAFT_BROKER_URL=broker_url, SHAFT_BROKER_TOKEN=broker.token, **extra)
     # In a conversation Ctrl-C belongs to the agent (it ends the talk and writes its journal
     # entry). If the supervisor took it too, subprocess.run would kill the agent mid-entry.
-    old_sigint = signal.signal(signal.SIGINT, signal.SIG_IGN) if interactive else None
+    old_sigint = signal.signal(signal.SIGINT, signal.SIG_IGN) if interactive and not driver else None
     try:
-        proc = subprocess.run(cmd, cwd=root, env=env, timeout=budget,
-                              stdout=subprocess.PIPE if output is not None else None, text=True)
-        code = proc.returncode
-        if output is not None:
-            output.append(proc.stdout or "")
+        if driver:
+            # Own process group: the terminal's Ctrl-C reaches the client, which decides what it means.
+            proc = subprocess.Popen(cmd, cwd=root, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True, bufsize=1, start_new_session=True)
+            try:
+                driver(proc)
+            finally:
+                if proc.poll() is None:
+                    try:
+                        proc.wait(timeout=15)
+                    except subprocess.TimeoutExpired:
+                        proc.terminate()
+                        proc.wait(timeout=10)
+            code = proc.returncode
+        else:
+            proc = subprocess.run(cmd, cwd=root, env=env, timeout=budget,
+                                  stdout=subprocess.PIPE if output is not None else None, text=True)
+            code = proc.returncode
+            if output is not None:
+                output.append(proc.stdout or "")
     except subprocess.TimeoutExpired:
         log(f"{name}: {kind} killed after {budget}s budget")
         print(f"{name}: {kind} exceeded its {budget}s budget and was stopped.", file=sys.stderr)

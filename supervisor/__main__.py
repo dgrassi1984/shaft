@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -24,7 +25,7 @@ from . import autonomy, evolution, finetune, gate, messages, metrics
 from .core import (DEFAULT_INSTANCE, HOME, INSTANCES, NAME_RE, PROJECT, SUP_DIR, TEMPLATE, git, git_wt,
                    instance_names, instance_root, journal_entries, journal_note, log, paused,
                    safe_mkdir, safe_write)
-from .runner import Busy, busy_with, is_busy, request_yield, run_agent, run_lock
+from .runner import Busy, busy_with, is_busy, request_yield, run_agent, run_lock, spawn_recover
 
 
 # -- instances -------------------------------------------------------------------
@@ -158,14 +159,6 @@ def cmd_status(names: list[str]) -> int:
     return 0
 
 
-def _spawn_recover(name: str) -> None:
-    SUP_DIR.mkdir(exist_ok=True)
-    out = (SUP_DIR / "recover.log").open("a")
-    subprocess.Popen([sys.executable, "-E", "-s", "-m", "supervisor", "recover", name], cwd=PROJECT,
-                     stdin=subprocess.DEVNULL, stdout=out, stderr=out, start_new_session=True)
-    log(f"{name}: background journal write-up started")
-
-
 def run_many(kind: str, names: list[str], every: bool) -> int:
     names = instance_names() if every else (names or [DEFAULT_INSTANCE])
     worst = 0
@@ -184,6 +177,7 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("talk", help="chat with an instance in the terminal")
     p.add_argument("name", nargs="?", default=DEFAULT_INSTANCE)
     p.add_argument("--show-thinking", action="store_true")
+    p.add_argument("--plain", action="store_true", help="plain line-by-line mode instead of the terminal client")
     for verb, text in (("live", "one autonomous cycle with tools"), ("reflect", "one reflection (no tools)"),
                        ("sleep", "consolidate memory, personality, goals"),
                        ("recover", "write journal entries for conversations that have none yet")):
@@ -249,8 +243,14 @@ def main(argv: list[str]) -> int:
             print(f"note: {', '.join(f'{n} ({others[n]})' for n in background)} is using the model; asked to "
                   f"wrap up at its next turn so you get it — the first reply may still wait for that turn.",
                   file=sys.stderr)
+        ui_python = PROJECT / ".venv-ui" / "bin" / "python"
+        if not args.plain and sys.stdin.isatty() and sys.stdout.isatty() and ui_python.exists():
+            os.execv(ui_python, [str(ui_python), "-E", "-s", "-m", "supervisor.talk_ui", args.name, *extra])
+        if not args.plain and sys.stdin.isatty() and not ui_python.exists():
+            print(f"(plain mode: the terminal client needs {ui_python} — python3 -m venv .venv-ui && "
+                  f".venv-ui/bin/pip install prompt_toolkit rich)", file=sys.stderr)
         code = run_agent(args.name, "talk", ["talk", *extra], interactive=True)
-        _spawn_recover(args.name)   # the journal entry is written in the background — leaving is instant
+        spawn_recover(args.name)   # the journal entry is written in the background — leaving is instant
         return code
     if args.cmd in ("live", "reflect", "sleep", "recover"):
         return run_many(args.cmd, args.names, args.all)

@@ -52,7 +52,8 @@ def restore(instance_root: Path, before: dict[str, bytes], paths: list[str]) -> 
 def run_tests(instance_root: Path, home: Path, timeout_s: int = 900) -> tuple[bool, str]:
     """Supervisor invariants against this instance's code (trusted test code; it sandboxes
     the agent itself), then the instance's own tests inside its sandbox."""
-    py = sys.executable
+    from .core import PYTHON
+    py = PYTHON
     from .core import safe_mkdir
     tmp = safe_mkdir(instance_root, ".tmp")
     outputs, ok = [], True

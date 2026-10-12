@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
@@ -38,6 +39,7 @@ class FakeLLM:
                     chunks += [{"tool_calls": [{"index": i, **c}]} for i, c in enumerate(calls)]
                     for delta in chunks:
                         self._sse({"choices": [{"delta": delta, "finish_reason": None}]})
+                        time.sleep(r.get("delay", 0))   # slow streaming, to test interrupts
                     self._sse({"choices": [{"delta": {}, "finish_reason": finish}]})
                     self._sse({"choices": [], "usage": usage})
                     self.wfile.write(b"data: [DONE]\n\n")
@@ -57,6 +59,7 @@ class FakeLLM:
                 self.wfile.flush()
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server.daemon_threads = True   # a client that disconnects mid-stream must not keep a test alive
         self.port = self.server.server_address[1]
         self.url = f"http://127.0.0.1:{self.port}/v1"
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
