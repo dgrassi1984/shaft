@@ -54,12 +54,37 @@ class FollowupBudgetTest(unittest.TestCase):
                                                                      "function": {"name": "f", "arguments": "{}"}}]},
                 {"role": "tool", "tool_call_id": "1", "content": "result"}]
         body = self.bodies(msgs, think_followup=1024)
-        self.assertEqual(body["chat_template_kwargs"], {"thinking_budget": 1024})
+        self.assertEqual(body["chat_template_kwargs"]["thinking_budget"], 1024)
 
     def test_first_call_and_cloud_get_the_full_budget(self):
-        self.assertNotIn("chat_template_kwargs", self.bodies([{"role": "user", "content": "x"}], think_followup=1024))
+        first = self.bodies([{"role": "user", "content": "x"}], think_followup=1024)
+        self.assertNotIn("thinking_budget", first["chat_template_kwargs"])
         tool_last = [{"role": "tool", "tool_call_id": "1", "content": "r"}]
-        self.assertNotIn("chat_template_kwargs", self.bodies(tool_last, think_followup=0))
+        self.assertNotIn("thinking_budget", self.bodies(tool_last, think_followup=0)["chat_template_kwargs"])
+        self.assertNotIn("chat_template_kwargs", self.bodies(tool_last, think_followup=1024, broker_token="t"))
+
+
+class ReasoningAcrossStepsTest(unittest.TestCase):
+    def test_each_step_sees_the_thinking_of_the_steps_before(self):
+        # Regression (2026-10-13): shaft repeated the same three tool rounds verbatim in one reply. The template
+        # renders an earlier step's reasoning_content inside <think>; we sent none, so every step had an empty
+        # plan and the model re-planned from scratch.
+        import json as _json
+        from shaft import agent
+        from shaft.tools import Toolbox
+        from supervisor.tests.fakellm import FakeLLM
+        fake = FakeLLM([{"reasoning": "PLAN: read the agenda, then build a feed plugin",
+                         "tool_calls": [("list_files", {"path": "."})]},
+                        {"content": "done"}])
+        self.addCleanup(fake.close)
+        root = Path(tempfile.mkdtemp(prefix="shaft-steps-"))
+        client = Client(fake.url, "m", "", 30, root / "u.jsonl")
+        agent.run(client, [{"role": "user", "content": "build something"}], Toolbox(root),
+                  max_tokens=100, purpose="test", max_steps=0)
+        second = fake.requests[1]
+        step = next(m for m in second["messages"] if m["role"] == "assistant")
+        self.assertIn("PLAN: read the agenda", step.get("reasoning_content", ""))
+        self.assertEqual(second["chat_template_kwargs"]["preserve_thinking"], False)
 
 
 class FileToolsTest(unittest.TestCase):

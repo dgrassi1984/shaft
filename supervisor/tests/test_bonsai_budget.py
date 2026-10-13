@@ -96,3 +96,22 @@ class RequestBudgetTest(unittest.TestCase):   # plain Python: no MLX needed
         self.assertEqual(request_budget(ask(None), 4096), 4096)
         self.assertEqual(request_budget(ask({"thinking_budget": "1"}), 4096), 4096)
         self.assertEqual(request_budget(ask({"thinking_budget": 1024}), 0), 0)
+
+
+@unittest.skipIf(mx is None, "needs the pack's tokenizer (.venv-bonsai)")
+class TemplateReasoningTest(unittest.TestCase):
+    def test_bonsai_template_shows_this_replys_earlier_thinking_only(self):
+        from mlx_lm.utils import load_tokenizer
+        from supervisor import bonsai_lora
+        tok = load_tokenizer(bonsai_lora.PACK)
+        call = {"id": "1", "type": "function", "function": {"name": "list_files", "arguments": {}}}
+        msgs = [{"role": "system", "content": "s"},
+                {"role": "user", "content": "first question"},
+                {"role": "assistant", "content": "old answer", "reasoning_content": "OLD-THOUGHT"},
+                {"role": "user", "content": "build something"},
+                {"role": "assistant", "content": "Let me look.", "reasoning_content": "PLAN-STEP-1",
+                 "tool_calls": [call]},
+                {"role": "tool", "tool_call_id": "1", "content": "plugins/"}]
+        text = tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True, preserve_thinking=False)
+        self.assertIn("PLAN-STEP-1", text)        # this reply's earlier step: kept
+        self.assertNotIn("OLD-THOUGHT", text)     # a finished turn's thinking: dropped
