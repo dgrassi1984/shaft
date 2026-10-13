@@ -125,7 +125,7 @@ while time.time() < end:
 
 
 class SupervisorSideTest(unittest.TestCase):
-    def test_conversation_takes_the_instance_from_a_running_cycle_and_gives_it_back(self):
+    def test_a_reply_takes_the_instance_from_a_running_cycle_and_gives_it_back(self):
         from supervisor import runner
         project = Path(tempfile.mkdtemp(prefix="shaft-proj-")).resolve()
         self.addCleanup(shutil.rmtree, project, True)
@@ -148,18 +148,25 @@ class SupervisorSideTest(unittest.TestCase):
             t.start()
             time.sleep(1)
             self.assertTrue(runner.is_busy("shaft"))
-            with runner.Presence("shaft", "chat1"):              # Daniele opens `shaft talk`
-                for _ in range(40):
-                    if not runner.is_busy("shaft"):
-                        break
-                    time.sleep(0.25)
-                during["free"] = not runner.is_busy("shaft")     # the conversation can have the instance
-                during["settled"] = len(settles)
-                runner._clean_tmp(root)                           # the conversation's write-up starts meanwhile
-                time.sleep(1)
-                during["still_paused"] = bool(list((root / ".tmp").glob("pause-*")))
+            with runner.Presence("shaft", "chat1"):              # Daniele opens `shaft talk` and types nothing yet
+                time.sleep(2.5)
+                during["open_only"] = runner.is_busy("shaft")    # an idle open conversation does not pause it
+                with runner.Reply("shaft", "talk"):              # he sends a message: a reply wants the instance
+                    for _ in range(40):
+                        if not runner.is_busy("shaft"):
+                            break
+                        time.sleep(0.25)
+                    during["free"] = not runner.is_busy("shaft")     # the reply can have the instance
+                    during["settled"] = len(settles)
+                    runner._clean_tmp(root)                           # the conversation's write-up starts meanwhile
+                    time.sleep(1)
+                    during["still_paused"] = bool(list((root / ".tmp").glob("pause-*")))
+                t.join(timeout=30)                               # reply done: it resumes with the talk still open
+                during["finished_while_open"] = not t.is_alive()
             t.join(timeout=30)
+        self.assertTrue(during["open_only"])                      # Daniele, 2026-10-13: "pause only while replying"
         self.assertTrue(during["free"])
+        self.assertTrue(during["finished_while_open"])
         # Regression (2026-10-13): another run's start-up cleanup deleted the paused cycle's pause file and resumed
         # it while the conversation still had the instance.
         self.assertTrue(during["still_paused"])

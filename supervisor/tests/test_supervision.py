@@ -44,14 +44,21 @@ class BrokerTest(unittest.TestCase):
             self.post("list_instances", {}, token="wrong")
         self.assertEqual(ctx.exception.code, 403)
 
+    def test_no_daily_limit_on_operator_messages_by_default(self):
+        """Daniele, 2026-10-13: "No limit" (SHAFT_OPERATOR_PER_DAY sets one; the run's own cap of 10 stays)."""
+        self.assertEqual(broker.OPERATOR_DAILY_LIMIT, 0)
+        with mock.patch.object(broker, "notify"):
+            ok = [self.post("send_message", {"to": "operator", "text": f"q{i}"})["ok"] for i in range(6)]
+        self.assertEqual(ok, [True] * 6)
+
     def test_messages_delivered_and_operator_limited(self):
         self.assertTrue(self.post("send_message", {"to": "b", "text": "hi b"})["ok"])
         self.assertIn("hi b", next((self.project / "instances" / "b" / "inbox").glob("*.md")).read_text())
         self.assertFalse(self.post("send_message", {"to": "nobody", "text": "x"})["ok"])
-        with mock.patch.object(broker, "notify"):
+        with mock.patch.object(broker, "notify"), mock.patch.object(broker, "OPERATOR_DAILY_LIMIT", 3):
             results = [self.post("send_message", {"to": "operator", "text": f"q{i}", "kind": "question"})["ok"]
-                       for i in range(broker.OPERATOR_DAILY_LIMIT + 1)]
-        self.assertEqual(results, [True] * broker.OPERATOR_DAILY_LIMIT + [False])
+                       for i in range(4)]
+        self.assertEqual(results, [True] * 3 + [False])
 
 
 class EnforcementTest(unittest.TestCase):

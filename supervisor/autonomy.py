@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from .core import PROJECT, PYTHON, SUP_DIR, instance_config, instance_names, log, paused
-from .runner import Busy, is_busy, open_conversations, run_agent, talking
+from .runner import Busy, is_busy, run_agent
 
 AGENTS = Path.home() / "Library" / "LaunchAgents"
 WAKE_DEFAULT_MIN = 120                  # minutes between wakes when config.env does not say
@@ -40,6 +40,7 @@ SERVICES = {
               "args": [str(PROJECT / ".venv-bonsai" / "bin" / "python"), "-E", "-s", "-m", "supervisor.embed_server"]},
     "scheduler": {"label": "com.shaft.scheduler",
                   "args": [PYTHON, "-E", "-s", "-m", "supervisor", "autonomy", "serve"]},
+    "telegram": {"label": "com.shaft.telegram", "args": [PYTHON, "-E", "-s", "-m", "supervisor", "telegram", "serve"]},
 }
 
 
@@ -153,12 +154,13 @@ def decide_wakes(now: datetime, st: dict, names: list[str], interval_of, awake_o
 
 
 def _awake(name: str) -> str:
-    """Why the instance counts as awake right now ('' if it does not)."""
-    from .runner import busy_with
+    """Why the instance counts as awake right now ('' if it does not). An open conversation waiting for the
+    operator does not: a cycle starts, and pauses only while a reply is being written (Daniele, 2026-10-13)."""
+    from .runner import busy_with, replying
     if (b := busy_with(name)):
         return b
-    if (convs := open_conversations(name)):
-        return f"in a conversation ({', '.join(sorted(set(convs.values())))})"
+    if replying(name):
+        return "a reply to the operator is waiting for it"
     return ""
 
 

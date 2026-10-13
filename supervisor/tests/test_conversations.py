@@ -34,9 +34,10 @@ class OpenConversationTest(unittest.TestCase):
                 seen["startup"] = runner.is_busy("shaft")
             seen["quiet"] = runner.is_busy("shaft")          # at the prompt: free
             seen["open"] = runner.open_conversations("shaft")
-            seen["talking"] = runner.talking()
+            seen["replying_quiet"] = runner.replying("shaft")
             with turn():                                    # a reply: held
                 seen["reply"] = runner.busy_with("shaft")
+                seen["replying"] = runner.replying("shaft")
 
         fake_proc = mock.Mock(returncode=0)
         fake_proc.poll.return_value = 0
@@ -52,11 +53,13 @@ class OpenConversationTest(unittest.TestCase):
         self.assertTrue(seen["startup"])
         self.assertFalse(seen["quiet"])
         self.assertEqual(seen["open"], {"t123": "talk"})
-        self.assertEqual(seen["talking"], ["shaft"])
+        self.assertEqual(seen["replying_quiet"], [])          # open but quiet: a cycle may run (pause only while replying)
+        self.assertEqual(len(seen["replying"]), 1)
         self.assertTrue(seen["reply"].startswith("talk"))
         self.assertEqual(settle.call_count, 2)               # each held stretch is checked and committed
         self.assertEqual(runner.open_conversations("shaft"), {})   # closed: no longer open
         self.assertFalse(runner.is_busy("shaft"))
+        self.assertEqual(runner.replying("shaft"), [])
 
     def test_ctrl_c_cannot_abort_the_checks_after_a_reply(self):
         # Regression (2026-10-13): a Ctrl-C while the gate tested shaft's new plugin aborted the settle halfway —

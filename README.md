@@ -93,6 +93,7 @@ shaft top                       # control panel, tabs 1–9: overview (state, no
 shaft status [name]             # how each instance is doing, open conversations, which code is running
 shaft model on|off|status       # SHAFT's own Bonsai 2 server (launchd, :8780)
 shaft api on|off|status|key|inbox-key   # OpenAI-compatible API + inbox doorbell on your tailnet (below)
+shaft telegram token <name>|pair|unpair|on|off|status   # talk with each instance from Telegram (below)
 shaft log [name] -n 5           # recent journal entries
 shaft stats [name]              # achieved difficulty, goal origins, judged success, calibration, honesty
 shaft judge backfill [name]     # rate origin/difficulty/novelty of cycles judged before those ratings existed
@@ -200,6 +201,25 @@ curl -s https://<mac>.<tailnet>.ts.net:8443/v1/inbox/wren -H "Authorization: Bea
   -H "Content-Type: application/json" -d '{"text": "CI on main is red", "source": "ci", "wake": true}'
 ```
 
+### Telegram (`shaft telegram …`)
+
+One bot per instance, one paired Telegram account for all of them.
+
+1. Create a bot per instance with @BotFather, then `shaft telegram token wren` (the token is read without
+   echo, checked with Telegram, and kept in `.env` as `TELEGRAM_TOKEN_WREN` — never visible to an instance).
+2. `shaft telegram pair` prints a one-time code (10 minutes); send `/pair <code>` to any of the bots from your
+   account. From then on every bot answers that account only; anyone else is ignored and logged. Pairing
+   another account needs `shaft telegram unpair` in your terminal.
+3. `shaft telegram on` (a launchd service, shown in `shaft top` → services).
+
+Writing to a bot is a live conversation with its instance, through the API (`shaft api on` is needed): a
+running cycle is paused only while the reply is written, and the conversation is written into the journal after
+`SHAFT_IDLE_MINUTES`. Replying to one of its messages quotes it, and answers it if it was a question. `/new`
+starts a new conversation, `/wake` starts a cycle, `/status` says what it is doing. Every message an instance
+sends you (`send_message` to the operator) also arrives from its bot. The service long-polls Telegram — no port,
+webhook or Funnel. Full text both ways: bot chats are not end-to-end encrypted, so Telegram's servers see them
+(accepted, 2026-10-13).
+
 ### The model server (`shaft model on`)
 
 `supervisor/bonsai_server.py`: mlx_lm's server with Bonsai's own loader (and a kept LoRA adapter, if
@@ -223,7 +243,7 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
   refused, and battery exams never get it.
 - **Broker**: the only door to the outside — web search (ScrapeBadger), page fetching
   (public addresses only, re-checked on every redirect), messages between instances and to
-  you (max 3 per instance per day, with a macOS notification), and **`delegate_coding`**: an
+  you (no daily limit unless `SHAFT_OPERATOR_PER_DAY`; a macOS notification, and Telegram if set up), and **`delegate_coding`**: an
   Opus-class model (`SHAFT_CODER_MODEL`, default `claude-opus-5-5`) reads the instance's code
   read-only and writes the change; the supervisor tests it on a scratch copy and applies it only if
   the gate passes — code only, never `self/`, `memory/` or `config.env`; max 2 per cycle and
@@ -284,8 +304,10 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
   their deadline and wrap up with a report before it; a stopped run leaves a journal note.
 - **Your conversation comes first**: `shaft talk` asks other instances' running cycles to wrap
   up at their next turn when they use the same local model server (an instance on a cloud model shares
-  nothing and is left alone, in either direction), and an instance's own scheduled cycle does not start
-  while a conversation with it is open (terminal or API). A conversation holds its instance only while it replies, so you can chat in the terminal and
+  nothing and is left alone, in either direction). An instance's running cycle is paused only while a reply
+  to you is being written (terminal, API or Telegram) and resumes as soon as it is done, even with the
+  conversation still open; an open but quiet conversation does not stop its cycles from starting (Daniele,
+  2026-10-13: "pause only while replying"). A conversation holds its instance only while it replies, so you can chat in the terminal and
   through the API at the same time. Open conversations are never written up early; a conversation
   picked up again after its write-up gets a further entry. Ctrl-C in a conversation ends it cleanly
   (the instance still writes its journal entry).

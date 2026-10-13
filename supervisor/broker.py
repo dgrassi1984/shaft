@@ -29,7 +29,8 @@ from pathlib import Path
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36"
 MAX_FETCH_BYTES = 3_000_000
 MAX_MESSAGE_CHARS = 8000
-OPERATOR_DAILY_LIMIT = 3
+# Messages to the operator per instance per day; 0 = no limit (Daniele, 2026-10-13, with Telegram: "No limit").
+OPERATOR_DAILY_LIMIT = int(os.environ.get("SHAFT_OPERATOR_PER_DAY") or 0)
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
 
 
@@ -55,8 +56,8 @@ SPECS = {
                         {"url": S, "max_chars": {"type": "integer", "description": "default 6000"}}, ["url"]),
     "send_message": _spec("send_message", "Send a message to another SHAFT instance, or to 'operator' "
                           "(Daniele) to ask him something or tell him something — he gets a notification "
-                          "and his reply arrives in your inbox. At most 3 operator messages per day, so "
-                          "make them count.",
+                          "(and, if your bot is set up, a Telegram message from you) and his reply arrives in your "
+                          "inbox. Make them count: he reads every one.",
                           {"to": S, "text": S,
                            "kind": {"type": "string", "enum": ["question", "note"],
                                     "description": "for the operator: question (wants an answer) or note"}},
@@ -478,7 +479,7 @@ class Broker:
         kind = "question" if kind == "question" else "note"     # instance-chosen: only these two are logged
         if to == "operator":
             sent = self._operator_sent_today(stamp)
-            if sent >= OPERATOR_DAILY_LIMIT:
+            if OPERATOR_DAILY_LIMIT and sent >= OPERATOR_DAILY_LIMIT:
                 raise RuntimeError(f"you already sent {sent} messages to the operator today "
                                    f"(limit {OPERATOR_DAILY_LIMIT}); keep it for tomorrow")
             self._deliver("operator", f"{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}.md",

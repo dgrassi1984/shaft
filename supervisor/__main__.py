@@ -477,6 +477,9 @@ def main(argv: list[str]) -> int:
     p.add_argument("name")
     p = sub.add_parser("api", help="OpenAI-compatible API for the instances, on your tailnet")
     p.add_argument("action", choices=["on", "off", "status", "key", "inbox-key", "serve"])
+    p = sub.add_parser("telegram", help="talk with each instance from Telegram, one bot per instance, one paired account")
+    p.add_argument("action", choices=["on", "off", "status", "token", "pair", "unpair", "serve"])
+    p.add_argument("name", nargs="?", help="token: the instance the bot is for")
     p = sub.add_parser("model", help="SHAFT's own Bonsai 2 model server (launchd service)")
     p.add_argument("action", choices=["on", "off", "status"])
     p = sub.add_parser("embed", help="SHAFT's embedding service for memory search (launchd service)")
@@ -624,6 +627,9 @@ def main(argv: list[str]) -> int:
     if args.cmd == "api":
         from . import api
         return api.command(args.action)
+    if args.cmd == "telegram":
+        from . import telegram
+        return telegram.command(args.action, args.name)
     if args.cmd == "model":
         return autonomy.service("model", args.action)
     if args.cmd == "embed":

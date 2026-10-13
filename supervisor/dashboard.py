@@ -15,7 +15,7 @@ from pathlib import Path
 from . import messages
 from .core import SUP_DIR, disabled_tools, instance_config, instance_names, instance_root, paused
 
-SERVICES = ("model", "embed", "api", "scheduler")
+SERVICES = ("model", "embed", "api", "scheduler", "telegram")
 NOISE = ('api "GET', 'api "POST', "background journal write-up started")   # feed lines that say nothing new
 
 

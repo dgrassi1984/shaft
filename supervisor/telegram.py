@@ -1,0 +1,423 @@
+"""Telegram: talk with each instance from your phone, and get its messages to you there (Daniele, 2026-10-13).
+
+One bot per instance (its token in .env as TELEGRAM_TOKEN_<NAME>, `shaft telegram token <name>`), and ONE paired
+Telegram account for all of them: `shaft telegram pair` prints a one-time code, you send `/pair <code>` to any
+of the bots from your account, and from then on every bot answers that account only — anyone else is ignored
+and logged; pairing again needs `shaft telegram unpair` in your terminal.
+
+- You → instance: a message to its bot is a turn of a live conversation, through SHAFT's own API (the same path
+  as any API client: a running cycle is paused only while the reply is written, the conversation is written up
+  into the journal after SHAFT_IDLE_MINUTES). Replying to one of its messages quotes it — and answers it, if it
+  was a question. /new starts a new conversation, /wake starts a cycle now, /status says what it is doing.
+- Instance → you: every message an instance sends the operator (send_message to "operator") also arrives from its
+  bot, read from the supervisor's message log (.supervisor/messages.jsonl). No daily limit (Daniele).
+- Full text both ways (Daniele accepted that Telegram's servers see it: bot chats are not end-to-end encrypted).
+- Nothing listens for Telegram: the service long-polls getUpdates, so no port is opened and no webhook, tunnel
+  or Funnel is needed. Tokens stay in the supervisor's .env and never reach an instance or a log line.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import secrets
+import sys
+import threading
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime, timedelta
+from pathlib import Path
+
+from .core import IDLE_MINUTES, SUP_DIR, instance_names, knob, log, secrets_env
+
+API_BASE, _ = knob("SHAFT_TELEGRAM_API", "https://api.telegram.org", str)   # tests point it at a fake
+POLL_S = 30                      # long-poll timeout
+STATE = "telegram.json"          # pairing, update offsets, the outbound cursor, which bot message was which question
+PAIR_MINUTES = 10
+MAX_TEXT = 4000                  # Telegram's limit is 4,096 per message
+_lock = threading.RLock()
+
+
+# -- state ------------------------------------------------------------------------------------------------
+def _path() -> Path:
+    return SUP_DIR / STATE
+
+
+def load() -> dict:
+    with _lock:
+        try:
+            return json.loads(_path().read_text())
+        except (OSError, ValueError):
+            return {}
+
+
+def save(st: dict) -> None:
+    with _lock:
+        SUP_DIR.mkdir(exist_ok=True)
+        tmp = _path().with_suffix(".tmp")
+        tmp.write_text(json.dumps(st, indent=1))
+        tmp.chmod(0o600)
+        os.replace(tmp, _path())
+
+
+def update(fn) -> dict:
+    with _lock:
+        st = load()
+        fn(st)
+        save(st)
+        return st
+
+
+def token_key(name: str) -> str:
+    return "TELEGRAM_TOKEN_" + name.upper().replace("-", "_")
+
+
+def tokens() -> dict[str, str]:
+    """{instance: bot token} for the instances that have a bot."""
+    env = secrets_env()
+    return {n: env[token_key(n)] for n in instance_names() if env.get(token_key(n))}
+
+
+# -- the Bot API ----------------------------------------------------------------------------------------------
+class TelegramError(Exception):
+    pass
+
+
+def call(token: str, method: str, http_timeout: float = 15, **params) -> object:
+    """One Bot API call. Errors never carry the token (it is part of the URL)."""
+    req = urllib.request.Request(f"{API_BASE}/bot{token}/{method}", data=json.dumps(params).encode(),
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=http_timeout) as r:
+            data = json.load(r)
+    except urllib.error.HTTPError as e:
+        try:
+            desc = json.load(e).get("description", "")
+        except ValueError:
+            desc = ""
+        raise TelegramError(f"{method}: HTTP {e.code} {desc}".strip()) from None
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        raise TelegramError(f"{method}: {type(e).__name__}: {str(e).replace(token, '<token>')}") from None
+    if not data.get("ok"):
+        raise TelegramError(f"{method}: {data.get('description', 'not ok')}")
+    return data.get("result")
+
+
+def send(token: str, chat_id: int, text: str, reply_to: int | None = None) -> list[int]:
+    """Send text, split at Telegram's limit; returns the message ids."""
+    ids = []
+    text = text.strip() or "(empty)"
+    for k in range(0, len(text), MAX_TEXT):
+        params = {"chat_id": chat_id, "text": text[k:k + MAX_TEXT]}
+        if reply_to and k == 0:
+            params["reply_parameters"] = {"message_id": reply_to, "allow_sending_without_reply": True}
+        ids.append(call(token, "sendMessage", **params)["message_id"])
+    return ids
+
+
+# -- pairing ----------------------------------------------------------------------------------------------------
+def _digest(code: str) -> str:
+    return hashlib.sha256(code.strip().upper().encode()).hexdigest()
+
+
+def new_pairing_code() -> str:
+    st = load()
+    if st.get("paired"):
+        raise TelegramError(f"already paired with {st['paired'].get('username') or st['paired']['user_id']}; "
+                            "`shaft telegram unpair` first")
+    code = secrets.token_hex(4).upper()
+    update(lambda s: s.update(pairing={"digest": _digest(code),
+                                       "until": (datetime.now() + timedelta(minutes=PAIR_MINUTES)).isoformat()}))
+    log("telegram: pairing code issued")
+    return code
+
+
+def try_pair(user: dict, code: str) -> str:
+    """/pair <code> from a private chat: pairs this account if no account is paired and the code is right."""
+    st = load()
+    if st.get("paired"):
+        return ""                                   # never says anything to an unpaired account
+    p = st.get("pairing") or {}
+    if not p or datetime.fromisoformat(p["until"]) < datetime.now() or \
+            not secrets.compare_digest(p["digest"], _digest(code)):
+        log(f"telegram: wrong or expired pairing code from user {user.get('id')}")
+        return ""
+    update(lambda s: (s.update(paired={"user_id": user["id"], "username": user.get("username", ""),
+                                       "paired_at": datetime.now().isoformat(timespec="seconds")}),
+                      s.pop("pairing", None)))
+    log(f"telegram: paired with user {user['id']} ({user.get('username', '')})")
+    return "Paired. From now on only this account can talk to SHAFT's bots."
+
+
+def paired_id() -> int | None:
+    return (load().get("paired") or {}).get("user_id")
+
+
+# -- you → instance ---------------------------------------------------------------------------------------------
+class Chat:
+    """One instance's conversation over its bot: the history the API needs, and its message ids."""
+
+    def __init__(self, name: str, token: str):
+        self.name, self.token = name, token
+        self.history: list[dict] = []
+        self.last = 0.0
+        self.lock = threading.Lock()
+
+    def reset_if_idle(self) -> None:
+        if self.history and time.time() - self.last > IDLE_MINUTES * 60:
+            self.history = []                        # the API has written that conversation up: a new one starts
+
+    def handle(self, msg: dict) -> None:
+        chat_id = msg["chat"]["id"]
+        text = (msg.get("text") or "").strip()
+        if not text:
+            send(self.token, chat_id, "Only text, for now.", msg["message_id"])
+            return
+        cmd = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
+        if cmd in ("/start", "/help"):
+            send(self.token, chat_id, f"I am {self.name}. Write to me and I answer. /new starts a new conversation, "
+                                      "/wake starts a cycle now, /status says what I am doing.")
+            return
+        if cmd == "/status":
+            from .dashboard import instance_state
+            i = instance_state(self.name)
+            line = f"{i['state']}{' since ' + i['since'] if i['since'] else ''}"
+            for k in ("doing", "goal"):
+                if i.get(k):
+                    line += f"\n{k}: {i[k]}"
+            line += f"\nnext wake {i['next_wake']} · today {i['calls_today']} model calls, ${i['usd_today']:.2f}"
+            send(self.token, chat_id, line)
+            return
+        if cmd == "/wake":
+            from .autonomy import start_wake
+            try:
+                send(self.token, chat_id, start_wake(self.name))
+            except RuntimeError as e:
+                send(self.token, chat_id, f"Not started: {e}")
+            return
+        if cmd == "/new":
+            with self.lock:
+                self.history = []
+            send(self.token, chat_id, "New conversation.")
+            return
+        if cmd == "/pair":
+            return                                   # already paired (an unpaired account never gets here)
+        quoted = msg.get("reply_to_message") or {}
+        if quoted.get("text"):
+            text = "> " + "\n> ".join(quoted["text"].splitlines()) + "\n\n" + text
+            answer_question(self.name, quoted.get("message_id"))
+        with self.lock:
+            self.reset_if_idle()
+            self.history.append({"role": "user", "content": text})
+            self.last = time.time()
+            stop = threading.Event()
+            threading.Thread(target=self._typing, args=(chat_id, stop), daemon=True).start()
+            try:
+                reply = ask_api(self.name, self.history)
+            except TelegramError as e:
+                self.history.pop()
+                stop.set()
+                send(self.token, chat_id, f"(no answer: {e})", msg["message_id"])
+                return
+            finally:
+                stop.set()
+            self.history.append({"role": "assistant", "content": reply})
+            self.last = time.time()
+        send(self.token, chat_id, reply)
+
+    def _typing(self, chat_id: int, stop: threading.Event) -> None:
+        while not stop.is_set():
+            try:
+                call(self.token, "sendChatAction", chat_id=chat_id, action="typing")
+            except TelegramError:
+                pass
+            stop.wait(4.5)
+
+
+def ask_api(name: str, history: list[dict]) -> str:
+    """One reply through SHAFT's own API: a sandboxed run, pausing a running cycle only while it replies."""
+    from . import api
+    env = secrets_env()
+    key, logins = env.get("SHAFT_API_KEY"), sorted(api.allowed_logins())
+    if not key or not logins:
+        raise TelegramError("the API is not set up (shaft api on)")
+    req = urllib.request.Request(f"http://127.0.0.1:{api.PORT}/v1/chat/completions",
+                                 data=json.dumps({"model": name, "messages": history}).encode(),
+                                 headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}",
+                                          "Tailscale-User-Login": logins[0], "User-Agent": "Telegram"})
+    try:
+        with urllib.request.urlopen(req, timeout=3600) as r:
+            data = json.load(r)
+    except urllib.error.HTTPError as e:
+        try:
+            raise TelegramError(json.load(e)["error"]["message"]) from None
+        except (ValueError, KeyError):
+            raise TelegramError(f"API HTTP {e.code}") from None
+    except (urllib.error.URLError, OSError) as e:
+        raise TelegramError(f"the API is not reachable ({e}); is it on? shaft api status") from None
+    return (data["choices"][0]["message"].get("content") or "").strip() or "(empty answer)"
+
+
+def answer_question(name: str, message_id: int | None) -> None:
+    """A reply to the bot message that carried an instance's question answers it in the operator inbox too."""
+    from . import messages
+    q = (load().get("questions") or {}).get(f"{name}:{message_id}")
+    if not q:
+        return
+    path = messages.OPERATOR_INBOX / q
+    if path.exists():
+        messages._archive(path)
+        log(f"telegram: {name}'s question {q} answered in Telegram")
+
+
+def handle_update(name: str, token: str, chat: Chat, upd: dict) -> None:
+    msg = upd.get("message")
+    if not msg:
+        return
+    user = msg.get("from") or {}
+    if (msg.get("chat") or {}).get("type") != "private":
+        log(f"telegram: {name}'s bot ignored a message from a {msg.get('chat', {}).get('type')} chat")
+        return
+    text = (msg.get("text") or "").strip()
+    owner = paired_id()
+    if owner is None:
+        if text.lower().startswith("/pair "):
+            if (said := try_pair(user, text.split(None, 1)[1])):
+                send(token, msg["chat"]["id"], said)
+        return
+    if user.get("id") != owner:
+        log(f"telegram: {name}'s bot ignored user {user.get('id')} ({user.get('username', '')}): not the paired account")
+        return
+    chat.handle(msg)
+
+
+def poll(name: str, token: str, stop: threading.Event) -> None:
+    chat = Chat(name, token)
+    while not stop.is_set():
+        offset = (load().get("offsets") or {}).get(name, 0)
+        try:
+            updates = call(token, "getUpdates", http_timeout=POLL_S + 15, offset=offset, timeout=POLL_S,
+                           allowed_updates=["message"])
+        except TelegramError as e:
+            log(f"telegram: {name}'s bot: {e}")
+            stop.wait(30)
+            continue
+        for upd in updates or []:
+            update(lambda s: s.setdefault("offsets", {}).__setitem__(name, upd["update_id"] + 1))
+            threading.Thread(target=_safe, args=(handle_update, name, token, chat, upd), daemon=True).start()
+
+
+def _safe(fn, *args) -> None:
+    try:
+        fn(*args)
+    except Exception as e:                       # one bad update must not stop the bot; say what went wrong
+        log(f"telegram: {type(e).__name__}: {e}")
+
+
+# -- instance → you ---------------------------------------------------------------------------------------------
+def forward_new(toks: dict[str, str] | None = None) -> int:
+    """Send the instances' messages to the operator that arrived since the last call, each from its own bot.
+    Starts from 'now' the first time (no backlog). Returns how many were sent."""
+    from . import messages
+    owner = paired_id()
+    toks = tokens() if toks is None else toks
+    st = load()
+    if owner is None or not toks:
+        return 0
+    cursor = st.get("sent_cursor")
+    rows = [m for m in messages.history() if m["to"] == "operator"]
+    if cursor is None:
+        update(lambda s: s.__setitem__("sent_cursor", rows[-1]["ts"] + "|" + rows[-1]["file"] if rows else ""))
+        return 0
+    sent = 0
+    for m in rows:
+        key = m["ts"] + "|" + m["file"]
+        if key <= cursor:
+            continue
+        tok = toks.get(m["from"])
+        if tok:
+            head = "❓ Question" if m.get("kind") == "question" else "📝 Note"
+            try:
+                ids = send(tok, owner, f"{head} from {m['from']}:\n\n{m['text']}")
+            except TelegramError as e:
+                log(f"telegram: could not forward {m['file']}: {e}")
+                return sent                         # try again from here next time
+            if m.get("kind") == "question":
+                update(lambda s: s.setdefault("questions", {}).__setitem__(f"{m['from']}:{ids[0]}", m["file"]))
+            sent += 1
+        cursor = key
+        update(lambda s: s.__setitem__("sent_cursor", key))
+    return sent
+
+
+def serve() -> int:
+    toks = tokens()
+    if not toks:
+        print("no bot tokens: shaft telegram token <instance>")
+        return 2
+    from .version import record_service
+    record_service("telegram", {"bots": sorted(toks), "paired": bool(paired_id())})
+    stop = threading.Event()
+    for name, token in toks.items():
+        threading.Thread(target=poll, args=(name, token, stop), daemon=True).start()
+    log(f"telegram: serving bots for {', '.join(sorted(toks))} ({'paired' if paired_id() else 'NOT paired yet'})")
+    print(f"telegram: bots for {', '.join(sorted(toks))}")
+    while True:
+        try:
+            forward_new(toks)
+        except Exception as e:
+            log(f"telegram: forwarding: {type(e).__name__}: {e}")
+        time.sleep(5)
+
+
+# -- operator commands -------------------------------------------------------------------------------------------
+def command(action: str, name: str | None = None) -> int:
+    from . import autonomy
+    from .api import _set_secret
+    if action == "serve":
+        return serve()
+    if action == "token":
+        if not name or name not in instance_names():
+            print(f"usage: shaft telegram token <instance> ({', '.join(instance_names())})")
+            return 2
+        import getpass
+        tok = getpass.getpass(f"bot token for {name} from @BotFather (not echoed): ").strip() if sys.stdin.isatty() \
+            else sys.stdin.readline().strip()
+        try:
+            me = call(tok, "getMe")
+        except TelegramError as e:
+            print(f"not saved: Telegram refused the token ({e})")
+            return 1
+        _set_secret(token_key(name), tok)
+        log(f"telegram: bot @{me.get('username')} set for {name}")
+        print(f"{name} now talks through @{me.get('username')} — restart the service: shaft telegram on")
+        return 0
+    if action == "pair":
+        try:
+            code = new_pairing_code()
+        except TelegramError as e:
+            print(e)
+            return 1
+        bots = ", ".join(sorted(tokens())) or "(no bots yet: shaft telegram token <instance>)"
+        print(f"Send this to any of the bots ({bots}) from your Telegram account, within {PAIR_MINUTES} minutes:\n\n"
+              f"    /pair {code}\n\nOnly that account will be able to talk to them.")
+        return 0
+    if action == "unpair":
+        update(lambda s: (s.pop("paired", None), s.pop("pairing", None)))
+        log("telegram: unpaired by the operator")
+        print("unpaired: the bots answer nobody until `shaft telegram pair`")
+        return 0
+    if action == "on":
+        if not tokens():
+            print("no bot tokens yet: shaft telegram token <instance>")
+            return 2
+        return autonomy.service("telegram", "on")
+    if action == "off":
+        return autonomy.service("telegram", "off")
+    autonomy.service("telegram", "status")
+    st = load()
+    p = st.get("paired")
+    print(f"bots: {', '.join(f'{n}' for n in sorted(tokens())) or 'none'} · "
+          f"paired: {(p.get('username') or p['user_id']) if p else 'no (shaft telegram pair)'}")
+    return 0

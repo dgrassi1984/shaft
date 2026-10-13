@@ -127,8 +127,8 @@ class Presence:
     """An open terminal conversation, registered for as long as it lasts. The file's lock is held by
     the conversation's process, so a crashed conversation stops counting at once."""
 
-    def __init__(self, name: str, talk_id: str, kind: str = "talk"):
-        self.path = SUP_DIR / "conversations" / name / f"{talk_id}.{kind}"
+    def __init__(self, name: str, talk_id: str, kind: str = "talk", folder: str = "conversations"):
+        self.path = SUP_DIR / folder / name / f"{talk_id}.{kind}"
         self.f = None
 
     def __enter__(self):
@@ -151,11 +151,9 @@ class Presence:
         self.f.close()
 
 
-def open_conversations(name: str) -> dict[str, str]:
-    """{talk_id: 'talk' | 'api'} for the instance's conversations still going on: terminal talks whose
-    client is running, and conversations the running API has not closed and written up yet."""
+def _held(folder: Path) -> dict[str, str]:
+    """{stem: suffix} of the Presence files in `folder` whose process still holds them; stale ones are removed."""
     found: dict[str, str] = {}
-    folder = SUP_DIR / "conversations" / name
     for p in sorted(folder.glob("*.*")) if folder.is_dir() else []:
         try:
             f = p.open("r")
@@ -173,6 +171,26 @@ def open_conversations(name: str) -> dict[str, str]:
             except FileNotFoundError:
                 pass
             fcntl.flock(f, fcntl.LOCK_UN)
+    return found
+
+
+def replying(name: str) -> list[str]:
+    """Replies to the operator that want the instance right now — waiting for it or writing (Reply). A running
+    cycle pauses only for these, and resumes as soon as they are done, even while the conversation stays open
+    (Daniele, 2026-10-13: "pause only while replying")."""
+    return sorted(_held(SUP_DIR / "replying" / name))
+
+
+def Reply(name: str, kind: str) -> Presence:
+    """Register one reply (terminal, API or Telegram) for as long as it waits for or holds the instance."""
+    return Presence(name, f"{kind}-{os.getpid()}-{time.monotonic_ns()}", "reply", folder="replying")
+
+
+def open_conversations(name: str) -> dict[str, str]:
+    """{talk_id: 'talk' | 'api'} for the instance's conversations still going on: terminal talks whose
+    client is running, and conversations the running API has not closed and written up yet. They are not
+    written up while open; they no longer keep its cycles paused (replying does)."""
+    found = _held(SUP_DIR / "conversations" / name)
     from .version import service
     if service("api", stale=False):   # the API decides when its conversations end — not this process's knob
         try:
@@ -183,13 +201,6 @@ def open_conversations(name: str) -> dict[str, str]:
             if t.get("model") == name and not t.get("written"):
                 found[t["talk_id"]] = "api"
     return found
-
-
-def talking() -> list[str]:
-    """Instances in a conversation with the operator (open, even if quiet right now)."""
-    from .core import instance_names
-    return [n for n in instance_names()
-            if open_conversations(n) or (busy_with(n) or "").startswith(("talk", "api"))]
 
 
 def is_busy(name: str) -> bool:
@@ -320,8 +331,8 @@ def _pid_alive(pid: int) -> bool:
 
 
 def _pause(name: str, root: Path, kind: str, proc, held: _Held, run: dict, broker) -> float:
-    """Daniele opened a conversation with this instance during its autonomous run (Daniele, 2026-10-13: "its
-    background cycle should be immediately paused"): signal it — a model call in flight is cut off, freeing the
+    """A reply to Daniele needs this instance during its autonomous run (Daniele, 2026-10-13: "its background
+    cycle should be immediately paused", and later "pause only while replying"): signal it — a model call in flight is cut off, freeing the
     model; a tool in progress finishes first — settle what it did so far, give the instance to the conversation,
     and take it back when the conversation ends. Returns the seconds it was paused."""
     t0 = time.monotonic()
@@ -344,11 +355,11 @@ def _pause(name: str, root: Path, kind: str, proc, held: _Held, run: dict, broke
             (root / ".tmp" / f"pause-{pid}").unlink(missing_ok=True)
             return 0.0
         time.sleep(0.25)
-    log(f"{name}: {kind} paused — the operator opened a conversation")
+    log(f"{name}: {kind} paused — a reply to the operator needs the instance")
     _settle(name, root, kind, run["before"], broker.handoffs[run["seen"]:], broker.config_writes[run["cseen"]:])
     held.release()
-    while open_conversations(name):
-        time.sleep(2)
+    while replying(name):
+        time.sleep(1)
     held.acquire(wait=True)
     # The conversation's changes are not mine.
     run["before"], run["seen"], run["cseen"] = _snapshot(root), len(broker.handoffs), len(broker.config_writes)
@@ -468,7 +479,7 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
                         pass
                     if ends is not None and time.monotonic() > ends:
                         raise subprocess.TimeoutExpired(cmd, budget)
-                    if pausable and open_conversations(name):
+                    if pausable and replying(name):
                         paused = _pause(name, root, kind, proc, held, run, broker)
                         ends = ends + paused if ends is not None else None
             except subprocess.TimeoutExpired:
@@ -617,15 +628,20 @@ class Turn:
         if self.held:
             return
         stack = ExitStack()
+        stack.enter_context(Reply(self.name, self.kind))   # a running cycle pauses for it, and resumes after it
         try:
-            stack.enter_context(run_lock(self.name, wait=False, kind=self.kind))
-        except Busy:
-            holder = busy_with(self.name) or "another run"
-            if not holder.startswith(("talk", "api", *PAUSABLE)):
-                request_yield([self.name])   # anything else wraps up at its next turn; a cycle is paused instead
-            if on_wait:
-                on_wait(holder)
-            stack.enter_context(run_lock(self.name, wait=True, kind=self.kind))
+            try:
+                stack.enter_context(run_lock(self.name, wait=False, kind=self.kind))
+            except Busy:
+                holder = busy_with(self.name) or "another run"
+                if not holder.startswith(("talk", "api", *PAUSABLE)):
+                    request_yield([self.name])   # anything else wraps up at its next turn; a cycle is paused instead
+                if on_wait:
+                    on_wait(holder)
+                stack.enter_context(run_lock(self.name, wait=True, kind=self.kind))
+        except BaseException:
+            stack.close()                        # interrupted while waiting: no reply wants the instance any more
+            raise
         self.held = stack
         self.before = _snapshot(self.root)
         self.handoffs_seen = len(self.broker.handoffs) if self.broker else 0

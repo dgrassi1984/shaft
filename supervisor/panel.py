@@ -23,7 +23,7 @@ JUDGE_ALERT_USD, _ = knob("SHAFT_JUDGE_ALERT_USD", "10", float)   # the judge ha
 CAP_ALERT = 0.8                                                    # a cap this full raises an alert
 ALERT_HOURS = 12                                                   # log alerts this recent are shown
 SERVICE_LOGS = {"model": "com.shaft.model.log", "embed": "com.shaft.embed.log", "api": "com.shaft.api.log",
-                "scheduler": "com.shaft.scheduler.log"}
+                "scheduler": "com.shaft.scheduler.log", "telegram": "com.shaft.telegram.log"}
 
 # -- caching ------------------------------------------------------------------------------------------------
 _memo: dict[str, tuple[tuple, object]] = {}

@@ -500,7 +500,7 @@ def render_costs(snap, ui, width, height):
 
 
 # -- 9 services ------------------------------------------------------------------------------------------------------
-SERVICE_NAMES = ["model", "embed", "api", "scheduler"]
+SERVICE_NAMES = ["model", "embed", "api", "scheduler", "telegram"]
 
 
 def render_services(snap, ui, width, height):

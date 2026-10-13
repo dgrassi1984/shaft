@@ -40,7 +40,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .core import API_TALKS as TALKS, IDLE_MINUTES, SUP_DIR, instance_names, knob, log, secrets_env
-from .runner import busy_with, request_yield, run_agent, spawn_recover
+from .runner import Reply, busy_with, request_yield, run_agent, spawn_recover
 
 PORT, _ = knob("SHAFT_API_PORT", "8781", int)
 INBOX_PER_HOUR, _ = knob("SHAFT_INBOX_PER_HOUR", "30", int)
@@ -259,7 +259,9 @@ class Handler(BaseHTTPRequestHandler):
         answered = threading.Event()
 
         def work():
+            reply = Reply(model, "api")      # a running cycle of this instance pauses for this reply, then resumes
             try:
+                reply.__enter__()
                 if b := busy_with(model):
                     if not b.startswith(("talk", "api", "live", "sleep", "reflect")):
                         request_yield([model])          # anything else: ask it to wrap up
@@ -281,6 +283,8 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:   # surface, never hang the client
                 events.put({"type": "error", "message": f"{type(e).__name__}: {e}"})
             finally:
+                if reply.f is not None:
+                    reply.__exit__(None, None, None)
                 events.put({"type": "done"})
 
         threading.Thread(target=work, daemon=True).start()

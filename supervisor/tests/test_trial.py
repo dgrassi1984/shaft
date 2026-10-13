@@ -232,10 +232,10 @@ class ReplayBrokerTest(Fixture):
 
     def test_the_operator_daily_limit_counts_the_replay_day(self):
         replay = self.make()
-        with mock.patch.object(broker, "notify"):
+        with mock.patch.object(broker, "notify"), mock.patch.object(broker, "OPERATOR_DAILY_LIMIT", 3):
             ok = [replay.call("send_message", {"to": "operator", "text": f"q{i}"})["ok"]
-                  for i in range(broker.OPERATOR_DAILY_LIMIT + 1)]
-        self.assertEqual(ok, [True] * broker.OPERATOR_DAILY_LIMIT + [False])
+                  for i in range(4)]
+        self.assertEqual(ok, [True] * 3 + [False])
 
     def test_history_ends_where_the_cycle_began(self):
         log = self.make().call("history", {})
