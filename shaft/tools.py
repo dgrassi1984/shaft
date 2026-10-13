@@ -34,6 +34,8 @@ PROTECTED = {
     "self/self.md": "use update_self_model",
     "self/personality.md": "use update_personality",
     "self/stats.md": "written by the supervisor from my measured results",
+    "config.env": "change a value with the supervisor's set_config(key, value) — the only way to change this "
+                  "file, so the supervisor can tell my settings from the operator's",
 }
 PROTECTED_DIRS = {".git": "git internals",
                   "secrets": "my keys are handled by the supervisor: secret_set / secret_list / secret_delete", "memory/episodes": "episodes are append-only records",
