@@ -1061,6 +1061,20 @@ def _pair_job(project: Path, tid: str, name: str, i: int, model: str) -> None:
         save(t)
 
 
+def sweep_scratch(older_than_s: float = 2 * CYCLE_TIMEOUT_S) -> int:
+    """Remove scratch copies left by a worker that was killed mid-replay (a scheduler restart kills its children
+    before their `finally` runs; 25 were left on 2026-10-13). Only ones older than any replay can run."""
+    base, n = Path(tempfile.gettempdir()), 0
+    for d in list(base.glob("shaft-trial-*")):
+        try:
+            if d.is_dir() and not d.is_symlink() and time.time() - d.stat().st_mtime > older_than_s:
+                shutil.rmtree(d, ignore_errors=True)
+                n += 1
+        except OSError:
+            continue
+    return n
+
+
 def work(project: Path = PROJECT) -> int:
     """The trial worker: run the tests and every pair that may run now, conclude finished trials; return when
     nothing more can run now. One worker at a time (a lock). Pairs on cloud models run PARALLEL at a time, one
@@ -1079,6 +1093,8 @@ def work(project: Path = PROJECT) -> int:
             f"[{TRIALS_PER_DAY_SRC}] DAILY_USD={DAILY_USD} [{DAILY_USD_SRC}] LOCAL_UNITS_PER_DAY="
             f"{LOCAL_UNITS_PER_DAY} [{LOCAL_UNITS_SRC}] LOCAL_WAIT_H={LOCAL_WAIT_H} [{LOCAL_WAIT_SRC}] "
             f"FALLBACK_MODEL={FALLBACK_MODEL} [{FALLBACK_SRC}])")
+        if (swept := sweep_scratch()):
+            log(f"trial worker: removed {swept} scratch copies left by an earlier worker")
         tried: set[tuple[str, int]] = set()      # a preempted pair waits for the next pass
         inflight: dict = {}                       # future -> (trial id, model)
         with ThreadPoolExecutor(max_workers=PARALLEL) as pool:
