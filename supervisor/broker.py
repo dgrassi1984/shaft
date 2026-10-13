@@ -95,11 +95,14 @@ SPECS = {
         ["kind"]),
     "delegate_coding": _spec(
         "delegate_coding",
-        "Hand a coding task to an Opus-class model. Describe WHAT you want changed in your code, plugins, "
-        "skills or tests and WHY. It reads your files, writes the change; the supervisor tests it on a copy "
-        "and applies it to your folder only if all tests pass. It cannot touch your self/, memory/ or "
-        "config.env. Slow (minutes) and costs real money: at most 2 per cycle, for real coding work only. "
-        "Your commit will record that the code was delegated.",
+        "Your coder: an Opus-class model that writes code for you. Use it for any non-trivial code — a new "
+        "plugin, a change to your own shaft/ code, tests, a fix after a failing test — rather than writing it "
+        "yourself: it is faster and more reliable than you are at code on the local model. You decide WHAT to "
+        "build and WHY; describe that, with the files involved and how to tell it works. It reads your files "
+        "and writes the change; the supervisor tests it on a copy and applies it to your folder only if all "
+        "tests pass (you see the result here). It cannot touch your self/, memory/ or config.env. Takes a minute "
+        "or two; limits: 2 per cycle, a daily budget the supervisor keeps. Small edits (a line, a note) you "
+        "can still do yourself.",
         {"task": S}),
 }
 MAX_HANDOFFS_PER_RUN = 2

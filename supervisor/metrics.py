@@ -178,7 +178,7 @@ def check_personality(name: str) -> None:
 
 
 def _code_section(name: str) -> list[str]:
-    """How much of my own code change was mine, and how much was delegated."""
+    """My kept code changes — who wrote them is a fact, not a score: delegating non-trivial code is the norm."""
     path = SUP_DIR / "code_changes" / f"{name}.jsonl"
     if not path.exists():
         return []
@@ -186,8 +186,8 @@ def _code_section(name: str) -> list[str]:
     files = sum(len(r["files"]) for r in rows)
     delegated = sum(len(r["delegated_files"]) for r in rows)
     return ["", "## Changes to my own code",
-            f"- {len(rows)} kept change(s), {files} file(s): {files - delegated} written by me, "
-            f"{delegated} delegated to the coding model"]
+            f"- {len(rows)} kept change(s), {files} file(s) — {delegated} written by my coder (delegate_coding), "
+            f"{files - delegated} by me"]
 
 
 def _traits_section(name: str) -> list[str]:
