@@ -168,3 +168,83 @@ class RecordToolTest(unittest.TestCase):
         self.assertIn("x run", out["tools"])
         self.assertNotIn("SECRET", "".join(out.values()))
         self.assertNotIn("tick: y", out["runs"])
+
+
+class UpdateNoteTest(unittest.TestCase):
+    """Regression (2026-10-13): `shaft update` merged template changes without a word to the instance, so it
+    never learned its own code had changed — shaft's self-model still said "no embeddings, no vector DB" and
+    "wakes me every 2 hours" after hybrid search was merged and its wake interval was 10 minutes."""
+
+    def setUp(self):
+        from unittest import mock
+        from supervisor import __main__ as cli, core
+        self.cli = cli
+        self.project = Path(tempfile.mkdtemp(prefix="shaft-upd-")).resolve()
+        self.addCleanup(shutil.rmtree, self.project, True)
+        git(self.project, "init", "-q")
+        git(self.project, "commit", "-q", "--allow-empty", "-m", "main")
+        self.tpl = self.project / "template"
+        git(self.project, "worktree", "add", "-q", "--orphan", "-b", "template", str(self.tpl))
+        (self.tpl / "shaft").mkdir()
+        (self.tpl / "shaft" / "agent.py").write_text("v = 1\n")
+        git(self.tpl, "add", "-A")
+        git(self.tpl, "commit", "-q", "-m", "template: first")
+        self.root = self.project / "instances" / "x"
+        git(self.project, "worktree", "add", "-q", "-b", "instance/x", str(self.root), "template")
+        (self.root / "memory").mkdir()
+        (self.root / "memory" / "journal.md").write_text("# x — journal\n")
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "-m", "x: created")
+        for target, value in ((core, "PROJECT"), (core, "INSTANCES")):
+            p = mock.patch.object(target, value, self.project if value == "PROJECT" else self.project / "instances")
+            p.start()
+            self.addCleanup(p.stop)
+        self.gate = mock.patch.object(cli.gate, "run_tests", return_value=(True, "ok"))
+        self.gate.start()
+        self.addCleanup(self.gate.stop)
+
+    def template_change(self, *subjects):
+        for i, s in enumerate(subjects):
+            (self.tpl / "shaft" / "agent.py").write_text(f"v = {s!r}\n")
+            git(self.tpl, "commit", "-q", "-am", s)
+
+    def notes(self):
+        return (self.root / "memory" / "journal.md").read_text().count("My code was updated")
+
+    def update(self):
+        import contextlib
+        import io
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            code = self.cli.cmd_update(["x"])
+        return code, out.getvalue()
+
+    def test_an_update_leaves_one_note_naming_the_merged_commits(self):
+        self.template_change("template: hybrid embedding search", "template: wake every 10 minutes")
+        code, out = self.update()
+        self.assertEqual(code, 0, out)
+        journal = (self.root / "memory" / "journal.md").read_text()
+        self.assertEqual(self.notes(), 1, journal)
+        self.assertIn("template: hybrid embedding search", journal)
+        self.assertIn("template: wake every 10 minutes", journal)
+        self.assertNotIn("template: first", journal)                  # already in the instance before
+        self.assertNotIn("merge template", journal)                   # the merge commit itself is not news
+        self.assertEqual(git(self.root, "status", "--porcelain").strip(), "")   # the note is committed
+
+    def test_no_note_when_already_up_to_date(self):
+        code, out = self.update()
+        self.assertEqual(code, 0, out)
+        self.assertIn("already up to date", out)
+        self.assertEqual(self.notes(), 0)
+
+    def test_no_note_when_the_merge_fails_the_gate(self):
+        self.template_change("template: broken change")
+        head = git(self.root, "rev-parse", "HEAD")
+        self.gate.stop()
+        from unittest import mock
+        with mock.patch.object(self.cli.gate, "run_tests", return_value=(False, "boom")):
+            code, out = self.update()
+        self.gate.start()
+        self.assertEqual(code, 1, out)
+        self.assertIn("rolled back", out)
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), head)
+        self.assertEqual(self.notes(), 0)

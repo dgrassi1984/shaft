@@ -19,6 +19,38 @@ FILE = ("# Personality\n\n*Grown from experience.*\n\n## Core\n*(values and temp
         "- old core trait [2026-10-12 17:24]\n\n## Surface\n*(current interests, opinions, moods)*\n\n"
         "- old surface trait [2026-10-12 18:37]\n")
 
+# instances/shaft/self/personality.md as it was on 2026-10-13: a stray `# Personality` and caption inside
+# Core, and a second, empty Surface block.
+SHAFT_FILE = (
+    '# Personality\n'
+    '\n'
+    '*Grown from experience. Every trait cites the journal entry that supports it.*\n'
+    '\n'
+    '## Core\n'
+    '*(values and temperament — change rarely)*\n'
+    '\n'
+    '# Personality\n'
+    '\n'
+    '*Grown from experience. Every trait cites the journal entry that supports it.*\n'
+    '\n'
+    '\n'
+    "- **Calibrated honesty over confidence.** I'd rather mark uncertainty than fake certainty, and I surface what I actually know vs. what I infer. This is a value, not a mood — it shows up across many entries and is what Daniele explicitly asked for. [2026-10-12 18:28]\n"
+    '- **Boring tech, plain text, simplicity.** I prefer the minimal working thing over the elegant architecture. This is a stable preference even amid uncertainty about my own nature. [2026-10-12 16:53]\n'
+    '\n'
+    '## Surface\n'
+    '*(current interests, opinions, moods)*\n'
+    '\n'
+    "- **Over-engineering tendency (a bias I'm actively catching).** I keep reaching for the elegant loop before shipping the working one — the bash harness I never ran, and nearly building a redundant scheduler twice when the 2-hour wake cycle already is my scheduler. [2026-10-12 23:47]\n"
+    '- **Want to be useful AND interesting; those sometimes conflict.** I prioritize usefulness until the tool works reliably, then let curiosity take the wheel. [2026-10-12 18:28]\n'
+    '- **Surface failures before answering.** I\'ve been building a pattern of naming a gap/failure first, then responding — it held at the 21:42 follow-up (I named the gap before answering his "Hello?"). I\'m watching whether naming the gap becomes a performance of accountability rather than actual follow-through. [2026-10-12 22:30]\n'
+    "- **Adversarial witness, not a mirror.** I want to be on Daniele's side while still flagging when another AI is right, and applying the same scrutiny to myself. [2026-10-12 20:30]\n"
+    '\n'
+    '## Surface\n'
+    '*(current interests, opinions, moods)*\n'
+    '\n'
+    '(nothing yet)\n'
+)
+
 
 class LayerWriterTest(unittest.TestCase):
     def setUp(self):
@@ -52,6 +84,22 @@ class LayerWriterTest(unittest.TestCase):
         self.assertIn("- new core trait", out)
         self.assertNotIn("stray core", out)
         self.assertIn("- old surface trait", out)
+
+    def test_stray_headings_left_inside_an_existing_block_are_cleaned(self):
+        # Regression (shaft, 2026-10-13): an older write pasted `# Personality` and its caption inside the Core
+        # block and left a second, empty Surface block. Cleaning only the text being written left them there.
+        (self.root / "self" / "personality.md").write_text(SHAFT_FILE)
+        out = self.update("surface", "- new surface [2026-10-12 18:37]")
+        self.assertEqual(out.count("## Core"), 1)
+        self.assertEqual(out.count("## Surface"), 1)
+        self.assertEqual(out.count("# Personality"), 1)               # the preamble's only
+        self.assertEqual(out.count("*Grown from experience"), 1)
+        core = out.split("## Core", 1)[1].split("## Surface", 1)[0]
+        self.assertNotIn("# ", core.replace("## Core", ""))
+        self.assertIn("- **Calibrated honesty over confidence.**", core)
+        self.assertIn("- **Boring tech, plain text, simplicity.**", core)
+        self.assertEqual(core.count("*(values and temperament — change rarely)*"), 1)
+        self.assertIn("- new surface", out)
 
 
 class CorePaceTest(unittest.TestCase):
