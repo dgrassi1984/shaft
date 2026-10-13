@@ -148,7 +148,7 @@ def open_conversations(name: str) -> dict[str, str]:
                 pass
             fcntl.flock(f, fcntl.LOCK_UN)
     from .version import service
-    if service("api"):   # the API decides when its conversations end (idle time) — not this process's knob
+    if service("api", stale=False):   # the API decides when its conversations end — not this process's knob
         try:
             talks = json.loads(API_TALKS.read_text()) if API_TALKS.exists() else {}
         except (OSError, ValueError):
@@ -233,8 +233,65 @@ def run_agent(name: str, kind: str, agent_args: list[str], interactive: bool, wa
         print(f"{PROJECT} is not a git repository; the supervisor needs one to record changes.", file=sys.stderr)
         return 2
     root = instance_root(name)
-    with run_lock(name, wait=wait_lock, kind=kind):
-        return _run(name, root, kind, agent_args, interactive, output, driver)
+    held = _Held(name, kind)
+    held.acquire(wait_lock)
+    try:
+        return _run(name, root, kind, agent_args, interactive, output, driver, held=held)
+    finally:
+        held.release()
+
+
+PAUSABLE = ("live", "sleep", "reflect")   # autonomous runs a conversation pauses at once
+
+
+class _Held:
+    """The instance's run lock as a handle a pausable run can give up during a conversation and take back."""
+
+    def __init__(self, name: str, kind: str):
+        self.name, self.kind, self.stack = name, kind, None
+
+    def acquire(self, wait: bool) -> None:
+        stack = ExitStack()
+        stack.enter_context(run_lock(self.name, wait=wait, kind=self.kind))
+        self.stack = stack
+
+    def release(self) -> None:
+        if self.stack:
+            self.stack.close()
+            self.stack = None
+
+
+def _pause(name: str, root: Path, kind: str, proc, held: _Held, run: dict, broker) -> float:
+    """Daniele opened a conversation with this instance during its autonomous run (Daniele, 2026-10-13: "its
+    background cycle should be immediately paused"): signal it — a model call in flight is cut off, freeing the
+    model; a tool in progress finishes first — settle what it did so far, give the instance to the conversation,
+    and take it back when the conversation ends. Returns the seconds it was paused."""
+    t0 = time.monotonic()
+    safe_write(root, ".tmp/pause", datetime.now().isoformat(timespec="seconds"))
+    try:
+        os.kill(proc.pid, signal.SIGUSR1)
+    except ProcessLookupError:
+        pass
+    ack = root / ".tmp" / "paused"
+    while not ack.exists():
+        if proc.poll() is not None:   # it ended on its own meanwhile
+            (root / ".tmp" / "pause").unlink(missing_ok=True)
+            return 0.0
+        time.sleep(0.25)
+    log(f"{name}: {kind} paused — the operator opened a conversation")
+    _settle(name, root, kind, run["before"], broker.handoffs[run["seen"]:])
+    held.release()
+    while open_conversations(name):
+        time.sleep(2)
+    held.acquire(wait=True)
+    run["before"], run["seen"] = _snapshot(root), len(broker.handoffs)   # the conversation's changes are not mine
+    paused = time.monotonic() - t0
+    if run.get("deadline"):
+        run["deadline"] += paused
+        safe_write(root, ".tmp/deadline", f"{run['deadline']:.0f}")   # the paused time is not taken from it
+    (root / ".tmp" / "pause").unlink(missing_ok=True)
+    log(f"{name}: {kind} resumed after {paused:.0f}s")
+    return paused
 
 
 def _snapshot(root: Path) -> dict:
@@ -298,11 +355,14 @@ def _finish(proc: subprocess.Popen) -> None:
 
 
 def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: bool,
-         output: list[str] | None = None, driver=None) -> int:
+         output: list[str] | None = None, driver=None, held: _Held | None = None) -> int:
     log(f"{name}: start {kind} {describe_knobs()}")
-    before = _snapshot(root)
+    for leftover in ("pause", "paused", "deadline"):
+        (root / ".tmp" / leftover).unlink(missing_ok=True)
+    run = {"before": _snapshot(root), "seen": 0}
     budget = None if interactive else (SLEEP_TIMEOUT_S if kind == "sleep" else CYCLE_TIMEOUT_S)
     broker, cmd, env = _launch(name, root, kind, agent_args, budget)
+    run["deadline"] = float(env["SHAFT_DEADLINE"]) if env.get("SHAFT_DEADLINE") else None
     # In a conversation Ctrl-C belongs to the agent (it ends the talk and writes its journal
     # entry). If the supervisor took it too, subprocess.run would kill the agent mid-entry.
     old_sigint = signal.signal(signal.SIGINT, signal.SIG_IGN) if interactive and not driver else None
@@ -322,8 +382,20 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
             readers = [_tee(proc.stderr, sys.stderr, err_tail)]   # still shown live; the tail explains a failure
             if output is not None:
                 readers.append(_tee(proc.stdout, None, out_all))
+            pausable = held is not None and kind in PAUSABLE and not interactive
+            ends = time.monotonic() + budget if budget else None
             try:
-                code = proc.wait(timeout=budget)
+                while True:
+                    try:
+                        code = proc.wait(timeout=2)
+                        break
+                    except subprocess.TimeoutExpired:
+                        pass
+                    if ends is not None and time.monotonic() > ends:
+                        raise subprocess.TimeoutExpired(cmd, budget)
+                    if pausable and open_conversations(name):
+                        paused = _pause(name, root, kind, proc, held, run, broker)
+                        ends = ends + paused if ends is not None else None
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait()
@@ -346,7 +418,8 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
             signal.signal(signal.SIGINT, old_sigint)
         broker.stop()
     log(f"{name}: end {kind} exit={code} broker_calls={broker.counts or {}}")
-    (root / ".tmp" / "yield").unlink(missing_ok=True)
+    for leftover in ("yield", "pause", "paused", "deadline"):
+        (root / ".tmp" / leftover).unlink(missing_ok=True)
     if code < 0 and not interactive:
         journal_note(root, "Supervisor: run stopped", f"My {kind} run was stopped from outside (signal {-code}) "
                      "before I finished it. Whatever I had already written to my files was kept.")
@@ -354,7 +427,7 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
         why = "".join(err_tail).strip()[-1200:] or "(it printed nothing)"
         journal_note(root, f"Supervisor: {kind} failed", f"My {kind} run ended with an error (exit {code}), so it "
                      f"did not complete. What it printed last:\n\n```\n{why}\n```")
-    if not _settle(name, root, kind, before, broker.handoffs):
+    if not _settle(name, root, kind, run["before"], broker.handoffs[run["seen"]:]):
         return code or 1
     if kind == "live":
         from . import metrics
@@ -428,8 +501,8 @@ class Turn:
             stack.enter_context(run_lock(self.name, wait=False, kind=self.kind))
         except Busy:
             holder = busy_with(self.name) or "another run"
-            if not holder.startswith(("talk", "api")):
-                request_yield([self.name])   # an autonomous run wraps up at its next turn
+            if not holder.startswith(("talk", "api", *PAUSABLE)):
+                request_yield([self.name])   # anything else wraps up at its next turn; a cycle is paused instead
             if on_wait:
                 on_wait(holder)
             stack.enter_context(run_lock(self.name, wait=True, kind=self.kind))

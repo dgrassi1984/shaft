@@ -186,9 +186,11 @@ class Handler(BaseHTTPRequestHandler):
         def work():
             try:
                 if b := busy_with(model):
-                    if not b.startswith(("talk", "api")):
-                        request_yield([model])          # an autonomous cycle: ask it to wrap up
-                    what = "in another conversation" if b.startswith(("talk", "api")) else "finishing a cycle"
+                    if not b.startswith(("talk", "api", "live", "sleep", "reflect")):
+                        request_yield([model])          # anything else: ask it to wrap up
+                    what = ("in another conversation" if b.startswith(("talk", "api")) else
+                            "pausing its cycle for you" if b.startswith(("live", "sleep", "reflect")) else
+                            "finishing a run")
                     events.put({"type": "status", "phase": f"waiting: {model} is {what} ({b})"})
                     while busy_with(model):
                         if cancelled.is_set():          # the client left while waiting: never run it later

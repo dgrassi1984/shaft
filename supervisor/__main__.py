@@ -379,7 +379,8 @@ def main(argv: list[str]) -> int:
     if args.cmd == "talk":
         extra = (["--show-thinking"] if args.show_thinking else []) + (["--as", args.speaker] if args.speaker else [])
         if (mine := busy_with(args.name)):
-            print(f"{args.name} is busy ({mine}); your conversation starts when it finishes…", file=sys.stderr)
+            print(f"{args.name} is busy ({mine}); " + ("pausing it for your conversation…" if mine.startswith(
+                ("live", "sleep", "reflect")) else "your conversation starts when it finishes…"), file=sys.stderr)
         others = {n: b for n in instance_names() if n != args.name and (b := busy_with(n))}
         background = [n for n, b in others.items() if not b.startswith("talk")]
         if background:

@@ -41,14 +41,17 @@ def _alive(pid: int) -> bool:
         return True
 
 
-def service(name: str) -> dict | None:
-    """The running service's record (None if it is not running or never recorded itself)."""
+def service(name: str, stale: bool = True) -> dict | None:
+    """The running service's record (None if it is not running or never recorded itself). stale=False skips
+    the git check of whether its code changed since it started (for frequent callers)."""
     try:
         rec = json.loads((SERVICES / f"{name}.json").read_text())
     except (OSError, ValueError):
         return None
     if not _alive(rec.get("pid", 0)):
         return None
+    if not stale:
+        return rec
     changed = git("diff", "--name-only", rec["commit"].split("+")[0], "--", *CODE.get(name, ["supervisor"]),
                   check=False)
     rec["stale"] = changed.returncode == 0 and bool(changed.stdout.strip())   # its code changed since it started
