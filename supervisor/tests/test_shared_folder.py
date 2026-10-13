@@ -189,12 +189,21 @@ class InstanceToolsTest(unittest.TestCase):
         self.assertIn("outside the shared folder", box.run("read_file", json.dumps({"path": "shared/../../etc/hosts"})))
         self.assertIn("outside the shared folder", box.run("read_file", json.dumps({"path": "shared/escape/private.md"})))
 
-    def test_without_a_grant_shared_is_just_a_name_in_my_folder(self):
+    def test_without_a_grant_it_says_there_is_none(self):
+        # Regression: with the grant taken back, shared/ listed "(empty)" and read_file said "No such file" in my
+        # own folder; shaft could not tell why and repeated the same read until the loop guard stopped it.
         box = self.box(None)
-        self.assertIn("ERROR", box.run("read_file", json.dumps({"path": "shared/docs/plan.md"})))
-        self.assertIn("wrote", box.run("write_file", json.dumps({"path": "shared/x.md", "content": "mine"})))
-        self.assertEqual((self.root / "shared" / "x.md").read_text(), "mine")
+        for tool, args in (("list_files", {"path": "shared/"}), ("read_file", {"path": "shared/docs/plan.md"}),
+                           ("write_file", {"path": "shared/x.md", "content": "mine"})):
+            self.assertIn("no shared folder now", box.run(tool, json.dumps(args)), tool)
+        self.assertFalse((self.root / "shared").exists())
         self.assertNotIn("operator's folder", box.run("list_files", "{}"))
+
+    def test_without_a_grant_my_own_shared_dir_is_mine(self):
+        (self.root / "shared").mkdir()
+        box = self.box(None)
+        self.assertIn("wrote", box.run("write_file", json.dumps({"path": "shared/x.md", "content": "mine"})))
+        self.assertEqual(box.run("read_file", json.dumps({"path": "shared/x.md"})), "mine")
 
     def test_the_prompt_mentions_it_only_when_granted(self):
         code = ("from shaft import prompts, config; from shaft.state import State; from pathlib import Path; import os\n"
