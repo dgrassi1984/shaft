@@ -123,7 +123,8 @@ class ReplayEndToEndTest(Fixture):
     def setUp(self):
         self.fake = FakeLLM([
             {"tool_calls": [("declare_intent", {"goal": "answer x about the owl", "success_criterion": "reply sent",
-                                                "confidence": 60})]},
+                                                "confidence": 60, "origin": "instance",
+                                                "origin_ref": "x's message about the owl"})]},
             {"tool_calls": [("send_message", {"to": "operator", "text": "hello Daniele", "kind": "note"})]},
             {"tool_calls": [("send_message", {"to": "x", "text": "the owl is purple"})]},
             {"tool_calls": [("http_request", {"url": "https://example.com/v1/post", "method": "POST",
@@ -255,8 +256,8 @@ class ReplayBrokerTest(Fixture):
         self.assertFalse(b.call("trial", {"hypothesis": "x" * 30, "files": []})["ok"])
 
     def test_cloud_spend_is_billed_to_the_trial(self):
-        self.assertEqual(self.make().billed, "tw@trial:x")
-        self.assertEqual(broker.Broker(NAME, self.project, {}, self.project / "l").billed, NAME)
+        self.assertEqual(self.make().usage_name, "tw@trial:x")
+        self.assertEqual(broker.Broker(NAME, self.project, {}, self.project / "l").usage_name, NAME)
 
 
 class VerdictTest(unittest.TestCase):

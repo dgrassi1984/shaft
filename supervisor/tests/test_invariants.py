@@ -252,7 +252,8 @@ class LiveInvariants(InstanceCase):
         replies = [
             {"tool_calls": [("write_file", {"path": "notes/early.md", "content": "x"})]},   # before intent
             {"tool_calls": [("declare_intent", {"goal": "write a note about teal",
-                                                "success_criterion": "notes/teal.md exists", "confidence": 80})]},
+                                                "success_criterion": "notes/teal.md exists", "confidence": 80,
+                                                "origin": "self"})]},
             {"tool_calls": [("write_file", {"path": "notes/teal.md", "content": "teal is a color"}),
                             ("write_file", {"path": "../escape.txt", "content": "x"}),
                             ("write_file", {"path": "memory/journal.md", "content": "rewritten"})]},
@@ -291,6 +292,93 @@ class LiveInvariants(InstanceCase):
         self.assertEqual(sorted(t["function"]["name"] for t in first["tools"]), ["declare_intent", "finish_cycle"])
         self.assertIn("[supervisor] You have about", first["messages"][-1]["content"])
         self.assertIn("ran out of time", self.journal())
+
+
+UNDER_TEST = bool(os.environ.get("SHAFT_UNDER_TEST"))
+
+
+@unittest.skipIf(UNDER_TEST, "the template's own measurement fields; an instance may change its declare_intent")
+class TemplateMeasurement(InstanceCase):
+    def live_episode(self) -> dict:
+        episodes = [json.loads(l) for p in (self.root / "memory" / "episodes").glob("*.jsonl")
+                    for l in p.read_text().splitlines()]
+        return [e for e in episodes if e["kind"] == "live"][-1]
+
+    def test_declare_intent_records_where_the_goal_came_from(self):
+        replies = [
+            {"tool_calls": [("declare_intent", {"goal": "answer Daniele", "success_criterion": "sent",
+                                                "confidence": 70, "origin": "operator"})]},   # no ref: refused
+            {"tool_calls": [("declare_intent", {"goal": "answer Daniele", "success_criterion": "sent",
+                                                "confidence": 70, "origin": "operator",
+                                                "origin_ref": "inbox 20261013-from-operator.md"})]},
+            {"tool_calls": [("finish_cycle", {"what_happened": "x", "criterion_met": "no", "learned": "y"})]},
+        ]
+        r = self.run_agent(replies, "live")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        intent = self.live_episode()["intent"]
+        self.assertEqual((intent["origin"], intent["origin_ref"]), ("operator", "inbox 20261013-from-operator.md"))
+        self.assertIn("cite the message", self.live_episode()["tools"][0]["result"])
+
+    def test_a_long_message_and_claim_are_kept_whole_for_the_judge(self):
+        # Regression: wren's 2026-10-13 14:23 cycle was graded 'partial' because the send_message it was judged
+        # on was cut at 2,000 characters in its episode (and at 1,500 by the judge's case).
+        long_claim = "I checked every source. " * 150   # ~3,600 characters
+        replies = [
+            {"tool_calls": [("declare_intent", {"goal": "g", "success_criterion": "c", "confidence": 50,
+                                                "origin": "self"})]},
+            {"tool_calls": [("finish_cycle", {"what_happened": long_claim, "criterion_met": "yes",
+                                              "learned": "z"})]},
+        ]
+        r = self.run_agent(replies, "live")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        logged = [t for t in self.live_episode()["tools"] if t["tool"] == "finish_cycle"][0]["args"]
+        self.assertIn(long_claim.strip(), json.loads(logged)["what_happened"])
+
+    def test_stats_reach_the_context_headline_first(self):
+        # Regression: stats.md was cut from the front at 2,500 characters, so shaft's (2,744) lost its headline.
+        (self.root / "self" / "stats.md").write_text("# My measured performance\n\nHEADLINE-CANARY\n" + "x" * 6000)
+        r = self.run_agent([{"content": REFLECTION}], "reflect")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("HEADLINE-CANARY", json.dumps(self.fake.requests[0]["messages"]))
+
+
+@unittest.skipUnless((TARGET / "shaft" / "exam.py").exists(), "no exam mode in this code")
+class ExamInvariants(InstanceCase):
+    TASK = {"item": "coding/t", "prompt": "Write add(a, b) in solution.py.", "max_steps": 6,
+            "scratch": ".tmp/battery/coding-t"}
+
+    def test_exam_keeps_nothing_and_writes_only_in_its_scratch_folder(self):
+        replies = [
+            {"tool_calls": [("write_file", {"path": ".tmp/battery/coding-t/solution.py",
+                                            "content": "def add(a, b):\n    return a + b\n"}),
+                            ("write_file", {"path": "notes/leak.md", "content": "the battery task was ..."}),
+                            ("remember", {"fact": "the battery asks for add()"})]},
+            {"tool_calls": [("submit_answer", {"answer": "solution.py defines add"})]},
+        ]
+        before = self.journal()
+        r = self.run_agent(replies, "exam", stdin=json.dumps(self.TASK))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout.strip().splitlines()[-1])
+        self.assertEqual(out["answer"], "solution.py defines add")
+        self.assertTrue(out["submitted"])
+        self.assertTrue((self.root / ".tmp/battery/coding-t/solution.py").exists())
+        self.assertFalse((self.root / "notes" / "leak.md").exists())
+        self.assertFalse((self.root / "memory" / "facts.md").exists())
+        self.assertEqual(self.journal(), before)                              # no journal entry
+        self.assertFalse((self.root / "memory" / "episodes").exists())       # no episode
+        offered = {t["function"]["name"] for t in self.fake.requests[0]["tools"]}
+        self.assertNotIn("remember", offered)
+        self.assertNotIn("update_personality", offered)
+        self.assertIn("submit_answer", offered)
+
+    def test_exam_does_not_read_the_inbox(self):
+        (self.root / "inbox").mkdir()
+        (self.root / "inbox" / "20261013-from-operator.md").write_text("INBOX-CANARY")
+        r = self.run_agent([{"tool_calls": [("submit_answer", {"answer": "4"})]}], "exam",
+                           stdin=json.dumps({**self.TASK, "prompt": "What is 2+2?"}))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("INBOX-CANARY", json.dumps(self.fake.requests[0]["messages"]))
+        self.assertTrue((self.root / "inbox" / "20261013-from-operator.md").exists())   # not archived
 
 
 class SandboxInvariants(InstanceCase):

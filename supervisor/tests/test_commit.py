@@ -170,10 +170,8 @@ class RecordToolTest(unittest.TestCase):
         self.assertNotIn("tick: y", out["runs"])
 
 
-class UpdateNoteTest(unittest.TestCase):
-    """Regression (2026-10-13): `shaft update` merged template changes without a word to the instance, so it
-    never learned its own code had changed — shaft's self-model still said "no embeddings, no vector DB" and
-    "wakes me every 2 hours" after hybrid search was merged and its wake interval was 10 minutes."""
+class UpdateCase(unittest.TestCase):
+    """An instance worktree x branched from a template, with `shaft update` run against them."""
 
     def setUp(self):
         from unittest import mock
@@ -218,6 +216,12 @@ class UpdateNoteTest(unittest.TestCase):
             code = self.cli.cmd_update(["x"])
         return code, out.getvalue()
 
+
+class UpdateNoteTest(UpdateCase):
+    """Regression (2026-10-13): `shaft update` merged template changes without a word to the instance, so it
+    never learned its own code had changed — shaft's self-model still said "no embeddings, no vector DB" and
+    "wakes me every 2 hours" after hybrid search was merged and its wake interval was 10 minutes."""
+
     def test_an_update_leaves_one_note_naming_the_merged_commits(self):
         self.template_change("template: hybrid embedding search", "template: wake every 10 minutes")
         code, out = self.update()
@@ -248,3 +252,72 @@ class UpdateNoteTest(unittest.TestCase):
         self.assertIn("rolled back", out)
         self.assertEqual(git(self.root, "rev-parse", "HEAD"), head)
         self.assertEqual(self.notes(), 0)
+
+
+class UpdateKeepsUncommittedWorkTest(UpdateCase):
+    """Regression (2026-10-13): a merged template that failed the gate was rolled back with `reset --hard`,
+    which also threw away every uncommitted edit in the instance's worktree — wren and kant both had an
+    uncommitted config.env while updates ran (` M config.env`, WAKE_INTERVAL_MINUTES 120 -> 10)."""
+
+    def setUp(self):
+        super().setUp()
+        (self.root / "config.env").write_text("WAKE_INTERVAL_MINUTES=120\n")
+        git(self.root, "add", "config.env")
+        git(self.root, "commit", "-q", "-m", "x: config")
+        (self.root / "config.env").write_text("WAKE_INTERVAL_MINUTES=10\n")      # the operator's uncommitted edit
+
+    def failing_update(self, side_effect=None):
+        from unittest import mock
+        self.gate.stop()
+        with mock.patch.object(self.cli.gate, "run_tests", return_value=(False, "boom"),
+                               side_effect=side_effect) as run:
+            code, out = self.update()
+        self.gate.start()
+        return code, out, run
+
+    def test_an_uncommitted_edit_survives_a_template_change_that_fails_the_gate(self):
+        self.template_change("template: broken change")
+        head = git(self.root, "rev-parse", "HEAD")
+        code, out, run = self.failing_update()
+        self.assertEqual((self.root / "config.env").read_text(), "WAKE_INTERVAL_MINUTES=10\n", out)
+        self.assertEqual(code, 1, out)
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), head)
+        self.assertEqual((self.root / "shaft" / "agent.py").read_text(), "v = 1\n")    # the merge never landed
+
+    def test_update_refuses_and_names_the_uncommitted_files(self):
+        self.template_change("template: fine change")
+        self.gate.stop()
+        from unittest import mock
+        with mock.patch.object(self.cli.gate, "run_tests", return_value=(True, "ok")) as run:
+            code, out = self.update()
+        self.gate.start()
+        self.assertEqual(code, 1, out)
+        self.assertIn("config.env", out)
+        self.assertIn("uncommitted", out)
+        run.assert_not_called()                                    # nothing merged, nothing tested
+        self.assertEqual((self.root / "shaft" / "agent.py").read_text(), "v = 1\n")
+        self.assertEqual((self.root / "config.env").read_text(), "WAKE_INTERVAL_MINUTES=10\n")
+
+    def test_untracked_files_do_not_block_an_update(self):
+        # An untracked file can be lost by neither the merge (git refuses to overwrite it) nor the rollback.
+        git(self.root, "checkout", "--", "config.env")
+        (self.root / "scratch.txt").write_text("mine\n")
+        self.template_change("template: fine change")
+        code, out = self.update()
+        self.assertEqual(code, 0, out)
+        self.assertEqual((self.root / "shaft" / "agent.py").read_text(), "v = 'template: fine change'\n")
+        self.assertEqual((self.root / "scratch.txt").read_text(), "mine\n")
+
+    def test_rollback_keeps_a_file_written_while_the_gate_ran(self):
+        # The rollback must undo only the merge: an edit made to a merged file during the gate is kept (git
+        # refuses `reset --keep`) and the operator is told, rather than silently discarded by `reset --hard`.
+        git(self.root, "checkout", "--", "config.env")
+        self.template_change("template: broken change")
+
+        def edit_during_gate(*_):
+            (self.root / "shaft" / "agent.py").write_text("v = 'edited during the gate'\n")
+            return False, "boom"
+        code, out, _ = self.failing_update(edit_during_gate)
+        self.assertEqual(code, 1, out)
+        self.assertEqual((self.root / "shaft" / "agent.py").read_text(), "v = 'edited during the gate'\n")
+        self.assertIn("could not roll back", out)

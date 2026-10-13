@@ -61,6 +61,33 @@ class InstanceTestsTest(unittest.TestCase):
         self.assertTrue(ok, out)
         self.assertIn("Ran 1 test", out)
 
+    def _run(self, files: dict[str, str]):
+        import os
+        import sys
+        from supervisor import sandbox
+        root = Path(tempfile.mkdtemp(prefix="shaft-itests-")).resolve()
+        self.addCleanup(shutil.rmtree, root, True)
+        (root / "tests").mkdir()
+        for rel, text in files.items():
+            (root / "tests" / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / "tests" / rel).write_text(text)
+        prof = root / "p.sb"
+        prof.write_text(sandbox.profile(root, Path.home(), []))
+        return gate.run_instance_tests(root, prof, sandbox.agent_env(os.environ, TMPDIR=str(root)), sys.executable)
+
+    def test_a_tests_folder_with_no_tests_passes(self):
+        # Regression (2026-10-13): kant's tests/ held only a stale __pycache__. unittest exits 5 ("NO TESTS
+        # RAN"), the gate read that as a failure, and every template update and every change kant made to its
+        # own code was rolled back.
+        ok, out = self._run({"__pycache__/x.cpython-312.pyc": ""})
+        self.assertTrue(ok, out)
+        self.assertIn("no tests", out)
+
+    def test_a_test_file_that_cannot_import_still_fails(self):
+        # "No tests" must not swallow a broken test: an import error is a failed test, not an empty folder.
+        ok, out = self._run({"test_broken.py": "import does_not_exist\n"})
+        self.assertFalse(ok, out)
+
 
 if __name__ == "__main__":
     unittest.main()

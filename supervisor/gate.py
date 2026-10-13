@@ -82,6 +82,9 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = 900) -> tuple[bo
     return ok, "\n".join(outputs)
 
 
+NO_TESTS_RAN = 5   # unittest's exit code when discovery finds no tests (Python 3.12+)
+
+
 def run_instance_tests(instance_root: Path, prof: Path, env: dict, py: str, timeout_s: int = 900) -> tuple[bool, str]:
     """The instance's own tests, inside its sandbox. `-t .` only when tests/ is a package:
     a plain folder of test files must work too (a correct coder-written test was rejected
@@ -90,4 +93,8 @@ def run_instance_tests(instance_root: Path, prof: Path, env: dict, py: str, time
     agent = subprocess.run(
         sandbox.wrap(prof, [py, "-E", "-s", "-m", "unittest", "discover", "-s", "tests", *top]),
         cwd=instance_root, env=env, capture_output=True, text=True, timeout=timeout_s)
+    if agent.returncode == NO_TESTS_RAN:
+        # A tests/ folder with nothing in it (kant's held only a stale __pycache__) is not a failing suite: read as
+        # one, it rolled back every update and self-change. A test file that fails to import still fails (exit 1).
+        return True, agent.stderr[-3000:] + "\n(no tests in tests/: nothing to fail)"
     return agent.returncode == 0, agent.stderr[-3000:]

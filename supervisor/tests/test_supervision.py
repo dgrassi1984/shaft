@@ -122,7 +122,7 @@ class CloudTranslationTest(unittest.TestCase):
     def test_disallowed_model_and_budget_refused_before_any_call(self):
         from supervisor import cloudllm
         with self.assertRaises(cloudllm.CloudError) as ctx:
-            cloudllm.complete("x", {"model": "claude-opus-5-5", "messages": []}, {"ANTHROPIC_API_KEY": "key"}, {})
+            cloudllm.complete("x", {"model": "claude-fable-5-1", "messages": []}, {"ANTHROPIC_API_KEY": "key"}, {})
         self.assertEqual(ctx.exception.status, 403)
         with mock.patch.object(cloudllm, "spent_today", return_value=cloudllm.DAILY_USD):
             with self.assertRaises(cloudllm.CloudError) as ctx:
@@ -269,7 +269,9 @@ class ProbationTest(unittest.TestCase):
 
     def run_probation(self, after: list[str]):
         from supervisor import core
-        js = [{"criterion_met": "yes"}] * 3 + [{"criterion_met": m} for m in after]
+        # every cycle rated difficulty 3: these tests pin the revert mechanics; what probation measures
+        # (achieved difficulty, not raw success) is pinned in test_measurement.ProbationMeasureTest
+        js = [{"criterion_met": "yes", "difficulty": 3}] * 3 + [{"criterion_met": m, "difficulty": 3} for m in after]
         wt = lambda root, *a, **k: core.git_wt(root, *a, **{**k, "project": self.project})  # noqa: E731
         with mock.patch.object(metrics, "INSTANCES", self.project / "instances"), \
              mock.patch.object(metrics, "judgments", return_value=js[:3]), mock.patch.object(metrics, "git_wt", wt):

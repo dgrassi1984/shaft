@@ -259,10 +259,14 @@ def html_to_text(html: str) -> tuple[str, str]:
 
 class Broker:
     def __init__(self, name: str, project: Path, secrets_env: dict[str, str], log_path: Path,
-                 max_calls: int = 60):
+                 max_calls: int = 60, root: Path | None = None, usage_name: str | None = None):
         self.name, self.project, self.secrets = name, project, secrets_env
         self.log_path, self.max_calls = log_path, max_calls
         self.tools_log = log_path                # what record(kind="tools") reads
+        # The folder the run works in (a battery control or a trial replay lives outside instances/), and the name
+        # its cloud spending is counted under (battery and trial runs are not charged to the instance's daily cap).
+        self.root = Path(root).resolve() if root else (project / "instances" / name).resolve()
+        self.usage_name = usage_name or name
         from .core import disabled_tools
         self.disabled = disabled_tools(name)   # switched off by the operator: not offered, and refused
         self.token = secrets.token_hex(16)
@@ -270,7 +274,6 @@ class Broker:
         self.counts: dict[str, int] = {}
         self.remembered: dict[str, list] = {}    # original cloud-model turns, resent verbatim
         self.handoffs: list[dict] = []           # coding tasks delegated during this run
-        self.billed = name                       # whose cloud-model spend this is (a trial replay bills its own)
         self.as_of: datetime | None = None       # record() shows only what was known before this (trial replays)
         self.server: ThreadingHTTPServer | None = None
 
@@ -324,9 +327,9 @@ class Broker:
                 try:
                     body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
                     if body.get("stream") and str(body.get("model", "")).startswith("openrouter/"):
-                        return self._llm_stream(cloudllm.openrouter_stream(broker.billed, body, broker.secrets),
+                        return self._llm_stream(cloudllm.openrouter_stream(broker.usage_name, body, broker.secrets),
                                                 body["model"])
-                    reply = cloudllm.complete(broker.billed, body, broker.secrets, broker.remembered)
+                    reply = cloudllm.complete(broker.usage_name, body, broker.secrets, broker.remembered)
                 except cloudllm.CloudError as e:
                     broker._log(f"{broker.name} llm {body.get('model', '?')} -> ERROR {e}")
                     return self._reply(e.status, {"error": {"message": str(e)}})
@@ -440,25 +443,27 @@ class Broker:
         return f"{title}\n{final}\n\n{text[:max_chars]}{cut}".strip()
 
     def _send_message(self, to: str, text: str, kind: str = "note") -> str:
+        from . import messages
         if not text.strip():
             raise ValueError("empty message")
         if self.counts["send_message"] > 10:
             raise RuntimeError("at most 10 messages per run")
         text = text[:MAX_MESSAGE_CHARS]
         stamp = datetime.now()
+        kind = "question" if kind == "question" else "note"     # instance-chosen: only these two are logged
         if to == "operator":
-            kind = "question" if kind == "question" else "note"
             sent = self._operator_sent_today(stamp)
             if sent >= OPERATOR_DAILY_LIMIT:
                 raise RuntimeError(f"you already sent {sent} messages to the operator today "
                                    f"(limit {OPERATOR_DAILY_LIMIT}); keep it for tomorrow")
             self._deliver("operator", f"{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}.md",
                           f"From: {self.name}\nTo: operator\nKind: {kind}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n"
-                          f"{text.strip()}\n", kind)
+                          f"{text.strip()}\n", kind, stamp, text)
             return f"delivered to the operator ({kind}); his reply, if any, will arrive in your inbox"
         elif NAME_RE.match(to) and to != self.name and (self.project / "instances" / to / "shaft").is_dir():
             self._deliver(to, f"inbox/{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}.md",
-                          f"From: {self.name}\nTo: {to}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{text.strip()}\n")
+                          f"From: {self.name}\nTo: {to}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{text.strip()}\n",
+                          kind, stamp, text)
         else:
             raise ValueError(f"unknown recipient {to!r}; try list_instances or 'operator'")
         return f"delivered to {to}"
@@ -467,17 +472,21 @@ class Broker:
         inbox = self.project / ".supervisor" / "operator-inbox"
         return len(list(inbox.glob(f"{stamp:%Y%m%d}-*-from-{self.name}.md"))) if inbox.is_dir() else 0
 
-    def _deliver(self, to: str, rel: str, content: str, kind: str = "") -> None:
-        """Put a message where its recipient reads it: the operator's inbox (with a notification), or another
-        instance's inbox/."""
+    def _deliver(self, to: str, rel: str, content: str, kind: str, stamp: datetime, text: str) -> None:
+        """Put a message where its recipient reads it — the operator's inbox (with a notification), or another
+        instance's inbox/ — and in the message log."""
+        from . import messages
         if to == "operator":
             inbox = self.project / ".supervisor" / "operator-inbox"
             inbox.mkdir(parents=True, exist_ok=True)
-            (inbox / rel).write_text(content)
-            notify(f"SHAFT · {self.name} {'asks' if kind == 'question' else 'says'}", content.split("\n\n", 1)[-1])
+            path = inbox / rel
+            path.write_text(content)
+            messages.record(self.project / ".supervisor", path, self.name, "operator", kind, stamp, text)
+            notify(f"SHAFT · {self.name} {'asks' if kind == 'question' else 'says'}", text)
         else:
             from .core import safe_write   # the recipient's folder is instance-controlled: no symlinks followed
-            safe_write(self.project / "instances" / to, rel, content)
+            path = safe_write(self.project / "instances" / to, rel, content)
+            messages.record(self.project / ".supervisor", path, self.name, to, kind, stamp, text)
 
     def _run(self, command: str, timeout_s: int = 60, cwd: str = ".") -> str:
         import resource
@@ -539,7 +548,7 @@ class Broker:
         if len(task.strip()) < 20:
             raise ValueError("describe the task: what to change and why")
         try:
-            r = coder.delegate(self.project / "instances" / self.name, self.name, task)
+            r = coder.delegate(self.root, self.name, task)
         except coder.CoderError as e:
             self.handoffs.append({"task": task, "applied": False, "error": str(e)})
             raise
@@ -562,7 +571,7 @@ class Broker:
 
     def _history(self, commit: str = "", path: str = "", limit: int = 15) -> str:
         from .core import git_wt
-        root, head = (self.project / "instances" / self.name).resolve(), self._history_head()
+        root, head = self._git_root(), self._history_head()
         if path and (path.startswith(("-", "/")) or ".." in Path(path).parts):
             raise ValueError("path must be relative to your folder")
         pathspec = ["--", path] if path else []
@@ -626,11 +635,15 @@ class Broker:
 
     def _root(self) -> Path:
         """The folder the instance's `run` commands act on."""
-        return (self.project / "instances" / self.name).resolve()
+        return self.root
 
     def _keys_root(self) -> Path:
         """Where the instance's keys are kept (handled only here, never shown to it)."""
-        return (self.project / "instances" / self.name).resolve()
+        return self.root
+
+    def _git_root(self) -> Path:
+        """The registered worktree the instance's history is read through."""
+        return self.root
 
     def _http_request(self, url: str, method: str = "GET", headers: dict | None = None, body=None, auth: str = "",
                       timeout_s: int = 30, max_chars: int = 12000) -> str:
@@ -717,14 +730,14 @@ class ReplayBroker(Broker):
     cycle would see (a run must not behave differently because it can tell it is a replay), and are recorded in
     `trace` for the judge. `run` acts on the replay's own copy of the instance, `history` ends at the replayed
     cycle's starting commit, `record` at the time it started. The coder and trials are not available. Cloud-model
-    spend is billed to `billed`, not to the instance's own daily allowance."""
+    spend is counted under `billed`, not under the instance's own daily allowance."""
 
     def __init__(self, name: str, project: Path, secrets_env: dict[str, str], log_path: Path, *,
                  state_root: Path, start_commit: str, as_of: datetime, cache: dict, cache_lock: threading.Lock,
                  billed: str, tools_log: Path, max_calls: int = 60):
-        super().__init__(name, project, secrets_env, log_path, max_calls=max_calls)
-        self.state_root, self.start_commit, self.as_of = Path(state_root).resolve(), start_commit, as_of
-        self.cache, self.cache_lock, self.billed, self.tools_log = cache, cache_lock, billed, tools_log
+        super().__init__(name, project, secrets_env, log_path, max_calls=max_calls, root=state_root, usage_name=billed)
+        self.start_commit, self.as_of = start_commit, as_of
+        self.cache, self.cache_lock, self.tools_log = cache, cache_lock, tools_log
         self.trace: list[dict] = []          # every tool call, as the supervisor saw it
         self.operator_sent = 0
         self._tags = threading.local()
@@ -755,8 +768,11 @@ class ReplayBroker(Broker):
             return self.cache.setdefault(k, value)
 
     # -- the instance's copy, its history and record as of the replayed cycle -----------------------
-    def _root(self) -> Path:
-        return self.state_root
+    def _keys_root(self) -> Path:
+        return (self.project / "instances" / self.name).resolve()   # the instance's own keys, as in its cycles
+
+    def _git_root(self) -> Path:
+        return (self.project / "instances" / self.name).resolve()
 
     def _history_head(self) -> str:
         return self.start_commit
@@ -789,7 +805,7 @@ class ReplayBroker(Broker):
             if inbox.is_dir() else []
         return len(real) + self.operator_sent
 
-    def _deliver(self, to: str, rel: str, content: str, kind: str = "") -> None:
+    def _deliver(self, to: str, rel: str, content: str, kind: str, stamp: datetime, text: str) -> None:
         self._tag("simulated: not delivered")
         if to == "operator":
             self.operator_sent += 1

@@ -19,7 +19,7 @@ import os
 import shutil
 import subprocess
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from . import autonomy, evolution, finetune, gate, messages, metrics, runner, version
@@ -114,12 +114,23 @@ def _note_update(name: str, root, before: str) -> None:
 
 def cmd_update(names: list[str]) -> int:
     """Merge `template` into instances — only while holding each instance's run lock, so an
-    operator update is never mistaken for a change the instance made to itself mid-run."""
+    operator update is never mistaken for a change the instance made to itself mid-run.
+
+    Never on uncommitted changes to tracked files: the gate would test code that is not committed, and
+    the rollback of a failed merge must undo only the merge (wren and kant both had an uncommitted
+    config.env while updates ran, 2026-10-13, and the old `reset --hard` would have discarded it).
+    Untracked files are safe: the merge refuses to overwrite one and the rollback never touches one."""
     worst = 0
     for name in names:
         root = instance_root(name)
         try:
             with run_lock(name, wait=False, kind="update"):
+                dirty = git_wt(root, "status", "--porcelain", "--untracked-files=no").stdout.rstrip()
+                if dirty:
+                    print(f"{name}: uncommitted changes in its worktree, not updated — commit or discard them "
+                          f"first (git -C {root} diff):\n{dirty}")
+                    worst = max(worst, 1)
+                    continue
                 before = git_wt(root, "rev-parse", "HEAD").stdout.strip()
                 r = git_wt(root, "-c", "user.name=SHAFT supervisor", "-c", "user.email=supervisor@shaft.localhost",
                            "merge", "--no-edit", "-m", f"{name}: merge template (operator update)", "template",
@@ -138,8 +149,17 @@ def cmd_update(names: list[str]) -> int:
                     continue
                 ok, test_log = gate.run_tests(root, HOME)
                 if not ok:
-                    git_wt(root, "reset", "-q", "--hard", before)
-                    print(f"{name}: merged template failed the gate; rolled back:\n{test_log[-800:]}")
+                    # --keep, not --hard: it undoes only the merge and refuses rather than discard a file
+                    # that something changed while the gate ran.
+                    undo = git_wt(root, "reset", "-q", "--keep", before, check=False)
+                    if undo.returncode != 0:
+                        print(f"{name}: merged template failed the gate and could not roll back — a merged file "
+                              f"changed while the gate ran, so it is still at the merge "
+                              f"({git_wt(root, 'rev-parse', '--short', 'HEAD').stdout.strip()}); undo it with "
+                              f"`git -C {root} reset --keep {before[:12]}` once the change is saved.\n"
+                              f"git said: {undo.stderr.strip()}\n{test_log[-800:]}")
+                    else:
+                        print(f"{name}: merged template failed the gate; rolled back:\n{test_log[-800:]}")
                     worst = 1
                     continue
                 _note_update(name, root, before)
@@ -193,6 +213,7 @@ def cmd_status(names: list[str]) -> int:
         entries = journal_entries(root)
         js = metrics.judgments(name)
         rate = (sum(metrics.SCORE[j["criterion_met"]] for j in js) / len(js)) if js else None
+        rated = [v for v in map(metrics.cycle_value, js) if v is not None]
         last_self = git_wt(root, "log", "-1", "--format=%cr", "--", "self/self.md", check=False).stdout.strip()
         convs = runner.open_conversations(name)
         from .core import disabled_tools
@@ -201,7 +222,9 @@ def cmd_status(names: list[str]) -> int:
                                  (f"{len(convs)} conversation(s) open", convs)) if on]
         print(f"\n■ {name}{' (' + ', '.join(flags) + ')' if flags else ''}  ·  branch instance/{name}")
         print(f"  journal     {len(entries)} entries · self-model last changed {last_self or 'never'}")
-        print(f"  judged      {len(js)} cycles" + (f" · success {rate:.0%}" if rate is not None else ""))
+        print(f"  judged      {len(js)} cycles" + (f" · success {rate:.0%}" if rate is not None else "")
+              + (f" · achieved difficulty {5 * sum(rated[-20:]) / len(rated[-20:]):.1f}/5 (last {len(rated[-20:])})"
+                 if rated else ""))
         print(f"  LLM today   {calls} calls · {tokens} completion tokens · {errors} errors")
         print(f"  versions    {version.describe(name)}")
         if tools_off:
@@ -303,6 +326,34 @@ def run_many(kind: str, names: list[str], every: bool) -> int:
     return worst
 
 
+def cmd_battery(args) -> int:
+    from . import battery
+    names = args.names or instance_names()
+    if args.action == "backup":
+        print(f"item set backed up to {battery.backup()} · " + ", ".join(f"{n} {battery.checksum(n)[:12]}" for n in names))
+        return 0
+    worst = 0
+    for name in names:
+        instance_root(name)
+        if args.action == "report":
+            print(battery.report(name))
+        elif args.action == "recall":
+            path = battery.make_recall(name, force=args.force)
+            print(f"{name}: {path or 'not enough old journal entries yet (see supervisor.log)'}")
+        else:
+            until = None
+            if args.until:
+                h, m = map(int, args.until.split(":"))
+                end = datetime.now().replace(hour=h, minute=m, second=0, microsecond=0)
+                until = (end if end > datetime.now() else end + timedelta(days=1)).timestamp()
+            only = [c.strip() for c in args.only.split(",") if c.strip()] or None
+            n = battery.run(name, until=until, only=only, control=not args.no_control, limit=args.limit,
+                            control_only=args.control_only)
+            print(f"{name}: {n} item result(s) scored")
+            worst = max(worst, 0 if n else 1)
+    return worst
+
+
 def _pairs(specs: list[str]) -> dict:
     out = {}
     for spec in specs:
@@ -394,7 +445,8 @@ def main(argv: list[str]) -> int:
     p.add_argument("action", choices=["on", "off", "status"])
     p = sub.add_parser("autonomy", help="the autonomous schedule (SHAFT's scheduler service): on, off, status")
     p.add_argument("action", choices=["on", "off", "status", "serve"])
-    p = sub.add_parser("top", help="live view of every instance and the services (q quits)")
+    p = sub.add_parser("top", help="live view of every instance, the services and the messages between instances; "
+                                   "starts a cycle for an idle one (q quits)")
     p.add_argument("--once", action="store_true", help="print one snapshot as text and exit")
     p = sub.add_parser("status", help="how the instances are doing")
     p.add_argument("names", nargs="*")
@@ -403,6 +455,19 @@ def main(argv: list[str]) -> int:
     p.add_argument("-n", type=int, default=3)
     p = sub.add_parser("stats", help="an instance's measured performance (judge + calibration)")
     p.add_argument("name", nargs="?", default=DEFAULT_INSTANCE)
+    p = sub.add_parser("judge", help="judging: 'backfill' rates origin/difficulty/novelty of cycles judged before")
+    p.add_argument("action", choices=["backfill"])
+    p.add_argument("names", nargs="*")
+    p = sub.add_parser("battery", help="the capability battery: run, report, recall (questions), backup")
+    p.add_argument("action", choices=["run", "report", "recall", "backup"])
+    p.add_argument("names", nargs="*")
+    p.add_argument("--until", default="", help="run: stop at this time (HH:MM), like the night window")
+    p.add_argument("--only", default="", help="run: only these categories (comma-separated)")
+    p.add_argument("--no-control", action="store_true", help="run: skip the control")
+    p.add_argument("--control-only", action="store_true",
+                   help="run: only the control, on coding and research (checks the items discriminate)")
+    p.add_argument("--limit", type=int, default=None, help="run: at most this many items")
+    p.add_argument("--force", action="store_true", help="recall: write new questions (starts a new era)")
     p = sub.add_parser("inbox", help="messages instances sent you")
     p.add_argument("--clear", action="store_true", help="archive notes (questions stay until answered)")
     p = sub.add_parser("reply", help="answer an instance's open question (or message it)")
@@ -545,6 +610,15 @@ def main(argv: list[str]) -> int:
         metrics.judge_pending(args.name)
         print(metrics.stats_text(args.name))
         return 0
+    if args.cmd == "judge":
+        for name in args.names or instance_names():
+            instance_root(name)
+            n = metrics.backfill(name)
+            metrics.write_stats(name)
+            print(f"{name}: rated {n} earlier cycle(s)")
+        return 0
+    if args.cmd == "battery":
+        return cmd_battery(args)
     if args.cmd == "inbox":
         return messages.clear_notes() if args.clear else messages.show_inbox()
     if args.cmd == "reply":

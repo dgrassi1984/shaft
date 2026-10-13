@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import plistlib
+import signal
 import subprocess
 import sys
 import time
@@ -101,8 +102,12 @@ def describe_schedule(name: str, config: dict[str, str] | None = None) -> str:
              f"config.env, at least {WAKE_FLOOR_MIN}; a wake that comes while you are already awake — a cycle, a "
              f"conversation, your sleep — is skipped)") if interval else \
         "does not wake you for cycles (WAKE_INTERVAL_MINUTES=0 in your config.env)"
+    from . import battery
+    night = (f" Some nights between {battery.WINDOW_START[0]:02d}:{battery.WINDOW_START[1]:02d} and your sleep it "
+             f"runs its capability battery on you — fixed tasks, scored, nothing kept in your files — so a wake "
+             f"in that window may be skipped." if battery.EVERY_DAYS > 0 else "")
     return (f"The supervisor {wakes}, and runs your sleep cycle every day at {SLEEP_AT[0]:02d}:{SLEEP_AT[1]:02d} "
-            f"(a missed sleep is made up later that day). Within a cycle, what you do is up to you.")
+            f"(a missed sleep is made up later that day).{night} Within a cycle, what you do is up to you.")
 
 
 def _state() -> dict:
@@ -174,6 +179,7 @@ def serve(poll_s: int = 30) -> int:
                 del children[job]
         if not (SUP_DIR / "paused").exists():
             st, now = _state(), datetime.now()
+            _batteries(children, now, sleep_due(now, st))
             if sleep_due(now, st) and "sleep" not in children:
                 children["sleep"] = (_start(["sleep", "--all"]), time.monotonic())
             names = [n for n in instance_names() if not paused(n)]
@@ -192,6 +198,35 @@ def serve(poll_s: int = 30) -> int:
         time.sleep(poll_s)
 
 
+def battery_jobs(children: dict, now: datetime, sleeping_due: bool, names: list[str], due, awake_of) \
+        -> tuple[list[str], list[str]]:
+    """(battery jobs to stop, instances whose battery to start). Pure: the scheduler's battery rule. A battery
+    runs only inside the night window, which closes before the sleep (Daniele, 2026-10-13: never in the
+    sleep's way); a due sleep or the window's end stops one that is still running."""
+    from . import battery
+    _, end = battery.window(now)
+    stop = [job for job in children if job.startswith("battery ") and (now >= end or sleeping_due)]
+    start = [] if sleeping_due else [n for n in names if f"battery {n}" not in children and due(n, now)
+                                     and not awake_of(n)]
+    return stop, start
+
+
+def _batteries(children: dict, now: datetime, sleeping_due: bool) -> None:
+    from . import battery
+    names = [n for n in instance_names() if not paused(n)]
+    stop, start = battery_jobs(children, now, sleeping_due, names, battery.due, _awake)
+    for job in stop:
+        proc, _ = children[job]
+        if proc.poll() is None and not getattr(proc, "stopping", False):
+            proc.send_signal(signal.SIGTERM)   # it stops its current item, restores the instance's files
+            proc.stopping = True
+            log(f"scheduler: stopping {job} — {'a sleep is due' if sleeping_due else 'the night window closed'}")
+    _, end = battery.window(now)
+    for name in start:
+        children[f"battery {name}"] = (_start(["battery", "run", name, "--until", f"{end:%H:%M}"]),
+                                       time.monotonic())
+
+
 def _start(args: list[str]) -> subprocess.Popen:
     log(f"scheduler: starting {' '.join(args)}")
     return subprocess.Popen([PYTHON, "-E", "-s", "-m", "supervisor", *args], cwd=PROJECT, stdin=subprocess.DEVNULL,
@@ -206,6 +241,21 @@ def wake(name: str) -> int:
     except Busy:
         log(f"{name}: wake skipped — it is already awake ({_awake(name) or 'another run'})")
         return 0
+
+
+def start_wake(name: str) -> str:
+    """By hand from `shaft top`: one wake of an idle instance, started detached (it outlives the TUI and counts
+    as the instance's wake, so the scheduler's next one is a full interval later). Refuses, with the reason,
+    an instance that is paused or already awake."""
+    if paused(name):
+        raise RuntimeError(f"{name} is paused (shaft resume {name})")
+    if (why := _awake(name)):
+        raise RuntimeError(f"{name} is already awake ({why})")
+    log(f"top: operator started a cycle for {name}")
+    with (SUP_DIR / f"manual-wake-{name}.log").open("a") as out:
+        subprocess.Popen([PYTHON, "-E", "-s", "-m", "supervisor", "wake", name], cwd=PROJECT,
+                         stdin=subprocess.DEVNULL, stdout=out, stderr=out, start_new_session=True)
+    return f"started a cycle for {name}"
 
 
 def tick() -> int:
