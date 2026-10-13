@@ -6,12 +6,16 @@ replaced only through an explicit, validated edit (see selfedit.py).
 from __future__ import annotations
 
 import json
+import re
 import os
 import tempfile
 from datetime import datetime
 from pathlib import Path
 
 ENTRY_SEPARATOR = "\n---\n"
+
+
+DATED_HEADING = re.compile(r"\A#{1,6}[ \t]*\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}[^\n]*\n+")
 
 
 class State:
@@ -63,6 +67,9 @@ class State:
     def append_journal(self, title: str, body: str, when: datetime | None = None) -> None:
         when = when or datetime.now()
         self.journal.parent.mkdir(parents=True, exist_ok=True)
+        # A model sometimes opens its text with a dated heading of its own ("## 2026-10-13 10:09 — ..."):
+        # the journal already writes one, so drop the copy (section headings like "## What happened" stay).
+        body = DATED_HEADING.sub("", body.strip())
         entry = f"{ENTRY_SEPARATOR}## {when:%Y-%m-%d %H:%M} — {title}\n\n{body.strip()}\n"
         with self.journal.open("a") as f:
             f.write(entry)

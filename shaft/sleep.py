@@ -30,7 +30,7 @@ def run(cfg, state: State, client: Client) -> str:
         state.append_journal("Sleep (unfinished)", summary)
         state.append_episode({"kind": "sleep", "ended_by": outcome.ended_by, "tools": toolbox.log})
         raise LLMError(summary)
-    entry = re.sub(r"\A#{1,6} [^\n]*\n+", "", outcome.reply.content.strip())   # the journal adds the heading
+    entry = outcome.reply.content.strip()
     entry += "\n\n*Consolidation actions:* " + ("; ".join(changes) or "none")
     state.append_journal("Sleep", entry)
     state.append_episode({"kind": "sleep", "ended_by": outcome.ended_by, "tools": toolbox.log,
