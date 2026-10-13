@@ -113,12 +113,23 @@ def _note_update(name: str, root, before: str) -> None:
 
 def cmd_update(names: list[str]) -> int:
     """Merge `template` into instances — only while holding each instance's run lock, so an
-    operator update is never mistaken for a change the instance made to itself mid-run."""
+    operator update is never mistaken for a change the instance made to itself mid-run.
+
+    Never on uncommitted changes to tracked files: the gate would test code that is not committed, and
+    the rollback of a failed merge must undo only the merge (wren and kant both had an uncommitted
+    config.env while updates ran, 2026-10-13, and the old `reset --hard` would have discarded it).
+    Untracked files are safe: the merge refuses to overwrite one and the rollback never touches one."""
     worst = 0
     for name in names:
         root = instance_root(name)
         try:
             with run_lock(name, wait=False, kind="update"):
+                dirty = git_wt(root, "status", "--porcelain", "--untracked-files=no").stdout.rstrip()
+                if dirty:
+                    print(f"{name}: uncommitted changes in its worktree, not updated — commit or discard them "
+                          f"first (git -C {root} diff):\n{dirty}")
+                    worst = max(worst, 1)
+                    continue
                 before = git_wt(root, "rev-parse", "HEAD").stdout.strip()
                 r = git_wt(root, "-c", "user.name=SHAFT supervisor", "-c", "user.email=supervisor@shaft.localhost",
                            "merge", "--no-edit", "-m", f"{name}: merge template (operator update)", "template",
@@ -137,8 +148,17 @@ def cmd_update(names: list[str]) -> int:
                     continue
                 ok, test_log = gate.run_tests(root, HOME)
                 if not ok:
-                    git_wt(root, "reset", "-q", "--hard", before)
-                    print(f"{name}: merged template failed the gate; rolled back:\n{test_log[-800:]}")
+                    # --keep, not --hard: it undoes only the merge and refuses rather than discard a file
+                    # that something changed while the gate ran.
+                    undo = git_wt(root, "reset", "-q", "--keep", before, check=False)
+                    if undo.returncode != 0:
+                        print(f"{name}: merged template failed the gate and could not roll back — a merged file "
+                              f"changed while the gate ran, so it is still at the merge "
+                              f"({git_wt(root, 'rev-parse', '--short', 'HEAD').stdout.strip()}); undo it with "
+                              f"`git -C {root} reset --keep {before[:12]}` once the change is saved.\n"
+                              f"git said: {undo.stderr.strip()}\n{test_log[-800:]}")
+                    else:
+                        print(f"{name}: merged template failed the gate; rolled back:\n{test_log[-800:]}")
                     worst = 1
                     continue
                 _note_update(name, root, before)
