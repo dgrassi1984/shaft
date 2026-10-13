@@ -13,6 +13,7 @@ Two front ends share one conversation loop:
 from __future__ import annotations
 
 import json
+import time
 import re
 import sys
 import uuid
@@ -69,6 +70,9 @@ class TerminalView:
         self._out(f"{DIM}{info['name']} · {info['model']} · {info['journal_entries']} journal entries · "
                   f"{info['tools']} tools\nCtrl-C stops a reply · Ctrl-C at the prompt, Ctrl-D or /exit ends "
                   f"the conversation{RESET}\n\n")
+
+    def usage(self, **numbers) -> None:   # the plain terminal shows speed in its status line only
+        pass
 
     def next_message(self) -> str | None:
         try:
@@ -149,6 +153,10 @@ class JsonView:
     def ready(self, info: dict) -> None:
         self._emit(type="ready", **info)
 
+    def usage(self, **numbers) -> None:
+        """One model call's numbers, for the client's status bar."""
+        self._emit(type="usage", **numbers)
+
     def next_message(self) -> str | None:
         while True:
             try:
@@ -220,7 +228,8 @@ def run(cfg, state: State, client: Client, show_thinking: bool = False, input_fn
         system += "\n\n## Recent conversations I have not written up yet (transcripts)\n\n" + unwritten
     history: list[dict] = []
     _, _, total = state.recent_journal(cfg.CONTEXT_JOURNAL_CHARS)
-    view.ready({"name": cfg.NAME, "model": cfg.LLM_MODEL, "journal_entries": total, "tools": len(toolbox.specs())})
+    view.ready({"name": cfg.NAME, "model": cfg.LLM_MODEL, "journal_entries": total, "tools": len(toolbox.specs()),
+                "context_tokens": cfg.LLM_CONTEXT_TOKENS})
 
     while True:
         user = view.next_message()
@@ -303,9 +312,26 @@ def _respond(client: Client, cfg, toolbox: Toolbox, messages: list[dict], view):
                     f"{chars / 1000:.1f}k chars" if chars >= 1000 else f"{chars} chars")
 
     def call(msgs, t=tools):
-        return client.stream(msgs, cfg.MAX_TOKENS_TALK, purpose="talk", tools=t,
-                             on_content=view.content_chunk, on_reasoning=view.reasoning_chunk,
-                             on_retry=view.retry, on_progress=on_progress, on_tool_text=on_tool_text)
+        started, first = time.monotonic(), []
+
+        def timed(f):   # notes when the first generated text arrives: before it, the prompt is being read
+            def g(*a):
+                if not first:
+                    first.append(time.monotonic())
+                return f(*a)
+            return g
+
+        reply = client.stream(msgs, cfg.MAX_TOKENS_TALK, purpose="talk", tools=t,
+                              on_content=timed(view.content_chunk), on_reasoning=timed(view.reasoning_chunk),
+                              on_retry=view.retry, on_progress=on_progress, on_tool_text=timed(on_tool_text))
+        ended, u = time.monotonic(), reply.usage or {}
+        out = u.get("completion_tokens") or 0
+        gen_s = ended - first[0] if first else 0.0
+        view.usage(prompt_tokens=u.get("prompt_tokens") or 0, completion_tokens=out,
+                   cached_tokens=(u.get("prompt_tokens_details") or {}).get("cached_tokens"),
+                   seconds=round(ended - started, 2), first_token_s=round(first[0] - started, 2) if first else None,
+                   tokens_per_s=round(out / gen_s, 1) if gen_s > 0.5 and out else None, cost=u.get("cost"))
+        return reply
 
     def on_tool(name: str, args: str, result: str) -> None:
         view.tool_end(name, args, not result.startswith("ERROR"), result)
