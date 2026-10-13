@@ -43,6 +43,7 @@ PROTECTED_DIRS = {".git": "git internals",
 # The operator's folder I may read (shaft share <name> <folder>): seen as shared/, never written.
 SHARED = "shared"
 SHARED_READ_ONLY = "read-only: shared/ is the operator's folder — write what you make from it to notes/"
+SHARED_NONE = "I have no shared folder now: the operator has not given me one, or has taken it back"
 
 
 def _spec(name: str, description: str, properties: dict, required: list[str] | None = None) -> dict:
@@ -160,6 +161,10 @@ class Toolbox:
 
     def _path(self, rel: str, for_write: bool = False) -> Path:
         parts = Path(rel).parts
+        if parts and parts[0] == SHARED and not self.shared and not (self.root / SHARED).exists():
+            # Not an empty folder or a missing file: say there is none (with the grant just taken back, "(empty)"
+            # and "No such file" left me checking the same path again and again).
+            raise PermissionError(SHARED_NONE)
         if self.shared and parts and parts[0] == SHARED:
             if for_write:
                 raise PermissionError(SHARED_READ_ONLY)
