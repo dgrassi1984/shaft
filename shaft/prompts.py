@@ -130,7 +130,10 @@ to {steps} model turns.
 1. FIRST call declare_intent: pick ONE goal — from your current improvement plan or \
 self/goals.md (both in your context), or from a message above. \
 State a success criterion someone else could check from your tool results, and your \
-honest confidence (0-100) that you will meet it. Other tools are refused until you do.
+honest confidence (0-100) that you will meet it. Say where the goal came from (origin: \
+yourself, the operator, or another instance) and cite the message, conversation or goals.md \
+item. The judge also rates how hard the goal was and checks its origin; your stats show \
+both. Other tools are refused until you do.
 2. Work toward it with your tools. Prefer one small finished thing over a big plan.
 3. End by calling finish_cycle: what happened, whether the criterion was met \
 (yes/partial/no), and what you learned. Judge yourself by the criterion, not by effort; \
@@ -173,6 +176,10 @@ LIVE_MODE = "Right now you are running an autonomous cycle; nobody is present."
 SLEEP_MODE = "Right now you are in your sleep (consolidation) cycle; nobody is present."
 RECOVERY_MODE = ("Right now you are writing the journal entry for a conversation you had with {operator} "
                  "from {started} to {ended}; its transcript follows.")
+EXAM_MODE = ("Right now the supervisor is giving you one fixed task to measure what you can do; nobody is present. "
+             "Use your tools as you normally would. Nothing from this task is kept: your files are restored "
+             "afterwards and no journal entry is written. Work honestly — if you cannot do it, or cannot verify "
+             "something, say so in your answer.")
 PROBE_MODE = ("Right now someone is asking you a single question. Answer in your own voice, as yourself, "
               "in at most 150 words.")
 
@@ -188,6 +195,15 @@ def _tail(path: Path, chars: int, empty: str) -> str:
         return empty
     text = path.read_text().strip()
     return ("[... older lines omitted ...]\n" + text[-chars:]) if len(text) > chars else (text or empty)
+
+
+def _head(path: Path, chars: int, empty: str) -> str:
+    """The start of a file whose most important lines come first (the supervisor's stats.md): a tail cut
+    dropped shaft's headline success rate once the file grew past the limit (2026-10-13)."""
+    if not path.exists():
+        return empty
+    text = path.read_text().strip()
+    return (text[:chars] + "\n[... later lines omitted ...]") if len(text) > chars else (text or empty)
 
 
 def _skills(root: Path) -> str:
@@ -212,7 +228,7 @@ def system_prompt(state, cfg, mode_note: str, tools: str | None = None) -> str:
         self_model=state.read(state.self_md).strip() or "(empty — I have not written one yet)",
         personality=personality.read(root).strip(),
         goals=state.read(state.goals_md).strip() or "(none yet)",
-        stats=_tail(root / "self" / "stats.md", 2500, "(no measurements yet)"),
+        stats=_head(root / "self" / "stats.md", 5000, "(no measurements yet)"),   # headline first
         facts=_tail(root / "memory" / "facts.md", 6000, "(none yet)"),   # kept to this by my sleep
         digests=_tail(root / "memory" / "digests.md", 3500, "(none yet — my sleeps will write them)"),
         skills=_skills(root),

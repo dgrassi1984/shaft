@@ -19,6 +19,15 @@ FACTS_MAX_CHARS = 6000     # facts.md is shown in full: consolidation keeps it t
 DIGEST_MAX_CHARS = 1500
 FACT_LINE = re.compile(r"^- \[\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?\] \S")   # every result stays in context for the rest of the cycle
 PLUGIN_TIMEOUT_S = 120
+# How much of a call's arguments my episode keeps. What I tell someone and what I claim about a cycle is kept
+# whole: a send_message cut at 2,000 characters made the judge grade a delivered answer 'partial' because the
+# part it was asked to check was past the cut (wren, 2026-10-13 14:23).
+LOG_ARGS_CHARS = 2000
+LOG_ARGS_WHOLE = {"send_message": 12000, "declare_intent": 12000, "finish_cycle": 12000}
+
+
+def log_args(tool: str, raw_args: str) -> str:
+    return _loggable(tool, raw_args)[:LOG_ARGS_WHOLE.get(tool, LOG_ARGS_CHARS)]
 
 # Paths I may not overwrite with write_file: append-only history, files with their own
 # validated tools, and files the supervisor writes about me.
@@ -131,7 +140,7 @@ class Toolbox:
             result = f"ERROR: {type(e).__name__}: {e}"
         if len(result) > MAX_RESULT_CHARS:
             result = result[:MAX_RESULT_CHARS] + f"\n[... truncated, {len(result)} chars total]"
-        self.log.append({"tool": name, "args": _loggable(name, raw_args)[:2000], "result": result[:2000],
+        self.log.append({"tool": name, "args": log_args(name, raw_args), "result": result[:2000],
                          "seconds": round((datetime.now() - started).total_seconds(), 2)})
         return result
 

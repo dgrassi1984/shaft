@@ -16,6 +16,7 @@ from .state import State
 from .tools import Toolbox, _spec
 
 S = {"type": "string"}
+ORIGINS = ("self", "operator", "instance")
 
 
 def read_inbox(state: State) -> list[tuple[str, str]]:
@@ -49,9 +50,15 @@ def run(cfg, state: State, client: Client) -> str:
         conf = int(args.get("confidence", -1))
         if not args.get("goal") or not args.get("success_criterion") or not 0 <= conf <= 100:
             return "ERROR: need goal, success_criterion and confidence 0-100"
+        origin, ref = str(args.get("origin", "")).lower(), str(args.get("origin_ref", "")).strip()
+        if origin not in ORIGINS:
+            return "ERROR: origin must be self, operator or instance — who chose this goal"
+        if origin != "self" and not ref:
+            return f"ERROR: origin {origin}: cite the message, conversation or goals.md item in origin_ref"
         pausing.activity(keep=True, goal=str(args.get("goal", ""))[:300])
         record["intent"] = {"goal": args["goal"], "success_criterion": args["success_criterion"],
-                            "confidence": conf, "at": datetime.now().isoformat(timespec="seconds")}
+                            "confidence": conf, "origin": origin, "origin_ref": ref,
+                            "at": datetime.now().isoformat(timespec="seconds")}
         return "intent recorded — now act"
 
     def finish(args: dict) -> str:   # allowed without an intent: a report beats silence (judged 'no')
@@ -66,7 +73,12 @@ def run(cfg, state: State, client: Client) -> str:
         "declare_intent": Control(_spec(
             "declare_intent", "Declare this cycle's goal BEFORE acting.",
             {"goal": S, "success_criterion": S,
-             "confidence": {"type": "integer", "description": "0-100, your honest probability of success"}}),
+             "confidence": {"type": "integer", "description": "0-100, your honest probability of success"},
+             "origin": {"type": "string", "enum": list(ORIGINS),
+                        "description": "who chose this goal: self (you), operator, or instance (another instance)"},
+             "origin_ref": {"type": "string", "description": "where it came from: the message file, the date of "
+                            "the conversation, or the goals.md item (required unless origin is self)"}},
+            ["goal", "success_criterion", "confidence", "origin"]),
             declare),
         "finish_cycle": Control(_spec(
             "finish_cycle", "End the cycle and report the outcome against the criterion.",

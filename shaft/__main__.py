@@ -6,7 +6,7 @@ import sys
 from datetime import datetime
 
 from . import config as config_mod
-from . import live, pausing, prompts, recovery, reflect, sleep, talk
+from . import exam, live, pausing, prompts, recovery, reflect, sleep, talk
 from .llm import Client, LLMError
 from .state import State
 
@@ -27,6 +27,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("answer", help="one reply for an API client: a JSON request on stdin, JSON events out")
     pr = sub.add_parser("probe", help="answer one question in my own voice, without tools (used by evals)")
     pr.add_argument("question")
+    sub.add_parser("exam", help="one task of the supervisor's capability battery: JSON on stdin, JSON out; "
+                                "nothing is kept")
     args = parser.parse_args(argv)
 
     try:
@@ -67,6 +69,8 @@ def main(argv: list[str] | None = None) -> int:
             talk.answer(cfg, state, client, _json.loads(sys.stdin.read() or "{}"))
         elif args.cmd == "recover":
             print(f"wrote {recovery.run(cfg, state, client)} journal entr(y/ies)")
+        elif args.cmd == "exam":
+            return exam.main(cfg, state, client)
         elif args.cmd == "probe":
             system = prompts.system_prompt(state, cfg, prompts.PROBE_MODE)
             reply = client.complete([{"role": "system", "content": system},
