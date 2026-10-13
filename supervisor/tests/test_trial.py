@@ -485,6 +485,27 @@ class WorkerTest(Fixture):
         for k, t in enumerate(ts):
             self.assertEqual(trial._files(NAME, t["id"], "candidate")["shaft/x.py"], f"# {k}\n".encode())
 
+    def test_two_instances_trials_with_the_same_id_both_get_their_tests(self):
+        """wren's and shaft's trials made in the same second shared an id; the worker took wren's tests for done
+        once shaft's ran, and wren's trial sat in 'testing' (2026-10-13)."""
+        other = self.project / "instances" / "tx"
+        git(self.project, "worktree", "add", "-q", "--orphan", "-b", "instance/tx", str(other))
+        shutil.copytree(self.root / "shaft", other / "shaft")
+        shutil.copy(self.root / "config.env", other / "config.env")
+        git(other, "add", "-A")
+        git(other, "commit", "-q", "-m", "tx: live", when="2026-10-10T09:00:00")
+        self.addCleanup(shutil.rmtree, SUP_DIR / "trials" / "tx", True)
+        with mock.patch.object(trial, "_new_id", lambda name: "t-same"), \
+                mock.patch.object(trial, "_choose", lambda *a, **k: [self.state(), self.state()]):
+            for name in (NAME, "tx"):
+                (SUP_DIR / "trials" / name / "t-same").mkdir(parents=True, exist_ok=True)
+                trial.create(name, {"shaft/x.py": b"# x\n"}, "same id", by="operator", project=self.project)
+        gated = []
+        with mock.patch.object(trial, "gate_check", lambda p, n, t: (gated.append(n), (False, "no"))[1]):
+            trial.work(self.project)
+        self.assertEqual(sorted(gated), sorted([NAME, "tx"]))
+        self.assertEqual({trial.load(n, "t-same")["status"] for n in (NAME, "tx")}, {"rejected"})
+
     def test_the_worker_runs_trials_side_by_side_but_one_pair_per_trial_at_a_time(self):
         ts = []
         for k in range(3):

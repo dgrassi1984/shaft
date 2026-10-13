@@ -953,7 +953,8 @@ def conclude(project: Path, t: dict) -> None:
     outcomes = [s["outcome"] for s in t["states"] if s["status"] in ("done", "unjudged")]
     v = verdict(outcomes)
     rows = [json.loads(l) for l in LEDGER.read_text().splitlines()] if LEDGER.exists() else []
-    v["usd"] = round(sum(r.get("usd") or 0 for r in rows if r.get("trial") == t["id"]), 4)
+    v["usd"] = round(sum(r.get("usd") or 0 for r in rows
+                         if r.get("trial") == t["id"] and r.get("instance") == t["instance"]), 4)
     v["models"] = sorted({s["model"] for s in t["states"] if s.get("model")})
     t.update(status="done", verdict=v, finished=datetime.now().isoformat(timespec="seconds"))
     save(t)
@@ -985,8 +986,9 @@ def report(t: dict) -> str:
     own = t["llm"].get("model")
     if any(m != own and m != "local" for m in models) and t["llm"]["local"]:
         k = sum(1 for s in t["states"] if s.get("model") not in (None, "local"))
-        lines.append(f"- {k} of these cycles ran on {FALLBACK_MODEL}, not on your own model (the local model was "
-                     f"busy): the change was measured there, and may act differently on your model.")
+        lines.append(f"- {k} of these cycles ran on {FALLBACK_MODEL}, not on your own model (the local model had no "
+                     f"idle time for them, and a trial never takes yours): the change was measured there, and may act "
+                     f"differently on your model.")
     lines += ["", "Per cycle (\"current\" = your code now, \"proposed\" = with the change):"]
     for j, s in enumerate(t["states"], 1):
         res = {"win": "proposed better", "loss": "current better", "tie": "no difference",
@@ -1095,27 +1097,30 @@ def work(project: Path = PROJECT) -> int:
             f"FALLBACK_MODEL={FALLBACK_MODEL} [{FALLBACK_SRC}])")
         if (swept := sweep_scratch()):
             log(f"trial worker: removed {swept} scratch copies left by an earlier worker")
-        tried: set[tuple[str, int]] = set()      # a preempted pair waits for the next pass
-        inflight: dict = {}                       # future -> (trial id, model)
+        # Trials are keyed by (instance, id): ids are unique per instance only (wren's and shaft's trials made in
+        # the same second shared one, and wren's never had its tests run, 2026-10-13).
+        tried: set[tuple[str, str, int]] = set()   # a preempted pair waits for the next pass
+        inflight: dict = {}                         # future -> ((instance, trial id), model)
         with ThreadPoolExecutor(max_workers=PARALLEL) as pool:
             while True:
-                busy = {tid for tid, _ in inflight.values()}
+                busy = {key for key, _ in inflight.values()}
                 for t in all_trials():
-                    if t["status"] == "queued" and t["id"] not in busy and \
+                    if t["status"] == "queued" and (t["instance"], t["id"]) not in busy and \
                             (all(s["status"] != "pending" for s in t["states"]) or _stale(t)):
                         conclude(project, t)
                 local_running = any(m == "local" for _, m in inflight.values())
                 for t, i, model in runnable(project):
                     if len(inflight) >= PARALLEL:
                         break
-                    if t["id"] in busy or (t["id"], i) in tried or (model == "local" and local_running):
+                    key = (t["instance"], t["id"])
+                    if key in busy or (*key, i) in tried or (model == "local" and local_running):
                         continue
-                    tried.add((t["id"], i))
-                    busy.add(t["id"])
+                    tried.add((*key, i))
+                    busy.add(key)
                     local_running |= model == "local"
                     fut = pool.submit(_gate_job, project, t) if i < 0 else \
                         pool.submit(_pair_job, project, t["id"], t["instance"], i, model)
-                    inflight[fut] = (t["id"], model)
+                    inflight[fut] = (key, model)
                 if not inflight:
                     return 0
                 done, _ = wait(list(inflight), return_when=FIRST_COMPLETED)
