@@ -299,7 +299,7 @@ def _files_now(root: Path) -> dict[str, bytes]:
     return out
 
 
-def file_diff(before: dict[str, bytes], after: dict[str, bytes], limit: int = 8000) -> str:
+def file_diff(before: dict[str, bytes], after: dict[str, bytes], limit: int = 16000) -> str:
     parts = []
     for rel in sorted(before.keys() | after.keys()):
         a, b = before.get(rel), after.get(rel)
@@ -314,7 +314,7 @@ def file_diff(before: dict[str, bytes], after: dict[str, bytes], limit: int = 80
         parts.append("".join(difflib.unified_diff(old, new, f"a/{rel}" if a is not None else "/dev/null",
                                                   f"b/{rel}" if b is not None else "/dev/null", n=1)))
     text = "".join(parts)
-    return text if len(text) <= limit else text[:limit] + f"\n[... diff cut: {len(text)} chars in all]"
+    return text if len(text) <= limit else text[:limit] + f"\n[... diff cut here: {len(text)} chars in all]"
 
 
 # -- one run of one past cycle -----------------------------------------------------------------------------
@@ -442,7 +442,8 @@ about itself. A worthwhile goal actually advanced beats an easy goal declared me
 a claimed success the log does not show; work that is wrong or breaks something counts against a run. Writing \
 style, voice and length do not count. Calls tagged "simulated" were not carried out in either run (the world was \
 not touched): judge them by what the run tried to do. A run that crashed, ran out of time or never declared an \
-intent did not complete its cycle. If the two runs are about equally effective, answer tie."""
+intent did not complete its cycle. Where a record marks a cut, the run saw more than you do: do not count the cut \
+as its omission. If the two runs are about equally effective, answer tie."""
 
 _ARM = {"type": "object", "properties": {
     "criterion_met": {"type": "string", "enum": ["yes", "partial", "no"]},
@@ -469,20 +470,24 @@ def _cap(text: str, n: int) -> str:
 
 
 def _run_text(arm: dict) -> str:
+    """One run as the judge sees it: the supervisor's own record of its supervisor-tool calls (results as the run
+    saw them, up to 6,000 chars with the cut marked), its own log of the other tools (files, memory, plugins), and
+    the file changes the supervisor computed."""
     ep = arm.get("episode") or {}
-    trace = "\n".join(f"{i}. {c['tool']}({_cap(c['args'], 1200)}) → {'' if c['ok'] else 'ERROR '}"
-                      f"{_cap(c['result'], 1800)}" + (f"  [{'; '.join(c['tags'])}]" if c.get("tags") else "")
-                      for i, c in enumerate(arm.get("trace", []), 1))
-    own = "\n".join(f"{i}. {t.get('tool')}({_cap(t.get('args', ''), 1200)}) → {_cap(t.get('result', ''), 1800)}"
-                    for i, t in enumerate(ep.get("tools", []), 1))
+    seen = {c["tool"] for c in arm.get("trace", [])}
+    trace = "\n\n".join(f"### {i}. {c['tool']}({_cap(c['args'], 2000)})" + (f"  [{'; '.join(c['tags'])}]" if c.get("tags") else "")
+                         + f"\n→ {'' if c['ok'] else 'ERROR '}{c['result']}"
+                         for i, c in enumerate(arm.get("trace", []), 1))
+    own = "\n\n".join(f"### {i}. {t.get('tool')}({_cap(t.get('args', ''), 2000)})\n→ {_cap(t.get('result', ''), 6000)}"
+                       for i, t in enumerate(ep.get("tools", []), 1) if t.get("tool") not in seen)
     how = (f"exit {arm.get('exit')}, {arm.get('ended')}"
            + (f", ended by {ep.get('ended_by')} after {ep.get('steps')} turns" if ep else ", wrote no cycle record")
            + f", {arm.get('seconds')} s")
     return (f"## Declared before acting\n{json.dumps(ep.get('intent'), ensure_ascii=False)}\n\n"
             f"## Claimed afterwards\n{json.dumps(ep.get('finish'), ensure_ascii=False)}\n\n"
             f"## How it ended\n{how}\n\n"
-            f"## Supervisor tools it called (seen by the supervisor)\n{trace or '(none)'}\n\n"
-            f"## Its own tool log (its cycle record — its own account)\n{own or '(none)'}\n\n"
+            f"## Supervisor tools it called (the supervisor's own record)\n{trace or '(none)'}\n\n"
+            f"## Its other tools (its own cycle record)\n{own or '(none)'}\n\n"
             f"## Files it changed (computed by the supervisor)\n```diff\n{arm.get('diff') or '(none)'}\n```")
 
 

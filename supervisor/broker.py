@@ -702,6 +702,11 @@ class Broker:
         return ("instances: " + ", ".join(names)) if names else "no other instances exist yet"
 
 
+def _marked(text: str, limit: int) -> str:
+    """At most `limit` chars, the cut said (the judge must not mistake a cut for the agent's omission)."""
+    return text if len(text) <= limit else text[:limit] + f"\n[... cut here: {len(text)} chars in all]"
+
+
 class ReplayBroker(Broker):
     """The broker for one run of a trial replay (supervisor/trial.py): the same tools, answered without touching
     the world or the instance.
@@ -729,7 +734,7 @@ class ReplayBroker(Broker):
         result = super().call(tool, args)
         shown = {k: ("[value withheld]" if tool == "secret_set" and k == "value" else v) for k, v in args.items()}
         self.trace.append({"tool": tool, "args": json.dumps(shown, ensure_ascii=False)[:2000], "ok": result["ok"],
-                           "result": str(result.get("result") if result["ok"] else result.get("error"))[:2500],
+                           "result": _marked(str(result.get("result") if result["ok"] else result.get("error")), 6000),
                            "tags": sorted(getattr(self._tags, "value", set()))})
         return result
 
