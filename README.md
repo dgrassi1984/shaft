@@ -193,7 +193,10 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
 
 - **Sandbox** (macOS `sandbox-exec`): an instance writes only inside `instances/<name>/`,
   reads nothing else in your home, and connects only to the LLM port(s) (`SHAFT_LLM_PORTS`,
-  default 8780) and its run's broker. It inherits no secrets from the environment.
+  default 8780) and its run's broker. It inherits no secrets from the environment. **One folder of
+  yours it may read** (`shaft share <name> <folder>`, `shaft share <name> off`): read-only, in its
+  sandbox and in `run`; its file tools show it as `shared/`. Kept in `.supervisor/tools/<name>.json`, not
+  in its `config.env`; a folder overlapping SHAFT's own state is refused, and battery exams never get it.
 - **Broker**: the only door to the outside — web search (ScrapeBadger), page fetching
   (public addresses only, re-checked on every redirect), messages between instances and to
   you (max 3 per instance per day, with a macOS notification), and **`delegate_coding`**: an
