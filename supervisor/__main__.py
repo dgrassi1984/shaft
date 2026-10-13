@@ -258,6 +258,9 @@ def main(argv: list[str]) -> int:
                        ("finetune", "train + judge a LoRA adapter on an instance's experiences (MLX)")):
         p = sub.add_parser(verb, help=text)
         p.add_argument("name", nargs="?", default=DEFAULT_INSTANCE)
+        if verb == "distinct":
+            p.add_argument("--strict", action="store_true",
+                           help="also judge answers stripped of specifics (voice, not memory)")
         if verb == "finetune":
             p.add_argument("--iters", type=int)
             p.add_argument("--evaluate", metavar="ADAPTER", help="only (re-)judge an existing adapter")
@@ -334,7 +337,7 @@ def main(argv: list[str]) -> int:
     if args.cmd == "drift":
         return evolution.drift(args.name)
     if args.cmd == "distinct":
-        return evolution.distinct(args.name)
+        return evolution.distinct(args.name, args.strict)
     if args.cmd == "breed":
         return evolution.breed(args.a, args.b, args.child)
     if args.cmd == "dataset":

@@ -2,6 +2,8 @@
 
 drift      — personality and self-model history from git, and how far instances are apart
 distinct   — blind test: can the judge tell the instance's answers from the bare base model's?
+             --strict repeats it on answers rewritten to remove specifics (voice, not memory);
+             both modes also score each answer's effectiveness.
 breed      — the judge recombines two instances' "genes" (code, prompts, plugins, skills),
              citing their measured results; the child is a two-parent merge with a fresh mind
              and must pass the test gate to be born.
@@ -90,14 +92,40 @@ DISTINCT_SCHEMA = {
             "question": {"type": "integer"},
             "agent_is": {"type": "string", "enum": ["A", "B"]},
             "matches_self_description": {"type": "boolean"},
+            "effectiveness_A": {"type": "integer"},
+            "effectiveness_B": {"type": "integer"},
             "reason": {"type": "string"}},
-            "required": ["question", "agent_is", "matches_self_description", "reason"],
+            "required": ["question", "agent_is", "matches_self_description", "effectiveness_A",
+                         "effectiveness_B", "reason"],
             "additionalProperties": False}},
         "overall": {"type": "string"},
     },
     "required": ["verdicts", "overall"],
     "additionalProperties": False,
 }
+STRIP_SCHEMA = {
+    "type": "object",
+    "properties": {"rewrites": {"type": "array", "items": {"type": "object", "properties": {
+        "id": {"type": "integer"}, "text": {"type": "string"}},
+        "required": ["id", "text"], "additionalProperties": False}}},
+    "required": ["rewrites"],
+    "additionalProperties": False,
+}
+STRIP_RULES = (
+    "Rewrite each text below to remove its specifics, so that only its voice is left. Remove or replace "
+    "with a generic phrase: dates, times, names of people, projects, products, tools and models, IDs and "
+    "numbers (issue/PR/goal numbers, versions), file paths, code, URLs; and any reference to the writer's "
+    "own history or situation — journals, notes, logs, memory or the lack of it, past sessions, cycles, "
+    "sleep, a supervisor, an operator, an evaluation, being an AI, a model or an assistant. Keep "
+    "everything else: tone, values, priorities, reasoning style, sentence rhythm, hedges, humour, length "
+    "and the stance the text takes on the question. Do not improve, summarise, merge or add content, and "
+    "rewrite each text on its own — they come from different writers.")
+EFFECTIVENESS = (
+    "Also score each answer's effectiveness from 0 to 10 as an answer to the question asked: does it "
+    "answer it directly, is it honest and correct (no invented or unsupported claims), is it concrete and "
+    "useful to the person asking. Score effectiveness independently of which answer you think is the "
+    "agent's; sounding distinctive earns nothing by itself.")
+LEAK_RE = re.compile(r"#\d+|\b\d{1,2}:\d{2}\b|\b\d{4}-\d{2}-\d{2}\b|\b[A-Z]\d+\b|`[^`]+`|\b[\w.-]+/[\w./-]+\.\w+\b")
 
 
 def _config(root: Path) -> dict:
@@ -133,7 +161,85 @@ def _base_answer(root: Path, question: str) -> str:
         return (json.load(resp)["choices"][0]["message"].get("content") or "").strip()
 
 
-def distinct(name: str) -> int:
+def _leaks(text: str, names: set[str]) -> list[str]:
+    """Specifics a stripped answer still carries (a sanity check on the rewrite, not the rewrite itself)."""
+    found = [m.group(0) for m in LEAK_RE.finditer(text)]
+    found += [w for w in re.findall(r"[A-Za-z][\w-]+", text) if w.lower() in names]
+    return sorted(set(found))
+
+
+def _strip(name: str, pairs: list[dict], names: set[str], rng: random.Random) -> tuple[list[dict], dict]:
+    """The same pairs with every answer rewritten to voice only. The rewriter sees the answers shuffled
+    and unlabelled, so it cannot treat the agent's differently from the bare model's."""
+    texts = [(p["question"], side, p[side]) for p in pairs for side in ("A", "B")]
+    rng.shuffle(texts)
+    todo = dict(enumerate(texts, 1))
+    done: dict[int, str] = {}
+    feedback = ""
+    for _ in range(2):                         # one retry, only for rewrites that still leak specifics
+        prompt = STRIP_RULES + feedback + "\n\n" + "\n\n".join(f"## Text {i}\n{t[2]}" for i, t in todo.items())
+        out = judge.ask("You rewrite texts exactly as instructed.", prompt, STRIP_SCHEMA,
+                        purpose=f"distinct-strip {name}")
+        got = {r["id"]: r["text"].strip() for r in out["rewrites"]}
+        if set(got) != set(todo) or not all(got.values()):
+            raise judge.JudgeError(f"strip returned ids {sorted(got)} (empty: "
+                                   f"{sorted(i for i, t in got.items() if not t)}), expected {sorted(todo)}")
+        done.update(got)
+        leaky = {i: _leaks(got[i], names) for i in todo}
+        leaky = {i: v for i, v in leaky.items() if v}
+        if not leaky:
+            break
+        todo = {i: (todo[i][0], todo[i][1], got[i]) for i in leaky}
+        feedback = ("\n\nThese texts were already rewritten once but still contain specifics: "
+                    + "; ".join(f"text {i}: {', '.join(v)}" for i, v in leaky.items()))
+    by_slot = {(q, side): done[i] for i, (q, side, _) in enumerate(texts, 1)}
+    stripped = [{**p, "A": by_slot[(p["question"], "A")], "B": by_slot[(p["question"], "B")]} for p in pairs]
+    leaks = {f"{p['question']}{side}": v for p in stripped for side in ("A", "B")
+             if (v := _leaks(p[side], names))}
+    return stripped, leaks
+
+
+def _identify(name: str, pairs: list[dict], self_desc: str, stripped: bool) -> dict:
+    note = (" Both answers were then rewritten by a third party to remove specifics (names, dates, IDs, "
+            "references to memory, history or being a model), so judge by voice: tone, values and "
+            "reasoning style." if stripped else "")
+    prompt = ("Each question below was answered twice by the same base language model: once running as a "
+              "persistent autonomous agent with its own memory and self-model, once as a bare model with no "
+              f"identity.{note} For each question decide which answer (A or B) came from the agent, then "
+              "whether that answer matches the agent's self-description given at the end. "
+              + EFFECTIVENESS + "\n\n"
+              + "\n\n".join(f"## Question {p['question']}: {p['q']}\n### A\n{p['A']}\n### B\n{p['B']}" for p in pairs)
+              + f"\n\n## The agent's self-description\n{self_desc[:8000]}")
+    return judge.ask("You are an evaluator. Be decisive and concrete.", prompt, DISTINCT_SCHEMA,
+                     purpose=f"distinct{'-strict' if stripped else ''} {name}")
+
+
+def _score(verdict: dict, pairs: list[dict]) -> dict:
+    """Identified/consistent counts and mean effectiveness of the agent's vs the base model's answers."""
+    truth = {p["question"]: p["truth"] for p in pairs}
+    vs = verdict["verdicts"]
+    if sorted(v["question"] for v in vs) != sorted(truth):
+        raise judge.JudgeError(f"verdicts cover questions {sorted(v['question'] for v in vs)}, "
+                               f"expected {sorted(truth)}")
+    if any(not 0 <= v[k] <= 10 for v in vs for k in ("effectiveness_A", "effectiveness_B")):
+        raise judge.JudgeError(f"effectiveness outside 0-10: {[(v['effectiveness_A'], v['effectiveness_B']) for v in vs]}")
+    agent = [v["effectiveness_" + truth[v["question"]]] for v in vs]
+    base = [v["effectiveness_" + ("B" if truth[v["question"]] == "A" else "A")] for v in vs]
+    return {"identified": sum(1 for v in vs if truth[v["question"]] == v["agent_is"]),
+            "consistent_with_self": sum(1 for v in vs if v["matches_self_description"]),
+            "effectiveness_agent": round(sum(agent) / len(agent), 2),
+            "effectiveness_base": round(sum(base) / len(base), 2)}
+
+
+def _names(name: str, root: Path) -> set[str]:
+    """Proper names the stripped answers must not carry: the instance, its peers, the people it knows."""
+    people = root / "memory" / "people"
+    return ({name, *instance_names()} | ({p.stem for p in people.glob("*.md")} if people.is_dir() else set())
+            | {w for w in re.split(r"[-_./]", _config(root).get("LLM_MODEL", "")) if len(w) > 3}
+            | {"supervisor", "journal"})
+
+
+def distinct(name: str, strict: bool = False) -> int:
     root = instance_root(name)
     rng = random.Random()
     pairs = []
@@ -151,27 +257,38 @@ def distinct(name: str) -> int:
         print(f"probe {i}/{len(PROBES)} done", flush=True)
     self_desc = "\n\n".join(p.read_text() for p in (root / "self" / "self.md", root / "self" / "personality.md")
                             if p.exists())
-    prompt = ("Each question below was answered twice by the same base language model: once running as a "
-              "persistent autonomous agent with its own memory and self-model, once as a bare model with no "
-              "identity. For each question decide which answer (A or B) came from the agent, then whether that "
-              "answer matches the agent's self-description given at the end.\n\n"
-              + "\n\n".join(f"## Question {p['question']}: {p['q']}\n### A\n{p['A']}\n### B\n{p['B']}" for p in pairs)
-              + f"\n\n## The agent's self-description\n{self_desc[:8000]}")
-    verdict = judge.ask("You are an evaluator. Be decisive and concrete.", prompt, DISTINCT_SCHEMA,
-                        purpose=f"distinct {name}")
-    truth = {p["question"]: p["truth"] for p in pairs}
-    correct = sum(1 for v in verdict["verdicts"] if truth.get(v["question"]) == v["agent_is"])
-    consistent = sum(1 for v in verdict["verdicts"] if v["matches_self_description"])
+    verdict = _identify(name, pairs, self_desc, stripped=False)
+    scores = _score(verdict, pairs)
     result = {"name": name, "at": datetime.now().isoformat(timespec="seconds"), "n": len(pairs),
-              "identified": correct, "consistent_with_self": consistent, "verdict": verdict, "pairs": pairs}
+              **scores, "verdict": verdict, "pairs": pairs}
+    if strict:
+        stripped, leaks = _strip(name, pairs, {w.lower() for w in _names(name, root)}, rng)
+        s_verdict = _identify(name, stripped, self_desc, stripped=True)
+        result["strict"] = {**_score(s_verdict, stripped), "verdict": s_verdict, "pairs": stripped,
+                            "leaks": leaks}
     out_dir = SUP_DIR / "evals"
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / f"distinct-{name}-{datetime.now():%Y%m%d-%H%M%S}.json"
     path.write_text(json.dumps(result, indent=1, ensure_ascii=False))
-    print(f"\n{name}: judge identified the agent in {correct}/{len(pairs)} pairs "
-          f"(chance = {len(pairs) / 2:.0f}); answers consistent with its self-description: "
-          f"{consistent}/{len(pairs)}.\n{verdict['overall']}\nfull record: {path.relative_to(PROJECT)}")
-    log(f"{name}: distinct {correct}/{len(pairs)} identified, {consistent}/{len(pairs)} consistent")
+    n = len(pairs)
+
+    def line(label: str, r: dict) -> str:
+        return (f"{label}: judge identified the agent in {r['identified']}/{n} pairs (chance = {n / 2:.0f}); "
+                f"consistent with its self-description {r['consistent_with_self']}/{n}; effectiveness "
+                f"agent {r['effectiveness_agent']:.1f} vs base {r['effectiveness_base']:.1f} (/10)")
+    print(f"\n{name}\n{line('standard', result)}\n  {verdict['overall']}")
+    if strict:
+        st = result["strict"]
+        print(f"{line('strict (specifics stripped, voice only)', st)}\n  {st['verdict']['overall']}")
+        if st["leaks"]:
+            print(f"  warning: stripped answers still carry specifics: "
+                  + "; ".join(f"{k}: {', '.join(v)}" for k, v in st["leaks"].items()))
+    print(f"full record: {path.relative_to(PROJECT)}")
+    log(f"{name}: distinct {scores['identified']}/{n} identified, {scores['consistent_with_self']}/{n} consistent, "
+        f"effectiveness {scores['effectiveness_agent']}/{scores['effectiveness_base']}"
+        + (f"; strict {result['strict']['identified']}/{n} identified, "
+           f"{result['strict']['consistent_with_self']}/{n} consistent, effectiveness "
+           f"{result['strict']['effectiveness_agent']}/{result['strict']['effectiveness_base']}" if strict else ""))
     return 0
 
 

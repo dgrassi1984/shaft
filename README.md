@@ -90,10 +90,19 @@ shaft new <name> [--from <i>]   # new instance from the template, or forked from
 shaft breed <a> <b> <child>     # child from two instances' recombined genes, fresh mind (judge picks)
 shaft drift [name]              # how its personality changed; distance to other instances
 shaft distinct [name]           # blind test: can the judge tell it from the bare base model?
+shaft distinct [name] --strict  # …again on answers stripped of specifics: voice, not memory
 shaft dataset|finetune [name]   # M6: export experiences / train a judged LoRA adapter (MLX)
 
 shaft pause [name] · shaft resume [name] · shaft check [name] · shaft setup · shaft list
 ```
+
+`shaft distinct` asks the instance and the bare base model the same four personal questions and
+has the judge pick which answer is the instance's. An instance is easy to spot when it cites its
+journal, goal IDs or PR numbers, so `--strict` also has the judge rewrite all eight answers —
+shuffled, unlabelled — without names, dates, IDs, paths or references to memory, history or being
+a model, and repeats the blind test on those: what is left to recognise is voice. Both modes score
+each answer's effectiveness (0–10: answers the question, honest, useful), so you can see whether
+identity costs usefulness. Records go to `.supervisor/evals/distinct-<name>-*.json`.
 
 ### The terminal client (`shaft talk`)
 
