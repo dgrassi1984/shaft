@@ -19,7 +19,7 @@ import os
 import shutil
 import subprocess
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from . import autonomy, evolution, finetune, gate, messages, metrics, runner, version
 from .core import (DEFAULT_INSTANCE, HOME, INSTANCES, NAME_RE, PROJECT, SUP_DIR, TEMPLATE, commit_state, git, git_wt,
@@ -192,6 +192,7 @@ def cmd_status(names: list[str]) -> int:
         entries = journal_entries(root)
         js = metrics.judgments(name)
         rate = (sum(metrics.SCORE[j["criterion_met"]] for j in js) / len(js)) if js else None
+        rated = [v for v in map(metrics.cycle_value, js) if v is not None]
         last_self = git_wt(root, "log", "-1", "--format=%cr", "--", "self/self.md", check=False).stdout.strip()
         convs = runner.open_conversations(name)
         from .core import disabled_tools
@@ -200,7 +201,9 @@ def cmd_status(names: list[str]) -> int:
                                  (f"{len(convs)} conversation(s) open", convs)) if on]
         print(f"\n■ {name}{' (' + ', '.join(flags) + ')' if flags else ''}  ·  branch instance/{name}")
         print(f"  journal     {len(entries)} entries · self-model last changed {last_self or 'never'}")
-        print(f"  judged      {len(js)} cycles" + (f" · success {rate:.0%}" if rate is not None else ""))
+        print(f"  judged      {len(js)} cycles" + (f" · success {rate:.0%}" if rate is not None else "")
+              + (f" · achieved difficulty {5 * sum(rated[-20:]) / len(rated[-20:]):.1f}/5 (last {len(rated[-20:])})"
+                 if rated else ""))
         print(f"  LLM today   {calls} calls · {tokens} completion tokens · {errors} errors")
         print(f"  versions    {version.describe(name)}")
         if tools_off:
@@ -302,6 +305,33 @@ def run_many(kind: str, names: list[str], every: bool) -> int:
     return worst
 
 
+def cmd_battery(args) -> int:
+    from . import battery
+    names = args.names or instance_names()
+    if args.action == "backup":
+        print(f"item set backed up to {battery.backup()} · " + ", ".join(f"{n} {battery.checksum(n)[:12]}" for n in names))
+        return 0
+    worst = 0
+    for name in names:
+        instance_root(name)
+        if args.action == "report":
+            print(battery.report(name))
+        elif args.action == "recall":
+            path = battery.make_recall(name, force=args.force)
+            print(f"{name}: {path or 'not enough old journal entries yet (see supervisor.log)'}")
+        else:
+            until = None
+            if args.until:
+                h, m = map(int, args.until.split(":"))
+                end = datetime.now().replace(hour=h, minute=m, second=0, microsecond=0)
+                until = (end if end > datetime.now() else end + timedelta(days=1)).timestamp()
+            only = [c.strip() for c in args.only.split(",") if c.strip()] or None
+            n = battery.run(name, until=until, only=only, control=not args.no_control, limit=args.limit)
+            print(f"{name}: {n} item result(s) scored")
+            worst = max(worst, 0 if n else 1)
+    return worst
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="shaft", description="SHAFT supervisor")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -338,6 +368,17 @@ def main(argv: list[str]) -> int:
     p.add_argument("-n", type=int, default=3)
     p = sub.add_parser("stats", help="an instance's measured performance (judge + calibration)")
     p.add_argument("name", nargs="?", default=DEFAULT_INSTANCE)
+    p = sub.add_parser("judge", help="judging: 'backfill' rates origin/difficulty/novelty of cycles judged before")
+    p.add_argument("action", choices=["backfill"])
+    p.add_argument("names", nargs="*")
+    p = sub.add_parser("battery", help="the capability battery: run, report, recall (questions), backup")
+    p.add_argument("action", choices=["run", "report", "recall", "backup"])
+    p.add_argument("names", nargs="*")
+    p.add_argument("--until", default="", help="run: stop at this time (HH:MM), like the night window")
+    p.add_argument("--only", default="", help="run: only these categories (comma-separated)")
+    p.add_argument("--no-control", action="store_true", help="run: skip the control")
+    p.add_argument("--limit", type=int, default=None, help="run: at most this many items")
+    p.add_argument("--force", action="store_true", help="recall: write new questions (starts a new era)")
     p = sub.add_parser("inbox", help="messages instances sent you")
     p.add_argument("--clear", action="store_true", help="archive notes (questions stay until answered)")
     p = sub.add_parser("reply", help="answer an instance's open question (or message it)")
@@ -456,6 +497,15 @@ def main(argv: list[str]) -> int:
         metrics.judge_pending(args.name)
         print(metrics.stats_text(args.name))
         return 0
+    if args.cmd == "judge":
+        for name in args.names or instance_names():
+            instance_root(name)
+            n = metrics.backfill(name)
+            metrics.write_stats(name)
+            print(f"{name}: rated {n} earlier cycle(s)")
+        return 0
+    if args.cmd == "battery":
+        return cmd_battery(args)
     if args.cmd == "inbox":
         return messages.clear_notes() if args.clear else messages.show_inbox()
     if args.cmd == "reply":

@@ -269,7 +269,9 @@ class ProbationTest(unittest.TestCase):
 
     def run_probation(self, after: list[str]):
         from supervisor import core
-        js = [{"criterion_met": "yes"}] * 3 + [{"criterion_met": m} for m in after]
+        # every cycle rated difficulty 3: these tests pin the revert mechanics; what probation measures
+        # (achieved difficulty, not raw success) is pinned in test_measurement.ProbationMeasureTest
+        js = [{"criterion_met": "yes", "difficulty": 3}] * 3 + [{"criterion_met": m, "difficulty": 3} for m in after]
         wt = lambda root, *a, **k: core.git_wt(root, *a, **{**k, "project": self.project})  # noqa: E731
         with mock.patch.object(metrics, "INSTANCES", self.project / "instances"), \
              mock.patch.object(metrics, "judgments", return_value=js[:3]), mock.patch.object(metrics, "git_wt", wt):
