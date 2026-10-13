@@ -12,7 +12,8 @@ from datetime import datetime
 from .core import SUP_DIR, git, git_wt, instance_config, instance_root
 
 SERVICES = SUP_DIR / "services"
-CODE = {"model": ["supervisor/bonsai_server.py", "supervisor/bonsai_lora.py"], "api": ["supervisor"]}   # what each runs
+CODE = {"model": ["supervisor/bonsai_server.py", "supervisor/bonsai_lora.py"], "api": ["supervisor"],
+        "embed": ["supervisor/embed_server.py"]}   # what each service runs
 
 
 def supervisor_commit() -> str:

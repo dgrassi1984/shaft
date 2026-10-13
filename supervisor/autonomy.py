@@ -35,6 +35,8 @@ SERVICES = {
     "model": {"label": "com.shaft.model",
               "args": [str(PROJECT / ".venv-bonsai" / "bin" / "python"), "-E", "-s", "-m", "supervisor.bonsai_server"]},
     "api": {"label": "com.shaft.api", "args": [PYTHON, "-E", "-s", "-m", "supervisor", "api", "serve"]},
+    "embed": {"label": "com.shaft.embed",
+              "args": [str(PROJECT / ".venv-bonsai" / "bin" / "python"), "-E", "-s", "-m", "supervisor.embed_server"]},
     "scheduler": {"label": "com.shaft.scheduler",
                   "args": [PYTHON, "-E", "-s", "-m", "supervisor", "autonomy", "serve"]},
 }

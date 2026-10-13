@@ -40,6 +40,7 @@ SLEEP_TIMEOUT_S, SLEEP_SRC = knob("SHAFT_SLEEP_TIMEOUT_S", "5400", int)   # nigh
 # 8780: SHAFT's own Bonsai 2 server (supervisor/bonsai_server.py); Atomic Chat's 1337 is no longer used.
 LLM_PORTS, PORTS_SRC = knob("SHAFT_LLM_PORTS", "8780", lambda s: [int(p) for p in s.split(",")])
 CORE_MIN_HOURS, CORE_SRC = knob("SHAFT_CORE_MIN_HOURS", "72", int)
+EMBED_PORT, EMBED_SRC = knob("SHAFT_EMBED_PORT", "8782", int)   # SHAFT's embedding service (memory search)
 BROKER_MAX_CALLS, BROKER_SRC = knob("SHAFT_BROKER_MAX_CALLS", "60", int)
 # A conversation (terminal or API) quiet this long is closed and written up into the journal.
 IDLE_MINUTES, IDLE_SRC = knob("SHAFT_IDLE_MINUTES", "30", int)

@@ -309,6 +309,8 @@ def main(argv: list[str]) -> int:
     p.add_argument("action", choices=["on", "off", "status", "key", "serve"])
     p = sub.add_parser("model", help="SHAFT's own Bonsai 2 model server (launchd service)")
     p.add_argument("action", choices=["on", "off", "status"])
+    p = sub.add_parser("embed", help="SHAFT's embedding service for memory search (launchd service)")
+    p.add_argument("action", choices=["on", "off", "status"])
     p = sub.add_parser("autonomy", help="the autonomous schedule (SHAFT's scheduler service): on, off, status")
     p.add_argument("action", choices=["on", "off", "status", "serve"])
     p = sub.add_parser("status", help="how the instances are doing")
@@ -407,6 +409,8 @@ def main(argv: list[str]) -> int:
         return api.command(args.action)
     if args.cmd == "model":
         return autonomy.service("model", args.action)
+    if args.cmd == "embed":
+        return autonomy.service("embed", args.action)
     if args.cmd == "tools":
         return cmd_tools(args.name, args.action, args.tool)
     if args.cmd == "secret":

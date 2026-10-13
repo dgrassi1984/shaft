@@ -27,7 +27,7 @@ from pathlib import Path
 
 from . import gate, sandbox
 from .broker import Broker
-from .core import (API_TALKS, BROKER_MAX_CALLS, CORE_MIN_HOURS, CYCLE_TIMEOUT_S, HOME, INSTANCES, LLM_PORTS, PROJECT, PYTHON,
+from .core import (API_TALKS, BROKER_MAX_CALLS, EMBED_PORT, CORE_MIN_HOURS, CYCLE_TIMEOUT_S, HOME, INSTANCES, LLM_PORTS, PROJECT, PYTHON,
                    SLEEP_TIMEOUT_S, SUP_DIR, UnsafePath,
                    commit_state, describe_knobs, git_wt, instance_root, journal_note, log, safe_mkdir,
                    safe_write, secrets_env)
@@ -249,7 +249,7 @@ def _launch(name: str, root: Path, kind: str, agent_args: list[str], budget: int
     broker_url = broker.start()
     SUP_DIR.mkdir(exist_ok=True)
     prof = SUP_DIR / f"{name}.sb"
-    prof.write_text(sandbox.profile(root, HOME, LLM_PORTS + [broker.port]))
+    prof.write_text(sandbox.profile(root, HOME, LLM_PORTS + [EMBED_PORT, broker.port]))
     safe_mkdir(root, ".tmp")
     cmd = sandbox.wrap(prof, [PYTHON, "-E", "-s", "-m", "shaft", *agent_args])
     extra = {"SHAFT_DEADLINE": f"{time.time() + budget - 60:.0f}"} if budget else {}
@@ -257,7 +257,8 @@ def _launch(name: str, root: Path, kind: str, agent_args: list[str], budget: int
     extra["SHAFT_SCHEDULE"] = describe_schedule(name)
     extra["SHAFT_OPEN_TALKS"] = ",".join(open_conversations(name))   # not to be written up yet
     env = sandbox.agent_env(os.environ, SHAFT_ROOT=str(root), TMPDIR=str(root / ".tmp"),
-                            SHAFT_BROKER_URL=broker_url, SHAFT_BROKER_TOKEN=broker.token, **extra)
+                            SHAFT_BROKER_URL=broker_url, SHAFT_BROKER_TOKEN=broker.token,
+                            SHAFT_EMBED_URL=f"http://127.0.0.1:{EMBED_PORT}/v1/embeddings", **extra)
     return broker, cmd, env
 
 

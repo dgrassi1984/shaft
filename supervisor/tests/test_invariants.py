@@ -206,7 +206,9 @@ class TalkInvariants(InstanceCase):
             self.assertIn(t, types)
         self.assertEqual("".join(e["text"] for e in events if e["type"] == "content"), "Noted: **iTerm2**.")
         self.assertTrue(next(e for e in events if e["type"] == "tool_end")["ok"])
-        self.assertEqual(self.fake.requests[0]["messages"][-1]["content"], "line one\nline two")   # multi-line kept
+        sent = self.fake.requests[0]["messages"][-1]["content"]
+        self.assertTrue(sent.startswith("line one\nline two"), sent)      # multi-line kept (recall may follow)
+        self.assertNotIn("Recalled", sent)       # nothing to recall but the message itself, which is never recalled
         episodes = "".join(p.read_text() for p in (self.root / "memory" / "episodes").glob("*.jsonl"))
         self.assertIn("line one", episodes)
 
