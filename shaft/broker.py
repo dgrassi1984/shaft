@@ -47,8 +47,10 @@ def tools() -> list[dict]:
 SLOW_TOOLS = {"delegate_coding": 1800}   # a coding handoff runs a model loop and the test gate: minutes
 
 
-def call(name: str, **args) -> str:
-    out = _request(f"/tools/{name}", args, timeout=SLOW_TOOLS.get(name, 120))
+def call(tool: str, /, **args) -> str:
+    """Positional-only `tool`: a tool's own arguments may be called anything, `name` included (secret_set's
+    first argument was taken as the tool name: "call() got multiple values for argument 'name'")."""
+    out = _request(f"/tools/{tool}", args, timeout=SLOW_TOOLS.get(tool, 120))
     if not out.get("ok"):
-        raise BrokerError(out.get("error") or f"{name} failed")
+        raise BrokerError(out.get("error") or f"{tool} failed")
     return out["result"]
