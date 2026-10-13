@@ -427,13 +427,13 @@ class FlowTest(Fixture):
         self.assertIn("worse", msg)
         self.assertIn("The current run did the work; the proposed run idled.", msg)   # unblinded, capitalised
         self.assertIn("current better", msg)
-        # adopting exactly the trialled files links probation to the verdict, with no margin
+        # adopting the trialled edit links probation to the verdict, with no margin
         (self.root / "shaft" / "extra.py").write_bytes(b"# proposed\n")
-        tried = trial.match(NAME, self.root, ["shaft/extra.py"])
+        tried = trial.match(NAME, self.root, ["shaft/extra.py"], {})
         self.assertEqual((tried or {}).get("verdict"), "worse")
-        self.assertIsNone(trial.match(NAME, self.root, ["shaft/extra.py", "shaft/other.py"]))
+        self.assertIsNone(trial.match(NAME, self.root, ["shaft/extra.py", "shaft/other.py"], {}))
         (self.root / "shaft" / "extra.py").write_bytes(b"# proposed!\n")
-        self.assertIsNone(trial.match(NAME, self.root, ["shaft/extra.py"]))   # one byte off: not that trial
+        self.assertIsNone(trial.match(NAME, self.root, ["shaft/extra.py"], {}))   # another edit: not that trial
         with mock.patch.object(metrics, "judgments", lambda n: []):
             metrics.start_probation(NAME, "abc", ["shaft/extra.py"], trial=tried)
         entry = json.loads(metrics._probation_path(NAME).read_text())[-1]
@@ -441,6 +441,21 @@ class FlowTest(Fixture):
         self.assertEqual(entry["margin"], 0.0)
         self.assertEqual(entry["trial"]["id"], t["id"])
         self.assertIn("Trials of my proposed changes", "\n".join(trial.stats_lines(NAME)))
+
+    def test_the_trialled_edit_is_recognised_on_a_file_that_moved_on(self):
+        """wren adopted its trialled sentence on top of a template merge that had landed in prompts.py meanwhile;
+        a byte-for-byte match missed it, so its probation never knew the verdict (2026-10-13)."""
+        base = trial.committed_code(self.project, NAME)["shaft/prompts.py"]
+        cand = base.replace(b"\n", b"\nTRIALLED SENTENCE\n", 1)
+        t = trial.create(NAME, {"shaft/prompts.py": cand}, "a sentence helps", project=self.project, n=2)
+        t.update(status="done", verdict={"label": "better", "W": 4, "L": 0, "T": 2})
+        trial.save(t)
+        moved = base + b"\n# a template merge landed here meanwhile\n"
+        (self.root / "shaft" / "prompts.py").write_bytes(moved.replace(b"\n", b"\nTRIALLED SENTENCE\n", 1))
+        self.assertEqual((trial.match(NAME, self.root, ["shaft/prompts.py"], {"shaft/prompts.py": moved})
+                          or {}).get("id"), t["id"])
+        (self.root / "shaft" / "prompts.py").write_bytes(moved.replace(b"\n", b"\nANOTHER SENTENCE\n", 1))
+        self.assertIsNone(trial.match(NAME, self.root, ["shaft/prompts.py"], {"shaft/prompts.py": moved}))
 
     def test_the_proposed_run_that_crashes_loses_without_a_judge(self):
         arms = iter([self.arm(True), self.arm(False)] * 4)

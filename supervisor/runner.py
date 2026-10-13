@@ -532,7 +532,7 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
     if kept:
         head = git_wt(root, "rev-parse", "HEAD").stdout.strip()
         from . import trial
-        tried = trial.match(name, root, kept)
+        tried = trial.match(name, root, kept, before["code"])
         metrics.start_probation(name, head, kept, trial=tried)
         if tried:
             log(f"{name}: kept change is trial {tried['id']}'s ({tried['verdict']})")

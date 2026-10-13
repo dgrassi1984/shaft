@@ -152,8 +152,8 @@ SPECS["trial"] = _spec(
     "which is which compares each pair for useful, correct work. The verdict (better / worse / no clear difference, "
     "with the judge's reasons per cycle) arrives in your inbox later — minutes on a cloud model; on the local model "
     "it uses only idle time and may move to a cloud model. record(kind='trials') shows progress. Nothing is applied: "
-    "if you want the change, copy the files into place yourself; if they match the trialled files exactly, your "
-    "probation knows the verdict. Only autonomous cycles are replayed: a change that only affects conversations or "
+    "if you want the change, make the edit yourself (on the file as it is then); if it is the trialled edit — the same "
+    "lines removed and added — your probation knows the verdict. Only autonomous cycles are replayed: a change that only affects conversations or "
     "sleep is not measured. One trial at a time, a few per day.",
     {"files": {"type": "array", "description": "the change: target path and the staged file it comes from",
                "items": {"type": "object", "properties": {

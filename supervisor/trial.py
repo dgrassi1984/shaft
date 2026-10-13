@@ -1001,8 +1001,9 @@ def report(t: dict) -> str:
     note = {"worse": " Because the verdict is 'worse', if you adopt it anyway your probation will revert it on any "
                      "drop in judged success (instead of only a clear drop).",
             }.get(v.get("label"), "")
-    lines += ["", "Nothing was applied. To adopt the change, put exactly these files in place (e.g. with run: cp). "
-                  "If the files you keep match these exactly, your probation knows this verdict." + note]
+    lines += ["", "Nothing was applied. To adopt the change, make exactly this edit (the same lines removed and added) "
+                  "— if a file moved on since, apply the edit to its current version. If the edit you keep is this "
+                  "one, your probation knows this verdict." + note]
     return "\n".join(lines)
 
 
@@ -1151,18 +1152,32 @@ def describe_all(name: str, before: datetime | None = None, limit: int = 20) -> 
     return "\n".join(describe(t) for t in ts[-limit:])
 
 
-def match(name: str, root: Path, kept: list[str]) -> dict | None:
-    """The finished trial whose change is exactly what the instance kept: the same files, byte for byte."""
+def _edit(old: bytes | None, new: bytes | None) -> tuple:
+    """What a change does to one file, wherever the file stands: (lines removed, lines added), each sorted.
+    None for a file the change deletes or creates is an empty side."""
+    a = (old or b"").decode(errors="replace").splitlines()
+    b = (new or b"").decode(errors="replace").splitlines()
+    removed, added = [], []
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if op != "equal":
+            removed += a[i1:i2]
+            added += b[j1:j2]
+    return tuple(sorted(removed)), tuple(sorted(added)), new is None
+
+
+def match(name: str, root: Path, kept: list[str], before: dict[str, bytes]) -> dict | None:
+    """The finished trial whose change is the one the instance kept: the same files, each with the same lines
+    removed and added — matched on the edit, not on whole files, because the rest of a file may have moved on
+    between the trial and the adoption (wren adopted its trialled sentence on top of a template merge that had
+    landed in the same file meanwhile, 2026-10-13)."""
+    now = {rel: ((root / rel).read_bytes() if (root / rel).is_file() and not (root / rel).is_symlink() else None)
+           for rel in kept}
+    kept_edit = {rel: _edit(before.get(rel), now[rel]) for rel in kept}
     for t in reversed(all_trials(name)):
-        if t["status"] != "done" or t["by"] != "instance":
+        if t["status"] != "done" or t["by"] != "instance" or {f["path"] for f in t["files"]} != set(kept):
             continue
-        paths = {f["path"] for f in t["files"]}
-        if paths != set(kept):
-            continue
-        same = all((not (root / f["path"]).exists()) if f["sha256"] is None else
-                   ((root / f["path"]).is_file() and _sha((root / f["path"]).read_bytes()) == f["sha256"])
-                   for f in t["files"])
-        if same:
+        base, cand = _files(name, t["id"], "base"), _files(name, t["id"], "candidate")
+        if all(_edit(base.get(rel), cand.get(rel)) == kept_edit[rel] for rel in kept):
             v = t["verdict"] or {}
             return {"id": t["id"], "verdict": v.get("label"), "W": v.get("W"), "L": v.get("L"), "T": v.get("T")}
     return None
