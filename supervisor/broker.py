@@ -229,9 +229,13 @@ def html_to_text(html: str) -> tuple[str, str]:
 
 class Broker:
     def __init__(self, name: str, project: Path, secrets_env: dict[str, str], log_path: Path,
-                 max_calls: int = 60):
+                 max_calls: int = 60, root: Path | None = None, usage_name: str | None = None):
         self.name, self.project, self.secrets = name, project, secrets_env
         self.log_path, self.max_calls = log_path, max_calls
+        # The folder the run works in (a battery control lives outside instances/), and the name its cloud
+        # spending is counted under (battery runs are not charged to the instance's own daily cap).
+        self.root = Path(root).resolve() if root else (project / "instances" / name).resolve()
+        self.usage_name = usage_name or name
         from .core import disabled_tools
         self.disabled = disabled_tools(name)   # switched off by the operator: not offered, and refused
         self.token = secrets.token_hex(16)
@@ -291,9 +295,9 @@ class Broker:
                 try:
                     body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
                     if body.get("stream") and str(body.get("model", "")).startswith("openrouter/"):
-                        return self._llm_stream(cloudllm.openrouter_stream(broker.name, body, broker.secrets),
+                        return self._llm_stream(cloudllm.openrouter_stream(broker.usage_name, body, broker.secrets),
                                                 body["model"])
-                    reply = cloudllm.complete(broker.name, body, broker.secrets, broker.remembered)
+                    reply = cloudllm.complete(broker.usage_name, body, broker.secrets, broker.remembered)
                 except cloudllm.CloudError as e:
                     broker._log(f"{broker.name} llm {body.get('model', '?')} -> ERROR {e}")
                     return self._reply(e.status, {"error": {"message": str(e)}})
@@ -448,7 +452,7 @@ class Broker:
         if not command.strip():
             raise ValueError("empty command")
         timeout_s = max(1, min(int(timeout_s), 300))
-        root = (self.project / "instances" / self.name).resolve()
+        root = self.root
         workdir = contained(root, *Path(cwd).parts) if cwd not in ("", ".") else root
         if not workdir.is_dir():
             raise ValueError(f"no directory {cwd!r} in your folder")
@@ -497,7 +501,7 @@ class Broker:
         if len(task.strip()) < 20:
             raise ValueError("describe the task: what to change and why")
         try:
-            r = coder.delegate(self.project / "instances" / self.name, self.name, task)
+            r = coder.delegate(self.root, self.name, task)
         except coder.CoderError as e:
             self.handoffs.append({"task": task, "applied": False, "error": str(e)})
             raise
@@ -515,7 +519,7 @@ class Broker:
 
     def _history(self, commit: str = "", path: str = "", limit: int = 15) -> str:
         from .core import git_wt
-        root = (self.project / "instances" / self.name).resolve()
+        root = self.root
         if path and (path.startswith(("-", "/")) or ".." in Path(path).parts):
             raise ValueError("path must be relative to your folder")
         pathspec = ["--", path] if path else []
@@ -564,7 +568,7 @@ class Broker:
         return text if len(text) <= RUN_OUTPUT_CHARS else "[... older entries cut]\n" + text[-RUN_OUTPUT_CHARS:]
 
     def _root(self) -> Path:
-        return (self.project / "instances" / self.name).resolve()
+        return self.root
 
     def _http_request(self, url: str, method: str = "GET", headers: dict | None = None, body=None, auth: str = "",
                       timeout_s: int = 30, max_chars: int = 12000) -> str:

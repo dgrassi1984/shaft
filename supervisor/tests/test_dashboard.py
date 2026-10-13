@@ -26,7 +26,7 @@ class InstanceStateTest(unittest.TestCase):
                         mock.patch("supervisor.runner.open_conversations", return_value={}),
                         mock.patch.object(dashboard, "paused", return_value=False),
                         mock.patch.object(dashboard, "_usd_today", return_value=0.01),
-                        mock.patch.object(dashboard, "_judged", return_value=(3, 1.0))]
+                        mock.patch.object(dashboard, "_judged", return_value=(3, 1.0, 2.0))]
         for p in self.patches:
             p.start()
             self.addCleanup(p.stop)

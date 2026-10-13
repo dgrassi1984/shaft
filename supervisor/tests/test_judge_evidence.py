@@ -30,7 +30,8 @@ class FullEvidenceReachesTheJudge(InstanceCase):
         replies = [
             {"tool_calls": [("declare_intent", {"goal": "rewrite self/self.md so it is no longer false",
                                                 "success_criterion": "read-back shows the Goals & constraints "
-                                                                     "section kept", "confidence": 80})]},
+                                                                     "section kept", "confidence": 80,
+                                                "origin": "self"})]},
             {"tool_calls": [("update_self_model", {"text": NEW_SELF})]},
             {"tool_calls": [("read_file", {"path": "self/self.md"})]},
             {"tool_calls": [("finish_cycle", {"what_happened": "rewrote self.md; the read-back shows Goals & "
