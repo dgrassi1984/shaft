@@ -89,11 +89,14 @@ class Client:
                on_reasoning: Callable[[str], None] | None = None,
                on_retry: Callable[[int, int], None] | None = None,
                tools: list[dict] | None = None,
-               on_progress: Callable[[int, int], None] | None = None, think: bool = True) -> Reply:
-        """on_progress(processed, total) reports prompt reading, where the server supports it."""
+               on_progress: Callable[[int, int], None] | None = None, think: bool = True,
+               on_tool_text: Callable[[str, int], None] | None = None) -> Reply:
+        """on_progress(processed, total) reports prompt reading, where the server supports it;
+        on_tool_text(name, chars) a tool call the model is still writing (SHAFT's server)."""
         return self._with_retry(messages, max_tokens, purpose, stream=True, tools=tools,
                                 on_content=on_content, on_reasoning=on_reasoning,
-                                on_retry=on_retry, on_progress=on_progress, think=think)
+                                on_retry=on_retry, on_progress=on_progress, think=think,
+                                on_tool_text=on_tool_text)
 
     # -- internals ----------------------------------------------------------
     def _with_retry(self, messages, max_tokens, purpose, stream, on_retry=None, **callbacks) -> Reply:
@@ -124,7 +127,7 @@ class Client:
         raise AssertionError("unreachable")
 
     def _call(self, messages, max_tokens, purpose, stream, tools=None,
-              on_content=None, on_reasoning=None, on_progress=None, think=True) -> Reply:
+              on_content=None, on_reasoning=None, on_progress=None, think=True, on_tool_text=None) -> Reply:
         body = {"model": self.model, "messages": messages, "max_tokens": max_tokens}
         if self.presence_penalty:   # Qwen's advice for quantized models: curbs endless repetition
             body["presence_penalty"] = self.presence_penalty
@@ -163,7 +166,7 @@ class Client:
         try:
             with urllib.request.urlopen(request, timeout=self.timeout_s) as resp:
                 if stream:
-                    self._read_stream(resp, reply, on_content, on_reasoning, on_progress)
+                    self._read_stream(resp, reply, on_content, on_reasoning, on_progress, on_tool_text)
                 else:
                     data = json.load(resp)
                     choice = data["choices"][0]
@@ -198,7 +201,7 @@ class Client:
             self._log(purpose, reply, time.monotonic() - started, error)
 
     @staticmethod
-    def _read_stream(resp, reply: Reply, on_content, on_reasoning, on_progress=None) -> None:
+    def _read_stream(resp, reply: Reply, on_content, on_reasoning, on_progress=None, on_tool_text=None) -> None:
         content, reasoning = [], []
         calls: dict[int, dict] = {}
         for raw in resp:
@@ -208,12 +211,20 @@ class Client:
                 if done.isdigit() and total.isdigit():
                     on_progress(int(done), int(total))
                 continue
+            if line.startswith(": tool ") and on_tool_text:   # SHAFT's server: ": tool write_file 1834"
+                parts = line.split()
+                if len(parts) == 4 and parts[3].isdigit():
+                    on_tool_text(parts[2], int(parts[3]))
+                continue
             if not line.startswith("data:"):
                 continue
             payload = line[5:].strip()
             if payload == "[DONE]":
                 break
             chunk = json.loads(payload)
+            if chunk.get("error") and not chunk.get("choices"):   # an error sent mid-stream (OpenRouter does)
+                err = chunk["error"]
+                raise LLMError(f"stream error: {err.get('message', err) if isinstance(err, dict) else err}")
             if chunk.get("usage"):
                 reply.usage = chunk["usage"]
             progress = chunk.get("prompt_progress")

@@ -298,10 +298,14 @@ def _respond(client: Client, cfg, toolbox: Toolbox, messages: list[dict], view):
         if total:
             view.status("reading my memory", f"{processed * 100 // total}% of {total / 1000:.1f}k tokens")
 
+    def on_tool_text(name: str, chars: int) -> None:   # the model is still writing this tool call
+        view.status(f"writing a call to {name}" if name != "?" else "writing a tool call",
+                    f"{chars / 1000:.1f}k chars" if chars >= 1000 else f"{chars} chars")
+
     def call(msgs, t=tools):
         return client.stream(msgs, cfg.MAX_TOKENS_TALK, purpose="talk", tools=t,
                              on_content=view.content_chunk, on_reasoning=view.reasoning_chunk,
-                             on_retry=view.retry, on_progress=on_progress)
+                             on_retry=view.retry, on_progress=on_progress, on_tool_text=on_tool_text)
 
     def on_tool(name: str, args: str, result: str) -> None:
         view.tool_end(name, args, not result.startswith("ERROR"), result)
