@@ -158,10 +158,12 @@ class Toolbox:
         gone = [l for l in old if l.strip() and l not in kept]
         if not gone:
             return f"wrote {len(content)} chars to {path}"
-        # I once rewrote a running record and silently dropped its earlier entries: say what went.
-        return (f"wrote {len(content)} chars to {path}. Note: {len(gone)} line(s) that were in the file are "
-                f"gone now, e.g. {gone[0][:120]!r}. If that was not intended: the old version is in "
-                f"history(path={path!r}); and append_file adds without replacing.")
+        # I once rewrote a running record and silently dropped its earlier entries: say what went — and say
+        # first that the write is complete ("N lines are gone" alone read as "only N lines were replaced").
+        return (f"wrote {len(content)} chars to {path}: the file now contains exactly what you wrote "
+                f"({len(content.splitlines())} lines). Compared with before, {len(gone)} earlier line(s) are no "
+                f"longer in it, e.g. {gone[0][:120]!r}. If that was not intended, the old version is in "
+                f"history(path={path!r}); append_file adds without replacing.")
 
     def _t_append_file(self, path: str, content: str) -> str:
         target = self._path(path, for_write=True)
