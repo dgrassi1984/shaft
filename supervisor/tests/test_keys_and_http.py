@@ -135,6 +135,32 @@ class KeysAndHttpTest(unittest.TestCase):
         self.assertFalse((self.project / "elsewhere.json").exists())
 
 
+class ThroughTheInstancesClientTest(unittest.TestCase):
+    def test_secret_set_as_the_instance_calls_it(self):
+        # Regression (wren, 2026-10-13): "ERROR: TypeError: call() got multiple values for argument 'name'" — the
+        # instance's broker.call(name, **args) took secret_set's own `name` argument as the tool name. The
+        # broker-level tests above called the broker directly and never went through the instance's client.
+        project = Path(tempfile.mkdtemp(prefix="shaft-proj-")).resolve()
+        self.addCleanup(shutil.rmtree, project, True)
+        (project / "instances" / "wren").mkdir(parents=True)
+        with mock.patch.object(core, "SUP_DIR", project / ".supervisor"):
+            b = Broker("wren", project, {}, project / "broker.log")
+            base = b.start()
+            self.addCleanup(b.stop)
+            template = Path(__file__).resolve().parents[2] / "template"
+            sys.path.insert(0, str(template))
+            from shaft.tools import Toolbox
+            with mock.patch.dict(os.environ, {"SHAFT_BROKER_URL": base, "SHAFT_BROKER_TOKEN": b.token}):
+                box = Toolbox(project / "instances" / "wren")
+                out = box.run("secret_set", json.dumps({"name": "github", "value": TOKEN, "hosts": ["api.github.com"]}))
+                listing = box.run("secret_list", "{}")
+                gone = box.run("secret_delete", json.dumps({"name": "github"}))
+        self.assertTrue(out.startswith("stored your key 'github'"), out)
+        self.assertIn("github: hosts api.github.com", listing)
+        self.assertIn("deleted", gone)
+        self.assertNotIn(TOKEN, json.dumps(box.log))
+
+
 class KeysOutOfReachTest(unittest.TestCase):
     """The instance's own process, its plugins and `run` cannot read the key file; nor can the coder."""
 

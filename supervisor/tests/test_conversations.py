@@ -58,6 +58,27 @@ class OpenConversationTest(unittest.TestCase):
         self.assertEqual(runner.open_conversations("shaft"), {})   # closed: no longer open
         self.assertFalse(runner.is_busy("shaft"))
 
+    def test_ctrl_c_cannot_abort_the_checks_after_a_reply(self):
+        # Regression (2026-10-13): a Ctrl-C while the gate tested shaft's new plugin aborted the settle halfway —
+        # no revert, no commit — and the broken files then blocked every template update.
+        import os
+        import signal
+        done = []
+
+        def settle(*a, **k):
+            os.kill(os.getpid(), signal.SIGINT)   # the operator presses Ctrl-C during the checks
+            done.append(True)
+            return True
+
+        before = signal.getsignal(signal.SIGINT)
+        turn = runner.Turn("shaft", self.sup, "talk")
+        with mock.patch.object(runner, "_snapshot", return_value={}), mock.patch.object(runner, "_settle", settle):
+            turn.begin()
+            turn.end()
+        self.assertEqual(done, [True])
+        self.assertIs(signal.getsignal(signal.SIGINT), before)   # Ctrl-C works again afterwards
+        self.assertFalse(runner.is_busy("shaft"))
+
     def test_crashed_conversation_stops_counting(self):
         folder = self.sup / "conversations" / "shaft"
         folder.mkdir(parents=True)

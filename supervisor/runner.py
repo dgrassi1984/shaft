@@ -435,12 +435,20 @@ class Turn:
     def end(self) -> None:
         if not self.held:
             return
+        # The checks must finish: a Ctrl-C during the gate's tests (the talk client only intercepts it while a
+        # reply streams) aborted them halfway — no revert, no commit, and an instance's broken plugin stayed
+        # in its folder, blocking its updates (2026-10-13). So Ctrl-C is ignored until they are done.
+        import threading
+        main = threading.current_thread() is threading.main_thread()
+        old = signal.signal(signal.SIGINT, signal.SIG_IGN) if main else None
         try:
             handoffs = self.broker.handoffs[self.handoffs_seen:] if self.broker else []
             _settle(self.name, self.root, self.kind, self.before, handoffs)
         finally:
             self.held.close()
             self.held = None
+            if old is not None:
+                signal.signal(signal.SIGINT, old)
 
     @contextmanager
     def __call__(self, on_wait=None):
