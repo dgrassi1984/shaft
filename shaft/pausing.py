@@ -34,6 +34,9 @@ def _on_signal(signum, frame):
 def install() -> None:
     signal.signal(signal.SIGUSR1, _on_signal)
     _state["installed"] = True
+    tmp = _root() / ".tmp"
+    tmp.mkdir(parents=True, exist_ok=True)
+    (tmp / "pausable").write_text(str(os.getpid()))   # SIGUSR1 kills a process without this handler: say I have it
 
 
 @contextmanager
