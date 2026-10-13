@@ -117,17 +117,47 @@ def paused(name: str) -> bool:
 
 def instance_config(name: str) -> dict[str, str]:
     """An instance's config.env (KEY="value"  # comment), read as text — never executed."""
-    out: dict[str, str] = {}
     try:
-        text = (instance_root(name) / "config.env").read_text()
+        return config_values((instance_root(name) / "config.env").read_text())
     except OSError:
-        return out
+        return {}
+
+
+CONFIG_KEY = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+
+
+def _config_key(line: str) -> str | None:
+    key, eq, _ = line.partition("=")
+    return key.strip() if eq and key.strip().isidentifier() else None
+
+
+def config_values(text: str) -> dict[str, str]:
+    out: dict[str, str] = {}
     for line in text.splitlines():
-        key, eq, value = line.partition("=")
-        if eq and key.strip().isidentifier():
-            value = value.split("#")[0].strip() if not value.strip().startswith('"') else value.strip()[1:].split('"')[0]
-            out[key.strip()] = value
+        if key := _config_key(line):
+            value = line.partition("=")[2].strip()
+            out[key] = value[1:].split('"')[0] if value.startswith('"') else value.split("#")[0].strip()
     return out
+
+
+def config_line(text: str, key: str) -> str | None:
+    """The line that sets `key` in config.env text (the last one: it is the one that counts), or None."""
+    found = [line for line in text.splitlines() if _config_key(line) == key]
+    return found[-1] if found else None
+
+
+def config_with(text: str, key: str, line: str | None) -> str:
+    """config.env text with the line that sets `key` replaced by `line` — appended if no line sets it,
+    removed if `line` is None. Every other line is kept as it is."""
+    lines = text.splitlines()
+    at = max((i for i, l in enumerate(lines) if _config_key(l) == key), default=None)
+    if at is None:
+        lines += [line] if line is not None else []
+    elif line is None:
+        del lines[at]
+    else:
+        lines[at] = line
+    return "\n".join(lines) + "\n" if lines else ""
 
 
 def disabled_tools(name: str) -> set[str]:

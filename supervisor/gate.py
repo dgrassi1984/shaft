@@ -14,7 +14,11 @@ from pathlib import Path
 
 from . import sandbox
 
-CODE_PATHS = ("shaft", "tests", "plugins", "config.env")
+CODE_PATHS = ("shaft", "tests", "plugins")
+# Not config.env: the operator edits it too, at any time — kant's mid-cycle switch to Opus was reverted as the
+# instance's change when its plugin failed the tests (2026-10-13). The instance changes it only through the
+# broker's set_config (its sandbox cannot write the file), which records each line it set; revert_config undoes
+# exactly those, and everything else in the file is the operator's.
 PROJECT = Path(__file__).resolve().parent.parent
 
 
@@ -47,6 +51,30 @@ def restore(instance_root: Path, before: dict[str, bytes], paths: list[str]) -> 
             target.write_bytes(before[rel])
         elif target.exists():
             target.unlink()
+
+
+def config_without(text: str, writes: list[dict]) -> tuple[str, list[str]]:
+    """config.env text with the instance's set_config writes undone, newest first, and the keys put back.
+    A line changed again after the instance set it (the operator's later edit) is left as it is."""
+    from .core import config_line, config_with
+    back = set()
+    for w in reversed(writes):
+        if config_line(text, w["key"]) == w["new"]:
+            text = config_with(text, w["key"], w["old"])
+            back.add(w["key"])
+    return text, sorted(back)
+
+
+def revert_config(instance_root: Path, writes: list[dict]) -> list[str]:
+    """Undo the instance's set_config writes in its config.env, keeping every other line. Returns the keys."""
+    from .core import contained, safe_write
+    if not writes:
+        return []
+    path = contained(instance_root, "config.env")
+    text, back = config_without(path.read_text() if path.is_file() else "", writes)
+    if back:
+        safe_write(instance_root, "config.env", text)
+    return back
 
 
 def run_tests(instance_root: Path, home: Path, timeout_s: int = 900) -> tuple[bool, str]:

@@ -319,12 +319,13 @@ def _pause(name: str, root: Path, kind: str, proc, held: _Held, run: dict, broke
             return 0.0
         time.sleep(0.25)
     log(f"{name}: {kind} paused — the operator opened a conversation")
-    _settle(name, root, kind, run["before"], broker.handoffs[run["seen"]:])
+    _settle(name, root, kind, run["before"], broker.handoffs[run["seen"]:], broker.config_writes[run["cseen"]:])
     held.release()
     while open_conversations(name):
         time.sleep(2)
     held.acquire(wait=True)
-    run["before"], run["seen"] = _snapshot(root), len(broker.handoffs)   # the conversation's changes are not mine
+    # The conversation's changes are not mine.
+    run["before"], run["seen"], run["cseen"] = _snapshot(root), len(broker.handoffs), len(broker.config_writes)
     paused = time.monotonic() - t0
     if run.get("deadline"):
         run["deadline"] += paused
@@ -398,7 +399,7 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
          output: list[str] | None = None, driver=None, held: _Held | None = None) -> int:
     log(f"{name}: start {kind} {describe_knobs()}")
     _clean_tmp(root)
-    run = {"before": _snapshot(root), "seen": 0}
+    run = {"before": _snapshot(root), "seen": 0, "cseen": 0}
     budget = None if interactive else (SLEEP_TIMEOUT_S if kind == "sleep" else CYCLE_TIMEOUT_S)
     broker, cmd, env = _launch(name, root, kind, agent_args, budget)
     run["deadline"] = float(env["SHAFT_DEADLINE"]) if env.get("SHAFT_DEADLINE") else None
@@ -466,7 +467,7 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
         why = "".join(err_tail).strip()[-1200:] or "(it printed nothing)"
         journal_note(root, f"Supervisor: {kind} failed", f"My {kind} run ended with an error (exit {code}), so it "
                      f"did not complete. What it printed last:\n\n```\n{why}\n```")
-    if not _settle(name, root, kind, run["before"], broker.handoffs[run["seen"]:]):
+    if not _settle(name, root, kind, run["before"], broker.handoffs[run["seen"]:], broker.config_writes[run["cseen"]:]):
         return code or 1
     if kind == "live":
         from . import metrics
@@ -475,28 +476,34 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
     return code
 
 
-def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]) -> bool:
+def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict],
+            config_writes: list[dict] = ()) -> bool:
     """Everything enforced after the instance acted: append-only journal, core-personality pace, the
-    test gate on code (revert on failure), the commit, probation and the personality check.
-    Returns False if the commit failed."""
+    test gate on code and on the config.env lines it set (revert on failure), the commit, probation and
+    the personality check. Returns False if the commit failed."""
     for note in (enforce_journal(root, before["journal"]), enforce_core(name, root, before["core"])):
         if note:
             log(f"{name}: {note}")
             journal_note(root, "Supervisor", note)
 
     touched = gate.changed(before["code"], gate.snapshot(root))
+    configured = sorted({w["key"] for w in config_writes})
     kept: list[str] = []
-    if touched:
+    if touched or configured:
         ok, test_log = gate.run_tests(root, HOME)
         if ok:
-            kept = touched
-            log(f"{name}: code change passed tests: {touched}")
+            kept = touched + (["config.env"] if configured else [])
+            log(f"{name}: code change passed tests: {touched} config: {configured}")
         else:
             gate.restore(root, before["code"], touched)
-            log(f"{name}: code change FAILED tests, reverted: {touched}")
-            journal_note(root, "Supervisor: code change reverted",
-                         "My changes to " + ", ".join(touched) + " were reverted because the tests "
-                         "failed. Last lines of the test output:\n\n```\n" + test_log[-1500:] + "\n```")
+            back = gate.revert_config(root, list(config_writes))
+            undone = touched + ([f"config.env ({', '.join(back)})"] if back else [])
+            log(f"{name}: code change FAILED tests, reverted: {touched} config: {back}")
+            if undone:
+                journal_note(root, "Supervisor: code change reverted",
+                             "My changes to " + ", ".join(undone) + " were reverted because the tests "
+                             "failed. Last lines of the test output:\n\n```\n" + test_log[-1500:] + "\n```")
+    _commit_outside_config(name, root, list(config_writes) if "config.env" in kept else [])
     applied = [h for h in handoffs if h.get("applied")]
     note = "\n".join(f"Delegated to {h['model']} at the instance's request (${h['usd']:.2f}): {h['summary'][:300]} "
                      f"[{', '.join(h['files'])}]" for h in applied)
@@ -521,6 +528,36 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
         except Exception as e:   # measurement never breaks a run
             log(f"{name}: personality check failed: {type(e).__name__}: {e}")
     return True
+
+
+def _commit_outside_config(name: str, root: Path, writes: list[dict]) -> None:
+    """config.env as changed from outside the instance — by the operator, who may edit it at any time, even
+    mid-run — committed on its own, before the run's commit: never presented as the instance's change, and
+    never undone with one of its changes on probation. `writes` are the instance's lines still in the file."""
+    from .core import config_values
+    path = root / "config.env"
+    if path.is_symlink() or not path.is_file():
+        return
+    outside, _ = gate.config_without(path.read_text(), writes)
+    head = git_wt(root, "show", "HEAD:config.env", check=False)
+    if head.returncode == 0 and head.stdout == outside:
+        return
+    try:
+        if [p for p in git_wt(root, "diff", "--cached", "--name-only", "-z").stdout.split("\0") if p]:
+            log(f"{name}: config.env changed from outside, not committed: other changes are staged")
+            return
+        was, now = config_values(head.stdout if head.returncode == 0 else ""), config_values(outside)
+        diff = [f"- {k}: {was.get(k, '(not set)')} -> {now.get(k, '(not set)')}"
+                for k in sorted(was.keys() | now.keys()) if was.get(k) != now.get(k)]
+        blob = git_wt(root, "hash-object", "-w", "--stdin", input=outside).stdout.strip()
+        git_wt(root, "update-index", "--add", "--cacheinfo", f"100644,{blob},config.env")
+        git_wt(root, "-c", "user.name=SHAFT supervisor", "-c", "user.email=supervisor@shaft.localhost", "commit",
+               "-q", "-m", f"{name}: config.env changed from outside the instance\n\nNot the instance's change (it "
+               "sets config.env only through set_config): the operator's.\n" + "\n".join(diff or ["- (comments)"]))
+    except subprocess.CalledProcessError as e:
+        log(f"{name}: could not commit config.env changed from outside: {(e.stderr or e.stdout or '').strip()}")
+        return
+    log(f"{name}: committed config.env changed from outside the instance: {diff}")
 
 
 class Turn:
@@ -548,6 +585,7 @@ class Turn:
         self.held = stack
         self.before = _snapshot(self.root)
         self.handoffs_seen = len(self.broker.handoffs) if self.broker else 0
+        self.config_seen = len(self.broker.config_writes) if self.broker else 0
 
     def end(self) -> None:
         if not self.held:
@@ -560,7 +598,8 @@ class Turn:
         old = signal.signal(signal.SIGINT, signal.SIG_IGN) if main else None
         try:
             handoffs = self.broker.handoffs[self.handoffs_seen:] if self.broker else []
-            _settle(self.name, self.root, self.kind, self.before, handoffs)
+            configured = self.broker.config_writes[self.config_seen:] if self.broker else []
+            _settle(self.name, self.root, self.kind, self.before, handoffs, configured)
         finally:
             self.held.close()
             self.held = None

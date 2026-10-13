@@ -40,7 +40,7 @@ class OpenConversationTest(unittest.TestCase):
 
         fake_proc = mock.Mock(returncode=0)
         fake_proc.poll.return_value = 0
-        broker = mock.Mock(handoffs=[], counts={})
+        broker = mock.Mock(handoffs=[], config_writes=[], counts={})
         with mock.patch.object(runner, "instance_root", return_value=self.sup), \
              mock.patch.object(runner, "PROJECT", Path(__file__).resolve().parents[2]), \
              mock.patch.object(runner, "_launch", return_value=(broker, [], {})), \

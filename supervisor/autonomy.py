@@ -98,9 +98,9 @@ def describe_schedule(name: str) -> str:
                 "by hand.")
     interval = wake_interval(name)
     wakes = (f"wakes you for an autonomous cycle every {_every(interval)} (WAKE_INTERVAL_MINUTES in your "
-             f"config.env, at least {WAKE_FLOOR_MIN}; a wake that comes while you are already awake — a cycle, a "
+             f"config.env — change it with set_config — at least {WAKE_FLOOR_MIN}; a wake that comes while you are already awake — a cycle, a "
              f"conversation, your sleep — is skipped)") if interval else \
-        "does not wake you for cycles (WAKE_INTERVAL_MINUTES=0 in your config.env)"
+        "does not wake you for cycles (WAKE_INTERVAL_MINUTES=0 in your config.env; change it with set_config)"
     return (f"The supervisor {wakes}, and runs your sleep cycle every day at {SLEEP_AT[0]:02d}:{SLEEP_AT[1]:02d} "
             f"(a missed sleep is made up later that day). Within a cycle, what you do is up to you.")
 

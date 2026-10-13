@@ -23,6 +23,14 @@ def _no_secrets(root: Path) -> str:
     return f"(deny file-read* file-write* (subpath {_q(root / 'secrets')}))"
 
 
+def _no_config_writes(root: Path) -> str:
+    """config.env has two writers: the operator, and the instance through the broker's set_config, which records
+    each change. Writing it directly would make its changes indistinguishable from the operator's (the gate
+    reverted an operator's mid-run model switch as the instance's, kant 2026-10-13). This also stops a
+    rename, unlink or hard link of the file."""
+    return f"(deny file-write* (literal {_q(root / 'config.env')}))"
+
+
 def profile(instance_root: Path, home: Path, llm_ports: list[int], any_localhost: bool = False) -> str:
     root, home = Path(instance_root).resolve(), Path(home).resolve()
     lines = [
@@ -37,6 +45,7 @@ def profile(instance_root: Path, home: Path, llm_ports: list[int], any_localhost
         f"(allow file-read* (subpath {_q(root)}))",
         _ancestors_metadata(root, home),
         _no_secrets(root),
+        _no_config_writes(root),
         # Network: only the LLM endpoint(s) on localhost.
         "(deny network*)",
     ]
