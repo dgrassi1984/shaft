@@ -466,6 +466,15 @@ class WorkerTest(Fixture):
         super().setUp()
         self.addCleanup(shutil.rmtree, SUP_DIR / "trials" / NAME, True)
 
+    def test_scratch_left_by_a_killed_worker_is_swept_but_not_a_running_one(self):
+        old = Path(tempfile.mkdtemp(prefix="shaft-trial-"))
+        new = Path(tempfile.mkdtemp(prefix="shaft-trial-"))
+        self.addCleanup(shutil.rmtree, new, True)
+        os.utime(old, (time.time() - 3 * trial.CYCLE_TIMEOUT_S,) * 2)
+        trial.sweep_scratch()
+        self.assertFalse(old.exists())
+        self.assertTrue(new.exists())
+
     def test_trials_asked_for_together_get_their_own_ids(self):
         """Four operator trials created in the same second shared one id and overwrote each other (2026-10-13)."""
         from concurrent.futures import ThreadPoolExecutor
