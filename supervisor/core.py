@@ -113,6 +113,21 @@ def paused(name: str) -> bool:
     return (SUP_DIR / "paused").exists() or (SUP_DIR / f"paused-{name}").exists()
 
 
+def instance_config(name: str) -> dict[str, str]:
+    """An instance's config.env (KEY="value"  # comment), read as text — never executed."""
+    out: dict[str, str] = {}
+    try:
+        text = (instance_root(name) / "config.env").read_text()
+    except OSError:
+        return out
+    for line in text.splitlines():
+        key, eq, value = line.partition("=")
+        if eq and key.strip().isidentifier():
+            value = value.split("#")[0].strip() if not value.strip().startswith('"') else value.strip()[1:].split('"')[0]
+            out[key.strip()] = value
+    return out
+
+
 def disabled_tools(name: str) -> set[str]:
     """Supervisor tools the operator switched off for this instance (`shaft tools <name> off <tool>`).
     Kept in the supervisor's folder, not the instance's config.env: an instance must not switch a tool

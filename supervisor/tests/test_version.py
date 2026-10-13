@@ -43,7 +43,8 @@ class VersionTest(unittest.TestCase):
     def test_cloud_instance_shows_its_cloud_model(self):
         root = Path(tempfile.mkdtemp(prefix="shaft-inst-"))
         (root / "config.env").write_text('LLM_BASE_URL="broker"\nLLM_MODEL="claude-haiku-5-5"  # wren\n')
-        with mock.patch.object(version, "instance_root", return_value=root), \
+        from supervisor import core
+        with mock.patch.object(core, "instance_root", return_value=root), \
              mock.patch.object(version, "instance", return_value={"commit": "x", "template_behind": 0}), \
              mock.patch.object(version, "supervisor_commit", return_value="abc1234"):
             line = version.describe("wren")

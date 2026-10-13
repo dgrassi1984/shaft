@@ -250,7 +250,7 @@ def _launch(name: str, root: Path, kind: str, agent_args: list[str], budget: int
     cmd = sandbox.wrap(prof, [PYTHON, "-E", "-s", "-m", "shaft", *agent_args])
     extra = {"SHAFT_DEADLINE": f"{time.time() + budget - 60:.0f}"} if budget else {}
     from .autonomy import describe_schedule
-    extra["SHAFT_SCHEDULE"] = describe_schedule()
+    extra["SHAFT_SCHEDULE"] = describe_schedule(name)
     extra["SHAFT_OPEN_TALKS"] = ",".join(open_conversations(name))   # not to be written up yet
     env = sandbox.agent_env(os.environ, SHAFT_ROOT=str(root), TMPDIR=str(root / ".tmp"),
                             SHAFT_BROKER_URL=broker_url, SHAFT_BROKER_TOKEN=broker.token, **extra)

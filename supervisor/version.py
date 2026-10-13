@@ -9,7 +9,7 @@ import json
 import os
 from datetime import datetime
 
-from .core import SUP_DIR, git, git_wt, instance_root
+from .core import SUP_DIR, git, git_wt, instance_config, instance_root
 
 SERVICES = SUP_DIR / "services"
 CODE = {"model": ["supervisor/bonsai_server.py", "supervisor/bonsai_lora.py"], "api": ["supervisor"]}   # what each runs
@@ -68,7 +68,7 @@ def describe(name: str) -> str:
     behind = inst["template_behind"]
     parts.append(f"{name} code {inst['commit']}"
                  + ("" if not behind else f" ({behind} template change(s) not merged: shaft update {name})"))
-    cfg = _config(name)
+    cfg = instance_config(name)
     if cfg.get("LLM_BASE_URL") == "broker":
         parts.append(f"model {cfg.get('LLM_MODEL', '?')} via the broker (cloud)")
         return " · ".join(parts)
@@ -83,18 +83,3 @@ def describe(name: str) -> str:
     else:
         parts.append("model server: not running")
     return " · ".join(parts)
-
-
-def _config(name: str) -> dict[str, str]:
-    """The instance's config.env (KEY="value"  # comment), read as text — never executed."""
-    out: dict[str, str] = {}
-    try:
-        text = (instance_root(name) / "config.env").read_text()
-    except OSError:
-        return out
-    for line in text.splitlines():
-        key, eq, value = line.partition("=")
-        if eq and key.strip().isidentifier():
-            value = value.split("#")[0].strip() if not value.strip().startswith('"') else value.strip()[1:].split('"')[0]
-            out[key.strip()] = value
-    return out

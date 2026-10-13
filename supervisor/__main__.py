@@ -302,7 +302,9 @@ def main(argv: list[str]) -> int:
         p = sub.add_parser(verb, help=text)
         p.add_argument("names", nargs="*")
         p.add_argument("--all", action="store_true")
-    sub.add_parser("tick", help="one autonomous round over all awake, idle instances (run by launchd)")
+    sub.add_parser("tick", help="wake every instance once now (skipping any already awake)")
+    p = sub.add_parser("wake", help="one scheduled wake of an instance (run by the scheduler; skipped if awake)")
+    p.add_argument("name")
     p = sub.add_parser("api", help="OpenAI-compatible API for the instances, on your tailnet")
     p.add_argument("action", choices=["on", "off", "status", "key", "serve"])
     p = sub.add_parser("model", help="SHAFT's own Bonsai 2 model server (launchd service)")
@@ -396,6 +398,8 @@ def main(argv: list[str]) -> int:
         return code
     if args.cmd in ("live", "reflect", "sleep", "recover"):
         return run_many(args.cmd, args.names, args.all)
+    if args.cmd == "wake":
+        return autonomy.wake(args.name)
     if args.cmd == "tick":
         return autonomy.tick()
     if args.cmd == "api":

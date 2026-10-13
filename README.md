@@ -79,8 +79,9 @@ ln -s "$PWD/bin/shaft" ~/.local/bin/shaft   # once
 shaft talk [name]               # chat with its tools, in the terminal client (see below); --plain for line mode
 shaft talk [name] --as "NAME"   # you are not the operator: recorded as NAME, never remembered as the operator
 shaft live|reflect|sleep [name|--all]   # one autonomous cycle / reflection / consolidation
-shaft autonomy on|off|status    # SHAFT's scheduler service: a cycle every 2 h, sleep daily from 04:00
-                                # (a missed sleep is made up later that day; every decision is logged)
+shaft autonomy on|off|status    # SHAFT's scheduler service: each instance wakes every WAKE_INTERVAL_MINUTES
+                                # (its config.env; default 120, at least 10, 0 = never; a wake while it is
+                                # already awake is skipped), sleep daily from 04:00 (made up later if missed)
 shaft status [name]             # how each instance is doing, open conversations, which code is running
 shaft model on|off|status       # SHAFT's own Bonsai 2 server (launchd, :8780)
 shaft api on|off|status|key     # OpenAI-compatible API on your tailnet (see below)
