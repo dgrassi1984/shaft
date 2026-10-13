@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from . import agent, prompts
 from .llm import Client, LLMError
@@ -29,7 +30,7 @@ def run(cfg, state: State, client: Client) -> str:
         state.append_journal("Sleep (unfinished)", summary)
         state.append_episode({"kind": "sleep", "ended_by": outcome.ended_by, "tools": toolbox.log})
         raise LLMError(summary)
-    entry = outcome.reply.content.strip()
+    entry = re.sub(r"\A#{1,6} [^\n]*\n+", "", outcome.reply.content.strip())   # the journal adds the heading
     entry += "\n\n*Consolidation actions:* " + ("; ".join(changes) or "none")
     state.append_journal("Sleep", entry)
     state.append_episode({"kind": "sleep", "ended_by": outcome.ended_by, "tools": toolbox.log,
@@ -39,10 +40,11 @@ def run(cfg, state: State, client: Client) -> str:
 
 def _action(entry: dict) -> str:
     """'remember: <fact>' / 'write_file: memory/people/daniele.md' — what a consolidation step did."""
+    raw = entry.get("args") or "{}"
     try:
-        args = json.loads(entry.get("args") or "{}")
-    except ValueError:
-        args = {}
+        args = json.loads(raw)
+    except ValueError:   # the tool log keeps 2,000 chars: a long write_file's arguments are cut short
+        args = {k: m.group(1) for k in ("path", "layer") if (m := re.search(rf'"{k}"\s*:\s*"([^"]+)"', raw))}
     detail = next((str(args[k]) for k in ("path", "fact", "text", "layer", "query") if args.get(k)), "")
     detail = " ".join(detail.split())
     return entry["tool"] + (f": {detail[:90]}{'…' if len(detail) > 90 else ''}" if detail else "")
