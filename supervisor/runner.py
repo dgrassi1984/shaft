@@ -21,6 +21,7 @@ import signal
 import subprocess
 import sys
 import time
+import urllib.parse
 from contextlib import ExitStack, contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -29,7 +30,7 @@ from . import gate, sandbox
 from .broker import Broker
 from .core import (API_TALKS, BROKER_MAX_CALLS, EMBED_PORT, CORE_MIN_HOURS, CYCLE_TIMEOUT_S, HOME, INSTANCES, LLM_PORTS, PROJECT, PYTHON,
                    SLEEP_TIMEOUT_S, SUP_DIR, UnsafePath,
-                   commit_state, describe_knobs, git_wt, instance_root, journal_note, log, safe_mkdir,
+                   commit_state, describe_knobs, git_wt, instance_config, instance_root, journal_note, log, safe_mkdir,
                    safe_write, secrets_env)
 
 CORE_RE = re.compile(r"^## Core\n(.*?)(?=^## |\Z)", re.M | re.S)
@@ -87,6 +88,28 @@ def spawn_recover(name: str) -> None:
     subprocess.Popen([PYTHON, "-E", "-s", "-m", "supervisor", "recover", name], cwd=PROJECT,
                      stdin=subprocess.DEVNULL, stdout=out, stderr=out, start_new_session=True)
     log(f"{name}: background journal write-up started")
+
+
+LOCALHOST = {"localhost", "127.0.0.1", "::1"}
+
+
+def model_server(name: str) -> str | None:
+    """The local model server the instance's calls go to ('127.0.0.1:8780'), or None when it thinks with a cloud
+    model through the broker. Two instances compete for the model only when both use the same local server."""
+    url = instance_config(name).get("LLM_BASE_URL", "").strip()
+    if not url or url == "broker":
+        return None
+    parts = urllib.parse.urlsplit(url)
+    host = "127.0.0.1" if parts.hostname in LOCALHOST else parts.hostname
+    return f"{host}:{parts.port or (443 if parts.scheme == 'https' else 80)}"
+
+
+def sharing_model(name: str, others: list[str]) -> list[str]:
+    """Those of `others` whose runs take the model `name` needs: the same local server. A cloud model is never
+    shared — wren on MiMo and kant on Opus were asked to wrap up for every conversation with shaft, on Bonsai
+    (2026-10-13), and an instance on a cloud model waits for nobody."""
+    server = model_server(name)
+    return [] if server is None else [n for n in others if model_server(n) == server]
 
 
 def request_yield(names: list[str]) -> None:

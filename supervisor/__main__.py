@@ -26,7 +26,8 @@ from . import autonomy, evolution, finetune, gate, messages, metrics, runner, su
 from .core import (DEFAULT_INSTANCE, HOME, INSTANCES, NAME_RE, PROJECT, SUP_DIR, TEMPLATE, commit_state, git, git_wt,
                    instance_names, instance_root, journal_entries, journal_note, log, paused,
                    safe_mkdir, safe_write)
-from .runner import Busy, busy_with, is_busy, request_yield, run_agent, run_lock, spawn_recover
+from .runner import (Busy, busy_with, is_busy, model_server, request_yield, run_agent, run_lock, sharing_model,
+                     spawn_recover)
 
 
 # -- instances -------------------------------------------------------------------
@@ -597,12 +598,12 @@ def main(argv: list[str]) -> int:
             print(f"{args.name} is busy ({mine}); " + ("pausing it for your conversation…" if mine.startswith(
                 ("live", "sleep", "reflect")) else "your conversation starts when it finishes…"), file=sys.stderr)
         others = {n: b for n in instance_names() if n != args.name and (b := busy_with(n))}
-        background = [n for n, b in others.items() if not b.startswith("talk")]
+        background = sharing_model(args.name, [n for n, b in others.items() if not b.startswith("talk")])
         if background:
             request_yield(background)
-            print(f"note: {', '.join(f'{n} ({others[n]})' for n in background)} is using the model; asked to "
-                  f"wrap up at its next turn so you get it — the first reply may still wait for that turn.",
-                  file=sys.stderr)
+            print(f"note: {', '.join(f'{n} ({others[n]})' for n in background)} is using the model {args.name} "
+                  f"needs ({model_server(args.name)}); asked to wrap up at its next turn so you get it — the first "
+                  f"reply may still wait for that turn.", file=sys.stderr)
         ui_python = PROJECT / ".venv-ui" / "bin" / "python"
         if not args.plain and sys.stdin.isatty() and sys.stdout.isatty() and ui_python.exists():
             os.execv(ui_python, [str(ui_python), "-E", "-s", "-m", "supervisor.talk_ui", args.name, *extra])

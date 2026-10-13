@@ -266,8 +266,9 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
   `SHAFT_CYCLE_TIMEOUT_S` (2400 s), a sleep after `SHAFT_SLEEP_TIMEOUT_S` (5400 s). Runs know
   their deadline and wrap up with a report before it; a stopped run leaves a journal note.
 - **Your conversation comes first**: `shaft talk` asks other instances' running cycles to wrap
-  up at their next turn, and no scheduled cycle starts while a conversation is open (terminal or
-  API). A conversation holds its instance only while it replies, so you can chat in the terminal and
+  up at their next turn when they use the same local model server (an instance on a cloud model shares
+  nothing and is left alone, in either direction), and an instance's own scheduled cycle does not start
+  while a conversation with it is open (terminal or API). A conversation holds its instance only while it replies, so you can chat in the terminal and
   through the API at the same time. Open conversations are never written up early; a conversation
   picked up again after its write-up gets a further entry. Ctrl-C in a conversation ends it cleanly
   (the instance still writes its journal entry).
