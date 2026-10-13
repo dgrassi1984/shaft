@@ -182,6 +182,22 @@ class FileToolsTest(unittest.TestCase):
         self.assertNotIn("gone", call("write_file", path="notes/new.md", content="fresh\n"))
         self.assertIn("append-only", call("append_file", path="memory/journal.md", content="x"))
 
+    def test_config_env_is_changed_with_set_config_not_written(self):
+        # Regression: the sandbox denies config.env writes (only the broker's set_config records an instance's
+        # line, so the gate never reverts the operator's), and write_file("config.env") surfaced a bare OS
+        # PermissionError that did not say what to do. The template refuses it first and names set_config.
+        import json as _json
+        from shaft.tools import Toolbox
+        root = Path(tempfile.mkdtemp(prefix="shaft-tools-"))
+        (root / "config.env").write_text('LLM_MODEL="bonsai"\n')
+        t = Toolbox(root)
+        for name, path in (("write_file", "config.env"), ("append_file", "config.env"),
+                           ("write_file", "./config.env"), ("append_file", "notes/../config.env")):
+            out = t.run(name, _json.dumps({"path": path, "content": 'LLM_MODEL="other"\n'}))
+            self.assertTrue(out.startswith("ERROR: PermissionError"), (name, path, out))
+            self.assertIn("set_config", out, (name, path))
+        self.assertEqual((root / "config.env").read_text(), 'LLM_MODEL="bonsai"\n')
+
 
 if __name__ == "__main__":
     unittest.main()
