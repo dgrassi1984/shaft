@@ -132,7 +132,7 @@ class SupervisorSideTest(unittest.TestCase):
         sup, root = project / ".supervisor", project / "instances" / "shaft"
         root.mkdir(parents=True)
         settles = []
-        broker = mock.Mock(handoffs=[], counts={})
+        broker = mock.Mock(handoffs=[], config_writes=[], counts={})
         cmd = [sys.executable, "-c", FAKE_CYCLE]
         env = {"SHAFT_DEADLINE": f"{time.time() + 600:.0f}"}
         result, during = {}, {}

@@ -133,6 +133,14 @@ SPECS = {
         "or two; limits: 2 per cycle, a daily budget the supervisor keeps. Small edits (a line, a note) you "
         "can still do yourself.",
         {"task": S}),
+    "set_config": _spec(
+        "set_config",
+        "Set one value in your config.env (your model, WAKE_INTERVAL_MINUTES, budgets...): this is the only way "
+        "to change that file — it is not writable with write_file or run. Your own settings are read at the start "
+        "of each run; the supervisor reads its schedule from the file as it is. Like a code change, it is tested "
+        "at the end of the run and undone if the tests fail.",
+        {"key": {"type": "string", "description": "e.g. WAKE_INTERVAL_MINUTES"},
+         "value": {"type": "string", "description": "one line, no double quotes"}}),
 }
 SPECS["trial"] = _spec(
     "trial",
@@ -275,6 +283,7 @@ class Broker:
         self.remembered: dict[str, list] = {}    # original cloud-model turns, resent verbatim
         self.handoffs: list[dict] = []           # coding tasks delegated during this run
         self.as_of: datetime | None = None       # record() shows only what was known before this (trial replays)
+        self.config_writes: list[dict] = []      # config.env lines the instance set (set_config) during this run
         self.server: ThreadingHTTPServer | None = None
 
     # -- lifecycle -------------------------------------------------------------
@@ -708,6 +717,24 @@ class Broker:
     def _secret_delete(self, name: str) -> str:
         from .core import delete_secret
         return f"deleted your key {name!r}" if delete_secret(self._keys_root(), name) else f"you have no key named {name!r}"
+
+    def _set_config(self, key: str, value) -> str:
+        """The instance's only way to change its config.env (its sandbox cannot write the file). Each change is
+        recorded, so the gate knows exactly which lines are the instance's: the operator edits the same file,
+        even mid-run, and the gate once reverted his model switch as the instance's (kant, 2026-10-13)."""
+        from .core import CONFIG_KEY, config_line, config_values, config_with, contained, safe_write
+        key, value = str(key).strip(), str(value)
+        if not CONFIG_KEY.match(key):
+            raise ValueError(f"{key!r}: a key is an UPPER_CASE name, e.g. WAKE_INTERVAL_MINUTES")
+        if len(value) > 500 or any(c in value for c in '"\n\r\0'):
+            raise ValueError("a value is one line of at most 500 characters, without double quotes")
+        path = contained(self._root(), "config.env")
+        text = path.read_text() if path.is_file() else ""
+        old, new = config_line(text, key), f'{key}="{value}"'
+        safe_write(self._root(), "config.env", config_with(text, key, new))
+        self.config_writes.append({"key": key, "old": old, "new": new})
+        was = repr(config_values(old)[key]) if old else "not set"
+        return f"config.env: {key} is now {value!r} (was {was}); your own settings take effect from your next run"
 
     def _list_instances(self) -> str:
         base = self.project / "instances"

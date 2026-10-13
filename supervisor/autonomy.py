@@ -99,9 +99,9 @@ def describe_schedule(name: str, config: dict[str, str] | None = None) -> str:
                 "by hand.")
     interval = wake_interval(name, config)
     wakes = (f"wakes you for an autonomous cycle every {_every(interval)} (WAKE_INTERVAL_MINUTES in your "
-             f"config.env, at least {WAKE_FLOOR_MIN}; a wake that comes while you are already awake — a cycle, a "
+             f"config.env — change it with set_config — at least {WAKE_FLOOR_MIN}; a wake that comes while you are already awake — a cycle, a "
              f"conversation, your sleep — is skipped)") if interval else \
-        "does not wake you for cycles (WAKE_INTERVAL_MINUTES=0 in your config.env)"
+        "does not wake you for cycles (WAKE_INTERVAL_MINUTES=0 in your config.env; change it with set_config)"
     from . import battery
     night = (f" Some nights between {battery.WINDOW_START[0]:02d}:{battery.WINDOW_START[1]:02d} and your sleep it "
              f"runs its capability battery on you — fixed tasks, scored, nothing kept in your files — so a wake "
