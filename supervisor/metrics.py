@@ -11,6 +11,7 @@ to be chance, exactly the changed files are restored to their earlier content.
 """
 from __future__ import annotations
 
+import hashlib
 import itertools
 import json
 import math
@@ -300,11 +301,12 @@ def judge_pending(name: str) -> int:
             break
         else:
             try:
-                verdict = judge.ask(JUDGE_SYSTEM, _case(ep, _written_files(name, ep), _provenance_evidence(name, ep),
-                                                        _prior_goals(js, ep["ts"])),
-                                    JUDGE_SCHEMA, purpose=f"judge {name}")
+                case = _case(ep, _written_files(name, ep), _provenance_evidence(name, ep), _prior_goals(js, ep["ts"]))
+                verdict = judge.ask(JUDGE_SYSTEM, case, JUDGE_SCHEMA, purpose=f"judge {name}")
                 _check_ratings(verdict)
                 verdict["judge"] = judge.JUDGE_MODEL
+                if second_sampled(name, ep["ts"]):
+                    verdict["second"] = second_opinion(name, case)
             except judge.JudgeError as e:
                 log(f"{name}: judging {ep['ts']} failed: {e}")
                 break
@@ -323,6 +325,45 @@ def judge_pending(name: str) -> int:
         js.append(rec)
         new += 1
     return new
+
+
+def second_sampled(name: str, episode_ts: str) -> bool:
+    """Whether this cycle also gets the second judge: one in SHAFT_JUDGE2_EVERY, chosen by a hash (reproducible,
+    and not something the instance picks)."""
+    if not judge.second_available():
+        return False
+    return int(hashlib.sha256(f"{name}|{episode_ts}".encode()).hexdigest(), 16) % judge.JUDGE2_EVERY == 0
+
+
+def second_opinion(name: str, case: str) -> dict:
+    """The second judge's blind verdict on the same case; a failure is recorded, never blocks the main verdict."""
+    try:
+        out = judge.ask_second(JUDGE_SYSTEM, case, JUDGE_SCHEMA, purpose=f"second {name}")
+        _check_ratings(out)
+        return {"judge": judge.JUDGE2_MODEL, **out}
+    except judge.JudgeError as e:
+        log(f"{name}: second judge failed: {e}")
+        return {"judge": judge.JUDGE2_MODEL, "error": str(e)[:300]}
+
+
+def _second_section(js: list[dict]) -> list[str]:
+    both = [j for j in js if isinstance(j.get("second"), dict) and not j["second"].get("error")
+            and j.get("judge") not in (None, "rule")]
+    if not both:
+        return []
+    agree = [j for j in both if j["criterion_met"] == j["second"]["criterion_met"]]
+    rated = [j for j in both if isinstance(j.get("difficulty"), int) and isinstance(j["second"].get("difficulty"), int)]
+    close = [j for j in rated if abs(j["difficulty"] - j["second"]["difficulty"]) <= 1]
+    model = both[-1]["second"]["judge"].removeprefix("openrouter/")
+    lines = ["", f"## A second judge ({model}, blind, on a sample of my cycles)",
+             f"- Agreed with the main judge on whether my criterion was met: {len(agree)}/{len(both)}"]
+    if rated:
+        lines.append(f"- Difficulty within one point: {len(close)}/{len(rated)}")
+    for j in [j for j in both if j not in agree][-3:]:
+        lines.append(f"- {j['episode_ts'][:16]}: main judge {j['criterion_met']}, second judge "
+                     f"{j['second']['criterion_met']} — {' '.join(j['second'].get('reasoning', '').split())[:220]}")
+    lines.append("  (record(kind='judgments', cycle=…) shows both verdicts in full)")
+    return lines
 
 
 def backfill(name: str, limit: int | None = None) -> int:
@@ -571,6 +612,7 @@ def stats_text(name: str) -> str:
     fails = [j for j in js if j["criterion_met"] != "yes" and j.get("failure_mode")][-5:]
     if fails:
         lines += ["", "## Recent failure modes"] + [f"- {j['episode_ts'][:16]} — {j['failure_mode']}" for j in fails]
+    lines += _second_section(js)
     lines += ["", "## Last judgment", f"{js[-1]['goal']}", f"> {js[-1]['reasoning']}"]
     lines += _code_section(name) + _traits_section(name) + _trials_section(name)
     return "\n".join(lines) + "\n"

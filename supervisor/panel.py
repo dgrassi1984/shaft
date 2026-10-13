@@ -74,7 +74,10 @@ def _prices() -> dict:
 
 
 def judge_usd(r: dict, prices: dict | None = None) -> float | None:
-    """A judge call's dollars from its tokens (the judge log has no dollar field); None for an unknown model."""
+    """A judge call's dollars: its own `usd` when logged (the second judge, from OpenRouter's usage.cost), else
+    from its tokens and the model's price; None for an unknown model."""
+    if r.get("usd") is not None:
+        return float(r["usd"])
     p = (prices or _prices()).get(r.get("model"))
     if not p:
         return None

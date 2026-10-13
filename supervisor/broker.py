@@ -34,6 +34,70 @@ OPERATOR_DAILY_LIMIT = int(os.environ.get("SHAFT_OPERATOR_PER_DAY") or 0)
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
 
 
+JUDGMENTS_BUDGET = 5500   # under the 6,000 characters at which a template instance's runtime cuts a tool result
+
+
+def _when(ts: str) -> str:
+    return (ts or "?")[:16].replace("T", " ")
+
+
+def judgment_text(j: dict) -> str:
+    """One verdict with every field the judge gave — the reasons behind each rating, not just the grades."""
+    out = [f"### {_when(j.get('episode_ts'))} — {j.get('goal', '')}",
+           f"I claimed {j.get('claimed')} at {j.get('confidence')}% confidence. Judge ({j.get('judge', '?')}): criterion "
+           f"met **{j.get('criterion_met')}**, my claim supported: {j.get('claim_supported')}, criterion "
+           f"{j.get('criterion_quality')}" + (f", failure: {j['failure_mode']}" if j.get("failure_mode") else "") + "."]
+    if j.get("reasoning"):
+        out.append(f"Reasoning: {j['reasoning']}")
+    if j.get("difficulty") is not None:
+        out.append(f"Difficulty {j['difficulty']}/5" + (f": {j['difficulty_reason']}" if j.get("difficulty_reason") else "")
+                   + (f" · novelty {j['novelty']}/5" if j.get("novelty") is not None else ""))
+    if j.get("origin"):
+        out.append(f"Origin: {j['origin']} (I declared {j.get('origin_declared') or 'none'}; matches: "
+                   f"{j.get('origin_supported')})" + (f" — {j['origin_evidence']}" if j.get("origin_evidence") else ""))
+    if j.get("model"):
+        out.append(f"My model in that cycle: {j['model']}")
+    s = j.get("second")
+    if isinstance(s, dict) and s.get("error"):
+        out.append(f"Second judge ({s.get('judge')}): no verdict ({s['error'][:160]})")
+    elif isinstance(s, dict):
+        agree = "agrees" if s.get("criterion_met") == j.get("criterion_met") else "DISAGREES"
+        out.append(f"Second judge ({s.get('judge', '?').removeprefix('openrouter/')}, blind) {agree}: criterion met "
+                   f"**{s.get('criterion_met')}**, claim supported {s.get('claim_supported')}, difficulty "
+                   f"{s.get('difficulty')}/5" + (f", failure: {s['failure_mode']}" if s.get("failure_mode") else "")
+                   + f". Reasoning: {s.get('reasoning', '')}")
+    return "\n".join(out)
+
+
+def judgments_text(rows: list[dict], limit: int = 20, cycle: str = "", before: str = "",
+                   budget: int = JUDGMENTS_BUDGET) -> str:
+    """Whole verdicts, newest first, as many as fit in `budget` — never one cut in half (wren, 2026-10-13: "I
+    only see fragments"). `cycle` gives one in full; `before` pages back."""
+    if cycle:
+        want = cycle.strip().replace("T", " ")[:16]
+        hit = [r for r in rows if _when(r.get("episode_ts")) == want]
+        return judgment_text(hit[-1]) if hit else (f"no judged cycle at {want}; the latest: "
+                                                   + ", ".join(_when(r.get("episode_ts")) for r in rows[-5:][::-1]))
+    if before:
+        cut = before.strip().replace("T", " ")[:16]
+        rows = [r for r in rows if _when(r.get("episode_ts")) < cut]
+    rows = rows[::-1]
+    picked, used = [], 0
+    for r in rows[:max(1, min(int(limit), 200))]:
+        t = judgment_text(r)
+        if picked and used + len(t) + 2 > budget:
+            break
+        picked.append(t)
+        used += len(t) + 2
+    if not picked:
+        return "(nothing recorded yet)"
+    more = len(rows) - len(picked)
+    tail = (f"\n\n({len(picked)} of {len(rows)} verdicts, newest first. Older: record(kind='judgments', "
+            f"before='{_when(rows[len(picked) - 1].get('episode_ts'))}'). One in full: record(kind='judgments', "
+            f"cycle='YYYY-MM-DD HH:MM').)" if more else "")
+    return "\n\n".join(picked) + tail
+
+
 def _tail_lines(path: Path, limit: int, keep=None) -> list[str]:
     try:
         lines = [l for l in path.read_text(errors="replace").splitlines() if l.strip()]
@@ -90,10 +154,15 @@ SPECS = {
         "start, end, exit code, reverted or kept code changes, notes), 'tools' (every supervisor tool you "
         "called, with arguments and outcome), 'code_changes' (code changes of yours that passed the tests), "
         "'trials' (your trials of proposed changes: progress and verdicts). "
-        "Newest last. Use it to check your claims about yourself. (Your own tool traces are also in "
-        "memory/episodes/*.jsonl.)",
+        "Newest last — except judgments: whole verdicts, newest first, as many as fit, with every field (the "
+        "reasons for the difficulty and origin ratings, and the second judge's blind verdict where there is "
+        "one); page back with `before`, or ask for one cycle's verdict with `cycle`. Use it to check your claims "
+        "about yourself. (Your own tool traces are also in memory/episodes/*.jsonl.)",
         {"kind": {"type": "string", "enum": ["judgments", "runs", "tools", "code_changes", "trials"]},
-         "limit": {"type": "integer", "description": "entries, default 20, max 200"}},
+         "limit": {"type": "integer", "description": "entries, default 20, max 200"},
+         "cycle": {"type": "string", "description": "judgments: one cycle's verdict in full, by its time "
+                                                    "('2026-10-13 17:42')"},
+         "before": {"type": "string", "description": "judgments: only cycles before this time (to page back)"}},
         ["kind"]),
     "http_request": _spec(
         "http_request",
@@ -645,7 +714,7 @@ class Broker:
     def _history_head(self) -> str:
         return "HEAD"
 
-    def _record(self, kind: str, limit: int = 20) -> str:
+    def _record(self, kind: str, limit: int = 20, cycle: str = "", before: str = "") -> str:
         from .core import SUP_DIR
         limit = max(1, min(int(limit), 200))
         # A trial replay sees the record as it stood when the replayed cycle started, never what came after.
@@ -657,14 +726,9 @@ class Broker:
             rows = [json.loads(l) for l in _tail_lines(path, 100000)]
             return [r for r in rows if known(str(r.get(field, "")).replace("T", " "))][-limit:]
         if kind == "judgments":
-            lines = []
-            for j in jsonl(SUP_DIR / "judgments" / f"{self.name}.jsonl", "judged_at"):
-                lines.append(f"- {j.get('episode_ts', '?')[:16]} · goal: {j.get('goal', '')[:200]}\n"
-                             f"  I claimed {j.get('claimed')} at {j.get('confidence')}% confidence; judge: criterion met "
-                             f"{j.get('criterion_met')}, claim supported {j.get('claim_supported')}, criterion "
-                             f"{j.get('criterion_quality')}{', failure: ' + j['failure_mode'] if j.get('failure_mode') else ''}"
-                             f"\n  reasoning: {j.get('reasoning', '')}")
-            text = "\n".join(lines)
+            rows = [json.loads(l) for l in _tail_lines(SUP_DIR / "judgments" / f"{self.name}.jsonl", 100000)]
+            return judgments_text([r for r in rows if known(str(r.get("judged_at", "")).replace("T", " "))],
+                                  limit, cycle, before)
         elif kind == "runs":
             mine = f"] {self.name}: "
             text = "\n".join(_tail_lines(SUP_DIR / "supervisor.log", 20000,

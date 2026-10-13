@@ -62,7 +62,9 @@ class PanelData(unittest.TestCase):
             {"ts": ts, "purpose": "judge wren", "model": "claude-opus-5-5", "input_tokens": 100_000, "output_tokens": 10_000},
             {"ts": ts, "purpose": "trial wren t-1 s1 AB", "model": "claude-opus-5-5", "input_tokens": 1_000_000,
              "output_tokens": 0},
-            {"ts": ts, "purpose": "judge wren", "model": "mystery-model", "input_tokens": 9, "output_tokens": 9}])
+            {"ts": ts, "purpose": "judge wren", "model": "mystery-model", "input_tokens": 9, "output_tokens": 9},
+            {"ts": ts, "purpose": "second wren", "model": "openrouter/z-ai/glm-5.3-flash", "input_tokens": 9,
+             "output_tokens": 9, "usd": 0.01}])
         _write(self.sup / "coder_usage.jsonl", [{"ts": ts, "instance": "shaft", "model": "claude-opus-5-5", "usd": 0.3}])
 
     def test_costs_count_every_dollar_once(self):
@@ -74,10 +76,10 @@ class PanelData(unittest.TestCase):
         self.assertEqual(t["instances"], {"wren": 1.0})
         self.assertAlmostEqual(t["other"], 0.1)
         self.assertAlmostEqual(t["trials"], 1.4)
-        self.assertAlmostEqual(t["judge"], 0.6)          # 100k in × $4/M + 10k out × $20/M; the trial call excluded
+        self.assertAlmostEqual(t["judge"], 0.61)         # 100k in × $4/M + 10k out × $20/M + the second judge's $0.01
         self.assertAlmostEqual(t["coder"], 0.3)
-        self.assertAlmostEqual(t["total"], 3.4)
-        self.assertAlmostEqual(c["judge_today_total"], 4.6)   # the judge's own view includes trial judging
+        self.assertAlmostEqual(t["total"], 3.41)
+        self.assertAlmostEqual(c["judge_today_total"], 4.61)  # the judge's own view includes trial judging
         self.assertEqual(c["unpriced"], 1)                     # an unknown model is counted as unpriced, not $0
         self.assertEqual(len(c["days"]), 7)
         self.assertEqual(sum(d["total"] for d in c["days"][:-1]), 0)
@@ -101,7 +103,7 @@ class PanelData(unittest.TestCase):
         self.assertIn("service model is not running", text)
         self.assertNotIn("service api", text)                 # only the services runs depend on
         self.assertIn("wren: cloud $7.00 of $8.00", text)
-        self.assertIn("judge spend $4.60", text)
+        self.assertIn("judge spend $4.61", text)
         self.assertIn("wren: code change FAILED", text)
         self.assertNotIn("kant", text)                        # older than ALERT_HOURS
         self.assertNotIn("passed", text)
