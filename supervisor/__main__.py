@@ -21,7 +21,7 @@ import subprocess
 import sys
 from datetime import date, datetime
 
-from . import autonomy, evolution, finetune, gate, messages, metrics, runner, version
+from . import autonomy, evolution, finetune, gate, messages, metrics, runner, surprise, version
 from .core import (DEFAULT_INSTANCE, HOME, INSTANCES, NAME_RE, PROJECT, SUP_DIR, TEMPLATE, commit_state, git, git_wt,
                    instance_names, instance_root, journal_entries, journal_note, log, paused,
                    safe_mkdir, safe_write)
@@ -322,6 +322,9 @@ def main(argv: list[str]) -> int:
     p.add_argument("-n", type=int, default=3)
     p = sub.add_parser("stats", help="an instance's measured performance (judge + calibration)")
     p.add_argument("name", nargs="?", default=DEFAULT_INSTANCE)
+    p = sub.add_parser("surprise", help="unexpected tool results, their recurrence, live cost (PLAN-surprise baseline)")
+    p.add_argument("names", nargs="*")
+    p.add_argument("--freeze", action="store_true", help="also write the baseline the surprise loop is judged against")
     p = sub.add_parser("inbox", help="messages instances sent you")
     p.add_argument("--clear", action="store_true", help="archive notes (questions stay until answered)")
     p = sub.add_parser("reply", help="answer an instance's open question (or message it)")
@@ -440,6 +443,10 @@ def main(argv: list[str]) -> int:
         metrics.judge_pending(args.name)
         print(metrics.stats_text(args.name))
         return 0
+    if args.cmd == "surprise":
+        for name in args.names:
+            instance_root(name)
+        return surprise.command(args.names or instance_names(), args.freeze)
     if args.cmd == "inbox":
         return messages.clear_notes() if args.clear else messages.show_inbox()
     if args.cmd == "reply":
