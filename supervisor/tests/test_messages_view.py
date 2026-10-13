@@ -193,7 +193,7 @@ class TopKeysTest(unittest.TestCase):
         out = c.export_text()
         self.assertIn("line 20", out)
         self.assertNotIn("line 19\n", out)
-        self.assertIn("lines 21–46 of 100", out)
+        self.assertIn("lines 21–45 of 100", out)   # 25 rows at height 30: the control panel's tab bar takes one
 
     def test_list_and_reading_views_fit_the_screen_even_when_narrow(self):
         # the footer once wrapped at 80 columns, pushing the screen one line past its height
