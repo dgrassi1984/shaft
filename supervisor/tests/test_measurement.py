@@ -83,6 +83,16 @@ class JudgingTest(InstanceDirCase):
         self.assertIn("TALK-CANARY", seen["case"])                    # a conversation in the last 72 h
         self.assertNotIn("TOO-OLD-CANARY", seen["case"])
         self.assertIn("difficulty", seen["schema"]["required"])
+        self.assertTrue(j["origin_supported"])
+
+    def test_an_undeclared_origin_is_never_supported(self):
+        # Regression: wren's 2026-10-13 16:19 cycle declared no origin, and the judge still said origin_supported: true.
+        self.episode({"ts": "2026-10-13T12:10:00", "kind": "live", "intent": {"goal": "g", "success_criterion": "c",
+                      "confidence": 50}, "finish": None, "tools": []})
+        with mock.patch.object(judge, "available", return_value=True), \
+             mock.patch.object(judge, "ask", return_value=dict(self.VERDICT)):
+            metrics.judge_pending("m")
+        self.assertIsNone(metrics.judgments("m")[0]["origin_supported"])
 
     def test_an_out_of_range_rating_leaves_the_cycle_unjudged(self):
         self.episode({"ts": "2026-10-13T12:10:00", "kind": "live", "intent": {"goal": "g", "success_criterion": "c",

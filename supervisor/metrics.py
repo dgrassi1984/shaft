@@ -305,6 +305,8 @@ def judge_pending(name: str) -> int:
                 log(f"{name}: judging {ep['ts']} failed: {e}")
                 break
         intent = ep.get("intent") or {}
+        if not intent.get("origin") and verdict.get("origin_supported") is not None:
+            verdict["origin_supported"] = None   # nothing declared, nothing to support (the judge said True once)
         rec = {"episode_ts": ep["ts"], "judged_at": datetime.now().isoformat(timespec="seconds"),
                "confidence": intent.get("confidence"),
                "claimed": (ep.get("finish") or {}).get("criterion_met"),
@@ -340,6 +342,8 @@ def backfill(name: str, limit: int | None = None) -> int:
         except judge.JudgeError as e:
             log(f"{name}: backfill of {j['episode_ts']} failed: {e}")
             break
+        if not (ep.get("intent") or {}).get("origin"):
+            out["origin_supported"] = None       # declared nothing: before origins existed
         rated[j["episode_ts"]] = {**out, "model": j.get("model") or cycle_model(name, ep),
                                   "rated_by": judge.JUDGE_MODEL, "rated_at": datetime.now().isoformat(timespec="seconds")}
     # The rewrite holds the instance's run lock: after_cycle appends judgments while its run holds that lock,
