@@ -77,7 +77,7 @@ def git(*args: str, check: bool = True) -> subprocess.CompletedProcess:
 
 
 def git_wt(root: Path, *args: str, check: bool = True, project: Path | None = None,
-           input: str | None = None) -> subprocess.CompletedProcess:
+           input: str | None = None, text: bool = True) -> subprocess.CompletedProcess:
     """Run git in an instance worktree without trusting anything inside it.
 
     The worktree's `.git` file is writable by the instance, which could point it at
@@ -88,7 +88,7 @@ def git_wt(root: Path, *args: str, check: bool = True, project: Path | None = No
     return subprocess.run(
         ["git", f"--git-dir={admin}", f"--work-tree={root}", "-c", "core.hooksPath=/dev/null",
          "-c", "core.fsmonitor=false", *args],
-        cwd=root, capture_output=True, text=True, check=check, input=input)
+        cwd=root, capture_output=True, text=text, check=check, input=input)
 
 
 def _worktree_admin_dir(root: Path, project: Path) -> Path:

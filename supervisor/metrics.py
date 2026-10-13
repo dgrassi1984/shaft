@@ -5,12 +5,16 @@ against its actual tool log. From the judgments the supervisor writes
 instances/<name>/self/stats.md — numbers the instance can read but not forge.
 
 Probation: when an instance changes its own code, prompts or plugins (and the tests
-pass), the change is kept on probation. After PROBATION_CYCLES judged cycles, if its
-judged success rate fell clearly below the rate before the change, the change is reverted.
+pass), the change is kept on probation. After PROBATION_CYCLES judged cycles that used it, if
+its achieved difficulty fell clearly below the level before the change and the drop is unlikely
+to be chance, exactly the changed files are restored to their earlier content.
 """
 from __future__ import annotations
 
+import itertools
 import json
+import math
+import random
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -577,6 +581,16 @@ def write_stats(name: str) -> None:
 
 
 # -- probation of self-modifications --------------------------------------------
+# A self-change is blamed for a drop only on the cycles that used it, and only if the drop is unlikely to be
+# chance. On 2026-10-13 the old rule (any 6 cycles, a drop of more than 0.15) fired three times in 21 minutes —
+# on a weather plugin never called once in its window (shaft, 3 cycles before vs 6 after: p=0.33) and on wren's
+# github plugin and truncation change (p=0.27 each, while an operator directive had just changed its goals).
+PROBATION_ALPHA = 0.05       # one-sided permutation test: how often chance alone gives a drop this large
+PROBATION_EXPIRY = 4         # x PROBATION_CYCLES rated cycles without enough use: kept, nothing to judge it by
+PERMUTATIONS = 20000         # sampled (seeded) when the exact test would need more splits than this
+SUPERVISOR_GIT = ("-c", "user.name=SHAFT supervisor", "-c", "user.email=supervisor@shaft.localhost")
+
+
 def _probation_path(name: str) -> Path:
     return SUP_DIR / "probation" / f"{name}.json"
 
@@ -585,9 +599,57 @@ def _values(rows: list[dict]) -> list[float]:
     return [v for v in map(cycle_value, rows) if v is not None]
 
 
+def _runtime(rel: str) -> bool:
+    """A file a cycle can use: the agent's code, its config, or a plugin (tests never run in a cycle)."""
+    parts = Path(rel).parts
+    return bool(parts) and (parts[0] in ("shaft", "config.env") or (parts[0] == "plugins" and len(parts) > 2))
+
+
+def _used(files: list[str], tools: set[str]) -> bool:
+    """Did a cycle that called `tools` use this change? The agent's code and config run in every cycle; a
+    plugin only when the cycle called it (its tool name is its folder's, which plugin_runner enforces)."""
+    for rel in files:
+        parts = Path(rel).parts
+        if parts and parts[0] in ("shaft", "config.env"):
+            return True
+        if len(parts) > 2 and parts[0] == "plugins" and parts[1] in tools:
+            return True
+    return False
+
+
+def _tools_by_cycle(name: str) -> dict[str, set[str]]:
+    return {ep["ts"]: {t.get("tool", "") for t in ep.get("tools", [])} for ep in live_episodes(name)}
+
+
+def chance_of_drop(before: list[float], after: list[float]) -> float:
+    """One-sided permutation test: the share of all ways to split the pooled cycles into a 'before' and an
+    'after' group of these sizes whose drop (mean before − mean after) is at least the observed one. No
+    distribution is assumed; with 6 cycles each side and three distinct scores most drops are chance."""
+    pool, k = before + after, len(after)
+    if not before or not after:
+        return 1.0
+    total, eps = sum(pool), 1e-9
+    observed = sum(before) / len(before) - sum(after) / k
+
+    def drop(idx) -> float:
+        a = sum(pool[i] for i in idx)
+        return (total - a) / len(before) - a / k
+
+    if math.comb(len(pool), k) <= PERMUTATIONS:
+        splits = list(itertools.combinations(range(len(pool)), k))
+    else:
+        rng = random.Random(0)
+        splits = [rng.sample(range(len(pool)), k) for _ in range(PERMUTATIONS)]
+    return sum(drop(idx) >= observed - eps for idx in splits) / len(splits)
+
+
 def start_probation(name: str, commit: str, files: list[str], trial: dict | None = None) -> None:
     """`trial`: the finished trial whose change this is, byte for byte (supervisor/trial.py match). A change
-    adopted against a 'worse' verdict is reverted on any drop, not only a clear one (PLAN-trials.md, D3)."""
+    adopted against a 'worse' verdict is undone on any drop, without the chance test: the trial is already the
+    evidence against it (PLAN-trials.md, D3). A change no cycle runs (tests only) is not put on probation."""
+    if not any(map(_runtime, files)):
+        log(f"{name}: change {commit[:8]} not on probation: no cycle runs {', '.join(files)}")
+        return
     js = judgments(name)
     recent = _values(js)[-PROBATION_CYCLES:]
     entry = {"commit": commit, "files": files, "since": datetime.now().isoformat(timespec="seconds"),
@@ -604,41 +666,131 @@ def start_probation(name: str, commit: str, files: list[str], trial: dict | None
     log(f"{name}: change {commit[:8]} on probation (baseline {entry['baseline']}, n={len(recent)})")
 
 
+def _verdict(name: str, entry: dict, js: list[dict], tools: dict[str, set[str]]) -> dict | None:
+    """None while the change is still being watched; else {"keep": bool, ...} with the numbers."""
+    c = entry["commit"][:8]
+    later = [j for j in js[entry["judged_before"]:] if cycle_value(j) is not None]
+    used = [j for j in later if _used(entry["files"], tools.get(j.get("episode_ts", ""), set()))]
+    model = (used or later or [{}])[0].get("model")      # before and after on the same model only
+    after = _values([j for j in used if j.get("model") == model])
+    if len(after) < PROBATION_CYCLES:
+        if len(later) >= PROBATION_EXPIRY * PROBATION_CYCLES:
+            log(f"{name}: probation {c}: used in {len(used)} of {len(later)} rated cycles since — kept, "
+                "too little use to judge it")
+            return {"keep": True}
+        return None
+    after = after[:PROBATION_CYCLES]
+    rate = sum(after) / len(after)
+    prior = _values([j for j in js[:entry["judged_before"]] if j.get("model") == model])[-PROBATION_CYCLES:]
+    if len(prior) < 3:
+        log(f"{name}: probation {c}: no baseline ({len(prior)} rated cycles on {model} before it) — kept")
+        return {"keep": True}
+    base = sum(prior) / len(prior)
+    p = chance_of_drop(prior, after)
+    worse = (entry.get("trial") or {}).get("verdict") == "worse"     # adopted against a trial: any drop
+    keep = not (rate < base - entry.get("margin", PROBATION_MARGIN) and (worse or p < PROBATION_ALPHA))
+    log(f"{name}: probation {c} {'passed' if keep else 'failed'} ({rate:.2f} vs baseline {base:.2f}, "
+        f"chance {p:.3f}, {len(after)} cycles that used it)")
+    return {"keep": keep, "rate": rate, "base": base, "n_before": len(prior), "n_after": len(after), "p": p}
+
+
+def _blob(root: Path, rev: str, rel: str) -> bytes | None:
+    r = git_wt(root, "cat-file", "blob", f"{rev}:{rel}", check=False, text=False)
+    return r.stdout if r.returncode == 0 else None
+
+
+def _one_line(r) -> str:
+    return " ".join((r.stderr or r.stdout or "").split())[:200] or f"exit {r.returncode}"
+
+
+def restore_change(name: str, entry: dict) -> str | None:
+    """Undo one self-change by restoring exactly its recorded files to their content at the change's parent
+    commit — never `git revert` of the run commit, which also holds the run's memory (the append-only episode
+    log, the journal, self/) and conflicts with every later run. The restored code must pass the test gate,
+    and is committed by the supervisor. Returns None on success, else why nothing was changed."""
+    from . import gate
+    from .core import HOME, UnsafePath, contained
+    root, commit, files = INSTANCES / name, entry["commit"], list(entry["files"])
+    not_code = [f for f in files if not Path(f).parts or Path(f).parts[0] not in gate.CODE_PATHS
+                or ".." in Path(f).parts]
+    if not_code:
+        return f"{', '.join(not_code)} is not code; the supervisor restores only code"
+    for rev in (commit, commit + "^"):
+        r = git_wt(root, "rev-parse", "--verify", "--quiet", rev + "^{commit}", check=False)
+        if r.returncode != 0:
+            return f"commit {rev} not found on instance/{name}"
+    try:
+        now = {rel: (t.read_bytes() if (t := contained(root, *Path(rel).parts)).is_file() else None)
+               for rel in files}
+    except UnsafePath as e:
+        return f"unsafe path: {e}"
+    moved = [rel for rel in files if now[rel] != _blob(root, commit, rel)]
+    if moved:
+        return (f"{', '.join(moved)} changed again after {commit[:8]}; restoring would also undo that later "
+                "change")
+    before = {rel: b for rel in files if (b := _blob(root, commit + "^", rel)) is not None}
+    current = {rel: b for rel, b in now.items() if b is not None}
+    gate.restore(root, before, files)
+    ok, out = gate.run_tests(root, HOME)
+    if not ok:
+        gate.restore(root, current, files)
+        last = [l for l in out.strip().splitlines() if l.strip()][-1:] or ["(no output)"]
+        return f"the tests fail with the earlier version ({last[0].strip()[:200]})"
+    msg = (f"{name}: supervisor restored {len(files)} file(s) to before {commit[:8]} (failed probation)\n\n"
+           + "\n".join(f"- {f}" for f in files))
+    add = git_wt(root, "add", "-A", "--", *files, check=False)
+    done = add if add.returncode else git_wt(root, *SUPERVISOR_GIT, "commit", "-q", "-m", msg, "--", *files,
+                                              check=False)
+    if done.returncode != 0:
+        gate.restore(root, current, files)
+        git_wt(root, "reset", "-q", "--", *files, check=False)
+        return f"git could not commit the restore: {_one_line(done)}"
+    return None
+
+
+def _fmt(stamp: str) -> str:
+    t = _ts(stamp)
+    return f"{t:%Y-%m-%d %H:%M}" if t else stamp
+
+
 def check_probation(name: str) -> None:
-    """Revert a self-change after which the achieved difficulty per cycle fell clearly below the level before
-    it. The baseline is recomputed from the judgments file (the rated cycles before the change), so a
-    probation opened before the ratings existed is measured the same way once they are backfilled."""
+    """Undo a self-change after which the achieved difficulty per cycle, on the cycles that used it, fell
+    clearly below the level before it — by more than the margin, and more than chance explains. The baseline
+    is recomputed from the judgments file (the rated cycles before the change), so a probation opened before
+    the ratings existed is measured the same way once they are backfilled. A restore that cannot be done
+    keeps the entry (retried every check, logged when the reason changes); nothing is dropped silently."""
     p = _probation_path(name)
     if not p.exists():
         return
-    js, still = judgments(name), []
+    js, tools, still = judgments(name), _tools_by_cycle(name), []
     for entry in json.loads(p.read_text()):
-        later = [j for j in js[entry["judged_before"]:] if cycle_value(j) is not None]
-        model = later[0].get("model") if later else None     # before and after on the same model only
-        after = _values([j for j in later if j.get("model") == model])
-        if len(after) < PROBATION_CYCLES:
+        c = entry["commit"][:8]
+        v = entry.get("failed") or _verdict(name, entry, js, tools)
+        if v is None:
             still.append(entry)
             continue
-        rate = sum(after[:PROBATION_CYCLES]) / PROBATION_CYCLES
-        prior = _values([j for j in js[:entry["judged_before"]] if j.get("model") == model])[-PROBATION_CYCLES:]
-        base = sum(prior) / len(prior) if len(prior) >= 3 else None
-        if base is None:
-            log(f"{name}: probation {entry['commit'][:8]}: no baseline ({len(prior)} rated cycles on {model} "
-                f"before it) — kept")
-        elif rate < base - entry.get("margin", PROBATION_MARGIN):
-            root = INSTANCES / name
-            r = git_wt(root, "-c", f"user.name=SHAFT supervisor", "-c", "user.email=supervisor@shaft.localhost",
-                       "revert", "--no-edit", entry["commit"], check=False)
-            outcome = "reverted" if r.returncode == 0 else f"revert FAILED ({r.stderr.strip()[:200]})"
-            if r.returncode != 0:
-                git_wt(root, "revert", "--abort", check=False)
-            journal_note(root, "Supervisor: self-change failed probation",
-                         f"My change {entry['commit'][:8]} to {', '.join(entry['files'])} was followed by an "
-                         f"achieved difficulty of {5 * rate:.1f} per cycle (success × how hard the goal was, 0–5) "
-                         f"over {PROBATION_CYCLES} cycles, against {5 * base:.1f} before it. It has been {outcome}.")
-            log(f"{name}: probation {entry['commit'][:8]} failed ({rate:.2f} < {base:.2f}): {outcome}")
-        else:
-            log(f"{name}: probation {entry['commit'][:8]} passed ({rate:.2f} vs baseline {base:.2f})")
+        if v["keep"]:
+            continue
+        entry["failed"] = v
+        why = restore_change(name, entry)
+        if why:
+            if why != entry.get("restore_failed"):
+                log(f"{name}: probation {c} failed but its restore could not be done — kept on probation: {why}")
+            entry["restore_failed"] = why
+            still.append(entry)
+            continue
+        files = entry["files"]
+        journal_note(INSTANCES / name, "Supervisor: self-change undone after probation",
+                     f"The supervisor restored {', '.join(files)} to how {'it was' if len(files) == 1 else 'they were'} "
+                     f"before my change of {_fmt(entry['since'])} (commit {c}). In the {v['n_after']} cycles since "
+                     f"that used it, my achieved difficulty was {5 * v['rate']:.1f} per cycle (success × how hard the "
+                     f"goal was, 0–5), against {5 * v['base']:.1f} in the {v['n_before']} cycles before it; "
+                     + (f"I had adopted it although trial {entry['trial'].get('id', '')} found it worse. "
+                        if (entry.get("trial") or {}).get("verdict") == "worse" else
+                        f"chance alone gives a drop that large {v['p']:.0%} of the time. ")
+                     + "Only these files were restored: my memory, journal and self files are as they were.")
+        log(f"{name}: probation {c} failed ({v['rate']:.2f} < {v['base']:.2f}): reverted — restored "
+            f"{', '.join(files)} to {c}^")
     p.write_text(json.dumps(still, indent=1))
 
 

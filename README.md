@@ -239,9 +239,14 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
   (6) or two preemptions. Caps per instance per day: `SHAFT_TRIALS_PER_DAY` (2), `SHAFT_TRIAL_DAILY_USD` (3),
   `SHAFT_TRIAL_LOCAL_UNITS_PER_DAY` (24); `SHAFT_TRIAL_N_MAX` (10). Ledger: `.supervisor/trial_usage.jsonl`;
   trials: `.supervisor/trials/<name>/<id>/`.
-- **Probation**: a kept self-change is reverted if the achieved difficulty per cycle (success ×
-  judged difficulty) over the next `SHAFT_PROBATION_CYCLES` (6) cycles falls clearly (0.15 on a 0–1
-  scale) below the level before it — by any amount, if it was adopted against a trial's 'worse' verdict.
+- **Probation**: a kept self-change is undone if the achieved difficulty per cycle (success ×
+  judged difficulty) over the next `SHAFT_PROBATION_CYCLES` (6) cycles *that used it* (a plugin only
+  when the cycle called it; tests never) falls clearly (0.15 on a 0–1 scale) below the level before
+  it, and a permutation test says chance alone gives such a drop under 5% of the time. Undoing
+  restores exactly the change's files from git (as they were before it) and commits that as the
+  supervisor; memory, journal and self are never touched. A restore that cannot be done (a file was
+  changed again since, or the tests fail with the earlier version) stays on probation and is logged.
+  A change adopted against a trial's 'worse' verdict is undone on any drop, without the chance test.
 - **Judge**: every autonomous cycle is graded from its tool log by a cloud model
   (`SHAFT_JUDGE_MODEL`, default `claude-opus-5-5`); results feed `self/stats.md`.
 - **Git**: after every run the instance's state is committed to its branch (author
