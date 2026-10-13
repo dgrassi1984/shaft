@@ -50,7 +50,7 @@ class InstanceStateTest(unittest.TestCase):
 
     def test_a_cycle_paused_for_a_conversation(self):
         self.write_activity(os.getpid(), phase="paused")
-        (self.root / ".tmp" / "paused").write_text("1")
+        (self.root / ".tmp" / f"paused-{os.getpid()}").write_text("1")
         self.assertEqual(dashboard.instance_state("wren")["state"], "live paused for a conversation")
 
 

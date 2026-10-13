@@ -83,7 +83,7 @@ def instance_state(name: str, now: float | None = None) -> dict:
     busy = busy_with(name) or ""
     convs = open_conversations(name)
     act = activity(root)
-    is_paused = (root / ".tmp" / "paused").exists()
+    is_paused = any((root / ".tmp").glob("paused-*")) if (root / ".tmp").is_dir() else False
     if paused(name):
         state = "paused by you"
     elif is_paused:

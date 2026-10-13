@@ -97,6 +97,20 @@ def _resolve_config_conflict(root) -> bool:
     return True
 
 
+def _note_update(name: str, root, before: str) -> None:
+    """Tell the instance its code changed: a journal note naming the template commits just merged (their
+    subjects), committed right after the merge. Without it an instance never learned of an update, and its
+    self-model kept describing code it no longer ran (shaft, 2026-10-13: "no embeddings", "every 2 hours")."""
+    subjects = git_wt(root, "log", "--no-merges", "--format=%h %s", f"{before}..HEAD").stdout.splitlines()
+    if not subjects:
+        return
+    journal_note(root, "My code was updated",
+                 "The operator merged these template changes into my code (they passed the gate):\n\n"
+                 + "\n".join(f"- {s}" for s in subjects)
+                 + "\n\nWhat I believe about my own code (self-model, notes) may now be out of date.")
+    commit_state(name, "update", [], root=root)
+
+
 def cmd_update(names: list[str]) -> int:
     """Merge `template` into instances — only while holding each instance's run lock, so an
     operator update is never mistaken for a change the instance made to itself mid-run."""
@@ -105,6 +119,7 @@ def cmd_update(names: list[str]) -> int:
         root = instance_root(name)
         try:
             with run_lock(name, wait=False, kind="update"):
+                before = git_wt(root, "rev-parse", "HEAD").stdout.strip()
                 r = git_wt(root, "-c", "user.name=SHAFT supervisor", "-c", "user.email=supervisor@shaft.localhost",
                            "merge", "--no-edit", "-m", f"{name}: merge template (operator update)", "template",
                            check=False)
@@ -122,10 +137,11 @@ def cmd_update(names: list[str]) -> int:
                     continue
                 ok, test_log = gate.run_tests(root, HOME)
                 if not ok:
-                    git_wt(root, "reset", "-q", "--hard", "ORIG_HEAD")
+                    git_wt(root, "reset", "-q", "--hard", before)
                     print(f"{name}: merged template failed the gate; rolled back:\n{test_log[-800:]}")
                     worst = 1
                     continue
+                _note_update(name, root, before)
                 log(f"{name}: updated from template")
                 print(f"{name}: updated from template ({git_wt(root, 'rev-parse', '--short', 'HEAD').stdout.strip()})")
         except Busy:
