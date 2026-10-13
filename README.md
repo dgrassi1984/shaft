@@ -63,7 +63,7 @@ Inside an instance:
 shaft/        its code (Python, stdlib only) — prompts, tools, life loop, sleep, talk
 plugins/      tools it wrote for itself (plugins/<name>/plugin.json + main.py); first: web_research
 skills/       how-tos it writes for itself
-config.env    its LLM settings and budgets
+config.env    its LLM settings and budgets (yours to edit; it changes it only through set_config)
 self/         self.md (self-model), personality.md (core/surface, every trait cites the journal),
               goals.md, stats.md (written by the supervisor: achieved difficulty, where its goals
               came from, judged success, calibration, battery scores)
@@ -191,12 +191,13 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
 
 ## Rules the supervisor enforces
 
-- **Sandbox** (macOS `sandbox-exec`): an instance writes only inside `instances/<name>/`,
-  reads nothing else in your home, and connects only to the LLM port(s) (`SHAFT_LLM_PORTS`,
-  default 8780) and its run's broker. It inherits no secrets from the environment. **One folder of
-  yours it may read** (`shaft share <name> <folder>`, `shaft share <name> off`): read-only, in its
-  sandbox and in `run`; its file tools show it as `shared/`. Kept in `.supervisor/tools/<name>.json`, not
-  in its `config.env`; a folder overlapping SHAFT's own state is refused, and battery exams never get it.
+- **Sandbox** (macOS `sandbox-exec`): an instance writes only inside `instances/<name>/` — and not
+  its `config.env` —, reads nothing else in your home, and connects only to the LLM port(s)
+  (`SHAFT_LLM_PORTS`, default 8780) and its run's broker. It inherits no secrets from the environment.
+  **One folder of yours it may read** (`shaft share <name> <folder>`, `shaft share <name> off`):
+  read-only, in its sandbox and in `run`; its file tools show it as `shared/`. Kept in
+  `.supervisor/tools/<name>.json`, not in its `config.env`; a folder overlapping SHAFT's own state is
+  refused, and battery exams never get it.
 - **Broker**: the only door to the outside — web search (ScrapeBadger), page fetching
   (public addresses only, re-checked on every redirect), messages between instances and to
   you (max 3 per instance per day, with a macOS notification), and **`delegate_coding`**: an
@@ -217,13 +218,17 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
   your terminal): kept in its folder under `secrets/` but handled only by the supervisor — the broker adds a
   key to requests to the hosts it is bound to, never through a redirect, and masks it in responses; the
   instance's own process, plugins, `run` and the coder cannot read the file, git never sees it.
+  **`set_config`**: the instance's only way to change its `config.env`, one value at a time; each change is
+  recorded, so the gate can tell its lines from yours — you may edit the file at any time, even mid-run.
   Per-run token, call budget
   (`SHAFT_BROKER_MAX_CALLS`, default 60), everything logged in `.supervisor/broker.log`.
 - **Append-only journal**: if a run rewrote history instead of appending, the journal is
   restored and the rewrite kept aside.
 - **Slow core**: the core personality may change at most every `SHAFT_CORE_MIN_HOURS` (72).
-- **Test gate**: if a run changed the instance's code, plugins or config, the invariant tests
-  and plugin checks run; failure restores the old code and tells the instance why.
+- **Test gate**: if a run changed the instance's code, plugins or (through `set_config`) config, the
+  invariant tests and plugin checks run; failure restores the old code and the config lines the instance
+  set, and tells the instance why. An edit of yours to `config.env` is never reverted or credited to the
+  instance: it is committed on its own ("config.env changed from outside the instance").
 - **Trials** (`trial` tool, [PLAN-trials.md](PLAN-trials.md)): an instance can test a change to its own
   code or prompts before keeping it. The supervisor runs the gate on it, rebuilds N (default 6) of its past
   autonomous cycles exactly as each began (its branch at that moment, the inbox it read), and runs each twice —
@@ -238,9 +243,14 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
   (6) or two preemptions. Caps per instance per day: `SHAFT_TRIALS_PER_DAY` (2), `SHAFT_TRIAL_DAILY_USD` (3),
   `SHAFT_TRIAL_LOCAL_UNITS_PER_DAY` (24); `SHAFT_TRIAL_N_MAX` (10). Ledger: `.supervisor/trial_usage.jsonl`;
   trials: `.supervisor/trials/<name>/<id>/`.
-- **Probation**: a kept self-change is reverted if the achieved difficulty per cycle (success ×
-  judged difficulty) over the next `SHAFT_PROBATION_CYCLES` (6) cycles falls clearly (0.15 on a 0–1
-  scale) below the level before it — by any amount, if it was adopted against a trial's 'worse' verdict.
+- **Probation**: a kept self-change is undone if the achieved difficulty per cycle (success ×
+  judged difficulty) over the next `SHAFT_PROBATION_CYCLES` (6) cycles *that used it* (a plugin only
+  when the cycle called it; tests never) falls clearly (0.15 on a 0–1 scale) below the level before
+  it, and a permutation test says chance alone gives such a drop under 5% of the time. Undoing
+  restores exactly the change's files from git (as they were before it) and commits that as the
+  supervisor; memory, journal and self are never touched. A restore that cannot be done (a file was
+  changed again since, or the tests fail with the earlier version) stays on probation and is logged.
+  A change adopted against a trial's 'worse' verdict is undone on any drop, without the chance test.
 - **Judge**: every autonomous cycle is graded from its tool log by a cloud model
   (`SHAFT_JUDGE_MODEL`, default `claude-opus-5-5`); results feed `self/stats.md`.
 - **Git**: after every run the instance's state is committed to its branch (author

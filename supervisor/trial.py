@@ -48,13 +48,17 @@ LOCAL_UNITS_PER_DAY, LOCAL_UNITS_SRC = knob("SHAFT_TRIAL_LOCAL_UNITS_PER_DAY", "
 N_MAX, N_MAX_SRC = knob("SHAFT_TRIAL_N_MAX", "10", int)
 LOCAL_WAIT_H, LOCAL_WAIT_SRC = knob("SHAFT_TRIAL_LOCAL_WAIT_H", "6", float)
 FALLBACK_MODEL, FALLBACK_SRC = knob("SHAFT_TRIAL_FALLBACK_MODEL", "openrouter/xiaomi/mimo-v2.6-pro", str)
+PARALLEL, PARALLEL_SRC = knob("SHAFT_TRIAL_PARALLEL", "3", int)
 N_DEFAULT, N_MIN, EXTEND_BY = 6, 2, 4
 ALPHA = 0.1                    # one-sided sign test on the states that were not ties (decision D5)
 STALE_H = 48                   # a trial still unfinished after this is concluded with the pairs it has
 LOCAL_UNIT_S = 900             # a local pair needs the model this long free ahead (≈1.5 × a measured cycle)
 PREEMPT_AHEAD_S = 90           # a local run is stopped this long before a wake or the sleep comes due
 TARGETS = ("shaft/", "plugins/", "skills/", "tests/")
-CODE = gate.CODE_PATHS         # what the arm's code is (shaft, tests, plugins, config.env)
+# What an arm's code is: the gate's code paths plus config.env, which carries the arm's model and settings.
+# The gate no longer counts config.env as code (the operator edits it too; the instance only via set_config),
+# but an arm still runs with — and a trial still refuses to change — the config it was committed with.
+CODE = (*gate.CODE_PATHS, "config.env")
 NOT_STATE = ("logs", ".tmp", "secrets", "__pycache__")
 LEDGER = SUP_DIR / "trial_usage.jsonl"
 
@@ -575,12 +579,18 @@ def verdict(outcomes: list[str]) -> dict:
 
 # -- asking for a trial ---------------------------------------------------------------------------------------
 def _new_id(name: str) -> str:
+    """A fresh id, its folder created at once: two trials asked for in the same second must not share one (four
+    operator trials created together got the same id and overwrote each other, 2026-10-13)."""
     base = f"t-{datetime.now():%Y%m%d-%H%M%S}"
-    tid, i = base, 1
-    while _dir(name, tid).exists():
-        i += 1
-        tid = f"{base}-{i}"
-    return tid
+    _dir(name).mkdir(parents=True, exist_ok=True)
+    for i in range(1, 1000):
+        tid = base if i == 1 else f"{base}-{i}"
+        try:
+            _dir(name, tid).mkdir()
+            return tid
+        except FileExistsError:
+            continue
+    raise TrialError("could not allocate a trial id")
 
 
 def _choose(project: Path, name: str, root: Path, n: int, wanted: list[str], tid: str,
@@ -1026,9 +1036,36 @@ def deliver(project: Path, t: dict) -> None:
         log(f"{t['instance']}: trial {t['id']} verdict not delivered: {e}")
 
 
+def _gate_job(project: Path, t: dict) -> None:
+    ok, out = gate_check(project, t["instance"], t)
+    t = load(t["instance"], t["id"])
+    t["gate"] = {"ok": ok, "output": out[-4000:]}
+    t["status"] = "queued" if ok else "rejected"
+    t["queued_at"] = datetime.now().isoformat(timespec="seconds")
+    save(t)
+    log(f"{t['instance']}: trial {t['id']} test gate {'passed' if ok else 'FAILED — not run'}")
+    if not ok:
+        deliver(project, t)
+
+
+def _pair_job(project: Path, tid: str, name: str, i: int, model: str) -> None:
+    t = load(name, tid)   # fresh: written only by this job while it runs (one pair per trial at a time)
+    if t["states"][i]["status"] != "pending":
+        return
+    try:
+        run_pair(project, t, i, model)
+    except Exception as e:
+        log(f"{name}: trial {tid} past cycle {i + 1} failed: {type(e).__name__}: {e}")
+        t = load(name, tid)
+        t["states"][i].update(status="unjudged", outcome="unjudged", why=f"replay failed: {e}"[:300])
+        save(t)
+
+
 def work(project: Path = PROJECT) -> int:
-    """One pass of the trial worker: run the tests and every pair that may run now, conclude finished trials.
-    One worker at a time (a lock); returns when nothing more can run now."""
+    """The trial worker: run the tests and every pair that may run now, conclude finished trials; return when
+    nothing more can run now. One worker at a time (a lock). Pairs on cloud models run PARALLEL at a time, one
+    pair per trial at a time (a trial's file has one writer); pairs on the local model one at a time."""
+    from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
     lock_path = SUP_DIR / "locks" / "trial-worker.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     f = lock_path.open("a+")
@@ -1038,40 +1075,38 @@ def work(project: Path = PROJECT) -> int:
         f.close()
         return 0
     try:
-        log(f"trial worker: started (TRIALS_PER_DAY={TRIALS_PER_DAY} [{TRIALS_PER_DAY_SRC}] DAILY_USD={DAILY_USD} "
-            f"[{DAILY_USD_SRC}] LOCAL_UNITS_PER_DAY={LOCAL_UNITS_PER_DAY} [{LOCAL_UNITS_SRC}] LOCAL_WAIT_H="
-            f"{LOCAL_WAIT_H} [{LOCAL_WAIT_SRC}] FALLBACK_MODEL={FALLBACK_MODEL} [{FALLBACK_SRC}])")
-        tried: set[tuple[str, int]] = set()
-        while True:
-            for t in all_trials():
-                if t["status"] == "queued":
-                    if all(s["status"] != "pending" for s in t["states"]) or _stale(t):
+        log(f"trial worker: started (PARALLEL={PARALLEL} [{PARALLEL_SRC}] TRIALS_PER_DAY={TRIALS_PER_DAY} "
+            f"[{TRIALS_PER_DAY_SRC}] DAILY_USD={DAILY_USD} [{DAILY_USD_SRC}] LOCAL_UNITS_PER_DAY="
+            f"{LOCAL_UNITS_PER_DAY} [{LOCAL_UNITS_SRC}] LOCAL_WAIT_H={LOCAL_WAIT_H} [{LOCAL_WAIT_SRC}] "
+            f"FALLBACK_MODEL={FALLBACK_MODEL} [{FALLBACK_SRC}])")
+        tried: set[tuple[str, int]] = set()      # a preempted pair waits for the next pass
+        inflight: dict = {}                       # future -> (trial id, model)
+        with ThreadPoolExecutor(max_workers=PARALLEL) as pool:
+            while True:
+                busy = {tid for tid, _ in inflight.values()}
+                for t in all_trials():
+                    if t["status"] == "queued" and t["id"] not in busy and \
+                            (all(s["status"] != "pending" for s in t["states"]) or _stale(t)):
                         conclude(project, t)
-            work_now = [w for w in runnable(project) if (w[0]["id"], w[1]) not in tried]
-            if not work_now:
-                return 0
-            t, i, model = work_now[0]
-            tried.add((t["id"], i))
-            t = load(t["instance"], t["id"])   # fresh: the instance may have asked for more meanwhile
-            if i < 0:
-                ok, out = gate_check(project, t["instance"], t)
-                t["gate"] = {"ok": ok, "output": out[-4000:]}
-                t["status"] = "queued" if ok else "rejected"
-                t["queued_at"] = datetime.now().isoformat(timespec="seconds")
-                save(t)
-                log(f"{t['instance']}: trial {t['id']} test gate {'passed' if ok else 'FAILED — not run'}")
-                if not ok:
-                    deliver(project, t)
-                continue
-            if t["states"][i]["status"] != "pending":
-                continue
-            try:
-                run_pair(project, t, i, model)
-            except Exception as e:
-                log(f"{t['instance']}: trial {t['id']} past cycle {i + 1} failed: {type(e).__name__}: {e}")
-                t = load(t["instance"], t["id"])
-                t["states"][i].update(status="unjudged", outcome="unjudged", why=f"replay failed: {e}"[:300])
-                save(t)
+                local_running = any(m == "local" for _, m in inflight.values())
+                for t, i, model in runnable(project):
+                    if len(inflight) >= PARALLEL:
+                        break
+                    if t["id"] in busy or (t["id"], i) in tried or (model == "local" and local_running):
+                        continue
+                    tried.add((t["id"], i))
+                    busy.add(t["id"])
+                    local_running |= model == "local"
+                    fut = pool.submit(_gate_job, project, t) if i < 0 else \
+                        pool.submit(_pair_job, project, t["id"], t["instance"], i, model)
+                    inflight[fut] = (t["id"], model)
+                if not inflight:
+                    return 0
+                done, _ = wait(list(inflight), return_when=FIRST_COMPLETED)
+                for fut in done:
+                    inflight.pop(fut)
+                    if fut.exception():
+                        log(f"trial worker: a job failed: {type(fut.exception()).__name__}: {fut.exception()}")
     finally:
         fcntl.flock(f, fcntl.LOCK_UN)
         f.close()

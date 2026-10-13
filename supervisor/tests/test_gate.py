@@ -25,18 +25,16 @@ class GateTest(unittest.TestCase):
         before = gate.snapshot(self.root)
         (self.root / "shaft" / "a.py").write_text("A = 2\n")
         (self.root / "shaft" / "new.py").write_text("B = 1\n")
-        (self.root / "config.env").unlink()
+        (self.root / "config.env").unlink()            # not code: the operator edits it too (test_config_writers)
         (self.root / "memory" / "journal.md").write_text("changed\n")
         (self.root / "shaft" / "__pycache__").mkdir()
         (self.root / "shaft" / "__pycache__" / "a.pyc").write_bytes(b"x")
-        self.assertEqual(gate.changed(before, gate.snapshot(self.root)),
-                         ["config.env", "shaft/a.py", "shaft/new.py"])
+        self.assertEqual(gate.changed(before, gate.snapshot(self.root)), ["shaft/a.py", "shaft/new.py"])
 
     def test_restore_undoes_everything(self):
         before = gate.snapshot(self.root)
         (self.root / "shaft" / "a.py").write_text("broken(\n")
         (self.root / "shaft" / "new.py").write_text("B = 1\n")
-        (self.root / "config.env").unlink()
         touched = gate.changed(before, gate.snapshot(self.root))
         gate.restore(self.root, before, touched)
         self.assertEqual(gate.snapshot(self.root), before)

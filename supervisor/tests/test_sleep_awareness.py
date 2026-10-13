@@ -66,7 +66,7 @@ class FailedRunTest(unittest.TestCase):
         # Regression: a sleep that died (e.g. model server down) left no trace the instance could see.
         root = Path(tempfile.mkdtemp(prefix="shaft-inst-"))
         cmd = [sys.executable, "-c", "import sys; sys.stderr.write('cannot reach LLM at 127.0.0.1:8780'); sys.exit(1)"]
-        broker = mock.Mock(handoffs=[], counts={})
+        broker = mock.Mock(handoffs=[], config_writes=[], counts={})
         with mock.patch.object(runner, "_launch", return_value=(broker, cmd, {})), \
              mock.patch.object(runner, "_snapshot", return_value={}), \
              mock.patch.object(runner, "_settle", return_value=True), \

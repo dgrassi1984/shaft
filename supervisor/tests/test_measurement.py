@@ -83,6 +83,16 @@ class JudgingTest(InstanceDirCase):
         self.assertIn("TALK-CANARY", seen["case"])                    # a conversation in the last 72 h
         self.assertNotIn("TOO-OLD-CANARY", seen["case"])
         self.assertIn("difficulty", seen["schema"]["required"])
+        self.assertTrue(j["origin_supported"])
+
+    def test_an_undeclared_origin_is_never_supported(self):
+        # Regression: wren's 2026-10-13 16:19 cycle declared no origin, and the judge still said origin_supported: true.
+        self.episode({"ts": "2026-10-13T12:10:00", "kind": "live", "intent": {"goal": "g", "success_criterion": "c",
+                      "confidence": 50}, "finish": None, "tools": []})
+        with mock.patch.object(judge, "available", return_value=True), \
+             mock.patch.object(judge, "ask", return_value=dict(self.VERDICT)):
+            metrics.judge_pending("m")
+        self.assertIsNone(metrics.judgments("m")[0]["origin_supported"])
 
     def test_an_out_of_range_rating_leaves_the_cycle_unjudged(self):
         self.episode({"ts": "2026-10-13T12:10:00", "kind": "live", "intent": {"goal": "g", "success_criterion": "c",
@@ -111,6 +121,31 @@ class JudgingTest(InstanceDirCase):
         with mock.patch.object(judge, "ask") as ask:
             self.assertEqual(metrics.backfill("m"), 0)                # idempotent
             ask.assert_not_called()
+
+    def test_backfill_rewrites_the_file_only_under_the_instance_run_lock(self):
+        # Live cycles append judgments (after_cycle, under the run lock) while a backfill runs.
+        import contextlib
+        from supervisor import runner
+        self.episode({"ts": "2026-10-12T17:24:00", "kind": "live", "intent": {"goal": "g", "success_criterion": "c",
+                      "confidence": 80}, "finish": {"criterion_met": "yes"}, "tools": []})
+        path = self.sup / "judgments" / "m.jsonl"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({k: v for k, v in judgment("2026-10-12T17:24:00", "yes").items()
+                                    if k not in metrics.RATINGS}) + "\n")
+        held = []
+
+        @contextlib.contextmanager
+        def lock(name, wait, kind=""):
+            held.append((name, kind))
+            yield
+            held.pop()
+        merged_under = []
+        real_merge = metrics._merge_ratings
+        with mock.patch.object(runner, "run_lock", lock), \
+             mock.patch.object(metrics, "_merge_ratings", lambda n, r: merged_under.append(list(held)) or real_merge(n, r)), \
+             mock.patch.object(judge, "ask", return_value={k: JudgingTest.VERDICT[k] for k in metrics.RATINGS}):
+            self.assertEqual(metrics.backfill("m"), 1)
+        self.assertTrue(merged_under and all(h == [("m", "backfill")] for h in merged_under), merged_under)
 
     def test_stats_lead_with_achieved_difficulty_and_origins(self):
         js = ([judgment(f"2026-10-13T0{i}:00:00", "yes", 1, "self", origin_declared="self") for i in range(4)]
@@ -148,16 +183,16 @@ class ModelTest(InstanceDirCase):
 class ProbationMeasureTest(unittest.TestCase):
     """The probation tests in test_supervision.py pin the revert mechanics; these pin what it measures."""
 
-    def check(self, before: list[dict], after: list[dict]) -> bool:
+    def check(self, before: list[dict], after: list[dict], trial: dict | None = None) -> bool:
         tmp = Path(tempfile.mkdtemp(prefix="shaft-pm-")).resolve()
         try:
             js = before + after
             with mock.patch.object(metrics, "SUP_DIR", tmp), mock.patch.object(metrics, "judgments", return_value=before):
-                metrics.start_probation("p", "abc123", ["shaft/prompts.py"])
+                metrics.start_probation("p", "abc123", ["shaft/prompts.py"], trial=trial)
             reverted = []
             with mock.patch.object(metrics, "SUP_DIR", tmp), mock.patch.object(metrics, "judgments", return_value=js), \
-                 mock.patch.object(metrics, "git_wt", lambda *a, **k: reverted.append(a) or
-                                   subprocess.CompletedProcess(a, 0, "", "")), \
+                 mock.patch.object(metrics, "restore_change", lambda name, entry: reverted.append(entry)), \
+                 mock.patch.object(metrics, "_tools_by_cycle", return_value={}), \
                  mock.patch.object(metrics, "journal_note"):
                 metrics.check_probation("p")
             return bool(reverted)
@@ -185,6 +220,45 @@ class ProbationMeasureTest(unittest.TestCase):
         n = metrics.PROBATION_CYCLES
         self.assertFalse(self.check([judgment(f"b{i}", "yes", None) for i in range(n)],
                                     [judgment(f"a{i}", "no", 2) for i in range(n)]))
+
+
+    def test_a_drop_chance_explains_is_kept(self):
+        # Bug 2026-10-13: wren's github plugin and truncation change were "reverted" for 92% -> 75% (yes x5 and one
+        # partial before; three partials after, all in the rogue-AI watch the operator had just assigned). A drop
+        # of 0.17 > 0.15, but chance alone gives one that large 27% of the time.
+        before = [judgment(f"b{i}", m, 3) for i, m in enumerate(["yes", "yes", "partial", "yes", "yes", "yes"])]
+        after = [judgment(f"a{i}", m, 3) for i, m in enumerate(["yes", "yes", "partial", "partial", "partial", "yes"])]
+        self.assertGreater(metrics.chance_of_drop(metrics._values(before), metrics._values(after)), 0.25)
+        self.assertFalse(self.check(before, after))
+
+    def test_a_change_adopted_against_a_worse_trial_is_undone_on_any_drop(self):
+        # PLAN-trials D3: the trial is the evidence against it, so the chance test does not apply; a 'better'
+        # verdict gets the normal rule.
+        before = [judgment(f"b{i}", m, 3) for i, m in enumerate(["yes", "yes", "partial", "yes", "yes", "yes"])]
+        after = [judgment(f"a{i}", m, 3) for i, m in enumerate(["yes", "partial", "yes", "partial", "yes", "yes"])]
+        self.assertFalse(self.check(before, after))
+        self.assertTrue(self.check(before, after, trial={"id": "t-1", "verdict": "worse"}))
+        self.assertFalse(self.check(before, after, trial={"id": "t-1", "verdict": "better"}))
+
+    def test_a_clear_drop_is_reverted(self):
+        n = metrics.PROBATION_CYCLES
+        before = [judgment(f"b{i}", "yes", 3) for i in range(n)]
+        after = [judgment(f"a{i}", m, 3) for i, m in enumerate(["yes"] + ["partial"] * (n - 1))]
+        self.assertLess(metrics.chance_of_drop(metrics._values(before), metrics._values(after)), 0.01)
+        self.assertTrue(self.check(before, after))
+
+
+class ChanceOfDropTest(unittest.TestCase):
+    def test_exact_values(self):
+        self.assertAlmostEqual(metrics.chance_of_drop([1, 1], [0, 0]), 1 / 6)        # 1 of C(4,2) splits
+        self.assertEqual(metrics.chance_of_drop([1, 1, 1], [1, 1, 1]), 1.0)          # no drop: every split ties
+        self.assertAlmostEqual(metrics.chance_of_drop([0, 0], [1, 1]), 1.0)          # a rise is never a drop
+
+    def test_large_samples_are_sampled_deterministically(self):
+        before, after = [1.0] * 30, [0.5] * 15 + [1.0] * 15
+        p = metrics.chance_of_drop(before, after)
+        self.assertEqual(p, metrics.chance_of_drop(before, after))
+        self.assertLess(p, 0.001)
 
 
 class BatteryIsolationTest(unittest.TestCase):
