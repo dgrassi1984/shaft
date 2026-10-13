@@ -276,6 +276,18 @@ def run_agent(name: str, kind: str, agent_args: list[str], interactive: bool, wa
         return _run(name, root, kind, agent_args, interactive, output, driver, held=held)
     finally:
         held.release()
+        if kind == "live":
+            _second_judge_later()
+
+
+def _second_judge_later() -> None:
+    """The second judge grades the cycles its sample picked once the instance is free again — detached, so the
+    wake that ran the cycle ends now and no message waits minutes for a second opinion."""
+    if not any((SUP_DIR / "judgments" / "second-cases").glob("*.json")):
+        return
+    with (SUP_DIR / "second-judge.log").open("a") as out:
+        subprocess.Popen([PYTHON, "-E", "-s", "-m", "supervisor", "judge", "second"], cwd=PROJECT,
+                         stdin=subprocess.DEVNULL, stdout=out, stderr=out, start_new_session=True)
 
 
 PAUSABLE = ("live", "sleep", "reflect")   # autonomous runs a conversation pauses at once

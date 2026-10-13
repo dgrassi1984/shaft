@@ -153,17 +153,18 @@ def judgments(name: str) -> list[dict]:
     """Every judged cycle of the instance, newest first, with what it achieved (0-5, None if unrated)."""
     from . import metrics
     path = SUP_DIR / "judgments" / f"{name}.jsonl"
+    seconds = SUP_DIR / "judgments" / f"{name}-second.jsonl"
 
     def read():
         out = []
-        for j in reversed(jsonl(path)):
+        for j in reversed(metrics.judgments(name, SUP_DIR)):
             try:
                 v = metrics.cycle_value(j)
             except KeyError:
                 v = None
             out.append({**j, "achieved": None if v is None else 5 * v})
         return out
-    return cached(f"judgments:{name}", [path], read)
+    return cached(f"judgments:{name}", [path, seconds], read)
 
 
 def traits(name: str) -> dict | None:

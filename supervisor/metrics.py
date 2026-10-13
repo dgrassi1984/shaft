@@ -121,9 +121,23 @@ def _judgments_path(name: str) -> Path:
     return SUP_DIR / "judgments" / f"{name}.jsonl"
 
 
-def judgments(name: str) -> list[dict]:
-    p = _judgments_path(name)
-    return [json.loads(l) for l in p.read_text().splitlines() if l.strip()] if p.exists() else []
+def judgments(name: str, sup: Path | None = None) -> list[dict]:
+    """Every judged cycle, oldest first, with the second judge's verdict (graded later, kept apart) merged in.
+    `sup`: the supervisor directory to read (the broker and the panel pass the one they use)."""
+    sup = sup or SUP_DIR
+    p = sup / "judgments" / f"{name}.jsonl"
+    rows = [json.loads(l) for l in p.read_text().splitlines() if l.strip()] if p.exists() else []
+    sp = sup / "judgments" / f"{name}-second.jsonl"
+    if rows and sp.exists():
+        seconds = {}
+        for l in sp.read_text().splitlines():
+            if l.strip():
+                r = json.loads(l)
+                seconds[r.pop("episode_ts")] = r
+        for j in rows:
+            if j["episode_ts"] in seconds and "second" not in j:
+                j["second"] = seconds[j["episode_ts"]]
+    return rows
 
 
 def live_episodes(name: str) -> list[dict]:
@@ -306,7 +320,7 @@ def judge_pending(name: str) -> int:
                 _check_ratings(verdict)
                 verdict["judge"] = judge.JUDGE_MODEL
                 if second_sampled(name, ep["ts"]):
-                    verdict["second"] = second_opinion(name, case)
+                    stash_second(name, ep["ts"], case)   # judged after the run lets go of the instance
             except judge.JudgeError as e:
                 log(f"{name}: judging {ep['ts']} failed: {e}")
                 break
@@ -333,6 +347,52 @@ def second_sampled(name: str, episode_ts: str) -> bool:
     if not judge.second_available():
         return False
     return int(hashlib.sha256(f"{name}|{episode_ts}".encode()).hexdigest(), 16) % judge.JUDGE2_EVERY == 0
+
+
+def _second_cases() -> Path:
+    return SUP_DIR / "judgments" / "second-cases"
+
+
+def _seconds_path(name: str) -> Path:
+    return SUP_DIR / "judgments" / f"{name}-second.jsonl"
+
+
+def stash_second(name: str, episode_ts: str, case: str) -> None:
+    """Keep the exact case the main judge saw, for the second judge to grade once the run has let go of the
+    instance: it takes minutes (GLM 5.3 Flash: 128 s on a real case), and a message from Daniele must not wait
+    for it."""
+    d = _second_cases()
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{name}@{episode_ts.replace(':', '-')}.json").write_text(json.dumps({"name": name, "episode_ts": episode_ts,
+                                                                               "case": case}))
+
+
+def second_pending(names: list[str] | None = None) -> int:
+    """Grade the stashed cases (`shaft judge second`; started detached after each cycle). Each case is claimed by
+    renaming it, so two of these never grade the same one; a verdict is appended to <name>-second.jsonl (no lock
+    needed) and merged into judgments() by its episode. Returns how many were graded."""
+    import os
+    done = 0
+    for path in sorted(_second_cases().glob("*.json")) if _second_cases().is_dir() else []:
+        name = path.name.split("@")[0]
+        if names and name not in names:
+            continue
+        claimed = path.with_suffix(f".working-{os.getpid()}")
+        try:
+            path.rename(claimed)
+        except FileNotFoundError:
+            continue                                     # another process took it
+        job = json.loads(claimed.read_text())
+        out = {"episode_ts": job["episode_ts"], "judged_at": datetime.now().isoformat(timespec="seconds"),
+               **second_opinion(name, job["case"])}
+        with _seconds_path(name).open("a") as f:
+            f.write(json.dumps(out, ensure_ascii=False) + "\n")
+        claimed.unlink()
+        write_stats(name)
+        log(f"{name}: second judge on {job['episode_ts']}: "
+            + (f"no verdict ({out['error'][:120]})" if out.get("error") else out["criterion_met"]))
+        done += 1
+    return done
 
 
 def second_opinion(name: str, case: str) -> dict:

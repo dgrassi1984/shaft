@@ -496,8 +496,9 @@ def main(argv: list[str]) -> int:
     p.add_argument("-n", type=int, default=3)
     p = sub.add_parser("stats", help="an instance's measured performance (judge + calibration)")
     p.add_argument("name", nargs="?", default=DEFAULT_INSTANCE)
-    p = sub.add_parser("judge", help="judging: 'backfill' rates origin/difficulty/novelty of cycles judged before")
-    p.add_argument("action", choices=["backfill"])
+    p = sub.add_parser("judge", help="judging: 'backfill' rates origin/difficulty/novelty of cycles judged before; "
+                                     "'second' runs the second judge on the cycles its sample picked")
+    p.add_argument("action", choices=["backfill", "second"])
     p.add_argument("names", nargs="*")
     p = sub.add_parser("battery", help="the capability battery: run, report, recall (questions), backup, off|on per instance")
     p.add_argument("action", choices=["run", "report", "recall", "backup", "off", "on"])
@@ -661,6 +662,9 @@ def main(argv: list[str]) -> int:
         instance_root(args.name)
         metrics.judge_pending(args.name)
         print(metrics.stats_text(args.name))
+        return 0
+    if args.cmd == "judge" and args.action == "second":
+        print(f"second judge: {metrics.second_pending(args.names or None)} cycle(s) graded")
         return 0
     if args.cmd == "judge":
         for name in args.names or instance_names():

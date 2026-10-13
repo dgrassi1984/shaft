@@ -146,28 +146,78 @@ class SecondJudgeTest(unittest.TestCase):
 
 
 class JudgePendingTest(unittest.TestCase):
-    def test_a_sampled_cycle_gets_both_verdicts_on_the_same_case(self):
-        ep = {"ts": "2026-10-13T04:42:00", "intent": {"goal": "g", "success_criterion": "c", "confidence": 70},
-              "finish": {"criterion_met": "yes"}, "tools": []}
-        written, cases = [], []
-        sup = Path(tempfile.mkdtemp(prefix="shaft-jp-"))
-        self.addCleanup(shutil.rmtree, sup, True)
-        with mock.patch.object(metrics, "SUP_DIR", sup), mock.patch.object(metrics, "live_episodes", return_value=[ep]), \
-                mock.patch.object(metrics, "judgments", return_value=[]), \
+    def setUp(self):
+        self.sup = Path(tempfile.mkdtemp(prefix="shaft-jp-"))
+        self.addCleanup(shutil.rmtree, self.sup, True)
+        self.ep = {"ts": "2026-10-13T04:42:00", "intent": {"goal": "g", "success_criterion": "c", "confidence": 70},
+                   "finish": {"criterion_met": "yes"}, "tools": []}
+        for p in (mock.patch.object(metrics, "SUP_DIR", self.sup), mock.patch.object(metrics, "log"),
+                  mock.patch.object(metrics, "write_stats")):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_the_second_judge_grades_the_same_case_after_the_run_and_its_verdict_is_merged(self):
+        cases = []
+        with mock.patch.object(metrics, "live_episodes", return_value=[self.ep]), \
                 mock.patch.object(metrics, "_written_files", return_value=""), \
                 mock.patch.object(metrics, "_provenance_evidence", return_value=""), \
                 mock.patch.object(metrics, "cycle_model", return_value="mimo"), \
                 mock.patch.object(judge, "available", return_value=True), \
                 mock.patch.object(judge, "ask", side_effect=lambda s, case, *a, **k: cases.append(case) or dict(VERDICT)), \
-                mock.patch.object(judge, "ask_second",
-                                  side_effect=lambda s, case, *a, **k: cases.append(case) or dict(VERDICT, criterion_met="yes")), \
+                mock.patch.object(judge, "ask_second") as second, \
                 mock.patch.object(metrics, "second_sampled", return_value=True):
             self.assertEqual(metrics.judge_pending("wren"), 1)
-            rec = json.loads((sup / "judgments" / "wren.jsonl").read_text())
-        self.assertEqual(rec["criterion_met"], "partial")                 # the main judge decides the score
-        self.assertEqual(rec["second"]["criterion_met"], "yes")
-        self.assertEqual(rec["second"]["judge"], judge.JUDGE2_MODEL)
+            second.assert_not_called()                                    # not while the run holds the instance
+        (stashed,) = (self.sup / "judgments" / "second-cases").glob("*.json")
+        with mock.patch.object(judge, "ask_second",
+                               side_effect=lambda s, case, *a, **k: cases.append(case) or dict(VERDICT, criterion_met="yes")):
+            self.assertEqual(metrics.second_pending(), 1)
+            self.assertEqual(metrics.second_pending(), 0)                 # graded once
+        self.assertFalse(stashed.exists())
+        (j,) = metrics.judgments("wren")
+        self.assertEqual(j["criterion_met"], "partial")                   # the main judge alone scores
+        self.assertEqual(j["second"]["criterion_met"], "yes")
+        self.assertEqual(j["second"]["judge"], judge.JUDGE2_MODEL)
         self.assertEqual(cases[0], cases[1])                              # blind, on exactly the same case
+
+    def test_a_case_another_process_took_is_skipped(self):
+        metrics.stash_second("wren", "2026-10-13T04:42:00", "case")
+        (path,) = (self.sup / "judgments" / "second-cases").glob("*.json")
+        path.rename(path.with_suffix(".working-1"))
+        with mock.patch.object(judge, "ask_second") as second:
+            self.assertEqual(metrics.second_pending(), 0)
+        second.assert_not_called()
+
+
+class ReleasedBeforeTheSecondJudgeTest(unittest.TestCase):
+    """The second judge takes minutes (128 s on a real case): the instance is let go first, so a message from
+    Daniele never waits for it, and the wake that ran the cycle does not linger."""
+
+    def test_the_lock_is_released_before_the_detached_second_judge_starts(self):
+        from supervisor import runner
+        order = []
+        held = mock.Mock(acquire=lambda wait: order.append("acquire"), release=lambda: order.append("release"))
+        with mock.patch.object(runner, "_Held", return_value=held), \
+                mock.patch.object(runner, "_run", side_effect=lambda *a, **k: order.append("run") or 0), \
+                mock.patch.object(runner, "instance_root"), \
+                mock.patch.object(runner, "_second_judge_later", side_effect=lambda: order.append("second")):
+            runner.run_agent("wren", "live", ["live"], False)
+            runner.run_agent("wren", "talk", ["talk"], True)
+        self.assertEqual(order, ["acquire", "run", "release", "second", "acquire", "run", "release"])
+
+    def test_it_is_started_detached_only_when_a_case_waits(self):
+        from supervisor import runner
+        sup = Path(tempfile.mkdtemp(prefix="shaft-j2l-"))
+        self.addCleanup(shutil.rmtree, sup, True)
+        with mock.patch.object(runner, "SUP_DIR", sup), mock.patch.object(runner.subprocess, "Popen") as popen:
+            runner._second_judge_later()
+            popen.assert_not_called()
+            (sup / "judgments" / "second-cases").mkdir(parents=True)
+            (sup / "judgments" / "second-cases" / "wren@x.json").write_text("{}")
+            runner._second_judge_later()
+        args, kw = popen.call_args
+        self.assertEqual(args[0][-3:], ["supervisor", "judge", "second"])
+        self.assertTrue(kw["start_new_session"])
 
 
 if __name__ == "__main__":

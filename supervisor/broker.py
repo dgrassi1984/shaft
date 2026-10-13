@@ -726,9 +726,12 @@ class Broker:
             rows = [json.loads(l) for l in _tail_lines(path, 100000)]
             return [r for r in rows if known(str(r.get(field, "")).replace("T", " "))][-limit:]
         if kind == "judgments":
-            rows = [json.loads(l) for l in _tail_lines(SUP_DIR / "judgments" / f"{self.name}.jsonl", 100000)]
-            return judgments_text([r for r in rows if known(str(r.get("judged_at", "")).replace("T", " "))],
-                                  limit, cycle, before)
+            from .metrics import judgments
+            rows = [r for r in judgments(self.name, SUP_DIR) if known(str(r.get("judged_at", "")).replace("T", " "))]
+            for r in rows:   # a replay sees a second verdict only if it existed then
+                if isinstance(r.get("second"), dict) and not known(str(r["second"].get("judged_at", "")).replace("T", " ")):
+                    del r["second"]
+            return judgments_text(rows, limit, cycle, before)
         elif kind == "runs":
             mine = f"] {self.name}: "
             text = "\n".join(_tail_lines(SUP_DIR / "supervisor.log", 20000,
