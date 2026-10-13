@@ -15,6 +15,9 @@ from pathlib import Path
 from . import broker, memory, personality, selfedit
 
 MAX_RESULT_CHARS = 6000
+# My tool log is what the judge grades my cycles from: it keeps what I saw. It was once cut at 2,000
+# characters while I saw 6,000, and the judge marked my read-backs of self/self.md "cut off" — unsupported.
+LOG_CHARS = MAX_RESULT_CHARS
 FACTS_MAX_CHARS = 6000     # facts.md is shown in full: consolidation keeps it to this
 DIGEST_MAX_CHARS = 1500
 FACT_LINE = re.compile(r"^- \[\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?\] \S")   # every result stays in context for the rest of the cycle
@@ -131,7 +134,7 @@ class Toolbox:
             result = f"ERROR: {type(e).__name__}: {e}"
         if len(result) > MAX_RESULT_CHARS:
             result = result[:MAX_RESULT_CHARS] + f"\n[... truncated, {len(result)} chars total]"
-        self.log.append({"tool": name, "args": _loggable(name, raw_args)[:2000], "result": result[:2000],
+        self.log.append({"tool": name, "args": for_log(_loggable(name, raw_args)), "result": result,   # what I saw
                          "seconds": round((datetime.now() - started).total_seconds(), 2)})
         return result
 
@@ -257,6 +260,11 @@ class Toolbox:
         if proc.returncode != 0:
             return f"ERROR: plugin {name} failed (exit {proc.returncode}): {proc.stderr[-1500:]}"
         return proc.stdout
+
+
+def for_log(text: str) -> str:
+    """Text for my tool log: whole up to LOG_CHARS, else cut there with a note saying so and how long it was."""
+    return text if len(text) <= LOG_CHARS else text[:LOG_CHARS] + f"\n[... cut in the log, {len(text)} chars total]"
 
 
 def _loggable(tool: str, raw_args: str) -> str:

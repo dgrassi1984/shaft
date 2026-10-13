@@ -9,7 +9,7 @@ from typing import Callable
 
 from . import pausing
 from .llm import Client, Reply
-from .tools import Toolbox
+from .tools import Toolbox, for_log
 
 
 @dataclass
@@ -129,7 +129,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
                     messages.append({"role": "tool", "tool_call_id": c["id"], "content": REPEATED_STOP})
                     return Outcome(reply, "repeating", step, toolbox.log)
                 messages.append({"role": "tool", "tool_call_id": c["id"], "content": REPEATED.format(name=c["name"])})
-                toolbox.log.append({"tool": c["name"], "args": c["arguments"][:2000], "result": "(repeat: not run)"})
+                toolbox.log.append({"tool": c["name"], "args": for_log(c["arguments"]), "result": "(repeat: not run)"})
                 continue
             last_call, repeats = call_key, 0
             pausing.activity(keep=True, phase="tool", tool=c["name"], args=" ".join(c["arguments"].split())[:160])
@@ -142,7 +142,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
                 except (ValueError, TypeError) as e:
                     result = f"ERROR: bad arguments for {c['name']}: {e}"
                 stop = stop or (controls[c["name"]].stops and not result.startswith("ERROR"))
-                toolbox.log.append({"tool": c["name"], "args": c["arguments"][:2000], "result": result[:2000]})
+                toolbox.log.append({"tool": c["name"], "args": for_log(c["arguments"]), "result": for_log(result)})
             else:
                 result = toolbox.run(c["name"], c["arguments"])
             if on_tool:
