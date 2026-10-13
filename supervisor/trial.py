@@ -1018,7 +1018,7 @@ def _unblind(judgments: list) -> str:
                          ("second run", f"{second} run"), ("First run", f"The {first} run"),
                          ("Second run", f"The {second} run")):
                 text = text.replace(a, b)
-            return text
+            return re.sub(r"(^|[.!?]\s+)the (current|proposed) run", lambda m: f"{m.group(1)}The {m.group(2)} run", text)
     return ""
 
 

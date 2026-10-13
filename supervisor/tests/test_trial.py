@@ -425,7 +425,7 @@ class FlowTest(Fixture):
         self.assertEqual(t["verdict"]["label"], "worse")
         msg = next((self.root / "inbox").glob(f"*trial-{t['id']}.md")).read_text()
         self.assertIn("worse", msg)
-        self.assertIn("the current run did the work", msg)          # unblinded
+        self.assertIn("The current run did the work; the proposed run idled.", msg)   # unblinded, capitalised
         self.assertIn("current better", msg)
         # adopting exactly the trialled files links probation to the verdict, with no margin
         (self.root / "shaft" / "extra.py").write_bytes(b"# proposed\n")
