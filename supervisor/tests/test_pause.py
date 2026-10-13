@@ -70,15 +70,16 @@ class AgentSideTest(unittest.TestCase):
 
             def supervisor():
                 time.sleep(1)                                   # the cycle is waiting on the model
-                (root / ".tmp" / "pause").write_text("now")
-                os.kill(os.getpid(), signal.SIGUSR1)
+                pid = os.getpid()
+                (root / ".tmp" / f"pause-{pid}").write_text("now")
+                os.kill(pid, signal.SIGUSR1)
                 for _ in range(50):
-                    if (root / ".tmp" / "paused").exists():    # it acknowledged: the conversation happens
+                    if (root / ".tmp" / f"paused-{pid}").exists():   # it acknowledged: the conversation happens
                         break
                     time.sleep(0.1)
-                seen["acked"] = (root / ".tmp" / "paused").exists()
+                seen["acked"] = (root / ".tmp" / f"paused-{pid}").exists()
                 time.sleep(1)
-                (root / ".tmp" / "pause").unlink()              # the conversation ended
+                (root / ".tmp" / f"pause-{pid}").unlink()           # the conversation ended
             seen = {}
             t = threading.Thread(target=supervisor)
             t.start()
@@ -97,7 +98,7 @@ class AgentSideTest(unittest.TestCase):
         root = Path(tempfile.mkdtemp(prefix="shaft-inst-"))
         self.addCleanup(shutil.rmtree, root, True)
         (root / ".tmp").mkdir()
-        (root / ".tmp" / "deadline").write_text(f"{time.time() + 3600:.0f}")
+        (root / ".tmp" / f"deadline-{os.getpid()}").write_text(f"{time.time() + 3600:.0f}")
         with mock.patch.dict(os.environ, {"SHAFT_ROOT": str(root), "SHAFT_DEADLINE": f"{time.time() + 60:.0f}"}):
             self.assertGreater(agent.time_left(), 3000)
 
@@ -106,16 +107,17 @@ FAKE_CYCLE = r"""
 import os, signal, sys, time
 from pathlib import Path
 tmp = Path(".tmp"); tmp.mkdir(exist_ok=True)
-(tmp / "pausable").write_text(str(os.getpid()))
+me = os.getpid()
+(tmp / f"pausable-{me}").write_text(str(me))
 paused = {"now": False}
 signal.signal(signal.SIGUSR1, lambda *a: paused.update(now=True))
 end = time.time() + 6
 while time.time() < end:
     if paused["now"]:
-        (tmp / "paused").write_text("1")
-        while (tmp / "pause").exists():
+        (tmp / f"paused-{me}").write_text("1")
+        while (tmp / f"pause-{me}").exists():
             time.sleep(0.2)
-        (tmp / "paused").unlink()
+        (tmp / f"paused-{me}").unlink()
         paused["now"] = False
         end += 1
     time.sleep(0.1)
@@ -153,15 +155,38 @@ class SupervisorSideTest(unittest.TestCase):
                     time.sleep(0.25)
                 during["free"] = not runner.is_busy("shaft")     # the conversation can have the instance
                 during["settled"] = len(settles)
-                during["deadline"] = (root / ".tmp" / "deadline").exists()
+                runner._clean_tmp(root)                           # the conversation's write-up starts meanwhile
                 time.sleep(1)
+                during["still_paused"] = bool(list((root / ".tmp").glob("pause-*")))
             t.join(timeout=30)
         self.assertTrue(during["free"])
+        # Regression (2026-10-13): another run's start-up cleanup deleted the paused cycle's pause file and resumed
+        # it while the conversation still had the instance.
+        self.assertTrue(during["still_paused"])
         self.assertEqual(during["settled"], 1)                    # the cycle's work so far was checked first
         self.assertEqual(result.get("code"), 0)                   # then it resumed and finished
         self.assertEqual(len(settles), 2)                         # and its own work after the pause was checked
         self.assertIsNot(settles[0], settles[1])                  # from a fresh baseline: the chat's work is not its
-        self.assertFalse((root / ".tmp" / "pause").exists())
+        self.assertEqual(list((root / ".tmp").glob("pause-*")), [])
+
+
+class CleanupTest(unittest.TestCase):
+    def test_only_files_of_runs_that_are_gone_are_removed(self):
+        from supervisor import runner
+        root = Path(tempfile.mkdtemp(prefix="shaft-inst-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        tmp = root / ".tmp"
+        tmp.mkdir()
+        gone, alive = 2 ** 22 + 4321, os.getpid()
+        for name in ("pause", "paused", "pausable", "deadline"):
+            (tmp / f"{name}-{gone}").write_text("x")
+            (tmp / f"{name}-{alive}").write_text("x")
+        (tmp / "activity.json").write_text(json.dumps({"pid": gone}))
+        (tmp / "memory-index.json").write_text("{}")
+        runner._clean_tmp(root)
+        left = sorted(p.name for p in tmp.iterdir())
+        self.assertEqual(left, sorted([f"{n}-{alive}" for n in ("pause", "paused", "pausable", "deadline")]
+                                      + ["memory-index.json"]))
 
 
 class OldCodeTest(unittest.TestCase):

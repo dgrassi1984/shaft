@@ -261,28 +261,61 @@ class _Held:
             self.stack = None
 
 
+CONTROL = re.compile(r"^(pause|paused|pausable|deadline)-(\d+)$")
+
+
+def _clean_tmp(root: Path) -> None:
+    """Remove pause/deadline files and the activity file of runs that are gone — never a live run's: the
+    conversation's write-up once deleted a paused cycle's pause file and resumed it while the instance was
+    still the conversation's (2026-10-13)."""
+    tmp = root / ".tmp"
+    for path in tmp.iterdir() if tmp.is_dir() else []:
+        m = CONTROL.match(path.name)
+        if m and not _pid_alive(int(m.group(2))):
+            path.unlink(missing_ok=True)
+    act = tmp / "activity.json"
+    try:
+        if act.exists() and not _pid_alive(int(json.loads(act.read_text()).get("pid", 0))):
+            act.unlink(missing_ok=True)
+    except (OSError, ValueError):
+        act.unlink(missing_ok=True)
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
 def _pause(name: str, root: Path, kind: str, proc, held: _Held, run: dict, broker) -> float:
     """Daniele opened a conversation with this instance during its autonomous run (Daniele, 2026-10-13: "its
     background cycle should be immediately paused"): signal it — a model call in flight is cut off, freeing the
     model; a tool in progress finishes first — settle what it did so far, give the instance to the conversation,
     and take it back when the conversation ends. Returns the seconds it was paused."""
     t0 = time.monotonic()
-    marker = root / ".tmp" / "pausable"
-    if not (marker.is_file() and marker.read_text().strip() == str(proc.pid)):
+    pid = proc.pid
+    marker = root / ".tmp" / f"pausable-{pid}"
+    if not marker.is_file():
         # Its code does not handle the signal (SIGUSR1 would kill it): ask it to wrap up instead, once.
         if not run.get("asked_to_yield"):
             request_yield([name])
             run["asked_to_yield"] = True
         return 0.0
-    safe_write(root, ".tmp/pause", datetime.now().isoformat(timespec="seconds"))
+    safe_write(root, f".tmp/pause-{pid}", datetime.now().isoformat(timespec="seconds"))
     try:
         os.kill(proc.pid, signal.SIGUSR1)
     except ProcessLookupError:
         pass
-    ack = root / ".tmp" / "paused"
+    ack = root / ".tmp" / f"paused-{pid}"
     while not ack.exists():
         if proc.poll() is not None:   # it ended on its own meanwhile
-            (root / ".tmp" / "pause").unlink(missing_ok=True)
+            (root / ".tmp" / f"pause-{pid}").unlink(missing_ok=True)
             return 0.0
         time.sleep(0.25)
     log(f"{name}: {kind} paused — the operator opened a conversation")
@@ -295,8 +328,8 @@ def _pause(name: str, root: Path, kind: str, proc, held: _Held, run: dict, broke
     paused = time.monotonic() - t0
     if run.get("deadline"):
         run["deadline"] += paused
-        safe_write(root, ".tmp/deadline", f"{run['deadline']:.0f}")   # the paused time is not taken from it
-    (root / ".tmp" / "pause").unlink(missing_ok=True)
+        safe_write(root, f".tmp/deadline-{pid}", f"{run['deadline']:.0f}")   # the paused time is not taken from it
+    (root / ".tmp" / f"pause-{pid}").unlink(missing_ok=True)
     log(f"{name}: {kind} resumed after {paused:.0f}s")
     return paused
 
@@ -364,8 +397,7 @@ def _finish(proc: subprocess.Popen) -> None:
 def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: bool,
          output: list[str] | None = None, driver=None, held: _Held | None = None) -> int:
     log(f"{name}: start {kind} {describe_knobs()}")
-    for leftover in ("pause", "paused", "deadline", "pausable", "activity.json"):
-        (root / ".tmp" / leftover).unlink(missing_ok=True)
+    _clean_tmp(root)
     run = {"before": _snapshot(root), "seen": 0}
     budget = None if interactive else (SLEEP_TIMEOUT_S if kind == "sleep" else CYCLE_TIMEOUT_S)
     broker, cmd, env = _launch(name, root, kind, agent_args, budget)
@@ -425,8 +457,8 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
             signal.signal(signal.SIGINT, old_sigint)
         broker.stop()
     log(f"{name}: end {kind} exit={code} broker_calls={broker.counts or {}}")
-    for leftover in ("yield", "pause", "paused", "deadline", "pausable", "activity.json"):
-        (root / ".tmp" / leftover).unlink(missing_ok=True)
+    (root / ".tmp" / "yield").unlink(missing_ok=True)
+    _clean_tmp(root)
     if code < 0 and not interactive:
         journal_note(root, "Supervisor: run stopped", f"My {kind} run was stopped from outside (signal {-code}) "
                      "before I finished it. Whatever I had already written to my files was kept.")
