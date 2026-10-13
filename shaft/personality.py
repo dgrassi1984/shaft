@@ -12,6 +12,8 @@ import re
 from pathlib import Path
 
 LAYERS = {"core": "Core", "surface": "Surface"}
+CAPTIONS = {"Core": "*(values and temperament — change rarely)*", "Surface": "*(current interests, opinions, moods)*"}
+ITALIC = re.compile(r"^\*[^*\s].*\*$")   # a caption line ("*(…)*", "*Grown from experience…*"), not a "* " bullet
 CITE = re.compile(r"\[(\d{4}-\d{2}-\d{2})(?: (\d{2}:\d{2}))?\]")
 HEAD = re.compile(r"^## (\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})", re.M)
 TEMPLATE = """# Personality
@@ -65,29 +67,40 @@ def update(root: Path, layer: str, text: str) -> str:
                 return f"ERROR: [{stamp}] is not a journal entry I have (in: {line.strip()!r})"
     current = read(root)
     title = LAYERS[layer]
-    note = "*(values and temperament — change rarely)*" if layer == "core" else \
-        "*(current interests, opinions, moods)*"
-    # Only this layer's own lines: headings (`# Personality`, `## Core` …) and captions I sometimes paste in
-    # once put a second Core block inside Surface, and the file then had two Cores (wren, 2026-10-13).
-    text = "\n".join(l for l in text.strip().splitlines()
-                     if not l.lstrip().startswith("#") and l.strip() not in (note, ""))
-    body = f"## {title}\n{note}\n\n{text.strip()}\n\n"
+    body = _block(title, text)
     path(root).parent.mkdir(parents=True, exist_ok=True)
     path(root).write_text(_rebuild(current, title, body).rstrip() + "\n")
     return f"{layer} personality updated ({len(bullets)} traits)"
 
 
+def _block(title: str, text: str) -> str:
+    """A layer's block from its own lines only. Headings (`# Personality`, `## Core` …) and captions I sometimes
+    paste in once put a second Core block inside Surface, and the file then had two Cores (wren, 2026-10-13);
+    a pasted `# Personality` and its caption stayed inside shaft's Core block until cleaned here too."""
+    lines = [l.rstrip() for l in text.strip().splitlines()
+             if not l.lstrip().startswith("#") and not ITALIC.match(l.strip())]
+    body = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+    return f"## {title}\n{CAPTIONS[title]}\n\n{body}\n\n"
+
+
 def _rebuild(current: str, title: str, body: str) -> str:
     """The file with exactly one block per section: the first `## X` of each title is kept, later copies are
-    dropped, and the layer being written is replaced (or appended if missing)."""
+    dropped, the layer being written is replaced (or appended if missing), and the other layer is cleaned of
+    stray headings and captions left in it by older writes."""
     parts = re.split(r"(?m)^(?=## )", current)
     preamble, blocks, seen = parts[0], [], set()
     for block in parts[1:]:
-        name = block.splitlines()[0][3:].strip()
+        head, _, rest = block.partition("\n")
+        name = head[3:].strip()
         if name in seen:
             continue
         seen.add(name)
-        blocks.append(body if name == title else block.rstrip() + "\n\n")
+        if name == title:
+            blocks.append(body)
+        elif name in CAPTIONS:
+            blocks.append(_block(name, rest))
+        else:
+            blocks.append(block.rstrip() + "\n\n")
     if title not in seen:
         blocks.append(body)
     return preamble + "".join(blocks)
