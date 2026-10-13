@@ -6,7 +6,7 @@ import sys
 from datetime import datetime
 
 from . import config as config_mod
-from . import live, prompts, recovery, reflect, sleep, talk
+from . import live, pausing, prompts, recovery, reflect, sleep, talk
 from .llm import Client, LLMError
 from .state import State
 
@@ -45,6 +45,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     state, client = State(cfg.root), Client.from_config(cfg)
+    if args.cmd in ("live", "sleep", "reflect"):   # autonomous: paused at once when Daniele opens a conversation
+        pausing.install()
     if args.cmd in ("live", "sleep", "reflect"):   # a conversation never waits: talk does this at its end
         n = recovery.run(cfg, state, client)   # conversations that ended without a journal entry
         if n:

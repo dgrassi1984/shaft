@@ -21,6 +21,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
+from . import pausing
+
 
 class LLMError(Exception):
     pass
@@ -164,7 +166,7 @@ class Client:
         reply = Reply(content="", max_tokens=max_tokens)
         error = None
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout_s) as resp:
+            with pausing.interruptible(), urllib.request.urlopen(request, timeout=self.timeout_s) as resp:
                 if stream:
                     self._read_stream(resp, reply, on_content, on_reasoning, on_progress, on_tool_text)
                 else:

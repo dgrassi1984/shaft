@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
+from . import pausing
 from .llm import Client, Reply
 from .tools import Toolbox
 
@@ -50,8 +51,11 @@ def yield_requested() -> bool:
 
 
 def time_left() -> float | None:
-    """Seconds until the supervisor stops this run (SHAFT_DEADLINE), or None if unbounded."""
-    deadline = os.environ.get("SHAFT_DEADLINE")
+    """Seconds until the supervisor stops this run (SHAFT_DEADLINE; moved later in .tmp/deadline after a
+    pause), or None if unbounded."""
+    root = os.environ.get("SHAFT_ROOT")
+    moved = os.path.join(root, ".tmp", "deadline") if root else ""
+    deadline = open(moved).read().strip() if moved and os.path.exists(moved) else os.environ.get("SHAFT_DEADLINE")
     return float(deadline) - time.time() if deadline else None
 
 
@@ -77,17 +81,26 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
     step = 0
     last_call, repeats = None, 0   # the previous tool call, and how many times in a row it came back unchanged
     while max_steps <= 0 or step < max_steps:
+        if pausing.requested():   # Daniele opened a conversation: wait, then go on where I was
+            pausing.wait_while_paused()
         step += 1
         left = time_left()
         yielding = step > 1 and yield_requested()
         last = step == max_steps or yielding or (left is not None and left < WRAP_UP_RESERVE_S)
-        if last and wrap_up:
-            why = ("one turn: Daniele needs the model for a conversation" if yielding else
-                   f"about {left / 60:.0f} minutes" if left is not None and left < WRAP_UP_RESERVE_S else "one turn")
-            messages.append({"role": "user", "content": f"[supervisor] You have {why} left. {wrap_up}"})
-            reply = call(messages, final_tools)
-        else:
-            reply = call(messages)
+        mark = len(messages)
+        try:
+            if last and wrap_up:
+                why = ("one turn: Daniele needs the model for a conversation" if yielding else
+                       f"about {left / 60:.0f} minutes" if left is not None and left < WRAP_UP_RESERVE_S else "one turn")
+                messages.append({"role": "user", "content": f"[supervisor] You have {why} left. {wrap_up}"})
+                reply = call(messages, final_tools)
+            else:
+                reply = call(messages)
+        except pausing.Paused:   # the call was cut off for a conversation: redo this step afterwards
+            del messages[mark:]
+            step -= 1
+            pausing.wait_while_paused()
+            continue
         turn = {"role": "assistant", "content": reply.content or ""}
         if reply.reasoning:
             # Bonsai's template shows each earlier step's thinking within the reply (until the next user
