@@ -13,7 +13,7 @@ from . import agent, memory, pausing, prompts
 from .agent import Control
 from .llm import Client
 from .state import State
-from .tools import Toolbox, _spec
+from .tools import Toolbox, _spec, for_log
 
 S = {"type": "string"}
 ORIGINS = ("self", "operator", "instance")
@@ -91,7 +91,7 @@ def run(cfg, state: State, client: Client) -> str:
     def gated_run(name: str, raw_args: str) -> str:   # no acting before the intent is declared
         if not record["intent"]:
             refusal = "ERROR: call declare_intent first — state your goal, criterion and confidence"
-            toolbox.log.append({"tool": name, "args": raw_args[:2000], "result": refusal})
+            toolbox.log.append({"tool": name, "args": for_log(raw_args), "result": refusal})
             return refusal
         return real_run(name, raw_args)
     toolbox.run = gated_run
