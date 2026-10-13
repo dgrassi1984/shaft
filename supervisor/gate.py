@@ -26,7 +26,7 @@ def snapshot(instance_root: Path) -> dict[str, bytes]:
         for path in paths:
             if path.is_symlink() or any(p.is_symlink() for p in path.parents if instance_root in p.parents):
                 continue   # never read through links the instance planted
-            if path.is_file() and "__pycache__" not in path.parts:
+            if path.is_file() and "__pycache__" not in path.parts and path.name != ".DS_Store":   # Finder's
                 files[str(path.relative_to(instance_root))] = path.read_bytes()
     return files
 

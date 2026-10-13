@@ -40,6 +40,35 @@ class CommitStateTest(unittest.TestCase):
         self.assertTrue(commit_state("x", "reflect", [], root=self.root, project=self.project))  # nothing new: no-op
 
 
+class IgnoredFileTest(unittest.TestCase):
+    def test_an_ignored_file_among_the_kept_code_does_not_sink_the_commit(self):
+        # Regression (2026-10-13): shaft's delegated system plugin passed the tests, but the kept files included
+        # plugins/.DS_Store (Finder's, ignored by git): `git add` refused it and the whole commit failed, leaving
+        # the plugin staged and every later template update blocked.
+        project = Path(tempfile.mkdtemp(prefix="shaft-commit-")).resolve()
+        self.addCleanup(shutil.rmtree, project, True)
+        git(project, "init", "-q")
+        git(project, "commit", "-q", "--allow-empty", "-m", "main")
+        root = project / "instances" / "x"
+        git(project, "worktree", "add", "-q", "--orphan", "-b", "instance/x", str(root))
+        (root / ".gitignore").write_text(".DS_Store\n")
+        (root / "plugins" / "system").mkdir(parents=True)
+        (root / "plugins" / "system" / "main.py").write_text("def run(): return 'ok'\n")
+        (root / "plugins" / ".DS_Store").write_bytes(b"finder")
+        kept = ["plugins/.DS_Store", "plugins/system/main.py"]
+        self.assertTrue(commit_state("x", "talk", kept, root=root, project=project))
+        self.assertIn("plugins/system/main.py", git(root, "show", "--name-only", "--format=", "HEAD"))
+        self.assertNotIn(".DS_Store", git(root, "show", "--name-only", "--format=", "HEAD"))
+
+    def test_the_gate_does_not_count_finder_files_as_code(self):
+        from supervisor import gate
+        root = Path(tempfile.mkdtemp(prefix="shaft-snap-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        (root / "plugins").mkdir()
+        (root / "plugins" / ".DS_Store").write_bytes(b"finder")
+        self.assertEqual(gate.snapshot(root), {})
+
+
 class ConfigMergeTest(unittest.TestCase):
     def test_instance_settings_survive_a_conflicting_template_change(self):
         # Regression: wren (on Haiku) conflicted with every template change near its model lines.

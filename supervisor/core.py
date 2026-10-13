@@ -76,7 +76,8 @@ def git(*args: str, check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(["git", "-C", str(PROJECT), *args], capture_output=True, text=True, check=check)
 
 
-def git_wt(root: Path, *args: str, check: bool = True, project: Path | None = None) -> subprocess.CompletedProcess:
+def git_wt(root: Path, *args: str, check: bool = True, project: Path | None = None,
+           input: str | None = None) -> subprocess.CompletedProcess:
     """Run git in an instance worktree without trusting anything inside it.
 
     The worktree's `.git` file is writable by the instance, which could point it at
@@ -87,7 +88,7 @@ def git_wt(root: Path, *args: str, check: bool = True, project: Path | None = No
     return subprocess.run(
         ["git", f"--git-dir={admin}", f"--work-tree={root}", "-c", "core.hooksPath=/dev/null",
          "-c", "core.fsmonitor=false", *args],
-        cwd=root, capture_output=True, text=True, check=check)
+        cwd=root, capture_output=True, text=True, check=check, input=input)
 
 
 def _worktree_admin_dir(root: Path, project: Path) -> Path:
@@ -275,9 +276,12 @@ def commit_state(name: str, kind: str, kept_code: list[str], root: Path | None =
     Returns False — after logging git's own error — if the commit failed.
     """
     root = root or INSTANCES / name
-    wt = lambda *a, check=True: git_wt(root, *a, check=check, project=project)  # noqa: E731
-    paths = [p for p in STATE_PATHS if (root / p).exists()] + kept_code
+    wt = lambda *a, check=True, input=None: git_wt(root, *a, check=check, project=project, input=input)  # noqa: E731
     try:
+        if kept_code:   # git refuses to add an ignored path, and one such path fails the whole commit
+            ignored = set(wt("check-ignore", "--stdin", check=False, input="\n".join(kept_code)).stdout.split())
+            kept_code = [p for p in kept_code if p not in ignored]
+        paths = [p for p in STATE_PATHS if (root / p).exists()] + kept_code
         wt("add", "-A", "--", *paths)
         staged = wt("diff", "--cached", "--name-only", "-z", "--", *paths).stdout.split("\0")
         staged = [p for p in staged if p]
