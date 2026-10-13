@@ -18,7 +18,7 @@ import re
 import sys
 import uuid
 
-from . import agent, prompts, recovery
+from . import agent, memory, prompts, recovery
 from .llm import Client, LLMError
 from .state import State
 from .tools import Toolbox
@@ -241,7 +241,9 @@ def run(cfg, state: State, client: Client, show_thinking: bool = False, input_fn
             continue
         state.append_episode({"kind": "talk", "talk_id": talk_id, "role": "user", "content": user,
                               **({"speaker": speaker} if speaker else {})})
-        turn = [{"role": "system", "content": system}, *history, {"role": "user", "content": user}]
+        # what my memory holds about this message, beyond what my context already shows
+        heard = user + memory.recall(state.root, user, shown=system + "\n" + user)   # not the message itself
+        turn = [{"role": "system", "content": system}, *history, {"role": "user", "content": heard}]
         start = len(turn)
         log_start = len(toolbox.log)
         reply = _respond(client, cfg, toolbox, turn, view)
@@ -291,6 +293,9 @@ def answer(cfg, state: State, client: Client, request: dict) -> None:
                 "tools": len(toolbox.specs())})
     state.append_episode({"kind": "talk", "talk_id": talk_id, "role": "user", "content": dialogue[-1]["content"],
                           "via": app})
+    asked = dialogue[-1]["content"]
+    dialogue[-1] = {**dialogue[-1], "content": asked + memory.recall(
+        state.root, asked, shown=system + "\n" + "\n".join(m["content"] for m in dialogue))}   # not this dialogue
     turn = [{"role": "system", "content": system}, *dialogue]
     log_start = len(toolbox.log)
     reply = _respond(client, cfg, toolbox, turn, view)

@@ -6,6 +6,7 @@ Every tool takes JSON arguments and returns text. A failing tool returns
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from datetime import datetime
@@ -13,13 +14,19 @@ from pathlib import Path
 
 from . import broker, memory, personality, selfedit
 
-MAX_RESULT_CHARS = 6000   # every result stays in context for the rest of the cycle
+MAX_RESULT_CHARS = 6000
+FACTS_MAX_CHARS = 6000     # facts.md is shown in full: consolidation keeps it to this
+DIGEST_MAX_CHARS = 1500
+FACT_LINE = re.compile(r"^- \[\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?\] \S")   # every result stays in context for the rest of the cycle
 PLUGIN_TIMEOUT_S = 120
 
 # Paths I may not overwrite with write_file: append-only history, files with their own
 # validated tools, and files the supervisor writes about me.
 PROTECTED = {
     "memory/journal.md": "the journal is append-only; it is written at the end of each cycle",
+    "memory/facts.md": "use remember to add a fact, rewrite_facts to consolidate (dropped facts are archived)",
+    "memory/facts-archive.md": "facts dropped in consolidation are kept here; it is only appended to",
+    "memory/digests.md": "use write_digest; digests are only appended to",
     "self/self.md": "use update_self_model",
     "self/personality.md": "use update_personality",
     "self/stats.md": "written by the supervisor from my measured results",
@@ -48,6 +55,14 @@ BUILTINS = [
           "the safe way to add a dated entry to a running record such as a notes/ log; nothing already "
           "in the file can be lost.", {"path": S, "content": S}),
     _spec("list_files", "List files under a directory of my folder.", {"path": S}, []),
+    _spec("rewrite_facts", "Consolidate memory/facts.md (in my sleep): give the whole new list — duplicates "
+          "merged, superseded or trivial facts dropped, what still matters kept — one per line as "
+          "'- [YYYY-MM-DD HH:MM] fact' (keep each fact's date). At most 6,000 characters: it is shown to me in "
+          "full. Facts I drop are kept in memory/facts-archive.md, still found by search_memory.", {"facts": S}),
+    _spec("write_digest", "Add today's digest (in my sleep): a short summary, at most 1,500 characters, of "
+          "what happened since my last sleep and what it means — what my future self needs once these "
+          "journal entries are no longer in view. Kept in memory/digests.md; recent digests are shown to me.",
+          {"text": S}),
     _spec("search_memory", "Search everything I remember (journal, facts, notes, conversations) "
           "and return the most relevant passages with their dates.",
           {"query": S, "k": {"type": "integer", "description": "max results, default 5"}}, ["query"]),
@@ -183,7 +198,9 @@ class Toolbox:
 
     def _t_search_memory(self, query: str, k: int = 5) -> str:
         hits = memory.search(self.root, query, k=k)
-        return "\n\n".join(f"[{h.source}] {h.text}" for h in hits) or "nothing relevant found"
+        note = (f"(words only: semantic search is unavailable — {memory.semantic_error})\n\n"
+                if memory.semantic_error else "")
+        return note + ("\n\n".join(f"[{h.source}] {h.text}" for h in hits) or "nothing relevant found")
 
     def _t_remember(self, fact: str) -> str:
         facts = self.root / "memory" / "facts.md"
@@ -193,6 +210,34 @@ class Toolbox:
         with facts.open("a") as f:
             f.write(f"- [{datetime.now():%Y-%m-%d %H:%M}] {fact.strip()}\n")
         return "remembered"
+
+    def _t_rewrite_facts(self, facts: str) -> str:
+        lines = [l.strip() for l in facts.strip().splitlines() if l.strip()]
+        bad = [l for l in lines if not FACT_LINE.match(l)]
+        if not lines or bad:
+            return (f"ERROR: write one fact per line as '- [YYYY-MM-DD HH:MM] fact' (keeping its date); "
+                    f"not like that: {bad[0][:120]!r}" if bad else "ERROR: no facts given")
+        text = "\n".join(lines)
+        if len(text) > FACTS_MAX_CHARS:
+            return f"ERROR: {len(text)} characters; consolidate to at most {FACTS_MAX_CHARS} (merge or drop more)"
+        path = self.root / "memory" / "facts.md"
+        old = [l.strip() for l in path.read_text().splitlines() if l.strip().startswith("- ")] if path.exists() else []
+        dropped = [l for l in old if l not in set(lines)]
+        if dropped:
+            with (self.root / "memory" / "facts-archive.md").open("a") as f:
+                f.write(f"\n## Dropped in consolidation, {datetime.now():%Y-%m-%d %H:%M}\n\n" + "\n".join(dropped) + "\n")
+        path.write_text("# Facts I have learned\n\n" + text + "\n")
+        return f"facts consolidated: {len(old)} -> {len(lines)} ({len(dropped)} archived in memory/facts-archive.md)"
+
+    def _t_write_digest(self, text: str) -> str:
+        text = text.strip()
+        if not text:
+            return "ERROR: empty digest"
+        if len(text) > DIGEST_MAX_CHARS:
+            return f"ERROR: {len(text)} characters; a digest is at most {DIGEST_MAX_CHARS}"
+        with (self.root / "memory" / "digests.md").open("a") as f:
+            f.write(f"\n## {datetime.now():%Y-%m-%d %H:%M} — digest\n\n{text}\n")
+        return "digest written"
 
     def _t_update_self_model(self, text: str) -> str:
         edit = selfedit.parse(f"<self_model>\n{text}\n</self_model>")

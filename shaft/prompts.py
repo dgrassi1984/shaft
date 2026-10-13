@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -55,6 +56,10 @@ CONTEXT = """\
 
 {goals}
 
+## My current improvement plan (from my last sleep)
+
+{improvement}
+
 ## My measured performance (self/stats.md, written by the supervisor)
 
 {stats}
@@ -66,6 +71,10 @@ CONTEXT = """\
 ## My skills (skills/)
 
 {skills}
+
+## Earlier days, as I digested them in my sleeps (newest last)
+
+{digests}
 
 ## My recent journal (newest last; {shown} of {total} entries)
 
@@ -118,8 +127,8 @@ to {steps} model turns.
 
 {inbox}
 
-1. FIRST call declare_intent: pick ONE goal — from self/goals.md, from your last \
-reflection's "How I will improve" or "What I want to do next", or from a message above. \
+1. FIRST call declare_intent: pick ONE goal — from your current improvement plan or \
+self/goals.md (both in your context), or from a message above. \
 State a success criterion someone else could check from your tool results, and your \
 honest confidence (0-100) that you will meet it. Other tools are refused until you do.
 2. Work toward it with your tools. Prefer one small finished thing over a big plan.
@@ -132,13 +141,17 @@ This is your sleep cycle: consolidate what happened since your last sleep (the r
 journal above; use search_memory and read_file for more). Use your tools to:
 
 1. remember any durable facts worth keeping (about the world, {operator}, yourself) — \
-not trivia, not things already in your facts.
+not trivia, not things already in your facts. Then, if your facts have grown past what you can \
+read at a glance or repeat each other, rewrite_facts: merge, drop what is superseded, keep the dates \
+(at most 6,000 characters; what you drop stays searchable in memory/facts-archive.md).
 2. update memory/people/{operator_file}.md with what you have learned about {operator} \
 (write the whole file; keep what is still true).
 3. update_personality: revise the surface layer from evidence. Change the core layer \
 only if several experiences point the same way — cite them.
 4. update self/goals.md if your goals changed.
 5. update_self_model only if your self-description no longer matches your journal.
+6. write_digest: a short summary of what happened since your last sleep and what it means — what your \
+future self needs once these journal entries are no longer in view.
 
 Then answer (without calling a tool) with your sleep journal entry: what you \
 consolidated, what you changed about yourself and why, and under "How I will improve" \
@@ -200,13 +213,15 @@ def system_prompt(state, cfg, mode_note: str, tools: str | None = None) -> str:
         personality=personality.read(root).strip(),
         goals=state.read(state.goals_md).strip() or "(none yet)",
         stats=_tail(root / "self" / "stats.md", 2500, "(no measurements yet)"),
-        facts=_tail(root / "memory" / "facts.md", 4000, "(none yet)"),
+        facts=_tail(root / "memory" / "facts.md", 6000, "(none yet)"),   # kept to this by my sleep
+        digests=_tail(root / "memory" / "digests.md", 3500, "(none yet — my sleeps will write them)"),
         skills=_skills(root),
         journal=journal or "(empty)",
         shown=shown,
         total=total,
         now=f"{datetime.now():%A %Y-%m-%d %H:%M}",
         sleep=last_sleep(state, journal),
+        improvement=improvement_plan(state),
     )
     return f"{identity}\n\n{context}"
 
@@ -230,3 +245,25 @@ def last_sleep(state, shown_journal: str = "") -> str:
             body = entry.split("\n", 1)[1].strip() if "\n" in entry else ""
             return f"{when} — {what}\n\n{body[:2500]}{' […]' if len(body) > 2500 else ''}"
     return "I have not slept yet (no sleep entry in my journal)."
+
+
+IMPROVE = re.compile(r"how i will improve", re.I)
+
+
+def improvement_plan(state) -> str:
+    """The "How I will improve" part (and what follows it: the next concrete step) of my latest sleep — or of
+    a reflection, if one is newer. My cycles choose their goal from it: it must not depend on the entry still
+    being in my recent journal, and reflections alone are not scheduled (only sleep is, every night)."""
+    for entry in reversed(state.journal_entries()):
+        title = entry.splitlines()[0].lstrip("# ").strip()
+        what = title.partition(" — ")[2]
+        if not what.startswith(("Sleep", "Reflection")):
+            continue
+        m = IMPROVE.search(entry)
+        if not m:
+            continue
+        start = entry.rfind("\n", 0, m.start()) + 1
+        plan = entry[start:].split("*Consolidation actions:*")[0].strip()
+        cut = f"{plan[:2000]} […]" if len(plan) > 2000 else plan
+        return f"From my {what.split(' (')[0].lower()} of {title[:16]}:\n\n{cut}"
+    return "None yet — my first sleep will set one (under \"How I will improve\")."

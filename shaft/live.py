@@ -9,7 +9,7 @@ from __future__ import annotations
 import shutil
 from datetime import datetime
 
-from . import agent, prompts
+from . import agent, memory, prompts
 from .agent import Control
 from .llm import Client
 from .state import State
@@ -84,9 +84,13 @@ def run(cfg, state: State, client: Client) -> str:
     toolbox.run = gated_run
 
     inbox = read_inbox(state)
+    system = prompts.system_prompt(state, cfg, prompts.LIVE_MODE, toolbox.describe())
+    # what my memory holds about my goals, my improvement plan and my messages, beyond what my context shows
+    about = "\n".join([state.read(state.goals_md), prompts.improvement_plan(state), inbox_text(inbox)])
     messages = [
-        {"role": "system", "content": prompts.system_prompt(state, cfg, prompts.LIVE_MODE, toolbox.describe())},
-        {"role": "user", "content": prompts.LIVE.format(steps=cfg.MAX_STEPS_LIVE, inbox=inbox_text(inbox))},
+        {"role": "system", "content": system},
+        {"role": "user", "content": prompts.LIVE.format(steps=cfg.MAX_STEPS_LIVE, inbox=inbox_text(inbox))
+         + memory.recall(state.root, about, shown=system)},
     ]
     outcome = agent.run(client, messages, toolbox, max_tokens=cfg.MAX_TOKENS_STEP, purpose="live",
                         max_steps=cfg.MAX_STEPS_LIVE, controls=controls,
