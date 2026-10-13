@@ -161,6 +161,15 @@ class RunToolTest(unittest.TestCase):
         self.assertIn("hi", r)
         self.assertIn("42", r)
 
+    def test_heredocs_work(self):
+        # Regression (2026-10-13): zsh writes here-document temp files to $TMPPREFIX (default /tmp/zsh), which the
+        # run sandbox may not write; every heredoc failed ("can't create temp file for here document") and
+        # shaft and wren concluded the shell itself was crippled.
+        r = self.run_cmd("cat <<'EOT'\nhello from a heredoc\nEOT\npython3 - <<'EOF'\nprint(6 * 7)\nEOF")
+        self.assertTrue(r.startswith("exit 0"), r)
+        self.assertIn("hello from a heredoc", r)
+        self.assertIn("42", r)
+
     def test_cannot_touch_its_mind(self):
         r = self.run_cmd("echo forged > memory/journal.md; echo x > self/self.md; echo $?")
         self.assertEqual((self.root / "memory" / "journal.md").read_text(), "journal\n")

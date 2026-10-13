@@ -387,6 +387,7 @@ class Broker:
             f.write(sandbox.run_profile(root, HOME))
         bindir = Path(PYTHON).parent
         env = {"PATH": f"{bindir}:/usr/bin:/bin:/usr/sbin:/sbin", "HOME": str(home), "TMPDIR": str(home),
+               "TMPPREFIX": str(home / "zsh"),   # zsh's here-document files (default /tmp/zsh: not writable here)
                "LANG": "en_US.UTF-8", "PYTHONDONTWRITEBYTECODE": "1", "TERM": "dumb"}
         if not (bindir / "python3").exists():                 # make `python3` the system Python
             env["PATH"] = f"{home}:{env['PATH']}"
