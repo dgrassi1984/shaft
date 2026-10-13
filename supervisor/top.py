@@ -1,10 +1,13 @@
-"""`shaft top`: the supervisor's live view — every instance's state and what it is doing right now, the
-services, the latest events and messages. Refreshes every second. Runs with .venv-ui (rich).
-Without a terminal (`shaft top --once`, or piped) it prints one snapshot as text.
+"""`shaft top`: the supervisor's control panel — every instance's state and what it is doing right now, the
+services, the latest events and messages, and (PLAN-control-panel.md) tabs for one instance in full, the
+judge's verdicts, trials, benchmarks, self-changes and probation, spending against the caps, and the services,
+with guarded actions. Refreshes every second. Runs with .venv-ui (rich). Without a terminal
+(`shaft top --once`, or piped) it prints one snapshot as text.
 
-Keys — overview: ↑/↓ pick an instance, c starts a cycle for it if idle (asks y/n), m browses the messages
-between instances, q quits. Messages: ↑/↓ (j/k, PgUp/PgDn) move, f filters by instance, Enter reads one,
-Esc goes back. Reading: ↑/↓ scroll, n/p next/previous message, Esc back to the list.
+Keys — 1–9 switch tab, ? help, q quits. Overview: ↑/↓ pick an instance, Enter shows it in full, c starts a
+cycle if idle, p pause/resume, s sleep now, u update, w write, r reply, x dismiss the alerts, m messages.
+Messages: ↑/↓ (j/k, PgUp/PgDn) move, f filters by instance, Enter reads one, Esc goes back. Reading: ↑/↓
+scroll, n/p next/previous message, Esc back to the list. The other tabs are in top_views.py.
 """
 from __future__ import annotations
 
@@ -25,7 +28,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from . import dashboard
+from . import dashboard, panel, top_views
 
 STATE_STYLE = {"idle": "dim", "in a cycle": "green", "sleeping": "blue", "talking": "cyan",
                "answering (API)": "cyan", "writing up a conversation": "magenta", "being updated": "yellow"}
@@ -91,6 +94,14 @@ class UI:
     confirm: str = ""             # instance waiting for y/n before a cycle starts
     flash: str = ""
     flash_until: float = 0.0
+    tab: str = "overview"         # top_views.TABS; overview and messages are this module's views
+    sel: int = 0                  # selected row in a list tab (judge, trials, services)
+    top: int = 0                  # first visible row of that list
+    detail: bool = False          # a list tab shows its selected row in full
+    only: bool = False            # trials: only the selected instance's
+    overlay: object = None        # top_views.Overlay: y/n question, one-line editor or picker
+    help: bool = False
+    width: int = 100              # the terminal's, as of the last render
 
     def say(self, text: str, seconds: float = 6) -> None:
         self.flash, self.flash_until = text, time.time() + seconds
@@ -184,6 +195,63 @@ def handle(ui: UI, key: str, snap: dict, page: int, start_wake) -> bool:
     return False
 
 
+def dispatch(ui: UI, key: str, snap: dict, page: int, start_wake) -> bool:
+    """One key for the whole panel: overlays first (they own every key, q included), then help, tab switches,
+    the original overview/messages keys (handle), the overview's instance actions, the other tabs. True = quit."""
+    if ui.overlay is not None:
+        top_views.handle_overlay(ui, key)
+        return False
+    if ui.help:
+        ui.help = False
+        return False
+    if ui.confirm:                                    # the original y/n of `c`
+        return handle(ui, key, snap, page, start_wake)
+    if key == "q":
+        return True
+    if key == "?":
+        ui.help = True
+        return False
+    if key in top_views.TAB_OF:
+        tab = top_views.TAB_OF[key]
+        if tab != ui.tab:
+            ui.tab, ui.sel, ui.top, ui.detail, ui.scroll = tab, 0, 0, False, 0
+        ui.view = "list" if tab == "messages" else "main" if tab == "overview" else ui.view
+        if tab == "messages":
+            ui.msg = 0
+        return False
+    if ui.tab in ("overview", "messages"):
+        if ui.view == "main":
+            if key in ("enter", "right", "l"):
+                ui.tab, ui.scroll = "instance", 0
+                return False
+            if key == "x":
+                ids = [a["id"] for a in snap.get("alerts") or []][:5]
+                panel.dismiss(ids)
+                snap["alerts"] = (snap.get("alerts") or [])[len(ids):]
+                ui.say(f"dismissed {len(ids)} alert(s)" if ids else "no alerts", 3)
+                return False
+            if top_views.instance_action(ui, key, snap):
+                return False
+        quit_ = handle(ui, key, snap, page, start_wake)
+        ui.tab = "overview" if ui.view == "main" else "messages"
+        return quit_
+    top_views.handle_view(ui, key, snap, page)
+    return False
+
+
+def extras(snap: dict) -> dict:
+    """The panel's additions to a snapshot: open alerts (minus dismissed ones) and today's total spend."""
+    try:
+        cost = panel.costs(days=1)
+        gone = panel.dismissed()
+        snap["alerts"] = [a for a in panel.alerts(snap, cost=cost) if a["id"] not in gone]
+        snap["spend"] = cost["today"]["total"]
+    except Exception as e:                           # a broken log must not take the panel down; say so
+        snap["alerts"] = [{"id": "panel", "text": f"panel data unavailable: {type(e).__name__}: {e}"}]
+        snap["spend"] = None
+    return snap
+
+
 # -- rendering --------------------------------------------------------------------------------------------
 def _when(m: dict) -> str:
     return m["ts"][5:16].replace("T", " ")            # MM-DD HH:MM
@@ -227,7 +295,14 @@ def render_main(snap: dict, ui: UI, width: int = 100):
         if s["detail"]:
             head.append(f" {s['detail']}", style="dim")
         head.append("   ")
-    parts = [head, _footer(ui, "↑/↓ instance · c start a cycle (idle only) · m messages · q quits")]
+    parts = [top_views.tab_bar(ui, snap), head,
+             top_views.footer(ui, top_views.HELP["overview"]) if ui.overlay else
+             _footer(ui, "↑/↓ instance · Enter details · c cycle · p pause · s sleep · u update · w write · r reply"
+                         " · m messages · ? help · q quits")]
+    for a in (snap.get("alerts") or [])[:5]:
+        parts.append(Text(f" ⚠ {clean(a['text'])}", style="bold red", no_wrap=True, overflow="ellipsis"))
+    if len(snap.get("alerts") or []) > 5:
+        parts.append(Text(f"   … {len(snap['alerts']) - 5} more · x dismisses the alerts shown", style="red"))
     sel = min(ui.inst, max(0, len(snap["instances"]) - 1))
     for n, i in enumerate(snap["instances"]):
         grid = Table.grid(padding=(0, 1))
@@ -315,16 +390,25 @@ def render_message(snap: dict, ui: UI, width: int, height: int):
 
 def render(snap: dict, ui: UI | None = None, width: int = 100, height: int = 40):
     ui = ui or UI()
+    ui.width = width
+    if ui.help:
+        return top_views.render_help(snap, ui, width, height)
+    if ui.overlay is not None and ui.overlay.kind == "pick":
+        return top_views.render_pick(ui, snap, height)
+    if ui.tab in top_views.RENDER:
+        return top_views.RENDER[ui.tab](snap, ui, width, height)
     if ui.view == "list":
-        return render_list(snap, ui, width, height)
+        return Group(top_views.tab_bar(ui, snap), render_list(snap, ui, width, height - 1))
     if ui.view == "message":
-        return render_message(snap, ui, width, height)
+        return Group(top_views.tab_bar(ui, snap), render_message(snap, ui, width, height - 1))
     return render_main(snap, ui, width)
 
 
 def plain(snap: dict) -> str:
     lines = [f"SHAFT {snap['at']} · " + " · ".join(f"{s['name']} {'up' if s['running'] else 'DOWN'}"
-                                                  for s in snap["services"])]
+                                                  for s in snap["services"])
+             + (f" · ${snap['spend']:.2f} spent today" if snap.get("spend") is not None else "")]
+    lines += [f"ALERT {a['text']}" for a in snap.get("alerts") or []]
     for i in snap["instances"]:
         lines.append(f"{i['name']:8} {i['state']}{' since ' + i['since'] if i['since'] else ''}"
                      f"{' · ' + i['doing'] if i['doing'] else ''}{' · goal: ' + i['goal'] if i['goal'] else ''}"
@@ -337,7 +421,7 @@ def plain(snap: dict) -> str:
 
 def main(argv: list[str]) -> int:
     if "--once" in argv or not (sys.stdin.isatty() and sys.stdout.isatty()):
-        print(plain(dashboard.snapshot()))
+        print(plain(extras(dashboard.snapshot())))
         return 0
     from .autonomy import start_wake
     console = Console()
@@ -351,16 +435,16 @@ def main(argv: list[str]) -> int:
 
     try:
         tty.setcbreak(fd)
-        snap, taken = dashboard.snapshot(), time.monotonic()
+        snap, taken = extras(dashboard.snapshot()), time.monotonic()
         with Live(draw(snap), console=console, screen=True, auto_refresh=False) as live:
             while True:
                 ready, _, _ = select.select([fd], [], [], max(0.0, 1.0 - (time.monotonic() - taken)))
                 if ready:
                     data = os.read(fd, 64).decode(errors="replace")
-                    if any(handle(ui, k, snap, max(1, console.size.height - 5), start_wake) for k in keys(data)):
+                    if any(dispatch(ui, k, snap, max(1, console.size.height - 5), start_wake) for k in keys(data)):
                         break
                 if time.monotonic() - taken >= 1.0:
-                    new, taken = dashboard.snapshot(), time.monotonic()
+                    new, taken = extras(dashboard.snapshot()), time.monotonic()
                     follow(ui, snap, new)
                     snap = new
                 live.update(draw(snap), refresh=True)
