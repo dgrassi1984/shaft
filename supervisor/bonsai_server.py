@@ -9,7 +9,7 @@ model name a client asks for, it gets Bonsai.
 Run with the Bonsai venv:  .venv-bonsai/bin/python -m supervisor.bonsai_server [--port 8780] [--adapter DIR]
 Normally started by launchd (shaft model on).
 
-Settings (environment): SHAFT_MODEL_TEMP (0.1), SHAFT_THINK_BUDGET (4096 reasoning tokens, then </think> is
+Settings (environment): SHAFT_MODEL_TEMP (0.6), SHAFT_THINK_BUDGET (4096 reasoning tokens, then </think> is
 forced; 0 = off; a request may ask for less with chat_template_kwargs.thinking_budget), SHAFT_PROMPT_CACHE_GB (4,
 enforced on every insert). Presence penalty is sent per request by the agent.
 """
@@ -125,7 +125,7 @@ def main(argv: list[str]) -> int:
         b = request_budget(gen_args, budget)
         return list(original(gen_args) or []) + ([ThinkingBudget(b, wrap_ids)] if b > 0 else [])
     S._make_logits_processors = with_budget
-    temp = os.environ.get("SHAFT_MODEL_TEMP", "0.1")                   # Daniele, 2026-10-12 (pack default 1.0)
+    temp = os.environ.get("SHAFT_MODEL_TEMP", "0.6")   # Daniele, 2026-10-13 (0.1 = near-greedy: verbatim loops; pack 1.0)
     cache_gb = float(os.environ.get("SHAFT_PROMPT_CACHE_GB", "4"))      # the cache grew to 8.3 GB uncapped
     cap = int(cache_gb * 1024 ** 3)
     S.LRUPromptCache = capped_prompt_cache(cap)

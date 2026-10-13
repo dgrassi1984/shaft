@@ -136,7 +136,7 @@ same, and is written up into the journal after `SHAFT_IDLE_MINUTES` without a me
 
 `supervisor/bonsai_server.py`: mlx_lm's server with Bonsai's own loader (and a kept LoRA adapter, if
 any). Context 262,144 tokens; hybrid attention (48 linear + 16 full layers). Settings:
-`SHAFT_MODEL_TEMP` (0.1), top-p 0.95, top-k 20, max 16,384 tokens per reply, a thinking budget
+`SHAFT_MODEL_TEMP` (0.6), top-p 0.95, top-k 20, max 16,384 tokens per reply, a thinking budget
 `SHAFT_THINK_BUDGET` (4,096 reasoning tokens; then Qwen's early-stopping phrase and `</think>` are forced —
 0 turns it off; a request may ask for less, never more), and a prompt cache capped at
 `SHAFT_PROMPT_CACHE_GB` (4, enforced on every insert). After a tool result the agent asks for
