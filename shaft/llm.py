@@ -51,13 +51,15 @@ class Reply:
 
 class Client:
     def __init__(self, base_url: str, model: str, api_key: str, timeout_s: int, usage_log: Path,
-                 broker_token: str = "", presence_penalty: float = 0.0, think_followup: int = 0):
+                 broker_token: str = "", presence_penalty: float = 0.0, think_followup: int = 0,
+                 reasoning_effort: str = ""):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key = api_key
         self.broker_token = broker_token
         self.presence_penalty = presence_penalty
         self.think_followup = think_followup
+        self.reasoning_effort = reasoning_effort
         self.local = not broker_token   # SHAFT's own server (template kwargs apply), not the cloud broker
         self.timeout_s = timeout_s
         self.usage_log = usage_log
@@ -74,7 +76,8 @@ class Client:
         return cls(base, cfg.LLM_MODEL, cfg.LLM_API_KEY, cfg.LLM_TIMEOUT_S,
                    cfg.root / "logs" / "llm_usage.jsonl", broker_token=token,
                    presence_penalty=cfg.LLM_PRESENCE_PENALTY / 10,
-                   think_followup=0 if token else cfg.LLM_THINK_FOLLOWUP)   # SHAFT's own server only
+                   think_followup=0 if token else cfg.LLM_THINK_FOLLOWUP,   # SHAFT's own server only
+                   reasoning_effort="" if token else cfg.LLM_REASONING_EFFORT)
 
     # -- public -------------------------------------------------------------
     def complete(self, messages: list[dict], max_tokens: int, purpose: str,
@@ -131,7 +134,11 @@ class Client:
             kwargs = {"preserve_thinking": False}
             if not think:   # Qwen-style templates: answer directly, no hidden reasoning
                 kwargs["enable_thinking"] = False
-            elif self.think_followup and messages and messages[-1].get("role") == "tool":
+            elif self.reasoning_effort:
+                # Bonsai's template defaults to xhigh, which thinks until the server's budget cuts it off on
+                # anything non-trivial (4,096 tokens, ~4 min); medium thinks as much as the request needs.
+                kwargs["reasoning_effort"] = self.reasoning_effort
+            if think and self.think_followup and messages and messages[-1].get("role") == "tool":
                 # After a tool result I mostly need to read it, not deliberate from scratch: SHAFT's server
                 # forces </think> after this many reasoning tokens (its own budget stays the ceiling).
                 kwargs["thinking_budget"] = self.think_followup

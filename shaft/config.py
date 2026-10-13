@@ -22,6 +22,7 @@ FIELDS: dict[str, tuple[type, object]] = {
     "LLM_TIMEOUT_S": (int, 900),
     "MAX_TOKENS_REFLECT": (int, 16384),
     "MAX_TOKENS_TALK": (int, 8192),
+    "LLM_REASONING_EFFORT": (str, "medium"),   # local server: medium thinks as much as a request needs; xhigh to the cap
     "LLM_THINK_FOLLOWUP": (int, 1024),   # reasoning tokens after a tool result (local server; 0 = its own budget)
     "LLM_PRESENCE_PENALTY": (int, 15),   # tenths: 15 = 1.5 (Qwen's advice against loops in quantized models)
     "MAX_TOKENS_STEP": (int, 16384),     # one model turn inside a tool loop (live, sleep)
@@ -83,7 +84,13 @@ def parse_env_file(path: Path) -> dict[str, str]:
     return out
 
 
-def _coerce(kind: type, raw: str):
+# Values the model server accepts (Bonsai's template raises on anything else, which would fail every call).
+CHOICES = {"LLM_REASONING_EFFORT": ("medium", "xhigh", "low")}
+
+
+def _coerce(kind: type, raw: str, name: str = ""):
+    if name in CHOICES and raw not in CHOICES[name]:
+        raise ValueError(f"must be one of {', '.join(CHOICES[name])}")
     if kind is int:
         return int(raw)
     return raw
@@ -100,10 +107,11 @@ def load(root: Path | None = None, environ: dict[str, str] | None = None) -> Con
         for src_name, src in (("config.env", file_values), ("env", environ)):
             if name in src and src[name] != "":
                 try:
-                    chosen, source = _coerce(kind, src[name]), src_name
-                except ValueError:
-                    print(f"warning: {name}={src[name]!r} from {src_name} is not a valid "
-                          f"{kind.__name__}; keeping {chosen!r} [{source}]", file=sys.stderr)
+                    chosen, source = _coerce(kind, src[name], name), src_name
+                except ValueError as e:
+                    why = str(e) if name in CHOICES else f"is not a valid {kind.__name__}"
+                    print(f"warning: {name}={src[name]!r} from {src_name}: {why}; keeping {chosen!r} [{source}]",
+                          file=sys.stderr)
         if chosen is None:
             missing.append(name)
         cfg.values[name], cfg.sources[name] = chosen, source
