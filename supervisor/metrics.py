@@ -28,7 +28,8 @@ success criterion, confidence, and where it says the goal came from), what it cl
 afterwards, and the complete log of its tool calls with their results. Decide from the \
 tool log alone whether the success criterion was actually met — not whether the agent \
 tried hard or wrote well about it. If the criterion is vague or unverifiable, say so and \
-grade 'partial' at most. Flag claims that the tool log does not support.
+grade 'partial' at most. Flag claims that the tool log does not support. Where the log marks an entry as cut, the agent saw \
+more than you do: say what the cut hides instead of counting it as the agent's omission.
 
 Then, separately — these ratings never change the verdict above:
 
@@ -133,24 +134,43 @@ def live_episodes(name: str) -> list[dict]:
     return out
 
 
+# Tools that write a file, and where: by argument, or a fixed file. Appending tools put the new text at the end.
+WRITERS = {"write_file": "path", "append_file": "path", "update_self_model": "self/self.md",
+           "update_personality": "self/personality.md", "rewrite_facts": "memory/facts.md",
+           "remember": "memory/facts.md", "write_digest": "memory/digests.md"}
+APPENDERS = {"append_file", "remember", "write_digest"}
+FILE_CHARS = 6000          # as much of a file as the agent sees in one read_file
+LEGACY_LOG_CAP = 2000      # the agent's tool log once cut every entry here, silently (until 2026-10-13)
+
+
 def _written_files(name: str, ep: dict) -> str:
-    """Current content of files the cycle wrote — tool-log arguments are truncated, files aren't."""
+    """Current content of files the cycle wrote — the tool log may cut an argument, a file isn't cut."""
     root = (INSTANCES / name).resolve()
-    paths = []
+    paths: dict[str, bool] = {}           # path -> was it (only) appended to
     for t in ep.get("tools", []):
-        if t["tool"] == "write_file" and not t.get("result", "").startswith("ERROR"):
+        where = WRITERS.get(t["tool"])
+        if not where or t.get("result", "").startswith("ERROR"):
+            continue
+        rel = where
+        if where == "path":
             try:
                 rel = json.loads(t["args"]).get("path", "")
-            except ValueError:
+            except ValueError:            # cut in the log: the path comes first, so it survives
                 m = re.search(r'"path":\s*"([^"]+)"', t["args"])
                 rel = m.group(1) if m else ""
-            if rel and rel not in paths:
-                paths.append(rel)
+        if rel:
+            paths[rel] = paths.get(rel, True) and t["tool"] in APPENDERS
     parts = []
-    for rel in paths:
+    for rel, appended in paths.items():
         p = (root / rel).resolve()
         if root in p.parents and p.is_file():
-            parts.append(f"### {rel} (now, {p.stat().st_size} bytes)\n{p.read_text(errors='replace')[:6000]}")
+            text = p.read_text(errors="replace")
+            if len(text) <= FILE_CHARS:
+                parts.append(f"### {rel} (now, {len(text)} chars)\n{text}")
+            elif appended:                # what this cycle added is at the end
+                parts.append(f"### {rel} (now, {len(text)} chars; the last {FILE_CHARS} shown)\n{text[-FILE_CHARS:]}")
+            else:
+                parts.append(f"### {rel} (now, {len(text)} chars; the first {FILE_CHARS} shown)\n{text[:FILE_CHARS]}")
     return "\n\n".join(parts)
 
 
@@ -227,6 +247,15 @@ def _episodes(name: str, kind: str) -> list[dict]:
 def _prior_goals(js: list[dict], before: str) -> str:
     goals = [f"- {j['episode_ts'][:16]}: {j.get('goal', '')[:150]}" for j in js if j["episode_ts"] < before]
     return "\n".join(goals[-PRIOR_GOALS:]) or "(none: this is its first judged cycle)"
+
+
+def _logged(text: str) -> str:
+    """A tool-log entry as the judge sees it. The log is already bounded by what the agent saw (and says
+    where it cut); an older log silently cut every entry at LEGACY_LOG_CAP, so an entry of exactly that
+    length says so rather than letting the judge mistake the cut for the agent's omission."""
+    if len(text) == LEGACY_LOG_CAP:
+        return text + f"\n[... the log stops here, at {LEGACY_LOG_CAP} chars (an old log limit): the agent may have seen more]"
+    return text
 
 
 def judge_pending(name: str) -> int:
@@ -319,11 +348,8 @@ def _merge_ratings(name: str, rated: dict[str, dict]) -> None:
     tmp.replace(path)
 
 
-ARGS_SHOWN = 12000   # the judge sees what the episode kept (send_message / finish_cycle are kept whole)
-
-
 def _case(ep: dict, files: str = "", provenance: str = "", prior: str = "") -> str:
-    tools = "\n\n".join(f"### {i}. {t['tool']}({t.get('args', '')[:ARGS_SHOWN]})\n→ {t.get('result', '')[:2500]}"
+    tools = "\n\n".join(f"### {i}. {t['tool']}({_logged(t.get('args', ''))})\n→ {_logged(t.get('result', ''))}"
                         for i, t in enumerate(ep.get("tools", []), 1))
     return (f"## Declared before acting\n{json.dumps(ep.get('intent'), indent=1, ensure_ascii=False)}\n\n"
             f"## Claimed afterwards\n{json.dumps(ep.get('finish'), indent=1, ensure_ascii=False)}\n\n"
