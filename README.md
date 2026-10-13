@@ -171,6 +171,12 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
   own branch's git log and diffs (git cannot run inside its sandbox, and `.git` holds other instances'
   minds). **`record`**: the supervisor's own record about it — the judge's verdicts with reasoning, its
   runs, its tool calls, its kept code changes — so it can check its claims about itself.
+  **`http_request`**: call web APIs (method, headers, body); GET/HEAD to any public address,
+  POST/PUT/PATCH/DELETE only to hosts the operator allowed (`shaft hosts <name> allow <host>`). **Its own
+  keys** (`secret_set` / `secret_list` / `secret_delete`, or `shaft secret <name> set <key> --hosts …` from
+  your terminal): kept in its folder under `secrets/` but handled only by the supervisor — the broker adds a
+  key to requests to the hosts it is bound to, never through a redirect, and masks it in responses; the
+  instance's own process, plugins, `run` and the coder cannot read the file, git never sees it.
   Per-run token, call budget
   (`SHAFT_BROKER_MAX_CALLS`, default 60), everything logged in `.supervisor/broker.log`.
 - **Append-only journal**: if a run rewrote history instead of appending, the journal is

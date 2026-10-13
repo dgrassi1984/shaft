@@ -93,6 +93,34 @@ SPECS = {
         {"kind": {"type": "string", "enum": ["judgments", "runs", "tools", "code_changes"]},
          "limit": {"type": "integer", "description": "entries, default 20, max 200"}},
         ["kind"]),
+    "http_request": _spec(
+        "http_request",
+        "Call a web API: method, url, optional headers (object) and body (text, or a JSON object). Returns the "
+        "status, the useful response headers and the body. GET/HEAD to any public address; POST/PUT/PATCH/DELETE "
+        "only to hosts the operator allowed for you (you are told how to ask if not). auth: the name of one of "
+        "your keys (secret_set) — the supervisor adds it to the request, only to the hosts that key is bound to; "
+        "with a key, redirects are not followed but returned to you. Errors from the API (4xx/5xx) come back as "
+        "data, not as a failure.",
+        {"url": S, "method": {"type": "string", "description": "GET (default), HEAD, POST, PUT, PATCH, DELETE"},
+         "headers": {"type": "object", "description": "extra request headers"},
+         "body": {"description": "request body: text, or an object sent as JSON"},
+         "auth": {"type": "string", "description": "name of your key to add (optional)"},
+         "timeout_s": {"type": "integer", "description": "default 30, max 120"},
+         "max_chars": {"type": "integer", "description": "body characters to return, default 12000"}},
+        ["url"]),
+    "secret_set": _spec(
+        "secret_set",
+        "Store one of your own keys (an API token you were given or obtained): name it, say which hosts it may be "
+        "sent to, and how (header, scheme). It is kept in your folder but handled only by the supervisor: you use "
+        "it by name in http_request and its value is never shown to you again. Storing a name again replaces it.",
+        {"name": {"type": "string", "description": "lowercase, e.g. github"}, "value": S,
+         "hosts": {"type": "array", "items": S, "description": "hosts it may be sent to, e.g. [\"api.github.com\"]"},
+         "header": {"type": "string", "description": "default Authorization"},
+         "scheme": {"type": "string", "description": "default Bearer; empty for a raw value"}},
+        ["name", "value", "hosts"]),
+    "secret_list": _spec("secret_list", "Your keys: names, the hosts each may be sent to, when stored. Never values.",
+                         {}, []),
+    "secret_delete": _spec("secret_delete", "Delete one of your keys.", {"name": S}),
     "delegate_coding": _spec(
         "delegate_coding",
         "Your coder: an Opus-class model that writes code for you. Use it for any non-trivial code — a new "
@@ -106,6 +134,8 @@ SPECS = {
         {"task": S}),
 }
 MAX_HANDOFFS_PER_RUN = 2
+WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+SHOWN_HEADERS = ("content-type", "content-length", "location", "etag", "last-modified", "link", "retry-after")
 MAX_COMMANDS_PER_RUN = 40
 RUN_OUTPUT_CHARS = 12000
 
@@ -148,6 +178,14 @@ class _CheckedRedirects(urllib.request.HTTPRedirectHandler):
 
 
 _opener = urllib.request.build_opener(_CheckedRedirects())
+
+
+class _NoRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **k):   # with a key attached, a redirect comes back to the instance as data
+        return None
+
+
+_opener_no_redirects = urllib.request.build_opener(_NoRedirects())
 
 
 class _Text(HTMLParser):
@@ -322,7 +360,8 @@ class Broker:
                 result = {"ok": False, "error": f"bad arguments: {e}"}
             except Exception as e:
                 result = {"ok": False, "error": f"{type(e).__name__}: {e}"}
-        brief = json.dumps(args, ensure_ascii=False)[:160]
+        shown = {k: ("[value withheld]" if tool == "secret_set" and k == "value" else v) for k, v in args.items()}
+        brief = json.dumps(shown, ensure_ascii=False)[:160]
         status = "ok" if result["ok"] else f"ERROR {result['error'][:200]}"
         self._log(f"{self.name} {tool} {brief} -> {status} ({(time.monotonic() - started) * 1000:.0f} ms)")
         return result
@@ -520,6 +559,69 @@ class Broker:
             raise ValueError("kind must be judgments, runs, tools or code_changes")
         text = text or "(nothing recorded yet)"
         return text if len(text) <= RUN_OUTPUT_CHARS else "[... older entries cut]\n" + text[-RUN_OUTPUT_CHARS:]
+
+    def _root(self) -> Path:
+        return (self.project / "instances" / self.name).resolve()
+
+    def _http_request(self, url: str, method: str = "GET", headers: dict | None = None, body=None, auth: str = "",
+                      timeout_s: int = 30, max_chars: int = 12000) -> str:
+        from .core import read_secrets, write_hosts
+        method = str(method or "GET").upper()
+        if method not in {"GET", "HEAD"} | WRITE_METHODS:
+            raise ValueError(f"method must be one of GET, HEAD, {', '.join(sorted(WRITE_METHODS))}")
+        check_public(url)
+        host = (urllib.parse.urlsplit(url).hostname or "").lower()
+        if method in WRITE_METHODS and host not in write_hosts(self.name):
+            raise PermissionError(f"{method} to {host} is not allowed for you yet — writing to the world needs the "
+                                  f"operator's OK: ask Daniele to run `shaft hosts {self.name} allow {host}`")
+        hdrs = {"User-Agent": "SHAFT/1 (+https://github.com/dgrassi1984/shaft)", "Accept": "*/*"}
+        hdrs.update({str(k): str(v) for k, v in (headers or {}).items()})
+        secret = None
+        if auth:
+            entry = read_secrets(self._root()).get(auth)
+            if not entry:
+                raise ValueError(f"you have no key named {auth!r} (secret_list shows yours)")
+            if host not in entry["hosts"]:
+                raise PermissionError(f"key {auth!r} may only be sent to {', '.join(entry['hosts'])}, not {host}")
+            secret = entry["value"]
+            hdrs[entry.get("header") or "Authorization"] = f"{entry.get('scheme', 'Bearer')} {secret}".strip()
+        data = None
+        if body not in (None, ""):
+            data = body.encode() if isinstance(body, str) else json.dumps(body).encode()
+            if not any(k.lower() == "content-type" for k in hdrs):
+                hdrs["Content-Type"] = "text/plain; charset=utf-8" if isinstance(body, str) else "application/json"
+        req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
+        try:
+            resp = (_opener_no_redirects if secret else _opener).open(req, timeout=max(1, min(int(timeout_s), 120)))
+            with resp:
+                status, rh, raw = resp.status, resp.headers, resp.read(MAX_FETCH_BYTES)
+        except urllib.error.HTTPError as e:   # an API's own error is an answer, not a broker failure
+            status, rh, raw = e.code, e.headers, e.read(MAX_FETCH_BYTES)
+        ctype = rh.get("Content-Type", "") if rh else ""
+        charset = re.search(r"charset=([\w-]+)", ctype)
+        text = raw.decode(charset.group(1) if charset else "utf-8", errors="replace")
+        max_chars = max(200, min(int(max_chars), 50000))
+        shown = [f"{k}: {v}" for k, v in (rh.items() if rh else [])
+                 if k.lower() in SHOWN_HEADERS or k.lower().startswith(("x-ratelimit", "ratelimit"))]
+        cut = f"\n[... {len(text) - max_chars} more chars]" if len(text) > max_chars else ""
+        out = f"HTTP {status}\n" + "\n".join(shown) + f"\n\n{text[:max_chars]}{cut}"
+        return out.replace(secret, "[your key]") if secret else out
+
+    def _secret_set(self, name: str, value: str, hosts, header: str = "Authorization", scheme: str = "Bearer") -> str:
+        from .core import store_secret
+        store_secret(self._root(), name, value, [hosts] if isinstance(hosts, str) else list(hosts), header, scheme)
+        return (f"stored your key {name!r} for {', '.join(hosts if not isinstance(hosts, str) else [hosts])}; use it "
+                f"with http_request(auth={name!r}). Its value will not be shown to you again.")
+
+    def _secret_list(self) -> str:
+        from .core import read_secrets
+        store = read_secrets(self._root())
+        return "\n".join(f"{n}: hosts {', '.join(e['hosts'])} · {e.get('header')} {e.get('scheme', '')}".rstrip()
+                         + f" · stored {e.get('created', '?')[:16]}" for n, e in sorted(store.items())) or "no keys yet"
+
+    def _secret_delete(self, name: str) -> str:
+        from .core import delete_secret
+        return f"deleted your key {name!r}" if delete_secret(self._root(), name) else f"you have no key named {name!r}"
 
     def _list_instances(self) -> str:
         base = self.project / "instances"

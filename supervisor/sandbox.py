@@ -16,6 +16,13 @@ def _q(path: Path | str) -> str:
     return '"' + str(path).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def _no_secrets(root: Path) -> str:
+    """The instance's keys (secrets/) are handled only by the supervisor's broker: not by the agent, its
+    plugins or `run` — a value must never come back into its context. Later rules win, so this follows the
+    allows."""
+    return f"(deny file-read* file-write* (subpath {_q(root / 'secrets')}))"
+
+
 def profile(instance_root: Path, home: Path, llm_ports: list[int], any_localhost: bool = False) -> str:
     root, home = Path(instance_root).resolve(), Path(home).resolve()
     lines = [
@@ -29,6 +36,7 @@ def profile(instance_root: Path, home: Path, llm_ports: list[int], any_localhost
         f"(deny file-read* (subpath {_q(home)}))",
         f"(allow file-read* (subpath {_q(root)}))",
         _ancestors_metadata(root, home),
+        _no_secrets(root),
         # Network: only the LLM endpoint(s) on localhost.
         "(deny network*)",
     ]
@@ -62,6 +70,7 @@ def run_profile(instance_root: Path, home: Path) -> str:
         f"(deny file-read* (subpath {_q(home)}))",
         f"(allow file-read* (subpath {_q(root)}))",
         _ancestors_metadata(root, home),
+        _no_secrets(root),
         "(deny network*)",
     ]) + "\n"
 

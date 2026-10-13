@@ -123,10 +123,78 @@ def disabled_tools(name: str) -> set[str]:
         return set()
 
 
+def write_hosts(name: str) -> set[str]:
+    """Hosts this instance may send POST/PUT/PATCH/DELETE to (`shaft hosts <name> allow <host>`)."""
+    try:
+        return set(json.loads((SUP_DIR / "tools" / f"{name}.json").read_text()).get("write_hosts", []))
+    except (OSError, ValueError):
+        return set()
+
+
+def _save_tools(name: str, off: set[str], hosts: set[str]) -> None:
+    (SUP_DIR / "tools").mkdir(parents=True, exist_ok=True)
+    (SUP_DIR / "tools" / f"{name}.json").write_text(json.dumps({"off": sorted(off), "write_hosts": sorted(hosts)},
+                                                               indent=1))
+
+
+def set_write_host(name: str, host: str, allow: bool) -> set[str]:
+    hosts = write_hosts(name) | {host.lower()} if allow else write_hosts(name) - {host.lower()}
+    _save_tools(name, disabled_tools(name), hosts)
+    return hosts
+
+
+# -- an instance's own keys ---------------------------------------------------------------------------
+# Its own (Daniele, 2026-10-13: "they should have their own key and be able to manage them"), kept in its
+# folder at secrets/secrets.json — but handled only by the supervisor: the instance stores, lists and
+# deletes keys through broker tools, and names a key in http_request for the broker to add. Its sandbox,
+# plugins and `run` cannot read the file, so a value never comes back into its context (prompts may go to
+# a cloud model; fetched pages may try to talk it into sending a key elsewhere). Never committed, never
+# copied into another instance, never shown to the coder.
+SECRETS_DIR = "secrets"
+SECRET_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,40}$")
+
+
+def read_secrets(root: Path) -> dict[str, dict]:
+    path = contained(root, SECRETS_DIR, "secrets.json")
+    try:
+        return json.loads(path.read_text()) if path.is_file() else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def store_secret(root: Path, key: str, value: str, hosts: list[str], header: str = "Authorization",
+                 scheme: str = "Bearer") -> None:
+    if not SECRET_NAME_RE.match(key):
+        raise ValueError("a key name is lowercase letters, digits, - or _ (e.g. github)")
+    hosts = sorted({h.strip().lower() for h in hosts if h.strip()})
+    if not value.strip() or not hosts:
+        raise ValueError("a key needs a value and at least one host it may be sent to")
+    store = read_secrets(root)
+    store[key] = {"value": value.strip(), "hosts": hosts, "header": header, "scheme": scheme,
+                  "created": datetime.now().isoformat(timespec="seconds")}
+    _write_secrets(root, store)
+
+
+def delete_secret(root: Path, key: str) -> bool:
+    store = read_secrets(root)
+    found = store.pop(key, None) is not None
+    if found:
+        _write_secrets(root, store)
+    return found
+
+
+def _write_secrets(root: Path, store: dict) -> None:
+    safe_mkdir(root, SECRETS_DIR)
+    path = contained(root, SECRETS_DIR, "secrets.json")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(json.dumps(store, indent=1))
+    os.chmod(path, 0o600)
+
+
 def set_tool(name: str, tool: str, on: bool) -> set[str]:
     off = disabled_tools(name) - {tool} if on else disabled_tools(name) | {tool}
-    (SUP_DIR / "tools").mkdir(parents=True, exist_ok=True)
-    (SUP_DIR / "tools" / f"{name}.json").write_text(json.dumps({"off": sorted(off)}, indent=1))
+    _save_tools(name, off, write_hosts(name))
     return off
 
 

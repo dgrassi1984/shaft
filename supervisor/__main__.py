@@ -189,6 +189,9 @@ def cmd_status(names: list[str]) -> int:
         print(f"  versions    {version.describe(name)}")
         if tools_off:
             print(f"  tools off   {', '.join(sorted(tools_off))} (shaft tools {name} on <tool>)")
+        from .core import write_hosts
+        if (hosts := write_hosts(name)):
+            print(f"  may write   {', '.join(sorted(hosts))} (shaft hosts {name} deny <host>)")
         if entries:
             lines = entries[-1].splitlines()
             print("  latest:     " + lines[0].lstrip("# "))
@@ -214,6 +217,53 @@ def cmd_tools(name: str, action: str | None, tool: str | None) -> int:
         print(f"{t:18} {'off' if t in off else 'on'}")
     if action:
         print(f"(takes effect from {name}'s next run or conversation)")
+    return 0
+
+
+def cmd_secret(args) -> int:
+    """Give an instance a key without it passing through a conversation (and so through transcripts, journal
+    write-ups and, for a cloud-brained instance, the provider's prompt)."""
+    from .core import delete_secret, read_secrets, store_secret
+    root = instance_root(args.name)
+    if args.action == "list":
+        store = read_secrets(root)
+        for k, e in sorted(store.items()):
+            print(f"{k:16} hosts {', '.join(e['hosts'])} · {e.get('header')} {e.get('scheme', '')} · {e.get('created', '?')[:16]}")
+        if not store:
+            print(f"{args.name} has no keys")
+        return 0
+    if not args.key:
+        print("which key? e.g. shaft secret wren set github --hosts api.github.com", file=sys.stderr)
+        return 2
+    if args.action == "delete":
+        found = delete_secret(root, args.key)
+        print(f"deleted {args.name}'s key {args.key}" if found else f"{args.name} has no key {args.key}")
+        return 0 if found else 1
+    import getpass
+    value = getpass.getpass(f"value for {args.name}'s key {args.key} (not echoed): ") if sys.stdin.isatty() \
+        else sys.stdin.readline()
+    try:
+        store_secret(root, args.key, value, args.hosts.split(","), args.header, args.scheme)
+    except ValueError as e:
+        print(e, file=sys.stderr)
+        return 2
+    log(f"{args.name}: operator gave it a key named {args.key} for {args.hosts}")
+    print(f"stored: {args.name} can use it as http_request(auth={args.key!r}) to {args.hosts}; it never sees the value")
+    return 0
+
+
+def cmd_hosts(name: str, action: str | None, host: str | None) -> int:
+    from .core import set_write_host, write_hosts
+    instance_root(name)
+    if action:
+        if not host:
+            print("which host? e.g. shaft hosts wren allow api.github.com", file=sys.stderr)
+            return 2
+        set_write_host(name, host, action == "allow")
+        log(f"{name}: write access to {host} {'allowed' if action == 'allow' else 'removed'} by the operator")
+    hosts = sorted(write_hosts(name))
+    print(f"{name} may send POST/PUT/PATCH/DELETE to: {', '.join(hosts) if hosts else 'no host yet'} "
+          f"(GET/HEAD: any public address)")
     return 0
 
 
@@ -307,6 +357,17 @@ def main(argv: list[str]) -> int:
     p.add_argument("name")
     p.add_argument("action", nargs="?", choices=["on", "off"])
     p.add_argument("tool", nargs="?")
+    p = sub.add_parser("secret", help="an instance's own keys: give it one (value read from your terminal), list, delete")
+    p.add_argument("name")
+    p.add_argument("action", choices=["set", "list", "delete"])
+    p.add_argument("key", nargs="?")
+    p.add_argument("--hosts", default="", help="comma-separated hosts the key may be sent to")
+    p.add_argument("--header", default="Authorization")
+    p.add_argument("--scheme", default="Bearer", help="e.g. Bearer, token; '' for the raw value")
+    p = sub.add_parser("hosts", help="hosts an instance may send POST/PUT/PATCH/DELETE to")
+    p.add_argument("name")
+    p.add_argument("action", nargs="?", choices=["allow", "deny"])
+    p.add_argument("host", nargs="?")
     p = sub.add_parser("check", help="run the test gate against an instance's code")
     p.add_argument("name", nargs="?", default=DEFAULT_INSTANCE)
     args = parser.parse_args(argv)
@@ -344,6 +405,10 @@ def main(argv: list[str]) -> int:
         return autonomy.service("model", args.action)
     if args.cmd == "tools":
         return cmd_tools(args.name, args.action, args.tool)
+    if args.cmd == "secret":
+        return cmd_secret(args)
+    if args.cmd == "hosts":
+        return cmd_hosts(args.name, args.action, args.host)
     if args.cmd == "autonomy":
         return autonomy.autonomy(args.action)
     if args.cmd == "status":
