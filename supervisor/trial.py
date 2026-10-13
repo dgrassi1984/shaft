@@ -54,7 +54,10 @@ STALE_H = 48                   # a trial still unfinished after this is conclude
 LOCAL_UNIT_S = 900             # a local pair needs the model this long free ahead (≈1.5 × a measured cycle)
 PREEMPT_AHEAD_S = 90           # a local run is stopped this long before a wake or the sleep comes due
 TARGETS = ("shaft/", "plugins/", "skills/", "tests/")
-CODE = gate.CODE_PATHS         # what the arm's code is (shaft, tests, plugins, config.env)
+# What an arm's code is: the gate's code paths plus config.env, which carries the arm's model and settings.
+# The gate no longer counts config.env as code (the operator edits it too; the instance only via set_config),
+# but an arm still runs with — and a trial still refuses to change — the config it was committed with.
+CODE = (*gate.CODE_PATHS, "config.env")
 NOT_STATE = ("logs", ".tmp", "secrets", "__pycache__")
 LEDGER = SUP_DIR / "trial_usage.jsonl"
 

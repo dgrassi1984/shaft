@@ -103,6 +103,14 @@ class ReconstructTest(Fixture):
         self.assertEqual((dest / "shaft" / "live.py").read_bytes(), code["shaft/live.py"])
         self.assertFalse((dest / "logs").exists())
 
+    def test_an_arm_keeps_its_committed_config_env_although_the_gate_no_longer_counts_it_as_code(self):
+        # The gate dropped config.env from CODE_PATHS (an operator's mid-cycle edit was reverted as the instance's,
+        # kant 2026-10-13); trials read each arm's model from it, and lost it when they shared the gate's paths.
+        self.assertNotIn("config.env", trial.gate.CODE_PATHS)
+        code = trial.committed_code(self.project, NAME)
+        self.assertIn("config.env", code)
+        self.assertEqual(trial.model_of(code)["model"], "fake")
+
     def test_code_is_replaced_wholesale_and_deletions_apply(self):
         st = self.state()
         dest = Path(tempfile.mkdtemp(prefix="shaft-recon-")) / NAME
