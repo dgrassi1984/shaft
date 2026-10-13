@@ -161,6 +161,7 @@ class Client:
         content, reasoning = "", ""
         phase, detail, t0 = "waiting for the model", "", time.monotonic()
         first_token = None
+        tool_t0 = 0.0
         spinner = Spinner("dots", style="dim")
 
         def view():
@@ -209,10 +210,16 @@ class Client:
                         if content:                      # text before a tool call stays on screen
                             live.console.print(Text(f"{self.name} ›", style="bold cyan"), Markdown(content))
                             content = ""
-                        phase, detail = f"running {ev['name']}", ev.get("args", "")[:60]
+                        # shown when it starts, not when it returns: a fetch or a delegated change can take minutes
+                        live.console.print(Text(f"  ⚙ {ev['name']}  {ev.get('args', '')[:110]}", style="dim"))
+                        tool_t0 = time.monotonic()
+                        phase, detail = f"running {ev['name']}", ""
                     elif t == "tool_end":
-                        mark = "[green]✓[/green]" if ev["ok"] else "[red]✗[/red]"
-                        live.console.print(f"  {mark} [dim]{ev['name']}  {ev.get('args', '')[:90]}[/dim]")
+                        took = time.monotonic() - tool_t0 if tool_t0 else 0
+                        if ev["ok"]:
+                            live.console.print(f"    [green]✓[/green] [dim]{took:.1f}s[/dim]")
+                        else:
+                            live.console.print(f"    [red]✗[/red] [dim]{ev.get('brief', '')[:150]}[/dim]")
                         phase, detail, reasoning = "waiting for the model", "", ""
                     elif t == "retry":
                         live.console.print(f"  [dim]reply cut off at {ev['old']} tokens — asking again with "

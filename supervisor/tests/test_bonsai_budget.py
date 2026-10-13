@@ -143,3 +143,33 @@ class Float16NormsTest(unittest.TestCase):
         self.assertEqual([k for k in f32 if not k.endswith(("A_log", "dt_bias", ".signs"))], [])
         h = model(mx.array([[1, 2, 3]]))
         self.assertEqual(h.dtype, mx.float16)
+
+
+class ToolProgressTest(unittest.TestCase):   # plain Python: a stand-in for mlx_lm's server module
+    def test_tool_calls_are_announced_while_written_at_most_once_a_second(self):
+        import io as _io
+        from types import SimpleNamespace as NS
+        from unittest import mock
+        from supervisor import bonsai_server
+
+        class Base:
+            def handle_completion(self, request, stop_words):
+                ctx, response = self.response_generator.generate(request)
+                return list(response)
+
+        handler = bonsai_server.tool_progress_handler(NS(APIHandler=Base)).__new__(
+            bonsai_server.tool_progress_handler(NS(APIHandler=Base)))
+        gens = [NS(state="reasoning", text="plan"), NS(state="tool", text="<tool_call>\n<function=write_file>\n"),
+                NS(state="tool", text="<parameter=path>notes/a.md"), NS(state="tool", text="x" * 500),
+                NS(state="normal", text="")]
+        handler.response_generator = NS(generate=lambda req: ("ctx", iter(gens)), cli_args=None)
+        handler.stream, handler.wfile = True, _io.BytesIO()
+        clock = iter([100.0, 100.4, 101.6])
+        with mock.patch.object(bonsai_server.time, "monotonic", lambda: next(clock)):
+            out = handler.handle_completion("req", [])
+        self.assertEqual(len(out), 5)   # every generated piece still reaches mlx_lm's own loop
+        lines = handler.wfile.getvalue().decode().split("\n\n")
+        self.assertEqual(lines[0], ": tool write_file 34")
+        self.assertTrue(lines[1].startswith(": tool write_file "))
+        self.assertEqual(len([l for l in lines if l]), 2)   # 100.0 and 101.6; not 100.4
+        self.assertIsNot(handler.response_generator.generate, None)

@@ -16,7 +16,8 @@ Messages API (raw HTTP, like the judge), and the reply back. Models named "openr
 - Assistant turns are resent exactly as the model produced them (thinking blocks included):
   each reply's original content blocks are remembered and substituted when the instance
   sends that turn back, because altered history invalidates replayed thinking.
-- Upstream is non-streaming; a streaming request gets the whole reply as one SSE burst.
+- Claude models: upstream is non-streaming; a streaming request gets the whole reply as one SSE burst.
+  OpenRouter models stream end to end (stream_openrouter): the instance sees its reply as it is written.
 """
 from __future__ import annotations
 
@@ -184,29 +185,93 @@ def _send(req: urllib.request.Request) -> tuple[dict | None, str | None]:
     return None, error
 
 
+def _openrouter_request(body: dict, key: str, stream: bool) -> urllib.request.Request:
+    req_body = {k: v for k, v in body.items() if k not in ("stream", "stream_options", "chat_template_kwargs")}
+    req_body["model"] = body["model"].removeprefix("openrouter/")
+    req_body["provider"] = OPENROUTER_PROVIDER
+    if stream:
+        req_body["stream"] = True
+    return urllib.request.Request(OPENROUTER_API, data=json.dumps(req_body).encode(), headers={
+        "content-type": "application/json", "authorization": f"Bearer {key}",
+        "x-title": "SHAFT", "http-referer": "https://github.com/dgrassi1984/shaft"})
+
+
+def _policy_hint(error: str) -> str:
+    if "provider" in error.lower() or "endpoint" in error.lower():
+        return (f" — the data policy allows only providers that neither collect nor retain data "
+                f"(SHAFT_OPENROUTER_PROVIDER={json.dumps(OPENROUTER_PROVIDER)})")
+    return ""
+
+
+def openrouter_stream(instance: str, body: dict, secrets: dict):
+    """A streaming OpenRouter call, passed through to the instance as it arrives: yields SSE lines (bytes).
+    Opening errors raise CloudError (nothing sent yet); usage and cost come from the final chunk."""
+    model = body.get("model")
+    if model not in CLOUD_MODELS:
+        raise CloudError(403, f"model {model!r} is not allowed for instances (SHAFT_CLOUD_MODELS={CLOUD_MODELS})")
+    spent = spent_today(instance)
+    if spent >= DAILY_USD:
+        raise CloudError(429, f"{instance} spent ${spent:.2f} on cloud models today (cap ${DAILY_USD:.2f})")
+    key = secrets.get("OPENROUTER_API_KEY", "")
+    if not key:
+        raise CloudError(503, "no OPENROUTER_API_KEY in the supervisor's .env")
+    started, resp = time.monotonic(), None
+    for wait in (0, 10, 30):   # retry only before the first byte: a started stream cannot be replayed
+        time.sleep(wait)
+        try:
+            resp = urllib.request.urlopen(_openrouter_request(body, key, stream=True), timeout=600)
+            break
+        except urllib.error.HTTPError as e:
+            error = f"HTTP {e.code}: {e.read().decode(errors='replace')[:400]}"
+            if e.code not in (429, 500, 502, 503, 504, 529):
+                break
+        except (urllib.error.URLError, OSError) as e:
+            error = f"network: {e}"
+    if resp is None:
+        _record(instance, model, None, None, 0.0, started, None, error)
+        raise CloudError(502, f"OpenRouter call for {model} failed: {error}{_policy_hint(error)}")
+    return _relay(instance, model, resp, started)
+
+
+def _relay(instance: str, model: str, resp, started: float):
+    usage, finish, error = {}, None, None
+    try:
+        with resp:
+            for raw in resp:
+                line = raw.rstrip(b"\r\n")
+                if line.startswith(b"data:") and line[5:].strip() not in (b"", b"[DONE]"):
+                    try:
+                        chunk = json.loads(line[5:])
+                    except ValueError:
+                        chunk = {}
+                    usage = chunk.get("usage") or usage
+                    if chunk.get("error"):
+                        error = json.dumps(chunk["error"])[:400]
+                    for c in chunk.get("choices") or []:
+                        finish = c.get("finish_reason") or finish
+                yield line + b"\n"
+    except (OSError, urllib.error.URLError) as e:
+        error = f"stream broken: {e}"
+        raise
+    finally:
+        _record(instance, model, usage.get("prompt_tokens"), usage.get("completion_tokens"),
+                float(usage.get("cost") or 0), started, finish, error)
+
+
 def _openrouter(instance: str, body: dict, key: str) -> dict:
     """An OpenAI-format request to OpenRouter, routed by the data policy; cost from its own usage.cost."""
     if not key:
         raise CloudError(503, "no OPENROUTER_API_KEY in the supervisor's .env")
     model = body["model"]
-    req_body = {k: v for k, v in body.items() if k not in ("stream", "stream_options", "chat_template_kwargs")}
-    req_body["model"] = model.removeprefix("openrouter/")
-    req_body["provider"] = OPENROUTER_PROVIDER
-    req = urllib.request.Request(OPENROUTER_API, data=json.dumps(req_body).encode(), headers={
-        "content-type": "application/json", "authorization": f"Bearer {key}",
-        "x-title": "SHAFT", "http-referer": "https://github.com/dgrassi1984/shaft"})
     started = time.monotonic()
-    data, error = _send(req)
+    data, error = _send(_openrouter_request(body, key, stream=False))
     if data is not None and not data.get("choices"):   # OpenRouter can answer 200 with an error object
         error, data = f"no reply: {json.dumps(data.get('error') or data)[:400]}", None
     usage = (data or {}).get("usage") or {}
     _record(instance, model, usage.get("prompt_tokens"), usage.get("completion_tokens"), float(usage.get("cost") or 0),
             started, ((data or {}).get("choices") or [{}])[0].get("finish_reason"), error)
     if data is None:
-        hint = (f" — the data policy allows only providers that neither collect nor retain data "
-                f"(SHAFT_OPENROUTER_PROVIDER={json.dumps(OPENROUTER_PROVIDER)})") if "provider" in (error or "").lower() \
-            or "endpoint" in (error or "").lower() else ""
-        raise CloudError(502, f"OpenRouter call for {model} failed: {error}{hint}")
+        raise CloudError(502, f"OpenRouter call for {model} failed: {error}{_policy_hint(error or '')}")
     message = data["choices"][0].get("message") or {}
     for c in message.get("tool_calls") or []:
         fn = c.get("function") or {}

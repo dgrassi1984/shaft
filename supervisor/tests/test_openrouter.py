@@ -21,9 +21,18 @@ REPLY = {"id": "gen-1", "object": "chat.completion", "model": "xiaomi/mimo-v2.6-
          "usage": {"prompt_tokens": 12000, "completion_tokens": 300, "cost": 0.0055}}
 
 
+STREAM = ["COMMENT",
+          {"choices": [{"index": 0, "delta": {"reasoning": "check the agenda"}, "finish_reason": None}]},
+          {"choices": [{"index": 0, "delta": {"content": "Teal is "}, "finish_reason": None}]},
+          "PAUSE",
+          {"choices": [{"index": 0, "delta": {"content": "blue-green."}, "finish_reason": "stop"}]},
+          {"choices": [], "usage": {"prompt_tokens": 9000, "completion_tokens": 40, "cost": 0.0042}}]
+
+
 class FakeOpenRouter:
     def __init__(self, status=200, reply=None):
         self.requests, self.headers = [], []
+        self.paused = threading.Event()
         fake = self
 
         class H(BaseHTTPRequestHandler):
@@ -31,8 +40,22 @@ class FakeOpenRouter:
                 pass
 
             def do_POST(self):
-                fake.requests.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                fake.requests.append(body)
                 fake.headers.append(dict(self.headers))
+                if body.get("stream") and status == 200:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.end_headers()
+                    for chunk in STREAM:
+                        if chunk == "PAUSE":
+                            fake.paused.wait(5)   # the test checks the first chunks arrived before the rest exist
+                            continue
+                        self.wfile.write(b": OPENROUTER PROCESSING\n\n" if chunk == "COMMENT" else
+                                         b"data: " + json.dumps(chunk).encode() + b"\n\n")
+                        self.wfile.flush()
+                    self.wfile.write(b"data: [DONE]\n\n")
+                    return
                 payload = json.dumps(reply if reply is not None else REPLY).encode()
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
@@ -48,7 +71,7 @@ class FakeOpenRouter:
         self.server.server_close()
 
 
-class OpenRouterTest(unittest.TestCase):
+class _Base(unittest.TestCase):
     def setUp(self):
         self.usage = Path(tempfile.mkdtemp(prefix="shaft-cloud-")) / "cloud_usage.jsonl"
         for p in (mock.patch.object(cloudllm, "USAGE", self.usage),
@@ -67,6 +90,9 @@ class OpenRouterTest(unittest.TestCase):
     BODY = {"model": "openrouter/xiaomi/mimo-v2.6-pro", "stream": True, "stream_options": {"include_usage": True},
             "chat_template_kwargs": {"preserve_thinking": False},
             "messages": [{"role": "user", "content": "what is on my agenda?"}], "tools": [], "max_tokens": 8192}
+
+
+class OpenRouterTest(_Base):
 
     def test_request_carries_the_data_policy_and_the_cost_is_openrouters(self):
         f = self.fake()
@@ -100,21 +126,64 @@ class OpenRouterTest(unittest.TestCase):
         with self.assertRaises(cloudllm.CloudError):
             cloudllm.complete("shaft", dict(self.BODY), {"OPENROUTER_API_KEY": "k"}, {})
 
-    def test_through_the_broker_as_an_instance_streams_it(self):
+    def test_through_the_broker_without_streaming(self):
         from supervisor.broker import Broker
         self.fake()
         root = Path(tempfile.mkdtemp(prefix="shaft-proj-"))
         b = Broker("shaft", root, {"OPENROUTER_API_KEY": "k"}, root / "broker.log")
         base = b.start()
         self.addCleanup(b.stop)
+        req = urllib.request.Request(base + "/llm/v1/chat/completions",
+                                     data=json.dumps({**self.BODY, "stream": False}).encode(),
+                                     headers={"X-Shaft-Token": b.token, "Content-Type": "application/json"})
+        out = json.load(urllib.request.urlopen(req, timeout=10))
+        msg = out["choices"][0]["message"]
+        self.assertEqual(msg["reasoning"], "check the agenda first")
+        self.assertEqual(msg["tool_calls"][0]["function"]["name"], "read_file")
+
+
+class StreamingTest(_Base):
+    def test_wren_sees_its_reply_as_it_is_written(self):
+        # Daniele: "wren does not use streaming in its response (mimo)" — the broker called OpenRouter without
+        # streaming and replayed the finished reply in one burst.
+        from supervisor.broker import Broker
+        f = self.fake()
+        root = Path(tempfile.mkdtemp(prefix="shaft-proj-"))
+        b = Broker("wren", root, {"OPENROUTER_API_KEY": "k"}, root / "broker.log")
+        base = b.start()
+        self.addCleanup(b.stop)
         req = urllib.request.Request(base + "/llm/v1/chat/completions", data=json.dumps(self.BODY).encode(),
                                      headers={"X-Shaft-Token": b.token, "Content-Type": "application/json"})
-        raw = urllib.request.urlopen(req, timeout=10).read().decode()
-        chunks = [json.loads(l[6:]) for l in raw.splitlines() if l.startswith("data: {")]
-        deltas = [c["choices"][0]["delta"] for c in chunks if c.get("choices")]
-        self.assertEqual(deltas[0], {"reasoning": "check the agenda first"})
-        self.assertEqual(deltas[1]["tool_calls"][0]["function"]["name"], "read_file")
-        self.assertTrue(raw.rstrip().endswith("data: [DONE]"))
+        resp = urllib.request.urlopen(req, timeout=10)
+        seen = b""
+        while b"Teal is " not in seen:   # arrives while the rest of the reply does not exist yet
+            seen += resp.readline()
+        self.assertNotIn(b"blue-green", seen)
+        self.assertTrue(f.requests[0]["stream"])
+        f.paused.set()
+        rest = resp.read()
+        self.assertIn(b"blue-green", rest)
+        self.assertTrue(rest.rstrip().endswith(b"data: [DONE]"))
+        rec = json.loads(self.usage.read_text().splitlines()[-1])
+        self.assertEqual((rec["usd"], rec["input_tokens"], rec["stop_reason"]), (0.0042, 9000, "stop"))
+
+    def test_the_agent_reads_the_relayed_stream(self):
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "template"))
+        from shaft.llm import Client
+        from supervisor.broker import Broker
+        f = self.fake()
+        f.paused.set()
+        root = Path(tempfile.mkdtemp(prefix="shaft-proj-"))
+        b = Broker("wren", root, {"OPENROUTER_API_KEY": "k"}, root / "broker.log")
+        base = b.start()
+        self.addCleanup(b.stop)
+        chunks = []
+        c = Client(base + "/llm/v1", "openrouter/xiaomi/mimo-v2.6-pro", "", 30, root / "u.jsonl", broker_token=b.token)
+        reply = c.stream([{"role": "user", "content": "teal?"}], 100, "test", on_content=chunks.append)
+        self.assertEqual(chunks, ["Teal is ", "blue-green."])
+        self.assertEqual(reply.reasoning, "check the agenda")
+        self.assertEqual(reply.finish_reason, "stop")
 
 
 if __name__ == "__main__":

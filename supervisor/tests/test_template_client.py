@@ -24,6 +24,25 @@ class StreamTest(unittest.TestCase):
         self.assertEqual(reply.content, "hi")
 
 
+class ToolAnnouncementTest(unittest.TestCase):
+    def test_a_tool_call_being_written_is_reported(self):
+        # Daniele: "when shaft calls a tool, the CLI doesn't show it until the tool has returned" — the server
+        # buffers a tool call until complete; SHAFT's server now announces it while it is written.
+        wire = (b": tool write_file 812\n\n: tool write_file 2304\n\n"
+                b'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\ndata: [DONE]\n\n')
+        seen = []
+        Client._read_stream(io.BytesIO(wire), Reply(content="", max_tokens=10), None, None,
+                            None, lambda name, n: seen.append((name, n)))
+        self.assertEqual(seen, [("write_file", 812), ("write_file", 2304)])
+
+    def test_an_error_mid_stream_is_an_error_not_an_empty_reply(self):
+        from shaft.llm import LLMError
+        wire = b'data: {"error": {"message": "Provider returned error", "code": 502}}\n\ndata: [DONE]\n\n'
+        with self.assertRaises(LLMError) as ctx:
+            Client._read_stream(io.BytesIO(wire), Reply(content="", max_tokens=10), None, None)
+        self.assertIn("Provider returned error", str(ctx.exception))
+
+
 class LeakedThinkingTest(unittest.TestCase):
     def test_thinking_closed_late_is_not_the_answer(self):
         # Regression: cut at its budget, Bonsai went on thinking in the answer and closed the block itself;

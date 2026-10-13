@@ -246,6 +246,9 @@ class Broker:
                 body: dict = {}
                 try:
                     body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+                    if body.get("stream") and str(body.get("model", "")).startswith("openrouter/"):
+                        return self._llm_stream(cloudllm.openrouter_stream(broker.name, body, broker.secrets),
+                                                body["model"])
                     reply = cloudllm.complete(broker.name, body, broker.secrets, broker.remembered)
                 except cloudllm.CloudError as e:
                     broker._log(f"{broker.name} llm {body.get('model', '?')} -> ERROR {e}")
@@ -264,6 +267,24 @@ class Broker:
                     self.wfile.write(payload)
                 else:
                     self._reply(200, reply)
+
+            def _llm_stream(self, lines, model: str):
+                """OpenRouter's stream, relayed line by line as it arrives."""
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                n = 0
+                try:
+                    for line in lines:
+                        self.wfile.write(line)
+                        if not line.strip():   # end of an SSE event
+                            self.wfile.flush()
+                        n += 1
+                    self.wfile.flush()
+                    broker._log(f"{broker.name} llm {model} -> streamed ({n} lines)")
+                except (BrokenPipeError, ConnectionResetError):
+                    broker._log(f"{broker.name} llm {model} -> stream abandoned by the instance")
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()

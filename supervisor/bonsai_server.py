@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
+import time
 
 from . import bonsai_lora
 
@@ -66,6 +68,53 @@ class ThinkingBudget:
         vocab = logits.shape[-1]
         forced = mx.where(mx.arange(vocab) == self.forced[k], 0.0, -mx.inf).astype(logits.dtype)
         return mx.where(self.closed, logits, mx.broadcast_to(forced, logits.shape))
+
+
+TOOL_NAME = re.compile(r'<function=([\w.-]+)|"name"\s*:\s*"([\w.-]+)"')   # Qwen XML or JSON tool-call forms
+
+
+def tool_progress_handler(S):
+    """mlx_lm's handler, announcing a tool call while the model is still writing it.
+
+    The server buffers a tool call until it is complete — a long write_file is a minute of silence, and the
+    talk client went on showing "thinking". While the model is inside a tool call this sends an SSE comment,
+    at most once a second: `: tool <name> <chars written>` (clients ignore comments they do not know)."""
+
+    class Handler(S.APIHandler):
+        def handle_completion(self, request, stop_words):
+            real, handler = self.response_generator, self
+
+            class Announcing:   # this request's view of the shared generator: generate() is wrapped, nothing else
+                def __getattr__(self, name):
+                    return getattr(real, name)
+
+                def generate(self, *a, **k):
+                    ctx, response = real.generate(*a, **k)
+                    return ctx, handler._announce_tools(response)
+
+            self.response_generator = Announcing()
+            try:
+                return super().handle_completion(request, stop_words)
+            finally:
+                self.response_generator = real
+
+        def _announce_tools(self, response):
+            text, last = "", 0.0
+            for gen in response:
+                if gen.state == "tool":
+                    text += gen.text
+                    now = time.monotonic()
+                    if self.stream and now - last >= 1.0:
+                        m = TOOL_NAME.search(text)
+                        name = next((g for g in m.groups() if g), "") if m else ""
+                        self.wfile.write(f": tool {name or '?'} {len(text)}\n\n".encode())
+                        self.wfile.flush()
+                        last = now
+                else:
+                    text = ""
+                yield gen
+
+    return Handler
 
 
 def request_budget(gen_args, budget: int) -> int:
@@ -129,6 +178,9 @@ def main(argv: list[str]) -> int:
     cache_gb = float(os.environ.get("SHAFT_PROMPT_CACHE_GB", "4"))      # the cache grew to 8.3 GB uncapped
     cap = int(cache_gb * 1024 ** 3)
     S.LRUPromptCache = capped_prompt_cache(cap)
+    handler, serve_http = tool_progress_handler(S), S._run_http_server
+    S._run_http_server = lambda host, port, generator, **kw: serve_http(host, port, generator,
+                                                                       **{**kw, "handler_class": handler})
     sys.argv = ["bonsai_server", "--model", str(pack), "--host", "127.0.0.1", "--port", str(args.port),
                 "--temp", temp, "--top-p", str(gen.get("top_p", 0.95)),
                 "--top-k", str(gen.get("top_k", 20)), "--max-tokens", "16384",
