@@ -5,6 +5,7 @@ import io
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "template"))
@@ -62,6 +63,28 @@ class FollowupBudgetTest(unittest.TestCase):
         tool_last = [{"role": "tool", "tool_call_id": "1", "content": "r"}]
         self.assertNotIn("thinking_budget", self.bodies(tool_last, think_followup=0)["chat_template_kwargs"])
         self.assertNotIn("chat_template_kwargs", self.bodies(tool_last, think_followup=1024, broker_token="t"))
+
+
+class ReasoningEffortTest(unittest.TestCase):
+    def test_medium_effort_reaches_the_local_server_and_a_typo_cannot_break_it(self):
+        # Bonsai's template defaults to xhigh: on anything non-trivial it thought until the 4,096 cap (~4 min);
+        # medium scaled with the request (117-1,234 tokens) and found a bug xhigh missed (_bench/RESULTS.md).
+        from supervisor.tests.fakellm import FakeLLM
+        from shaft import config
+        fake = FakeLLM([{"content": "ok"}, {"content": "ok"}])
+        self.addCleanup(fake.close)
+        root = Path(tempfile.mkdtemp(prefix="shaft-cfg-"))
+        (root / "config.env").write_text(f'LLM_BASE_URL="{fake.url}"\nLLM_MODEL="m"\n')
+        cfg = config.load(root, environ={})
+        Client.from_config(cfg).complete([{"role": "user", "content": "x"}], 100, "test")
+        self.assertEqual(fake.requests[-1]["chat_template_kwargs"]["reasoning_effort"], "medium")
+        err = io.StringIO()
+        with unittest.mock.patch("sys.stderr", err):
+            bad = config.load(root, environ={"LLM_REASONING_EFFORT": "maximum"})
+        self.assertEqual(bad.LLM_REASONING_EFFORT, "medium")
+        self.assertIn("must be one of medium, xhigh, low", err.getvalue())
+        Client.from_config(cfg).complete([{"role": "user", "content": "x"}], 100, "test", think=False)
+        self.assertNotIn("reasoning_effort", fake.requests[-1]["chat_template_kwargs"])
 
 
 class ReasoningAcrossStepsTest(unittest.TestCase):

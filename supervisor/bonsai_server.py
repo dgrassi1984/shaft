@@ -39,33 +39,33 @@ class ThinkingBudget:
 
     def __init__(self, budget: int, wrap_up: list[int] | None = None):
         self.budget, self.start, self.thinking = budget, None, False
-        self.wrap_up = list(wrap_up or [])
-        self.forcing: list[int] | None = None
+        self.forced = list(wrap_up or []) + [THINK_END]
+        self.closed = None   # on the GPU: has </think> been generated yet? Never read back (no sync per token)
 
     def __call__(self, tokens, logits):
         import mlx.core as mx
         seq = tokens.reshape(-1) if tokens.ndim > 1 else tokens
         n = seq.shape[0]
-        if self.start is None:
+        if self.start is None:   # the prompt, once: is thinking open at the end of it?
             self.start = n
             tail = seq[-64:].tolist()
             opens = [i for i, t in enumerate(tail) if t == THINK_START]
             closes = [i for i, t in enumerate(tail) if t == THINK_END]
             self.thinking = bool(opens) and (not closes or opens[-1] > closes[-1])
+            self.closed = mx.array(False)
             return logits
         if not self.thinking:
             return logits
-        if int(seq[-1].item()) == THINK_END:
-            self.thinking = False
+        # Reading the last token back (`.item()`) every step forced a GPU sync per thinking token: ~7% of
+        # decode (_bench/RESULTS.md). The "closed" flag stays a lazy GPU value instead.
+        self.closed = mx.logical_or(self.closed, seq[-1] == THINK_END)
+        mx.async_eval(self.closed)
+        k = n - self.start - self.budget
+        if k < 0 or k >= len(self.forced):
             return logits
-        if self.forcing is None and n - self.start >= self.budget:
-            self.forcing = self.wrap_up + [THINK_END]
-        if self.forcing:
-            token = self.forcing.pop(0)
-            vocab = logits.shape[-1]
-            forced = mx.where(mx.arange(vocab) == token, 0.0, -mx.inf).astype(logits.dtype)
-            return mx.broadcast_to(forced, logits.shape)
-        return logits
+        vocab = logits.shape[-1]
+        forced = mx.where(mx.arange(vocab) == self.forced[k], 0.0, -mx.inf).astype(logits.dtype)
+        return mx.where(self.closed, logits, mx.broadcast_to(forced, logits.shape))
 
 
 def request_budget(gen_args, budget: int) -> int:
@@ -104,7 +104,7 @@ def main(argv: list[str]) -> int:
     class BonsaiProvider(S.ModelProvider):
         def load(self, model_path, adapter_path=None, draft_model_path=None):
             if self.model is None:
-                model = bonsai_lora.load_text_model()
+                model = bonsai_lora.load_text_model(float16_norms=True)
                 if args.adapter:
                     bonsai_lora.load_adapter(model, args.adapter)
                 self.tokenizer = load_tokenizer(pack, eos_token_ids=gen.get("eos_token_id"))

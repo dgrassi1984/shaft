@@ -27,12 +27,19 @@ def _imports():
     return mx, nn
 
 
-def load_text_model():
+def load_text_model(float16_norms: bool = False):
     """Bonsai's language model on mlx_lm's Qwen3.5 implementation (the training-capable one).
 
     Mirrors the pack's own vision_artifact loader — same Packed layers, same sign checks —
     but builds mlx_lm's TextModel and loads only the `language_model.*` weights. mlx-vlm's
-    implementation is inference-optimised and uses Metal kernels that have no backward pass."""
+    implementation is inference-optimised and uses Metal kernels that have no backward pass.
+
+    float16_norms (serving and evaluation): the pack stores 353 norm weights as float32, and MLX promotes
+    float16 x float32 to float32 — so after the first RMSNorm the residual stream, attention and the KV
+    cache all ran in float32: decode 20 -> 17 tok/s from 0 to 16k context, prefill ~250 tok/s. Cast to
+    float16 (A_log, dt_bias and the Hadamard signs stay float32): +12% decode at 0, +43% at 16k, prefill
+    +30-50%, 5 GB less at 16k; mean NLL over 16,384 real tokens 1.0935 -> 1.0934, top-1 agreement 99.85%
+    (_bench/RESULTS.md, 2026-10-13). Training keeps float32 norms: only inference was measured."""
     mx, nn = _imports()
     from mlx_lm.models.qwen3_5 import TextModel, TextModelArgs
     from runtime import Packed
@@ -57,16 +64,20 @@ def load_text_model():
             parent = parent[int(part)] if part.isdigit() else getattr(parent, part)
         setattr(parent, parts[-1], Packed(arrays, block, signs, record["embedding"], mx.float16))
     model.load_weights(list(weights.items()), strict=True)
+    if float16_norms:
+        from mlx.utils import tree_flatten
+        model.load_weights([(k, v.astype(mx.float16)) for k, v in tree_flatten(model.parameters())
+                            if v.dtype == mx.float32 and not k.endswith(("A_log", "dt_bias", ".signs"))], strict=False)
     model.eval()
     mx.eval(model.parameters())
     return model
 
 
-def load():
+def load(float16_norms: bool = False):
     """(model, encode, decode, eos_ids) for text use of the pack."""
     mx, nn = _imports()
     from tokenizers import Tokenizer
-    model = load_text_model()
+    model = load_text_model(float16_norms)
     tok = Tokenizer.from_file(str(PACK / "tokenizer.json"))
     eos = {i for i in (tok.token_to_id("<|im_end|>"), tok.token_to_id("<|endoftext|>")) if i is not None}
     return model, (lambda s: tok.encode(s).ids), (lambda ids: tok.decode(ids)), eos
@@ -140,7 +151,7 @@ def spike(example_path: str | None = None) -> int:
     from mlx.utils import tree_flatten
 
     t0 = time.time()
-    model, encode, decode, eos = load()
+    model, encode, decode, eos = load(float16_norms=True)   # measured as served
     print(f"loaded in {time.time() - t0:.1f}s; active memory {mx.get_active_memory() / 1e9:.1f} GB", flush=True)
 
     # 1. speed: prompt processing and generation, greedy, no thinking
@@ -307,7 +318,7 @@ def generate(model, encode, decode, eos, messages: list[dict], max_tokens: int =
 
 def answers(adapter_dir: str, system_file: str, questions_file: str, out_file: str) -> int:
     """Base Bonsai's answers, then the same questions with the adapter attached."""
-    model, encode, decode, eos = load()
+    model, encode, decode, eos = load(float16_norms=True)   # judged as it will be served
     system = Path(system_file).read_text()
     questions = json.loads(Path(questions_file).read_text())
     ask = lambda q: generate(model, encode, decode, eos, [{"role": "system", "content": system},  # noqa: E731

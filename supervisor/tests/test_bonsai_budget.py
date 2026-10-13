@@ -115,3 +115,31 @@ class TemplateReasoningTest(unittest.TestCase):
         text = tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True, preserve_thinking=False)
         self.assertIn("PLAN-STEP-1", text)        # this reply's earlier step: kept
         self.assertNotIn("OLD-THOUGHT", text)     # a finished turn's thinking: dropped
+
+
+@unittest.skipIf(mx is None, "needs MLX (.venv-bonsai)")
+class BudgetWithoutSyncTest(unittest.TestCase):
+    def test_thinking_closed_early_is_never_forced(self):
+        from supervisor.bonsai_server import THINK_END, THINK_START, ThinkingBudget
+        b, logits = ThinkingBudget(3, wrap_up=[7, 8]), mx.zeros((1, 248100))
+        seq = [1, THINK_START]
+        b(mx.array(seq), logits)
+        for tok in (5, THINK_END, 9, 9, 9, 9, 9):   # closes after 2 tokens, then answers well past the budget
+            seq.append(tok)
+            out = b(mx.array(seq), logits)
+            self.assertFalse(bool(mx.isinf(out).any().item()), f"forced after the model closed thinking ({seq})")
+
+
+@unittest.skipIf(mx is None, "needs MLX and the pack (.venv-bonsai); loads the 8 GB model")
+class Float16NormsTest(unittest.TestCase):
+    def test_served_model_has_no_float32_except_what_must_stay(self):
+        # Regression (2026-10-13): 353 float32 norm weights promoted the whole forward pass and the KV cache to
+        # float32 — decode fell from 20 to 17 tok/s by 16k context and prompt reading stayed ~250 tok/s.
+        from mlx.utils import tree_flatten
+        from supervisor import bonsai_lora
+        model = bonsai_lora.load_text_model(float16_norms=True)
+        f32 = [k for k, v in tree_flatten(model.parameters()) if v.dtype == mx.float32]
+        self.assertTrue(f32)   # A_log / dt_bias / signs stay float32 on purpose
+        self.assertEqual([k for k in f32 if not k.endswith(("A_log", "dt_bias", ".signs"))], [])
+        h = model(mx.array([[1, 2, 3]]))
+        self.assertEqual(h.dtype, mx.float16)
