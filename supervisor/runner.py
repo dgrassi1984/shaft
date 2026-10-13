@@ -364,7 +364,7 @@ def _finish(proc: subprocess.Popen) -> None:
 def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: bool,
          output: list[str] | None = None, driver=None, held: _Held | None = None) -> int:
     log(f"{name}: start {kind} {describe_knobs()}")
-    for leftover in ("pause", "paused", "deadline", "pausable"):
+    for leftover in ("pause", "paused", "deadline", "pausable", "activity.json"):
         (root / ".tmp" / leftover).unlink(missing_ok=True)
     run = {"before": _snapshot(root), "seen": 0}
     budget = None if interactive else (SLEEP_TIMEOUT_S if kind == "sleep" else CYCLE_TIMEOUT_S)
@@ -425,7 +425,7 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
             signal.signal(signal.SIGINT, old_sigint)
         broker.stop()
     log(f"{name}: end {kind} exit={code} broker_calls={broker.counts or {}}")
-    for leftover in ("yield", "pause", "paused", "deadline", "pausable"):
+    for leftover in ("yield", "pause", "paused", "deadline", "pausable", "activity.json"):
         (root / ".tmp" / leftover).unlink(missing_ok=True)
     if code < 0 and not interactive:
         journal_note(root, "Supervisor: run stopped", f"My {kind} run was stopped from outside (signal {-code}) "

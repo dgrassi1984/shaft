@@ -313,6 +313,8 @@ def main(argv: list[str]) -> int:
     p.add_argument("action", choices=["on", "off", "status"])
     p = sub.add_parser("autonomy", help="the autonomous schedule (SHAFT's scheduler service): on, off, status")
     p.add_argument("action", choices=["on", "off", "status", "serve"])
+    p = sub.add_parser("top", help="live view of every instance and the services (q quits)")
+    p.add_argument("--once", action="store_true", help="print one snapshot as text and exit")
     p = sub.add_parser("status", help="how the instances are doing")
     p.add_argument("names", nargs="*")
     p = sub.add_parser("log", help="recent journal entries")
@@ -412,6 +414,14 @@ def main(argv: list[str]) -> int:
         return autonomy.service("model", args.action)
     if args.cmd == "embed":
         return autonomy.service("embed", args.action)
+    if args.cmd == "top":
+        ui_python = PROJECT / ".venv-ui" / "bin" / "python"
+        extra = ["--once"] if args.once else []
+        if not ui_python.exists():
+            print(f"shaft top needs {ui_python} (python3 -m venv .venv-ui && .venv-ui/bin/pip install "
+                  f"prompt_toolkit rich)", file=sys.stderr)
+            return 2
+        os.execv(ui_python, [str(ui_python), "-E", "-s", "-m", "supervisor.top", *extra])
     if args.cmd == "tools":
         return cmd_tools(args.name, args.action, args.tool)
     if args.cmd == "secret":

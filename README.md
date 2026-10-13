@@ -82,6 +82,7 @@ shaft live|reflect|sleep [name|--all]   # one autonomous cycle / reflection / co
 shaft autonomy on|off|status    # SHAFT's scheduler service: each instance wakes every WAKE_INTERVAL_MINUTES
                                 # (its config.env; default 120, at least 10, 0 = never; a wake while it is
                                 # already awake is skipped), sleep daily from 04:00 (made up later if missed)
+shaft top                       # live view: every instance's state and what it is doing now, services, events
 shaft status [name]             # how each instance is doing, open conversations, which code is running
 shaft model on|off|status       # SHAFT's own Bonsai 2 server (launchd, :8780)
 shaft api on|off|status|key     # OpenAI-compatible API on your tailnet (see below)
