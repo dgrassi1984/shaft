@@ -35,6 +35,7 @@ from rich.spinner import Spinner
 from rich.text import Text
 
 from . import messages, version
+from .talk_stats import Stats
 from .core import IDLE_MINUTES, SUP_DIR, instance_root
 from .runner import run_conversation, spawn_recover
 
@@ -62,6 +63,7 @@ class Client:
         self.events: queue.Queue = queue.Queue()
         self.proc = None
         self.info: dict = {}
+        self.stats = Stats()   # context, speed and totals for the status line
         self.interrupts: list[float] = []
         self.quit = False
         self.prompting, self.idle_closed, self.last_activity = False, False, time.monotonic()
@@ -114,10 +116,12 @@ class Client:
     def _cont(width, line_number, wrap_count):
         return " " * (width - 2) + "… "
 
-    def _toolbar(self):
-        model = self.info.get("model", "…").split("/")[-1]
-        return HTML(f" <b>{self.name}</b> · {model} · thinking {'shown' if self.show_thinking else 'hidden'}"
-                    f"   ⏎ send · ⇧⏎ / ⌥⏎ new line · /help")
+    def _status(self) -> str:
+        return self.stats.line(self.name, self.info.get("model", "…"), self.show_thinking)
+
+    def _toolbar(self):   # prompt_toolkit's bar: shown at the bottom of the window while you type
+        from html import escape
+        return HTML(f" {escape(self._status())}   ⏎ send · /help")
 
     # -- the agent's events ----------------------------------------------------------
     def _reader(self) -> None:
@@ -178,6 +182,8 @@ class Client:
                     speed = f" · {len(content) / 4 / max(time.monotonic() - first_token, 0.1):.0f} tok/s"
                 spinner.text = Text(f"{phase}{' · ' + detail if detail else ''} · {secs:.0f}s{speed}", style="dim")
                 parts.append(spinner)
+                # the status line also while it replies: the prompt's bar is not on screen then
+                parts.append(Text(f" {self._status()}", style="reverse dim"))
             return Group(*parts)
 
         old = signal.signal(signal.SIGINT, self._on_sigint)
@@ -221,6 +227,8 @@ class Client:
                         else:
                             live.console.print(f"    [red]✗[/red] [dim]{ev.get('brief', '')[:150]}[/dim]")
                         phase, detail, reasoning = "waiting for the model", "", ""
+                    elif t == "usage":
+                        self.stats.add(ev)
                     elif t == "retry":
                         live.console.print(f"  [dim]reply cut off at {ev['old']} tokens — asking again with "
                                            f"{ev['new']}[/dim]")
@@ -309,6 +317,7 @@ class Client:
             self.console.print(f"[red]the agent did not start[/red]\n{getattr(self, 'stderr_tail', '')[-1500:]}")
             return
         self.info = ready
+        self.stats.window = int(ready.get("context_tokens") or 0)
         self.console.print(f"[bold cyan]{self.name}[/bold cyan] [dim]· {ready['model'].split('/')[-1]} · "
                            f"{ready['journal_entries']} journal entries · {ready['tools']} tools · /help[/dim]")
         self.console.print(f"[dim]{version.describe(self.name)}[/dim]\n")
