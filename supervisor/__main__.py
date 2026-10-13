@@ -197,6 +197,8 @@ def cmd_status(names: list[str]) -> int:
 
 def run_many(kind: str, names: list[str], every: bool) -> int:
     names = instance_names() if every else (names or [DEFAULT_INSTANCE])
+    if kind == "sleep" and every:   # the nightly sleep, by the scheduler or by hand: today's is done
+        autonomy.record("sleep")
     worst = 0
     for name in names:
         if kind not in ("talk", "recover") and paused(name):   # writing journal entries is housekeeping
@@ -233,8 +235,8 @@ def main(argv: list[str]) -> int:
     p.add_argument("action", choices=["on", "off", "status", "key", "serve"])
     p = sub.add_parser("model", help="SHAFT's own Bonsai 2 model server (launchd service)")
     p.add_argument("action", choices=["on", "off", "status"])
-    p = sub.add_parser("autonomy", help="install/remove the launchd schedule")
-    p.add_argument("action", choices=["on", "off", "status"])
+    p = sub.add_parser("autonomy", help="the autonomous schedule (SHAFT's scheduler service): on, off, status")
+    p.add_argument("action", choices=["on", "off", "status", "serve"])
     p = sub.add_parser("status", help="how the instances are doing")
     p.add_argument("names", nargs="*")
     p = sub.add_parser("log", help="recent journal entries")
