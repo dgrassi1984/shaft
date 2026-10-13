@@ -236,7 +236,10 @@ class Client:
                     elif t in ("turn_end", "interrupted", "error", "eof"):
                         phase = ""
                         live.update(view())
-                        if t == "turn_end" and ev.get("ended_by") != "answer":
+                        if t == "turn_end" and ev.get("ended_by") == "repeating":
+                            live.console.print(f"  [dim]stopped: {self.name} kept repeating the same tool call "
+                                               f"unchanged (it was not run again)[/dim]")
+                        elif t == "turn_end" and ev.get("ended_by") != "answer":
                             live.console.print(f"  [dim]stopped after {ev['steps']} tool rounds without a "
                                                f"final answer[/dim]")
                         elif t == "interrupted":

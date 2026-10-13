@@ -106,6 +106,40 @@ class ReasoningEffortTest(unittest.TestCase):
         self.assertNotIn("reasoning_effort", fake.requests[-1]["chat_template_kwargs"])
 
 
+class RepeatGuardTest(unittest.TestCase):
+    """shaft called the identical `run` eleven times in a row, copying its previous step whole (2026-10-13)."""
+
+    def loop(self, replies):
+        from shaft import agent
+        from shaft.tools import Toolbox
+        from supervisor.tests.fakellm import FakeLLM
+        fake = FakeLLM(replies)
+        self.addCleanup(fake.close)
+        root = Path(tempfile.mkdtemp(prefix="shaft-steps-"))
+        box = Toolbox(root)
+        out = agent.run(Client(fake.url, "m", "", 30, root / "u.jsonl"), [{"role": "user", "content": "go"}], box,
+                        max_tokens=100, purpose="test", max_steps=0)
+        return out, box, fake, root
+
+    def test_an_identical_call_in_a_row_is_not_run_and_the_third_ends_the_reply(self):
+        same = {"tool_calls": [("list_files", {"path": "."})]}
+        out, box, fake, _ = self.loop([same, same, same, same, {"content": "never reached"}])
+        self.assertEqual(out.ended_by, "repeating")
+        self.assertEqual(len(fake.requests), 3)                       # not a fourth model call
+        ran = [e for e in box.log if e["result"] != "(repeat: not run)"]
+        self.assertEqual(len(ran), 1)                                  # executed once
+        told = [m["content"] for m in fake.requests[2]["messages"] if m["role"] == "tool"][-1]
+        self.assertIn("not run again", told)
+
+    def test_reading_again_after_a_write_is_not_a_repeat(self):
+        read = {"tool_calls": [("read_file", {"path": "notes/a.md"})]}
+        write = {"tool_calls": [("write_file", {"path": "notes/a.md", "content": "v2\n"})]}
+        (Path(tempfile.gettempdir())).exists()
+        out, box, fake, root = self.loop([write, read, write, read, {"content": "done"}])
+        self.assertEqual(out.ended_by, "answer")
+        self.assertNotIn("(repeat: not run)", [e["result"] for e in box.log])
+
+
 class ReasoningAcrossStepsTest(unittest.TestCase):
     def test_each_step_sees_the_thinking_of_the_steps_before(self):
         # Regression (2026-10-13): shaft repeated the same three tool rounds verbatim in one reply. The template
