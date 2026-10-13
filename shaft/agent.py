@@ -75,6 +75,11 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
         else:
             reply = call(messages)
         turn = {"role": "assistant", "content": reply.content or ""}
+        if reply.reasoning:
+            # Bonsai's template shows each earlier step's thinking within the reply (until the next user
+            # message). Without it the steps carried empty <think> blocks: no plan, no conclusions from what
+            # I read — I re-planned from scratch and repeated the same tool rounds verbatim (2026-10-13).
+            turn["reasoning_content"] = reply.reasoning
         if reply.tool_calls:
             turn["tool_calls"] = [{"id": c["id"], "type": "function",
                                    "function": {"name": c["name"], "arguments": c["arguments"]}}

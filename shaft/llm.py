@@ -58,6 +58,7 @@ class Client:
         self.broker_token = broker_token
         self.presence_penalty = presence_penalty
         self.think_followup = think_followup
+        self.local = not broker_token   # SHAFT's own server (template kwargs apply), not the cloud broker
         self.timeout_s = timeout_s
         self.usage_log = usage_log
 
@@ -124,12 +125,17 @@ class Client:
         body = {"model": self.model, "messages": messages, "max_tokens": max_tokens}
         if self.presence_penalty:   # Qwen's advice for quantized models: curbs endless repetition
             body["presence_penalty"] = self.presence_penalty
-        if not think:   # Qwen-style templates (llama.cpp): answer directly, no hidden reasoning
-            body["chat_template_kwargs"] = {"enable_thinking": False}
-        elif self.think_followup and messages and messages[-1].get("role") == "tool":
-            # After a tool result I mostly need to read it, not deliberate from scratch: SHAFT's server
-            # forces </think> after this many reasoning tokens (its own budget stays the ceiling).
-            body["chat_template_kwargs"] = {"thinking_budget": self.think_followup}
+        if self.local:
+            # Earlier steps' thinking is shown only within the current reply, not for older turns: it keeps
+            # the plan across tool rounds without carrying every past reply's reasoning in the context.
+            kwargs = {"preserve_thinking": False}
+            if not think:   # Qwen-style templates: answer directly, no hidden reasoning
+                kwargs["enable_thinking"] = False
+            elif self.think_followup and messages and messages[-1].get("role") == "tool":
+                # After a tool result I mostly need to read it, not deliberate from scratch: SHAFT's server
+                # forces </think> after this many reasoning tokens (its own budget stays the ceiling).
+                kwargs["thinking_budget"] = self.think_followup
+            body["chat_template_kwargs"] = kwargs
         if tools:
             body["tools"] = tools
         if stream:
