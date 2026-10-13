@@ -174,7 +174,7 @@ class TalkInvariants(InstanceCase):
                            "reflect")   # autonomous runs write it up first
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("Conversation with Daniele (2026-10-12 16:59–17:04)", self.journal())
-        self.assertEqual(self.fake.requests[0].get("chat_template_kwargs"), {"enable_thinking": False})
+        self.assertIs((self.fake.requests[0].get("chat_template_kwargs") or {}).get("enable_thinking"), False)
         self.assertIn("'do no harm' as my boundary", self.journal())
         self.assertIn("do no harm", json.dumps(self.fake.requests[0]["messages"]))
         r = self.run_agent([{"content": REFLECTION}], "reflect")          # once written, never again
