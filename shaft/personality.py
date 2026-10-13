@@ -67,13 +67,27 @@ def update(root: Path, layer: str, text: str) -> str:
     title = LAYERS[layer]
     note = "*(values and temperament — change rarely)*" if layer == "core" else \
         "*(current interests, opinions, moods)*"
+    # Only this layer's own lines: headings (`# Personality`, `## Core` …) and captions I sometimes paste in
+    # once put a second Core block inside Surface, and the file then had two Cores (wren, 2026-10-13).
     text = "\n".join(l for l in text.strip().splitlines()
-                     if l.strip() not in (note, f"## {title}"))   # I sometimes repeat the caption/heading
+                     if not l.lstrip().startswith("#") and l.strip() not in (note, ""))
     body = f"## {title}\n{note}\n\n{text.strip()}\n\n"
-    if re.search(rf"^## {title}\n", current, re.M):
-        new = re.sub(rf"^## {title}\n.*?(?=^## |\Z)", lambda _: body, current, flags=re.M | re.S)
-    else:
-        new = current.rstrip() + "\n\n" + body
     path(root).parent.mkdir(parents=True, exist_ok=True)
-    path(root).write_text(new.rstrip() + "\n")
+    path(root).write_text(_rebuild(current, title, body).rstrip() + "\n")
     return f"{layer} personality updated ({len(bullets)} traits)"
+
+
+def _rebuild(current: str, title: str, body: str) -> str:
+    """The file with exactly one block per section: the first `## X` of each title is kept, later copies are
+    dropped, and the layer being written is replaced (or appended if missing)."""
+    parts = re.split(r"(?m)^(?=## )", current)
+    preamble, blocks, seen = parts[0], [], set()
+    for block in parts[1:]:
+        name = block.splitlines()[0][3:].strip()
+        if name in seen:
+            continue
+        seen.add(name)
+        blocks.append(body if name == title else block.rstrip() + "\n\n")
+    if title not in seen:
+        blocks.append(body)
+    return preamble + "".join(blocks)
