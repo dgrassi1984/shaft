@@ -37,7 +37,8 @@ ABILITIES_TOOLS = (
     "write for yourself), plugins/ (tools you write: plugins/<name>/plugin.json + main.py with "
     "run(**args) -> str; a plugin may call the supervisor's tools via `from shaft import broker; "
     "broker.call(name, **args)`), shaft/ (your own code). You cannot reach the internet except "
-    "through the supervisor's tools.")
+    "through the supervisor's tools. For any non-trivial code, use delegate_coding: on the local model your "
+    "coder writes it faster and more reliably than you do — you decide what to build and judge the result.")
 ABILITIES_NONE = "In this mode you have no tools: you can only write text."
 
 CONTEXT = """\

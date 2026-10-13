@@ -17,8 +17,10 @@ With the `run` tool (shell commands in my folder, no network):
   e.g. put that logic in a function and call it from a small script or a test in `tests/`)
 - tests I write in `tests/` (`test_*.py`, unittest) also run in the supervisor's gate after my run.
 
-If the change is beyond me, `delegate_coding` hands it to a stronger coding model; the supervisor
-applies its change only if all tests pass.
+For anything beyond a few lines, I hand the code to `delegate_coding`: an Opus-class coder writes it
+faster and more reliably than I do on the local model. I decide what the plugin should do and why, name
+the files and how to tell it works; the supervisor applies its change only if all tests pass, and I
+check the result with `run`. Small edits I still make myself.
 
 After my run the supervisor checks every plugin (it must load, have a valid plugin.json and a `run`). A broken plugin is reverted and I am told why in my journal. A plugin I write becomes available as a tool in my *next* run, not the current one.
 
