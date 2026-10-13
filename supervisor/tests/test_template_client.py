@@ -142,7 +142,8 @@ class FileToolsTest(unittest.TestCase):
         self.assertTrue(call("append_file", path="notes/trend.md", content="- 10-13 entry B").startswith("appended"))
         self.assertEqual((root / "notes/trend.md").read_text(), "# Trend\n- 10-12 entry A\n- 10-13 entry B\n")
         out = call("write_file", path="notes/trend.md", content="# Trend\n- 10-13 entry C\n")
-        self.assertIn("2 line(s) that were in the file are gone", out)
+        self.assertIn("the file now contains exactly what you wrote (2 lines)", out)   # shaft read the old note as
+        self.assertIn("2 earlier line(s) are no longer in it", out)                      # "the write did not land"
         self.assertIn("history(path='notes/trend.md')", out)
         self.assertNotIn("gone", call("write_file", path="notes/new.md", content="fresh\n"))
         self.assertIn("append-only", call("append_file", path="memory/journal.md", content="x"))

@@ -66,26 +66,6 @@ class WrapUpTest(unittest.TestCase):
         self.assertFalse(bool(mx.isinf(after).any().item()))   # the answer is free again
 
 
-@unittest.skipIf(mx is None, "needs MLX (.venv-bonsai)")
-class PromptCacheCapTest(unittest.TestCase):
-    def test_cap_holds_right_after_a_reply_is_cached(self):
-        # Regression: mlx_lm trimmed only when the next request started; the cache sat at 6.0 GB against 4 GB.
-        from supervisor.bonsai_server import capped_prompt_cache
-
-        class Layer:
-            def __init__(self, n):
-                self.nbytes = n
-
-            def is_trimmable(self):
-                return False
-
-        cache = capped_prompt_cache(100)(10)          # how mlx_lm's server builds it: size only
-        for i in range(5):
-            cache.insert_cache("m", [i, i + 1, i + 2], [Layer(40)])
-        self.assertLessEqual(cache.nbytes, 100)
-        self.assertGreater(cache.nbytes, 0)
-
-
 class RequestBudgetTest(unittest.TestCase):   # plain Python: no MLX needed
     def test_a_request_may_ask_for_less_never_more(self):
         from types import SimpleNamespace as NS

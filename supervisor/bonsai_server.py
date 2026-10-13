@@ -10,8 +10,8 @@ Run with the Bonsai venv:  .venv-bonsai/bin/python -m supervisor.bonsai_server [
 Normally started by launchd (shaft model on).
 
 Settings (environment): SHAFT_MODEL_TEMP (0.6), SHAFT_THINK_BUDGET (4096 reasoning tokens, then </think> is
-forced; 0 = off; a request may ask for less with chat_template_kwargs.thinking_budget), SHAFT_PROMPT_CACHE_GB (4,
-enforced on every insert). Presence penalty is sent per request by the agent.
+forced; 0 = off; a request may ask for less with chat_template_kwargs.thinking_budget), SHAFT_PROMPT_CACHE_GB (8,
+trimmed by mlx_lm when the next request starts). Presence penalty is sent per request by the agent.
 """
 from __future__ import annotations
 
@@ -126,17 +126,6 @@ def request_budget(gen_args, budget: int) -> int:
     return budget
 
 
-def capped_prompt_cache(cap: int):
-    """mlx_lm trims its prompt cache to --prompt-cache-bytes only when a new request starts, so a finished
-    reply's cache sat above the cap until then (6.0 GB against 4 GB). This class enforces it on every insert."""
-    from mlx_lm.models.cache import LRUPromptCache
-
-    class CappedPromptCache(LRUPromptCache):
-        def __init__(self, max_size: int = 10, max_bytes: int = 1 << 63):
-            super().__init__(max_size, min(max_bytes, cap))
-    return CappedPromptCache
-
-
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="bonsai_server")
     ap.add_argument("--port", type=int, default=PORT)
@@ -175,9 +164,12 @@ def main(argv: list[str]) -> int:
         return list(original(gen_args) or []) + ([ThinkingBudget(b, wrap_ids)] if b > 0 else [])
     S._make_logits_processors = with_budget
     temp = os.environ.get("SHAFT_MODEL_TEMP", "0.6")   # Daniele, 2026-10-13 (0.1 = near-greedy: verbatim loops; pack 1.0)
-    cache_gb = float(os.environ.get("SHAFT_PROMPT_CACHE_GB", "4"))      # the cache grew to 8.3 GB uncapped
+    # mlx_lm trims the prompt cache to this when the next request starts — after that request has taken its
+    # prefix. Enforcing it on every insert instead (2026-10-13 morning) evicted each new entry at once on
+    # long agent prompts: from ~16k tokens every tool round re-read the whole prompt (42k tokens, ~2 min).
+    # 8 GB holds the entries of a 40k-token conversation with float16 KV; the Mac has 64 GB.
+    cache_gb = float(os.environ.get("SHAFT_PROMPT_CACHE_GB", "8"))
     cap = int(cache_gb * 1024 ** 3)
-    S.LRUPromptCache = capped_prompt_cache(cap)
     handler, serve_http = tool_progress_handler(S), S._run_http_server
     S._run_http_server = lambda host, port, generator, **kw: serve_http(host, port, generator,
                                                                        **{**kw, "handler_class": handler})
