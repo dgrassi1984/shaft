@@ -453,5 +453,48 @@ class FlowTest(Fixture):
         self.assertEqual(trial.load(NAME, t["id"])["verdict"]["label"], "no clear difference")
 
 
+class WorkerTest(Fixture):
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(shutil.rmtree, SUP_DIR / "trials" / NAME, True)
+
+    def test_trials_asked_for_together_get_their_own_ids(self):
+        """Four operator trials created in the same second shared one id and overwrote each other (2026-10-13)."""
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(4) as pool:
+            ts = list(pool.map(lambda k: trial.create(NAME, {"shaft/x.py": f"# {k}\n".encode()}, f"variant {k}",
+                                                      by="operator", project=self.project, n=2), range(4)))
+        self.assertEqual(len({t["id"] for t in ts}), 4)
+        for k, t in enumerate(ts):
+            self.assertEqual(trial._files(NAME, t["id"], "candidate")["shaft/x.py"], f"# {k}\n".encode())
+
+    def test_the_worker_runs_trials_side_by_side_but_one_pair_per_trial_at_a_time(self):
+        ts = []
+        for k in range(3):
+            t = trial.create(NAME, {"shaft/x.py": f"# {k}\n".encode()}, f"variant {k}", by="operator",
+                             project=self.project, n=2, model="cloud")
+            t["status"] = "queued"
+            trial.save(t)
+            ts.append(t)
+        lock, running, peak, per_trial = threading.Lock(), set(), [0], {}
+
+        def fake_pair(project, t, i, model):
+            with lock:
+                self.assertNotIn(t["id"], {r[0] for r in running}, "two pairs of one trial at once")
+                running.add((t["id"], i))
+                peak[0] = max(peak[0], len(running))
+            time.sleep(0.3)
+            with lock:
+                running.discard((t["id"], i))
+            t = trial.load(t["instance"], t["id"])
+            t["states"][i].update(status="done", outcome="tie", model=model)
+            trial.save(t)
+        with mock.patch.object(trial, "run_pair", fake_pair), mock.patch.object(trial, "PARALLEL", 3):
+            self.assertEqual(trial.work(self.project), 0)
+        self.assertGreaterEqual(peak[0], 2)
+        for t in ts:
+            self.assertEqual(trial.load(NAME, t["id"])["status"], "done")
+
+
 if __name__ == "__main__":
     unittest.main()
