@@ -267,6 +267,13 @@ def _pause(name: str, root: Path, kind: str, proc, held: _Held, run: dict, broke
     model; a tool in progress finishes first — settle what it did so far, give the instance to the conversation,
     and take it back when the conversation ends. Returns the seconds it was paused."""
     t0 = time.monotonic()
+    marker = root / ".tmp" / "pausable"
+    if not (marker.is_file() and marker.read_text().strip() == str(proc.pid)):
+        # Its code does not handle the signal (SIGUSR1 would kill it): ask it to wrap up instead, once.
+        if not run.get("asked_to_yield"):
+            request_yield([name])
+            run["asked_to_yield"] = True
+        return 0.0
     safe_write(root, ".tmp/pause", datetime.now().isoformat(timespec="seconds"))
     try:
         os.kill(proc.pid, signal.SIGUSR1)
@@ -357,7 +364,7 @@ def _finish(proc: subprocess.Popen) -> None:
 def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: bool,
          output: list[str] | None = None, driver=None, held: _Held | None = None) -> int:
     log(f"{name}: start {kind} {describe_knobs()}")
-    for leftover in ("pause", "paused", "deadline"):
+    for leftover in ("pause", "paused", "deadline", "pausable"):
         (root / ".tmp" / leftover).unlink(missing_ok=True)
     run = {"before": _snapshot(root), "seen": 0}
     budget = None if interactive else (SLEEP_TIMEOUT_S if kind == "sleep" else CYCLE_TIMEOUT_S)
@@ -418,7 +425,7 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
             signal.signal(signal.SIGINT, old_sigint)
         broker.stop()
     log(f"{name}: end {kind} exit={code} broker_calls={broker.counts or {}}")
-    for leftover in ("yield", "pause", "paused", "deadline"):
+    for leftover in ("yield", "pause", "paused", "deadline", "pausable"):
         (root / ".tmp" / leftover).unlink(missing_ok=True)
     if code < 0 and not interactive:
         journal_note(root, "Supervisor: run stopped", f"My {kind} run was stopped from outside (signal {-code}) "

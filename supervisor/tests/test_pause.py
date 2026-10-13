@@ -106,6 +106,7 @@ FAKE_CYCLE = r"""
 import os, signal, sys, time
 from pathlib import Path
 tmp = Path(".tmp"); tmp.mkdir(exist_ok=True)
+(tmp / "pausable").write_text(str(os.getpid()))
 paused = {"now": False}
 signal.signal(signal.SIGUSR1, lambda *a: paused.update(now=True))
 end = time.time() + 6
@@ -161,6 +162,21 @@ class SupervisorSideTest(unittest.TestCase):
         self.assertEqual(len(settles), 2)                         # and its own work after the pause was checked
         self.assertIsNot(settles[0], settles[1])                  # from a fresh baseline: the chat's work is not its
         self.assertFalse((root / ".tmp" / "pause").exists())
+
+
+class OldCodeTest(unittest.TestCase):
+    def test_a_run_that_cannot_be_paused_is_asked_to_wrap_up_not_signalled(self):
+        from supervisor import runner
+        root = Path(tempfile.mkdtemp(prefix="shaft-inst-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        (root / ".tmp").mkdir()
+        proc = mock.Mock(pid=999999)
+        run = {}
+        with mock.patch.object(runner, "request_yield") as yielded, mock.patch("os.kill") as kill:
+            self.assertEqual(runner._pause("shaft", root, "live", proc, mock.Mock(), run, mock.Mock()), 0.0)
+            runner._pause("shaft", root, "live", proc, mock.Mock(), run, mock.Mock())
+        kill.assert_not_called()                     # SIGUSR1 would have killed it
+        yielded.assert_called_once_with(["shaft"])   # asked once, not every 2 seconds
 
 
 if __name__ == "__main__":
