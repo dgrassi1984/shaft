@@ -123,7 +123,8 @@ class SpeakerTest(unittest.TestCase):
         # Regression: Claude Code talked to shaft for Daniele (saying so); the write-up was titled
         # "Conversation with Daniele" and filed "what I learned about Daniele" from what Claude Code did.
         from supervisor.tests.fakellm import FakeLLM
-        fake = FakeLLM([{"content": "Claude Code added a history tool."}])
+        fake = FakeLLM([{"content": "## 2026-10-13 10:09 — Conversation with Claude Code (2026-10-13 10:09–10:10)\n\n"
+                                    "Claude Code added a history tool."}])
         self.addCleanup(fake.close)
         root = Path(tempfile.mkdtemp(prefix="shaft-inst-"))
         (root / "memory" / "episodes").mkdir(parents=True)
@@ -138,9 +139,26 @@ class SpeakerTest(unittest.TestCase):
         journal = (root / "memory" / "journal.md").read_text()
         self.assertIn("Conversation with Claude Code (for Daniele)", journal)
         self.assertNotIn("Conversation with Daniele", journal)
+        self.assertEqual(journal.count("## "), 1)   # MiMo opened its text with its own dated heading (wren, 10-13)
         sent = json.dumps(fake.requests[-1]["messages"])
         self.assertIn("do not attribute what Claude Code said or did to Daniele", sent)
         self.assertIn("what you learned about Claude Code", sent)
+
+
+class JournalHeadingTest(unittest.TestCase):
+    def test_section_headings_stay_dated_copies_go(self):
+        code = ("from shaft.state import State; from pathlib import Path; import os\n"
+                "s = State(Path(os.environ['SHAFT_ROOT']))\n"
+                "s.append_journal('Reflection', '## What happened since my last reflection\\n\\nA lot.')\n"
+                "s.append_journal('Sleep', '### 2026-10-13T04:40 Sleep cycle\\n\\nConsolidated.')\n"
+                "print(s.journal.read_text())")
+        root = Path(tempfile.mkdtemp(prefix="shaft-inst-"))
+        r = subprocess.run([sys.executable, "-E", "-s", "-c", code], cwd=TEMPLATE, capture_output=True, text=True,
+                           env={"PATH": "/usr/bin:/bin", "SHAFT_ROOT": str(root)})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("## What happened since my last reflection", r.stdout)
+        self.assertNotIn("Sleep cycle", r.stdout)
+        self.assertIn("— Sleep\n\nConsolidated.", r.stdout)
 
 
 if __name__ == "__main__":
