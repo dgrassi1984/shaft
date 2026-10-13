@@ -6,6 +6,7 @@ Every tool takes JSON arguments and returns text. A failing tool returns
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -37,6 +38,9 @@ PROTECTED = {
 PROTECTED_DIRS = {".git": "git internals",
                   "secrets": "my keys are handled by the supervisor: secret_set / secret_list / secret_delete", "memory/episodes": "episodes are append-only records",
                   "logs": "logs are written by my runtime", "inbox": "the supervisor delivers messages here"}
+# The operator's folder I may read (shaft share <name> <folder>): seen as shared/, never written.
+SHARED = "shared"
+SHARED_READ_ONLY = "read-only: shared/ is the operator's folder — write what you make from it to notes/"
 
 
 def _spec(name: str, description: str, properties: dict, required: list[str] | None = None) -> dict:
@@ -48,7 +52,8 @@ def _spec(name: str, description: str, properties: dict, required: list[str] | N
 
 S = {"type": "string"}
 BUILTINS = [
-    _spec("read_file", "Read a text file inside my own folder (paths are relative to it).",
+    _spec("read_file", "Read a text file inside my own folder (paths are relative to it), or under shared/ when "
+          "the operator has given me a folder to read.",
           {"path": S, "offset": {"type": "integer", "description": "start character, default 0"}}, ["path"]),
     _spec("write_file", "Create or overwrite a text file inside my own folder. Use it for notes/, "
           "skills/, plugins/, self/goals.md and my own code. Code changes are tested by the "
@@ -57,7 +62,8 @@ BUILTINS = [
     _spec("append_file", "Add text to the end of a text file inside my own folder (created if missing) — "
           "the safe way to add a dated entry to a running record such as a notes/ log; nothing already "
           "in the file can be lost.", {"path": S, "content": S}),
-    _spec("list_files", "List files under a directory of my folder.", {"path": S}, []),
+    _spec("list_files", "List files under a directory of my folder (or of shared/, the operator's folder, when I "
+          "have one).", {"path": S}, []),
     _spec("rewrite_facts", "Consolidate memory/facts.md (in my sleep): give the whole new list — duplicates "
           "merged, superseded or trivial facts dropped, what still matters kept — one per line as "
           "'- [YYYY-MM-DD HH:MM] fact' (keep each fact's date). At most 6,000 characters: it is shown to me in "
@@ -84,6 +90,8 @@ BUILTINS = [
 class Toolbox:
     def __init__(self, root: Path, extra: list[dict] | None = None):
         self.root = Path(root).resolve()
+        shared = os.environ.get("SHAFT_SHARED")
+        self.shared = Path(shared).resolve() if shared else None
         self.extra = extra or []          # control tools owned by the caller (e.g. finish_cycle)
         self.plugins = self._discover_plugins()
         self.remote = self._discover_broker()
@@ -149,6 +157,14 @@ class Toolbox:
         return f"ERROR: unknown tool {name!r}. Available: {self.describe()}"
 
     def _path(self, rel: str, for_write: bool = False) -> Path:
+        parts = Path(rel).parts
+        if self.shared and parts and parts[0] == SHARED:
+            if for_write:
+                raise PermissionError(SHARED_READ_ONLY)
+            path = self.shared.joinpath(*parts[1:]).resolve()
+            if path != self.shared and self.shared not in path.parents:
+                raise PermissionError(f"{rel!r} is outside the shared folder")
+            return path
         path = (self.root / rel).resolve()
         if path != self.root and self.root not in path.parents:
             raise PermissionError(f"{rel!r} is outside my folder")
@@ -194,9 +210,13 @@ class Toolbox:
 
     def _t_list_files(self, path: str = ".") -> str:
         base = self._path(path)
+        in_shared = bool(self.shared) and (base == self.shared or self.shared in base.parents)
+        top, prefix = (self.shared, SHARED + "/") if in_shared else (self.root, "")
         skip = {".git", "__pycache__", ".tmp", "logs", "secrets"}
-        rows = [p.relative_to(self.root).as_posix() + ("/" if p.is_dir() else "")
-                for p in sorted(base.rglob("*")) if not skip & set(p.relative_to(self.root).parts)]
+        rows = [prefix + p.relative_to(top).as_posix() + ("/" if p.is_dir() else "")
+                for p in sorted(base.rglob("*")) if not skip & set(p.relative_to(top).parts)]
+        if self.shared and base == self.root:
+            rows.append(f"{SHARED}/ (the operator's folder, read-only: list_files {SHARED})")
         return "\n".join(rows[:400]) or "(empty)"
 
     def _t_search_memory(self, query: str, k: int = 5) -> str:

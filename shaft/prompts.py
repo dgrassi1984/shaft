@@ -41,6 +41,8 @@ ABILITIES_TOOLS = (
     "through the supervisor's tools.")
 DELEGATION = (" For any non-trivial code, use delegate_coding: your coder writes it faster and more reliably than "
               "you do — you decide what to build and judge the result.")
+SHARED = (" shared/ is a folder {operator} lets you read (read-only: read_file, list_files, and `run` "
+          "at {path}); it is {operator}'s material, not your memory — what you make from it goes in notes/.")
 ABILITIES_NONE = "In this mode you have no tools: you can only write text."
 
 CONTEXT = """\
@@ -221,6 +223,8 @@ def system_prompt(state, cfg, mode_note: str, tools: str | None = None) -> str:
     abilities = ABILITIES_TOOLS.format(tools=tools) if tools else ABILITIES_NONE
     if tools and "delegate_coding" in tools:   # the operator can switch the coder off for an instance
         abilities += DELEGATION
+    if tools and os.environ.get("SHAFT_SHARED"):   # granted by the operator (shaft share <name> <folder>)
+        abilities += SHARED.format(operator=cfg.OPERATOR_NAME, path=os.environ["SHAFT_SHARED"])
     schedule = os.environ.get("SHAFT_SCHEDULE") or "the supervisor did not say (you may be running outside it)."
     identity = IDENTITY.format(name=cfg.NAME, operator=cfg.OPERATOR_NAME, schedule=schedule,
                                abilities=abilities, mode_note=mode_note)
