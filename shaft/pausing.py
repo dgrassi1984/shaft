@@ -1,10 +1,12 @@
 """Being paused by the supervisor while Daniele talks with me (Daniele, 2026-10-13: "when I start a chat, its
 background cycle should be immediately paused").
 
-The supervisor writes .tmp/pause and sends SIGUSR1. If I am waiting on the model, the call is cut off at once
-(the server stops generating when the connection drops, so the model is free for the conversation); if I am
-running a tool, I stop right after it. I acknowledge with .tmp/paused, wait until .tmp/pause is gone, then
-redo the step that was cut off. Only autonomous runs (cycle, sleep, reflection) install this.
+The supervisor writes .tmp/pause-<my pid> and sends SIGUSR1. If I am waiting on the model, the call is cut off
+at once (the server stops generating when the connection drops, so the model is free for the conversation); if
+I am running a tool, I stop right after it. I acknowledge with .tmp/paused-<pid>, wait until the pause file is
+gone, then redo the step that was cut off. Only autonomous runs (cycle, sleep, reflection) install this.
+The files carry my pid: other runs (the conversation's write-up) clean only files whose process is gone — a
+shared name let one delete my pause file and resume me while the conversation still had the instance.
 """
 from __future__ import annotations
 
@@ -26,6 +28,10 @@ def _root() -> Path:
     return Path(os.environ.get("SHAFT_ROOT") or ".")
 
 
+def _mine(name: str) -> Path:
+    return _root() / ".tmp" / f"{name}-{os.getpid()}"
+
+
 def _on_signal(signum, frame):
     _state["requested"] = True
     if _state["in_call"]:
@@ -37,7 +43,7 @@ def install() -> None:
     _state["installed"] = True
     tmp = _root() / ".tmp"
     tmp.mkdir(parents=True, exist_ok=True)
-    (tmp / "pausable").write_text(str(os.getpid()))   # SIGUSR1 kills a process without this handler: say I have it
+    _mine("pausable").write_text(str(os.getpid()))   # SIGUSR1 kills a process without this handler: say I have it
 
 
 @contextmanager
@@ -51,18 +57,17 @@ def interruptible():
 
 
 def requested() -> bool:
-    return _state["installed"] and (_state["requested"] or (_root() / ".tmp" / "pause").exists())
+    return _state["installed"] and (_state["requested"] or _mine("pause").exists())
 
 
 def wait_while_paused() -> None:
-    tmp = _root() / ".tmp"
-    tmp.mkdir(parents=True, exist_ok=True)
-    (tmp / "paused").write_text(str(os.getpid()))   # the supervisor settles my work so far and frees the instance
+    (_root() / ".tmp").mkdir(parents=True, exist_ok=True)
+    _mine("paused").write_text(str(os.getpid()))   # the supervisor settles my work so far and frees the instance
     try:
-        while (tmp / "pause").exists():
+        while _mine("pause").exists():
             time.sleep(1)
     finally:
-        (tmp / "paused").unlink(missing_ok=True)
+        _mine("paused").unlink(missing_ok=True)
         _state["requested"] = False
 
 

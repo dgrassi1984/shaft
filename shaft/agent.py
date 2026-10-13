@@ -54,7 +54,7 @@ def time_left() -> float | None:
     """Seconds until the supervisor stops this run (SHAFT_DEADLINE; moved later in .tmp/deadline after a
     pause), or None if unbounded."""
     root = os.environ.get("SHAFT_ROOT")
-    moved = os.path.join(root, ".tmp", "deadline") if root else ""
+    moved = os.path.join(root, ".tmp", f"deadline-{os.getpid()}") if root else ""
     deadline = open(moved).read().strip() if moved and os.path.exists(moved) else os.environ.get("SHAFT_DEADLINE")
     return float(deadline) - time.time() if deadline else None
 
