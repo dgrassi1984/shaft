@@ -203,6 +203,8 @@ def _exam(label: str, root: Path, broker: Broker, task: dict, until: float | Non
     finally:
         for r in readers:
             r.join(timeout=5)
+        proc.stdout.close()
+        proc.stderr.close()
     out, err = "".join(out_chunks).strip(), "".join(err_chunks).strip()
     last = out.splitlines()[-1] if out else ""
     try:
@@ -358,13 +360,12 @@ RECALL_SCHEMA = {
 
 def recall_candidates(name: str, now: datetime | None = None) -> list[tuple[str, str]]:
     """(stamp, text) of journal entries old enough and already out of the instance's context window."""
-    from .core import instance_config as cfg_of
     now = now or datetime.now()
     journal = INSTANCES / name / "memory" / "journal.md"
     if not journal.exists():
         return []
     entries = [b.strip() for b in journal.read_text().split("\n---\n") if b.strip().startswith("## ")]
-    window = int(cfg_of(name).get("CONTEXT_JOURNAL_CHARS") or 16000)
+    window = int(instance_config(name).get("CONTEXT_JOURNAL_CHARS") or 16000)
     shown, used = set(), 0
     for e in reversed(entries):        # what recent_journal shows the instance (newest that fit)
         if used and used + len(e) > window:
@@ -466,22 +467,25 @@ def _on_term(signum, _frame):
 
 
 def run(name: str, until: float | None = None, only: list[str] | None = None, control: bool = True,
-        limit: int | None = None) -> int:
-    """One battery run for one instance (and its control, item by item). Returns the number of items scored."""
+        limit: int | None = None, control_only: bool = False) -> int:
+    """One battery run for one instance (and its control, item by item). Returns the number of items scored.
+    control_only: the control alone (checks that the items discriminate; the instance is not touched)."""
     from .runner import _Held, Busy
     signal.signal(signal.SIGTERM, _on_term)
     root = instance_root(name)
     e = era(name)
     make_recall(name)                                  # once enough old entries exist; frozen afterwards
     e = era(name)                                      # the checksum includes recall questions once written
-    items = [it for it in load_items(name) if not only or it["category"] in only]
+    items = [it for it in load_items(name) if (not only or it["category"] in only)
+             and (not control_only or it["category"] in CONTROLLED)]
     if not items:
         log(f"{name}: battery: no items in {items_dir()}")
         return 0
     items = order(name, items, e)[:limit]
     held = _Held(name, "battery")
     try:
-        held.acquire(wait=False)
+        if not control_only:
+            held.acquire(wait=False)
     except Busy:
         log(f"{name}: battery skipped — the instance is busy")
         return 0
@@ -491,10 +495,11 @@ def run(name: str, until: float | None = None, only: list[str] | None = None, co
     scored = 0
     interrupt = _interrupt_check(name, until)
     try:
-        if control and any(it["category"] in CONTROLLED for it in items):
+        if (control or control_only) and any(it["category"] in CONTROLLED for it in items):
             ctrl_root = make_control(name)
         for item in items:
-            arms = [("instance", root)] + ([("control", ctrl_root)] if ctrl_root and item["category"] in CONTROLLED else [])
+            arms = ([] if control_only else [("instance", root)]) + \
+                ([("control", ctrl_root)] if ctrl_root and item["category"] in CONTROLLED else [])
             for arm, arm_root in arms:
                 why = interrupt()
                 if why:
@@ -506,16 +511,18 @@ def run(name: str, until: float | None = None, only: list[str] | None = None, co
         log(f"{name}: battery stopped: {stop}")
         summary["stopped"] = str(stop)
     finally:
-        held.release()
-        (root / ".tmp" / "yield").unlink(missing_ok=True)   # a conversation's request to us, not to the next cycle
+        held.release()   # a no-op when control_only never took it
+        if not control_only:
+            (root / ".tmp" / "yield").unlink(missing_ok=True)   # a conversation's request to us, not to the next cycle
         if ctrl_root:
             shutil.rmtree(ctrl_root, ignore_errors=True)
         summary["ended"] = datetime.now().isoformat(timespec="seconds")
-        out = SUP_DIR / "evals" / f"battery-{name}-{datetime.now():%Y%m%d-%H%M%S}.json"
+        out = SUP_DIR / "evals" / f"battery-{name}{'-control' if control_only else ''}-{datetime.now():%Y%m%d-%H%M%S}.json"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(summary, indent=1, ensure_ascii=False))
-        metrics.write_stats(name)
-        _record_run(name)
+        if not control_only:   # a control check is not the instance's scheduled run
+            metrics.write_stats(name)
+            _record_run(name)
     log(f"{name}: battery run: {scored} scored · " + "; ".join(f"{i['arm'][0]}:{i['item']}={i['score']}"
                                                             for i in summary["items"]))
     return scored

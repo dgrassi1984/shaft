@@ -326,7 +326,8 @@ def cmd_battery(args) -> int:
                 end = datetime.now().replace(hour=h, minute=m, second=0, microsecond=0)
                 until = (end if end > datetime.now() else end + timedelta(days=1)).timestamp()
             only = [c.strip() for c in args.only.split(",") if c.strip()] or None
-            n = battery.run(name, until=until, only=only, control=not args.no_control, limit=args.limit)
+            n = battery.run(name, until=until, only=only, control=not args.no_control, limit=args.limit,
+                            control_only=args.control_only)
             print(f"{name}: {n} item result(s) scored")
             worst = max(worst, 0 if n else 1)
     return worst
@@ -377,6 +378,8 @@ def main(argv: list[str]) -> int:
     p.add_argument("--until", default="", help="run: stop at this time (HH:MM), like the night window")
     p.add_argument("--only", default="", help="run: only these categories (comma-separated)")
     p.add_argument("--no-control", action="store_true", help="run: skip the control")
+    p.add_argument("--control-only", action="store_true",
+                   help="run: only the control, on coding and research (checks the items discriminate)")
     p.add_argument("--limit", type=int, default=None, help="run: at most this many items")
     p.add_argument("--force", action="store_true", help="recall: write new questions (starts a new era)")
     p = sub.add_parser("inbox", help="messages instances sent you")

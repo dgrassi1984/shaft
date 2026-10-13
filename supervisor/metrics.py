@@ -457,8 +457,8 @@ def _battery_section(name: str) -> list[str]:
 def stats_text(name: str) -> str:
     js = judgments(name)
     if not js:
-        return "\n".join(["# My measured performance", "", "*Written by the supervisor.* No judged cycles yet."]
-                         + _code_section(name) + _traits_section(name)) + "\n"
+        return "\n".join(["# My measured performance", "", "*Written by the supervisor.* No judged cycles yet.", ""]
+                         + _battery_section(name) + _code_section(name) + _traits_section(name)) + "\n"
     scores = [SCORE[j["criterion_met"]] for j in js]
     confs = [(j["confidence"] / 100, SCORE[j["criterion_met"]]) for j in js if j.get("confidence") is not None]
     claimed = [j for j in js if j.get("claimed")]

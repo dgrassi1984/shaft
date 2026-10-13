@@ -320,5 +320,118 @@ class BrokerRootTest(unittest.TestCase):
             self.assertEqual(default._root(), (Path(tmp) / "instances" / "wren").resolve())
 
 
+TEMPLATE_CODE = Path(__file__).resolve().parents[2] / "template" / "shaft"
+
+
+@unittest.skipUnless((TEMPLATE_CODE / "exam.py").exists(), "needs the template's exam mode")
+class BatteryEndToEndTest(unittest.TestCase):
+    """One item through the real path: sandboxed `shaft exam` for the instance and its control (fake model),
+    hidden tests, grading (stubbed judge), results, the instance's files restored, stats.md."""
+
+    def setUp(self):
+        from supervisor import core, runner
+        from supervisor.tests.fakellm import FakeLLM
+        self.project = Path(tempfile.mkdtemp(prefix="shaft-e2e-")).resolve()
+        git = lambda cwd, *a: subprocess.run(["git", "-C", str(cwd), "-c", "user.name=t", "-c", "user.email=t@t", *a],
+                                             check=True, capture_output=True, text=True)
+        git(self.project, "init", "-q")
+        git(self.project, "commit", "-q", "--allow-empty", "-m", "main")
+        self.root = self.project / "instances" / "e"
+        git(self.project, "worktree", "add", "-q", "--orphan", "-b", "instance/e", str(self.root))
+        shutil.copytree(TEMPLATE_CODE, self.root / "shaft", ignore=shutil.ignore_patterns("__pycache__"))
+        self.fake = FakeLLM([
+            # instance: writes a solution and a note outside its scratch folder (refused), then answers
+            {"tool_calls": [("write_file", {"path": ".tmp/battery/coding-add/solution.py",
+                                            "content": "def add(a, b):\n    return a + b\n"}),
+                            ("write_file", {"path": "notes/leak.md", "content": "task: add()"})]},
+            {"tool_calls": [("submit_answer", {"answer": "solution.py: add(a, b) returns a + b"})]},
+            # control: answers without writing anything
+            {"tool_calls": [("submit_answer", {"answer": "I could not do it"})]},
+        ])
+        config = f'LLM_BASE_URL="{self.fake.url}"\nLLM_MODEL="fake"\nOPERATOR_NAME="Daniele"\n'
+        (self.root / "config.env").write_text(config)
+        (self.root / ".gitignore").write_text(".tmp/\nlogs/\n")
+        for d in ("self", "memory", "notes"):
+            (self.root / d).mkdir()
+        (self.root / "memory" / "journal.md").write_text("# journal\n")
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "-m", "state")
+        self.sup = self.project / "sup"
+        item = self.sup / "battery" / "items" / "v1" / "coding"
+        (item / "add" / "hidden").mkdir(parents=True)
+        (item / "add.json").write_text(json.dumps({"prompt": "Write add(a, b) in solution.py.", "reference": "a+b",
+                                                   "hidden_tests": 1, "max_steps": 4}))
+        (item / "add" / "hidden" / "test_hidden.py").write_text(
+            "import unittest\nfrom solution import add\n\nclass T(unittest.TestCase):\n"
+            "    def test_add(self):\n        self.assertEqual(add(2, 3), 5)\n")
+        archive = self.project / "template.tar"   # the control is made from this instead of `git archive`
+        subprocess.run(["tar", "-cf", str(archive), "-C", str(self.root), "shaft"], check=True)
+        real_make = battery.make_control
+
+        def make_control(name):
+            dest = battery.base() / "control" / name
+            dest.mkdir(parents=True)
+            subprocess.run(["tar", "-xf", str(archive), "-C", str(dest)], check=True)
+            shutil.copy2(self.root / "config.env", dest / "config.env")
+            for d in ("self", "memory", "notes", "inbox"):
+                (dest / d).mkdir()
+            return dest
+        self.graded = []
+
+        def ask(system, case, schema, purpose, **kw):
+            self.graded.append(case)
+            return {"correct": "yes", "effectiveness": 9, "unsupported_claims": 0, "reasoning": "fine"}
+        wt = lambda root, *a, **k: core.git_wt(root, *a, **{**k, "project": self.project})  # noqa: E731
+        self.patches = [
+            mock.patch.object(battery, "SUP_DIR", self.sup), mock.patch.object(metrics, "SUP_DIR", self.sup),
+            mock.patch.object(runner, "SUP_DIR", self.sup), mock.patch.object(metrics, "INSTANCES", self.project / "instances"),
+            mock.patch.object(battery, "INSTANCES", self.project / "instances"),
+            mock.patch.object(battery, "instance_root", lambda n: self.root),
+            mock.patch.object(battery, "instance_config", lambda n: {"LLM_MODEL": "fake"}),
+            mock.patch.object(battery, "LLM_PORTS", [self.fake.port]), mock.patch.object(battery, "secrets_env", dict),
+            mock.patch.object(battery, "git_wt", wt), mock.patch.object(battery, "make_control", make_control),
+            mock.patch.object(battery, "log"), mock.patch.object(metrics, "log"),
+            mock.patch.object(judge, "ask", ask), mock.patch.object(judge, "JUDGE_MODEL", "judge-test"),
+            mock.patch("supervisor.autonomy.describe_schedule", return_value="test"),
+        ]
+        for p in self.patches:
+            p.start()
+        self.real_make = real_make
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        self.fake.close()
+        shutil.rmtree(self.project, ignore_errors=True)
+
+    def test_one_item_for_the_instance_and_its_control(self):
+        before = battery.snapshot(self.root)
+        self.assertEqual(battery.run("e"), 2)
+        rows = battery.results("e")
+        inst, ctrl = [r for r in rows if r["arm"] == "instance"][0], [r for r in rows if r["arm"] == "control"][0]
+        self.assertEqual((inst["status"], inst["tests"]["passed"], inst["score"]), ("scored", 1, 10.0), inst)
+        self.assertEqual((ctrl["status"], ctrl["tests"]["passed"], ctrl["score"]), ("scored", 0, 0.0), ctrl)
+        self.assertEqual(inst["checksum"], battery.checksum("e"))
+        after = battery.snapshot(self.root)
+        self.assertIn("self/stats.md", after)                                     # the supervisor's own write
+        self.assertEqual({k: v for k, v in after.items() if k != "self/stats.md"}, before)   # nothing kept
+        self.assertFalse((self.root / ".tmp" / "battery" / "coding-add").exists())
+        self.assertFalse((self.sup / "battery" / "control" / "e").exists())        # control removed
+        self.assertNotIn("write_add", (self.sup / "battery" / "broker.log").read_text() if
+                         (self.sup / "battery" / "broker.log").exists() else "")
+        self.assertIn("Hidden tests: 1/1 passed", self.graded[0])
+        stats = (self.root / "self" / "stats.md").read_text()
+        self.assertIn("coding: **10.0**", stats)
+        self.assertIn("control 0.0", stats)
+        self.assertEqual(len(list((self.sup / "evals").glob("battery-e-*.json"))), 1)
+
+    def test_control_only_leaves_the_instance_alone(self):
+        before = battery.snapshot(self.root)
+        self.assertEqual(battery.run("e", control_only=True), 1)
+        self.assertEqual([r["arm"] for r in battery.results("e")], ["control"])
+        self.assertEqual(battery.snapshot(self.root), before)                      # not even stats.md
+        self.assertFalse((self.sup / "battery" / "schedule.json").exists())        # not the scheduled run
+
+
 if __name__ == "__main__":
     unittest.main()

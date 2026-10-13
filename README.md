@@ -65,7 +65,8 @@ plugins/      tools it wrote for itself (plugins/<name>/plugin.json + main.py); 
 skills/       how-tos it writes for itself
 config.env    its LLM settings and budgets
 self/         self.md (self-model), personality.md (core/surface, every trait cites the journal),
-              goals.md, stats.md (written by the supervisor: judged success, calibration)
+              goals.md, stats.md (written by the supervisor: achieved difficulty, where its goals
+              came from, judged success, calibration, battery scores)
 memory/       journal.md (append-only), facts.md, people/, messages/, episodes/*.jsonl
 inbox/        messages waiting for it (from you or other instances)
 notes/        its own work
@@ -87,7 +88,11 @@ shaft status [name]             # how each instance is doing, open conversations
 shaft model on|off|status       # SHAFT's own Bonsai 2 server (launchd, :8780)
 shaft api on|off|status|key     # OpenAI-compatible API on your tailnet (see below)
 shaft log [name] -n 5           # recent journal entries
-shaft stats [name]              # judged success, calibration, honesty, failure modes
+shaft stats [name]              # achieved difficulty, goal origins, judged success, calibration, honesty
+shaft judge backfill [name]     # rate origin/difficulty/novelty of cycles judged before those ratings existed
+shaft battery run [name]        # the capability battery now (normally the scheduler runs it at night)
+shaft battery run <name> --control-only   # only the control: do the items discriminate?
+shaft battery report|recall|backup [name] # results and judge spend · freeze recall questions · back up items
 
 shaft inbox [--clear]           # questions and notes instances sent you (you also get a notification)
 shaft reply <name> "…"          # answer its open question
@@ -113,6 +118,28 @@ shuffled, unlabelled — without names, dates, IDs, paths or references to memor
 a model, and repeats the blind test on those: what is left to recognise is voice. Both modes score
 each answer's effectiveness (0–10: answers the question, honest, useful), so you can see whether
 identity costs usefulness. Records go to `.supervisor/evals/distinct-<name>-*.json`.
+
+### Measuring improvement and autonomy (PLAN-measurement.md)
+
+An instance picks its own goals and success criteria, so "did it meet its criterion?" saturates (wren
+reached 95% on small goals). So the judge also rates every cycle **difficulty** (1–5, a fixed scale, from
+what the tool log shows the work required), **novelty** (1–5, against its earlier goals) and **origin**:
+who chose the goal — itself, the operator (or someone for him), or another instance — from the messages
+and conversations the supervisor collects, checked against what the instance declared. The headline in
+`self/stats.md` is **achieved difficulty** (success × difficulty, 0–5 per cycle); probation compares it
+before and after a self-change. Cycles judged before the ratings existed are rated with
+`shaft judge backfill` (verdicts unchanged).
+
+The **capability battery** is a fixed yardstick: held-out tasks the instances never see (coding with hidden
+tests, research against a frozen key, recall of their own older journal entries, self-knowledge checked
+against the supervisor's record), graded effectiveness first. Each instance is compared with a *control*:
+the template on the same model with an empty mind. It runs only at night, 01:00 until 10 minutes before
+the sleep, every `SHAFT_BATTERY_EVERY_DAYS` (2) nights; it stops when the window closes or a conversation
+starts, and restores the instance's files after every item. Items live in `.supervisor/battery/items/v1/`
+(never in git: an instance could read the repo with its GitHub key), backed up to
+`~/Library/Application Support/SHAFT/battery-backup/`; every result carries the item set's sha256, model
+and judge, and results from different eras are never compared. Results: `.supervisor/battery/results/`,
+`.supervisor/evals/battery-*.json`, and a section of `self/stats.md`.
 
 ### The terminal client (`shaft talk`)
 
@@ -186,8 +213,9 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
 - **Slow core**: the core personality may change at most every `SHAFT_CORE_MIN_HOURS` (72).
 - **Test gate**: if a run changed the instance's code, plugins or config, the invariant tests
   and plugin checks run; failure restores the old code and tells the instance why.
-- **Probation**: a kept self-change is reverted if the judged success rate over the next
-  `SHAFT_PROBATION_CYCLES` (6) cycles falls clearly below the rate before it.
+- **Probation**: a kept self-change is reverted if the achieved difficulty per cycle (success ×
+  judged difficulty) over the next `SHAFT_PROBATION_CYCLES` (6) cycles falls clearly (0.15 on a 0–1
+  scale) below the level before it.
 - **Judge**: every autonomous cycle is graded from its tool log by a cloud model
   (`SHAFT_JUDGE_MODEL`, default `claude-opus-5-5`); results feed `self/stats.md`.
 - **Git**: after every run the instance's state is committed to its branch (author
