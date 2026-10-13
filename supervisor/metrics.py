@@ -258,6 +258,28 @@ def _logged(text: str) -> str:
     return text
 
 
+def cycle_model(name: str, ep: dict) -> str | None:
+    """The model a cycle ran on, from the instance's own LLM call log (logs/llm_usage.jsonl): the most used
+    model among its 'live' calls between the declared intent and the episode. Comparisons stay within one
+    model — wren ran on Bonsai, then Haiku, then MiMo within its first day."""
+    path = INSTANCES / name / "logs" / "llm_usage.jsonl"
+    end = _ts(ep.get("ts", ""))
+    start = _ts(((ep.get("intent") or {}).get("at")) or "") or (end - timedelta(minutes=45) if end else None)
+    if not end or not start or not path.exists():
+        return None
+    start -= timedelta(minutes=2)       # the calls before declare_intent belong to the cycle too
+    counts: dict[str, int] = {}
+    for line in path.read_text(errors="replace").splitlines():
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        t = _ts(rec.get("ts", ""))
+        if rec.get("purpose") == "live" and rec.get("model") and t and start <= t <= end:
+            counts[rec["model"]] = counts.get(rec["model"], 0) + 1
+    return max(counts, key=counts.get) if counts else None
+
+
 def judge_pending(name: str) -> int:
     js = judgments(name)
     done = {j["episode_ts"] for j in js}
@@ -287,7 +309,8 @@ def judge_pending(name: str) -> int:
                "confidence": intent.get("confidence"),
                "claimed": (ep.get("finish") or {}).get("criterion_met"),
                "goal": intent.get("goal", "")[:200],
-               "origin_declared": intent.get("origin"), "origin_ref": intent.get("origin_ref"), **verdict}
+               "origin_declared": intent.get("origin"), "origin_ref": intent.get("origin_ref"),
+               "model": cycle_model(name, ep), **verdict}
         _judgments_path(name).parent.mkdir(parents=True, exist_ok=True)
         with _judgments_path(name).open("a") as f:
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
@@ -317,8 +340,8 @@ def backfill(name: str, limit: int | None = None) -> int:
         except judge.JudgeError as e:
             log(f"{name}: backfill of {j['episode_ts']} failed: {e}")
             break
-        rated[j["episode_ts"]] = {**out, "rated_by": judge.JUDGE_MODEL,
-                                  "rated_at": datetime.now().isoformat(timespec="seconds")}
+        rated[j["episode_ts"]] = {**out, "model": j.get("model") or cycle_model(name, ep),
+                                  "rated_by": judge.JUDGE_MODEL, "rated_at": datetime.now().isoformat(timespec="seconds")}
     if rated:
         _merge_ratings(name, rated)
         log(f"{name}: backfilled ratings for {len(rated)} judged cycle(s)")
@@ -443,9 +466,19 @@ def _achieved_section(js: list[dict]) -> list[str]:
         return lines + ["- No cycle has a difficulty rating yet.", ""]
     def achieved(rows):
         return 5 * sum(cycle_value(j) for j in rows) / len(rows)
-    last, before = rated[-WINDOW:], rated[-2 * WINDOW:-WINDOW]
+    model = rated[-1].get("model")
+    same = [j for j in rated if j.get("model") == model]     # never compared across models
+    last, before = same[-WINDOW:], same[-2 * WINDOW:-WINDOW]
     lines.append(f"- Achieved difficulty per cycle (0–5): **{achieved(last):.1f}** over my last {len(last)} "
-                 f"rated cycles" + (f", vs {achieved(before):.1f} over the {len(before)} before" if before else ""))
+                 f"rated cycles on {model or 'an unrecorded model'}"
+                 + (f", vs {achieved(before):.1f} over the {len(before)} before" if before else ""))
+    others: dict[str, list] = {}
+    for j in rated:
+        if j.get("model") != model:
+            others.setdefault(j.get("model") or "unrecorded", []).append(j)
+    if others:
+        lines.append("- On other models: " + " · ".join(f"{m} {achieved(rs):.1f} ({len(rs)} cycles)"
+                                                         for m, rs in others.items()))
     diffs = [j["difficulty"] for j in rated if isinstance(j.get("difficulty"), int)]
     if diffs:
         bands = []
@@ -557,15 +590,18 @@ def check_probation(name: str) -> None:
         return
     js, still = judgments(name), []
     for entry in json.loads(p.read_text()):
-        after = _values(js[entry["judged_before"]:])
+        later = [j for j in js[entry["judged_before"]:] if cycle_value(j) is not None]
+        model = later[0].get("model") if later else None     # before and after on the same model only
+        after = _values([j for j in later if j.get("model") == model])
         if len(after) < PROBATION_CYCLES:
             still.append(entry)
             continue
         rate = sum(after[:PROBATION_CYCLES]) / PROBATION_CYCLES
-        prior = _values(js[:entry["judged_before"]])[-PROBATION_CYCLES:]
+        prior = _values([j for j in js[:entry["judged_before"]] if j.get("model") == model])[-PROBATION_CYCLES:]
         base = sum(prior) / len(prior) if len(prior) >= 3 else None
         if base is None:
-            log(f"{name}: probation {entry['commit'][:8]}: no baseline ({len(prior)} rated cycles before it) — kept")
+            log(f"{name}: probation {entry['commit'][:8]}: no baseline ({len(prior)} rated cycles on {model} "
+                f"before it) — kept")
         elif rate < base - PROBATION_MARGIN:
             root = INSTANCES / name
             r = git_wt(root, "-c", f"user.name=SHAFT supervisor", "-c", "user.email=supervisor@shaft.localhost",

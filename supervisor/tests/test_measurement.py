@@ -123,6 +123,28 @@ class JudgingTest(InstanceDirCase):
         self.assertIn("matched the judge: 4/5", text)
 
 
+class ModelTest(InstanceDirCase):
+    """Comparisons stay within one model: wren ran on Bonsai, Haiku and MiMo within its first day."""
+
+    def test_a_cycle_gets_the_model_of_its_live_calls(self):
+        (self.root / "logs").mkdir()
+        calls = [("2026-10-13T12:00:30", "live", "bonsai"), ("2026-10-13T12:01:00", "live", "mimo"),
+                 ("2026-10-13T12:02:00", "live", "mimo"), ("2026-10-13T12:02:30", "talk", "haiku"),
+                 ("2026-10-13T13:00:00", "live", "haiku")]
+        (self.root / "logs" / "llm_usage.jsonl").write_text(
+            "".join(json.dumps({"ts": t, "purpose": pu, "model": m}) + "\n" for t, pu, m in calls))
+        ep = {"ts": "2026-10-13T12:03:00", "intent": {"at": "2026-10-13T12:01:00"}}
+        self.assertEqual(metrics.cycle_model("m", ep), "mimo")
+
+    def test_the_headline_is_on_the_current_model_only(self):
+        js = ([judgment(f"2026-10-13T0{i}:00:00", "yes", 5, model="haiku") for i in range(3)]
+              + [judgment(f"2026-10-13T1{i}:00:00", "yes", 1, model="mimo") for i in range(2)])
+        with mock.patch.object(metrics, "judgments", return_value=js):
+            text = metrics.stats_text("m")
+        self.assertIn("**1.0** over my last 2 rated cycles on mimo", text)
+        self.assertIn("On other models: haiku 5.0 (3 cycles)", text)
+
+
 class ProbationMeasureTest(unittest.TestCase):
     """The probation tests in test_supervision.py pin the revert mechanics; these pin what it measures."""
 
@@ -153,6 +175,11 @@ class ProbationMeasureTest(unittest.TestCase):
         n = metrics.PROBATION_CYCLES
         self.assertFalse(self.check([judgment(f"b{i}", "yes", 1) for i in range(n)],
                                     [judgment(f"a{i}", "partial", 4) for i in range(n)]))
+
+    def test_a_model_change_is_not_read_as_a_regression(self):
+        n = metrics.PROBATION_CYCLES
+        self.assertFalse(self.check([judgment(f"b{i}", "yes", 4, model="haiku") for i in range(n)],
+                                    [judgment(f"a{i}", "yes", 1, model="bonsai") for i in range(n)]))
 
     def test_without_rated_cycles_before_it_nothing_is_reverted(self):
         n = metrics.PROBATION_CYCLES
