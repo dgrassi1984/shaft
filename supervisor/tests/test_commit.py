@@ -262,8 +262,10 @@ class UpdateKeepsUncommittedWorkTest(UpdateCase):
     def setUp(self):
         super().setUp()
         (self.root / "config.env").write_text("WAKE_INTERVAL_MINUTES=120\n")
-        git(self.root, "add", "config.env")
-        git(self.root, "commit", "-q", "-m", "x: config")
+        (self.root / "notes").mkdir()
+        (self.root / "notes" / "todo.md").write_text("- one\n")
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "-m", "x: config and notes")
         (self.root / "config.env").write_text("WAKE_INTERVAL_MINUTES=10\n")      # the operator's uncommitted edit
 
     def failing_update(self, side_effect=None):
@@ -275,28 +277,42 @@ class UpdateKeepsUncommittedWorkTest(UpdateCase):
         self.gate.start()
         return code, out, run
 
-    def test_an_uncommitted_edit_survives_a_template_change_that_fails_the_gate(self):
+    def test_an_uncommitted_config_edit_survives_a_template_change_that_fails_the_gate(self):
         self.template_change("template: broken change")
-        head = git(self.root, "rev-parse", "HEAD")
         code, out, run = self.failing_update()
         self.assertEqual((self.root / "config.env").read_text(), "WAKE_INTERVAL_MINUTES=10\n", out)
         self.assertEqual(code, 1, out)
-        self.assertEqual(git(self.root, "rev-parse", "HEAD"), head)
+        self.assertIn("rolled back", out)
         self.assertEqual((self.root / "shaft" / "agent.py").read_text(), "v = 1\n")    # the merge never landed
+        # committed on its own as the operator's, exactly as a run commits it — and kept by the rollback
+        self.assertIn("config.env changed from outside the instance", git(self.root, "log", "-1", "--format=%s"))
+        self.assertEqual(git(self.root, "show", "HEAD:config.env"), "WAKE_INTERVAL_MINUTES=10\n")
+        self.assertEqual(git(self.root, "status", "--porcelain", "--untracked-files=no").strip(), "")
 
-    def test_update_refuses_and_names_the_uncommitted_files(self):
+    def test_an_uncommitted_config_edit_does_not_block_an_update(self):
         self.template_change("template: fine change")
+        code, out = self.update()
+        self.assertEqual(code, 0, out)
+        self.assertEqual((self.root / "shaft" / "agent.py").read_text(), "v = 'template: fine change'\n")
+        self.assertEqual(git(self.root, "show", "HEAD:config.env"), "WAKE_INTERVAL_MINUTES=10\n")
+
+    def test_update_refuses_and_names_other_uncommitted_files(self):
+        (self.root / "notes" / "todo.md").write_text("- one\n- two, not committed\n")
+        self.template_change("template: fine change")
+        before = git(self.root, "rev-parse", "HEAD")
         self.gate.stop()
         from unittest import mock
         with mock.patch.object(self.cli.gate, "run_tests", return_value=(True, "ok")) as run:
             code, out = self.update()
         self.gate.start()
         self.assertEqual(code, 1, out)
-        self.assertIn("config.env", out)
+        self.assertIn("notes/todo.md", out)
         self.assertIn("uncommitted", out)
         run.assert_not_called()                                    # nothing merged, nothing tested
+        self.assertNotEqual(git(self.root, "rev-parse", "HEAD"), before)          # only the config commit
+        self.assertIn("config.env changed from outside", git(self.root, "log", "-1", "--format=%s"))
         self.assertEqual((self.root / "shaft" / "agent.py").read_text(), "v = 1\n")
-        self.assertEqual((self.root / "config.env").read_text(), "WAKE_INTERVAL_MINUTES=10\n")
+        self.assertEqual((self.root / "notes" / "todo.md").read_text(), "- one\n- two, not committed\n")
 
     def test_untracked_files_do_not_block_an_update(self):
         # An untracked file can be lost by neither the merge (git refuses to overwrite it) nor the rollback.

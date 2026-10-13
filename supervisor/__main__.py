@@ -119,12 +119,15 @@ def cmd_update(names: list[str]) -> int:
     Never on uncommitted changes to tracked files: the gate would test code that is not committed, and
     the rollback of a failed merge must undo only the merge (wren and kant both had an uncommitted
     config.env while updates ran, 2026-10-13, and the old `reset --hard` would have discarded it).
+    An operator's config.env edit is first committed on its own, as a run would (between runs every
+    config.env change is the operator's); anything else uncommitted stops the update for the operator.
     Untracked files are safe: the merge refuses to overwrite one and the rollback never touches one."""
     worst = 0
     for name in names:
         root = instance_root(name)
         try:
             with run_lock(name, wait=False, kind="update"):
+                runner._commit_outside_config(name, root, [])
                 dirty = git_wt(root, "status", "--porcelain", "--untracked-files=no").stdout.rstrip()
                 if dirty:
                     print(f"{name}: uncommitted changes in its worktree, not updated — commit or discard them "
