@@ -22,6 +22,7 @@ FIELDS: dict[str, tuple[type, object]] = {
     "LLM_TIMEOUT_S": (int, 900),
     "MAX_TOKENS_REFLECT": (int, 16384),
     "MAX_TOKENS_TALK": (int, 8192),
+    "WAKE_INTERVAL_MINUTES": (int, 120),   # read by the supervisor's scheduler (floor 10; 0 = never)
     "LLM_CONTEXT_TOKENS": (int, 262144),   # the model's context window (Bonsai 2: 262,144), for the status bar
     "LLM_REASONING_EFFORT": (str, "medium"),   # local server: medium thinks as much as a request needs; xhigh to the cap
     "LLM_THINK_FOLLOWUP": (int, 1024),   # reasoning tokens after a tool result (local server; 0 = its own budget)
