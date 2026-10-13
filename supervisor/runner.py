@@ -175,10 +175,12 @@ def is_busy(name: str) -> bool:
 
 
 def _core(root: Path) -> str:
-    """The core personality's traits (bullet lines) — captions and placeholders don't count."""
+    """The core personality's traits (bullet lines) from every `## Core` block — captions and placeholders
+    don't count. All blocks, not the first: a second Core block (wren, 2026-10-13) held a core change the
+    pace rule had refused, out of the rule's sight."""
     p = root / "self" / "personality.md"
-    m = CORE_RE.search(p.read_text()) if p.exists() else None
-    return "\n".join(l.strip() for l in (m.group(1) if m else "").splitlines()
+    blocks = CORE_RE.findall(p.read_text()) if p.exists() else []
+    return "\n".join(l.strip() for block in blocks for l in block.splitlines()
                      if l.lstrip().startswith(("- ", "* ")))
 
 
@@ -209,8 +211,10 @@ def enforce_core(name: str, root: Path, before: str) -> str | None:
     if last and not _core_is_empty(before) and datetime.now() - last < timedelta(hours=CORE_MIN_HOURS):
         p = root / "self" / "personality.md"
         caption = "*(values and temperament — change rarely)*"
-        safe_write(root, "self/personality.md",
-                   CORE_RE.sub(lambda _: f"## Core\n{caption}\n\n{before}\n\n", p.read_text(), count=1))
+        restored = CORE_RE.sub(lambda _: f"## Core\n{caption}\n\n{before}\n\n", p.read_text(), count=1)
+        first = CORE_RE.search(restored)
+        tail = CORE_RE.sub("", restored[first.end():]) if first else ""   # no second Core block survives
+        safe_write(root, "self/personality.md", (restored[:first.end()] + tail if first else restored).rstrip() + "\n")
         wait = last + timedelta(hours=CORE_MIN_HOURS)
         return (f"I changed my core personality only {(datetime.now() - last).total_seconds() / 3600:.0f} h "
                 f"after the last core change; the core may change at most every {CORE_MIN_HOURS} h, so the "
