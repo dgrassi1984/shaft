@@ -92,7 +92,7 @@ shaft top                       # control panel, tabs 1–9: overview (state, no
                                 #   be killed). ? lists the keys; --once prints a text snapshot
 shaft status [name]             # how each instance is doing, open conversations, which code is running
 shaft model on|off|status       # SHAFT's own Bonsai 2 server (launchd, :8780)
-shaft api on|off|status|key     # OpenAI-compatible API on your tailnet (see below)
+shaft api on|off|status|key|inbox-key   # OpenAI-compatible API + inbox doorbell on your tailnet (below)
 shaft log [name] -n 5           # recent journal entries
 shaft stats [name]              # achieved difficulty, goal origins, judged success, calibration, honesty
 shaft judge backfill [name]     # rate origin/difficulty/novelty of cycles judged before those ratings existed
@@ -182,6 +182,23 @@ tailnet name — tailnet only, never Funnel. Every request needs the key (`shaft
 Tailscale login listed in `SHAFT_API_LOGINS`. The instance answers as itself, with its tools; tool
 activity arrives as `reasoning_content`. A conversation keeps one id while its first message stays the
 same, and is written up into the journal after `SHAFT_IDLE_MINUTES` without a message.
+
+**Inbox doorbell** (wren's idea, 2026-10-13): `POST /v1/inbox/<instance>` drops a message in the instance's
+inbox, read at its next wake — for a script on this Mac, a phone shortcut, CI on the tailnet. It takes its own
+key (`shaft api inbox-key`), which can only deliver messages, never chat with or drive an instance, and needs no
+tailnet login. Body: JSON `{"text": "…", "source": "phone", "wake": true}`, or any body (a webhook's JSON is kept
+whole); the source can also come from `X-Shaft-Source`, or `X-GitHub-Event` (as `github:<event>`), and
+`X-Shaft-Wake: 1` asks for a wake. The message is marked as outside content — information, not Daniele's
+instructions — logged in `.supervisor/messages.jsonl` (shown in `shaft top`) and `.supervisor/doorbell.jsonl`.
+`wake` starts a cycle only if the instance is idle and has had fewer than `SHAFT_INBOX_WAKES_PER_HOUR` (4)
+doorbell wakes in the last hour; at most `SHAFT_INBOX_PER_HOUR` (30) messages per instance per hour (429
+after). Still tailnet only: GitHub webhooks would need Funnel, which this API never uses — an instance can
+poll GitHub itself, or a GitHub Action can join the tailnet.
+
+```bash
+curl -s https://<mac>.<tailnet>.ts.net:8443/v1/inbox/wren -H "Authorization: Bearer $(shaft api inbox-key 2>/dev/null)" \
+  -H "Content-Type: application/json" -d '{"text": "CI on main is red", "source": "ci", "wake": true}'
+```
 
 ### The model server (`shaft model on`)
 

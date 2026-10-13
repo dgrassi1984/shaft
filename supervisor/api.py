@@ -2,6 +2,8 @@
 
   GET  /v1/models              each instance is a "model" (shaft, wren, …)
   POST /v1/chat/completions    stream or not; the instance answers as itself, with its tools
+  POST /v1/inbox/<instance>    the doorbell: drop a message in its inbox (read at its next wake), and
+                               optionally wake it now — for scripts, a phone shortcut, CI on the tailnet
 
 Each request is a normal sandboxed run (broker, run lock, gate, commit). The client's conversation
 is the dialogue; the instance's own identity and memory come first. A conversation (same instance,
@@ -12,6 +14,12 @@ show and others ignore.
 Security: the server listens on 127.0.0.1 only; `tailscale serve` exposes it to the tailnet (never
 Funnel). Every request needs the bearer key SHAFT_API_KEY from .env AND a Tailscale-User-Login
 header (set by `tailscale serve`) in SHAFT_API_LOGINS.
+
+The inbox doorbell has its own, narrower key, SHAFT_INBOX_KEY (`shaft api inbox-key`): it can only drop a
+message, never chat with or drive an instance, and it needs no tailnet login (a script on this Mac, a tagged CI
+node or a phone shortcut has none) — the server is still reachable only from this Mac and the tailnet. The chat
+key with an allowed login works too. Each message is marked as outside content (messages.deliver_external) and
+rate-limited per instance: SHAFT_INBOX_PER_HOUR messages, SHAFT_INBOX_WAKES_PER_HOUR wakes.
 """
 from __future__ import annotations
 
@@ -24,16 +32,20 @@ import secrets
 import select
 import signal
 import socket
+import sys
 import threading
 import time
 import uuid
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from .core import API_TALKS as TALKS, IDLE_MINUTES, instance_names, knob, log, secrets_env
+from .core import API_TALKS as TALKS, IDLE_MINUTES, SUP_DIR, instance_names, knob, log, secrets_env
 from .runner import busy_with, request_yield, run_agent, spawn_recover
 
 PORT, _ = knob("SHAFT_API_PORT", "8781", int)
+INBOX_PER_HOUR, _ = knob("SHAFT_INBOX_PER_HOUR", "30", int)
+INBOX_WAKES_PER_HOUR, _ = knob("SHAFT_INBOX_WAKES_PER_HOUR", "4", int)
+DOORBELL_LOG = "doorbell.jsonl"       # one line per accepted message: when, instance, source, wake outcome
 
 
 def allowed_logins() -> set[str]:
@@ -136,10 +148,73 @@ class Handler(BaseHTTPRequestHandler):
                 {"id": n, "object": "model", "created": 0, "owned_by": "shaft"} for n in instance_names()]})
         self._error(404, f"no route {self.path}")
 
+    def _inbox_authorised(self) -> bool:
+        """The inbox key alone, or the chat key with an allowed tailnet login."""
+        inbox_key = secrets_env().get("SHAFT_INBOX_KEY", "")
+        given = self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+        if inbox_key and given and secrets.compare_digest(given, inbox_key):
+            return True
+        return self._authorised()
+
+    def _inbox(self, name: str) -> None:
+        from . import messages
+        if name not in instance_names():
+            return self._error(404, f"no instance {name!r}; instances: {', '.join(instance_names())}")
+        raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        text, source, wake = raw.decode(errors="replace"), self.headers.get("X-Shaft-Source", ""), False
+        if (self.headers.get("Content-Type") or "").startswith("application/json"):
+            try:
+                body = json.loads(raw or b"{}")
+            except ValueError:
+                return self._error(400, "body is not valid JSON")
+            if isinstance(body, dict) and "text" in body:
+                text, source, wake = str(body["text"]), str(body.get("source") or source), bool(body.get("wake"))
+            else:                                   # any JSON payload (a webhook's): kept whole, readable
+                text = json.dumps(body, indent=1, ensure_ascii=False)
+        if not source and (event := self.headers.get("X-GitHub-Event")):
+            source = f"github:{event}"
+        source = (source or "outside").strip().lower()
+        wake = wake or self.headers.get("X-Shaft-Wake", "").lower() in ("1", "true", "yes")
+        recent = [m for m in messages.history() if m["to"] == name and m.get("kind") == "external"
+                  and m["ts"] >= datetime.fromtimestamp(time.time() - 3600).isoformat(timespec="seconds")]
+        if len(recent) >= INBOX_PER_HOUR:
+            return self._error(429, f"{name} got {len(recent)} outside messages in the last hour "
+                                    f"(SHAFT_INBOX_PER_HOUR={INBOX_PER_HOUR}); try later", "rate_limit_error")
+        try:
+            path = messages.deliver_external(name, text, source)
+        except ValueError as e:
+            return self._error(400, str(e))
+        woke = self._wake(name) if wake else "not asked to wake: read at its next scheduled wake"
+        with (SUP_DIR / DOORBELL_LOG).open("a") as f:
+            f.write(json.dumps({"ts": datetime.now().isoformat(timespec="seconds"), "instance": name,
+                                "source": source, "file": path.name, "wake": woke}) + "\n")
+        self._json(202, {"delivered": path.name, "instance": name, "source": source, "wake": woke})
+
+    def _wake(self, name: str) -> str:
+        from .autonomy import start_wake
+        since = datetime.fromtimestamp(time.time() - 3600).isoformat(timespec="seconds")
+        try:
+            rows = [json.loads(l) for l in (SUP_DIR / DOORBELL_LOG).read_text().splitlines() if l.strip()]
+        except (OSError, ValueError):
+            rows = []
+        woken = sum(1 for r in rows if r["instance"] == name and r["ts"] >= since and r["wake"].startswith("started"))
+        if woken >= INBOX_WAKES_PER_HOUR:
+            return (f"not woken: {woken} doorbell wakes in the last hour (SHAFT_INBOX_WAKES_PER_HOUR="
+                    f"{INBOX_WAKES_PER_HOUR}); read at its next scheduled wake")
+        try:
+            return start_wake(name)
+        except RuntimeError as e:
+            return f"not woken: {e}; read at its next wake"
+
     def do_POST(self):
+        route = self.path.rstrip("/")
+        if route.startswith("/v1/inbox/"):
+            if self._inbox_authorised():
+                self._inbox(route.removeprefix("/v1/inbox/"))
+            return
         if not self._authorised():
             return
-        if self.path.rstrip("/") != "/v1/chat/completions":
+        if route != "/v1/chat/completions":
             return self._error(404, f"no route {self.path}")
         try:
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
@@ -331,10 +406,23 @@ def command(action: str) -> int:
         key = secrets_env().get("SHAFT_API_KEY")
         print(key or "no key yet — run: shaft api on")
         return 0 if key else 1
+    if action == "inbox-key":
+        key = secrets_env().get("SHAFT_INBOX_KEY")
+        if not key:
+            key = "sk-shaft-inbox-" + secrets.token_urlsafe(32)
+            _set_secret("SHAFT_INBOX_KEY", key)
+            log("api: inbox key created")
+        print(key)
+        print(f"  POST {url().removesuffix('/v1')}/v1/inbox/<instance>   (Authorization: Bearer <this key>)\n"
+              f"  JSON {{\"text\": \"…\", \"source\": \"phone\", \"wake\": true}} or any body (a webhook's), "
+              f"source from X-Shaft-Source", file=sys.stderr)
+        return 0
     if action == "on":
         env = secrets_env()
         if not env.get("SHAFT_API_KEY"):
             _set_secret("SHAFT_API_KEY", "sk-shaft-" + secrets.token_urlsafe(32))
+        if not env.get("SHAFT_INBOX_KEY"):
+            _set_secret("SHAFT_INBOX_KEY", "sk-shaft-inbox-" + secrets.token_urlsafe(32))
         if not env.get("SHAFT_API_LOGINS"):
             st = json.loads(_tailscale("status", "--json").stdout or "{}")
             me = st.get("User", {}).get(str(st.get("Self", {}).get("UserID")), {}).get("LoginName")
@@ -361,4 +449,6 @@ def command(action: str) -> int:
     autonomy.service("api", "status")
     print(_tailscale("serve", "status").stdout.strip())
     print(f"endpoint: {url()}  ·  allowed: {', '.join(sorted(allowed_logins())) or '(none)'}")
+    print(f"inbox doorbell: {url()}/inbox/<instance>  ·  key: shaft api inbox-key  ·  "
+          f"{INBOX_PER_HOUR} messages and {INBOX_WAKES_PER_HOUR} wakes per instance per hour")
     return 0

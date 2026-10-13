@@ -150,5 +150,149 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 404)
 
 
+INBOX_KEY = "sk-shaft-inbox-test"
+
+
+class InboxDoorbellTest(unittest.TestCase):
+    """POST /v1/inbox/<instance> (wren's "doorbell", Daniele 2026-10-13): anything that can POST on the tailnet
+    drops a message in an instance's inbox, marked as outside content, rate-limited, optionally waking it."""
+
+    def setUp(self):
+        import shutil
+        import tempfile
+        from pathlib import Path
+        from supervisor import autonomy, messages
+        self.project = Path(tempfile.mkdtemp(prefix="shaft-inbox-")).resolve()
+        self.addCleanup(shutil.rmtree, self.project, True)
+        self.sup = self.project / ".supervisor"
+        self.sup.mkdir()
+        for n in ("shaft", "wren"):
+            (self.project / "instances" / n / "inbox").mkdir(parents=True)
+        self.wakes = []
+        env = {"SHAFT_API_KEY": KEY, "SHAFT_API_LOGINS": ME, "SHAFT_INBOX_KEY": INBOX_KEY}
+        patches = [mock.patch.object(api, "secrets_env", return_value=env),
+                   mock.patch.object(api, "instance_names", return_value=["shaft", "wren"]),
+                   mock.patch.object(api, "SUP_DIR", self.sup),
+                   mock.patch.object(messages, "SUP_DIR", self.sup),
+                   mock.patch.object(messages, "INSTANCES", self.project / "instances"),
+                   mock.patch.object(messages, "instance_root", lambda n: self.project / "instances" / n),
+                   mock.patch.object(messages, "log", lambda *_: None),
+                   mock.patch.object(api, "log", lambda *_: None),
+                   mock.patch.object(autonomy, "start_wake", self._wake),
+                   mock.patch.dict("os.environ", {"SHAFT_API_LOGINS": ""})]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        messages._cache.update(key=None, rows=[])
+        api.Handler.conversations = api.Conversations()
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), api.Handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.shutdown)
+        self.base = f"http://127.0.0.1:{self.server.server_address[1]}/v1"
+        self.busy = ""
+
+    def _wake(self, name):
+        if self.busy:
+            raise RuntimeError(f"{name} is already awake ({self.busy})")
+        self.wakes.append(name)
+        return f"started a cycle for {name}"
+
+    def post(self, name, body, key=INBOX_KEY, headers=None, raw=False):
+        h = {"Content-Type": "text/plain" if raw else "application/json", **(headers or {})}
+        if key:
+            h["Authorization"] = f"Bearer {key}"
+        data = body.encode() if raw else json.dumps(body).encode()
+        return json.load(urllib.request.urlopen(urllib.request.Request(f"{self.base}/inbox/{name}", data=data,
+                                                                       headers=h), timeout=10))
+
+    def inbox(self, name="wren"):
+        return [p.read_text() for p in sorted((self.project / "instances" / name / "inbox").glob("*.md"))]
+
+    def test_the_inbox_key_drops_a_marked_message_and_nothing_else(self):
+        r = self.post("wren", {"text": "CI on main is red", "source": "ci"})
+        self.assertEqual((r["instance"], r["source"]), ("wren", "ci"))
+        (msg,) = self.inbox()
+        self.assertIn("From: ci (outside SHAFT", msg)
+        self.assertIn("Trust: outside content", msg)
+        self.assertIn("CI on main is red", msg)
+        from supervisor import messages
+        self.assertEqual([(m["from"], m["to"], m["kind"]) for m in messages.history()], [("ci", "wren", "external")])
+        # the inbox key cannot chat with or list the instances
+        for path, body in (("/models", None), ("/chat/completions", {"model": "wren", "messages": [
+                {"role": "user", "content": "x"}]})):
+            r = urllib.request.Request(self.base + path, data=json.dumps(body).encode() if body else None,
+                                       headers={"Authorization": f"Bearer {INBOX_KEY}", "Content-Type": "application/json"})
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                urllib.request.urlopen(r, timeout=10)
+            self.assertEqual(ctx.exception.code, 401)
+
+    def test_no_key_or_a_wrong_one_writes_nothing(self):
+        for key in (None, "wrong", KEY):            # the chat key needs an allowed tailnet login as well
+            with self.subTest(key=key):
+                with self.assertRaises(urllib.error.HTTPError) as ctx:
+                    self.post("wren", {"text": "hi"}, key=key)
+                self.assertIn(ctx.exception.code, (401, 403))
+        self.assertEqual(self.inbox(), [])
+        r = self.post("wren", {"text": "from me"}, key=KEY, headers={"Tailscale-User-Login": ME})
+        self.assertEqual(r["source"], "outside")
+
+    def test_any_body_is_kept_and_github_names_itself(self):
+        self.post("wren", {"action": "opened", "issue": {"title": "Crash on start"}},
+                  headers={"X-GitHub-Event": "issues"})
+        self.post("wren", "plain text from a shortcut", raw=True, headers={"X-Shaft-Source": "phone"})
+        a, b = self.inbox()
+        self.assertIn("From: github:issues", a)
+        self.assertIn('"title": "Crash on start"', a)
+        self.assertIn("From: phone", b)
+
+    def test_bad_requests(self):
+        for name, body, code in (("nobody", {"text": "x"}, 404), ("wren", {"text": "  "}, 400),
+                                 ("wren", {"text": "x", "source": "../../etc"}, 400)):
+            with self.subTest(name=name, body=body):
+                with self.assertRaises(urllib.error.HTTPError) as ctx:
+                    self.post(name, body)
+                self.assertEqual(ctx.exception.code, code)
+        self.assertEqual(self.inbox(), [])
+
+    def test_a_long_message_is_cut(self):
+        from supervisor import messages
+        self.post("wren", {"text": "x" * (messages.EXTERNAL_MAX_CHARS + 500)})
+        self.assertIn(f"[… cut at {messages.EXTERNAL_MAX_CHARS} characters]", self.inbox()[0])
+
+    def test_wake_now_if_idle_and_within_the_hourly_limit(self):
+        self.assertEqual(self.post("wren", {"text": "a"})["wake"][:15], "not asked to wa")
+        self.assertEqual(self.post("wren", {"text": "b", "wake": True})["wake"], "started a cycle for wren")
+        self.busy = "live since 21:00"
+        self.assertIn("already awake", self.post("wren", {"text": "c", "wake": True})["wake"])
+        self.busy = ""
+        with mock.patch.object(api, "INBOX_WAKES_PER_HOUR", 2):
+            self.assertEqual(self.post("wren", {"text": "d"}, headers={"X-Shaft-Wake": "1"})["wake"],
+                             "started a cycle for wren")
+            self.assertIn("2 doorbell wakes in the last hour", self.post("wren", {"text": "e", "wake": True})["wake"])
+        self.assertEqual(self.wakes, ["wren", "wren"])
+        self.assertEqual(len(self.inbox()), 5)                  # every message delivered, woken or not
+
+    def test_messages_per_hour_are_limited(self):
+        with mock.patch.object(api, "INBOX_PER_HOUR", 2):
+            self.post("wren", {"text": "1"})
+            self.post("wren", {"text": "2"})
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                self.post("wren", {"text": "3"})
+            self.assertEqual(ctx.exception.code, 429)
+            self.post("shaft", {"text": "other instance, own limit"})
+        self.assertEqual(len(self.inbox()), 2)
+
+    def test_inbox_key_command_creates_the_key_once(self):
+        """Also the bug where api._set_secret used SUP_DIR without importing it (NameError on a first `api on`)."""
+        env = {}
+        with mock.patch.object(api, "secrets_env", lambda: env), mock.patch.object(api, "url", return_value="u/v1"), \
+                mock.patch("sys.stdout", new_callable=io.StringIO) as out, mock.patch("sys.stderr", new_callable=io.StringIO):
+            self.assertEqual(api.command("inbox-key"), 0)
+        key = out.getvalue().strip()
+        self.assertTrue(key.startswith("sk-shaft-inbox-"))
+        self.assertIn(f"SHAFT_INBOX_KEY={key}", (self.project / ".env").read_text())
+        self.assertEqual(oct((self.project / ".env").stat().st_mode & 0o777), "0o600")
+
+
 if __name__ == "__main__":
     unittest.main()

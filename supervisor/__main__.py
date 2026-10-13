@@ -476,7 +476,7 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("wake", help="one scheduled wake of an instance (run by the scheduler; skipped if awake)")
     p.add_argument("name")
     p = sub.add_parser("api", help="OpenAI-compatible API for the instances, on your tailnet")
-    p.add_argument("action", choices=["on", "off", "status", "key", "serve"])
+    p.add_argument("action", choices=["on", "off", "status", "key", "inbox-key", "serve"])
     p = sub.add_parser("model", help="SHAFT's own Bonsai 2 model server (launchd service)")
     p.add_argument("action", choices=["on", "off", "status"])
     p = sub.add_parser("embed", help="SHAFT's embedding service for memory search (launchd service)")
