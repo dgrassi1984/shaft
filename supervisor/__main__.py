@@ -353,6 +353,17 @@ def run_many(kind: str, names: list[str], every: bool) -> int:
 def cmd_battery(args) -> int:
     from . import battery
     names = args.names or instance_names()
+    if args.action in ("off", "on"):
+        for name in args.names or sys.exit("shaft battery off|on needs instance names"):
+            instance_root(name)
+            if args.action == "off":
+                battery.off_path(name).parent.mkdir(parents=True, exist_ok=True)
+                battery.off_path(name).write_text(datetime.now().isoformat(timespec="seconds") + "\n")
+            else:
+                battery.off_path(name).unlink(missing_ok=True)
+            log(f"battery {args.action} for {name} by operator")
+            print(f"{name}: battery {args.action}")
+        return 0
     if args.action == "backup":
         print(f"item set backed up to {battery.backup()} · " + ", ".join(f"{n} {battery.checksum(n)[:12]}" for n in names))
         return 0
@@ -364,6 +375,8 @@ def cmd_battery(args) -> int:
         elif args.action == "recall":
             path = battery.make_recall(name, force=args.force)
             print(f"{name}: {path or 'not enough old journal entries yet (see supervisor.log)'}")
+        elif battery.is_off(name):
+            print(f"{name}: battery off (`shaft battery on {name}` turns it on)")
         else:
             until = None
             if args.until:
@@ -482,8 +495,8 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("judge", help="judging: 'backfill' rates origin/difficulty/novelty of cycles judged before")
     p.add_argument("action", choices=["backfill"])
     p.add_argument("names", nargs="*")
-    p = sub.add_parser("battery", help="the capability battery: run, report, recall (questions), backup")
-    p.add_argument("action", choices=["run", "report", "recall", "backup"])
+    p = sub.add_parser("battery", help="the capability battery: run, report, recall (questions), backup, off|on per instance")
+    p.add_argument("action", choices=["run", "report", "recall", "backup", "off", "on"])
     p.add_argument("names", nargs="*")
     p.add_argument("--until", default="", help="run: stop at this time (HH:MM), like the night window")
     p.add_argument("--only", default="", help="run: only these categories (comma-separated)")

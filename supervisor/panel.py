@@ -263,7 +263,8 @@ def battery_status(name: str) -> dict:
     rows = battery.results(name) if installed or battery.results_path(name).exists() else []
     now = datetime.now()
     start, end = battery.window(now)
-    return {"installed": installed, "results": rows[-30:][::-1], "due": installed and battery.due(name, now),
+    return {"installed": installed, "off": battery.is_off(name), "results": rows[-30:][::-1],
+            "due": installed and battery.due(name, now),
             "window": f"{start:%H:%M}–{end:%H:%M}", "every_days": battery.EVERY_DAYS,
             "lines": battery.stats_lines(name) if rows else []}
 
@@ -325,9 +326,17 @@ def scheduled_runs() -> list[str]:
         b = busy_with(name) or ""
         if b.split()[:1] and b.split()[0] in ("live", "sleep", "battery"):
             out.append(f"{name} ({b})")
-    r = subprocess.run(["pgrep", "-f", "supervisor (trial work|battery run)"], capture_output=True, text=True)
-    if r.stdout.strip():
-        out.append("trial or battery worker")
+    # Only workers in the scheduler's own process group: a battery or trial started by hand from a terminal
+    # survives a restart, and flagging it blocked the restart for nothing.
+    sched = subprocess.run(["pgrep", "-f", "supervisor autonomy serve"], capture_output=True, text=True).stdout.split()
+    pgids = {subprocess.run(["ps", "-o", "pgid=", "-p", pid], capture_output=True, text=True).stdout.strip()
+             for pid in sched} - {""}
+    for pgid in pgids:
+        r = subprocess.run(["pgrep", "-g", pgid, "-f", "supervisor (trial work|battery run)"], capture_output=True,
+                           text=True)
+        if r.stdout.strip():
+            out.append("trial or battery worker")
+            break
     return out
 
 

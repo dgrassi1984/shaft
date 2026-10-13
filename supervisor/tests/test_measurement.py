@@ -380,6 +380,41 @@ class BatteryScheduleTest(unittest.TestCase):
             self.assertFalse(battery.due("wren", datetime(2026, 10, 15, 2, 0)))     # one night later
             self.assertTrue(battery.due("wren", datetime(2026, 10, 16, 2, 0)))      # two nights later
 
+    def test_default_cadence_is_every_five_nights(self):
+        # Daniele, 2026-10-13: "set it to run every 5 nights" (was 2).
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("SHAFT_BATTERY_EVERY_DAYS", None)
+            self.assertEqual(battery.knob("SHAFT_BATTERY_EVERY_DAYS", "5", int)[0], 5)
+        self.assertEqual(battery.EVERY_DAYS, 5)
+
+    def test_an_instance_turned_off_is_never_due_and_never_run(self):
+        # "Kant no battery": kant is on Opus, about $15 a run. Neither the scheduler nor a manual run touches it.
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(battery, "SUP_DIR", Path(tmp)), \
+             mock.patch.object(battery, "EVERY_DAYS", 5), mock.patch.object(battery, "log") as log:
+            (Path(tmp) / "battery" / "items" / battery.VERSION).mkdir(parents=True)
+            battery.off_path("kant").write_text("x")
+            self.assertFalse(battery.due("kant", datetime(2026, 10, 14, 1, 0)))
+            self.assertTrue(battery.due("wren", datetime(2026, 10, 14, 1, 0)))
+            with mock.patch.object(battery, "instance_root", side_effect=AssertionError("ran an off instance")):
+                self.assertEqual(battery.run("kant", control_only=True), 0)
+                self.assertEqual(battery.run("kant"), 0)
+            self.assertIn("battery is off", log.call_args.args[0])
+
+    def test_missing_items_are_logged_once_a_night_not_skipped_in_silence(self):
+        # The bug: with no items installed, due() returned False every poll and nothing said why — the battery
+        # never ran and the only trace was "not installed" in the control panel.
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(battery, "SUP_DIR", Path(tmp)), \
+             mock.patch.object(battery, "EVERY_DAYS", 5), mock.patch.object(battery, "log") as log, \
+             mock.patch.dict(battery._missing_logged, clear=True):
+            self.assertFalse(battery.due("wren", datetime(2026, 10, 13, 23, 0)))   # outside the window: quiet
+            log.assert_not_called()
+            for minute in (0, 1, 30):
+                self.assertFalse(battery.due("wren", datetime(2026, 10, 14, 1, minute)))
+            self.assertEqual(log.call_count, 1)
+            self.assertIn("not installed", log.call_args.args[0])
+            battery.due("wren", datetime(2026, 10, 15, 1, 0))                       # the next night says it again
+            self.assertEqual(log.call_count, 2)
+
 
 class BatteryResultsTest(unittest.TestCase):
     def test_order_runs_unrun_items_first_then_the_oldest(self):

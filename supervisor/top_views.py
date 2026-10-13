@@ -368,7 +368,10 @@ def render_benchmarks(snap, ui, width, height):
     lines: list[Text] = []
     b = panel.battery_status(name) if name else {"installed": False, "results": [], "lines": []}
     lines.append(Text(" Capability battery", style="bold underline"))
-    if not b["installed"]:
+    if b.get("off"):
+        lines.append(Text(f"   off for {name}: no battery runs, scheduled or by hand (`shaft battery on {name}`)",
+                          style="yellow"))
+    elif not b["installed"]:
         lines.append(Text("   not installed: no items in .supervisor/battery/ — the nightly run does nothing until they "
                           "are copied in (your decision, 2026-10-13)", style="yellow"))
     else:
@@ -705,7 +708,10 @@ def handle_view(ui, key: str, snap: dict, page_rows: int) -> None:
                 lambda: run_now(["trial", "run", name, "--aa", "--hypothesis", "A/A calibration (from shaft top)"]))
     elif tab == "benchmarks" and key == "b" and names:
         name = current(ui, snap)
-        if not panel.battery_status(name)["installed"]:
+        status = panel.battery_status(name)
+        if status.get("off"):
+            ui.say(f"the battery is off for {name} (shaft battery on {name})")
+        elif not status["installed"]:
             ui.say("the battery is not installed: no items in .supervisor/battery/")
         else:
             ask(ui, f"run the capability battery for {name} now? Its cost has no estimate yet (judge grading + the "

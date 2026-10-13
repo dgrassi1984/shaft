@@ -99,6 +99,7 @@ shaft judge backfill [name]     # rate origin/difficulty/novelty of cycles judge
 shaft battery run [name]        # the capability battery now (normally the scheduler runs it at night)
 shaft battery run <name> --control-only   # only the control: do the items discriminate?
 shaft battery report|recall|backup [name] # results and judge spend · freeze recall questions · back up items
+shaft battery off|on <name>      # no battery for this instance, scheduled or by hand (kant: off)
 
 shaft inbox [--clear]           # questions and notes instances sent you (you also get a notification)
 shaft reply <name> "…"          # answer its open question
@@ -146,7 +147,8 @@ The **capability battery** is a fixed yardstick: held-out tasks the instances ne
 tests, research against a frozen key, recall of their own older journal entries, self-knowledge checked
 against the supervisor's record), graded effectiveness first. Each instance is compared with a *control*:
 the template on the same model with an empty mind. It runs only at night, 01:00 until 10 minutes before
-the sleep, every `SHAFT_BATTERY_EVERY_DAYS` (2) nights; it stops when the window closes or a conversation
+the sleep, every `SHAFT_BATTERY_EVERY_DAYS` (5) nights, for every instance not turned off with
+`shaft battery off <name>` (kant is off: on Opus a run costs about $15); it stops when the window closes or a conversation
 starts, and restores the instance's files after every item. Items live in `.supervisor/battery/items/v1/`
 (never in git: an instance could read the repo with its GitHub key), backed up to
 `~/Library/Application Support/SHAFT/battery-backup/`; every result carries the item set's sha256, model
