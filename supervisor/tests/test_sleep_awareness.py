@@ -83,3 +83,23 @@ class FailedRunTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SleepEntryTest(unittest.TestCase):
+    def test_entry_has_one_heading_and_named_actions(self):
+        # Regressions from the first real sleeps (2026-10-13): shaft's entry began with its own heading
+        # under the journal's ("Sleep" then "Sleep cycle (first sleep)"); wren's long write_file showed no path.
+        import json
+        from supervisor.tests.fakellm import FakeLLM
+        fake = FakeLLM([{"tool_calls": [("write_file", {"path": "notes/long.md", "content": "y" * 3000})]},
+                        {"content": "## 2026-10-13 04:40 — Sleep cycle (first sleep)\n\nI consolidated."}])
+        self.addCleanup(fake.close)
+        root = Path(tempfile.mkdtemp(prefix="shaft-inst-"))
+        (root / "config.env").write_text(f'LLM_BASE_URL="{fake.url}"\nLLM_MODEL="m"\n')
+        r = subprocess.run([sys.executable, "-E", "-s", "-m", "shaft", "sleep"], cwd=TEMPLATE,
+                           env={"PATH": "/usr/bin:/bin", "SHAFT_ROOT": str(root)}, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        journal = (root / "memory" / "journal.md").read_text()
+        self.assertIn("— Sleep\n\nI consolidated.", journal)
+        self.assertNotIn("Sleep cycle (first sleep)", journal)
+        self.assertIn("write_file: notes/long.md", journal)
