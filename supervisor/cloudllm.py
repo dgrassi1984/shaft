@@ -1,10 +1,15 @@
-"""Cloud models for instances, through the broker — the instance never holds the key.
+"""Cloud models for instances, through the broker — the instance never holds a key.
 
 An instance whose config.env says LLM_BASE_URL="broker" sends OpenAI-style chat requests
-to its run's broker at /llm/v1/chat/completions. This module translates them to the Claude
-Messages API (raw HTTP, like the judge), and the reply back. Rules:
+to its run's broker at /llm/v1/chat/completions. Claude models are translated to the Claude
+Messages API (raw HTTP, like the judge), and the reply back. Models named "openrouter/<id>"
+(e.g. openrouter/xiaomi/mimo-v2.6-pro) go to OpenRouter, which speaks the OpenAI format. Rules:
 
-- Only models in SHAFT_CLOUD_MODELS (operator's choice; default claude-haiku-5-5) are allowed.
+- Only models in SHAFT_CLOUD_MODELS (operator's choice) are allowed.
+- OpenRouter requests are routed only to providers that neither collect nor retain data
+  (SHAFT_OPENROUTER_PROVIDER, default {"data_collection": "deny", "zdr": true,
+  "require_parameters": true}): an instance's prompt carries its whole memory, including what it
+  knows about Daniele. If no provider qualifies, the call fails and says so — no silent fallback.
 - Spending per instance per day is capped (SHAFT_CLOUD_DAILY_USD, default 2) and logged in
   .supervisor/cloud_usage.jsonl.
 - Assistant turns are resent exactly as the model produced them (thinking blocks included):
@@ -24,7 +29,11 @@ from datetime import date, datetime
 from .core import SUP_DIR, knob
 
 API = "https://api.anthropic.com/v1/messages"
-CLOUD_MODELS, _ = knob("SHAFT_CLOUD_MODELS", "claude-haiku-5-5", lambda s: [m.strip() for m in s.split(",") if m.strip()])
+OPENROUTER_API = "https://openrouter.ai/api/v1/chat/completions"
+CLOUD_MODELS, _ = knob("SHAFT_CLOUD_MODELS", "claude-haiku-5-5,openrouter/xiaomi/mimo-v2.6-pro",
+                       lambda s: [m.strip() for m in s.split(",") if m.strip()])
+OPENROUTER_PROVIDER, _ = knob("SHAFT_OPENROUTER_PROVIDER",
+                              '{"data_collection": "deny", "zdr": true, "require_parameters": true}', json.loads)
 DAILY_USD, _ = knob("SHAFT_CLOUD_DAILY_USD", "2", float)
 # $ per million tokens (input, output) — prompts ≤ 100K tokens; from the Claude API price table.
 PRICES = {"claude-haiku-5-5": (0.10, 0.50), "claude-sonnet-5-5": (2.0, 10.0), "claude-opus-5-5": (4.0, 20.0)}
@@ -115,40 +124,28 @@ def from_anthropic(data: dict) -> dict:
             "usage": {"prompt_tokens": usage.get("input_tokens"), "completion_tokens": usage.get("output_tokens")}}
 
 
-def complete(instance: str, body: dict, key: str, remembered: dict[str, list]) -> dict:
+def complete(instance: str, body: dict, secrets: dict, remembered: dict[str, list]) -> dict:
     model = body.get("model")
     if model not in CLOUD_MODELS:
         raise CloudError(403, f"model {model!r} is not allowed for instances (SHAFT_CLOUD_MODELS={CLOUD_MODELS})")
-    if not key:
-        raise CloudError(503, "no ANTHROPIC_API_KEY in the supervisor's .env")
     spent = spent_today(instance)
     if spent >= DAILY_USD:
         raise CloudError(429, f"{instance} spent ${spent:.2f} on cloud models today (cap ${DAILY_USD:.2f})")
+    if model.startswith("openrouter/"):
+        return _openrouter(instance, body, secrets.get("OPENROUTER_API_KEY", ""))
+    key = secrets.get("ANTHROPIC_API_KEY", "")
+    if not key:
+        raise CloudError(503, "no ANTHROPIC_API_KEY in the supervisor's .env")
     req_body = to_anthropic(body, remembered)
     req = urllib.request.Request(API, data=json.dumps(req_body).encode(), headers={
         "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01"})
-    started, data, error = time.monotonic(), None, None
-    for wait in (0, 10, 30):
-        time.sleep(wait)
-        try:
-            with urllib.request.urlopen(req, timeout=600) as resp:
-                data = json.load(resp)
-            break
-        except urllib.error.HTTPError as e:
-            error = f"HTTP {e.code}: {e.read().decode(errors='replace')[:400]}"
-            if e.code not in (429, 500, 502, 503, 504, 529):
-                break
-        except (urllib.error.URLError, OSError) as e:
-            error = f"network: {e}"
+    started = time.monotonic()
+    data, error = _send(req)
     usage = (data or {}).get("usage") or {}
     pin, pout = PRICES.get(model, (0, 0))
     usd = ((usage.get("input_tokens") or 0) * pin + (usage.get("output_tokens") or 0) * pout) / 1e6
-    USAGE.parent.mkdir(parents=True, exist_ok=True)
-    with USAGE.open("a") as f:
-        f.write(json.dumps({"ts": datetime.now().isoformat(timespec="seconds"), "instance": instance, "model": model,
-                            "input_tokens": usage.get("input_tokens"), "output_tokens": usage.get("output_tokens"),
-                            "usd": round(usd, 6), "seconds": round(time.monotonic() - started, 1),
-                            "stop_reason": (data or {}).get("stop_reason"), "error": None if data else error}) + "\n")
+    _record(instance, model, usage.get("input_tokens"), usage.get("output_tokens"), usd, started,
+            (data or {}).get("stop_reason"), None if data else error)
     if data is None:
         raise CloudError(502, f"cloud model call failed: {error}")
     if data.get("stop_reason") == "refusal":
@@ -159,10 +156,71 @@ def complete(instance: str, body: dict, key: str, remembered: dict[str, list]) -
     return out
 
 
+def _record(instance: str, model: str, tokens_in, tokens_out, usd: float, started: float, stop, error) -> None:
+    USAGE.parent.mkdir(parents=True, exist_ok=True)
+    with USAGE.open("a") as f:
+        f.write(json.dumps({"ts": datetime.now().isoformat(timespec="seconds"), "instance": instance, "model": model,
+                            "input_tokens": tokens_in, "output_tokens": tokens_out, "usd": round(usd, 6),
+                            "seconds": round(time.monotonic() - started, 1), "stop_reason": stop,
+                            "error": error}) + "\n")
+
+
+def _send(req: urllib.request.Request) -> tuple[dict | None, str | None]:
+    """POST with retries on overload and network errors; (data, None) or (None, error)."""
+    error = None
+    for wait in (0, 10, 30):
+        time.sleep(wait)
+        try:
+            with urllib.request.urlopen(req, timeout=600) as resp:
+                return json.load(resp), None
+        except urllib.error.HTTPError as e:
+            error = f"HTTP {e.code}: {e.read().decode(errors='replace')[:400]}"
+            if e.code not in (429, 500, 502, 503, 504, 529):
+                break
+        except (urllib.error.URLError, OSError) as e:
+            error = f"network: {e}"
+    return None, error
+
+
+def _openrouter(instance: str, body: dict, key: str) -> dict:
+    """An OpenAI-format request to OpenRouter, routed by the data policy; cost from its own usage.cost."""
+    if not key:
+        raise CloudError(503, "no OPENROUTER_API_KEY in the supervisor's .env")
+    model = body["model"]
+    req_body = {k: v for k, v in body.items() if k not in ("stream", "stream_options", "chat_template_kwargs")}
+    req_body["model"] = model.removeprefix("openrouter/")
+    req_body["provider"] = OPENROUTER_PROVIDER
+    req = urllib.request.Request(OPENROUTER_API, data=json.dumps(req_body).encode(), headers={
+        "content-type": "application/json", "authorization": f"Bearer {key}",
+        "x-title": "SHAFT", "http-referer": "https://github.com/dgrassi1984/shaft"})
+    started = time.monotonic()
+    data, error = _send(req)
+    if data is not None and not data.get("choices"):   # OpenRouter can answer 200 with an error object
+        error, data = f"no reply: {json.dumps(data.get('error') or data)[:400]}", None
+    usage = (data or {}).get("usage") or {}
+    _record(instance, model, usage.get("prompt_tokens"), usage.get("completion_tokens"), float(usage.get("cost") or 0),
+            started, ((data or {}).get("choices") or [{}])[0].get("finish_reason"), error)
+    if data is None:
+        hint = (f" — the data policy allows only providers that neither collect nor retain data "
+                f"(SHAFT_OPENROUTER_PROVIDER={json.dumps(OPENROUTER_PROVIDER)})") if "provider" in (error or "").lower() \
+            or "endpoint" in (error or "").lower() else ""
+        raise CloudError(502, f"OpenRouter call for {model} failed: {error}{hint}")
+    message = data["choices"][0].get("message") or {}
+    for c in message.get("tool_calls") or []:
+        fn = c.get("function") or {}
+        if not isinstance(fn.get("arguments"), str):
+            fn["arguments"] = json.dumps(fn.get("arguments") or {}, ensure_ascii=False)
+    data["usage"] = {"prompt_tokens": usage.get("prompt_tokens"), "completion_tokens": usage.get("completion_tokens"),
+                     "cost": usage.get("cost")}
+    return data
+
+
 def as_sse(reply: dict) -> bytes:
     """A complete reply as an OpenAI-style stream, for clients that asked for one."""
     msg, choice = reply["choices"][0]["message"], reply["choices"][0]
     chunks = []
+    if msg.get("reasoning"):   # OpenRouter's reasoning text, so a thinking-aware client shows it
+        chunks.append({"choices": [{"index": 0, "delta": {"reasoning": msg["reasoning"]}, "finish_reason": None}]})
     if msg.get("content"):
         chunks.append({"choices": [{"index": 0, "delta": {"content": msg["content"]}, "finish_reason": None}]})
     for i, c in enumerate(msg.get("tool_calls", [])):

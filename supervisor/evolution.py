@@ -146,7 +146,7 @@ def _base_answer(root: Path, question: str) -> str:
         reply = cloudllm.complete(f"{root.name}-baseline", {
             "model": cfg["LLM_MODEL"], "max_tokens": 4000,
             "messages": [{"role": "user", "content": question + " (Answer in at most 150 words.)"}]},
-            secrets_env().get("ANTHROPIC_API_KEY", ""), {})
+            secrets_env(), {})
         return reply["choices"][0]["message"]["content"].strip()
     url = urllib.parse.urlsplit(cfg["LLM_BASE_URL"])
     # config.env is instance-editable: never let it aim the (unsandboxed) supervisor elsewhere.

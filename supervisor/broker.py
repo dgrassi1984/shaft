@@ -246,8 +246,7 @@ class Broker:
                 body: dict = {}
                 try:
                     body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
-                    reply = cloudllm.complete(broker.name, body, broker.secrets.get("ANTHROPIC_API_KEY", ""),
-                                              broker.remembered)
+                    reply = cloudllm.complete(broker.name, body, broker.secrets, broker.remembered)
                 except cloudllm.CloudError as e:
                     broker._log(f"{broker.name} llm {body.get('model', '?')} -> ERROR {e}")
                     return self._reply(e.status, {"error": {"message": str(e)}})

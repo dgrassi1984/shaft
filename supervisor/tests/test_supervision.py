@@ -122,11 +122,11 @@ class CloudTranslationTest(unittest.TestCase):
     def test_disallowed_model_and_budget_refused_before_any_call(self):
         from supervisor import cloudllm
         with self.assertRaises(cloudllm.CloudError) as ctx:
-            cloudllm.complete("x", {"model": "claude-opus-5-5", "messages": []}, "key", {})
+            cloudllm.complete("x", {"model": "claude-opus-5-5", "messages": []}, {"ANTHROPIC_API_KEY": "key"}, {})
         self.assertEqual(ctx.exception.status, 403)
         with mock.patch.object(cloudllm, "spent_today", return_value=cloudllm.DAILY_USD):
             with self.assertRaises(cloudllm.CloudError) as ctx:
-                cloudllm.complete("x", {"model": "claude-haiku-5-5", "messages": []}, "key", {})
+                cloudllm.complete("x", {"model": "claude-haiku-5-5", "messages": []}, {"ANTHROPIC_API_KEY": "key"}, {})
         self.assertEqual(ctx.exception.status, 429)
 
 
