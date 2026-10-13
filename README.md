@@ -28,10 +28,11 @@ Design, milestones and decisions: [PLAN.md](PLAN.md).
   `LLM_BASE_URL="broker"` + e.g. `LLM_MODEL="claude-haiku-5-5"` or
   `LLM_MODEL="openrouter/xiaomi/mimo-v2.6-pro"` for a cloud model through the supervisor (the instance
   never sees a key; allowed models `SHAFT_CLOUD_MODELS`, daily cap per instance `SHAFT_CLOUD_DAILY_USD`).
-  OpenRouter models need `OPENROUTER_API_KEY` in `.env` and are routed only to providers that neither
-  collect nor retain data (`SHAFT_OPENROUTER_PROVIDER`, default `{"data_collection": "deny", "zdr": true,
-  "require_parameters": true}`) — an instance's prompt carries its whole memory; if no provider
-  qualifies, the call fails and says so. Cost is OpenRouter's own `usage.cost`.
+  OpenRouter models need `OPENROUTER_API_KEY` in `.env` and go only to NovitaAI (Daniele's choice), with
+  no fallback, and only if it neither collects nor retains data (`SHAFT_OPENROUTER_PROVIDER`, default
+  `{"only": ["novita"], "allow_fallbacks": false, "data_collection": "deny", "zdr": true,
+  "require_parameters": true}`) — an instance's prompt carries its whole memory; if the provider does not
+  qualify, the call fails and says so. Cost is OpenRouter's own `usage.cost`.
 - Optional, in `.env` at the root (supervisor-only, never visible to instances):
   `SCRAPEBADGER_API_KEY` (web search), `ANTHROPIC_API_KEY` (the judge, Claude models),
   `OPENROUTER_API_KEY` (OpenRouter models).

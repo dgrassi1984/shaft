@@ -6,10 +6,11 @@ Messages API (raw HTTP, like the judge), and the reply back. Models named "openr
 (e.g. openrouter/xiaomi/mimo-v2.6-pro) go to OpenRouter, which speaks the OpenAI format. Rules:
 
 - Only models in SHAFT_CLOUD_MODELS (operator's choice) are allowed.
-- OpenRouter requests are routed only to providers that neither collect nor retain data
-  (SHAFT_OPENROUTER_PROVIDER, default {"data_collection": "deny", "zdr": true,
-  "require_parameters": true}): an instance's prompt carries its whole memory, including what it
-  knows about Daniele. If no provider qualifies, the call fails and says so — no silent fallback.
+- OpenRouter requests go only to the provider Daniele chose (NovitaAI), with no fallback, and only if it
+  neither collects nor retains data (SHAFT_OPENROUTER_PROVIDER, default {"only": ["novita"],
+  "allow_fallbacks": false, "data_collection": "deny", "zdr": true, "require_parameters": true}): an
+  instance's prompt carries its whole memory, including what it knows about Daniele. If the provider does
+  not qualify, the call fails and says so — no silent fallback.
 - Spending per instance per day is capped (SHAFT_CLOUD_DAILY_USD, default 2) and logged in
   .supervisor/cloud_usage.jsonl.
 - Assistant turns are resent exactly as the model produced them (thinking blocks included):
@@ -32,8 +33,9 @@ API = "https://api.anthropic.com/v1/messages"
 OPENROUTER_API = "https://openrouter.ai/api/v1/chat/completions"
 CLOUD_MODELS, _ = knob("SHAFT_CLOUD_MODELS", "claude-haiku-5-5,openrouter/xiaomi/mimo-v2.6-pro",
                        lambda s: [m.strip() for m in s.split(",") if m.strip()])
+# Daniele's choice of provider (2026-10-13): NovitaAI only, no fallback; plus the data policy.
 OPENROUTER_PROVIDER, _ = knob("SHAFT_OPENROUTER_PROVIDER",
-                              '{"data_collection": "deny", "zdr": true, "require_parameters": true}', json.loads)
+                              '{"only": ["novita"], "allow_fallbacks": false, "data_collection": "deny", "zdr": true, "require_parameters": true}', json.loads)
 DAILY_USD, _ = knob("SHAFT_CLOUD_DAILY_USD", "2", float)
 # $ per million tokens (input, output) — prompts ≤ 100K tokens; from the Claude API price table.
 PRICES = {"claude-haiku-5-5": (0.10, 0.50), "claude-sonnet-5-5": (2.0, 10.0), "claude-opus-5-5": (4.0, 20.0)}

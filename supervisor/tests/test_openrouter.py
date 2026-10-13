@@ -73,7 +73,8 @@ class OpenRouterTest(unittest.TestCase):
         out = cloudllm.complete("shaft", dict(self.BODY), {"OPENROUTER_API_KEY": "sk-or-test"}, {})
         sent = f.requests[0]
         self.assertEqual(sent["model"], "xiaomi/mimo-v2.6-pro")
-        self.assertEqual(sent["provider"], {"data_collection": "deny", "zdr": True, "require_parameters": True})
+        self.assertEqual(sent["provider"], {"only": ["novita"], "allow_fallbacks": False, "data_collection": "deny",
+                                            "zdr": True, "require_parameters": True})
         for local_only in ("stream", "stream_options", "chat_template_kwargs"):
             self.assertNotIn(local_only, sent)
         self.assertEqual(f.headers[0]["Authorization"], "Bearer sk-or-test")
