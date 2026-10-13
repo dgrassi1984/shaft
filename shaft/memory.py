@@ -3,7 +3,7 @@
 Two rankings fused (reciprocal rank fusion): BM25 over words, and the meaning of each chunk as a vector from
 SHAFT's local embedding service (SHAFT_EMBED_URL), so a memory written in other words — or in the other
 language — is still found. Vectors are cached per chunk in .tmp/memory-index.json and computed only for new
-chunks. Without the service, search is BM25 only and says so (semantic_error). Each hit carries its source
+chunks. Without the service, search is BM25 only. Every search_memory result says which it was (mode). Each hit carries its source
 (journal entry heading, file, or conversation timestamp) so I can cite it.
 """
 from __future__ import annotations
@@ -29,6 +29,7 @@ CHUNK = 900
 INDEX = Path(".tmp") / "memory-index.json"   # derived from my memory; rebuilt if missing
 RRF_K = 60                                    # reciprocal rank fusion constant (the usual 60)
 semantic_error = ""                           # why the last search was words-only, if it was
+mode = ""                                     # how the last search ranked: "words + meaning", "words only: <why>"
 
 
 @dataclass
@@ -166,6 +167,8 @@ def _semantic(root: Path, docs: list[tuple[str, str]], query: str, top: int) -> 
 
 
 def search(root: Path, query: str, k: int = 5) -> list[Hit]:
+    global mode
+    mode = ""                                 # nothing searched: no claim either way
     root = Path(root)
     docs = corpus(root)
     if not docs or not query.strip():
@@ -174,6 +177,7 @@ def search(root: Path, query: str, k: int = 5) -> list[Hit]:
     for ranking in (_bm25(docs, query)[:50], _semantic(root, docs, query, 50)):
         for rank, i in enumerate(ranking):
             fused[i] = fused.get(i, 0.0) + 1 / (RRF_K + rank + 1)
+    mode = f"words only: semantic search is unavailable — {semantic_error}" if semantic_error else "words + meaning"
     best = sorted(fused.items(), key=lambda kv: -kv[1])[:k]
     return [Hit(docs[i][0], docs[i][1][:1200], round(score * 1000, 2)) for i, score in best]
 

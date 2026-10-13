@@ -228,8 +228,9 @@ class Toolbox:
 
     def _t_search_memory(self, query: str, k: int = 5) -> str:
         hits = memory.search(self.root, query, k=k)
-        note = (f"(words only: semantic search is unavailable — {memory.semantic_error})\n\n"
-                if memory.semantic_error else "")
+        # Say how it searched every time, not only when meaning search fails: when it worked and said nothing, I
+        # used it daily and still wrote in my self-model that I had "no embeddings".
+        note = f"(searched by {memory.mode})\n\n" if memory.mode else ""
         return note + ("\n\n".join(f"[{h.source}] {h.text}" for h in hits) or "nothing relevant found")
 
     def _t_remember(self, fact: str) -> str:
