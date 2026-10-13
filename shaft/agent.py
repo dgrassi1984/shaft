@@ -82,12 +82,14 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
     last_call, repeats = None, 0   # the previous tool call, and how many times in a row it came back unchanged
     while max_steps <= 0 or step < max_steps:
         if pausing.requested():   # Daniele opened a conversation: wait, then go on where I was
+            pausing.activity(keep=True, phase="paused")
             pausing.wait_while_paused()
         step += 1
         left = time_left()
         yielding = step > 1 and yield_requested()
         last = step == max_steps or yielding or (left is not None and left < WRAP_UP_RESERVE_S)
         mark = len(messages)
+        pausing.activity(keep=True, phase="thinking", step=step, purpose=purpose, tool=None, args=None)
         try:
             if last and wrap_up:
                 why = ("one turn: Daniele needs the model for a conversation" if yielding else
@@ -99,6 +101,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
         except pausing.Paused:   # the call was cut off for a conversation: redo this step afterwards
             del messages[mark:]
             step -= 1
+            pausing.activity(keep=True, phase="paused")
             pausing.wait_while_paused()
             continue
         turn = {"role": "assistant", "content": reply.content or ""}
@@ -129,6 +132,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
                 toolbox.log.append({"tool": c["name"], "args": c["arguments"][:2000], "result": "(repeat: not run)"})
                 continue
             last_call, repeats = call_key, 0
+            pausing.activity(keep=True, phase="tool", tool=c["name"], args=" ".join(c["arguments"].split())[:160])
             if on_tool_start:
                 on_tool_start(c["name"], c["arguments"])
             if c["name"] in controls:

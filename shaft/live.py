@@ -9,7 +9,7 @@ from __future__ import annotations
 import shutil
 from datetime import datetime
 
-from . import agent, memory, prompts
+from . import agent, memory, pausing, prompts
 from .agent import Control
 from .llm import Client
 from .state import State
@@ -49,6 +49,7 @@ def run(cfg, state: State, client: Client) -> str:
         conf = int(args.get("confidence", -1))
         if not args.get("goal") or not args.get("success_criterion") or not 0 <= conf <= 100:
             return "ERROR: need goal, success_criterion and confidence 0-100"
+        pausing.activity(keep=True, goal=str(args.get("goal", ""))[:300])
         record["intent"] = {"goal": args["goal"], "success_criterion": args["success_criterion"],
                             "confidence": conf, "at": datetime.now().isoformat(timespec="seconds")}
         return "intent recorded — now act"

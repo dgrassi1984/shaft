@@ -8,6 +8,7 @@ redo the step that was cut off. Only autonomous runs (cycle, sleep, reflection) 
 """
 from __future__ import annotations
 
+import json
 import os
 import signal
 import time
@@ -63,3 +64,20 @@ def wait_while_paused() -> None:
     finally:
         (tmp / "paused").unlink(missing_ok=True)
         _state["requested"] = False
+
+
+def activity(**fields) -> None:
+    """What I am doing right now, for the supervisor's live view (`shaft top`): .tmp/activity.json, replaced
+    at each step. Never fails the run."""
+    try:
+        tmp = _root() / ".tmp"
+        tmp.mkdir(parents=True, exist_ok=True)
+        path = tmp / "activity.json"
+        current = {}
+        if fields.pop("keep", False) and path.exists():
+            current = json.loads(path.read_text())
+        current.update(fields, ts=time.time(), pid=os.getpid())
+        (tmp / "activity.json.tmp").write_text(json.dumps(current, ensure_ascii=False))
+        os.replace(tmp / "activity.json.tmp", path)
+    except (OSError, ValueError):
+        pass
