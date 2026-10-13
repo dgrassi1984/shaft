@@ -25,7 +25,9 @@ def run(cfg, state: State, client: Client) -> str:
                                 "including what you did not get to.")
     changes = [_action(e) for e in toolbox.log if not e["result"].startswith("ERROR")]
     if outcome.ended_by != "answer":
-        summary = (f"I ran out of turns ({outcome.steps}) before writing my sleep entry. "
+        why = ("I got stuck repeating the same tool call" if outcome.ended_by == "repeating"
+               else f"I ran out of turns ({outcome.steps})")
+        summary = (f"{why} before writing my sleep entry. "
                    f"Tools that succeeded: {'; '.join(changes) or 'none'}.")
         state.append_journal("Sleep (unfinished)", summary)
         state.append_episode({"kind": "sleep", "ended_by": outcome.ended_by, "tools": toolbox.log})

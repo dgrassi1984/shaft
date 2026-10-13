@@ -27,6 +27,19 @@ class Outcome:
     transcript: list = field(default_factory=list)
 
 
+REPEAT_LIMIT = 2   # identical calls in a row that are refused before the reply is ended
+REPEATED = ("(not run again) You just called {name} with exactly these arguments, and its result is the one above "
+            "— running it again cannot change it. Use that result, or do something different.")
+REPEATED_STOP = "(stopped) The same call a third time in a row: this reply is ended so the loop does not go on."
+
+
+def _canonical(arguments: str) -> str:
+    try:
+        return json.dumps(json.loads(arguments or "{}"), sort_keys=True)
+    except ValueError:
+        return arguments or ""
+
+
 WRAP_UP_RESERVE_S = 900   # one heavy turn of a thinking model can take ~12 minutes
 
 
@@ -62,6 +75,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
     call = call or (lambda msgs, t=tools: client.complete(msgs, max_tokens, purpose, tools=t))
     reply = None
     step = 0
+    last_call, repeats = None, 0   # the previous tool call, and how many times in a row it came back unchanged
     while max_steps <= 0 or step < max_steps:
         step += 1
         left = time_left()
@@ -89,6 +103,19 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
             return Outcome(reply, "answer", step, toolbox.log)
         stop = False
         for c in reply.tool_calls:
+            call_key = (c["name"], _canonical(c["arguments"]))
+            if call_key == last_call:
+                # The same call again, straight after itself: its result cannot have changed. Once I copied my
+                # previous step whole, eleven times in a row (2026-10-13) — so it is not run again, and a third
+                # identical attempt ends the reply.
+                repeats += 1
+                if repeats >= REPEAT_LIMIT:
+                    messages.append({"role": "tool", "tool_call_id": c["id"], "content": REPEATED_STOP})
+                    return Outcome(reply, "repeating", step, toolbox.log)
+                messages.append({"role": "tool", "tool_call_id": c["id"], "content": REPEATED.format(name=c["name"])})
+                toolbox.log.append({"tool": c["name"], "args": c["arguments"][:2000], "result": "(repeat: not run)"})
+                continue
+            last_call, repeats = call_key, 0
             if on_tool_start:
                 on_tool_start(c["name"], c["arguments"])
             if c["name"] in controls:

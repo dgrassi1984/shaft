@@ -119,7 +119,9 @@ class TerminalView:
 
     def turn_end(self, steps: int, ended_by: str) -> None:
         self.ui.clear()
-        if ended_by != "answer":
+        if ended_by == "repeating":
+            self._out(f"\n{DIM}[stopped: the same tool call kept coming back unchanged]{RESET}")
+        elif ended_by != "answer":
             self._out(f"\n{DIM}[stopped after {steps} tool rounds without a final answer]{RESET}")
         self._out("\n\n")
         self.speaking, self.reasoning = False, 0
