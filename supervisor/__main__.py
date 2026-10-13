@@ -232,9 +232,12 @@ def cmd_status(names: list[str]) -> int:
         print(f"  versions    {version.describe(name)}")
         if tools_off:
             print(f"  tools off   {', '.join(sorted(tools_off))} (shaft tools {name} on <tool>)")
-        from .core import write_hosts
+        from .core import shared_folder, write_hosts
         if (hosts := write_hosts(name)):
             print(f"  may write   {', '.join(sorted(hosts))} (shaft hosts {name} deny <host>)")
+        if (folder := shared_folder(name)):
+            print(f"  may read    {folder}{'' if folder.is_dir() else ' (MISSING: left out of its runs)'} "
+                  f"(shaft share {name} off)")
         if entries:
             lines = entries[-1].splitlines()
             print("  latest:     " + lines[0].lstrip("# "))
@@ -307,6 +310,24 @@ def cmd_hosts(name: str, action: str | None, host: str | None) -> int:
     hosts = sorted(write_hosts(name))
     print(f"{name} may send POST/PUT/PATCH/DELETE to: {', '.join(hosts) if hosts else 'no host yet'} "
           f"(GET/HEAD: any public address)")
+    return 0
+
+
+def cmd_share(name: str, folder: str | None) -> int:
+    """The operator's folder an instance may read (read-only), seen by it as shared/."""
+    from .core import set_shared_folder, shared_folder
+    instance_root(name)
+    if folder:
+        try:
+            path = set_shared_folder(name, None if folder == "off" else folder)
+        except ValueError as e:
+            print(e, file=sys.stderr)
+            return 2
+        log(f"{name}: shared folder {'set to ' + str(path) if path else 'removed'} by the operator")
+    current = shared_folder(name)
+    print(f"{name} may read {current} as shared/ (read-only)" if current else f"{name} has no shared folder")
+    if folder:
+        print(f"(takes effect from {name}'s next run or conversation)")
     return 0
 
 
@@ -523,6 +544,9 @@ def main(argv: list[str]) -> int:
     p.add_argument("name")
     p.add_argument("action", nargs="?", choices=["allow", "deny"])
     p.add_argument("host", nargs="?")
+    p = sub.add_parser("share", help="a folder of yours an instance may read (read-only, seen as shared/); 'off' removes it")
+    p.add_argument("name")
+    p.add_argument("folder", nargs="?", help="a directory, or 'off'")
     p = sub.add_parser("trial", help="trials of proposed changes: list, show, run (operator), replay, work")
     tsub = p.add_subparsers(dest="action", required=True)
     q = tsub.add_parser("list", help="every trial, newest last")
@@ -601,6 +625,8 @@ def main(argv: list[str]) -> int:
         return cmd_secret(args)
     if args.cmd == "hosts":
         return cmd_hosts(args.name, args.action, args.host)
+    if args.cmd == "share":
+        return cmd_share(args.name, args.folder)
     if args.cmd == "autonomy":
         return autonomy.autonomy(args.action)
     if args.cmd == "status":

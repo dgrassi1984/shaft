@@ -267,7 +267,8 @@ def html_to_text(html: str) -> tuple[str, str]:
 
 class Broker:
     def __init__(self, name: str, project: Path, secrets_env: dict[str, str], log_path: Path,
-                 max_calls: int = 60, root: Path | None = None, usage_name: str | None = None):
+                 max_calls: int = 60, root: Path | None = None, usage_name: str | None = None,
+                 share: bool | None = None):
         self.name, self.project, self.secrets = name, project, secrets_env
         self.log_path, self.max_calls = log_path, max_calls
         self.tools_log = log_path                # what record(kind="tools") reads
@@ -277,6 +278,10 @@ class Broker:
         self.usage_name = usage_name or name
         from .core import disabled_tools
         self.disabled = disabled_tools(name)   # switched off by the operator: not offered, and refused
+        # The operator's folder this run may read (shaft share): the instance's own runs and its trial replays,
+        # never a battery exam (its control arm has no such folder). Checked again here: a folder deleted or
+        # moved since it was granted is logged and left out, not handed to the sandbox.
+        self.shared = self._shared_folder(name) if (root is None if share is None else share) else None
         self.token = secrets.token_hex(16)
         self.calls = 0
         self.counts: dict[str, int] = {}
@@ -285,6 +290,17 @@ class Broker:
         self.as_of: datetime | None = None       # record() shows only what was known before this (trial replays)
         self.config_writes: list[dict] = []      # config.env lines the instance set (set_config) during this run
         self.server: ThreadingHTTPServer | None = None
+
+    @staticmethod
+    def _shared_folder(name: str) -> Path | None:
+        from .core import check_shared_folder, log, shared_folder
+        if not (granted := shared_folder(name)):
+            return None
+        try:
+            return check_shared_folder(granted)
+        except ValueError as e:
+            log(f"{name}: shared folder {granted} left out of this run — {e} (shaft share {name} off, or share another)")
+            return None
 
     # -- lifecycle -------------------------------------------------------------
     def start(self) -> str:
@@ -515,11 +531,13 @@ class Broker:
         home = safe_mkdir(root, ".tmp/home")                 # tools that write to $HOME write here
         fd, prof = tempfile.mkstemp(prefix=f"shaft-run-{self.name}-", suffix=".sb")
         with os.fdopen(fd, "w") as f:
-            f.write(sandbox.run_profile(root, HOME))
+            f.write(sandbox.run_profile(root, HOME, self.shared))
         bindir = Path(PYTHON).parent
         env = {"PATH": f"{bindir}:/usr/bin:/bin:/usr/sbin:/sbin", "HOME": str(home), "TMPDIR": str(home),
                "TMPPREFIX": str(home / "zsh"),   # zsh's here-document files (default /tmp/zsh: not writable here)
                "LANG": "en_US.UTF-8", "PYTHONDONTWRITEBYTECODE": "1", "TERM": "dumb"}
+        if self.shared:
+            env["SHAFT_SHARED"] = str(self.shared)
         if not (bindir / "python3").exists():                 # make `python3` the system Python
             env["PATH"] = f"{home}:{env['PATH']}"
             link = home / "python3"
@@ -762,7 +780,8 @@ class ReplayBroker(Broker):
     def __init__(self, name: str, project: Path, secrets_env: dict[str, str], log_path: Path, *,
                  state_root: Path, start_commit: str, as_of: datetime, cache: dict, cache_lock: threading.Lock,
                  billed: str, tools_log: Path, max_calls: int = 60):
-        super().__init__(name, project, secrets_env, log_path, max_calls=max_calls, root=state_root, usage_name=billed)
+        super().__init__(name, project, secrets_env, log_path, max_calls=max_calls, root=state_root, usage_name=billed,
+                         share=True)   # it replays the instance's own cycle, which could read the folder
         self.start_commit, self.as_of = start_commit, as_of
         self.cache, self.cache_lock, self.tools_log = cache, cache_lock, tools_log
         self.trace: list[dict] = []          # every tool call, as the supervisor saw it

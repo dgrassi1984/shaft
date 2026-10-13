@@ -360,13 +360,15 @@ def _launch(name: str, root: Path, kind: str, agent_args: list[str], budget: int
 def agent_command(root: Path, broker: Broker, agent_args: list[str], profile: Path, llm_ports: list[int],
                   extra: dict[str, str]) -> tuple[list[str], dict[str, str]]:
     """The sandboxed command and environment for the agent in `root`, talking to `broker` (already started):
-    it may write only in `root` and reach only the model ports, the embedding service and its broker."""
-    profile.write_text(sandbox.profile(root, HOME, list(llm_ports) + [EMBED_PORT, broker.port]))
+    it may write only in `root` and reach only the model ports, the embedding service and its broker; it may read
+    the operator's shared folder if the broker carries one (shaft share)."""
+    profile.write_text(sandbox.profile(root, HOME, list(llm_ports) + [EMBED_PORT, broker.port], shared=broker.shared))
     safe_mkdir(root, ".tmp")
     cmd = sandbox.wrap(profile, [PYTHON, "-E", "-s", "-m", "shaft", *agent_args])
     env = sandbox.agent_env(os.environ, SHAFT_ROOT=str(root), TMPDIR=str(root / ".tmp"),
                             SHAFT_BROKER_URL=f"http://127.0.0.1:{broker.port}", SHAFT_BROKER_TOKEN=broker.token,
-                            SHAFT_EMBED_URL=f"http://127.0.0.1:{EMBED_PORT}/v1/embeddings", **extra)
+                            SHAFT_EMBED_URL=f"http://127.0.0.1:{EMBED_PORT}/v1/embeddings",
+                            **({"SHAFT_SHARED": str(broker.shared)} if broker.shared else {}), **extra)
     return cmd, env
 
 

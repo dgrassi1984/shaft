@@ -160,33 +160,73 @@ def config_with(text: str, key: str, line: str | None) -> str:
     return "\n".join(lines) + "\n" if lines else ""
 
 
-def disabled_tools(name: str) -> set[str]:
-    """Supervisor tools the operator switched off for this instance (`shaft tools <name> off <tool>`).
-    Kept in the supervisor's folder, not the instance's config.env: an instance must not switch a tool
-    that costs the operator money (delegate_coding) back on for itself."""
+def _tool_settings(name: str) -> dict:
+    """What the operator set for this instance (`shaft tools`, `shaft hosts`, `shaft share`), in the supervisor's
+    folder — never in the instance's config.env, which the instance can change (set_config): it must not widen
+    its own access."""
     try:
-        return set(json.loads((SUP_DIR / "tools" / f"{name}.json").read_text()).get("off", []))
+        data = json.loads((SUP_DIR / "tools" / f"{name}.json").read_text())
+        return data if isinstance(data, dict) else {}
     except (OSError, ValueError):
-        return set()
+        return {}
+
+
+def _update_tool_settings(name: str, **changes) -> None:
+    """Change some keys and keep the rest: each setter owns its own key (allowing a host once rewrote the file
+    with only `off` and `write_hosts`, which would have dropped anything else kept here)."""
+    data = {**_tool_settings(name), **changes}
+    (SUP_DIR / "tools").mkdir(parents=True, exist_ok=True)
+    (SUP_DIR / "tools" / f"{name}.json").write_text(json.dumps({k: v for k, v in data.items() if v is not None},
+                                                               indent=1))
+
+
+def disabled_tools(name: str) -> set[str]:
+    """Supervisor tools the operator switched off for this instance (`shaft tools <name> off <tool>`): an
+    instance must not switch a tool that costs the operator money (delegate_coding) back on for itself."""
+    return set(_tool_settings(name).get("off", []))
 
 
 def write_hosts(name: str) -> set[str]:
     """Hosts this instance may send POST/PUT/PATCH/DELETE to (`shaft hosts <name> allow <host>`)."""
-    try:
-        return set(json.loads((SUP_DIR / "tools" / f"{name}.json").read_text()).get("write_hosts", []))
-    except (OSError, ValueError):
-        return set()
+    return set(_tool_settings(name).get("write_hosts", []))
 
 
-def _save_tools(name: str, off: set[str], hosts: set[str]) -> None:
-    (SUP_DIR / "tools").mkdir(parents=True, exist_ok=True)
-    (SUP_DIR / "tools" / f"{name}.json").write_text(json.dumps({"off": sorted(off), "write_hosts": sorted(hosts)},
-                                                               indent=1))
+# -- the operator's folder an instance may read ----------------------------------------------------------------
+# Daniele, 2026-10-13: shaft asked for "a clearly scoped folder" of his work. Read-only: the instance still writes
+# only in its own folder. Its sandbox and `run` may read it; its file tools show it as shared/ (SHAFT_SHARED).
+def _share_forbidden() -> tuple[Path, ...]:
+    """SHAFT's own state: the project (instances, supervisor code), the supervisor's folder wherever it is now, and
+    the battery's held-out items backup. Read at call time, not import time: SUP_DIR is moved by tests."""
+    return PROJECT, SUP_DIR, HOME / "Library" / "Application Support" / "SHAFT"
+
+
+def shared_folder(name: str) -> Path | None:
+    """The folder the operator lets this instance read (`shaft share <name> <folder>`), or None."""
+    path = _tool_settings(name).get("shared")
+    return Path(path) if path else None
+
+
+def check_shared_folder(folder: Path | str) -> Path:
+    """The resolved folder, if it may be shared: an existing directory that neither holds nor sits inside SHAFT's
+    own state (other instances, the supervisor's folder, the battery's held-out items)."""
+    path = Path(folder).expanduser().resolve()
+    if not path.is_dir():
+        raise ValueError(f"{path} is not a directory")
+    for forbidden in (f.resolve() for f in _share_forbidden()):
+        if path == forbidden or forbidden in path.parents or path in forbidden.parents:
+            raise ValueError(f"{path} overlaps {forbidden}: SHAFT's own state is never shared")
+    return path
+
+
+def set_shared_folder(name: str, folder: Path | str | None) -> Path | None:
+    path = check_shared_folder(folder) if folder else None
+    _update_tool_settings(name, shared=str(path) if path else None)
+    return path
 
 
 def set_write_host(name: str, host: str, allow: bool) -> set[str]:
     hosts = write_hosts(name) | {host.lower()} if allow else write_hosts(name) - {host.lower()}
-    _save_tools(name, disabled_tools(name), hosts)
+    _update_tool_settings(name, write_hosts=sorted(hosts))
     return hosts
 
 
@@ -241,7 +281,7 @@ def _write_secrets(root: Path, store: dict) -> None:
 
 def set_tool(name: str, tool: str, on: bool) -> set[str]:
     off = disabled_tools(name) - {tool} if on else disabled_tools(name) | {tool}
-    _save_tools(name, off, write_hosts(name))
+    _update_tool_settings(name, off=sorted(off))
     return off
 
 

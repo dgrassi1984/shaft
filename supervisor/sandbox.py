@@ -31,7 +31,20 @@ def _no_config_writes(root: Path) -> str:
     return f"(deny file-write* (literal {_q(root / 'config.env')}))"
 
 
-def profile(instance_root: Path, home: Path, llm_ports: list[int], any_localhost: bool = False) -> str:
+def _shared(shared: Path | None, home: Path) -> list[str]:
+    """Read-only access to the operator's folder (`shaft share`): reads, and the metadata of its parents so the
+    path resolves. No write rule: the instance still writes only in its own directory."""
+    if not shared:
+        return []
+    shared = Path(shared).resolve()
+    rules = [f"(allow file-read* (subpath {_q(shared)}))"]
+    if (meta := _ancestors_metadata(shared, home)):
+        rules.append(meta)
+    return rules
+
+
+def profile(instance_root: Path, home: Path, llm_ports: list[int], any_localhost: bool = False,
+            shared: Path | None = None) -> str:
     root, home = Path(instance_root).resolve(), Path(home).resolve()
     lines = [
         "(version 1)",
@@ -44,6 +57,7 @@ def profile(instance_root: Path, home: Path, llm_ports: list[int], any_localhost
         f"(deny file-read* (subpath {_q(home)}))",
         f"(allow file-read* (subpath {_q(root)}))",
         _ancestors_metadata(root, home),
+        *_shared(shared, home),
         _no_secrets(root),
         _no_config_writes(root),
         # Network: only the LLM endpoint(s) on localhost.
@@ -65,10 +79,10 @@ def _ancestors_metadata(root: Path, home: Path) -> str:
     return "(allow file-read-metadata " + " ".join(f"(literal {_q(p)})" for p in parents) + ")" if parents else ""
 
 
-def run_profile(instance_root: Path, home: Path) -> str:
+def run_profile(instance_root: Path, home: Path, shared: Path | None = None) -> str:
     """Stricter than the agent's own sandbox, for commands the agent runs via the broker's `run`:
     writes only to its working areas (never self/, memory/, inbox/, config.env, .git), reads only its
-    own folder in the home directory, and no network at all."""
+    own folder in the home directory (and the operator's shared folder, if any), and no network at all."""
     root, home = Path(instance_root).resolve(), Path(home).resolve()
     writable = " ".join(f"(subpath {_q(root / d)})" for d in RUN_WRITABLE)
     return "\n".join([
@@ -79,6 +93,7 @@ def run_profile(instance_root: Path, home: Path) -> str:
         f"(deny file-read* (subpath {_q(home)}))",
         f"(allow file-read* (subpath {_q(root)}))",
         _ancestors_metadata(root, home),
+        *_shared(shared, home),
         _no_secrets(root),
         "(deny network*)",
     ]) + "\n"
