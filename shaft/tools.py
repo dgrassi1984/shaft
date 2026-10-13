@@ -24,7 +24,8 @@ PROTECTED = {
     "self/personality.md": "use update_personality",
     "self/stats.md": "written by the supervisor from my measured results",
 }
-PROTECTED_DIRS = {".git": "git internals", "memory/episodes": "episodes are append-only records",
+PROTECTED_DIRS = {".git": "git internals",
+                  "secrets": "my keys are handled by the supervisor: secret_set / secret_list / secret_delete", "memory/episodes": "episodes are append-only records",
                   "logs": "logs are written by my runtime", "inbox": "the supervisor delivers messages here"}
 
 
@@ -115,7 +116,7 @@ class Toolbox:
             result = f"ERROR: {type(e).__name__}: {e}"
         if len(result) > MAX_RESULT_CHARS:
             result = result[:MAX_RESULT_CHARS] + f"\n[... truncated, {len(result)} chars total]"
-        self.log.append({"tool": name, "args": raw_args[:2000], "result": result[:2000],
+        self.log.append({"tool": name, "args": _loggable(name, raw_args)[:2000], "result": result[:2000],
                          "seconds": round((datetime.now() - started).total_seconds(), 2)})
         return result
 
@@ -133,6 +134,8 @@ class Toolbox:
         path = (self.root / rel).resolve()
         if path != self.root and self.root not in path.parents:
             raise PermissionError(f"{rel!r} is outside my folder")
+        if path == self.root / "secrets" or self.root / "secrets" in path.parents:   # not even reading
+            raise PermissionError(f"{rel}: {PROTECTED_DIRS['secrets']}")
         if for_write:
             r = path.relative_to(self.root).as_posix()
             if r in PROTECTED:
@@ -171,7 +174,7 @@ class Toolbox:
 
     def _t_list_files(self, path: str = ".") -> str:
         base = self._path(path)
-        skip = {".git", "__pycache__", ".tmp", "logs"}
+        skip = {".git", "__pycache__", ".tmp", "logs", "secrets"}
         rows = [p.relative_to(self.root).as_posix() + ("/" if p.is_dir() else "")
                 for p in sorted(base.rglob("*")) if not skip & set(p.relative_to(self.root).parts)]
         return "\n".join(rows[:400]) or "(empty)"
@@ -207,3 +210,14 @@ class Toolbox:
         if proc.returncode != 0:
             return f"ERROR: plugin {name} failed (exit {proc.returncode}): {proc.stderr[-1500:]}"
         return proc.stdout
+
+
+def _loggable(tool: str, raw_args: str) -> str:
+    """The tool log goes into my episodes (and from there into my context): a key's value never does."""
+    if tool != "secret_set":
+        return raw_args
+    try:
+        args = json.loads(raw_args or "{}")
+        return json.dumps({**args, "value": "[withheld]"} if isinstance(args, dict) else {}, ensure_ascii=False)
+    except ValueError:
+        return '{"value": "[withheld]"}'

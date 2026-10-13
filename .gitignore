@@ -3,3 +3,5 @@ logs/
 .tmp/
 __pycache__/
 .DS_Store
+# my keys: handled by the supervisor, never committed
+secrets/
