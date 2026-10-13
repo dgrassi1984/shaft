@@ -41,7 +41,7 @@ from .core import (BROKER_MAX_CALLS, EMBED_PORT, HOME, INSTANCES, LLM_PORTS, PRO
                    git_wt, instance_config, instance_root, knob, log, secrets_env)
 
 VERSION, _ = knob("SHAFT_BATTERY_VERSION", "v1", str)
-EVERY_DAYS, _ = knob("SHAFT_BATTERY_EVERY_DAYS", "2", int)          # 0 = never scheduled
+EVERY_DAYS, _ = knob("SHAFT_BATTERY_EVERY_DAYS", "5", int)          # 0 = never scheduled (Daniele, 2026-10-13: 5)
 WINDOW_START = (1, 0)                                                # the night window opens at 01:00 ...
 WINDOW_MARGIN_MIN = 10                                               # ... and closes 10 min before the sleep
 ITEM_TIMEOUT_S, _ = knob("SHAFT_BATTERY_ITEM_TIMEOUT_S", "1800", int)
@@ -60,6 +60,16 @@ def base() -> Path:
 
 def items_dir() -> Path:
     return base() / "items" / VERSION
+
+
+def off_path(name: str) -> Path:
+    """Present: this instance gets no battery, scheduled or by hand (`shaft battery off|on <name>`).
+    Daniele, 2026-10-13: "Kant no battery" (on Opus a run costs about $15)."""
+    return base() / f"off-{name}"
+
+
+def is_off(name: str) -> bool:
+    return off_path(name).exists()
 
 
 def results_path(name: str) -> Path:
@@ -471,6 +481,9 @@ def run(name: str, until: float | None = None, only: list[str] | None = None, co
     """One battery run for one instance (and its control, item by item). Returns the number of items scored.
     control_only: the control alone (checks that the items discriminate; the instance is not touched)."""
     from .runner import _Held, Busy
+    if is_off(name):
+        log(f"{name}: battery is off for this instance ({off_path(name)}); `shaft battery on {name}` turns it on")
+        return 0
     signal.signal(signal.SIGTERM, _on_term)
     root = instance_root(name)
     e = era(name)
@@ -597,12 +610,21 @@ def window(now: datetime) -> tuple[datetime, datetime]:
     return start, end
 
 
+_missing_logged: dict[str, object] = {}     # name -> the night whose missing items were logged
+
+
 def due(name: str, now: datetime) -> bool:
-    """In tonight's window, and the last run was at least EVERY_DAYS nights ago."""
-    if EVERY_DAYS <= 0 or not items_dir().is_dir():
+    """In tonight's window, not turned off for this instance, and the last run was at least EVERY_DAYS nights
+    ago. Missing items inside the window are logged (once a night), never skipped in silence."""
+    if EVERY_DAYS <= 0 or is_off(name):
         return False
     start, end = window(now)
     if not start <= now < end:
+        return False
+    if not items_dir().is_dir():
+        if _missing_logged.get(name) != start.date():
+            _missing_logged[name] = start.date()
+            log(f"{name}: battery due tonight but not installed — no items in {items_dir()}; nothing runs")
         return False
     st_path = base() / "schedule.json"
     last = (json.loads(st_path.read_text()) if st_path.exists() else {}).get(name)

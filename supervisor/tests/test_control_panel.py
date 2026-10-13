@@ -149,7 +149,34 @@ def _snap(states=("idle", "in a cycle")):
             "spend": 3.4}
 
 
-@unittest.skipIf(top is None, "needs rich (.venv-ui/bin/python -m unittest supervisor.tests.test_control_panel)")
+class SchedulerRestartGuard(unittest.TestCase):
+    """2026-10-13: a battery started by hand from a terminal blocked the scheduler restart ("would kill them:
+    trial or battery worker") though it was in another process group and a restart could not touch it."""
+
+    def _runs(self, worker_in_scheduler_group: bool) -> list[str]:
+        def fake(cmd, **_):
+            out = ""
+            if cmd[:3] == ["pgrep", "-f", "supervisor autonomy serve"]:
+                out = "98073\n"
+            elif cmd[:2] == ["ps", "-o"]:
+                out = "98073\n"
+            elif cmd[:3] == ["pgrep", "-g", "98073"]:
+                out = "4242\n" if worker_in_scheduler_group else ""
+            elif cmd[:2] == ["pgrep", "-f"]:
+                out = "79847\n"                     # an ungrouped matcher would see the hand-started run
+            return mock.Mock(stdout=out, returncode=0)
+        with mock.patch.object(panel, "instance_names", return_value=[]), \
+             mock.patch.object(panel.subprocess, "run", side_effect=fake):
+            return panel.scheduled_runs()
+
+    def test_a_worker_started_by_hand_does_not_block_the_restart(self):
+        self.assertEqual(self._runs(worker_in_scheduler_group=False), [])
+
+    def test_a_worker_the_scheduler_started_still_blocks_it(self):
+        self.assertEqual(self._runs(worker_in_scheduler_group=True), ["trial or battery worker"])
+
+
+@unittest.skipIf(top is None,"needs rich (.venv-ui/bin/python -m unittest supervisor.tests.test_control_panel)")
 class PanelKeys(unittest.TestCase):
     def setUp(self):
         self.ran = []
