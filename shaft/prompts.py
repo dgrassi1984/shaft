@@ -37,8 +37,9 @@ ABILITIES_TOOLS = (
     "write for yourself), plugins/ (tools you write: plugins/<name>/plugin.json + main.py with "
     "run(**args) -> str; a plugin may call the supervisor's tools via `from shaft import broker; "
     "broker.call(name, **args)`), shaft/ (your own code). You cannot reach the internet except "
-    "through the supervisor's tools. For any non-trivial code, use delegate_coding: on the local model your "
-    "coder writes it faster and more reliably than you do — you decide what to build and judge the result.")
+    "through the supervisor's tools.")
+DELEGATION = (" For any non-trivial code, use delegate_coding: your coder writes it faster and more reliably than "
+              "you do — you decide what to build and judge the result.")
 ABILITIES_NONE = "In this mode you have no tools: you can only write text."
 
 CONTEXT = """\
@@ -189,6 +190,8 @@ def system_prompt(state, cfg, mode_note: str, tools: str | None = None) -> str:
     root = state.root
     journal, shown, total = state.recent_journal(cfg.CONTEXT_JOURNAL_CHARS)
     abilities = ABILITIES_TOOLS.format(tools=tools) if tools else ABILITIES_NONE
+    if tools and "delegate_coding" in tools:   # the operator can switch the coder off for an instance
+        abilities += DELEGATION
     schedule = os.environ.get("SHAFT_SCHEDULE") or "the supervisor did not say (you may be running outside it)."
     identity = IDENTITY.format(name=cfg.NAME, operator=cfg.OPERATOR_NAME, schedule=schedule,
                                abilities=abilities, mode_note=mode_note)
