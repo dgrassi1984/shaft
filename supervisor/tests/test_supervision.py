@@ -243,6 +243,12 @@ class FinetuneGuardTest(unittest.TestCase):
 
 
 class ProbationTest(unittest.TestCase):
+    """Probation undoes a failed self-change by restoring exactly its files from git — on a real instance worktree,
+    shaped like the three changes of 2026-10-13 whose `git revert` of the whole run commit failed: the run commit
+    also appended to memory/episodes/*.jsonl, which every later run appends to again."""
+
+    FILES = ["plugins/weather/main.py", "plugins/weather/plugin.json", "tests/test_weather.py"]
+
     def setUp(self):
         import subprocess
         self.sp = subprocess
@@ -251,43 +257,188 @@ class ProbationTest(unittest.TestCase):
         self.git(self.project, "commit", "-q", "--allow-empty", "-m", "main")
         self.root = self.project / "instances" / "p"
         self.git(self.project, "worktree", "add", "-q", "--orphan", "-b", "instance/p", str(self.root))
-        (self.root / "memory").mkdir()
-        (self.root / "memory" / "journal.md").write_text("# j\n")
-        (self.root / "prompts.py").write_text("GOOD = True\n")
-        self.git(self.root, "add", "-A")
-        self.git(self.root, "commit", "-q", "-m", "good")
-        (self.root / "prompts.py").write_text("GOOD = False\n")
-        self.git(self.root, "commit", "-q", "-am", "self-change")
+        for rel, text in {"memory/journal.md": "# j\n", "self/self.md": "me\n", "shaft/prompts.py": "GOOD = True\n",
+                          "plugins/clock/main.py": "def run(): return 'now'\n",
+                          "plugins/clock/plugin.json": '{"name": "clock"}\n'}.items():
+            self.write(rel, text)
+        self.cycles = 0
+        self.episode("before")
+        self.commit("good")
+        # the run that made the change: plugin files, its test, and the run's own memory in one commit
+        self.write("plugins/weather/main.py", "def run(**a): return 'sunny'\n")
+        self.write("plugins/weather/plugin.json", '{"name": "weather"}\n')
+        self.write("tests/test_weather.py", "# weather test\n")
+        self.episode("the talk that made the change")
+        with (self.root / "memory" / "journal.md").open("a") as f:
+            f.write("made a weather plugin\n")
+        self.commit("p: talk")
         self.change = self.git(self.root, "rev-parse", "HEAD").strip()
+        self.sup = Path(tempfile.mkdtemp(prefix="shaft-prob-sup-")).resolve()
+        self.judged: list[dict] = [{"episode_ts": f"b{i}", "criterion_met": "yes", "difficulty": 3} for i in range(3)]
+        self.tests_pass = True
 
     def tearDown(self):
         shutil.rmtree(self.project, ignore_errors=True)
+        shutil.rmtree(self.sup, ignore_errors=True)
 
     def git(self, cwd, *args):
         return self.sp.run(["git", "-C", str(cwd), "-c", "user.name=t", "-c", "user.email=t@t", *args],
                            check=True, capture_output=True, text=True).stdout
 
-    def run_probation(self, after: list[str]):
-        from supervisor import core
-        # every cycle rated difficulty 3: these tests pin the revert mechanics; what probation measures
-        # (achieved difficulty, not raw success) is pinned in test_measurement.ProbationMeasureTest
-        js = [{"criterion_met": "yes", "difficulty": 3}] * 3 + [{"criterion_met": m, "difficulty": 3} for m in after]
+    def write(self, rel, text):
+        (self.root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (self.root / rel).write_text(text)
+
+    def commit(self, msg):
+        self.git(self.root, "add", "-A")
+        self.git(self.root, "commit", "-q", "-m", msg)
+
+    def episode(self, what, tools=(), day="2026-10-13"):
+        self.cycles += 1
+        ts = f"{day}T{self.cycles:02d}:00:00"
+        (self.root / "memory" / "episodes").mkdir(parents=True, exist_ok=True)
+        with (self.root / "memory" / "episodes" / f"{day}.jsonl").open("a") as f:
+            f.write(json.dumps({"ts": ts, "kind": "live", "what": what, "tools": [{"tool": t} for t in tools]}) + "\n")
+        return ts
+
+    def later_cycles(self, results, tools=("weather",), day="2026-10-13"):
+        """Cycles after the change, each committed as its own run (as the real supervisor does)."""
+        for met in results:
+            ts = self.episode(f"cycle {met}", tools, day)
+            self.judged.append({"episode_ts": ts, "criterion_met": met, "difficulty": 3})
+            self.commit(f"p: live {ts}")
+
+    def patched(self):
+        from contextlib import ExitStack
+        from supervisor import core, gate
         wt = lambda root, *a, **k: core.git_wt(root, *a, **{**k, "project": self.project})  # noqa: E731
-        with mock.patch.object(metrics, "INSTANCES", self.project / "instances"), \
-             mock.patch.object(metrics, "judgments", return_value=js[:3]), mock.patch.object(metrics, "git_wt", wt):
-            metrics.start_probation("p", self.change, ["prompts.py"])
-        with mock.patch.object(metrics, "INSTANCES", self.project / "instances"), \
-             mock.patch.object(metrics, "judgments", return_value=js), mock.patch.object(metrics, "git_wt", wt):
+        stack = ExitStack()
+        for target, attr, value in ((metrics, "INSTANCES", self.project / "instances"), (metrics, "SUP_DIR", self.sup),
+                                    (metrics, "git_wt", wt),
+                                    (gate, "run_tests", lambda *a, **k: (self.tests_pass, "Ran 3 tests\nFAILED"))):
+            stack.enter_context(mock.patch.object(target, attr, value))
+        return stack
+
+    def start(self, files=None):
+        with self.patched(), mock.patch.object(metrics, "judgments", return_value=list(self.judged)):
+            metrics.start_probation("p", self.change, files or self.FILES)
+
+    def check(self):
+        with self.patched(), mock.patch.object(metrics, "judgments", return_value=list(self.judged)):
             metrics.check_probation("p")
 
-    def test_worse_results_revert_the_change(self):
-        self.run_probation(["no"] * metrics.PROBATION_CYCLES)
-        self.assertEqual((self.root / "prompts.py").read_text(), "GOOD = True\n")
-        self.assertIn("failed probation", (self.root / "memory" / "journal.md").read_text())
+    def open_entries(self):
+        p = self.sup / "probation" / "p.json"
+        return json.loads(p.read_text()) if p.exists() else []
+
+    def episode_lines(self):
+        return sum(p.read_text().count("\n") for p in (self.root / "memory" / "episodes").glob("*.jsonl"))
+
+    def undo_keeps_memory(self, day):
+        self.start()
+        self.later_cycles(["no"] * metrics.PROBATION_CYCLES, day=day)
+        lines, journal = self.episode_lines(), (self.root / "memory" / "journal.md").read_text()
+        self.check()
+        self.assertEqual(self.episode_lines(), lines, "the episode log lost or gained lines")
+        self.assertFalse((self.root / "plugins" / "weather" / "main.py").exists(), "the change was not undone")
+        after = (self.root / "memory" / "journal.md").read_text()
+        self.assertTrue(after.startswith(journal), "the journal was rewritten, not appended to")
+        self.assertIn("made a weather plugin", after)
+        self.assertEqual((self.root / "self" / "self.md").read_text(), "me\n")
+        self.assertEqual(self.open_entries(), [])
+
+    def test_probation_revert_leaves_memory_episodes_untouched(self):
+        # Bug 2026-10-13: probation ran `git revert` on the whole run commit, which also holds the episode line
+        # the run appended; every later run appends again, so all three reverts failed with a conflict.
+        self.undo_keeps_memory("2026-10-13")
+
+    def test_probation_revert_leaves_memory_episodes_untouched_across_days(self):
+        # The same bug when the later cycles wrote the next day's file: `git revert` went through and deleted the
+        # run's episode record and its journal lines.
+        self.undo_keeps_memory("2026-10-14")
+
+    def test_the_revert_restores_exactly_the_listed_files(self):
+        self.start()
+        self.later_cycles(["no"] * metrics.PROBATION_CYCLES)
+        self.check()
+        for rel in self.FILES:   # none of them existed before the change
+            self.assertFalse((self.root / rel).exists(), rel)
+        self.assertEqual((self.root / "shaft" / "prompts.py").read_text(), "GOOD = True\n")
+        self.assertTrue((self.root / "plugins" / "clock" / "main.py").exists())
+        head = self.git(self.root, "show", "--name-only", "--format=%an%n%s", "HEAD").split("\n")
+        self.assertEqual(head[0], "SHAFT supervisor")
+        self.assertIn(f"before {self.change[:8]}", head[1])
+        self.assertEqual(sorted(l for l in head[2:] if l.strip()), sorted(self.FILES))
+        self.assertEqual(self.git(self.root, "status", "--porcelain", "--", *self.FILES), "")
+        note = (self.root / "memory" / "journal.md").read_text().split("self-change undone after probation")[1]
+        for rel in self.FILES:
+            self.assertIn(rel, note)
+        for raw in ("hint:", "error:", "FAILED", "revert --continue"):
+            self.assertNotIn(raw, note)
+
+    def test_a_modified_file_gets_its_content_from_before_the_change(self):
+        self.write("shaft/prompts.py", "GOOD = False\n")
+        self.episode("the talk that changed prompts")
+        self.commit("p: talk 2")
+        self.change = self.git(self.root, "rev-parse", "HEAD").strip()
+        self.start(["shaft/prompts.py"])
+        self.later_cycles(["no"] * metrics.PROBATION_CYCLES, tools=())
+        self.check()
+        self.assertEqual((self.root / "shaft" / "prompts.py").read_text(), "GOOD = True\n")
+        self.assertTrue((self.root / "plugins" / "weather" / "main.py").exists(), "an unlisted file was restored")
+
+    def test_a_failed_restore_keeps_the_entry(self):
+        # Bug 2026-10-13: after the failed revert the entry was dropped from probation, silently.
+        self.start()
+        self.later_cycles(["no"] * metrics.PROBATION_CYCLES)
+        self.write("plugins/weather/main.py", "def run(**a): return 'rainy'\n")   # changed again later
+        self.commit("p: live later change")
+        journal = (self.root / "memory" / "journal.md").read_text()
+        self.check()
+        [entry] = self.open_entries()
+        self.assertEqual(entry["commit"], self.change)
+        self.assertIn("changed again", entry["restore_failed"])
+        self.assertEqual((self.root / "plugins" / "weather" / "main.py").read_text(), "def run(**a): return 'rainy'\n")
+        self.assertEqual((self.root / "memory" / "journal.md").read_text(), journal)
+        self.check()   # retried, still kept
+        self.assertEqual(len(self.open_entries()), 1)
+
+    def test_a_restore_whose_tests_fail_is_put_back_and_kept(self):
+        self.start()
+        self.later_cycles(["no"] * metrics.PROBATION_CYCLES)
+        self.tests_pass = False
+        self.check()
+        [entry] = self.open_entries()
+        self.assertIn("tests fail", entry["restore_failed"])
+        self.assertEqual((self.root / "plugins" / "weather" / "main.py").read_text(), "def run(**a): return 'sunny'\n")
+        self.assertEqual(self.git(self.root, "status", "--porcelain"), "")
+        self.tests_pass = True
+        self.check()   # the verdict stands; the retry restores it
+        self.assertEqual(self.open_entries(), [])
+        self.assertFalse((self.root / "plugins" / "weather" / "main.py").exists())
 
     def test_equal_results_keep_the_change(self):
-        self.run_probation(["yes"] * metrics.PROBATION_CYCLES)
-        self.assertEqual((self.root / "prompts.py").read_text(), "GOOD = False\n")
+        self.start()
+        self.later_cycles(["yes"] * metrics.PROBATION_CYCLES)
+        self.check()
+        self.assertTrue((self.root / "plugins" / "weather" / "main.py").exists())
+        self.assertEqual(self.open_entries(), [])
+
+    def test_a_plugin_never_called_is_not_blamed(self):
+        # Bug 2026-10-13: shaft's weather plugin "failed probation" over 6 cycles that never called it.
+        self.start()
+        self.later_cycles(["no"] * metrics.PROBATION_CYCLES, tools=("clock", "read_file"))
+        self.check()
+        self.assertTrue((self.root / "plugins" / "weather" / "main.py").exists())
+        self.assertEqual(len(self.open_entries()), 1, "still waiting for cycles that use it")
+        self.later_cycles(["no"] * (metrics.PROBATION_EXPIRY - 1) * metrics.PROBATION_CYCLES, tools=("clock",))
+        self.check()
+        self.assertTrue((self.root / "plugins" / "weather" / "main.py").exists())
+        self.assertEqual(self.open_entries(), [], "too little use to judge: kept and closed")
+
+    def test_a_test_only_change_is_not_put_on_probation(self):
+        self.start(["tests/test_weather.py"])
+        self.assertEqual(self.open_entries(), [])
 
 
 if __name__ == "__main__":
