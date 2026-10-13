@@ -204,6 +204,21 @@ def wake(name: str) -> int:
         return 0
 
 
+def start_wake(name: str) -> str:
+    """By hand from `shaft top`: one wake of an idle instance, started detached (it outlives the TUI and counts
+    as the instance's wake, so the scheduler's next one is a full interval later). Refuses, with the reason,
+    an instance that is paused or already awake."""
+    if paused(name):
+        raise RuntimeError(f"{name} is paused (shaft resume {name})")
+    if (why := _awake(name)):
+        raise RuntimeError(f"{name} is already awake ({why})")
+    log(f"top: operator started a cycle for {name}")
+    with (SUP_DIR / f"manual-wake-{name}.log").open("a") as out:
+        subprocess.Popen([PYTHON, "-E", "-s", "-m", "supervisor", "wake", name], cwd=PROJECT,
+                         stdin=subprocess.DEVNULL, stdout=out, stderr=out, start_new_session=True)
+    return f"started a cycle for {name}"
+
+
 def tick() -> int:
     """By hand: wake every awake-able instance once now (one after another), skipping any already awake."""
     if (SUP_DIR / "paused").exists():

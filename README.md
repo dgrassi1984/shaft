@@ -27,7 +27,7 @@ Design, milestones and decisions: [PLAN.md](PLAN.md).
   Any other OpenAI-compatible endpoint with tool calling on localhost works too, or
   `LLM_BASE_URL="broker"` + e.g. `LLM_MODEL="claude-haiku-5-5"` or
   `LLM_MODEL="openrouter/xiaomi/mimo-v2.6-pro"` for a cloud model through the supervisor (the instance
-  never sees a key; allowed models `SHAFT_CLOUD_MODELS`, daily cap per instance `SHAFT_CLOUD_DAILY_USD`).
+  never sees a key; allowed models `SHAFT_CLOUD_MODELS`, daily cap per instance `SHAFT_CLOUD_DAILY_USD`, default $8).
   OpenRouter models need `OPENROUTER_API_KEY` in `.env` and go only to NovitaAI (Daniele's choice), with
   no fallback, and only if it neither collects nor retains data (`SHAFT_OPENROUTER_PROVIDER`, default
   `{"only": ["novita"], "allow_fallbacks": false, "data_collection": "deny", "zdr": true,
@@ -82,7 +82,9 @@ shaft live|reflect|sleep [name|--all]   # one autonomous cycle / reflection / co
 shaft autonomy on|off|status    # SHAFT's scheduler service: each instance wakes every WAKE_INTERVAL_MINUTES
                                 # (its config.env; default 120, at least 10, 0 = never; a wake while it is
                                 # already awake is skipped), sleep daily from 04:00 (made up later if missed)
-shaft top                       # live view: every instance's state and what it is doing now, services, events
+shaft top                       # live view: every instance's state and what it is doing now, services, events,
+                                #   messages; m browses messages between instances (full text), c starts a
+                                #   cycle for the selected idle instance
 shaft status [name]             # how each instance is doing, open conversations, which code is running
 shaft model on|off|status       # SHAFT's own Bonsai 2 server (launchd, :8780)
 shaft api on|off|status|key     # OpenAI-compatible API on your tailnet (see below)

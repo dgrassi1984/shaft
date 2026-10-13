@@ -407,15 +407,16 @@ class Broker:
         return f"{title}\n{final}\n\n{text[:max_chars]}{cut}".strip()
 
     def _send_message(self, to: str, text: str, kind: str = "note") -> str:
+        from . import messages
         if not text.strip():
             raise ValueError("empty message")
         if self.counts["send_message"] > 10:
             raise RuntimeError("at most 10 messages per run")
         text = text[:MAX_MESSAGE_CHARS]
         stamp = datetime.now()
+        kind = "question" if kind == "question" else "note"     # instance-chosen: only these two are logged
         if to == "operator":
             inbox = self.project / ".supervisor" / "operator-inbox"
-            kind = "question" if kind == "question" else "note"
             today = list(inbox.glob(f"{stamp:%Y%m%d}-*-from-{self.name}.md")) if inbox.is_dir() else []
             if len(today) >= OPERATOR_DAILY_LIMIT:
                 raise RuntimeError(f"you already sent {len(today)} messages to the operator today "
@@ -424,12 +425,14 @@ class Broker:
             path = inbox / f"{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}.md"
             path.write_text(f"From: {self.name}\nTo: operator\nKind: {kind}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n"
                             f"{text.strip()}\n")
+            messages.record(self.project / ".supervisor", path, self.name, "operator", kind, stamp, text)
             notify(f"SHAFT · {self.name} {'asks' if kind == 'question' else 'says'}", text)
             return f"delivered to the operator ({kind}); his reply, if any, will arrive in your inbox"
         elif NAME_RE.match(to) and to != self.name and (self.project / "instances" / to / "shaft").is_dir():
             from .core import safe_write   # the recipient's folder is instance-controlled: no symlinks followed
-            safe_write(self.project / "instances" / to, f"inbox/{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}.md",
-                       f"From: {self.name}\nTo: {to}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{text.strip()}\n")
+            path = safe_write(self.project / "instances" / to, f"inbox/{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}.md",
+                              f"From: {self.name}\nTo: {to}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{text.strip()}\n")
+            messages.record(self.project / ".supervisor", path, self.name, to, kind, stamp, text)
         else:
             raise ValueError(f"unknown recipient {to!r}; try list_instances or 'operator'")
         return f"delivered to {to}"

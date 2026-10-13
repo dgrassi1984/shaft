@@ -1,13 +1,62 @@
-"""Messages between the operator and instances (instance→instance goes through the broker)."""
+"""Messages between the operator and instances (instance→instance goes through the broker).
+
+Every delivery — instance→instance, instance→operator, operator→instance — is also appended to the
+supervisor's own log (.supervisor/messages.jsonl), which `shaft top` browses. The log, not the instances'
+inbox/ and memory/messages/ folders, is the record: those are instance-controlled, the log is not.
+"""
 from __future__ import annotations
 
+import fcntl
+import json
 import shutil
 from datetime import datetime
 from pathlib import Path
 
-from .core import SUP_DIR, instance_root, log, safe_write
+from .core import INSTANCES, SUP_DIR, instance_root, log, safe_write
 
 OPERATOR_INBOX = SUP_DIR / "operator-inbox"
+LOG_NAME = "messages.jsonl"
+
+
+def record(sup_dir: Path, path: Path, sender: str, to: str, kind: str, at: datetime, text: str) -> None:
+    """Append one delivered message to the log. One locked write per line: brokers of several instances
+    deliver concurrently."""
+    line = json.dumps({"ts": at.isoformat(timespec="seconds"), "from": sender, "to": to, "kind": kind,
+                       "file": path.name, "text": text.strip()}, ensure_ascii=False) + "\n"
+    sup_dir.mkdir(parents=True, exist_ok=True)
+    with (sup_dir / LOG_NAME).open("a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        f.write(line)
+
+
+_cache: dict = {"key": None, "rows": []}
+
+
+def _unread(to: str) -> set[str]:
+    """File names still waiting in the recipient's inbox (it moves them out once it has read them)."""
+    inbox = OPERATOR_INBOX if to == "operator" else INSTANCES / to / "inbox"
+    return {p.name for p in inbox.glob("*.md")} if inbox.is_dir() else set()
+
+
+def history() -> list[dict]:
+    """Every logged message, oldest first, each with `read` (False while it sits in the recipient's inbox)."""
+    path = SUP_DIR / LOG_NAME
+    try:
+        st = path.stat()
+    except OSError:
+        return []
+    key = (st.st_mtime_ns, st.st_size)
+    if _cache["key"] != key:
+        rows = []
+        for line in path.read_text(errors="replace").splitlines():
+            try:
+                rows.append(json.loads(line))
+            except ValueError:
+                continue
+        rows.sort(key=lambda m: (m["ts"], m["file"]))   # file names carry microseconds: ties keep their order
+        _cache.update(key=key, rows=rows)
+    waiting = {to: _unread(to) for to in {m["to"] for m in _cache["rows"]}}
+    return [{**m, "read": m["file"] not in waiting[m["to"]]} for m in _cache["rows"]]
 
 
 def _parse(path: Path) -> dict:
@@ -40,9 +89,11 @@ def _deliver(name: str, text: str, kind: str, in_reply_to: str | None = None) ->
     root = instance_root(name)
     stamp = datetime.now()
     ref = f"In-Reply-To: {in_reply_to}\n" if in_reply_to else ""
-    return safe_write(root, f"inbox/{stamp:%Y%m%d-%H%M%S-%f}-from-operator.md",
+    path = safe_write(root, f"inbox/{stamp:%Y%m%d-%H%M%S-%f}-from-operator.md",
                       f"From: operator (Daniele)\nTo: {name}\nKind: {kind}\n{ref}Date: {stamp:%Y-%m-%d %H:%M}\n\n"
                       f"{text.strip()}\n")
+    record(SUP_DIR, path, "operator", name, kind, stamp, text)
+    return path
 
 
 def reply(name: str, text: str) -> int:

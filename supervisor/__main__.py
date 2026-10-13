@@ -329,7 +329,8 @@ def main(argv: list[str]) -> int:
     p.add_argument("action", choices=["on", "off", "status"])
     p = sub.add_parser("autonomy", help="the autonomous schedule (SHAFT's scheduler service): on, off, status")
     p.add_argument("action", choices=["on", "off", "status", "serve"])
-    p = sub.add_parser("top", help="live view of every instance and the services (q quits)")
+    p = sub.add_parser("top", help="live view of every instance, the services and the messages between instances; "
+                                   "starts a cycle for an idle one (q quits)")
     p.add_argument("--once", action="store_true", help="print one snapshot as text and exit")
     p = sub.add_parser("status", help="how the instances are doing")
     p.add_argument("names", nargs="*")
