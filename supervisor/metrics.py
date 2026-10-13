@@ -342,12 +342,16 @@ def backfill(name: str, limit: int | None = None) -> int:
             break
         rated[j["episode_ts"]] = {**out, "model": j.get("model") or cycle_model(name, ep),
                                   "rated_by": judge.JUDGE_MODEL, "rated_at": datetime.now().isoformat(timespec="seconds")}
-    if rated:
-        _merge_ratings(name, rated)
-        log(f"{name}: backfilled ratings for {len(rated)} judged cycle(s)")
-    # rule-judged cycles (no intent) get empty ratings so they are not asked again
-    _merge_ratings(name, {j["episode_ts"]: {k: None for k in RATINGS} for j in judgments(name)
-                          if "difficulty" not in j and j.get("judge") == "rule"})
+    # The rewrite holds the instance's run lock: after_cycle appends judgments while its run holds that lock,
+    # so no cycle can be judged between our read and our replace. (The judge calls above run without it.)
+    from .runner import run_lock
+    with run_lock(name, wait=True, kind="backfill"):
+        if rated:
+            _merge_ratings(name, rated)
+            log(f"{name}: backfilled ratings for {len(rated)} judged cycle(s)")
+        # rule-judged cycles (no intent) get empty ratings so they are not asked again
+        _merge_ratings(name, {j["episode_ts"]: {k: None for k in RATINGS} for j in judgments(name)
+                              if "difficulty" not in j and j.get("judge") == "rule"})
     return len(rated)
 
 

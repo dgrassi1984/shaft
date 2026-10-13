@@ -112,6 +112,31 @@ class JudgingTest(InstanceDirCase):
             self.assertEqual(metrics.backfill("m"), 0)                # idempotent
             ask.assert_not_called()
 
+    def test_backfill_rewrites_the_file_only_under_the_instance_run_lock(self):
+        # Live cycles append judgments (after_cycle, under the run lock) while a backfill runs.
+        import contextlib
+        from supervisor import runner
+        self.episode({"ts": "2026-10-12T17:24:00", "kind": "live", "intent": {"goal": "g", "success_criterion": "c",
+                      "confidence": 80}, "finish": {"criterion_met": "yes"}, "tools": []})
+        path = self.sup / "judgments" / "m.jsonl"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({k: v for k, v in judgment("2026-10-12T17:24:00", "yes").items()
+                                    if k not in metrics.RATINGS}) + "\n")
+        held = []
+
+        @contextlib.contextmanager
+        def lock(name, wait, kind=""):
+            held.append((name, kind))
+            yield
+            held.pop()
+        merged_under = []
+        real_merge = metrics._merge_ratings
+        with mock.patch.object(runner, "run_lock", lock), \
+             mock.patch.object(metrics, "_merge_ratings", lambda n, r: merged_under.append(list(held)) or real_merge(n, r)), \
+             mock.patch.object(judge, "ask", return_value={k: JudgingTest.VERDICT[k] for k in metrics.RATINGS}):
+            self.assertEqual(metrics.backfill("m"), 1)
+        self.assertTrue(merged_under and all(h == [("m", "backfill")] for h in merged_under), merged_under)
+
     def test_stats_lead_with_achieved_difficulty_and_origins(self):
         js = ([judgment(f"2026-10-13T0{i}:00:00", "yes", 1, "self", origin_declared="self") for i in range(4)]
               + [judgment("2026-10-13T05:00:00", "partial", 4, "operator", origin_declared="self")])
