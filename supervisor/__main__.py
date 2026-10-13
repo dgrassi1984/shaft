@@ -178,6 +178,8 @@ def cmd_status(names: list[str]) -> int:
         rate = (sum(metrics.SCORE[j["criterion_met"]] for j in js) / len(js)) if js else None
         last_self = git_wt(root, "log", "-1", "--format=%cr", "--", "self/self.md", check=False).stdout.strip()
         convs = runner.open_conversations(name)
+        from .core import disabled_tools
+        tools_off = disabled_tools(name)
         flags = [f for f, on in (("paused", paused(name)), ("busy", is_busy(name)),
                                  (f"{len(convs)} conversation(s) open", convs)) if on]
         print(f"\n■ {name}{' (' + ', '.join(flags) + ')' if flags else ''}  ·  branch instance/{name}")
@@ -185,6 +187,8 @@ def cmd_status(names: list[str]) -> int:
         print(f"  judged      {len(js)} cycles" + (f" · success {rate:.0%}" if rate is not None else ""))
         print(f"  LLM today   {calls} calls · {tokens} completion tokens · {errors} errors")
         print(f"  versions    {version.describe(name)}")
+        if tools_off:
+            print(f"  tools off   {', '.join(sorted(tools_off))} (shaft tools {name} on <tool>)")
         if entries:
             lines = entries[-1].splitlines()
             print("  latest:     " + lines[0].lstrip("# "))
@@ -192,6 +196,24 @@ def cmd_status(names: list[str]) -> int:
                 print("    " + line[:160])
             if len(lines) > 8:
                 print("    …")
+    return 0
+
+
+def cmd_tools(name: str, action: str | None, tool: str | None) -> int:
+    from .broker import SPECS
+    from .core import disabled_tools, set_tool
+    instance_root(name)
+    if action:
+        if tool not in SPECS:
+            print(f"unknown tool {tool!r}; supervisor tools: {', '.join(sorted(SPECS))}", file=sys.stderr)
+            return 2
+        set_tool(name, tool, action == "on")
+        log(f"{name}: supervisor tool {tool} switched {action} by the operator")
+    off = disabled_tools(name)
+    for t in sorted(SPECS):
+        print(f"{t:18} {'off' if t in off else 'on'}")
+    if action:
+        print(f"(takes effect from {name}'s next run or conversation)")
     return 0
 
 
@@ -281,6 +303,10 @@ def main(argv: list[str]) -> int:
     for verb in ("pause", "resume"):
         p = sub.add_parser(verb, help=f"{verb} autonomous runs (all, or one instance)")
         p.add_argument("name", nargs="?")
+    p = sub.add_parser("tools", help="an instance's supervisor tools: list them, or switch one on/off")
+    p.add_argument("name")
+    p.add_argument("action", nargs="?", choices=["on", "off"])
+    p.add_argument("tool", nargs="?")
     p = sub.add_parser("check", help="run the test gate against an instance's code")
     p.add_argument("name", nargs="?", default=DEFAULT_INSTANCE)
     args = parser.parse_args(argv)
@@ -316,6 +342,8 @@ def main(argv: list[str]) -> int:
         return api.command(args.action)
     if args.cmd == "model":
         return autonomy.service("model", args.action)
+    if args.cmd == "tools":
+        return cmd_tools(args.name, args.action, args.tool)
     if args.cmd == "autonomy":
         return autonomy.autonomy(args.action)
     if args.cmd == "status":

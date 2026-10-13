@@ -194,6 +194,8 @@ class Broker:
                  max_calls: int = 60):
         self.name, self.project, self.secrets = name, project, secrets_env
         self.log_path, self.max_calls = log_path, max_calls
+        from .core import disabled_tools
+        self.disabled = disabled_tools(name)   # switched off by the operator: not offered, and refused
         self.token = secrets.token_hex(16)
         self.calls = 0
         self.counts: dict[str, int] = {}
@@ -227,7 +229,8 @@ class Broker:
                 if not self._authorised():
                     return
                 if self.path == "/tools":
-                    return self._reply(200, {"tools": list(SPECS.values())})
+                    return self._reply(200, {"tools": [spec for tool, spec in SPECS.items()
+                                                       if tool not in broker.disabled]})
                 self._reply(404, {"ok": False, "error": "not found"})
 
             def do_POST(self):
@@ -308,7 +311,9 @@ class Broker:
         started = time.monotonic()
         self.calls += 1
         self.counts[tool] = self.counts.get(tool, 0) + 1
-        if self.calls > self.max_calls:
+        if tool in self.disabled:
+            result = {"ok": False, "error": f"{tool} is not available to you (the operator switched it off)"}
+        elif self.calls > self.max_calls:
             result = {"ok": False, "error": f"call budget for this run exhausted ({self.max_calls})"}
         else:
             try:

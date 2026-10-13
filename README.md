@@ -99,6 +99,8 @@ shaft distinct [name]           # blind test: can the judge tell it from the bar
 shaft distinct [name] --strict  # …again on answers stripped of specifics: voice, not memory
 shaft dataset|finetune [name]   # M6: export experiences / train a judged LoRA adapter (MLX)
 
+shaft tools <name> [on|off <tool>]   # an instance's supervisor tools, e.g. off delegate_coding (operator-only:
+                                     # kept in .supervisor/, so the instance cannot switch it back on)
 shaft pause [name] · shaft resume [name] · shaft check [name] · shaft setup · shaft list
 ```
 

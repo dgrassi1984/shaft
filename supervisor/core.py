@@ -1,6 +1,7 @@
 """Shared supervisor plumbing: paths, knobs, logging, git, instance lookup, commits."""
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -110,6 +111,23 @@ def instance_names() -> list[str]:
 
 def paused(name: str) -> bool:
     return (SUP_DIR / "paused").exists() or (SUP_DIR / f"paused-{name}").exists()
+
+
+def disabled_tools(name: str) -> set[str]:
+    """Supervisor tools the operator switched off for this instance (`shaft tools <name> off <tool>`).
+    Kept in the supervisor's folder, not the instance's config.env: an instance must not switch a tool
+    that costs the operator money (delegate_coding) back on for itself."""
+    try:
+        return set(json.loads((SUP_DIR / "tools" / f"{name}.json").read_text()).get("off", []))
+    except (OSError, ValueError):
+        return set()
+
+
+def set_tool(name: str, tool: str, on: bool) -> set[str]:
+    off = disabled_tools(name) - {tool} if on else disabled_tools(name) | {tool}
+    (SUP_DIR / "tools").mkdir(parents=True, exist_ok=True)
+    (SUP_DIR / "tools" / f"{name}.json").write_text(json.dumps({"off": sorted(off)}, indent=1))
+    return off
 
 
 def journal_entries(root: Path) -> list[str]:
