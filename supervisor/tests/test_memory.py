@@ -179,11 +179,24 @@ class SemanticSearchTest(unittest.TestCase):
         self.assertEqual(sum(len(c["input"]) for c in self.fake.calls if c["input_type"] == "document"), 3)
         self.assertTrue((self.root / ".tmp" / "memory-index.json").exists())
 
+    def test_with_the_service_it_says_so_too(self):
+        # Regression: the label appeared only when meaning search failed, so shaft used it daily and still wrote
+        # "No embeddings, no vector DB. Just text." in its self-model (2026-10-13).
+        with mock.patch.dict(os.environ, {"SHAFT_EMBED_URL": self.fake.url}):
+            out = Toolbox(self.root).run("search_memory", json.dumps({"query": "dove lavora?"}))
+        self.assertTrue(out.startswith("(searched by words + meaning)"), out[:200])
+        self.assertIn("example-co", out)
+
+    def test_nothing_searched_claims_nothing(self):
+        with mock.patch.dict(os.environ, {"SHAFT_EMBED_URL": self.fake.url}):
+            out = Toolbox(self.root).run("search_memory", json.dumps({"query": "   "}))
+        self.assertEqual(out, "nothing relevant found")
+
     def test_without_the_service_it_says_words_only(self):
         with mock.patch.dict(os.environ, {"SHAFT_EMBED_URL": "http://127.0.0.1:9/v1/embeddings"}), \
              mock.patch("sys.stderr"):
             out = Toolbox(self.root).run("search_memory", json.dumps({"query": "example-co"}))
-        self.assertIn("words only", out)
+        self.assertTrue(out.startswith("(searched by words only: semantic search is unavailable"), out[:200])
         self.assertIn("example-co", out)
 
 
