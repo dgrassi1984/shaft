@@ -8,3 +8,5 @@
 - The supervisor never imports agent code; instances never see secrets; the API stays tailnet-only.
 - A conversation holds the instance only while it replies; open conversations are registered
   (`runner.open_conversations`) and are never written up while still going on.
+- Trial replays (supervisor/trial.py) never settle, commit, deliver or send: the ReplayBroker answers writes as
+  a real cycle would and records them; a trial never takes an instance's time on the local model.

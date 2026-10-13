@@ -57,6 +57,9 @@ def run_lock(name: str, wait: bool, kind: str = ""):
         f.flush()
         yield
     finally:
+        f.seek(0)
+        f.truncate()   # no holder: the trial worker reads this line instead of trying the lock (trial.py)
+        f.flush()
         fcntl.flock(f, fcntl.LOCK_UN)
         f.close()
 
@@ -343,20 +346,27 @@ def _snapshot(root: Path) -> dict:
 def _launch(name: str, root: Path, kind: str, agent_args: list[str], budget: int | None):
     """Start the run's broker and return (broker, command, environment) for the agent."""
     broker = Broker(name, PROJECT, secrets_env(), SUP_DIR / "broker.log", max_calls=BROKER_MAX_CALLS)
-    broker_url = broker.start()
+    broker.start()
     SUP_DIR.mkdir(exist_ok=True)
-    prof = SUP_DIR / f"{name}.sb"
-    prof.write_text(sandbox.profile(root, HOME, LLM_PORTS + [EMBED_PORT, broker.port]))
-    safe_mkdir(root, ".tmp")
-    cmd = sandbox.wrap(prof, [PYTHON, "-E", "-s", "-m", "shaft", *agent_args])
     extra = {"SHAFT_DEADLINE": f"{time.time() + budget - 60:.0f}"} if budget else {}
     from .autonomy import describe_schedule
     extra["SHAFT_SCHEDULE"] = describe_schedule(name)
     extra["SHAFT_OPEN_TALKS"] = ",".join(open_conversations(name))   # not to be written up yet
-    env = sandbox.agent_env(os.environ, SHAFT_ROOT=str(root), TMPDIR=str(root / ".tmp"),
-                            SHAFT_BROKER_URL=broker_url, SHAFT_BROKER_TOKEN=broker.token,
-                            SHAFT_EMBED_URL=f"http://127.0.0.1:{EMBED_PORT}/v1/embeddings", **extra)
+    cmd, env = agent_command(root, broker, agent_args, SUP_DIR / f"{name}.sb", LLM_PORTS, extra)
     return broker, cmd, env
+
+
+def agent_command(root: Path, broker: Broker, agent_args: list[str], profile: Path, llm_ports: list[int],
+                  extra: dict[str, str]) -> tuple[list[str], dict[str, str]]:
+    """The sandboxed command and environment for the agent in `root`, talking to `broker` (already started):
+    it may write only in `root` and reach only the model ports, the embedding service and its broker."""
+    profile.write_text(sandbox.profile(root, HOME, list(llm_ports) + [EMBED_PORT, broker.port]))
+    safe_mkdir(root, ".tmp")
+    cmd = sandbox.wrap(profile, [PYTHON, "-E", "-s", "-m", "shaft", *agent_args])
+    env = sandbox.agent_env(os.environ, SHAFT_ROOT=str(root), TMPDIR=str(root / ".tmp"),
+                            SHAFT_BROKER_URL=f"http://127.0.0.1:{broker.port}", SHAFT_BROKER_TOKEN=broker.token,
+                            SHAFT_EMBED_URL=f"http://127.0.0.1:{EMBED_PORT}/v1/embeddings", **extra)
+    return cmd, env
 
 
 def _tee(stream, echo, keep: list[str]):
@@ -512,7 +522,16 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
     from . import metrics   # judged outcomes, calibration stats, probation of self-changes
     if kept:
         head = git_wt(root, "rev-parse", "HEAD").stdout.strip()
-        metrics.start_probation(name, head, kept)
+        from . import trial
+        tried = trial.match(name, root, kept)
+        metrics.start_probation(name, head, kept, trial=tried)
+        if tried:
+            log(f"{name}: kept change is trial {tried['id']}'s ({tried['verdict']})")
+            if tried["verdict"] == "worse":
+                journal_note(root, "Supervisor: change adopted against its trial",
+                             f"I adopted the change I trialled in {tried['id']} although the trial found it worse "
+                             f"(lost {tried['L']}, won {tried['W']}, tied {tried['T']} replayed cycles). It is on "
+                             f"probation and will be reverted on any drop in my judged success.")
     pers_path = root / "self" / "personality.md"
     if pers_path.exists() and pers_path.read_text() != before["personality"] and judge_ok():
         try:

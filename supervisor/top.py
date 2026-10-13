@@ -68,6 +68,8 @@ def render(snap: dict):
         sched = f"wakes every {i['every']} · next {i['next_wake']}" if i["every"] != "no wakes" else "no scheduled wakes"
         off = f" · off: {', '.join(i['tools_off'])}" if i["tools_off"] else ""
         grid.add_row("plan", Text(f"{sched}{off}", style="dim"))
+        if i.get("trial"):
+            grid.add_row("trial", Text(i["trial"], style="magenta"))
         parts.append(Panel(grid, title=f"[bold]{i['name']}[/bold] · {i['model']}", title_align="left",
                            border_style=_state_style(i["state"])))
     parts.append(Panel(Group(*[_event(l) for l in snap["events"]]) if snap["events"] else Text("—", style="dim"),
@@ -82,7 +84,7 @@ def plain(snap: dict) -> str:
     for i in snap["instances"]:
         lines.append(f"{i['name']:8} {i['state']}{' since ' + i['since'] if i['since'] else ''}"
                      f"{' · ' + i['doing'] if i['doing'] else ''}{' · goal: ' + i['goal'] if i['goal'] else ''}"
-                     f" · next wake {i['next_wake']}")
+                     f" · next wake {i['next_wake']}" + (f"\n{'':8} trial {i['trial']}" if i.get("trial") else ""))
     return "\n".join(lines + [""] + [e.split(" cycle_timeout_s=")[0] for e in snap["events"][-5:]])
 
 

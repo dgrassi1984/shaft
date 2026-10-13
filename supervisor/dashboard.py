@@ -125,7 +125,20 @@ def instance_state(name: str, now: float | None = None) -> dict:
             "every": f"{int(interval.total_seconds() // 60)} min" if interval else "no wakes",
             "next_wake": next_wake, "conversations": len(convs), "calls_today": calls, "tokens_today": tokens,
             "usd_today": _usd_today(name), "judged": n_judged, "success": rate,
-            "tools_off": sorted(disabled_tools(name))}
+            "tools_off": sorted(disabled_tools(name)), "trial": _trial_line(name)}
+
+
+def _trial_line(name: str) -> str:
+    """The instance's latest trial, if one is running or finished today."""
+    from . import trial
+    ts = trial.all_trials(name)
+    if not ts:
+        return ""
+    t = ts[-1]
+    if t["status"] in ("done", "rejected") and not t.get("finished", t["created"]).startswith(
+            datetime.now().date().isoformat()):
+        return ""
+    return trial.describe(t).splitlines()[0][2:]
 
 
 _launchd_cache: dict[str, tuple[float, bool]] = {}

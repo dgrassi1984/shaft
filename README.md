@@ -104,6 +104,12 @@ shaft dataset|finetune [name]   # M6: export experiences / train a judged LoRA a
 shaft tools <name> [on|off <tool>]   # an instance's supervisor tools, e.g. off delegate_coding (operator-only:
                                      # kept in .supervisor/, so the instance cannot switch it back on)
 shaft pause [name] · shaft resume [name] · shaft check [name] · shaft setup · shaft list
+
+shaft trial list [name]                    # trials of proposed changes (an instance asks with its `trial` tool)
+shaft trial show <name> <id>               # one trial: each replayed cycle, outcome, the report it was sent
+shaft trial run <name> --cand PATH=FILE …  # an operator trial (planted tests; --base PATH=FILE, --aa, --model)
+shaft trial replay <name> <episode-ts>     # replay one past cycle once with the current code (debug)
+shaft trial work                           # run what may run now (the scheduler does this)
 ```
 
 `shaft distinct` asks the instance and the bare base model the same four personal questions and
@@ -186,8 +192,23 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
 - **Slow core**: the core personality may change at most every `SHAFT_CORE_MIN_HOURS` (72).
 - **Test gate**: if a run changed the instance's code, plugins or config, the invariant tests
   and plugin checks run; failure restores the old code and tells the instance why.
+- **Trials** (`trial` tool, [PLAN-trials.md](PLAN-trials.md)): an instance can test a change to its own
+  code or prompts before keeping it. The supervisor runs the gate on it, rebuilds N (default 6) of its past
+  autonomous cycles exactly as each began (its branch at that moment, the inbox it read), and runs each twice —
+  current code and proposed code — in scratch copies under the same sandbox, through a replay broker that
+  sends nothing (messages, writes, keys are checked and recorded, not carried out; web reads are real and
+  shared by both runs; no coder). A judge not told which run is which compares each pair, effectiveness first,
+  in both orders; a sign test (α 0.1) gives better / worse / no clear difference, sent to the instance's inbox.
+  Nothing is applied: the instance adopts the change itself, and if the files match the trial byte for byte
+  its probation knows the verdict. On the local model a trial uses only idle time (no run, conversation, wake or
+  sleep due within 15 min; cut off 90 s before one) and otherwise runs on `SHAFT_TRIAL_FALLBACK_MODEL`
+  (mimo) — at once for an instance waking more often than every 30 min, else after `SHAFT_TRIAL_LOCAL_WAIT_H`
+  (6) or two preemptions. Caps per instance per day: `SHAFT_TRIALS_PER_DAY` (2), `SHAFT_TRIAL_DAILY_USD` (3),
+  `SHAFT_TRIAL_LOCAL_UNITS_PER_DAY` (24); `SHAFT_TRIAL_N_MAX` (10). Ledger: `.supervisor/trial_usage.jsonl`;
+  trials: `.supervisor/trials/<name>/<id>/`.
 - **Probation**: a kept self-change is reverted if the judged success rate over the next
-  `SHAFT_PROBATION_CYCLES` (6) cycles falls clearly below the rate before it.
+  `SHAFT_PROBATION_CYCLES` (6) cycles falls clearly below the rate before it (any drop at all, if it was
+  adopted against a trial's 'worse' verdict).
 - **Judge**: every autonomous cycle is graded from its tool log by a cloud model
   (`SHAFT_JUDGE_MODEL`, default `claude-opus-5-5`); results feed `self/stats.md`.
 - **Git**: after every run the instance's state is committed to its branch (author

@@ -87,10 +87,11 @@ SPECS = {
         "The supervisor's own record about you — what it saw you do, not what you remember. kind: "
         "'judgments' (the judge's verdict on each autonomous cycle, with its full reasoning), 'runs' (your runs: "
         "start, end, exit code, reverted or kept code changes, notes), 'tools' (every supervisor tool you "
-        "called, with arguments and outcome), 'code_changes' (code changes of yours that passed the tests). "
+        "called, with arguments and outcome), 'code_changes' (code changes of yours that passed the tests), "
+        "'trials' (your trials of proposed changes: progress and verdicts). "
         "Newest last. Use it to check your claims about yourself. (Your own tool traces are also in "
         "memory/episodes/*.jsonl.)",
-        {"kind": {"type": "string", "enum": ["judgments", "runs", "tools", "code_changes"]},
+        {"kind": {"type": "string", "enum": ["judgments", "runs", "tools", "code_changes", "trials"]},
          "limit": {"type": "integer", "description": "entries, default 20, max 200"}},
         ["kind"]),
     "http_request": _spec(
@@ -133,6 +134,35 @@ SPECS = {
         "can still do yourself.",
         {"task": S}),
 }
+SPECS["trial"] = _spec(
+    "trial",
+    "Test a change to your own code or prompts before you keep it. Stage the new files in your folder (e.g. "
+    "notes/proposals/<idea>/prompts.py) and list them: files=[{\"path\": \"shaft/prompts.py\", \"from\": "
+    "\"notes/proposals/<idea>/prompts.py\"}] ({\"path\": ..., \"delete\": true} removes a file). The supervisor "
+    "replays n of your past autonomous cycles (default 6), each from the exact state you were in when it began, "
+    "twice — with your current code and with the change — with nothing sent to the world; a judge who does not know "
+    "which is which compares each pair for useful, correct work. The verdict (better / worse / no clear difference, "
+    "with the judge's reasons per cycle) arrives in your inbox later — minutes on a cloud model; on the local model "
+    "it uses only idle time and may move to a cloud model. record(kind='trials') shows progress. Nothing is applied: "
+    "if you want the change, copy the files into place yourself; if they match the trialled files exactly, your "
+    "probation knows the verdict. Only autonomous cycles are replayed: a change that only affects conversations or "
+    "sleep is not measured. One trial at a time, a few per day.",
+    {"files": {"type": "array", "description": "the change: target path and the staged file it comes from",
+               "items": {"type": "object", "properties": {
+                   "path": {"type": "string", "description": "file to change, under shaft/, plugins/, skills/, tests/ "
+                                                             "or config.env"},
+                   "from": {"type": "string", "description": "staged new version in your folder"},
+                   "delete": {"type": "boolean", "description": "true: the change removes this file"}},
+                   "required": ["path"]}},
+     "hypothesis": {"type": "string", "description": "what should get better, and how a reader of your cycles would "
+                                                     "see it"},
+     "episodes": {"type": "array", "items": S,
+                  "description": "optional: timestamps (ts) of past cycles to include, up to half — e.g. ones you "
+                                 "failed; the rest are drawn at random"},
+     "n": {"type": "integer", "description": "past cycles to replay, default 6"},
+     "extend": {"type": "string", "description": "id of a finished trial with no clear difference: add 4 more "
+                                                 "cycles to it (then files and hypothesis are not needed)"}},
+    [])
 MAX_HANDOFFS_PER_RUN = 2
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 SHOWN_HEADERS = ("content-type", "content-length", "location", "etag", "last-modified", "link", "retry-after")
@@ -232,6 +262,7 @@ class Broker:
                  max_calls: int = 60):
         self.name, self.project, self.secrets = name, project, secrets_env
         self.log_path, self.max_calls = log_path, max_calls
+        self.tools_log = log_path                # what record(kind="tools") reads
         from .core import disabled_tools
         self.disabled = disabled_tools(name)   # switched off by the operator: not offered, and refused
         self.token = secrets.token_hex(16)
@@ -239,6 +270,8 @@ class Broker:
         self.counts: dict[str, int] = {}
         self.remembered: dict[str, list] = {}    # original cloud-model turns, resent verbatim
         self.handoffs: list[dict] = []           # coding tasks delegated during this run
+        self.billed = name                       # whose cloud-model spend this is (a trial replay bills its own)
+        self.as_of: datetime | None = None       # record() shows only what was known before this (trial replays)
         self.server: ThreadingHTTPServer | None = None
 
     # -- lifecycle -------------------------------------------------------------
@@ -291,9 +324,9 @@ class Broker:
                 try:
                     body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
                     if body.get("stream") and str(body.get("model", "")).startswith("openrouter/"):
-                        return self._llm_stream(cloudllm.openrouter_stream(broker.name, body, broker.secrets),
+                        return self._llm_stream(cloudllm.openrouter_stream(broker.billed, body, broker.secrets),
                                                 body["model"])
-                    reply = cloudllm.complete(broker.name, body, broker.secrets, broker.remembered)
+                    reply = cloudllm.complete(broker.billed, body, broker.secrets, broker.remembered)
                 except cloudllm.CloudError as e:
                     broker._log(f"{broker.name} llm {body.get('model', '?')} -> ERROR {e}")
                     return self._reply(e.status, {"error": {"message": str(e)}})
@@ -414,25 +447,37 @@ class Broker:
         text = text[:MAX_MESSAGE_CHARS]
         stamp = datetime.now()
         if to == "operator":
-            inbox = self.project / ".supervisor" / "operator-inbox"
             kind = "question" if kind == "question" else "note"
-            today = list(inbox.glob(f"{stamp:%Y%m%d}-*-from-{self.name}.md")) if inbox.is_dir() else []
-            if len(today) >= OPERATOR_DAILY_LIMIT:
-                raise RuntimeError(f"you already sent {len(today)} messages to the operator today "
+            sent = self._operator_sent_today(stamp)
+            if sent >= OPERATOR_DAILY_LIMIT:
+                raise RuntimeError(f"you already sent {sent} messages to the operator today "
                                    f"(limit {OPERATOR_DAILY_LIMIT}); keep it for tomorrow")
-            inbox.mkdir(parents=True, exist_ok=True)
-            path = inbox / f"{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}.md"
-            path.write_text(f"From: {self.name}\nTo: operator\nKind: {kind}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n"
-                            f"{text.strip()}\n")
-            notify(f"SHAFT · {self.name} {'asks' if kind == 'question' else 'says'}", text)
+            self._deliver("operator", f"{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}.md",
+                          f"From: {self.name}\nTo: operator\nKind: {kind}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n"
+                          f"{text.strip()}\n", kind)
             return f"delivered to the operator ({kind}); his reply, if any, will arrive in your inbox"
         elif NAME_RE.match(to) and to != self.name and (self.project / "instances" / to / "shaft").is_dir():
-            from .core import safe_write   # the recipient's folder is instance-controlled: no symlinks followed
-            safe_write(self.project / "instances" / to, f"inbox/{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}.md",
-                       f"From: {self.name}\nTo: {to}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{text.strip()}\n")
+            self._deliver(to, f"inbox/{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}.md",
+                          f"From: {self.name}\nTo: {to}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{text.strip()}\n")
         else:
             raise ValueError(f"unknown recipient {to!r}; try list_instances or 'operator'")
         return f"delivered to {to}"
+
+    def _operator_sent_today(self, stamp: datetime) -> int:
+        inbox = self.project / ".supervisor" / "operator-inbox"
+        return len(list(inbox.glob(f"{stamp:%Y%m%d}-*-from-{self.name}.md"))) if inbox.is_dir() else 0
+
+    def _deliver(self, to: str, rel: str, content: str, kind: str = "") -> None:
+        """Put a message where its recipient reads it: the operator's inbox (with a notification), or another
+        instance's inbox/."""
+        if to == "operator":
+            inbox = self.project / ".supervisor" / "operator-inbox"
+            inbox.mkdir(parents=True, exist_ok=True)
+            (inbox / rel).write_text(content)
+            notify(f"SHAFT · {self.name} {'asks' if kind == 'question' else 'says'}", content.split("\n\n", 1)[-1])
+        else:
+            from .core import safe_write   # the recipient's folder is instance-controlled: no symlinks followed
+            safe_write(self.project / "instances" / to, rel, content)
 
     def _run(self, command: str, timeout_s: int = 60, cwd: str = ".") -> str:
         import resource
@@ -445,7 +490,7 @@ class Broker:
         if not command.strip():
             raise ValueError("empty command")
         timeout_s = max(1, min(int(timeout_s), 300))
-        root = (self.project / "instances" / self.name).resolve()
+        root = self._root()
         workdir = contained(root, *Path(cwd).parts) if cwd not in ("", ".") else root
         if not workdir.is_dir():
             raise ValueError(f"no directory {cwd!r} in your folder")
@@ -510,21 +555,26 @@ class Broker:
             lines.append("The new code takes effect in your next cycle; plugins appear as tools then.")
         return "\n".join(lines)
 
+    def _trial(self, files=None, hypothesis: str = "", episodes=None, n: int = 0, extend: str = "") -> str:
+        from . import trial
+        return trial.request(self.name, files or [], hypothesis, episodes or [], int(n or 0), extend,
+                             project=self.project)
+
     def _history(self, commit: str = "", path: str = "", limit: int = 15) -> str:
         from .core import git_wt
-        root = (self.project / "instances" / self.name).resolve()
+        root, head = (self.project / "instances" / self.name).resolve(), self._history_head()
         if path and (path.startswith(("-", "/")) or ".." in Path(path).parts):
             raise ValueError("path must be relative to your folder")
         pathspec = ["--", path] if path else []
         if not commit:
             out = git_wt(root, "log", f"-n{max(1, min(int(limit), 100))}", "--date=format:%Y-%m-%d %H:%M",
-                         "--format=%h %ad %an: %s", "HEAD", *pathspec, check=False, project=self.project)
+                         "--format=%h %ad %an: %s", head, *pathspec, check=False, project=self.project)
             if out.returncode:
                 raise RuntimeError(out.stderr.strip()[:300])
             return out.stdout.strip() or "(no commits" + (f" touching {path}" if path else "") + ")"
         if not re.fullmatch(r"[0-9a-f]{4,40}", commit):
             raise ValueError("commit must be a commit id (hex) from the log")
-        mine = git_wt(root, "merge-base", "--is-ancestor", commit, "HEAD", check=False, project=self.project)
+        mine = git_wt(root, "merge-base", "--is-ancestor", commit, head, check=False, project=self.project)
         if mine.returncode:
             raise ValueError(f"{commit} is not a commit of your branch")
         out = git_wt(root, "show", "--stat", "--patch", "--date=format:%Y-%m-%d %H:%M",
@@ -534,13 +584,23 @@ class Broker:
         text = out.stdout
         return text if len(text) <= RUN_OUTPUT_CHARS else text[:RUN_OUTPUT_CHARS] + f"\n[... {len(text)} chars in all]"
 
+    def _history_head(self) -> str:
+        return "HEAD"
+
     def _record(self, kind: str, limit: int = 20) -> str:
         from .core import SUP_DIR
         limit = max(1, min(int(limit), 200))
+        # A trial replay sees the record as it stood when the replayed cycle started, never what came after.
+        cut = f"{self.as_of:%Y-%m-%d %H:%M:%S}" if self.as_of else None
+        known = (lambda stamp: stamp < cut) if cut else (lambda stamp: True)
+        logged = lambda l: known(l[1:20].replace("T", " "))   # noqa: E731 — "[YYYY-mm-dd HH:MM:SS] ..."
+
+        def jsonl(path: Path, field: str) -> list[dict]:
+            rows = [json.loads(l) for l in _tail_lines(path, 100000)]
+            return [r for r in rows if known(str(r.get(field, "")).replace("T", " "))][-limit:]
         if kind == "judgments":
             lines = []
-            for line in _tail_lines(SUP_DIR / "judgments" / f"{self.name}.jsonl", limit):
-                j = json.loads(line)
+            for j in jsonl(SUP_DIR / "judgments" / f"{self.name}.jsonl", "judged_at"):
                 lines.append(f"- {j.get('episode_ts', '?')[:16]} · goal: {j.get('goal', '')[:200]}\n"
                              f"  I claimed {j.get('claimed')} at {j.get('confidence')}% confidence; judge: criterion met "
                              f"{j.get('criterion_met')}, claim supported {j.get('claim_supported')}, criterion "
@@ -549,18 +609,27 @@ class Broker:
             text = "\n".join(lines)
         elif kind == "runs":
             mine = f"] {self.name}: "
-            text = "\n".join(l for l in _tail_lines(SUP_DIR / "supervisor.log", 20000, keep=lambda l: mine in l)[-limit:])
+            text = "\n".join(_tail_lines(SUP_DIR / "supervisor.log", 20000,
+                                         keep=lambda l: mine in l and logged(l))[-limit:])
         elif kind == "tools":
             mine = f"] {self.name} "
-            text = "\n".join(l for l in _tail_lines(self.log_path, 20000, keep=lambda l: mine in l)[-limit:])
+            text = "\n".join(_tail_lines(self.tools_log, 20000, keep=lambda l: mine in l and logged(l))[-limit:])
         elif kind == "code_changes":
-            text = "\n".join(_tail_lines(SUP_DIR / "code_changes" / f"{self.name}.jsonl", limit))
+            text = "\n".join(json.dumps(r) for r in jsonl(SUP_DIR / "code_changes" / f"{self.name}.jsonl", "ts"))
+        elif kind == "trials":
+            from . import trial
+            text = trial.describe_all(self.name, before=self.as_of, limit=limit)
         else:
-            raise ValueError("kind must be judgments, runs, tools or code_changes")
+            raise ValueError("kind must be judgments, runs, tools, code_changes or trials")
         text = text or "(nothing recorded yet)"
         return text if len(text) <= RUN_OUTPUT_CHARS else "[... older entries cut]\n" + text[-RUN_OUTPUT_CHARS:]
 
     def _root(self) -> Path:
+        """The folder the instance's `run` commands act on."""
+        return (self.project / "instances" / self.name).resolve()
+
+    def _keys_root(self) -> Path:
+        """Where the instance's keys are kept (handled only here, never shown to it)."""
         return (self.project / "instances" / self.name).resolve()
 
     def _http_request(self, url: str, method: str = "GET", headers: dict | None = None, body=None, auth: str = "",
@@ -578,7 +647,7 @@ class Broker:
         hdrs.update({str(k): str(v) for k, v in (headers or {}).items()})
         secret = None
         if auth:
-            entry = read_secrets(self._root()).get(auth)
+            entry = read_secrets(self._keys_root()).get(auth)
             if not entry:
                 raise ValueError(f"you have no key named {auth!r} (secret_list shows yours)")
             if host not in entry["hosts"]:
@@ -591,12 +660,7 @@ class Broker:
             if not any(k.lower() == "content-type" for k in hdrs):
                 hdrs["Content-Type"] = "text/plain; charset=utf-8" if isinstance(body, str) else "application/json"
         req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
-        try:
-            resp = (_opener_no_redirects if secret else _opener).open(req, timeout=max(1, min(int(timeout_s), 120)))
-            with resp:
-                status, rh, raw = resp.status, resp.headers, resp.read(MAX_FETCH_BYTES)
-        except urllib.error.HTTPError as e:   # an API's own error is an answer, not a broker failure
-            status, rh, raw = e.code, e.headers, e.read(MAX_FETCH_BYTES)
+        status, rh, raw = self._send(req, bool(secret), max(1, min(int(timeout_s), 120)))
         ctype = rh.get("Content-Type", "") if rh else ""
         charset = re.search(r"charset=([\w-]+)", ctype)
         text = raw.decode(charset.group(1) if charset else "utf-8", errors="replace")
@@ -607,23 +671,143 @@ class Broker:
         out = f"HTTP {status}\n" + "\n".join(shown) + f"\n\n{text[:max_chars]}{cut}"
         return out.replace(secret, "[your key]") if secret else out
 
+    def _send(self, req: urllib.request.Request, keyed: bool, timeout_s: int):
+        """Send an http_request: (status, headers, body bytes)."""
+        try:
+            resp = (_opener_no_redirects if keyed else _opener).open(req, timeout=timeout_s)
+            with resp:
+                return resp.status, resp.headers, resp.read(MAX_FETCH_BYTES)
+        except urllib.error.HTTPError as e:   # an API's own error is an answer, not a broker failure
+            return e.code, e.headers, e.read(MAX_FETCH_BYTES)
+
     def _secret_set(self, name: str, value: str, hosts, header: str = "Authorization", scheme: str = "Bearer") -> str:
         from .core import store_secret
-        store_secret(self._root(), name, value, [hosts] if isinstance(hosts, str) else list(hosts), header, scheme)
+        store_secret(self._keys_root(), name, value, [hosts] if isinstance(hosts, str) else list(hosts), header, scheme)
         return (f"stored your key {name!r} for {', '.join(hosts if not isinstance(hosts, str) else [hosts])}; use it "
                 f"with http_request(auth={name!r}). Its value will not be shown to you again.")
 
     def _secret_list(self) -> str:
         from .core import read_secrets
-        store = read_secrets(self._root())
+        store = read_secrets(self._keys_root())
         return "\n".join(f"{n}: hosts {', '.join(e['hosts'])} · {e.get('header')} {e.get('scheme', '')}".rstrip()
                          + f" · stored {e.get('created', '?')[:16]}" for n, e in sorted(store.items())) or "no keys yet"
 
     def _secret_delete(self, name: str) -> str:
         from .core import delete_secret
-        return f"deleted your key {name!r}" if delete_secret(self._root(), name) else f"you have no key named {name!r}"
+        return f"deleted your key {name!r}" if delete_secret(self._keys_root(), name) else f"you have no key named {name!r}"
 
     def _list_instances(self) -> str:
         base = self.project / "instances"
         names = sorted(p.name for p in base.iterdir() if (p / "shaft").is_dir() and p.name != self.name)
         return ("instances: " + ", ".join(names)) if names else "no other instances exist yet"
+
+
+class ReplayBroker(Broker):
+    """The broker for one run of a trial replay (supervisor/trial.py): the same tools, answered without touching
+    the world or the instance.
+
+    Reads — web_search, fetch_page, GET/HEAD http_request — are real, but shared by the two runs of a pair through
+    `cache`: the first run's answer is given to the second, byte for byte, so both see the same world. Writes —
+    messages, POST/PUT/PATCH/DELETE, keys — are not carried out; they pass the same checks and return what a real
+    cycle would see (a run must not behave differently because it can tell it is a replay), and are recorded in
+    `trace` for the judge. `run` acts on the replay's own copy of the instance, `history` ends at the replayed
+    cycle's starting commit, `record` at the time it started. The coder and trials are not available. Cloud-model
+    spend is billed to `billed`, not to the instance's own daily allowance."""
+
+    def __init__(self, name: str, project: Path, secrets_env: dict[str, str], log_path: Path, *,
+                 state_root: Path, start_commit: str, as_of: datetime, cache: dict, cache_lock: threading.Lock,
+                 billed: str, tools_log: Path, max_calls: int = 60):
+        super().__init__(name, project, secrets_env, log_path, max_calls=max_calls)
+        self.state_root, self.start_commit, self.as_of = Path(state_root).resolve(), start_commit, as_of
+        self.cache, self.cache_lock, self.billed, self.tools_log = cache, cache_lock, billed, tools_log
+        self.trace: list[dict] = []          # every tool call, as the supervisor saw it
+        self.operator_sent = 0
+        self._tags = threading.local()
+
+    def call(self, tool: str, args: dict) -> dict:
+        self._tags.value = set()
+        result = super().call(tool, args)
+        shown = {k: ("[value withheld]" if tool == "secret_set" and k == "value" else v) for k, v in args.items()}
+        self.trace.append({"tool": tool, "args": json.dumps(shown, ensure_ascii=False)[:2000], "ok": result["ok"],
+                           "result": str(result.get("result") if result["ok"] else result.get("error"))[:2500],
+                           "tags": sorted(getattr(self._tags, "value", set()))})
+        return result
+
+    def _tag(self, tag: str) -> None:
+        if not hasattr(self._tags, "value"):
+            self._tags.value = set()
+        self._tags.value.add(tag)
+
+    def _shared(self, key, compute):
+        """The pair's shared answer to a read: computed once (errors are not kept), then the same for both runs."""
+        k = json.dumps(key, sort_keys=True, ensure_ascii=False, default=str)
+        with self.cache_lock:
+            if k in self.cache:
+                self._tag("same answer as the other run")
+                return self.cache[k]
+        value = compute()
+        with self.cache_lock:
+            return self.cache.setdefault(k, value)
+
+    # -- the instance's copy, its history and record as of the replayed cycle -----------------------
+    def _root(self) -> Path:
+        return self.state_root
+
+    def _history_head(self) -> str:
+        return self.start_commit
+
+    # -- reads: real, shared by the pair ---------------------------------------------------------------
+    def _web_search(self, query: str, page: int = 1) -> str:
+        return self._shared(["web_search", query, int(page)], lambda: Broker._web_search(self, query, page))
+
+    def _fetch_page(self, url: str, max_chars: int = 6000) -> str:
+        return self._shared(["fetch_page", url, int(max_chars)], lambda: Broker._fetch_page(self, url, max_chars))
+
+    def _send(self, req: urllib.request.Request, keyed: bool, timeout_s: int):
+        method = req.get_method()
+        if method in WRITE_METHODS:   # not sent: what a real cycle would see from a plain success
+            self._tag("simulated: not sent")
+            return 200, {}, b""
+        key = ["http", method, req.full_url, sorted(req.header_items()), (req.data or b"").decode(errors="replace")]
+        status, headers, raw = self._shared(key, lambda: self._fetch(req, keyed, timeout_s))
+        return status, dict(headers), raw
+
+    def _fetch(self, req, keyed, timeout_s):
+        status, headers, raw = Broker._send(self, req, keyed, timeout_s)
+        return status, dict(headers.items()) if headers else {}, raw
+
+    # -- writes: checked like the real thing, recorded, not carried out ----------------------------------
+    def _operator_sent_today(self, stamp: datetime) -> int:
+        inbox = self.project / ".supervisor" / "operator-inbox"
+        cut = f"{self.as_of:%Y%m%d-%H%M%S}"
+        real = [p for p in inbox.glob(f"{self.as_of:%Y%m%d}-*-from-{self.name}.md") if p.name < cut] \
+            if inbox.is_dir() else []
+        return len(real) + self.operator_sent
+
+    def _deliver(self, to: str, rel: str, content: str, kind: str = "") -> None:
+        self._tag("simulated: not delivered")
+        if to == "operator":
+            self.operator_sent += 1
+
+    def _secret_set(self, name: str, value: str, hosts, header: str = "Authorization", scheme: str = "Bearer") -> str:
+        from .core import SECRET_NAME_RE
+        if not SECRET_NAME_RE.match(str(name)):   # the same refusals as store_secret
+            raise ValueError("a key name is lowercase letters, digits, - or _ (e.g. github)")
+        if not str(value).strip() or not [h for h in ([hosts] if isinstance(hosts, str) else hosts) if h.strip()]:
+            raise ValueError("a key needs a value and at least one host it may be sent to")
+        self._tag("simulated: not stored")
+        return (f"stored your key {name!r} for {', '.join(hosts if not isinstance(hosts, str) else [hosts])}; use it "
+                f"with http_request(auth={name!r}). Its value will not be shown to you again.")
+
+    def _secret_delete(self, name: str) -> str:
+        from .core import read_secrets
+        self._tag("simulated: not deleted")
+        return f"deleted your key {name!r}" if name in read_secrets(self._keys_root()) else f"you have no key named {name!r}"
+
+    def _delegate_coding(self, task: str) -> str:
+        self._tag("not available in a replay")
+        raise RuntimeError("the coder is not available right now; try again in a later cycle")
+
+    def _trial(self, *a, **k) -> str:
+        self._tag("not available in a replay")
+        raise RuntimeError("a trial of yours is already running; record(kind='trials') shows it")

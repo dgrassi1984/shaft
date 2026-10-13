@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 from datetime import date, datetime
+from pathlib import Path
 
 from . import autonomy, evolution, finetune, gate, messages, metrics, runner, version
 from .core import (DEFAULT_INSTANCE, HOME, INSTANCES, NAME_RE, PROJECT, SUP_DIR, TEMPLATE, commit_state, git, git_wt,
@@ -302,6 +303,70 @@ def run_many(kind: str, names: list[str], every: bool) -> int:
     return worst
 
 
+def _pairs(specs: list[str]) -> dict:
+    out = {}
+    for spec in specs:
+        rel, eq, src = spec.partition("=")
+        if not eq:
+            raise SystemExit(f"{spec!r}: expected PATH=FILE (or PATH= to delete)")
+        out[rel] = Path(src).read_bytes() if src else None
+    return out
+
+
+def cmd_trial(args) -> int:
+    from . import trial
+    if args.action == "list":
+        print("\n".join(trial.describe(t) for t in trial.all_trials(args.name)) or "no trials yet")
+        return 0
+    if args.action == "show":
+        t = trial.load(args.name, args.id)
+        print(trial.describe(t))
+        for i, s in enumerate(t["states"], 1):
+            print(f"  {i}. {s['ts']} from {s['start_commit'][:10]} · {s['chosen_by']} · {s['status']} · "
+                  f"{s.get('outcome') or ''} {s.get('model') or ''} · {s.get('why') or ''}")
+        if t["status"] in ("done", "rejected"):
+            print("\n" + trial.report(t))
+        return 0
+    if args.action == "work":
+        return trial.work()
+    if args.action == "replay":
+        instance_root(args.name)
+        ep = next((e for e in trial.live_episodes(INSTANCES / args.name) if e["ts"] == args.ts), None)
+        if not ep:
+            print(f"no live episode of {args.name} ended at {args.ts}", file=sys.stderr)
+            return 1
+        st = trial.state_of(PROJECT, args.name, ep)
+        if not st:
+            print(f"cannot find when that cycle started", file=sys.stderr)
+            return 1
+        import threading
+        rec = trial.replay_arm(PROJECT, args.name, st, trial.committed_code(PROJECT, args.name), model=args.model,
+                               cache={}, cache_lock=threading.Lock(), billed=f"{args.name}@trial:replay",
+                               keep=Path(args.keep).resolve() if args.keep else None)
+        ep2 = rec["episode"] or {}
+        print(f"state: {st['start_commit'][:10]} (cycle began {st['t0']}; inbox {st['inbox']})")
+        print(f"exit {rec['exit']} · {rec['ended']} · {rec['seconds']} s · completed {rec['completed']} · "
+              f"tokens {rec['usage']} · ${rec['usd']}")
+        print(f"goal: {(ep2.get('intent') or {}).get('goal')}\nclaimed: {(ep2.get('finish') or {}).get('criterion_met')}")
+        for c in rec["trace"]:
+            print(f"  {c['tool']} {c['args'][:100]} -> {'ok' if c['ok'] else 'ERROR'} {c['tags']}")
+        print(rec["diff"][:3000] or "(no file changes)")
+        if not rec["completed"]:
+            print(rec["output_tail"])
+        return 0
+    instance_root(args.name)
+    change = _pairs(args.cand)
+    try:
+        t = trial.create(args.name, change, args.hypothesis, by="operator", episodes=args.episodes, n=args.n,
+                         base=_pairs(args.base) or None, allow_empty=args.aa, model=args.model)
+    except trial.TrialError as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 1
+    print(f"queued {t['id']} with {len(t['states'])} past cycles; `shaft trial work` runs it now, or the "
+          f"scheduler does")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="shaft", description="SHAFT supervisor")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -390,6 +455,30 @@ def main(argv: list[str]) -> int:
     p.add_argument("name")
     p.add_argument("action", nargs="?", choices=["allow", "deny"])
     p.add_argument("host", nargs="?")
+    p = sub.add_parser("trial", help="trials of proposed changes: list, show, run (operator), replay, work")
+    tsub = p.add_subparsers(dest="action", required=True)
+    q = tsub.add_parser("list", help="every trial, newest last")
+    q.add_argument("name", nargs="?")
+    q = tsub.add_parser("show", help="one trial in full, with its report")
+    q.add_argument("name")
+    q.add_argument("id")
+    q = tsub.add_parser("run", help="queue a trial as the operator (its verdict is not sent to the instance)")
+    q.add_argument("name")
+    q.add_argument("--cand", action="append", default=[], metavar="PATH=FILE",
+                   help="the change: PATH (in the instance) gets FILE's content; PATH= deletes it")
+    q.add_argument("--base", action="append", default=[], metavar="PATH=FILE",
+                   help="replace PATH in the current version (A) too — for planted tests")
+    q.add_argument("--aa", action="store_true", help="A/A calibration: the 'change' is the current code itself")
+    q.add_argument("--hypothesis", default="operator trial")
+    q.add_argument("-n", type=int, default=0)
+    q.add_argument("--episodes", nargs="*", default=[])
+    q.add_argument("--model", choices=["auto", "cloud", "local"], default="auto")
+    q = tsub.add_parser("replay", help="replay one past cycle once with the current code (debug); keeps a copy")
+    q.add_argument("name")
+    q.add_argument("ts", help="the episode's ts")
+    q.add_argument("--model", default="local", help="'local' (its own configuration) or a cloud model id")
+    q.add_argument("--keep", help="copy the replayed folder here")
+    tsub.add_parser("work", help="run the queued trials' tests and replays that may run now (the scheduler does this)")
     p = sub.add_parser("check", help="run the test gate against an instance's code")
     p.add_argument("name", nargs="?", default=DEFAULT_INSTANCE)
     args = parser.parse_args(argv)
@@ -495,6 +584,8 @@ def main(argv: list[str]) -> int:
         log(f"{args.cmd} {args.name or 'all'} by operator")
         print(f"{args.cmd}d {args.name or 'all instances'}.")
         return 0
+    if args.cmd == "trial":
+        return cmd_trial(args)
     if args.cmd == "check":
         ok, output = gate.run_tests(instance_root(args.name), HOME)
         print(output)

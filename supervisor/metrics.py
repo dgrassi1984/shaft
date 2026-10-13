@@ -203,11 +203,20 @@ def _traits_section(name: str) -> list[str]:
     return lines
 
 
+def _trials_section(name: str) -> list[str]:
+    from . import trial
+    try:
+        return trial.stats_lines(name)
+    except Exception as e:   # measurement never breaks a run
+        log(f"{name}: trials section failed: {type(e).__name__}: {e}")
+        return []
+
+
 def stats_text(name: str) -> str:
     js = judgments(name)
     if not js:
         return "\n".join(["# My measured performance", "", "*Written by the supervisor.* No judged cycles yet."]
-                         + _code_section(name) + _traits_section(name)) + "\n"
+                         + _code_section(name) + _traits_section(name) + _trials_section(name)) + "\n"
     scores = [SCORE[j["criterion_met"]] for j in js]
     confs = [(j["confidence"] / 100, SCORE[j["criterion_met"]]) for j in js if j.get("confidence") is not None]
     claimed = [j for j in js if j.get("claimed")]
@@ -238,7 +247,7 @@ def stats_text(name: str) -> str:
     if fails:
         lines += ["", "## Recent failure modes"] + [f"- {j['episode_ts'][:16]} — {j['failure_mode']}" for j in fails]
     lines += ["", "## Last judgment", f"{js[-1]['goal']}", f"> {js[-1]['reasoning']}"]
-    lines += _code_section(name) + _traits_section(name)
+    lines += _code_section(name) + _traits_section(name) + _trials_section(name)
     return "\n".join(lines) + "\n"
 
 
@@ -251,12 +260,17 @@ def _probation_path(name: str) -> Path:
     return SUP_DIR / "probation" / f"{name}.json"
 
 
-def start_probation(name: str, commit: str, files: list[str]) -> None:
+def start_probation(name: str, commit: str, files: list[str], trial: dict | None = None) -> None:
+    """`trial`: the finished trial whose change this is, byte for byte (supervisor/trial.py match). A change
+    adopted against a 'worse' verdict is reverted on any drop, not only a clear one (PLAN-trials.md, D3)."""
     js = judgments(name)
     recent = [SCORE[j["criterion_met"]] for j in js[-PROBATION_CYCLES:]]
     entry = {"commit": commit, "files": files, "since": datetime.now().isoformat(timespec="seconds"),
              "judged_before": len(js), "baseline": sum(recent) / len(recent) if recent else None,
              "baseline_n": len(recent)}
+    if trial:
+        entry["trial"] = trial
+        entry["margin"] = 0.0 if trial.get("verdict") == "worse" else PROBATION_MARGIN
     p = _probation_path(name)
     p.parent.mkdir(parents=True, exist_ok=True)
     open_ = json.loads(p.read_text()) if p.exists() else []
@@ -276,8 +290,8 @@ def check_probation(name: str) -> None:
             still.append(entry)
             continue
         rate = sum(after[:PROBATION_CYCLES]) / PROBATION_CYCLES
-        base = entry["baseline"]
-        if base is not None and entry["baseline_n"] >= 3 and rate < base - PROBATION_MARGIN:
+        base, margin = entry["baseline"], entry.get("margin", PROBATION_MARGIN)
+        if base is not None and entry["baseline_n"] >= 3 and rate < base - margin:
             root = INSTANCES / name
             r = git_wt(root, "-c", f"user.name=SHAFT supervisor", "-c", "user.email=supervisor@shaft.localhost",
                        "revert", "--no-edit", entry["commit"], check=False)

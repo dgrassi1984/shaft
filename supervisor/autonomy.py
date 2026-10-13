@@ -75,9 +75,9 @@ def service(name: str, action: str) -> int:
     return 0
 
 
-def wake_interval(name: str) -> timedelta | None:
+def wake_interval(name: str, config: dict[str, str] | None = None) -> timedelta | None:
     """The instance's WAKE_INTERVAL_MINUTES (config.env), at least WAKE_FLOOR_MIN; 0 = no scheduled wakes."""
-    raw = instance_config(name).get("WAKE_INTERVAL_MINUTES", "")
+    raw = (instance_config(name) if config is None else config).get("WAKE_INTERVAL_MINUTES", "")
     try:
         minutes = int(raw) if raw else WAKE_DEFAULT_MIN
     except ValueError:
@@ -91,12 +91,12 @@ def _every(interval: timedelta) -> str:
     return f"{m // 60} hours" if m % 60 == 0 and m >= 120 else "hour" if m == 60 else f"{m} minutes"
 
 
-def describe_schedule(name: str) -> str:
+def describe_schedule(name: str, config: dict[str, str] | None = None) -> str:
     """What an instance should know about when it runs — from the scheduler and its own config.env."""
     if not (AGENTS / f"{SERVICES['scheduler']['label']}.plist").exists():
         return ("Your autonomous schedule is off: you run only when Daniele talks to you or starts a cycle "
                 "by hand.")
-    interval = wake_interval(name)
+    interval = wake_interval(name, config)
     wakes = (f"wakes you for an autonomous cycle every {_every(interval)} (WAKE_INTERVAL_MINUTES in your "
              f"config.env, at least {WAKE_FLOOR_MIN}; a wake that comes while you are already awake — a cycle, a "
              f"conversation, your sleep — is skipped)") if interval else \
@@ -185,6 +185,10 @@ def serve(poll_s: int = 30) -> int:
             for name in start:
                 record("wake", name)
                 children[f"wake {name}"] = (_start(["wake", name]), time.monotonic())
+            if "trials" not in children:   # trials of proposed changes; on the local model only in its idle time
+                from . import trial
+                if trial.has_work():
+                    children["trials"] = (_start(["trial", "work"]), time.monotonic())
         time.sleep(poll_s)
 
 
