@@ -18,8 +18,10 @@ and logged; pairing again needs `shaft telegram unpair` in your terminal.
 from __future__ import annotations
 
 import hashlib
+import html
 import json
 import os
+import re
 import secrets
 import sys
 import threading
@@ -35,7 +37,8 @@ API_BASE, _ = knob("SHAFT_TELEGRAM_API", "https://api.telegram.org", str)   # te
 POLL_S = 30                      # long-poll timeout
 STATE = "telegram.json"          # pairing, update offsets, the outbound cursor, which bot message was which question
 PAIR_MINUTES = 10
-MAX_TEXT = 4000                  # Telegram's limit is 4,096 per message
+MAX_TEXT = 4000                  # Telegram's limit is 4,096 characters per message, after formatting
+CHUNK = 3000                     # Markdown per message, before formatting (tags and escapes add some)
 _lock = threading.RLock()
 
 
@@ -105,15 +108,118 @@ def call(token: str, method: str, http_timeout: float = 15, **params) -> object:
 
 
 def send(token: str, chat_id: int, text: str, reply_to: int | None = None) -> list[int]:
-    """Send text, split at Telegram's limit; returns the message ids."""
+    """Send Markdown as Telegram's HTML formatting, split into messages first (so no tag is ever cut); a part
+    Telegram refuses to parse is sent again as plain text rather than lost. Returns the message ids."""
     ids = []
-    text = text.strip() or "(empty)"
-    for k in range(0, len(text), MAX_TEXT):
-        params = {"chat_id": chat_id, "text": text[k:k + MAX_TEXT]}
+    for k, part in enumerate(split_markdown(text.strip() or "(empty)")):
+        params = {"chat_id": chat_id}
         if reply_to and k == 0:
             params["reply_parameters"] = {"message_id": reply_to, "allow_sending_without_reply": True}
-        ids.append(call(token, "sendMessage", **params)["message_id"])
+        formatted = to_html(part)
+        try:
+            if len(formatted) > MAX_TEXT:
+                raise TelegramError("formatted text too long")
+            ids.append(call(token, "sendMessage", text=formatted, parse_mode="HTML",
+                            link_preview_options={"is_disabled": True}, **params)["message_id"])
+        except TelegramError as e:
+            if "parse" not in str(e).lower() and "too long" not in str(e):
+                raise
+            log(f"telegram: sent as plain text ({e})")
+            ids.append(call(token, "sendMessage", text=part[:MAX_TEXT], **params)["message_id"])
     return ids
+
+
+# -- Markdown → Telegram HTML ----------------------------------------------------------------------------------
+FENCE = re.compile(r"^\s*(```|~~~)\s*([\w+#.-]*)\s*$")
+TABLE_SEP = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$")
+
+
+def split_markdown(md: str, limit: int = CHUNK) -> list[str]:
+    """Parts of at most `limit` characters, cut at line ends; a code block cut in two is closed and reopened."""
+    parts, cur, size, fence = [], [], 0, None
+    for line in md.splitlines():
+        for piece in [line[i:i + limit] for i in range(0, len(line), limit)] or [""]:
+            if cur and size + len(piece) + 1 > limit:
+                if fence is not None:
+                    cur.append("```")
+                parts.append("\n".join(cur).strip("\n"))
+                cur, size = ([f"```{fence}"] if fence is not None else []), 0
+            cur.append(piece)
+            size += len(piece) + 1
+            if (m := FENCE.match(piece)):
+                fence = None if fence is not None else m.group(2)
+    if cur:
+        parts.append("\n".join(cur).strip("\n"))
+    return [p for p in parts if p.strip()] or ["(empty)"]
+
+
+def _inline(text: str) -> str:
+    """One line's inline Markdown: `code`, **bold**, *italic*, _italic_, ~~strike~~, [links](url)."""
+    out = []
+    for k, seg in enumerate(re.split(r"(`[^`\n]+`)", text)):
+        if k % 2:
+            out.append(f"<code>{html.escape(seg[1:-1], quote=False)}</code>")
+            continue
+        s = html.escape(seg, quote=False)
+        s = re.sub(r"\[([^\]\n]+)\]\((https?://[^)\s]+)\)",
+                   lambda m: f'<a href="{m.group(2).replace(chr(34), "%22")}">{m.group(1)}</a>', s)
+        s = re.sub(r"\*\*(?=\S)(.+?)(?<=\S)\*\*", r"<b>\1</b>", s)
+        s = re.sub(r"(?<!\w)__(?=\S)(.+?)(?<=\S)__(?!\w)", r"<b>\1</b>", s)
+        s = re.sub(r"~~(?=\S)(.+?)(?<=\S)~~", r"<s>\1</s>", s)
+        s = re.sub(r"(?<![\w*])\*(?=[^\s*])(.+?)(?<=[^\s*])\*(?![\w*])", r"<i>\1</i>", s)
+        s = re.sub(r"(?<![\w])_(?=[^\s_])(.+?)(?<=[^\s_])_(?![\w])", r"<i>\1</i>", s)
+        out.append(s)
+    return "".join(out)
+
+
+def _table(rows: list[str]) -> str:
+    cells = [[c.strip() for c in r.strip().strip("|").split("|")] for r in rows if not TABLE_SEP.match(r)]
+    widths = [max(len(r[i]) if i < len(r) else 0 for r in cells) for i in range(max(map(len, cells)))]
+    lines = ["  ".join((r[i] if i < len(r) else "").ljust(widths[i]) for i in range(len(widths))).rstrip()
+             for r in cells]
+    return "<pre>" + html.escape("\n".join(lines), quote=False) + "</pre>"
+
+
+def to_html(md: str) -> str:
+    """Markdown as Telegram's HTML subset: headings bold, lists with bullets, quotes, code blocks, tables
+    as aligned monospace. Anything else passes through as escaped text."""
+    out, lines, i = [], md.splitlines(), 0
+    while i < len(lines):
+        line = lines[i]
+        if (m := FENCE.match(line)):
+            lang, body, i = m.group(2), [], i + 1
+            while i < len(lines) and not FENCE.match(lines[i]):
+                body.append(lines[i])
+                i += 1
+            i += 1                                    # the closing fence (or the end)
+            cls = f' class="language-{html.escape(lang)}"' if lang else ""
+            out.append(f"<pre><code{cls}>{html.escape(chr(10).join(body), quote=False)}</code></pre>")
+            continue
+        if line.lstrip().startswith("|") and i + 1 < len(lines) and TABLE_SEP.match(lines[i + 1]):
+            rows = []
+            while i < len(lines) and lines[i].lstrip().startswith("|"):
+                rows.append(lines[i])
+                i += 1
+            out.append(_table(rows))
+            continue
+        if line.lstrip().startswith(">"):
+            quote = []
+            while i < len(lines) and lines[i].lstrip().startswith(">"):
+                quote.append(_inline(lines[i].lstrip()[1:].lstrip()))
+                i += 1
+            out.append("<blockquote>" + "\n".join(quote) + "</blockquote>")
+            continue
+        if (m := re.match(r"^#{1,6}\s+(.*)$", line)):
+            out.append(f"<b>{_inline(m.group(1).strip().rstrip('#').strip())}</b>")
+        elif re.match(r"^\s*([-*_])(\s*\1){2,}\s*$", line):
+            out.append("──────────")
+        elif (m := re.match(r"^(\s*)[-*+]\s+(\[[ xX]\]\s+)?(.*)$", line)):
+            box = {"[ ]": "☐ ", "[x]": "☑ "}.get((m.group(2) or "").strip().lower(), "")
+            out.append(f"{'  ' * (len(m.group(1)) // 2)}• {box}{_inline(m.group(3))}")
+        else:
+            out.append(_inline(line))
+        i += 1
+    return "\n".join(out)
 
 
 # -- pairing ----------------------------------------------------------------------------------------------------
@@ -152,6 +258,21 @@ def try_pair(user: dict, code: str) -> str:
 
 def paired_id() -> int | None:
     return (load().get("paired") or {}).get("user_id")
+
+
+def reachable(name: str) -> str:
+    """'@its_bot' when Daniele can be reached on Telegram through this instance's bot: a token, a known bot name,
+    a paired account and the service running; '' otherwise. Instances are told this in send_message."""
+    from .version import service
+    st = load()
+    bot = (st.get("bots") or {}).get(name, "")
+    if not (bot and st.get("paired") and token_key(name) in secrets_env() and service("telegram", stale=False)):
+        return ""
+    return f"@{bot}"
+
+
+def remember_bot(name: str, username: str) -> None:
+    update(lambda s: s.setdefault("bots", {}).__setitem__(name, username))
 
 
 # -- you → instance ---------------------------------------------------------------------------------------------
@@ -337,9 +458,9 @@ def forward_new(toks: dict[str, str] | None = None) -> int:
             continue
         tok = toks.get(m["from"])
         if tok:
-            head = "❓ Question" if m.get("kind") == "question" else "📝 Note"
+            head = "❓ **Question** from" if m.get("kind") == "question" else "📝 **Note** from"
             try:
-                ids = send(tok, owner, f"{head} from {m['from']}:\n\n{m['text']}")
+                ids = send(tok, owner, f"{head} {m['from']}\n\n{m['text']}")
             except TelegramError as e:
                 log(f"telegram: could not forward {m['file']}: {e}")
                 return sent                         # try again from here next time
@@ -357,6 +478,11 @@ def serve() -> int:
         print("no bot tokens: shaft telegram token <instance>")
         return 2
     from .version import record_service
+    for name, token in toks.items():                 # the bots' names, for the instances' send_message tool
+        try:
+            remember_bot(name, call(token, "getMe").get("username", ""))
+        except TelegramError as e:
+            log(f"telegram: {name}'s bot: {e}")
     record_service("telegram", {"bots": sorted(toks), "paired": bool(paired_id())})
     stop = threading.Event()
     for name, token in toks.items():
@@ -390,6 +516,7 @@ def command(action: str, name: str | None = None) -> int:
             print(f"not saved: Telegram refused the token ({e})")
             return 1
         _set_secret(token_key(name), tok)
+        remember_bot(name, me.get("username", ""))
         log(f"telegram: bot @{me.get('username')} set for {name}")
         print(f"{name} now talks through @{me.get('username')} — restart the service: shaft telegram on")
         return 0

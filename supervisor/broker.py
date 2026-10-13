@@ -279,6 +279,7 @@ class Broker:
         self.usage_name = usage_name or name
         from .core import disabled_tools
         self.disabled = disabled_tools(name)   # switched off by the operator: not offered, and refused
+        self.bot = ""                           # set by tool_specs: its Telegram bot, if Daniele can be reached there
         # The operator's folder this run may read (shaft share): the instance's own runs and its trial replays,
         # never a battery exam (its control arm has no such folder). Checked again here: a folder deleted or
         # moved since it was granted is logged and left out, not handed to the sandbox.
@@ -329,8 +330,7 @@ class Broker:
                 if not self._authorised():
                     return
                 if self.path == "/tools":
-                    return self._reply(200, {"tools": [spec for tool, spec in SPECS.items()
-                                                       if tool not in broker.disabled]})
+                    return self._reply(200, {"tools": broker.tool_specs()})
                 self._reply(404, {"ok": False, "error": "not found"})
 
             def do_POST(self):
@@ -493,6 +493,27 @@ class Broker:
         else:
             raise ValueError(f"unknown recipient {to!r}; try list_instances or 'operator'")
         return f"delivered to {to}"
+
+    def tool_specs(self) -> list[dict]:
+        """The tools offered to this instance; send_message says when Daniele is reached on Telegram, through
+        this instance's own bot (Daniele, 2026-10-13: "ensure that the instances know they can contact me")."""
+        from . import telegram
+        try:
+            self.bot = telegram.reachable(self.name)
+        except Exception:                      # Telegram's state unreadable: the tool still works, without the line
+            self.bot = ""
+        out = []
+        for tool, spec in SPECS.items():
+            if tool in self.disabled:
+                continue
+            if tool == "send_message" and self.bot:
+                spec = json.loads(json.dumps(spec))
+                spec["function"]["description"] += (
+                    f" Messages to 'operator' reach Daniele at once on his phone, on Telegram, from your own bot "
+                    f"{self.bot}; he can answer there, and he can also write to you there — those are live "
+                    "conversations with you, like the terminal.")
+            out.append(spec)
+        return out
 
     def _operator_sent_today(self, stamp: datetime) -> int:
         inbox = self.project / ".supervisor" / "operator-inbox"

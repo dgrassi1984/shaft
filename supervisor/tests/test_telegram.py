@@ -25,6 +25,7 @@ class FakeBotAPI:
         self.calls: list[tuple[str, str, dict]] = []      # (token, method, params)
         self.next_id = 100
         self.fail = set()
+        self.reject_html = False
         fake = self
 
         class H(BaseHTTPRequestHandler):
@@ -38,6 +39,8 @@ class FakeBotAPI:
                 fake.calls.append((token, method, params))
                 if method in fake.fail or token not in TOK.values():
                     body, code = {"ok": False, "description": "Unauthorized"}, 401
+                elif fake.reject_html and params.get("parse_mode"):
+                    body, code = {"ok": False, "description": "Bad Request: can't parse entities: bad tag"}, 400
                 elif method == "getMe":
                     body, code = {"ok": True, "result": {"username": "wren_shaft_bot"}}, 200
                 elif method == "sendMessage":
@@ -158,10 +161,11 @@ class TelegramTest(unittest.TestCase):
         self.assertEqual(telegram.forward_new(), 1)                  # kant has no bot: skipped, not stuck
         (tok, p), = self.api.sent(TOK["wren"])[-1:]
         self.assertEqual(p["chat_id"], 42)
-        self.assertIn("Question from wren", p["text"])
+        self.assertIn("❓ <b>Question</b> from wren", p["text"])
         self.assertEqual(telegram.forward_new(), 0)                  # sent once
         mid = self.api.next_id
-        self.upd(_msg(ME, "Once.", mid=30, reply_to={"message_id": mid, "text": p["text"]}))
+        shown = "❓ Question from wren\n\nNotify once or every time?"     # Telegram quotes the rendered text
+        self.upd(_msg(ME, "Once.", mid=30, reply_to={"message_id": mid, "text": shown}))
         self.assertTrue(self.asked[-1][1][-1]["content"].startswith("> ❓ Question from wren"))
         self.assertFalse(any(p.name.endswith("from-wren.md") for p in inbox.glob("*.md")))   # answered: archived
 
@@ -202,6 +206,20 @@ class TelegramTest(unittest.TestCase):
     def test_long_answers_are_split(self):
         ids = telegram.send(TOK["wren"], 42, "x" * (telegram.MAX_TEXT * 2 + 10))
         self.assertEqual(len(ids), 3)
+        self.assertTrue(all(len(p["text"]) <= telegram.MAX_TEXT for _, p in self.api.sent()))
+
+    def test_markdown_arrives_formatted_and_a_refused_part_as_plain_text(self):
+        """Daniele, 2026-10-13: "It currently is raw markdown"."""
+        telegram.send(TOK["wren"], 42, "**Done**: `a < b` — see [PR](https://x.org/p?a=1&b=2)")
+        (_, p), = self.api.sent()
+        self.assertEqual(p["parse_mode"], "HTML")
+        self.assertEqual(p["text"], '<b>Done</b>: <code>a &lt; b</code> — see <a href="https://x.org/p?a=1&amp;b=2">PR</a>')
+        self.api.reject_html = True
+        telegram.send(TOK["wren"], 42, "**odd** text")
+        last = self.api.sent()[-1][1]
+        self.assertNotIn("parse_mode", last)                     # sent again, plain: never lost
+        self.assertEqual(last["text"], "**odd** text")
+
 
     def test_token_command_checks_with_telegram_before_saving(self):
         saved = {}
@@ -214,6 +232,63 @@ class TelegramTest(unittest.TestCase):
                 mock.patch("sys.stdin", io.StringIO(TOK["wren"] + "\n")), mock.patch("sys.stdout", new_callable=io.StringIO):
             self.assertEqual(telegram.command("token", "wren"), 0)
         self.assertEqual(saved, {"TELEGRAM_TOKEN_WREN": TOK["wren"]})
+
+
+class MarkdownTest(unittest.TestCase):
+    def test_blocks(self):
+        md = ("## Findings\n\n- first\n  - nested *it*\n- [x] done\n\n> quoted **b**\n> two\n\n"
+              "| model | success |\n|---|---:|\n| mimo | 86% |\n\n```python\nif a < b:\n    x = '<ok>'\n```\n---")
+        out = telegram.to_html(md)
+        self.assertIn("<b>Findings</b>", out)
+        self.assertIn("• first\n  • nested <i>it</i>\n• ☑ done", out)
+        self.assertIn("<blockquote>quoted <b>b</b>\ntwo</blockquote>", out)
+        self.assertIn("<pre>model  success\nmimo   86%</pre>", out)
+        self.assertIn('<pre><code class="language-python">if a &lt; b:\n    x = \'&lt;ok&gt;\'</code></pre>', out)
+        self.assertTrue(out.endswith("──────────"))
+
+    def test_text_that_only_looks_like_markup_is_left_alone(self):
+        self.assertEqual(telegram.to_html("snake_case_name, 2*3*4 and <tag> & co"),
+                         "snake_case_name, 2*3*4 and &lt;tag&gt; &amp; co")
+        self.assertEqual(telegram.to_html("`**not bold**`"), "<code>**not bold**</code>")
+
+    def test_a_code_block_cut_by_the_split_is_closed_and_reopened(self):
+        parts = telegram.split_markdown("```py\n" + "line\n" * 800 + "```", 1000)
+        self.assertGreater(len(parts), 3)
+        for p in parts:
+            self.assertEqual(p.count("```") % 2, 0, p[:40])
+            self.assertTrue(p.startswith("```py"))
+            self.assertIn('<code class="language-py">', telegram.to_html(p))
+
+
+class ToldTheyCanReachDanieleTest(unittest.TestCase):
+    """Daniele, 2026-10-13: "ensure that the instances know they can contact me via telegram"."""
+
+    def test_send_message_names_the_bot_only_when_it_works(self):
+        from supervisor import broker
+        b = broker.Broker.__new__(broker.Broker)
+        b.name, b.disabled = "wren", set()
+        with mock.patch.object(telegram, "reachable", return_value="@WrenFawlerBot"):
+            spec = next(t for t in b.tool_specs() if t["function"]["name"] == "send_message")
+        self.assertIn("on Telegram, from your own bot @WrenFawlerBot", spec["function"]["description"])
+        self.assertNotIn("@WrenFawlerBot", broker.SPECS["send_message"]["function"]["description"])   # not shared
+        with mock.patch.object(telegram, "reachable", return_value=""):
+            spec = next(t for t in b.tool_specs() if t["function"]["name"] == "send_message")
+        self.assertNotIn("Telegram, from your own bot", spec["function"]["description"])
+
+    def test_reachable_needs_token_bot_pairing_and_the_service(self):
+        sup = Path(tempfile.mkdtemp(prefix="shaft-tg-"))
+        self.addCleanup(shutil.rmtree, sup, True)
+        env = {telegram.token_key("wren"): TOK["wren"]}
+        with mock.patch.object(telegram, "SUP_DIR", sup), mock.patch.object(telegram, "secrets_env", lambda: env), \
+                mock.patch("supervisor.version.service", return_value={"pid": 1}) as svc:
+            self.assertEqual(telegram.reachable("wren"), "")              # no bot name, not paired
+            telegram.remember_bot("wren", "WrenFawlerBot")
+            self.assertEqual(telegram.reachable("wren"), "")              # not paired
+            telegram.update(lambda s: s.__setitem__("paired", {"user_id": 42}))
+            self.assertEqual(telegram.reachable("wren"), "@WrenFawlerBot")
+            self.assertEqual(telegram.reachable("shaft"), "")             # no token for shaft here
+            svc.return_value = None
+            self.assertEqual(telegram.reachable("wren"), "")              # service down
 
 
 if __name__ == "__main__":
