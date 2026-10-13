@@ -240,8 +240,8 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
   sends nothing (messages, writes, keys are checked and recorded, not carried out; web reads are real and
   shared by both runs; no coder). A judge not told which run is which compares each pair, effectiveness first,
   in both orders; a sign test (α 0.1) gives better / worse / no clear difference, sent to the instance's inbox.
-  Nothing is applied: the instance adopts the change itself, and if it makes the trialled edit (the same lines
-  removed and added, even if the rest of the file moved on) its probation knows the verdict. On the local model a trial uses only idle time (no run, conversation, wake or
+  Nothing is applied: the instance adopts the change itself, and if the files match the trial byte for byte
+  its probation knows the verdict. On the local model a trial uses only idle time (no run, conversation, wake or
   sleep due within 15 min; cut off 90 s before one) and otherwise runs on `SHAFT_TRIAL_FALLBACK_MODEL`
   (mimo) — at once for an instance waking more often than every 30 min, else after `SHAFT_TRIAL_LOCAL_WAIT_H`
   (6) or two preemptions. Caps per instance per day: `SHAFT_TRIALS_PER_DAY` (2), `SHAFT_TRIAL_DAILY_USD` (3),
