@@ -62,13 +62,13 @@ class Client:
         self.presence_penalty = presence_penalty
         self.think_followup = think_followup
         self.reasoning_effort = reasoning_effort
-        self.local = not broker_token   # SHAFT's own server (template kwargs apply), not the cloud broker
         self.timeout_s = timeout_s
         self.usage_log = usage_log
 
     @classmethod
     def from_config(cls, cfg) -> "Client":
-        """LLM_BASE_URL="broker" means: a cloud model through the supervisor's broker (no key here)."""
+        """LLM_BASE_URL="broker" means: a model the supervisor's broker reaches for me (no key here) — a cloud model,
+        or a self-hosted Bonsai server such as racer/bonsai2, which reads the same template settings as my local one."""
         base, token = cfg.LLM_BASE_URL, ""
         if base == "broker":
             broker_url = os.environ.get("SHAFT_BROKER_URL")
@@ -78,8 +78,7 @@ class Client:
         return cls(base, cfg.LLM_MODEL, cfg.LLM_API_KEY, cfg.LLM_TIMEOUT_S,
                    cfg.root / "logs" / "llm_usage.jsonl", broker_token=token,
                    presence_penalty=cfg.LLM_PRESENCE_PENALTY / 10,
-                   think_followup=0 if token else cfg.LLM_THINK_FOLLOWUP,   # SHAFT's own server only
-                   reasoning_effort="" if token else cfg.LLM_REASONING_EFFORT)
+                   think_followup=cfg.LLM_THINK_FOLLOWUP, reasoning_effort=cfg.LLM_REASONING_EFFORT)
 
     # -- public -------------------------------------------------------------
     def complete(self, messages: list[dict], max_tokens: int, purpose: str,
@@ -133,21 +132,22 @@ class Client:
         body = {"model": self.model, "messages": messages, "max_tokens": max_tokens}
         if self.presence_penalty:   # Qwen's advice for quantized models: curbs endless repetition
             body["presence_penalty"] = self.presence_penalty
-        if self.local:
-            # Earlier steps' thinking is shown only within the current reply, not for older turns: it keeps
-            # the plan across tool rounds without carrying every past reply's reasoning in the context.
-            kwargs = {"preserve_thinking": False}
-            if not think:   # Qwen-style templates: answer directly, no hidden reasoning
-                kwargs["enable_thinking"] = False
-            elif self.reasoning_effort:
-                # Bonsai's template defaults to xhigh, which thinks until the server's budget cuts it off on
-                # anything non-trivial (4,096 tokens, ~4 min); medium thinks as much as the request needs.
-                kwargs["reasoning_effort"] = self.reasoning_effort
-            if think and self.think_followup and messages and messages[-1].get("role") == "tool":
-                # After a tool result I mostly need to read it, not deliberate from scratch: SHAFT's server
-                # forces </think> after this many reasoning tokens (its own budget stays the ceiling).
-                kwargs["thinking_budget"] = self.think_followup
-            body["chat_template_kwargs"] = kwargs
+        # Bonsai's template settings (my local server, or a self-hosted one through the broker); the broker drops
+        # them for cloud models, which have no such template.
+        # Earlier steps' thinking is shown only within the current reply, not for older turns: it keeps
+        # the plan across tool rounds without carrying every past reply's reasoning in the context.
+        kwargs = {"preserve_thinking": False}
+        if not think:   # Qwen-style templates: answer directly, no hidden reasoning
+            kwargs["enable_thinking"] = False
+        elif self.reasoning_effort:
+            # Bonsai's template defaults to xhigh, which thinks until the server's budget cuts it off on
+            # anything non-trivial (4,096 tokens, ~4 min); medium thinks as much as the request needs.
+            kwargs["reasoning_effort"] = self.reasoning_effort
+        if think and self.think_followup and messages and messages[-1].get("role") == "tool":
+            # After a tool result I mostly need to read it, not deliberate from scratch: SHAFT's server
+            # forces </think> after this many reasoning tokens (its own budget stays the ceiling; llama.cpp ignores it).
+            kwargs["thinking_budget"] = self.think_followup
+        body["chat_template_kwargs"] = kwargs
         if tools:
             body["tools"] = tools
         if stream:
