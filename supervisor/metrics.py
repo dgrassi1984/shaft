@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import judge
-from .core import INSTANCES, SUP_DIR, git_wt, journal_note, knob, log, safe_write
+from .core import INSTANCES, SUP_DIR, config_values, git_wt, journal_note, knob, log, safe_write
 
 PROBATION_CYCLES, _ = knob("SHAFT_PROBATION_CYCLES", "6", int)
 PROBATION_MARGIN = 0.15   # revert only on a clear drop, not noise
@@ -299,6 +299,16 @@ def cycle_model(name: str, ep: dict) -> str | None:
     return max(counts, key=counts.get) if counts else None
 
 
+def own_models(name: str, ep: dict | None = None) -> list[str]:
+    """The models an instance thinks with — the one its cycle ran on and the one configured now: the judge rotation
+    never grades it with either (no self-preference)."""
+    try:
+        configured = config_values((INSTANCES / name / "config.env").read_text()).get("LLM_MODEL")
+    except OSError:
+        configured = None
+    return [m for m in ((cycle_model(name, ep) if ep else None), configured) if m]
+
+
 def judge_pending(name: str) -> int:
     js = judgments(name)
     done = {j["episode_ts"] for j in js}
@@ -316,9 +326,10 @@ def judge_pending(name: str) -> int:
         else:
             try:
                 case = _case(ep, _written_files(name, ep), _provenance_evidence(name, ep), _prior_goals(js, ep["ts"]))
-                verdict = judge.ask(JUDGE_SYSTEM, case, JUDGE_SCHEMA, purpose=f"judge {name}")
+                by = judge.pick(exclude=own_models(name, ep))
+                verdict = judge.ask(JUDGE_SYSTEM, case, JUDGE_SCHEMA, purpose=f"judge {name}", model=by)
                 _check_ratings(verdict)
-                verdict["judge"] = judge.JUDGE_MODEL
+                verdict["judge"] = by
                 if second_sampled(name, ep["ts"]):
                     stash_second(name, ep["ts"], case)   # judged after the run lets go of the instance
             except judge.JudgeError as e:
@@ -442,7 +453,8 @@ def backfill(name: str, limit: int | None = None) -> int:
         case = (_case(ep, _written_files(name, ep), _provenance_evidence(name, ep), _prior_goals(js, ep["ts"]))
                 + f"\n\n## The verdict already given (keep it; rate only)\n{json.dumps(verdict_given, indent=1)}")
         try:
-            out = judge.ask(JUDGE_SYSTEM, case, RATING_SCHEMA, purpose=f"backfill {name}")
+            by = judge.pick(exclude=own_models(name, ep))
+            out = judge.ask(JUDGE_SYSTEM, case, RATING_SCHEMA, purpose=f"backfill {name}", model=by)
             _check_ratings(out)
         except judge.JudgeError as e:
             log(f"{name}: backfill of {j['episode_ts']} failed: {e}")
@@ -450,7 +462,7 @@ def backfill(name: str, limit: int | None = None) -> int:
         if not (ep.get("intent") or {}).get("origin"):
             out["origin_supported"] = None       # declared nothing: before origins existed
         rated[j["episode_ts"]] = {**out, "model": j.get("model") or cycle_model(name, ep),
-                                  "rated_by": judge.JUDGE_MODEL, "rated_at": datetime.now().isoformat(timespec="seconds")}
+                                  "rated_by": by, "rated_at": datetime.now().isoformat(timespec="seconds")}
     # The rewrite holds the instance's run lock: after_cycle appends judgments while its run holds that lock,
     # so no cycle can be judged between our read and our replace. (The judge calls above run without it.)
     from .runner import run_lock
@@ -533,7 +545,8 @@ def check_personality(name: str) -> None:
         cases.append(f"## Trait\n{t}\n\n## Cited journal entries\n" + ("\n\n".join(cited[:3]) or "(none found)"))
     verdict = judge.ask("You check whether personality traits are supported by the journal entries they cite. "
                         "'yes' only if the entry shows behaviour that supports the trait.",
-                        "\n\n---\n\n".join(cases), TRAITS_SCHEMA, purpose=f"traits {name}")
+                        "\n\n---\n\n".join(cases), TRAITS_SCHEMA, purpose=f"traits {name}",
+                        exclude=own_models(name))
     path = SUP_DIR / "judgments" / f"{name}-traits.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"checked_at": datetime.now().isoformat(timespec="seconds"), **verdict},

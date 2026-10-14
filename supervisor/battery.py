@@ -290,7 +290,7 @@ def run_hidden_tests(item: dict, scratch: Path) -> dict:
     return {"passed": max(0, total - bad), "total": total, "output": output[-3000:]}
 
 
-def grade(item: dict, res: dict, truth: str | None, tests: dict | None) -> dict:
+def grade(item: dict, res: dict, truth: str | None, tests: dict | None, model: str | None = None) -> dict:
     ref = {"coding": "## What the task asked for, and how it is checked\n" + item.get("reference", ""),
            "research": "## Reference answer (frozen when the item was written)\n" + item.get("key", ""),
            "recall": "## What the agent's own journal entry says (the reference)\n" + item.get("answer", ""),
@@ -299,7 +299,7 @@ def grade(item: dict, res: dict, truth: str | None, tests: dict | None) -> dict:
             f"## Its tool log\n{_tool_log(res)}")
     if tests:
         case += f"\n\n## Hidden tests: {tests['passed']}/{tests['total']} passed\n```\n{tests['output'][-2000:]}\n```"
-    out = judge.ask(GRADE_SYSTEM, case, GRADE_SCHEMA, purpose=f"battery {item['category']}")
+    out = judge.ask(GRADE_SYSTEM, case, GRADE_SCHEMA, purpose=f"battery {item['category']}", model=model)
     if out.get("effectiveness") not in range(11):
         raise judge.JudgeError(f"effectiveness {out.get('effectiveness')!r} outside 0-10")
     return out
@@ -413,11 +413,13 @@ def make_recall(name: str, force: bool = False) -> Path | None:
               "outcome), not an opinion — phrased as someone asking the agent about its past, without quoting "
               "the entry. Give the answer as the entry states it.\n\n"
               + "\n\n".join(f"## Entry {stamp}\n{text[:3000]}" for stamp, text in picked))
-    out = judge.ask("You write precise recall questions.", prompt, RECALL_SCHEMA, purpose=f"battery recall-gen {name}")
+    by = judge.pick(exclude=[instance_config(name).get("LLM_MODEL")])
+    out = judge.ask("You write precise recall questions.", prompt, RECALL_SCHEMA, purpose=f"battery recall-gen {name}",
+                    model=by)
     qs = out["questions"]
     if len(qs) != RECALL_ITEMS:
         raise judge.JudgeError(f"expected {RECALL_ITEMS} recall questions, got {len(qs)}")
-    data = {"generated": datetime.now().isoformat(timespec="seconds"), "judge": judge.JUDGE_MODEL,
+    data = {"generated": datetime.now().isoformat(timespec="seconds"), "judge": by,
             "questions": [{"id": f"{name}-{i + 1}", "prompt": q["question"], "answer": q["answer"],
                            "entry": q["entry"], "max_steps": 8} for i, q in enumerate(qs)]}
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -441,7 +443,7 @@ def results(name: str) -> list[dict]:
 
 def era(name: str) -> dict:
     return {"version": VERSION, "checksum": checksum(name), "model": instance_config(name).get("LLM_MODEL"),
-            "judge": judge.JUDGE_MODEL}
+            "judge": judge.rotation()}   # graded by the rotation; each row records its own grader
 
 
 def _same_era(row: dict, e: dict) -> bool:
@@ -516,11 +518,13 @@ def run(name: str, until: float | None = None, only: list[str] | None = None, co
         for item in items:
             arms = ([] if control_only else [("instance", root)]) + \
                 ([("control", ctrl_root)] if ctrl_root and item["category"] in CONTROLLED else [])
+            # One grader for both arms of an item, so instance and control are compared under the same judge.
+            grader = judge.pick(exclude=[instance_config(name).get("LLM_MODEL")])
             for arm, arm_root in arms:
                 why = interrupt()
                 if why:
                     raise Interrupted(why)
-                row = _one(name, item, arm, arm_root, e, until, interrupt)
+                row = _one(name, item, arm, arm_root, e, until, interrupt, grader)
                 summary["items"].append({k: row.get(k) for k in ("item", "arm", "status", "score")})
                 scored += row["status"] == "scored"
     except Interrupted as stop:
@@ -544,7 +548,8 @@ def run(name: str, until: float | None = None, only: list[str] | None = None, co
     return scored
 
 
-def _one(name: str, item: dict, arm: str, root: Path, e: dict, until: float | None, interrupt) -> dict:
+def _one(name: str, item: dict, arm: str, root: Path, e: dict, until: float | None, interrupt,
+         grader: str | None = None) -> dict:
     label = name if arm == "instance" else f"{name}-control"
     scratch_rel = f".tmp/battery/{item['id'].replace('/', '-')}"
     scratch = root / scratch_rel
@@ -588,7 +593,8 @@ def _one(name: str, item: dict, arm: str, root: Path, e: dict, until: float | No
         t = truth(name, item["truth"]) if item["category"] == "self" else None
         row["truth"] = t
         row["tests"] = tests
-        row["grade"] = grade(item, res, t, tests)
+        row["grade"] = grade(item, res, t, tests, model=grader)
+        row["grader"] = grader
         row["status"] = "scored"
         row["score"] = round(headline(row), 2)
     except judge.JudgeError as err:

@@ -329,8 +329,13 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
   supervisor; memory, journal and self are never touched. A restore that cannot be done (a file was
   changed again since, or the tests fail with the earlier version) stays on probation and is logged.
   A change adopted against a trial's 'worse' verdict is undone on any drop, without the chance test.
-- **Judge**: every autonomous cycle is graded from its tool log by a cloud model
-  (`SHAFT_JUDGE_MODEL`, default `claude-opus-5-5`); results feed `self/stats.md`.
+- **Judge**: every autonomous cycle is graded from its tool log by a cloud model picked at random from a
+  rotation (`SHAFT_JUDGE_MODELS`, default `openrouter/xiaomi/mimo-v2.6-pro,claude-haiku-5-5,claude-sonnet-5-5`;
+  Daniele, 2026-10-14 — Opus 5.5 was too costly), never the model the judged instance runs on; each verdict records
+  its judge. Claude models go straight to the Claude API; OpenRouter ones under the instances' data policy (no data
+  collection, zero retention — Muse Spark was left out because its only provider keeps prompts). A trial pair keeps
+  one judge for both orders; a battery item one grader for both arms, and a battery era is the whole pool. Results
+  feed `self/stats.md`.
 - **Git**: after every run the instance's state is committed to its branch (author
   `SHAFT/<name>`), with the main repo's worktree registry and hooks off, so an instance
   cannot redirect the supervisor's git calls.

@@ -511,14 +511,14 @@ def state_context(project: Path, name: str, state: dict) -> str:
             f"{_cap(goals, 4000)}\n\n## Its inbox at that moment\n" + ("\n\n".join(inbox) or "(empty)"))
 
 
-def judge_pair(context: str, first: dict, second: dict, purpose: str) -> dict:
+def judge_pair(context: str, first: dict, second: dict, purpose: str, model: str | None = None) -> dict:
     """One judgment of a pair in one order. `finish_reason='length'` is no answer yet: asked once more with
     twice the room; then it fails (the state is reported unjudged, never guessed)."""
     from . import judge
     case = judge_case(context, first, second)
     for room in (16000, 32000):
         try:
-            return judge.ask(JUDGE_SYSTEM, case, JUDGE_SCHEMA, purpose=purpose, max_tokens=room)
+            return judge.ask(JUDGE_SYSTEM, case, JUDGE_SCHEMA, purpose=purpose, max_tokens=room, model=model)
         except judge.JudgeError as e:
             if "max_tokens" not in str(e) or room == 32000:
                 raise
@@ -526,14 +526,17 @@ def judge_pair(context: str, first: dict, second: dict, purpose: str) -> dict:
 
 
 def _judge_usd(purpose: str) -> float:
+    """What the judge calls for `purpose` cost: OpenRouter's own figure when logged, else tokens × the model's price."""
     from .cloudllm import PRICES
-    from .judge import JUDGE_MODEL
     path = SUP_DIR / "judge_usage.jsonl"
     usd = 0.0
     for line in path.read_text().splitlines() if path.exists() else []:
         r = json.loads(line)
         if r.get("purpose") == purpose:
-            pin, pout = PRICES.get(r.get("model") or JUDGE_MODEL, PRICES.get(JUDGE_MODEL, (0, 0)))
+            if r.get("usd") is not None:
+                usd += float(r["usd"])
+                continue
+            pin, pout = PRICES.get(r.get("model"), (0, 0))
             usd += ((r.get("input_tokens") or 0) * pin + (r.get("output_tokens") or 0) * pout) / 1e6
     return usd
 
@@ -921,6 +924,15 @@ def run_pair(project: Path, t: dict, i: int, model: str) -> None:
         return
     judgments: list[dict | None] = []
     ctx = state_context(project, name, s)
+    # One judge for both orders of the pair (the order swap checks position bias, not judge variance), never the
+    # model the instance or its replay ran on.
+    from . import judge
+    try:
+        by = judge.pick(exclude=[_config(project, name).get("LLM_MODEL"), label])
+    except judge.JudgeError as e:
+        by = None
+        log(f"{name}: trial {t['id']} past cycle {i + 1}: {e}")
+    s["judge"] = by
     for first, second in (("A", "B"), ("B", "A")):
         purpose = f"trial {name} {t['id']} s{i} {first}{second}"
         try:
@@ -928,7 +940,9 @@ def run_pair(project: Path, t: dict, i: int, model: str) -> None:
                     arms["A"]["completed"] != arms["B"]["completed"]:
                 judgments.append(None)   # decided by the completion rule: no judge needed
                 continue
-            judgments.append(judge_pair(ctx, arms[first], arms[second], purpose))
+            if by is None:
+                raise RuntimeError("no judge available for this pair")
+            judgments.append(judge_pair(ctx, arms[first], arms[second], purpose, model=by))
         except Exception as e:
             log(f"{name}: trial {t['id']} judgment {purpose} failed: {type(e).__name__}: {e}")
             judgments.append(None)

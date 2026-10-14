@@ -514,8 +514,11 @@ class BatteryEndToEndTest(unittest.TestCase):
             return dest
         self.graded = []
 
+        self.graders = []
+
         def ask(system, case, schema, purpose, **kw):
             self.graded.append(case)
+            self.graders.append(kw.get("model"))
             return {"correct": "yes", "effectiveness": 9, "unsupported_claims": 0, "reasoning": "fine"}
         wt = lambda root, *a, **k: core.git_wt(root, *a, **{**k, "project": self.project})  # noqa: E731
         self.patches = [
@@ -527,7 +530,7 @@ class BatteryEndToEndTest(unittest.TestCase):
             mock.patch.object(battery, "LLM_PORTS", [self.fake.port]), mock.patch.object(battery, "secrets_env", dict),
             mock.patch.object(battery, "git_wt", wt), mock.patch.object(battery, "make_control", make_control),
             mock.patch.object(battery, "log"), mock.patch.object(metrics, "log"),
-            mock.patch.object(judge, "ask", ask), mock.patch.object(judge, "JUDGE_MODEL", "judge-test"),
+            mock.patch.object(judge, "ask", ask), mock.patch.object(judge, "JUDGE_MODELS", ["judge-test"]),
             mock.patch("supervisor.autonomy.describe_schedule", return_value="test"),
         ]
         for p in self.patches:
@@ -548,6 +551,10 @@ class BatteryEndToEndTest(unittest.TestCase):
         self.assertEqual((inst["status"], inst["tests"]["passed"], inst["score"]), ("scored", 1, 10.0), inst)
         self.assertEqual((ctrl["status"], ctrl["tests"]["passed"], ctrl["score"]), ("scored", 0, 0.0), ctrl)
         self.assertEqual(inst["checksum"], battery.checksum("e"))
+        # One grader for both arms of the item (judge rotation, 2026-10-14), recorded on each row; the era is the pool.
+        self.assertEqual(inst["grader"], ctrl["grader"])
+        self.assertEqual(self.graders, [inst["grader"]] * 2)
+        self.assertEqual(inst["judge"], judge.rotation())
         after = battery.snapshot(self.root)
         self.assertIn("self/stats.md", after)                                     # the supervisor's own write
         self.assertEqual({k: v for k, v in after.items() if k != "self/stats.md"}, before)   # nothing kept

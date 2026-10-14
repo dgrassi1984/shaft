@@ -458,6 +458,24 @@ class FlowTest(Fixture):
         (self.root / "shaft" / "prompts.py").write_bytes(moved.replace(b"\n", b"\nANOTHER SENTENCE\n", 1))
         self.assertIsNone(trial.match(NAME, self.root, ["shaft/prompts.py"], {"shaft/prompts.py": moved}))
 
+    def test_both_orders_of_a_pair_have_one_judge_never_the_instances_model(self):
+        # 2026-10-14, judge rotation: the order swap checks position bias; a different judge per order would mix in
+        # judge variance. And the model the instance thinks with never grades it.
+        seen = []
+        own = trial._config(self.project, NAME).get("LLM_MODEL")
+        pool = ["openrouter/xiaomi/mimo-v2.6-pro", "claude-haiku-5-5", "claude-sonnet-5-5", own or "x"]
+        with mock.patch.object(trial, "replay_arm", lambda *a, **k: self.arm(True)), \
+                mock.patch.object(trial, "judge_pair", lambda *a, **k: seen.append(k["model"]) or
+                                  {"winner": "first", "margin": "clear", "reasoning": "r"}), \
+                mock.patch("supervisor.judge.JUDGE_MODELS", pool):
+            for _ in range(6):
+                seen.clear()
+                trial.run_pair(self.project, trial.load(NAME, self.t["id"]), 0, "own")
+                self.assertEqual(len(seen), 2)
+                self.assertEqual(seen[0], seen[1])
+                self.assertNotEqual(seen[0], own)
+        self.assertEqual(trial.load(NAME, self.t["id"])["states"][0]["judge"], seen[0])
+
     def test_the_proposed_run_that_crashes_loses_without_a_judge(self):
         arms = iter([self.arm(True), self.arm(False)] * 4)
         judge = mock.Mock(side_effect=AssertionError("no judge needed"))
