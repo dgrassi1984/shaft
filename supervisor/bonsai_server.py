@@ -16,10 +16,13 @@ trimmed by mlx_lm when the next request starts). Presence penalty is sent per re
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
+import os
 import re
 import sys
 import time
+import traceback
 
 from . import bonsai_lora
 
@@ -117,6 +120,64 @@ def tool_progress_handler(S):
     return Handler
 
 
+GENERATION_DIED = 70   # EX_SOFTWARE: launchd's KeepAlive restarts the server
+
+
+def exit_if_generation_dies(S, exit=os._exit):
+    """Make the whole process exit when mlx_lm's generation thread dies, so launchd restarts it.
+
+    mlx_lm serves HTTP on the main thread and generates on one background thread; when that thread raised
+    (2026-10-14 01:48: `[metal::malloc] Resource limit (499000) exceeded`) the HTTP side kept accepting requests
+    that waited forever on a queue nobody filled: every agent call timed out after 900 s for 6.5 hours, at 0% CPU,
+    and launchd saw a live process. os._exit, because sys.exit in a thread ends only that thread; the open
+    connections are reset at once, so a waiting client fails fast instead of hanging."""
+    run = S.ResponseGenerator._generate
+
+    def _generate(self):
+        try:
+            run(self)
+        except BaseException:
+            traceback.print_exc()
+            print(f"bonsai_server: the generation thread died; exiting ({GENERATION_DIED}) so launchd restarts "
+                  f"the server", file=sys.stderr, flush=True)
+            exit(GENERATION_DIED)
+            return
+        if not self._stop:   # returned without being asked to: nothing would ever answer again
+            print(f"bonsai_server: the generation thread ended unasked; exiting ({GENERATION_DIED})",
+                  file=sys.stderr, flush=True)
+            exit(GENERATION_DIED)
+
+    S.ResponseGenerator._generate = _generate
+
+
+CACHE_BOOKKEEPING = ("left_padding", "lengths", "offset")
+
+
+def bound_cache_graphs(G):
+    """Evaluate the batch caches' bookkeeping arrays after every decode step, so their lazy graphs stay one node deep.
+
+    mlx_lm 0.31-0.32: after a fresh prompt, ArraysCache.merge gives the Gated DeltaNet caches `left_padding`, and
+    every layer's ArraysCache.advance(1) then does `left_padding -= 1` per decoded token. Nothing evaluates it while
+    decoding, so the graph grows a Subtract node and about one fresh scalar Metal buffer per DeltaNet layer per token
+    (48 of Bonsai's 64 layers) for as long as the batch keeps generating — across requests while instances overlap. That hit
+    Metal's limit on the number of buffers, `[metal::malloc] Resource limit (499000) exceeded`, on 2026-10-14 01:48
+    (a 34k-token prompt: 2.6k -> 66k live buffers in ~1,100 decoded tokens, _bench/mlx_soak_server.py). One async
+    eval of these few small arrays per step, with no GPU sync, cuts every chain; the values are unchanged (and an
+    array already evaluated — BatchKVCache's offsets, used every step — costs nothing)."""
+    import mlx.core as mx
+    step = G.GenerationBatch._step
+
+    def _step(self):
+        out = step(self)
+        pending = [a for c in self.prompt_cache for a in (getattr(c, n, None) for n in CACHE_BOOKKEEPING)
+                   if isinstance(a, mx.array)]
+        if pending:
+            mx.async_eval(pending)
+        return out
+
+    G.GenerationBatch._step = _step
+
+
 def request_budget(gen_args, budget: int) -> int:
     """A request may ask for a smaller thinking budget (chat_template_kwargs.thinking_budget — the agent does
     after a tool result), never a larger one; 0 (off) stays off."""
@@ -153,7 +214,8 @@ def main(argv: list[str]) -> int:
             return self.model, self.tokenizer
 
     S.ModelProvider = BonsaiProvider
-    import os
+    exit_if_generation_dies(S)
+    bound_cache_graphs(importlib.import_module("mlx_lm.generate"))   # not `import ... as`: mlx_lm.generate is also a function
     budget = int(os.environ.get("SHAFT_THINK_BUDGET", "4096"))   # Daniele: "not too low"
     original = S._make_logits_processors
 

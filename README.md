@@ -240,7 +240,12 @@ any). Context 262,144 tokens; hybrid attention (48 linear + 16 full layers). Set
 `SHAFT_MODEL_TEMP` (0.6), top-p 0.95, top-k 20, max 16,384 tokens per reply, a thinking budget
 `SHAFT_THINK_BUDGET` (4,096 reasoning tokens; then Qwen's early-stopping phrase and `</think>` are forced —
 0 turns it off; a request may ask for less, never more), and a prompt cache capped at
-`SHAFT_PROMPT_CACHE_GB` (4, enforced on every insert). After a tool result the agent asks for
+`SHAFT_PROMPT_CACHE_GB` (8, trimmed by mlx_lm when the next request starts). If the generation thread dies the
+whole process exits (code 70) so launchd restarts it, and waiting requests fail at once instead of hanging; on
+2026-10-14 a dead thread left a listening server that answered nothing for 6.5 hours. The cause, Metal's limit on
+the number of buffers (499,000), came from mlx_lm's Gated DeltaNet caches growing a lazy graph by one buffer per
+layer per decoded token; the server evaluates those bookkeeping arrays every step (`bound_cache_graphs`).
+After a tool result the agent asks for
 `LLM_THINK_FOLLOWUP` (1,024) reasoning tokens: Bonsai spent its full budget on every tool round (~4.5 min
 each); now a follow-up takes ~20–75 s. Agents send a presence penalty (`LLM_PRESENCE_PENALTY`)
 against loops. Prompt reading is reported as progress (`reading my memory · N%`).
