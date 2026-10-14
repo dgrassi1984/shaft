@@ -1,8 +1,9 @@
-"""Client for the supervisor's broker — my only door to the outside world.
+"""Client for the supervisor's broker — my door to my keys, my models and the other instances.
 
 The supervisor runs the broker while I run and hands me its address and a token
-(SHAFT_BROKER_URL / SHAFT_BROKER_TOKEN). It owns the internet, the API keys and
-other instances' mailboxes; I only ever see results. Plugins can use it too:
+(SHAFT_BROKER_URL / SHAFT_BROKER_TOKEN). It owns the API keys and other instances'
+mailboxes; I only ever see results. (Plain internet access goes through the
+supervisor's proxy, HTTPS_PROXY.) Plugins can use it too:
 
     from shaft import broker
     text = broker.call("web_search", query="...")
