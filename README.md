@@ -35,6 +35,13 @@ Design, milestones and decisions: [PLAN.md](PLAN.md).
   `{"only": ["novita"], "allow_fallbacks": false, "data_collection": "deny", "zdr": true,
   "require_parameters": true}`) — an instance's prompt carries its whole memory; if the provider does not
   qualify, the call fails and says so. Cost is OpenRouter's own `usage.cost`.
+  Or a self-hosted server the supervisor reaches for the instance: `LLM_BASE_URL="broker"` +
+  `LLM_MODEL="racer/bonsai2"` — Bonsai 2 on Daniele's RTX 5070 Ti PC (llama.cpp, `100.120.0.1:8080` over
+  Tailscale), which the sandbox itself cannot reach. Servers are `SHAFT_SELF_HOSTED`
+  (`{name: {"url", "sampling", "think_budget"}}`); the broker adds the server's sampling and a 4,096-token
+  thinking budget (smaller after a tool result, as on the local server). If the server is unreachable or fails
+  before replying, the local Bonsai answers instead (`SHAFT_SELF_HOSTED_FALLBACK`, default `:8780`; `""` = fail);
+  trial replays never fall back. Every fallback is in `.supervisor/broker.log`.
 - Optional, in `.env` at the root (supervisor-only, never visible to instances):
   `SCRAPEBADGER_API_KEY` (web search), `ANTHROPIC_API_KEY` (the judge, Claude models),
   `OPENROUTER_API_KEY` (OpenRouter models).

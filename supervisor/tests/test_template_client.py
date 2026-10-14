@@ -76,12 +76,19 @@ class FollowupBudgetTest(unittest.TestCase):
         body = self.bodies(msgs, think_followup=1024)
         self.assertEqual(body["chat_template_kwargs"]["thinking_budget"], 1024)
 
-    def test_first_call_and_cloud_get_the_full_budget(self):
+    def test_first_call_gets_the_full_budget(self):
         first = self.bodies([{"role": "user", "content": "x"}], think_followup=1024)
         self.assertNotIn("thinking_budget", first["chat_template_kwargs"])
         tool_last = [{"role": "tool", "tool_call_id": "1", "content": "r"}]
         self.assertNotIn("thinking_budget", self.bodies(tool_last, think_followup=0)["chat_template_kwargs"])
-        self.assertNotIn("chat_template_kwargs", self.bodies(tool_last, think_followup=1024, broker_token="t"))
+
+    def test_through_the_broker_the_settings_still_go_out(self):
+        # racer/bonsai2 is reached through the broker and reads the same template settings as the local server;
+        # the broker drops them for cloud models (test_openrouter, to_anthropic builds its own body).
+        tool_last = [{"role": "tool", "tool_call_id": "1", "content": "r"}]
+        body = self.bodies(tool_last, think_followup=1024, broker_token="t", reasoning_effort="medium")
+        self.assertEqual(body["chat_template_kwargs"],
+                         {"preserve_thinking": False, "reasoning_effort": "medium", "thinking_budget": 1024})
 
 
 class ReasoningEffortTest(unittest.TestCase):

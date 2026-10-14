@@ -362,6 +362,9 @@ def html_to_text(html: str) -> tuple[str, str]:
 
 
 class Broker:
+    # A self-hosted model server that cannot be reached (racer is off) is replaced by the local Bonsai: selfhosted.py.
+    local_fallback = True
+
     def __init__(self, name: str, project: Path, secrets_env: dict[str, str], log_path: Path,
                  max_calls: int = 60, root: Path | None = None, usage_name: str | None = None,
                  share: bool | None = None, network: bool = True):
@@ -455,14 +458,20 @@ class Broker:
                 self._reply(200, broker.call(m.group(1), args if isinstance(args, dict) else {}))
 
             def _llm(self):
-                from . import cloudllm
+                from . import cloudllm, selfhosted
                 body: dict = {}
                 try:
                     body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
-                    if body.get("stream") and str(body.get("model", "")).startswith("openrouter/"):
+                    if selfhosted.serves(body.get("model")):
+                        how = {"fallback": broker.local_fallback, "note": lambda s: broker._log(f"{broker.name} llm {s}")}
+                        if body.get("stream"):
+                            return self._llm_stream(selfhosted.stream(broker.usage_name, body, **how), body["model"])
+                        reply = selfhosted.complete(broker.usage_name, body, **how)
+                    elif body.get("stream") and str(body.get("model", "")).startswith("openrouter/"):
                         return self._llm_stream(cloudllm.openrouter_stream(broker.usage_name, body, broker.secrets),
                                                 body["model"])
-                    reply = cloudllm.complete(broker.usage_name, body, broker.secrets, broker.remembered)
+                    else:
+                        reply = cloudllm.complete(broker.usage_name, body, broker.secrets, broker.remembered)
                 except cloudllm.CloudError as e:
                     broker._log(f"{broker.name} llm {body.get('model', '?')} -> ERROR {e}")
                     return self._reply(e.status, {"error": {"message": str(e)}})
@@ -482,7 +491,7 @@ class Broker:
                     self._reply(200, reply)
 
             def _llm_stream(self, lines, model: str):
-                """OpenRouter's stream, relayed line by line as it arrives."""
+                """OpenRouter's or a self-hosted server's stream, relayed line by line as it arrives."""
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Cache-Control", "no-cache")
@@ -970,7 +979,10 @@ class ReplayBroker(Broker):
     refusal traced as a "network" call; its `run` and plugins read the instance's real Python environment,
     read-only. `run` acts on the replay's own copy of the instance, `history` ends at the replayed
     cycle's starting commit, `record` at the time it started. The coder and trials are not available. Cloud-model
-    spend is counted under `billed`, not under the instance's own daily allowance."""
+    spend is counted under `billed`, not under the instance's own daily allowance. A self-hosted model server that
+    cannot be reached fails the run instead of falling back: a trial never takes the local model unasked."""
+
+    local_fallback = False
 
     def __init__(self, name: str, project: Path, secrets_env: dict[str, str], log_path: Path, *,
                  state_root: Path, start_commit: str, as_of: datetime, cache: dict, cache_lock: threading.Lock,

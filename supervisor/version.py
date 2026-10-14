@@ -74,7 +74,10 @@ def describe(name: str) -> str:
                  + ("" if not behind else f" ({behind} template change(s) not merged: shaft update {name})"))
     cfg = instance_config(name)
     if cfg.get("LLM_BASE_URL") == "broker":
-        parts.append(f"model {cfg.get('LLM_MODEL', '?')} via the broker (cloud)")
+        from . import selfhosted
+        m = cfg.get("LLM_MODEL", "?")
+        where = f"self-hosted at {selfhosted.host_port(m)}, local fallback" if selfhosted.serves(m) else "cloud"
+        parts.append(f"model {m} via the broker ({where})")
         return " · ".join(parts)
     model = service("model")
     if model and ":8780" not in cfg.get("LLM_BASE_URL", ":8780"):

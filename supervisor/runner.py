@@ -94,9 +94,14 @@ LOCALHOST = {"localhost", "127.0.0.1", "::1"}
 
 
 def model_server(name: str) -> str | None:
-    """The local model server the instance's calls go to ('127.0.0.1:8780'), or None when it thinks with a cloud
-    model through the broker. Two instances compete for the model only when both use the same local server."""
-    url = instance_config(name).get("LLM_BASE_URL", "").strip()
+    """The model server the instance's calls go to ('127.0.0.1:8780', or a self-hosted one through the broker:
+    '100.120.0.1:8080'), or None when it thinks with a cloud model. Two instances compete for the model only when
+    both use the same server."""
+    from . import selfhosted
+    cfg = instance_config(name)
+    url = cfg.get("LLM_BASE_URL", "").strip()
+    if url == "broker" and selfhosted.serves(cfg.get("LLM_MODEL")):
+        return selfhosted.host_port(cfg["LLM_MODEL"])
     if not url or url == "broker":
         return None
     parts = urllib.parse.urlsplit(url)
@@ -105,7 +110,7 @@ def model_server(name: str) -> str | None:
 
 
 def sharing_model(name: str, others: list[str]) -> list[str]:
-    """Those of `others` whose runs take the model `name` needs: the same local server. A cloud model is never
+    """Those of `others` whose runs take the model `name` needs: the same model server. A cloud model is never
     shared — wren on MiMo and kant on Opus were asked to wrap up for every conversation with shaft, on Bonsai
     (2026-10-13), and an instance on a cloud model waits for nobody."""
     server = model_server(name)

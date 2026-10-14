@@ -3,7 +3,9 @@
 An instance whose config.env says LLM_BASE_URL="broker" sends OpenAI-style chat requests
 to its run's broker at /llm/v1/chat/completions. Claude models are translated to the Claude
 Messages API (raw HTTP, like the judge), and the reply back. Models named "openrouter/<id>"
-(e.g. openrouter/xiaomi/mimo-v2.6-pro) go to OpenRouter, which speaks the OpenAI format. Rules:
+(e.g. openrouter/xiaomi/mimo-v2.6-pro) go to OpenRouter, which speaks the OpenAI format. Models named
+"<server>/<id>" for a server in SHAFT_SELF_HOSTED (racer/bonsai2) go to that server: supervisor/selfhosted.py.
+Rules:
 
 - Only models in SHAFT_CLOUD_MODELS (operator's choice) are allowed.
 - OpenRouter requests go only to the provider Daniele chose (NovitaAI), with no fallback, and only if it
@@ -139,6 +141,9 @@ def from_anthropic(data: dict) -> dict:
 
 def complete(instance: str, body: dict, secrets: dict, remembered: dict[str, list]) -> dict:
     model = body.get("model")
+    from . import selfhosted
+    if selfhosted.serves(model):   # a self-hosted server (racer/bonsai2): free, no cap, local fallback
+        return selfhosted.complete(instance, body)
     if model not in CLOUD_MODELS:
         raise CloudError(403, f"model {model!r} is not allowed for instances (SHAFT_CLOUD_MODELS={CLOUD_MODELS})")
     spent = spent_today(instance)

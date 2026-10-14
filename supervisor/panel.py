@@ -19,6 +19,7 @@ from pathlib import Path
 from . import egress, pyenv
 from .core import (SUP_DIR, disabled_tools, git, instance_config, instance_names, instance_root, journal_entries,
                    knob, paused, shared_folder)
+from . import selfhosted
 
 JUDGE_ALERT_USD, _ = knob("SHAFT_JUDGE_ALERT_USD", "10", float)   # the judge has no cap (Daniele): only an alert
 CAP_ALERT = 0.8                                                    # a cap this full raises an alert
@@ -202,8 +203,8 @@ def instance_detail(name: str) -> dict:
         pass
     questions = [m for m in messages.pending() if m["from"] == name]
     return {"name": name, "paused": paused(name),
-            "model": cfg.get("LLM_MODEL", "?"), "via": "broker (cloud)" if cfg.get("LLM_BASE_URL") == "broker"
-            else cfg.get("LLM_BASE_URL", "?"),
+            "model": cfg.get("LLM_MODEL", "?"), "via": ("broker (self-hosted)" if selfhosted.serves(cfg.get("LLM_MODEL")) else "broker (cloud)")
+            if cfg.get("LLM_BASE_URL") == "broker" else cfg.get("LLM_BASE_URL", "?"),
             "wake": cfg.get("WAKE_INTERVAL_MINUTES", "120"), "effort": cfg.get("LLM_REASONING_EFFORT", "medium"),
             "tools_off": sorted(disabled_tools(name)),
             "shared": str(shared_folder(name) or ""),

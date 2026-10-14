@@ -16,6 +16,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/bonsai_server.py` | `ThinkingBudget` | `tool_progress_handler`, `request_budget`, `main` |
 | `supervisor/broker.py` | `BlockedAddress`, `Broker`, `ReplayBroker` | `judgment_text`, `judgments_text`, `notify`, `check_public`, `html_to_text` |
 | `supervisor/cloudllm.py` | `CloudError` | `spent_today`, `to_anthropic`, `from_anthropic`, `complete`, `decide`, `openrouter_stream`, `as_sse` |
+| `supervisor/selfhosted.py` | — | `serves`, `server`, `host_port`, `think_budget`, `open_reply`, `complete`, `stream` |
 | `supervisor/coder.py` | `CoderError` | `spent_today`, `write`, `check_targets`, `test_in_scratch`, `delegate` |
 | `supervisor/core.py` | `UnsafePath` | `knob`, `describe_knobs`, `log`, `secrets_env`, `git`, `git_wt`, `instance_root`, `instance_names`, `paused`, `instance_config`, `config_values`, `config_line`, `config_with`, `disabled_tools`, `shared_folder`, `check_shared_folder`, `set_shared_folder`, `read_secrets`, `store_secret`, `delete_secret`, `set_tool`, `journal_entries`, `contained`, `safe_write`, `safe_write_bytes`, `safe_mkdir`, `journal_note`, `commit_state` |
 | `supervisor/dashboard.py` | — | `activity`, `instance_state`, `services`, `events`, `snapshot` |
@@ -58,6 +59,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_memory.py` | `FakeEmbedder`, `ImprovementPlanTest`, `RecallTest`, `SleepConsolidationTest`, `SemanticSearchTest` | `concept_vector`, `instance` |
 | `supervisor/tests/test_messages_view.py` | `MessageLogTest`, `StartWakeTest`, `TopKeysTest` | — |
 | `supervisor/tests/test_openrouter.py` | `FakeOpenRouter`, `OpenRouterTest`, `StreamingTest` | — |
+| `supervisor/tests/test_selfhosted.py` | `RacerTest`, `FallbackTest`, `RoutingTest` | `closed_port` |
 | `supervisor/tests/test_pause.py` | `SlowModel`, `AgentSideTest`, `SupervisorSideTest`, `CleanupTest`, `OldCodeTest`, `YieldOnlyForTheSameModelTest` | — |
 | `supervisor/tests/test_personality.py` | `LayerWriterTest`, `CorePaceTest` | — |
 | `supervisor/tests/test_pyenv.py` | `ChoiceTest`, `SandboxTest`, `GateTest`, `TemplateTest` | `make_venv` |

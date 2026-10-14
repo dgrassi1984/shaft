@@ -140,7 +140,7 @@ def _config(root: Path) -> dict:
 def _base_answer(root: Path, question: str) -> str:
     """The same base model with no identity at all."""
     cfg = _config(root)
-    if cfg["LLM_BASE_URL"] == "broker":       # a cloud-brained instance: same cloud model, no identity
+    if cfg["LLM_BASE_URL"] == "broker":       # a cloud or self-hosted model via the broker: the same, no identity
         from . import cloudllm
         from .core import secrets_env
         reply = cloudllm.complete(f"{root.name}-baseline", {
