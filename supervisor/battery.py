@@ -50,7 +50,8 @@ RECALL_MIN_AGE_H, _ = knob("SHAFT_BATTERY_RECALL_MIN_AGE_H", "48", int)
 RECALL_ITEMS = 6
 CATEGORIES = ("coding", "research", "recall", "self")
 CONTROLLED = ("coding", "research")          # a fresh mind cannot know an instance's memory or record
-EXAM_OFF = {"send_message", "list_instances", "delegate_coding", "secret_set", "secret_delete"}
+EXAM_OFF = {"send_message", "list_instances", "delegate_coding", "secret_set", "secret_delete",
+            "decide"}   # added 2026-10-14: exams keep the tools they were calibrated with
 BACKUP = HOME / "Library" / "Application Support" / "SHAFT" / "battery-backup"
 
 

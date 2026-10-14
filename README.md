@@ -279,6 +279,11 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
   minds). **`record`**: the supervisor's own record about it — the judge's verdicts with reasoning, its
   runs, its tool calls, its kept code changes, its internet connections — so it can check its claims about
   itself.
+  **`decide`**: TypeSafe's Jev decision model through OpenRouter, on the supervisor's key — a `state` and typed
+  questions (`noul` yes/no, `choice`, `score`) answered with probabilities, no prose; `SHAFT_DECISION_MODELS`
+  (`typesafe/jev-1.13`, `~typesafe/jev-latest`), the same daily cloud cap and usage log as the chat models, and the
+  data policy `SHAFT_DECISION_PROVIDER` (no data collection, zero retention, no fallback); off in battery exams,
+  shared by a trial's pair like the other reads.
   **`http_request`**: call web APIs (any method, headers, body) at any public address. **Its own
   keys** (`secret_set` / `secret_list` / `secret_delete`, or `shaft secret <name> set <key> --hosts …` from
   your terminal): kept in its folder under `secrets/` but handled only by the supervisor — the broker adds a

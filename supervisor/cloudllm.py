@@ -18,6 +18,11 @@ Messages API (raw HTTP, like the judge), and the reply back. Models named "openr
   sends that turn back, because altered history invalidates replayed thinking.
 - Claude models: upstream is non-streaming; a streaming request gets the whole reply as one SSE burst.
   OpenRouter models stream end to end (stream_openrouter): the instance sees its reply as it is written.
+- Decision models (Daniele, 2026-10-14: TypeSafe's Jev, through OpenRouter): not chat models — typed questions
+  (choice / score / noul) about a state, answered with probabilities, at OpenRouter's /api/alpha/decisions.
+  The broker's `decide` tool calls them (decide()). Only SHAFT_DECISION_MODELS; same daily cap and usage log as
+  the chat models; the same data rule (SHAFT_DECISION_PROVIDER: no data collection, zero retention, no fallback
+  — Jev's provider is TypeSafe, so no provider pin): a provider that does not qualify fails the call.
 """
 from __future__ import annotations
 
@@ -38,6 +43,11 @@ CLOUD_MODELS, _ = knob("SHAFT_CLOUD_MODELS", "claude-haiku-5-5,claude-opus-5-5,o
 OPENROUTER_PROVIDER, _ = knob("SHAFT_OPENROUTER_PROVIDER",
                               '{"only": ["novita"], "allow_fallbacks": false, "data_collection": "deny", "zdr": true, "require_parameters": true}', json.loads)
 DAILY_USD, _ = knob("SHAFT_CLOUD_DAILY_USD", "8", float)
+DECISIONS_API = "https://openrouter.ai/api/alpha/decisions"
+DECISION_MODELS, _ = knob("SHAFT_DECISION_MODELS", "typesafe/jev-1.13,~typesafe/jev-latest",
+                          lambda s: [m.strip() for m in s.split(",") if m.strip()])
+DECISION_PROVIDER, _ = knob("SHAFT_DECISION_PROVIDER",
+                            '{"data_collection": "deny", "zdr": true, "allow_fallbacks": false}', json.loads)
 # $ per million tokens (input, output) — prompts ≤ 100K tokens; from the Claude API price table.
 PRICES = {"claude-haiku-5-5": (0.10, 0.50), "claude-sonnet-5-5": (2.0, 10.0), "claude-opus-5-5": (4.0, 20.0)}
 USAGE = SUP_DIR / "cloud_usage.jsonl"
@@ -196,11 +206,37 @@ def _openrouter_request(body: dict, key: str, stream: bool) -> urllib.request.Re
         "x-title": "SHAFT", "http-referer": "https://github.com/dgrassi1984/shaft"})
 
 
-def _policy_hint(error: str) -> str:
+def _policy_hint(error: str, knob_name: str = "SHAFT_OPENROUTER_PROVIDER", policy: dict | None = None) -> str:
     if "provider" in error.lower() or "endpoint" in error.lower():
         return (f" — the data policy allows only providers that neither collect nor retain data "
-                f"(SHAFT_OPENROUTER_PROVIDER={json.dumps(OPENROUTER_PROVIDER)})")
+                f"({knob_name}={json.dumps(OPENROUTER_PROVIDER if policy is None else policy)})")
     return ""
+
+
+def decide(instance: str, model: str, state, questions: dict, secrets: dict) -> dict:
+    """One call to a decision model: OpenRouter's response ({model, answers, usage, ...}), cost recorded."""
+    if model not in DECISION_MODELS:
+        raise CloudError(403, f"decision model {model!r} is not allowed for instances "
+                              f"(SHAFT_DECISION_MODELS={DECISION_MODELS})")
+    spent = spent_today(instance)
+    if spent >= DAILY_USD:
+        raise CloudError(429, f"{instance} spent ${spent:.2f} on cloud models today (cap ${DAILY_USD:.2f})")
+    key = secrets.get("OPENROUTER_API_KEY", "")
+    if not key:
+        raise CloudError(503, "no OPENROUTER_API_KEY in the supervisor's .env")
+    body = {"model": model, "state": state, "questions": questions, "provider": DECISION_PROVIDER}
+    req = urllib.request.Request(DECISIONS_API, data=json.dumps(body).encode(), headers={
+        "content-type": "application/json", "authorization": f"Bearer {key}",
+        "x-title": "SHAFT", "http-referer": "https://github.com/dgrassi1984/shaft"})
+    started = time.monotonic()
+    data, error = _send(req)
+    usage = (data or {}).get("usage") or {}
+    _record(instance, model, usage.get("input_tokens"), usage.get("output_tokens"), float(usage.get("cost") or 0),
+            started, "decided" if data else None, None if data else error)
+    if data is None:
+        raise CloudError(502, f"decision call to {model} failed: {error}"
+                              f"{_policy_hint(error, 'SHAFT_DECISION_PROVIDER', DECISION_PROVIDER)}")
+    return data
 
 
 def openrouter_stream(instance: str, body: dict, secrets: dict):

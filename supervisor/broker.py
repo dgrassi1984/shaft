@@ -176,6 +176,21 @@ SPECS = {
                                                     "('2026-10-13 17:42')"},
          "before": {"type": "string", "description": "judgments: only cycles before this time (to page back)"}},
         ["kind"]),
+    "decide": _spec(
+        "decide",
+        "Ask a decision model (TypeSafe's Jev, through OpenRouter, paid by the supervisor from your daily cloud "
+        "allowance; fractions of a cent per call): not a chat model — it reads a `state` (text or JSON) and answers "
+        "typed `questions` with probabilities, never prose. Each question has an id you choose: "
+        "{\"type\": \"noul\", \"instructions\": \"Is X true?\", \"criteria\": {\"true\": \"...\", \"false\": \"...\"}} "
+        "(yes/no → probability of true), {\"type\": \"choice\", \"instructions\": ..., \"criteria\": {\"option\": "
+        "\"when to pick it\", ...}} (→ choice, per-option probabilities, confidence), or {\"type\": \"score\", "
+        "\"instructions\": ..., \"criteria\": [\"lowest level\", ..., \"highest\"]} (→ level, probabilities). Several "
+        "questions per call. Returns JSON: the model snapshot served, the answers, the cost. Plugins can call it "
+        "(broker.call('decide', ...)).",
+        {"state": {"description": "what to decide about: text, or a JSON object/array"},
+         "questions": {"type": "object", "description": "id -> {type: noul|choice|score, instructions, criteria}"},
+         "model": {"type": "string", "description": "default typesafe/jev-1.13 (also ~typesafe/jev-latest)"}},
+        ["state", "questions"]),
     "http_request": _spec(
         "http_request",
         "Call a web API: method, url, optional headers (object) and body (text, or a JSON object). Returns the "
@@ -548,6 +563,20 @@ class Broker:
             return f"no results for {query!r}"
         return "\n\n".join(f"{i}. {r.get('title', '')}\n   {r.get('link', '')}\n   {r.get('snippet', '')}"
                            for i, r in enumerate(rows, 1))
+
+    def _decide(self, state, questions: dict, model: str = "") -> str:
+        from . import cloudllm
+        if not isinstance(questions, dict) or not questions:
+            raise ValueError("questions must be an object: id -> {type, instructions, criteria}")
+        model = model or cloudllm.DECISION_MODELS[0]
+        try:
+            data = cloudllm.decide(self.usage_name, model, state, questions, self.secrets)
+        except cloudllm.CloudError as e:
+            raise RuntimeError(str(e)) from None
+        usage = data.get("usage") or {}
+        return json.dumps({"model": data.get("model"), "answers": data.get("answers"),
+                           "usd": usage.get("cost"), "input_tokens": usage.get("input_tokens")},
+                          ensure_ascii=False, indent=1)
 
     def _fetch_page(self, url: str, max_chars: int = 6000) -> str:
         check_public(url)
@@ -933,7 +962,7 @@ class ReplayBroker(Broker):
     """The broker for one run of a trial replay (supervisor/trial.py): the same tools, answered without touching
     the world or the instance.
 
-    Reads — web_search, fetch_page, GET/HEAD http_request — are real, but shared by the two runs of a pair through
+    Reads — web_search, fetch_page, decide, GET/HEAD http_request — are real, but shared by the two runs of a pair through
     `cache`: the first run's answer is given to the second, byte for byte, so both see the same world. Writes —
     messages, POST/PUT/PATCH/DELETE, keys — are not carried out; they pass the same checks and return what a real
     cycle would see (a run must not behave differently because it can tell it is a replay), and are recorded in
@@ -1002,6 +1031,9 @@ class ReplayBroker(Broker):
     # -- reads: real, shared by the pair ---------------------------------------------------------------
     def _web_search(self, query: str, page: int = 1) -> str:
         return self._shared(["web_search", query, int(page)], lambda: Broker._web_search(self, query, page))
+
+    def _decide(self, state, questions: dict, model: str = "") -> str:
+        return self._shared(["decide", state, questions, model], lambda: Broker._decide(self, state, questions, model))
 
     def _fetch_page(self, url: str, max_chars: int = 6000) -> str:
         return self._shared(["fetch_page", url, int(max_chars)], lambda: Broker._fetch_page(self, url, max_chars))

@@ -15,7 +15,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/bonsai_lora.py` | — | `load_text_model`, `load`, `logits_of`, `make_cache`, `render`, `make_lora_class`, `attach_lora`, `spike`, `train`, `load_adapter`, `generate`, `answers` |
 | `supervisor/bonsai_server.py` | `ThinkingBudget` | `tool_progress_handler`, `request_budget`, `main` |
 | `supervisor/broker.py` | `BlockedAddress`, `Broker`, `ReplayBroker` | `judgment_text`, `judgments_text`, `notify`, `check_public`, `html_to_text` |
-| `supervisor/cloudllm.py` | `CloudError` | `spent_today`, `to_anthropic`, `from_anthropic`, `complete`, `openrouter_stream`, `as_sse` |
+| `supervisor/cloudllm.py` | `CloudError` | `spent_today`, `to_anthropic`, `from_anthropic`, `complete`, `decide`, `openrouter_stream`, `as_sse` |
 | `supervisor/coder.py` | `CoderError` | `spent_today`, `write`, `check_targets`, `test_in_scratch`, `delegate` |
 | `supervisor/core.py` | `UnsafePath` | `knob`, `describe_knobs`, `log`, `secrets_env`, `git`, `git_wt`, `instance_root`, `instance_names`, `paused`, `instance_config`, `config_values`, `config_line`, `config_with`, `disabled_tools`, `shared_folder`, `check_shared_folder`, `set_shared_folder`, `read_secrets`, `store_secret`, `delete_secret`, `set_tool`, `journal_entries`, `contained`, `safe_write`, `safe_write_bytes`, `safe_mkdir`, `journal_note`, `commit_state` |
 | `supervisor/dashboard.py` | — | `activity`, `instance_state`, `services`, `events`, `snapshot` |
@@ -45,8 +45,10 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_control_panel.py` | `PanelData`, `SchedulerRestartGuard`, `PanelKeys`, `PanelViews` | — |
 | `supervisor/tests/test_conversations.py` | `OpenConversationTest`, `WriteUpTest`, `SpeakerTest`, `JournalHeadingTest` | — |
 | `supervisor/tests/test_dashboard.py` | `InstanceStateTest`, `EventsTest` | — |
+| `supervisor/tests/test_decide.py` | `DecideTest` | — |
 | `supervisor/tests/test_distinct.py` | `StripTest`, `ScoreTest`, `DistinctEndToEndTest` | `pairs_with`, `texts_in`, `clean`, `verdict` |
 | `supervisor/tests/test_egress.py` | `Upstream`, `PublicAddressTest`, `SummaryTest`, `ProxyTest`, `SandboxedRunTest`, `ReplayEgressTest` | `pretend_public` |
+| `supervisor/tests/test_embed_memory.py` | `EmbedCacheBoundTest` | — |
 | `supervisor/tests/test_gate.py` | `GateTest`, `InstanceTestsTest` | — |
 | `supervisor/tests/test_invariants.py` | `InstanceCase`, `ReflectInvariants`, `TalkInvariants`, `LiveInvariants`, `TemplateMeasurement`, `ExamInvariants`, `SandboxInvariants` | — |
 | `supervisor/tests/test_judge2.py` | `RecordShowsWholeVerdictsTest`, `SecondJudgeTest`, `JudgePendingTest`, `ReleasedBeforeTheSecondJudgeTest` | — |
