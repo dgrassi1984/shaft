@@ -220,8 +220,17 @@ class Toolbox:
         in_shared = bool(self.shared) and (base == self.shared or self.shared in base.parents)
         top, prefix = (self.shared, SHARED + "/") if in_shared else (self.root, "")
         skip = {".git", "__pycache__", ".tmp", "logs", "secrets"}
-        rows = [prefix + p.relative_to(top).as_posix() + ("/" if p.is_dir() else "")
-                for p in sorted(base.rglob("*")) if not skip & set(p.relative_to(top).parts)]
+        bulky = {".venv", ".uv"} - set(base.relative_to(top).parts)   # tens of thousands of files: listed, not walked
+        rows = []
+        for here, dirs, files in os.walk(base) if not skip & set(base.relative_to(top).parts) else ():
+            rel = Path(here).relative_to(top)
+            dirs[:] = sorted(d for d in dirs if d not in skip)
+            for d in [d for d in dirs if d in bulky]:
+                dirs.remove(d)
+                rows.append(prefix + (rel / d).as_posix() + "/ (not listed: list_files " + (rel / d).as_posix() + ")")
+            rows += [prefix + (rel / d).as_posix() + "/" for d in dirs]
+            rows += [prefix + (rel / f).as_posix() for f in sorted(files)]
+        rows.sort()
         if self.shared and base == self.root:
             rows.append(f"{SHARED}/ (the operator's folder, read-only: list_files {SHARED})")
         return "\n".join(rows[:400]) or "(empty)"
@@ -282,7 +291,9 @@ class Toolbox:
         return personality.update(self.root, layer, text)
 
     def _run_plugin(self, name: str, args: dict) -> str:
-        proc = subprocess.run([sys.executable, "-E", "-s", "-m", "shaft.plugin_runner", name],
+        # SHAFT_PYTHON: my own environment's interpreter (.venv/), set by the supervisor; I run on the system one.
+        python = os.environ.get("SHAFT_PYTHON") or sys.executable
+        proc = subprocess.run([python, "-E", "-s", "-m", "shaft.plugin_runner", name],
                               input=json.dumps(args), capture_output=True, text=True,
                               cwd=self.root, timeout=PLUGIN_TIMEOUT_S)
         if proc.returncode != 0:

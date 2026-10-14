@@ -1,6 +1,9 @@
 # runtime artefacts (not part of an agent's mind or code)
 logs/
 .tmp/
+# my Python environment: rebuilt from .python-version and requirements.txt
+.venv/
+.uv/
 __pycache__/
 .DS_Store
 # my keys: handled by the supervisor, never committed
