@@ -23,6 +23,10 @@ PORT = 8782
 TASK = "Given a question or topic, retrieve memories (journal entries, facts, notes, conversations) about it"
 MAX_TOKENS = 1024          # a memory chunk is ~900 characters; longer inputs are cut, not refused
 MAX_INPUTS = 64
+# MLX keeps freed buffers for reuse, up to its default limit (tens of GB here). Every input length frees
+# differently sized buffers, so the cache only grew: 30 GB after 20 h on 2026-10-14, one of three processes
+# whose memory ran the 64 GB Mac into a watchdog panic. A forward pass needs < 2 GB including the 1.2 GB model.
+CACHE_BYTES = 512 * 1024 ** 2
 
 
 class Embedder:
@@ -31,6 +35,7 @@ class Embedder:
         from mlx_lm.models import qwen3
         from tokenizers import Tokenizer
         self.mx = mx
+        mx.set_cache_limit(CACHE_BYTES)
         # The checkpoint is the bare transformer (sentence-transformers layout: no lm_head, no "model." prefix)
         args = qwen3.ModelArgs.from_dict(json.loads((model_dir / "config.json").read_text()))
         self.model = qwen3.Qwen3Model(args)
