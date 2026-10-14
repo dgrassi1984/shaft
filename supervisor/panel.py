@@ -8,6 +8,7 @@ re-parse a 200 KB log every second.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -374,8 +375,14 @@ def alerts(snap: dict | None = None, now: datetime | None = None, cost: dict | N
     since = (now - timedelta(hours=ALERT_HOURS)).strftime("%Y-%m-%d %H:%M:%S")
     for line in _log_failures():
         if line[1:20] >= since:
-            out.append({"id": f"log:{line[1:20]}:{hash(line) & 0xffffff:x}", "text": line[12:20] + line[21:200]})
+            out.append({"id": log_alert_id(line), "text": line[12:20] + line[21:200]})
     return out
+
+
+def log_alert_id(line: str) -> str:
+    """A log alert's id: its time and a digest of the line — the same in every process. (It was hash(), which
+    Python seeds afresh per process, so dismissed log alerts came back at every relaunch of shaft top.)"""
+    return f"log:{line[1:20]}:{hashlib.sha1(line.encode(errors='replace')).hexdigest()[:12]}"
 
 
 def _log_failures() -> list[str]:
@@ -390,7 +397,135 @@ def _log_failures() -> list[str]:
     return cached("log-failures", [path], read)
 
 
+# -- transcripts: every cycle and every conversation, from the instance's own episode records --------------------
+CYCLE_KINDS = {"live": "cycle", "sleep": "sleep", "reflect": "reflection"}
+WRITEUP_KINDS = ("talk_recovered", "talk_summary")
+TRANSCRIPT_CUT = 8000        # a tool result longer than this is cut in the view, which says where the rest is
+
+
+def _episode_files(name: str) -> list[Path]:
+    return sorted((instance_root(name) / "memory" / "episodes").glob("*.jsonl"))
+
+
+def transcripts(name: str) -> list[dict]:
+    """Every finished cycle (live, sleep, reflection) and every conversation of the instance, newest first. A
+    conversation's turns are grouped by talk_id, with its write-up attached. Read from memory/episodes/*.jsonl, the
+    instance's own record of what it did; a cycle appears once it has ended (the record is written then)."""
+    files = _episode_files(name)
+
+    def read():
+        out, talks = [], {}
+        for f in files:
+            try:
+                lines = f.read_text(errors="replace").splitlines()
+            except OSError:
+                continue
+            for n, line in enumerate(lines, 1):
+                try:
+                    r = json.loads(line)
+                except ValueError:
+                    continue
+                where = f"memory/episodes/{f.name}:{n}"
+                kind = r.get("kind")
+                if kind in CYCLE_KINDS:
+                    out.append({"id": where, "kind": CYCLE_KINDS[kind], "ts": r.get("ts", ""), "where": where,
+                                "record": r})
+                elif kind == "talk" or kind in WRITEUP_KINDS:
+                    tid = r.get("talk_id") or where
+                    t = talks.setdefault(tid, {"id": f"talk:{tid}", "kind": "conversation", "ts": r.get("ts", ""),
+                                               "where": where, "turns": [], "writeups": [], "via": ""})
+                    if kind in WRITEUP_KINDS:
+                        t["writeups"].append(r)
+                    else:                       # its last turn, not its write-up (that comes when it closes)
+                        t["turns"].append(r)
+                        t["last"] = r.get("ts", "")
+                        t["via"] = t["via"] or (r.get("via") or "")
+        out += list(talks.values())
+        return sorted(out, key=lambda e: e["ts"], reverse=True)
+    return cached(f"transcripts:{name}", files, read)
+
+
+def transcript_summary(e: dict) -> str:
+    """One line for the list."""
+    if e["kind"] == "conversation":
+        turns = e["turns"]
+        first = next((t.get("content", "") for t in turns if t.get("role") == "user"), "")
+        via = e["via"] or "terminal"
+        span = f" → {e['last'][11:16]}" if e.get("last") and e["last"][:16] != e["ts"][:16] else ""
+        return (f"{len(turns)} turns · via {via}{span}{' · written up' if e['writeups'] else ''} · "
+                + " ".join(first.split()))
+    r = e["record"]
+    steps, tools = r.get("steps"), len(r.get("tools") or [])
+    end = r.get("ended_by") or ""
+    if e["kind"] == "cycle":
+        goal = " ".join(((r.get("intent") or {}).get("goal") or "(no intent declared)").split())
+        met = (r.get("finish") or {}).get("criterion_met")
+        return f"{met or '·':<7} {tools} tools{f', {steps} steps' if steps else ''} · {end} · {goal}"
+    return f"{tools} tools · {end} · " + " ".join((r.get("content") or "").split())
+
+
+def _block(out: list, label: str, value, style: str = "") -> None:
+    if value in (None, "", [], {}):
+        return
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, indent=1)
+    out.append((label, "bold") if label else ("", ""))
+    out += [(line, style) for line in text.splitlines() or [""]]
+
+
+def _tool_lines(out: list, tools: list, where: str) -> None:
+    for k, call in enumerate(tools or [], 1):
+        args = call.get("args")
+        try:
+            args = json.dumps(json.loads(args), ensure_ascii=False, indent=1) if isinstance(args, str) else \
+                json.dumps(args, ensure_ascii=False, indent=1)
+        except ValueError:
+            pass
+        out.append((f"▸ {k}. {call.get('tool')}", "bold cyan"))
+        out += [(f"  {l}", "cyan") for l in str(args or "").splitlines()]
+        result = str(call.get("result", ""))
+        if len(result) > TRANSCRIPT_CUT:
+            result = (result[:TRANSCRIPT_CUT] + f"\n[… {len(result) - TRANSCRIPT_CUT} more chars, in full at {where}]")
+        out += [(f"  │ {l}", "") for l in result.splitlines() or [""]]
+
+
+def transcript_lines(name: str, e: dict, thinking: bool = False) -> list[tuple[str, str]]:
+    """The whole transcript as (line, style) pairs, unwrapped: the panel wraps them to its width."""
+    out: list[tuple[str, str]] = [(f"{e['kind']} · {e['ts'].replace('T', ' ')} · {e['where']}", "bold"), ("", "")]
+    if e["kind"] == "conversation":
+        operator = instance_config(name).get("OPERATOR_NAME") or "operator"
+        for t in e["turns"]:
+            who = name if t.get("role") == "assistant" else (t.get("speaker") or operator)
+            via = f" via {t['via']}" if t.get("via") else ""
+            out.append((f"── {t.get('ts', '')[11:19]} {who}{via}", "bold green" if who == name else "bold yellow"))
+            if thinking and t.get("reasoning"):
+                out += [(f"  (thinking) {l}", "dim") for l in str(t["reasoning"]).splitlines()]
+            out += [(l, "") for l in str(t.get("content") or "").splitlines() or [""]]
+            if t.get("tools"):
+                _tool_lines(out, t["tools"], e["where"])
+            out.append(("", ""))
+        for w in e["writeups"]:
+            _block(out, f"── write-up ({w.get('kind')}, {w.get('ts', '')[11:16]})", w.get("content"))
+        return out
+    r = e["record"]
+    out.append((f"ended by {r.get('ended_by') or '?'} · {r.get('steps') or '?'} steps · "
+                f"{len(r.get('tools') or [])} tool calls", "dim"))
+    intent = r.get("intent") or {}
+    for label, key in (("Goal", "goal"), ("Success criterion", "success_criterion"), ("Confidence", "confidence"),
+                       ("Origin", "origin"), ("Origin reference", "origin_ref")):
+        _block(out, label, intent.get(key))
+    _block(out, "Inbox at the start", r.get("inbox"))
+    if r.get("tools"):
+        out += [("", ""), ("Tool calls", "bold underline")]
+        _tool_lines(out, r["tools"], e["where"])
+    _block(out, "Text", r.get("content"))
+    for key, value in (r.get("finish") or {}).items():
+        _block(out, f"Finish · {key.replace('_', ' ')}", value)
+    return out
+
+
 DISMISSED = "top_dismissed.json"
+DISMISS_KEEP_DAYS = 3        # every alert id carries its day, and none older than ALERT_HOURS can come back
+_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
 def dismissed() -> set[str]:
@@ -401,6 +536,9 @@ def dismissed() -> set[str]:
 
 
 def dismiss(ids: list[str]) -> None:
-    keep = dismissed() | set(ids)
+    """Remember dismissed alert ids; forget only those of days no alert can come from any more (never by count:
+    keeping the alphabetically last 500 dropped today's cap: and judge: dismissals first)."""
+    cut = (date.today() - timedelta(days=DISMISS_KEEP_DAYS)).isoformat()
+    keep = {i for i in dismissed() | set(ids) if not (m := _DAY.search(i)) or m.group(0) >= cut}
     SUP_DIR.mkdir(exist_ok=True)
-    (SUP_DIR / DISMISSED).write_text(json.dumps(sorted(keep)[-500:]))
+    (SUP_DIR / DISMISSED).write_text(json.dumps(sorted(keep)))

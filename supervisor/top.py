@@ -4,7 +4,7 @@ judge's verdicts, trials, benchmarks, self-changes and probation, spending again
 with guarded actions. Refreshes every second. Runs with .venv-ui (rich). Without a terminal
 (`shaft top --once`, or piped) it prints one snapshot as text.
 
-Keys — 1–9 switch tab, ? help, q quits. Overview: ↑/↓ pick an instance, Enter shows it in full, c starts a
+Keys — 0–9 switch tab, ? help, q quits. Overview: ↑/↓ pick an instance, Enter shows it in full, c starts a
 cycle if idle, p pause/resume, s sleep now, u update, w write, r reply, x dismiss the alerts, m messages.
 Messages: ↑/↓ (j/k, PgUp/PgDn) move, f filters by instance, Enter reads one, Esc goes back. Reading: ↑/↓
 scroll, n/p next/previous message, Esc back to the list. The other tabs are in top_views.py.
@@ -101,6 +101,8 @@ class UI:
     only: bool = False            # trials: only the selected instance's
     overlay: object = None        # top_views.Overlay: y/n question, one-line editor or picker
     help: bool = False
+    tx_filter: str = ""           # transcripts: '' (all), 'cycles' or 'conversations'
+    thinking: bool = False        # transcripts: show a conversation's thinking
     width: int = 100              # the terminal's, as of the last render
 
     def say(self, text: str, seconds: float = 6) -> None:

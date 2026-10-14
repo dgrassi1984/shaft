@@ -92,10 +92,12 @@ shaft live|reflect|sleep [name|--all]   # one autonomous cycle / reflection / co
 shaft autonomy on|off|status    # SHAFT's scheduler service: each instance wakes every WAKE_INTERVAL_MINUTES
                                 # (its config.env; default 120, at least 10, 0 = never; a wake while it is
                                 # already awake is skipped), sleep daily from 04:00 (made up later if missed)
-shaft top                       # control panel, tabs 1–9: overview (state, now, alerts, today's spend) · one
+shaft top                       # control panel, tabs 0–9: overview (state, now, alerts, today's spend) · one
                                 #   instance in full · judge verdicts · trials · benchmarks (battery, distinct,
                                 #   surprises) · self-changes and probation · messages · costs against the caps
-                                #   · services. Actions ask y/n and run the matching shaft subcommand: cycle,
+                                #   · services · transcripts (0: every finished cycle, sleep and reflection, and
+                                #   every conversation with you, in full — tool calls, results, write-up; f
+                                #   filters, t shows a conversation's thinking). Actions ask y/n and run the matching shaft subcommand: cycle,
                                 #   pause/resume, sleep, update, tools, write/reply, A/A trial, battery,
                                 #   services and autonomy (a scheduler restart is refused while its runs would
                                 #   be killed). ? lists the keys; --once prints a text snapshot

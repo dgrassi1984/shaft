@@ -1,4 +1,4 @@
-"""`shaft top`'s control-panel views (PLAN-control-panel.md): tabs 2–6, 8 and 9, the actions, and the
+"""`shaft top`'s control-panel views (PLAN-control-panel.md): tabs 2–6, 8, 9 and 0, the actions, and the
 overlays every view shares (y/n question, one-line editor, picker, help). Tabs 1 (overview) and 7 (messages)
 are top.py's original views.
 
@@ -21,7 +21,7 @@ from . import panel
 from .core import PROJECT, PYTHON, SUP_DIR, log
 
 TABS = [("1", "overview"), ("2", "instance"), ("3", "judge"), ("4", "trials"), ("5", "benchmarks"),
-        ("6", "changes"), ("7", "messages"), ("8", "costs"), ("9", "services")]
+        ("6", "changes"), ("7", "messages"), ("8", "costs"), ("9", "services"), ("0", "transcripts")]
 TAB_OF = dict(TABS)
 SPARK = "▁▂▃▄▅▆▇█"
 MARK = {"yes": ("✓", "green"), "partial": ("½", "yellow"), "no": ("✗", "red")}
@@ -36,6 +36,8 @@ HELP = {
     "changes": "←/→ instance · ↑/↓ scroll",
     "costs": "↑/↓ scroll",
     "services": "↑/↓ service · r start/restart · o stop · a autonomy on/off",
+    "transcripts": "←/→ instance · ↑/↓ PgUp/PgDn pick · Enter read it in full · f all / cycles / conversations · "
+                   "t thinking on/off (conversations) · Esc back",
 }
 
 
@@ -107,7 +109,7 @@ def service_guard(service: str, action: str) -> str:
 
 # -- shared rendering ----------------------------------------------------------------------------------------------
 SHORT = {"overview": "all", "instance": "inst", "judge": "judge", "trials": "trial", "benchmarks": "bench",
-         "changes": "chg", "messages": "msg", "costs": "cost", "services": "svc"}
+         "changes": "chg", "messages": "msg", "costs": "cost", "services": "svc", "transcripts": "tx"}
 
 
 def tab_bar(ui, snap: dict, width: int | None = None) -> Text:
@@ -135,7 +137,7 @@ def footer(ui, hint: str) -> Text:
         return Text(f" {o.text}{o.buf}▌   (Enter sends · Esc cancels)", style="bold", no_wrap=True, overflow="ellipsis")
     if ui.flash and time.time() < ui.flash_until:
         return Text(f" {ui.flash}", style="bold", no_wrap=True, overflow="ellipsis")
-    return Text(f" {hint} · 1–9 tabs · ? help · q quits", style="dim", no_wrap=True, overflow="ellipsis")
+    return Text(f" {hint} · 0–9 tabs · ? help · q quits", style="dim", no_wrap=True, overflow="ellipsis")
 
 
 def window(lines: list, top: int, rows: int) -> list:
@@ -536,7 +538,7 @@ def render_services(snap, ui, width, height):
 # -- help -----------------------------------------------------------------------------------------------------------
 def render_help(snap, ui, width, height):
     lines = [Text(" Keys", style="bold underline"), Text(""),
-             Text("   1–9 switch tab · ? this help (any key closes it) · q quits · Esc goes back")]
+             Text("   0–9 switch tab · ? this help (any key closes it) · q quits · Esc goes back")]
     for name, hint in HELP.items():
         lines.append(Text(f"   {name:<11}", style="bold"))
         for w in wrap(hint, width - 18):
@@ -550,9 +552,73 @@ def render_help(snap, ui, width, height):
     return page([tab_bar(ui, snap)], lines, ui, "any key closes", height)
 
 
+# -- 0 transcripts ---------------------------------------------------------------------------------------------------
+TX_FILTERS = ("", "cycles", "conversations")            # f cycles through them
+TX_KIND_STYLE = {"cycle": "green", "conversation": "yellow", "sleep": "blue", "reflection": "magenta"}
+_tx_cache: dict = {}
+
+
+def _tx_shown(ui, name: str) -> list[dict]:
+    es = panel.transcripts(name) if name else []
+    if ui.tx_filter == "cycles":
+        return [e for e in es if e["kind"] != "conversation"]
+    if ui.tx_filter == "conversations":
+        return [e for e in es if e["kind"] == "conversation"]
+    return es
+
+
+def _tx_lines(name: str, e: dict, width: int, thinking: bool) -> list[Text]:
+    """The transcript wrapped to the panel's width, kept while nothing about it changes (it renders every second)."""
+    from .top import clean                              # instance-written text: no terminal control characters
+    key = (name, e["id"], len(e.get("turns", ())), len(e.get("writeups", ())), width, thinking)
+    if key not in _tx_cache:
+        if len(_tx_cache) > 16:
+            _tx_cache.clear()
+        lines = []
+        for text, style in panel.transcript_lines(name, e, thinking):
+            lines += [Text(f" {w}", style=style) for w in wrap(clean(text), width - 2)]
+        _tx_cache[key] = lines
+    return _tx_cache[key]
+
+
+def transcript_line(e: dict, width: int, selected: bool) -> Text:
+    from .top import clean
+    t = Text(no_wrap=True, overflow="ellipsis", style="reverse" if selected else "")
+    t.append(f" {e['ts'][5:16].replace('T', ' ')} ", style="" if selected else "dim")
+    t.append(f"{e['kind']:<13}", style="" if selected else TX_KIND_STYLE.get(e["kind"], ""))
+    t.append(clean(panel.transcript_summary(e)))
+    return t
+
+
+def render_transcripts(snap, ui, width, height):
+    name = current(ui, snap)
+    es = _tx_shown(ui, name)
+    head = [tab_bar(ui, snap), _inst_head(ui, snap, "transcripts")]
+    if ui.detail and es:
+        e = es[min(ui.sel, len(es) - 1)]
+        lines = _tx_lines(name, e, width, ui.thinking)
+        rows = max(1, height - len(head) - 1)
+        shown = _scrolled(lines, ui, height, len(head))
+        more = f"lines {ui.scroll + 1}–{ui.scroll + len(shown)} of {len(lines)} · " if len(lines) > rows else ""
+        think = f" · t thinking {'off' if ui.thinking else 'on'}" if e["kind"] == "conversation" else ""
+        return page(head, shown, ui, f"{more}↑/↓ PgUp/PgDn scroll{think} · Esc back", height)
+    live = next((i for i in snap.get("instances", []) if i["name"] == name), {})
+    info = Text(f" {len(es)} {ui.tx_filter or 'transcripts'} · newest first · f filter", style="dim", no_wrap=True,
+                overflow="ellipsis")
+    if live.get("state") == "in a cycle":
+        info.append(f" · the cycle running now (since {live.get('since', '?')}) appears when it ends", style="yellow")
+    head.append(info)
+    rows = max(1, height - len(head) - 1)
+    ui.sel = max(0, min(ui.sel, len(es) - 1))
+    ui.top = scroll_to(ui.sel, ui.top, rows)
+    body = [transcript_line(e, width, k == ui.sel) for k, e in enumerate(es[ui.top:ui.top + rows], start=ui.top)]
+    return page(head, body or [Text(f" no {ui.tx_filter or 'transcripts'} yet", style="dim")], ui,
+                HELP["transcripts"], height)
+
+
 RENDER = {"instance": render_instance, "judge": render_judge, "trials": render_trials,
           "benchmarks": render_benchmarks, "changes": render_changes, "costs": render_costs,
-          "services": render_services}
+          "services": render_services, "transcripts": render_transcripts}
 
 
 # -- keys -------------------------------------------------------------------------------------------------------------
@@ -662,6 +728,14 @@ def handle_view(ui, key: str, snap: dict, page_rows: int) -> None:
             ui.inst = (ui.inst + (1 if key in ("right", "l") else -1)) % len(names)
             ui.sel = ui.top = ui.scroll = 0
         return
+    if tab == "transcripts" and key == "t":
+        ui.thinking = not ui.thinking
+        ui.say(f"thinking {'shown' if ui.thinking else 'hidden'} in conversations", 2)
+        return
+    if tab == "transcripts" and key == "f" and not ui.detail:
+        ui.tx_filter = TX_FILTERS[(TX_FILTERS.index(ui.tx_filter) + 1) % len(TX_FILTERS)]
+        ui.sel = ui.top = 0
+        return
     if ui.detail:
         if key in ("esc", "back"):
             ui.detail, ui.scroll = False, 0
@@ -674,7 +748,7 @@ def handle_view(ui, key: str, snap: dict, page_rows: int) -> None:
         elif key == "pgdn":
             ui.scroll += page_rows
         return
-    if tab in ("judge", "trials", "services"):            # lists with a selection
+    if tab in ("judge", "trials", "services", "transcripts"):   # lists with a selection
         if key in ("up", "k"):
             ui.sel = max(0, ui.sel - 1)
         elif key in ("down", "j"):

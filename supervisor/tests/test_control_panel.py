@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from datetime import date, datetime, timedelta
@@ -17,6 +20,7 @@ from pathlib import Path
 from unittest import mock
 
 from supervisor import cloudllm, coder, panel, trial
+from supervisor.core import PROJECT
 
 try:
     from rich.console import Console
@@ -113,6 +117,30 @@ class PanelData(unittest.TestCase):
         panel.dismiss(["log:x"])
         panel.dismiss(["cap:y"])
         self.assertEqual(panel.dismissed(), {"log:x", "cap:y"})
+
+    def test_a_log_alerts_id_is_the_same_in_every_process(self):
+        # Regression (Daniele, 2026-10-14: "dismissed alerts keep popping up on next relaunch"): the id was built
+        # with hash(), which Python seeds afresh in every process, so a dismissal never matched after a relaunch.
+        line = "[2026-10-14 01:31:59] wren: code change FAILED tests, reverted: ['plugins/x/main.py']"
+        code = f"from supervisor import panel; print(panel.log_alert_id({line!r}))"
+        ids = {subprocess.run([sys.executable, "-E", "-s", "-c", code], cwd=PROJECT, capture_output=True, text=True,
+                              env={**os.environ, "PYTHONHASHSEED": seed}).stdout.strip() for seed in ("1", "2", "3")}
+        self.assertEqual(len(ids), 1, ids)
+        self.assertEqual(ids, {panel.log_alert_id(line)})
+        self.assertTrue(panel.log_alert_id(line).startswith("log:2026-10-14 01:31:59:"))
+
+    def test_old_dismissals_are_pruned_by_age_never_by_name(self):
+        # Regression: the file kept sorted(ids)[-500:], the alphabetically last 500 — past 500 entries a cap: or
+        # judge: dismissal of today was dropped before old log: ones, and the alert came back.
+        old = (NOW - timedelta(days=panel.DISMISS_KEEP_DAYS + 1)).strftime("%Y-%m-%d")
+        panel.dismiss([f"log:{old} 09:00:00:abc", f"judge:{old}"])
+        panel.dismiss([f"cap:wren:cloud:{TODAY}"])
+        panel.dismiss([f"log:{TODAY} 10:{i // 60:02d}:{i % 60:02d}:{i:06x}" for i in range(600)])
+        kept = panel.dismissed()
+        self.assertIn(f"cap:wren:cloud:{TODAY}", kept)
+        self.assertEqual(len([i for i in kept if i.startswith("log:")]), 600)
+        self.assertNotIn(f"judge:{old}", kept)                  # an alert of a past day can never come back
+        self.assertNotIn(f"log:{old} 09:00:00:abc", kept)
 
     def test_judgments_newest_first_with_what_each_achieved(self):
         _write(self.sup / "judgments" / "wren.jsonl", [
