@@ -58,4 +58,4 @@ ship:
 #   failure_classes: AGENTS.md   # unset: falls back to project.conventions
 
 docs_move_with_code:
-  - python3 ~/Development/agent-workflows/scripts/gen_codemap.py
+  - python3 ~/Development/agent-workflows/scripts/gen_codemap.py --root .   # without --root it regenerates agent-workflows itself
