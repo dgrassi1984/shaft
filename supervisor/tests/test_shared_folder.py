@@ -30,17 +30,15 @@ class SettingsTest(unittest.TestCase):
         self.addCleanup(p.stop)
 
     def test_other_settings_do_not_wipe_the_grant(self):
-        # Regression: _save_tools rewrote tools/<name>.json with only `off` and `write_hosts`, so allowing a host
-        # or switching a tool would silently drop the shared folder.
+        # Regression: _save_tools rewrote tools/<name>.json with only its own keys, so switching a tool would
+        # silently drop the shared folder.
         core.set_shared_folder("shaft", self.folder)
-        core.set_write_host("shaft", "api.github.com", allow=True)
         core.set_tool("shaft", "delegate_coding", on=False)
         self.assertEqual(core.shared_folder("shaft"), self.folder)
-        self.assertEqual(core.write_hosts("shaft"), {"api.github.com"})
         self.assertEqual(core.disabled_tools("shaft"), {"delegate_coding"})
         core.set_shared_folder("shaft", None)
         self.assertIsNone(core.shared_folder("shaft"))
-        self.assertEqual(core.write_hosts("shaft"), {"api.github.com"})   # and removing it keeps the rest
+        self.assertEqual(core.disabled_tools("shaft"), {"delegate_coding"})   # and removing it keeps the rest
         self.assertNotIn("shared", json.loads((self.sup / "tools" / "shaft.json").read_text()))
 
     def test_per_instance(self):

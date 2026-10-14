@@ -140,16 +140,14 @@ class ReplayEndToEndTest(Fixture):
             {"tool_calls": [("secret_set", {"name": "gh", "value": "SECRETVALUE", "hosts": ["api.github.com"]})]},
             {"tool_calls": [("delegate_coding", {"task": "write a plugin that does something useful"})]},
             {"tool_calls": [("run", {"command": "mkdir -p notes && echo ran > notes/ran.txt"})]},
+            {"tool_calls": [("run", {"command": "curl -s -o /dev/null -w 'status %{http_code}' "
+                                                "-X POST https://example.com/hook || true"})]},
             {"tool_calls": [("write_file", {"path": "notes/answer.md", "content": "The owl is purple."})]},
             {"tool_calls": [("finish_cycle", {"what_happened": "replied", "criterion_met": "yes", "learned": "-"})]},
         ])
         self.addCleanup(self.fake.close)
         self.llm_url = self.fake.url
         super().setUp()
-        hosts = SUP_DIR / "tools"
-        hosts.mkdir(parents=True, exist_ok=True)
-        (hosts / f"{NAME}.json").write_text(json.dumps({"write_hosts": ["example.com"]}))
-        self.addCleanup((hosts / f"{NAME}.json").unlink, True)
 
     def test_replay_has_no_side_effects(self):
         before, tip = snapshot(self.root), git(self.root, "rev-parse", "HEAD")
@@ -168,6 +166,9 @@ class ReplayEndToEndTest(Fixture):
         self.assertIn("simulated: not delivered", tags["send_message"])
         self.assertIn("simulated: not sent", tags["http_request"])
         self.assertIn("simulated: not stored", tags["secret_set"])
+        # A replay's own network traffic never leaves either (open egress since 2026-10-14): refused and traced.
+        self.assertIn("simulated: not sent", tags["network"])
+        self.assertTrue(any("example.com:443" in c["args"] for c in rec["trace"] if c["tool"] == "network"))
         self.assertNotIn("SECRETVALUE", json.dumps(rec["trace"]))
         results = {c["tool"]: c["result"] for c in rec["trace"]}
         self.assertTrue(results["http_request"].startswith("HTTP 200"))
@@ -227,7 +228,7 @@ class ReplayBrokerTest(Fixture):
         args = {"name": "gh", "value": "v", "hosts": ["api.github.com"]}
         self.assertEqual(real.call("secret_set", args), replay.call("secret_set", args))
         self.assertEqual(real.call("secret_delete", {"name": "nope"}), replay.call("secret_delete", {"name": "nope"}))
-        refused = {"url": "https://example.org/x", "method": "POST"}
+        refused = {"url": "https://example.org/x", "method": "TRACE"}
         self.assertEqual(real.call("http_request", refused), replay.call("http_request", refused))
 
     def test_the_operator_daily_limit_counts_the_replay_day(self):

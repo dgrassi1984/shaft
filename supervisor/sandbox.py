@@ -3,7 +3,9 @@
 An instance may write only inside its own directory (instances/<name>/), may
 not read anything else in the operator's home — including other instances
 and the supervisor's state — and may only connect to allowed localhost ports.
-Rules are evaluated last-match-wins.
+Its way to the internet is one of those ports: the run's egress proxy
+(supervisor/egress.py), which reaches only public addresses. Rules are
+evaluated last-match-wins.
 """
 from __future__ import annotations
 
@@ -43,8 +45,23 @@ def _shared(shared: Path | None, home: Path) -> list[str]:
     return rules
 
 
+def _env_reads(root: Path, env_root: Path | None, home: Path) -> list[str]:
+    """A copy of an instance (coder hand-off, trial gate, trial replay) reads the instance's real Python environment
+    (supervisor/pyenv.py), read-only: it tests with the packages the instance has, and cannot change them."""
+    if not env_root or Path(env_root).resolve() == root:
+        return []
+    from .pyenv import ENV_DIRS
+    env_root = Path(env_root).resolve()
+    rules = ["(allow file-read* " + " ".join(f"(subpath {_q(env_root / d)})" for d in ENV_DIRS) + ")"]
+    if (meta := _ancestors_metadata(env_root / ENV_DIRS[0], home)):
+        rules.append(meta)
+    return rules
+
+
 def profile(instance_root: Path, home: Path, llm_ports: list[int], any_localhost: bool = False,
-            shared: Path | None = None) -> str:
+            shared: Path | None = None, env_root: Path | None = None) -> str:
+    """The agent's own sandbox. `llm_ports` are the local ports it may connect to: its models, the embedding
+    service, its broker and its egress proxy."""
     root, home = Path(instance_root).resolve(), Path(home).resolve()
     lines = [
         "(version 1)",
@@ -58,9 +75,10 @@ def profile(instance_root: Path, home: Path, llm_ports: list[int], any_localhost
         f"(allow file-read* (subpath {_q(root)}))",
         _ancestors_metadata(root, home),
         *_shared(shared, home),
+        *_env_reads(root, env_root, home),
         _no_secrets(root),
         _no_config_writes(root),
-        # Network: only the LLM endpoint(s) on localhost.
+        # Network: only the given localhost ports (the internet only through the egress proxy among them).
         "(deny network*)",
     ]
     if any_localhost:
@@ -70,7 +88,7 @@ def profile(instance_root: Path, home: Path, llm_ports: list[int], any_localhost
     return "\n".join(lines) + "\n"
 
 
-RUN_WRITABLE = ("notes", "plugins", "skills", "tests", "shaft", ".tmp")
+RUN_WRITABLE = ("notes", "plugins", "skills", "tests", "shaft", ".tmp", ".venv", ".uv")
 
 
 def _ancestors_metadata(root: Path, home: Path) -> str:
@@ -79,12 +97,16 @@ def _ancestors_metadata(root: Path, home: Path) -> str:
     return "(allow file-read-metadata " + " ".join(f"(literal {_q(p)})" for p in parents) + ")" if parents else ""
 
 
-def run_profile(instance_root: Path, home: Path, shared: Path | None = None) -> str:
+def run_profile(instance_root: Path, home: Path, shared: Path | None = None, egress_port: int = 0,
+                env_root: Path | None = None) -> str:
     """Stricter than the agent's own sandbox, for commands the agent runs via the broker's `run`:
-    writes only to its working areas (never self/, memory/, inbox/, config.env, .git), reads only its
-    own folder in the home directory (and the operator's shared folder, if any), and no network at all."""
+    writes only to its working areas and its Python environment (never self/, memory/, inbox/, config.env,
+    .git), reads only its own folder in the home directory (and the operator's shared folder, if any), and
+    no network but the run's egress proxy (the public internet, nothing local)."""
+    from .pyenv import DECLARED
     root, home = Path(instance_root).resolve(), Path(home).resolve()
-    writable = " ".join(f"(subpath {_q(root / d)})" for d in RUN_WRITABLE)
+    writable = " ".join([*(f"(subpath {_q(root / d)})" for d in RUN_WRITABLE),
+                         *(f"(literal {_q(root / f)})" for f in DECLARED)])
     return "\n".join([
         "(version 1)",
         "(allow default)",
@@ -94,8 +116,10 @@ def run_profile(instance_root: Path, home: Path, shared: Path | None = None) -> 
         f"(allow file-read* (subpath {_q(root)}))",
         _ancestors_metadata(root, home),
         *_shared(shared, home),
+        *_env_reads(root, env_root, home),
         _no_secrets(root),
         "(deny network*)",
+        *([f'(allow network-outbound (remote ip "localhost:{int(egress_port)}"))'] if egress_port else []),
     ]) + "\n"
 
 

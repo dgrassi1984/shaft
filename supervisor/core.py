@@ -161,7 +161,7 @@ def config_with(text: str, key: str, line: str | None) -> str:
 
 
 def _tool_settings(name: str) -> dict:
-    """What the operator set for this instance (`shaft tools`, `shaft hosts`, `shaft share`), in the supervisor's
+    """What the operator set for this instance (`shaft tools`, `shaft share`), in the supervisor's
     folder — never in the instance's config.env, which the instance can change (set_config): it must not widen
     its own access."""
     try:
@@ -172,8 +172,8 @@ def _tool_settings(name: str) -> dict:
 
 
 def _update_tool_settings(name: str, **changes) -> None:
-    """Change some keys and keep the rest: each setter owns its own key (allowing a host once rewrote the file
-    with only `off` and `write_hosts`, which would have dropped anything else kept here)."""
+    """Change some keys and keep the rest: each setter owns its own key (one setter once rewrote the file with
+    only its own keys, which dropped the shared-folder grant)."""
     data = {**_tool_settings(name), **changes}
     (SUP_DIR / "tools").mkdir(parents=True, exist_ok=True)
     (SUP_DIR / "tools" / f"{name}.json").write_text(json.dumps({k: v for k, v in data.items() if v is not None},
@@ -184,11 +184,6 @@ def disabled_tools(name: str) -> set[str]:
     """Supervisor tools the operator switched off for this instance (`shaft tools <name> off <tool>`): an
     instance must not switch a tool that costs the operator money (delegate_coding) back on for itself."""
     return set(_tool_settings(name).get("off", []))
-
-
-def write_hosts(name: str) -> set[str]:
-    """Hosts this instance may send POST/PUT/PATCH/DELETE to (`shaft hosts <name> allow <host>`)."""
-    return set(_tool_settings(name).get("write_hosts", []))
 
 
 # -- the operator's folder an instance may read ----------------------------------------------------------------
@@ -222,12 +217,6 @@ def set_shared_folder(name: str, folder: Path | str | None) -> Path | None:
     path = check_shared_folder(folder) if folder else None
     _update_tool_settings(name, shared=str(path) if path else None)
     return path
-
-
-def set_write_host(name: str, host: str, allow: bool) -> set[str]:
-    hosts = write_hosts(name) | {host.lower()} if allow else write_hosts(name) - {host.lower()}
-    _update_tool_settings(name, write_hosts=sorted(hosts))
-    return hosts
 
 
 # -- an instance's own keys ---------------------------------------------------------------------------

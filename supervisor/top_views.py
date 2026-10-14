@@ -221,8 +221,9 @@ def render_instance(snap, ui, width, height):
     row("model", f"{d['model']} via {d['via']} · effort {d['effort']}")
     row("wakes", f"every {d['wake']} min · next {live.get('next_wake', '?')}")
     row("tools off", ", ".join(d["tools_off"]) or "none")
-    row("may write to", ", ".join(d["write_hosts"]) or "no hosts (GET only)")
     row("shared folder", d["shared"] or "none")
+    row("python", d["python"], "yellow" if "BROKEN" in d["python"] else "")
+    row("internet", d["internet"])
     if d["questions"]:
         sec(f"Open questions to you ({len(d['questions'])}) — r replies to the oldest")
         for q in d["questions"][:3]:

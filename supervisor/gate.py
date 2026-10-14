@@ -14,7 +14,9 @@ from pathlib import Path
 
 from . import sandbox
 
-CODE_PATHS = ("shaft", "tests", "plugins")
+# .python-version and requirements.txt declare the instance's own Python environment (supervisor/pyenv.py): code
+# like the rest, tested when changed and committed when kept, so a lost .venv/ can be rebuilt from them.
+CODE_PATHS = ("shaft", "tests", "plugins", ".python-version", "requirements.txt")
 # Not config.env: the operator edits it too, at any time — kant's mid-cycle switch to Opus was reverted as the
 # instance's change when its plugin failed the tests (2026-10-13). The instance changes it only through the
 # broker's set_config (its sandbox cannot write the file), which records each line it set; revert_config undoes
@@ -77,17 +79,21 @@ def revert_config(instance_root: Path, writes: list[dict]) -> list[str]:
     return back
 
 
-def run_tests(instance_root: Path, home: Path, timeout_s: int = 900) -> tuple[bool, str]:
+def run_tests(instance_root: Path, home: Path, timeout_s: int = 900,
+              env_root: Path | None = None) -> tuple[bool, str]:
     """Supervisor invariants against this instance's code (trusted test code; it sandboxes
-    the agent itself), then the instance's own tests inside its sandbox."""
-    from .core import PYTHON
-    py = PYTHON
-    from .core import safe_mkdir
+    the agent itself), then its plugins' check and its own tests inside its sandbox, on its own Python
+    environment (supervisor/pyenv.py). `env_root`: where that environment lives when `instance_root` is a
+    scratch copy (coder hand-off, trial gate) — read-only from the copy."""
+    from . import pyenv
+    from .core import PYTHON, safe_mkdir
+    env_root = Path(env_root or instance_root)
+    py = pyenv.python(env_root)
     tmp = safe_mkdir(instance_root, ".tmp")
     outputs, ok = [], True
 
     sup_env = {**os.environ, "SHAFT_UNDER_TEST": str(instance_root)}
-    sup = subprocess.run([py, "-E", "-s", "-m", "unittest", "discover", "-s", "supervisor/tests", "-t", "."],
+    sup = subprocess.run([PYTHON, "-E", "-s", "-m", "unittest", "discover", "-s", "supervisor/tests", "-t", "."],
                          cwd=PROJECT, env=sup_env, capture_output=True, text=True, timeout=timeout_s)
     outputs.append("== supervisor invariants ==\n" + sup.stderr[-3000:])
     ok &= sup.returncode == 0
@@ -95,8 +101,8 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = 900) -> tuple[bo
     fd, prof_name = tempfile.mkstemp(prefix="shaft-tests-", suffix=".sb")   # outside the instance
     prof = Path(prof_name)
     with os.fdopen(fd, "w") as f:
-        f.write(sandbox.profile(instance_root, home, [], any_localhost=True))
-    env = sandbox.agent_env(os.environ, TMPDIR=str(tmp))
+        f.write(sandbox.profile(instance_root, home, [], any_localhost=True, env_root=env_root))
+    env = sandbox.agent_env(os.environ, TMPDIR=str(tmp), SHAFT_PYTHON=py)
     if (instance_root / "plugins").is_dir():
         plug = subprocess.run(sandbox.wrap(prof, [py, "-E", "-s", "-m", "shaft.plugin_runner", "--check"]),
                               cwd=instance_root, env=env, capture_output=True, text=True, timeout=120)

@@ -59,7 +59,7 @@ TARGETS = ("shaft/", "plugins/", "skills/", "tests/")
 # The gate no longer counts config.env as code (the operator edits it too; the instance only via set_config),
 # but an arm still runs with — and a trial still refuses to change — the config it was committed with.
 CODE = (*gate.CODE_PATHS, "config.env")
-NOT_STATE = ("logs", ".tmp", "secrets", "__pycache__")
+NOT_STATE = ("logs", ".tmp", "secrets", "__pycache__", ".venv", ".uv")
 LEDGER = SUP_DIR / "trial_usage.jsonl"
 
 
@@ -750,7 +750,7 @@ def gate_check(project: Path, name: str, t: dict) -> tuple[bool, str]:
             if data is not None:
                 contained(scratch, *Path(rel).parent.parts).mkdir(parents=True, exist_ok=True)
                 contained(scratch, *Path(rel).parts).write_bytes(data)
-        return gate.run_tests(scratch, HOME)
+        return gate.run_tests(scratch, HOME, env_root=project / "instances" / name)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

@@ -395,6 +395,7 @@ def _launch(name: str, root: Path, kind: str, agent_args: list[str], budget: int
     broker = Broker(name, PROJECT, secrets_env(), SUP_DIR / "broker.log", max_calls=BROKER_MAX_CALLS)
     broker.start()
     SUP_DIR.mkdir(exist_ok=True)
+    rebuild_env(name, root, broker)
     extra = {"SHAFT_DEADLINE": f"{time.time() + budget - 60:.0f}"} if budget else {}
     from .autonomy import describe_schedule
     extra["SHAFT_SCHEDULE"] = describe_schedule(name)
@@ -403,18 +404,39 @@ def _launch(name: str, root: Path, kind: str, agent_args: list[str], budget: int
     return broker, cmd, env
 
 
+def rebuild_env(name: str, root: Path, broker: Broker) -> None:
+    """A Python environment the instance declared (.python-version, requirements.txt) but no longer has — a new
+    machine, a wiped folder — is rebuilt before it starts, exactly as its own `run` would do it: same sandbox, same
+    proxy. A failure is logged and noted for the instance, never fatal: it can repair the environment itself."""
+    from . import pyenv
+    if not pyenv.needs_rebuild(root):
+        return
+    try:
+        out = broker._run(pyenv.rebuild_command(root), timeout_s=300)
+    except Exception as e:
+        out = f"{type(e).__name__}: {e}"
+    ok = out.startswith("exit 0")
+    log(f"{name}: Python environment {'rebuilt' if ok else 'NOT rebuilt'} from its declaration — {out.splitlines()[0]}")
+    if not ok:
+        journal_note(root, "My Python environment could not be rebuilt", f"`{pyenv.rebuild_command(root)}` failed:\n\n"
+                     f"```\n{out[-2000:]}\n```\n\nRepair it with `run` (uv), or fix .python-version / requirements.txt.")
+
+
 def agent_command(root: Path, broker: Broker, agent_args: list[str], profile: Path, llm_ports: list[int],
                   extra: dict[str, str]) -> tuple[list[str], dict[str, str]]:
     """The sandboxed command and environment for the agent in `root`, talking to `broker` (already started):
-    it may write only in `root` and reach only the model ports, the embedding service and its broker; it may read
-    the operator's shared folder if the broker carries one (shaft share)."""
-    profile.write_text(sandbox.profile(root, HOME, list(llm_ports) + [EMBED_PORT, broker.port], shared=broker.shared))
+    it may write only in `root` and reach only the model ports, the embedding service, its broker and its egress
+    proxy (the public internet); it may read the operator's shared folder if the broker carries one (shaft share),
+    and the instance's Python environment when `root` is a copy (trial replay)."""
+    ports = list(llm_ports) + [EMBED_PORT, broker.port, broker.egress.port]
+    profile.write_text(sandbox.profile(root, HOME, ports, shared=broker.shared, env_root=broker.env_root))
     safe_mkdir(root, ".tmp")
     cmd = sandbox.wrap(profile, [PYTHON, "-E", "-s", "-m", "shaft", *agent_args])
     env = sandbox.agent_env(os.environ, SHAFT_ROOT=str(root), TMPDIR=str(root / ".tmp"),
                             SHAFT_BROKER_URL=f"http://127.0.0.1:{broker.port}", SHAFT_BROKER_TOKEN=broker.token,
                             SHAFT_EMBED_URL=f"http://127.0.0.1:{EMBED_PORT}/v1/embeddings",
-                            **({"SHAFT_SHARED": str(broker.shared)} if broker.shared else {}), **extra)
+                            **({"SHAFT_SHARED": str(broker.shared)} if broker.shared else {}),
+                            **broker.sandbox_env(), **extra)
     return cmd, env
 
 

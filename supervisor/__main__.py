@@ -233,9 +233,7 @@ def cmd_status(names: list[str]) -> int:
         print(f"  versions    {version.describe(name)}")
         if tools_off:
             print(f"  tools off   {', '.join(sorted(tools_off))} (shaft tools {name} on <tool>)")
-        from .core import shared_folder, write_hosts
-        if (hosts := write_hosts(name)):
-            print(f"  may write   {', '.join(sorted(hosts))} (shaft hosts {name} deny <host>)")
+        from .core import shared_folder
         if (folder := shared_folder(name)):
             print(f"  may read    {folder}{'' if folder.is_dir() else ' (MISSING: left out of its runs)'} "
                   f"(shaft share {name} off)")
@@ -296,21 +294,6 @@ def cmd_secret(args) -> int:
         return 2
     log(f"{args.name}: operator gave it a key named {args.key} for {args.hosts}")
     print(f"stored: {args.name} can use it as http_request(auth={args.key!r}) to {args.hosts}; it never sees the value")
-    return 0
-
-
-def cmd_hosts(name: str, action: str | None, host: str | None) -> int:
-    from .core import set_write_host, write_hosts
-    instance_root(name)
-    if action:
-        if not host:
-            print("which host? e.g. shaft hosts wren allow api.github.com", file=sys.stderr)
-            return 2
-        set_write_host(name, host, action == "allow")
-        log(f"{name}: write access to {host} {'allowed' if action == 'allow' else 'removed'} by the operator")
-    hosts = sorted(write_hosts(name))
-    print(f"{name} may send POST/PUT/PATCH/DELETE to: {', '.join(hosts) if hosts else 'no host yet'} "
-          f"(GET/HEAD: any public address)")
     return 0
 
 
@@ -561,10 +544,6 @@ def main(argv: list[str]) -> int:
     p.add_argument("--hosts", default="", help="comma-separated hosts the key may be sent to")
     p.add_argument("--header", default="Authorization")
     p.add_argument("--scheme", default="Bearer", help="e.g. Bearer, token; '' for the raw value")
-    p = sub.add_parser("hosts", help="hosts an instance may send POST/PUT/PATCH/DELETE to")
-    p.add_argument("name")
-    p.add_argument("action", nargs="?", choices=["allow", "deny"])
-    p.add_argument("host", nargs="?")
     p = sub.add_parser("share", help="a folder of yours an instance may read (read-only, seen as shared/); 'off' removes it")
     p.add_argument("name")
     p.add_argument("folder", nargs="?", help="a directory, or 'off'")
@@ -647,8 +626,6 @@ def main(argv: list[str]) -> int:
         return cmd_tools(args.name, args.action, args.tool)
     if args.cmd == "secret":
         return cmd_secret(args)
-    if args.cmd == "hosts":
-        return cmd_hosts(args.name, args.action, args.host)
     if args.cmd == "share":
         return cmd_share(args.name, args.folder)
     if args.cmd == "autonomy":

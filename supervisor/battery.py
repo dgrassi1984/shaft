@@ -180,7 +180,8 @@ def make_control(name: str) -> Path:
 def _exam(label: str, root: Path, broker: Broker, task: dict, until: float | None, interrupt) -> dict:
     """Run the agent's `exam` command on one task in its sandbox. Raises Interrupted."""
     prof = base() / f"{label}.sb"
-    prof.write_text(sandbox.profile(root, HOME, LLM_PORTS + [EMBED_PORT, broker.port]))
+    prof.write_text(sandbox.profile(root, HOME, LLM_PORTS + [EMBED_PORT, broker.port, broker.egress.port],
+                                    env_root=broker.env_root))   # its own Python environment, read-only
     (root / ".tmp").mkdir(exist_ok=True)
     deadline = time.time() + ITEM_TIMEOUT_S
     if until:
@@ -189,7 +190,8 @@ def _exam(label: str, root: Path, broker: Broker, task: dict, until: float | Non
                             SHAFT_BROKER_URL=broker.url, SHAFT_BROKER_TOKEN=broker.token,
                             SHAFT_EMBED_URL=f"http://127.0.0.1:{EMBED_PORT}/v1/embeddings",
                             SHAFT_DEADLINE=f"{deadline - 60:.0f}",
-                            SHAFT_SCHEDULE="the supervisor is running its capability battery (no schedule now).")
+                            SHAFT_SCHEDULE="the supervisor is running its capability battery (no schedule now).",
+                            **broker.sandbox_env())
     cmd = sandbox.wrap(prof, [PYTHON, "-E", "-s", "-m", "shaft", "exam"])
     proc = subprocess.Popen(cmd, cwd=root, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True, start_new_session=True)
@@ -550,7 +552,7 @@ def _one(name: str, item: dict, arm: str, root: Path, e: dict, until: float | No
         shutil.copytree(Path(item["dir"]) / "fixture", scratch)
     task = {"item": item["id"], "prompt": item["prompt"], "max_steps": item.get("max_steps", 12), "scratch": scratch_rel}
     broker = Broker(label, PROJECT, secrets_env(), base() / "broker.log", max_calls=BROKER_MAX_CALLS,
-                    root=root, usage_name=f"{label}-battery")
+                    root=root, usage_name=f"{label}-battery", network=False)   # exams stay offline, as they always were
     broker.disabled |= EXAM_OFF
     broker.url = broker.start()
     before = snapshot(root) if arm == "instance" else None

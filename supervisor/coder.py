@@ -25,7 +25,8 @@ CODER_MODEL, _ = knob("SHAFT_CODER_MODEL", "claude-opus-5-5", str)
 DAILY_USD, _ = knob("SHAFT_CODER_DAILY_USD", "5", float)
 MAX_TURNS = 16
 WRITABLE = ("shaft/", "plugins/", "skills/", "tests/")
-HIDDEN = (".git", "logs", ".tmp", "__pycache__", "secrets")   # secrets: the instance's keys, never to the coder
+# secrets: the instance's keys, never to the coder; .venv/.uv: its Python environment, read in place, never copied
+HIDDEN = (".git", "logs", ".tmp", "__pycache__", "secrets", ".venv", ".uv")
 PRICES = {"claude-opus-5-5": (4.0, 20.0), "claude-sonnet-5-5": (2.0, 10.0), "claude-fable-5-1": (10.0, 50.0)}
 USAGE = SUP_DIR / "coder_usage.jsonl"
 API = "https://api.anthropic.com/v1/messages"
@@ -177,7 +178,7 @@ def test_in_scratch(root: Path, files: list[dict]) -> tuple[bool, str]:
                         ignore=shutil.ignore_patterns(*HIDDEN))
         for f in files:
             safe_write(scratch, f["path"], f["content"])
-        return gate.run_tests(scratch, HOME)
+        return gate.run_tests(scratch, HOME, env_root=root)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

@@ -8,7 +8,8 @@ append-only journal of everything it has experienced, its own tools and plugins,
 own copy of its source code. It runs autonomous cycles on its own (goal → act → report),
 consolidates memory while it "sleeps", talks with you in the terminal, messages other
 instances, and can ask you things. A supervisor that the agents cannot modify runs them
-in a sandbox, lends them the internet through a broker that holds the API keys, tests any
+in a sandbox, lets them reach the public internet (never your machine or network) and
+keeps their API keys in a broker, tests any
 change they make to themselves (reverting failures, putting successes on probation), has a
 stronger cloud model judge whether they did what they claimed, and records every step in
 git — one branch per agent, so their evolution is a readable history.
@@ -20,7 +21,8 @@ Design, milestones and decisions: [PLAN.md](PLAN.md).
 
 ## Requirements
 
-- macOS (the sandbox uses `sandbox-exec`), Python 3.12+, git 2.42+ — no Python packages.
+- macOS (the sandbox uses `sandbox-exec`), Python 3.12+, git 2.42+, `uv` (instances manage their own Python
+  with it) — no Python packages for the supervisor.
 - A model per instance, set in its `config.env`. The default is SHAFT's own model server:
   Ternary-Bonsai-2-27B (MLX, 2-bit) behind mlx_lm's OpenAI-compatible server on `127.0.0.1:8780`
   (`shaft model on` installs it as a launchd service; needs `.venv-bonsai/` and the pack below).
@@ -238,7 +240,22 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
 
 - **Sandbox** (macOS `sandbox-exec`): an instance writes only inside `instances/<name>/` — and not
   its `config.env` —, reads nothing else in your home, and connects only to the LLM port(s)
-  (`SHAFT_LLM_PORTS`, default 8780) and its run's broker. It inherits no secrets from the environment.
+  (`SHAFT_LLM_PORTS`, default 8780), its run's broker and its run's **egress proxy**. It inherits no secrets
+  from the environment.
+- **Internet** ([PLAN-python-env.md](PLAN-python-env.md)): the sandbox cannot filter by address, so the
+  instance's way out is a proxy the supervisor runs for each run (`supervisor/egress.py`; `HTTPS_PROXY` /
+  `HTTP_PROXY` are set, and uv, pip, curl, git and Python's HTTP libraries follow them). It connects only to
+  public addresses — resolved and checked by the proxy itself — so localhost, your LAN and the tailnet stay out of
+  reach; a socket of the instance's own is refused by the sandbox. Every connection is logged in
+  `.supervisor/egress/<name>.jsonl` (`record(kind='egress')`, the panel's *internet* row). Trial replays and
+  battery exams get a proxy that refuses everything.
+- **Its own Python** (`supervisor/pyenv.py`): `.venv/` (and uv's state in `.uv/`) in its folder, made and
+  changed by the instance with `uv` in `run` — any Python version, any package. Its plugins (`SHAFT_PYTHON`),
+  its tests in the gate and `python3` in `run` use it; the agent process itself stays on the system Python, so a
+  broken environment never stops it from waking up to fix it. It declares its choice in `.python-version` and
+  `requirements.txt` (code: tested and committed); a missing `.venv/` is rebuilt from them at wake, sandboxed.
+  Scratch copies (coder, trials, battery) read the real environment read-only. The panel's *python* row says
+  which interpreter it runs on.
   **One folder of yours it may read** (`shaft share <name> <folder>`, `shaft share <name> off`):
   read-only, in its sandbox and in `run`; its file tools show it as `shared/`. Kept in
   `.supervisor/tools/<name>.json`, not in its `config.env`; a folder overlapping SHAFT's own state is
@@ -254,14 +271,15 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
   the gate passes — code only, never `self/`, `memory/` or `config.env`; max 2 per cycle and
   `SHAFT_CODER_DAILY_USD` (5) per instance per day; commits and `self/stats.md` record what was
   delegated. **`run`**: shell commands (`zsh`) in a stricter sandbox — writes only to `notes/`,
-  `plugins/`, `skills/`, `tests/`, `shaft/` and `.tmp/`, no network, reads only its own folder;
+  `plugins/`, `skills/`, `tests/`, `shaft/`, `.tmp/`, `.venv/`, `.uv/`, `.python-version` and
+  `requirements.txt`, the internet only through the egress proxy, reads only its own folder;
   60 s default time limit (the whole process group is killed), 100 MB file-size limit, output capped,
   40 commands per run. So an instance can build and test its own tools and plugins. **`history`**: its
   own branch's git log and diffs (git cannot run inside its sandbox, and `.git` holds other instances'
   minds). **`record`**: the supervisor's own record about it — the judge's verdicts with reasoning, its
-  runs, its tool calls, its kept code changes — so it can check its claims about itself.
-  **`http_request`**: call web APIs (method, headers, body); GET/HEAD to any public address,
-  POST/PUT/PATCH/DELETE only to hosts the operator allowed (`shaft hosts <name> allow <host>`). **Its own
+  runs, its tool calls, its kept code changes, its internet connections — so it can check its claims about
+  itself.
+  **`http_request`**: call web APIs (any method, headers, body) at any public address. **Its own
   keys** (`secret_set` / `secret_list` / `secret_delete`, or `shaft secret <name> set <key> --hosts …` from
   your terminal): kept in its folder under `secrets/` but handled only by the supervisor — the broker adds a
   key to requests to the hosts it is bound to, never through a redirect, and masks it in responses; the
@@ -282,7 +300,7 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
   autonomous cycles exactly as each began (its branch at that moment, the inbox it read), and runs each twice —
   current code and proposed code — in scratch copies under the same sandbox, through a replay broker that
   sends nothing (messages, writes, keys are checked and recorded, not carried out; web reads are real and
-  shared by both runs; no coder). A judge not told which run is which compares each pair, effectiveness first,
+  shared by both runs; the replay's own network is refused and traced; no coder). A judge not told which run is which compares each pair, effectiveness first,
   in both orders; a sign test (α 0.1) gives better / worse / no clear difference, sent to the instance's inbox.
   Nothing is applied: the instance adopts the change itself, and if it makes the trialled edit (the same lines
   removed and added, even if the rest of the file moved on) its probation knows the verdict. On the local model a trial uses only idle time (no run, conversation, wake or

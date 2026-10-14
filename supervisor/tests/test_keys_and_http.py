@@ -87,12 +87,9 @@ class KeysAndHttpTest(unittest.TestCase):
         self.assertTrue(missing["ok"])
         self.assertTrue(missing["result"].startswith("HTTP 404"))
 
-    def test_writing_needs_the_operators_ok(self):
-        out = self.call("http_request", url=self.api.base + "/issues", method="POST", body={"title": "hi"})
-        self.assertFalse(out["ok"])
-        self.assertIn("shaft hosts wren allow 127.0.0.1", out["error"])
-        self.assertEqual(self.api.seen, [])                                   # nothing was sent
-        core.set_write_host("wren", "127.0.0.1", allow=True)
+    def test_post_goes_out_without_an_operator_allowlist(self):
+        # Daniele, 2026-10-14: writes are not gated per host any more (wren needed POST to api.github.com to mint
+        # a GitHub App token). A POST to a host nobody allowed must be sent, not refused.
         out = self.call("http_request", url=self.api.base + "/issues", method="POST", body={"title": "hi"})
         self.assertTrue(out["ok"], out)
         self.assertEqual(json.loads(self.api.seen[-1]["body"]), {"title": "hi"})

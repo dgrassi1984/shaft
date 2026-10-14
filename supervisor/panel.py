@@ -16,8 +16,9 @@ import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from . import egress, pyenv
 from .core import (SUP_DIR, disabled_tools, git, instance_config, instance_names, instance_root, journal_entries,
-                   knob, paused, shared_folder, write_hosts)
+                   knob, paused, shared_folder)
 
 JUDGE_ALERT_USD, _ = knob("SHAFT_JUDGE_ALERT_USD", "10", float)   # the judge has no cap (Daniele): only an alert
 CAP_ALERT = 0.8                                                    # a cap this full raises an alert
@@ -204,8 +205,10 @@ def instance_detail(name: str) -> dict:
             "model": cfg.get("LLM_MODEL", "?"), "via": "broker (cloud)" if cfg.get("LLM_BASE_URL") == "broker"
             else cfg.get("LLM_BASE_URL", "?"),
             "wake": cfg.get("WAKE_INTERVAL_MINUTES", "120"), "effort": cfg.get("LLM_REASONING_EFFORT", "medium"),
-            "tools_off": sorted(disabled_tools(name)), "write_hosts": sorted(write_hosts(name)),
+            "tools_off": sorted(disabled_tools(name)),
             "shared": str(shared_folder(name) or ""),
+            "python": pyenv.describe(root),
+            "internet": egress.summary(egress.recent(egress.log_path(name), 2000), date.today().isoformat()),
             "stats": stats.read_text(errors="replace") if stats.exists() else "(no stats yet)",
             "journal": heads, "probation": probation, "questions": questions,
             "changes": changes(name), "merges": template_merges(name)[:5], "traits": traits(name),

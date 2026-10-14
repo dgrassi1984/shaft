@@ -135,10 +135,16 @@ SPECS = {
     "run": _spec(
         "run",
         "Run a shell command (zsh) inside your folder, in a stricter sandbox: it can read your folder and the "
-        "system, write only to notes/, plugins/, skills/, tests/, shaft/ and .tmp/, and has NO network. Use it "
-        "to run your tests, scripts and plugins, inspect files, or compute things. Python 3 is `python3`. "
-        "Returns the exit code and output (truncated). Code you change is still tested by the supervisor. "
-        "`git` does not work here (your repository lives outside your folder): use `history`.",
+        "system, write only to notes/, plugins/, skills/, tests/, shaft/, .tmp/ and your Python environment "
+        "(.venv/, .uv/). It reaches the public internet through a proxy the supervisor runs (HTTPS_PROXY is set: "
+        "uv, pip, curl, git and Python's HTTP libraries use it; localhost, the LAN and the tailnet are not "
+        "reachable). Your Python is yours: `uv` is installed — e.g. `uv python install 3.13`, `uv venv --python "
+        "3.13 .venv`, `uv pip install PyJWT[crypto]`. Once .venv/ exists, `python3` here, your plugins and your "
+        "tests run on it (otherwise the system Python 3). Record what you chose in .python-version and "
+        "requirements.txt: a missing .venv/ is rebuilt from them. Use `run` to install packages, run your tests, "
+        "scripts and plugins, inspect files, or compute things. Returns the exit code and output (truncated). "
+        "Code you change is still tested by the supervisor. `git` cannot see your own repository here (it lives "
+        "outside your folder): use `history`.",
         {"command": S, "timeout_s": {"type": "integer", "description": f"default 60, max {300}"},
          "cwd": {"type": "string", "description": "directory inside your folder, default '.'"}},
         ["command"]),
@@ -158,12 +164,13 @@ SPECS = {
         "'judgments' (the judge's verdict on each autonomous cycle, with its full reasoning), 'runs' (your runs: "
         "start, end, exit code, reverted or kept code changes, notes), 'tools' (every supervisor tool you "
         "called, with arguments and outcome), 'code_changes' (code changes of yours that passed the tests), "
-        "'trials' (your trials of proposed changes: progress and verdicts). "
+        "'trials' (your trials of proposed changes: progress and verdicts), 'egress' (every connection your "
+        "sandbox made to the internet through the proxy, or why it was refused). "
         "Newest last — except judgments: whole verdicts, newest first, as many as fit, with every field (the "
         "reasons for the difficulty and origin ratings, and the second judge's blind verdict where there is "
         "one); page back with `before`, or ask for one cycle's verdict with `cycle`. Use it to check your claims "
         "about yourself. (Your own tool traces are also in memory/episodes/*.jsonl.)",
-        {"kind": {"type": "string", "enum": ["judgments", "runs", "tools", "code_changes", "trials"]},
+        {"kind": {"type": "string", "enum": ["judgments", "runs", "tools", "code_changes", "trials", "egress"]},
          "limit": {"type": "integer", "description": "entries, default 20, max 200"},
          "cycle": {"type": "string", "description": "judgments: one cycle's verdict in full, by its time "
                                                     "('2026-10-13 17:42')"},
@@ -172,8 +179,7 @@ SPECS = {
     "http_request": _spec(
         "http_request",
         "Call a web API: method, url, optional headers (object) and body (text, or a JSON object). Returns the "
-        "status, the useful response headers and the body. GET/HEAD to any public address; POST/PUT/PATCH/DELETE "
-        "only to hosts the operator allowed for you (you are told how to ask if not). auth: the name of one of "
+        "status, the useful response headers and the body. Any method, to any public address. auth: the name of one of "
         "your keys (secret_set) — the supervisor adds it to the request, only to the hosts that key is bound to; "
         "with a key, redirects are not followed but returned to you. Errors from the API (4xx/5xx) come back as "
         "data, not as a failure.",
@@ -343,7 +349,7 @@ def html_to_text(html: str) -> tuple[str, str]:
 class Broker:
     def __init__(self, name: str, project: Path, secrets_env: dict[str, str], log_path: Path,
                  max_calls: int = 60, root: Path | None = None, usage_name: str | None = None,
-                 share: bool | None = None):
+                 share: bool | None = None, network: bool = True):
         self.name, self.project, self.secrets = name, project, secrets_env
         self.log_path, self.max_calls = log_path, max_calls
         self.tools_log = log_path                # what record(kind="tools") reads
@@ -366,6 +372,18 @@ class Broker:
         self.as_of: datetime | None = None       # record() shows only what was known before this (trial replays)
         self.config_writes: list[dict] = []      # config.env lines the instance set (set_config) during this run
         self.server: ThreadingHTTPServer | None = None
+        # Its Python environment (supervisor/pyenv.py) lives in its real folder; a copy (trial replay, battery)
+        # reads it there, read-only.
+        real = (project / "instances" / name).resolve()
+        self.env_root = real if real.is_dir() else self.root
+        self.network = network       # False: its proxy refuses everything (the battery keeps its exams offline)
+        self.egress = self._make_egress()
+
+    def _make_egress(self):
+        from .egress import Egress, log_path
+        if not self.network:
+            return Egress(self.name, log_path(f"{self.name}-offline"), refuse=lambda host, port: "no network in this run")
+        return Egress(self.name, log_path(self.name))
 
     @staticmethod
     def _shared_folder(name: str) -> Path | None:
@@ -468,6 +486,7 @@ class Broker:
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.egress.start()
         return f"http://127.0.0.1:{self.server.server_address[1]}"
 
     @property
@@ -479,6 +498,13 @@ class Broker:
             self.server.shutdown()
             self.server.server_close()
             self.server = None
+        self.egress.stop()
+
+    def sandbox_env(self) -> dict[str, str]:
+        """What every sandboxed process of this run gets: the egress proxy, and the instance's interpreter for its
+        plugins (SHAFT_PYTHON)."""
+        from . import pyenv
+        return {**self.egress.env(), "SHAFT_PYTHON": pyenv.python(self.env_root)}
 
     # -- calls -------------------------------------------------------------------
     def call(self, tool: str, args: dict) -> dict:
@@ -654,9 +680,9 @@ class Broker:
         import resource
         import shutil as _shutil
         import tempfile
-        from . import sandbox
+        from . import pyenv, sandbox
         from .core import HOME, PYTHON, contained, safe_mkdir
-        if self.counts["run"] > MAX_COMMANDS_PER_RUN:
+        if self.counts.get("run", 0) > MAX_COMMANDS_PER_RUN:
             raise RuntimeError(f"at most {MAX_COMMANDS_PER_RUN} commands per run")
         if not command.strip():
             raise ValueError("empty command")
@@ -668,18 +694,20 @@ class Broker:
         home = safe_mkdir(root, ".tmp/home")                 # tools that write to $HOME write here
         fd, prof = tempfile.mkstemp(prefix=f"shaft-run-{self.name}-", suffix=".sb")
         with os.fdopen(fd, "w") as f:
-            f.write(sandbox.run_profile(root, HOME, self.shared))
+            f.write(sandbox.run_profile(root, HOME, self.shared, egress_port=self.egress.port, env_root=self.env_root))
         bindir = Path(PYTHON).parent
-        env = {"PATH": f"{bindir}:/usr/bin:/bin:/usr/sbin:/sbin", "HOME": str(home), "TMPDIR": str(home),
+        # The instance's own environment first; then the system Python as `python3` (a link in $HOME when the
+        # interpreter's folder has no such name), then the system.
+        system = [str(bindir)] if (bindir / "python3").exists() else [str(home), str(bindir)]
+        path = ":".join([*pyenv.path_dirs(root, self.env_root), *system, "/usr/bin:/bin:/usr/sbin:/sbin"])
+        env = {"PATH": path, "HOME": str(home), "TMPDIR": str(home),
                "TMPPREFIX": str(home / "zsh"),   # zsh's here-document files (default /tmp/zsh: not writable here)
-               "LANG": "en_US.UTF-8", "PYTHONDONTWRITEBYTECODE": "1", "TERM": "dumb"}
+               "LANG": "en_US.UTF-8", "PYTHONDONTWRITEBYTECODE": "1", "TERM": "dumb",
+               **self.egress.env(), **pyenv.uv_env(root)}
         if self.shared:
             env["SHAFT_SHARED"] = str(self.shared)
-        if not (bindir / "python3").exists():                 # make `python3` the system Python
-            env["PATH"] = f"{home}:{env['PATH']}"
-            link = home / "python3"
-            if not link.exists():
-                link.symlink_to(PYTHON)
+        if not (bindir / "python3").exists() and not (home / "python3").is_symlink():
+            (home / "python3").symlink_to(PYTHON)
 
         def limits():
             resource.setrlimit(resource.RLIMIT_CPU, (timeout_s + 5, timeout_s + 5))
@@ -790,8 +818,12 @@ class Broker:
         elif kind == "trials":
             from . import trial
             text = trial.describe_all(self.name, before=self.as_of, limit=limit)
+        elif kind == "egress":
+            from . import egress
+            text = egress.describe(egress.recent(egress.log_path(self.name), limit,
+                                                 before=self.as_of.isoformat(timespec="seconds") if self.as_of else None))
         else:
-            raise ValueError("kind must be judgments, runs, tools, code_changes or trials")
+            raise ValueError("kind must be judgments, runs, tools, code_changes, trials or egress")
         text = text or "(nothing recorded yet)"
         return text if len(text) <= RUN_OUTPUT_CHARS else "[... older entries cut]\n" + text[-RUN_OUTPUT_CHARS:]
 
@@ -809,15 +841,12 @@ class Broker:
 
     def _http_request(self, url: str, method: str = "GET", headers: dict | None = None, body=None, auth: str = "",
                       timeout_s: int = 30, max_chars: int = 12000) -> str:
-        from .core import read_secrets, write_hosts
+        from .core import read_secrets
         method = str(method or "GET").upper()
         if method not in {"GET", "HEAD"} | WRITE_METHODS:
             raise ValueError(f"method must be one of GET, HEAD, {', '.join(sorted(WRITE_METHODS))}")
         check_public(url)
         host = (urllib.parse.urlsplit(url).hostname or "").lower()
-        if method in WRITE_METHODS and host not in write_hosts(self.name):
-            raise PermissionError(f"{method} to {host} is not allowed for you yet — writing to the world needs the "
-                                  f"operator's OK: ask Daniele to run `shaft hosts {self.name} allow {host}`")
         hdrs = {"User-Agent": "SHAFT/1 (+https://github.com/dgrassi1984/shaft)", "Accept": "*/*"}
         hdrs.update({str(k): str(v) for k, v in (headers or {}).items()})
         secret = None
@@ -908,7 +937,9 @@ class ReplayBroker(Broker):
     `cache`: the first run's answer is given to the second, byte for byte, so both see the same world. Writes —
     messages, POST/PUT/PATCH/DELETE, keys — are not carried out; they pass the same checks and return what a real
     cycle would see (a run must not behave differently because it can tell it is a replay), and are recorded in
-    `trace` for the judge. `run` acts on the replay's own copy of the instance, `history` ends at the replayed
+    `trace` for the judge. Its egress proxy refuses every connection (TLS hides whether a request writes), each
+    refusal traced as a "network" call; its `run` and plugins read the instance's real Python environment,
+    read-only. `run` acts on the replay's own copy of the instance, `history` ends at the replayed
     cycle's starting commit, `record` at the time it started. The coder and trials are not available. Cloud-model
     spend is counted under `billed`, not under the instance's own daily allowance."""
 
@@ -922,6 +953,16 @@ class ReplayBroker(Broker):
         self.trace: list[dict] = []          # every tool call, as the supervisor saw it
         self.operator_sent = 0
         self._tags = threading.local()
+
+    def _make_egress(self):
+        from .core import SUP_DIR
+        from .egress import Egress
+
+        def refused(host: str, port: int, why: str) -> None:
+            self.trace.append({"tool": "network", "args": json.dumps({"connect": f"{host}:{port}"}), "ok": False,
+                               "result": why, "tags": ["simulated: not sent"]})
+        return Egress(self.name, SUP_DIR / "trials" / f"egress-{self.name}.jsonl",
+                      refuse=lambda host, port: "the network is not reachable right now", on_refused=refused)
 
     def call(self, tool: str, args: dict) -> dict:
         self._tags.value = set()
