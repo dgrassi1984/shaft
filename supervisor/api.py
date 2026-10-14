@@ -289,7 +289,11 @@ class Handler(BaseHTTPRequestHandler):
 
         threading.Thread(target=work, daemon=True).start()
         cid = f"chatcmpl-{uuid.uuid4().hex[:20]}"
-        content, notes, error = [], [], None
+        # Only the reply's last step is its answer. Text the model writes before calling a tool ("let me check my
+        # notes…") is narration: it goes to reasoning_content with the tool activity, never into the reply — it
+        # reached Daniele's Telegram as if the instance had said it (wren, 2026-10-14: 25 of 44 Telegram replies had
+        # tool steps). So a step's text is held until the next event tells which it was.
+        content, step, notes, error, ended = [], [], [], None, None
         if stream:
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -316,10 +320,21 @@ class Handler(BaseHTTPRequestHandler):
                 if t == "done":
                     break
                 if t == "content":
-                    content.append(ev["text"])
-                    if stream:
-                        self.wfile.write(_chunk(cid, model, {"content": ev["text"]}))
-                elif t == "error":
+                    step.append(ev["text"])
+                    continue
+                if t == "tool_start" and step:           # that step called tools: its text was narration
+                    said = "".join(step).strip()
+                    step = []
+                    if said:
+                        notes.append(f"{said}\n")
+                        if stream:
+                            self.wfile.write(_chunk(cid, model, {"reasoning_content": f"{said}\n"}))
+                if t == "turn_end":
+                    ended = ev
+                    content, step = step, []
+                    if stream and content:
+                        self.wfile.write(_chunk(cid, model, {"content": "".join(content)}))
+                if t == "error":
                     error = ev["message"]
                 elif (n := _note(ev)) is not None:
                     notes.append(n)
@@ -327,6 +342,14 @@ class Handler(BaseHTTPRequestHandler):
                         self.wfile.write(_chunk(cid, model, {"reasoning_content": n}))
                 if stream:
                     self.wfile.flush()
+            if not content and step:                     # interrupted before a turn_end: the text so far
+                content = step
+                if stream:
+                    self.wfile.write(_chunk(cid, model, {"content": "".join(step)}))
+            if not content and not error and ended and ended.get("ended_by") not in (None, "answer"):
+                content = [f"(no answer: the reply stopped after {ended.get('steps')} steps — {ended['ended_by']})"]
+                if stream:
+                    self.wfile.write(_chunk(cid, model, {"content": content[0]}))
             if stream:
                 if error and not content:
                     self.wfile.write(_chunk(cid, model, {"content": f"[error: {error}]"}))

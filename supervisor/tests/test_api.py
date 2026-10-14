@@ -92,6 +92,43 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(fake_run_agent.request["messages"][-1]["content"], "what is teal?")
         self.assertTrue(fake_run_agent.request["talk_id"].startswith("api-"))
 
+    NARRATED = [{"type": "ready", "name": "wren"}, {"type": "status", "phase": "waiting for the model"},
+                {"type": "content", "text": "Let me check my notes "}, {"type": "content", "text": "on teal first."},
+                {"type": "usage", "prompt_tokens": 9, "completion_tokens": 3},
+                {"type": "tool_start", "name": "search_memory", "args": '{"query": "teal"}'},
+                {"type": "tool_end", "name": "search_memory", "ok": True, "brief": "ok"},
+                {"type": "content", "text": "Teal is "}, {"type": "content", "text": "blue-green."},
+                {"type": "turn_end", "steps": 2, "ended_by": "answer"}]
+
+    def test_only_the_last_step_is_the_reply_narration_goes_to_reasoning(self):
+        # Regression (Daniele, 2026-10-14: "on Telegram I get more than what he actually says"): every step's text
+        # was joined into the reply, so what the instance wrote before calling a tool reached Telegram as if said.
+        with mock.patch(f"{__name__}.EVENTS", self.NARRATED):
+            out = json.load(self.req("/chat/completions", {"model": "wren", "messages": [{"role": "user", "content": "teal?"}]}))
+        msg = out["choices"][0]["message"]
+        self.assertEqual(msg["content"], "Teal is blue-green.")             # what Telegram sends: the answer only
+        self.assertNotIn("Let me check", msg["content"])
+        self.assertIn("Let me check my notes on teal first.", msg["reasoning_content"])
+        self.assertIn("⚙ search_memory", msg["reasoning_content"])
+
+    def test_streamed_narration_is_reasoning_and_the_answer_is_content(self):
+        with mock.patch(f"{__name__}.EVENTS", self.NARRATED):
+            raw = self.req("/chat/completions", {"model": "wren", "stream": True,
+                                                 "messages": [{"role": "user", "content": "teal?"}]}).read().decode()
+        chunks = [json.loads(l[6:]) for l in raw.splitlines() if l.startswith("data: {")]
+        text = "".join(c["choices"][0]["delta"].get("content", "") for c in chunks)
+        notes = "".join(c["choices"][0]["delta"].get("reasoning_content", "") for c in chunks)
+        self.assertEqual(text, "Teal is blue-green.")
+        self.assertIn("Let me check my notes on teal first.", notes)
+
+    def test_a_reply_that_stops_before_answering_says_so(self):
+        steps = [e for e in self.NARRATED[:7]] + [{"type": "turn_end", "steps": 30, "ended_by": "steps"}]
+        with mock.patch(f"{__name__}.EVENTS", steps):
+            out = json.load(self.req("/chat/completions", {"model": "wren", "messages": [{"role": "user", "content": "teal?"}]}))
+        content = out["choices"][0]["message"]["content"]
+        self.assertEqual(content, "(no answer: the reply stopped after 30 steps — steps)")
+        self.assertNotIn("Let me check", content)                           # the narration is not passed off as one
+
     def test_plain_chat_and_same_conversation_keeps_its_id(self):
         body = {"model": "shaft", "messages": [{"role": "user", "content": "hi"}]}
         out = json.load(self.req("/chat/completions", body))
