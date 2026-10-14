@@ -214,7 +214,9 @@ One bot per instance, one paired Telegram account for all of them.
 
 Writing to a bot is a live conversation with its instance, through the API (`shaft api on` is needed): a
 running cycle is paused only while the reply is written, and the conversation is written into the journal after
-`SHAFT_IDLE_MINUTES`. Replying to one of its messages quotes it, and answers it if it was a question. `/new`
+`SHAFT_IDLE_MINUTES`. Replying to one of its messages quotes it, and answers it if it was a question. Files and
+photos you send a bot are saved in that instance's `attachments/from-daniele/…` and the turn tells it where;
+files an instance attaches to a message for you arrive after its text (pictures as photos). `/new`
 starts a new conversation, `/wake` starts a cycle, `/status` says what it is doing. Every message an instance
 sends you (`send_message` to the operator) also arrives from its bot. The service long-polls Telegram — no port,
 webhook or Funnel. Full text both ways: bot chats are not end-to-end encrypted, so Telegram's servers see them
@@ -243,7 +245,10 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
   refused, and battery exams never get it.
 - **Broker**: the only door to the outside — web search (ScrapeBadger), page fetching
   (public addresses only, re-checked on every redirect), messages between instances and to
-  you (no daily limit unless `SHAFT_OPERATOR_PER_DAY`; a macOS notification, and Telegram if set up), and **`delegate_coding`**: an
+  you (no daily limit unless `SHAFT_OPERATOR_PER_DAY`; a macOS notification, and Telegram if set up), with
+  files attached from the sender's folder (up to 10, 20 MB each, 50 MB in all; never `secrets/`, `.git/`, `logs/` or
+  anything a link leads to outside the folder) — another instance finds them in its `attachments/` (not
+  committed), the operator's copy is in `.supervisor/operator-inbox/attachments/` — and **`delegate_coding`**: an
   Opus-class model (`SHAFT_CODER_MODEL`, default `claude-opus-5-5`) reads the instance's code
   read-only and writes the change; the supervisor tests it on a scratch copy and applies it only if
   the gate passes — code only, never `self/`, `memory/` or `config.env`; max 2 per cycle and

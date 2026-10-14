@@ -21,21 +21,36 @@ ME, STRANGER = {"id": 42, "username": "daniele"}, {"id": 666, "username": "someo
 
 
 class FakeBotAPI:
+    FILE = b"%PDF-1.7 fake"
+
     def __init__(self):
         self.calls: list[tuple[str, str, dict]] = []      # (token, method, params)
         self.next_id = 100
         self.fail = set()
         self.reject_html = False
+        self.uploads: list[str] = []
         fake = self
 
         class H(BaseHTTPRequestHandler):
             def log_message(self, *a):
                 pass
 
+            def do_GET(self):                     # /file/bot<token>/<path>: a file Daniele sent
+                data = fake.FILE
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
             def do_POST(self):
                 _, bot, method = self.path.split("/", 2)
                 token = bot.removeprefix("bot")
-                params = json.loads(self.rfile.read(int(self.headers["Content-Length"])) or b"{}")
+                raw = self.rfile.read(int(self.headers["Content-Length"]))
+                if self.headers["Content-Type"].startswith("multipart/form-data"):
+                    fake.uploads.append(raw.decode("latin-1"))
+                    params = {}
+                else:
+                    params = json.loads(raw or b"{}")
                 fake.calls.append((token, method, params))
                 if method in fake.fail or token not in TOK.values():
                     body, code = {"ok": False, "description": "Unauthorized"}, 401
@@ -43,9 +58,11 @@ class FakeBotAPI:
                     body, code = {"ok": False, "description": "Bad Request: can't parse entities: bad tag"}, 400
                 elif method == "getMe":
                     body, code = {"ok": True, "result": {"username": "wren_shaft_bot"}}, 200
-                elif method == "sendMessage":
+                elif method in ("sendMessage", "sendPhoto", "sendDocument"):
                     fake.next_id += 1
                     body, code = {"ok": True, "result": {"message_id": fake.next_id}}, 200
+                elif method == "getFile":
+                    body, code = {"ok": True, "result": {"file_path": f"documents/{params.get('file_id')}"}}, 200
                 else:
                     body, code = {"ok": True, "result": True}, 200
                 data = json.dumps(body).encode()

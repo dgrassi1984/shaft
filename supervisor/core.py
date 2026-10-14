@@ -325,6 +325,16 @@ def safe_write(root: Path, rel: str, text: str, append: bool = False) -> Path:
     return path
 
 
+def safe_write_bytes(root: Path, rel: str, data: bytes) -> Path:
+    """safe_write for a file's bytes (attachments); the last component is opened without following a link."""
+    contained(root, *Path(rel).parent.parts).mkdir(parents=True, exist_ok=True)
+    path = contained(root, *Path(rel).parts)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+    return path
+
+
 def safe_mkdir(root: Path, rel: str) -> Path:
     path = contained(root, *Path(rel).parts)
     path.mkdir(parents=True, exist_ok=True)

@@ -13,21 +13,65 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-from .core import INSTANCES, SUP_DIR, instance_root, log, safe_write
+from .core import INSTANCES, PROJECT, SUP_DIR, instance_root, log, safe_write, safe_write_bytes
 
 OPERATOR_INBOX = SUP_DIR / "operator-inbox"
 LOG_NAME = "messages.jsonl"
 
 
-def record(sup_dir: Path, path: Path, sender: str, to: str, kind: str, at: datetime, text: str) -> None:
+def record(sup_dir: Path, path: Path, sender: str, to: str, kind: str, at: datetime, text: str,
+           attachments: list[dict] | None = None) -> None:
     """Append one delivered message to the log. One locked write per line: brokers of several instances
-    deliver concurrently."""
-    line = json.dumps({"ts": at.isoformat(timespec="seconds"), "from": sender, "to": to, "kind": kind,
-                       "file": path.name, "text": text.strip()}, ensure_ascii=False) + "\n"
+    deliver concurrently. `attachments`: [{name, path (from the project root), bytes}]."""
+    row = {"ts": at.isoformat(timespec="seconds"), "from": sender, "to": to, "kind": kind,
+           "file": path.name, "text": text.strip()}
+    if attachments:
+        row["attachments"] = [{k: a[k] for k in ("name", "path", "bytes")} for a in attachments]
+    line = json.dumps(row, ensure_ascii=False) + "\n"
     sup_dir.mkdir(parents=True, exist_ok=True)
     with (sup_dir / LOG_NAME).open("a") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         f.write(line)
+
+
+# -- attachments (Daniele, 2026-10-14: "attach files to their messages to each other and on Telegram") ----------
+ATTACH_MAX_FILES = 10
+ATTACH_MAX_BYTES = 20 * 1024 * 1024        # per file — also what a Telegram bot may download
+ATTACH_MAX_TOTAL = 50 * 1024 * 1024        # per message — what a Telegram bot may upload, per file
+ATTACH_NAME = re.compile(r"[^A-Za-z0-9._ -]+")
+
+
+def attachment_name(name: str) -> str:
+    n = ATTACH_NAME.sub("_", Path(name).name).strip(" .") or "file"
+    return n[-100:]
+
+
+def size_text(n: int) -> str:
+    return f"{n} bytes" if n < 1024 else f"{n / 1024:.0f} KB" if n < 1024 ** 2 else f"{n / 1024 ** 2:.1f} MB"
+
+
+def store_attachments(root: Path, rel_dir: str, files: list[tuple[str, bytes]]) -> list[dict]:
+    """Write the files under root/rel_dir (no links followed); returns [{name, rel, path, bytes}] — `rel` from
+    `root` (where its reader finds it), `path` from the project root (where the supervisor finds it)."""
+    out, used = [], set()
+    for k, (name, data) in enumerate(files):
+        n = attachment_name(name)
+        if n in used:
+            n = f"{k + 1}-{n}"
+        used.add(n)
+        path = safe_write_bytes(root, f"{rel_dir}/{n}", data)
+        try:
+            from_project = str(path.resolve().relative_to(PROJECT.resolve()))
+        except ValueError:
+            from_project = str(path)
+        out.append({"name": n, "rel": f"{rel_dir}/{n}", "path": from_project, "bytes": len(data)})
+    return out
+
+
+def attachment_lines(atts: list[dict], key: str = "rel") -> str:
+    if not atts:
+        return ""
+    return "\n\nAttachments:\n" + "\n".join(f"- {a[key]} ({size_text(a['bytes'])})" for a in atts)
 
 
 _cache: dict = {"key": None, "rows": []}

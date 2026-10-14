@@ -121,10 +121,15 @@ SPECS = {
     "send_message": _spec("send_message", "Send a message to another SHAFT instance, or to 'operator' "
                           "(Daniele) to ask him something or tell him something — he gets a notification "
                           "(and, if your bot is set up, a Telegram message from you) and his reply arrives in your "
-                          "inbox. Make them count: he reads every one.",
+                          "inbox. Make them count: he reads every one. You can attach files from your folder; files "
+                          "sent to you arrive in your attachments/ folder (the message says where).",
                           {"to": S, "text": S,
                            "kind": {"type": "string", "enum": ["question", "note"],
-                                    "description": "for the operator: question (wants an answer) or note"}},
+                                    "description": "for the operator: question (wants an answer) or note"},
+                           "attachments": {"type": "array", "items": {"type": "string"},
+                                           "description": "paths of files in your folder (e.g. notes/report.md), "
+                                                          "up to 10, 20 MB each, 50 MB in all; Daniele gets them "
+                                                          "on Telegram if your bot is set up"}},
                           ["to", "text"]),
     "list_instances": _spec("list_instances", "List the other SHAFT instances you can message.", {}, []),
     "run": _spec(
@@ -537,7 +542,7 @@ class Broker:
         cut = f"\n[... {len(text) - max_chars} more chars]" if len(text) > max_chars else ""
         return f"{title}\n{final}\n\n{text[:max_chars]}{cut}".strip()
 
-    def _send_message(self, to: str, text: str, kind: str = "note") -> str:
+    def _send_message(self, to: str, text: str, kind: str = "note", attachments: list | None = None) -> str:
         from . import messages
         if not text.strip():
             raise ValueError("empty message")
@@ -546,22 +551,62 @@ class Broker:
         text = text[:MAX_MESSAGE_CHARS]
         stamp = datetime.now()
         kind = "question" if kind == "question" else "note"     # instance-chosen: only these two are logged
+        is_instance = NAME_RE.match(to) and to != self.name and (self.project / "instances" / to / "shaft").is_dir()
+        if to != "operator" and not is_instance:
+            raise ValueError(f"unknown recipient {to!r}; try list_instances or 'operator'")
+        files = self._read_attachments(attachments)              # all checked before anything is delivered
+        with_files = f" with {len(files)} attachment(s)" if files else ""
         if to == "operator":
             sent = self._operator_sent_today(stamp)
             if OPERATOR_DAILY_LIMIT and sent >= OPERATOR_DAILY_LIMIT:
                 raise RuntimeError(f"you already sent {sent} messages to the operator today "
                                    f"(limit {OPERATOR_DAILY_LIMIT}); keep it for tomorrow")
-            self._deliver("operator", f"{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}.md",
-                          f"From: {self.name}\nTo: operator\nKind: {kind}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n"
-                          f"{text.strip()}\n", kind, stamp, text)
-            return f"delivered to the operator ({kind}); his reply, if any, will arrive in your inbox"
-        elif NAME_RE.match(to) and to != self.name and (self.project / "instances" / to / "shaft").is_dir():
-            self._deliver(to, f"inbox/{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}.md",
-                          f"From: {self.name}\nTo: {to}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{text.strip()}\n",
-                          kind, stamp, text)
-        else:
-            raise ValueError(f"unknown recipient {to!r}; try list_instances or 'operator'")
-        return f"delivered to {to}"
+            stem = f"{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}"
+            atts = self._store(self.project / ".supervisor" / "operator-inbox", f"attachments/{stem}", files)
+            body = text.strip() + messages.attachment_lines(atts, "path")
+            self._deliver("operator", f"{stem}.md",
+                          f"From: {self.name}\nTo: operator\nKind: {kind}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{body}\n",
+                          kind, stamp, body, atts)
+            return f"delivered to the operator ({kind}){with_files}; his reply, if any, will arrive in your inbox"
+        atts = self._store(self.project / "instances" / to, f"attachments/from-{self.name}/{stamp:%Y%m%d-%H%M%S-%f}",
+                           files)
+        body = text.strip() + messages.attachment_lines(atts)
+        self._deliver(to, f"inbox/{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}.md",
+                      f"From: {self.name}\nTo: {to}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{body}\n", kind, stamp, body, atts)
+        return f"delivered to {to}{with_files}"
+
+    def _read_attachments(self, paths) -> list[tuple[str, bytes]]:
+        """The files to attach, read now: inside this instance's folder (links that lead out are refused), not its
+        keys, git or logs, within the size limits."""
+        from . import messages
+        if not paths:
+            return []
+        paths = [paths] if isinstance(paths, str) else paths
+        if not isinstance(paths, list) or len(paths) > messages.ATTACH_MAX_FILES:
+            raise ValueError(f"attachments: a list of at most {messages.ATTACH_MAX_FILES} paths in your folder")
+        out, total = [], 0
+        for rel in paths:
+            rel = str(rel).strip()
+            real = (self.root / rel).resolve()
+            if real == self.root or self.root not in real.parents:
+                raise ValueError(f"{rel}: attachments must be files in your folder")
+            if real.relative_to(self.root).parts[0] in ("secrets", ".git", "logs"):
+                raise ValueError(f"{rel}: files in {real.relative_to(self.root).parts[0]}/ cannot be attached")
+            if not real.is_file():
+                raise ValueError(f"{rel}: no such file in your folder")
+            size = real.stat().st_size
+            if size > messages.ATTACH_MAX_BYTES:
+                raise ValueError(f"{rel}: {messages.size_text(size)}, more than "
+                                 f"{messages.size_text(messages.ATTACH_MAX_BYTES)} per file")
+            total += size
+            if total > messages.ATTACH_MAX_TOTAL:
+                raise ValueError(f"attachments: more than {messages.size_text(messages.ATTACH_MAX_TOTAL)} in all")
+            out.append((real.name, real.read_bytes()))
+        return out
+
+    def _store(self, root: Path, rel_dir: str, files: list[tuple[str, bytes]]) -> list[dict]:
+        from . import messages
+        return messages.store_attachments(root, rel_dir, files) if files else []
 
     def tool_specs(self) -> list[dict]:
         """The tools offered to this instance; send_message says when Daniele is reached on Telegram, through
@@ -588,7 +633,8 @@ class Broker:
         inbox = self.project / ".supervisor" / "operator-inbox"
         return len(list(inbox.glob(f"{stamp:%Y%m%d}-*-from-{self.name}.md"))) if inbox.is_dir() else 0
 
-    def _deliver(self, to: str, rel: str, content: str, kind: str, stamp: datetime, text: str) -> None:
+    def _deliver(self, to: str, rel: str, content: str, kind: str, stamp: datetime, text: str,
+                 attachments: list[dict] | None = None) -> None:
         """Put a message where its recipient reads it — the operator's inbox (with a notification), or another
         instance's inbox/ — and in the message log."""
         from . import messages
@@ -597,12 +643,12 @@ class Broker:
             inbox.mkdir(parents=True, exist_ok=True)
             path = inbox / rel
             path.write_text(content)
-            messages.record(self.project / ".supervisor", path, self.name, "operator", kind, stamp, text)
+            messages.record(self.project / ".supervisor", path, self.name, "operator", kind, stamp, text, attachments)
             notify(f"SHAFT · {self.name} {'asks' if kind == 'question' else 'says'}", text)
         else:
             from .core import safe_write   # the recipient's folder is instance-controlled: no symlinks followed
             path = safe_write(self.project / "instances" / to, rel, content)
-            messages.record(self.project / ".supervisor", path, self.name, to, kind, stamp, text)
+            messages.record(self.project / ".supervisor", path, self.name, to, kind, stamp, text, attachments)
 
     def _run(self, command: str, timeout_s: int = 60, cwd: str = ".") -> str:
         import resource
@@ -940,7 +986,13 @@ class ReplayBroker(Broker):
             if inbox.is_dir() else []
         return len(real) + self.operator_sent
 
-    def _deliver(self, to: str, rel: str, content: str, kind: str, stamp: datetime, text: str) -> None:
+    def _store(self, root: Path, rel_dir: str, files: list[tuple[str, bytes]]) -> list[dict]:
+        from . import messages   # checked like the real thing, nothing written
+        return [{"name": messages.attachment_name(n), "rel": f"{rel_dir}/{messages.attachment_name(n)}",
+                 "path": f"{rel_dir}/{messages.attachment_name(n)}", "bytes": len(d)} for n, d in files]
+
+    def _deliver(self, to: str, rel: str, content: str, kind: str, stamp: datetime, text: str,
+                 attachments: list[dict] | None = None) -> None:
         self._tag("simulated: not delivered")
         if to == "operator":
             self.operator_sent += 1

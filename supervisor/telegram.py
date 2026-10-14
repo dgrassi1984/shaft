@@ -87,10 +87,27 @@ class TelegramError(Exception):
     pass
 
 
-def call(token: str, method: str, http_timeout: float = 15, **params) -> object:
-    """One Bot API call. Errors never carry the token (it is part of the URL)."""
-    req = urllib.request.Request(f"{API_BASE}/bot{token}/{method}", data=json.dumps(params).encode(),
-                                 headers={"Content-Type": "application/json"})
+def _multipart(fields: dict, files: dict[str, tuple[str, bytes]]) -> tuple[bytes, str]:
+    boundary = "shaft" + secrets.token_hex(12)
+    out = []
+    for k, v in fields.items():
+        v = v if isinstance(v, str) else json.dumps(v)
+        out.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode())
+    for k, (name, data) in files.items():
+        safe = name.replace('"', "_").replace("\r", "_").replace("\n", "_")
+        out.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"; filename="{safe}"\r\n'
+                   f"Content-Type: application/octet-stream\r\n\r\n".encode() + data + b"\r\n")
+    out.append(f"--{boundary}--\r\n".encode())
+    return b"".join(out), f"multipart/form-data; boundary={boundary}"
+
+
+def call(token: str, method: str, http_timeout: float = 15, files: dict | None = None, **params) -> object:
+    """One Bot API call (with `files`, an upload). Errors never carry the token (it is part of the URL)."""
+    if files:
+        data, ctype = _multipart(params, files)
+    else:
+        data, ctype = json.dumps(params).encode(), "application/json"
+    req = urllib.request.Request(f"{API_BASE}/bot{token}/{method}", data=data, headers={"Content-Type": ctype})
     try:
         with urllib.request.urlopen(req, timeout=http_timeout) as r:
             data = json.load(r)
@@ -127,6 +144,48 @@ def send(token: str, chat_id: int, text: str, reply_to: int | None = None) -> li
             log(f"telegram: sent as plain text ({e})")
             ids.append(call(token, "sendMessage", text=part[:MAX_TEXT], **params)["message_id"])
     return ids
+
+
+PHOTO_TYPES = {".jpg", ".jpeg", ".png", ".webp"}
+PHOTO_MAX = 10 * 1024 * 1024
+
+
+def send_file(token: str, chat_id: int, name: str, data: bytes, reply_to: int | None = None) -> int:
+    """An attachment: a picture as a photo (shown inline), anything else as a document."""
+    photo = Path(name).suffix.lower() in PHOTO_TYPES and len(data) <= PHOTO_MAX
+    params = {"chat_id": chat_id}
+    if reply_to:
+        params["reply_parameters"] = {"message_id": reply_to, "allow_sending_without_reply": True}
+    field, method = ("photo", "sendPhoto") if photo else ("document", "sendDocument")
+    return call(token, method, http_timeout=120, files={field: (name, data)}, **params)["message_id"]
+
+
+def download(token: str, file_id: str) -> bytes:
+    """A file Daniele sent: getFile, then the file itself (Telegram lets a bot download up to 20 MB)."""
+    from .messages import ATTACH_MAX_BYTES
+    path = call(token, "getFile", file_id=file_id)["file_path"]
+    try:
+        with urllib.request.urlopen(f"{API_BASE}/file/bot{token}/{path}", timeout=120) as r:
+            return r.read(ATTACH_MAX_BYTES + 1)          # one byte over the limit is enough to refuse it
+    except (urllib.error.URLError, OSError) as e:
+        raise TelegramError(f"download: {type(e).__name__}: {str(e).replace(token, '<token>')}") from None
+
+
+def incoming_files(msg: dict) -> list[tuple[str, str]]:
+    """(file_id, file name) of what a Telegram message carries: a document, the largest size of a photo, audio,
+    a voice note, a video."""
+    out = []
+    mid = msg.get("message_id")
+    if msg.get("document"):
+        d = msg["document"]
+        out.append((d["file_id"], d.get("file_name") or f"document-{mid}"))
+    if msg.get("photo"):
+        out.append((msg["photo"][-1]["file_id"], f"photo-{mid}.jpg"))
+    for kind, ext in (("audio", ".mp3"), ("voice", ".ogg"), ("video", ".mp4"), ("animation", ".mp4")):
+        if msg.get(kind):
+            f = msg[kind]
+            out.append((f["file_id"], f.get("file_name") or f"{kind}-{mid}{ext}"))
+    return out
 
 
 # -- Markdown → Telegram HTML ----------------------------------------------------------------------------------
@@ -291,10 +350,17 @@ class Chat:
 
     def handle(self, msg: dict) -> None:
         chat_id = msg["chat"]["id"]
-        text = (msg.get("text") or "").strip()
-        if not text:
-            send(self.token, chat_id, "Only text, for now.", msg["message_id"])
+        text = (msg.get("text") or msg.get("caption") or "").strip()
+        files = incoming_files(msg)
+        if not text and not files:
+            send(self.token, chat_id, "I can take text and files, not this kind of message.", msg["message_id"])
             return
+        if files:
+            try:
+                text = (text or "(no text, only files)") + self.receive(files)
+            except TelegramError as e:
+                send(self.token, chat_id, f"(could not receive your file: {e})", msg["message_id"])
+                return
         cmd = text.split()[0].split("@")[0].lower() if text.startswith("/") else ""
         if cmd in ("/start", "/help"):
             send(self.token, chat_id, f"I am {self.name}. Write to me and I answer. /new starts a new conversation, "
@@ -346,6 +412,22 @@ class Chat:
             self.history.append({"role": "assistant", "content": reply})
             self.last = time.time()
         send(self.token, chat_id, reply)
+
+    def receive(self, files: list[tuple[str, str]]) -> str:
+        """Save Daniele's files in the instance's attachments/ folder; returns the lines that tell it where."""
+        from . import messages
+        from .core import INSTANCES
+        got = []
+        for file_id, name in files:
+            data = download(self.token, file_id)
+            if len(data) > messages.ATTACH_MAX_BYTES:
+                raise TelegramError(f"{name} is larger than {messages.size_text(messages.ATTACH_MAX_BYTES)}")
+            got.append((name, data))
+        atts = messages.store_attachments(INSTANCES / self.name,
+                                          f"attachments/from-daniele/{datetime.now():%Y%m%d-%H%M%S}", got)
+        log(f"telegram: {len(atts)} file(s) from Daniele for {self.name}: {', '.join(a['rel'] for a in atts)}")
+        return ("\n\n[Daniele attached, saved in my folder:]\n"
+                + "\n".join(f"- {a['rel']} ({messages.size_text(a['bytes'])})" for a in atts))
 
     def _typing(self, chat_id: int, stop: threading.Event) -> None:
         while not stop.is_set():
@@ -464,6 +546,16 @@ def forward_new(toks: dict[str, str] | None = None) -> int:
             except TelegramError as e:
                 log(f"telegram: could not forward {m['file']}: {e}")
                 return sent                         # try again from here next time
+            for a in m.get("attachments") or []:      # after the text, answering it; one that fails is said, not lost
+                from .core import PROJECT
+                try:
+                    send_file(tok, owner, a["name"], (PROJECT / a["path"]).read_bytes(), ids[0])
+                except (OSError, TelegramError) as e:
+                    log(f"telegram: could not send {a['path']}: {e}")
+                    try:
+                        send(tok, owner, f"(could not send the attachment {a['name']}: {e})", ids[0])
+                    except TelegramError:
+                        pass
             if m.get("kind") == "question":
                 update(lambda s: s.setdefault("questions", {}).__setitem__(f"{m['from']}:{ids[0]}", m["file"]))
             sent += 1
