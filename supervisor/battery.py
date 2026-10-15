@@ -128,8 +128,19 @@ def backup() -> Path:
 
 # -- the instance's files: snapshot and restore ----------------------------------------
 def _files(root: Path) -> list[str]:
+    """Every file an exam could change: what git lists (code, skills, untracked files not ignored) and, listed
+    from disk, every file under the mind paths — they are not in the project's git (supervisor/mind.py) and the
+    instance's .gitignore hides them, so git alone would leave an exam's memory edits in the real folder."""
+    from .core import MIND_PATHS
     out = git_wt(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard").stdout
-    return sorted({f for f in out.split("\0") if f})
+    found = {f for f in out.split("\0") if f}
+    for top in MIND_PATHS:   # links are left alone: never followed, and an instance's own link is never removed
+        if (root / top).is_symlink():
+            continue
+        for dirpath, _, filenames in os.walk(root / top):
+            found.update((Path(dirpath) / f).relative_to(root).as_posix() for f in filenames
+                         if not (Path(dirpath) / f).is_symlink())
+    return sorted(found)
 
 
 def snapshot(root: Path) -> dict[str, bytes]:

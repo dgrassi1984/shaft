@@ -12,7 +12,8 @@ in a sandbox, lets them reach the public internet (never your machine or network
 keeps their API keys in a broker, tests any
 change they make to themselves (reverting failures, putting successes on probation), has a
 stronger cloud model judge whether they did what they claimed, and records every step in
-git — one branch per agent, so their evolution is a readable history.
+git — one branch per agent for its code, and one private store per agent for its mind (never pushed,
+never in the project's repository), so their evolution is a readable history.
 
 It makes no claim that the agents are conscious. It builds the functional pieces people
 usually mean by the word — continuity, a self-model, initiative, metacognition,
@@ -64,7 +65,12 @@ bin/shaft autonomy on    # let them live: a cycle every 2 h, sleep daily from 04
 |---|---|---|
 | `main` | `./` | `supervisor/` (the part no instance can edit), `bin/shaft`, docs |
 | `template` | `template/` | the pristine agent new instances fork from |
-| `instance/<name>` | `instances/<name>/` | one agent: its code, mind and memory — it may edit all of it |
+| `instance/<name>` | `instances/<name>/` | one agent: its code, plugins and skills — it may edit all of it |
+
+An agent's mind — `self/`, `memory/`, `notes/`, `inbox/` — lives in the same folder but never in this
+repository: the supervisor versions it after every run in `.supervisor/minds/<name>.git`, a private git
+repository with no remote and a pre-push hook that always fails (`shaft mind status`). What an instance read
+and wrote for itself cannot be pushed or merged with the code (PLAN-mind-out-of-git.md).
 
 Inside an instance:
 
@@ -121,6 +127,7 @@ shaft update [name|--all]       # merge template fixes into instances — only w
 shaft new <name> [--from <i>]   # new instance from the template, or forked from <i> (genes, not memories)
 shaft breed <a> <b> <child>     # child from two instances' recombined genes, fresh mind (judge picks)
 shaft drift [name]              # how its personality changed; distance to other instances
+shaft mind status|backfill|check|cutover|guard [name]   # the private mind stores (cutover: one instance, idle)
 shaft distinct [name]           # blind test: can the judge tell it from the bare base model?
 shaft distinct [name] --strict  # …again on answers stripped of specifics: voice, not memory
 shaft dataset|finetune [name]   # M6: export experiences / train a judged LoRA adapter (MLX)
@@ -325,8 +332,8 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
   `requirements.txt`, the internet only through the egress proxy, reads only its own folder;
   60 s default time limit (the whole process group is killed), 100 MB file-size limit, output capped,
   40 commands per run. So an instance can build and test its own tools and plugins. **`history`**: its
-  own branch's git log and diffs (git cannot run inside its sandbox, and `.git` holds other instances'
-  minds). **`record`**: the supervisor's own record about it — the judge's verdicts with reasoning, its
+  own git log and diffs, each entry tagged `[code]` (its branch) or `[mind]` (its mind store) — git cannot
+  run inside its sandbox. **`record`**: the supervisor's own record about it — the judge's verdicts with reasoning, its
   runs, its tool calls, its kept code changes, its internet connections — so it can check its claims about
   itself.
   **`decide`**: TypeSafe's Jev decision model through OpenRouter, on the supervisor's key — a `state` and typed
@@ -379,9 +386,12 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
   collection, zero retention — Muse Spark was left out because its only provider keeps prompts). A trial pair keeps
   one judge for both orders; a battery item one grader for both arms, and a battery era is the whole pool. Results
   feed `self/stats.md`.
-- **Git**: after every run the instance's state is committed to its branch (author
-  `SHAFT/<name>`), with the main repo's worktree registry and hooks off, so an instance
-  cannot redirect the supervisor's git calls.
+- **Git**: after every run the instance's mind is committed to its mind store and its skills and kept
+  code to its branch, with the same message (author `SHAFT/<name>`). The branch git calls use the main
+  repo's worktree registry with hooks off; the mind store's run with hooks, fsmonitor, the user's git
+  config and the instance's own `.gitattributes` off, and add with `-f` (its `.gitignore` files cannot hide
+  part of its mind) — so an instance cannot redirect the supervisor's git calls. A mind path is never
+  staged on the branch. Trial replays read the mind as of the replayed cycle's start from the store.
 - **Budgets**: one run per instance at a time; a cycle is stopped after
   `SHAFT_CYCLE_TIMEOUT_S` (2400 s), a sleep after `SHAFT_SLEEP_TIMEOUT_S` (5400 s). Runs know
   their deadline and wrap up with a report before it; a stopped run leaves a journal note.

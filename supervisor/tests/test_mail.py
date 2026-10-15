@@ -374,8 +374,13 @@ class AttachmentTest(MailCase):
         self.assertEqual(git(self.root, "check-ignore", rel).strip(), rel)
         self.assertNotIn("mail", git(self.root, "status", "--porcelain", "--untracked-files=all"))
         (self.root / "notes" / "from-mail.md").write_text("a note\n")
+        from supervisor import mind
+        mind.init("wren", self.project)
         self.assertTrue(core.commit_state("wren", "live", [], root=self.root, project=self.project))
-        self.assertEqual(git(self.root, "show", "--name-only", "--format=", "HEAD").split(), ["notes/from-mail.md"])
+        self.assertEqual(git(self.root, "ls-files", "--", "notes", "mail"), "")      # neither on the branch
+        stored = mind.git("wren", "ls-tree", "-r", "--name-only", "mind", project=self.project).stdout.split()
+        self.assertIn("notes/from-mail.md", stored)                                  # the note: in its mind store
+        self.assertFalse([p for p in stored if p.startswith("mail/")])               # the download: nowhere
 
     def test_refused_where_mail_is_not_ignored_yet(self):
         (self.root / ".gitignore").write_text("logs/\n.tmp/\n")   # an instance the template update has not reached

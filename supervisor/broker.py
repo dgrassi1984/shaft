@@ -156,9 +156,11 @@ SPECS = {
         ["command"]),
     "history": _spec(
         "history",
-        "Your own history in git: every run of yours is a commit on your branch. Without `commit`: the log "
-        "(newest first), optionally only commits that touched `path`. With `commit`: what that commit changed "
-        "(stat and diff, truncated). Only your own branch. Use it to see how you have changed and when. "
+        "Your own history in git: every run of yours is a commit — your code and skills on your branch "
+        "(tagged [code]), your mind (self/, memory/, notes/, inbox/) in your private mind store (tagged [mind]). "
+        "Without `commit`: the log (newest first), optionally only commits that touched `path`. With `commit`: "
+        "what that commit changed (stat and diff, truncated). Only your own history. Use it to see how you have "
+        "changed and when. "
         "(`git` itself does not work inside `run`: your repository lives outside your folder.)",
         {"commit": {"type": "string", "description": "a commit id from the log (optional)"},
          "path": {"type": "string", "description": "a file or folder in your folder, e.g. self/self.md (optional)"},
@@ -860,31 +862,57 @@ class Broker:
                              project=self.project)
 
     def _history(self, commit: str = "", path: str = "", limit: int = 15) -> str:
-        from .core import git_wt
-        root, head = self._git_root(), self._history_head()
-        if path and (path.startswith(("-", "/")) or ".." in Path(path).parts):
+        """Its history in two repositories: its code and skills on its branch, its mind in its mind store
+        (supervisor/mind.py). Each log line is tagged `code` or `mind`; a commit id is looked up in either."""
+        from . import mind
+        from .core import MIND_PATHS, git_wt, not_mind
+        root, (code_head, mind_head) = self._git_root(), self._history_heads()
+        if path and (path.startswith(("-", "/", ":")) or ".." in Path(path).parts):
             raise ValueError("path must be relative to your folder")
-        pathspec = ["--", path] if path else []
-        if not commit:
-            out = git_wt(root, "log", f"-n{max(1, min(int(limit), 100))}", "--date=format:%Y-%m-%d %H:%M",
-                         "--format=%h %ad %an: %s", head, *pathspec, check=False, project=self.project)
+        top = Path(path).parts[0] if path and Path(path).parts else ""
+        in_mind, in_code = (not top or top in MIND_PATHS), (not top or top not in MIND_PATHS)
+        code_spec = ["--", path] if in_code and top else ["--", *not_mind()]
+        mind_spec = ["--", path] if top else []
+
+        def code(*a):
+            out = git_wt(root, *a, check=False, project=self.project)
             if out.returncode:
                 raise RuntimeError(out.stderr.strip()[:300])
-            return out.stdout.strip() or "(no commits" + (f" touching {path}" if path else "") + ")"
+            return out.stdout
+
+        def mine(*a):
+            return mind.git(self.name, *a, project=self.project).stdout
+
+        if not commit:
+            n = max(1, min(int(limit), 100))
+            fmt = ["--date=format:%Y-%m-%d %H:%M", "--format=%ct %h %ad %an: %s", f"-n{n}"]
+            rows = [(l, "code") for l in code("log", *fmt, code_head, *code_spec).splitlines()] if in_code else []
+            rows += [(l, "mind") for l in mine("log", *fmt, mind_head, *mind_spec).splitlines()] \
+                if in_mind and mind_head else []
+            rows = sorted(rows, key=lambda r: -int(r[0].split(" ", 1)[0]))[:n]
+            lines = [f"{h} [{tag}] {rest}" for line, tag in rows for _, h, rest in [line.split(" ", 2)]]
+            return "\n".join(lines) or "(no commits" + (f" touching {path}" if path else "") + ")"
         if not re.fullmatch(r"[0-9a-f]{4,40}", commit):
             raise ValueError("commit must be a commit id (hex) from the log")
-        mine = git_wt(root, "merge-base", "--is-ancestor", commit, head, check=False, project=self.project)
-        if mine.returncode:
-            raise ValueError(f"{commit} is not a commit of your branch")
-        out = git_wt(root, "show", "--stat", "--patch", "--date=format:%Y-%m-%d %H:%M",
-                     "--format=%h %ad %an%n%n%B", commit, *pathspec, check=False, project=self.project)
-        if out.returncode:
-            raise RuntimeError(out.stderr.strip()[:300])
-        text = out.stdout
+        show = ["show", "--stat", "--patch", "--date=format:%Y-%m-%d %H:%M", "--format=%h %ad %an%n%n%B", commit]
+        parts = []
+        if in_code and git_wt(root, "merge-base", "--is-ancestor", commit, code_head, check=False,
+                              project=self.project).returncode == 0:
+            parts.append("[code]\n" + code(*show, *code_spec))
+        if in_mind and mind_head and mind.git(self.name, "merge-base", "--is-ancestor", commit, mind_head,
+                                              project=self.project, check=False).returncode == 0:
+            parts.append("[mind]\n" + mine(*show, *mind_spec))
+        if not parts:
+            raise ValueError(f"{commit} is not a commit of your history")
+        text = "\n".join(parts)
         return text if len(text) <= RUN_OUTPUT_CHARS else text[:RUN_OUTPUT_CHARS] + f"\n[... {len(text)} chars in all]"
 
-    def _history_head(self) -> str:
-        return "HEAD"
+    def _history_heads(self) -> tuple[str, str | None]:
+        """(its branch, its mind store) as far as `history` reads them; an instance without a mind store is an
+        error, not a history without its mind."""
+        from . import mind
+        mind.require(self.name, self.project)
+        return "HEAD", mind.head(self.name, self.project)
 
     def _record(self, kind: str, limit: int = 20, cycle: str = "", before: str = "") -> str:
         from .core import SUP_DIR
@@ -1161,7 +1189,7 @@ class ReplayBroker(Broker):
     `trace` for the judge. Its egress proxy refuses every connection (TLS hides whether a request writes), each
     refusal traced as a "network" call; its `run` and plugins read the instance's real Python environment,
     read-only. `run` acts on the replay's own copy of the instance, `history` ends at the replayed
-    cycle's starting commit, `record` at the time it started. The coder and trials are not available. Cloud-model
+    cycle's starting commit and its mind as of that start, `record` at the time it started. The coder and trials are not available. Cloud-model
     spend is counted under `billed`, not under the instance's own daily allowance. A self-hosted model server that
     cannot be reached fails the run instead of falling back: a trial never takes the local model unasked."""
 
@@ -1220,8 +1248,10 @@ class ReplayBroker(Broker):
     def _git_root(self) -> Path:
         return (self.project / "instances" / self.name).resolve()
 
-    def _history_head(self) -> str:
-        return self.start_commit
+    def _history_heads(self) -> tuple[str, str | None]:
+        """Both stop at the replayed cycle: its starting commit, and its mind as of the cycle's start."""
+        from . import mind
+        return self.start_commit, mind.at(self.name, self.as_of, self.project)
 
     # -- reads: real, shared by the pair ---------------------------------------------------------------
     def _web_search(self, query: str, page: int = 1) -> str:

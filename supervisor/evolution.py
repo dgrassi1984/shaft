@@ -19,35 +19,31 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-from . import gate, judge, metrics
-from .core import (HOME, INSTANCES, LLM_PORTS, NAME_RE, PROJECT, SUP_DIR, git, git_wt, instance_names,
+from . import gate, judge, metrics, mind
+from .core import (HOME, INSTANCES, LLM_PORTS, MIND_PATHS, add_all_but_mind, NAME_RE, PROJECT, SUP_DIR, git, git_wt, instance_names,
                    instance_root, journal_note, log, safe_mkdir, safe_write)
 from .runner import run_agent
 
 GENES = ("shaft", "plugins", "skills", "tests", "config.env")
-MIND = ("self", "memory", "notes", "inbox")
 CORE_RE = re.compile(r"^## Core\n(.*?)(?=^## |\Z)", re.M | re.S)
 WORD = re.compile(r"[a-z]{4,}")
 
 
 # -- drift ---------------------------------------------------------------------------
-def _show(root: Path, rev: str, path: str) -> str:
-    return git_wt(root, "show", f"{rev}:{path}", check=False).stdout
-
-
 def drift(name: str) -> int:
+    """Personality and self-model history, read from the instance's mind store."""
     root = instance_root(name)
-    log_lines = git_wt(root, "log", "--reverse", "--format=%H %ad", "--date=format:%Y-%m-%d %H:%M",
-                       "--", "self/self.md", "self/personality.md").stdout.splitlines()
+    log_lines = mind.log(name, "--reverse", "--format=%H %ad", "--date=format:%Y-%m-%d %H:%M",
+                         "--", "self/self.md", "self/personality.md").splitlines()
     print(f"# Drift of {name}\n")
     prev_core, core_changes, edits = "", 0, 0
     for line in log_lines:
         sha, when = line.split(" ", 1)
-        stat = git_wt(root, "show", "--numstat", "--format=", sha, "--",
-                      "self/self.md", "self/personality.md").stdout.split()
+        stat = mind.git(name, "show", "--numstat", "--format=", sha, "--",
+                        "self/self.md", "self/personality.md").stdout.split()
         added = sum(int(x) for x in stat[0::3] if x.isdigit())
         removed = sum(int(x) for x in stat[1::3] if x.isdigit())
-        m = CORE_RE.search(_show(root, sha, "self/personality.md"))
+        m = CORE_RE.search(mind.show(name, sha, "self/personality.md") or "")
         core = m.group(1).strip() if m else ""
         core_changed = core != prev_core and bool(core)
         core_changes += core_changed
@@ -346,8 +342,8 @@ def _build_child(a: str, b: str, child: str, choices: list[dict], summary: str) 
                 git_wt(root, "checkout", source, "--", c["path"])
             else:
                 git_wt(root, "rm", "-q", "--ignore-unmatch", "--", c["path"])
-        for d in MIND:
-            git_wt(root, "rm", "-r", "-q", "--ignore-unmatch", "--", d)
+        git_wt(root, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", *MIND_PATHS)  # a parent's, pre-cutover
+        for d in MIND_PATHS:
             shutil.rmtree(root / d, ignore_errors=True)
         for d in ("self", "memory", "notes"):
             safe_mkdir(root, d)
@@ -361,11 +357,15 @@ def _build_child(a: str, b: str, child: str, choices: list[dict], summary: str) 
                                    f"recombination of theirs; my mind starts empty.\n\nWhy these genes: {summary}\n\n{picks}")
         ok, test_log = gate.run_tests(root, HOME)
         if ok:
-            git_wt(root, "add", "-A", ".")
-            git_wt(root, "commit", "-q", "-m", f"{child}: born from {a} × {b}\n\n{summary}\n\n{picks}")
+            message = f"{child}: born from {a} × {b}\n\n{summary}\n\n{picks}"
+            add_all_but_mind(root)
+            git_wt(root, "commit", "-q", "-m", message)
+            mind.init(child)
+            mind.commit(child, message, root)
             return True, test_log
     except Exception as e:
         test_log = f"{type(e).__name__}: {e}"
+    shutil.rmtree(mind.store(child), ignore_errors=True)
     git("worktree", "remove", "--force", str(root), check=False)
     git("branch", "-D", f"instance/{child}", check=False)
     return False, test_log
@@ -376,6 +376,10 @@ def breed(a: str, b: str, child: str, attempts: int = 2) -> int:
         instance_root(parent)
     if not NAME_RE.match(child) or (INSTANCES / child).exists():
         print(f"bad or existing child name {child!r}")
+        return 2
+    if mind.exists(child):
+        print(f"a mind store for {child!r} already exists at {mind.store(child)} (an earlier instance of that name); "
+              "move it away first")
         return 2
     differing = _gene_diff(a, b)
     if differing and not judge.available():

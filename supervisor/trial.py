@@ -2,8 +2,8 @@
 
 The instance stages a change and calls the broker's `trial` tool (request). The supervisor freezes the instance's
 committed code (A) and the change applied to it (B), runs the test gate on B, and picks N past autonomous cycles.
-For each it rebuilds the instance's state at the moment that cycle began (reconstruct: its git branch at that
-moment, plus the inbox it read) and runs the cycle twice from that same state — once with A, once with B — in
+For each it rebuilds the instance's state at the moment that cycle began (reconstruct: its git branch and its mind
+store at that moment, plus the inbox it read) and runs the cycle twice from that same state — once with A, once with B — in
 scratch copies outside the instance's folder, under the same sandbox, through a ReplayBroker that carries out no
 writes (replay_arm). A judge who is not told which run is which compares each pair, effectiveness first, in both
 orders (judge_pair); the verdict — better / worse / no clear difference, by a sign test — goes to the instance's
@@ -38,8 +38,8 @@ from datetime import datetime, timedelta
 from math import comb
 from pathlib import Path
 
-from . import gate
-from .core import (CYCLE_TIMEOUT_S, HOME, LLM_PORTS, PROJECT, SUP_DIR, UnsafePath, contained, knob, log,
+from . import gate, mind
+from .core import (CYCLE_TIMEOUT_S, HOME, LLM_PORTS, MIND_PATHS, PROJECT, SUP_DIR, UnsafePath, contained, knob, log,
                    safe_write, secrets_env)
 
 TRIALS_PER_DAY, TRIALS_PER_DAY_SRC = knob("SHAFT_TRIALS_PER_DAY", "2", int)
@@ -167,11 +167,6 @@ def committed_code(project: Path, name: str, rev: str = "") -> dict[str, bytes]:
     return out
 
 
-def _show(project: Path, rev: str, rel: str) -> str | None:
-    r = _git(project, "show", f"{rev}:{rel}", check=False)
-    return r.stdout if r.returncode == 0 else None
-
-
 def _env(text: str) -> dict[str, str]:
     out = {}
     for line in text.splitlines():
@@ -235,7 +230,11 @@ def state_of(project: Path, name: str, ep: dict, starts: list[str] | None = None
     t0 = start_time(name, ep, starts)
     if not t0:
         return None
-    commit = _git(project, "log", "-1", "--format=%H", f"--before={t0:%Y-%m-%dT%H:%M:%S}", branch(name)).stdout.strip()
+    # --first-parent: the branch's own line. Without it the walk also reached template commits merged later
+    # (`shaft update`), and a template commit dated between the last run and t0 became the start: a replay with
+    # the template's tree and an empty mind (8 of the 50 replayed states on disk, found by PLAN-mind-out-of-git M0).
+    commit = _git(project, "log", "-1", "--first-parent", "--format=%H", f"--before={t0:%Y-%m-%dT%H:%M:%S}",
+                  branch(name)).stdout.strip()
     if not commit:
         return None
     goal = ((ep.get("intent") or {}).get("goal") or "")[:200]
@@ -243,13 +242,30 @@ def state_of(project: Path, name: str, ep: dict, starts: list[str] | None = None
             "inbox": list(ep.get("inbox") or []), "original_goal": goal}
 
 
+def mind_rev(project: Path, name: str, state: dict) -> str | None:
+    """The mind commit the cycle began with: derived from its stored start (t0), so a trial written before the
+    mind left git needs no new field."""
+    try:
+        return mind.at(name, state["t0"], project)
+    except mind.MindError as e:
+        raise TrialError(str(e)) from None
+
+
 def reconstruct(project: Path, name: str, state: dict, code: dict[str, bytes | None], dest: Path) -> Path:
-    """The instance's folder as it was when the cycle began — its mind from the branch at the starting commit,
-    the messages it found in its inbox — with `code` in place of its code. Read-only on the repository."""
+    """The instance's folder as it was when the cycle began — the branch at the starting commit, its mind from
+    the mind store as of the cycle's start, the messages it found in its inbox — with `code` in place of its
+    code. Read-only on both repositories: a replay never writes the mind store."""
     archive = _git(project, "archive", "--format=tar", state["start_commit"], binary=True).stdout
     dest.mkdir(parents=True, exist_ok=True)
     with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
         tar.extractall(dest, filter="data")
+    for rel in MIND_PATHS:   # a commit from before the cutover still holds a mind: the store's is the one read
+        shutil.rmtree(dest / rel, ignore_errors=True)
+    rev = mind_rev(project, name, state)
+    try:
+        mind.archive(name, rev, dest, project)
+    except mind.MindError as e:
+        raise TrialError(str(e)) from None
     for rel in CODE:
         p = dest / rel
         if p.is_dir() and not p.is_symlink():
@@ -267,7 +283,7 @@ def reconstruct(project: Path, name: str, state: dict, code: dict[str, bytes | N
     for msg in state.get("inbox", []):
         if "/" in msg or msg.startswith("."):
             continue
-        text = _show(project, branch(name), f"memory/messages/{msg}")
+        text = mind.show(name, "mind", f"memory/messages/{msg}", project)
         if text is not None:
             safe_write(dest, f"inbox/{msg}", text)
     for rel in ("logs", ".tmp"):
@@ -502,10 +518,11 @@ def judge_case(context: str, first: dict, second: dict) -> str:
 
 
 def state_context(project: Path, name: str, state: dict) -> str:
-    goals = _show(project, state["start_commit"], "self/goals.md") or "(no goals file)"
+    goals = mind.show(name, mind_rev(project, name, state), "self/goals.md", project) \
+        or "(no goals file)"
     inbox = []
     for msg in state.get("inbox", []):
-        text = _show(project, branch(name), f"memory/messages/{msg}")
+        text = mind.show(name, "mind", f"memory/messages/{msg}", project)
         if text:
             inbox.append(f"### {msg}\n{_cap(text, 2000)}")
     return (f"The replayed cycle originally began {state['t0']}.\n\n## Its goals file at that moment\n"

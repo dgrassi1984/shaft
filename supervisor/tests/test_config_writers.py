@@ -18,14 +18,15 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from supervisor import gate, sandbox
+from supervisor import gate, mind, sandbox
+from supervisor.tests.mindfix import IGNORE_MIND
 
 OPERATOR = 'LLM_MODEL="claude-opus-5-5"   # Daniele, 2026-10-13'
 CONFIG = 'LLM_BASE_URL="broker"\nLLM_MODEL="bonsai"\nWAKE_INTERVAL_MINUTES=120\n'
 FAILING = "import unittest\n\nclass T(unittest.TestCase):\n    def test_x(self):\n        self.fail('broken')\n"
 PASSING = "import unittest\n\nclass T(unittest.TestCase):\n    def test_x(self):\n        self.assertTrue(True)\n"
 
-# The instance's cycle: it writes a plugin and a test, then keeps working until the test says it is done.
+# The instance's cycle: it writes a plugin, a test and a journal line, then keeps working until the test says it is done.
 CYCLE = r"""
 import sys, time
 from pathlib import Path
@@ -33,6 +34,8 @@ Path("plugins/text_stats").mkdir(parents=True, exist_ok=True)
 Path("plugins/text_stats/main.py").write_text("def run(**args):\n    return 'stats'\n")
 Path("tests").mkdir(exist_ok=True)
 Path("tests/test_text_stats.py").write_text(sys.argv[1])
+with Path("memory/journal.md").open("a") as f:
+    f.write("made text_stats\n")
 Path(".tmp/working").write_text("1")
 end = time.time() + 30
 while not Path(".tmp/done").exists() and time.time() < end:
@@ -71,9 +74,11 @@ class ConfigWritersTest(unittest.TestCase):
         (self.root / "shaft" / "__init__.py").write_text("")
         (self.root / "memory" / "journal.md").write_text("# kant — journal\n")
         (self.root / "config.env").write_text(CONFIG)
-        (self.root / ".gitignore").write_text(".tmp/\n")
+        (self.root / ".gitignore").write_text(".tmp/\n" + IGNORE_MIND)
         git(self.root, "add", "-A")
         git(self.root, "commit", "-q", "-m", "kant: created")
+        mind.init("kant", self.project)
+        mind.commit("kant", "kant: created", self.root, self.project)
 
     def cycle(self, test_file: str, during):
         """One live cycle through the supervisor's own entry point; `during(broker)` runs while the instance
@@ -85,7 +90,8 @@ class ConfigWritersTest(unittest.TestCase):
         cmd = [sys.executable, "-c", CYCLE, test_file]
         env = {"SHAFT_DEADLINE": f"{time.time() + 600:.0f}"}
         result = {}
-        with mock.patch.object(runner, "SUP_DIR", sup), mock.patch.object(runner, "API_TALKS", sup / "api.json"), \
+        with mock.patch.object(runner, "SUP_DIR", sup), mock.patch.object(core, "SUP_DIR", sup), \
+             mock.patch.object(runner, "API_TALKS", sup / "api.json"), \
              mock.patch.object(runner, "PROJECT", self.project), mock.patch.object(core, "PROJECT", self.project), \
              mock.patch.object(core, "INSTANCES", self.project / "instances"), \
              mock.patch.object(runner, "instance_root", return_value=self.root), \
@@ -150,6 +156,13 @@ class ConfigWritersTest(unittest.TestCase):
         mine = [c for c in self.commits() if "made by the instance" in c]
         self.assertEqual(len(mine), 1)
         self.assertNotIn("config.env", mine[0])                             # and not on probation as the instance's
+        # The run's journal went to its mind store, under the same message; the branch commit holds no mind path.
+        run = git(self.root, "log", "-1", "--format=%H", "--grep=made by the instance").strip()
+        self.assertFalse([p for p in git(self.root, "show", "--name-only", "--format=", run).split()
+                          if p.split("/")[0] in ("self", "memory", "notes", "inbox")])
+        self.assertEqual(mind.git("kant", "log", "-1", "--format=%B", project=self.project).stdout.strip(),
+                         git(self.root, "log", "-1", "--format=%B", run).strip())
+        self.assertIn("made text_stats", mind.show("kant", "mind", "memory/journal.md", self.project) or "")
         self.assertNotIn("config.env", self.probation.call_args.args[2])
         self.assertEqual(len([c for c in self.commits() if "changed from outside the instance" in c]), 1)
 
