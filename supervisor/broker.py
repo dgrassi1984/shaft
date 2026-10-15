@@ -26,6 +26,8 @@ from html.parser import HTMLParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from .core import NETWORK_ERRORS
+
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36"
 MAX_FETCH_BYTES = 3_000_000
 MAX_MESSAGE_CHARS = 8000
@@ -477,6 +479,10 @@ class Broker:
                     return self._reply(e.status, {"error": {"message": str(e)}})
                 except ValueError:
                     return self._reply(400, {"error": {"message": "body must be JSON"}})
+                except Exception as e:     # never a dropped connection: the instance retries a 502 (its llm.py)
+                    broker._log(f"{broker.name} llm {body.get('model', '?')} -> ERROR {type(e).__name__}: {e}")
+                    return self._reply(502, {"error": {"message": f"the supervisor's model call failed: "
+                                                                 f"{type(e).__name__}: {e}"}})
                 u = reply["usage"]
                 broker._log(f"{broker.name} llm {body.get('model')} -> {reply['choices'][0]['finish_reason']} "
                             f"(in {u['prompt_tokens']}, out {u['completion_tokens']})")
@@ -507,6 +513,14 @@ class Broker:
                     broker._log(f"{broker.name} llm {model} -> streamed ({n} lines)")
                 except (BrokenPipeError, ConnectionResetError):
                     broker._log(f"{broker.name} llm {model} -> stream abandoned by the instance")
+                except NETWORK_ERRORS as e:   # the upstream stream broke: say so in-band (the instance's llm.py reads it)
+                    broker._log(f"{broker.name} llm {model} -> ERROR upstream stream broke after {n} lines: {e!r}")
+                    try:
+                        msg = {"error": {"message": f"the model's stream broke after {n} lines: {e!r}"}}
+                        self.wfile.write(b"data: " + json.dumps(msg).encode() + b"\n\n")
+                        self.wfile.flush()
+                    except OSError:
+                        pass
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()

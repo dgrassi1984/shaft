@@ -31,7 +31,7 @@ import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .core import IDLE_MINUTES, SUP_DIR, instance_names, knob, log, secrets_env
+from .core import IDLE_MINUTES, NETWORK_ERRORS, SUP_DIR, instance_names, knob, log, secrets_env
 
 API_BASE, _ = knob("SHAFT_TELEGRAM_API", "https://api.telegram.org", str)   # tests point it at a fake
 POLL_S = 30                      # long-poll timeout
@@ -167,7 +167,7 @@ def download(token: str, file_id: str) -> bytes:
     try:
         with urllib.request.urlopen(f"{API_BASE}/file/bot{token}/{path}", timeout=120) as r:
             return r.read(ATTACH_MAX_BYTES + 1)          # one byte over the limit is enough to refuse it
-    except (urllib.error.URLError, OSError) as e:
+    except NETWORK_ERRORS as e:
         raise TelegramError(f"download: {type(e).__name__}: {str(e).replace(token, '<token>')}") from None
 
 
@@ -457,7 +457,7 @@ def ask_api(name: str, history: list[dict]) -> str:
             raise TelegramError(json.load(e)["error"]["message"]) from None
         except (ValueError, KeyError):
             raise TelegramError(f"API HTTP {e.code}") from None
-    except (urllib.error.URLError, OSError) as e:
+    except NETWORK_ERRORS as e:
         raise TelegramError(f"the API is not reachable ({e}); is it on? shaft api status") from None
     return (data["choices"][0]["message"].get("content") or "").strip() or "(empty answer)"
 

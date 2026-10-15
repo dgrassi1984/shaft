@@ -19,7 +19,7 @@ import urllib.request
 from datetime import date, datetime
 from pathlib import Path
 
-from .core import HOME, SUP_DIR, UnsafePath, contained, knob, safe_write, secrets_env
+from .core import HOME, NETWORK_ERRORS, SUP_DIR, UnsafePath, contained, knob, safe_write, secrets_env
 
 CODER_MODEL, _ = knob("SHAFT_CODER_MODEL", "claude-opus-5-5", str)
 DAILY_USD, _ = knob("SHAFT_CODER_DAILY_USD", "5", float)
@@ -111,7 +111,7 @@ def _call(key: str, messages: list) -> dict:
             error = f"HTTP {e.code}: {e.read().decode(errors='replace')[:400]}"
             if e.code not in (429, 500, 502, 503, 504, 529):
                 break
-        except (urllib.error.URLError, OSError) as e:
+        except NETWORK_ERRORS as e:
             error = f"network: {e}"
     raise CoderError(f"coder call failed: {error}")
 

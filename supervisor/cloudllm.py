@@ -35,7 +35,7 @@ import urllib.error
 import urllib.request
 from datetime import date, datetime
 
-from .core import SUP_DIR, knob
+from .core import NETWORK_ERRORS, SUP_DIR, knob
 
 API = "https://api.anthropic.com/v1/messages"
 OPENROUTER_API = "https://openrouter.ai/api/v1/chat/completions"
@@ -195,7 +195,7 @@ def _send(req: urllib.request.Request) -> tuple[dict | None, str | None]:
             error = f"HTTP {e.code}: {e.read().decode(errors='replace')[:400]}"
             if e.code not in (429, 500, 502, 503, 504, 529):
                 break
-        except (urllib.error.URLError, OSError) as e:
+        except NETWORK_ERRORS as e:
             error = f"network: {e}"
     return None, error
 
@@ -266,7 +266,7 @@ def openrouter_stream(instance: str, body: dict, secrets: dict):
             error = f"HTTP {e.code}: {e.read().decode(errors='replace')[:400]}"
             if e.code not in (429, 500, 502, 503, 504, 529):
                 break
-        except (urllib.error.URLError, OSError) as e:
+        except NETWORK_ERRORS as e:
             error = f"network: {e}"
     if resp is None:
         _record(instance, model, None, None, 0.0, started, None, error)
@@ -291,8 +291,8 @@ def _relay(instance: str, model: str, resp, started: float):
                     for c in chunk.get("choices") or []:
                         finish = c.get("finish_reason") or finish
                 yield line + b"\n"
-    except (OSError, urllib.error.URLError) as e:
-        error = f"stream broken: {e}"
+    except NETWORK_ERRORS as e:
+        error = f"stream broken: {e!r}"
         raise
     finally:
         _record(instance, model, usage.get("prompt_tokens"), usage.get("completion_tokens"),

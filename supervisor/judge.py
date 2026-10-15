@@ -18,7 +18,7 @@ import time
 import urllib.error
 import urllib.request
 
-from .core import SUP_DIR, knob, secrets_env
+from .core import NETWORK_ERRORS, SUP_DIR, knob, secrets_env
 
 JUDGE_MODELS, JUDGE_SRC = knob("SHAFT_JUDGE_MODELS", "openrouter/xiaomi/mimo-v2.6-pro,claude-haiku-5-5,claude-sonnet-5-5",
                                lambda s: [m.strip() for m in s.split(",") if m.strip()])
@@ -101,7 +101,7 @@ def _ask_claude(model, system, prompt, schema, purpose, max_tokens, effort) -> d
             if e.code not in (429, 500, 502, 503, 504, 529):
                 _log(purpose, model, None, time.monotonic() - started, last_error)
                 raise JudgeError(last_error) from e
-        except (urllib.error.URLError, OSError) as e:
+        except NETWORK_ERRORS as e:
             last_error = f"network: {e}"
     else:
         _log(purpose, model, None, time.monotonic() - started, last_error)

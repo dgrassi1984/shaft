@@ -27,7 +27,7 @@ import urllib.request
 from typing import Callable
 
 from .cloudllm import CloudError, _record, _relay
-from .core import LLM_PORTS, knob
+from .core import LLM_PORTS, NETWORK_ERRORS, knob
 
 SERVERS, _ = knob("SHAFT_SELF_HOSTED", json.dumps({"racer": {
     "url": "http://100.120.0.1:8080/v1",   # DMDRacer over Tailscale: Bonsai 2 27B on an RTX 5070 Ti (llama.cpp)
@@ -91,7 +91,7 @@ def _open(url: str, body: dict):
         if e.code < 500:   # the request itself is wrong: the local server would refuse it too
             raise CloudError(e.code, f"{url} refused the request: {detail}") from e
         return None, detail
-    except (urllib.error.URLError, OSError) as e:
+    except NETWORK_ERRORS as e:
         return None, f"network: {e}"
 
 

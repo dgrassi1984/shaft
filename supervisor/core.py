@@ -1,15 +1,21 @@
 """Shared supervisor plumbing: paths, knobs, logging, git, instance lookup, commits."""
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import re
 import subprocess
 import sys
+import urllib.error
 from datetime import datetime
 from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent.parent
+# What a network call can raise when the far end is unreachable, resets, or stops mid-answer: http.client's
+# IncompleteRead and RemoteDisconnected are HTTPExceptions, not OSErrors, so a retry on (URLError, OSError) let a
+# reply cut short by OpenRouter escape — it crashed the broker's handler and wren's sleep of 2026-10-15 04:34.
+NETWORK_ERRORS = (urllib.error.URLError, OSError, http.client.HTTPException)
 # The system interpreter, even when the supervisor itself runs inside a venv (the terminal client
 # runs in .venv-ui): sandboxed agents cannot read a venv inside the home folder, and agents and
 # launchd jobs must not depend on one.
