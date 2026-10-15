@@ -19,7 +19,7 @@ from pathlib import Path
 
 from . import egress, pyenv
 from .core import (SUP_DIR, disabled_tools, git, instance_config, instance_names, instance_root, journal_entries,
-                   knob, paused, shared_folder)
+                   knob, mail_grants, paused, shared_folder)
 from . import selfhosted
 
 JUDGE_ALERT_USD, _ = knob("SHAFT_JUDGE_ALERT_USD", "10", float)   # the judge has no cap (Daniele): only an alert
@@ -201,6 +201,7 @@ def instance_detail(name: str) -> dict:
             "wake": cfg.get("WAKE_INTERVAL_MINUTES", "120"), "effort": cfg.get("LLM_REASONING_EFFORT", "medium"),
             "tools_off": sorted(disabled_tools(name)),
             "shared": str(shared_folder(name) or ""),
+            "mail": ", ".join(f"{g['account']}/{g['label']}" for g in mail_grants(name)),
             "python": pyenv.describe(root),
             "internet": egress.summary(egress.recent(egress.log_path(name), 2000), date.today().isoformat()),
             "stats": stats.read_text(errors="replace") if stats.exists() else "(no stats yet)",

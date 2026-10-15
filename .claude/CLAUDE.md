@@ -10,3 +10,5 @@
   (`runner.open_conversations`) and are never written up while still going on.
 - Trial replays (supervisor/trial.py) never settle, commit, deliver or send: the ReplayBroker answers writes as
   a real cycle would and records them; a trial never takes an instance's time on the local model.
+- An instance reads the operator's mail only through the broker's mail tools: it never holds a mail credential, and the
+  supervisor checks the granted label on every thread it returns, reads or downloads from (PLAN-mail.md).

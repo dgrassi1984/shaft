@@ -432,6 +432,7 @@ def agent_command(root: Path, broker: Broker, agent_args: list[str], profile: Pa
     """The sandboxed command and environment for the agent in `root`, talking to `broker` (already started):
     it may write only in `root` and reach only the model ports, the embedding service, its broker and its egress
     proxy (the public internet); it may read the operator's shared folder if the broker carries one (shaft share),
+    is told which of the operator's mail labels its broker serves it (SHAFT_MAIL, shaft mail),
     and the instance's Python environment when `root` is a copy (trial replay)."""
     ports = list(llm_ports) + [EMBED_PORT, broker.port, broker.egress.port]
     profile.write_text(sandbox.profile(root, HOME, ports, shared=broker.shared, env_root=broker.env_root))
@@ -441,6 +442,7 @@ def agent_command(root: Path, broker: Broker, agent_args: list[str], profile: Pa
                             SHAFT_BROKER_URL=f"http://127.0.0.1:{broker.port}", SHAFT_BROKER_TOKEN=broker.token,
                             SHAFT_EMBED_URL=f"http://127.0.0.1:{EMBED_PORT}/v1/embeddings",
                             **({"SHAFT_SHARED": str(broker.shared)} if broker.shared else {}),
+                            **({"SHAFT_MAIL": granted} if (granted := broker.mail_env()) else {}),
                             **broker.sandbox_env(), **extra)
     return cmd, env
 

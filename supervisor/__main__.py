@@ -251,6 +251,9 @@ def cmd_status(names: list[str]) -> int:
         if (folder := shared_folder(name)):
             print(f"  may read    {folder}{'' if folder.is_dir() else ' (MISSING: left out of its runs)'} "
                   f"(shaft share {name} off)")
+        from .core import mail_grants
+        if (grants := mail_grants(name)):
+            print(f"  mail        {', '.join(g['account'] + '/' + g['label'] for g in grants)} (shaft mail {name} off)")
         if entries:
             lines = entries[-1].splitlines()
             print("  latest:     " + lines[0].lstrip("# "))
@@ -326,6 +329,75 @@ def cmd_share(name: str, folder: str | None) -> int:
     print(f"{name} may read {current} as shared/ (read-only)" if current else f"{name} has no shared folder")
     if folder:
         print(f"(takes effect from {name}'s next run or conversation)")
+    return 0
+
+
+def cmd_mail(target: str | None, action: str | None, alias: str | None, label: str | None) -> int:
+    """The operator's Gmail an instance may read, one label at a time (PLAN-mail.md): log in an account, grant,
+    revoke, show. The grant is read on every mail call, so a revoke takes effect on the instance's next call."""
+    from . import mail
+    from .core import mail_grants, secrets_env, set_mail_grants
+
+    def show(name: str) -> None:
+        grants = mail_grants(name)
+        print(f"{name} may read: " + (", ".join(f"{g['account']}/{g['label']}" for g in grants) if grants else "no mail"))
+
+    if target == "login":
+        if not (action and alias):
+            print("usage: shaft mail login <alias> <address>  (e.g. shaft mail login example-co operator@work.example)",
+                  file=sys.stderr)
+            return 2
+        try:
+            saved = mail.login(action, alias, secrets_env())
+        except mail.MailError as e:
+            print(e, file=sys.stderr)
+            return 2
+        log(f"mail account {action} logged in as {saved['address']} by the operator")
+        print(f"logged in: mail account {action} is {saved['address']} (read-only). Grant a label with "
+              f"shaft mail <instance> grant {action} <label>")
+        return 0
+    if not target:
+        accts = mail.accounts()
+        print("accounts: " + (", ".join(f"{a} ({d.get('address', '?')}, since {d.get('created', '?')[:10]})"
+                                        for a, d in accts.items()) if accts else "none (shaft mail login <alias> <address>)"))
+        for name in instance_names():
+            show(name)
+        return 0
+    instance_root(target)
+    if not action:
+        show(target)
+        return 0
+    grants = mail_grants(target)
+    if action == "off":
+        set_mail_grants(target, [])
+        log(f"{target}: all mail grants removed by the operator (were: "
+            f"{', '.join(g['account'] + '/' + g['label'] for g in grants) or 'none'})")
+    elif not (alias and label):
+        print(f"usage: shaft mail {target} {action} <alias> <label>", file=sys.stderr)
+        return 2
+    elif action == "grant":
+        if not mail.account(alias):
+            known = ", ".join(mail.accounts()) or "none"
+            print(f"no mail account {alias!r} (logged in: {known}); first: shaft mail login {alias} <address>",
+                  file=sys.stderr)
+            return 2
+        try:
+            mail.Account(alias, secrets_env()).label_id(label)   # the label must exist in that account now
+        except (mail.MailError, mail.GmailError) as e:
+            print(f"not granted: {e}", file=sys.stderr)
+            return 2
+        set_mail_grants(target, grants + [{"account": alias, "label": label}])
+        log(f"{target}: mail grant {alias}/{label} added by the operator")
+    else:   # revoke
+        rest = [g for g in grants if g != {"account": alias, "label": label}]
+        if rest == grants:
+            print(f"{target} has no grant {alias}/{label}", file=sys.stderr)
+            show(target)
+            return 1
+        set_mail_grants(target, rest)
+        log(f"{target}: mail grant {alias}/{label} revoked by the operator")
+    show(target)
+    print(f"(from {target}'s next mail call; the prompt line changes from its next run)")
     return 0
 
 
@@ -605,6 +677,12 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("share", help="a folder of yours an instance may read (read-only, seen as shared/); 'off' removes it")
     p.add_argument("name")
     p.add_argument("folder", nargs="?", help="a directory, or 'off'")
+    p = sub.add_parser("mail", help="your Gmail an instance may read, one label at a time: 'login <alias> <address>', "
+                                    "'<name> grant|revoke <alias> <label>', '<name> off', '<name>' shows; alone lists all")
+    p.add_argument("target", nargs="?", help="an instance, or 'login'")
+    p.add_argument("action", nargs="?", help="grant, revoke, off — or, after login, the account alias")
+    p.add_argument("alias", nargs="?", help="the account alias — or, after login, its address")
+    p.add_argument("label", nargs="?", help="the Gmail label")
     p = sub.add_parser("trial", help="trials of proposed changes: list, show, run (operator), replay, work")
     tsub = p.add_subparsers(dest="action", required=True)
     q = tsub.add_parser("list", help="every trial, newest last")
@@ -686,6 +764,11 @@ def main(argv: list[str]) -> int:
         return cmd_secret(args)
     if args.cmd == "share":
         return cmd_share(args.name, args.folder)
+    if args.cmd == "mail":
+        if args.target not in (None, "login") and args.action not in (None, "grant", "revoke", "off"):
+            print(f"unknown mail action {args.action!r}: grant, revoke or off", file=sys.stderr)
+            return 2
+        return cmd_mail(args.target, args.action, args.alias, args.label)
     if args.cmd == "autonomy":
         return autonomy.autonomy(args.action)
     if args.cmd == "status":

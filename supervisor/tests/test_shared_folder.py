@@ -41,6 +41,23 @@ class SettingsTest(unittest.TestCase):
         self.assertEqual(core.disabled_tools("shaft"), {"delegate_coding"})   # and removing it keeps the rest
         self.assertNotIn("shared", json.loads((self.sup / "tools" / "shaft.json").read_text()))
 
+    def test_other_settings_do_not_wipe_the_mail_grant(self):
+        # The same class of bug for the mail grant (PLAN-mail.md): every setter must keep the keys it does not own.
+        grant = [{"account": "example-co", "label": "ToObsidian"}]
+        core.set_mail_grants("shaft", grant)
+        core.set_tool("shaft", "delegate_coding", on=False)
+        core.set_shared_folder("shaft", self.folder)
+        core.set_shared_folder("shaft", None)
+        core.set_tool("shaft", "delegate_coding", on=True)
+        self.assertEqual(core.mail_grants("shaft"), grant)
+        core.set_mail_grants("shaft", [])
+        self.assertEqual(core.disabled_tools("shaft"), set())
+        self.assertNotIn("mail", json.loads((self.sup / "tools" / "shaft.json").read_text()))
+        core.set_mail_grants("shaft", grant)
+        core.set_shared_folder("shaft", self.folder)
+        core.set_mail_grants("shaft", [])
+        self.assertEqual(core.shared_folder("shaft"), self.folder)   # and clearing mail keeps the folder
+
     def test_per_instance(self):
         core.set_shared_folder("shaft", self.folder)
         self.assertIsNone(core.shared_folder("wren"))

@@ -59,7 +59,8 @@ TARGETS = ("shaft/", "plugins/", "skills/", "tests/")
 # The gate no longer counts config.env as code (the operator edits it too; the instance only via set_config),
 # but an arm still runs with — and a trial still refuses to change — the config it was committed with.
 CODE = (*gate.CODE_PATHS, "config.env")
-NOT_STATE = ("logs", ".tmp", "secrets", "__pycache__", ".venv", ".uv")
+# mail/: attachments downloaded from the operator's mail (PLAN-mail.md) are copies, not state: never in the judge's diff.
+NOT_STATE = ("logs", ".tmp", "secrets", "__pycache__", ".venv", ".uv", "mail")
 LEDGER = SUP_DIR / "trial_usage.jsonl"
 
 
