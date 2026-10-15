@@ -8,3 +8,5 @@ __pycache__/
 .DS_Store
 # my keys: handled by the supervisor, never committed
 secrets/
+# attachments downloaded from the operator's mail (mail_attachment): copies of his mail, never committed
+mail/
