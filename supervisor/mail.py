@@ -203,8 +203,8 @@ class Account:
         for label in labels:
             if label.get("name") == name:
                 return label["id"]
-        raise MailError(f"label {name!r} does not exist in mail account {self.alias!r} any more (renamed or deleted?): "
-                        "nothing under it is visible until the operator grants it again")
+        raise MailError(f"mail account {self.alias!r} has no label {name!r} (if it was granted: renamed or deleted since; "
+                        "nothing under it is visible until the operator grants it again)")
 
 
 # -- visibility: the one rule, used by search, read and download ---------------------------------------------------

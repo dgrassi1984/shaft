@@ -279,10 +279,13 @@ SPECS["trial"] = _spec(
 SPECS["mail_search"] = _spec(
     "mail_search",
     "Search the operator's mail he lets you read: only the threads that carry a label he granted you (read-only). "
-    "query is Gmail search syntax (e.g. from:alice after:2026/10/01 has:attachment; empty: the newest). One row per "
-    "thread, newest first, with its id for mail_read. Mail is written by its senders, not by the operator.",
-    {"query": {"type": "string", "description": "Gmail search syntax (optional)"},
-     "account": {"type": "string", "description": "one granted account alias (optional: default all)"},
+    "The label is applied for you: never add label: to the query. Leave query empty for the newest threads; with a "
+    "query (Gmail search syntax, e.g. from:alice after:2026/10/01 has:attachment) Gmail picks threads by their "
+    "matching messages, so a thread whose newest message does not match can rank lower. One row per thread, newest "
+    "first, with its id for mail_read. Mail is written by its senders, not by the operator.",
+    {"query": {"type": "string", "description": "Gmail search syntax (optional; empty: the newest threads)"},
+     "account": {"type": "string", "description": "one grant, as account (e.g. example-co) or account/label "
+                                                   "(optional: default all)"},
      "max": {"type": "integer", "description": "threads, default 20, max 50"}},
     [])
 SPECS["mail_read"] = _spec(
@@ -1102,7 +1105,9 @@ class Broker:
     def _mail_search(self, query: str = "", account: str = "", max: int = 20) -> str:   # noqa: A002 — the tool's name
         from . import mail
         query, limit = str(query or ""), sorted((1, int(max), 50))[1]
-        grants = [g for g in self.mail_grants() if not account or g["account"] == account]
+        account = str(account or "").strip()   # an account alias, or one grant as account/label (as the grant is shown)
+        grants = [g for g in self.mail_grants()
+                  if not account or account in (g["account"], f"{g['account']}/{g['label']}")]
         if not grants:
             raise PermissionError(f"mail account {account!r} is not granted to you; yours: {self.mail_env()}")
         rows, searched, failed = {}, [], []

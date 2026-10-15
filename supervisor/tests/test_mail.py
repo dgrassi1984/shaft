@@ -262,7 +262,7 @@ class EnforcementTest(MailCase):
         for tool, args in (("mail_search", {}), ("mail_read", {"id": "example-co/aaa111"}),
                            ("mail_attachment", {"id": "example-co/aaa111", "message": 1, "attachment": 1})):
             err = self.refused(b, tool, args)
-            self.assertIn("'ToObsidian' does not exist in mail account 'example-co' any more", err)
+            self.assertIn("mail account 'example-co' has no label 'ToObsidian' (if it was granted: renamed or deleted since", err)
             self.assertNotIn("Hello", err)
         self.assertFalse([p for m, p, _ in self.gmail.requests if p.startswith("threads")])
 
@@ -273,6 +273,14 @@ class EnforcementTest(MailCase):
         self.assertIn("'home' is not granted to you", self.refused(b, "mail_read", {"id": "home/aaa111"}))
         self.assertIn("'home' is not granted to you", self.refused(b, "mail_search", {"account": "home"}))
         self.assertEqual(len(self.gmail.requests), before)   # nothing asked of Gmail for an alias not granted
+
+    def test_search_accepts_the_grant_as_shown(self):
+        # Regression (M5, 2026-10-15): wren passed account="example-co/ToObsidian", the grant as its tool description shows
+        # it, and was told "'example-co/ToObsidian' is not granted to you; yours: example-co/ToObsidian".
+        b = self.broker()
+        self.assertIn("example-co/aaa111", self.ok(b, "mail_search", {"account": "example-co/ToObsidian"}))
+        self.assertIn("example-co/aaa111", self.ok(b, "mail_search", {"account": "example-co"}))
+        self.assertIn("not granted to you", self.refused(b, "mail_search", {"account": "example-co/Other"}))   # not widened
 
     def test_grant_on_another_label_does_not_open_this_one(self):
         core.set_mail_grants("wren", [{"account": "example-co", "label": "Other"}])
@@ -514,7 +522,7 @@ class CliTest(MailCase):
         self.assertIn("no mail account 'home'", out)
         code, out = self.cli("wren", "grant", "example-co", "NoSuchLabel")
         self.assertEqual(code, 2)
-        self.assertIn("'NoSuchLabel' does not exist", out)
+        self.assertIn("mail account 'example-co' has no label 'NoSuchLabel'", out)
         self.assertEqual(core.mail_grants("wren"), [])
         self.assertEqual(self.cli("wren", "frobnicate", "example-co", "x")[0], 2)
 
