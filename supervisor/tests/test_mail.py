@@ -65,6 +65,7 @@ class FakeGmail:
         self.files: dict[str, bytes] = {}
         self.requests: list[tuple[str, str, dict]] = []
         self.refuse_refresh = False
+        self.over_quota = 0            # the next N API calls answer 403 "Quota exceeded", as Gmail did in M0
         self.threads: dict[str, list[dict]] = {}
         self.add("aaa111", [msg("m1", "aaa111", [TAG, "INBOX"], 9, "Alice <alice@x.com>", "Project notes",
                                 text="Hello from the tagged thread", files=[("report.pdf", b"%PDF-1 report")]),
@@ -118,6 +119,10 @@ class FakeGmail:
         assert req.get_method() == "GET", "mail.py must never write to the mailbox"
         path = url.path.removeprefix(urllib.parse.urlsplit(mail.API).path).strip("/")
         self.requests.append(("GET", path, params))
+        if self.over_quota:
+            self.over_quota -= 1
+            raise self._error(req.full_url, 403, {"error": {"code": 403, "message": "Quota exceeded for quota metric "
+                                                            "'Total Query Cost' and limit 'Units per minute per user'"}})
         if path == "profile":
             return self._answer({"emailAddress": self.address})
         if path == "labels":
@@ -443,6 +448,21 @@ class ConfigTest(MailCase):
         html = self.ok(b, "mail_read", {"id": "example-co/eee555"})
         self.assertIn("Only HTML here", html)
         self.assertNotIn("evil()", html)
+
+    def test_gmail_quota_is_waited_out_then_named(self):
+        # Regression (M0, 2026-10-15): Gmail's per-user per-minute quota answered 403 mid-run; the first answer over
+        # quota must be waited out, not turned into a failed read.
+        slept = []
+        with mock.patch.object(mail, "sleep", slept.append):
+            self.gmail.over_quota = 2
+            self.assertIn("Hello from the tagged thread", self.ok(self.broker(), "mail_read", {"id": "example-co/aaa111"}))
+            self.assertEqual(slept, [2.0, 4.0])
+            slept.clear()
+            self.gmail.over_quota = 10 ** 6
+            err = self.refused(self.broker(), "mail_read", {"id": "example-co/aaa111"})
+        self.assertIn("per-minute quota for example-co, still exceeded", err)
+        self.assertIn("try again in a minute", err)
+        self.assertLessEqual(sum(slept), mail.QUOTA_WAIT_S)
 
     def test_long_bodies_cut_and_said(self):
         self.gmail.add("abc123", [msg("m30", "abc123", [TAG], 9, "Long <l@x.com>", "Long", text="x" * 30000)])

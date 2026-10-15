@@ -255,6 +255,8 @@ Setup, once per Workspace organisation:
 Then `shaft mail wren grant example-co ToObsidian` checks that the label exists and saves the grant in
 `.supervisor/tools/wren.json`. `shaft mail wren revoke example-co ToObsidian` or `shaft mail wren off` holds from wren's
 next mail call. A label renamed or deleted in Gmail is refused until you grant it again. Up to 30 mail calls per run.
+Gmail's quota is 15,000 units per minute per user, shared by every instance on the account. A call over it waits up to
+60 s, then fails, saying so.
 Bodies are cut at 20,000 characters (60,000 per thread). Downloads go to `mail/<alias>/<thread>/` in the instance's
 folder (gitignored by the template; a download is refused until `shaft update` brings that rule). Limits: 25 MB per
 file, 100 MB per run. Each body is shown under a line saying who wrote it and that it is not your instruction.

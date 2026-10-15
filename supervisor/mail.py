@@ -42,7 +42,11 @@ THREAD_RE = re.compile(r"^[0-9a-f]{6,32}$")          # Gmail's thread ids: hex
 HIDDEN = {"DRAFT", "TRASH", "SPAM"}                   # unsent drafts and deleted mail are never shown
 BODY_CHARS, THREAD_CHARS = 20_000, 60_000
 FILE_MAX = 25 * 1024 ** 2                             # Gmail's own limit on an attachment
+# Gmail's quota is per user per minute (15,000 units; a thread read costs 10), shared by every instance granted the
+# account: M0 hit it (2026-10-15). An answer over quota is waited out, Retry-After first, for this long at most.
+QUOTA_WAIT_S = 60
 urlopen = urllib.request.urlopen
+sleep = time.sleep
 
 
 class MailError(RuntimeError):
@@ -110,6 +114,18 @@ def _error_text(e: urllib.error.HTTPError) -> str:
     return " ".join(str(x) for x in (err, body.get("error_description")) if x) or str(e.code)
 
 
+def _over_quota(status: int, detail: str) -> bool:
+    return status == 429 or (status == 403 and any(k in detail for k in ("Quota exceeded", "ate Limit Exceeded",
+                                                                          "rateLimitExceeded")))
+
+
+def _retry_after(e: urllib.error.HTTPError) -> float:
+    try:
+        return max(0.0, float((e.headers or {}).get("Retry-After") or 0))
+    except ValueError:
+        return 0.0
+
+
 def _post_form(url: str, form: dict) -> dict:
     req = urllib.request.Request(url, data=urllib.parse.urlencode(form).encode(), method="POST",
                                  headers={"Content-Type": "application/x-www-form-urlencoded"})
@@ -157,18 +173,28 @@ class Account:
 
     def get(self, path: str, **params) -> dict:
         query = urllib.parse.urlencode({k: v for k, v in params.items() if v not in (None, "")}, doseq=True)
-        for attempt in (1, 2):
+        refreshed, waited, attempt = False, 0.0, 0
+        while True:
             req = urllib.request.Request(f"{API}/{path}" + (f"?{query}" if query else ""),
                                          headers={"Authorization": f"Bearer {self.token()}"})
             try:
                 with urlopen(req, timeout=30) as resp:
                     return json.load(resp)
             except urllib.error.HTTPError as e:
-                if e.code == 401 and attempt == 1:   # the access token expired early: refresh once
-                    self._token = ""
+                detail = _error_text(e)
+                if e.code == 401 and not refreshed:   # the access token expired early: refresh once
+                    self._token, refreshed = "", True
                     continue
-                raise GmailError(e.code, _error_text(e)) from None
-        raise AssertionError("unreachable")
+                if _over_quota(e.code, detail):
+                    attempt += 1
+                    pause = _retry_after(e) or min(2.0 ** attempt, 30.0)
+                    if waited + pause <= QUOTA_WAIT_S:
+                        sleep(pause)
+                        waited += pause
+                        continue
+                    raise GmailError(e.code, f"{detail} — Gmail's per-minute quota for {self.alias}, still exceeded "
+                                             f"after waiting {waited:.0f} s; try again in a minute") from None
+                raise GmailError(e.code, detail) from None
 
     def label_id(self, name: str) -> str:
         """The ID of the label named `name` now. A grant names a label; a label renamed or deleted since is refused,
