@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Callable
@@ -32,6 +33,53 @@ REPEAT_LIMIT = 2   # identical calls in a row that are refused before the reply 
 REPEATED = ("(not run again) You just called {name} with exactly these arguments, and its result is the one above "
             "— running it again cannot change it. Use that result, or do something different.")
 REPEATED_STOP = "(stopped) The same call a third time in a row: this reply is ended so the loop does not go on."
+
+
+# The ledger: after each step, the calls I actually made so far, from my tool log, under the step's last result.
+# Twice on 2026-10-15 I told Daniele that an append_file of mine "returned success" and then vanished from disk:
+# I had never called it (no such call in my log or in the model's) — I remembered a write I had only planned.
+FILE_WRITERS = ("write_file", "append_file", "remember", "rewrite_facts", "write_digest", "update_self_model",
+                "update_personality")
+LEDGER_CALLS_CHARS = 600   # the list of other calls is cut from its oldest end; file writes are never cut
+NOT_RUN = "(repeat: not run)"
+
+
+def _arg(entry: dict, key: str) -> str:
+    """One string argument from a logged call (its args may be cut in the log, so not parsed as JSON)."""
+    m = re.search(rf'"{key}"\s*:\s*"((?:[^"\\]|\\.)*)"', entry.get("args", ""))
+    return m.group(1) if m else ""
+
+
+def call_ledger(entries: list[dict], step: int, max_steps: int, purpose: str) -> str:
+    groups: list[list] = []   # [label, count], consecutive repeats merged
+    for e in entries:
+        label = e["tool"]
+        if label == "send_message" and _arg(e, "to"):
+            label += f" → {_arg(e, 'to')}"
+        if e.get("result") == NOT_RUN:
+            label += " (repeat, not run)"
+        elif str(e.get("result", "")).startswith("ERROR"):
+            label += " (ERROR)"
+        if groups and groups[-1][0] == label:
+            groups[-1][1] += 1
+        else:
+            groups.append([label, 1])
+    calls = [f"{label} ×{n}" if n > 1 else label for label, n in groups]
+    dropped = 0
+    while calls and len(", ".join(calls)) > LEDGER_CALLS_CHARS:
+        dropped += groups.pop(0)[1]
+        calls.pop(0)
+    shown = (f"… {dropped} earlier, " if dropped else "") + (", ".join(calls) or "none")
+    writes = []
+    for e in entries:
+        if e["tool"] in FILE_WRITERS:
+            path = _arg(e, "path")
+            first = (str(e.get("result", "")).splitlines() or [""])[0][:120]
+            writes.append(f"{e['tool']}{' ' + path if path else ''} → {first}")
+    where = "this reply" if purpose == "talk" else "this cycle"
+    of = f" of {max_steps}" if max_steps > 0 else ""
+    return (f"[runtime] Calls actually made so far {where} (step {step}{of}), from my tool log: {shown}. "
+            f"File writes: {'; '.join(writes) if writes else 'none'}.")
 
 
 def _canonical(arguments: str) -> str:
@@ -64,7 +112,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
         call: Callable[..., Reply] | None = None,
         on_tool: Callable[[str, str, str], None] | None = None,
         on_tool_start: Callable[[str, str], None] | None = None,
-        wrap_up: str | None = None) -> Outcome:
+        wrap_up: str | None = None, ledger: bool = True) -> Outcome:
     """Run until the model answers without calling tools, a stopping control is called,
     or max_steps model turns have been used (max_steps <= 0: no limit — conversations, where
     Daniele stops a reply with Ctrl-C). `call` defaults to client.complete; pass a streaming
@@ -72,7 +120,11 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
 
     On the last turn — or when the supervisor's deadline is near — the model is told to
     wrap up (`wrap_up`) and only the controls stay available, so a cycle ends with a
-    report instead of being cut off mid-thought."""
+    report instead of being cut off mid-thought.
+
+    With `ledger`, each step's last tool result ends with the calls actually made so far in this run (from
+    the tool log), so I check what I did against the log, not against my memory of my plan. It goes only to
+    the model: the tool log, which the judge and metrics read, keeps the results as the tools returned them."""
     controls = controls or {}
     tools = toolbox.specs() + [c.spec for c in controls.values()]
     final_tools = [c.spec for c in controls.values()] or None
@@ -80,6 +132,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
     reply = None
     step = 0
     last_call, repeats = None, 0   # the previous tool call, and how many times in a row it came back unchanged
+    first_logged = len(toolbox.log)   # a conversation's toolbox outlives one reply: the ledger counts this run's
     while max_steps <= 0 or step < max_steps:
         if pausing.requested():   # Daniele opened a conversation: wait, then go on where I was
             pausing.activity(keep=True, phase="paused")
@@ -129,7 +182,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
                     messages.append({"role": "tool", "tool_call_id": c["id"], "content": REPEATED_STOP})
                     return Outcome(reply, "repeating", step, toolbox.log)
                 messages.append({"role": "tool", "tool_call_id": c["id"], "content": REPEATED.format(name=c["name"])})
-                toolbox.log.append({"tool": c["name"], "args": for_log(c["arguments"]), "result": "(repeat: not run)"})
+                toolbox.log.append({"tool": c["name"], "args": for_log(c["arguments"]), "result": NOT_RUN})
                 continue
             last_call, repeats = call_key, 0
             pausing.activity(keep=True, phase="tool", tool=c["name"], args=" ".join(c["arguments"].split())[:160])
@@ -150,6 +203,8 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
             messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
         if stop:
             return Outcome(reply, "control", step, toolbox.log)
+        if ledger:
+            messages[-1]["content"] += "\n\n" + call_ledger(toolbox.log[first_logged:], step, max_steps, purpose)
         if last and wrap_up:
             break
     return Outcome(reply, "steps", step, toolbox.log)
