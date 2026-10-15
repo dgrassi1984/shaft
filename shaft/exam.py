@@ -73,7 +73,8 @@ def run(cfg, state: State, client: Client, task: dict) -> dict:
     outcome = agent.run(client, messages, toolbox, max_tokens=cfg.MAX_TOKENS_STEP, purpose="exam",
                         max_steps=int(task.get("max_steps") or cfg.MAX_STEPS_LIVE), controls=controls,
                         wrap_up="Stop working now and call submit_answer with your best answer, saying what "
-                                "you could not finish or verify.")
+                                "you could not finish or verify.",
+                        ledger=False)   # the battery stays comparable with its runs before the ledger
     text = answer.get("text")
     if text is None:   # no submit_answer: the last words are the answer
         text = (outcome.reply.content or "").strip() if outcome.reply else ""
