@@ -18,6 +18,8 @@ Rules:
 - Assistant turns are resent exactly as the model produced them (thinking blocks included):
   each reply's original content blocks are remembered and substituted when the instance
   sends that turn back, because altered history invalidates replayed thinking.
+- Claude requests are prompt-cached for an hour (CACHE): each turn of a loop re-reads the turns before it at the
+  cache price. The usage log keeps cache reads and writes apart from input_tokens, and the cap prices them (usd()).
 - Claude models: upstream is non-streaming; a streaming request gets the whole reply as one SSE burst.
   OpenRouter models stream end to end (stream_openrouter): the instance sees its reply as it is written.
 - Decision models (Daniele, 2026-10-14: TypeSafe's Jev, through OpenRouter): not chat models — typed questions
@@ -50,8 +52,15 @@ DECISION_MODELS, _ = knob("SHAFT_DECISION_MODELS", "typesafe/jev-1.13,~typesafe/
                           lambda s: [m.strip() for m in s.split(",") if m.strip()])
 DECISION_PROVIDER, _ = knob("SHAFT_DECISION_PROVIDER",
                             '{"data_collection": "deny", "zdr": true, "allow_fallbacks": false}', json.loads)
-# $ per million tokens (input, output) — prompts ≤ 100K tokens; from the Claude API price table.
-PRICES = {"claude-haiku-5-5": (0.10, 0.50), "claude-sonnet-5-5": (2.0, 10.0), "claude-opus-5-5": (4.0, 20.0)}
+# $ per million tokens (input, output, cache read) — prompts ≤ 100K tokens; from the Claude API price table.
+# Cache writes cost 1.25× input (5-minute entries) or 2× (1-hour). One table for every Claude call the supervisor
+# pays for: instances, the coder, the judges (usd() below).
+PRICES = {"claude-haiku-5-5": (0.10, 0.50, 0.01), "claude-sonnet-5-5": (2.0, 10.0, 0.20),
+          "claude-opus-5-5": (4.0, 20.0, 0.20), "claude-fable-5-1": (10.0, 50.0, 0.25)}
+# Prompt caching (Daniele, 2026-10-15: 1-hour entries). Each request marks its end; the next turn of the same loop
+# reads everything before its new tail at the cache price. An hour also carries a loop over a pause — a conversation
+# that takes the model, a long tool run — which a 5-minute entry would not survive.
+CACHE = {"type": "ephemeral", "ttl": "1h"}
 USAGE = SUP_DIR / "cloud_usage.jsonl"
 
 
@@ -63,6 +72,36 @@ class CloudError(Exception):
 
 def _turn_key(content: str, tool_ids: list[str]) -> str:
     return hashlib.sha256(json.dumps([content, tool_ids]).encode()).hexdigest()
+
+
+def billed(usage: dict) -> dict:
+    """A Claude reply's usage as the counts it is billed by. Its input_tokens is only the uncached remainder:
+    cache reads and writes are counted (and priced) apart."""
+    writes = usage.get("cache_creation") or {}
+    w5m, w1h = writes.get("ephemeral_5m_input_tokens"), writes.get("ephemeral_1h_input_tokens")
+    if w5m is None and w1h is None:   # no per-TTL split in the reply: priced as the TTL we ask for (the dearer one)
+        w5m, w1h = 0, usage.get("cache_creation_input_tokens") or 0
+    return {"input_tokens": usage.get("input_tokens") or 0, "output_tokens": usage.get("output_tokens") or 0,
+            "cache_read_tokens": usage.get("cache_read_input_tokens") or 0,
+            "cache_write_5m_tokens": w5m or 0, "cache_write_1h_tokens": w1h or 0}
+
+
+def usd(model: str, r: dict) -> float | None:
+    """What a Claude call cost, from a record with billed()'s counts (older records have no cache counts: none
+    were cached); None for a model without a price."""
+    p = PRICES.get(model)
+    if not p:
+        return None
+    pin, pout, pread = p
+    n = lambda k: r.get(k) or 0
+    return (n("input_tokens") * pin + n("output_tokens") * pout + n("cache_read_tokens") * pread
+            + n("cache_write_5m_tokens") * pin * 1.25 + n("cache_write_1h_tokens") * pin * 2) / 1e6
+
+
+def prompt_size(r: dict) -> int:
+    """The whole prompt a call sent: the uncached remainder plus what was read from or written to the cache."""
+    return sum(r.get(k) or 0 for k in ("input_tokens", "cache_read_tokens", "cache_write_5m_tokens",
+                                       "cache_write_1h_tokens"))
 
 
 def spent_today(instance: str) -> float:
@@ -112,7 +151,8 @@ def to_anthropic(body: dict, remembered: dict[str, list]) -> dict:
     for m in messages:
         if m["role"] == "user":
             m["content"].sort(key=lambda b: b["type"] != "tool_result")
-    out = {"model": body["model"], "max_tokens": int(body.get("max_tokens") or 16000), "messages": messages}
+    out = {"model": body["model"], "max_tokens": int(body.get("max_tokens") or 16000), "messages": messages,
+           "cache_control": CACHE}   # automatic: the breakpoint moves to the last block as the loop grows
     if system:
         out["system"] = "\n\n".join(system)
     tools = [{"name": t["function"]["name"], "description": t["function"].get("description", ""),
@@ -130,13 +170,14 @@ def from_anthropic(data: dict) -> dict:
              for b in data.get("content", []) if b.get("type") == "tool_use"]
     finish = {"end_turn": "stop", "stop_sequence": "stop", "tool_use": "tool_calls",
               "max_tokens": "length"}.get(data.get("stop_reason"), "stop")
-    usage = data.get("usage") or {}
+    usage = billed(data.get("usage") or {})
     message = {"role": "assistant", "content": text}
     if calls:
         message["tool_calls"] = calls
     return {"id": data.get("id"), "object": "chat.completion", "model": data.get("model"),
             "choices": [{"index": 0, "message": message, "finish_reason": finish}],
-            "usage": {"prompt_tokens": usage.get("input_tokens"), "completion_tokens": usage.get("output_tokens")}}
+            "usage": {"prompt_tokens": prompt_size(usage), "completion_tokens": usage["output_tokens"],
+                      "prompt_tokens_details": {"cached_tokens": usage["cache_read_tokens"]}}}
 
 
 def complete(instance: str, body: dict, secrets: dict, remembered: dict[str, list]) -> dict:
@@ -146,6 +187,9 @@ def complete(instance: str, body: dict, secrets: dict, remembered: dict[str, lis
         return selfhosted.complete(instance, body)
     if model not in CLOUD_MODELS:
         raise CloudError(403, f"model {model!r} is not allowed for instances (SHAFT_CLOUD_MODELS={CLOUD_MODELS})")
+    if not model.startswith("openrouter/") and model not in PRICES:   # unpriced = uncapped: refuse, never bill $0
+        raise CloudError(403, f"model {model!r} has no price in cloudllm.PRICES ({sorted(PRICES)}), so the daily "
+                              f"cap could not count it")
     spent = spent_today(instance)
     if spent >= DAILY_USD:
         raise CloudError(429, f"{instance} spent ${spent:.2f} on cloud models today (cap ${DAILY_USD:.2f})")
@@ -159,11 +203,10 @@ def complete(instance: str, body: dict, secrets: dict, remembered: dict[str, lis
         "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01"})
     started = time.monotonic()
     data, error = _send(req)
-    usage = (data or {}).get("usage") or {}
-    pin, pout = PRICES.get(model, (0, 0))
-    usd = ((usage.get("input_tokens") or 0) * pin + (usage.get("output_tokens") or 0) * pout) / 1e6
-    _record(instance, model, usage.get("input_tokens"), usage.get("output_tokens"), usd, started,
-            (data or {}).get("stop_reason"), None if data else error)
+    counts = billed((data or {}).get("usage") or {})
+    _record(instance, model, counts["input_tokens"], counts["output_tokens"], usd(model, counts), started,
+            (data or {}).get("stop_reason"), None if data else error,
+            cache={k: v for k, v in counts.items() if k.startswith("cache_")})
     if data is None:
         raise CloudError(502, f"cloud model call failed: {error}")
     if data.get("stop_reason") == "refusal":
@@ -174,13 +217,14 @@ def complete(instance: str, body: dict, secrets: dict, remembered: dict[str, lis
     return out
 
 
-def _record(instance: str, model: str, tokens_in, tokens_out, usd: float, started: float, stop, error) -> None:
+def _record(instance: str, model: str, tokens_in, tokens_out, usd: float, started: float, stop, error,
+            cache: dict | None = None) -> None:
     USAGE.parent.mkdir(parents=True, exist_ok=True)
     with USAGE.open("a") as f:
         f.write(json.dumps({"ts": datetime.now().isoformat(timespec="seconds"), "instance": instance, "model": model,
-                            "input_tokens": tokens_in, "output_tokens": tokens_out, "usd": round(usd, 6),
-                            "seconds": round(time.monotonic() - started, 1), "stop_reason": stop,
-                            "error": error}) + "\n")
+                            "input_tokens": tokens_in, "output_tokens": tokens_out, **(cache or {}),
+                            "usd": round(usd, 6), "seconds": round(time.monotonic() - started, 1),
+                            "stop_reason": stop, "error": error}) + "\n")
 
 
 def _send(req: urllib.request.Request) -> tuple[dict | None, str | None]:

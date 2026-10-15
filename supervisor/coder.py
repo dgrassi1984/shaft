@@ -19,6 +19,7 @@ import urllib.request
 from datetime import date, datetime
 from pathlib import Path
 
+from . import cloudllm
 from .core import HOME, NETWORK_ERRORS, SUP_DIR, UnsafePath, contained, knob, safe_write, secrets_env
 
 CODER_MODEL, _ = knob("SHAFT_CODER_MODEL", "claude-opus-5-5", str)
@@ -27,7 +28,6 @@ MAX_TURNS = 16
 WRITABLE = ("shaft/", "plugins/", "skills/", "tests/")
 # secrets: the instance's keys, never to the coder; .venv/.uv: its Python environment, read in place, never copied
 HIDDEN = (".git", "logs", ".tmp", "__pycache__", "secrets", ".venv", ".uv")
-PRICES = {"claude-opus-5-5": (4.0, 20.0), "claude-sonnet-5-5": (2.0, 10.0), "claude-fable-5-1": (10.0, 50.0)}
 USAGE = SUP_DIR / "coder_usage.jsonl"
 API = "https://api.anthropic.com/v1/messages"
 
@@ -97,7 +97,8 @@ def _read_only_tool(root: Path, name: str, args: dict) -> str:
 
 def _call(key: str, messages: list) -> dict:
     body = {"model": CODER_MODEL, "max_tokens": 32000, "system": SYSTEM, "messages": messages, "tools": TOOLS,
-            "output_config": {"effort": "high"}, "fallbacks": "default"}
+            "output_config": {"effort": "high"}, "fallbacks": "default",
+            "cache_control": cloudllm.CACHE}   # each turn re-reads the files read so far from the cache
     req = urllib.request.Request(API, data=json.dumps(body).encode(), headers={
         "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01",
         "anthropic-beta": "server-side-fallback-2026-07-01"})
@@ -123,15 +124,21 @@ def write(root: Path, instance: str, task: str) -> tuple[list[dict], str, dict]:
         raise CoderError("no ANTHROPIC_API_KEY in the supervisor's .env")
     if spent_today(instance) >= DAILY_USD:
         raise CoderError(f"{instance} already spent ${spent_today(instance):.2f} on coding today (cap ${DAILY_USD:.2f})")
+    if CODER_MODEL not in cloudllm.PRICES:   # unpriced = uncapped: refuse, never bill $0
+        raise CoderError(f"SHAFT_CODER_MODEL={CODER_MODEL!r} has no price in cloudllm.PRICES ({sorted(cloudllm.PRICES)})")
     messages = [{"role": "user", "content": f"The agent's task for you:\n\n{task}"}]
-    usage = {"input_tokens": 0, "output_tokens": 0, "turns": 0}
+    usage = {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0, "cache_write_5m_tokens": 0,
+             "cache_write_1h_tokens": 0, "turns": 0, "usd": 0.0}
     started = time.monotonic()
     try:
         for _ in range(MAX_TURNS):
             data = _call(key, messages)
             usage["turns"] += 1
-            for k in ("input_tokens", "output_tokens"):
-                usage[k] += (data.get("usage") or {}).get(k) or 0
+            counts = cloudllm.billed(data.get("usage") or {})
+            for k, v in counts.items():
+                usage[k] += v
+            # a fallback model may have answered: priced as the model that did (an unpriced one as the coder's)
+            usage["usd"] += cloudllm.usd(data.get("model") or CODER_MODEL, counts) or cloudllm.usd(CODER_MODEL, counts)
             if data.get("stop_reason") == "refusal":
                 raise CoderError("the coder declined this task")
             if data.get("stop_reason") == "max_tokens":
@@ -150,8 +157,7 @@ def write(root: Path, instance: str, task: str) -> tuple[list[dict], str, dict]:
                 for b in calls]})
         raise CoderError(f"the coder did not submit within {MAX_TURNS} turns")
     finally:
-        pin, pout = PRICES.get(CODER_MODEL, (0, 0))
-        usage["usd"] = round((usage["input_tokens"] * pin + usage["output_tokens"] * pout) / 1e6, 4)
+        usage["usd"] = round(usage["usd"], 4)
         usage["seconds"] = round(time.monotonic() - started, 1)
         USAGE.parent.mkdir(parents=True, exist_ok=True)
         with USAGE.open("a") as f:

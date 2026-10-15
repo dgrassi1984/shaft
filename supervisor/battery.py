@@ -692,12 +692,9 @@ def report(name: str) -> str:
     return "\n".join(lines)
 
 
-PRICES = {"claude-opus-5-5": (4, 20), "claude-sonnet-5-5": (2, 10), "claude-haiku-5-5": (0.1, 0.5)}
-
-
 def _usd(r: dict) -> float:
-    i, o = PRICES.get(r.get("model"), (0, 0))
-    return ((r.get("input_tokens") or 0) * i + (r.get("output_tokens") or 0) * o) / 1e6
+    from . import cloudllm
+    return float(r["usd"]) if r.get("usd") is not None else cloudllm.usd(r.get("model"), r) or 0.0
 
 
 def _judge_usage() -> list[dict]:

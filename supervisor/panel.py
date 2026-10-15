@@ -71,20 +71,13 @@ def jsonl(path: Path) -> list[dict]:
 
 
 # -- costs --------------------------------------------------------------------------------------------------
-def _prices() -> dict:
-    from . import cloudllm, coder
-    return {**coder.PRICES, **cloudllm.PRICES}
-
-
-def judge_usd(r: dict, prices: dict | None = None) -> float | None:
+def judge_usd(r: dict) -> float | None:
     """A judge call's dollars: its own `usd` when logged (the second judge, from OpenRouter's usage.cost), else
-    from its tokens and the model's price; None for an unknown model."""
+    from its tokens and the model's price (cloudllm.usd); None for an unknown model."""
+    from . import cloudllm
     if r.get("usd") is not None:
         return float(r["usd"])
-    p = (prices or _prices()).get(r.get("model"))
-    if not p:
-        return None
-    return ((r.get("input_tokens") or 0) * p[0] + (r.get("output_tokens") or 0) * p[1]) / 1e6
+    return cloudllm.usd(r.get("model"), r)
 
 
 def _purpose(r: dict) -> str:
@@ -101,7 +94,6 @@ def costs(days: int = 7, today: date | None = None) -> dict:
     today = today or date.today()
     first = today - timedelta(days=days - 1)
     names = set(instance_names())
-    prices = _prices()
     by_day: dict[str, dict] = {}
 
     def add(day: str, comp: str, usd: float, who: str = "") -> None:
@@ -124,7 +116,7 @@ def costs(days: int = 7, today: date | None = None) -> dict:
     unpriced = 0
     judge_today: dict[str, float] = {}
     for r in jsonl(SUP_DIR / "judge_usage.jsonl"):
-        usd = judge_usd(r, prices)
+        usd = judge_usd(r)
         if usd is None:
             unpriced += 1
             continue

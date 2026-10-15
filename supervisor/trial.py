@@ -527,7 +527,7 @@ def judge_pair(context: str, first: dict, second: dict, purpose: str, model: str
 
 def _judge_usd(purpose: str) -> float:
     """What the judge calls for `purpose` cost: OpenRouter's own figure when logged, else tokens × the model's price."""
-    from .cloudllm import PRICES
+    from .cloudllm import usd as priced
     path = SUP_DIR / "judge_usage.jsonl"
     usd = 0.0
     for line in path.read_text().splitlines() if path.exists() else []:
@@ -536,8 +536,7 @@ def _judge_usd(purpose: str) -> float:
             if r.get("usd") is not None:
                 usd += float(r["usd"])
                 continue
-            pin, pout = PRICES.get(r.get("model"), (0, 0))
-            usd += ((r.get("input_tokens") or 0) * pin + (r.get("output_tokens") or 0) * pout) / 1e6
+            usd += priced(r.get("model"), r) or 0.0
     return usd
 
 
