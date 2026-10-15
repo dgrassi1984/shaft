@@ -14,9 +14,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
-from supervisor import broker, metrics, trial
-from supervisor.core import SUP_DIR
+from supervisor import broker, metrics, mind, trial
+from supervisor.core import MIND_PATHS, SUP_DIR
 from supervisor.tests.fakellm import FakeLLM
+from supervisor.tests.mindfix import IGNORE_MIND, commit_at, store_state
 
 TEMPLATE = Path(__file__).resolve().parents[2] / "template"
 NAME = "tw"
@@ -36,9 +37,10 @@ def snapshot(root: Path) -> dict[str, bytes]:
 
 
 class Fixture(unittest.TestCase):
-    """A project with one instance whose branch holds: C0 (09:00, the state a cycle began from) and C1 (10:20,
-    after that cycle: the message it read archived, its episode written). The supervisor log says the cycle
-    started at 10:00."""
+    """A project with one instance, laid out as after the mind left git: its branch holds C0 (09:00, the code a
+    cycle began from) and C1 (10:20, after it); its mind store holds M0 (09:00, the mind the cycle began from)
+    and M1 (10:20, after it: the message it read archived, its episode and new goals written). The supervisor log
+    says the cycle started at 10:00."""
 
     llm_url = "http://127.0.0.1:9/v1"
 
@@ -52,7 +54,7 @@ class Fixture(unittest.TestCase):
         (self.project / "instances" / "x" / "shaft").mkdir(parents=True)   # another instance to message
         (self.project / "instances" / "x" / "config.env").write_text('LLM_BASE_URL="broker"\n')
         shutil.copytree(TEMPLATE / "shaft", self.root / "shaft", ignore=shutil.ignore_patterns("__pycache__"))
-        (self.root / ".gitignore").write_text("logs/\n.tmp/\n__pycache__/\nsecrets/\n")
+        (self.root / ".gitignore").write_text("logs/\n.tmp/\n__pycache__/\nsecrets/\n" + IGNORE_MIND)
         (self.root / "config.env").write_text(f'LLM_BASE_URL="{self.llm_url}"\nLLM_MODEL="fake"\n'
                                               f'WAKE_INTERVAL_MINUTES=120\n')
         for rel, text in {"self/self.md": "I am tw.\n", "self/goals.md": "- G1: learn the OLD-GOAL thing\n",
@@ -62,6 +64,7 @@ class Fixture(unittest.TestCase):
         git(self.root, "add", "-A")
         git(self.root, "commit", "-q", "-m", f"{NAME}: live 2026-10-10 09:00", when="2026-10-10T09:00:00")
         self.c0 = git(self.root, "rev-parse", "HEAD").strip()
+        self.m0 = commit_at(NAME, self.project, self.root, "2026-10-10T09:00:00", f"{NAME}: live 2026-10-10 09:00")
         (self.root / "memory" / "messages").mkdir(parents=True)
         (self.root / "memory" / "messages" / "20261010-100500-from-x.md").write_text(
             "From: x\nTo: tw\n\nPlease look at the PURPLE-OWL question.\n")
@@ -74,9 +77,11 @@ class Fixture(unittest.TestCase):
         (self.root / "memory" / "episodes" / "2026-10-10.jsonl").write_text(
             json.dumps(self.ep) + "\n" + json.dumps(self.ep2) + "\n")
         (self.root / "self" / "goals.md").write_text("- G1: NEW-GOAL written after the cycle\n")
+        (self.root / "shaft" / "later.py").write_text("LATER = True\n")
         git(self.root, "add", "-A")
         git(self.root, "commit", "-q", "-m", f"{NAME}: live 2026-10-10 10:20", when="2026-10-10T10:20:30")
         self.c1 = git(self.root, "rev-parse", "HEAD").strip()
+        self.m1 = commit_at(NAME, self.project, self.root, "2026-10-10T10:20:30", f"{NAME}: live 2026-10-10 10:20")
         with (SUP_DIR / "supervisor.log").open("a") as f:
             f.write(f"[2026-10-10 10:00:00] {NAME}: start live cycle_timeout_s=2400\n"
                     f"[2026-10-10 11:00:00] {NAME}: start live cycle_timeout_s=2400\n")
@@ -102,6 +107,41 @@ class ReconstructTest(Fixture):
         self.assertFalse((dest / "memory" / "messages").exists())                     # archived only after
         self.assertEqual((dest / "shaft" / "live.py").read_bytes(), code["shaft/live.py"])
         self.assertFalse((dest / "logs").exists())
+
+    def test_replay_mind_as_of_cycle(self):
+        # The mind laid into the copy is the store's as of the cycle's start (M0), never the current one (M1),
+        # and never a mind a pre-cutover branch commit still holds: the store is the one place it is read from.
+        st = self.state()
+        self.assertEqual(trial.mind_rev(self.project, NAME, st), self.m0)
+        (self.root / "memory" / "stale.md").write_text("STALE-BRANCH-MIND\n")
+        git(self.root, "add", "-f", "memory/stale.md")
+        git(self.root, "commit", "-q", "--amend", "--no-edit", when="2026-10-10T10:20:30")   # C1 now holds a mind file
+        dest = Path(tempfile.mkdtemp(prefix="shaft-recon-")) / NAME
+        self.addCleanup(shutil.rmtree, dest.parent, True)
+        st["start_commit"] = git(self.root, "rev-parse", "HEAD").strip()
+        trial.reconstruct(self.project, NAME, st, trial.committed_code(self.project, NAME), dest)
+        laid = {p.relative_to(dest).as_posix(): p.read_bytes() for top in MIND_PATHS if (dest / top).is_dir()
+                for p in (dest / top).rglob("*") if p.is_file()}
+        expected = {rel: data for rel, (_, data) in mind.files(NAME, self.m0, self.project).items()}
+        expected["inbox/20261010-100500-from-x.md"] = laid.get("inbox/20261010-100500-from-x.md", b"")
+        self.assertEqual(laid, expected)
+        self.assertNotIn("memory/stale.md", laid)
+        self.assertIn(b"PURPLE-OWL", laid["inbox/20261010-100500-from-x.md"])         # from the store's tip
+
+    def test_state_of_follows_the_instance_line_not_a_merged_template_commit(self):
+        # Regression (M0 of PLAN-mind-out-of-git): kant's cycle of 2026-10-13 20:58 got the template commit
+        # a8c52d5 (17:27:32, merged into kant later) as its start, because the walk followed the merge's second
+        # parent: a replay with the template's tree and an empty mind. 8 of the 50 replayed states on disk.
+        tpl = self.project / "tpl"
+        git(self.project, "worktree", "add", "-q", "--orphan", "-b", "template", str(tpl))
+        (tpl / "shaft").mkdir()
+        (tpl / "shaft" / "from_template.py").write_text("TEMPLATE = True\n")
+        git(tpl, "add", "-A")
+        git(tpl, "commit", "-q", "-m", "template: change", when="2026-10-10T09:30:00")   # before the cycle's t0
+        git(self.root, "merge", "-q", "--no-edit", "--allow-unrelated-histories", "-m", "merge template",
+            "template", when="2026-10-10T11:30:00")                                      # merged after it
+        st = self.state()
+        self.assertEqual(st["start_commit"], self.c0)
 
     def test_an_arm_keeps_its_committed_config_env_although_the_gate_no_longer_counts_it_as_code(self):
         # The gate dropped config.env from CODE_PATHS (an operator's mid-cycle edit was reverted as the instance's,
@@ -182,6 +222,24 @@ class ReplayEndToEndTest(Fixture):
 
 
 
+class ReplayLeavesTheMindStoreTest(ReplayEndToEndTest):
+    """Project rule: trial replays never commit. The replay's copy has its own mind; the store is only read."""
+
+    def test_replay_has_no_side_effects(self):   # the parent's test, not run twice
+        pass
+
+    def test_replay_never_writes_mind_store(self):
+        before = store_state(NAME, self.project)
+        with mock.patch.object(broker, "notify"), \
+                mock.patch.object(broker.Broker, "_send", side_effect=AssertionError("a write left the broker")):
+            rec = trial.replay_arm(self.project, NAME, self.state(), trial.committed_code(self.project, NAME),
+                                   model="local", cache={}, cache_lock=threading.Lock(), billed=f"{NAME}@trial:t")
+        self.assertTrue(rec["completed"], rec["output_tail"])
+        self.assertIn("notes/answer.md", rec["diff"])                    # the run did write its (copied) mind
+        self.assertEqual(store_state(NAME, self.project), before)
+        self.assertEqual(mind.head(NAME, self.project), self.m1)
+
+
 class PreemptTest(Fixture):
     def setUp(self):
         from supervisor.tests.test_pause import SlowModel
@@ -239,12 +297,15 @@ class ReplayBrokerTest(Fixture):
         self.assertEqual(ok, [True] * 3 + [False])
 
     def test_history_ends_where_the_cycle_began(self):
+        # Both heads stop at the replayed cycle: the code at its starting commit, the mind as of its start.
         log = self.make().call("history", {})
         self.assertTrue(log["ok"], log)
-        self.assertIn("09:00", log["result"])
+        self.assertIn(f"{self.c0[:7]} [code]", log["result"])
+        self.assertIn(f"{self.m0[:7]} [mind]", log["result"])
         self.assertNotIn("10:20", log["result"])
-        later = self.c1[:10]
-        self.assertFalse(self.make().call("history", {"commit": later})["ok"])
+        for later in (self.c1[:10], self.m1[:10]):
+            self.assertFalse(self.make().call("history", {"commit": later})["ok"])
+        self.assertIn("OLD-GOAL", self.make().call("history", {"commit": self.m0[:10]})["result"])
 
     def test_record_shows_only_what_was_known_then(self):
         jpath = SUP_DIR / "judgments" / f"{NAME}.jsonl"
@@ -528,6 +589,7 @@ class WorkerTest(Fixture):
         shutil.copy(self.root / "config.env", other / "config.env")
         git(other, "add", "-A")
         git(other, "commit", "-q", "-m", "tx: live", when="2026-10-10T09:00:00")
+        mind.init("tx", self.project)
         self.addCleanup(shutil.rmtree, SUP_DIR / "trials" / "tx", True)
         with mock.patch.object(trial, "_new_id", lambda name: "t-same"), \
                 mock.patch.object(trial, "_choose", lambda *a, **k: [self.state(), self.state()]):

@@ -1,13 +1,16 @@
 """Committing an instance's state on its branch."""
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
+from supervisor import mind
 from supervisor.core import commit_state
+from supervisor.tests.mindfix import IGNORE_MIND, commit_at
 
 
 def git(cwd, *args):
@@ -22,9 +25,13 @@ class CommitStateTest(unittest.TestCase):
         git(self.project, "commit", "-q", "--allow-empty", "-m", "main")
         self.root = self.project / "instances" / "x"
         git(self.project, "worktree", "add", "-q", "--orphan", "-b", "instance/x", str(self.root))
+        mind.init("x", self.project)
 
     def tearDown(self):
         shutil.rmtree(self.project, ignore_errors=True)
+
+    def store_files(self) -> list[str]:
+        return sorted(mind.git("x", "ls-tree", "-r", "--name-only", "mind", project=self.project).stdout.split())
 
     def test_commits_with_empty_state_dirs(self):
         # Regression: `git commit -- notes skills` failed because empty dirs are unknown to git,
@@ -33,11 +40,102 @@ class CommitStateTest(unittest.TestCase):
             (self.root / d).mkdir()
         (self.root / "self" / "self.md").write_text("# Self\n")
         (self.root / "memory" / "journal.md").write_text("j\n")
+        (self.root / "skills" / "s.md").write_text("a skill\n")
         self.assertTrue(commit_state("x", "reflect", [], root=self.root, project=self.project))
         files = git(self.root, "show", "--name-only", "--format=", "HEAD").split()
-        self.assertEqual(sorted(files), ["memory/journal.md", "self/self.md"])
+        self.assertEqual(files, ["skills/s.md"])                       # skills stay on the branch (D2)
+        self.assertEqual(self.store_files(), ["memory/journal.md", "self/self.md"])
         self.assertIn("SHAFT/x", git(self.root, "log", "-1", "--format=%an"))
+        self.assertIn("SHAFT/x", mind.git("x", "log", "-1", "--format=%an", project=self.project).stdout)
+        tip = mind.head("x", self.project)
         self.assertTrue(commit_state("x", "reflect", [], root=self.root, project=self.project))  # nothing new: no-op
+        self.assertEqual(mind.head("x", self.project), tip)
+
+    def test_commit_never_stages_mind(self):
+        # The mind must never reach the project's git (it can be pushed; an instance may read mail): not with an
+        # empty .gitignore, not when it is named among the kept code, not when the branch tracked it before.
+        (self.root / ".gitignore").write_text("")
+        for rel, text in {"self/self.md": "me\n", "memory/journal.md": "j\n", "notes/n.md": "n\n",
+                          "inbox/m.md": "hi\n", "plugins/p/main.py": "def run(): return 1\n",
+                          "memory/evil.py": "x = 1\n"}.items():
+            (self.root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.root / rel).write_text(text)
+        self.assertTrue(commit_state("x", "live", ["plugins/p/main.py", "memory/evil.py"], root=self.root,
+                                     project=self.project))
+        tracked = git(self.root, "ls-files").split()
+        self.assertEqual(tracked, ["plugins/p/main.py"])
+        self.assertFalse([p for p in git(self.root, "log", "--name-only", "--format=").split()
+                          if p.split("/")[0] in ("self", "memory", "notes", "inbox")])
+        self.assertEqual(self.store_files(), ["inbox/m.md", "memory/evil.py", "memory/journal.md", "notes/n.md",
+                                              "self/self.md"])
+        self.assertEqual(mind.git("x", "log", "-1", "--format=%B", project=self.project).stdout,
+                         git(self.root, "log", "-1", "--format=%B"))          # the same message on both sides
+        (self.root / "memory" / "journal.md").write_text("j\nmore\n")
+        self.assertTrue(commit_state("x", "live", [], root=self.root, project=self.project))
+        self.assertEqual(git(self.root, "ls-files").split(), ["plugins/p/main.py"])
+        self.assertEqual(mind.show("x", "mind", "memory/journal.md", self.project), "j\nmore\n")
+
+    def test_a_deleted_mind_folder_is_deleted_in_the_store_too(self):
+        for rel in ("notes/a.md", "memory/journal.md"):
+            (self.root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.root / rel).write_text("x\n")
+        self.assertTrue(commit_state("x", "live", [], root=self.root, project=self.project))
+        shutil.rmtree(self.root / "notes")
+        self.assertTrue(commit_state("x", "live", [], root=self.root, project=self.project))
+        self.assertEqual(self.store_files(), ["memory/journal.md"])
+
+    def test_mind_store_refuses_remote(self):
+        (self.root / "memory").mkdir()
+        (self.root / "memory" / "journal.md").write_text("j\n")
+        self.assertTrue(commit_state("x", "live", [], root=self.root, project=self.project))
+        tip = mind.head("x", self.project)
+        store = mind.store("x", self.project)
+        elsewhere = self.project / "elsewhere.git"
+        git(self.project, "init", "-q", "--bare", str(elsewhere))
+        # the pre-push hook: a push by hand, with the store's own hooks, fails and sends nothing
+        r = subprocess.run(["git", f"--git-dir={store}", "push", str(elsewhere), "mind"], capture_output=True,
+                           text=True)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("never pushed", r.stderr)
+        self.assertEqual(git(elsewhere, "for-each-ref"), "")
+        # a remote added to the store: the next commit refuses loudly, commits nothing, and leaves the remote be
+        subprocess.run(["git", f"--git-dir={store}", "remote", "add", "origin", str(elsewhere)], check=True)
+        (self.root / "memory" / "journal.md").write_text("j\nsecret mail text\n")
+        from unittest import mock
+        from supervisor import core
+        with mock.patch.object(core, "log") as logged:
+            self.assertFalse(commit_state("x", "live", [], root=self.root, project=self.project))
+        self.assertTrue(any("MIND STORE REFUSED" in c.args[0] for c in logged.call_args_list))
+        self.assertEqual(mind.head("x", self.project), tip)
+        self.assertIn("origin", subprocess.run(["git", f"--git-dir={store}", "remote"], capture_output=True,
+                                               text=True).stdout)
+        self.assertEqual(git(elsewhere, "for-each-ref"), "")
+
+    def test_mind_store_ignores_instance_gitignore(self):
+        # The instance writes .gitignore and .gitattributes files in its own folder: neither may hide part of its
+        # mind from the store or change the bytes stored (a `text` attribute would turn CRLF into LF).
+        (self.root / "memory").mkdir()
+        (self.root / "memory" / ".gitignore").write_text("*\n")
+        (self.root / ".gitignore").write_text(IGNORE_MIND + "self/\n")
+        (self.root / "memory" / ".gitattributes").write_text("* text eol=lf\n")
+        (self.root / "memory" / "journal.md").write_bytes(b"line one\r\nline two\r\n")
+        (self.root / "self").mkdir()
+        (self.root / "self" / "self.md").write_text("me\n")
+        self.assertTrue(commit_state("x", "live", [], root=self.root, project=self.project))
+        self.assertEqual(self.store_files(), ["memory/.gitattributes", "memory/.gitignore", "memory/journal.md",
+                                              "self/self.md"])
+        stored = mind.git("x", "show", "mind:memory/journal.md", project=self.project, binary=True).stdout
+        self.assertEqual(stored, b"line one\r\nline two\r\n")
+
+    def test_no_mind_store_is_an_error_not_a_silent_skip(self):
+        shutil.rmtree(mind.store("x", self.project))
+        (self.root / "memory").mkdir()
+        (self.root / "memory" / "journal.md").write_text("j\n")
+        import contextlib
+        import io
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertFalse(commit_state("x", "live", [], root=self.root, project=self.project))
+        self.assertIn("shaft mind cutover x", err.getvalue())
 
 
 class IgnoredFileTest(unittest.TestCase):
@@ -51,6 +149,7 @@ class IgnoredFileTest(unittest.TestCase):
         git(project, "commit", "-q", "--allow-empty", "-m", "main")
         root = project / "instances" / "x"
         git(project, "worktree", "add", "-q", "--orphan", "-b", "instance/x", str(root))
+        mind.init("x", project)
         (root / ".gitignore").write_text(".DS_Store\n")
         (root / "plugins" / "system").mkdir(parents=True)
         (root / "plugins" / "system" / "main.py").write_text("def run(): return 'ok'\n")
@@ -118,26 +217,49 @@ class HistoryToolTest(unittest.TestCase):
         git(self.project, "init", "-q")
         git(self.project, "commit", "-q", "--allow-empty", "-m", "main: supervisor secret")
         self.main = git(self.project, "rev-parse", "--short", "HEAD").strip()
+        self.others = []
         for name in ("x", "y"):
             root = self.project / "instances" / name
             git(self.project, "worktree", "add", "-q", "--orphan", "-b", f"instance/{name}", str(root))
+            (root / ".gitignore").write_text(IGNORE_MIND)
+            (root / "plugins").mkdir()
+            (root / "plugins" / "tool.py").write_text(f"NAME = {name!r}\n")
+            git(root, "add", "-A")
+            subprocess.run(["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m",
+                            f"{name}: code"], check=True, env={**os.environ, "GIT_AUTHOR_DATE": "2026-10-10T09:00:00",
+                                                               "GIT_COMMITTER_DATE": "2026-10-10T09:00:00"})
             (root / "self").mkdir()
             (root / "self" / "self.md").write_text(f"I am {name}\n")
-            git(root, "add", "-A")
-            git(root, "commit", "-q", "-m", f"{name}: reflect")
-        self.other = git(self.project / "instances" / "y", "rev-parse", "--short", "HEAD").strip()
+            commit_at(name, self.project, root, "2026-10-10T10:00:00", f"{name}: reflect")
+            self.others += [git(root, "rev-parse", "--short", "HEAD").strip(), mind.head(name, self.project)[:10]] \
+                if name == "y" else []
         self.broker = Broker("x", self.project, {}, self.project / "broker.log")
 
     def test_own_log_and_changes(self):
         log = self.broker.call("history", {"path": "self/self.md"})
         self.assertTrue(log["ok"], log)
         self.assertIn("x: reflect", log["result"])
+        self.assertIn("[mind]", log["result"])
         commit = log["result"].split()[0]
         self.assertIn("+I am x", self.broker.call("history", {"commit": commit})["result"])
 
+    def test_history_spans_code_and_mind(self):
+        log = self.broker.call("history", {})
+        self.assertTrue(log["ok"], log)
+        lines = log["result"].splitlines()
+        self.assertEqual([l.split()[1] for l in lines], ["[mind]", "[code]"])          # newest first, both repos
+        self.assertIn("x: reflect", lines[0])
+        self.assertIn("x: code", lines[1])
+        code, mine = lines[1].split()[0], lines[0].split()[0]
+        self.assertIn("+NAME = 'x'", self.broker.call("history", {"commit": code})["result"])
+        self.assertIn("+I am x", self.broker.call("history", {"commit": mine})["result"])
+        only_code = self.broker.call("history", {"path": "plugins"})["result"]
+        self.assertIn("[code]", only_code)
+        self.assertNotIn("[mind]", only_code)
+
     def test_nothing_outside_its_branch(self):
-        for args in ({"commit": self.main}, {"commit": self.other}, {"path": "../y/self/self.md"},
-                     {"commit": "--output=/tmp/pwn"}):
+        for args in ({"commit": self.main}, *({"commit": c} for c in self.others), {"path": "../y/self/self.md"},
+                     {"commit": "--output=/tmp/pwn"}, {"path": ":(top)../y"}):
             with self.subTest(args=args):
                 self.assertFalse(self.broker.call("history", args)["ok"])
 
@@ -185,6 +307,7 @@ class UpdateCase(unittest.TestCase):
         git(self.project, "worktree", "add", "-q", "--orphan", "-b", "template", str(self.tpl))
         (self.tpl / "shaft").mkdir()
         (self.tpl / "shaft" / "agent.py").write_text("v = 1\n")
+        (self.tpl / ".gitignore").write_text(IGNORE_MIND)
         git(self.tpl, "add", "-A")
         git(self.tpl, "commit", "-q", "-m", "template: first")
         self.root = self.project / "instances" / "x"
@@ -192,11 +315,14 @@ class UpdateCase(unittest.TestCase):
         (self.root / "memory").mkdir()
         (self.root / "memory" / "journal.md").write_text("# x — journal\n")
         git(self.root, "add", "-A")
-        git(self.root, "commit", "-q", "-m", "x: created")
-        for target, value in ((core, "PROJECT"), (core, "INSTANCES")):
-            p = mock.patch.object(target, value, self.project if value == "PROJECT" else self.project / "instances")
+        git(self.root, "commit", "-q", "--allow-empty", "-m", "x: created")
+        for target, value, to in ((core, "PROJECT", self.project), (core, "INSTANCES", self.project / "instances"),
+                                  (core, "SUP_DIR", self.project / ".supervisor")):
+            p = mock.patch.object(target, value, to)
             p.start()
             self.addCleanup(p.stop)
+        mind.init("x")
+        mind.commit("x", "x: created", self.root)
         self.gate = mock.patch.object(cli.gate, "run_tests", return_value=(True, "ok"))
         self.gate.start()
         self.addCleanup(self.gate.stop)
@@ -232,7 +358,9 @@ class UpdateNoteTest(UpdateCase):
         self.assertIn("template: wake every 10 minutes", journal)
         self.assertNotIn("template: first", journal)                  # already in the instance before
         self.assertNotIn("merge template", journal)                   # the merge commit itself is not news
-        self.assertEqual(git(self.root, "status", "--porcelain").strip(), "")   # the note is committed
+        self.assertEqual(git(self.root, "status", "--porcelain").strip(), "")   # nothing left on the branch
+        self.assertIn("template: hybrid embedding search", mind.show("x", "mind", "memory/journal.md"))  # committed
+        self.assertTrue(mind.git("x", "log", "-1", "--format=%s").stdout.startswith("x: update"))
 
     def test_no_note_when_already_up_to_date(self):
         code, out = self.update()
@@ -262,10 +390,10 @@ class UpdateKeepsUncommittedWorkTest(UpdateCase):
     def setUp(self):
         super().setUp()
         (self.root / "config.env").write_text("WAKE_INTERVAL_MINUTES=120\n")
-        (self.root / "notes").mkdir()
-        (self.root / "notes" / "todo.md").write_text("- one\n")
+        (self.root / "skills").mkdir()
+        (self.root / "skills" / "todo.md").write_text("- one\n")
         git(self.root, "add", "-A")
-        git(self.root, "commit", "-q", "-m", "x: config and notes")
+        git(self.root, "commit", "-q", "-m", "x: config and skills")
         (self.root / "config.env").write_text("WAKE_INTERVAL_MINUTES=10\n")      # the operator's uncommitted edit
 
     def failing_update(self, side_effect=None):
@@ -297,7 +425,7 @@ class UpdateKeepsUncommittedWorkTest(UpdateCase):
         self.assertEqual(git(self.root, "show", "HEAD:config.env"), "WAKE_INTERVAL_MINUTES=10\n")
 
     def test_update_refuses_and_names_other_uncommitted_files(self):
-        (self.root / "notes" / "todo.md").write_text("- one\n- two, not committed\n")
+        (self.root / "skills" / "todo.md").write_text("- one\n- two, not committed\n")
         self.template_change("template: fine change")
         before = git(self.root, "rev-parse", "HEAD")
         self.gate.stop()
@@ -306,13 +434,23 @@ class UpdateKeepsUncommittedWorkTest(UpdateCase):
             code, out = self.update()
         self.gate.start()
         self.assertEqual(code, 1, out)
-        self.assertIn("notes/todo.md", out)
+        self.assertIn("skills/todo.md", out)
         self.assertIn("uncommitted", out)
         run.assert_not_called()                                    # nothing merged, nothing tested
         self.assertNotEqual(git(self.root, "rev-parse", "HEAD"), before)          # only the config commit
         self.assertIn("config.env changed from outside", git(self.root, "log", "-1", "--format=%s"))
         self.assertEqual((self.root / "shaft" / "agent.py").read_text(), "v = 1\n")
-        self.assertEqual((self.root / "notes" / "todo.md").read_text(), "- one\n- two, not committed\n")
+        self.assertEqual((self.root / "skills" / "todo.md").read_text(), "- one\n- two, not committed\n")
+
+    def test_an_uncommitted_mind_does_not_block_an_update(self):
+        # The mind is not tracked on the branch any more: a journal line written since the last run is no reason
+        # to refuse an update (it is committed to the mind store with the update's note).
+        with (self.root / "memory" / "journal.md").open("a") as f:
+            f.write("written after the last commit\n")
+        self.template_change("template: fine change")
+        code, out = self.update()
+        self.assertEqual(code, 0, out)
+        self.assertIn("written after the last commit", mind.show("x", "mind", "memory/journal.md"))
 
     def test_untracked_files_do_not_block_an_update(self):
         # An untracked file can be lost by neither the merge (git refuses to overwrite it) nor the rollback.

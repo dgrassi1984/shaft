@@ -24,7 +24,12 @@ INSTANCES = PROJECT / "instances"
 TEMPLATE = PROJECT / "template"
 SUP_DIR = Path(os.environ.get("SHAFT_SUPERVISOR_DIR") or PROJECT / ".supervisor")  # tests point it elsewhere
 HOME = Path.home()
-STATE_PATHS = ("self", "memory", "notes", "skills", "inbox")
+# The mind: what an instance remembers and writes for itself. Never in the project's git (which can be pushed):
+# versioned in its private mind store (supervisor/mind.py, PLAN-mind-out-of-git.md).
+MIND_PATHS = ("self", "memory", "notes", "inbox")
+# The non-code state the instance's branch still holds: skills/ is a gene (evolution recombines it, the template
+# ships one), not memory (PLAN-mind-out-of-git.md D2).
+SKILL_PATHS = ("skills",)
 DEFAULT_INSTANCE = "shaft"
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
 
@@ -342,38 +347,63 @@ def journal_note(root: Path, title: str, body: str) -> None:
                f"\n---\n## {datetime.now():%Y-%m-%d %H:%M} — {title}\n\n{body.strip()}\n", append=True)
 
 
+def not_mind() -> list[str]:
+    """A pathspec for the whole work tree except the mind paths (for reading the branch: log, show)."""
+    return [".", *(f":(exclude,top){p}" for p in MIND_PATHS)]
+
+
+def add_all_but_mind(root: Path, project: Path | None = None) -> None:
+    """`git add -A` of everything git would add, except the mind paths, whatever .gitignore says. The files are
+    listed first (an exclude pathspec makes `add` fail once the excluded folder is ignored), so no mind file is
+    ever hashed into the project's repository either."""
+    out = git_wt(root, "ls-files", "-z", "--others", "--exclude-standard", "--modified", "--deleted",
+                 project=project).stdout
+    paths = sorted({p for p in out.split("\0") if p and Path(p).parts[0] not in MIND_PATHS})
+    if paths:
+        git_wt(root, "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul", input="\0".join(paths),
+               project=project)
+
+
 def commit_state(name: str, kind: str, kept_code: list[str], root: Path | None = None,
                  project: Path | None = None, note: str = "") -> bool:
-    """Commit the instance's mind (always) and its code changes that passed the gate.
+    """Commit the instance's mind to its mind store, then its skills and the code changes that passed the gate
+    to its branch — the same message on both sides. A mind path is never staged on the branch, whatever its
+    .gitignore says.
 
-    Only files git actually staged are named in the commit: an empty directory
-    (notes/, skills/ on a young instance) is unknown to git and would fail as a pathspec.
-    Returns False — after logging git's own error — if the commit failed.
+    Only files git actually staged are named in the branch commit: an empty directory (skills/ on a young
+    instance) is unknown to git and would fail as a pathspec. Returns False — after logging git's own error —
+    if either commit failed; the mind is committed first, so a failure there leaves the branch untouched too.
     """
+    from . import mind
     root = root or INSTANCES / name
     wt = lambda *a, check=True, input=None: git_wt(root, *a, check=check, project=project, input=input)  # noqa: E731
+    msg = f"{name}: {kind} {datetime.now():%Y-%m-%d %H:%M}"
     try:
         if kept_code:   # git refuses to add an ignored path, and one such path fails the whole commit
             ignored = set(wt("check-ignore", "--stdin", check=False, input="\n".join(kept_code)).stdout.split())
-            kept_code = [p for p in kept_code if p not in ignored]
-        paths = [p for p in STATE_PATHS if (root / p).exists()] + kept_code
-        wt("add", "-A", "--", *paths)
-        staged = wt("diff", "--cached", "--name-only", "-z", "--", *paths).stdout.split("\0")
-        staged = [p for p in staged if p]
-        if not staged:
-            return True
-        msg = f"{name}: {kind} {datetime.now():%Y-%m-%d %H:%M}"
+            kept_code = [p for p in kept_code if p not in ignored and Path(p).parts[0] not in MIND_PATHS]
         if kept_code:
             msg += "\n\nCode changes made by the instance (tests passed):\n" + "\n".join(f"- {p}" for p in kept_code)
         if note:
             msg += "\n\n" + note
-        wt("-c", f"user.name=SHAFT/{name}", "-c", f"user.email={name}@shaft.localhost",
-           "commit", "-q", "-m", msg, "--", *staged)
-    except subprocess.CalledProcessError as e:
-        detail = (e.stderr or e.stdout or "").strip()
+        minded = mind.commit(name, msg, root, project)
+        paths = [p for p in SKILL_PATHS if (root / p).exists()] + kept_code
+        staged = []
+        if paths:
+            wt("add", "-A", "--", *paths)
+            staged = wt("diff", "--cached", "--name-only", "-z", "--", *paths).stdout.split("\0")
+            staged = [p for p in staged if p and Path(p).parts[0] not in MIND_PATHS]
+        if staged:
+            wt("-c", f"user.name=SHAFT/{name}", "-c", f"user.email={name}@shaft.localhost",
+               "commit", "-q", "-m", msg, "--", *staged)
+    except (subprocess.CalledProcessError, mind.MindError) as e:
+        detail = (getattr(e, "stderr", None) or getattr(e, "stdout", None) or str(e)).strip()
         log(f"{name}: COMMIT FAILED after {kind}: {detail}")
         print(f"{name}: could not commit its state after {kind} — files are on disk, uncommitted.\n"
               f"git said: {detail}", file=sys.stderr)
         return False
-    log(f"{name}: committed {kind} on instance/{name} ({len(staged)} files)")
+    if minded or staged:
+        log(f"{name}: committed {kind}: " + ", ".join(
+            [*(["the mind in its mind store"] if minded else []), *([f"{len(staged)} files on instance/{name}"]
+                                                                   if staged else [])]))
     return True
