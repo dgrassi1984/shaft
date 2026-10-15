@@ -125,9 +125,12 @@ def _ask_claude(model, system, prompt, schema, purpose, max_tokens, effort) -> d
     return out
 
 
-def _log(purpose, model, usage, seconds, error, usd=None, provider=None, reasoning=None) -> None:
+SEEN_CHARS = 400   # the end of an unusable answer, kept in its usage line: where a dropped field shows
+
+
+def _log(purpose, model, usage, seconds, error, usd=None, provider=None, reasoning=None, seen=None) -> None:
     """One line per judge call in judge_usage.jsonl: Claude calls are priced from their tokens (cloudllm.PRICES),
-    OpenRouter calls carry OpenRouter's own `usd`."""
+    OpenRouter calls carry OpenRouter's own `usd`; an answer that was not usable carries what it ended with."""
     SUP_DIR.mkdir(exist_ok=True)
     usage = usage or {}
     rec = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "purpose": purpose, "model": model,
@@ -136,6 +139,8 @@ def _log(purpose, model, usage, seconds, error, usd=None, provider=None, reasoni
            "seconds": round(seconds, 1), "error": error}
     if usd is not None:
         rec.update(usd=usd, provider=provider, reasoning_tokens=reasoning)
+    if seen is not None:
+        rec["seen"] = seen
     with (SUP_DIR / "judge_usage.jsonl").open("a") as f:
         f.write(json.dumps(rec) + "\n")
 
@@ -148,7 +153,10 @@ def _log(purpose, model, usage, seconds, error, usd=None, provider=None, reasoni
 # the answer is checked here.
 JUDGE2_MODEL, _ = knob("SHAFT_JUDGE2_MODEL", "openrouter/z-ai/glm-5.3-flash", str)
 JUDGE2_EVERY, _ = knob("SHAFT_JUDGE2_EVERY", "4", int)        # one cycle in this many; 0 = no second judge
-JUDGE2_MAX_TOKENS = 16000                                      # its hidden reasoning shares this ceiling
+# Its hidden reasoning shares this ceiling: measured over 84 calls (2026-10-14/15) p50 6.3k, p90 12.2k, max 16.5k
+# reasoning tokens, and 22.9k in one replay — 16000 left no room. At ~47 tokens/s (Novita), 32000 is also about
+# what fits in the 600 s HTTP timeout (cloudllm._send): a higher ceiling would trade a length re-ask for a timeout.
+JUDGE2_MAX_TOKENS = 32000
 
 
 def second_available() -> bool:
@@ -185,8 +193,12 @@ def ask_second(system: str, prompt: str, schema: dict, purpose: str) -> dict:
 
 
 def _ask_openrouter(model, system, prompt, schema, purpose, max_tokens, effort, label=None) -> dict:
-    """A judgment through OpenRouter, checked against `schema`. An answer cut off for length is never parsed: it is
-    asked again once with twice the room; an answer that does not match is asked again once."""
+    """A judgment through OpenRouter, checked against `schema`. An answer cut off for length is never parsed nor
+    shown back: it is asked again once with twice the room. A finished answer that does not match is shown back to
+    the model with what is wrong, and the whole object asked for again: GLM 5.3 Flash ended its JSON after
+    difficulty_reason in 14 of 84 attempts (2026-10-14/15), having settled novelty in its reasoning; asked blind
+    again it re-judged the case from scratch (2-4 min) and dropped it as often, while shown its answer it returned
+    the whole object, the other fields unchanged, in about a minute."""
     from . import cloudllm
     label = label or f"judge {model}"
     key = secrets_env().get("OPENROUTER_API_KEY")
@@ -195,13 +207,16 @@ def _ask_openrouter(model, system, prompt, schema, purpose, max_tokens, effort, 
     fields = json.dumps(schema["properties"], ensure_ascii=False)
     instructions = (f"{system}\n\nAnswer with ONE JSON object and nothing else, with exactly these fields "
                     f"(JSON schema of each): {fields}")
-    retried_length, problem = False, ""
+    retried_length, problem, unusable = False, "", ""
     for attempt in range(3):
         started = time.monotonic()
         messages = [{"role": "system", "content": instructions}, {"role": "user", "content": prompt}]
         if problem:
-            messages.append({"role": "user", "content": f"Your previous answer was not usable ({problem}). "
-                                                        "Answer again with only the JSON object."})
+            if unusable.strip():
+                messages.append({"role": "assistant", "content": unusable})
+            messages.append({"role": "user", "content": f"That answer is not usable: {problem}. Answer again with "
+                                                        f"the whole JSON object, every one of these fields: "
+                                                        f"{', '.join(schema['properties'])}."})
         body = {"model": model, "max_tokens": max_tokens, "messages": messages}
         if effort:
             body["reasoning"] = {"effort": effort}
@@ -226,7 +241,9 @@ def _ask_openrouter(model, system, prompt, schema, purpose, max_tokens, effort, 
             problem = _valid(out, schema)
         except ValueError:
             problem = "not valid JSON"
-        _log(purpose, model, usage, time.monotonic() - started, problem or None, cost, data.get("provider"), reasoning)
+        _log(purpose, model, usage, time.monotonic() - started, problem or None, cost, data.get("provider"), reasoning,
+             seen=text[-SEEN_CHARS:] if problem else None)
         if not problem:
             return out
+        unusable = text
     raise JudgeError(f"{label} gave no usable answer: {problem}")
