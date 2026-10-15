@@ -62,7 +62,27 @@ Rate the work the goal required, whether or not it was achieved.
 
 Novelty, relative to this agent's earlier goals (listed): 1 = a repeat of a standing task; \
 2 = the next step of something it was already doing; 3 = a new task in a familiar area; \
-4 = a new area or a new kind of capability; 5 = the first of its kind for this agent."""
+4 = a new area or a new kind of capability; 5 = the first of its kind for this agent.
+
+Value, last and separately (it changes neither the verdict nor the ratings above): what did this cycle \
+actually deliver — what would be lost if it had not run? Judge the output the tool log and the files show, \
+whether or not the criterion was met, against what was already there (the earlier part of a file it appended \
+to, its earlier goals). Effort is not value: a hard cycle that produced nothing is a 1. \
+0 = worse than not running: it recorded something false where it will be read, broke something, or undid \
+good work; \
+1 = nothing anyone would miss: a repeated check with no new result (a standing watch that found nothing new — \
+the watch may be worth having, this run of it delivered nothing), a restatement of what was already known, or \
+bookkeeping whose only reader is the judge or the agent's own stats; \
+2 = minor upkeep with a real effect: corrected a wrong line others rely on, a small tidy-up a later cycle \
+will use; \
+3 = useful: a new verified fact, a working fix, or a tool or skill that will be used again — someone would \
+act on it; \
+4 = worth telling Daniele or another instance about: a primary-source finding, a real bug fixed in shared \
+code, a capability gained and shown working; \
+5 = exceptional: an output most competent people could not have produced in one cycle. \
+Who would miss it: 'operator' = Daniele; 'instance' = another SHAFT instance; 'own_capability' = a tool, \
+skill, fix or verified fact this agent will use again; 'own_record' = bookkeeping about itself (its stats, \
+judge verdicts, notes about its own cycles); 'nobody' = nothing was kept that anyone would miss."""
 
 VERDICT_PROPS = {
     "criterion_met": {"type": "string", "enum": ["yes", "partial", "no"]},
@@ -83,14 +103,26 @@ RATING_PROPS = {
     "novelty": {"type": "integer", "enum": [1, 2, 3, 4, 5]},
 }
 RATINGS = tuple(RATING_PROPS)
+VALUE_FOR = ("operator", "instance", "own_capability", "own_record", "nobody")
+VALUE_PROPS = {
+    "value": {"type": "integer", "enum": [0, 1, 2, 3, 4, 5]},
+    "value_for": {"type": "string", "enum": list(VALUE_FOR)},
+    "value_reason": {"type": "string", "description": "one sentence: the concrete output, or that there is none"},
+}
+VALUES = tuple(VALUE_PROPS)
 
 
 def _schema(props: dict) -> dict:
     return {"type": "object", "properties": props, "required": list(props), "additionalProperties": False}
 
 
-JUDGE_SCHEMA = _schema({**VERDICT_PROPS, **RATING_PROPS})
-RATING_SCHEMA = _schema(RATING_PROPS)   # backfill: ratings for cycles judged before they existed
+JUDGE_SCHEMA = _schema({**VERDICT_PROPS, **RATING_PROPS, **VALUE_PROPS})
+
+
+def backfill_schema(missing: list[str]) -> dict:
+    """Backfill: only the rating and value fields a judged cycle is missing (its verdict stays as it is)."""
+    props = {**RATING_PROPS, **VALUE_PROPS}
+    return _schema({k: props[k] for k in props if k in missing})
 
 SCORE = {"yes": 1.0, "partial": 0.5, "no": 0.0}
 EVIDENCE_HOURS = 72           # messages and conversations before a cycle that may hold its goal's origin
@@ -109,12 +141,22 @@ def cycle_value(j: dict) -> float | None:
     return score * d / 5 if isinstance(d, int) else None
 
 
-def _check_ratings(verdict: dict) -> None:
+def _check_ratings(verdict: dict, fields=RATINGS + VALUES) -> None:
+    """Refuse a judgment whose ratings are missing or out of range: it is never written with holes."""
+    absent = [k for k in fields if k not in verdict]
+    if absent:
+        raise judge.JudgeError(f"judge returned no {', '.join(absent)}")
     for k in ("difficulty", "novelty"):
-        if verdict.get(k) not in (1, 2, 3, 4, 5):
+        if k in fields and verdict.get(k) not in (1, 2, 3, 4, 5):
             raise judge.JudgeError(f"judge returned {k}={verdict.get(k)!r}, expected 1-5")
-    if verdict.get("origin") not in ("self", "operator", "instance"):
+    if "origin" in fields and verdict.get("origin") not in ("self", "operator", "instance"):
         raise judge.JudgeError(f"judge returned origin={verdict.get('origin')!r}")
+    if "value" in fields and (isinstance(verdict.get("value"), bool) or verdict.get("value") not in range(6)):
+        raise judge.JudgeError(f"judge returned value={verdict.get('value')!r}, expected 0-5")
+    if "value_for" in fields and verdict.get("value_for") not in VALUE_FOR:
+        raise judge.JudgeError(f"judge returned value_for={verdict.get('value_for')!r}")
+    if "value_reason" in fields and not str(verdict.get("value_reason") or "").strip():
+        raise judge.JudgeError("judge returned no value_reason")
 
 
 def _judgments_path(name: str) -> Path:
@@ -158,38 +200,81 @@ WRITERS = {"write_file": "path", "append_file": "path", "update_self_model": "se
            "update_personality": "self/personality.md", "rewrite_facts": "memory/facts.md",
            "remember": "memory/facts.md", "write_digest": "memory/digests.md"}
 APPENDERS = {"append_file", "remember", "write_digest"}
+APPENDED_ARG = {"append_file": "content", "remember": "fact", "write_digest": "text"}   # the text each one adds
 FILE_CHARS = 6000          # as much of a file as the agent sees in one read_file
 LEGACY_LOG_CAP = 2000      # the agent's tool log once cut every entry here, silently (until 2026-10-13)
+PROBE_CHARS = 80           # how much of an appended text is looked up in the file to find where it starts
+ADDED_MARK = "⟪this cycle's addition starts here⟫"
+
+
+def _arg(args: str, key: str) -> str:
+    """One string argument from a logged call, also when the log cut the JSON (its start survives)."""
+    try:
+        return str(json.loads(args).get(key) or "")
+    except (ValueError, AttributeError):
+        m = re.search(rf'"{key}":\s*"((?:[^"\\]|\\.)*)', args)
+        if not m:
+            return ""
+        raw = m.group(1)
+        for cut in range(0, 7):          # a cut may fall inside an escape: drop up to 6 chars until it decodes
+            try:
+                return json.loads(f'"{raw[:len(raw) - cut]}"')
+            except ValueError:
+                continue
+        return raw
+
+
+def _added_at(text: str, added: list[str]) -> int | None:
+    """Where this cycle's appended text starts in the file as it is now, or None if it cannot be found. Its start
+    is what the judge needs: everything before it was already there."""
+    found = []
+    for a in added:
+        probe = a.strip()[:PROBE_CHARS]
+        if len(probe) >= 16:             # shorter text could match anywhere
+            at = text.rfind(probe)
+            if at >= 0:
+                found.append(at)
+    return min(found) if found else None
 
 
 def _written_files(name: str, ep: dict) -> str:
-    """Current content of files the cycle wrote — the tool log may cut an argument, a file isn't cut."""
+    """Current content of files the cycle wrote — the tool log may cut an argument, a file isn't cut. For a file
+    the cycle only appended to, where its addition starts is marked, so the judge can tell new text from old."""
     root = (INSTANCES / name).resolve()
     paths: dict[str, bool] = {}           # path -> was it (only) appended to
+    added: dict[str, list[str]] = {}      # path -> the texts this cycle appended to it
     for t in ep.get("tools", []):
         where = WRITERS.get(t["tool"])
         if not where or t.get("result", "").startswith("ERROR"):
             continue
         rel = where
         if where == "path":
-            try:
-                rel = json.loads(t["args"]).get("path", "")
-            except ValueError:            # cut in the log: the path comes first, so it survives
-                m = re.search(r'"path":\s*"([^"]+)"', t["args"])
-                rel = m.group(1) if m else ""
+            rel = _arg(t["args"], "path")   # cut in the log: the path comes first, so it survives
         if rel:
             paths[rel] = paths.get(rel, True) and t["tool"] in APPENDERS
+            if t["tool"] in APPENDED_ARG:
+                added.setdefault(rel, []).append(_arg(t["args"], APPENDED_ARG[t["tool"]]))
     parts = []
     for rel, appended in paths.items():
         p = (root / rel).resolve()
         if root in p.parents and p.is_file():
             text = p.read_text(errors="replace")
-            if len(text) <= FILE_CHARS:
-                parts.append(f"### {rel} (now, {len(text)} chars)\n{text}")
-            elif appended:                # what this cycle added is at the end
-                parts.append(f"### {rel} (now, {len(text)} chars; the last {FILE_CHARS} shown)\n{text[-FILE_CHARS:]}")
-            else:
-                parts.append(f"### {rel} (now, {len(text)} chars; the first {FILE_CHARS} shown)\n{text[:FILE_CHARS]}")
+            at = _added_at(text, added.get(rel, [])) if appended else None
+            if at is None:
+                if len(text) <= FILE_CHARS:
+                    parts.append(f"### {rel} (now, {len(text)} chars)\n{text}")
+                elif appended:            # what this cycle added is at the end
+                    parts.append(f"### {rel} (now, {len(text)} chars; the last {FILE_CHARS} shown)\n{text[-FILE_CHARS:]}")
+                else:
+                    parts.append(f"### {rel} (now, {len(text)} chars; the first {FILE_CHARS} shown)\n{text[:FILE_CHARS]}")
+                continue
+            # Show the addition with the text before it; a later cycle may have appended after it.
+            lo = 0 if len(text) <= FILE_CHARS else max(0, min(len(text) - FILE_CHARS, at - FILE_CHARS // 4))
+            hi = min(len(text), lo + FILE_CHARS)
+            shown = text[lo:at] + ADDED_MARK + "\n" + text[at:hi]
+            span = "" if (lo, hi) == (0, len(text)) else f"; characters {lo}–{hi} shown"
+            parts.append(f"### {rel} (now, {len(text)} chars; this cycle appended from character {at} on — the {at} "
+                         f"before it were already there; marked where it starts{span})\n{shown}")
     return "\n\n".join(parts)
 
 
@@ -319,7 +404,7 @@ def judge_pending(name: str) -> int:
         if not ep.get("intent"):
             verdict = {"criterion_met": "no", "claim_supported": True, "criterion_quality": "unverifiable",
                        "failure_mode": "never declared an intent", "reasoning": "No intent was declared.",
-                       "judge": "rule", **{k: None for k in RATINGS}}
+                       "judge": "rule", **{k: None for k in RATINGS + VALUES}}
         elif not judge.available():
             log(f"{name}: judge unavailable, episode {ep['ts']} left unjudged")
             break
@@ -437,43 +522,79 @@ def _second_section(js: list[dict]) -> list[str]:
     return lines
 
 
+def _missing(j: dict) -> list[str]:
+    """The rating and value fields a judged cycle was never asked for (a None the judge or the rule gave is an
+    answer, not a gap)."""
+    return [k for k in RATINGS + VALUES if k not in j]
+
+
 def backfill(name: str, limit: int | None = None) -> int:
-    """Add origin, difficulty and novelty to cycles judged before those ratings existed. Their verdicts
-    (criterion_met etc.) are kept as they are: only the ratings are asked for. Returns how many were rated."""
+    """Add the ratings (origin, difficulty, novelty) and the value fields to cycles judged before those existed.
+    Each cycle is asked only for the fields it is missing, and its verdict (criterion_met etc.) is kept as it is,
+    so a second run asks nothing. Returns how many cycles were rated."""
     episodes = {ep["ts"]: ep for ep in live_episodes(name)}
-    todo = [j for j in judgments(name) if "difficulty" not in j and j.get("judge") != "rule"]
+    todo = [j for j in judgments(name) if _missing(j) and j.get("judge") != "rule"]
     rated: dict[str, dict] = {}
+    done = 0
     js = judgments(name)
     for j in todo[:limit]:
         ep = episodes.get(j["episode_ts"])
         if ep is None:
             log(f"{name}: backfill: episode {j['episode_ts']} not found, left unrated")
             continue
-        verdict_given = {k: j.get(k) for k in VERDICT_PROPS}
+        missing = _missing(j)
+        given = {k: j.get(k) for k in [*VERDICT_PROPS, *RATINGS, *VALUES] if k in j}
         case = (_case(ep, _written_files(name, ep), _provenance_evidence(name, ep), _prior_goals(js, ep["ts"]))
-                + f"\n\n## The verdict already given (keep it; rate only)\n{json.dumps(verdict_given, indent=1)}")
+                + f"\n\n## The verdict and ratings already given (keep them; give only the fields asked for)\n"
+                + json.dumps(given, indent=1, ensure_ascii=False))
         try:
             by = judge.pick(exclude=own_models(name, ep))
-            out = judge.ask(JUDGE_SYSTEM, case, RATING_SCHEMA, purpose=f"backfill {name}", model=by)
-            _check_ratings(out)
+            out = judge.ask(JUDGE_SYSTEM, case, backfill_schema(missing), purpose=f"backfill {name}", model=by)
+            _check_ratings(out, missing)
         except judge.JudgeError as e:
             log(f"{name}: backfill of {j['episode_ts']} failed: {e}")
             break
-        if not (ep.get("intent") or {}).get("origin"):
+        out = {k: out[k] for k in missing}
+        if "origin_supported" in out and not (ep.get("intent") or {}).get("origin"):
             out["origin_supported"] = None       # declared nothing: before origins existed
-        rated[j["episode_ts"]] = {**out, "model": j.get("model") or cycle_model(name, ep),
-                                  "rated_by": by, "rated_at": datetime.now().isoformat(timespec="seconds")}
-    # The rewrite holds the instance's run lock: after_cycle appends judgments while its run holds that lock,
-    # so no cycle can be judged between our read and our replace. (The judge calls above run without it.)
+        now = datetime.now().isoformat(timespec="seconds")
+        rec = {**out, "model": j.get("model") or cycle_model(name, ep)}
+        if any(k in missing for k in RATINGS):
+            rec.update(rated_by=by, rated_at=now)
+        if any(k in missing for k in VALUES):
+            rec.update(value_judge=by, value_at=now)   # who graded the value, when not the cycle's own judge
+        rated[j["episode_ts"]] = rec
+        done += 1
+        if len(rated) >= BACKFILL_FLUSH:        # a crash or a refusal later loses at most this many paid judgments
+            _flush_backfill(name, rated)
+            log(f"{name}: backfill {done}/{min(len(todo), limit or len(todo))}")
+            rated = {}
+    _flush_backfill(name, rated)
+    # rule-judged cycles (no intent) get empty fields so they are not asked again
+    _flush_backfill(name, {j["episode_ts"]: {k: None for k in _missing(j)} for j in judgments(name)
+                           if _missing(j) and j.get("judge") == "rule"})
+    if done:
+        log(f"{name}: backfilled {done} judged cycle(s)")
+    return done
+
+
+BACKFILL_FLUSH = 10
+
+
+def _flush_backfill(name: str, rated: dict[str, dict]) -> None:
+    """Merge backfilled fields into the judgments file. The rewrite holds the instance's run lock: after_cycle
+    appends judgments while its run holds that lock, so no cycle is judged between our read and our replace.
+    (The judge calls run without it.)"""
+    if not rated:
+        return
     from .runner import run_lock
     with run_lock(name, wait=True, kind="backfill"):
-        if rated:
-            _merge_ratings(name, rated)
-            log(f"{name}: backfilled ratings for {len(rated)} judged cycle(s)")
-        # rule-judged cycles (no intent) get empty ratings so they are not asked again
-        _merge_ratings(name, {j["episode_ts"]: {k: None for k in RATINGS} for j in judgments(name)
-                              if "difficulty" not in j and j.get("judge") == "rule"})
-    return len(rated)
+        _merge_ratings(name, rated)
+
+
+def value_judge(j: dict) -> str | None:
+    """Who graded a cycle's value: the backfill's judge, else the cycle's own."""
+    return j.get("value_judge") or j.get("judge")
 
 
 def _merge_ratings(name: str, rated: dict[str, dict]) -> None:

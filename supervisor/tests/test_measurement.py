@@ -58,7 +58,9 @@ class CycleValueTest(unittest.TestCase):
 class JudgingTest(InstanceDirCase):
     VERDICT = {"criterion_met": "yes", "claim_supported": True, "criterion_quality": "checkable",
                "failure_mode": "", "reasoning": "ok", "origin": "operator", "origin_supported": True,
-               "origin_evidence": "Daniele's message", "difficulty": 3, "difficulty_reason": "r", "novelty": 4}
+               "origin_evidence": "Daniele's message", "difficulty": 3, "difficulty_reason": "r", "novelty": 4,
+               "value": 3, "value_for": "operator", "value_reason": "the release note Daniele asked for"}
+    FIELDS = metrics.RATINGS + metrics.VALUES
 
     def test_a_judged_cycle_records_origin_difficulty_and_novelty(self):
         (self.root / "memory" / "messages" / "20261013-120000-000001-from-operator.md").write_text(
@@ -110,14 +112,16 @@ class JudgingTest(InstanceDirCase):
         old = {k: v for k, v in judgment("2026-10-12T17:24:00", "partial").items() if k not in metrics.RATINGS}
         rule = {**old, "episode_ts": "2026-10-12T18:00:00", "judge": "rule", "criterion_met": "no"}
         path.write_text(json.dumps(old) + "\n" + json.dumps(rule) + "\n")
-        ratings = {k: self.VERDICT[k] for k in metrics.RATINGS}
+        ratings = {k: self.VERDICT[k] for k in self.FIELDS}
         with mock.patch.object(judge, "ask", return_value=dict(ratings)) as ask:
             self.assertEqual(metrics.backfill("m"), 1)
-            self.assertIs(ask.call_args.args[2], metrics.RATING_SCHEMA)   # ratings only, no new verdict
+            schema = ask.call_args.args[2]
+            self.assertEqual(sorted(schema["required"]), sorted(self.FIELDS))   # no new verdict
         a, b = metrics.judgments("m")
         self.assertEqual(a["criterion_met"], "partial")
-        self.assertEqual((a["origin"], a["difficulty"]), ("operator", 3))
+        self.assertEqual((a["origin"], a["difficulty"], a["value"], a["value_for"]), ("operator", 3, 3, "operator"))
         self.assertIsNone(b["difficulty"])                            # rule-judged: rated empty, not asked
+        self.assertIsNone(b["value"])
         with mock.patch.object(judge, "ask") as ask:
             self.assertEqual(metrics.backfill("m"), 0)                # idempotent
             ask.assert_not_called()
@@ -143,9 +147,75 @@ class JudgingTest(InstanceDirCase):
         real_merge = metrics._merge_ratings
         with mock.patch.object(runner, "run_lock", lock), \
              mock.patch.object(metrics, "_merge_ratings", lambda n, r: merged_under.append(list(held)) or real_merge(n, r)), \
-             mock.patch.object(judge, "ask", return_value={k: JudgingTest.VERDICT[k] for k in metrics.RATINGS}):
+             mock.patch.object(judge, "ask", return_value={k: JudgingTest.VERDICT[k] for k in JudgingTest.FIELDS}):
             self.assertEqual(metrics.backfill("m"), 1)
         self.assertTrue(merged_under and all(h == [("m", "backfill")] for h in merged_under), merged_under)
+
+    def test_backfill_asks_a_rated_cycle_only_for_its_value(self):
+        # PLAN-value V1: cycles rated by the E0 backfill keep their ratings and who gave them; only value is asked.
+        self.episode({"ts": "2026-10-14T10:00:00", "kind": "live", "intent": {"goal": "g", "success_criterion": "c",
+                      "confidence": 80}, "finish": {"criterion_met": "yes"}, "tools": []})
+        path = self.sup / "judgments" / "m.jsonl"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({**judgment("2026-10-14T10:00:00", "yes", 2, "self", rated_by="old-judge"),
+                                    "origin_supported": None, "origin_evidence": "e", "difficulty_reason": "r"}) + "\n")
+        values = {"value": 1, "value_for": "own_record", "value_reason": "a fact about its own stats"}
+        with mock.patch.object(judge, "ask", return_value={**values, "difficulty": 5}) as ask, \
+             mock.patch.object(judge, "pick", return_value="judge-b"):
+            self.assertEqual(metrics.backfill("m"), 1)
+        self.assertEqual(sorted(ask.call_args.args[2]["required"]), sorted(metrics.VALUES))
+        self.assertIn('"difficulty": 2', ask.call_args.args[1])          # what was already given is shown, kept
+        j = metrics.judgments("m")[0]
+        self.assertEqual((j["difficulty"], j["rated_by"]), (2, "old-judge"))   # not overwritten by the extra key
+        self.assertEqual((j["value"], j["value_for"], j["value_judge"]), (1, "own_record", "judge-b"))
+        self.assertEqual(metrics.value_judge(j), "judge-b")
+
+    def test_a_backfill_that_dies_midway_keeps_what_it_paid_for(self):
+        for i in range(3):
+            self.episode({"ts": f"2026-10-14T1{i}:00:00", "kind": "live", "intent": {"goal": "g",
+                          "success_criterion": "c", "confidence": 80}, "finish": None, "tools": []})
+        path = self.sup / "judgments" / "m.jsonl"
+        path.parent.mkdir(parents=True)
+        path.write_text("".join(json.dumps({**judgment(f"2026-10-14T1{i}:00:00", "yes", 2, "self"),
+                                            "origin_supported": None, "origin_evidence": "e",
+                                            "difficulty_reason": "r"}) + "\n" for i in range(3)))
+        answers = iter([{"value": 2, "value_for": "operator", "value_reason": "r"},
+                        {"value": 3, "value_for": "operator", "value_reason": "r"}])
+
+        def ask(*a, **kw):
+            try:
+                return next(answers)
+            except StopIteration:
+                raise RuntimeError("network gone") from None
+        with mock.patch.object(metrics, "BACKFILL_FLUSH", 1), mock.patch.object(judge, "ask", ask), \
+             self.assertRaises(RuntimeError):
+            metrics.backfill("m")
+        self.assertEqual([j.get("value") for j in metrics.judgments("m")], [2, 3, None])
+        with mock.patch.object(judge, "ask", return_value={"value": 1, "value_for": "nobody", "value_reason": "r"}) as ask:
+            self.assertEqual(metrics.backfill("m"), 1)                 # the rerun asks only for the last one
+        self.assertEqual(ask.call_count, 1)
+
+    def test_a_judgment_without_a_usable_value_leaves_the_cycle_unjudged(self):
+        self.episode({"ts": "2026-10-13T12:10:00", "kind": "live", "intent": {"goal": "g", "success_criterion": "c",
+                      "confidence": 50}, "finish": None, "tools": []})
+        for bad in ({"value": 6}, {"value": True}, {"value_for": "everyone"}, {"value_reason": " "}):
+            with mock.patch.object(judge, "available", return_value=True), \
+                 mock.patch.object(judge, "ask", return_value={**self.VERDICT, **bad}):
+                self.assertEqual(metrics.judge_pending("m"), 0, bad)
+        self.assertEqual(metrics.judgments("m"), [])
+
+    def test_a_judged_cycle_records_its_value(self):
+        self.episode({"ts": "2026-10-13T12:10:00", "kind": "live", "intent": {"goal": "g", "success_criterion": "c",
+                      "confidence": 50}, "finish": None, "tools": []})
+        self.episode({"ts": "2026-10-13T12:20:00", "kind": "live", "finish": None, "tools": []})   # no intent
+        with mock.patch.object(judge, "available", return_value=True), \
+             mock.patch.object(judge, "ask", return_value=dict(self.VERDICT)) as ask:
+            self.assertEqual(metrics.judge_pending("m"), 2)
+        self.assertEqual(ask.call_args.args[2]["required"][-3:], ["value", "value_for", "value_reason"])
+        self.assertIn("what would be lost if it had not run", ask.call_args.args[0])
+        a, b = metrics.judgments("m")
+        self.assertEqual((a["value"], a["value_for"]), (3, "operator"))
+        self.assertEqual((b["judge"], b["value"], b["value_for"]), ("rule", None, None))
 
     def test_stats_lead_with_achieved_difficulty_and_origins(self):
         js = ([judgment(f"2026-10-13T0{i}:00:00", "yes", 1, "self", origin_declared="self") for i in range(4)]
