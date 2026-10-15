@@ -319,7 +319,8 @@ def render_main(snap: dict, ui: UI, width: int = 100):
         grid.add_row("now", Text(clean(i["doing"]) or "—", style="bold" if i["doing"] else "dim"))
         if i["goal"]:
             grid.add_row("goal", Text(clean(i["goal"])))
-        rate = (f" · judged {i['judged']} (achieved {i['achieved']:.1f}/5, success {i['success']:.0%} of the last 10)"
+        worth = f"value {i['value']:.1f}/5, " if i.get("value") is not None else ""
+        rate = (f" · judged {i['judged']} ({worth}achieved {i['achieved']:.1f}/5, success {i['success']:.0%} of the last 10)"
                 if i.get("achieved") is not None else
                 f" · judged {i['judged']} ({i['success']:.0%} of the last 10)" if i["success"] is not None else "")
         cost = f" · ${i['usd_today']:.2f}" if i["usd_today"] else ""

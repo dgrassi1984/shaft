@@ -265,6 +265,8 @@ def judge_line(j: dict, width: int, selected: bool) -> Text:
     t.append(f"{'claimed ' + claimed if claimed and claimed != j.get('criterion_met') else '':<15}", style="yellow")
     ach = j.get("achieved")
     t.append(f"d{j.get('difficulty', '·')} n{j.get('novelty', '·')} " + (f"{ach:3.1f} " if ach is not None else " ·  "))
+    v = j.get("value")
+    t.append(f"v{v if v is not None else '·'} ", style="green" if (v or 0) >= 3 else ("red" if v == 0 else ""))
     origin = j.get("origin") or "?"
     t.append(f"{origin:<9}", style="cyan" if origin == "self" else "")
     if j.get("claim_supported") is False:
@@ -278,12 +280,12 @@ def judge_detail(j: dict, width: int) -> list[str]:
             ("claimed", "claimed"), ("confidence", "confidence"), ("claim supported", "claim_supported"),
             ("criterion", "criterion_quality"), ("failure mode", "failure_mode"), ("origin declared", "origin_declared"),
             ("origin (judged)", "origin"), ("origin supported", "origin_supported"), ("difficulty", "difficulty"),
-            ("novelty", "novelty")]
+            ("novelty", "novelty"), ("value", "value"), ("value for", "value_for"), ("value graded by", "value_judge")]
     out = [f"cycle {j.get('episode_ts', '')}", ""] + wrap(f"Goal: {j.get('goal', '')}", width) + [""]
     out += [f"{label:<17}{j.get(k)}" for label, k in keys if j.get(k) not in (None, "")]
     if j.get("achieved") is not None:
         out.append(f"{'achieved':<17}{j['achieved']:.1f} / 5")
-    for label, k in (("Reasoning", "reasoning"), ("Why this difficulty", "difficulty_reason"),
+    for label, k in (("Reasoning", "reasoning"), ("Why this difficulty", "difficulty_reason"), ("Why this value", "value_reason"),
                      ("Origin evidence", "origin_evidence"), ("Origin reference", "origin_ref")):
         if j.get(k):
             out += ["", f"{label}:"] + wrap(str(j[k]), width)
@@ -303,6 +305,10 @@ def render_judge(snap, ui, width, height):
     tr = panel.traits(name) if name else None
     info = Text(f" {len(js)} judged · achieved (0–5, oldest→newest): ", style="dim", no_wrap=True)
     info.append(spark(rated), style="cyan")
+    worth = [j.get("value") for j in reversed(js)][-40:]
+    if any(v is not None for v in worth):
+        info.append(" · value: ", style="dim")
+        info.append(spark(worth), style="green")
     if tr:
         ok = sum(1 for t in tr["traits"] if t["supported"] == "yes")
         info.append(f" · personality traits supported {ok}/{len(tr['traits'])}", style="dim")

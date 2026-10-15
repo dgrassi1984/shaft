@@ -218,6 +218,7 @@ def cmd_status(names: list[str]) -> int:
         js = metrics.judgments(name)
         rate = (sum(metrics.SCORE[j["criterion_met"]] for j in js) / len(js)) if js else None
         rated = [v for v in map(metrics.cycle_value, js) if v is not None]
+        worth = metrics.mean_value(metrics.valued(js)[-20:])
         last_self = git_wt(root, "log", "-1", "--format=%cr", "--", "self/self.md", check=False).stdout.strip()
         convs = runner.open_conversations(name)
         from .core import disabled_tools
@@ -228,7 +229,8 @@ def cmd_status(names: list[str]) -> int:
         print(f"  journal     {len(entries)} entries · self-model last changed {last_self or 'never'}")
         print(f"  judged      {len(js)} cycles" + (f" · success {rate:.0%}" if rate is not None else "")
               + (f" · achieved difficulty {5 * sum(rated[-20:]) / len(rated[-20:]):.1f}/5 (last {len(rated[-20:])})"
-                 if rated else ""))
+                 if rated else "")
+              + (f" · value {worth:.1f}/5 (last {len(metrics.valued(js)[-20:])})" if worth is not None else ""))
         print(f"  LLM today   {calls} calls · {tokens} completion tokens · {errors} errors")
         print(f"  versions    {version.describe(name)}")
         if tools_off:
@@ -477,9 +479,13 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("log", help="recent journal entries")
     p.add_argument("name", nargs="?", default=DEFAULT_INSTANCE)
     p.add_argument("-n", type=int, default=3)
+    p = sub.add_parser("review", help="what the instances did in the last hours and what of it was worth anything "
+                                      "(judged value, success, repeated goals, the cycles worth reading)")
+    p.add_argument("names", nargs="*")
+    p.add_argument("--hours", type=float, default=24)
     p = sub.add_parser("stats", help="an instance's measured performance (judge + calibration)")
     p.add_argument("name", nargs="?", default=DEFAULT_INSTANCE)
-    p = sub.add_parser("judge", help="judging: 'backfill' rates origin/difficulty/novelty of cycles judged before; "
+    p = sub.add_parser("judge", help="judging: 'backfill' asks cycles judged before for the ratings and value they lack; "
                                      "'second' runs the second judge on the cycles its sample picked")
     p.add_argument("action", choices=["backfill", "second"])
     p.add_argument("names", nargs="*")
@@ -640,6 +646,11 @@ def main(argv: list[str]) -> int:
         metrics.judge_pending(args.name)
         print(metrics.stats_text(args.name))
         return 0
+    if args.cmd == "review":                 # read-only: judges nothing, so it costs nothing and waits for no run
+        for name in args.names:
+            instance_root(name)
+        print(metrics.review_text(args.names or instance_names(), args.hours), end="")
+        return 0
     if args.cmd == "judge" and args.action == "second":
         print(f"second judge: {metrics.second_pending(args.names or None)} cycle(s) graded")
         return 0
@@ -648,7 +659,7 @@ def main(argv: list[str]) -> int:
             instance_root(name)
             n = metrics.backfill(name)
             metrics.write_stats(name)
-            print(f"{name}: rated {n} earlier cycle(s)")
+            print(f"{name}: backfilled {n} earlier cycle(s)")
         return 0
     if args.cmd == "battery":
         return cmd_battery(args)

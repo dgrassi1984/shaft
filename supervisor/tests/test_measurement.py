@@ -228,6 +228,76 @@ class JudgingTest(InstanceDirCase):
         self.assertIn("matched the judge: 4/5", text)
 
 
+def valued_j(ts: str, value: int, value_for: str = "operator", model: str = "mimo", **kw) -> dict:
+    return judgment(ts, "yes", 2, "self", value=value, value_for=value_for, value_reason=f"output at {ts}",
+                    model=model, **kw)
+
+
+class ValueTest(unittest.TestCase):
+    """PLAN-value V2: what the cycles delivered, in stats.md and in `shaft review`."""
+
+    def test_stats_show_value_on_the_current_model_with_who_would_miss_it(self):
+        js = ([valued_j(f"2026-10-14T{h:02d}:00:00", 1, "own_record") for h in range(20)]
+              + [valued_j(f"2026-10-15T{h:02d}:00:00", 3 if h % 2 else 1, "operator" if h % 2 else "nobody")
+                 for h in range(20)]
+              + [valued_j("2026-10-13T09:00:00", 4, model="haiku"),
+                 judgment("2026-10-15T21:00:00", "no", None, judge="rule", value=None),
+                 judgment("2026-10-15T22:00:00", "yes", 2)])            # judged before value existed
+        js.sort(key=lambda j: j["episode_ts"])
+        with mock.patch.object(metrics, "judgments", return_value=js):
+            text = metrics.stats_text("m")
+        self.assertLess(text.index("What I achieved"), text.index("What my cycles were worth"))
+        self.assertIn("**2.0** over my last 20 cycles on mimo, vs 1.0 over the 20 before", text)
+        self.assertIn("On other models: haiku 4.0 (1 cycles)", text)
+        self.assertIn("1: 10 · 3: 10", text)
+        self.assertIn("Who would miss them: Daniele 10 · another instance 0 · my own future work 0 · "
+                      "my own record-keeping 0 · nobody 10", text)
+        self.assertIn("2026-10-13 09:00 — 4/5: output at 2026-10-13T09:00:00", text)   # most valuable first
+        self.assertIn("Cycles without a value grade yet: 1", text)       # the rule-judged one is not counted
+
+    def test_stats_without_value_grades_say_so(self):
+        with mock.patch.object(metrics, "judgments", return_value=[judgment("2026-10-15T10:00:00", "yes", 2)]):
+            self.assertIn("No cycle has a value grade yet.", metrics.stats_text("m"))
+
+    def test_review_counts_the_window_and_lists_the_cycles_worth_reading(self):
+        now = datetime(2026, 10, 15, 12, 0)
+        js = [valued_j("2026-10-14T11:00:00", 4, judge="sonnet"),               # the window before
+              valued_j("2026-10-14T13:00:00", 1, "own_record", judge="haiku", goal="Run the standing watch"),
+              valued_j("2026-10-14T14:00:00", 1, "nobody", judge="haiku", goal="Run the standing watch"),
+              {**valued_j("2026-10-15T09:00:00", 3, judge="sonnet", value_judge="haiku"),
+               "criterion_met": "partial", "claim_supported": False},
+              valued_j("2026-10-15T12:00:00", 5)]                               # after `now`: not counted
+        with mock.patch.object(metrics, "judgments", return_value=js):
+            text = metrics.review_text(["m"], 24, now=now)
+        self.assertIn("■ m: 3 cycles · success 83% · achieved 1.67 · value 1.67 (3 graded)", text)
+        self.assertIn("the 24 h before: 1 cycles", text)
+        self.assertIn("claims the log did not support: 1", text)
+        self.assertIn("2× Run the standing watch", text)
+        self.assertIn("who would miss them: Daniele 1 · another instance 0 · its own future work 0 · "
+                      "its own record-keeping 1 · nobody 1", text)
+        self.assertIn("cycles worth something (value ≥ 3): 1 of 3 graded", text)
+        self.assertIn("10-15 09:00  3/5 for operator: output at 2026-10-15T09:00:00", text)
+        # by judge: a value graded later by another judge is not counted for the cycle's own judge
+        self.assertIn("haiku                        2 cycles · success 100% · value 1.00", text)
+        self.assertRegex(text, r"sonnet +1 cycles · success 50%\n")
+
+    def test_review_of_a_window_nobody_graded_does_not_claim_zero_worth(self):
+        js = [judgment("2026-10-15T09:00:00", "yes", 2, judge="haiku")]
+        with mock.patch.object(metrics, "judgments", return_value=js):
+            text = metrics.review_text(["m"], 24, now=datetime(2026, 10, 15, 12, 0))
+        self.assertIn("value not graded", text)
+        self.assertIn("no cycle in this window has a value grade yet", text)
+        self.assertNotIn("cycles worth something", text)
+
+    def test_the_instance_reads_its_value_in_the_judgment_text(self):
+        from supervisor import broker
+        j = {**valued_j("2026-10-15T09:00:00", 1, "own_record", value_judge="haiku"),
+             "second": {"judge": "glm", **valued_j("x", 3)}}
+        text = broker.judgment_text(j)
+        self.assertIn("Value 1/5, for own_record: output at 2026-10-15T09:00:00 (graded later by haiku)", text)
+        self.assertIn("value 3/5", text)
+
+
 class ModelTest(InstanceDirCase):
     """Comparisons stay within one model: wren ran on Bonsai, Haiku and MiMo within its first day."""
 

@@ -161,7 +161,8 @@ class CycleVerdictTest(unittest.TestCase):
             used.append(model)
             return {"criterion_met": "yes", "claim_supported": True, "criterion_quality": "checkable", "failure_mode": "",
                     "reasoning": "ok", "origin": "self", "origin_supported": True, "origin_evidence": "",
-                    "difficulty": 2, "difficulty_reason": "", "novelty": 2}
+                    "difficulty": 2, "difficulty_reason": "", "novelty": 2,
+                    "value": 1, "value_for": "nobody", "value_reason": "nothing kept"}
         with mock.patch.object(judge, "ask", ask):
             self.assertEqual(metrics.judge_pending("wren"), 40)
         self.assertEqual(set(used), {"claude-haiku-5-5", "claude-sonnet-5-5"})   # rotated, MiMo never

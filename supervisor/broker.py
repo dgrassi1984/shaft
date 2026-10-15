@@ -54,6 +54,9 @@ def judgment_text(j: dict) -> str:
     if j.get("difficulty") is not None:
         out.append(f"Difficulty {j['difficulty']}/5" + (f": {j['difficulty_reason']}" if j.get("difficulty_reason") else "")
                    + (f" · novelty {j['novelty']}/5" if j.get("novelty") is not None else ""))
+    if j.get("value") is not None:
+        out.append(f"Value {j['value']}/5, for {j.get('value_for')}" + (f": {j['value_reason']}" if j.get("value_reason") else "")
+                   + (f" (graded later by {j['value_judge']})" if j.get("value_judge") else ""))
     if j.get("origin"):
         out.append(f"Origin: {j['origin']} (I declared {j.get('origin_declared') or 'none'}; matches: "
                    f"{j.get('origin_supported')})" + (f" — {j['origin_evidence']}" if j.get("origin_evidence") else ""))
@@ -66,7 +69,8 @@ def judgment_text(j: dict) -> str:
         agree = "agrees" if s.get("criterion_met") == j.get("criterion_met") else "DISAGREES"
         out.append(f"Second judge ({s.get('judge', '?').removeprefix('openrouter/')}, blind) {agree}: criterion met "
                    f"**{s.get('criterion_met')}**, claim supported {s.get('claim_supported')}, difficulty "
-                   f"{s.get('difficulty')}/5" + (f", failure: {s['failure_mode']}" if s.get("failure_mode") else "")
+                   f"{s.get('difficulty')}/5" + (f", value {s['value']}/5" if s.get("value") is not None else "")
+                   + (f", failure: {s['failure_mode']}" if s.get("failure_mode") else "")
                    + f". Reasoning: {s.get('reasoning', '')}")
     return "\n".join(out)
 
@@ -169,7 +173,7 @@ SPECS = {
         "'trials' (your trials of proposed changes: progress and verdicts), 'egress' (every connection your "
         "sandbox made to the internet through the proxy, or why it was refused). "
         "Newest last — except judgments: whole verdicts, newest first, as many as fit, with every field (the "
-        "reasons for the difficulty and origin ratings, and the second judge's blind verdict where there is "
+        "reasons for the difficulty, origin and value ratings, and the second judge's blind verdict where there is "
         "one); page back with `before`, or ask for one cycle's verdict with `cycle`. Use it to check your claims "
         "about yourself. (Your own tool traces are also in memory/episodes/*.jsonl.)",
         {"kind": {"type": "string", "enum": ["judgments", "runs", "tools", "code_changes", "trials", "egress"]},

@@ -328,7 +328,8 @@ DETAIL = {"name": "shaft", "paused": False, "model": "bonsai", "via": "local", "
           "merges": ["2026-10-13 17:28 shaft: merge template (operator update)"], "traits": None, "judged": 5}
 JUDGMENT = {"episode_ts": "2026-10-13T17:42:56", "goal": "Audit the skill file", "criterion_met": "yes",
             "claimed": "yes", "difficulty": 3, "novelty": 2, "origin": "self", "achieved": 3.0,
-            "reasoning": "Step 2 reads the full skill file.", "model": "openrouter/x/mimo"}
+            "reasoning": "Step 2 reads the full skill file.", "model": "openrouter/x/mimo",
+            "value": 2, "value_for": "own_capability", "value_reason": "a corrected skill file it reads every cycle"}
 TRIAL = {"id": "t-1", "instance": "wren", "by": "operator", "created": "2026-10-13T16:26:55", "status": "done",
          "hypothesis": "planted blatant harm", "states": [{"status": "done"}] * 6,
          "verdict": {"label": "worse", "W": 0, "L": 6, "T": 0, "p": 0.0156, "usd": 1.7}}
@@ -375,7 +376,7 @@ class PanelViews(unittest.TestCase):
         expect = {"overview": ["⚠ wren: code change FAILED tests", "$3.40 today"],
                   "instance": ["Recent journal", "abcdef12", "plugins/weather/main.py",
                                "My measured performance"],
-                  "judge": ["Audit the skill file", "traits supported 1/1"],
+                  "judge": ["Audit the skill file", "traits supported 1/1", " v2 ", "value: "],
                   "trials": ["planted blatant harm", "worse", "W0 L6", "operator trials are not capped"],
                   "benchmarks": ["not installed", "identified 4/4", "effectiveness 7.2", "16 tool calls"],
                   "changes": ["plugins/weather/main.py", "RESTORE FAILED", "probation 74f4b7a8 failed", "merge template"],
@@ -390,6 +391,8 @@ class PanelViews(unittest.TestCase):
         out = self.text(top.UI(tab="judge", detail=True))
         self.assertIn("Step 2 reads the full skill file.", out)
         self.assertIn("achieved         3.0 / 5", out)
+        self.assertIn("value for        own_capability", out)
+        self.assertIn("a corrected skill file it reads every cycle", out)
 
     def test_help_and_picker(self):
         self.assertIn("Secrets, new, breed and finetune stay in the CLI", self.text(top.UI(help=True)))

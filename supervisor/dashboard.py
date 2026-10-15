@@ -79,6 +79,15 @@ def _judged(name: str) -> tuple[int, float | None, float | None]:
             5 * sum(rated) / len(rated) if rated else None)
 
 
+def _value(name: str) -> float | None:
+    """Mean value (0-5: what each cycle delivered) over the last 10 graded cycles."""
+    from . import metrics
+    try:
+        return metrics.mean_value(metrics.valued(metrics.judgments(name))[-10:])
+    except Exception:
+        return None
+
+
 def instance_state(name: str, now: float | None = None) -> dict:
     from . import autonomy
     from .runner import busy_with, open_conversations
@@ -129,6 +138,7 @@ def instance_state(name: str, now: float | None = None) -> dict:
             "every": f"{int(interval.total_seconds() // 60)} min" if interval else "no wakes",
             "next_wake": next_wake, "conversations": len(convs), "calls_today": calls, "tokens_today": tokens,
             "usd_today": _usd_today(name), "judged": n_judged, "success": rate, "achieved": achieved,
+            "value": _value(name),
             "tools_off": sorted(disabled_tools(name)), "trial": _trial_line(name)}
 
 

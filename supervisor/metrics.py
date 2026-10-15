@@ -755,6 +755,61 @@ def _achieved_section(js: list[dict]) -> list[str]:
     return lines + [""]
 
 
+VALUE_FOR_LABEL = {"operator": "Daniele", "instance": "another instance", "own_capability": "my own future work",
+                   "own_record": "my own record-keeping", "nobody": "nobody"}
+
+
+def valued(js: list[dict]) -> list[dict]:
+    """The judged cycles that carry a value grade (rule-judged and not yet backfilled ones do not)."""
+    return [j for j in js if isinstance(j.get("value"), int) and not isinstance(j.get("value"), bool)]
+
+
+def mean_value(rows: list[dict]) -> float | None:
+    rows = valued(rows)
+    return sum(j["value"] for j in rows) / len(rows) if rows else None
+
+
+def value_shares(rows: list[dict]) -> dict[str, int]:
+    """How many of the valued cycles each beneficiary would miss, in VALUE_FOR order."""
+    rows = valued(rows)
+    return {k: sum(1 for j in rows if j.get("value_for") == k) for k in VALUE_FOR}
+
+
+def _value_section(js: list[dict]) -> list[str]:
+    """What my cycles delivered, whatever the criterion I set myself — the measure busy work cannot raise."""
+    rows = valued(js)
+    lines = ["## What my cycles were worth (what would be lost if each had not run)"]
+    if not rows:
+        return lines + ["- No cycle has a value grade yet.", ""]
+    model = rows[-1].get("model")
+    same = [j for j in rows if j.get("model") == model]     # never compared across models
+    last, before = same[-WINDOW:], same[-2 * WINDOW:-WINDOW]
+    lines.append(f"- Value per cycle (0–5): **{mean_value(last):.1f}** over my last {len(last)} cycles on "
+                 f"{model or 'an unrecorded model'}"
+                 + (f", vs {mean_value(before):.1f} over the {len(before)} before" if before else ""))
+    others: dict[str, list] = {}
+    for j in rows:
+        if j.get("model") != model:
+            others.setdefault(j.get("model") or "unrecorded", []).append(j)
+    if others:
+        lines.append("- On other models: " + " · ".join(f"{m} {mean_value(rs):.1f} ({len(rs)} cycles)"
+                                                         for m, rs in others.items()))
+    levels = " · ".join(f"{v}: {n}" for v in range(6) if (n := sum(1 for j in last if j["value"] == v)))
+    lines.append(f"- Grades over those {len(last)} (0 = worse than not running, 1 = nothing anyone would miss, "
+                 f"3 = useful, 4 = worth telling Daniele): {levels}")
+    lines.append("- Who would miss them: " + " · ".join(f"{VALUE_FOR_LABEL[k]} {n}"
+                                                       for k, n in value_shares(last).items()))
+    best = sorted((j for j in rows if j["value"] >= 3), key=lambda j: (j["value"], j["episode_ts"]))[-3:][::-1]
+    if best:
+        lines.append("- My most valuable cycles:")
+        lines += [f"  - {j['episode_ts'][:16].replace('T', ' ')} — {j['value']}/5: {j.get('value_reason', '')}"
+                  for j in best]
+    unvalued = len([j for j in js if j.get("judge") != "rule"]) - len(rows)
+    if unvalued:
+        lines.append(f"- Cycles without a value grade yet: {unvalued}")
+    return lines + [""]
+
+
 def _battery_section(name: str) -> list[str]:
     from . import battery   # the capability battery's results, if it has run
     return battery.stats_lines(name)
@@ -783,7 +838,7 @@ def stats_text(name: str) -> str:
     lines = ["# My measured performance", "",
              f"*Written by the supervisor from {len(js)} cycles judged by {js[-1].get('judge', '?')}. "
              f"Updated {datetime.now():%Y-%m-%d %H:%M}.*", ""]
-    lines += _achieved_section(js) + _battery_section(name)
+    lines += _achieved_section(js) + _value_section(js) + _battery_section(name)
     lines += ["## Success against my own criteria (raw)",
              f"- Judged success rate: **{sum(scores) / len(scores):.0%}** (yes=1, partial=0.5)",
              f"- Last 5 cycles: {', '.join(j['criterion_met'] for j in js[-5:])}"]
@@ -810,6 +865,80 @@ def stats_text(name: str) -> str:
     lines += ["", "## Last judgment", f"{js[-1]['goal']}", f"> {js[-1]['reasoning']}"]
     lines += _code_section(name) + _traits_section(name) + _trials_section(name)
     return "\n".join(lines) + "\n"
+
+
+def _window(js: list[dict], start: datetime, end: datetime) -> list[dict]:
+    return [j for j in js if (t := _ts(j.get("episode_ts", ""))) and start <= t < end]
+
+
+def _summary(rows: list[dict]) -> str:
+    if not rows:
+        return "0 cycles"
+    rated = [v for v in map(cycle_value, rows) if v is not None]
+    worth = mean_value(rows)
+    return (f"{len(rows)} cycles · success {sum(SCORE[j['criterion_met']] for j in rows) / len(rows):.0%}"
+            + (f" · achieved {5 * sum(rated) / len(rated):.2f}" if rated else "")
+            + (f" · value {worth:.2f} ({len(valued(rows))} graded)" if worth is not None else " · value not graded"))
+
+
+def review_text(names: list[str], hours: float = 24, now: datetime | None = None) -> str:
+    """`shaft review`: what each instance did in the last `hours`, and what of it was worth anything — the
+    question the per-cycle numbers answer only one cycle at a time."""
+    now = now or datetime.now()
+    start = now - timedelta(hours=hours)
+    out = [f"Review of {start:%Y-%m-%d %H:%M} → {now:%Y-%m-%d %H:%M} ({hours:g} h)"]
+    for name in names:
+        js = judgments(name)
+        rows, prev = _window(js, start, now), _window(js, start - timedelta(hours=hours), start)
+        out += ["", f"■ {name}: {_summary(rows)}", f"  the {hours:g} h before: {_summary(prev)}"]
+        if not rows:
+            out.append(f"  last judged cycle: {js[-1]['episode_ts'][:16].replace('T', ' ') if js else 'never'}")
+            continue
+        models: dict[str, int] = {}
+        for j in rows:
+            models[j.get("model") or "unrecorded"] = models.get(j.get("model") or "unrecorded", 0) + 1
+        out.append("  models: " + ", ".join(f"{m} {n}" for m, n in models.items()))
+        verdicts = {v: sum(1 for j in rows if j["criterion_met"] == v) for v in ("yes", "partial", "no")}
+        unsupported = sum(1 for j in rows if j.get("claim_supported") is False)
+        out.append(f"  verdicts: yes {verdicts['yes']} · partial {verdicts['partial']} · no {verdicts['no']}"
+                   f" · claims the log did not support: {unsupported}")
+        confs = [(j["confidence"] / 100, SCORE[j["criterion_met"]]) for j in rows if j.get("confidence") is not None]
+        if confs:
+            out.append(f"  confidence beforehand {sum(c for c, _ in confs) / len(confs):.0%} vs judged "
+                       f"{sum(s for _, s in confs) / len(confs):.0%}")
+        if valued(rows):
+            levels = " · ".join(f"{v}: {sum(1 for j in valued(rows) if j['value'] == v)}" for v in range(6))
+            out.append(f"  value grades: {levels}")
+            out.append("  who would miss them: " + " · ".join(
+                f"{VALUE_FOR_LABEL[k].replace('my own', 'its own')} {n}" for k, n in value_shares(rows).items()))
+        goals: dict[str, int] = {}
+        for j in rows:
+            g = " ".join((j.get("goal") or "").split())[:70]
+            goals[g] = goals.get(g, 0) + 1
+        repeated = sorted(((n, g) for g, n in goals.items() if n > 1), reverse=True)[:5]
+        if repeated:
+            out.append("  most repeated goals (same first 70 characters):")
+            out += [f"    {n:>3}× {g}" for n, g in repeated]
+        judges: dict[str, list] = {}
+        for j in rows:
+            if j.get("judge") not in (None, "rule"):
+                judges.setdefault(j["judge"].removeprefix("openrouter/"), []).append(j)
+        if len(judges) > 1:
+            out.append("  by judge (assigned at random, so a gap is the judges, not the cycles):")
+            for m, rs in sorted(judges.items()):
+                worth = mean_value([j for j in rs if value_judge(j) == j.get("judge")])
+                out.append(f"    {m:<26} {len(rs):>3} cycles · success "
+                           f"{sum(SCORE[j['criterion_met']] for j in rs) / len(rs):.0%}"
+                           + (f" · value {worth:.2f}" if worth is not None else ""))
+        if not valued(rows):
+            out.append("  no cycle in this window has a value grade yet (shaft judge backfill grades them)")
+            continue
+        best = sorted((j for j in valued(rows) if j["value"] >= 3), key=lambda j: j["episode_ts"])
+        out.append(f"  cycles worth something (value ≥ 3): {len(best)} of {len(valued(rows))} graded")
+        for j in best:
+            out.append(f"    {j['episode_ts'][5:16].replace('T', ' ')}  {j['value']}/5 for {j.get('value_for')}: "
+                       f"{' '.join((j.get('value_reason') or '').split())}")
+    return "\n".join(out) + "\n"
 
 
 def write_stats(name: str) -> None:
