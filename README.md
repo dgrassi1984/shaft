@@ -134,9 +134,12 @@ shaft dataset|finetune [name]   # M6: export experiences / train a judged LoRA a
 
 shaft tools <name> [on|off <tool>]   # an instance's supervisor tools, e.g. off delegate_coding (operator-only:
                                      # kept in .supervisor/, so the instance cannot switch it back on)
-shaft mail login <alias> <address> [--client <name>]   # log in one of your Gmail accounts (read-only; below)
+shaft google login <alias> <address> [--client <name>]   # log in a Google account: Gmail + Calendar, read-only
+shaft google [migrate]               # accounts, clients, granted scopes · migrate: move PLAN-mail's account files
 shaft mail <name> grant|revoke <alias> <label>   # the label's threads an instance may read · shaft mail <name> off
 shaft mail [name]                    # accounts and grants
+shaft calendar <name> grant|revoke <alias> primary|<title>|<id>   # one calendar it may read · shaft calendar <name> off
+shaft calendar [name] · shaft calendar calendars <alias>          # grants · an account's calendars, to pick one
 shaft pause [name] · shaft resume [name] · shaft check [name] · shaft setup · shaft list
 
 shaft trial list [name]                    # trials of proposed changes (an instance asks with its `trial` tool)
@@ -243,37 +246,45 @@ sends you (`send_message` to the operator) also arrives from its bot. The servic
 webhook or Funnel. Full text both ways: bot chats are not end-to-end encrypted, so Telegram's servers see them
 (accepted, 2026-10-13).
 
+### Google accounts (`shaft google …`)
+
+Mail and Calendar share your Google accounts ([PLAN-calendar.md](PLAN-calendar.md)). An instance never holds a
+Google credential: neither scope can be limited to one label or one calendar, so the supervisor keeps each account's
+refresh token in `.supervisor/google/<alias>.json` (0600) and enforces every grant itself. One login per account asks
+for `gmail.readonly` and `calendar.readonly` together and records the scopes Google actually granted (the consent page
+lets you untick one): `shaft google` lists them. A tool whose scope was not granted refuses, naming the login to run
+again; it never returns an empty result. Nothing in the mailbox or a calendar is ever changed.
+
+Each account records the OAuth client it logged in with (a refresh token works only with the client that issued it).
+A client is named in `.env` as `GMAIL_<CLIENT>_CLIENT_ID` / `GMAIL_<CLIENT>_CLIENT_SECRET`; `--client` picks it, and
+it defaults to the alias. One client per Google organisation, because an **Internal** app signs in only its own
+organisation's users:
+- **A Workspace organisation** (e.g. example-co.ai): a Google Cloud project owned by it, the Gmail API and the Google
+  Calendar API enabled, consent screen **Internal** (no Google review, tokens that do not expire after 7 days), the
+  scopes `gmail.readonly` and `calendar.readonly` (Data Access), a **Desktop app** client →
+  `GMAIL_example-co_CLIENT_ID` / `_SECRET`, then `shaft google login example-co operator@work.example`.
+- **gmail.com accounts**: a project of your own (not in an organisation), both APIs enabled, consent screen
+  **External** with the same two scopes, then **Publish app → In production** (left in Testing, the refresh token
+  expires after 7 days). It stays unverified, which Google allows for personal use (under 100 users;
+  `calendar.readonly` is sensitive, not restricted): the login shows a "hasn't verified this app" page (Advanced → Go
+  to … (unsafe)). A **Desktop app** client → `GMAIL_PERSONAL_CLIENT_ID` / `_SECRET`, then
+  `shaft google login home <you>@gmail.com --client personal`. Several gmail.com accounts can share this client.
+
+Google's quotas are per user per minute, shared by every instance on the account (Gmail: 15,000 units). A call over
+quota waits up to 60 s, then fails, saying so. Accounts logged in before Calendar (PLAN-mail) kept their files in
+`.supervisor/mail/`: `shaft google migrate` moves them (until then they are not read, and the error says so).
+
 ### Mail (`shaft mail …`)
 
-An instance you pick may read the Gmail threads that carry a label you pick ([PLAN-mail.md](PLAN-mail.md)). No
-Gmail credential can be limited to one label, so the instance never holds one. The supervisor keeps the account's
-refresh token (scope `gmail.readonly`) in `.supervisor/mail/<alias>.json` (0600) and checks the label on every call.
-The search filters on the label's ID, and every thread it returns, reads or downloads from is checked again before
-anything of it is shown. A thread is visible while any of its messages carries the label; then all its messages
-are, later replies included. Drafts, trash and spam are left out. Nothing in the mailbox is ever changed.
+An instance you pick may read the Gmail threads that carry a label you pick ([PLAN-mail.md](PLAN-mail.md)), on an
+account logged in with `shaft google login`. The search filters on the label's ID, and every thread it returns,
+reads or downloads from is checked again before anything of it is shown. A thread is visible while any of its
+messages carries the label; then all its messages are, later replies included. Drafts, trash and spam are left out.
 
-One instance may read several accounts: log each in under its own alias and grant its label; `mail_search`
-covers every grant unless told one. Each account records the OAuth client it logged in with (a refresh token works
-only with the client that issued it). A client is named in `.env` as `GMAIL_<CLIENT>_CLIENT_ID` /
-`GMAIL_<CLIENT>_CLIENT_SECRET`; `--client` picks it, and it defaults to the alias.
-
-One client per Google organisation, because an **Internal** app signs in only its own organisation's users:
-- **A Workspace organisation** (e.g. example-co.ai): a Google Cloud project owned by it, Gmail API enabled, consent screen
-  **Internal** (no Google review, tokens that do not expire after 7 days), only the `gmail.readonly` scope, a
-  **Desktop app** client → `GMAIL_example-co_CLIENT_ID` / `_SECRET`, then
-  `shaft mail login example-co operator@work.example`.
-- **gmail.com accounts**: a project of your own (not in an organisation), Gmail API enabled, consent screen
-  **External**, only `gmail.readonly`, then **Publish app → In production** (left in Testing, the refresh token
-  expires after 7 days). It stays unverified, which Google allows for personal use (under 100 users): the login
-  shows a "hasn't verified this app" page (Advanced → Go to … (unsafe)). A **Desktop app** client →
-  `GMAIL_PERSONAL_CLIENT_ID` / `_SECRET`, then `shaft mail login home <you>@gmail.com --client personal`. Several
-  gmail.com accounts can share this client (`--client personal` on each).
-
-Then `shaft mail wren grant example-co ToObsidian` checks that the label exists and saves the grant in
+One instance may read several accounts: grant a label on each; `mail_search` covers every grant unless told one.
+`shaft mail wren grant example-co ToObsidian` checks that the label exists and saves the grant in
 `.supervisor/tools/wren.json`. `shaft mail wren revoke example-co ToObsidian` or `shaft mail wren off` holds from wren's
 next mail call. A label renamed or deleted in Gmail is refused until you grant it again. Up to 30 mail calls per run.
-Gmail's quota is 15,000 units per minute per user, shared by every instance on the account. A call over it waits up to
-60 s, then fails, saying so.
 Bodies are cut at 20,000 characters (60,000 per thread). Downloads go to `mail/<alias>/<thread>/` in the instance's
 folder (gitignored by the template; a download is refused until `shaft update` brings that rule). Limits: 25 MB per
 file, 100 MB per run. Each body is shown under a line saying who wrote it and that it is not your instruction.
@@ -283,6 +294,29 @@ The risks you accept by granting a label: anything an instance reads it can send
 Mail content reaches model providers (a cloud-brained instance, the judges). Senders can write instructions into
 mail (prompt injection). What the instance writes from it into its mind stays in its private mind store's history (never in the project's
 git), and downloads stay in `mail/`, after a revoke.
+
+### Calendar (`shaft calendar …`)
+
+An instance you pick may read the calendars you pick, one per grant ([PLAN-calendar.md](PLAN-calendar.md)), with full
+event details: title, time and time zone, location, description, organiser, attendees and their responses, your
+response, conference link, recurrence, attachment links (never downloaded). Private events on a granted calendar are
+shown; declined ones are shown and marked. `shaft calendar calendars example-co` lists the account's calendars;
+`shaft calendar wren grant example-co primary` (or a title, or an ID) resolves it once and saves its ID with its title in
+`.supervisor/tools/wren.json`. A title shared by two calendars is refused, both listed: grant by ID. `revoke` and
+`off` hold from the instance's next calendar call.
+
+Every Calendar API call names a granted calendar in its path, and nothing an instance calls spans calendars (no
+free/busy, no calendar list). An event's id is `<alias>/<hash of the calendar>/<event>`, resolved against the
+instance's grants as they are then, so an event of another calendar cannot be addressed at all. The tools:
+`calendar_events` (a window, default now to 7 days, at most 92; optional free-text query; up to 100 events, the cut
+said) and `calendar_event` (one event in full; descriptions cut at 10,000 characters, the cut said). Up to 30
+calendar calls per run. An event's description and location under an organiser other than you come under a line
+saying who wrote it and that it is not your instruction. Trial replays read the calendar live, shared by the pair,
+with events created after the replayed cycle hidden (an older event edited since shows its edit; the judge is told).
+Battery exams get none.
+
+The risks are mail's, plus other people's data: attendees' names and addresses, and invitations they wrote, reach
+the instance, its model providers and the judges.
 
 ### The model server (`shaft model on`)
 
@@ -328,6 +362,9 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
   **Your mail, one label at a time** (`shaft mail <name> grant <alias> <label>`; [PLAN-mail.md](PLAN-mail.md)):
   `mail_search`, `mail_read`, `mail_attachment`, offered only when granted. The credential and the grant stay with
   the supervisor, which enforces the label on every call (below).
+  **Your calendars, one per grant** (`shaft calendar <name> grant <alias> <calendar>`;
+  [PLAN-calendar.md](PLAN-calendar.md)): `calendar_events`, `calendar_event`, offered only when granted. Every call
+  names a granted calendar; the credential and the grant stay with the supervisor.
 - **Broker**: the only door to the outside — web search (ScrapeBadger), page fetching
   (public addresses only, re-checked on every redirect), messages between instances and to
   you (no daily limit unless `SHAFT_OPERATOR_PER_DAY`; a macOS notification, and Telegram if set up), with

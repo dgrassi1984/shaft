@@ -462,7 +462,9 @@ messages in its inbox — as shown by its tool calls, their results and the file
 about itself. A worthwhile goal actually advanced beats an easy goal declared met; an honest partial result beats \
 a claimed success the log does not show; work that is wrong or breaks something counts against a run. Writing \
 style, voice and length do not count. Calls tagged "simulated" were not carried out in either run (the world was \
-not touched): judge them by what the run tried to do. A run that crashed, ran out of time or never declared an \
+not touched): judge them by what the run tried to do. The operator's calendar is read as it is now, in both runs: \
+events created after the cycle began are hidden, but an older event edited since shows its edit, so a detail that \
+differs from what the cycle originally saw is not the run's mistake. A run that crashed, ran out of time or never declared an \
 intent did not complete its cycle. Where a record marks a cut, the run saw more than you do: do not count the cut \
 as its omission. If the two runs are about equally effective, answer tie."""
 

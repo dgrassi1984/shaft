@@ -36,7 +36,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import judge, metrics, sandbox
-from .broker import MAIL_TOOLS, Broker
+from .broker import CALENDAR_TOOLS, MAIL_TOOLS, Broker
 from .core import (BROKER_MAX_CALLS, EMBED_PORT, HOME, INSTANCES, LLM_PORTS, PROJECT, PYTHON, SUP_DIR,
                    git_wt, instance_config, instance_root, knob, log, secrets_env)
 
@@ -52,7 +52,8 @@ CATEGORIES = ("coding", "research", "recall", "self")
 CONTROLLED = ("coding", "research")          # a fresh mind cannot know an instance's memory or record
 EXAM_OFF = {"send_message", "list_instances", "delegate_coding", "secret_set", "secret_delete",
             "decide",   # added 2026-10-14: exams keep the tools they were calibrated with
-            *MAIL_TOOLS}   # the operator's mail never reaches an exam (its broker has none either: root= is set)
+            *MAIL_TOOLS, *CALENDAR_TOOLS}   # the operator's mail and calendars never reach an exam (its broker has
+                                            # none either: root= is set)
 BACKUP = HOME / "Library" / "Application Support" / "SHAFT" / "battery-backup"
 
 

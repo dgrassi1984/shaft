@@ -225,6 +225,7 @@ def render_instance(snap, ui, width, height):
     row("tools off", ", ".join(d["tools_off"]) or "none")
     row("shared folder", d["shared"] or "none")
     row("mail", d["mail"] or "none")
+    row("calendar", d["calendar"] or "none")
     row("python", d["python"], "yellow" if "BROKEN" in d["python"] else "")
     row("internet", d["internet"])
     if d["questions"]:
