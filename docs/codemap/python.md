@@ -8,24 +8,26 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 
 | Module | Classes | Functions |
 |---|---|---|
-| `supervisor/__main__.py` | — | `cmd_new`, `cmd_update`, `cmd_setup`, `cmd_status`, `cmd_tools`, `cmd_secret`, `cmd_share`, `cmd_mail`, `run_many`, `cmd_mind`, `cmd_battery`, `cmd_trial`, `main` |
+| `supervisor/__main__.py` | — | `cmd_new`, `cmd_update`, `cmd_setup`, `cmd_status`, `cmd_tools`, `cmd_secret`, `cmd_share`, `cmd_google`, `cmd_mail`, `cmd_calendar`, `run_many`, `cmd_mind`, `cmd_battery`, `cmd_trial`, `main` |
 | `supervisor/api.py` | `Conversations`, `Handler` | `allowed_logins`, `serve`, `url`, `command` |
 | `supervisor/autonomy.py` | — | `service`, `wake_interval`, `describe_schedule`, `record`, `sleep_due`, `decide_wakes`, `serve`, `battery_jobs`, `wake`, `start_wake`, `tick`, `autonomy` |
 | `supervisor/battery.py` | `Interrupted` | `base`, `items_dir`, `off_path`, `is_off`, `results_path`, `load_items`, `checksum`, `backup`, `snapshot`, `restore`, `make_control`, `run_hidden_tests`, `grade`, `headline`, `truth`, `recall_candidates`, `make_recall`, `results`, `era`, `order`, `run`, `window`, `due`, `stats_lines`, `report` |
 | `supervisor/bonsai_lora.py` | — | `load_text_model`, `load`, `logits_of`, `make_cache`, `render`, `make_lora_class`, `attach_lora`, `spike`, `train`, `load_adapter`, `generate`, `answers` |
 | `supervisor/bonsai_server.py` | `ThinkingBudget` | `tool_progress_handler`, `exit_if_generation_dies`, `bound_cache_graphs`, `request_budget`, `main` |
 | `supervisor/broker.py` | `BlockedAddress`, `Broker`, `ReplayBroker` | `judgment_text`, `judgments_text`, `notify`, `check_public`, `html_to_text` |
+| `supervisor/calendar.py` | `NotVisible` | `cal_hash`, `handle`, `calendars`, `resolve`, `parse_when`, `window`, `start_key`, `all_day`, `span`, `events`, `event`, `series`, `by_operator`, `own_response`, `written_by`, `recurrence_text`, `render_row`, `render_event` |
 | `supervisor/cloudllm.py` | `CloudError` | `billed`, `usd`, `prompt_size`, `spent_today`, `to_anthropic`, `from_anthropic`, `complete`, `decide`, `openrouter_stream`, `as_sse` |
 | `supervisor/coder.py` | `CoderError` | `spent_today`, `write`, `check_targets`, `test_in_scratch`, `delegate` |
-| `supervisor/core.py` | `UnsafePath` | `knob`, `describe_knobs`, `log`, `secrets_env`, `git`, `git_wt`, `instance_root`, `instance_names`, `paused`, `instance_config`, `config_values`, `config_line`, `config_with`, `disabled_tools`, `shared_folder`, `check_shared_folder`, `set_shared_folder`, `mail_grants`, `set_mail_grants`, `read_secrets`, `store_secret`, `delete_secret`, `set_tool`, `journal_entries`, `contained`, `safe_write`, `safe_write_bytes`, `safe_mkdir`, `journal_note`, `not_mind`, `add_all_but_mind`, `commit_state` |
+| `supervisor/core.py` | `UnsafePath` | `knob`, `describe_knobs`, `log`, `secrets_env`, `git`, `git_wt`, `instance_root`, `instance_names`, `paused`, `instance_config`, `config_values`, `config_line`, `config_with`, `disabled_tools`, `shared_folder`, `check_shared_folder`, `set_shared_folder`, `mail_grants`, `set_mail_grants`, `calendar_grants`, `set_calendar_grants`, `read_secrets`, `store_secret`, `delete_secret`, `set_tool`, `journal_entries`, `contained`, `safe_write`, `safe_write_bytes`, `safe_mkdir`, `journal_note`, `not_mind`, `add_all_but_mind`, `commit_state` |
 | `supervisor/dashboard.py` | — | `activity`, `instance_state`, `services`, `events`, `snapshot` |
 | `supervisor/egress.py` | `Refused`, `Egress` | `log_path`, `public_address`, `recent`, `describe`, `summary` |
 | `supervisor/embed_server.py` | `Embedder` | `make_handler`, `main` |
 | `supervisor/evolution.py` | — | `drift`, `distinct`, `breed` |
 | `supervisor/finetune.py` | — | `backend`, `build_dataset`, `cmd_dataset`, `overfit`, `evaluate`, `cmd_evaluate`, `cmd_finetune` |
 | `supervisor/gate.py` | — | `snapshot`, `changed`, `restore`, `config_without`, `revert_config`, `run_tests`, `run_instance_tests` |
+| `supervisor/google.py` | `AccountError`, `ApiError`, `Account` | `accounts_dir`, `old_accounts_dir`, `unmigrated`, `account`, `accounts`, `scopes`, `scope_text`, `login_command`, `migrate`, `client_keys`, `login` |
 | `supervisor/judge.py` | `JudgeError` | `same_model`, `pick`, `rotation`, `available`, `ask`, `second_available`, `ask_second` |
-| `supervisor/mail.py` | `MailError`, `NotVisible`, `GmailError`, `Account` | `accounts_dir`, `account`, `accounts`, `visible`, `get_thread`, `search`, `attachments`, `body_text`, `sender_line`, `render`, `pick_attachment`, `attachment_bytes`, `login` |
+| `supervisor/mail.py` | `NotVisible` | `label_id`, `visible`, `get_thread`, `search`, `attachments`, `body_text`, `sender_line`, `render`, `pick_attachment`, `attachment_bytes` |
 | `supervisor/messages.py` | — | `record`, `attachment_name`, `size_text`, `store_attachments`, `attachment_lines`, `history`, `pending`, `show_inbox`, `deliver_external`, `reply`, `send`, `clear_notes` |
 | `supervisor/metrics.py` | — | `backfill_schema`, `cycle_value`, `judgments`, `live_episodes`, `cycle_model`, `own_models`, `judge_pending`, `second_sampled`, `stash_second`, `second_pending`, `second_opinion`, `backfill`, `value_judge`, `check_personality`, `valued`, `mean_value`, `value_shares`, `stats_text`, `review_text`, `write_stats`, `chance_of_drop`, `start_probation`, `restore_change`, `check_probation`, `after_cycle` |
 | `supervisor/mind.py` | `MindError` | `minds_dir`, `store`, `exists`, `git`, `init`, `head`, `require`, `commit`, `at`, `files`, `archive`, `show`, `log`, `backfill`, `check`, `check_every_commit`, `cutover`, `guard_project`, `describe` |
@@ -46,6 +48,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_bonsai_budget.py` | `ThinkingBudgetTest`, `WrapUpTest`, `RequestBudgetTest`, `TemplateReasoningTest`, `BudgetWithoutSyncTest`, `Float16NormsTest`, `ToolProgressTest` | — |
 | `supervisor/tests/test_bonsai_buffers.py` | `DecodeBuffersTest` | `live_buffers`, `tiny_qwen35` |
 | `supervisor/tests/test_bonsai_liveness.py` | `GenerationThreadDiesTest`, `GuardTest` | `free_port`, `chat` |
+| `supervisor/tests/test_calendar.py` | `FakeCalendar`, `CalendarCase`, `EnforcementTest`, `ScopeTest`, `OfferedTest`, `ReplayTest`, `CliTest`, `TemplatePromptTest` | `ev`, `git` |
 | `supervisor/tests/test_commit.py` | `CommitStateTest`, `IgnoredFileTest`, `ConfigMergeTest`, `HistoryToolTest`, `RecordToolTest`, `UpdateCase`, `UpdateNoteTest`, `UpdateKeepsUncommittedWorkTest` | `git` |
 | `supervisor/tests/test_config_writers.py` | `ConfigWritersTest`, `SetConfigTest`, `SandboxTest` | `git`, `instance_tests_only` |
 | `supervisor/tests/test_control_panel.py` | `PanelData`, `SchedulerRestartGuard`, `PanelKeys`, `PanelViews` | — |
@@ -56,12 +59,13 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_egress.py` | `Upstream`, `PublicAddressTest`, `SummaryTest`, `ProxyTest`, `SandboxedRunTest`, `ReplayEgressTest` | `pretend_public` |
 | `supervisor/tests/test_embed_memory.py` | `EmbedCacheBoundTest` | — |
 | `supervisor/tests/test_gate.py` | `GateTest`, `InstanceTestsTest` | — |
+| `supervisor/tests/test_google.py` | `FakeGoogle`, `GoogleCase`, `LoginTest`, `MigrateTest`, `CliTest` | — |
 | `supervisor/tests/test_invariants.py` | `InstanceCase`, `ReflectInvariants`, `TalkInvariants`, `LiveInvariants`, `TemplateMeasurement`, `ExamInvariants`, `SandboxInvariants` | — |
 | `supervisor/tests/test_judge2.py` | `RecordShowsWholeVerdictsTest`, `SecondJudgeTest`, `JudgePendingTest`, `ReleasedBeforeTheSecondJudgeTest` | — |
 | `supervisor/tests/test_judge_evidence.py` | `FullEvidenceReachesTheJudge`, `JudgeCase` | — |
 | `supervisor/tests/test_judge_rotation.py` | `FakeClaude`, `PickTest`, `RoutingTest`, `CycleVerdictTest` | — |
 | `supervisor/tests/test_keys_and_http.py` | `FakeAPI`, `KeysAndHttpTest`, `ThroughTheInstancesClientTest`, `KeysOutOfReachTest`, `InstanceSideTest`, `OperatorCommandTest` | — |
-| `supervisor/tests/test_mail.py` | `FakeGmail`, `MailCase`, `EnforcementTest`, `OfferedTest`, `ReplayTest`, `AttachmentTest`, `ConfigTest`, `CliTest`, `LoginTest`, `TemplatePromptTest` | `ms`, `b64`, `msg`, `git` |
+| `supervisor/tests/test_mail.py` | `FakeGmail`, `MailCase`, `EnforcementTest`, `OfferedTest`, `ReplayTest`, `AttachmentTest`, `ConfigTest`, `CliTest`, `TemplatePromptTest` | `ms`, `b64`, `msg`, `git` |
 | `supervisor/tests/test_measurement.py` | `InstanceDirCase`, `CycleValueTest`, `JudgingTest`, `ValueTest`, `ModelTest`, `ProbationMeasureTest`, `ChanceOfDropTest`, `BatteryIsolationTest`, `HiddenTestsTest`, `BatteryScheduleTest`, `BatteryResultsTest`, `BrokerRootTest`, `BatteryEndToEndTest` | `judgment`, `valued_j` |
 | `supervisor/tests/test_memory.py` | `FakeEmbedder`, `ImprovementPlanTest`, `RecallTest`, `SleepConsolidationTest`, `SemanticSearchTest` | `concept_vector`, `instance` |
 | `supervisor/tests/test_messages_view.py` | `MessageLogTest`, `StartWakeTest`, `TopKeysTest` | — |

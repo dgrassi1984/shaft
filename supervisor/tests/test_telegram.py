@@ -283,7 +283,7 @@ class ToldTheyCanReachDanieleTest(unittest.TestCase):
     def test_send_message_names_the_bot_only_when_it_works(self):
         from supervisor import broker
         b = broker.Broker.__new__(broker.Broker)
-        b.name, b.disabled, b.mail_allowed = "wren", set(), False
+        b.name, b.disabled, b.grants_allowed = "wren", set(), False
         with mock.patch.object(telegram, "reachable", return_value="@WrenFawlerBot"):
             spec = next(t for t in b.tool_specs() if t["function"]["name"] == "send_message")
         self.assertIn("on Telegram, from your own bot @WrenFawlerBot", spec["function"]["description"])

@@ -250,6 +250,29 @@ def set_mail_grants(name: str, grants: list[dict]) -> list[dict]:
     return keep
 
 
+# -- the operator's calendars an instance may read (PLAN-calendar.md) ----------------------------------------------
+# Daniele, 2026-10-15: several instances, each with its own grants, one calendar per grant, full event details. A
+# calendar token opens every calendar the account can see, so the grant stays here and supervisor/calendar.py makes
+# every API call name a granted calendar. Stored by calendar ID (it survives a rename), with its title at grant time.
+def calendar_grants(name: str) -> list[dict]:
+    """The calendars this instance may read (`shaft calendar <name> grant <alias> <calendar>`):
+    [{account, calendar (its ID), name (its title when granted)}]."""
+    raw = _tool_settings(name).get("calendar")
+    return [{"account": g["account"], "calendar": g["calendar"], "name": g.get("name") or g["calendar"]}
+            for g in raw if isinstance(g, dict) and isinstance(g.get("account"), str)
+            and isinstance(g.get("calendar"), str) and g["calendar"]] if isinstance(raw, list) else []
+
+
+def set_calendar_grants(name: str, grants: list[dict]) -> list[dict]:
+    keep: list[dict] = []
+    for g in grants:
+        g = {"account": g["account"], "calendar": g["calendar"], "name": g.get("name") or g["calendar"]}
+        if not any((k["account"], k["calendar"]) == (g["account"], g["calendar"]) for k in keep):
+            keep.append(g)
+    _update_tool_settings(name, calendar=keep or None)
+    return keep
+
+
 # -- an instance's own keys ---------------------------------------------------------------------------
 # Its own (Daniele, 2026-10-13: "they should have their own key and be able to manage them"), kept in its
 # folder at secrets/secrets.json — but handled only by the supervisor: the instance stores, lists and
