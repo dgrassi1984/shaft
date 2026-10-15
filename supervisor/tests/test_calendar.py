@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -199,6 +200,21 @@ class EnforcementTest(CalendarCase):
                 self.assertEqual(self.refused(b, "calendar_event", {"id": bad}), HIDDEN)
         self.assertNotIn("SECRET", self.week(b, query="Board"))
         self.assertFalse([p for p in self.cal.paths() if urllib.parse.quote(TEAM, safe="") in p or "Board" in p])
+
+    def test_every_listed_event_is_readable(self):
+        # Regression (M5, 2026-10-15): invitations created outside Google Calendar (e.g. Outlook) have event ids that
+        # start with "_"; calendar_events listed them and calendar_event refused them as not visible (6 of 25 real
+        # events this week). Whatever calendar_events lists, calendar_event must read.
+        outlook = "_8kp4cc9o70p3ib9i6d332b9k84s32b9o6spjab9h8kr3ega48cr34gpi68_20261016T064500Z"
+        self.cal.events[PRIMARY][outlook] = ev(outlook, "Valeriya <> Daniele", "2026-10-16T08:45:00+02:00",
+                                               "2026-10-16T09:00:00+02:00", organizer={"email": "v@x.com"})
+        b = self.broker()
+        out = self.week(b)
+        handles = re.findall(r"^(example-co/[0-9a-f]{8}/\S+) · ", out, re.M)
+        self.assertIn(self.handle(PRIMARY, outlook), handles)
+        for h in handles:
+            with self.subTest(handle=h):
+                self.ok(b, "calendar_event", {"id": h})
 
     def test_every_api_path_names_a_granted_calendar(self):
         b = self.broker()

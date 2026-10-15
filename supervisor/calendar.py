@@ -21,7 +21,9 @@ from datetime import date, datetime, timedelta
 from . import google
 
 API = "https://www.googleapis.com/calendar/v3"
-EVENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_@.-]{0,1023}$")   # Google's event ids, recurring instances' too
+# Google's event ids, recurring instances' too. Ids of invitations created outside Google Calendar (e.g. Outlook)
+# start with "_". Never with ".": an id ".." would leave the events collection once the path is resolved.
+EVENT_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_@.-]{0,1023}$")
 HASH_RE = re.compile(r"^[0-9a-f]{8}$")
 WINDOW_DAYS, DEFAULT_DAYS = 92, 7                 # a search covers at most 92 days; default now to 7 days ahead
 MAX_EVENTS, DEFAULT_EVENTS = 100, 50
