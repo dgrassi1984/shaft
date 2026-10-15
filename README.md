@@ -134,7 +134,7 @@ shaft dataset|finetune [name]   # M6: export experiences / train a judged LoRA a
 
 shaft tools <name> [on|off <tool>]   # an instance's supervisor tools, e.g. off delegate_coding (operator-only:
                                      # kept in .supervisor/, so the instance cannot switch it back on)
-shaft mail login <alias> <address>   # log in one of your Gmail accounts (read-only; below)
+shaft mail login <alias> <address> [--client <name>]   # log in one of your Gmail accounts (read-only; below)
 shaft mail <name> grant|revoke <alias> <label>   # the label's threads an instance may read · shaft mail <name> off
 shaft mail [name]                    # accounts and grants
 shaft pause [name] · shaft resume [name] · shaft check [name] · shaft setup · shaft list
@@ -252,12 +252,22 @@ The search filters on the label's ID, and every thread it returns, reads or down
 anything of it is shown. A thread is visible while any of its messages carries the label; then all its messages
 are, later replies included. Drafts, trash and spam are left out. Nothing in the mailbox is ever changed.
 
-Setup, once per Workspace organisation:
-1. A Google Cloud project owned by the organisation, with the Gmail API enabled.
-2. An OAuth consent screen of type **Internal** (no Google review, tokens that do not expire after 7 days), with
-   only the `gmail.readonly` scope.
-3. A **Desktop app** OAuth client. Put its ID and secret in `.env` as `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET`.
-4. `shaft mail login example-co operator@work.example` opens Google's consent page and checks the account.
+One instance may read several accounts: log each in under its own alias and grant its label; `mail_search`
+covers every grant unless told one. Each account records the OAuth client it logged in with (a refresh token works
+only with the client that issued it). A client is named in `.env` as `GMAIL_<CLIENT>_CLIENT_ID` /
+`GMAIL_<CLIENT>_CLIENT_SECRET`; `--client` picks it, and it defaults to the alias.
+
+One client per Google organisation, because an **Internal** app signs in only its own organisation's users:
+- **A Workspace organisation** (e.g. example-co.ai): a Google Cloud project owned by it, Gmail API enabled, consent screen
+  **Internal** (no Google review, tokens that do not expire after 7 days), only the `gmail.readonly` scope, a
+  **Desktop app** client → `GMAIL_example-co_CLIENT_ID` / `_SECRET`, then
+  `shaft mail login example-co operator@work.example`.
+- **gmail.com accounts**: a project of your own (not in an organisation), Gmail API enabled, consent screen
+  **External**, only `gmail.readonly`, then **Publish app → In production** (left in Testing, the refresh token
+  expires after 7 days). It stays unverified, which Google allows for personal use (under 100 users): the login
+  shows a "hasn't verified this app" page (Advanced → Go to … (unsafe)). A **Desktop app** client →
+  `GMAIL_PERSONAL_CLIENT_ID` / `_SECRET`, then `shaft mail login home <you>@gmail.com --client personal`. Several
+  gmail.com accounts can share this client (`--client personal` on each).
 
 Then `shaft mail wren grant example-co ToObsidian` checks that the label exists and saves the grant in
 `.supervisor/tools/wren.json`. `shaft mail wren revoke example-co ToObsidian` or `shaft mail wren off` holds from wren's
@@ -271,7 +281,8 @@ Trial replays read the same mail, as of the replayed cycle, shared by the pair. 
 
 The risks you accept by granting a label: anything an instance reads it can send anywhere (it has the internet).
 Mail content reaches model providers (a cloud-brained instance, the judges). Senders can write instructions into
-mail (prompt injection). What the instance writes from it into its mind is committed on its branch.
+mail (prompt injection). What the instance writes from it into its mind stays in its private mind store's history (never in the project's
+git), and downloads stay in `mail/`, after a revoke.
 
 ### The model server (`shaft model on`)
 

@@ -332,7 +332,7 @@ def cmd_share(name: str, folder: str | None) -> int:
     return 0
 
 
-def cmd_mail(target: str | None, action: str | None, alias: str | None, label: str | None) -> int:
+def cmd_mail(target: str | None, action: str | None, alias: str | None, label: str | None, client: str = "") -> int:
     """The operator's Gmail an instance may read, one label at a time (PLAN-mail.md): log in an account, grant,
     revoke, show. The grant is read on every mail call, so a revoke takes effect on the instance's next call."""
     from . import mail
@@ -344,21 +344,24 @@ def cmd_mail(target: str | None, action: str | None, alias: str | None, label: s
 
     if target == "login":
         if not (action and alias):
-            print("usage: shaft mail login <alias> <address>  (e.g. shaft mail login example-co operator@work.example)",
+            print("usage: shaft mail login <alias> <address> [--client <name>]  (e.g. shaft mail login example-co "
+                  "operator@work.example; the client defaults to the alias: GMAIL_<CLIENT>_CLIENT_ID/_SECRET in .env)",
                   file=sys.stderr)
             return 2
         try:
-            saved = mail.login(action, alias, secrets_env())
+            saved = mail.login(action, alias, secrets_env(), client=client)
         except mail.MailError as e:
             print(e, file=sys.stderr)
             return 2
-        log(f"mail account {action} logged in as {saved['address']} by the operator")
-        print(f"logged in: mail account {action} is {saved['address']} (read-only). Grant a label with "
+        log(f"mail account {action} logged in as {saved['address']} (client {saved['client']}) by the operator")
+        print(f"logged in: mail account {action} is {saved['address']} (read-only, client {saved['client']}). "
+              f"Grant a label with "
               f"shaft mail <instance> grant {action} <label>")
         return 0
     if not target:
         accts = mail.accounts()
-        print("accounts: " + (", ".join(f"{a} ({d.get('address', '?')}, since {d.get('created', '?')[:10]})"
+        print("accounts: " + (", ".join(f"{a} ({d.get('address', '?')}, client {d.get('client') or 'NONE: log in again'}, "
+                                        f"since {d.get('created', '?')[:10]})"
                                         for a, d in accts.items()) if accts else "none (shaft mail login <alias> <address>)"))
         for name in instance_names():
             show(name)
@@ -677,12 +680,15 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("share", help="a folder of yours an instance may read (read-only, seen as shared/); 'off' removes it")
     p.add_argument("name")
     p.add_argument("folder", nargs="?", help="a directory, or 'off'")
-    p = sub.add_parser("mail", help="your Gmail an instance may read, one label at a time: 'login <alias> <address>', "
+    p = sub.add_parser("mail", help="your Gmail an instance may read, one label at a time: 'login <alias> <address> "
+                                    "[--client <name>]', "
                                     "'<name> grant|revoke <alias> <label>', '<name> off', '<name>' shows; alone lists all")
     p.add_argument("target", nargs="?", help="an instance, or 'login'")
     p.add_argument("action", nargs="?", help="grant, revoke, off — or, after login, the account alias")
     p.add_argument("alias", nargs="?", help="the account alias — or, after login, its address")
     p.add_argument("label", nargs="?", help="the Gmail label")
+    p.add_argument("--client", default="", help="with login: the OAuth client (GMAIL_<CLIENT>_CLIENT_ID/_SECRET in .env); "
+                                                "default: the alias. One per Google organisation: gmail.com needs its own")
     p = sub.add_parser("trial", help="trials of proposed changes: list, show, run (operator), replay, work")
     tsub = p.add_subparsers(dest="action", required=True)
     q = tsub.add_parser("list", help="every trial, newest last")
@@ -768,7 +774,7 @@ def main(argv: list[str]) -> int:
         if args.target not in (None, "login") and args.action not in (None, "grant", "revoke", "off"):
             print(f"unknown mail action {args.action!r}: grant, revoke or off", file=sys.stderr)
             return 2
-        return cmd_mail(args.target, args.action, args.alias, args.label)
+        return cmd_mail(args.target, args.action, args.alias, args.label, args.client)
     if args.cmd == "autonomy":
         return autonomy.autonomy(args.action)
     if args.cmd == "status":

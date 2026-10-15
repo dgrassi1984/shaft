@@ -38,6 +38,7 @@ AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
 ALIAS_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
+CLIENT_RE = ALIAS_RE                                 # an OAuth client's name (GMAIL_<NAME>_CLIENT_ID)
 THREAD_RE = re.compile(r"^[0-9a-f]{6,32}$")          # Gmail's thread ids: hex
 HIDDEN = {"DRAFT", "TRASH", "SPAM"}                   # unsent drafts and deleted mail are never shown
 BODY_CHARS, THREAD_CHARS = 20_000, 60_000
@@ -95,12 +96,24 @@ def _save_account(alias: str, data: dict) -> Path:
     return path
 
 
-def _client(secrets_env: dict[str, str]) -> tuple[str, str]:
-    missing = [k for k in ("GMAIL_CLIENT_ID", "GMAIL_CLIENT_SECRET") if not secrets_env.get(k)]
+def client_keys(client: str) -> tuple[str, str]:
+    """The .env names of an OAuth client's ID and secret: GMAIL_<CLIENT>_CLIENT_ID / _CLIENT_SECRET."""
+    stem = f"GMAIL_{client.upper().replace('-', '_')}"
+    return f"{stem}_CLIENT_ID", f"{stem}_CLIENT_SECRET"
+
+
+def _client(client: str, secrets_env: dict[str, str]) -> tuple[str, str]:
+    """An account's OAuth client, by name. One per Google organisation at least: an Internal app (example-co.ai) only
+    signs in its own organisation's users, so a gmail.com account needs its own client (an External app in
+    production). A refresh token works only with the client that issued it, so each account records its own."""
+    if not CLIENT_RE.match(client or ""):
+        raise MailError(f"{client!r} is not an OAuth client name (lowercase letters, digits, -)")
+    keys = client_keys(client)
+    missing = [k for k in keys if not secrets_env.get(k)]
     if missing:
-        raise MailError(f"mail needs {' and '.join(missing)} in {core.PROJECT / '.env'} (the Desktop OAuth client of an "
-                        "Internal Google Cloud app: README, Mail)")
-    return secrets_env["GMAIL_CLIENT_ID"], secrets_env["GMAIL_CLIENT_SECRET"]
+        raise MailError(f"mail client {client!r} needs {' and '.join(missing)} in {core.PROJECT / '.env'} (the Desktop "
+                        "OAuth client of its Google Cloud app: README, Mail)")
+    return secrets_env[keys[0]], secrets_env[keys[1]]
 
 
 def _error_text(e: urllib.error.HTTPError) -> str:
@@ -160,14 +173,18 @@ class Account:
             if self._token and time.time() < self._expires - 60:
                 return self._token
             saved = self._saved()
-            cid, secret = _client(self.secrets)
+            if not saved.get("client"):
+                raise MailError(f"mail account {self.alias!r} ({saved.get('address', '?')}) names no OAuth client; the "
+                                f"operator runs `shaft mail login {self.alias} {saved.get('address', '<address>')} "
+                                f"--client <name>` again")
+            cid, secret = _client(saved["client"], self.secrets)
             try:
                 data = _post_form(TOKEN_URL, {"client_id": cid, "client_secret": secret, "grant_type": "refresh_token",
                                               "refresh_token": saved["refresh_token"]})
             except urllib.error.HTTPError as e:
                 raise MailError(f"mail account {self.alias!r} ({saved.get('address', '?')}): Google refused its login "
                                 f"({_error_text(e)}); the operator runs `shaft mail login {self.alias} "
-                                f"{saved.get('address', '<address>')}` again") from None
+                                f"{saved.get('address', '<address>')} --client {saved['client']}` again") from None
             self._token, self._expires = data["access_token"], time.time() + int(data.get("expires_in") or 3600)
             return self._token
 
@@ -391,15 +408,18 @@ def attachment_bytes(acct: Account, msg: dict, att: dict) -> bytes:
 
 
 # -- login: the operator's consent, once per account --------------------------------------------------------------
-def login(alias: str, address: str, secrets_env: dict[str, str], open_url=None, timeout_s: int = 300) -> dict:
-    """Run Google's consent flow on a loopback redirect, check the account is `address`, and keep its refresh token.
-    Nothing is saved unless every step succeeds."""
+def login(alias: str, address: str, secrets_env: dict[str, str], client: str = "", open_url=None,
+          timeout_s: int = 300) -> dict:
+    """Run Google's consent flow with OAuth client `client` (default: the one named like the alias) on a loopback
+    redirect, check the account is `address`, and keep its refresh token and the client that issued it. Nothing is
+    saved unless every step succeeds."""
+    client = client or alias
     import webbrowser
     if not ALIAS_RE.match(alias or ""):
         raise MailError(f"{alias!r} is not an alias: lowercase letters, digits, -, starting with a letter (e.g. example-co)")
     if "@" not in (address or ""):
         raise MailError(f"{address!r} is not an email address")
-    cid, secret = _client(secrets_env)
+    cid, secret = _client(client, secrets_env)
     got: dict = {}
     done = threading.Event()
 
@@ -452,7 +472,7 @@ def login(alias: str, address: str, secrets_env: dict[str, str], open_url=None, 
         me = str(json.load(resp).get("emailAddress", ""))
     if me.casefold() != address.casefold():
         raise MailError(f"signed in as {me or 'an unknown account'}, not {address}: nothing saved")
-    data = {"address": me, "refresh_token": tok["refresh_token"], "scope": tok.get("scope", SCOPE),
+    data = {"address": me, "client": client, "refresh_token": tok["refresh_token"], "scope": tok.get("scope", SCOPE),
             "created": datetime.now().isoformat(timespec="seconds")}
     _save_account(alias, data)
     return data

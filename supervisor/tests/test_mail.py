@@ -174,10 +174,10 @@ class MailCase(unittest.TestCase):
         (self.root / "self" / "self.md").write_text("I am wren\n")
         git(self.root, "add", "-A")
         git(self.root, "commit", "-q", "-m", "wren: born")
-        mail._save_account("example-co", {"address": "operator@work.example", "refresh_token": "rt"})
+        mail._save_account("example-co", {"address": "operator@work.example", "client": "example-co", "refresh_token": "rt"})
         if self.grant:
             core.set_mail_grants("wren", [{"account": "example-co", "label": "ToObsidian"}])
-        self.secrets = {"GMAIL_CLIENT_ID": "cid", "GMAIL_CLIENT_SECRET": "csecret"}
+        self.secrets = {"GMAIL_example-co_CLIENT_ID": "cid", "GMAIL_example-co_CLIENT_SECRET": "csecret"}
 
     def fake_gmail(self) -> FakeGmail:
         self.gmail = FakeGmail()
@@ -267,7 +267,7 @@ class EnforcementTest(MailCase):
         self.assertFalse([p for m, p, _ in self.gmail.requests if p.startswith("threads")])
 
     def test_handle_from_other_alias_refused(self):
-        mail._save_account("home", {"address": "d@gmail.com", "refresh_token": "rt2"})
+        mail._save_account("home", {"address": "d@gmail.com", "client": "personal", "refresh_token": "rt2"})
         b = self.broker()
         before = len(self.gmail.requests)
         self.assertIn("'home' is not granted to you", self.refused(b, "mail_read", {"id": "home/aaa111"}))
@@ -441,16 +441,44 @@ class ConfigTest(MailCase):
         self.assertEqual(self.gmail.requests, [])
 
     def test_missing_client_named(self):
-        self.secrets = {"GMAIL_CLIENT_ID": "cid"}
+        self.secrets = {"GMAIL_example-co_CLIENT_ID": "cid"}
         err = self.refused(self.broker(), "mail_search", {})
-        self.assertIn("GMAIL_CLIENT_SECRET", err)
+        self.assertIn("mail client 'example-co' needs GMAIL_example-co_CLIENT_SECRET", err)
         self.assertIn(".env", err)
+
+    def test_each_account_refreshes_with_its_own_client(self):
+        # An Internal app (example-co.ai) only signs in its own organisation's users, and a refresh token works only with
+        # the client that issued it: with one client for every account, a gmail.com account could never be read.
+        mail._save_account("home", {"address": "d@gmail.com", "client": "personal", "refresh_token": "rt2"})
+        self.secrets.update({"GMAIL_PERSONAL_CLIENT_ID": "pid", "GMAIL_PERSONAL_CLIENT_SECRET": "psecret"})
+        for alias in ("example-co", "home"):
+            mail.Account(alias, self.secrets).token()
+        used = [(f["client_id"], f["client_secret"], f["refresh_token"]) for m, p, f in self.gmail.requests if p == "token"]
+        self.assertEqual(used, [("cid", "csecret", "rt"), ("pid", "psecret", "rt2")])
+
+    def test_one_instance_reads_two_accounts(self):
+        mail._save_account("home", {"address": "d@gmail.com", "client": "personal", "refresh_token": "rt2"})
+        self.secrets.update({"GMAIL_PERSONAL_CLIENT_ID": "pid", "GMAIL_PERSONAL_CLIENT_SECRET": "psecret"})
+        core.set_mail_grants("wren", [{"account": "example-co", "label": "ToObsidian"},
+                                      {"account": "home", "label": "ToObsidian"}])
+        out = self.ok(self.broker(), "mail_search", {})
+        self.assertIn("example-co/ToObsidian", out)
+        self.assertIn("home/ToObsidian", out)
+        clients = {f["client_id"] for m, p, f in self.gmail.requests if p == "token"}
+        self.assertEqual(clients, {"cid", "pid"})
+
+    def test_account_without_client_refused(self):
+        mail._save_account("example-co", {"address": "operator@work.example", "refresh_token": "rt"})
+        err = self.refused(self.broker(), "mail_search", {})
+        self.assertIn("names no OAuth client", err)
+        self.assertIn("shaft mail login example-co operator@work.example --client <name>", err)
+        self.assertFalse([p for m, p, _ in self.gmail.requests if p == "token"])
 
     def test_refused_login_named(self):
         self.gmail.refuse_refresh = True
         err = self.refused(self.broker(), "mail_read", {"id": "example-co/aaa111"})
         self.assertIn("Google refused its login (invalid_grant revoked)", err)
-        self.assertIn("shaft mail login example-co operator@work.example", err)
+        self.assertIn("shaft mail login example-co operator@work.example --client example-co", err)
 
     def test_body_marked_as_senders(self):
         b = self.broker()
@@ -538,6 +566,10 @@ class CliTest(MailCase):
 class LoginTest(MailCase):
     grant = False
 
+    def setUp(self):
+        super().setUp()
+        self.secrets.update({"GMAIL_WORK_CLIENT_ID": "wid", "GMAIL_WORK_CLIENT_SECRET": "wsecret"})
+
     def browser(self, code: str = "the-code", state: str | None = None):
         def open_url(url):
             q = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query))
@@ -547,9 +579,19 @@ class LoginTest(MailCase):
             urllib.request.urlopen(back, timeout=5).read()   # the real loopback, not the fake Gmail
         return open_url
 
-    def login(self, address: str, **kw):
+    def login(self, address: str, client: str = "", **kw):
         with redirect_stdout(io.StringIO()):
-            return mail.login("work", address, self.secrets, open_url=self.browser(**kw), timeout_s=5)
+            return mail.login("work", address, self.secrets, client=client, open_url=self.browser(**kw), timeout_s=5)
+
+    def test_login_records_its_client(self):
+        self.assertEqual(self.login("operator@work.example")["client"], "work")           # default: the alias
+        self.assertEqual(self.login("operator@work.example", client="example-co")["client"], "example-co")
+        codes = [f["client_id"] for m, p, f in self.gmail.requests if p == "token"]
+        self.assertEqual(codes, ["wid", "cid"])
+        self.assertEqual(json.loads((self.sup / "mail" / "work.json").read_text())["client"], "example-co")
+        with self.assertRaisesRegex(mail.MailError, "mail client 'nope' needs GMAIL_NOPE_CLIENT_ID and "
+                                                    "GMAIL_NOPE_CLIENT_SECRET"):
+            self.login("operator@work.example", client="nope")
 
     def test_login_keeps_the_token_only_for_the_right_account(self):
         saved = self.login("Daniele.Grassi@example-co.ai")
