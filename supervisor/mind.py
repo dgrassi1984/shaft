@@ -34,8 +34,10 @@ PRE_PUSH = ("#!/bin/sh\n# SHAFT: an instance's mind store is never pushed anywhe
             "echo \"refused: this is an instance's private mind store; it is never pushed\" >&2\nexit 1\n")
 PROJECT_PRE_PUSH = """#!/bin/sh
 # SHAFT: instance/* branches are never pushed — their history still holds the minds of the past
-# (PLAN-mind-out-of-git.md D4). Installed by `shaft mind guard`.
+# (PLAN-mind-out-of-git.md D4). Installed by `shaft mind guard`. Deleting one on a remote sends nothing
+# (its local sha is all zeros) and is the cleanup D4 asks for, so it is let through.
 while read -r local_ref local_sha remote_ref remote_sha; do
+  case "$local_sha" in *[!0]*) ;; *) continue ;; esac
   case "$local_ref $remote_ref" in
     *refs/heads/instance/*)
       echo "refused: $local_ref -> $remote_ref (instance branches hold the instances' minds; never pushed)" >&2

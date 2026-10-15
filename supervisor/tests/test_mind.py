@@ -216,6 +216,13 @@ class CutoverTest(Project):
         self.assertEqual(subprocess.run(["git", "-C", str(self.project), "push", "-q", str(remote), "main"],
                                         capture_output=True, text=True).returncode, 0)
         self.assertEqual(git(remote, "for-each-ref", "--format=%(refname)").split(), ["refs/heads/main"])
+        # Deleting a remote instance branch is the cleanup D4 asks for: the first hook refused it too, because a
+        # delete names refs/heads/instance/* as its remote ref.
+        git(self.project, "push", "-q", "--no-verify", str(remote), "instance/x")
+        deleted = subprocess.run(["git", "-C", str(self.project), "push", str(remote), "--delete", "instance/x"],
+                                 capture_output=True, text=True)
+        self.assertEqual(deleted.returncode, 0, deleted.stderr)
+        self.assertEqual(git(remote, "for-each-ref", "--format=%(refname)").split(), ["refs/heads/main"])
         hook.write_text("#!/bin/sh\nexit 0\n")                          # someone else's hook is never replaced
         with self.assertRaisesRegex(mind.MindError, "not SHAFT's"):
             mind.guard_project(self.project)
