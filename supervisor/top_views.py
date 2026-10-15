@@ -224,6 +224,7 @@ def render_instance(snap, ui, width, height):
     row("wakes", f"every {d['wake']} min · next {live.get('next_wake', '?')}")
     row("tools off", ", ".join(d["tools_off"]) or "none")
     row("shared folder", d["shared"] or "none")
+    row("mail", d["mail"] or "none")
     row("python", d["python"], "yellow" if "BROKEN" in d["python"] else "")
     row("internet", d["internet"])
     if d["questions"]:

@@ -225,6 +225,26 @@ def set_shared_folder(name: str, folder: Path | str | None) -> Path | None:
     return path
 
 
+# -- the operator's mail an instance may read (PLAN-mail.md) ------------------------------------------------------
+# Daniele, 2026-10-15: an instance he picks reads the Gmail threads carrying a label he picks. No Gmail credential can
+# be limited to a label, so the grant and the credential stay here and supervisor/mail.py enforces the label.
+def mail_grants(name: str) -> list[dict]:
+    """The labels this instance may read (`shaft mail <name> grant <alias> <label>`): [{account, label}]."""
+    raw = _tool_settings(name).get("mail")
+    return [{"account": g["account"], "label": g["label"]} for g in raw if isinstance(g, dict)
+            and isinstance(g.get("account"), str) and isinstance(g.get("label"), str)] if isinstance(raw, list) else []
+
+
+def set_mail_grants(name: str, grants: list[dict]) -> list[dict]:
+    keep: list[dict] = []
+    for g in grants:
+        g = {"account": g["account"], "label": g["label"]}
+        if g not in keep:
+            keep.append(g)
+    _update_tool_settings(name, mail=keep or None)
+    return keep
+
+
 # -- an instance's own keys ---------------------------------------------------------------------------
 # Its own (Daniele, 2026-10-13: "they should have their own key and be able to manage them"), kept in its
 # folder at secrets/secrets.json — but handled only by the supervisor: the instance stores, lists and

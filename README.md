@@ -127,6 +127,9 @@ shaft dataset|finetune [name]   # M6: export experiences / train a judged LoRA a
 
 shaft tools <name> [on|off <tool>]   # an instance's supervisor tools, e.g. off delegate_coding (operator-only:
                                      # kept in .supervisor/, so the instance cannot switch it back on)
+shaft mail login <alias> <address>   # log in one of your Gmail accounts (read-only; below)
+shaft mail <name> grant|revoke <alias> <label>   # the label's threads an instance may read · shaft mail <name> off
+shaft mail [name]                    # accounts and grants
 shaft pause [name] · shaft resume [name] · shaft check [name] · shaft setup · shaft list
 
 shaft trial list [name]                    # trials of proposed changes (an instance asks with its `trial` tool)
@@ -233,6 +236,34 @@ sends you (`send_message` to the operator) also arrives from its bot. The servic
 webhook or Funnel. Full text both ways: bot chats are not end-to-end encrypted, so Telegram's servers see them
 (accepted, 2026-10-13).
 
+### Mail (`shaft mail …`)
+
+An instance you pick may read the Gmail threads that carry a label you pick ([PLAN-mail.md](PLAN-mail.md)). No
+Gmail credential can be limited to one label, so the instance never holds one. The supervisor keeps the account's
+refresh token (scope `gmail.readonly`) in `.supervisor/mail/<alias>.json` (0600) and checks the label on every call.
+The search filters on the label's ID, and every thread it returns, reads or downloads from is checked again before
+anything of it is shown. A thread is visible while any of its messages carries the label; then all its messages
+are, later replies included. Drafts, trash and spam are left out. Nothing in the mailbox is ever changed.
+
+Setup, once per Workspace organisation:
+1. A Google Cloud project owned by the organisation, with the Gmail API enabled.
+2. An OAuth consent screen of type **Internal** (no Google review, tokens that do not expire after 7 days), with
+   only the `gmail.readonly` scope.
+3. A **Desktop app** OAuth client. Put its ID and secret in `.env` as `GMAIL_CLIENT_ID` / `GMAIL_CLIENT_SECRET`.
+4. `shaft mail login example-co operator@work.example` opens Google's consent page and checks the account.
+
+Then `shaft mail wren grant example-co ToObsidian` checks that the label exists and saves the grant in
+`.supervisor/tools/wren.json`. `shaft mail wren revoke example-co ToObsidian` or `shaft mail wren off` holds from wren's
+next mail call. A label renamed or deleted in Gmail is refused until you grant it again. Up to 30 mail calls per run.
+Bodies are cut at 20,000 characters (60,000 per thread). Downloads go to `mail/<alias>/<thread>/` in the instance's
+folder (gitignored by the template; a download is refused until `shaft update` brings that rule). Limits: 25 MB per
+file, 100 MB per run. Each body is shown under a line saying who wrote it and that it is not your instruction.
+Trial replays read the same mail, as of the replayed cycle, shared by the pair. Battery exams get none.
+
+The risks you accept by granting a label: anything an instance reads it can send anywhere (it has the internet).
+Mail content reaches model providers (a cloud-brained instance, the judges). Senders can write instructions into
+mail (prompt injection). What the instance writes from it into its mind is committed on its branch.
+
 ### The model server (`shaft model on`)
 
 `supervisor/bonsai_server.py`: mlx_lm's server with Bonsai's own loader (and a kept LoRA adapter, if
@@ -274,6 +305,9 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
   read-only, in its sandbox and in `run`; its file tools show it as `shared/`. Kept in
   `.supervisor/tools/<name>.json`, not in its `config.env`; a folder overlapping SHAFT's own state is
   refused, and battery exams never get it.
+  **Your mail, one label at a time** (`shaft mail <name> grant <alias> <label>`; [PLAN-mail.md](PLAN-mail.md)):
+  `mail_search`, `mail_read`, `mail_attachment`, offered only when granted. The credential and the grant stay with
+  the supervisor, which enforces the label on every call (below).
 - **Broker**: the only door to the outside — web search (ScrapeBadger), page fetching
   (public addresses only, re-checked on every redirect), messages between instances and to
   you (no daily limit unless `SHAFT_OPERATOR_PER_DAY`; a macOS notification, and Telegram if set up), with
