@@ -14,6 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 from supervisor import autonomy, battery, judge, metrics
+from supervisor.tests.mindfix import IGNORE_MIND
 
 
 def judgment(ts: str, met: str, difficulty=None, origin=None, **kw) -> dict:
@@ -412,11 +413,13 @@ class BatteryIsolationTest(unittest.TestCase):
         git(self.project, "commit", "-q", "--allow-empty", "-m", "main")
         self.root = self.project / "instances" / "b"
         git(self.project, "worktree", "add", "-q", "--orphan", "-b", "instance/b", str(self.root))
-        (self.root / ".gitignore").write_text(".tmp/\nlogs/\n")
+        (self.root / ".gitignore").write_text(".tmp/\nlogs/\n" + IGNORE_MIND)   # the mind is not in git
         (self.root / "memory").mkdir()
         (self.root / "memory" / "journal.md").write_text("# j\n\n---\n## old entry\n")
         (self.root / "notes").mkdir()
         (self.root / "notes" / "keep.md").write_text("keep")
+        (self.root / "plugins").mkdir()
+        (self.root / "plugins" / "p.py").write_text("P = 1\n")
         git(self.root, "add", "-A")
         git(self.root, "commit", "-q", "-m", "state")
         (self.root / "notes" / "uncommitted.md").write_text("an earlier run's untracked note")
@@ -443,6 +446,30 @@ class BatteryIsolationTest(unittest.TestCase):
         self.assertFalse((self.root / "notes" / "leak.md").exists())
         self.assertEqual((self.root / "notes" / "uncommitted.md").read_text(), "an earlier run's untracked note")
         self.assertEqual(sorted(undone), ["+notes/leak.md", "-notes/keep.md", "~memory/journal.md"])
+
+    def test_battery_restores_mind_edits(self):
+        # Found while planning PLAN-mind-out-of-git: the files to restore were listed by git alone, so once the
+        # mind is ignored an exam in the instance's real folder would have kept its memory edits for good.
+        self.assertEqual(subprocess.run(["git", "-C", str(self.root), "ls-files", "memory", "self", "notes"],
+                                        capture_output=True, text=True).stdout, "")     # really not in git
+        (self.root / "self").mkdir()
+        (self.root / "self" / "self.md").write_text("me\n")
+        (self.root / "memory" / "episodes").mkdir()
+        (self.root / "memory" / "link.md").symlink_to("journal.md")                  # the instance's own link
+        before = battery.snapshot(self.root)
+        with (self.root / "memory" / "journal.md").open("a") as f:
+            f.write("\n---\n## the battery task was: write add()\n")
+        (self.root / "memory" / "episodes" / "2026-10-15.jsonl").write_text('{"kind": "exam"}\n')
+        (self.root / "self" / "self.md").unlink()
+        (self.root / "plugins" / "p.py").write_text("P = 2\n")
+        undone = battery.restore(self.root, before)
+        self.assertEqual((self.root / "memory" / "journal.md").read_text(), "# j\n\n---\n## old entry\n")
+        self.assertFalse((self.root / "memory" / "episodes" / "2026-10-15.jsonl").exists())
+        self.assertEqual((self.root / "self" / "self.md").read_text(), "me\n")
+        self.assertEqual((self.root / "plugins" / "p.py").read_text(), "P = 1\n")
+        self.assertTrue((self.root / "memory" / "link.md").is_symlink())               # left alone
+        self.assertEqual(sorted(undone), ["+memory/episodes/2026-10-15.jsonl", "-self/self.md",
+                                          "~memory/journal.md", "~plugins/p.py"])
 
 
 class HiddenTestsTest(unittest.TestCase):
@@ -626,7 +653,7 @@ class BatteryEndToEndTest(unittest.TestCase):
         ])
         config = f'LLM_BASE_URL="{self.fake.url}"\nLLM_MODEL="fake"\nOPERATOR_NAME="Daniele"\n'
         (self.root / "config.env").write_text(config)
-        (self.root / ".gitignore").write_text(".tmp/\nlogs/\n")
+        (self.root / ".gitignore").write_text(".tmp/\nlogs/\n" + IGNORE_MIND)
         for d in ("self", "memory", "notes"):
             (self.root / d).mkdir()
         (self.root / "memory" / "journal.md").write_text("# journal\n")
