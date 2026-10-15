@@ -123,17 +123,18 @@ class SecondJudgeTest(unittest.TestCase):
         attempts, finish_reason 'stop', not cut off. The re-ask did not show it its answer, so it re-judged the whole
         case blind (2-4 min) and dropped the field as often; nothing kept what it had written, so the logs could not
         say why."""
-        dropped = {k: v for k, v in VERDICT.items() if k != "novelty"}
+        last = list(metrics.JUDGE_SCHEMA["properties"])[-1]               # GLM drops the schema's LAST field
+        dropped = {k: v for k, v in VERDICT.items() if k != last}
         out = self.ask(_reply(json.dumps(dropped)), _reply(json.dumps(VERDICT)))
         self.assertEqual(out, VERDICT)
         retry = self.sent[1]["messages"]
         self.assertEqual([m["role"] for m in retry], ["system", "user", "assistant", "user"])
         self.assertEqual(retry[2]["content"], json.dumps(dropped))       # its own answer, shown back
-        self.assertIn("missing novelty", retry[3]["content"])
+        self.assertIn(f"missing {last}", retry[3]["content"])
         self.assertIn(", ".join(metrics.JUDGE_SCHEMA["properties"]), retry[3]["content"])
         first, second = self.usage()
-        self.assertEqual(first["error"], "missing novelty")
-        self.assertTrue(first["seen"].endswith('"difficulty_reason": "a few known steps"}'))   # what it ended with
+        self.assertEqual(first["error"], f"missing {last}")
+        self.assertTrue(first["seen"].endswith(json.dumps(dropped)[-60:]))   # what it ended with
         self.assertNotIn("seen", second)
 
     def test_a_cut_off_answer_is_never_shown_back(self):
