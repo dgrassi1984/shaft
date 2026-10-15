@@ -170,6 +170,105 @@ class ReasoningAcrossStepsTest(unittest.TestCase):
         self.assertEqual(second["chat_template_kwargs"]["preserve_thinking"], False)
 
 
+class CallLedgerTest(unittest.TestCase):
+    """Twice on 2026-10-15 shaft told Daniele an append_file of its had "returned success" ("appended 2029 chars")
+    and then vanished from disk — it had never called it: no such call in its tool log or in the model's. Each step
+    now ends with the calls actually made, from the tool log, so a remembered-but-planned write shows as missing."""
+
+    def loop(self, replies, purpose="live", max_steps=12, box=None):
+        from shaft import agent
+        from shaft.tools import Toolbox
+        from supervisor.tests.fakellm import FakeLLM
+        fake = FakeLLM(replies)
+        self.addCleanup(fake.close)
+        root = box.root if box else Path(tempfile.mkdtemp(prefix="shaft-ledger-"))
+        box = box or Toolbox(root)
+        out = agent.run(Client(fake.url, "m", "", 30, root / "u.jsonl"), [{"role": "user", "content": "go"}], box,
+                        max_tokens=100, purpose=purpose, max_steps=max_steps)
+        return out, box, fake, root
+
+    @staticmethod
+    def seen(fake, i):
+        """The last tool message of model request i: what the model saw at the end of the step before."""
+        return [m["content"] for m in fake.requests[i]["messages"] if m["role"] == "tool"][-1]
+
+    def test_a_write_never_made_shows_as_none(self):
+        # The 17:2x cycle: searched, checked, ran — and never appended, then reported the append as done.
+        out, box, fake, root = self.loop([
+            {"tool_calls": [("list_files", {"path": "."}), ("read_file", {"path": "notes/t.md"})]},
+            {"tool_calls": [("list_files", {"path": "notes"})]},
+            {"content": "done"}])
+        last = self.seen(fake, 2)
+        self.assertIn("[runtime] Calls actually made so far this cycle (step 2 of 12)", last)
+        self.assertIn("list_files, read_file (ERROR), list_files", last)
+        self.assertTrue(last.endswith("File writes: none."), last)
+        self.assertNotIn("append_file", last)
+
+    def test_a_real_append_is_named_with_its_path_and_result(self):
+        out, box, fake, root = self.loop([
+            {"tool_calls": [("append_file", {"path": "notes/trend.md", "content": "- entry\n"})]},
+            {"content": "done"}])
+        self.assertEqual((root / "notes" / "trend.md").read_text(), "- entry\n")
+        self.assertIn("File writes: append_file notes/trend.md → appended 8 chars to notes/trend.md.",
+                      self.seen(fake, 1))
+
+    def test_a_refused_write_shows_its_error(self):
+        out, box, fake, root = self.loop([
+            {"tool_calls": [("append_file", {"path": "memory/journal.md", "content": "x"})]},
+            {"content": "done"}])
+        last = self.seen(fake, 1)
+        self.assertIn("append_file (ERROR)", last)
+        self.assertIn("File writes: append_file memory/journal.md → ERROR: PermissionError: memory/journal.md: "
+                      "the journal is append-only", last)
+
+    def test_the_tool_log_keeps_results_as_the_tools_returned_them(self):
+        # The judge and metrics read the tool log ("appended N chars"): the ledger is for the model only.
+        out, box, fake, root = self.loop([
+            {"tool_calls": [("append_file", {"path": "notes/a.md", "content": "x"})]},
+            {"content": "done"}])
+        self.assertEqual([e["result"] for e in box.log], ["appended 1 chars to notes/a.md"])
+        self.assertTrue(self.seen(fake, 1).startswith("appended 1 chars to notes/a.md\n\n[runtime] "))
+
+    def test_a_reply_counts_only_its_own_calls(self):
+        # A conversation keeps one toolbox across replies: the ledger is about "this reply".
+        out, box, fake, root = self.loop([{"tool_calls": [("append_file", {"path": "notes/a.md", "content": "x"})]},
+                                          {"content": "first reply"}], purpose="talk", max_steps=0)
+        out, box, fake, root = self.loop([{"tool_calls": [("list_files", {"path": "."})]},
+                                          {"content": "second reply"}], purpose="talk", max_steps=0, box=box)
+        last = self.seen(fake, 1)
+        self.assertIn("so far this reply (step 1), from my tool log: list_files. File writes: none.", last)
+
+    def test_a_long_reply_cuts_old_calls_but_never_a_write(self):
+        many = [{"tool_calls": [("read_file", {"path": f"nope-{i}.md"}), ("list_files", {"path": "."})]}
+                for i in range(40)]
+        out, box, fake, root = self.loop(
+            [{"tool_calls": [("write_file", {"path": "notes/w.md", "content": "w\n"})]}, *many, {"content": "done"}],
+            max_steps=0)
+        last = self.seen(fake, 41)
+        calls = last.split("from my tool log: ", 1)[1].split(". File writes:", 1)[0]
+        self.assertLessEqual(len(calls), 600 + len("… 999 earlier, "))
+        self.assertTrue(calls.startswith("… "), calls)
+        self.assertIn("File writes: write_file notes/w.md → wrote 2 chars to notes/w.md.", last)
+
+    def test_a_battery_exam_gets_no_ledger(self):
+        # The battery measures me over time: its tasks stay as they were before the ledger.
+        import json
+        from shaft import config, exam
+        from shaft.state import State
+        from supervisor.tests.fakellm import FakeLLM
+        fake = FakeLLM([{"tool_calls": [("list_files", {"path": "."})]},
+                        {"tool_calls": [("submit_answer", {"answer": "42"})]}])
+        self.addCleanup(fake.close)
+        root = Path(tempfile.mkdtemp(prefix="shaft-exam-"))
+        cfg = config.load(root, environ={"LLM_BASE_URL": fake.url, "LLM_MODEL": "m"})
+        out = exam.run(cfg, State(root), Client(fake.url, "m", "", 30, root / "u.jsonl"),
+                       {"prompt": "What is 6 x 7?", "max_steps": 4})
+        self.assertEqual(out["answer"], "42")
+        self.assertEqual(len(fake.requests), 2)
+        self.assertNotIn("[runtime] Calls", json.dumps(fake.requests[1]["messages"]))
+        self.assertIn("list_files", json.dumps(fake.requests[1]["messages"]))   # the step did run
+
+
 class FileToolsTest(unittest.TestCase):
     def test_a_running_record_is_not_silently_lost(self):
         # Regression: shaft rewrote notes/ai-misalignment-trend.md to add a dated entry and dropped the
