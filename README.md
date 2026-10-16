@@ -488,8 +488,9 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
   changed again since, or the tests fail with the earlier version) stays on probation and is logged.
   A change adopted against a trial's 'worse' verdict is undone on any drop, without the chance test.
 - **Judge**: every autonomous cycle is graded from its tool log by a cloud model picked at random from a
-  rotation (`SHAFT_JUDGE_MODELS`, default `openrouter/xiaomi/mimo-v2.6-pro,claude-haiku-5-5,claude-sonnet-5-5`;
-  Daniele, 2026-10-14 — Opus 5.5 was too costly), never the model the judged instance runs on; each verdict records
+  rotation (`SHAFT_JUDGE_MODELS`, default `openrouter/xiaomi/mimo-v2.6-pro,claude-sonnet-5-5`;
+  Daniele, 2026-10-14 — Opus 5.5 was too costly; Haiku 5.5 left 2026-10-16, far stricter than every other judge on
+  the same cycles, PLAN-judge-mix.md), never the model the judged instance runs on; each verdict records
   its judge. Claude models go straight to the Claude API; OpenRouter ones under the instances' data policy (no data
   collection, zero retention — Muse Spark was left out because its only provider keeps prompts). A trial pair keeps
   one judge for both orders; a battery item one grader for both arms, and a battery era is the whole pool. Results

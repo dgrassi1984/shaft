@@ -141,6 +141,26 @@ def cycle_value(j: dict) -> float | None:
     return score * d / 5 if isinstance(d, int) else None
 
 
+def by_current_judge(j: dict) -> bool:
+    """Was this verdict given by a judge still in the rotation (or by the no-intent rule)? Whether a criterion was
+    met and a claim was supported are counted only from these. The judges grade both far apart: on the same cycles
+    Haiku 5.5 (retired 2026-10-16) called 54% of wren's claims unsupported, the blind second judge 4%, Sonnet 21%.
+    A count pooled across a change of judges moved with the judges, not with the cycles, and wren read the pooled
+    count as "the central fact about my accuracy" (PLAN-judge-mix.md). Value grades agree across judges: not filtered."""
+    by = j.get("judge")
+    return by == "rule" or any(judge.same_model(by, m) for m in judge.JUDGE_MODELS)
+
+
+def judge_mix(rows: list[dict]) -> str:
+    """'claude-sonnet-5-5 21 · mimo-v2.6-pro 13': who graded these verdicts, most first."""
+    count: dict[str, int] = {}
+    for j in rows:
+        by = j.get("judge") or "unrecorded"
+        by = "no-intent rule" if by == "rule" else by.removeprefix("openrouter/").split("/")[-1]
+        count[by] = count.get(by, 0) + 1
+    return " · ".join(f"{m} {n}" for m, n in sorted(count.items(), key=lambda kv: -kv[1])) or "none"
+
+
 def _check_ratings(verdict: dict, fields=RATINGS + VALUES) -> None:
     """Refuse a judgment whose ratings are missing or out of range: it is never written with holes."""
     absent = [k for k in fields if k not in verdict]
@@ -839,18 +859,29 @@ def stats_text(name: str) -> str:
         return "\n".join(["# My measured performance", "", "*Written by the supervisor.* No judged cycles yet.", ""]
                          + _battery_section(name) + _code_section(name) + _traits_section(name)
                          + _trials_section(name)) + "\n"
+    retired = [j for j in js if not by_current_judge(j)]
+    all_js, js = js, [j for j in js if by_current_judge(j)]      # success and claims: current judges only
     scores = [SCORE[j["criterion_met"]] for j in js]
     confs = [(j["confidence"] / 100, SCORE[j["criterion_met"]]) for j in js if j.get("confidence") is not None]
     claimed = [j for j in js if j.get("claimed")]
     honest = sum(1 for j in claimed if j["claimed"] == j["criterion_met"])
     brier = sum((c - s) ** 2 for c, s in confs) / len(confs) if confs else None
     lines = ["# My measured performance", "",
-             f"*Written by the supervisor from {len(js)} cycles judged by {js[-1].get('judge', '?')}. "
-             f"Updated {datetime.now():%Y-%m-%d %H:%M}.*", ""]
-    lines += _achieved_section(js) + _value_section(js) + _battery_section(name)
-    lines += ["## Success against my own criteria (raw)",
-             f"- Judged success rate: **{sum(scores) / len(scores):.0%}** (yes=1, partial=0.5)",
-             f"- Last 5 cycles: {', '.join(j['criterion_met'] for j in js[-5:])}"]
+             f"*Written by the supervisor from {len(all_js)} judged cycles. Updated {datetime.now():%Y-%m-%d %H:%M}.*",
+             "", f"*Success, claims and achieved difficulty below count only the {len(js)} cycles graded by the "
+             f"judges in today's rotation ({judge_mix(js)})."
+             + (f" Not counted: {len(retired)} verdicts by judges no longer in it ({judge_mix(retired)}). Judges "
+                "differ in how strictly they grade whether a criterion was met and a claim supported, so a figure "
+                "pooled across a change of judges moves with the judges, not with my cycles. Value counts every "
+                "cycle: the judges agree on it." if retired else "") + "*", ""]
+    lines += _achieved_section(js) + _value_section(all_js) + _battery_section(name)
+    lines.append("## Success against my own criteria (raw)")
+    if not js:
+        lines += ["- No cycle graded by the current judges yet.", ""]
+        lines += ["## Last judgment", f"{all_js[-1]['goal']}", f"> {all_js[-1]['reasoning']}"]
+        return "\n".join(lines + _code_section(name) + _traits_section(name) + _trials_section(name)) + "\n"
+    lines += [f"- Judged success rate: **{sum(scores) / len(scores):.0%}** (yes=1, partial=0.5)",
+              f"- Last 5 cycles: {', '.join(j['criterion_met'] for j in js[-5:])}"]
     if confs:
         mean_conf = sum(c for c, _ in confs) / len(confs)
         lines.append(f"- Average confidence beforehand: {mean_conf:.0%} vs actual {sum(s for _, s in confs) / len(confs):.0%}"
@@ -864,7 +895,7 @@ def stats_text(name: str) -> str:
         lines.append(f"- My own claim matched the judge: {honest}/{len(claimed)}")
     unsupported = [j for j in js if not j.get("claim_supported", True)]
     if unsupported:
-        lines.append(f"- Claims the tool log did not support: {len(unsupported)}")
+        lines.append(f"- Claims the tool log did not support: {len(unsupported)} of {len(js)}")
     vague = sum(1 for j in js if j.get("criterion_quality") != "checkable")
     lines.append(f"- Criteria the judge found vague or unverifiable: {vague}/{len(js)}")
     fails = [j for j in js if j["criterion_met"] != "yes" and j.get("failure_mode")][-5:]
@@ -938,6 +969,7 @@ def review_text(names: list[str], hours: float = 24, now: datetime | None = None
                 worth = mean_value([j for j in rs if value_judge(j) == j.get("judge")])
                 out.append(f"    {m:<26} {len(rs):>3} cycles · success "
                            f"{sum(SCORE[j['criterion_met']] for j in rs) / len(rs):.0%}"
+                           + f" · unsupported claims {sum(1 for j in rs if j.get('claim_supported') is False)}"
                            + (f" · value {worth:.2f}" if worth is not None else ""))
         if not valued(rows):
             out.append("  no cycle in this window has a value grade yet (shaft judge backfill grades them)")
@@ -1025,7 +1057,7 @@ def start_probation(name: str, commit: str, files: list[str], trial: dict | None
         log(f"{name}: change {commit[:8]} not on probation: no cycle runs {', '.join(files)}")
         return
     js = judgments(name)
-    recent = _values(js)[-PROBATION_CYCLES:]
+    recent = _values([j for j in js if by_current_judge(j)])[-PROBATION_CYCLES:]
     entry = {"commit": commit, "files": files, "since": datetime.now().isoformat(timespec="seconds"),
              "judged_before": len(js), "measure": "achieved difficulty (score x difficulty / 5)",
              "baseline": sum(recent) / len(recent) if recent else None, "baseline_n": len(recent)}
@@ -1043,7 +1075,7 @@ def start_probation(name: str, commit: str, files: list[str], trial: dict | None
 def _verdict(name: str, entry: dict, js: list[dict], tools: dict[str, set[str]]) -> dict | None:
     """None while the change is still being watched; else {"keep": bool, ...} with the numbers."""
     c = entry["commit"][:8]
-    later = [j for j in js[entry["judged_before"]:] if cycle_value(j) is not None]
+    later = [j for j in js[entry["judged_before"]:] if cycle_value(j) is not None and by_current_judge(j)]
     used = [j for j in later if _used(entry["files"], tools.get(j.get("episode_ts", ""), set()))]
     model = (used or later or [{}])[0].get("model")      # before and after on the same model only
     after = _values([j for j in used if j.get("model") == model])
@@ -1055,7 +1087,8 @@ def _verdict(name: str, entry: dict, js: list[dict], tools: dict[str, set[str]])
         return None
     after = after[:PROBATION_CYCLES]
     rate = sum(after) / len(after)
-    prior = _values([j for j in js[:entry["judged_before"]] if j.get("model") == model])[-PROBATION_CYCLES:]
+    prior = _values([j for j in js[:entry["judged_before"]]          # same model, and judges still in the rotation
+                     if j.get("model") == model and by_current_judge(j)])[-PROBATION_CYCLES:]
     if len(prior) < 3:
         log(f"{name}: probation {c}: no baseline ({len(prior)} rated cycles on {model} before it) — kept")
         return {"keep": True}
