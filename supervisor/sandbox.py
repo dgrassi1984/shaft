@@ -9,6 +9,9 @@ evaluated last-match-wins.
 """
 from __future__ import annotations
 
+import functools
+import re
+import subprocess
 from pathlib import Path
 
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
@@ -23,6 +26,48 @@ def _no_secrets(root: Path) -> str:
     plugins or `run` — a value must never come back into its context. Later rules win, so this follows the
     allows."""
     return f"(deny file-read* file-write* (subpath {_q(root / 'secrets')}))"
+
+
+@functools.lru_cache(maxsize=1)
+def user_folder() -> Path | None:
+    """macOS's per-user folder (/private/var/folders/<xx>/<id>/: T temp files, C caches): outside the home, but the
+    operator's — every app he runs keeps its temp files and caches there. None if macOS does not say where it is."""
+    r = subprocess.run(["/usr/bin/getconf", "DARWIN_USER_TEMP_DIR"], capture_output=True, text=True)
+    temp = r.stdout.strip()
+    return Path(temp).resolve().parent if r.returncode == 0 and temp else None
+
+
+# The operator's places outside his home. Until 2026-10-16 only the home was denied, and any sandboxed process could
+# list and read these: /private/tmp held Claude Code's working files for every project of his; /Users/Shared and
+# /Volumes (other disks) hold whatever he puts there.
+OUTSIDE_HOME = ("/private/tmp", "/Users/Shared", "/Volumes")
+
+
+def _operator_places_closed() -> list[str]:
+    """The per-user folder (every app's temp files and caches) and OUTSIDE_HOME, closed. First in each profile, so
+    the rules after it still open what an instance may use there: its own folder, shared folder and environment (a
+    test's instance lives in a temp folder), and the image tools' temp names (_image_temp_names)."""
+    folder = user_folder()
+    if folder is None:
+        from .core import log
+        log("sandbox: macOS did not say where the per-user temp folder is (getconf DARWIN_USER_TEMP_DIR); "
+            "it is left readable")
+    places = [*([folder] if folder else []), *OUTSIDE_HOME]
+    return ["(deny file-read* file-write* " + " ".join(f"(subpath {_q(p)})" for p in places) + ")"]
+
+
+def _image_temp_names() -> list[str]:
+    """The names Apple's image tools give their own temp files in the per-user folder: `sips` writes
+    .<UUID>-<6 chars>, renames it to <UUID>, then copies the result where it was asked (it ignores TMPDIR; without
+    these it fails with "Cannot write to file …/T/<UUID>"). They are random and the folder cannot be listed, so no
+    other app's file is reachable. After the write rules (writes are denied there). SBPL regexes have no {n}
+    counts — a pattern with them never matches — so `+` it is."""
+    folder = user_folder()
+    if folder is None:
+        return []
+    hexes = "[0-9A-F]+"
+    name = rf"^{re.escape(str(folder / 'T'))}/\.?{hexes}-{hexes}-{hexes}-{hexes}-{hexes}(-[A-Za-z0-9]+)?$"
+    return [f'(allow file-read* file-write* (regex #"{name}"))']
 
 
 def _no_config_writes(root: Path) -> str:
@@ -66,6 +111,7 @@ def profile(instance_root: Path, home: Path, llm_ports: list[int], any_localhost
     lines = [
         "(version 1)",
         "(allow default)",
+        *_operator_places_closed(),
         # Writes: only its own directory and terminal/null devices.
         "(deny file-write*)",
         f"(allow file-write* (subpath {_q(root)}) (literal \"/dev/null\") (literal \"/dev/tty\")"
@@ -76,6 +122,7 @@ def profile(instance_root: Path, home: Path, llm_ports: list[int], any_localhost
         _ancestors_metadata(root, home),
         *_shared(shared, home),
         *_env_reads(root, env_root, home),
+        *_image_temp_names(),
         _no_secrets(root),
         _no_config_writes(root),
         # Network: only the given localhost ports (the internet only through the egress proxy among them).
@@ -110,6 +157,7 @@ def run_profile(instance_root: Path, home: Path, shared: Path | None = None, egr
     return "\n".join([
         "(version 1)",
         "(allow default)",
+        *_operator_places_closed(),
         "(deny file-write*)",
         f'(allow file-write* {writable} (literal "/dev/null") (literal "/dev/tty") (subpath "/dev/fd"))',
         f"(deny file-read* (subpath {_q(home)}))",
@@ -117,6 +165,7 @@ def run_profile(instance_root: Path, home: Path, shared: Path | None = None, egr
         _ancestors_metadata(root, home),
         *_shared(shared, home),
         *_env_reads(root, env_root, home),
+        *_image_temp_names(),
         _no_secrets(root),
         "(deny network*)",
         *([f'(allow network-outbound (remote ip "localhost:{int(egress_port)}"))'] if egress_port else []),

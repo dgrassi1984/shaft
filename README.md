@@ -368,7 +368,9 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
 ## Rules the supervisor enforces
 
 - **Sandbox** (macOS `sandbox-exec`): an instance writes only inside `instances/<name>/` — and not
-  its `config.env` —, reads nothing else in your home, and connects only to the LLM port(s)
+  its `config.env` —, reads nothing else in your home nor your places outside it (your macOS per-user temp and
+  cache folder `/var/folders/…`, `/private/tmp`, `/Users/Shared`, `/Volumes`; only the random temp names `sips`
+  gives its own files are open, so an instance can turn a PDF page into an image), and connects only to the LLM port(s)
   (`SHAFT_LLM_PORTS`, default 8780), its run's broker and its run's **egress proxy**. It inherits no secrets
   from the environment.
 - **Internet** ([PLAN-python-env.md](PLAN-python-env.md)): the sandbox cannot filter by address, so the
