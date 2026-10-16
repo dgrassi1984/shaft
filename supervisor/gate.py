@@ -141,14 +141,36 @@ def committed_tree(project: Path | None = None) -> tuple[Path, str]:
     return tree, label
 
 
+PLUGIN_CHECK_S = 120   # the plugins' check only imports and validates them
+
+
+class StageTimedOut(Exception):
+    """A stage of the gate ran past its time. Counted as a failure: the gate never lets a change through unjudged."""
+
+    def __init__(self, stage: str, seconds: int, tail: str = ""):
+        super().__init__(f"{stage}: timed out after {seconds}s, counted as failed")
+        self.stage, self.seconds, self.tail = stage, seconds, tail
+
+
+def _stage(stage: str, argv: list[str], timeout_s: int, **kw) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout_s, **kw)
+    except subprocess.TimeoutExpired as e:   # subprocess.run has killed the child already
+        tail = "".join(x.decode(errors="replace") if isinstance(x, bytes) else x
+                       for x in (e.stdout, e.stderr) if x)   # what it printed before it was stopped (bytes here)
+        raise StageTimedOut(stage, timeout_s, tail[-2000:]) from None
+
+
 def run_tests(instance_root: Path, home: Path, timeout_s: int = 900,
               env_root: Path | None = None) -> tuple[bool, str]:
     """Supervisor invariants against this instance's code (trusted test code, run from the last commit — never from
     what another session is editing; it sandboxes the agent itself), then its plugins' check and its own tests inside
     its sandbox, on its own Python environment (supervisor/pyenv.py). `env_root`: where that environment lives when
-    `instance_root` is a scratch copy (coder hand-off, trial gate) — read-only from the copy."""
+    `instance_root` is a scratch copy (coder hand-off, trial gate) — read-only from the copy. A stage that times out
+    fails the gate, named in the output and the supervisor log: raised instead, it left the change on disk
+    unsettled, neither kept nor reverted, and the next run took it as its baseline — ungated."""
     from . import pyenv
-    from .core import PYTHON, safe_mkdir
+    from .core import PYTHON, log, safe_mkdir
     env_root = Path(env_root or instance_root)
     py = pyenv.python(env_root)
     tmp = safe_mkdir(instance_root, ".tmp")
@@ -158,27 +180,35 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = 900,
         tree, label = committed_tree()
     except Exception as e:   # fail closed: a change kept unsettled would pass ungated as the next run's baseline
         return False, f"== supervisor invariants ==\nno committed copy of the supervisor to test with: {e!r}"
-    sup_env = {**os.environ, "SHAFT_UNDER_TEST": str(instance_root)}
-    sup = subprocess.run([PYTHON, "-E", "-s", "-m", "unittest", "discover", "-s", "supervisor/tests", "-t", "."],
-                         cwd=tree, env=sup_env, capture_output=True, text=True, timeout=timeout_s)
-    outputs.append(f"== supervisor invariants ({label}) ==\n" + sup.stderr[-3000:])
-    ok &= sup.returncode == 0
-
     fd, prof_name = tempfile.mkstemp(prefix="shaft-tests-", suffix=".sb")   # outside the instance
     prof = Path(prof_name)
     with os.fdopen(fd, "w") as f:
         f.write(sandbox.profile(instance_root, home, [], any_localhost=True, env_root=env_root))
-    env = sandbox.agent_env(os.environ, TMPDIR=str(tmp), SHAFT_PYTHON=py)
-    if (instance_root / "plugins").is_dir():
-        plug = subprocess.run(sandbox.wrap(prof, [py, "-E", "-s", "-m", "shaft.plugin_runner", "--check"]),
-                              cwd=instance_root, env=env, capture_output=True, text=True, timeout=120)
-        outputs.append("== plugins ==\n" + (plug.stdout + plug.stderr)[-2000:])
-        ok &= plug.returncode == 0
-    if (instance_root / "tests").is_dir():
-        passed, out = run_instance_tests(instance_root, prof, env, py, timeout_s)
-        outputs.append("== instance tests ==\n" + out)
-        ok &= passed
-    prof.unlink(missing_ok=True)
+    try:
+        sup_env = {**os.environ, "SHAFT_UNDER_TEST": str(instance_root)}
+        sup = _stage(f"supervisor invariants ({label})",
+                     [PYTHON, "-E", "-s", "-m", "unittest", "discover", "-s", "supervisor/tests", "-t", "."],
+                     timeout_s, cwd=tree, env=sup_env)
+        outputs.append(f"== supervisor invariants ({label}) ==\n" + sup.stderr[-3000:])
+        ok &= sup.returncode == 0
+
+        env = sandbox.agent_env(os.environ, TMPDIR=str(tmp), SHAFT_PYTHON=py)
+        if (instance_root / "plugins").is_dir():
+            plug = _stage("plugins", sandbox.wrap(prof, [py, "-E", "-s", "-m", "shaft.plugin_runner", "--check"]),
+                          min(PLUGIN_CHECK_S, timeout_s), cwd=instance_root, env=env)
+            outputs.append("== plugins ==\n" + (plug.stdout + plug.stderr)[-2000:])
+            ok &= plug.returncode == 0
+        if (instance_root / "tests").is_dir():
+            passed, out = run_instance_tests(instance_root, prof, env, py, timeout_s)
+            outputs.append("== instance tests ==\n" + out)
+            ok &= passed
+    except StageTimedOut as t:
+        log(f"gate: {instance_root}: {t}")
+        outputs.append(f"== {t.stage} ==\n" + (t.tail + "\n" if t.tail else "")
+                       + f"{t}; the checks after it did not run")
+        ok = False
+    finally:
+        prof.unlink(missing_ok=True)
     return ok, "\n".join(outputs)
 
 
@@ -190,9 +220,8 @@ def run_instance_tests(instance_root: Path, prof: Path, env: dict, py: str, time
     a plain folder of test files must work too (a correct coder-written test was rejected
     because tests/ had no __init__.py)."""
     top = ["-t", "."] if (instance_root / "tests" / "__init__.py").exists() else []
-    agent = subprocess.run(
-        sandbox.wrap(prof, [py, "-E", "-s", "-m", "unittest", "discover", "-s", "tests", *top]),
-        cwd=instance_root, env=env, capture_output=True, text=True, timeout=timeout_s)
+    agent = _stage("instance tests", sandbox.wrap(prof, [py, "-E", "-s", "-m", "unittest", "discover", "-s", "tests",
+                                                         *top]), timeout_s, cwd=instance_root, env=env)
     if agent.returncode == NO_TESTS_RAN:
         # A tests/ folder with nothing in it (kant's held only a stale __pycache__) is not a failing suite: read as
         # one, it rolled back every update and self-change. A test file that fails to import still fails (exit 1).

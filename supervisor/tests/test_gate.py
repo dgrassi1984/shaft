@@ -96,8 +96,8 @@ def git(repo: Path, *args: str) -> None:
                    check=True, capture_output=True)
 
 
-class CommittedTreeTest(unittest.TestCase):
-    """The supervisor's tests in the gate come from the last commit, not from the checkout other sessions edit."""
+class FakeProjectCase(unittest.TestCase):
+    """A tiny committed project for the gate to take its supervisor tests from, and an empty instance beside it."""
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="shaft-gate-tree-")).resolve()
@@ -134,8 +134,12 @@ class CommittedTreeTest(unittest.TestCase):
         patch.start()
         self.addCleanup(patch.stop)
 
-    def gate(self) -> tuple[bool, str]:
-        return gate.run_tests(self.inst, Path.home(), timeout_s=120)
+    def gate(self, timeout_s: int = 120) -> tuple[bool, str]:
+        return gate.run_tests(self.inst, Path.home(), timeout_s=timeout_s)
+
+
+class CommittedTreeTest(FakeProjectCase):
+    """The supervisor's tests in the gate come from the last commit, not from the checkout other sessions edit."""
 
     def test_half_written_sandbox_in_the_checkout_does_not_fail_the_gate_20261016(self):
         # Regression (2026-10-16 09:40): another session was mid-edit on supervisor/sandbox.py in the main checkout;
@@ -178,6 +182,59 @@ class CommittedTreeTest(unittest.TestCase):
         self.assertNotEqual(second, first)
         self.assertFalse(first.parent.exists())
         self.assertFalse((second / "notes.txt").exists())
+
+
+HANGS = ("import sys, time, unittest\n\nclass T(unittest.TestCase):\n    def test_hangs(self):\n"
+         "        sys.stderr.write('test_hangs started\\n'); sys.stderr.flush(); time.sleep(120)\n")
+
+
+class StageTimeoutTest(FakeProjectCase):
+    """Regression (found 2026-10-16, by reading): a gate stage that ran past its timeout raised TimeoutExpired out of
+    run_tests, and runner._settle has no handler: the instance's change stayed on disk neither kept nor reverted, and
+    the next run's snapshot took it as its baseline, so it passed without ever being gated. Each stage's timeout must
+    fail the gate, named in the output the instance is shown and in the supervisor log."""
+
+    def gate_timing_out(self, timeout_s: int) -> tuple[bool, str, str]:
+        with mock.patch("supervisor.core.log") as log:
+            ok, out = self.gate(timeout_s)
+        logged = "\n".join(c.args[0] for c in log.call_args_list)
+        return ok, out, logged
+
+    def test_supervisor_invariants_timing_out_fail_the_gate(self):
+        (self.project / "supervisor" / "tests" / "test_slow.py").write_text(HANGS)
+        git(self.project, "add", "-A")
+        git(self.project, "commit", "-qm", "a supervisor test that hangs")
+        (self.inst / "tests").mkdir()
+        (self.inst / "tests" / "test_ok.py").write_text("import unittest\n\nclass T(unittest.TestCase):\n"
+                                                       "    def test_ok(self):\n        pass\n")
+        ok, out, logged = self.gate_timing_out(3)
+        self.assertFalse(ok, out)
+        self.assertIn("supervisor invariants (", out)
+        self.assertIn("timed out after 3s, counted as failed", out)
+        self.assertNotIn("== instance tests ==", out)                   # the checks after it did not run
+        self.assertIn("supervisor invariants (", logged)
+        self.assertIn("timed out after 3s", logged)
+
+    def test_the_plugins_check_timing_out_fails_the_gate(self):
+        (self.inst / "plugins").mkdir()
+        (self.inst / "shaft").mkdir()
+        (self.inst / "shaft" / "__init__.py").write_text("")
+        (self.inst / "shaft" / "plugin_runner.py").write_text("import time\ntime.sleep(120)\n")
+        with mock.patch.object(gate, "PLUGIN_CHECK_S", 3):
+            ok, out, logged = self.gate_timing_out(60)
+        self.assertFalse(ok, out)
+        self.assertIn("== plugins ==\n", out)
+        self.assertIn("plugins: timed out after 3s, counted as failed", out)
+        self.assertIn("plugins: timed out after 3s", logged)
+
+    def test_instance_tests_timing_out_fail_the_gate_and_say_which_test(self):
+        (self.inst / "tests").mkdir()
+        (self.inst / "tests" / "test_slow.py").write_text(HANGS)
+        ok, out, logged = self.gate_timing_out(5)
+        self.assertFalse(ok, out)
+        self.assertIn("instance tests: timed out after 5s, counted as failed", out)
+        self.assertIn("test_hangs started", out)                       # what it printed before it was stopped
+        self.assertIn("instance tests: timed out after 5s", logged)
 
 
 if __name__ == "__main__":
