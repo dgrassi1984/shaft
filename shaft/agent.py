@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from . import pausing
+from . import images, pausing
 from .llm import Client, Reply
 from .tools import Toolbox, for_log
 
@@ -142,6 +142,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
         yielding = step > 1 and yield_requested()
         last = step == max_steps or yielding or (left is not None and left < WRAP_UP_RESERVE_S)
         mark = len(messages)
+        images.keep_newest(messages)   # only the newest images are resent (PLAN-vision.md)
         pausing.activity(keep=True, phase="thinking", step=step, purpose=purpose, tool=None, args=None)
         try:
             if last and wrap_up:
@@ -205,6 +206,9 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
             return Outcome(reply, "control", step, toolbox.log)
         if ledger:
             messages[-1]["content"] += "\n\n" + call_ledger(toolbox.log[first_logged:], step, max_steps, purpose)
+        if toolbox.shown:   # what view_image showed: after the tool results, as a tool result cannot carry an image
+            messages.append(images.image_message(toolbox.shown))
+            toolbox.shown = []
         if last and wrap_up:
             break
     return Outcome(reply, "steps", step, toolbox.log)

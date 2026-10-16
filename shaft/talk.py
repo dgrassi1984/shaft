@@ -18,7 +18,7 @@ import re
 import sys
 import uuid
 
-from . import agent, memory, prompts, recovery
+from . import agent, images, memory, prompts, recovery
 from .llm import Client, LLMError
 from .state import State
 from .tools import Toolbox
@@ -294,8 +294,9 @@ def answer(cfg, state: State, client: Client, request: dict) -> None:
     state.append_episode({"kind": "talk", "talk_id": talk_id, "role": "user", "content": dialogue[-1]["content"],
                           "via": app})
     asked = dialogue[-1]["content"]
-    dialogue[-1] = {**dialogue[-1], "content": asked + memory.recall(
-        state.root, asked, shown=system + "\n" + "\n".join(m["content"] for m in dialogue))}   # not this dialogue
+    dialogue[-1] = {**dialogue[-1], "content": images.with_attached(asked + memory.recall(
+        state.root, asked, shown=system + "\n" + "\n".join(m["content"] for m in dialogue)), state.root,
+        listed_in=asked)}   # recall: not this dialogue; images: only those this message lists
     turn = [{"role": "system", "content": system}, *dialogue]
     log_start = len(toolbox.log)
     reply = _respond(client, cfg, toolbox, turn, view)

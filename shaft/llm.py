@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from . import pausing
+from . import images, pausing
 
 
 class LLMError(Exception):
@@ -129,7 +129,7 @@ class Client:
 
     def _call(self, messages, max_tokens, purpose, stream, tools=None,
               on_content=None, on_reasoning=None, on_progress=None, think=True, on_tool_text=None) -> Reply:
-        body = {"model": self.model, "messages": messages, "max_tokens": max_tokens}
+        body = {"model": self.model, "messages": images.for_model(messages), "max_tokens": max_tokens}
         if self.presence_penalty:   # Qwen's advice for quantized models: curbs endless repetition
             body["presence_penalty"] = self.presence_penalty
         # Bonsai's template settings (my local server, or a self-hosted one through the broker); the broker drops

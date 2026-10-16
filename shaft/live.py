@@ -9,7 +9,7 @@ from __future__ import annotations
 import shutil
 from datetime import datetime
 
-from . import agent, memory, pausing, prompts
+from . import agent, images, memory, pausing, prompts
 from .agent import Control
 from .llm import Client
 from .state import State
@@ -102,8 +102,9 @@ def run(cfg, state: State, client: Client) -> str:
     about = "\n".join([state.read(state.goals_md), prompts.improvement_plan(state), inbox_text(inbox)])
     messages = [
         {"role": "system", "content": system},
-        {"role": "user", "content": prompts.LIVE.format(steps=cfg.MAX_STEPS_LIVE, inbox=inbox_text(inbox))
-         + memory.recall(state.root, about, shown=system)},
+        {"role": "user", "content": images.with_attached(   # images attached to my messages (PLAN-vision.md)
+            prompts.LIVE.format(steps=cfg.MAX_STEPS_LIVE, inbox=inbox_text(inbox))
+            + memory.recall(state.root, about, shown=system), state.root, listed_in=inbox_text(inbox))},
     ]
     outcome = agent.run(client, messages, toolbox, max_tokens=cfg.MAX_TOKENS_STEP, purpose="live",
                         max_steps=cfg.MAX_STEPS_LIVE, controls=controls,
