@@ -40,6 +40,8 @@ PROTECTED = {
 PROTECTED_DIRS = {".git": "git internals",
                   "secrets": "my keys are handled by the supervisor: secret_set / secret_list / secret_delete", "memory/episodes": "episodes are append-only records",
                   "logs": "logs are written by my runtime", "inbox": "the supervisor delivers messages here"}
+# My records (the mind, beside self/'s own tools): write_file may not drop their lines unless I say replace.
+RECORD_DIRS = ("notes", "memory")
 # The operator's folder I may read (shaft share <name> <folder>): seen as shared/, never written.
 SHARED = "shared"
 SHARED_READ_ONLY = "read-only: shared/ is the operator's folder — write what you make from it to notes/"
@@ -61,7 +63,11 @@ BUILTINS = [
     _spec("write_file", "Create or overwrite a text file inside my own folder. Use it for notes/, "
           "skills/, plugins/, self/goals.md and my own code. Code changes are tested by the "
           "supervisor after the run and reverted if tests fail. It replaces the whole file: to add an "
-          "entry to a log or record, use append_file.", {"path": S, "content": S}),
+          "entry to a log or record, use append_file. A write that would drop lines of a record in notes/ "
+          "or memory/ is refused unless replace is true.",
+          {"path": S, "content": S,
+           "replace": {"type": "boolean", "description": "true only to replace a notes/ or memory/ record on "
+                       "purpose, dropping lines it holds now (default false)"}}, ["path", "content"]),
     _spec("append_file", "Add text to the end of a text file inside my own folder (created if missing) — "
           "the safe way to add a dated entry to a running record such as a notes/ log; nothing already "
           "in the file can be lost.", {"path": S, "content": S}),
@@ -190,13 +196,20 @@ class Toolbox:
         text = self._path(path).read_text(errors="replace")
         return text[offset:offset + MAX_RESULT_CHARS] or "(empty)"
 
-    def _t_write_file(self, path: str, content: str) -> str:
+    def _t_write_file(self, path: str, content: str, replace: bool = False) -> str:
         target = self._path(path, for_write=True)
-        target.parent.mkdir(parents=True, exist_ok=True)
         old = target.read_text(errors="replace").splitlines() if target.is_file() else []
-        target.write_text(content)
         kept = set(content.splitlines())
         gone = [l for l in old if l.strip() and l not in kept]
+        record = target.relative_to(self.root).parts[0] in RECORD_DIRS
+        if gone and record and replace is not True and str(replace).lower() != "true":
+            # 2026-10-16 03:59: I meant to add an audit entry and wrote it with write_file over my 546 KB trend
+            # record; the report after the write said 2,067 lines were gone, but they already were. Refused first.
+            return (f"ERROR: not written. {path} has {len(old)} lines and this write would drop {len(gone)} of "
+                    f"them, e.g. {gone[0][:120]!r}. To add an entry, use append_file. To replace this record on "
+                    f"purpose, call write_file again with replace=true.")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content)
         if not gone:
             return f"wrote {len(content)} chars to {path}"
         # I once rewrote a running record and silently dropped its earlier entries: say what went — and say
