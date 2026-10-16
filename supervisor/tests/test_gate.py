@@ -1,10 +1,14 @@
 """The self-modification gate restores failing code changes byte-for-byte."""
 from __future__ import annotations
 
+import os
 import shutil
+import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from supervisor import gate
 
@@ -85,6 +89,95 @@ class InstanceTestsTest(unittest.TestCase):
         # "No tests" must not swallow a broken test: an import error is a failed test, not an empty folder.
         ok, out = self._run({"test_broken.py": "import does_not_exist\n"})
         self.assertFalse(ok, out)
+
+
+def git(repo: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                   check=True, capture_output=True)
+
+
+class CommittedTreeTest(unittest.TestCase):
+    """The supervisor's tests in the gate come from the last commit, not from the checkout other sessions edit."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="shaft-gate-tree-")).resolve()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.project, self.inst = self.tmp / "project", self.tmp / "inst"
+        tests = self.project / "supervisor" / "tests"
+        tests.mkdir(parents=True)
+        self.inst.mkdir()
+        (self.project / "supervisor" / "__init__.py").write_text("")
+        (tests / "__init__.py").write_text("")
+        self.sandbox = self.project / "supervisor" / "sandbox.py"
+        self.sandbox.write_text('PROFILE = "closed"\n')
+        (tests / "test_sandbox.py").write_text(
+            "import unittest\nfrom pathlib import Path\nfrom supervisor import sandbox\n\n"
+            "class T(unittest.TestCase):\n"
+            "    def test_profile(self):\n        self.assertEqual(sandbox.PROFILE, 'closed')\n\n"
+            "    def test_no_real_instance_within_reach(self):\n"
+            "        project = Path(__file__).resolve().parents[2]\n"
+            "        self.assertEqual(list((project / 'instances').iterdir()), [])\n"
+            "        self.assertNotIn('KEY', (project / '.env').read_text())\n\n"
+            "    def test_its_own_repository(self):\n"   # the runner refuses a project without .git
+            "        import subprocess\n"
+            "        project = Path(__file__).resolve().parents[2]\n"
+            "        top = subprocess.run(['git', '-C', str(project), 'rev-parse', '--show-toplevel'],\n"
+            "                             capture_output=True, text=True).stdout.strip()\n"
+            "        self.assertEqual(Path(top).resolve(), project)\n")
+        (self.project / ".gitignore").write_text("/instances/\n/.supervisor/\n.env\n")
+        (self.project / "instances" / "kant").mkdir(parents=True)
+        (self.project / ".env").write_text("KEY=secret\n")
+        git(self.project, "init", "-q")
+        git(self.project, "add", "-A")
+        git(self.project, "commit", "-qm", "start")
+        patch = mock.patch.object(gate, "PROJECT", self.project)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def gate(self) -> tuple[bool, str]:
+        return gate.run_tests(self.inst, Path.home(), timeout_s=120)
+
+    def test_half_written_sandbox_in_the_checkout_does_not_fail_the_gate_20261016(self):
+        # Regression (2026-10-16 09:40): another session was mid-edit on supervisor/sandbox.py in the main checkout;
+        # the gate ran the supervisor's tests from that half-written file, 37 failed, and shaft's good
+        # plugins/write_gate change was reverted. An edit nobody committed must not decide a verdict.
+        ok, out = self.gate()
+        self.assertTrue(ok, out)
+        self.sandbox.write_text('PROFILE = "half-writ')                       # a syntax error, mid-edit
+        (self.project / "supervisor" / "tests" / "test_wip.py").write_text("import unittest\n"
+            "class W(unittest.TestCase):\n    def test_unfinished(self):\n        self.fail('wip')\n")
+        ok, out = self.gate()
+        self.assertTrue(ok, out)
+        self.assertIn("Ran 3 tests", out)
+        self.assertIn(f"supervisor invariants ({gate._git(self.project, 'rev-parse', 'HEAD').decode()[:10]})", out)
+
+    def test_a_committed_breaking_change_still_fails_the_gate(self):
+        self.assertTrue(self.gate()[0])
+        self.sandbox.write_text('PROFILE = "open"\n')
+        git(self.project, "commit", "-qam", "break the sandbox")
+        ok, out = self.gate()
+        self.assertFalse(ok, out)
+        self.assertIn("test_profile", out)
+
+    def test_no_committed_copy_fails_closed(self):
+        # Raising would leave the change on disk unsettled, and the next run would take it as its baseline: ungated.
+        shutil.rmtree(self.project / ".git")
+        ok, out = self.gate()
+        self.assertFalse(ok)
+        self.assertIn("no committed copy", out)
+
+    def test_one_tree_per_commit_and_idle_trees_go(self):
+        first, _ = gate.committed_tree(self.project)
+        self.assertEqual(gate.committed_tree(self.project)[0], first)            # reused, not copied again
+        (self.project / "notes.txt").write_text("unfinished")                   # untracked: not in the tree
+        git(self.project, "commit", "-q", "--allow-empty", "-m", "next")
+        self.assertEqual(first.name, "project")       # named like the project: tests may read its name
+        old = time.time() - gate.TREE_IDLE_S - 60
+        os.utime(first.parent, (old, old))
+        second, _ = gate.committed_tree(self.project)
+        self.assertNotEqual(second, first)
+        self.assertFalse(first.parent.exists())
+        self.assertFalse((second / "notes.txt").exists())
 
 
 if __name__ == "__main__":

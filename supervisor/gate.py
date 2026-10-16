@@ -79,12 +79,74 @@ def revert_config(instance_root: Path, writes: list[dict]) -> list[str]:
     return back
 
 
+TREES = ".supervisor/gate-tests"   # under the project: the tests' sandbox probes need it inside the home folder
+TREE_IDLE_S = 86400                # a committed tree no gate has used for a day is removed
+
+
+def _git(repo: Path, *args: str) -> bytes:
+    """git's stdout. Popen, not subprocess.run: tests replace subprocess.run to record the gate's own commands."""
+    p = subprocess.Popen(["git", "-C", str(repo), *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    out, err = p.communicate()
+    if p.returncode:
+        raise RuntimeError(f"git -C {repo} {' '.join(args)}: {err.decode(errors='replace').strip()}")
+    return out
+
+
+def _extract(repo: Path, rev: str, dest: Path) -> None:
+    import io
+    import tarfile
+    with tarfile.open(fileobj=io.BytesIO(_git(repo, "archive", "--format=tar", rev))) as tar:
+        tar.extractall(dest, filter="data")
+
+
+def committed_tree(project: Path | None = None) -> tuple[Path, str]:
+    """A clean copy of the project's last commit, with its template's last commit at template/, where the gate runs
+    the supervisor's tests: several sessions edit the main checkout at once, and a half-written sandbox.py there
+    failed 37 supervisor tests and reverted shaft's good plugins/write_gate change (2026-10-16 09:40). One copy per
+    pair of commits, made once and reused, in a folder named like the project's and committed as its own repository
+    (the runner refuses a project without .git; a test's git commands never reach the real one). Nothing of the
+    running system is in it: an empty instances/ and a .env without secrets, so the sandbox probes still aim at files
+    that exist, and no test can touch a real instance. Returns the copy and the commits' label."""
+    import shutil
+    import time
+    project = Path(project or PROJECT)
+    template = project / "template"
+    head = _git(project, "rev-parse", "HEAD").decode().strip()
+    tpl = _git(template, "rev-parse", "HEAD").decode().strip() if (template / ".git").exists() else ""
+    label = head[:10] + (f" template {tpl[:10]}" if tpl else "")
+    base = project / TREES
+    base.mkdir(parents=True, exist_ok=True)
+    commits = base / (head[:16] + (f"-{tpl[:16]}" if tpl else ""))
+    tree = commits / project.name
+    if not tree.is_dir():
+        staging = Path(tempfile.mkdtemp(prefix=".new-", dir=base))
+        _extract(project, head, staging / project.name)
+        if tpl:
+            _extract(template, tpl, staging / project.name / "template")
+        for d in (".supervisor", "instances"):           # the tests' own scratch folders, not the real ones
+            (staging / project.name / d).mkdir(exist_ok=True)
+        (staging / project.name / ".env").write_text("# the gate's copy of the project: no secrets\n")
+        for args in (("init", "-q"), ("add", "-A"), ("commit", "-q", "--no-verify", "-m", label)):
+            _git(staging / project.name, "-c", "user.name=shaft gate", "-c", "user.email=gate@shaft.invalid",
+                 "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", *args)
+        try:
+            staging.rename(commits)
+        except OSError:                                   # another gate run made it first
+            shutil.rmtree(staging, ignore_errors=True)
+    now = time.time()
+    os.utime(commits, (now, now))
+    for old in base.iterdir():
+        if old != commits and old.is_dir() and now - old.stat().st_mtime > TREE_IDLE_S:
+            shutil.rmtree(old, ignore_errors=True)
+    return tree, label
+
+
 def run_tests(instance_root: Path, home: Path, timeout_s: int = 900,
               env_root: Path | None = None) -> tuple[bool, str]:
-    """Supervisor invariants against this instance's code (trusted test code; it sandboxes
-    the agent itself), then its plugins' check and its own tests inside its sandbox, on its own Python
-    environment (supervisor/pyenv.py). `env_root`: where that environment lives when `instance_root` is a
-    scratch copy (coder hand-off, trial gate) — read-only from the copy."""
+    """Supervisor invariants against this instance's code (trusted test code, run from the last commit — never from
+    what another session is editing; it sandboxes the agent itself), then its plugins' check and its own tests inside
+    its sandbox, on its own Python environment (supervisor/pyenv.py). `env_root`: where that environment lives when
+    `instance_root` is a scratch copy (coder hand-off, trial gate) — read-only from the copy."""
     from . import pyenv
     from .core import PYTHON, safe_mkdir
     env_root = Path(env_root or instance_root)
@@ -92,10 +154,14 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = 900,
     tmp = safe_mkdir(instance_root, ".tmp")
     outputs, ok = [], True
 
+    try:
+        tree, label = committed_tree()
+    except Exception as e:   # fail closed: a change kept unsettled would pass ungated as the next run's baseline
+        return False, f"== supervisor invariants ==\nno committed copy of the supervisor to test with: {e!r}"
     sup_env = {**os.environ, "SHAFT_UNDER_TEST": str(instance_root)}
     sup = subprocess.run([PYTHON, "-E", "-s", "-m", "unittest", "discover", "-s", "supervisor/tests", "-t", "."],
-                         cwd=PROJECT, env=sup_env, capture_output=True, text=True, timeout=timeout_s)
-    outputs.append("== supervisor invariants ==\n" + sup.stderr[-3000:])
+                         cwd=tree, env=sup_env, capture_output=True, text=True, timeout=timeout_s)
+    outputs.append(f"== supervisor invariants ({label}) ==\n" + sup.stderr[-3000:])
     ok &= sup.returncode == 0
 
     fd, prof_name = tempfile.mkstemp(prefix="shaft-tests-", suffix=".sb")   # outside the instance

@@ -217,7 +217,6 @@ class InstanceSideTest(unittest.TestCase):
 
 class OperatorCommandTest(unittest.TestCase):
     def test_shaft_secret_set_from_stdin_never_prints_the_value(self):
-        project = Path(__file__).resolve().parents[2]
         tmp = Path(tempfile.mkdtemp(prefix="shaft-sec-")).resolve()
         self.addCleanup(shutil.rmtree, tmp, True)
         root = tmp / "wren"
@@ -231,7 +230,6 @@ class OperatorCommandTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertNotIn(TOKEN, out.getvalue())
         self.assertEqual(core.read_secrets(root)["github"]["value"], TOKEN)
-        self.assertEqual(project.name, "shaft")
 
 
 if __name__ == "__main__":
