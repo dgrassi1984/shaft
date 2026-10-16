@@ -48,6 +48,9 @@ def git(cwd, *args):
                           check=True, capture_output=True, text=True).stdout
 
 
+REAL_RUN_TESTS = gate.run_tests
+
+
 def instance_tests_only(root: Path, home: Path):
     """The gate's tests minus the supervisor invariants (they would run this whole suite again, inside itself):
     the instance's own tests, in its sandbox, for real."""
@@ -80,9 +83,9 @@ class ConfigWritersTest(unittest.TestCase):
         mind.init("kant", self.project)
         mind.commit("kant", "kant: created", self.root, self.project)
 
-    def cycle(self, test_file: str, during):
+    def cycle(self, test_file: str, during, gate_tests=instance_tests_only):
         """One live cycle through the supervisor's own entry point; `during(broker)` runs while the instance
-        is mid-cycle, then the cycle ends."""
+        is mid-cycle, then the cycle ends. `gate_tests` stands in for gate.run_tests."""
         from supervisor import core, runner
         from supervisor.broker import Broker
         sup = self.project / ".supervisor"
@@ -96,7 +99,7 @@ class ConfigWritersTest(unittest.TestCase):
              mock.patch.object(core, "INSTANCES", self.project / "instances"), \
              mock.patch.object(runner, "instance_root", return_value=self.root), \
              mock.patch.object(runner, "_launch", return_value=(broker, cmd, env)), \
-             mock.patch.object(gate, "run_tests", side_effect=instance_tests_only), \
+             mock.patch.object(gate, "run_tests", side_effect=gate_tests), \
              mock.patch.object(runner, "log"), mock.patch("supervisor.metrics.after_cycle"), \
              mock.patch("supervisor.metrics.start_probation") as probation:
             t = threading.Thread(target=lambda: result.update(code=runner.run_agent("kant", "live", ["live"], False)))
@@ -149,6 +152,36 @@ class ConfigWritersTest(unittest.TestCase):
         self.assertTrue(outside[0].strip().startswith("SHAFT supervisor|"))
         self.assertIn('LLM_MODEL: bonsai -> claude-opus-5-5', outside[0])
         self.assertFalse([c for c in self.commits() if "made by the instance" in c and "config.env" in c])
+
+    def test_a_gate_stage_that_times_out_reverts_the_change_instead_of_leaving_it_ungated_20261016(self):
+        # Regression (found 2026-10-16): a gate stage past its timeout raised TimeoutExpired out of runner._settle.
+        # The change stayed on disk, neither kept nor reverted, and the next run's snapshot took it as its "before":
+        # it passed without ever being gated. The real gate.run_tests runs here, every stage; the instance's test hangs.
+        tree = self.project.parent / (self.project.name + "-tree")                 # a tiny committed supervisor
+        self.addCleanup(shutil.rmtree, tree, True)
+        (tree / "supervisor" / "tests").mkdir(parents=True)
+        for rel in ("supervisor/__init__.py", "supervisor/tests/__init__.py"):
+            (tree / rel).write_text("")
+        (tree / "supervisor" / "tests" / "test_ok.py").write_text(PASSING)
+        (self.root / "shaft" / "plugin_runner.py").write_text("")                # its plugins' check passes
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "-m", "kant: plugin runner")
+        hangs = ("import sys, time, unittest\n\nclass T(unittest.TestCase):\n    def test_x(self):\n"
+                 "        sys.stderr.write('test_x started\\n'); sys.stderr.flush(); time.sleep(120)\n")
+        with mock.patch.object(gate, "committed_tree", return_value=(tree, "tree")):
+            self.cycle(hangs, lambda broker: None, lambda root, home: REAL_RUN_TESTS(root, home, timeout_s=5))
+        self.assertFalse((self.root / "plugins" / "text_stats" / "main.py").exists())   # reverted, not left on disk
+        self.assertFalse((self.root / "tests" / "test_text_stats.py").exists())
+        unsettled = git(self.root, "status", "--porcelain", "--untracked-files=all", "--", *gate.CODE_PATHS)
+        self.assertEqual([l for l in unsettled.splitlines() if "__pycache__" not in l], [])     # the gate ignores those
+        self.assertFalse([c for c in self.commits() if "text_stats" in c])
+        reverted = self.journal_entry("Supervisor: code change reverted")           # the instance is told why
+        self.assertIn("plugins/text_stats/main.py", reverted)
+        self.assertIn("instance tests: timed out after 5s, counted as failed", reverted)
+        self.assertIn("test_x started", reverted)
+        logged = (self.project / ".supervisor" / "supervisor.log").read_text()
+        self.assertIn("instance tests: timed out after 5s", logged)                  # and the operator, which stage
+        self.probation.assert_not_called()
 
     def test_an_operator_edit_mid_cycle_is_not_the_instance_s_change_when_its_tests_pass(self):
         self.cycle(PASSING, lambda broker: self.operator_edits(OPERATOR))
