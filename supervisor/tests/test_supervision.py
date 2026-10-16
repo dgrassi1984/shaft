@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
-from supervisor import broker, metrics, runner
+from supervisor import broker, judge, metrics, runner
 
 
 class BrokerTest(unittest.TestCase):
@@ -96,7 +96,7 @@ class StatsTest(unittest.TestCase):
     def test_calibration_numbers(self):
         js = [{"episode_ts": f"2026-10-12T1{i}:00:00", "confidence": c, "claimed": cl, "criterion_met": m,
                "claim_supported": cl == m, "criterion_quality": "checkable", "failure_mode": "", "goal": "g",
-               "reasoning": "r", "judge": "j"}
+               "reasoning": "r", "judge": judge.JUDGE_MODELS[0]}
               for i, (c, cl, m) in enumerate([(90, "yes", "no"), (90, "yes", "yes"), (20, "no", "no")])]
         with mock.patch.object(metrics, "judgments", return_value=js):
             text = metrics.stats_text("x")
@@ -281,7 +281,8 @@ class ProbationTest(unittest.TestCase):
         self.commit("p: talk")
         self.change = self.git(self.root, "rev-parse", "HEAD").strip()
         self.sup = Path(tempfile.mkdtemp(prefix="shaft-prob-sup-")).resolve()
-        self.judged: list[dict] = [{"episode_ts": f"b{i}", "criterion_met": "yes", "difficulty": 3} for i in range(3)]
+        self.judged: list[dict] = [{"episode_ts": f"b{i}", "criterion_met": "yes", "difficulty": 3,
+                                    "judge": judge.JUDGE_MODELS[0]} for i in range(3)]
         self.tests_pass = True
 
     def tearDown(self):
@@ -312,7 +313,7 @@ class ProbationTest(unittest.TestCase):
         """Cycles after the change, each committed as its own run (as the real supervisor does)."""
         for met in results:
             ts = self.episode(f"cycle {met}", tools, day)
-            self.judged.append({"episode_ts": ts, "criterion_met": met, "difficulty": 3})
+            self.judged.append({"episode_ts": ts, "criterion_met": met, "difficulty": 3, "judge": judge.JUDGE_MODELS[0]})
             self.commit(f"p: live {ts}")
 
     def patched(self):

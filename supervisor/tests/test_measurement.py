@@ -20,7 +20,7 @@ from supervisor.tests.mindfix import IGNORE_MIND
 def judgment(ts: str, met: str, difficulty=None, origin=None, **kw) -> dict:
     return {"episode_ts": ts, "criterion_met": met, "confidence": 70, "claimed": met, "claim_supported": True,
             "criterion_quality": "checkable", "failure_mode": "", "goal": f"goal at {ts}", "reasoning": "r",
-            "judge": "j", "difficulty": difficulty, "novelty": 2 if difficulty else None, "origin": origin, **kw}
+            "judge": judge.JUDGE_MODELS[0], "difficulty": difficulty, "novelty": 2 if difficulty else None, "origin": origin, **kw}
 
 
 class InstanceDirCase(unittest.TestCase):
@@ -279,8 +279,8 @@ class ValueTest(unittest.TestCase):
         self.assertIn("cycles worth something (value ≥ 3): 1 of 3 graded", text)
         self.assertIn("10-15 09:00  3/5 for operator: output at 2026-10-15T09:00:00", text)
         # by judge: a value graded later by another judge is not counted for the cycle's own judge
-        self.assertIn("haiku                        2 cycles · success 100% · value 1.00", text)
-        self.assertRegex(text, r"sonnet +1 cycles · success 50%\n")
+        self.assertIn("haiku                        2 cycles · success 100% · unsupported claims 0 · value 1.00", text)
+        self.assertRegex(text, r"sonnet +1 cycles · success 50% · unsupported claims 1\n")
 
     def test_review_of_a_window_nobody_graded_does_not_claim_zero_worth(self):
         js = [judgment("2026-10-15T09:00:00", "yes", 2, judge="haiku")]
@@ -297,6 +297,61 @@ class ValueTest(unittest.TestCase):
         text = broker.judgment_text(j)
         self.assertIn("Value 1/5, for own_record: output at 2026-10-15T09:00:00 (graded later by haiku)", text)
         self.assertIn("value 3/5", text)
+
+
+class JudgeMixTest(unittest.TestCase):
+    """PLAN-judge-mix: success and claims never pooled across a change of judges. Bug 2026-10-16: stats.md printed
+    one running count of unsupported claims over Opus, then Haiku and Sonnet at random. On the same cycles Haiku
+    called 54% of wren's claims unsupported, the blind second judge 4%, Sonnet 21%; wren read the pooled count
+    (8/107 -> 73/273) as "the central fact about my accuracy". The header named only the last cycle's judge."""
+    RETIRED = "claude-haiku-5-5"
+
+    def rows(self):
+        retired = [{**valued_j(f"2026-10-14T{h:02d}:00:00", 1, "own_record", judge=self.RETIRED),
+                    "criterion_met": "no", "claim_supported": False} for h in range(10)]
+        current = [valued_j(f"2026-10-15T{h:02d}:00:00", 3, judge=judge.JUDGE_MODELS[0]) for h in range(10)]
+        return retired + current
+
+    def test_haiku_has_left_the_default_rotation(self):
+        if judge.JUDGE_SRC != "default":
+            self.skipTest("SHAFT_JUDGE_MODELS is set in this environment")
+        self.assertFalse(any(judge.same_model(m, self.RETIRED) for m in judge.JUDGE_MODELS))
+        self.assertTrue(judge.JUDGE_MODELS)
+
+    def test_a_retired_judges_verdicts_are_not_counted_in_success_or_claims(self):
+        with mock.patch.object(metrics, "judgments", return_value=self.rows()):
+            text = metrics.stats_text("m")
+        self.assertIn("Judged success rate: **100%**", text)                 # pooled, it read 50%
+        self.assertNotIn("Claims the tool log did not support", text)        # pooled, it read 10
+        self.assertIn("Criteria the judge found vague or unverifiable: 0/10", text)
+        self.assertIn(f"Not counted: 10 verdicts by judges no longer in it ({self.RETIRED} 10)", text)
+        self.assertIn(f"count only the 10 cycles graded by the judges in today's rotation "
+                      f"({judge.JUDGE_MODELS[0].removeprefix('openrouter/').split('/')[-1]} 10)", text)
+        self.assertNotIn("judged by", text)                                  # the header named the last judge only
+        self.assertIn("**2.0** over my last 10 rated cycles", text)          # achieved: current judges (pooled 1.0)
+        self.assertIn("**2.0** over my last 20 cycles on mimo", text)        # value: every cycle, both judges
+
+    def test_unsupported_claims_are_counted_out_of_the_cycles_they_come_from(self):
+        rows = self.rows()[10:]
+        rows[-1] = {**rows[-1], "claim_supported": False}
+        with mock.patch.object(metrics, "judgments", return_value=rows):
+            self.assertIn("Claims the tool log did not support: 1 of 10", metrics.stats_text("m"))
+
+    def test_only_retired_verdicts_say_so_instead_of_dividing_by_zero(self):
+        with mock.patch.object(metrics, "judgments", return_value=self.rows()[:10]):
+            text = metrics.stats_text("m")
+        self.assertIn("No cycle graded by the current judges yet.", text)
+        self.assertNotIn("Judged success rate", text)
+
+    def test_probation_baseline_ignores_a_retired_judges_verdicts(self):
+        # Before the change: six Sonnet-era cycles at 0.6, then six by a retired strict judge at 0.2 just before it.
+        # After: six at 0.2 by a current judge — a real drop against the current judges' 0.6. Pooled, the baseline
+        # was the strict judge's 0.2 and the drop was invisible.
+        n = metrics.PROBATION_CYCLES
+        before = ([judgment(f"b{i}", "yes", 3) for i in range(n)]
+                  + [judgment(f"r{i}", "yes", 1, judge=self.RETIRED) for i in range(n)])
+        after = [judgment(f"a{i}", "yes", 1) for i in range(n)]
+        self.assertTrue(ProbationMeasureTest.check(self, before, after))
 
 
 class ModelTest(InstanceDirCase):

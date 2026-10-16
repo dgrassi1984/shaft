@@ -1,7 +1,9 @@
 """The cloud judge: models that grade instances, never live their lives.
 
 A rotation (Daniele, 2026-10-14: Opus 5.5 was too costly; "stochastic rotation I prefer"): every judgment picks one
-model at random from SHAFT_JUDGE_MODELS, never the model the judged instance runs on (no self-preference — wren runs
+model at random from SHAFT_JUDGE_MODELS (MiMo and Sonnet 5.5; Haiku 5.5 left on 2026-10-16: on the same cycles it
+called 54% of wren's claims unsupported where the blind GLM judge called 4%, Sonnet 21% and Opus 17% —
+PLAN-judge-mix.md), never the model the judged instance runs on (no self-preference — wren runs
 on MiMo). Every verdict records the model that gave it. Claude models go straight to the Claude Messages API with the
 supervisor's key (structured JSON output via output_config.format; refusals re-run server-side with
 `fallbacks: "default"`); "openrouter/…" models go through OpenRouter under the instances' data policy
@@ -20,7 +22,7 @@ import urllib.request
 
 from .core import NETWORK_ERRORS, SUP_DIR, knob, secrets_env
 
-JUDGE_MODELS, JUDGE_SRC = knob("SHAFT_JUDGE_MODELS", "openrouter/xiaomi/mimo-v2.6-pro,claude-haiku-5-5,claude-sonnet-5-5",
+JUDGE_MODELS, JUDGE_SRC = knob("SHAFT_JUDGE_MODELS", "openrouter/xiaomi/mimo-v2.6-pro,claude-sonnet-5-5",
                                lambda s: [m.strip() for m in s.split(",") if m.strip()])
 API = "https://api.anthropic.com/v1/messages"
 
