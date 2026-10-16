@@ -84,7 +84,7 @@ TREE_IDLE_S = 86400                # a committed tree no gate has used for a day
 
 
 def _git(repo: Path, *args: str) -> bytes:
-    """git's stdout. Popen, not subprocess.run: tests replace subprocess.run to record the gate's own commands."""
+    """git's stdout."""
     p = subprocess.Popen(["git", "-C", str(repo), *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     out, err = p.communicate()
     if p.returncode:
@@ -152,13 +152,60 @@ class StageTimedOut(Exception):
         self.stage, self.seconds, self.tail = stage, seconds, tail
 
 
+STOP_GRACE_S = 2   # how long a timed-out stage has to exit on SIGTERM before its whole process group is killed
+
+
+def _end_group(p: subprocess.Popen) -> None:
+    """Kill everything left in the stage's process group and return once it is empty. subprocess.run's timeout
+    killed only the direct child (sandbox-exec, exec'd into python): a worker a test had started went on writing the
+    instance's code after the gate had failed and runner._settle had reverted the change (found 2026-10-16)."""
+    import signal
+    import time
+    deadline = time.monotonic() + 10
+    while True:   # SIGKILL again until none is left: a member may have forked while the first one was delivered
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):   # empty, or only a member no signal of ours can reach
+            return
+        p.wait()                                         # the leader, reaped, so it no longer counts as a member
+        if time.monotonic() > deadline:
+            return
+        time.sleep(0.02)
+
+
 def _stage(stage: str, argv: list[str], timeout_s: int, **kw) -> subprocess.CompletedProcess:
+    """One stage, in its own process group, all of which ends with it. A timeout gets SIGTERM, then SIGKILL after
+    STOP_GRACE_S, and raises StageTimedOut with the tail of what the stage printed. On a normal exit whatever it left
+    running in the group is killed too: a failed gate is followed by a revert that a leftover could undo. A process
+    that starts its own session (setsid) leaves the group and is not reached."""
+    import signal
+    p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                         start_new_session=True, **kw)
+    timed_out = False
     try:
-        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout_s, **kw)
-    except subprocess.TimeoutExpired as e:   # subprocess.run has killed the child already
-        tail = "".join(x.decode(errors="replace") if isinstance(x, bytes) else x
-                       for x in (e.stdout, e.stderr) if x)   # what it printed before it was stopped (bytes here)
-        raise StageTimedOut(stage, timeout_s, tail[-2000:]) from None
+        try:
+            out, err = p.communicate(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            try:
+                os.killpg(p.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                out, err = p.communicate(timeout=STOP_GRACE_S)
+            except subprocess.TimeoutExpired:   # it ignores SIGTERM, or a member still holds the pipes
+                _end_group(p)
+                try:
+                    out, err = p.communicate(timeout=STOP_GRACE_S)
+                except subprocess.TimeoutExpired:   # held by a process that left the group: give up on the output
+                    out, err = "", ""
+                    for f in (p.stdout, p.stderr):
+                        f.close()
+    finally:
+        _end_group(p)
+    if timed_out:
+        raise StageTimedOut(stage, timeout_s, (out + err)[-2000:])   # what it printed before it was stopped
+    return subprocess.CompletedProcess(argv, p.returncode, out, err)
 
 
 def run_tests(instance_root: Path, home: Path, timeout_s: int = 900,
@@ -168,7 +215,8 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = 900,
     its sandbox, on its own Python environment (supervisor/pyenv.py). `env_root`: where that environment lives when
     `instance_root` is a scratch copy (coder hand-off, trial gate) — read-only from the copy. A stage that times out
     fails the gate, named in the output and the supervisor log: raised instead, it left the change on disk
-    unsettled, neither kept nor reverted, and the next run took it as its baseline — ungated."""
+    unsettled, neither kept nor reverted, and the next run took it as its baseline — ungated. Nothing left in a stage's
+    process group outlives it (_stage), so no leftover there writes the instance's code after the caller's revert."""
     from . import pyenv
     from .core import PYTHON, log, safe_mkdir
     env_root = Path(env_root or instance_root)

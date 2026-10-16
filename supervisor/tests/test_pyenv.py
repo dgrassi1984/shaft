@@ -172,12 +172,12 @@ class GateTest(unittest.TestCase):
         (copy / "tests").mkdir()
         calls, profiles = [], []
 
-        def fake_run(argv, **kw):
+        def fake_stage(stage, argv, timeout_s, **kw):   # every command the gate runs goes through _stage
             calls.append((argv, kw))
             if argv[0] == sandbox.SANDBOX_EXEC:          # the profile is deleted after the gate: read it now
                 profiles.append(Path(argv[2]).read_text())
             return subprocess.CompletedProcess(argv, 0, "", "")
-        with mock.patch.object(gate.subprocess, "run", side_effect=fake_run), \
+        with mock.patch.object(gate, "_stage", side_effect=fake_stage), \
                 mock.patch.object(gate, "committed_tree", return_value=(real, "abc")):   # test_gate covers it
             ok, _ = gate.run_tests(copy, HOME, env_root=real)
         self.assertTrue(ok)
