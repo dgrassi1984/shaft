@@ -178,12 +178,12 @@ class TelegramTest(unittest.TestCase):
         self.assertEqual(telegram.forward_new(), 1)                  # kant has no bot: skipped, not stuck
         (tok, p), = self.api.sent(TOK["wren"])[-1:]
         self.assertEqual(p["chat_id"], 42)
-        self.assertIn("❓ <b>Question</b> from wren", p["text"])
+        self.assertEqual(p["text"], "❓ <b>Question</b>\n\nNotify once or every time?")   # its own bot: no "from wren"
         self.assertEqual(telegram.forward_new(), 0)                  # sent once
         mid = self.api.next_id
-        shown = "❓ Question from wren\n\nNotify once or every time?"     # Telegram quotes the rendered text
+        shown = "❓ Question\n\nNotify once or every time?"     # Telegram quotes the rendered text
         self.upd(_msg(ME, "Once.", mid=30, reply_to={"message_id": mid, "text": shown}))
-        self.assertTrue(self.asked[-1][1][-1]["content"].startswith("> ❓ Question from wren"))
+        self.assertTrue(self.asked[-1][1][-1]["content"].startswith("> ❓ Question"))
         self.assertFalse(any(p.name.endswith("from-wren.md") for p in inbox.glob("*.md")))   # answered: archived
 
     def test_a_failed_forward_is_retried(self):
@@ -198,6 +198,7 @@ class TelegramTest(unittest.TestCase):
         self.assertEqual(telegram.forward_new(), 0)
         self.api.fail.clear()
         self.assertEqual(telegram.forward_new(), 1)
+        self.assertEqual(self.api.sent(TOK["wren"])[-1][1]["text"], "later")   # a note is just its text, no "📝 Note from wren" header
 
     def test_commands(self):
         self.pair()

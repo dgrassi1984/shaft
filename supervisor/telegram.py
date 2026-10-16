@@ -540,9 +540,10 @@ def forward_new(toks: dict[str, str] | None = None) -> int:
             continue
         tok = toks.get(m["from"])
         if tok:
-            head = "❓ **Question** from" if m.get("kind") == "question" else "📝 **Note** from"
+            # it comes from the instance's own bot, so no "from <name>"; a question is marked: a reply answers it
+            body = f"❓ **Question**\n\n{m['text']}" if m.get("kind") == "question" else m["text"]
             try:
-                ids = send(tok, owner, f"{head} {m['from']}\n\n{m['text']}")
+                ids = send(tok, owner, body)
             except TelegramError as e:
                 log(f"telegram: could not forward {m['file']}: {e}")
                 return sent                         # try again from here next time
