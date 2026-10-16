@@ -435,7 +435,9 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
 - **Slow core**: the core personality may change at most every `SHAFT_CORE_MIN_HOURS` (72).
 - **Test gate**: if a run changed the instance's code, plugins or (through `set_config`) config, the
   invariant tests and plugin checks run; failure restores the old code and the config lines the instance
-  set, and tells the instance why. An edit of yours to `config.env` is never reverted or credited to the
+  set, and tells the instance why. The supervisor's own tests run from its last commit (and the template's), in a
+  clean copy under `.supervisor/gate-tests/`, never from the checkout: an edit someone is still making there cannot
+  decide a verdict. An edit of yours to `config.env` is never reverted or credited to the
   instance: it is committed on its own ("config.env changed from outside the instance").
 - **Trials** (`trial` tool, [PLAN-trials.md](PLAN-trials.md)): an instance can test a change to its own
   code or prompts before keeping it. The supervisor runs the gate on it, rebuilds N (default 6) of its past

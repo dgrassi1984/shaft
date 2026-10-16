@@ -177,12 +177,14 @@ class GateTest(unittest.TestCase):
             if argv[0] == sandbox.SANDBOX_EXEC:          # the profile is deleted after the gate: read it now
                 profiles.append(Path(argv[2]).read_text())
             return subprocess.CompletedProcess(argv, 0, "", "")
-        with mock.patch.object(gate.subprocess, "run", side_effect=fake_run):
+        with mock.patch.object(gate.subprocess, "run", side_effect=fake_run), \
+                mock.patch.object(gate, "committed_tree", return_value=(real, "abc")):   # test_gate covers it
             ok, _ = gate.run_tests(copy, HOME, env_root=real)
         self.assertTrue(ok)
         venv_py = str(real / ".venv" / "bin" / "python")
         invariants, plugins, tests = calls
         self.assertEqual(invariants[0][0], PYTHON)
+        self.assertEqual(invariants[1]["cwd"], real)                 # the committed tree, not the checkout
         self.assertIn(venv_py, plugins[0])
         self.assertIn(venv_py, tests[0])
         self.assertEqual(plugins[1]["env"]["SHAFT_PYTHON"], venv_py)
