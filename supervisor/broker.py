@@ -160,12 +160,16 @@ SPECS = {
         "Your own history in git: every run of yours is a commit — your code and skills on your branch "
         "(tagged [code]), your mind (self/, memory/, notes/, inbox/) in your private mind store (tagged [mind]). "
         "Without `commit`: the log (newest first), optionally only commits that touched `path`. With `commit`: "
-        "what that commit changed (stat and diff, truncated). Only your own history. Use it to see how you have "
-        "changed and when. "
+        "what that commit changed (stat and diff, truncated). With `commit`, `path` (one file) and `save_as`: "
+        "that file exactly as it was after that commit, written whole to `save_as` — a new path in your folder, "
+        "never an existing file — so you can bring back a file a bad write damaged: check it, then replace the "
+        "damaged file yourself with `run`. Only your own history. Use it to see how you have changed and when. "
         "(`git` itself does not work inside `run`: your repository lives outside your folder.)",
         {"commit": {"type": "string", "description": "a commit id from the log (optional)"},
          "path": {"type": "string", "description": "a file or folder in your folder, e.g. self/self.md (optional)"},
-         "limit": {"type": "integer", "description": "log entries, default 15, max 100"}},
+         "limit": {"type": "integer", "description": "log entries, default 15, max 100"},
+         "save_as": {"type": "string", "description": "with commit and path: a new file in your folder to write "
+                                                       "that file to, as it was after the commit (optional)"}},
         []),
     "record": _spec(
         "record",
@@ -930,14 +934,18 @@ class Broker:
         return trial.request(self.name, files or [], hypothesis, episodes or [], int(n or 0), extend,
                              project=self.project)
 
-    def _history(self, commit: str = "", path: str = "", limit: int = 15) -> str:
+    def _history(self, commit: str = "", path: str = "", limit: int = 15, save_as: str = "") -> str:
         """Its history in two repositories: its code and skills on its branch, its mind in its mind store
-        (supervisor/mind.py). Each log line is tagged `code` or `mind`; a commit id is looked up in either."""
+        (supervisor/mind.py). Each log line is tagged `code` or `mind`; a commit id is looked up in either.
+        `save_as` writes one file as it was after `commit` to a new path: the mind store lives outside its folder,
+        so without it the instance could not bring back its own file (shaft's 546 KB trend file, truncated to
+        2.7 KB by a bad write on 2026-10-16, had to be restored by the operator)."""
         from . import mind
-        from .core import MIND_PATHS, git_wt, not_mind
+        from .core import MIND_PATHS, git_wt, not_mind, safe_write_bytes
         root, (code_head, mind_head) = self._git_root(), self._history_heads()
-        if path and (path.startswith(("-", "/", ":")) or ".." in Path(path).parts):
-            raise ValueError("path must be relative to your folder")
+        for arg, value in (("path", path), ("save_as", save_as)):
+            if value and (value.startswith(("-", "/", ":")) or ".." in Path(value).parts):
+                raise ValueError(f"{arg} must be relative to your folder")
         top = Path(path).parts[0] if path and Path(path).parts else ""
         in_mind, in_code = (not top or top in MIND_PATHS), (not top or top not in MIND_PATHS)
         code_spec = ["--", path] if in_code and top else ["--", *not_mind()]
@@ -963,13 +971,33 @@ class Broker:
             return "\n".join(lines) or "(no commits" + (f" touching {path}" if path else "") + ")"
         if not re.fullmatch(r"[0-9a-f]{4,40}", commit):
             raise ValueError("commit must be a commit id (hex) from the log")
+        ours_code = in_code and git_wt(root, "merge-base", "--is-ancestor", commit, code_head, check=False,
+                                       project=self.project).returncode == 0
+        ours_mind = in_mind and bool(mind_head) and mind.git(self.name, "merge-base", "--is-ancestor", commit,
+                                                             mind_head, project=self.project, check=False).returncode == 0
+        if save_as:
+            if not path:
+                raise ValueError("save_as needs the path of the file to bring back")
+            if not (ours_mind if top in MIND_PATHS else ours_code):
+                raise ValueError(f"{commit} is not a commit of your history that holds {path}")
+            spec = f"{commit}:{Path(path).as_posix()}"
+            r = (mind.git(self.name, "cat-file", "blob", spec, project=self.project, binary=True, check=False)
+                 if top in MIND_PATHS else git_wt(root, "cat-file", "blob", spec, check=False, project=self.project,
+                                                  text=False))
+            if r.returncode:
+                raise ValueError(f"{path} is not a file in {commit}")
+            if os.path.lexists(self._root() / save_as):
+                raise ValueError(f"{save_as} already exists: save to a new path, check it, then replace the file "
+                                 "with run")
+            safe_write_bytes(self._root(), save_as, r.stdout)
+            lines = r.stdout.count(b"\n")
+            return (f"saved {save_as}: {path} as it was after {commit} ({len(r.stdout)} bytes, {lines} lines). "
+                    "Nothing else was changed.")
         show = ["show", "--stat", "--patch", "--date=format:%Y-%m-%d %H:%M", "--format=%h %ad %an%n%n%B", commit]
         parts = []
-        if in_code and git_wt(root, "merge-base", "--is-ancestor", commit, code_head, check=False,
-                              project=self.project).returncode == 0:
+        if ours_code:
             parts.append("[code]\n" + code(*show, *code_spec))
-        if in_mind and mind_head and mind.git(self.name, "merge-base", "--is-ancestor", commit, mind_head,
-                                              project=self.project, check=False).returncode == 0:
+        if ours_mind:
             parts.append("[mind]\n" + mine(*show, *mind_spec))
         if not parts:
             raise ValueError(f"{commit} is not a commit of your history")
@@ -1378,7 +1406,8 @@ class ReplayBroker(Broker):
     `trace` for the judge. Its egress proxy refuses every connection (TLS hides whether a request writes), each
     refusal traced as a "network" call; its `run` and plugins read the instance's real Python environment,
     read-only. `run` acts on the replay's own copy of the instance, `history` ends at the replayed
-    cycle's starting commit and its mind as of that start, `record` at the time it started. The coder and trials are not available. Cloud-model
+    cycle's starting commit and its mind as of that start (its `save_as` writes into the copy), `record` at the time
+    it started. The coder and trials are not available. Cloud-model
     spend is counted under `billed`, not under the instance's own daily allowance. A self-hosted model server that
     cannot be reached fails the run instead of falling back: a trial never takes the local model unasked."""
 
