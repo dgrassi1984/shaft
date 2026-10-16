@@ -433,7 +433,7 @@ def agent_command(root: Path, broker: Broker, agent_args: list[str], profile: Pa
     it may write only in `root` and reach only the model ports, the embedding service, its broker and its egress
     proxy (the public internet); it may read the operator's shared folder if the broker carries one (shaft share),
     is told which of the operator's mail labels and calendars its broker serves it (SHAFT_MAIL, shaft mail;
-    SHAFT_CALENDAR, shaft calendar),
+    SHAFT_CALENDAR, shaft calendar), whether its model sees images (SHAFT_VISION, PLAN-vision.md),
     and the instance's Python environment when `root` is a copy (trial replay)."""
     ports = list(llm_ports) + [EMBED_PORT, broker.port, broker.egress.port]
     profile.write_text(sandbox.profile(root, HOME, ports, shared=broker.shared, env_root=broker.env_root))
@@ -445,8 +445,20 @@ def agent_command(root: Path, broker: Broker, agent_args: list[str], profile: Pa
                             **({"SHAFT_SHARED": str(broker.shared)} if broker.shared else {}),
                             **({"SHAFT_MAIL": granted} if (granted := broker.mail_env()) else {}),
                             **({"SHAFT_CALENDAR": granted} if (granted := broker.calendar_env()) else {}),
+                            **({"SHAFT_VISION": "1"} if _sees_images(root) else {}),
                             **broker.sandbox_env(), **extra)
     return cmd, env
+
+
+def _sees_images(root: Path) -> bool:
+    """Whether the model in `root`'s config.env accepts images (vision.py: learned, unknown counts as no)."""
+    from . import vision
+    from .core import config_values
+    try:
+        model = config_values((root / "config.env").read_text()).get("LLM_MODEL")
+    except OSError:
+        return False
+    return vision.sees_images_or_no(model)
 
 
 def _tee(stream, echo, keep: list[str]):

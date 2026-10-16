@@ -52,6 +52,7 @@ CATEGORIES = ("coding", "research", "recall", "self")
 CONTROLLED = ("coding", "research")          # a fresh mind cannot know an instance's memory or record
 EXAM_OFF = {"send_message", "list_instances", "delegate_coding", "secret_set", "secret_delete",
             "decide",   # added 2026-10-14: exams keep the tools they were calibrated with
+            "describe_image",   # PLAN-vision: exams keep the tools they were calibrated with
             *MAIL_TOOLS, *CALENDAR_TOOLS}   # the operator's mail and calendars never reach an exam (its broker has
                                             # none either: root= is set)
 BACKUP = HOME / "Library" / "Application Support" / "SHAFT" / "battery-backup"
