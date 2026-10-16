@@ -263,6 +263,50 @@ class HistoryToolTest(unittest.TestCase):
             with self.subTest(args=args):
                 self.assertFalse(self.broker.call("history", args)["ok"])
 
+    def test_save_as_brings_back_a_truncated_mind_file(self):
+        """Regression, 2026-10-16: a bad write cut shaft's notes/ai-misalignment-trend.md from 545,936 B to 2,744 B.
+        Its mind store held the whole file, but outside its folder: only the operator could restore it."""
+        root = self.project / "instances" / "x"
+        (root / "notes").mkdir()
+        whole = "".join(f"- 2026-10-{i % 28 + 1:02d} entry {i} — sources\n" for i in range(5000)).encode()
+        (root / "notes" / "trend.md").write_bytes(whole)
+        commit_at("x", self.project, root, "2026-10-11T10:00:00", "x: watch")
+        good = mind.head("x", self.project)[:10]
+        (root / "notes" / "trend.md").write_bytes(whole[:1600])
+        commit_at("x", self.project, root, "2026-10-11T11:00:00", "x: bad write")
+        r = self.broker.call("history", {"commit": good, "path": "notes/trend.md", "save_as": "notes/trend.restored"})
+        self.assertTrue(r["ok"], r)
+        self.assertIn(f"{len(whole)} bytes", r["result"])
+        self.assertEqual((root / "notes" / "trend.restored").read_bytes(), whole)
+        self.assertEqual(len((root / "notes" / "trend.md").read_bytes()), 1600)   # the damaged file is left to it
+
+    def test_save_as_brings_back_a_code_file(self):
+        code = self.broker.call("history", {"path": "plugins"})["result"].split()[0]
+        r = self.broker.call("history", {"commit": code, "path": "plugins/tool.py", "save_as": "plugins/old.py"})
+        self.assertTrue(r["ok"], r)
+        self.assertEqual((self.project / "instances" / "x" / "plugins" / "old.py").read_text(), "NAME = 'x'\n")
+
+    def test_save_as_never_overwrites_and_stays_in_its_history(self):
+        mine = self.broker.call("history", {"path": "self/self.md"})["result"].split()[0]
+        root = self.project / "instances" / "x"
+        (root / "elsewhere").symlink_to(self.project / "outside")
+        refused = [{"commit": mine, "path": "self/self.md", "save_as": "self/self.md"},          # an existing file
+                   {"commit": mine, "path": "self/self.md", "save_as": "elsewhere"},             # a link, even dangling
+                   {"commit": mine, "path": "self/self.md", "save_as": "../y/self/self.md"},
+                   {"commit": mine, "path": "self/self.md", "save_as": "/tmp/pwn"},
+                   {"commit": mine, "save_as": "copy.md"},                                       # no path
+                   {"commit": mine, "path": "self", "save_as": "copy.md"},                       # a folder
+                   {"commit": mine, "path": "self/nope.md", "save_as": "copy.md"},
+                   {"commit": self.others[1], "path": "self/self.md", "save_as": "copy.md"},     # y's mind
+                   {"commit": self.others[0], "path": "plugins/tool.py", "save_as": "copy.md"},  # y's branch
+                   {"commit": self.main, "path": "plugins/tool.py", "save_as": "copy.md"}]
+        for args in refused:
+            with self.subTest(args=args):
+                self.assertFalse(self.broker.call("history", args)["ok"])
+        self.assertEqual((root / "self" / "self.md").read_text(), "I am x\n")
+        self.assertFalse((root / "copy.md").exists())
+        self.assertFalse((self.project / "outside").exists())
+
 
 class RecordToolTest(unittest.TestCase):
     """shaft asked for the supervisor's record of what it did (to check its own claims) — its own only."""

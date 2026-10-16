@@ -285,6 +285,7 @@ class FileToolsTest(unittest.TestCase):
         self.assertIn("the file now contains exactly what you wrote (2 lines)", out)   # shaft read the old note as
         self.assertIn("2 earlier line(s) are no longer in it", out)                      # "the write did not land"
         self.assertIn("history(path='notes/trend.md')", out)
+        self.assertIn("save_as=", out)                    # how to bring it back whole, not only where it is
         self.assertNotIn("gone", call("write_file", path="notes/new.md", content="fresh\n"))
         self.assertIn("append-only", call("append_file", path="memory/journal.md", content="x"))
 

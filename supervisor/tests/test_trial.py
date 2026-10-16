@@ -307,6 +307,17 @@ class ReplayBrokerTest(Fixture):
             self.assertFalse(self.make().call("history", {"commit": later})["ok"])
         self.assertIn("OLD-GOAL", self.make().call("history", {"commit": self.m0[:10]})["result"])
 
+    def test_history_save_as_writes_only_the_replay_copy(self):
+        copy = Path(tempfile.mkdtemp(prefix="shaft-replay-copy-")).resolve()
+        self.addCleanup(shutil.rmtree, copy, True)
+        replay = self.make(state_root=copy)
+        later = replay.call("history", {"commit": self.m1[:10], "path": "self/goals.md", "save_as": "goals.later"})
+        self.assertFalse(later["ok"], later)                       # after the replayed cycle began: not its history
+        r = replay.call("history", {"commit": self.m0[:10], "path": "self/goals.md", "save_as": "goals.old"})
+        self.assertTrue(r["ok"], r)
+        self.assertEqual((copy / "goals.old").read_text(), "- G1: learn the OLD-GOAL thing\n")
+        self.assertFalse((self.root / "goals.old").exists())        # the instance's real folder is untouched
+
     def test_record_shows_only_what_was_known_then(self):
         jpath = SUP_DIR / "judgments" / f"{NAME}.jsonl"
         jpath.parent.mkdir(parents=True, exist_ok=True)

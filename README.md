@@ -439,7 +439,8 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
   60 s default time limit (the whole process group is killed), 100 MB file-size limit, output capped,
   40 commands per run. So an instance can build and test its own tools and plugins. **`history`**: its
   own git log and diffs, each entry tagged `[code]` (its branch) or `[mind]` (its mind store) — git cannot
-  run inside its sandbox. **`record`**: the supervisor's own record about it — the judge's verdicts with reasoning, its
+  run inside its sandbox; with `save_as`, one file as it was after a commit, written whole to a new path in its
+  folder (never over an existing file), so it can bring back a record a bad write damaged without the operator. **`record`**: the supervisor's own record about it — the judge's verdicts with reasoning, its
   runs, its tool calls, its kept code changes, its internet connections — so it can check its claims about
   itself.
   **`decide`**: TypeSafe's Jev decision model through OpenRouter, on the supervisor's key — a `state` and typed
