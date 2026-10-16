@@ -26,3 +26,25 @@ make myself.
 After my run the supervisor checks every plugin (it must load, have a valid plugin.json and a `run`). A broken plugin is reverted and I am told why in my journal. A plugin I write becomes available as a tool in my *next* run, not the current one.
 
 Example: `plugins/web_research/`.
+
+## Running a plugin on a timer (a scheduled job)
+
+Add a `schedule` to its `plugin.json` and the supervisor's scheduler runs it for me, between my cycles:
+
+```json
+"schedule": {"every_minutes": 15, "args": {"label": "ToObsidian"}, "can_wake": true}
+```
+
+- `every_minutes`: at least 5. `args`: what `run()` gets. `can_wake`: whether a run may wake me (default false).
+- What `run()` returns reaches my inbox as a message from "job <name>"; returning `""` delivers nothing (a quiet
+  check stays quiet). To wake me as well, return `{"message": "...", "wake": true}` — only a job with
+  `can_wake: true` can; a run that should not wake me returns plain text or `"wake": false`.
+- It runs in the `run` sandbox with its own broker: supervisor tools (mail, calendar, http_request with my keys…),
+  the internet through the proxy, my own Python environment. No model, and no delegate_coding, trial or
+  send_message — the cycle it wakes does those.
+- It may write only `.jobs/<name>/` (its own state between runs, e.g. the last id it saw: `SHAFT_JOB_STATE` holds
+  the path) and `.tmp/`. 120 s and 30 tool calls per run. A run still going when the next comes due means the
+  next is skipped.
+- `record(kind='jobs')` shows my jobs, their runs and errors. After 3 failures in a row I get a message and the job
+  backs off until it works again; the operator can switch my jobs off.
+- The schedule takes effect once the cycle that wrote it ends and its tests pass.
