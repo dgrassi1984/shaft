@@ -26,7 +26,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/finetune.py` | — | `backend`, `build_dataset`, `cmd_dataset`, `overfit`, `evaluate`, `cmd_evaluate`, `cmd_finetune` |
 | `supervisor/gate.py` | `StageTimedOut` | `snapshot`, `changed`, `restore`, `config_without`, `revert_config`, `committed_tree`, `run_tests`, `run_instance_tests` |
 | `supervisor/google.py` | `AccountError`, `ApiError`, `Account` | `accounts_dir`, `old_accounts_dir`, `unmigrated`, `account`, `accounts`, `scopes`, `scope_text`, `login_command`, `migrate`, `client_keys`, `login` |
-| `supervisor/jobs.py` | — | `entry`, `jobs_off`, `set_jobs_off`, `declared`, `report_problems`, `interval`, `due`, `run`, `request_wake`, `take_wake`, `pending_wakes`, `tick`, `describe` |
+| `supervisor/jobs.py` | — | `entry`, `jobs_off`, `set_jobs_off`, `uncommitted`, `declared`, `report_problems`, `interval`, `due`, `run`, `request_wake`, `take_wake`, `pending_wakes`, `tick`, `describe` |
 | `supervisor/judge.py` | `JudgeError` | `same_model`, `pick`, `rotation`, `available`, `ask`, `second_available`, `ask_second` |
 | `supervisor/mail.py` | `NotVisible` | `label_id`, `visible`, `get_thread`, `search`, `attachments`, `body_text`, `sender_line`, `render`, `pick_attachment`, `attachment_bytes` |
 | `supervisor/messages.py` | — | `record`, `attachment_name`, `size_text`, `store_attachments`, `attachment_lines`, `history`, `pending`, `show_inbox`, `deliver_external`, `reply`, `send`, `clear_notes` |
@@ -38,6 +38,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/sandbox.py` | — | `user_folder`, `profile`, `run_profile`, `job_profile`, `agent_env`, `wrap` |
 | `supervisor/selfhosted.py` | — | `serves`, `server`, `host_port`, `think_budget`, `open_reply`, `complete`, `stream` |
 | `supervisor/surprise.py` | — | `flag`, `kind_of`, `episodes`, `events`, `recurrence`, `cycles`, `baseline`, `report`, `command` |
+| `supervisor/talk_input.py` | `Draft` | `enter_sequences`, `other_modified_keys` |
 | `supervisor/talk_stats.py` | `Stats` | — |
 | `supervisor/talk_ui.py` | `Client` | `main` |
 | `supervisor/telegram.py` | `TelegramError`, `Chat` | `load`, `save`, `update`, `token_key`, `tokens`, `call`, `send`, `send_file`, `download`, `incoming_files`, `split_markdown`, `to_html`, `new_pairing_code`, `try_pair`, `paired_id`, `reachable`, `remember_bot`, `ask_api`, `answer_question`, `handle_update`, `poll`, `forward_new`, `serve`, `command` |
@@ -59,7 +60,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_distinct.py` | `StripTest`, `ScoreTest`, `DistinctEndToEndTest` | `pairs_with`, `texts_in`, `clean`, `verdict` |
 | `supervisor/tests/test_egress.py` | `Upstream`, `PublicAddressTest`, `SummaryTest`, `ProxyTest`, `SandboxedRunTest`, `ReplayEgressTest` | `pretend_public` |
 | `supervisor/tests/test_embed_memory.py` | `EmbedCacheBoundTest` | — |
-| `supervisor/tests/test_gate.py` | `GateTest`, `InstanceTestsTest`, `FakeProjectCase`, `CommittedTreeTest`, `StageTimeoutTest` | `git` |
+| `supervisor/tests/test_gate.py` | `GateTest`, `InstanceTestsTest`, `FakeProjectCase`, `CommittedTreeTest`, `StageTimeoutTest`, `StageProcessGroupTest` | `git` |
 | `supervisor/tests/test_google.py` | `FakeGoogle`, `GoogleCase`, `LoginTest`, `MigrateTest`, `CliTest` | — |
 | `supervisor/tests/test_invariants.py` | `InstanceCase`, `ReflectInvariants`, `TalkInvariants`, `LiveInvariants`, `TemplateMeasurement`, `ExamInvariants`, `SandboxInvariants` | — |
 | `supervisor/tests/test_jobs.py` | `JobCase`, `DeclaredTest`, `SchedulerTest`, `RunTest` | — |
@@ -84,6 +85,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_sleep_awareness.py` | `LastSleepTest`, `FailedRunTest`, `SleepEntryTest` | `last_sleep` |
 | `supervisor/tests/test_supervision.py` | `BrokerTest`, `EnforcementTest`, `StatsTest`, `CloudTranslationTest`, `RunToolTest`, `SymlinkEscapeTest`, `FinetuneGuardTest`, `ProbationTest` | — |
 | `supervisor/tests/test_surprise_rules.py` | `FlagTest`, `BaselineTest` | — |
+| `supervisor/tests/test_talk_input.py` | `DraftKeys`, `PromptKeys`, `QueuedMessages` | `fed` |
 | `supervisor/tests/test_talk_status.py` | `StatusLineTest`, `UsageEventTest` | — |
 | `supervisor/tests/test_telegram.py` | `FakeBotAPI`, `TelegramTest`, `MarkdownTest`, `ToldTheyCanReachDanieleTest` | — |
 | `supervisor/tests/test_template_client.py` | `StreamTest`, `ToolAnnouncementTest`, `LeakedThinkingTest`, `FollowupBudgetTest`, `ReasoningEffortTest`, `RepeatGuardTest`, `ReasoningAcrossStepsTest`, `CallLedgerTest`, `FileToolsTest` | — |
