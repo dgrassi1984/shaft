@@ -8,7 +8,8 @@ Two front ends share one conversation loop:
 
   in : {"type": "user", "text": "..."}  |  {"type": "exit"}
   out: ready, status{phase,detail}, reasoning{text}, content{text}, tool_start{name,args},
-       tool_end{name,ok,brief}, retry{old,new}, turn_end{steps,ended_by}, interrupted, error{message}, bye
+       tool_end{name,ok,brief}, retry{old,new}, turn_end{steps,ended_by}, interrupted, error{message}, bye,
+       heard{text} (`answer` only: a message Daniele sent while I was replying, now in my reply — PLAN-interject.md)
 """
 from __future__ import annotations
 
@@ -201,6 +202,9 @@ class JsonView:
         self.reasoning = 0
         self._emit(type="turn_end", steps=steps, ended_by=ended_by)
 
+    def heard(self, text: str) -> None:
+        self._emit(type="heard", text=text)
+
     def interrupted(self) -> None:
         self.reasoning = 0
         self._emit(type="interrupted")
@@ -267,6 +271,38 @@ def _text(content) -> str:
     return "\n".join(parts) + (f"\n[{skipped} non-text attachment(s) not shown to me]" if skipped else "")
 
 
+class Interjections:
+    """Messages Daniele sends while I am still replying: the supervisor appends them, one JSON line each, to
+    .tmp/interject-<talk id>.jsonl. Each call returns the ones I have not taken yet as user messages, logged as part
+    of this conversation and announced to the supervisor (heard), which counts them to know which got my reply."""
+
+    def __init__(self, cfg, state: State, talk_id: str, app: str, view):
+        ok = re.fullmatch(r"[\w-]{1,64}", talk_id)
+        self.path = state.root / ".tmp" / f"interject-{talk_id}.jsonl" if ok else None
+        self.cfg, self.state, self.talk_id, self.app, self.view = cfg, state, talk_id, app, view
+        self.taken = 0
+
+    def __call__(self) -> list[dict]:
+        try:
+            lines = self.path.read_text().splitlines() if self.path else []
+        except OSError:
+            return []
+        new = []
+        for line in lines[self.taken:]:
+            try:
+                text = str(json.loads(line).get("text") or "").strip()
+            except (ValueError, AttributeError):
+                break                                   # still being written: next step
+            self.taken += 1
+            self.state.append_episode({"kind": "talk", "talk_id": self.talk_id, "role": "user", "content": text,
+                                       "via": self.app, "interjected": True})
+            self.view.heard(text)
+            note = f"[{self.cfg.OPERATOR_NAME} sent this while you were still replying]\n\n"
+            new.append({"role": "user", "content": images.with_attached(note + text, self.state.root,
+                                                                        listed_in=text)})
+        return new
+
+
 def answer(cfg, state: State, client: Client, request: dict) -> None:
     """One reply for an OpenAI-compatible client (via the supervisor's API): the client sends the
     whole conversation each time; I answer as myself and log the new turn."""
@@ -299,14 +335,14 @@ def answer(cfg, state: State, client: Client, request: dict) -> None:
         listed_in=asked)}   # recall: not this dialogue; images: only those this message lists
     turn = [{"role": "system", "content": system}, *dialogue]
     log_start = len(toolbox.log)
-    reply = _respond(client, cfg, toolbox, turn, view)
+    reply = _respond(client, cfg, toolbox, turn, view, Interjections(cfg, state, talk_id, app, view))
     if reply is not None:
         state.append_episode({"kind": "talk", "talk_id": talk_id, "role": "assistant", "content": reply.content,
                               "reasoning": reply.reasoning, "tools": toolbox.log[log_start:], "usage": reply.usage,
                               "via": app})
 
 
-def _respond(client: Client, cfg, toolbox: Toolbox, messages: list[dict], view):
+def _respond(client: Client, cfg, toolbox: Toolbox, messages: list[dict], view, interjections=None):
     """Stream one reply, reporting each phase to the view:
     waiting for the model → reading my memory (prompt %) → thinking → answer / tools."""
     tools = toolbox.specs()
@@ -349,7 +385,7 @@ def _respond(client: Client, cfg, toolbox: Toolbox, messages: list[dict], view):
     try:
         outcome = agent.run(client, messages, toolbox, max_tokens=cfg.MAX_TOKENS_TALK, purpose="talk",
                             max_steps=cfg.MAX_STEPS_TALK, call=call, on_tool=on_tool,
-                            on_tool_start=view.tool_start)
+                            on_tool_start=view.tool_start, interjections=interjections)
         view.turn_end(outcome.steps, outcome.ended_by)
         return outcome.reply
     except KeyboardInterrupt:
