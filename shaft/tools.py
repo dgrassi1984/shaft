@@ -238,7 +238,8 @@ class Toolbox:
         return (f"wrote {len(content)} chars to {path}: the file now contains exactly what you wrote "
                 f"({len(content.splitlines())} lines). Compared with before, {len(gone)} earlier line(s) are no "
                 f"longer in it, e.g. {gone[0][:120]!r}. If that was not intended, the old version is in "
-                f"history(path={path!r}); append_file adds without replacing.")
+                f"history(path={path!r}): history(commit=<id>, path={path!r}, save_as=<new path>) writes it back "
+                f"whole for you to check and put in place; append_file adds without replacing.")
 
     def _t_append_file(self, path: str, content: str) -> str:
         target = self._path(path, for_write=True)
