@@ -221,7 +221,9 @@ def run(name: str, plugin: str) -> int:
     root = instance_root(name)
     job = next((j for j in declared(name, root)[0] if j["plugin"] == plugin), None)
     if job is None:
-        log(f"{name}: job {plugin} not run — it is not (or no longer) a valid scheduled plugin")
+        changing = plugin in (uncommitted(root) or set())
+        log(f"{name}: job {plugin} not run — " + ("it is being changed (not committed yet)" if changing
+                                                  else "it is not (or no longer) a valid scheduled plugin"))
         return 2
     started, stamp = time.monotonic(), datetime.now()
     _update(name, plugin, last_start=stamp.isoformat(timespec="seconds"))
