@@ -193,6 +193,9 @@ def serve(poll_s: int = 30) -> int:
             for name in start:
                 record("wake", name)
                 children[f"wake {name}"] = (_start(["wake", name]), time.monotonic())
+            from . import jobs   # the instances' own plugins on their timers, and the wakes those jobs asked for
+            jobs.tick(children, now, _start, instance_names(),
+                      lambda n: "waking already" if f"wake {n}" in children else _awake(n))
             if "trials" not in children:   # trials of proposed changes; on the local model only in its idle time
                 from . import trial
                 if trial.has_work():

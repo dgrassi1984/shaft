@@ -203,6 +203,7 @@ def instance_detail(name: str) -> dict:
             "shared": str(shared_folder(name) or ""),
             "mail": ", ".join(f"{g['account']}/{g['label']}" for g in mail_grants(name)),
             "calendar": "; ".join(f"{g['account']}/{g['name']}" for g in calendar_grants(name)),
+            "jobs": _jobs_summary(name),
             "python": pyenv.describe(root),
             "internet": egress.summary(egress.recent(egress.log_path(name), 2000), date.today().isoformat()),
             "stats": stats.read_text(errors="replace") if stats.exists() else "(no stats yet)",
@@ -536,3 +537,18 @@ def dismiss(ids: list[str]) -> None:
     keep = {i for i in dismissed() | set(ids) if not (m := _DAY.search(i)) or m.group(0) >= cut}
     SUP_DIR.mkdir(exist_ok=True)
     (SUP_DIR / DISMISSED).write_text(json.dumps(sorted(keep)))
+
+
+def _jobs_summary(name: str) -> str:
+    """'watcher every 15 min (can wake), digest every 60 min' — or why none run (PLAN-jobs.md)."""
+    from . import jobs
+    if jobs.jobs_off(name):
+        return "off (shaft jobs " + name + " on)"
+    try:
+        declared, problems = jobs.declared(name)
+    except OSError:
+        return "none"
+    parts = [f"{j['plugin']} every {j['every_minutes']} min" + (" (can wake)" if j["can_wake"] else "")
+             + (f" · {jobs.entry(name, j['plugin']).get('fails')} failing" if jobs.entry(name, j['plugin']).get("fails")
+                else "") for j in declared]
+    return ", ".join(parts) + (f" · {len(problems)} not run" if problems else "") if parts or problems else "none"

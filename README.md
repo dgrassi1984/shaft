@@ -132,6 +132,7 @@ shaft distinct [name]           # blind test: can the judge tell it from the bar
 shaft distinct [name] --strict  # …again on answers stripped of specifics: voice, not memory
 shaft dataset|finetune [name]   # M6: export experiences / train a judged LoRA adapter (MLX)
 
+shaft jobs [name] [on|off]           # instances' scheduled jobs: their plugins on a timer (runs, errors, wakes)
 shaft tools <name> [on|off <tool>]   # an instance's supervisor tools, e.g. off delegate_coding (operator-only:
                                      # kept in .supervisor/, so the instance cannot switch it back on)
 shaft google login <alias> <address> [--client <name>]   # log in a Google account: Gmail + Calendar, read-only
@@ -317,6 +318,31 @@ Battery exams get none.
 
 The risks are mail's, plus other people's data: attendees' names and addresses, and invitations they wrote, reach
 the instance, its model providers and the judges.
+
+### Scheduled jobs (`shaft jobs …`)
+
+An instance can run one of its own plugins on a timer ([PLAN-jobs.md](PLAN-jobs.md)), for example a watcher that
+checks the tagged mail every 15 minutes. It declares the job in the plugin's own manifest:
+`"schedule": {"every_minutes": 15, "args": {…}, "can_wake": true}` in `plugins/<name>/plugin.json`. A cycle
+writes it, the gate tests it, and the commit records it. No launchd job is installed: SHAFT's scheduler service runs
+due jobs as children.
+
+Each run happens in the `run` sandbox, with its own broker and egress proxy:
+- supervisor tools, mail and calendar grants, the instance's keys, its Python environment and the internet;
+- no model, and no `delegate_coding`, `trial` or `send_message`;
+- writes only to `.jobs/<plugin>/` (gitignored state) and `.tmp/`;
+- at most 120 s and 30 tool calls, at least 5 minutes apart (`SHAFT_JOB_MIN_MINUTES`), at most 5 jobs per
+  instance.
+
+What a run returns lands in the instance's inbox, from "job <plugin>". An empty return delivers nothing. A job with
+`can_wake: true` whose run returns `{"message": …, "wake": true}` starts a cycle as soon as the instance is idle.
+Several requests while it is awake make one wake, there is no rate limit, and a paused instance is never woken.
+
+A run still going when the next comes due means the next is skipped, and the skip is logged. After 3 failures in a
+row the instance gets one message and the job backs off (its interval doubles, up to a day). Every run is logged in
+`.supervisor/jobs/<name>.jsonl`. `shaft jobs`, the panel's and `shaft top`'s *jobs* row, and the instance's own
+`record(kind='jobs')` show them. Jobs are on by default; `shaft jobs <name> off` stops an instance's jobs. They
+never run during a battery exam, nor in trial replays.
 
 ### Images
 

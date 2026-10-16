@@ -174,12 +174,13 @@ SPECS = {
         "start, end, exit code, reverted or kept code changes, notes), 'tools' (every supervisor tool you "
         "called, with arguments and outcome), 'code_changes' (code changes of yours that passed the tests), "
         "'trials' (your trials of proposed changes: progress and verdicts), 'egress' (every connection your "
-        "sandbox made to the internet through the proxy, or why it was refused). "
+        "sandbox made to the internet through the proxy, or why it was refused), 'jobs' (your scheduled plugins: "
+        "their timers, recent runs, errors, wakes they asked for). "
         "Newest last — except judgments: whole verdicts, newest first, as many as fit, with every field (the "
         "reasons for the difficulty, origin and value ratings, and the second judge's blind verdict where there is "
         "one); page back with `before`, or ask for one cycle's verdict with `cycle`. Use it to check your claims "
         "about yourself. (Your own tool traces are also in memory/episodes/*.jsonl.)",
-        {"kind": {"type": "string", "enum": ["judgments", "runs", "tools", "code_changes", "trials", "egress"]},
+        {"kind": {"type": "string", "enum": ["judgments", "runs", "tools", "code_changes", "trials", "egress", "jobs"]},
          "limit": {"type": "integer", "description": "entries, default 20, max 200"},
          "cycle": {"type": "string", "description": "judgments: one cycle's verdict in full, by its time "
                                                     "('2026-10-13 17:42')"},
@@ -455,6 +456,8 @@ class Broker:
         self.usage_name = usage_name or name
         from .core import disabled_tools
         self.disabled = disabled_tools(name)   # switched off by the operator: not offered, and refused
+        self.unavailable: dict[str, str] = {}   # tool -> why it is refused in this kind of run (a scheduled job's)
+        self.model_allowed = True              # False: /llm refuses (a scheduled job is a script, PLAN-jobs.md)
         self.bot = ""                           # set by tool_specs: its Telegram bot, if Daniele can be reached there
         # The operator's folder this run may read (shaft share): the instance's own runs and its trial replays,
         # never a battery exam (its control arm has no such folder). Checked again here: a folder deleted or
@@ -543,6 +546,10 @@ class Broker:
             def _llm(self):
                 from . import cloudllm, selfhosted, vision
                 body: dict = {}
+                if not broker.model_allowed:
+                    broker._log(f"{broker.name} llm -> REFUSED (a scheduled job has no model)")
+                    return self._reply(403, {"error": {"message": "a scheduled job has no model: it is a script; "
+                                                                  "what it returns reaches you in your inbox"}})
                 try:
                     body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
                     if (images := vision.count(body)):   # checked and prepared before any provider sees them
@@ -638,6 +645,8 @@ class Broker:
         self.counts[tool] = self.counts.get(tool, 0) + 1
         if tool in self.disabled:
             result = {"ok": False, "error": f"{tool} is not available to you (the operator switched it off)"}
+        elif tool in self.unavailable:
+            result = {"ok": False, "error": f"{tool} is not available {self.unavailable[tool]}"}
         elif self.calls > self.max_calls:
             result = {"ok": False, "error": f"call budget for this run exhausted ({self.max_calls})"}
         elif tool in MAIL_TOOLS and not self.mail_grants():
@@ -1008,8 +1017,11 @@ class Broker:
             from . import egress
             text = egress.describe(egress.recent(egress.log_path(self.name), limit,
                                                  before=self.as_of.isoformat(timespec="seconds") if self.as_of else None))
+        elif kind == "jobs":
+            from . import jobs
+            text = jobs.describe(self.name, limit) if not self.as_of else "(a replay does not see the job record)"
         else:
-            raise ValueError("kind must be judgments, runs, tools, code_changes, trials or egress")
+            raise ValueError("kind must be judgments, runs, tools, code_changes, trials, egress or jobs")
         text = text or "(nothing recorded yet)"
         return text if len(text) <= RUN_OUTPUT_CHARS else "[... older entries cut]\n" + text[-RUN_OUTPUT_CHARS:]
 
