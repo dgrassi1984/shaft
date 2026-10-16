@@ -206,6 +206,55 @@ class SchedulerRestartGuard(unittest.TestCase):
         self.assertEqual(self._runs(worker_in_scheduler_group=True), ["trial or battery worker"])
 
 
+@unittest.skipIf(top is None, "needs rich (.venv-ui/bin/python -m unittest supervisor.tests.test_control_panel)")
+class PanelRestartsOnNewCode(unittest.TestCase):
+    """Regression, 2026-10-16: a top left open across the calendar merge crashed on the Benchmarks tab — its lazy
+    import loaded the new battery.py (needs broker.CALENDAR_TOOLS) against the broker.py loaded before the merge."""
+
+    def test_the_stamp_covers_the_modules_that_skewed_and_sees_an_edit(self):
+        names = {Path(p[0]).name for p in top.code_stamp()}
+        self.assertTrue({"battery.py", "broker.py", "panel.py", "top_views.py"} <= names)
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(top, "SOURCE", Path(d)):
+            f = Path(d) / "broker.py"
+            f.write_text("A = 1\n")
+            before = top.code_stamp()
+            f.write_text("A = 1\nCALENDAR_TOOLS = ()\n")
+            self.assertNotEqual(top.code_stamp(), before)
+
+    def test_main_reexecs_itself_when_the_source_changes_instead_of_importing_it(self):
+        class Exec(Exception):
+            pass
+
+        def select(*a):                                 # without the restart the loop would spin on forever
+            select.calls += 1
+            if select.calls > 3:
+                raise AssertionError("top kept drawing on the old code after its source changed")
+            return [], [], []
+        select.calls = 0
+
+        live = mock.MagicMock()
+        live.__enter__.return_value = live
+        stamps = iter([("old",), ("old",), ("new",)])
+        execv = mock.Mock(side_effect=Exec)
+        with mock.patch.object(top.sys.stdin, "isatty", return_value=True), \
+                mock.patch.object(top.sys.stdout, "isatty", return_value=True), \
+                mock.patch.object(top.sys.stdin, "fileno", return_value=0), \
+                mock.patch.object(top, "termios") as termios, mock.patch.object(top, "tty"), \
+                mock.patch.object(top, "Live", return_value=live), \
+                mock.patch.object(top, "Console", return_value=mock.Mock(size=(100, 40))), \
+                mock.patch.object(top.select, "select", select), \
+                mock.patch.object(top.dashboard, "snapshot", return_value={}), \
+                mock.patch.object(top, "extras", side_effect=lambda s: s), \
+                mock.patch.object(top, "render", return_value=""), \
+                mock.patch.object(top, "code_stamp", side_effect=lambda: next(stamps)), \
+                mock.patch.object(top.os, "execv", execv):
+            with self.assertRaises(Exec):
+                top.main([])
+        execv.assert_called_once_with(top.sys.executable, top.sys.orig_argv)
+        termios.tcsetattr.assert_called_once()              # the terminal is restored before the exec
+        self.assertEqual(live.update.call_count, 1)         # one frame on the old code, none after the change
+
+
 @unittest.skipIf(top is None,"needs rich (.venv-ui/bin/python -m unittest supervisor.tests.test_control_panel)")
 class PanelKeys(unittest.TestCase):
     def setUp(self):
@@ -320,7 +369,7 @@ class PanelKeys(unittest.TestCase):
 
 
 DETAIL = {"name": "shaft", "paused": False, "model": "bonsai", "via": "local", "wake": "10", "effort": "medium",
-          "tools_off": [], "shared": "", "mail": "", "python": ".venv · Python 3.13.1", "internet": "3 today · pypi.org ×2", "stats": "# My measured performance\n- rate 70%",
+          "tools_off": [], "shared": "", "mail": "", "calendar": "", "python": ".venv · Python 3.13.1", "internet": "3 today · pypi.org ×2", "stats": "# My measured performance\n- rate 70%",
           "journal": ["2026-10-13 17:32 — Conversation with Daniele"], "questions": [],
           "probation": [{"commit": "abcdef1234", "since": "2026-10-13T15:00", "files": ["plugins/x/main.py"],
                          "baseline": 0.5, "restore_failed": "file changed since"}],

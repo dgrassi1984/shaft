@@ -1,8 +1,9 @@
 """`shaft top`: the supervisor's control panel — every instance's state and what it is doing right now, the
 services, the latest events and messages, and (PLAN-control-panel.md) tabs for one instance in full, the
 judge's verdicts, trials, benchmarks, self-changes and probation, spending against the caps, and the services,
-with guarded actions. Refreshes every second. Runs with .venv-ui (rich). Without a terminal
-(`shaft top --once`, or piped) it prints one snapshot as text.
+with guarded actions. Refreshes every second, and restarts itself on the new code when the supervisor's source
+changes on disk. Runs with .venv-ui (rich). Without a terminal (`shaft top --once`, or piped) it prints one
+snapshot as text.
 
 Keys — 0–9 switch tab, ? help, q quits. Overview: ↑/↓ pick an instance, Enter shows it in full, c starts a
 cycle if idle, p pause/resume, s sleep now, u update, w write, r reply, x dismiss the alerts, m messages.
@@ -20,6 +21,7 @@ import textwrap
 import time
 import tty
 from dataclasses import dataclass
+from pathlib import Path
 
 from rich.console import Console, Group
 from rich.live import Live
@@ -422,6 +424,17 @@ def plain(snap: dict) -> str:
                            [e.split(" cycle_timeout_s=")[0] for e in snap["events"][-5:]]))
 
 
+SOURCE = Path(__file__).resolve().parent
+
+
+def code_stamp() -> tuple:
+    """The supervisor's source as it stands on disk. The panel imports most modules lazily (panel.py, top_views),
+    so a top left open across a merge would load new modules against the old ones it already holds and crash —
+    2026-10-16: the Benchmarks tab imported the new battery.py, which needs broker.CALENDAR_TOOLS, against a
+    broker.py loaded before the calendar merge. A changed stamp makes main() restart itself on the new code."""
+    return panel._stamp(sorted(SOURCE.glob("*.py")))
+
+
 def main(argv: list[str]) -> int:
     if "--once" in argv or not (sys.stdin.isatty() and sys.stdout.isatty()):
         print(plain(extras(dashboard.snapshot())))
@@ -431,6 +444,7 @@ def main(argv: list[str]) -> int:
     fd = sys.stdin.fileno()
     saved = termios.tcgetattr(fd)
     ui = UI()
+    started, restart = code_stamp(), False
 
     def draw(snap):
         w, h = console.size
@@ -441,6 +455,9 @@ def main(argv: list[str]) -> int:
         snap, taken = extras(dashboard.snapshot()), time.monotonic()
         with Live(draw(snap), console=console, screen=True, auto_refresh=False) as live:
             while True:
+                if code_stamp() != started:      # checked before any key or refresh can import a changed module
+                    restart = True
+                    break
                 ready, _, _ = select.select([fd], [], [], max(0.0, 1.0 - (time.monotonic() - taken)))
                 if ready:
                     data = os.read(fd, 64).decode(errors="replace")
@@ -455,6 +472,8 @@ def main(argv: list[str]) -> int:
         pass
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, saved)
+    if restart:
+        os.execv(sys.executable, sys.orig_argv)
     return 0
 
 
