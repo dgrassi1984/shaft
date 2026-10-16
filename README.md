@@ -318,6 +318,36 @@ Battery exams get none.
 The risks are mail's, plus other people's data: attendees' names and addresses, and invitations they wrote, reach
 the instance, its model providers and the judges.
 
+### Images
+
+Instances can see images ([PLAN-vision.md](PLAN-vision.md)). There are two ways:
+- **Native.** If the instance's model accepts images, a photo you attach on Telegram reaches its model with your
+  message, and its `view_image` tool shows it an image file in its folder (`attachments/`, `mail/`, `shared/`).
+- **Described.** Every instance has the supervisor tool `describe_image(path, question)`. A vision model
+  (`SHAFT_DESCRIBE_MODEL`, default `claude-haiku-5-5`) answers in text, marked as described rather than seen. This
+  is how an instance whose model cannot see images (shaft on Bonsai) learns what is in one, and the cost counts
+  toward its daily cloud cap. At most 10 calls per run.
+
+Which models see images is learned, not listed:
+- Claude models do.
+- An OpenRouter model does if OpenRouter's model list includes `image` among its input modalities. The list is
+  cached for a day in `.supervisor/models.json`.
+- Self-hosted models do not.
+
+The run's environment tells the instance (`SHAFT_VISION=1`).
+
+The broker's model proxy checks every image before any provider sees it:
+- data: URLs only;
+- JPEG, PNG, GIF or WebP, recognised from the bytes;
+- downscaled with `sips` to 1,568 px when larger;
+- at most 4 per call (`SHAFT_MAX_IMAGES`).
+
+A model that cannot see images gets a refusal that names it. Only the newest images are resent in a conversation.
+
+Image bytes are never stored: episodes, the journal, logs and the tool log keep the path. Trial replays copy the
+attachments sent before the replayed cycle. Battery exams get no image tools. A judge, which reads text only, is told
+when a cycle used an image.
+
 ### The model server (`shaft model on`)
 
 `supervisor/bonsai_server.py`: mlx_lm's server with Bonsai's own loader (and a kept LoRA adapter, if

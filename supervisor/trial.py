@@ -286,6 +286,7 @@ def reconstruct(project: Path, name: str, state: dict, code: dict[str, bytes | N
         text = mind.show(name, "mind", f"memory/messages/{msg}", project)
         if text is not None:
             safe_write(dest, f"inbox/{msg}", text)
+    copy_attachments(project / "instances" / name, dest, datetime.fromisoformat(state["t0"]))
     for rel in ("logs", ".tmp"):
         shutil.rmtree(dest / rel, ignore_errors=True)
     (dest / ".tmp").mkdir()
@@ -293,6 +294,29 @@ def reconstruct(project: Path, name: str, state: dict, code: dict[str, bytes | N
     if index.is_file() and not index.is_symlink():
         shutil.copyfile(index, dest / ".tmp" / "memory-index.json")
     return dest
+
+
+def copy_attachments(src: Path, dest: Path, before: datetime) -> int:
+    """Files sent to the instance before `before` (attachments/<from-who>/<YYYYmmdd-HHMMSS…>/): they are versioned
+    nowhere (not in git, not in the mind store), and a replay must see the photo the original cycle could look at
+    (PLAN-vision.md). Later ones are left out, as later mail is. Regular files only: a link is never followed."""
+    copied = 0
+    base = src / "attachments"
+    for batch in sorted(base.glob("*/*")) if base.is_dir() and not base.is_symlink() else []:
+        try:
+            stamp = datetime.strptime(batch.name[:15], "%Y%m%d-%H%M%S")
+        except ValueError:
+            continue
+        if batch.is_symlink() or not batch.is_dir() or stamp >= before:
+            continue
+        inside = batch.resolve()
+        for f in batch.rglob("*"):
+            if f.is_file() and not f.is_symlink() and inside in f.resolve().parents:   # nothing reached through a link
+                target = contained(dest, *f.relative_to(src).parts)
+                contained(dest, *f.relative_to(src).parent.parts).mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(f, target)
+                copied += 1
+    return copied
 
 
 def _talk_ids(root: Path) -> list[str]:

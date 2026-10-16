@@ -30,6 +30,7 @@ Rules:
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import time
@@ -116,6 +117,23 @@ def spent_today(instance: str) -> float:
     return total
 
 
+def _user_blocks(content) -> list[dict]:
+    """A user message's content as Claude blocks: text, or OpenAI-style parts — text and images (data: URLs, already
+    checked and prepared by vision.prepare in the broker's proxy)."""
+    if not isinstance(content, list):
+        return [{"type": "text", "text": content}]
+    from .vision import split_data_url
+    blocks = []
+    for part in content:
+        if part.get("type") == "text":
+            blocks.append({"type": "text", "text": part.get("text", "")})
+        elif part.get("type") == "image_url":
+            media, data = split_data_url((part.get("image_url") or {}).get("url", ""))
+            blocks.append({"type": "image", "source": {"type": "base64", "media_type": media,
+                                                       "data": base64.b64encode(data).decode()}})
+    return blocks or [{"type": "text", "text": "(empty)"}]
+
+
 def to_anthropic(body: dict, remembered: dict[str, list]) -> dict:
     system, messages = [], []
 
@@ -130,7 +148,7 @@ def to_anthropic(body: dict, remembered: dict[str, list]) -> dict:
         if role == "system":
             system.append(content)
         elif role == "user":
-            push("user", [{"type": "text", "text": content}])
+            push("user", _user_blocks(content))
         elif role == "tool":
             push("user", [{"type": "tool_result", "tool_use_id": m["tool_call_id"], "content": content or "(empty)"}])
         elif role == "assistant":
