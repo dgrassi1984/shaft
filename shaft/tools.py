@@ -13,7 +13,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from . import broker, memory, personality, selfedit
+from . import broker, images, memory, personality, selfedit
 
 MAX_RESULT_CHARS = 6000
 # My tool log is what the judge grades my cycles from: it keeps what I saw. It was once cut at 2,000
@@ -90,6 +90,12 @@ BUILTINS = [
 ]
 
 
+# Shown only when my model sees images (SHAFT_VISION, PLAN-vision.md): the image follows the tool results.
+VIEW_IMAGE = _spec("view_image", "Look at an image file (JPEG, PNG, GIF or WebP) in my folder — a photo Daniele "
+                   "attached (attachments/…), a mail attachment (mail/…), a file in shared/. The image is shown to "
+                   "me right after the tool results.", {"path": S})
+
+
 class Toolbox:
     def __init__(self, root: Path, extra: list[dict] | None = None):
         self.root = Path(root).resolve()
@@ -99,6 +105,7 @@ class Toolbox:
         self.plugins = self._discover_plugins()
         self.remote = self._discover_broker()
         self.log: list[dict] = []
+        self.shown: list[Path] = []       # images view_image showed, for the agent loop to send after the results
 
     # -- discovery ---------------------------------------------------------------
     def _discover_plugins(self) -> dict[str, dict]:
@@ -125,11 +132,14 @@ class Toolbox:
         except broker.BrokerError:
             return {}
 
+    def _builtins(self) -> list[dict]:
+        return BUILTINS + ([VIEW_IMAGE] if images.vision() else [])
+
     def specs(self) -> list[dict]:
-        return BUILTINS + list(self.plugins.values()) + list(self.remote.values()) + self.extra
+        return self._builtins() + list(self.plugins.values()) + list(self.remote.values()) + self.extra
 
     def describe(self) -> str:
-        groups = [("built-in", [t["function"]["name"] for t in BUILTINS]),
+        groups = [("built-in", [t["function"]["name"] for t in self._builtins()]),
                   ("my plugins", list(self.plugins)), ("supervisor", list(self.remote))]
         return "; ".join(f"{label}: {', '.join(names) or '(none)'}" for label, names in groups)
 
@@ -151,7 +161,7 @@ class Toolbox:
 
     def _dispatch(self, name: str, args: dict) -> str:
         builtin = getattr(self, f"_t_{name}", None)
-        if builtin and name in {t["function"]["name"] for t in BUILTINS}:
+        if builtin and name in {t["function"]["name"] for t in self._builtins()}:
             return builtin(**args)
         if name in self.plugins:
             return self._run_plugin(name, args)
@@ -185,6 +195,17 @@ class Toolbox:
                 if r == d or r.startswith(d + "/"):
                     raise PermissionError(f"{r}: {why}")
         return path
+
+    def _t_view_image(self, path: str) -> str:
+        target = self._path(path)
+        if not images.is_image(target):
+            raise ValueError(f"{path}: not a JPEG, PNG, GIF or WebP file")
+        if not target.is_file():
+            raise FileNotFoundError(f"{path}: no such file")
+        if len(self.shown) >= images.MAX_SHOWN:
+            raise ValueError(f"at most {images.MAX_SHOWN} images per step; look at the rest next step")
+        self.shown.append(target)
+        return f"{path}: shown below ({target.stat().st_size // 1024} KB)."
 
     def _t_read_file(self, path: str, offset: int = 0) -> str:
         text = self._path(path).read_text(errors="replace")
