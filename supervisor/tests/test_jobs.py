@@ -24,8 +24,13 @@ class JobCase(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.project, True)
         self.sup = self.project / ".supervisor"
         self.root = self.project / "instances" / "wren"
+        git = lambda *a, cwd=self.project: subprocess.run(["git", "-C", str(cwd), *a], check=True,  # noqa: E731
+                                                           capture_output=True)
+        git("init", "-q")
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "main")
+        git("worktree", "add", "-q", "--orphan", "-b", "instance/wren", str(self.root))
+        self.git = lambda *a: git("-c", "user.name=t", "-c", "user.email=t@t", *a, cwd=self.root)  # noqa: E731
         shutil.copytree(TEMPLATE / "shaft", self.root / "shaft", ignore=shutil.ignore_patterns("__pycache__"))
-        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
         for d in ("notes", "memory", "inbox", "plugins"):
             (self.root / d).mkdir()
         (self.root / "config.env").write_text('OPERATOR_NAME="Daniele"\n')
@@ -34,7 +39,7 @@ class JobCase(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
 
-    def plugin(self, name: str, body: str, schedule: dict | None = None, **extra) -> None:
+    def plugin(self, name: str, body: str, schedule: dict | None = None, commit: bool = True, **extra) -> None:
         d = self.root / "plugins" / name
         d.mkdir(parents=True, exist_ok=True)
         spec = {"name": name, "description": "test", "parameters": {"type": "object", "properties": {}}, **extra}
@@ -42,6 +47,9 @@ class JobCase(unittest.TestCase):
             spec["schedule"] = schedule
         (d / "plugin.json").write_text(json.dumps(spec))
         (d / "main.py").write_text(textwrap.dedent(body))
+        if commit:   # a job runs only committed code, as a cycle's commit leaves it
+            self.git("add", "-A", "--", f"plugins/{name}")
+            self.git("commit", "-q", "-m", f"plugin {name}")
 
     def inbox(self) -> list[str]:
         return [p.read_text() for p in sorted((self.root / "inbox").glob("*.md"))]
@@ -64,10 +72,26 @@ class DeclaredTest(JobCase):
         self.assertFalse(jobs.due("wren", job, now + timedelta(minutes=14)))
         self.assertTrue(jobs.due("wren", job, now + timedelta(minutes=15)))
 
+    def test_an_uncommitted_plugin_waits_for_its_commit(self):
+        # Regression (2026-10-16): wren's watcher ran mid-conversation, half-written ("NameError: name 'broker' is not
+        # defined"), and a plugin.json written before its main.py was reported to it as "no main.py".
+        self.plugin("watch", "def run(): return 'v1'", {"every_minutes": 10})
+        (self.root / "plugins" / "watch" / "main.py").write_text("def run(: broken mid-edit")
+        (self.root / "plugins" / "half").mkdir()
+        (self.root / "plugins" / "half" / "plugin.json").write_text(json.dumps(
+            {"name": "half", "description": "x", "parameters": {"type": "object"}, "schedule": {"every_minutes": 10}}))
+        self.assertEqual(jobs.declared("wren"), ([], []))                 # neither runs, nothing is reported
+        self.assertIn("watch: being changed (not committed yet)", jobs.describe("wren"))
+        self.assertEqual(jobs.run("wren", "watch"), 2)
+        self.git("checkout", "--", "plugins/watch")
+        self.assertEqual([j["plugin"] for j in jobs.declared("wren")[0]], ["watch"])
+
     def test_bad_manifest_skipped_and_reported_once(self):
         self.plugin("bad", "def run(): return ''", {"every_minutes": "often"})
         (self.root / "plugins" / "broken").mkdir()
         (self.root / "plugins" / "broken" / "plugin.json").write_text('{"name": "broken", "schedule": {')
+        self.git("add", "-A", "--", "plugins/broken")
+        self.git("commit", "-q", "-m", "broken")
         for _ in range(2):
             jobs.tick({}, datetime.now(), lambda args: self.fail("nothing should start"), ["wren"], lambda n: "")
         self.assertEqual(len(self.inbox()), 1)                              # once, not every tick
@@ -244,7 +268,7 @@ class RunTest(JobCase):
         e = jobs.entry("wren", "flaky")
         self.assertEqual(e["fails"], jobs.FAIL_REPORT + 1)
         self.assertEqual(jobs.interval(job, e), timedelta(minutes=40))     # doubled past the third failure
-        self.plugin("flaky", "def run(): return ''", {"every_minutes": 10})
+        self.plugin("flaky", "def run(): return ''", {"every_minutes": 10})   # fixed, and committed
         self.assertEqual(jobs.run("wren", "flaky"), 0)
         self.assertEqual(jobs.entry("wren", "flaky")["fails"], 0)
 

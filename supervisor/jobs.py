@@ -95,13 +95,42 @@ def set_jobs_off(name: str, off: bool) -> None:
 
 
 # -- what the instance declared ----------------------------------------------------------------------------------------
+def uncommitted(root: Path) -> set[str] | None:
+    """Plugin folders whose files differ from the instance's last commit — being written by a cycle or a
+    conversation, or just reverted by the gate. None if git cannot tell (then no job runs: fail closed).
+    A job runs only committed, gate-tested code (2026-10-16: wren's watcher ran mid-conversation, half-written —
+    "NameError: name 'broker' is not defined" — and a plugin.json written before its main.py was reported as broken)."""
+    from .core import git_wt
+    try:
+        r = git_wt(root, "status", "--porcelain", "--untracked-files=all", "--", "plugins", check=False,
+                   project=Path(root).parent.parent)
+    except SystemExit as e:   # not a registered worktree
+        log(f"jobs: {root.name}: cannot tell which plugins are committed ({e}); no job runs")
+        return None
+    if r.returncode != 0:
+        log(f"jobs: {root.name}: git status failed ({r.stderr.strip()[:200]}); no job runs")
+        return None
+    out = set()
+    for line in r.stdout.splitlines():
+        path = line[3:].strip().strip('"').split(" -> ")[-1]
+        parts = Path(path).parts
+        if len(parts) >= 2 and parts[0] == "plugins":
+            out.add(parts[1])
+    return out
+
+
 def declared(name: str, root: Path | None = None) -> tuple[list[dict], list[str]]:
-    """(jobs, problems): every plugin whose manifest has a valid `schedule` (at most MAX_JOBS, by name), and why
-    each other schedule is not run."""
+    """(jobs, problems): every committed plugin whose manifest has a valid `schedule` (at most MAX_JOBS, by name),
+    and why each other committed schedule is not run. A plugin with uncommitted changes is neither: it waits."""
     root = Path(root or instance_root(name))
     jobs, problems = [], []
+    changing = uncommitted(root)
+    if changing is None:
+        return [], []
     for manifest in sorted((root / "plugins").glob("*/plugin.json")) if (root / "plugins").is_dir() else []:
         plugin = manifest.parent.name
+        if plugin in changing:
+            continue
         try:
             spec = json.loads(manifest.read_text())
         except (OSError, ValueError) as e:
@@ -126,6 +155,13 @@ def declared(name: str, root: Path | None = None) -> tuple[list[dict], list[str]
                         + ", ".join(j["plugin"] for j in jobs[MAX_JOBS:]))
         jobs = jobs[:MAX_JOBS]
     return jobs, problems
+
+
+def _manifest_text(name: str, plugin: str) -> str:
+    try:
+        return (instance_root(name) / "plugins" / plugin / "plugin.json").read_text(errors="replace")
+    except OSError:
+        return ""
 
 
 def _invalid(sched) -> str:
@@ -372,6 +408,9 @@ def describe(name: str, limit: int = 20) -> str:
         lines.append(f"  {j['plugin']}: every {j['every_minutes']} min{' · can wake' if j['can_wake'] else ''} · {state}"
                      + (f"\n    last error: {e['last_error'][:200]}" if e.get("last_error") else ""))
     lines += [f"  not run: {p}" for p in problems]
+    changing = uncommitted(instance_root(name)) or set()
+    lines += [f"  {p}: being changed (not committed yet) — runs once its cycle commits it"
+              for p in sorted(changing) if '"schedule"' in _manifest_text(name, p)]
     if not jobs and not problems:
         lines.append("  (no plugin has a schedule)")
     if (req := pending_wakes().get(name)):
