@@ -112,7 +112,8 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
         call: Callable[..., Reply] | None = None,
         on_tool: Callable[[str, str, str], None] | None = None,
         on_tool_start: Callable[[str, str], None] | None = None,
-        wrap_up: str | None = None, ledger: bool = True) -> Outcome:
+        wrap_up: str | None = None, ledger: bool = True,
+        interjections: Callable[[], list[dict]] | None = None) -> Outcome:
     """Run until the model answers without calling tools, a stopping control is called,
     or max_steps model turns have been used (max_steps <= 0: no limit — conversations, where
     Daniele stops a reply with Ctrl-C). `call` defaults to client.complete; pass a streaming
@@ -124,7 +125,10 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
 
     With `ledger`, each step's last tool result ends with the calls actually made so far in this run (from
     the tool log), so I check what I did against the log, not against my memory of my plan. It goes only to
-    the model: the tool log, which the judge and metrics read, keeps the results as the tools returned them."""
+    the model: the tool log, which the judge and metrics read, keeps the results as the tools returned them.
+
+    `interjections` (conversations): messages Daniele sent while I am still replying. Each step starts by adding
+    the new ones after my last tool result, so the next model call already has them (PLAN-interject.md)."""
     controls = controls or {}
     tools = toolbox.specs() + [c.spec for c in controls.values()]
     final_tools = [c.spec for c in controls.values()] or None
@@ -137,6 +141,8 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
         if pausing.requested():   # Daniele opened a conversation: wait, then go on where I was
             pausing.activity(keep=True, phase="paused")
             pausing.wait_while_paused()
+        if interjections:   # before the mark: a step redone after a pause keeps them
+            messages.extend(interjections())
         step += 1
         left = time_left()
         yielding = step > 1 and yield_requested()
