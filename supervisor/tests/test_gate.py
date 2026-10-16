@@ -237,5 +237,46 @@ class StageTimeoutTest(FakeProjectCase):
         self.assertIn("instance tests: timed out after 5s", logged)
 
 
+LEAVES_A_WRITER = (   # a test that starts a background worker: it says it started, then writes the instance's code
+    "import subprocess, sys, time, unittest\nfrom pathlib import Path\n\n"
+    "WORKER = (\"import time\\nfrom pathlib import Path\\nPath('started').write_text('x')\\ntime.sleep({late})\\n\"\n"
+    "          \"Path('shaft/late.py').write_text('WRITTEN_AFTER_THE_GATE = True\\\\n')\\n\")\n\n"
+    "class T(unittest.TestCase):\n    def test_server(self):\n"
+    "        subprocess.Popen([sys.executable, '-c', WORKER], stdin=subprocess.DEVNULL,\n"
+    "                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+    "        while not Path('started').exists():\n            time.sleep(0.05)\n"
+    "        {then}\n")
+
+
+class StageProcessGroupTest(FakeProjectCase):
+    """Regression (found 2026-10-16, by reading): on a timeout subprocess.run killed only the stage's direct child
+    (sandbox-exec, exec'd into python). A process a test had started kept running in the instance's sandbox after the
+    gate had failed and runner._settle had reverted the change, so it could write the instance's code after the
+    revert. Nothing a stage started may outlive it."""
+
+    def assert_no_write_after_the_gate(self, then: str, timeout_s: int, late_s: int) -> str:
+        (self.inst / "shaft").mkdir()
+        (self.inst / "tests").mkdir()
+        (self.inst / "tests" / "test_server.py").write_text(LEAVES_A_WRITER.format(late=late_s, then=then))
+        ok, out = self.gate(timeout_s)
+        returned = time.monotonic()
+        self.assertFalse(ok, out)
+        self.assertTrue((self.inst / "started").exists(), out)            # the worker did start: not a vacuous pass
+        while time.monotonic() - returned < late_s + 2:                    # past the moment it would have written
+            self.assertFalse((self.inst / "shaft" / "late.py").exists(),
+                             "a process the gate's stage started wrote the instance's code after run_tests returned")
+            time.sleep(0.2)
+        return out
+
+    def test_a_process_a_timed_out_test_started_cannot_write_the_code_after_the_gate_20261016(self):
+        out = self.assert_no_write_after_the_gate("time.sleep(120)", timeout_s=4, late_s=4)
+        self.assertIn("instance tests: timed out after 4s, counted as failed", out)
+
+    def test_a_process_a_failing_test_left_behind_cannot_write_the_code_after_the_gate(self):
+        # The same race without a timeout: the stage ends, the gate fails, _settle reverts, the worker writes.
+        out = self.assert_no_write_after_the_gate("self.fail('broken')", timeout_s=60, late_s=3)
+        self.assertIn("broken", out)
+
+
 if __name__ == "__main__":
     unittest.main()
