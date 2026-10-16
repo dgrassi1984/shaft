@@ -6,9 +6,12 @@ lock, the gate and the commit. The instance is held only while it replies — wh
 you, the API and journal write-ups can use it. A conversation quiet for SHAFT_IDLE_MINUTES closes
 itself and is written up.
 
-Keys: Enter sends · Shift-Enter / Option-Enter / Ctrl-J new line · ↑/↓ history
+Keys: Enter sends · Shift-Enter / Ctrl-J new line · ↑/↓ history
+      while it replies you keep typing: Enter or Cmd-Enter queues a message (sent when the reply ends; what you
+      type next is a new one), Esc takes the queued ones back
       Ctrl-C stops a reply; at the prompt it clears your text, or ends the conversation if empty
       Ctrl-D ends the conversation
+Which bytes those keys arrive as, and the iTerm2 key binding Cmd-Enter needs: talk_input.py.
 """
 from __future__ import annotations
 
@@ -16,6 +19,7 @@ import json
 import os
 import uuid
 import queue
+import select
 import signal
 import sys
 import termios
@@ -35,25 +39,33 @@ from rich.spinner import Spinner
 from rich.text import Text
 
 from . import messages, version
+from .talk_input import ENTER, PASTE_OFF, PASTE_ON, REPORT_KEYS_OFF, REPORT_KEYS_ON, Draft, other_modified_keys
 from .talk_stats import Stats
 from .core import IDLE_MINUTES, SUP_DIR, instance_root
 from .runner import run_conversation, spawn_recover
 
-# Shift-Enter as sent by terminals that report modifiers (iTerm2 "CSI u", kitty, xterm
-# modifyOtherKeys) — map it to Ctrl-J, which inserts a new line. iTerm2's other common setups send
-# ESC+CR (Option-Enter / Shift-Enter mapped to "Esc+") or a bare LF: both are bound below too.
-for seq in ("\x1b[13;2u", "\x1b[27;2;13~", "\x1b[13;3u", "\x1b[27;3;13~"):
-    ANSI_SEQUENCES[seq] = Keys.ControlJ
+# A modified Enter as terminals report it once talk asks (talk_input.py): Shift-Enter and the like → Ctrl-J,
+# which inserts a new line; Cmd-Enter → F20, which sends (there is no reply to queue behind at the prompt).
+# ESC+CR (Option-Enter where Option sends Esc+) is bound below. Other modified keys are dropped, not typed.
+for seq, kind in ENTER.items():
+    if seq.startswith("\x1b["):
+        ANSI_SEQUENCES[seq] = Keys.ControlJ if kind == "newline" else Keys.F20
+for seq in other_modified_keys():
+    ANSI_SEQUENCES.setdefault(seq, Keys.Ignore)
 
 HELP = """\
-**Keys** — Enter sends · **Shift-Enter**, **Option-Enter** or **Ctrl-J** new line · ↑/↓ history · \
+**Keys** — Enter sends · **Shift-Enter** or **Ctrl-J** new line · ↑/↓ history · \
 Ctrl-C stops a reply (at the prompt: clears your text, or ends if empty) · Ctrl-D ends
+
+**While it replies** keep typing: **Enter** or **Cmd-Enter** queues the message — it is sent as soon as the \
+reply ends, and what you type next is a new one · Esc takes the queued ones back to edit · Ctrl-U clears the one \
+you are typing · what is not queued, or everything if you stop the reply (Ctrl-C), is put back at the prompt
 
 **Commands** — `/thinking` show or hide its reasoning · `/status` how it is doing · `/version` which code is running · `/inbox` messages \
 it sent you · `/clear` clear the screen · `/exit` end
 
-*Shift-Enter in iTerm2:* if it sends instead of adding a line, turn on Settings → Profiles → Keys → \
-General → "Report modifiers using CSI u" (or use Option-Enter / Ctrl-J)."""
+*Cmd-Enter in iTerm2* is Toggle Full Screen until you add Settings → Keys → Key Bindings → + → ⌘↩ → \
+"Send Escape Sequence" → `[13;9u`."""
 
 
 class Client:
@@ -67,6 +79,7 @@ class Client:
         self.interrupts: list[float] = []
         self.quit = False
         self.prompting, self.idle_closed, self.last_activity = False, False, time.monotonic()
+        self.draft = Draft()   # what you type while it replies (talk_input.py)
         SUP_DIR.mkdir(exist_ok=True)
         self.session = PromptSession(history=FileHistory(str(SUP_DIR / f"talk-history-{name}")),
                                      multiline=True, key_bindings=self._keys(), prompt_continuation=self._cont,
@@ -92,6 +105,7 @@ class Client:
         kb = KeyBindings()
 
         @kb.add("enter")
+        @kb.add("f20")                 # Cmd-Enter (mapped above): at the prompt it sends
         def _(event):
             buf = event.current_buffer
             if buf.text.strip():
@@ -168,7 +182,7 @@ class Client:
         tool_t0 = 0.0
         spinner = Spinner("dots", style="dim")
 
-        def view():
+        def view(final=False):
             parts = []
             if self.show_thinking and reasoning:
                 parts.append(Text(reasoning[-1200:], style="dim italic"))
@@ -184,15 +198,29 @@ class Client:
                 parts.append(spinner)
                 # the status line also while it replies: the prompt's bar is not on screen then
                 parts.append(Text(f" {self._status()}", style="reverse dim"))
+            if (self.draft.text or self.draft.queue) and not final:   # off the last frame: sent ones are printed
+                for q in self.draft.queue:
+                    parts.append(Text.assemble(("queued › ", "bold cyan"), q))
+                parts.append(Text.assemble(("you › ", "bold cyan"), self.draft.text, ("▌", "dim")))
+                parts.append(Text("  ⏎ / ⌘⏎ queue · ⇧⏎ new line" + (" · queued ones are sent when the reply ends, "
+                                  "Esc takes them back" if self.draft.queue else ""), style="dim"))
             return Group(*parts)
+
+        def typed():   # read what you type while it replies, without blocking
+            while saved_tty is not None and select.select([sys.stdin], [], [], 0)[0]:
+                data = os.read(sys.stdin.fileno(), 4096)
+                if not data:
+                    return
+                self.draft.feed(data)
 
         old = signal.signal(signal.SIGINT, self._on_sigint)
         saved_tty = self._quiet_tty()   # keystrokes and ^C must not be echoed into the streaming reply
         try:
             with Live(view(), console=self.console, refresh_per_second=10, transient=False) as live:
                 while True:
+                    typed()
                     try:
-                        ev = self.events.get(timeout=0.1)
+                        ev = self.events.get(timeout=0.05)
                     except queue.Empty:
                         live.update(view())
                         continue
@@ -235,7 +263,10 @@ class Client:
                         content, reasoning, first_token = "", "", None
                     elif t in ("turn_end", "interrupted", "error", "eof"):
                         phase = ""
-                        live.update(view())
+                        typed()
+                        if t in ("interrupted", "eof") or self.quit:
+                            self.draft.unqueue()   # you stopped it: what you typed goes back to the prompt
+                        live.update(view(final=True))
                         if t == "turn_end" and ev.get("ended_by") == "repeating":
                             live.console.print(f"  [dim]stopped: {self.name} kept repeating the same tool call "
                                                f"unchanged (it was not run again)[/dim]")
@@ -256,16 +287,24 @@ class Client:
         finally:
             signal.signal(signal.SIGINT, old)
             self._restore_tty(saved_tty)
+            self.draft.flush()
         self.console.print()
 
     @staticmethod
     def _quiet_tty():
+        """While it replies: no echo, keys one by one (not a line at a time) and CR left as CR, so the draft is
+        read as you type it — ISIG stays on, so Ctrl-C is still the SIGINT that stops the reply. Pastes arrive
+        bracketed."""
         try:
             fd = sys.stdin.fileno()
             saved = termios.tcgetattr(fd)
             quiet = termios.tcgetattr(fd)
-            quiet[3] &= ~(termios.ECHO | termios.ECHOCTL)
+            quiet[0] &= ~termios.ICRNL       # Enter stays CR (queues), not turned into LF (a new line)
+            quiet[3] &= ~(termios.ECHO | termios.ECHOCTL | termios.ICANON)
+            quiet[6][termios.VMIN], quiet[6][termios.VTIME] = 1, 0
             termios.tcsetattr(fd, termios.TCSANOW, quiet)
+            sys.stdout.write(PASTE_ON)
+            sys.stdout.flush()
             return saved
         except (termios.error, ValueError, OSError):
             return None
@@ -274,7 +313,9 @@ class Client:
     def _restore_tty(saved) -> None:
         if saved is not None:
             try:
-                termios.tcsetattr(sys.stdin.fileno(), termios.TCSAFLUSH, saved)   # also drops typed-ahead junk
+                sys.stdout.write(PASTE_OFF)
+                sys.stdout.flush()
+                termios.tcsetattr(sys.stdin.fileno(), termios.TCSANOW, saved)
             except (termios.error, ValueError, OSError):
                 pass
 
@@ -310,6 +351,15 @@ class Client:
     # -- the conversation --------------------------------------------------------------------
     def drive(self, proc, turn) -> None:
         """turn(): the runner's hold on the instance — taken for start-up and for each reply only."""
+        sys.stdout.write(REPORT_KEYS_ON)   # Shift-Enter told apart from Enter (talk_input.py), until it ends
+        sys.stdout.flush()
+        try:
+            self._drive(proc, turn)
+        finally:
+            sys.stdout.write(REPORT_KEYS_OFF)
+            sys.stdout.flush()
+
+    def _drive(self, proc, turn) -> None:
         self.proc = proc
         threading.Thread(target=self._reader, daemon=True).start()
         threading.Thread(target=self._drain_stderr, daemon=True).start()
@@ -326,13 +376,18 @@ class Client:
         self.console.print(f"[dim]{version.describe(self.name)}[/dim]\n")
         threading.Thread(target=self._idle_watch, daemon=True).start()
         while not self.quit:
-            self.prompting, self.last_activity = True, time.monotonic()
-            try:
-                text = self.session.prompt(HTML("<ansicyan><b>you ›</b></ansicyan> "))
-            except (EOFError, KeyboardInterrupt):
-                break
-            finally:
-                self.prompting = False
+            text, queued = self.draft.take()   # typed during the last reply
+            if queued:
+                self.console.print(Text.assemble(("you › ", "bold cyan"), text))
+                self.session.history.append_string(text)   # ↑ finds it like anything sent from the prompt
+            else:
+                self.prompting, self.last_activity = True, time.monotonic()
+                try:
+                    text = self.session.prompt(HTML("<ansicyan><b>you ›</b></ansicyan> "), default=text)
+                except (EOFError, KeyboardInterrupt):
+                    break
+                finally:
+                    self.prompting = False
             text = text.strip()
             if not text:
                 continue
