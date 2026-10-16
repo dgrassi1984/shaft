@@ -281,12 +281,53 @@ class FileToolsTest(unittest.TestCase):
         call("write_file", path="notes/trend.md", content="# Trend\n- 10-12 entry A\n")
         self.assertTrue(call("append_file", path="notes/trend.md", content="- 10-13 entry B").startswith("appended"))
         self.assertEqual((root / "notes/trend.md").read_text(), "# Trend\n- 10-12 entry A\n- 10-13 entry B\n")
-        out = call("write_file", path="notes/trend.md", content="# Trend\n- 10-13 entry C\n")
+        out = call("write_file", path="notes/trend.md", content="# Trend\n- 10-13 entry C\n", replace=True)
         self.assertIn("the file now contains exactly what you wrote (2 lines)", out)   # shaft read the old note as
         self.assertIn("2 earlier line(s) are no longer in it", out)                      # "the write did not land"
         self.assertIn("history(path='notes/trend.md')", out)
         self.assertNotIn("gone", call("write_file", path="notes/new.md", content="fresh\n"))
         self.assertIn("append-only", call("append_file", path="memory/journal.md", content="x"))
+
+    def test_a_record_is_not_overwritten_by_an_entry_meant_to_be_added(self):
+        # Regression (2026-10-16 03:59): shaft wrote a 1.6 KB audit entry with write_file over its 546 KB
+        # notes/ai-misalignment-trend.md. The report after the write named the 2,067 lost lines; they were
+        # already gone. A write that would drop a record's lines is now refused before anything changes.
+        import json as _json
+        from shaft.tools import Toolbox
+        root = Path(tempfile.mkdtemp(prefix="shaft-tools-"))
+        t = Toolbox(root)
+        call = lambda name, **a: t.run(name, _json.dumps(a))   # noqa: E731
+        record = "# AI misalignment trend record\n" + "".join(f"- entry {i}\n" for i in range(2067))
+        (root / "notes").mkdir()
+        (root / "notes/trend.md").write_text(record)
+        out = call("write_file", path="notes/trend.md", content="<!-- AUDIT -->\n## audit entry\n")
+        self.assertTrue(out.startswith("ERROR: not written."), out)
+        self.assertIn("would drop 2068 of them", out)
+        self.assertIn("use append_file", out)
+        self.assertEqual((root / "notes/trend.md").read_text(), record)              # not one byte changed
+        # the same for memory/ records, and a "true" string is read as true
+        (root / "memory").mkdir()
+        (root / "memory/people.md").write_text("- Daniele: quant\n")
+        self.assertTrue(call("write_file", path="memory/people.md", content="- new\n").startswith("ERROR"))
+        self.assertIn("1 earlier line(s)", call("write_file", path="memory/people.md", content="- new\n",
+                                                replace="true"))
+        self.assertEqual((root / "memory/people.md").read_text(), "- new\n")
+        # keeping every line (an extension) and new files need nothing
+        self.assertTrue(call("write_file", path="notes/trend.md", content=record + "- more\n").startswith("wrote"))
+        self.assertTrue(call("write_file", path="notes/fresh.md", content="x\n").startswith("wrote"))
+
+    def test_code_and_skills_are_still_rewritten_in_one_call(self):
+        # Instances build their own plugins by rewriting main.py whole: only notes/ and memory/ are guarded.
+        import json as _json
+        from shaft.tools import Toolbox
+        root = Path(tempfile.mkdtemp(prefix="shaft-tools-"))
+        t = Toolbox(root)
+        call = lambda name, **a: t.run(name, _json.dumps(a))   # noqa: E731
+        for path in ("plugins/p/main.py", "skills/s.md", "tests/test_p.py", "self/goals.md"):
+            call("write_file", path=path, content="v1\nold line\n")
+            out = call("write_file", path=path, content="v2\n")
+            self.assertTrue(out.startswith("wrote"), (path, out))
+            self.assertEqual((root / path).read_text(), "v2\n")
 
     def test_config_env_is_changed_with_set_config_not_written(self):
         # Regression: the sandbox denies config.env writes (only the broker's set_config records an instance's
