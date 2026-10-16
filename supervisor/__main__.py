@@ -266,6 +266,21 @@ def cmd_status(names: list[str]) -> int:
     return 0
 
 
+def cmd_jobs(name: str | None, action: str | None) -> int:
+    """Scheduled jobs (PLAN-jobs.md): an instance's own plugins, run on the timer their manifest declares."""
+    from . import jobs
+    if action and not name:
+        print("usage: shaft jobs <name> on|off", file=sys.stderr)
+        return 2
+    if action:
+        instance_root(name)
+        jobs.set_jobs_off(name, action == "off")
+        log(f"{name}: scheduled jobs switched {action} by the operator")
+    for n in ([name] if name else instance_names()):
+        print(jobs.describe(n))
+    return 0
+
+
 def cmd_tools(name: str, action: str | None, tool: str | None) -> int:
     from .broker import SPECS
     from .core import disabled_tools, set_tool
@@ -775,6 +790,14 @@ def main(argv: list[str]) -> int:
     for verb in ("pause", "resume"):
         p = sub.add_parser(verb, help=f"{verb} autonomous runs (all, or one instance)")
         p.add_argument("name", nargs="?")
+    p = sub.add_parser("jobs", help="instances' scheduled jobs (their own plugins on a timer): list, or switch an "
+                                    "instance's jobs on/off")
+    p.add_argument("name", nargs="?")
+    p.add_argument("action", nargs="?", choices=["on", "off"])
+    p = sub.add_parser("job", help="(the scheduler's) run one scheduled job now: job run <name> <plugin>")
+    p.add_argument("action", choices=["run"])
+    p.add_argument("name")
+    p.add_argument("plugin")
     p = sub.add_parser("tools", help="an instance's supervisor tools: list them, or switch one on/off")
     p.add_argument("name")
     p.add_argument("action", nargs="?", choices=["on", "off"])
@@ -886,6 +909,12 @@ def main(argv: list[str]) -> int:
                   f"prompt_toolkit rich)", file=sys.stderr)
             return 2
         os.execv(ui_python, [str(ui_python), "-E", "-s", "-m", "supervisor.top", *extra])
+    if args.cmd == "jobs":
+        return cmd_jobs(args.name, args.action)
+    if args.cmd == "job":
+        from . import jobs
+        instance_root(args.name)
+        return jobs.run(args.name, args.plugin)
     if args.cmd == "tools":
         return cmd_tools(args.name, args.action, args.tool)
     if args.cmd == "secret":

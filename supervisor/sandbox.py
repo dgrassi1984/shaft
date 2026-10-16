@@ -151,9 +151,25 @@ def run_profile(instance_root: Path, home: Path, shared: Path | None = None, egr
     .git), reads only its own folder in the home directory (and the operator's shared folder, if any), and
     no network but the run's egress proxy (the public internet, nothing local)."""
     from .pyenv import DECLARED
-    root, home = Path(instance_root).resolve(), Path(home).resolve()
+    root = Path(instance_root).resolve()
     writable = " ".join([*(f"(subpath {_q(root / d)})" for d in RUN_WRITABLE),
                          *(f"(literal {_q(root / f)})" for f in DECLARED)])
+    return _command_profile(root, home, writable, shared, [egress_port] if egress_port else [], env_root)
+
+
+def job_profile(instance_root: Path, home: Path, state_dir: Path, shared: Path | None = None, egress_port: int = 0,
+                broker_port: int = 0, env_root: Path | None = None) -> str:
+    """For a scheduled job (PLAN-jobs.md): the `run` sandbox, but writes only to the job's own state folder
+    (.jobs/<plugin>/) and .tmp/ — a cycle running at the same time works on the code, notes and mind, and nothing
+    of the job's may be mistaken for its change — and the network adds the job's own broker (its supervisor tools)."""
+    root = Path(instance_root).resolve()
+    writable = f"(subpath {_q(Path(state_dir).resolve())}) (subpath {_q(root / '.tmp')})"
+    return _command_profile(root, home, writable, shared, [p for p in (egress_port, broker_port) if p], env_root)
+
+
+def _command_profile(root: Path, home: Path, writable: str, shared: Path | None, ports: list[int],
+                     env_root: Path | None) -> str:
+    home = Path(home).resolve()
     return "\n".join([
         "(version 1)",
         "(allow default)",
@@ -168,7 +184,7 @@ def run_profile(instance_root: Path, home: Path, shared: Path | None = None, egr
         *_image_temp_names(),
         _no_secrets(root),
         "(deny network*)",
-        *([f'(allow network-outbound (remote ip "localhost:{int(egress_port)}"))'] if egress_port else []),
+        *(f'(allow network-outbound (remote ip "localhost:{int(port)}"))' for port in ports),
     ]) + "\n"
 
 

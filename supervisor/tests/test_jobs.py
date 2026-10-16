@@ -1,0 +1,267 @@
+"""Scheduled jobs (PLAN-jobs.md): an instance's own plugins, run on the timer their manifest declares, in the job
+sandbox, their output delivered to its inbox, a wake started only when the job may and the run asks. The real
+sandbox runs the plugins; only the scheduler's children are fakes."""
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+import tempfile
+import textwrap
+import unittest
+from datetime import datetime, timedelta
+from pathlib import Path
+from unittest import mock
+
+from supervisor import core, jobs
+
+TEMPLATE = Path(__file__).resolve().parents[2] / "template"
+
+
+class JobCase(unittest.TestCase):
+    def setUp(self):
+        self.project = Path(tempfile.mkdtemp(prefix="shaft-jobs-")).resolve()
+        self.addCleanup(shutil.rmtree, self.project, True)
+        self.sup = self.project / ".supervisor"
+        self.root = self.project / "instances" / "wren"
+        shutil.copytree(TEMPLATE / "shaft", self.root / "shaft", ignore=shutil.ignore_patterns("__pycache__"))
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        for d in ("notes", "memory", "inbox", "plugins"):
+            (self.root / d).mkdir()
+        (self.root / "config.env").write_text('OPERATOR_NAME="Daniele"\n')
+        for p in (mock.patch.object(core, "SUP_DIR", self.sup), mock.patch.object(jobs, "SUP_DIR", self.sup),
+                  mock.patch.object(core, "INSTANCES", self.project / "instances")):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def plugin(self, name: str, body: str, schedule: dict | None = None, **extra) -> None:
+        d = self.root / "plugins" / name
+        d.mkdir(parents=True, exist_ok=True)
+        spec = {"name": name, "description": "test", "parameters": {"type": "object", "properties": {}}, **extra}
+        if schedule is not None:
+            spec["schedule"] = schedule
+        (d / "plugin.json").write_text(json.dumps(spec))
+        (d / "main.py").write_text(textwrap.dedent(body))
+
+    def inbox(self) -> list[str]:
+        return [p.read_text() for p in sorted((self.root / "inbox").glob("*.md"))]
+
+    def rows(self) -> list[dict]:
+        path = self.sup / "jobs" / "wren.jsonl"
+        return [json.loads(l) for l in path.read_text().splitlines()] if path.is_file() else []
+
+
+class DeclaredTest(JobCase):
+    def test_job_runs_on_its_interval_and_not_faster_than_the_floor(self):
+        self.plugin("ok", "def run(): return ''", {"every_minutes": 15})
+        self.plugin("fast", "def run(): return ''", {"every_minutes": jobs.MIN_MINUTES - 1})
+        declared, problems = jobs.declared("wren")
+        self.assertEqual([j["plugin"] for j in declared], ["ok"])
+        self.assertIn(f"outside {jobs.MIN_MINUTES}", problems[0])
+        job, now = declared[0], datetime(2026, 10, 16, 12, 0)
+        self.assertTrue(jobs.due("wren", job, now))                         # never run: due
+        jobs._update("wren", "ok", last_start=now.isoformat())
+        self.assertFalse(jobs.due("wren", job, now + timedelta(minutes=14)))
+        self.assertTrue(jobs.due("wren", job, now + timedelta(minutes=15)))
+
+    def test_bad_manifest_skipped_and_reported_once(self):
+        self.plugin("bad", "def run(): return ''", {"every_minutes": "often"})
+        (self.root / "plugins" / "broken").mkdir()
+        (self.root / "plugins" / "broken" / "plugin.json").write_text('{"name": "broken", "schedule": {')
+        for _ in range(2):
+            jobs.tick({}, datetime.now(), lambda args: self.fail("nothing should start"), ["wren"], lambda n: "")
+        self.assertEqual(len(self.inbox()), 1)                              # once, not every tick
+        self.assertIn("every_minutes must be a whole number", self.inbox()[0])
+        self.assertIn("plugins/broken/plugin.json does not parse", self.inbox()[0])
+
+    def test_at_most_five_jobs(self):
+        for i in range(jobs.MAX_JOBS + 1):
+            self.plugin(f"p{i}", "def run(): return ''", {"every_minutes": 10})
+        declared, problems = jobs.declared("wren")
+        self.assertEqual(len(declared), jobs.MAX_JOBS)
+        self.assertIn("not run: p5", problems[-1])
+
+
+class SchedulerTest(JobCase):
+    def setUp(self):
+        super().setUp()
+        self.plugin("watch", "def run(): return ''", {"every_minutes": 10, "can_wake": True})
+        self.started: list[list[str]] = []
+        p = mock.patch("supervisor.autonomy.record")
+        self.record = p.start()
+        self.addCleanup(p.stop)
+
+    def start(self, args):
+        self.started.append(args)
+        return object()
+
+    def test_overrunning_job_is_skipped_not_stacked_and_logged(self):
+        now = datetime(2026, 10, 16, 12, 0)
+        children = {}
+        jobs.tick(children, now, self.start, ["wren"], lambda n: "")
+        self.assertEqual(self.started, [["job", "run", "wren", "watch"]])
+        jobs._update("wren", "watch", last_start=now.isoformat())
+        with mock.patch.object(jobs, "log") as log:
+            jobs.tick(children, now + timedelta(minutes=10), self.start, ["wren"], lambda n: "")
+        self.assertEqual(len(self.started), 1)                              # skipped, not stacked
+        self.assertEqual(self.rows()[-1]["skipped"], "its previous run is still going")
+        self.assertIn("skipped — its previous run is still going", log.call_args[0][0])
+        del children["job wren watch"]                                     # it ended: next one a full interval later
+        jobs.tick(children, now + timedelta(minutes=15), self.start, ["wren"], lambda n: "")
+        self.assertEqual(len(self.started), 1)
+        jobs.tick(children, now + timedelta(minutes=20), self.start, ["wren"], lambda n: "")
+        self.assertEqual(len(self.started), 2)
+
+    def test_wake_only_when_declared_and_requested_coalesced_while_awake(self):
+        job = jobs.declared("wren")[0][0]
+        self.assertEqual(jobs._outcome('{"message": "new mail", "wake": false}', job)[:2], ("new mail", False))
+        self.assertEqual(jobs._outcome("plain text", job)[:2], ("plain text", False))
+        self.assertEqual(jobs._outcome('{"message": "new mail", "wake": true}', job)[:2], ("new mail", True))
+        no_wake = {**job, "can_wake": False}
+        msg, wake, note = jobs._outcome('{"message": "x", "wake": true}', no_wake)
+        self.assertFalse(wake)
+        self.assertIn("does not say can_wake: true", note)
+        jobs.request_wake("wren", "watch")
+        jobs.request_wake("wren", "watch")
+        jobs.request_wake("wren", "other")
+        children = {"job wren watch": (object(), 0)}                        # no job is due: only the wake is at stake
+        jobs.tick(children, datetime.now(), self.start, ["wren"], lambda n: "a cycle since 12:00")
+        self.assertEqual(self.started, [])                                  # awake: kept
+        jobs.tick(children, datetime.now(), self.start, ["wren"], lambda n: "")
+        self.assertEqual(self.started, [["wake", "wren"]])                  # one wake for three requests
+        self.record.assert_called_once_with("wake", "wren")
+        jobs.tick(children, datetime.now(), self.start, ["wren"], lambda n: "")
+        self.assertEqual(self.started, [["wake", "wren"]])
+
+    def test_paused_instance_runs_no_jobs_and_its_wake_is_dropped(self):
+        jobs.request_wake("wren", "watch")
+        with mock.patch.object(core, "paused", lambda n: True):
+            jobs.tick({}, datetime.now(), self.start, ["wren"], lambda n: "")
+        self.assertEqual(self.started, [])
+        self.assertEqual(jobs.pending_wakes(), {})
+
+    def test_operator_switch_off_holds(self):
+        jobs.set_jobs_off("wren", True)
+        jobs.tick({}, datetime.now(), self.start, ["wren"], lambda n: "")
+        self.assertEqual(self.started, [])
+        self.assertTrue(json.loads((self.sup / "tools" / "wren.json").read_text())["jobs_off"])
+        jobs.set_jobs_off("wren", False)
+        jobs.tick({}, datetime.now(), self.start, ["wren"], lambda n: "")
+        self.assertEqual(self.started, [["job", "run", "wren", "watch"]])
+
+    def test_no_jobs_during_a_battery_exam(self):
+        # An exam runs in the instance's real folder and undoes every file created meanwhile: a message would be lost.
+        jobs.tick({"battery wren": (object(), 0)}, datetime.now(), self.start, ["wren"], lambda n: "")
+        self.assertEqual(self.started, [])
+
+
+class RunTest(JobCase):
+    """jobs.run under the real sandbox-exec, with a real broker."""
+
+    def test_job_output_lands_in_inbox_and_empty_output_delivers_nothing(self):
+        self.plugin("hello", "def run(who): return f'hello {who}'", {"every_minutes": 10, "args": {"who": "wren"}})
+        self.plugin("quiet", "def run(): return ''", {"every_minutes": 10})
+        self.assertEqual(jobs.run("wren", "hello"), 0)
+        self.assertEqual(jobs.run("wren", "quiet"), 0)
+        self.assertEqual(len(self.inbox()), 1)
+        self.assertIn("From: job hello (my own scheduled job", self.inbox()[0])
+        self.assertIn("hello wren", self.inbox()[0])
+        self.assertEqual([(r["plugin"], r["delivered"]) for r in self.rows()], [("hello", True), ("quiet", False)])
+
+    def test_job_writes_only_its_state_dir(self):
+        self.plugin("writer", """
+            import os, pathlib
+            def run():
+                out = []
+                for rel in ("notes/x.md", "plugins/writer/evil.py", "memory/x.md", "config.env", "inbox/x.md",
+                            os.environ["SHAFT_JOB_STATE"] + "/state.json", ".tmp/scratch"):
+                    try:
+                        pathlib.Path(rel).write_text("x")
+                        out.append(f"{rel}: WROTE")
+                    except OSError:
+                        out.append(f"{rel}: refused")
+                return "\\n".join(out)
+            """, {"every_minutes": 10})
+        self.assertEqual(jobs.run("wren", "writer"), 0)
+        report = self.inbox()[0]
+        for rel in ("notes/x.md", "plugins/writer/evil.py", "memory/x.md", "config.env", "inbox/x.md"):
+            self.assertIn(f"{rel}: refused", report)
+        self.assertIn(".jobs/writer/state.json: WROTE", report)
+        self.assertIn(".tmp/scratch: WROTE", report)
+        self.assertEqual((self.root / "config.env").read_text(), 'OPERATOR_NAME="Daniele"\n')
+
+    def test_job_has_no_model_and_no_send_message(self):
+        self.plugin("asker", """
+            import json, os, urllib.request, urllib.error
+            from shaft import broker
+            def run():
+                req = urllib.request.Request(os.environ["SHAFT_BROKER_URL"] + "/llm/v1/chat/completions",
+                    data=b'{"model": "x", "messages": []}', headers={"X-Shaft-Token": os.environ["SHAFT_BROKER_TOKEN"],
+                    "Content-Type": "application/json"})
+                try:
+                    urllib.request.urlopen(req, timeout=10)
+                    model = "MODEL ANSWERED"
+                except urllib.error.HTTPError as e:
+                    model = f"model {e.code}: {json.load(e)['error']['message']}"
+                try:
+                    broker.call("send_message", to="operator", text="hi")
+                    sent = "SENT"
+                except broker.BrokerError as e:
+                    sent = str(e)
+                return model + "\\n" + sent
+            """, {"every_minutes": 10})
+        self.assertEqual(jobs.run("wren", "asker"), 0)
+        report = self.inbox()[0]
+        self.assertIn("model 403: a scheduled job has no model", report)
+        self.assertIn("send_message is not available in a scheduled job", report)
+        self.assertFalse((self.sup / "operator-inbox").exists())
+
+    def test_job_mail_grant_applies(self):
+        core.set_mail_grants("wren", [{"account": "example-co", "label": "ToObsidian"}])
+        self.plugin("mailer", """
+            import os
+            from shaft import broker
+            def run():
+                try:
+                    broker.call("mail_search", query="")
+                    return "searched"
+                except broker.BrokerError as e:
+                    return os.environ.get("SHAFT_MAIL", "") + " | " + str(e)
+            """, {"every_minutes": 10})
+        self.assertEqual(jobs.run("wren", "mailer"), 0)
+        report = self.inbox()[0]
+        self.assertIn("example-co/ToObsidian", report)                         # granted: the job sees its grant …
+        self.assertNotIn("no mail granted to you", report)                 # … and the tool is offered to it
+
+    def test_failures_back_off_and_are_reported_once(self):
+        self.plugin("flaky", "def run(): raise RuntimeError('upstream down')", {"every_minutes": 10})
+        for _ in range(jobs.FAIL_REPORT + 1):
+            self.assertEqual(jobs.run("wren", "flaky"), 1)
+        reports = [m for m in self.inbox() if "failed" in m]
+        self.assertEqual(len(reports), 1)
+        self.assertIn("upstream down", reports[0])
+        job = jobs.declared("wren")[0][0]
+        e = jobs.entry("wren", "flaky")
+        self.assertEqual(e["fails"], jobs.FAIL_REPORT + 1)
+        self.assertEqual(jobs.interval(job, e), timedelta(minutes=40))     # doubled past the third failure
+        self.plugin("flaky", "def run(): return ''", {"every_minutes": 10})
+        self.assertEqual(jobs.run("wren", "flaky"), 0)
+        self.assertEqual(jobs.entry("wren", "flaky")["fails"], 0)
+
+    def test_a_job_that_overruns_is_killed(self):
+        self.plugin("slow", "import time\ndef run():\n    time.sleep(5)\n    return 'late'", {"every_minutes": 10})
+        with mock.patch.object(jobs, "TIMEOUT_S", 1):
+            self.assertEqual(jobs.run("wren", "slow"), 1)
+        self.assertTrue(self.rows()[-1]["timed_out"])
+        self.assertEqual(self.inbox(), [])
+
+    def test_wake_requested_by_a_run(self):
+        self.plugin("waker", 'def run(): return {"message": "new tagged mail", "wake": True}',
+                    {"every_minutes": 10, "can_wake": True})
+        self.assertEqual(jobs.run("wren", "waker"), 0)
+        self.assertEqual(jobs.pending_wakes()["wren"]["by"], ["waker"])
+        self.assertIn("new tagged mail", self.inbox()[0])
+
+
+if __name__ == "__main__":
+    unittest.main()
