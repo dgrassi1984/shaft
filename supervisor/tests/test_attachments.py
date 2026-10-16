@@ -148,7 +148,7 @@ class TelegramAttachmentsTest(unittest.TestCase):
         chat = t.Chat("wren", self.tok["wren"])
         msg = {"message_id": 7, "from": {"id": 42}, "chat": {"id": 42, "type": "private"}, "caption": "look at this",
                "document": {"file_id": "F1", "file_name": "paper.pdf"}}
-        with mock.patch.object(t, "ask_api", lambda name, history: asked.append(history[-1]["content"]) or "ok"):
+        with mock.patch.object(t, "ask_api", lambda name, history: asked.append(history[-1]["content"]) or ("ok", 0)):
             t.handle_update("wren", self.tok["wren"], chat, {"update_id": 1, "message": msg})
         (saved,) = (self.project / "instances" / "wren" / "attachments" / "from-daniele").glob("*/paper.pdf")
         self.assertEqual(saved.read_bytes(), self.api.FILE)
@@ -162,7 +162,7 @@ class TelegramAttachmentsTest(unittest.TestCase):
         photo = {"message_id": 8, "from": {"id": 42}, "chat": {"id": 42, "type": "private"},
                  "photo": [{"file_id": "small"}, {"file_id": "F1"}]}
         sticker = {"message_id": 9, "from": {"id": 42}, "chat": {"id": 42, "type": "private"}, "sticker": {}}
-        with mock.patch.object(t, "ask_api", lambda name, history: asked.append(history[-1]["content"]) or "ok"):
+        with mock.patch.object(t, "ask_api", lambda name, history: asked.append(history[-1]["content"]) or ("ok", 0)):
             t.handle_update("wren", self.tok["wren"], chat, {"update_id": 2, "message": photo})
             t.handle_update("wren", self.tok["wren"], chat, {"update_id": 3, "message": sticker})
         self.assertTrue(asked[0].startswith("(no text, only files)"))

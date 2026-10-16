@@ -14,6 +14,7 @@ class FakeLLM:
     def __init__(self, replies: list[dict]):
         self.replies = list(replies)
         self.requests: list[dict] = []
+        self.on_request = None   # called with each request body before it is answered (to act "meanwhile")
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -23,6 +24,8 @@ class FakeLLM:
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 fake.requests.append(body)
+                if fake.on_request:
+                    fake.on_request(body)
                 r = fake.replies.pop(0) if fake.replies else {"content": "(fake: out of replies)"}
                 content, reasoning = r.get("content", ""), r.get("reasoning", "")
                 calls = [{"id": f"call_{i}", "type": "function",

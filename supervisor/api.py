@@ -2,6 +2,8 @@
 
   GET  /v1/models              each instance is a "model" (shaft, wren, …)
   POST /v1/chat/completions    stream or not; the instance answers as itself, with its tools
+  POST /v1/chat/interject      a message for the conversation whose reply is still running: the instance reads it at
+                               its next step and its reply covers it (202), or 409 when no reply is running
   POST /v1/inbox/<instance>    the doorbell: drop a message in its inbox (read at its next wake), and
                                optionally wake it now — for scripts, a phone shortcut, CI on the tailnet
 
@@ -10,6 +12,11 @@ is the dialogue; the instance's own identity and memory come first. A conversati
 same first user message) keeps one id; after IDLE_MINUTES (SHAFT_IDLE_MINUTES) without a message it is closed and its journal entry is
 written. Tool activity and status are sent as `reasoning_content`, which "thinking"-aware clients
 show and others ignore.
+
+A message sent to /v1/chat/interject while that conversation's reply runs is appended to the agent's
+.tmp/interject-<talk id>.jsonl; the agent takes it at its next step and says so (`heard`). The reply's JSON counts
+them in `interjections_heard` (in the order sent): the client answers any others with its next request
+(PLAN-interject.md).
 
 Security: the server listens on 127.0.0.1 only; `tailscale serve` exposes it to the tailnet (never
 Funnel). Every request needs the bearer key SHAFT_API_KEY from .env AND a Tailscale-User-Login
@@ -39,7 +46,8 @@ import uuid
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from .core import API_TALKS as TALKS, IDLE_MINUTES, SUP_DIR, instance_names, knob, log, secrets_env
+from .core import (API_TALKS as TALKS, IDLE_MINUTES, SUP_DIR, UnsafePath, instance_names, instance_root, knob, log,
+                   safe_write, secrets_env)
 from .runner import Reply, busy_with, request_yield, run_agent, spawn_recover
 
 PORT, _ = knob("SHAFT_API_PORT", "8781", int)
@@ -64,9 +72,19 @@ class Conversations:
         TALKS.parent.mkdir(exist_ok=True)
         TALKS.write_text(json.dumps(self.talks, indent=1))
 
-    def talk_id(self, model: str, messages: list[dict]) -> str:
+    @staticmethod
+    def _key(model: str, messages: list[dict]) -> str:
         first = next((m for m in messages if m.get("role") == "user"), {})
-        key = hashlib.sha256(json.dumps([model, first.get("content")], sort_keys=True).encode()).hexdigest()[:16]
+        return hashlib.sha256(json.dumps([model, first.get("content")], sort_keys=True).encode()).hexdigest()[:16]
+
+    def current(self, model: str, messages: list[dict]) -> str | None:
+        """The talk id of this conversation if it has one still going on (never creates one)."""
+        with self.lock:
+            t = self.talks.get(self._key(model, messages))
+            return t["talk_id"] if t and not t.get("written") else None
+
+    def talk_id(self, model: str, messages: list[dict]) -> str:
+        key = self._key(model, messages)
         with self.lock:
             t = self.talks.get(key)
             if not t or t.get("written"):   # new, or its earlier part is already in the journal
@@ -89,6 +107,54 @@ class Conversations:
             spawn_recover(model)
 
 
+class Live:
+    """Replies running now, by talk id, and the messages sent to them while they run. Until the agent process starts
+    (it may wait for another conversation) they are held here; then each goes to its .tmp/interject-<talk id>.jsonl,
+    one JSON line, which the agent reads at the start of each step."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.replies: dict[str, dict] = {}
+
+    @staticmethod
+    def _rel(talk_id: str) -> str:
+        return f".tmp/interject-{talk_id}.jsonl"
+
+    def begin(self, model: str, talk_id: str) -> dict:
+        entry = {"model": model, "talk_id": talk_id, "held": [], "started": False}
+        with self.lock:
+            self.replies[talk_id] = entry               # a second request in the same talk: the newest takes them
+            (instance_root(model) / self._rel(talk_id)).unlink(missing_ok=True)   # a crashed run's leftovers
+        return entry
+
+    def _write(self, entry: dict, text: str) -> None:
+        safe_write(instance_root(entry["model"]), self._rel(entry["talk_id"]),
+                   json.dumps({"text": text}, ensure_ascii=False) + "\n", append=True)
+
+    def started(self, entry: dict) -> None:
+        with self.lock:
+            for text in entry["held"]:
+                self._write(entry, text)
+            entry["held"], entry["started"] = [], True
+
+    def interject(self, talk_id: str, text: str) -> bool:
+        with self.lock:
+            entry = self.replies.get(talk_id)
+            if entry is None:
+                return False
+            if entry["started"]:
+                self._write(entry, text)
+            else:
+                entry["held"].append(text)
+            return True
+
+    def end(self, entry: dict) -> None:
+        with self.lock:
+            if self.replies.get(entry["talk_id"]) is entry:
+                del self.replies[entry["talk_id"]]
+            (instance_root(entry["model"]) / self._rel(entry["talk_id"])).unlink(missing_ok=True)
+
+
 def _chunk(cid: str, model: str, delta: dict, finish: str | None = None) -> bytes:
     return b"data: " + json.dumps({"id": cid, "object": "chat.completion.chunk", "created": int(time.time()),
                                    "model": model, "choices": [{"index": 0, "delta": delta,
@@ -106,12 +172,15 @@ def _note(ev: dict) -> str | None:
         return f"{'✓' if ev['ok'] else '✗'} {ev['name']}\n"
     if t == "retry":
         return f"reply cut off at {ev['old']} tokens — asking again with {ev['new']}\n"
+    if t == "heard":
+        return f"↪ read your new message: {' '.join(ev.get('text', '').split())[:120]}\n"
     return None
 
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "shaft-api/1"
     conversations: Conversations
+    live: Live
 
     def log_message(self, fmt, *args):
         log("api " + (fmt % args))
@@ -214,7 +283,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not self._authorised():
             return
-        if route != "/v1/chat/completions":
+        if route not in ("/v1/chat/completions", "/v1/chat/interject"):
             return self._error(404, f"no route {self.path}")
         try:
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
@@ -226,7 +295,27 @@ class Handler(BaseHTTPRequestHandler):
         messages = body.get("messages") or []
         if not messages or messages[-1].get("role") != "user":
             return self._error(400, "messages must end with a user message")
+        if route == "/v1/chat/interject":
+            return self._interject(model, messages)
         self._chat(model, messages, bool(body.get("stream")), self.headers.get("User-Agent", "an app"))
+
+    def _interject(self, model: str, messages: list[dict]) -> None:
+        """The last user message joins the reply running in this conversation (same first user message)."""
+        content = messages[-1].get("content")
+        text = (content if isinstance(content, str) else "\n".join(
+            p.get("text", "") for p in content or [] if isinstance(p, dict) and p.get("type") == "text")).strip()
+        if not text:
+            return self._error(400, "the message to add is empty")
+        talk_id = self.conversations.current(model, messages)
+        try:
+            ok = bool(talk_id) and self.live.interject(talk_id, text)
+        except (OSError, UnsafePath) as e:
+            return self._error(500, f"could not pass it to {model}: {e}", "server_error")
+        if not ok:
+            return self._error(409, f"{model} is not replying in this conversation now: send it as a new message",
+                               "conflict")
+        log(f"api: a message for {model}'s running reply ({talk_id})")
+        self._json(202, {"interjected": True, "talk_id": talk_id})
 
     def _client_gone(self) -> bool:
         """The client hung up: its socket is readable and a peek returns no data."""
@@ -240,12 +329,17 @@ class Handler(BaseHTTPRequestHandler):
         events: queue.Queue = queue.Queue()
         procs: list = []
         talk_id = self.conversations.talk_id(model, messages)
+        live = self.live.begin(model, talk_id)
         request = {"messages": messages, "talk_id": talk_id, "client": app.split()[0][:40]}
 
         def driver(proc):
             procs.append(proc)
             proc.stdin.write(json.dumps(request))
             proc.stdin.close()
+            try:
+                self.live.started(live)         # messages sent while it waited: read at its first step
+            except (OSError, UnsafePath) as e:
+                log(f"api: could not pass held messages to {model}: {e}")
             for line in proc.stdout:
                 try:
                     ev = json.loads(line)
@@ -283,6 +377,10 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:   # surface, never hang the client
                 events.put({"type": "error", "message": f"{type(e).__name__}: {e}"})
             finally:
+                try:
+                    self.live.end(live)         # before "done": a message after this is the client's next request
+                except (OSError, UnsafePath) as e:
+                    log(f"api: {e}")
                 if reply.f is not None:
                     reply.__exit__(None, None, None)
                 events.put({"type": "done"})
@@ -293,7 +391,7 @@ class Handler(BaseHTTPRequestHandler):
         # notes…") is narration: it goes to reasoning_content with the tool activity, never into the reply — it
         # reached Daniele's Telegram as if the instance had said it (wren, 2026-10-14: 25 of 44 Telegram replies had
         # tool steps). So a step's text is held until the next event tells which it was.
-        content, step, notes, error, ended = [], [], [], None, None
+        content, step, notes, error, ended, heard = [], [], [], None, None, 0
         if stream:
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -334,6 +432,8 @@ class Handler(BaseHTTPRequestHandler):
                     content, step = step, []
                     if stream and content:
                         self.wfile.write(_chunk(cid, model, {"content": "".join(content)}))
+                if t == "heard":
+                    heard += 1
                 if t == "error":
                     error = ev["message"]
                 elif (n := _note(ev)) is not None:
@@ -363,7 +463,8 @@ class Handler(BaseHTTPRequestHandler):
                                  "choices": [{"index": 0, "finish_reason": "stop", "message": {
                                      "role": "assistant", "content": "".join(content),
                                      "reasoning_content": "".join(notes)}}],
-                                 "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}})
+                                 "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                                 "interjections_heard": heard})
         except (BrokenPipeError, ConnectionResetError):
             cancelled.set()
             if procs and procs[0].poll() is None:      # the client left: stop the reply
@@ -383,6 +484,7 @@ def serve() -> int:
     from .version import record_service
     record_service("api", {"port": PORT, "idle_minutes": IDLE_MINUTES})
     Handler.conversations = Conversations()
+    Handler.live = Live()
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     server.daemon_threads = True
 

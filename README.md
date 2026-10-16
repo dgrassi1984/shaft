@@ -207,7 +207,10 @@ streaming or not), served on `127.0.0.1:8781` and exposed by `tailscale serve` o
 tailnet name — tailnet only, never Funnel. Every request needs the key (`shaft api key`) and a
 Tailscale login listed in `SHAFT_API_LOGINS`. The instance answers as itself, with its tools; tool
 activity arrives as `reasoning_content`. A conversation keeps one id while its first message stays the
-same, and is written up into the journal after `SHAFT_IDLE_MINUTES` without a message.
+same, and is written up into the journal after `SHAFT_IDLE_MINUTES` without a message. `POST /v1/chat/interject`
+(same body as a chat request) adds the last message to the reply still running in that conversation: the instance
+reads it at its next step and its answer covers it; the reply's JSON says how many it heard
+(`interjections_heard`), and 409 means no reply is running there (PLAN-interject.md).
 
 **Inbox doorbell** (wren's idea, 2026-10-13): `POST /v1/inbox/<instance>` drops a message in the instance's
 inbox, read at its next wake — for a script on this Mac, a phone shortcut, CI on the tailnet. It takes its own
@@ -239,10 +242,12 @@ One bot per instance, one paired Telegram account for all of them.
 
 Writing to a bot is a live conversation with its instance, through the API (`shaft api on` is needed): a
 running cycle is paused only while the reply is written, and the conversation is written into the journal after
-`SHAFT_IDLE_MINUTES`. Replying to one of its messages quotes it, and answers it if it was a question. Files and
+`SHAFT_IDLE_MINUTES`. A message you send while it is still replying joins that reply at its next step (it
+does not wait for the reply to end); one that arrives once the answer is already being written is answered right
+after it. Replying to one of its messages quotes it, and answers it if it was a question. Files and
 photos you send a bot are saved in that instance's `attachments/from-daniele/…` and the turn tells it where;
 files an instance attaches to a message for you arrive after its text (pictures as photos). `/new`
-starts a new conversation, `/wake` starts a cycle, `/status` says what it is doing. Every message an instance
+starts a new conversation (not while a reply is running), `/wake` starts a cycle, `/status` says what it is doing. Every message an instance
 sends you (`send_message` to the operator) also arrives from its bot. The service long-polls Telegram — no port,
 webhook or Funnel. Full text both ways: bot chats are not end-to-end encrypted, so Telegram's servers see them
 (accepted, 2026-10-13).

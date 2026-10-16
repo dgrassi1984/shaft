@@ -112,7 +112,7 @@ class TelegramTest(unittest.TestCase):
 
     def _ask(self, name, history):
         self.asked.append((name, [dict(h) for h in history]))
-        return f"answer {len(self.asked)}"
+        return f"answer {len(self.asked)}", 0
 
     def upd(self, u, chat=None):
         telegram.handle_update("wren", TOK["wren"], chat or self.chat, u)
@@ -165,6 +165,70 @@ class TelegramTest(unittest.TestCase):
             self.upd(_msg(ME, "hi", mid=20))
         self.assertIn("(no answer: the API is not reachable)", self.api.sent()[-1][1]["text"])
         self.assertEqual(self.chat.history, [])                      # the failed turn is not kept
+
+    # Daniele, 2026-10-16: "When I send a message via telegram while the instance is still working on my previous
+    # message, it should be injected immediately into it." Before, it waited on the chat's lock for the whole first
+    # reply and got its own reply after it; the running reply never saw it (PLAN-interject.md).
+    def _slow_reply(self, heard):
+        """The first reply runs until released and says it heard `heard` of the messages sent meanwhile."""
+        self.release, self.interjected = threading.Event(), []
+
+        def ask(name, history):
+            self.asked.append((name, [dict(h) for h in history]))
+            if len(self.asked) == 1:
+                self.release.wait(10)
+                return "answer 1", heard
+            return f"answer {len(self.asked)}", 0
+
+        def interject(name, messages):
+            self.interjected.append([m["content"] for m in messages])
+            return True
+
+        for p in (mock.patch.object(telegram, "ask_api", ask), mock.patch.object(telegram, "interject_api", interject)):
+            p.start()
+            self.addCleanup(p.stop)
+        self.pair()
+        first = threading.Thread(target=self.upd, args=(_msg(ME, "check my calendar", mid=40),))
+        first.start()
+        for _ in range(100):
+            if self.asked:
+                break
+            time.sleep(0.02)
+        return first
+
+    def test_a_message_during_a_reply_joins_it_instead_of_waiting(self):
+        first = self._slow_reply(heard=1)
+        t0 = time.monotonic()
+        self.upd(_msg(ME, "and skip Friday", mid=41))                 # returns at once: it does not wait
+        self.assertLess(time.monotonic() - t0, 2)
+        self.assertEqual(self.interjected, [["check my calendar", "and skip Friday"]])   # the conversation's key
+        self.release.set()
+        first.join(10)
+        self.assertEqual(len(self.asked), 1)                          # one reply covered both: none answered twice
+        self.assertEqual([h["content"] for h in self.chat.history],
+                         ["check my calendar", "and skip Friday", "answer 1"])
+        self.assertEqual([p["text"] for _, p in self.api.sent(TOK["wren"])][-1:], ["answer 1"])
+        self.assertIsNone(self.chat.inflight)
+
+    def test_a_message_the_reply_did_not_hear_is_answered_straight_after(self):
+        first = self._slow_reply(heard=0)                             # too late for it, or an old agent
+        self.upd(_msg(ME, "and skip Friday", mid=41))
+        self.upd(_msg(ME, "and Monday", mid=42))
+        self.release.set()
+        first.join(10)
+        self.assertEqual(len(self.asked), 2)
+        self.assertEqual([h["content"] for h in self.asked[1][1]],
+                         ["check my calendar", "answer 1", "and skip Friday\n\nand Monday"])
+        self.assertEqual([p["text"] for _, p in self.api.sent(TOK["wren"])][-2:], ["answer 1", "answer 2"])
+        self.assertIsNone(self.chat.inflight)
+
+    def test_new_during_a_reply_does_not_pull_the_conversation_from_under_it(self):
+        first = self._slow_reply(heard=0)
+        self.upd(_msg(ME, "/new", mid=41))
+        self.assertIn("still replying", self.api.sent()[-1][1]["text"])
+        self.release.set()
+        first.join(10)
+        self.assertEqual([h["content"] for h in self.chat.history], ["check my calendar", "answer 1"])
 
     def test_instances_messages_arrive_from_their_own_bot_and_a_reply_answers_the_question(self):
         self.pair()
