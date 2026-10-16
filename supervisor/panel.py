@@ -99,7 +99,8 @@ def costs(days: int = 7, today: date | None = None) -> dict:
     def add(day: str, comp: str, usd: float, who: str = "") -> None:
         if not (first.isoformat() <= day <= today.isoformat()) or not usd:
             return
-        d = by_day.setdefault(day, {"instances": {}, "judge": 0.0, "trials": 0.0, "coder": 0.0, "other": 0.0})
+        d = by_day.setdefault(day, {"instances": {}, "judge": 0.0, "trials": 0.0, "coder": 0.0, "recaps": 0.0,
+                                    "other": 0.0})
         if comp == "instances":
             d["instances"][who] = d["instances"].get(who, 0.0) + usd
         else:
@@ -126,11 +127,13 @@ def costs(days: int = 7, today: date | None = None) -> dict:
             add(r["ts"][:10], "judge", usd)
     for r in jsonl(SUP_DIR / "coder_usage.jsonl"):
         add(r["ts"][:10], "coder", r.get("usd") or 0.0)
+    for r in jsonl(SUP_DIR / "recap_usage.jsonl"):       # the overview's one-line recaps (recap.py)
+        add(r["ts"][:10], "recaps", r.get("usd") or 0.0)
     rows = []
     for k in range(days):
         day = (first + timedelta(days=k)).isoformat()
-        d = by_day.get(day, {"instances": {}, "judge": 0.0, "trials": 0.0, "coder": 0.0, "other": 0.0})
-        d["total"] = sum(d["instances"].values()) + d["judge"] + d["trials"] + d["coder"] + d["other"]
+        d = by_day.get(day, {"instances": {}, "judge": 0.0, "trials": 0.0, "coder": 0.0, "recaps": 0.0, "other": 0.0})
+        d["total"] = sum(d["instances"].values()) + d["judge"] + d["trials"] + d["coder"] + d["recaps"] + d["other"]
         rows.append({"day": day, **d})
     caps = []
     for name in sorted(names):

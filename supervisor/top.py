@@ -6,7 +6,8 @@ changes on disk. Runs with .venv-ui (rich). Without a terminal (`shaft top --onc
 snapshot as text.
 
 Keys — 0–9 switch tab, ? help, q quits. Overview: ↑/↓ pick an instance, Enter shows it in full, c starts a
-cycle if idle, p pause/resume, s sleep now, u update, w write, r reply, x dismiss the alerts, m messages.
+cycle if idle, p pause/resume, s sleep now, u update, w write, r reply, a recaps every instance in one line (what it
+is doing now and did in the last hour, written by a small model: recap.py), x dismiss the alerts, m messages.
 Messages: ↑/↓ (j/k, PgUp/PgDn) move, f filters by instance, Enter reads one, Esc goes back. Reading: ↑/↓
 scroll, n/p next/previous message, Esc back to the list. The other tabs are in top_views.py.
 """
@@ -30,7 +31,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from . import dashboard, panel, top_views
+from . import dashboard, panel, recap, top_views
 
 STATE_STYLE = {"idle": "dim", "in a cycle": "green", "sleeping": "blue", "talking": "cyan",
                "answering (API)": "cyan", "writing up a conversation": "magenta", "being updated": "yellow"}
@@ -228,6 +229,9 @@ def dispatch(ui: UI, key: str, snap: dict, page: int, start_wake) -> bool:
             if key in ("enter", "right", "l"):
                 ui.tab, ui.scroll = "instance", 0
                 return False
+            if key == "a":
+                ui.say(recap.start(snap["instances"]))
+                return False
             if key == "x":
                 ids = [a["id"] for a in snap.get("alerts") or []][:5]
                 panel.dismiss(ids)
@@ -244,7 +248,11 @@ def dispatch(ui: UI, key: str, snap: dict, page: int, start_wake) -> bool:
 
 
 def extras(snap: dict) -> dict:
-    """The panel's additions to a snapshot: open alerts (minus dismissed ones) and today's total spend."""
+    """The panel's additions to a snapshot: open alerts (minus dismissed ones), today's total spend, and each
+    instance's latest recap (recap.py) with whether a new one is being written."""
+    stored = recap.load()
+    for i in snap["instances"]:
+        i["recap"] = {**stored.get(i["name"], {}), "running": recap.running(i["name"])}
     try:
         cost = panel.costs(days=1)
         gone = panel.dismissed()
@@ -291,6 +299,32 @@ def _footer(ui: UI, hint: str) -> Text:
     return Text(f" {hint}", style="dim", no_wrap=True, overflow="ellipsis")
 
 
+def _ago(ts: str, now: float | None = None) -> str:
+    try:
+        s = (now or time.time()) - time.mktime(time.strptime(ts, "%Y-%m-%dT%H:%M:%S"))
+    except (TypeError, ValueError):
+        return "?"
+    return "just now" if s < 60 else f"{s / 60:.0f} min ago" if s < 3600 else f"{s / 3600:.1f} h ago"
+
+
+def recap_line(r: dict | None) -> Text | None:
+    """The overview's recap row: the latest recap and its age, whether a new one is being written, or why the
+    last attempt failed (kept beside the previous recap, which stays visible). None before the first `a`."""
+    r = r or {}
+    if not (r.get("text") or r.get("error") or r.get("running")):
+        return None
+    t = Text()
+    if r.get("text"):
+        t.append(clean(r["text"]))
+        t.append(f"  · {r['ts'][11:16]} ({_ago(r['ts'])})", style="dim")
+    if r.get("running"):
+        t.append(("  · " if r.get("text") else "") + "writing a recap…", style="dim italic")
+    elif r.get("error") and r.get("error_ts", "") >= r.get("ts", ""):
+        t.append(("  · " if r.get("text") else "") + f"recap failed {r['error_ts'][11:16]}: {clean(r['error'])[:160]}",
+                 style="red")
+    return t
+
+
 def render_main(snap: dict, ui: UI, width: int = 100):
     head = Text(f" SHAFT · {snap['at']}   ", style="bold")
     for s in snap["services"]:
@@ -302,7 +336,7 @@ def render_main(snap: dict, ui: UI, width: int = 100):
     parts = [top_views.tab_bar(ui, snap), head,
              top_views.footer(ui, top_views.HELP["overview"]) if ui.overlay else
              _footer(ui, "↑/↓ instance · Enter details · c cycle · p pause · s sleep · u update · w write · r reply"
-                         " · m messages · ? help · q quits")]
+                         " · a recap · m messages · ? help · q quits")]
     for a in (snap.get("alerts") or [])[:5]:
         parts.append(Text(f" ⚠ {clean(a['text'])}", style="bold red", no_wrap=True, overflow="ellipsis"))
     if len(snap.get("alerts") or []) > 5:
@@ -321,6 +355,8 @@ def render_main(snap: dict, ui: UI, width: int = 100):
         grid.add_row("now", Text(clean(i["doing"]) or "—", style="bold" if i["doing"] else "dim"))
         if i["goal"]:
             grid.add_row("goal", Text(clean(i["goal"])))
+        if (line := recap_line(i.get("recap"))) is not None:
+            grid.add_row("recap", line)
         worth = f"value {i['value']:.1f}/5, " if i.get("value") is not None else ""
         rate = (f" · judged {i['judged']} ({worth}achieved {i['achieved']:.1f}/5, success {i['success']:.0%} of the last 10)"
                 if i.get("achieved") is not None else
@@ -417,7 +453,9 @@ def plain(snap: dict) -> str:
     for i in snap["instances"]:
         lines.append(f"{i['name']:8} {i['state']}{' since ' + i['since'] if i['since'] else ''}"
                      f"{' · ' + i['doing'] if i['doing'] else ''}{' · goal: ' + i['goal'] if i['goal'] else ''}"
-                     f" · next wake {i['next_wake']}" + (f"\n{'':8} trial {i['trial']}" if i.get("trial") else ""))
+                     f" · next wake {i['next_wake']}" + (f"\n{'':8} trial {i['trial']}" if i.get("trial") else "")
+                     + (f"\n{'':8} recap {(i.get('recap') or {})['text']} ({i['recap']['ts'][11:16]})"
+                        if (i.get("recap") or {}).get("text") else ""))
     msgs = [f"{_when(m)} {m['from']} → {m['to']}{'' if m['read'] else ' (pending)'}: {_first_line(m['text'])[:120]}"
             for m in snap.get("messages", [])[-5:]]
     return clean("\n".join(lines + [""] + msgs + ([""] if msgs else []) +

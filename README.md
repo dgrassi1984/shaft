@@ -106,7 +106,10 @@ shaft top                       # control panel, tabs 0–9: overview (state, no
                                 #   filters, t shows a conversation's thinking). Actions ask y/n and run the matching shaft subcommand: cycle,
                                 #   pause/resume, sleep, update, tools, write/reply, A/A trial, battery,
                                 #   services and autonomy (a scheduler restart is refused while its runs would
-                                #   be killed). ? lists the keys; --once prints a text snapshot
+                                #   be killed). a writes each instance a one-line recap — what it is doing now
+                                #   and did in the last hour — by a small model from its own records
+                                #   (SHAFT_RECAP_MODEL, default claude-haiku-5-5; supervisor/recap.py, about
+                                #   $0.0005 a line, in costs → recaps). ? lists the keys; --once prints a text snapshot
 shaft status [name]             # how each instance is doing, open conversations, which code is running
 shaft model on|off|status       # SHAFT's own Bonsai 2 server (launchd, :8780)
 shaft api on|off|status|key|inbox-key   # OpenAI-compatible API + inbox doorbell on your tailnet (below)

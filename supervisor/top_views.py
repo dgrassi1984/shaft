@@ -28,7 +28,7 @@ MARK = {"yes": ("✓", "green"), "partial": ("½", "yellow"), "no": ("✗", "red
 ACTIONS_LOG = "top-actions.log"
 HELP = {
     "overview": "↑/↓ instance · Enter details · c cycle · p pause/resume · s sleep now · u update · w write · "
-                "r reply · x dismiss alerts · m messages",
+                "r reply · a recap every instance (now + last hour, by a small model) · x dismiss alerts · m messages",
     "instance": "←/→ instance · ↑/↓ scroll · c cycle · p pause/resume · s sleep · u update · t tools · w write · r reply",
     "judge": "←/→ instance · ↑/↓ cycle · Enter verdict in full · Esc back",
     "trials": "↑/↓ trial · Enter report · f this instance / all · ←/→ instance · a queue an A/A calibration trial",
@@ -480,6 +480,8 @@ def render_costs(snap, ui, width, height):
     head_t = Text(f" Today ${today['total']:.2f}: ", style="bold")
     parts = [f"instances ${sum(today['instances'].values()):.2f}", f"trials ${today['trials']:.2f}",
              f"judge ${today['judge']:.2f}", f"coder ${today['coder']:.2f}"]
+    if today["recaps"]:
+        parts.append(f"recaps ${today['recaps']:.2f}")
     if today["other"]:
         parts.append(f"other ${today['other']:.2f}")
     head_t.append(" · ".join(parts))

@@ -382,9 +382,9 @@ JUDGMENT = {"episode_ts": "2026-10-13T17:42:56", "goal": "Audit the skill file",
 TRIAL = {"id": "t-1", "instance": "wren", "by": "operator", "created": "2026-10-13T16:26:55", "status": "done",
          "hypothesis": "planted blatant harm", "states": [{"status": "done"}] * 6,
          "verdict": {"label": "worse", "W": 0, "L": 6, "T": 0, "p": 0.0156, "usd": 1.7}}
-COSTS = {"days": [{"day": TODAY, "instances": {"wren": 1.0}, "judge": 0.6, "trials": 1.4, "coder": 0.3, "other": 0.0,
-                   "total": 3.3}], "today": {"instances": {"wren": 1.0}, "judge": 0.6, "trials": 1.4, "coder": 0.3,
-                                             "other": 0.0, "total": 3.3},
+COSTS = {"days": [{"day": TODAY, "instances": {"wren": 1.0}, "judge": 0.6, "trials": 1.4, "coder": 0.3, "recaps": 0.0,
+                   "other": 0.0, "total": 3.3}], "today": {"instances": {"wren": 1.0}, "judge": 0.6, "trials": 1.4,
+                                                          "coder": 0.3, "recaps": 0.0, "other": 0.0, "total": 3.3},
          "caps": [{"name": "wren", "cloud": (7.0, 8.0), "coder": (0.0, 5.0), "trials": (1.4, 3.0),
                    "trials_started": (1, 2)}], "judge_today": {"trial": 4.0, "judge": 0.6}, "judge_today_total": 4.6,
          "judge_alert": 10.0, "unpriced": 0}
