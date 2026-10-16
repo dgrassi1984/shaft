@@ -50,11 +50,21 @@ class ApiTest(unittest.TestCase):
                    mock.patch.object(api, "instance_names", return_value=["shaft", "wren"]),
                    mock.patch.object(api, "run_agent", fake_run_agent),
                    mock.patch.object(api, "busy_with", return_value=None),
+                   mock.patch.object(api, "instance_root", lambda n: self.roots / n),
+                   mock.patch.object(api, "log", lambda *_: None),
                    mock.patch.dict("os.environ", {"SHAFT_API_LOGINS": ""})]
+        import shutil
+        import tempfile
+        from pathlib import Path
+        self.roots = Path(tempfile.mkdtemp(prefix="shaft-api-")).resolve()
+        self.addCleanup(shutil.rmtree, self.roots, True)
+        for n in ("shaft", "wren"):
+            (self.roots / n).mkdir()
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
         api.Handler.conversations = api.Conversations()
+        api.Handler.live = api.Live()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), api.Handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.addCleanup(self.server.shutdown)
@@ -185,6 +195,105 @@ class ApiTest(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             self.req("/chat/completions", {"model": "nobody", "messages": [{"role": "user", "content": "x"}]})
         self.assertEqual(ctx.exception.code, 404)
+
+
+class InterjectTest(unittest.TestCase):
+    """Daniele, 2026-10-16: "When I send a message via telegram while the instance is still working on my previous
+    message, it should be injected immediately into it." Before, the second message waited for the whole first reply
+    and then got a reply of its own; the reply in progress never saw it (PLAN-interject.md)."""
+
+    WAIT = object()
+
+    req = ApiTest.req
+
+    def setUp(self):
+        ApiTest.setUp(self)
+        self.pre, self.mid, self.go = threading.Event(), threading.Event(), threading.Event()
+        self.seen_file = []
+        test = self
+
+        class Lines:                             # the agent's stdout, stopping at WAIT until the test says go
+            def __init__(self, events):
+                self.events = events
+
+            def __iter__(self):
+                for e in self.events:
+                    if e is test.WAIT:
+                        test.mid.set()
+                        test.go.wait(10)
+                        continue
+                    yield json.dumps(e) + "\n"
+
+        def run_agent(name, kind, args, interactive, driver=None, **kw):
+            self.pre.wait(10)                    # still waiting for the instance (another conversation)
+            proc = FakeProc()
+            proc.stdout = Lines(self.events)
+            driver(proc)
+            path = self.roots / name / ".tmp"
+            self.seen_file += [l for f in path.glob("interject-*.jsonl") for l in f.read_text().splitlines()]
+            return 0
+
+        p = mock.patch.object(api, "run_agent", run_agent)
+        p.start()
+        self.addCleanup(p.stop)
+        self.events = [{"type": "ready"}, {"type": "tool_start", "name": "calendar", "args": "{}"}, self.WAIT,
+                       {"type": "tool_end", "name": "calendar", "ok": True, "brief": "ok"},
+                       {"type": "heard", "text": "one"}, {"type": "heard", "text": "two"},
+                       {"type": "content", "text": "Both done."}, {"type": "turn_end", "steps": 2, "ended_by": "answer"}]
+
+    def chat(self, out):
+        body = {"model": "wren", "messages": [{"role": "user", "content": "check my calendar"}]}
+        out.append(json.load(self.req("/chat/completions", body)))
+
+    def interject(self, text):
+        return self.req("/chat/interject", {"model": "wren", "messages": [
+            {"role": "user", "content": "check my calendar"}, {"role": "user", "content": text}]})
+
+    def test_a_message_during_the_reply_reaches_the_running_agent_in_order(self):
+        out = []
+        t = threading.Thread(target=self.chat, args=(out,))
+        t.start()
+        for _ in range(100):                     # the reply is registered before its agent starts
+            if api.Handler.live.replies:
+                break
+            import time
+            time.sleep(0.05)
+        self.assertEqual(self.interject("one").status, 202)        # held: the agent has not started yet
+        self.pre.set()
+        self.assertTrue(self.mid.wait(10))
+        self.assertEqual(self.interject("two").status, 202)        # written while it runs
+        talk_id = next(iter(api.Handler.live.replies))
+        lines = (self.roots / "wren" / ".tmp" / f"interject-{talk_id}.jsonl").read_text().splitlines()
+        self.assertEqual([json.loads(l)["text"] for l in lines], ["one", "two"])
+        self.go.set()
+        t.join(10)
+        msg = out[0]["choices"][0]["message"]
+        self.assertEqual(msg["content"], "Both done.")
+        self.assertEqual(out[0]["interjections_heard"], 2)          # Telegram puts both before the answer
+        self.assertIn("read your new message: one", msg["reasoning_content"])
+        self.assertEqual(list((self.roots / "wren" / ".tmp").glob("interject-*")), [])   # removed with the reply
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.interject("three")                                 # nothing running: the client sends it anew
+        self.assertEqual(ctx.exception.code, 409)
+
+    def test_no_reply_running_is_409_and_an_empty_message_is_refused(self):
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.interject("hello?")
+        self.assertEqual(ctx.exception.code, 409)
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.interject("   ")
+        self.assertEqual(ctx.exception.code, 400)
+
+    def test_a_crashed_runs_leftover_file_is_not_read_by_the_next_reply(self):
+        self.pre.set()
+        self.go.set()
+        body = {"model": "wren", "messages": [{"role": "user", "content": "check my calendar"}]}
+        talk_id = api.Handler.conversations.talk_id("wren", body["messages"])
+        stale = self.roots / "wren" / ".tmp" / f"interject-{talk_id}.jsonl"
+        stale.parent.mkdir(parents=True, exist_ok=True)
+        stale.write_text(json.dumps({"text": "from a reply that crashed"}) + "\n")
+        json.load(self.req("/chat/completions", body))
+        self.assertEqual(self.seen_file, [])
 
 
 INBOX_KEY = "sk-shaft-inbox-test"

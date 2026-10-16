@@ -8,7 +8,8 @@ and logged; pairing again needs `shaft telegram unpair` in your terminal.
 - You → instance: a message to its bot is a turn of a live conversation, through SHAFT's own API (the same path
   as any API client: a running cycle is paused only while the reply is written, the conversation is written up
   into the journal after SHAFT_IDLE_MINUTES). Replying to one of its messages quotes it — and answers it, if it
-  was a question. /new starts a new conversation, /wake starts a cycle now, /status says what it is doing.
+  was a question. A message sent while it is still replying joins that reply at its next step (/v1/chat/interject);
+  one that arrives too late for it (the answer was already being written) is answered straight after. /new starts a new conversation, /wake starts a cycle now, /status says what it is doing.
 - Instance → you: every message an instance sends the operator (send_message to "operator") also arrives from its
   bot, read from the supervisor's message log (.supervisor/messages.jsonl). No daily limit (Daniele).
 - Full text both ways (Daniele accepted that Telegram's servers see it: bot chats are not end-to-end encrypted).
@@ -342,7 +343,8 @@ class Chat:
         self.name, self.token = name, token
         self.history: list[dict] = []
         self.last = 0.0
-        self.lock = threading.Lock()
+        self.mu = threading.Lock()                   # the history and the in-flight list; never held for a reply
+        self.inflight: list[str] | None = None       # while a reply runs (one at a time): messages sent to it, in order
 
     def reset_if_idle(self) -> None:
         if self.history and time.time() - self.last > IDLE_MINUTES * 60:
@@ -384,9 +386,12 @@ class Chat:
                 send(self.token, chat_id, f"Not started: {e}")
             return
         if cmd == "/new":
-            with self.lock:
-                self.history = []
-            send(self.token, chat_id, "New conversation.")
+            with self.mu:
+                running = self.inflight is not None
+                if not running:
+                    self.history = []
+            send(self.token, chat_id, "I am still replying: send /new once I have answered." if running
+                 else "New conversation.")
             return
         if cmd == "/pair":
             return                                   # already paired (an unpaired account never gets here)
@@ -394,24 +399,58 @@ class Chat:
         if quoted.get("text"):
             text = "> " + "\n> ".join(quoted["text"].splitlines()) + "\n\n" + text
             answer_question(self.name, quoted.get("message_id"))
-        with self.lock:
+        with self.mu:
+            if self.inflight is not None:            # a reply is running: this message joins it (PLAN-interject.md)
+                self.inflight.append(text)
+                try:                                 # under mu: it can never reach two replies
+                    if not interject_api(self.name, [self.history[0], {"role": "user", "content": text}]):
+                        log(f"telegram: {self.name}'s reply had ended; the message is answered next")
+                except TelegramError as e:
+                    log(f"telegram: could not add a message to {self.name}'s reply ({e}); it is answered next")
+                return
             self.reset_if_idle()
             self.history.append({"role": "user", "content": text})
             self.last = time.time()
-            stop = threading.Event()
-            threading.Thread(target=self._typing, args=(chat_id, stop), daemon=True).start()
-            try:
-                reply = ask_api(self.name, self.history)
-            except TelegramError as e:
-                self.history.pop()
-                stop.set()
-                send(self.token, chat_id, f"(no answer: {e})", msg["message_id"])
-                return
-            finally:
-                stop.set()
-            self.history.append({"role": "assistant", "content": reply})
-            self.last = time.time()
-        send(self.token, chat_id, reply)
+            self.inflight = []
+        try:
+            self._converse(chat_id, msg["message_id"])
+        except BaseException:
+            with self.mu:                            # still ours: a new message would have joined it
+                self.inflight = None
+            raise
+
+    def _converse(self, chat_id: int, message_id: int) -> None:
+        """Reply to the history's last message, and to every message sent meanwhile: those the reply heard go before
+        it in the history; the others (too late for it, or an instance whose code does not read them yet) get one
+        reply straight after. Only this thread changes the history while the reply runs."""
+        stop = threading.Event()
+        threading.Thread(target=self._typing, args=(chat_id, stop), daemon=True).start()
+        try:
+            while True:
+                try:
+                    reply, heard = ask_api(self.name, list(self.history))
+                except TelegramError as e:
+                    with self.mu:
+                        self.history.pop()
+                        lost, self.inflight = len(self.inflight or []), None
+                    send(self.token, chat_id, f"(no answer: {e}"
+                         + (f" — nor to the {lost} message(s) you sent meanwhile" if lost else "") + ")",
+                         message_id)
+                    return
+                with self.mu:
+                    got, heard = self.inflight or [], min(heard, len(self.inflight or []))
+                    self.history += [{"role": "user", "content": t} for t in got[:heard]]
+                    self.history.append({"role": "assistant", "content": reply})
+                    self.last = time.time()
+                    rest = got[heard:]
+                    if rest:
+                        self.history.append({"role": "user", "content": "\n\n".join(rest)})
+                    self.inflight = [] if rest else None   # decided with the list: nothing falls between
+                send(self.token, chat_id, reply)
+                if not rest:
+                    return
+        finally:
+            stop.set()
 
     def receive(self, files: list[tuple[str, str]]) -> str:
         """Save Daniele's files in the instance's attachments/ folder; returns the lines that tell it where."""
@@ -438,28 +477,49 @@ class Chat:
             stop.wait(4.5)
 
 
-def ask_api(name: str, history: list[dict]) -> str:
-    """One reply through SHAFT's own API: a sandboxed run, pausing a running cycle only while it replies."""
+def _api(route: str, name: str, messages: list[dict], timeout: float) -> dict:
+    """POST to SHAFT's own API as the paired operator; its error message is raised as a TelegramError."""
     from . import api
     env = secrets_env()
     key, logins = env.get("SHAFT_API_KEY"), sorted(api.allowed_logins())
     if not key or not logins:
         raise TelegramError("the API is not set up (shaft api on)")
-    req = urllib.request.Request(f"http://127.0.0.1:{api.PORT}/v1/chat/completions",
-                                 data=json.dumps({"model": name, "messages": history}).encode(),
+    req = urllib.request.Request(f"http://127.0.0.1:{api.PORT}/v1/chat/{route}",
+                                 data=json.dumps({"model": name, "messages": messages}).encode(),
                                  headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}",
                                           "Tailscale-User-Login": logins[0], "User-Agent": "Telegram"})
     try:
-        with urllib.request.urlopen(req, timeout=3600) as r:
-            data = json.load(r)
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.load(r)
     except urllib.error.HTTPError as e:
         try:
-            raise TelegramError(json.load(e)["error"]["message"]) from None
+            err = TelegramError(json.load(e)["error"]["message"])
         except (ValueError, KeyError):
-            raise TelegramError(f"API HTTP {e.code}") from None
+            err = TelegramError(f"API HTTP {e.code}")
+        err.code = e.code
+        raise err from None
     except NETWORK_ERRORS as e:
         raise TelegramError(f"the API is not reachable ({e}); is it on? shaft api status") from None
-    return (data["choices"][0]["message"].get("content") or "").strip() or "(empty answer)"
+
+
+def ask_api(name: str, history: list[dict]) -> tuple[str, int]:
+    """One reply through SHAFT's own API: a sandboxed run, pausing a running cycle only while it replies.
+    Returns the reply and how many messages sent to it meanwhile (interject_api) it heard, oldest first."""
+    data = _api("completions", name, history, 3600)
+    reply = (data["choices"][0]["message"].get("content") or "").strip() or "(empty answer)"
+    return reply, int(data.get("interjections_heard") or 0)
+
+
+def interject_api(name: str, messages: list[dict]) -> bool:
+    """Add the last message to the reply running in this conversation (its first user message says which).
+    False when no reply is running there any more."""
+    try:
+        _api("interject", name, messages, 15)
+    except TelegramError as e:
+        if getattr(e, "code", None) == 409:
+            return False
+        raise
+    return True
 
 
 def answer_question(name: str, message_id: int | None) -> None:

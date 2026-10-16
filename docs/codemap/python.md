@@ -9,7 +9,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | Module | Classes | Functions |
 |---|---|---|
 | `supervisor/__main__.py` | — | `cmd_new`, `cmd_update`, `cmd_setup`, `cmd_status`, `cmd_jobs`, `cmd_tools`, `cmd_secret`, `cmd_share`, `cmd_google`, `cmd_mail`, `cmd_calendar`, `run_many`, `cmd_mind`, `cmd_battery`, `cmd_trial`, `main` |
-| `supervisor/api.py` | `Conversations`, `Handler` | `allowed_logins`, `serve`, `url`, `command` |
+| `supervisor/api.py` | `Conversations`, `Live`, `Handler` | `allowed_logins`, `serve`, `url`, `command` |
 | `supervisor/autonomy.py` | — | `service`, `wake_interval`, `describe_schedule`, `record`, `sleep_due`, `decide_wakes`, `serve`, `battery_jobs`, `wake`, `start_wake`, `tick`, `autonomy` |
 | `supervisor/battery.py` | `Interrupted` | `base`, `items_dir`, `off_path`, `is_off`, `results_path`, `load_items`, `checksum`, `backup`, `snapshot`, `restore`, `make_control`, `run_hidden_tests`, `grade`, `headline`, `truth`, `recall_candidates`, `make_recall`, `results`, `era`, `order`, `run`, `window`, `due`, `stats_lines`, `report` |
 | `supervisor/bonsai_lora.py` | — | `load_text_model`, `load`, `logits_of`, `make_cache`, `render`, `make_lora_class`, `attach_lora`, `spike`, `train`, `load_adapter`, `generate`, `answers` |
@@ -42,10 +42,10 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/talk_input.py` | `Draft` | `enter_sequences`, `other_modified_keys` |
 | `supervisor/talk_stats.py` | `Stats` | — |
 | `supervisor/talk_ui.py` | `Client` | `main` |
-| `supervisor/telegram.py` | `TelegramError`, `Chat` | `load`, `save`, `update`, `token_key`, `tokens`, `call`, `send`, `send_file`, `download`, `incoming_files`, `split_markdown`, `to_html`, `new_pairing_code`, `try_pair`, `paired_id`, `reachable`, `remember_bot`, `ask_api`, `answer_question`, `handle_update`, `poll`, `forward_new`, `serve`, `command` |
+| `supervisor/telegram.py` | `TelegramError`, `Chat` | `load`, `save`, `update`, `token_key`, `tokens`, `call`, `send`, `send_file`, `download`, `incoming_files`, `split_markdown`, `to_html`, `new_pairing_code`, `try_pair`, `paired_id`, `reachable`, `remember_bot`, `ask_api`, `interject_api`, `answer_question`, `handle_update`, `poll`, `forward_new`, `serve`, `command` |
 | `supervisor/tests/fakellm.py` | `FakeLLM` | — |
 | `supervisor/tests/mindfix.py` | — | `commit_at`, `store_state` |
-| `supervisor/tests/test_api.py` | `KeepingStringIO`, `FakeProc`, `ApiTest`, `InboxDoorbellTest` | `fake_run_agent` |
+| `supervisor/tests/test_api.py` | `KeepingStringIO`, `FakeProc`, `ApiTest`, `InterjectTest`, `InboxDoorbellTest` | `fake_run_agent` |
 | `supervisor/tests/test_attachments.py` | `BrokerAttachmentsTest`, `TelegramAttachmentsTest` | — |
 | `supervisor/tests/test_autonomy.py` | `SleepDueTest`, `WakeTest` | — |
 | `supervisor/tests/test_bonsai_budget.py` | `ThinkingBudgetTest`, `WrapUpTest`, `RequestBudgetTest`, `TemplateReasoningTest`, `BudgetWithoutSyncTest`, `Float16NormsTest`, `ToolProgressTest` | — |
@@ -63,6 +63,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_embed_memory.py` | `EmbedCacheBoundTest` | — |
 | `supervisor/tests/test_gate.py` | `GateTest`, `InstanceTestsTest`, `FakeProjectCase`, `CommittedTreeTest`, `StageTimeoutTest`, `StageProcessGroupTest` | `git` |
 | `supervisor/tests/test_google.py` | `FakeGoogle`, `GoogleCase`, `LoginTest`, `MigrateTest`, `CliTest` | — |
+| `supervisor/tests/test_interject.py` | `AnswerHearsInterjectionsTest` | — |
 | `supervisor/tests/test_invariants.py` | `InstanceCase`, `ReflectInvariants`, `TalkInvariants`, `LiveInvariants`, `TemplateMeasurement`, `ExamInvariants`, `SandboxInvariants` | — |
 | `supervisor/tests/test_jobs.py` | `JobCase`, `DeclaredTest`, `SchedulerTest`, `RunTest` | — |
 | `supervisor/tests/test_judge2.py` | `RecordShowsWholeVerdictsTest`, `SecondJudgeTest`, `JudgePendingTest`, `ReleasedBeforeTheSecondJudgeTest` | — |
