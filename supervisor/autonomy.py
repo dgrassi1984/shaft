@@ -85,7 +85,15 @@ def wake_interval(name: str, config: dict[str, str] | None = None) -> timedelta 
     except ValueError:
         log(f"{name}: WAKE_INTERVAL_MINUTES={raw!r} is not a number of minutes; using {WAKE_DEFAULT_MIN}")
         minutes = WAKE_DEFAULT_MIN
-    return None if minutes <= 0 else timedelta(minutes=max(minutes, WAKE_FLOOR_MIN))
+    return None if minutes <= 0 else timedelta(minutes=max(minutes, wake_floor(name)))
+
+
+def wake_floor(name: str) -> int:
+    """The shortest interval the instance may set itself: WAKE_FLOOR_MIN, or the operator's own floor for it
+    (`shaft limits <name> wake-floor <minutes>`, kept in the supervisor's folder — the instance cannot lower it)."""
+    from .core import _tool_settings
+    own = _tool_settings(name).get("wake_floor_minutes")
+    return own if isinstance(own, int) and not isinstance(own, bool) and own >= 1 else WAKE_FLOOR_MIN
 
 
 def _every(interval: timedelta) -> str:
@@ -100,7 +108,7 @@ def describe_schedule(name: str, config: dict[str, str] | None = None) -> str:
                 "by hand.")
     interval = wake_interval(name, config)
     wakes = (f"wakes you for an autonomous cycle every {_every(interval)} (WAKE_INTERVAL_MINUTES in your "
-             f"config.env — change it with set_config — at least {WAKE_FLOOR_MIN}; a wake that comes while you are already awake — a cycle, a "
+             f"config.env — change it with set_config — at least {wake_floor(name)}; a wake that comes while you are already awake — a cycle, a "
              f"conversation, your sleep — is skipped)") if interval else \
         "does not wake you for cycles (WAKE_INTERVAL_MINUTES=0 in your config.env; change it with set_config)"
     from . import battery

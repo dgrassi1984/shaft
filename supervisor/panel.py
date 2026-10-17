@@ -139,7 +139,7 @@ def costs(days: int = 7, today: date | None = None) -> dict:
     for name in sorted(names):
         used = trial.usage_today(name)
         caps.append({"name": name,
-                     "cloud": (cloudllm.spent_today(name), cloudllm.DAILY_USD),
+                     "cloud": (cloudllm.spent_today(name), cloudllm.daily_cap(name)),
                      "coder": (coder.spent_today(name), coder.DAILY_USD),
                      "trials": (used["usd"], trial.DAILY_USD), "trials_started": (used["started"], trial.TRIALS_PER_DAY)})
     return {"days": rows, "today": rows[-1], "caps": caps, "judge_today": judge_today,

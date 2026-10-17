@@ -266,6 +266,42 @@ def cmd_status(names: list[str]) -> int:
     return 0
 
 
+def cmd_limits(name: str | None, limit: str | None, value: str | None) -> int:
+    """The operator's own limits for an instance, kept in supervisor/tools/<name>.json (never its config.env, which
+    it can change): how often it may wake (WAKE_INTERVAL_MINUTES in its config.env, at least the floor) and how much
+    it may spend on cloud models a day."""
+    from . import autonomy, cloudllm
+    from .core import _update_tool_settings
+    if limit and not (name and value):
+        print("usage: shaft limits <name> wake-floor <minutes>|off · shaft limits <name> cloud-cap <dollars>|off",
+              file=sys.stderr)
+        return 2
+    if limit:
+        instance_root(name)
+        key = {"wake-floor": "wake_floor_minutes", "cloud-cap": "cloud_daily_usd"}[limit]
+        if value == "off":
+            new = None
+        else:
+            try:
+                new = int(value) if limit == "wake-floor" else round(float(value), 2)
+            except ValueError:
+                new = 0
+            if new <= 0:
+                print(f"{limit} must be a positive {'whole number of minutes' if limit == 'wake-floor' else 'amount'}"
+                      f" (or off), not {value!r}", file=sys.stderr)
+                return 2
+        _update_tool_settings(name, **{key: new})
+        log(f"{name}: {limit} set to {value} by the operator")
+    for n in ([name] if name else instance_names()):
+        interval = autonomy.wake_interval(n)
+        floor, default_floor = autonomy.wake_floor(n), autonomy.WAKE_FLOOR_MIN
+        cap = cloudllm.daily_cap(n)
+        print(f"{n}: wakes every {int(interval.total_seconds() // 60) if interval else 'never'} min · wake floor {floor} min"
+              f"{' (yours)' if floor != default_floor else ' (default)'} · cloud cap ${cap:.2f}"
+              f"{' (yours)' if cap != cloudllm.DAILY_USD else ' (default)'} · spent today ${cloudllm.spent_today(n):.2f}")
+    return 0
+
+
 def cmd_jobs(name: str | None, action: str | None) -> int:
     """Scheduled jobs (PLAN-jobs.md): an instance's own plugins, run on the timer their manifest declares."""
     from . import jobs
@@ -790,6 +826,11 @@ def main(argv: list[str]) -> int:
     for verb in ("pause", "resume"):
         p = sub.add_parser(verb, help=f"{verb} autonomous runs (all, or one instance)")
         p.add_argument("name", nargs="?")
+    p = sub.add_parser("limits", help="the operator's own limits for an instance: its wake floor (shortest wake interval "
+                                      "it may set itself) and its daily cloud cap; 'off' goes back to the default")
+    p.add_argument("name", nargs="?")
+    p.add_argument("limit", nargs="?", choices=["wake-floor", "cloud-cap"])
+    p.add_argument("value", nargs="?", help="minutes (wake-floor), dollars (cloud-cap), or off")
     p = sub.add_parser("jobs", help="instances' scheduled jobs (their own plugins on a timer): list, or switch an "
                                     "instance's jobs on/off")
     p.add_argument("name", nargs="?")
@@ -909,6 +950,8 @@ def main(argv: list[str]) -> int:
                   f"prompt_toolkit rich)", file=sys.stderr)
             return 2
         os.execv(ui_python, [str(ui_python), "-E", "-s", "-m", "supervisor.top", *extra])
+    if args.cmd == "limits":
+        return cmd_limits(args.name, args.limit, args.value)
     if args.cmd == "jobs":
         return cmd_jobs(args.name, args.action)
     if args.cmd == "job":

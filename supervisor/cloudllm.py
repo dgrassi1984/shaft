@@ -48,6 +48,15 @@ CLOUD_MODELS, _ = knob("SHAFT_CLOUD_MODELS", "claude-haiku-5-5,claude-opus-5-5,o
 OPENROUTER_PROVIDER, _ = knob("SHAFT_OPENROUTER_PROVIDER",
                               '{"only": ["novita"], "allow_fallbacks": false, "data_collection": "deny", "zdr": true, "require_parameters": true}', json.loads)
 DAILY_USD, _ = knob("SHAFT_CLOUD_DAILY_USD", "8", float)
+
+
+def daily_cap(instance: str) -> float:
+    """The instance's daily cloud cap: the operator's own for it (`shaft limits <name> cloud-cap <usd>`, kept in the
+    supervisor's folder — the instance cannot raise it), else SHAFT_CLOUD_DAILY_USD. Trial and battery runs, billed
+    under other names, keep the default."""
+    from .core import _tool_settings
+    own = _tool_settings(instance).get("cloud_daily_usd") if instance.replace("-", "").isalnum() else None
+    return float(own) if isinstance(own, (int, float)) and not isinstance(own, bool) and own > 0 else DAILY_USD
 DECISIONS_API = "https://openrouter.ai/api/alpha/decisions"
 DECISION_MODELS, _ = knob("SHAFT_DECISION_MODELS", "typesafe/jev-1.13,~typesafe/jev-latest",
                           lambda s: [m.strip() for m in s.split(",") if m.strip()])
@@ -209,8 +218,8 @@ def complete(instance: str, body: dict, secrets: dict, remembered: dict[str, lis
         raise CloudError(403, f"model {model!r} has no price in cloudllm.PRICES ({sorted(PRICES)}), so the daily "
                               f"cap could not count it")
     spent = spent_today(instance)
-    if spent >= DAILY_USD:
-        raise CloudError(429, f"{instance} spent ${spent:.2f} on cloud models today (cap ${DAILY_USD:.2f})")
+    if spent >= (cap := daily_cap(instance)):
+        raise CloudError(429, f"{instance} spent ${spent:.2f} on cloud models today (cap ${cap:.2f})")
     if model.startswith("openrouter/"):
         return _openrouter(instance, body, secrets.get("OPENROUTER_API_KEY", ""))
     key = secrets.get("ANTHROPIC_API_KEY", "")
@@ -286,8 +295,8 @@ def decide(instance: str, model: str, state, questions: dict, secrets: dict) -> 
         raise CloudError(403, f"decision model {model!r} is not allowed for instances "
                               f"(SHAFT_DECISION_MODELS={DECISION_MODELS})")
     spent = spent_today(instance)
-    if spent >= DAILY_USD:
-        raise CloudError(429, f"{instance} spent ${spent:.2f} on cloud models today (cap ${DAILY_USD:.2f})")
+    if spent >= (cap := daily_cap(instance)):
+        raise CloudError(429, f"{instance} spent ${spent:.2f} on cloud models today (cap ${cap:.2f})")
     key = secrets.get("OPENROUTER_API_KEY", "")
     if not key:
         raise CloudError(503, "no OPENROUTER_API_KEY in the supervisor's .env")
@@ -313,8 +322,8 @@ def openrouter_stream(instance: str, body: dict, secrets: dict):
     if model not in CLOUD_MODELS:
         raise CloudError(403, f"model {model!r} is not allowed for instances (SHAFT_CLOUD_MODELS={CLOUD_MODELS})")
     spent = spent_today(instance)
-    if spent >= DAILY_USD:
-        raise CloudError(429, f"{instance} spent ${spent:.2f} on cloud models today (cap ${DAILY_USD:.2f})")
+    if spent >= (cap := daily_cap(instance)):
+        raise CloudError(429, f"{instance} spent ${spent:.2f} on cloud models today (cap ${cap:.2f})")
     key = secrets.get("OPENROUTER_API_KEY", "")
     if not key:
         raise CloudError(503, "no OPENROUTER_API_KEY in the supervisor's .env")
