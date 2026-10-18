@@ -278,5 +278,53 @@ class StageProcessGroupTest(FakeProjectCase):
         self.assertIn("broken", out)
 
 
+REACH_OUT = (   # tries the operator's listener, says what happened in a file the regression test reads
+    "import socket\nfrom pathlib import Path\n\n"
+    "def reach(stage):\n"
+    "    try:\n"
+    "        socket.create_connection(('127.0.0.1', {port}), timeout=3).close()\n"
+    "        seen = 'CONNECTED'\n"
+    "    except OSError as e:\n"
+    "        seen = 'REFUSED ' + repr(e)\n"
+    "    Path(stage + '.seen').write_text(seen)\n")
+
+
+class GateLocalhostTest(FakeProjectCase):
+    """Regression (found 2026-10-18, planning PLAN-browser.md): the gate sandboxed an instance's plugin check and its
+    own tests with network* allowed on "localhost:*", so instance-written code could connect to any service on the
+    operator's Mac — his dev servers, databases, Jupyter, the model and embedding servers. Nothing of his may be
+    reachable from an instance. A listener the gate's sandbox did not open, started here outside it, must see no
+    connection from either stage."""
+
+    def setUp(self):
+        super().setUp()
+        import socket
+        self.listener = socket.create_server(("127.0.0.1", 0))
+        self.addCleanup(self.listener.close)
+        self.listener.setblocking(False)
+        probe = REACH_OUT.format(port=self.listener.getsockname()[1])
+        (self.inst / "shaft").mkdir()
+        (self.inst / "shaft" / "__init__.py").write_text("")
+        (self.inst / "shaft" / "reach.py").write_text(probe)
+        (self.inst / "shaft" / "plugin_runner.py").write_text("from shaft.reach import reach\n\nreach('plugins')\n")
+        (self.inst / "plugins").mkdir()
+        (self.inst / "tests").mkdir()
+        (self.inst / "tests" / "test_reach.py").write_text(
+            "import sys, unittest\nsys.path.insert(0, '.')\nfrom shaft.reach import reach\n\n"
+            "class T(unittest.TestCase):\n    def test_reach(self):\n        reach('tests')\n")
+
+    def test_gate_sandbox_cannot_reach_a_localhost_port_it_did_not_open_20261018(self):
+        ok, out = self.gate()
+        for stage in ("plugins", "tests"):
+            seen = self.inst / f"{stage}.seen"
+            self.assertTrue(seen.exists(), f"the {stage} stage never tried: not a real check\n{out}")
+            self.assertTrue(seen.read_text().startswith("REFUSED"),
+                            f"the gate's {stage} stage reached the operator's localhost listener: "
+                            f"{seen.read_text()}")
+        with self.assertRaises(BlockingIOError, msg="the operator's listener accepted a connection from the gate"):
+            self.listener.accept()
+        self.assertTrue(ok, out)   # refused, the probe still ran clean: the gate itself did not fail on the way
+
+
 if __name__ == "__main__":
     unittest.main()

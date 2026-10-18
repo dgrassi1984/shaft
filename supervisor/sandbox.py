@@ -108,10 +108,13 @@ def _env_reads(root: Path, env_root: Path | None, home: Path) -> list[str]:
     return rules
 
 
-def profile(instance_root: Path, home: Path, llm_ports: list[int], any_localhost: bool = False,
-            shared: Path | None = None, env_root: Path | None = None) -> str:
+def profile(instance_root: Path, home: Path, llm_ports: list[int], shared: Path | None = None,
+            env_root: Path | None = None) -> str:
     """The agent's own sandbox. `llm_ports` are the local ports it may connect to: its models, the embedding
-    service, its broker and its egress proxy."""
+    service, its broker and its egress proxy. The gate passes none: an instance's tests and plugin check get no
+    network at all, like `run` without its proxy. Until 2026-10-18 the gate's profile allowed any localhost port
+    (network* on "localhost:*"), so instance-written tests could reach every service on the operator's Mac — his dev
+    servers and databases, the model and embedding servers; no instance's tests used it."""
     root, home = Path(instance_root).resolve(), Path(home).resolve()
     lines = [
         "(version 1)",
@@ -133,8 +136,6 @@ def profile(instance_root: Path, home: Path, llm_ports: list[int], any_localhost
         # Network: only the given localhost ports (the internet only through the egress proxy among them).
         "(deny network*)",
     ]
-    if any_localhost:
-        lines.append('(allow network* (local ip "localhost:*") (remote ip "localhost:*"))')
     for port in llm_ports:
         lines.append(f'(allow network-outbound (remote ip "localhost:{int(port)}"))')
     return "\n".join(lines) + "\n"

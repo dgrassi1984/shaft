@@ -505,7 +505,8 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
   invariant tests and plugin checks run; failure restores the old code and the config lines the instance
   set, and tells the instance why. The supervisor's own tests run from its last commit (and the template's), in a
   clean copy under `.supervisor/gate-tests/`, never from the checkout: an edit someone is still making there cannot
-  decide a verdict. A check that runs past its time counts as failed. An edit of yours to `config.env` is never reverted or credited to the
+  decide a verdict. The plugin check and the instance's own tests run in its sandbox with no network at
+  all, like `run` without its proxy (until 2026-10-18 they could reach any localhost port of yours). A check that runs past its time counts as failed. An edit of yours to `config.env` is never reverted or credited to the
   instance: it is committed on its own ("config.env changed from outside the instance"); so is an edit of yours to
   `drive.md` ("drive.md changed by the operator"), with a note in the instance's journal that its drive changed.
 - **Trials** (`trial` tool, [PLAN-trials.md](PLAN-trials.md)): an instance can test a change to its own

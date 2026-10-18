@@ -231,7 +231,7 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = 900,
     fd, prof_name = tempfile.mkstemp(prefix="shaft-tests-", suffix=".sb")   # outside the instance
     prof = Path(prof_name)
     with os.fdopen(fd, "w") as f:
-        f.write(sandbox.profile(instance_root, home, [], any_localhost=True, env_root=env_root))
+        f.write(sandbox.profile(instance_root, home, [], env_root=env_root))
     try:
         sup_env = {**os.environ, "SHAFT_UNDER_TEST": str(instance_root)}
         sup = _stage(f"supervisor invariants ({label})",
