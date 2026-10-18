@@ -70,12 +70,17 @@ def _image_temp_names() -> list[str]:
     return [f'(allow file-read* file-write* (regex #"{name}"))']
 
 
-def _no_config_writes(root: Path) -> str:
+# Files in an instance's folder that only the operator writes directly (its sandbox cannot).
+OPERATOR_FILES = ("config.env", "drive.md")
+
+
+def _no_operator_file_writes(root: Path) -> str:
     """config.env has two writers: the operator, and the instance through the broker's set_config, which records
     each change. Writing it directly would make its changes indistinguishable from the operator's (the gate
-    reverted an operator's mid-run model switch as the instance's, kant 2026-10-13). This also stops a
-    rename, unlink or hard link of the file."""
-    return f"(deny file-write* (literal {_q(root / 'config.env')}))"
+    reverted an operator's mid-run model switch as the instance's, kant 2026-10-13). drive.md, what the instance is
+    for (PLAN-thelos.md), has one writer: the operator — the instance changes how it pursues its drive, not the
+    drive. This also stops creating, renaming, unlinking or hard-linking either file."""
+    return "(deny file-write* " + " ".join(f"(literal {_q(root / f)})" for f in OPERATOR_FILES) + ")"
 
 
 def _shared(shared: Path | None, home: Path) -> list[str]:
@@ -124,7 +129,7 @@ def profile(instance_root: Path, home: Path, llm_ports: list[int], any_localhost
         *_env_reads(root, env_root, home),
         *_image_temp_names(),
         _no_secrets(root),
-        _no_config_writes(root),
+        _no_operator_file_writes(root),
         # Network: only the given localhost ports (the internet only through the egress proxy among them).
         "(deny network*)",
     ]

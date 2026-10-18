@@ -79,6 +79,8 @@ shaft/        its code (Python, stdlib only) — prompts, tools, life loop, slee
 plugins/      tools it wrote for itself (plugins/<name>/plugin.json + main.py); first: web_research
 skills/       how-tos it writes for itself
 config.env    its LLM settings and budgets (yours to edit; it changes it only through set_config)
+drive.md      what it is for — the drive paragraph of its system prompt (yours alone: its sandbox cannot
+              write it; without one, the template's "improve yourself". Thelos: assist you, PLAN-thelos.md)
 self/         self.md (self-model), personality.md (core/surface, every trait cites the journal),
               goals.md, stats.md (written by the supervisor: achieved difficulty, where its goals
               came from, judged success, calibration, battery scores)
@@ -128,6 +130,8 @@ shaft send <name> "…"           # message it
 
 shaft update [name|--all]       # merge template fixes into instances — only when idle, gate-tested
 shaft new <name> [--from <i>]   # new instance from the template, or forked from <i> (genes, not memories)
+shaft new <name> --from <i> --seed   # …also knowing what <i> knows about you: its people file and facts.md,
+                                # marked as <i>'s beliefs in <i>'s voice — never its self, journal or episodes
 shaft breed <a> <b> <child>     # child from two instances' recombined genes, fresh mind (judge picks)
 shaft drift [name]              # how its personality changed; distance to other instances
 shaft mind status|backfill|check|cutover|guard [name]   # the private mind stores (cutover: one instance, idle)
@@ -404,7 +408,7 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
 ## Rules the supervisor enforces
 
 - **Sandbox** (macOS `sandbox-exec`): an instance writes only inside `instances/<name>/` — and not
-  its `config.env` —, reads nothing else in your home nor your places outside it (your macOS per-user temp and
+  its `config.env` or `drive.md` —, reads nothing else in your home nor your places outside it (your macOS per-user temp and
   cache folder `/var/folders/…`, `/private/tmp`, `/Users/Shared`, `/Volumes`; only the random temp names `sips`
   gives its own files are open, so an instance can turn a PDF page into an image), and connects only to the LLM port(s)
   (`SHAFT_LLM_PORTS`, default 8780), its run's broker and its run's **egress proxy**. It inherits no secrets
@@ -475,7 +479,8 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
   set, and tells the instance why. The supervisor's own tests run from its last commit (and the template's), in a
   clean copy under `.supervisor/gate-tests/`, never from the checkout: an edit someone is still making there cannot
   decide a verdict. A check that runs past its time counts as failed. An edit of yours to `config.env` is never reverted or credited to the
-  instance: it is committed on its own ("config.env changed from outside the instance").
+  instance: it is committed on its own ("config.env changed from outside the instance"); so is an edit of yours to
+  `drive.md` ("drive.md changed by the operator"), with a note in the instance's journal that its drive changed.
 - **Trials** (`trial` tool, [PLAN-trials.md](PLAN-trials.md)): an instance can test a change to its own
   code or prompts before keeping it. The supervisor runs the gate on it, rebuilds N (default 6) of its past
   autonomous cycles exactly as each began (its branch at that moment, the inbox it read), and runs each twice —
