@@ -60,7 +60,8 @@ TARGETS = ("shaft/", "plugins/", "skills/", "tests/")
 # but an arm still runs with — and a trial still refuses to change — the config it was committed with.
 CODE = (*gate.CODE_PATHS, "config.env")
 # mail/: attachments downloaded from the operator's mail (PLAN-mail.md) are copies, not state: never in the judge's diff.
-NOT_STATE = ("logs", ".tmp", "secrets", "__pycache__", ".venv", ".uv", "mail")
+# .browser/: a browser profile a replay's `run` created (PLAN-browser.md) — cookies, never shown to the judge.
+NOT_STATE = ("logs", ".tmp", "secrets", "__pycache__", ".venv", ".uv", "mail", ".browser")
 LEDGER = SUP_DIR / "trial_usage.jsonl"
 
 

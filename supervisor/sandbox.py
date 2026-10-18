@@ -141,7 +141,20 @@ def profile(instance_root: Path, home: Path, llm_ports: list[int], shared: Path 
     return "\n".join(lines) + "\n"
 
 
-RUN_WRITABLE = ("notes", "plugins", "skills", "tests", "shaft", ".tmp", ".venv", ".uv")
+RUN_WRITABLE = ("notes", "plugins", "skills", "tests", "shaft", ".tmp", ".venv", ".uv", ".browser")
+
+
+def _browser_reads(home: Path) -> list[str]:
+    """The shared Chromium (supervisor/browser.py, PLAN-browser.md), read-only — only in the sandboxes that may
+    browse: `run` (nothing but the egress proxy) and jobs. The agent's own sandbox, which its plugins inherit, carries
+    the broker token and reaches the model ports, and the gate's has no network: neither reads it, so a browser
+    started there fails to launch."""
+    from .browser import BROWSERS
+    browsers = Path(BROWSERS).resolve()
+    rules = [f"(allow file-read* (subpath {_q(browsers)}))"]
+    if (meta := _ancestors_metadata(browsers, Path(home).resolve())):
+        rules.append(meta)
+    return rules
 
 
 def _ancestors_metadata(root: Path, home: Path) -> str:
@@ -153,9 +166,10 @@ def _ancestors_metadata(root: Path, home: Path) -> str:
 def run_profile(instance_root: Path, home: Path, shared: Path | None = None, egress_port: int = 0,
                 env_root: Path | None = None) -> str:
     """Stricter than the agent's own sandbox, for commands the agent runs via the broker's `run`:
-    writes only to its working areas and its Python environment (never self/, memory/, inbox/, config.env,
-    .git), reads only its own folder in the home directory (and the operator's shared folder, if any), and
-    no network but the run's egress proxy (the public internet, nothing local)."""
+    writes only to its working areas, its Python environment and its browser profile (.browser/, PLAN-browser.md;
+    never self/, memory/, inbox/, config.env, .git), reads only its own folder in the home directory (and the
+    operator's shared folder, if any, and the shared Chromium), and no network but the run's egress proxy (the
+    public internet, nothing local)."""
     from .pyenv import DECLARED
     root = Path(instance_root).resolve()
     writable = " ".join([*(f"(subpath {_q(root / d)})" for d in RUN_WRITABLE),
@@ -166,10 +180,13 @@ def run_profile(instance_root: Path, home: Path, shared: Path | None = None, egr
 def job_profile(instance_root: Path, home: Path, state_dir: Path, shared: Path | None = None, egress_port: int = 0,
                 broker_port: int = 0, env_root: Path | None = None) -> str:
     """For a scheduled job (PLAN-jobs.md): the `run` sandbox, but writes only to the job's own state folder
-    (.jobs/<plugin>/) and .tmp/ — a cycle running at the same time works on the code, notes and mind, and nothing
-    of the job's may be mistaken for its change — and the network adds the job's own broker (its supervisor tools)."""
+    (.jobs/<plugin>/), .tmp/ and its browser profile — a cycle running at the same time works on the code, notes and
+    mind, and nothing of the job's may be mistaken for its change (the profile is never code and never committed) —
+    and the network adds the job's own broker (its supervisor tools)."""
+    from .browser import PROFILE
     root = Path(instance_root).resolve()
-    writable = f"(subpath {_q(Path(state_dir).resolve())}) (subpath {_q(root / '.tmp')})"
+    writable = (f"(subpath {_q(Path(state_dir).resolve())}) (subpath {_q(root / '.tmp')}) "
+                f"(subpath {_q(root / PROFILE)})")
     return _command_profile(root, home, writable, shared, [p for p in (egress_port, broker_port) if p], env_root)
 
 
@@ -187,6 +204,7 @@ def _command_profile(root: Path, home: Path, writable: str, shared: Path | None,
         _ancestors_metadata(root, home),
         *_shared(shared, home),
         *_env_reads(root, env_root, home),
+        *_browser_reads(home),
         *_image_temp_names(),
         _no_secrets(root),
         "(deny network*)",

@@ -228,6 +228,7 @@ def render_instance(snap, ui, width, height):
     row("calendar", d["calendar"] or "none")
     row("jobs", d.get("jobs") or "none")
     row("python", d["python"], "yellow" if "BROKEN" in d["python"] else "")
+    row("browser", d["browser"], "yellow" if "not installed" in d["browser"] else "")
     row("internet", d["internet"])
     if d["questions"]:
         sec(f"Open questions to you ({len(d['questions'])}) — r replies to the oldest")

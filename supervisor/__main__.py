@@ -940,6 +940,10 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("share", help="a folder of yours an instance may read (read-only, seen as shared/); 'off' removes it")
     p.add_argument("name")
     p.add_argument("folder", nargs="?", help="a directory, or 'off'")
+    p = sub.add_parser("browser", help="the Chromium every instance browses with (PLAN-browser.md): 'install "
+                                       "[--playwright X.Y.Z]' (re)installs it; alone shows it and each profile")
+    p.add_argument("action", nargs="?", choices=["install"])
+    p.add_argument("--playwright", default=None, help="install: the Playwright version (default: the supervisor's pin)")
     p = sub.add_parser("google", help="your Google accounts, for mail and calendar: 'login <alias> <address> "
                                       "[--client <name>]' (both scopes, read-only), 'migrate' (from .supervisor/mail/); "
                                       "alone lists them with their clients and granted scopes")
@@ -1051,6 +1055,14 @@ def main(argv: list[str]) -> int:
         return cmd_secret(args)
     if args.cmd == "share":
         return cmd_share(args.name, args.folder)
+    if args.cmd == "browser":
+        from . import browser
+        if args.action == "install":
+            return browser.install(args.playwright or browser.PLAYWRIGHT)
+        print(f"shared Chromium: {browser.describe_install()} ({browser.BROWSERS})")
+        for name in instance_names():
+            print(f"  {name}: {browser.describe(INSTANCES / name)}")
+        return 0
     if args.cmd == "google":
         return cmd_google(args.action, args.alias, args.address, args.client)
     if args.cmd == "mail":

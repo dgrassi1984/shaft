@@ -17,6 +17,11 @@ __pycache__/
 /.venv-bonsai/
 /.venv-ui/
 
+# the Chromium every instance browses with (shaft browser install, PLAN-browser.md); .new/.old while it is replaced
+/.browsers/
+/.browsers.new/
+/.browsers.old/
+
 # BEGIN agent-workflows
 # Generated skill wrappers — do not commit. Refresh with:
 #   python3 ~/Development/agent-workflows/scripts/gen_agent_wrappers.py --repo .

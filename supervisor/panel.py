@@ -17,7 +17,7 @@ import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from . import egress, pyenv
+from . import browser, egress, pyenv
 from .core import (SUP_DIR, calendar_grants, disabled_tools, git, instance_config, instance_names, instance_root,
                    journal_entries, knob, mail_grants, paused, shared_folder)
 from . import selfhosted
@@ -208,6 +208,7 @@ def instance_detail(name: str) -> dict:
             "calendar": "; ".join(f"{g['account']}/{g['name']}" for g in calendar_grants(name)),
             "jobs": _jobs_summary(name),
             "python": pyenv.describe(root),
+            "browser": browser.describe(root),
             "internet": egress.summary(egress.recent(egress.log_path(name), 2000), date.today().isoformat()),
             "stats": stats.read_text(errors="replace") if stats.exists() else "(no stats yet)",
             "journal": heads, "probation": probation, "questions": questions,
