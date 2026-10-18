@@ -5,6 +5,10 @@ account's refresh token in .supervisor/google/<alias>.json (0600, outside every 
 issued it and the scopes Google actually granted; instances never hold a credential. mail.py and calendar.py enforce
 their own grants on top of an `Account`; nothing here knows about labels or calendars.
 
+An instance's own Google account (PLAN-own-mail.md: Thelos's Gmail) is not the operator's: its login is a `google`
+key in the instance's key store (`instance_key_login`), refreshed by the broker (`refresh`) and added to its
+http_request calls like any key. It may never be one of the operator's accounts (`operator_addresses`).
+
 `urlopen` is the one door to Google; the tests put a fake Google behind it.
 """
 from __future__ import annotations
@@ -30,8 +34,12 @@ AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 GMAIL = "https://www.googleapis.com/auth/gmail.readonly"
 CALENDAR = "https://www.googleapis.com/auth/calendar.readonly"
+GMAIL_MODIFY = "https://www.googleapis.com/auth/gmail.modify"
 SCOPES = (GMAIL, CALENDAR)                            # one login asks for both
-SCOPE_NAMES = {GMAIL: "gmail.readonly", CALENDAR: "calendar.readonly"}
+SCOPE_NAMES = {GMAIL: "gmail.readonly", CALENDAR: "calendar.readonly", GMAIL_MODIFY: "gmail.modify"}
+# What an instance's own Google key may be granted, and the hosts its token is good for (the key is bound to them).
+# gmail.modify: read, send, label, trash; never a permanent delete, the settings or anything outside Gmail.
+KEY_SCOPES = {"gmail.modify": (GMAIL_MODIFY, ("gmail.googleapis.com",))}
 GMAIL_PROFILE = "https://gmail.googleapis.com/gmail/v1/users/me/profile"
 CALENDAR_PRIMARY = "https://www.googleapis.com/calendar/v3/calendars/primary"
 ALIAS_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
@@ -190,6 +198,26 @@ def _retry_after(e: urllib.error.HTTPError) -> float:
         return 0.0
 
 
+def refresh(client: str, refresh_token: str, secrets_env: dict[str, str], who: str, again: str) -> tuple[str, float]:
+    """A fresh access token from a refresh token, with the OAuth client that issued it: (token, expiry as a Unix
+    time). `who` names the login in an error and `again` is the command that redoes it; a refused refresh never
+    comes back as an empty answer. The one refresh path, for operator accounts and instance keys alike."""
+    cid, secret = _client(client, secrets_env)
+    try:
+        data = _post_form(TOKEN_URL, {"client_id": cid, "client_secret": secret, "grant_type": "refresh_token",
+                                      "refresh_token": refresh_token})
+    except urllib.error.HTTPError as e:
+        raise AccountError(f"{who}: Google refused its login ({_error_text(e)}); the operator runs `{again}` "
+                           "again") from None
+    return data["access_token"], time.time() + int(data.get("expires_in") or 3600)
+
+
+def operator_addresses() -> set[str]:
+    """The addresses of the operator's own Google accounts (casefolded): never an instance's own key, which has no
+    label check, so the operator's mailbox would be read whole (PLAN-own-mail.md, D2)."""
+    return {str(a.get("address") or "").casefold() for a in accounts().values()} - {""}
+
+
 def _post_form(url: str, form: dict) -> dict:
     req = urllib.request.Request(url, data=urllib.parse.urlencode(form).encode(), method="POST",
                                  headers={"Content-Type": "application/x-www-form-urlencoded"})
@@ -241,15 +269,10 @@ class Account:
                 raise AccountError(f"Google account {self.alias!r} ({saved.get('address', '?')}) names no OAuth client; "
                                    f"the operator runs `shaft google login {self.alias} "
                                    f"{saved.get('address', '<address>')} --client <name>` again")
-            cid, secret = _client(saved["client"], self.secrets)
-            try:
-                data = _post_form(TOKEN_URL, {"client_id": cid, "client_secret": secret, "grant_type": "refresh_token",
-                                              "refresh_token": saved["refresh_token"]})
-            except urllib.error.HTTPError as e:
-                raise AccountError(f"Google account {self.alias!r} ({saved.get('address', '?')}): Google refused its "
-                                   f"login ({_error_text(e)}); the operator runs `shaft google login {self.alias} "
-                                   f"{saved.get('address', '<address>')} --client {saved['client']}` again") from None
-            self._token, self._expires = data["access_token"], time.time() + int(data.get("expires_in") or 3600)
+            self._token, self._expires = refresh(
+                saved["client"], saved["refresh_token"], self.secrets,
+                f"Google account {self.alias!r} ({saved.get('address', '?')})",
+                f"shaft google login {self.alias} {saved.get('address', '<address>')} --client {saved['client']}")
             return self._token
 
     def get(self, url: str, **params) -> dict:
@@ -286,12 +309,12 @@ class Account:
 def _signed_in_as(access_token: str, granted: set[str]) -> str:
     """The account the token belongs to, read with a scope it was granted: Gmail's profile, else the primary
     calendar (whose ID is the account's address)."""
-    if GMAIL in granted:
+    if granted & {GMAIL, GMAIL_MODIFY}:
         url, field = GMAIL_PROFILE, "emailAddress"
     elif CALENDAR in granted:
         url, field = CALENDAR_PRIMARY, "id"
     else:
-        raise AccountError("Google granted neither gmail.readonly nor calendar.readonly: nothing saved")
+        raise AccountError("Google granted no Gmail or Calendar scope: nothing saved")
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {access_token}"})
     with urlopen(req, timeout=30) as resp:
         return str(json.load(resp).get(field, ""))
@@ -304,9 +327,38 @@ def login(alias: str, address: str, secrets_env: dict[str, str], client: str = "
     issued it and the scopes Google granted (the consent page lets the operator untick one). Nothing is saved unless
     every step succeeds."""
     client = client or alias
-    import webbrowser
     if not ALIAS_RE.match(alias or ""):
         raise AccountError(f"{alias!r} is not an alias: lowercase letters, digits, -, starting with a letter (e.g. example-co)")
+    data = consent(address, client, SCOPES, secrets_env, open_url=open_url, timeout_s=timeout_s)
+    _save_account(alias, data)
+    return data
+
+
+def instance_key_login(address: str, client: str, scope: str, secrets_env: dict[str, str], open_url=None,
+                       timeout_s: int = 300) -> dict:
+    """The consent flow for an instance's own Google account (PLAN-own-mail.md): one scope from KEY_SCOPES, never
+    an operator account (checked before the browser opens and again on the address Google signed in). Returns the
+    key's fields for core.store_google_key; nothing is stored here."""
+    if scope not in KEY_SCOPES:
+        raise AccountError(f"an instance's Google key may be granted {', '.join(KEY_SCOPES)}, not {scope!r}")
+    if (address or "").casefold() in operator_addresses():
+        raise AccountError(f"{address} is one of your own Google accounts (shaft google): an instance never holds it "
+                           "as a key; grant it labels or calendars instead (shaft mail, shaft calendar)")
+    url, hosts = KEY_SCOPES[scope]
+    data = consent(address, client, (url,), secrets_env, open_url=open_url, timeout_s=timeout_s, incremental=False)
+    if data["address"].casefold() in operator_addresses():
+        raise AccountError(f"signed in as {data['address']}, one of your own Google accounts: nothing saved")
+    if url not in scopes(data):
+        raise AccountError(f"Google did not grant {scope} (it granted {data['scope'] or 'nothing'}): nothing saved")
+    return {"kind": "google", **data, "hosts": list(hosts)}
+
+
+def consent(address: str, client: str, wanted: tuple[str, ...], secrets_env: dict[str, str], open_url=None,
+            timeout_s: int = 300, incremental: bool = True) -> dict:
+    """Google's consent flow with OAuth client `client` for `wanted` scopes, on a loopback redirect with PKCE and a
+    state check, signed in as `address`: {address, client, refresh_token, scope, created}. `incremental` keeps
+    scopes this client was granted before (an operator login); an instance key asks only for what it needs."""
+    import webbrowser
     if "@" not in (address or ""):
         raise AccountError(f"{address!r} is not an email address")
     cid, secret = _client(client, secrets_env)
@@ -333,8 +385,8 @@ def login(alias: str, address: str, secrets_env: dict[str, str], client: str = "
     verifier = secrets.token_urlsafe(64)
     state = secrets.token_urlsafe(16)
     url = AUTH_URL + "?" + urllib.parse.urlencode({
-        "client_id": cid, "redirect_uri": redirect, "response_type": "code", "scope": " ".join(SCOPES),
-        "include_granted_scopes": "true", "access_type": "offline", "prompt": "consent", "login_hint": address,
+        "client_id": cid, "redirect_uri": redirect, "response_type": "code", "scope": " ".join(wanted),
+        "include_granted_scopes": "true" if incremental else "false", "access_type": "offline", "prompt": "consent", "login_hint": address,
         "state": state, "code_challenge_method": "S256",
         "code_challenge": base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()})
     try:
@@ -364,7 +416,5 @@ def login(alias: str, address: str, secrets_env: dict[str, str], client: str = "
     me = _signed_in_as(tok["access_token"], granted)
     if me.casefold() != address.casefold():
         raise AccountError(f"signed in as {me or 'an unknown account'}, not {address}: nothing saved")
-    data = {"address": me, "client": client, "refresh_token": tok["refresh_token"],
+    return {"address": me, "client": client, "refresh_token": tok["refresh_token"],
             "scope": " ".join(s for s in sorted(granted)), "created": datetime.now().isoformat(timespec="seconds")}
-    _save_account(alias, data)
-    return data

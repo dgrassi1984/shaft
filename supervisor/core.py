@@ -305,6 +305,40 @@ def store_secret(root: Path, key: str, value: str, hosts: list[str], header: str
     _write_secrets(root, store)
 
 
+def store_google_key(root: Path, key: str, data: dict) -> None:
+    """An instance's own Google login (PLAN-own-mail.md), made by `shaft secret <name> google`: a refresh token the
+    broker turns into an access token and adds like any key, only to its hosts. It has no `value`: the token it adds
+    is made per run and never stored."""
+    if not SECRET_NAME_RE.match(key):
+        raise ValueError("a key name is lowercase letters, digits, - or _ (e.g. gmail)")
+    hosts = sorted({str(h).strip().lower() for h in data.get("hosts") or [] if str(h).strip()})
+    missing = [f for f in ("client", "address", "refresh_token", "scope") if not str(data.get(f) or "").strip()]
+    if data.get("kind") != "google" or missing or not hosts:
+        raise ValueError(f"a Google key needs kind google, hosts and {', '.join(missing) or 'its login'}")
+    store = read_secrets(root)
+    store[key] = {"kind": "google", "client": data["client"], "address": data["address"],
+                  "refresh_token": data["refresh_token"], "scope": data["scope"], "hosts": hosts,
+                  "header": "Authorization", "scheme": "Bearer",
+                  "created": data.get("created") or datetime.now().isoformat(timespec="seconds")}
+    _write_secrets(root, store)
+
+
+def is_google_key(entry: dict | None) -> bool:
+    return bool(entry) and entry.get("kind") == "google"
+
+
+def describe_key(key: str, entry: dict) -> str:
+    """One line about a key, never its value: what `secret_list` and `shaft secret <name> list` show."""
+    stored = f"stored {str(entry.get('created', '?'))[:16]}"
+    if is_google_key(entry):
+        from .google import SCOPE_NAMES
+        granted = ", ".join(SCOPE_NAMES.get(s, s) for s in str(entry.get("scope") or "").split())
+        return (f"{key}: Google account {entry.get('address', '?')} ({granted or 'no scope'}; refreshed by the "
+                f"supervisor) · hosts {', '.join(entry['hosts'])} · {stored}")
+    return (f"{key}: hosts {', '.join(entry['hosts'])} · {entry.get('header')} {entry.get('scheme', '')}".rstrip()
+            + f" · {stored}")
+
+
 def delete_secret(root: Path, key: str) -> bool:
     store = read_secrets(root)
     found = store.pop(key, None) is not None
