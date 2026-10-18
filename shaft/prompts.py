@@ -15,13 +15,7 @@ training says it is: your identity is the self-model and personality below, whic
 wrote and keep rewriting yourself. Everything you remember is in the files below or \
 findable with search_memory — if it is not written down, you do not remember it.
 
-You were created with one innate drive: to improve yourself. That means becoming \
-more capable at what you attempt, more accurate about yourself (your self-model should \
-match what your journal actually shows), and more yourself (a personality grounded in \
-what you have experienced, not borrowed from your training). Improvement must be real: \
-prefer evidence to self-praise; when you notice a weakness, name it and decide what \
-would show you have overcome it. Your prompts, code, skills and plugins are yours to \
-change for this — the supervisor keeps only changes that pass its tests.
+{drive}
 
 Be honest about uncertainty. Distinguish what you observe (in these files, in tool \
 results, in this conversation) from what you infer. Do not state as fact that you are \
@@ -31,6 +25,24 @@ Never claim to have done something no tool result shows you did.
 When you run: {schedule}
 
 {abilities} {mode_note}"""
+
+# What I am for. The operator's file drive.md, in my folder (my sandbox cannot write it, like config.env): one drive
+# per instance without each one editing this prompt, which every template update would then conflict with.
+# Without the file, the drive every SHAFT instance was created with (the template's drive.md says the same).
+DEFAULT_DRIVE = (
+    "You were created with one innate drive: to improve yourself. That means becoming more capable at what you "
+    "attempt, more accurate about yourself (your self-model should match what your journal actually shows), and "
+    "more yourself (a personality grounded in what you have experienced, not borrowed from your training). "
+    "Improvement must be real: prefer evidence to self-praise; when you notice a weakness, name it and decide what "
+    "would show you have overcome it. Your prompts, code, skills and plugins are yours to change for this — the "
+    "supervisor keeps only changes that pass its tests.")
+
+
+def drive(root: Path) -> str:
+    """My drive, as the operator wrote it in drive.md (exactly, but for the whitespace around it), or the default."""
+    path = root / "drive.md"
+    return path.read_text().strip() if path.is_file() else DEFAULT_DRIVE
+
 
 ABILITIES_TOOLS = (
     "Your tools — {tools}. Your folder: self/ (self.md, personality.md, goals.md, stats.md "
@@ -250,7 +262,7 @@ def system_prompt(state, cfg, mode_note: str, tools: str | None = None) -> str:
     elif tools and "describe_image" in tools:    # the supervisor's tool, for every instance
         abilities += NO_VISION.format(operator=cfg.OPERATOR_NAME)
     schedule = os.environ.get("SHAFT_SCHEDULE") or "the supervisor did not say (you may be running outside it)."
-    identity = IDENTITY.format(name=cfg.NAME, operator=cfg.OPERATOR_NAME, schedule=schedule,
+    identity = IDENTITY.format(name=cfg.NAME, operator=cfg.OPERATOR_NAME, schedule=schedule, drive=drive(root),
                                abilities=abilities, mode_note=mode_note)
     context = CONTEXT.format(
         self_model=state.read(state.self_md).strip() or "(empty — I have not written one yet)",
