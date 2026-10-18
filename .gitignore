@@ -17,3 +17,6 @@ secrets/
 mail/
 # my scheduled jobs' own state (.jobs/<plugin>/): a cache the job keeps between runs, never committed
 .jobs/
+
+# my browser profile (.browser/): my sessions and the passwords of my own accounts, never committed or copied
+.browser/
