@@ -605,6 +605,7 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
                              "My changes to " + ", ".join(undone) + " were reverted because the tests "
                              "failed. Last lines of the test output:\n\n```\n" + test_log[-1500:] + "\n```")
     _commit_outside_config(name, root, list(config_writes) if "config.env" in kept else [])
+    _commit_outside_drive(name, root)
     applied = [h for h in handoffs if h.get("applied")]
     note = "\n".join(f"Delegated to {h['model']} at the instance's request (${h['usd']:.2f}): {h['summary'][:300]} "
                      f"[{', '.join(h['files'])}]" for h in applied)
@@ -668,6 +669,37 @@ def _commit_outside_config(name: str, root: Path, writes: list[dict]) -> None:
         log(f"{name}: could not commit config.env changed from outside: {(e.stderr or e.stdout or '').strip()}")
         return
     log(f"{name}: committed config.env changed from outside the instance: {diff}")
+
+
+def _commit_outside_drive(name: str, root: Path) -> None:
+    """drive.md (what the instance is for, PLAN-thelos.md) as the operator left it, committed on its own: only he
+    writes it (the sandbox denies the instance), so any difference from HEAD is his. Uncommitted, it would stop
+    `shaft update` (dirty worktree) and ride along in the instance's next commit as if it were its change. The
+    instance is told in its journal: what it believes about its purpose may now be out of date."""
+    path = root / "drive.md"
+    if path.is_symlink() or path.is_dir():
+        return
+    if not git_wt(root, "status", "--porcelain", "--untracked-files=all", "--", "drive.md").stdout.strip():
+        return
+    try:
+        if [p for p in git_wt(root, "diff", "--cached", "--name-only", "-z").stdout.split("\0") if p]:
+            log(f"{name}: drive.md changed from outside, not committed: other changes are staged")
+            return
+        git_wt(root, "add", "-A", "--", "drive.md")
+        gone = not path.exists()
+        git_wt(root, "-c", "user.name=SHAFT supervisor", "-c", "user.email=supervisor@shaft.localhost", "commit",
+               "-q", "-m", f"{name}: drive.md changed by the operator\n\nNot the instance's change (its sandbox cannot "
+               "write drive.md). " + ("Removed: the default drive applies." if gone else "Its drive is now:\n\n"
+                                      + path.read_text().strip()), "--", "drive.md")
+    except subprocess.CalledProcessError as e:
+        log(f"{name}: could not commit drive.md changed from outside: {(e.stderr or e.stdout or '').strip()}")
+        return
+    journal_note(root, "My drive was changed by the operator",
+                 ("The operator removed my drive.md: I am back to the drive every SHAFT instance starts with."
+                  if gone else "The operator set what I am for (drive.md, in my system prompt from now on):\n\n"
+                  + path.read_text().strip())
+                 + "\n\nWhat my self-model and goals say about my purpose may now be out of date.")
+    log(f"{name}: committed drive.md changed by the operator")
 
 
 class Turn:

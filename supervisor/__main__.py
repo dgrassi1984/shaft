@@ -25,19 +25,47 @@ from pathlib import Path
 
 from . import autonomy, evolution, finetune, gate, messages, metrics, mind, runner, surprise, version
 from .core import (DEFAULT_INSTANCE, HOME, INSTANCES, MIND_PATHS, add_all_but_mind, NAME_RE, PROJECT, SUP_DIR, TEMPLATE, commit_state,
-                   git, git_wt, instance_names, instance_root, journal_entries, journal_note, log, paused,
+                   git, git_wt, instance_config, instance_names, instance_root, journal_entries, journal_note, log, paused,
                    safe_mkdir, safe_write)
 from .runner import (Busy, busy_with, is_busy, model_server, request_yield, run_agent, run_lock, sharing_model,
                      spawn_recover)
 
 
 # -- instances -------------------------------------------------------------------
-def cmd_new(name: str, source: str | None) -> int:
+def _seed_paths(operator: str) -> tuple[str, str]:
+    return f"memory/people/{operator.lower().replace(' ', '-')}.md", "memory/facts.md"   # as the agent's sleep names it
+
+
+def _seed_files(source: str) -> tuple[str, dict[str, str]]:
+    """What `new --seed` copies from the parent's mind (its store's HEAD, not its worktree, which a cycle may be
+    writing): what it knows about the operator — memory/people/<operator>.md and memory/facts.md — and nothing of
+    itself. Returns the operator's name and {path: text} of the files it has. Raises ValueError if it cannot."""
+    operator = instance_config(source).get("OPERATOR_NAME", "")
+    if not operator:
+        raise ValueError(f"{source}'s config.env sets no OPERATOR_NAME: whose people file to seed is unknown")
+    head = mind.head(source)
+    if head is None:
+        raise ValueError(f"{source} has no mind store at {mind.store(source)} to seed from")
+    return operator, {p: text for p in _seed_paths(operator) if (text := mind.show(source, head, p))}
+
+
+def _seeded(text: str, source: str, operator: str) -> str:
+    """A seeded file with where it came from, under its heading: the parent wrote it, in its own voice ("me" in it
+    is the parent), citing a journal the child cannot read."""
+    note = (f"> Seeded {date.today():%Y-%m-%d} from {source}'s memory: {source}'s beliefs about {operator}, written in "
+            f"{source}'s voice (\"I\" and \"me\" here mean {source}, not me). A [YYYY-MM-DD HH:MM] citation refers to "
+            f"{source}'s journal, which I cannot read: re-check a claim before relying on it.\n")
+    first, _, rest = text.partition("\n")
+    return f"{first}\n\n{note}{rest}" if first.startswith("# ") else f"{note}\n{text}"
+
+
+def cmd_new(name: str, source: str | None, seed: bool = False) -> int:
     """Create instance/<name> forked from `template` (or from another instance's branch).
 
     A fork inherits code, skills and plugins (its "genes"), never the parent's mind:
     self-model, personality, goals, journal, episodes and notes start fresh. The lineage
-    stays in git history.
+    stays in git history. With `seed`, it also starts knowing what the parent knows about the operator
+    (its people file and facts, marked as the parent's), never what the parent is (PLAN-thelos.md).
     """
     if not NAME_RE.match(name) or name == "operator":
         print("instance names: lowercase letters, digits and '-', starting with a letter (not 'operator')",
@@ -51,8 +79,17 @@ def cmd_new(name: str, source: str | None) -> int:
         print(f"a mind store for {name!r} already exists at {mind.store(name)} (an earlier instance of that name); "
               "move it away first", file=sys.stderr)
         return 2
+    if seed and not source:
+        print("--seed copies from a parent instance: name it with --from", file=sys.stderr)
+        return 2
     if source:
         instance_root(source)
+    if seed:
+        try:
+            operator, seeds = _seed_files(source)
+        except ValueError as e:
+            print(f"cannot seed from {source}: {e}", file=sys.stderr)
+            return 2
     base = f"instance/{source}" if source else "template"
     INSTANCES.mkdir(exist_ok=True)
     git("worktree", "add", "-q", "-b", f"instance/{name}", str(root), base)
@@ -67,8 +104,15 @@ def cmd_new(name: str, source: str | None) -> int:
     safe_write(root, "self/goals.md", "# Goals & Open Questions\n\n(none yet — mine to set)\n")
     origin = f"forked from {source} (code, skills and plugins only, not its memories)" if source \
         else "from the SHAFT template"
+    if seed:
+        for path, text in seeds.items():
+            safe_write(root, path, _seeded(text, source, operator))
+        origin = (f"forked from {source} (code, skills and plugins; of its memories only what it knows about "
+                  f"{operator}: {', '.join(seeds) or 'none, it had neither file'})")
     safe_write(root, "memory/journal.md", f"# {name} — journal\n")
-    journal_note(root, "Created", f"I was created by the supervisor {origin}. My memory starts here.")
+    journal_note(root, "Created", f"I was created by the supervisor {origin}. My memory starts here."
+                 + (f" The seeded files are {source}'s beliefs, in {source}'s voice; my own sleeps will make them mine."
+                    if seed and seeds else ""))
     message = f"{name}: created {origin}"
     add_all_but_mind(root)
     git_wt(root, "commit", "-q", "--allow-empty", "-m", message)   # from the template: no code change, the lineage
@@ -76,6 +120,10 @@ def cmd_new(name: str, source: str | None) -> int:
     mind.commit(name, message, root)
     log(f"created instance {name} on instance/{name} {origin}, its mind in {mind.store(name)}")
     print(f"created {name} (branch instance/{name}, worktree {root.relative_to(PROJECT)})")
+    if seed:
+        missing = [p for p in _seed_paths(operator) if p not in seeds]
+        print(f"seeded from {source}: {', '.join(seeds) or 'nothing'}"
+              + (f" ({source} has no {', '.join(missing)})" if missing else ""))
     return 0
 
 
@@ -138,6 +186,7 @@ def cmd_update(names: list[str]) -> int:
         try:
             with run_lock(name, wait=False, kind="update"):
                 runner._commit_outside_config(name, root, [])
+                runner._commit_outside_drive(name, root)
                 dirty = git_wt(root, "status", "--porcelain", "--untracked-files=no").stdout.rstrip()
                 if dirty:
                     print(f"{name}: uncommitted changes in its worktree, not updated — commit or discard them "
@@ -823,6 +872,9 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("new", help="create an instance")
     p.add_argument("name")
     p.add_argument("--from", dest="source", help="fork code, skills and plugins (not memory) from this instance")
+    p.add_argument("--seed", action="store_true",
+                   help="with --from: also start knowing what the parent knows about you (its people file and "
+                        "facts, marked as its own), never what it is")
     for verb in ("pause", "resume"):
         p = sub.add_parser(verb, help=f"{verb} autonomous runs (all, or one instance)")
         p.add_argument("name", nargs="?")
@@ -1040,7 +1092,7 @@ def main(argv: list[str]) -> int:
     if args.cmd == "update":
         return cmd_update(instance_names() if args.all else (args.names or [DEFAULT_INSTANCE]))
     if args.cmd == "new":
-        return cmd_new(args.name, args.source)
+        return cmd_new(args.name, args.source, args.seed)
     if args.cmd in ("pause", "resume"):
         if args.name:
             instance_root(args.name)
