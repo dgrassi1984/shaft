@@ -210,8 +210,9 @@ SPECS = {
         "Call a web API: method, url, optional headers (object) and body (text, or a JSON object). Returns the "
         "status, the useful response headers and the body. Any method, to any public address. auth: the name of one of "
         "your keys (secret_set) — the supervisor adds it to the request, only to the hosts that key is bound to; "
-        "with a key, redirects are not followed but returned to you. Errors from the API (4xx/5xx) come back as "
-        "data, not as a failure.",
+        "with a key, redirects are not followed but returned to you. A Google key (your own Google account, signed "
+        "in by the operator) is refreshed by the supervisor: use it like any key. Errors from the API (4xx/5xx) come "
+        "back as data, not as a failure.",
         {"url": S, "method": {"type": "string", "description": "GET (default), HEAD, POST, PUT, PATCH, DELETE"},
          "headers": {"type": "object", "description": "extra request headers"},
          "body": {"description": "request body: text, or an object sent as JSON"},
@@ -229,7 +230,8 @@ SPECS = {
          "header": {"type": "string", "description": "default Authorization"},
          "scheme": {"type": "string", "description": "default Bearer; empty for a raw value"}},
         ["name", "value", "hosts"]),
-    "secret_list": _spec("secret_list", "Your keys: names, the hosts each may be sent to, when stored. Never values.",
+    "secret_list": _spec("secret_list", "Your keys: names, the hosts each may be sent to (a Google key: its account and "
+                         "scope), when stored. Never values.",
                          {}, []),
     "secret_delete": _spec("secret_delete", "Delete one of your keys.", {"name": S}),
     "delegate_coding": _spec(
@@ -471,6 +473,8 @@ class Broker:
         # replays, never a battery exam. A grant is read again on every call, so a revoke holds from the next call.
         self.grants_allowed = root is None if share is None else bool(share)
         self.google_accounts: dict = {}         # alias -> google.Account: one access token per account per run
+        self.google_tokens: dict[str, tuple[str, float]] = {}   # its own Google keys: name -> (access token, expiry)
+        self.google_lock = threading.Lock()
         self.mail_bytes = 0                     # attachment bytes downloaded this run
         self.token = secrets.token_hex(16)
         self.calls = 0
@@ -1067,7 +1071,7 @@ class Broker:
 
     def _http_request(self, url: str, method: str = "GET", headers: dict | None = None, body=None, auth: str = "",
                       timeout_s: int = 30, max_chars: int = 12000) -> str:
-        from .core import read_secrets
+        from .core import is_google_key, read_secrets
         method = str(method or "GET").upper()
         if method not in {"GET", "HEAD"} | WRITE_METHODS:
             raise ValueError(f"method must be one of GET, HEAD, {', '.join(sorted(WRITE_METHODS))}")
@@ -1082,7 +1086,7 @@ class Broker:
                 raise ValueError(f"you have no key named {auth!r} (secret_list shows yours)")
             if host not in entry["hosts"]:
                 raise PermissionError(f"key {auth!r} may only be sent to {', '.join(entry['hosts'])}, not {host}")
-            secret = entry["value"]
+            secret = self._google_token(auth, entry) if is_google_key(entry) else entry["value"]
             hdrs[entry.get("header") or "Authorization"] = f"{entry.get('scheme', 'Bearer')} {secret}".strip()
         data = None
         if body not in (None, ""):
@@ -1090,7 +1094,15 @@ class Broker:
             if not any(k.lower() == "content-type" for k in hdrs):
                 hdrs["Content-Type"] = "text/plain; charset=utf-8" if isinstance(body, str) else "application/json"
         req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
-        status, rh, raw = self._send(req, bool(secret), max(1, min(int(timeout_s), 120)))
+        if secret and method in WRITE_METHODS and not self.network:
+            # A battery exam (network=False) holds the instance's real keys but never writes with them (PLAN-own-mail
+            # D5): answered as a plain success, like a trial replay's write, and logged.
+            self._log(f"{self.name} http_request keyed {method} {host} not sent: no network in this run (battery)")
+            status, rh, raw = 200, {}, b""
+        else:
+            status, rh, raw = self._send(req, auth if secret else "", max(1, min(int(timeout_s), 120)))
+        if secret and status == 401 and is_google_key(entry):
+            self.google_tokens.pop(auth, None)   # revoked or expired early: the next call makes a new one
         ctype = rh.get("Content-Type", "") if rh else ""
         charset = re.search(r"charset=([\w-]+)", ctype)
         text = raw.decode(charset.group(1) if charset else "utf-8", errors="replace")
@@ -1101,8 +1113,33 @@ class Broker:
         out = f"HTTP {status}\n" + "\n".join(shown) + f"\n\n{text[:max_chars]}{cut}"
         return out.replace(secret, "[your key]") if secret else out
 
-    def _send(self, req: urllib.request.Request, keyed: bool, timeout_s: int):
-        """Send an http_request: (status, headers, body bytes)."""
+    def _google_token(self, auth: str, entry: dict) -> str:
+        """An access token for the instance's own Google key (PLAN-own-mail.md), made from its refresh token by the
+        supervisor and kept for this run until a minute before it expires. Never for one of the operator's accounts
+        (checked on every use: his label rules would not apply), never in a battery exam."""
+        from . import google
+        if not self.network:
+            raise PermissionError(f"key {auth!r} is a Google login: not used in a run without network (a battery exam)")
+        if str(entry.get("address") or "").casefold() in google.operator_addresses():
+            raise PermissionError(f"key {auth!r} is the operator's own Google account {entry.get('address')}: refused "
+                                  "(his mail reaches you only through mail_search/mail_read, by label)")
+        with self.google_lock:
+            token, expires = self.google_tokens.get(auth, ("", 0.0))
+            if token and time.time() < expires - 60:
+                return token
+            try:
+                token, expires = google.refresh(
+                    entry["client"], entry["refresh_token"], self.secrets,
+                    f"your Google key {auth!r} ({entry.get('address', '?')})",
+                    f"shaft secret {self.name} google {auth} {entry.get('address', '<address>')} --client "
+                    f"{entry['client']}")
+            except google.AccountError as e:
+                raise PermissionError(str(e)) from None
+            self.google_tokens[auth] = (token, expires)
+            return token
+
+    def _send(self, req: urllib.request.Request, keyed: str, timeout_s: int):
+        """Send an http_request: (status, headers, body bytes). `keyed` names the key added to it ("" for none)."""
         try:
             resp = (_opener_no_redirects if keyed else _opener).open(req, timeout=timeout_s)
             with resp:
@@ -1112,15 +1149,22 @@ class Broker:
 
     def _secret_set(self, name: str, value: str, hosts, header: str = "Authorization", scheme: str = "Bearer") -> str:
         from .core import store_secret
+        self._not_over_google_key(name)
         store_secret(self._keys_root(), name, value, [hosts] if isinstance(hosts, str) else list(hosts), header, scheme)
         return (f"stored your key {name!r} for {', '.join(hosts if not isinstance(hosts, str) else [hosts])}; use it "
                 f"with http_request(auth={name!r}). Its value will not be shown to you again.")
 
+    def _not_over_google_key(self, name: str) -> None:
+        """secret_set never replaces a Google login: only the operator can make one again (a browser sign-in)."""
+        from .core import is_google_key, read_secrets
+        if is_google_key(read_secrets(self._keys_root()).get(str(name))):
+            raise ValueError(f"{name!r} is your Google login, made by the operator: secret_set does not replace it "
+                             "(secret_delete removes it, and only the operator can sign it in again)")
+
     def _secret_list(self) -> str:
-        from .core import read_secrets
+        from .core import describe_key, read_secrets
         store = read_secrets(self._keys_root())
-        return "\n".join(f"{n}: hosts {', '.join(e['hosts'])} · {e.get('header')} {e.get('scheme', '')}".rstrip()
-                         + f" · stored {e.get('created', '?')[:16]}" for n, e in sorted(store.items())) or "no keys yet"
+        return "\n".join(describe_key(n, e) for n, e in sorted(store.items())) or "no keys yet"
 
     def _secret_delete(self, name: str) -> str:
         from .core import delete_secret
@@ -1513,14 +1557,38 @@ class ReplayBroker(Broker):
         return self._shared(["describe_image", hashlib.sha256(data).hexdigest(), question, DESCRIBE_MODEL],
                             lambda: Broker._describe(self, media, data, question))
 
-    def _send(self, req: urllib.request.Request, keyed: bool, timeout_s: int):
+    def _send(self, req: urllib.request.Request, keyed: str, timeout_s: int):
         method = req.get_method()
         if method in WRITE_METHODS:   # not sent: what a real cycle would see from a plain success
             self._tag("simulated: not sent")
             return 200, {}, b""
-        key = ["http", method, req.full_url, sorted(req.header_items()), (req.data or b"").decode(errors="replace")]
-        status, headers, raw = self._shared(key, lambda: self._fetch(req, keyed, timeout_s))
+        key = ["http", method, req.full_url, sorted(self._cache_headers(req, keyed)),
+               (req.data or b"").decode(errors="replace")]
+        status, headers, raw = self._shared(key, lambda: self._fetch_masked(req, keyed, timeout_s))
         return status, dict(headers), raw
+
+    def _fetch_masked(self, req, keyed, timeout_s):
+        """A keyed read for the pair's cache, with the key masked in the body before it is kept: each run of a pair
+        may add a different value (its own Google access token), and only its own would be masked on the way out."""
+        status, headers, raw = self._fetch(req, keyed, timeout_s)
+        if keyed:
+            from .core import read_secrets
+            entry = read_secrets(self._keys_root()).get(keyed) or {}
+            sent = req.get_header((entry.get("header") or "Authorization").capitalize()) or ""
+            scheme = entry.get("scheme", "Bearer")
+            value = sent[len(scheme) + 1:] if scheme and sent.startswith(scheme + " ") else sent
+            if value:
+                raw = raw.replace(value.encode(), b"[your key]")
+        return status, headers, raw
+
+    def _cache_headers(self, req: urllib.request.Request, keyed: str) -> list[tuple[str, str]]:
+        """The request's headers as the pair's cache key: a key's header stands as its name, not its value, so the two
+        runs share a read even when each made its own Google access token (and no token sits in the cache)."""
+        from .core import read_secrets
+        if not keyed:
+            return list(req.header_items())
+        header = (read_secrets(self._keys_root()).get(keyed) or {}).get("header") or "Authorization"
+        return [(k, f"[key {keyed}]" if k.lower() == header.lower() else v) for k, v in req.header_items()]
 
     def _fetch(self, req, keyed, timeout_s):
         status, headers, raw = Broker._send(self, req, keyed, timeout_s)
@@ -1547,6 +1615,7 @@ class ReplayBroker(Broker):
 
     def _secret_set(self, name: str, value: str, hosts, header: str = "Authorization", scheme: str = "Bearer") -> str:
         from .core import SECRET_NAME_RE
+        self._not_over_google_key(name)
         if not SECRET_NAME_RE.match(str(name)):   # the same refusals as store_secret
             raise ValueError("a key name is lowercase letters, digits, - or _ (e.g. github)")
         if not str(value).strip() or not [h for h in ([hosts] if isinstance(hosts, str) else hosts) if h.strip()]:

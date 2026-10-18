@@ -104,7 +104,7 @@ class LoginTest(GoogleCase):
     def test_no_scope_granted_saves_nothing(self):
         (self.sup / "google").mkdir(parents=True)
         self.fake.granted = "openid"
-        with self.assertRaisesRegex(google.AccountError, "granted neither gmail.readonly nor calendar.readonly: "
+        with self.assertRaisesRegex(google.AccountError, "granted no Gmail or Calendar scope: "
                                                          "nothing saved"):
             self.login(ME)
         self.assertFalse((self.sup / "google" / "work.json").exists())

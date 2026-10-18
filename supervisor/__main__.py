@@ -387,12 +387,12 @@ def cmd_tools(name: str, action: str | None, tool: str | None) -> int:
 def cmd_secret(args) -> int:
     """Give an instance a key without it passing through a conversation (and so through transcripts, journal
     write-ups and, for a cloud-brained instance, the provider's prompt)."""
-    from .core import delete_secret, read_secrets, store_secret
+    from .core import delete_secret, describe_key, read_secrets, store_secret
     root = instance_root(args.name)
     if args.action == "list":
         store = read_secrets(root)
         for k, e in sorted(store.items()):
-            print(f"{k:16} hosts {', '.join(e['hosts'])} · {e.get('header')} {e.get('scheme', '')} · {e.get('created', '?')[:16]}")
+            print(describe_key(k, e))
         if not store:
             print(f"{args.name} has no keys")
         return 0
@@ -403,6 +403,8 @@ def cmd_secret(args) -> int:
         found = delete_secret(root, args.key)
         print(f"deleted {args.name}'s key {args.key}" if found else f"{args.name} has no key {args.key}")
         return 0 if found else 1
+    if args.action == "google":
+        return _secret_google(args, root)
     import getpass
     value = getpass.getpass(f"value for {args.name}'s key {args.key} (not echoed): ") if sys.stdin.isatty() \
         else sys.stdin.readline()
@@ -413,6 +415,35 @@ def cmd_secret(args) -> int:
         return 2
     log(f"{args.name}: operator gave it a key named {args.key} for {args.hosts}")
     print(f"stored: {args.name} can use it as http_request(auth={args.key!r}) to {args.hosts}; it never sees the value")
+    return 0
+
+
+def _secret_google(args, root) -> int:
+    """`shaft secret <name> google <key> <address> --client <c> [--scope gmail.modify]`: the instance's own Google
+    account (PLAN-own-mail.md), signed in by the operator in the browser; the broker refreshes it per run."""
+    from . import google
+    from .core import secrets_env, store_google_key
+    env = secrets_env()
+    clients = sorted({k[len("GMAIL_"):-len("_CLIENT_ID")].lower().replace("_", "-") for k in env
+                      if k.startswith("GMAIL_") and k.endswith("_CLIENT_ID")})
+    if not (args.address and args.client):
+        print(f"usage: shaft secret {args.name} google <key> <address> --client <name> [--scope gmail.modify] "
+              f"(e.g. shaft secret thelos google gmail instance@example.com --client personal); the OAuth clients "
+              f"in .env: {', '.join(clients) or 'none'}", file=sys.stderr)
+        return 2
+    try:
+        data = google.instance_key_login(args.address, args.client, args.scope, env)
+        if args.hosts:
+            data["hosts"] = args.hosts.split(",")
+        store_google_key(root, args.key, data)
+    except (google.AccountError, ValueError) as e:
+        print(e, file=sys.stderr)
+        return 2
+    hosts = ", ".join(sorted({h.strip().lower() for h in data["hosts"]}))
+    log(f"{args.name}: operator gave it a Google key named {args.key} for {data['address']} ({args.scope}, client "
+        f"{data['client']}) for {hosts}")
+    print(f"stored: {args.name} can use {data['address']} ({args.scope}) as http_request(auth={args.key!r}) to "
+          f"{hosts}; the supervisor refreshes it, and {args.name} never sees a token")
     return 0
 
 
@@ -897,9 +928,13 @@ def main(argv: list[str]) -> int:
     p.add_argument("tool", nargs="?")
     p = sub.add_parser("secret", help="an instance's own keys: give it one (value read from your terminal), list, delete")
     p.add_argument("name")
-    p.add_argument("action", choices=["set", "list", "delete"])
+    p.add_argument("action", choices=["set", "google", "list", "delete"],
+                   help="google: its own Google account, signed in in your browser (google <key> <address> --client)")
     p.add_argument("key", nargs="?")
-    p.add_argument("--hosts", default="", help="comma-separated hosts the key may be sent to")
+    p.add_argument("address", nargs="?", help="google: the instance's own Google address (never one of yours)")
+    p.add_argument("--hosts", default="", help="comma-separated hosts the key may be sent to (google: from the scope)")
+    p.add_argument("--client", default="", help="google: the OAuth client in .env (GMAIL_<CLIENT>_CLIENT_ID/_SECRET)")
+    p.add_argument("--scope", default="gmail.modify", help="google: gmail.modify (read, send, label, trash)")
     p.add_argument("--header", default="Authorization")
     p.add_argument("--scheme", default="Bearer", help="e.g. Bearer, token; '' for the raw value")
     p = sub.add_parser("share", help="a folder of yours an instance may read (read-only, seen as shared/); 'off' removes it")

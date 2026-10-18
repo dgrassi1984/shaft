@@ -310,6 +310,32 @@ Mail content reaches model providers (a cloud-brained instance, the judges). Sen
 mail (prompt injection). What the instance writes from it into its mind stays in its private mind store's history (never in the project's
 git), and downloads stay in `mail/`, after a revoke.
 
+### An instance's own Gmail (`shaft secret <name> google …`)
+
+An instance may have a Google account of its own, not yours: Thelos has `instance@example.com`
+([PLAN-own-mail.md](PLAN-own-mail.md)). It reads the whole mailbox and sends from it through its own plugin, calling the
+Gmail API with `http_request(auth=…)`. The supervisor holds the login as a **Google key** in the instance's key store
+(`secrets/`, never readable by the instance). Each run, the broker makes an access token from the key's refresh token,
+adds it like any key and only to the key's hosts, and masks it in answers. Sign it in once, in a browser signed in as
+that account:
+
+    shaft secret thelos google gmail instance@example.com --client personal
+
+- The scope is `gmail.modify`: read, send, label, archive, trash (recoverable for 30 days). It cannot delete
+  permanently, change settings, forwarding or filters, or reach anything outside Gmail. The key is bound to
+  `gmail.googleapis.com`. The `personal` client's Data Access list must include `gmail.modify`.
+- **Never one of your accounts.** An address logged in with `shaft google` is refused, at sign-in and on every use.
+  Your mail reaches instances only by label (`shaft mail`).
+- The instance can delete the key (`secret_delete`), but `secret_set` cannot replace it. A refused refresh names the
+  command to sign it in again.
+- Trial replays never send (the POST is recorded, not carried out), and a pair shares its reads. Battery exams make
+  no Google token, and never write with any of an instance's keys.
+
+The risks you accept: it sends as itself to anyone, and anyone can write to it (prompt injection with a send button;
+every send is in `broker.log`). A new account that sends automatically may be limited by Google (about 500
+recipients a day). Do not forward your own mail there: it would be read whole, with no label. Mail content reaches
+model providers and the instance's mind store, as with labels.
+
 ### Calendar (`shaft calendar …`)
 
 An instance you pick may read the calendars you pick, one per grant ([PLAN-calendar.md](PLAN-calendar.md)), with full
@@ -466,7 +492,8 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
   keys** (`secret_set` / `secret_list` / `secret_delete`, or `shaft secret <name> set <key> --hosts …` from
   your terminal): kept in its folder under `secrets/` but handled only by the supervisor — the broker adds a
   key to requests to the hosts it is bound to, never through a redirect, and masks it in responses; the
-  instance's own process, plugins, `run` and the coder cannot read the file, git never sees it.
+  instance's own process, plugins, `run` and the coder cannot read the file, git never sees it. A **Google key**
+  (`shaft secret <name> google`, the instance's own Google account) is refreshed by the supervisor per run.
   **`set_config`**: the instance's only way to change its `config.env`, one value at a time; each change is
   recorded, so the gate can tell its lines from yours — you may edit the file at any time, even mid-run.
   Per-run token, call budget
