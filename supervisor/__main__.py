@@ -315,6 +315,24 @@ def cmd_status(names: list[str]) -> int:
     return 0
 
 
+def cmd_alerts(action: str | None, ids: list[str]) -> int:
+    """The control panel's open alerts (panel.extras, as shaft top and the web UI show them), or dismiss some."""
+    from . import dashboard, panel
+    if action == "dismiss":
+        if not ids:
+            print("dismiss which? shaft alerts lists the ids")
+            return 1
+        panel.dismiss(ids)
+        print(f"dismissed {len(ids)} alert(s)")
+        return 0
+    snap = panel.extras({"instances": [], "services": dashboard.services()})
+    for a in snap.get("alerts") or []:
+        print(f"{a['id']}  {a['text']}")
+    if not snap.get("alerts"):
+        print("no open alerts")
+    return 0
+
+
 def cmd_limits(name: str | None, limit: str | None, value: str | None) -> int:
     """The operator's own limits for an instance, kept in supervisor/tools/<name>.json (never its config.env, which
     it can change): how often it may wake (WAKE_INTERVAL_MINUTES in its config.env, at least the floor) and how much
@@ -821,6 +839,15 @@ def main(argv: list[str]) -> int:
     p.add_argument("name")
     p = sub.add_parser("api", help="OpenAI-compatible API for the instances, on your tailnet")
     p.add_argument("action", choices=["on", "off", "status", "key", "inbox-key", "serve"])
+    p = sub.add_parser("cycle", help="start one cycle of an idle instance now, detached (as shaft top's c and the web "
+                                     "UI do); refused if it is paused or already awake")
+    p.add_argument("name")
+    p = sub.add_parser("recap", help="write each instance's one-line recap now (what it is doing, what it did in the "
+                                     "last hour), by a small model; shown by shaft top and the web UI")
+    p.add_argument("names", nargs="*")
+    p = sub.add_parser("alerts", help="the control panel's open alerts with their ids; 'dismiss ID…' hides them")
+    p.add_argument("action", nargs="?", choices=["dismiss"])
+    p.add_argument("ids", nargs="*")
     p = sub.add_parser("web", help="the web UI for managing the instances, on your tailnet (PLAN-webui.md): on, off, "
                                    "status, pair [--name NAME] (a one-time link for a browser), unpair DEVICE|--all")
     p.add_argument("action", choices=["on", "off", "status", "pair", "unpair", "serve"])
@@ -1032,6 +1059,19 @@ def main(argv: list[str]) -> int:
     if args.cmd == "api":
         from . import api
         return api.command(args.action)
+    if args.cmd == "cycle":
+        instance_root(args.name)
+        try:
+            print(autonomy.start_wake(args.name))
+        except RuntimeError as e:
+            print(f"not started: {e}")
+            return 1
+        return 0
+    if args.cmd == "recap":
+        from . import recap
+        return recap.command(args.names)
+    if args.cmd == "alerts":
+        return cmd_alerts(args.action, args.ids)
     if args.cmd == "web":
         from . import web
         return web.command(args.action, args.name if args.action == "pair" else args.device, args.all)

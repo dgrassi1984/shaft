@@ -271,3 +271,29 @@ class NavTest(PagesTest):
         with mock.patch.object(web, "overview", return_value=snap(name="shaft", state="in a cycle", since="12:00")):
             self.has("/i/shaft", 'data-poll="/fragment/i/shaft/live"')
             self.has("/fragment/i/shaft/live", "in a cycle since 12:00")
+
+
+class NoMarkupShownAsTextTest(PagesTest):
+    """The class of bug: markup escaped twice shows as text (the instance page showed its journal as raw <ul><li>, M2
+    2026-10-19). No page may contain escaped tags of its own making."""
+    OWN = ("&lt;ul", "&lt;li", "&lt;span", "&lt;div", "&lt;a href", "&lt;table", "&lt;section", "&lt;form", "&lt;p")
+
+    def test_no_page_shows_its_own_markup_escaped(self):
+        with mock.patch.object(panel, "transcripts", return_value=[]):
+            for path in ("/", "/fragment/overview", "/i/shaft", "/i/shaft/judge", "/i/shaft/changes",
+                         "/i/shaft/benchmarks", "/i/shaft/transcripts", "/i/shaft/journal", "/trials", "/costs",
+                         "/services", "/fragment/services", "/messages"):
+                body = self.get(path)
+                for tag in self.OWN:
+                    self.assertNotIn(tag, body, f"{path} shows {tag}")
+
+    def test_the_summary_lists_its_journal_headings(self):
+        body = self.get("/i/shaft")
+        self.assertIn('<li><span class="clip">2026-10-13 17:32 — Conversation with Daniele</span></li>', body)
+
+    def test_adding_to_html_escapes_the_text_side_only(self):
+        from supervisor.web_pages import Html
+        self.assertEqual(Html("<b>") + "<i>", "<b>&lt;i&gt;")
+        self.assertEqual("<i>" + Html("<b>"), "&lt;i&gt;<b>")
+        self.assertIsInstance("x" + Html("<b>"), Html)
+        self.assertEqual(Html("<b>") + Html("<i>"), "<b><i>")

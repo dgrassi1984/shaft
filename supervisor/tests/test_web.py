@@ -32,7 +32,9 @@ class WebTest(unittest.TestCase):
         self.patches = [mock.patch.object(web, "SUP_DIR", self.sup),
                         mock.patch.object(web, "allowed_logins", return_value={ME}),
                         mock.patch.object(web, "allowed_hosts", return_value={HOST}),
-                        mock.patch.object(web, "overview", return_value=snap())]
+                        mock.patch.object(web, "overview", return_value=snap()),
+                        mock.patch("supervisor.web_actions._update_question",
+                                   side_effect=lambda n: ("", f"{n} is already on the current template"))]
         for p in self.patches:
             p.start()
             self.addCleanup(p.stop)

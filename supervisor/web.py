@@ -302,7 +302,8 @@ def _route(req: Request) -> Response:
         return _html(405, web_pages.message_page("Not allowed", f"{req.method} is not supported."))
     try:
         r = _get(req, csrf_token(secret))
-    except Exception as e:          # say what broke: an empty page reads as "nothing to show"
+    except (Exception, SystemExit) as e:    # say what broke: an empty page reads as "nothing to show" (SystemExit:
+        #                                     core.instance_root's way to say an instance is gone)
         log(f"web: {req.path} failed: {type(e).__name__}: {e}")
         why = f"{type(e).__name__}: {e}"
         if req.path.startswith("/fragment/"):
@@ -337,6 +338,18 @@ def _post(req: Request, dev: str) -> Response:
     if req.path == "/unpair":
         unpair(dev)
         return _html(200, web_pages.h('<p>This browser is unpaired.</p>'))
+    if m := re.match(r"^/action/([a-z-]+)$", req.path):
+        from . import dashboard, web_actions
+        with _snap_lock:
+            _snap["snap"] = None                     # the guards read the state as it is now, not a second ago
+        try:
+            status, text = web_actions.run(m[1], req.form(), overview(), _names(), list(dashboard.SERVICES))
+        except (Exception, SystemExit) as e:         # say what broke, never a silent nothing
+            log(f"web: action {m[1]} failed: {type(e).__name__}: {e}")
+            status, text = 500, f"{m[1]} failed: {type(e).__name__}: {e}"
+        with _snap_lock:
+            _snap["snap"] = None                     # the next refresh shows what the action changed
+        return _html(status, web_pages.h("<p>{t}</p>", t=text))
     return _html(404, web_pages.message_page("Not found", f"No action at {req.path}."))
 
 
@@ -398,7 +411,8 @@ def _get(req: Request, csrf: str) -> Response | None:
         return _html(200, v.costs_page(panel.costs(days=7), names, csrf))
     if path in ("/services", "/fragment/services"):
         order = list(dashboard.SERVICES)
-        live = v.services_live(panel.services_detail(), order, panel.scheduled_runs())
+        from . import actions
+        live = v.services_live(panel.services_detail(), order, panel.scheduled_runs(), actions.busy_instances())
         if path == "/fragment/services":
             return _html(200, live)
         sel = qs.get("log") if qs.get("log") in order else order[0]

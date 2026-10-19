@@ -9,7 +9,6 @@ that take longer than a moment run detached (they outlive the panel), with their
 """
 from __future__ import annotations
 
-import subprocess
 import textwrap
 from dataclasses import dataclass, field
 
@@ -17,15 +16,13 @@ from rich.console import Group
 from rich.table import Table
 from rich.text import Text
 
-from . import dashboard, panel
-from .core import PROJECT, PYTHON, SUP_DIR, log
+from . import actions, dashboard, panel
 
 TABS = [("1", "overview"), ("2", "instance"), ("3", "judge"), ("4", "trials"), ("5", "benchmarks"),
         ("6", "changes"), ("7", "messages"), ("8", "costs"), ("9", "services"), ("0", "transcripts")]
 TAB_OF = dict(TABS)
 SPARK = "▁▂▃▄▅▆▇█"
 MARK = {"yes": ("✓", "green"), "partial": ("½", "yellow"), "no": ("✗", "red")}
-ACTIONS_LOG = "top-actions.log"
 HELP = {
     "overview": "↑/↓ instance · Enter details · c cycle · p pause/resume · s sleep now · u update · w write · "
                 "r reply · a recap every instance (now + last hour, by a small model) · x dismiss alerts · m messages",
@@ -52,59 +49,22 @@ class Overlay:
     sel: int = 0
 
 
-# -- running actions ------------------------------------------------------------------------------------------
-def _cli(args: list[str]) -> list[str]:
-    return [PYTHON, "-E", "-s", "-m", "supervisor", *args]
-
-
-def _say(args: list[str]) -> str:
-    shown = " ".join(a if len(a) < 60 else a[:57] + "…" for a in args)
-    return f"shaft {shown}"
-
-
+# -- running actions: the same as the web UI's (actions.py), logged as `top: operator …` ------------------------
 def run_now(args: list[str], timeout: float = 60) -> str:
-    """A quick subcommand: run it and return its last line of output (or why it failed)."""
-    log(f"top: operator ran {_say(args)}")
-    try:
-        r = subprocess.run(_cli(args), cwd=PROJECT, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return f"{_say(args)}: still running after {timeout:.0f}s"
-    out = [l for l in (r.stdout + "\n" + r.stderr).splitlines() if l.strip()]
-    last = out[-1].strip() if out else ("done" if r.returncode == 0 else f"exit {r.returncode}")
-    return last if r.returncode == 0 else f"refused: {last}"
+    """A quick subcommand: its last line of output, or "refused: …"."""
+    ok, last = actions.run_now(args, timeout, who="top")
+    return last if ok else f"refused: {last}"
 
 
 def run_detached(args: list[str]) -> str:
-    """A long subcommand: started in its own session (it outlives the panel), output in top-actions.log."""
-    log(f"top: operator started {_say(args)}")
-    SUP_DIR.mkdir(exist_ok=True)
-    with (SUP_DIR / ACTIONS_LOG).open("a") as out:
-        out.write(f"\n== {_say(args)}\n")
-        out.flush()
-        subprocess.Popen(_cli(args), cwd=PROJECT, stdin=subprocess.DEVNULL, stdout=out, stderr=out,
-                         start_new_session=True)
-    return f"started: {_say(args)} (output in .supervisor/{ACTIONS_LOG})"
+    return actions.run_detached(args, who="top")
 
 
-# -- guards ----------------------------------------------------------------------------------------------------
-def busy_instances() -> list[str]:
-    from .core import instance_names
-    from .runner import busy_with
-    return [f"{n} ({b})" for n in instance_names() if (b := busy_with(n))]
+busy_instances = actions.busy_instances
 
 
 def service_guard(service: str, action: str) -> str:
-    """Why stopping or restarting this service now would hurt a run (empty if it would not)."""
-    if service == "scheduler" or (service == "autonomy" and action == "off"):
-        runs = panel.scheduled_runs()
-        if runs:
-            return (f"the scheduler's runs share its process group, so this would kill them: {', '.join(runs)}. "
-                    "Try again when they end.")
-    if service in ("model", "embed", "api"):
-        runs = busy_instances()
-        if runs:
-            return f"runs in progress use it: {', '.join(runs)}. Try again when they end."
-    return ""
+    return actions.service_guard(service, action, busy=lambda: busy_instances())
 
 
 # -- shared rendering ----------------------------------------------------------------------------------------------
@@ -341,12 +301,6 @@ def trial_line(t: dict, width: int, selected: bool) -> Text:
         line.append(f"{panel.trial_progress(t) + ' replayed':<20}{'':<26}")
     line.append(" ".join((t.get("hypothesis") or "").split()))
     return line
-
-
-def trial_cost_estimate() -> float | None:
-    done = [((t.get("verdict") or {}).get("usd")) for t in panel.trials() if t.get("status") == "done"]
-    done = [u for u in done if u]
-    return sum(done) / len(done) if done else None
 
 
 def render_trials(snap, ui, width, height):
@@ -699,16 +653,13 @@ def instance_action(ui, key: str, snap: dict) -> bool:
         if state != "idle":
             ui.say(f"{name} is {state} — a sleep starts only when it is idle")
         else:
-            ask(ui, f"start a sleep (consolidation) for {name} now? It runs up to 90 minutes on its model.",
-                lambda: run_detached(["sleep", name]))
+            ask(ui, actions.SLEEP_QUESTION.format(name=name), lambda: run_detached(["sleep", name]))
     elif key == "u":
-        from . import version
-        behind = version.instance(name).get("template_behind")
-        if not behind:
-            ui.say(f"{name} is already on the current template")
+        question, nothing = actions.update_question(name)
+        if nothing:
+            ui.say(nothing)
         else:
-            ask(ui, f"merge {behind} template commit(s) into {name}? (refused while it is busy or has uncommitted "
-                    "edits; rolled back if the test gate fails)", lambda: run_detached(["update", name]))
+            ask(ui, question, lambda: run_detached(["update", name]))
     elif key == "w":
         ui.overlay = Overlay("input", f"message to {name}: ", lambda text: run_now(["send", name, text]))
     elif key == "r":
@@ -787,22 +738,15 @@ def handle_view(ui, key: str, snap: dict, page_rows: int) -> None:
             ui.only, ui.sel, ui.top = not ui.only, 0, 0
         elif key == "a" and names:
             name = current(ui, snap)
-            est = trial_cost_estimate()
-            spent = panel.costs(days=1)["today"]["trials"]
-            cost = f"about ${est:.2f} by the finished trials so far" if est else "cost unknown so far"
-            ask(ui, f"queue an A/A calibration trial for {name} (the current code against itself)? {cost}; "
-                    f"trials today ${spent:.2f}, operator trials are not capped",
+            ask(ui, actions.aa_trial_question(name),
                 lambda: run_now(["trial", "run", name, "--aa", "--hypothesis", "A/A calibration (from shaft top)"]))
     elif tab == "benchmarks" and key == "b" and names:
         name = current(ui, snap)
-        status = panel.battery_status(name)
-        if status.get("off"):
-            ui.say(f"the battery is off for {name} (shaft battery on {name})")
-        elif not status["installed"]:
-            ui.say("the battery is not installed: no items in .supervisor/battery/")
+        why = actions.battery_refusal(name)
+        if why:
+            ui.say(why)
         else:
-            ask(ui, f"run the capability battery for {name} now? Its cost has no estimate yet (judge grading + the "
-                    "instance's model per item)", lambda: run_detached(["battery", "run", name]))
+            ask(ui, actions.BATTERY_QUESTION.format(name=name), lambda: run_detached(["battery", "run", name]))
     elif tab == "services":
         sel = SERVICE_NAMES[min(ui.sel, len(SERVICE_NAMES) - 1)]
         cmd = "autonomy" if sel == "scheduler" else sel

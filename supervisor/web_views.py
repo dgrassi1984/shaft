@@ -208,7 +208,9 @@ def instance_live(live: dict, d: dict) -> Html:
     if live.get("goal"):
         pairs.append(("goal", live["goal"]))
     pairs.append(("wakes", f"every {d['wake']} min · next {live.get('next_wake', '?')}"))
-    return rows(pairs)
+    from .web_actions import instance_buttons
+    buttons = instance_buttons(live) if live.get("name") else Html("")
+    return join([rows(pairs), buttons])
 
 
 def instance_summary(name: str, d: dict, live: dict, names: list[str], csrf: str) -> Html:
@@ -231,13 +233,18 @@ def instance_summary(name: str, d: dict, live: dict, names: list[str], csrf: str
         parts.append(section("On probation now", lines(
             f"{e['commit'][:8]} since {e['since'][:16]} · {', '.join(e['files'])} · baseline "
             f"{e.get('baseline') if e.get('baseline') is None else round(e['baseline'], 2)}" for e in d["probation"])))
-    parts.append(section("Recent journal", lines(clip(j) for j in d["journal"]) + link(f"/i/{q(name)}/journal", "the whole journal →")))
+    parts.append(section("Recent journal", join([lines(clip(j) for j in d["journal"]),
+                                                 link(f"/i/{q(name)}/journal", "the whole journal →")])))
     if d["changes"]:
         parts.append(section("Kept changes to its own code", lines(
             f"{c['ts'][:16]} {', '.join(c['files'])}" + (f" ({len(c['delegated'])} by its coder)" if c["delegated"]
                                                          else "") for c in d["changes"][:5])))
     if d["merges"]:
         parts.append(section("Template updates (shaft update)", lines(d["merges"])))
+    from .web_actions import message_forms, tool_switches
+    question = next((x for x in d["questions"] if x.get("kind") == "question"), None)
+    parts.insert(1, section("Write to it", message_forms(name, question)))
+    parts.append(section("Supervisor tools (shaft tools)", tool_switches(name, set(d["tools_off"]))))
     parts.append(section("self/stats.md (written by the supervisor)", markdown(d["stats"])))
     return instance_frame(name, "", "summary", join(parts), names, csrf)
 
@@ -306,9 +313,13 @@ def trials_page(ts: list[dict], c: dict, only: str, progress, names: list[str], 
             f"${cap['trials'][0]:.2f}/${cap['trials'][1]:.2f}" for cap in c["caps"]]
     filt = join([link("/trials", "all instances") if only else Html("<b>all instances</b>")] +
                 [h(" · {x}", x=link(f"/trials?i={q(n)}", n) if n != only else h("<b>{n}</b>", n=n)) for n in names])
+    from . import actions
+    from .web_actions import button
+    aa = join(button("aa-trial", n, actions.aa_trial_question(n), {"name": n}, cls="small") for n in names)
     head = h('<section class="panel"><p>{filt}</p><p class="dim">today: {caps} · all trials ${all} (operator trials '
-             'are not capped)</p></section>', filt=filt, caps=" · ".join(caps) or "no caps",
-             all=f"{c['today']['trials']:.2f}")
+             'are not capped)</p><div class="actions"><span class="dim">Queue an A/A calibration trial:</span> {aa}'
+             '</div></section>', filt=filt, caps=" · ".join(caps) or "no caps", all=f"{c['today']['trials']:.2f}",
+             aa=aa)
     body = []
     for t in ts:
         v = t.get("verdict") or {}
@@ -348,6 +359,11 @@ def benchmarks_page(name: str, b: dict, evs: list[dict], s: dict, names: list[st
     else:
         bat.append(h('<p class="dim">night window {w} · every {e} night(s) · {due}</p>', w=b["window"],
                      e=b["every_days"], due="due tonight" if b["due"] else "not due"))
+    from . import actions
+    from .web_actions import button
+    why = actions.battery_refusal(name)
+    bat.append(button("battery", "Run the battery now", actions.BATTERY_QUESTION.format(name=name), {"name": name},
+                      why))
     bat.append(lines(b["lines"], empty=""))
     if b["results"]:
         bat.append(table(["at", "arm", "item", "status", "score"],
@@ -555,7 +571,8 @@ def costs_page(c: dict, names: list[str], csrf: str) -> Html:
 
 
 # -- services (TUI tab 9) --------------------------------------------------------------------------------------------
-def services_live(svcs: list[dict], order: list[str], runs: list[str]) -> Html:
+def services_live(svcs: list[dict], order: list[str], runs: list[str], busy: list[str]) -> Html:
+    from .web_actions import autonomy_button, service_buttons
     by = {s["name"]: s for s in svcs}
     body = []
     for name in order:
@@ -564,11 +581,14 @@ def services_live(svcs: list[dict], order: list[str], runs: list[str]) -> Html:
                       h('<span class="{c}">{t}</span>', c="good" if s["running"] else "bad",
                         t="● running" if s["running"] else "○ NOT RUNNING"),
                       f"pid {s['pid']}" if s.get("pid") else "", s.get("detail", ""),
-                      h('<span class="warn">older code than checked out: restart it</span>') if s.get("stale") else ""],
+                      h('<span class="warn">older code than checked out: restart it</span>') if s.get("stale") else "",
+                      service_buttons(name, s["running"], runs, busy)],
                      ""))
-    return join([table(["service", "state", "pid", "detail", ""], body),
+    sched = by.get("scheduler", {}).get("running", False)
+    return join([table(["service", "state", "pid", "detail", "", ""], body),
                  h('<p class="{c}">Runs a scheduler restart would kill: {r}</p>', c="warn" if runs else "dim",
-                   r=", ".join(runs) or "none")])
+                   r=", ".join(runs) or "none"),
+                 h('<div class="actions">{b}</div>', b=autonomy_button(sched, runs))])
 
 
 def services_page(live: Html, sel: str, log_name: str, tail: list[str], names: list[str], csrf: str) -> Html:

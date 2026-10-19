@@ -15,7 +15,15 @@ from .dashboard import clean, event_tone
 
 
 class Html(str):
-    """Text that is already safe HTML (built here); anything else is escaped on the way in."""
+    """Text that is already safe HTML (built here); anything else is escaped on the way in. Adding to it keeps it
+    Html and escapes the plain-text side: str's own + returned a plain str, which the next h() escaped again, and
+    an instance page showed its journal as raw markup (M2, 2026-10-19)."""
+
+    def __add__(self, other):
+        return Html(str.__add__(self, esc(other)))
+
+    def __radd__(self, other):
+        return Html(str.__add__(esc(other), self))
 
 
 def esc(value) -> Html:
@@ -33,7 +41,7 @@ def join(parts, sep: str = "") -> Html:
 
 
 # -- the page ------------------------------------------------------------------------------------------------------
-STATIC_VERSION = "5"        # bump when web_static changes, so a browser does not keep an old copy
+STATIC_VERSION = "6"        # bump when web_static changes, so a browser does not keep an old copy
 
 
 def page(title: str, body: Html, nav: Html = Html(""), csrf: str = "") -> Html:
@@ -140,9 +148,12 @@ def instance_card(i: dict) -> Html:
     rows.append(_row("plan", f"{sched}{off}", "dim"))
     if i.get("trial"):
         rows.append(_row("trial", i["trial"], "trial-text"))
+    from .web_actions import instance_buttons
     return h('<article class="card st-{cls}" id="inst-{name}"><header><a href="/i/{name}"><b>{name}</b></a> '
-             '<span class="dim">· {model}</span></header>{rows}</article>',
-             cls=state_class(i["state"]), name=i["name"], model=i["model"], rows=join(rows))
+             '<span class="dim">· {model}</span></header>{rows}<footer>{buttons}'
+             '<a class="msglink" href="/i/{name}#write">Message…</a></footer></article>',
+             cls=state_class(i["state"]), name=i["name"], model=i["model"], rows=join(rows),
+             buttons=instance_buttons(i))
 
 
 def _when(m: dict) -> str:
@@ -180,12 +191,16 @@ def overview(snap: dict) -> Html:
     msgs = join(message_line(m) for m in ms[-5:]) if ms else Html('<li class="dim">—</li>')
     events = (join(h('<li class="{tone}">{line}</li>', tone=event_tone(e), line=e.split(" cycle_timeout_s=")[0][:200])
                    for e in snap["events"]) if snap["events"] else Html('<li class="dim">—</li>'))
-    return h('<div class="topline"><span class="dim">{at}</span>{spend}<div class="services">{services}</div></div>'
-             '{alerts}<div class="cards">{cards}</div>'
+    from .web_actions import alert_buttons, button
+    recap = button("recap", "Recap every instance", "write every instance's one-line recap now? A small model call "
+                   "each (SHAFT_RECAP_MODEL), counted under recaps in Costs.", cls="small")
+    return h('<div class="topline"><span class="dim">{at}</span>{spend}<div class="services">{services}</div>{recap}'
+             '</div>{alerts}<div class="cards">{cards}</div>'
              '<section class="panel"><h2>{msg_title}</h2><ul class="lines">{msgs}</ul></section>'
              '<section class="panel"><h2>events</h2><ul class="lines events">{events}</ul></section>',
-             at=snap["at"], spend=spend, services=services,
-             alerts=h('<ul class="alerts">{a}</ul>', a=alert_html) if alerts else Html(""),
+             at=snap["at"], spend=spend, services=services, recap=recap,
+             alerts=h('<div class="alerts"><ul>{a}</ul>{b}</div>', a=alert_html, b=alert_buttons(alerts))
+             if alerts else Html(""),
              cards=join(instance_card(i) for i in snap["instances"]), msg_title=msg_title, msgs=msgs, events=events)
 
 

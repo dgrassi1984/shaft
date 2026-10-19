@@ -1,7 +1,8 @@
 // SHAFT web UI behaviour (PLAN-webui.md). No inline script anywhere (the CSP forbids it): pages declare what they
 // need with data- attributes, and this file binds it once.
 //   data-poll="/fragment/…"  the element's content is refreshed from that URL every 2 s while the tab is visible
-//   <form data-post="/…">    sent with fetch as a POST carrying the CSRF token; data-confirm asks first
+//   <form data-post="/…">    sent with fetch as a POST carrying the CSRF token; data-confirm asks first, data-reset
+//                            clears it once sent; the reply is shown as a toast and the polled parts refresh
 // Listeners are delegated from the document, so content swapped in by a poll needs no re-binding.
 (() => {
   "use strict";
@@ -73,6 +74,7 @@
     }
     setInterval(tick, every);
     document.addEventListener("visibilitychange", tick);
+    document.addEventListener("shaft:refresh", () => setTimeout(tick, 300));
   }
 
   document.addEventListener("submit", async (ev) => {
@@ -90,7 +92,9 @@
       });
       const body = await r.text();
       toast(textOf(body) || (r.ok ? "done" : `HTTP ${r.status}`), !r.ok);
+      if (r.ok && form.dataset.reset) form.reset();
       if (r.ok && form.dataset.after === "reload") setTimeout(() => location.reload(), 800);
+      document.dispatchEvent(new Event("shaft:refresh"));      // show what the action changed, now
     } catch (e) {
       toast(`Not sent: ${e.message}`, true);
     } finally {

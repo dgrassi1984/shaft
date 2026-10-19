@@ -10,7 +10,9 @@ is logged in .supervisor/recap_usage.jsonl and counted in the panel's costs (pan
 """
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 import re
 import threading
 import time
@@ -233,14 +235,38 @@ def write(inst: dict, now: float | None = None) -> dict:
     return rec
 
 
-def start(instances: list[dict]) -> str:
-    """Write every instance's recap in the background, one thread each; what to tell the operator."""
-    todo = []
+def _lock_path(name: str):
+    return SUP_DIR / "locks" / f"recap-{name}.lock"
+
+
+def _claim(name: str) -> int | None:
+    """Hold the instance's recap lock (one file lock, across processes: `shaft top`, the web UI and `shaft recap`
+    never pay twice for the same recap). The fd to close when done, or None if a recap is being written elsewhere."""
+    path = _lock_path(name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        return None
+    return fd
+
+
+def start(instances: list[dict], wait: bool = False) -> str:
+    """Write every instance's recap in the background, one thread each (wait=True: until all are written); what to
+    tell the operator. An instance whose recap is already being written — here or in another process — is skipped."""
+    todo, held = [], {}
     with _lock:
         for inst in instances:
-            if inst["name"] not in _running:
-                _running.add(inst["name"])
-                todo.append(inst)
+            if inst["name"] in _running:
+                continue
+            fd = _claim(inst["name"])
+            if fd is None:
+                continue
+            _running.add(inst["name"])
+            held[inst["name"]] = fd
+            todo.append(inst)
 
     def run(inst):
         try:
@@ -248,12 +274,52 @@ def start(instances: list[dict]) -> str:
         finally:
             with _lock:
                 _running.discard(inst["name"])
-    for inst in todo:
-        threading.Thread(target=run, args=(inst,), daemon=True, name=f"recap-{inst['name']}").start()
+                os.close(held.pop(inst["name"]))
+    threads = [threading.Thread(target=run, args=(inst,), daemon=True, name=f"recap-{inst['name']}") for inst in todo]
+    for th in threads:
+        th.start()
+    if wait:
+        for th in threads:
+            th.join()
     return (f"recapping {', '.join(i['name'] for i in todo)} with {MODEL}…" if todo
             else "a recap is already being written")
 
 
 def running(name: str) -> bool:
+    """A recap of this instance is being written, in this process or another."""
     with _lock:
-        return name in _running
+        if name in _running:
+            return True
+    path = _lock_path(name)
+    if not path.exists():
+        return False
+    fd = os.open(path, os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return False
+    except BlockingIOError:
+        return True
+    finally:
+        os.close(fd)
+
+
+def command(names: list[str]) -> int:
+    """`shaft recap [names]`: write the recaps now (all instances by default) and print them."""
+    from . import dashboard
+    from .core import instance_names
+    names = names or instance_names()
+    unknown = [n for n in names if n not in instance_names()]
+    if unknown:
+        print(f"no such instance: {', '.join(unknown)}")
+        return 1
+    print(start([dashboard.instance_state(n) for n in names], wait=True))
+    stored, worst = load(), 0
+    for n in names:
+        r = stored.get(n, {})
+        if r.get("error") and r.get("error_ts", "") >= r.get("ts", ""):
+            print(f"{n}: recap failed: {r['error']}")
+            worst = 1
+        elif r.get("text"):
+            print(f"{n}: {r['text']}")
+    return worst
