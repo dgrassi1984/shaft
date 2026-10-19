@@ -437,17 +437,18 @@ def cmd_secret(args) -> int:
 
 
 def _secret_google(args, root) -> int:
-    """`shaft secret <name> google <key> <address> --client <c> [--scope gmail.modify]`: the instance's own Google
-    account (PLAN-own-mail.md), signed in by the operator in the browser; the broker refreshes it per run."""
+    """`shaft secret <name> google <key> <address> --client <c> [--scope gmail.modify|drive]`: the instance's own
+    Google account (PLAN-own-mail.md, PLAN-own-drive.md), signed in by the operator in the browser; the broker
+    refreshes it per run."""
     from . import google
     from .core import secrets_env, store_google_key
     env = secrets_env()
     clients = sorted({k[len("GMAIL_"):-len("_CLIENT_ID")].lower().replace("_", "-") for k in env
                       if k.startswith("GMAIL_") and k.endswith("_CLIENT_ID")})
     if not (args.address and args.client):
-        print(f"usage: shaft secret {args.name} google <key> <address> --client <name> [--scope gmail.modify] "
-              f"(e.g. shaft secret thelos google gmail instance@example.com --client personal); the OAuth clients "
-              f"in .env: {', '.join(clients) or 'none'}", file=sys.stderr)
+        print(f"usage: shaft secret {args.name} google <key> <address> --client <name> [--scope "
+              f"{'|'.join(google.KEY_SCOPES)}] (e.g. shaft secret thelos google drive instance@example.com --client "
+              f"personal --scope drive); the OAuth clients in .env: {', '.join(clients) or 'none'}", file=sys.stderr)
         return 2
     try:
         data = google.instance_key_login(args.address, args.client, args.scope, env)
@@ -981,7 +982,9 @@ def main(argv: list[str]) -> int:
     p.add_argument("address", nargs="?", help="google: the instance's own Google address (never one of yours)")
     p.add_argument("--hosts", default="", help="comma-separated hosts the key may be sent to (google: from the scope)")
     p.add_argument("--client", default="", help="google: the OAuth client in .env (GMAIL_<CLIENT>_CLIENT_ID/_SECRET)")
-    p.add_argument("--scope", default="gmail.modify", help="google: gmail.modify (read, send, label, trash)")
+    p.add_argument("--scope", default="gmail.modify",
+                   help="google: gmail.modify (read, send, label, trash its mail) or drive (its Drive, Sheets, Docs and "
+                        "Slides: PLAN-own-drive.md)")
     p.add_argument("--header", default="Authorization")
     p.add_argument("--scheme", default="Bearer", help="e.g. Bearer, token; '' for the raw value")
     p = sub.add_parser("share", help="a folder of yours an instance may read (read-only, seen as shared/); 'off' removes it")

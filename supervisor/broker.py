@@ -31,6 +31,9 @@ from .core import NETWORK_ERRORS, knob
 
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36"
 MAX_FETCH_BYTES = 3_000_000
+# http_request's binary bodies (PLAN-own-drive.md D3): a file sent whole, and an answer saved whole or not at all.
+MAX_BODY_FILE_BYTES = 50_000_000
+MAX_SAVE_BYTES = 50_000_000
 MAX_MESSAGE_CHARS = 8000
 # Messages to the operator per instance per day; 0 = no limit (Daniele, 2026-10-13, with Telegram: "No limit").
 OPERATOR_DAILY_LIMIT = int(os.environ.get("SHAFT_OPERATOR_PER_DAY") or 0)
@@ -216,13 +219,18 @@ SPECS = {
         "your keys (secret_set) — the supervisor adds it to the request, only to the hosts that key is bound to; "
         "with a key, redirects are not followed but returned to you. A Google key (your own Google account, signed "
         "in by the operator) is refreshed by the supervisor: use it like any key. Errors from the API (4xx/5xx) come "
-        "back as data, not as a failure.",
+        "back as data, not as a failure. For files that are not text: body_file sends one of your files as the body, "
+        "save_to writes the answer to a new file in your folder (up to 50 MB each way).",
         {"url": S, "method": {"type": "string", "description": "GET (default), HEAD, POST, PUT, PATCH, DELETE"},
          "headers": {"type": "object", "description": "extra request headers"},
          "body": {"description": "request body: text, or an object sent as JSON"},
          "auth": {"type": "string", "description": "name of your key to add (optional)"},
          "timeout_s": {"type": "integer", "description": "default 30, max 120"},
-         "max_chars": {"type": "integer", "description": "body characters to return, default 12000"}},
+         "max_chars": {"type": "integer", "description": "body characters to return, default 12000"},
+         "body_file": {"type": "string", "description": "a file in your folder sent as the body, byte for byte (an "
+                                                         "upload: a PDF, an image), instead of body (optional)"},
+         "save_to": {"type": "string", "description": "a new path in your folder: the answer's body is written there "
+                                                       "whole, byte for byte (a download), and not shown (optional)"}},
         ["url"]),
     "secret_set": _spec(
         "secret_set",
@@ -1083,12 +1091,17 @@ class Broker:
         return self.root
 
     def _http_request(self, url: str, method: str = "GET", headers: dict | None = None, body=None, auth: str = "",
-                      timeout_s: int = 30, max_chars: int = 12000) -> str:
+                      timeout_s: int = 30, max_chars: int = 12000, body_file: str = "", save_to: str = "") -> str:
         from .core import is_google_key, read_secrets
         method = str(method or "GET").upper()
         if method not in {"GET", "HEAD"} | WRITE_METHODS:
             raise ValueError(f"method must be one of GET, HEAD, {', '.join(sorted(WRITE_METHODS))}")
         check_public(url)
+        upload = self._body_file(body_file) if body_file else None
+        if upload is not None and body not in (None, ""):
+            raise ValueError("give body or body_file, not both")
+        if save_to:
+            self._new_file(save_to, "save_to")
         host = (urllib.parse.urlsplit(url).hostname or "").lower()
         hdrs = {"User-Agent": "SHAFT/1 (+https://github.com/dgrassi1984/shaft)", "Accept": "*/*"}
         hdrs.update({str(k): str(v) for k, v in (headers or {}).items()})
@@ -1102,20 +1115,27 @@ class Broker:
             secret = self._google_token(auth, entry) if is_google_key(entry) else entry["value"]
             hdrs[entry.get("header") or "Authorization"] = f"{entry.get('scheme', 'Bearer')} {secret}".strip()
         data = None
-        if body not in (None, ""):
+        if upload is not None:
+            data = upload
+            if not any(k.lower() == "content-type" for k in hdrs):
+                hdrs["Content-Type"] = "application/octet-stream"
+        elif body not in (None, ""):
             data = body.encode() if isinstance(body, str) else json.dumps(body).encode()
             if not any(k.lower() == "content-type" for k in hdrs):
                 hdrs["Content-Type"] = "text/plain; charset=utf-8" if isinstance(body, str) else "application/json"
         req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
+        limit = MAX_SAVE_BYTES if save_to else MAX_FETCH_BYTES
         if secret and method in WRITE_METHODS and not self.network:
             # A battery exam (network=False) holds the instance's real keys but never writes with them (PLAN-own-mail
             # D5): answered as a plain success, like a trial replay's write, and logged.
             self._log(f"{self.name} http_request keyed {method} {host} not sent: no network in this run (battery)")
             status, rh, raw = 200, {}, b""
         else:
-            status, rh, raw = self._send(req, auth if secret else "", max(1, min(int(timeout_s), 120)))
+            status, rh, raw = self._send(req, auth if secret else "", max(1, min(int(timeout_s), 120)), limit)
         if secret and status == 401 and is_google_key(entry):
             self.google_tokens.pop(auth, None)   # revoked or expired early: the next call makes a new one
+        if save_to:
+            return self._save_answer(save_to, status, rh, raw, secret)
         ctype = rh.get("Content-Type", "") if rh else ""
         charset = re.search(r"charset=([\w-]+)", ctype)
         text = raw.decode(charset.group(1) if charset else "utf-8", errors="replace")
@@ -1151,14 +1171,59 @@ class Broker:
             self.google_tokens[auth] = (token, expires)
             return token
 
-    def _send(self, req: urllib.request.Request, keyed: str, timeout_s: int):
-        """Send an http_request: (status, headers, body bytes). `keyed` names the key added to it ("" for none)."""
+    def _send(self, req: urllib.request.Request, keyed: str, timeout_s: int, limit: int = MAX_FETCH_BYTES):
+        """Send an http_request: (status, headers, body bytes). `keyed` names the key added to it ("" for none). The
+        body is read up to `limit` bytes plus one, so a caller can tell a cut answer from a whole one."""
         try:
             resp = (_opener_no_redirects if keyed else _opener).open(req, timeout=timeout_s)
             with resp:
-                return resp.status, resp.headers, resp.read(MAX_FETCH_BYTES)
+                return resp.status, resp.headers, resp.read(limit + 1)
         except urllib.error.HTTPError as e:   # an API's own error is an answer, not a broker failure
-            return e.code, e.headers, e.read(MAX_FETCH_BYTES)
+            return e.code, e.headers, e.read(limit + 1)
+
+    def _new_file(self, rel: str, arg: str) -> Path:
+        """A path for a new file in its folder (`save_to`): relative, inside, not there yet. Checked before anything
+        is sent, so a bad path never costs a request."""
+        from .core import contained
+        if not rel or rel.startswith(("-", "/", ":")) or ".." in Path(rel).parts:
+            raise ValueError(f"{arg} must be a path relative to your folder")
+        path = contained(self._root(), *Path(rel).parts)
+        if os.path.lexists(path):
+            raise ValueError(f"{arg}: {rel} already exists; save to a new path")
+        return path
+
+    def _body_file(self, rel: str) -> bytes:
+        """The bytes of a file in its folder, sent as an http_request body (`body_file`)."""
+        from .core import contained
+        if rel.startswith(("-", "/", ":")) or ".." in Path(rel).parts:
+            raise ValueError("body_file must be a path relative to your folder")
+        path = contained(self._root(), *Path(rel).parts)   # refuses a link anywhere on the way
+        if not path.is_file():
+            raise ValueError(f"body_file: {rel} is not a file in your folder")
+        size = path.stat().st_size
+        if size > MAX_BODY_FILE_BYTES:
+            raise ValueError(f"body_file: {rel} is {size} bytes, over the {MAX_BODY_FILE_BYTES} limit")
+        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as f:   # not swapped for a link since
+            return f.read()
+
+    def _save_answer(self, rel: str, status: int, rh, raw: bytes, secret) -> str:
+        """`save_to`: the answer's body written whole to a new file, or nothing written. Only a 2xx answer is saved:
+        an error page or a redirect (a keyed request does not follow one) is shown instead, so it never poses as the
+        file; an answer over the limit is refused, so a cut file never poses as a whole one."""
+        from .core import safe_write_bytes
+        shown = [f"{k}: {v}" for k, v in (rh.items() if rh else []) if k.lower() in SHOWN_HEADERS]
+        head = f"HTTP {status}\n" + "\n".join(shown)
+        if not 200 <= status < 300:
+            text = raw[:4000].decode("utf-8", errors="replace")
+            out = f"{head}\n\nnot saved (HTTP {status} is not the file):\n{text}"
+            return out.replace(secret, "[your key]") if secret else out
+        if len(raw) > MAX_SAVE_BYTES:
+            raise ValueError(f"save_to: the answer is over {MAX_SAVE_BYTES} bytes; nothing saved")
+        if secret and secret.encode() in raw:
+            raw = raw.replace(secret.encode(), b"[your key]")
+        self._new_file(rel, "save_to")
+        safe_write_bytes(self._root(), rel, raw)
+        return f"{head}\n\nsaved {rel}: {len(raw)} bytes, sha256 {hashlib.sha256(raw).hexdigest()}"
 
     def _secret_set(self, name: str, value: str, hosts, header: str = "Authorization", scheme: str = "Bearer") -> str:
         from .core import store_secret
@@ -1568,20 +1633,20 @@ class ReplayBroker(Broker):
         return self._shared(["describe_image", hashlib.sha256(data).hexdigest(), question, DESCRIBE_MODEL],
                             lambda: Broker._describe(self, media, data, question))
 
-    def _send(self, req: urllib.request.Request, keyed: str, timeout_s: int):
+    def _send(self, req: urllib.request.Request, keyed: str, timeout_s: int, limit: int = MAX_FETCH_BYTES):
         method = req.get_method()
         if method in WRITE_METHODS:   # not sent: what a real cycle would see from a plain success
             self._tag("simulated: not sent")
             return 200, {}, b""
         key = ["http", method, req.full_url, sorted(self._cache_headers(req, keyed)),
-               (req.data or b"").decode(errors="replace")]
-        status, headers, raw = self._shared(key, lambda: self._fetch_masked(req, keyed, timeout_s))
+               (req.data or b"").decode(errors="replace"), limit]
+        status, headers, raw = self._shared(key, lambda: self._fetch_masked(req, keyed, timeout_s, limit))
         return status, dict(headers), raw
 
-    def _fetch_masked(self, req, keyed, timeout_s):
+    def _fetch_masked(self, req, keyed, timeout_s, limit=MAX_FETCH_BYTES):
         """A keyed read for the pair's cache, with the key masked in the body before it is kept: each run of a pair
         may add a different value (its own Google access token), and only its own would be masked on the way out."""
-        status, headers, raw = self._fetch(req, keyed, timeout_s)
+        status, headers, raw = self._fetch(req, keyed, timeout_s, limit)
         if keyed:
             from .core import read_secrets
             entry = read_secrets(self._keys_root()).get(keyed) or {}
@@ -1601,8 +1666,8 @@ class ReplayBroker(Broker):
         header = (read_secrets(self._keys_root()).get(keyed) or {}).get("header") or "Authorization"
         return [(k, f"[key {keyed}]" if k.lower() == header.lower() else v) for k, v in req.header_items()]
 
-    def _fetch(self, req, keyed, timeout_s):
-        status, headers, raw = Broker._send(self, req, keyed, timeout_s)
+    def _fetch(self, req, keyed, timeout_s, limit=MAX_FETCH_BYTES):
+        status, headers, raw = Broker._send(self, req, keyed, timeout_s, limit)
         return status, dict(headers.items()) if headers else {}, raw
 
     # -- writes: checked like the real thing, recorded, not carried out ----------------------------------

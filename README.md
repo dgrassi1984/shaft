@@ -366,6 +366,27 @@ every send is in `broker.log`). A new account that sends automatically may be li
 recipients a day). Do not forward your own mail there: it would be read whole, with no label. Mail content reaches
 model providers and the instance's mind store, as with labels.
 
+### An instance's own Drive, Sheets, Docs and Slides (`shaft secret <name> google … --scope drive`)
+
+The same account's files ([PLAN-own-drive.md](PLAN-own-drive.md)): a second Google key on the instance's own account,
+used the same way (its own plugins, `http_request(auth="drive")`). Sign it in once, as that account:
+
+    shaft secret thelos google drive instance@example.com --client personal --scope drive
+
+- The `drive` bundle is four scopes, all granted or nothing saved: `drive` (every file in its Drive and every file
+  shared with it), `spreadsheets`, `documents`, `presentations`. The key is bound to `www.googleapis.com` (Drive v3
+  and its uploads), `sheets.googleapis.com`, `docs.googleapis.com` and `slides.googleapis.com`. The `personal`
+  client's project must have the four APIs enabled and the four scopes in Data Access; the app stays In production.
+- Binary files go through `http_request`'s `body_file` (upload) and `save_to` (download).
+- The same guards as its Gmail: never one of your accounts, refreshed by the supervisor, trial replays never write
+  (a `save_to` in a replay lands in the replay's copy), battery exams make no token.
+
+The risks you accept: it can share any of its files with anyone, or with anyone who has the link (logged in
+`broker.log`, no allowlist). Whatever you share with it, it reads whole, and as an editor it can change or trash it:
+share as Viewer when it need not edit. Files shared with it by others are written by them (prompt injection). Unlike
+`gmail.modify`, `drive` can delete its own files permanently. Its 15 GB is shared with its Gmail: a full Drive
+stops its mail arriving.
+
 ### Calendar (`shaft calendar …`)
 
 An instance you pick may read the calendars you pick, one per grant ([PLAN-calendar.md](PLAN-calendar.md)), with full
@@ -561,7 +582,9 @@ alerted for 12 h, until any later start).
   (`typesafe/jev-1.13`, `~typesafe/jev-latest`), the same daily cloud cap and usage log as the chat models, and the
   data policy `SHAFT_DECISION_PROVIDER` (no data collection, zero retention, no fallback); off in battery exams,
   shared by a trial's pair like the other reads.
-  **`http_request`**: call web APIs (any method, headers, body) at any public address. **Its own
+  **`http_request`**: call web APIs (any method, headers, body) at any public address; `body_file` sends a file
+  of its folder as the body byte for byte and `save_to` writes the answer to a new file of its folder (2xx only,
+  whole or not at all; 50 MB each way), for files that are not text. **Its own
   keys** (`secret_set` / `secret_list` / `secret_delete`, or `shaft secret <name> set <key> --hosts …` from
   your terminal): kept in its folder under `secrets/` but handled only by the supervisor — the broker adds a
   key to requests to the hosts it is bound to, never through a redirect, and masks it in responses; the

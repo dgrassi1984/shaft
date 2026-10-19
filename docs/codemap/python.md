@@ -60,8 +60,6 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_commit.py` | `CommitStateTest`, `IgnoredFileTest`, `ConfigMergeTest`, `HistoryToolTest`, `RecordToolTest`, `UpdateCase`, `UpdateNoteTest`, `UpdateKeepsUncommittedWorkTest` | `git` |
 | `supervisor/tests/test_config_writers.py` | `ConfigWritersTest`, `SetConfigTest`, `SandboxTest` | `git`, `instance_tests_only` |
 | `supervisor/tests/test_control_panel.py` | `PanelData`, `SchedulerRestartGuard`, `PanelRestartsOnNewCode`, `PanelKeys`, `PanelViews` | — |
-| `supervisor/tests/test_control_panel.py` | `PanelData`, `SchedulerRestartGuard`, `PanelRestartsOnNewCode`, `PanelKeys`, `PanelViews` | — |
-| `supervisor/tests/test_control_panel.py` | `PanelData`, `SchedulerRestartGuard`, `PanelRestartsOnNewCode`, `PanelKeys`, `PanelViews` | — |
 | `supervisor/tests/test_conversations.py` | `OpenConversationTest`, `WriteUpTest`, `SpeakerTest`, `JournalHeadingTest` | — |
 | `supervisor/tests/test_dashboard.py` | `InstanceStateTest`, `EventsTest` | — |
 | `supervisor/tests/test_decide.py` | `DecideTest` | — |
@@ -88,6 +86,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_network_errors.py` | `CutShort`, `RetryTest`, `BrokerAnswersTest` | — |
 | `supervisor/tests/test_opconfig.py` | `OpConfigTest`, `SetTest`, `CommitFailsTest`, `SecretNamesTest`, `FieldsTest`, `DriveTest`, `RaceTest`, `ThroughARealCycleTest`, `LinkedWorktreeTest` | — |
 | `supervisor/tests/test_openrouter.py` | `FakeOpenRouter`, `OpenRouterTest`, `StreamingTest` | — |
+| `supervisor/tests/test_own_drive.py` | `FakeDriveTokens`, `FakeDrive`, `DriveCase`, `DriveLoginTest`, `DriveKeyTest`, `BinaryBodyTest`, `DriveReplayTest` | `drive_key` |
 | `supervisor/tests/test_own_mail.py` | `FakeTokens`, `FakeGmail`, `OwnMailCase`, `TokenTest`, `ExamAndReplayTest`, `LoginTest` | `key` |
 | `supervisor/tests/test_pause.py` | `SlowModel`, `AgentSideTest`, `SupervisorSideTest`, `CleanupTest`, `OldCodeTest`, `YieldOnlyForTheSameModelTest` | — |
 | `supervisor/tests/test_personality.py` | `LayerWriterTest`, `CorePaceTest` | — |
@@ -109,7 +108,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_trial.py` | `Fixture`, `ReconstructTest`, `ReplayEndToEndTest`, `ReplayLeavesTheMindStoreTest`, `ReplaySeesItsRealVenvTest`, `PreemptTest`, `ReplayBrokerTest`, `VerdictTest`, `RequestTest`, `LocalTimeTest`, `FlowTest`, `WorkerTest` | `git`, `snapshot` |
 | `supervisor/tests/test_version.py` | `VersionTest` | `done` |
 | `supervisor/tests/test_vision.py` | `FakeModels`, `Case`, `CapabilityTest`, `PrepareTest`, `DescribeTest`, `ReplayAttachmentsTest`, `JudgeNoteTest`, `TemplateTest`, `AnswerEndToEndTest` | `png`, `image_part` |
-| `supervisor/tests/test_web.py` | `WebTest`, `WhoMayUseItTest`, `PairingTest`, `ForgedRequestsTest`, `EscapingTest`, `OverviewTest`, `PortTest` | `snap` |
+| `supervisor/tests/test_web.py` | `WebTest`, `WhoMayUseItTest`, `PairingTest`, `ForgedRequestsTest`, `EscapingTest`, `OverviewTest`, `HostsTest`, `PortTest` | `snap` |
 | `supervisor/tests/test_web_actions.py` | `ActionsTest`, `EveryActionRunsItsCommand`, `RefusedWhereTheTuiRefuses`, `PagesShowEachActionAsItRuns`, `RecapLockTest`, `NewVerbsTest`, `OneBrokenInstanceTest` | — |
 | `supervisor/tests/test_web_chat.py` | `FakeApi`, `ChatTest`, `RelayTest`, `OlderApiTest`, `FilesTest`, `ChatRoutesTest` | `chunk` |
 | `supervisor/tests/test_web_config.py` | `ConfigActionsTest`, `ConfigPagesTest` | — |
@@ -119,7 +118,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/trial.py` | `TrialError` | `load`, `save`, `all_trials`, `usage_today`, `branch`, `committed_code`, `model_of`, `live_episodes`, `start_time`, `state_of`, `mind_rev`, `reconstruct`, `link_env`, `copy_attachments`, `file_diff`, `replay_arm`, `judge_case`, `state_context`, `judge_pair`, `decide`, `sign_p`, `verdict`, `create`, `request`, `gate_check`, `local_free_for`, `local_never_free`, `runnable`, `has_work`, `run_pair`, `conclude`, `report`, `deliver`, `sweep_scratch`, `work`, `describe`, `describe_all`, `match`, `stats_lines` |
 | `supervisor/version.py` | — | `supervisor_commit`, `record_service`, `service`, `instance`, `describe` |
 | `supervisor/vision.py` | `VisionError` | `sees_images`, `sees_images_or_no`, `sniff`, `prepare_bytes`, `data_url`, `split_data_url`, `count`, `prepare`, `without_images` |
-| `supervisor/web.py` | `Request`, `Response`, `Handler` | `allowed_logins`, `allowed_hosts`, `url`, `new_pairing`, `devices`, `unpair`, `device_from_cookie`, `csrf_token`, `overview`, `respond`, `activity`, `attachment_path`, `serve`, `command` |
+| `supervisor/web.py` | `Request`, `Response`, `Handler` | `allowed_logins`, `tailnet_hosts`, `record_hosts`, `allowed_hosts`, `url`, `new_pairing`, `devices`, `unpair`, `device_from_cookie`, `csrf_token`, `overview`, `respond`, `activity`, `attachment_path`, `serve`, `command` |
 | `supervisor/web_actions.py` | `Refused` | `run`, `button`, `instance_buttons`, `message_forms`, `tool_switches`, `alert_buttons`, `service_buttons`, `autonomy_button` |
 | `supervisor/web_chat.py` | `Refused`, `Relay` | `load`, `save`, `chats`, `open_chat`, `new_chat`, `reap`, `replying`, `send`, `stop`, `end`, `parse_multipart` |
 | `supervisor/web_config.py` | — | `run`, `config_page`, `drive_diff`, `drive_page`, `access_page`, `access` |

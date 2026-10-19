@@ -5,9 +5,10 @@ account's refresh token in .supervisor/google/<alias>.json (0600, outside every 
 issued it and the scopes Google actually granted; instances never hold a credential. mail.py and calendar.py enforce
 their own grants on top of an `Account`; nothing here knows about labels or calendars.
 
-An instance's own Google account (PLAN-own-mail.md: Thelos's Gmail) is not the operator's: its login is a `google`
-key in the instance's key store (`instance_key_login`), refreshed by the broker (`refresh`) and added to its
-http_request calls like any key. It may never be one of the operator's accounts (`operator_addresses`).
+An instance's own Google account (PLAN-own-mail.md: Thelos's Gmail; PLAN-own-drive.md: its Drive, Sheets, Docs and
+Slides) is not the operator's: each login is a `google` key in the instance's key store (`instance_key_login`, one
+bundle from KEY_SCOPES), refreshed by the broker (`refresh`) and added to its http_request calls like any key. It
+may never be one of the operator's accounts (`operator_addresses`).
 
 `urlopen` is the one door to Google; the tests put a fake Google behind it.
 """
@@ -35,12 +36,24 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 GMAIL = "https://www.googleapis.com/auth/gmail.readonly"
 CALENDAR = "https://www.googleapis.com/auth/calendar.readonly"
 GMAIL_MODIFY = "https://www.googleapis.com/auth/gmail.modify"
+DRIVE = "https://www.googleapis.com/auth/drive"
+SHEETS = "https://www.googleapis.com/auth/spreadsheets"
+DOCS = "https://www.googleapis.com/auth/documents"
+SLIDES = "https://www.googleapis.com/auth/presentations"
 SCOPES = (GMAIL, CALENDAR)                            # one login asks for both
-SCOPE_NAMES = {GMAIL: "gmail.readonly", CALENDAR: "calendar.readonly", GMAIL_MODIFY: "gmail.modify"}
-# What an instance's own Google key may be granted, and the hosts its token is good for (the key is bound to them).
+SCOPE_NAMES = {GMAIL: "gmail.readonly", CALENDAR: "calendar.readonly", GMAIL_MODIFY: "gmail.modify", DRIVE: "drive",
+               SHEETS: "spreadsheets", DOCS: "documents", SLIDES: "presentations"}
+# What an instance's own Google key may be granted (a bundle of scopes, all or nothing), and the hosts its token is
+# good for (the key is bound to them).
 # gmail.modify: read, send, label, trash; never a permanent delete, the settings or anything outside Gmail.
-KEY_SCOPES = {"gmail.modify": (GMAIL_MODIFY, ("gmail.googleapis.com",))}
+# drive (PLAN-own-drive.md): every file in its Drive and every file shared with it, Sheets, Docs and Slides; it can
+# share, trash and permanently delete its own files. www.googleapis.com serves Drive v3 and its uploads (and other
+# Google APIs, which refuse a token without their scope).
+KEY_SCOPES = {"gmail.modify": ((GMAIL_MODIFY,), ("gmail.googleapis.com",)),
+              "drive": ((DRIVE, SHEETS, DOCS, SLIDES),
+                        ("www.googleapis.com", "sheets.googleapis.com", "docs.googleapis.com", "slides.googleapis.com"))}
 GMAIL_PROFILE = "https://gmail.googleapis.com/gmail/v1/users/me/profile"
+DRIVE_ABOUT = "https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)"
 CALENDAR_PRIMARY = "https://www.googleapis.com/calendar/v3/calendars/primary"
 ALIAS_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
 CLIENT_RE = ALIAS_RE                                 # an OAuth client's name (GMAIL_<NAME>_CLIENT_ID)
@@ -308,16 +321,18 @@ class Account:
 # -- login: the operator's consent, once per account, for every scope ---------------------------------------------
 def _signed_in_as(access_token: str, granted: set[str]) -> str:
     """The account the token belongs to, read with a scope it was granted: Gmail's profile, else the primary
-    calendar (whose ID is the account's address)."""
+    calendar (whose ID is the account's address), else Drive's `about`."""
     if granted & {GMAIL, GMAIL_MODIFY}:
-        url, field = GMAIL_PROFILE, "emailAddress"
+        url, read = GMAIL_PROFILE, lambda d: d.get("emailAddress")
     elif CALENDAR in granted:
-        url, field = CALENDAR_PRIMARY, "id"
+        url, read = CALENDAR_PRIMARY, lambda d: d.get("id")
+    elif DRIVE in granted:
+        url, read = DRIVE_ABOUT, lambda d: (d.get("user") or {}).get("emailAddress")
     else:
-        raise AccountError("Google granted no Gmail or Calendar scope: nothing saved")
+        raise AccountError("Google granted no Gmail, Calendar or Drive scope: nothing saved")
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {access_token}"})
     with urlopen(req, timeout=30) as resp:
-        return str(json.load(resp).get(field, ""))
+        return str(read(json.load(resp)) or "")
 
 
 def login(alias: str, address: str, secrets_env: dict[str, str], client: str = "", open_url=None,
@@ -336,20 +351,24 @@ def login(alias: str, address: str, secrets_env: dict[str, str], client: str = "
 
 def instance_key_login(address: str, client: str, scope: str, secrets_env: dict[str, str], open_url=None,
                        timeout_s: int = 300) -> dict:
-    """The consent flow for an instance's own Google account (PLAN-own-mail.md): one scope from KEY_SCOPES, never
-    an operator account (checked before the browser opens and again on the address Google signed in). Returns the
+    """The consent flow for an instance's own Google account (PLAN-own-mail.md, PLAN-own-drive.md): one bundle from
+    KEY_SCOPES, every scope in it granted or nothing saved (the consent page lets the operator untick one); never an
+    operator account (checked before the browser opens and again on the address Google signed in). Returns the
     key's fields for core.store_google_key; nothing is stored here."""
     if scope not in KEY_SCOPES:
         raise AccountError(f"an instance's Google key may be granted {', '.join(KEY_SCOPES)}, not {scope!r}")
     if (address or "").casefold() in operator_addresses():
         raise AccountError(f"{address} is one of your own Google accounts (shaft google): an instance never holds it "
                            "as a key; grant it labels or calendars instead (shaft mail, shaft calendar)")
-    url, hosts = KEY_SCOPES[scope]
-    data = consent(address, client, (url,), secrets_env, open_url=open_url, timeout_s=timeout_s, incremental=False)
+    urls, hosts = KEY_SCOPES[scope]
+    data = consent(address, client, urls, secrets_env, open_url=open_url, timeout_s=timeout_s, incremental=False)
     if data["address"].casefold() in operator_addresses():
         raise AccountError(f"signed in as {data['address']}, one of your own Google accounts: nothing saved")
-    if url not in scopes(data):
-        raise AccountError(f"Google did not grant {scope} (it granted {data['scope'] or 'nothing'}): nothing saved")
+    missing = [SCOPE_NAMES.get(u, u) for u in urls if u not in scopes(data)]
+    if missing:
+        bundle = f"; {scope} needs all of {', '.join(SCOPE_NAMES[u] for u in urls)}" if len(urls) > 1 else ""
+        raise AccountError(f"Google did not grant {', '.join(missing)} (it granted {data['scope'] or 'nothing'}"
+                           f"{bundle}): nothing saved; log in again and leave every box ticked")
     return {"kind": "google", **data, "hosts": list(hosts)}
 
 
