@@ -188,6 +188,10 @@
   // this browser (data-draft), so a reload or a closed tab does not lose it; the server's chat is the record.
   const composer = () => document.querySelector("form[data-files]");
 
+  function touchOnly() {                         // a phone or tablet with no keyboard and no mouse
+    return window.matchMedia("(hover: none) and (pointer: coarse)").matches;
+  }
+
   function picked(form) {
     const input = form.querySelector("input[type=file]");
     const box = form.querySelector("[data-picked]");
@@ -327,7 +331,10 @@
 
   document.addEventListener("keydown", (ev) => {
     const form = ev.target.closest && ev.target.closest("form[data-files]");
-    if (form && ev.target.tagName === "TEXTAREA" && ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) {
+    // Enter sends on a computer (Shift-Enter: a new line). A touch-only device has no Shift: there Return is a new
+    // line and the Send button sends (PLAN-pwa P0: on the iPhone a message could not have two lines).
+    if (form && ev.target.tagName === "TEXTAREA" && ev.key === "Enter" && !ev.shiftKey && !ev.isComposing
+        && !touchOnly()) {
       ev.preventDefault();
       form.requestSubmit();
       return;
@@ -473,10 +480,15 @@
     if (!q) { b.hidden = true; return; }
     const r = q.range.getBoundingClientRect();
     b.hidden = false;
-    // below the selection: a phone shows its own copy/paste menu above it
-    b.style.top = `${window.scrollY + r.bottom + 6}px`;
-    b.style.left = `${Math.max(8, Math.min(window.scrollX + r.left, window.scrollX + window.innerWidth - b.offsetWidth - 8))}px`;
+    // In the window (position: fixed), below the selection — a phone shows its own copy/paste menu above it — and
+    // kept inside the window when the selection runs to its bottom edge.
+    const below = r.bottom + 6 + b.offsetHeight <= window.innerHeight - 8;
+    b.style.top = `${below ? r.bottom + 6 : Math.max(8, r.top - b.offsetHeight - 6)}px`;
+    b.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - b.offsetWidth - 8))}px`;
   }
+  // The feed and the documents scroll in their own boxes: the button follows its selection when either moves.
+  document.addEventListener("scroll", () => { if (!quoteButton().hidden) placeQuoteButton(); }, true);
+  window.addEventListener("resize", () => { if (!quoteButton().hidden) placeQuoteButton(); });
 
   function quoteSelection() {
     const q = quotable();

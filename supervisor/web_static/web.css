@@ -15,6 +15,7 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }    /* a rule that sets display must never show what the page hid */
 html, body { margin: 0; background: var(--bg); color: var(--text); }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }   /* iOS must not enlarge text on rotation */
 body { font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
 a { color: var(--accent); text-decoration: none; }
 h1 { font-size: 1.3rem; margin: 0 0 .8rem; }
@@ -102,7 +103,7 @@ nav .unpair button { font-size: .8rem; color: var(--dim); width: 100%; }
 #toast.show { opacity: 1; }
 #toast.bad { background: var(--bad); color: #fff; }
 
-@media (max-width: 720px) {
+@media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
   .shell { grid-template-columns: 1fr; }
   nav { position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; gap: .2rem .4rem;
         border-right: 0; border-bottom: 1px solid var(--line); padding: .6rem 1rem; }
@@ -173,7 +174,7 @@ td:empty::before { content: ""; }
 .att { margin: .5rem 0 1rem; }
 img.attachment { max-width: 100%; max-height: 70vh; border-radius: 6px; border: 1px solid var(--line); }
 
-@media (max-width: 720px) {
+@media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
   table thead { display: none; }
   table, tbody, tr, td { display: block; width: 100%; }
   tr { border-bottom: 1px solid var(--line); padding: .3rem 0; }
@@ -232,7 +233,7 @@ form.composer { display: grid; gap: .4rem; margin: .6rem 0 1rem; position: stick
 label.pick { font-size: .85rem; cursor: pointer; color: var(--accent); }
 label.pick input { display: none; }
 /* reply to part of a message (select it in the feed) */
-#quote-reply { position: absolute; z-index: 20; font-size: .8rem; padding: .2rem .55rem; border-radius: 6px;
+#quote-reply { position: fixed; z-index: 20; font-size: .8rem; padding: .2rem .55rem; border-radius: 6px;
                box-shadow: 0 2px 8px rgba(0, 0, 0, .25); }
 #quote-reply[hidden] { display: none; }
 blockquote { margin: .3rem 0; padding: .1rem .6rem; border-left: 3px solid var(--line); color: var(--dim); }
@@ -266,7 +267,7 @@ main:has(> .chatgrid) { display: flex; flex-direction: column; height: 100vh; pa
 .earlier { border-top: 1px solid var(--line); margin-top: .5rem; padding-top: .4rem; font-size: .88rem; max-height: 14rem;
            overflow-y: auto; }
 .earlier h3 { font-size: .8rem; color: var(--dim); margin: 0 0 .2rem; }
-@media (max-width: 720px) {
+@media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
   main:has(> .chatgrid) { height: auto; min-height: 0; }
   .chatgrid, .chatgrid:has(.docview), .chatgrid:has(.doclist a), .chatgrid.showdocs {
     grid-template-columns: minmax(0, 1fr); }
@@ -298,7 +299,7 @@ form.composer textarea { resize: none; min-height: 2.6rem; }
 .turn.it pre > .copy { position: absolute; top: .2rem; right: .2rem; opacity: 0; }
 .turn.it pre:hover > .copy { opacity: 1; }
 .turn.sending { opacity: .6; }
-@media (max-width: 720px) { .keys { display: none; } }
+@media (max-width: 720px), (pointer: coarse) and (max-height: 520px) { .keys { display: none; } }
 /* a very wide window: the conversation keeps a readable width (the documents panel takes the room beside it) */
 .chathead { max-width: 72rem; width: 100%; }
 .chatgrid:not(:has(.docview)):not(:has(.doclist a)) > .chatpage { max-width: 72rem; width: 100%; }
@@ -352,3 +353,31 @@ form.docedit textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monosp
 .md th.al-c, .md td.al-c { text-align: center; }
 .md blockquote { margin: .4rem 0; }
 form.clearbtn { display: inline; margin: 0; }
+
+/* Touch (PLAN-pwa P0). The phone rules above also apply to a phone held sideways (a touch screen under 520 px tall:
+   it was given the desktop's three columns). */
+/* Long words, links and file names wrap instead of widening the chat. */
+.turn, .md, .doclist a, .doctitle b, .doccard, .chip span, .feed .wrap { overflow-wrap: anywhere; min-width: 0; }
+.doctitle b { flex: 1 1 auto; }
+@media (hover: none) {
+  /* No hover on a phone: what showed on hover is always there. */
+  .turn .who .copy, .turn.it pre > .copy, .docview pre > .copy { opacity: 1; }
+  .keys { display: none; }                          /* "Enter sends" is not true where Return makes a new line */
+}
+@media (pointer: coarse) {
+  /* iOS zooms the page into any field under 16 px when it is tapped. */
+  input, select, textarea, form.composer textarea, form.docedit textarea, .newdoc input { font-size: 16px; }
+  /* Fingers: 44 pt targets (Apple's guideline). */
+  button, button.small, button.act, details.menu > summary, label.pick, .newdoc > summary {
+    min-height: 44px; min-width: 44px; padding-top: .45rem; padding-bottom: .45rem; }
+  nav a.inst, .doclist a, .doccard, .menupages a, .rail details.manage > a, .editchip, .tabs a {
+    min-height: 44px; display: inline-flex; align-items: center; }
+  .chip .unpick { min-width: 44px; min-height: 44px; font-size: 1.3rem; }
+  label.pick { display: inline-flex; align-items: center; }
+  details.menu > summary { display: inline-flex; align-items: center; justify-content: center; }
+}
+@media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
+  /* The ⋯ menu as a sheet across the screen: anchored to its button, it ran off the right edge. */
+  .menubody { position: fixed; left: .5rem; right: .5rem; top: 3.5rem; width: auto;
+              max-height: calc(100dvh - 4.5rem); overflow-y: auto; }
+}

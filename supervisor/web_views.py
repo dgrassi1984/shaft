@@ -720,10 +720,11 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
     composer = Html("") if read_only else h(
         '<form class="composer" data-post="/chat/{n}/send" data-multipart="1" data-reset="1" data-files data-draft="{n}">'
         '<div class="chips" data-picked></div>'
-        '<textarea name="text" rows="2" maxlength="20000" placeholder="Message {n} — Enter sends, Shift-Enter is a new '
-        'line; drop, paste or attach files"></textarea>'
+        '<textarea name="text" rows="2" maxlength="20000" placeholder="Message {n}" aria-label="Message {n}">'
+        '</textarea>'
         '<div class="actions"><label class="pick">Attach files<input type="file" name="files" multiple></label>'
-        '<span class="dim keys">/ to write · Alt-↑↓ another chat</span><button type="submit">Send</button></div></form>',
+        '<span class="dim keys">Enter sends · Shift-Enter new line · / to write · Alt-↑↓ another chat</span>'
+        '<button type="submit">Send</button></div></form>',
         n=name)
     pasts = [link(f"/i/{q(name)}/chat?id={q(c['id'])}", f"{c['created'][:16].replace('T', ' ')} · "
                   f"{len([t for t in c['turns'] if t['role'] == 'user'])} message(s)") for c in past]
