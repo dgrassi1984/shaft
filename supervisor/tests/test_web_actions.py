@@ -34,9 +34,11 @@ class ActionsTest(WebTest):
         self.ran.append((who, ["detached", *args], None))
         return "started"
 
+    LOG_ID = "log:2026-10-19 09:48:34:2373c79a19f2"           # a real log alert's id: its time has a space
+
     def act(self, verb: str, state: str = "idle", **form) -> tuple[int, str]:
         s = snap(state=state)
-        s["alerts"] = [{"id": "a1", "text": "one"}, {"id": "a2", "text": "two"}]
+        s["alerts"] = [{"id": "a1", "text": "one"}, {"id": "a2", "text": "two"}, {"id": self.LOG_ID, "text": "log"}]
         body = "&".join(f"{k}={v}" for k, v in form.items()).encode()
         with mock.patch.object(web, "overview", return_value=s):
             r = self.req(f"/action/{verb}", "POST", cookie=self.cookie, body=body,
@@ -92,9 +94,19 @@ class EveryActionRunsItsCommand(ActionsTest):
         self.act("recap")
         self.assertRan(["detached", "recap"], None)
 
-    def test_dismiss_the_alerts_shown(self):
-        self.act("dismiss", ids="a1+a2")
-        self.assertRan(["alerts", "dismiss", "a1", "a2"])
+    def test_dismiss_the_alerts_shown_including_a_log_alert_whose_id_has_a_space(self):
+        """Live, 2026-10-19: the ids went space-separated, a log alert's id split in two, and every dismiss was
+        refused as "not open any more"."""
+        import json as _json
+        import urllib.parse as up
+        from supervisor import web_actions
+        form = str(web_actions.alert_buttons([{"id": "a1"}, {"id": self.LOG_ID}]))
+        value = form.split('name="ids" value="')[1].split('"')[0]
+        import html as _html
+        ids = _html.unescape(value)
+        self.assertEqual(_json.loads(ids), ["a1", self.LOG_ID])          # what the page posts
+        self.assertEqual(self.act("dismiss", ids=up.quote(ids))[0], 200)
+        self.assertRan(["alerts", "dismiss", "a1", self.LOG_ID])
 
     def test_services_and_autonomy(self):
         self.act("service", service="model", op="on")
@@ -133,8 +145,9 @@ class RefusedWhereTheTuiRefuses(ActionsTest):
             self.refused("battery", "the battery is off", name="wren")
 
     def test_alerts_no_longer_open(self):
-        self.refused("dismiss", "not open any more", ids="gone")
+        self.refused("dismiss", "not open any more", ids="%5B%22gone%22%5D")
         self.refused("dismiss", "not open any more", ids="")
+        self.refused("dismiss", "not open any more", ids="not-json")
 
     def test_a_scheduler_restart_while_its_runs_go_on(self):
         with mock.patch.object(panel, "scheduled_runs", return_value=["wren (live since 12:00)"]):

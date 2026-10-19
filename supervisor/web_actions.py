@@ -10,6 +10,8 @@ runs it.
 """
 from __future__ import annotations
 
+import json
+
 from . import actions
 from .web_pages import Html, h, join
 
@@ -59,7 +61,10 @@ def _run(verb: str, form: dict, snap: dict, names: list[str], services: list[str
         return _started(["recap"])
     if verb == "dismiss":
         open_ids = {a["id"] for a in snap.get("alerts") or []}
-        ids = [i for i in form.get("ids", "").split() if i]
+        try:                                         # a JSON list: a log alert's id has a space in it (its time)
+            ids = [str(i) for i in json.loads(form.get("ids", "[]")) if i]
+        except (ValueError, TypeError):
+            ids = []
         if not ids or not set(ids) <= open_ids:
             raise Refused("those alerts are not open any more")
         return _ran(["alerts", "dismiss", *ids])
@@ -204,7 +209,7 @@ def alert_buttons(alerts: list[dict]) -> Html:
     shown = alerts[:5]
     if not shown:
         return Html("")
-    return button("dismiss", "Dismiss these alerts", "", {"ids": " ".join(a["id"] for a in shown)}, cls="small")
+    return button("dismiss", "Dismiss these alerts", "", {"ids": json.dumps([a["id"] for a in shown])}, cls="small")
 
 
 def service_buttons(name: str, running: bool, scheduled: list[str], busy: list[str]) -> Html:
