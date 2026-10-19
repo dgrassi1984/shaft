@@ -45,7 +45,8 @@ def chat_frame(name: str, live: dict, body: Html, names: list[str], csrf: str, e
         facts.append(f"${live['usd_today']:.2f} today")
     buttons = instance_buttons(live) if live.get("name") else Html("")
     head = h('<header class="chathead"><h1>{name}</h1><span class="dim facts">{facts}</span>'
-             '<details class="menu"><summary title="{name}: pages and actions">⋯</summary><div class="menubody">'
+             '<button type="button" class="small docsbtn" data-show-docs title="its documents (notes/docs/)">📄 Documents'
+             '</button><details class="menu"><summary title="{name}: pages and actions">⋯</summary><div class="menubody">'
              '<div class="menupages">{pages}</div><div class="actions">{buttons}</div>'
              '<div class="actions"><button type="button" class="small" data-notify>Notify me of replies</button></div>'
              '{earlier}</div></details></header>',
@@ -707,7 +708,7 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
                p=d["path"], b=d["bytes"], cls="on" if d["path"] == open_path else "",
                dot=Html('<span class="mark" title="changed in this chat">●</span> ') if d["path"] in marked else Html(""))
              for d in listing]
-    new = h('<details class="newdoc"><summary>New document</summary><form data-post="/docs/{n}/save" '
+    new = h('<details class="newdoc" data-key="newdoc"><summary>New document</summary><form data-post="/docs/{n}/save" '
             'data-after="doc-saved"><input type="hidden" name="sha" value="none"><input name="path" required '
             'placeholder="name, e.g. plan" pattern="[A-Za-z0-9][A-Za-z0-9 _.\\-]*" maxlength="80">'
             '<textarea name="text" hidden></textarea><button type="submit" class="small">Create</button></form></details>',

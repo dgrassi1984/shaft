@@ -68,6 +68,8 @@
       if (document.visibilityState !== "visible" && !el.dataset.hidden) return;   // data-hidden: keeps going (the rail)
       if (selectingIn(el)) return;                  // replacing it would drop the text being selected (to quote it)
       if (el.querySelector(".editing")) return;     // nor a document being edited: Save's check says if it changed
+      const typing = document.activeElement;        // nor a field being typed in (a new document's name)
+      if (typing && el.contains(typing) && typing.matches("input, textarea")) return;
       running = true;
       try {
         const r = await fetch(url, { credentials: "same-origin", cache: "no-store" });
@@ -144,7 +146,11 @@
       const body = await r.text();
       toast(textOf(body) || (r.ok ? "done" : `HTTP ${r.status}`), !r.ok);
       const refusal = form.querySelector("[data-refusal]");
-      if (refusal) refusal.textContent = r.ok ? "" : fullText(body);     // all of it: what changed meanwhile
+      if (refusal) {                                  // all of it, as this server wrote it (escaped): what changed
+        refusal.replaceChildren(...(r.ok ? [] : new DOMParser().parseFromString(body, "text/html").body.childNodes));
+      }
+      const now = r.headers.get("X-Doc-Sha");         // refused as stale: Save again replaces it, knowingly
+      if (!r.ok && now && form.querySelector("input[name=sha]")) form.querySelector("input[name=sha]").value = now;
       if (r.ok && form.dataset.after === "doc-saved") docSaved(form, r.headers.get("X-Doc"));
       if (r.ok && form.dataset.reset) { form.reset(); picked(form); }
       if (r.ok && form.dataset.draft) sent(form);
@@ -582,6 +588,14 @@
     }
     if (panel && panel._tick) panel._tick();
   }
+  document.addEventListener("click", (ev) => {           // 📄 Documents: show the panel (it hides when there are none)
+    if (!(ev.target.closest && ev.target.closest("[data-show-docs]"))) return;
+    const grid = document.querySelector(".chatgrid");
+    const panel = document.getElementById("docs");
+    if (!grid || !panel) return;
+    grid.classList.toggle("showdocs");
+    if (grid.classList.contains("showdocs")) panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  });
   document.addEventListener("click", (ev) => {
     const edit = ev.target.closest && ev.target.closest("[data-edit-doc]");
     const cancel = ev.target.closest && ev.target.closest("[data-cancel-edit]");

@@ -22,6 +22,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import re
 import secrets
 import socket
 import threading
@@ -299,13 +300,19 @@ def _run(relay: Relay) -> None:
 EDIT_DIFF_MAX = 12000                  # a diff longer than this is summarised: the instance reads the file itself
 
 
+def _fence(text: str) -> str:
+    """A code fence longer than any run of backticks in the text: a document's own ``` must not close it."""
+    return "`" * max(3, 1 + max((len(m) for m in re.findall(r"`+", text)), default=0))
+
+
 def edit_diff(path: str, old: str | None, new: str) -> str:
     """What the operator changed in a document, as the instance is told it."""
     import difflib
     rel = f"notes/docs/{path}"
     if old is None:
         body = new if len(new) <= EDIT_DIFF_MAX else new[:EDIT_DIFF_MAX] + "\n…(cut: read the file)"
-        return f"[Daniele created {rel}:]\n```markdown\n{body}\n```"
+        f = _fence(body)
+        return f"[Daniele created {rel}:]\n{f}markdown\n{body}\n{f}"
     diff = "\n".join(difflib.unified_diff(old.splitlines(), new.splitlines(), f"a/{rel}", f"b/{rel}", lineterm="", n=2))
     if not diff:
         return f"[Daniele saved {rel} unchanged.]"
@@ -313,7 +320,8 @@ def edit_diff(path: str, old: str | None, new: str) -> str:
         added = sum(l.startswith("+") for l in diff.splitlines()[2:])
         dropped = sum(l.startswith("-") for l in diff.splitlines()[2:])
         return f"[Daniele edited {rel}: +{added} −{dropped} lines, too long to show here — read the file.]"
-    return f"[Daniele edited {rel}:]\n```diff\n{diff}\n```"
+    f = _fence(diff)
+    return f"[Daniele edited {rel}:]\n{f}diff\n{diff}\n{f}"
 
 
 def doc_saved(name: str, login: str, path: str, old: str | None, new: str, sha: str) -> str:
@@ -324,7 +332,10 @@ def doc_saved(name: str, login: str, path: str, old: str | None, new: str, sha: 
     with _lock(chat["id"]):
         chat = load(chat["id"])
         pend = chat.setdefault("pending_edits", {})
-        first = pend.get(path, {}).get("old", old) if path in pend else old
+        # Folded into one diff only while nobody else wrote it in between: if the instance wrote over his last save,
+        # it knows its own version, and the diff starts there (folding from the first save called its text his).
+        prev = pend.get(path)
+        first = prev["old"] if prev and prev["new"] == old else old
         pend[path] = {"old": first, "new": new}
         added = sorted({l.strip() for l in new.splitlines() if l.strip()} - {l.strip() for l in (old or "").splitlines()})
         chat.setdefault("saved_docs", {})[path] = {"sha": sha, "text": new, "ts": _now(), "added": added[:400]}

@@ -342,3 +342,10 @@ class StaticVersionTest(TestCase):
             (Path(d) / "web.js").write_text("two")
             self.assertNotEqual(before, web_pages._static_version(Path(d)))
         self.assertEqual(web_pages.STATIC_VERSION, web_pages._static_version())
+
+
+class StylesTest(TestCase):
+    def test_what_the_page_hides_stays_hidden(self):
+        """Found live: form.docedit { display: grid } showed the document editor the page had hidden."""
+        css = (Path(web_pages.__file__).parent / "web_static" / "web.css").read_text()
+        self.assertIn("[hidden] { display: none !important; }", css)

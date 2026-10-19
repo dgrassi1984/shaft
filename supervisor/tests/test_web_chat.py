@@ -553,6 +553,13 @@ class DocEditsTest(DocsInChatTest):
         long = web_chat.edit_diff("p.md", "", "\n".join(f"line {i}" for i in range(3000)))
         self.assertIn("+3000 −0 lines, too long to show here — read the file", long)
 
+    def test_a_document_with_its_own_code_fence_does_not_close_the_diff(self):
+        d = web_chat.edit_diff("p.md", "a\n", "a\n```python\nx\n```\n")
+        self.assertTrue(d.startswith("[Daniele edited notes/docs/p.md:]\n````diff\n"))
+        self.assertTrue(d.endswith("\n````"))
+        c = web_chat.edit_diff("p.md", None, "````\nfour\n````")
+        self.assertTrue(c.startswith("[Daniele created notes/docs/p.md:]\n`````markdown\n"))
+
     def test_saves_while_it_is_idle_go_once_with_the_next_message_as_one_diff(self):
         chat, _ = web_chat.send("wren", ME, "start", [])
         self.wait_idle(chat["id"])
@@ -572,6 +579,17 @@ class DocEditsTest(DocsInChatTest):
         web_chat.send("wren", ME, "and now?", [])
         self.wait_idle(chat["id"])
         self.assertNotIn("Daniele edited", self.api.chats()[2][2]["messages"][-1]["content"])   # never twice
+
+    def test_a_write_of_the_instance_between_two_saves_is_not_called_his(self):
+        """Found live: he created plan.md empty, the instance wrote its plan in it, he added a section — and the
+        instance would have been told "Daniele created plan.md" with its own plan in it."""
+        web_chat.doc_saved("wren", ME, "plan.md", None, "", "s1")
+        web_chat.doc_saved("wren", ME, "plan.md", "its plan\n", "its plan\nmy section\n", "s2")
+        chat, _ = web_chat.send("wren", ME, "go on", [])
+        sent = self.wait_idle(chat["id"])["turns"][0]["content"]
+        self.assertNotIn("Daniele created", sent)
+        self.assertIn("[Daniele edited notes/docs/plan.md:]", sent)
+        self.assertIn(" its plan\n+my section", sent)
 
     def test_a_save_while_it_replies_reaches_it_at_once(self):
         self.api.hold.set()
@@ -646,6 +664,11 @@ class DocSaveRouteTest(DocsPanelTest):
         self.assertIn("+by the instance", body)
         self.assertEqual((self.docs / "plan.md").read_text(), "one\nby the instance\n")
         self.assertIsNone(web_chat.open_chat("wren"))
+        # Found live: Save after the refusal was refused forever (the page kept the old sha). It gets the sha now:
+        self.assertEqual(r.headers["X-Doc-Sha"], docs.sha(b"one\nby the instance\n"))
+        again = self.post(path="plan.md", text="one\nmine\n", sha=r.headers["X-Doc-Sha"])
+        self.assertEqual(again.status, 200)
+        self.assertEqual((self.docs / "plan.md").read_text(), "one\nmine\n")
 
     def test_a_new_document_by_name(self):
         r = self.post(path="ideas", text="", sha="none")
@@ -666,3 +689,11 @@ class DocSaveRouteTest(DocsPanelTest):
         self.assertIn("Restore yours", panel)
         self.assertIn('data-post="/docs/wren/save"', panel)
         self.assertIn(f'name="sha" value="{docs.sha(b"one" + bytes([10]) + b"its rewrite" + bytes([10]))}"', panel)
+
+
+class DocsButtonTest(DocsPanelTest):
+    def test_with_no_documents_the_panel_can_still_be_opened_to_make_one(self):
+        """Found live: with no documents the panel is hidden, and its New document with it."""
+        body = self.req("/i/wren/chat", cookie=self.cookie).body.decode()
+        self.assertIn("data-show-docs", body)
+        self.assertIn('data-post="/docs/wren/save"', body)                       # the New document form is there

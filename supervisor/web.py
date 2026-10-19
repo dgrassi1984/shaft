@@ -515,12 +515,15 @@ def _save_doc(name: str, login: str, form: dict) -> Response:
     finally:
         tmp.unlink(missing_ok=True)
     if not ok:
-        now, _ = docs.read(name, path)
+        now, now_sha = docs.read(name, path)
         diff = "\n".join(difflib.unified_diff(text.splitlines(), (now or "").splitlines(), "yours", "now", lineterm="",
                                               n=1)) if now is not None and sha != "none" else ""
+        # The sha it has now goes back to the page: Save again replaces it with yours, knowingly (Cancel takes it).
         return _html(409, web_pages.h('<p>{l}</p>{d}', l=last if last.startswith("refused") else f"refused: {last}",
-                                      d=web_pages.h('<p>What it has now that your text has not (your text is kept in '
-                                                    'the box):</p><pre class="diff">{x}</pre>', x=diff) if diff else ""))
+                                      d=web_pages.h('<p>What it has now that your text has not. Your text is kept in '
+                                                    'the box: Save again to replace it with yours, or Cancel to take '
+                                                    'its version.</p><pre class="diff">{x}</pre>', x=diff) if diff else ""),
+                     {"X-Doc-Sha": now_sha} if diff else {})
     _, new_sha = docs.read(name, path)
     rel = docs._rel(path)
     try:
