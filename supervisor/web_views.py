@@ -32,7 +32,8 @@ def instance_frame(name: str, tab: str, title: str, body: Html, names: list[str]
     return frame(f"{name} · {title}", join([head, body]), names, csrf, current=f"i:{name}")
 
 
-def chat_frame(name: str, live: dict, body: Html, names: list[str], csrf: str, earlier: Html = Html("")) -> Html:
+def chat_frame(name: str, live: dict, body: Html, names: list[str], csrf: str, earlier: Html = Html(""),
+               clear: bool = False) -> Html:
     """The chat's own frame (PLAN-webui-chat §1): the instance's model, state and spend in one line, and everything
     else about it — its pages and its actions — behind the ⋯ menu, out of the conversation's way."""
     from .web_actions import instance_buttons
@@ -45,12 +46,17 @@ def chat_frame(name: str, live: dict, body: Html, names: list[str], csrf: str, e
     buttons = instance_buttons(live) if live.get("name") else Html("")
     head = h('<header class="chathead"><h1>{name}</h1><span class="dim facts">{facts}</span>'
              '<button type="button" class="small docsbtn" data-show-docs title="its documents (notes/docs/)">📄 Documents'
-             '</button><details class="menu"><summary title="{name}: pages and actions">⋯</summary><div class="menubody">'
+             '</button>{clear}<details class="menu"><summary title="{name}: pages and actions">⋯</summary><div class="menubody">'
              '<div class="menupages">{pages}</div><div class="actions">{buttons}</div>'
              '<div class="actions"><button type="button" class="small" data-notify>Notify me of replies</button></div>'
              '{earlier}</div></details></header>',
              name=name, facts=" · ".join(f for f in facts if f), pages=pages, buttons=buttons,
-             earlier=h('<div class="earlier">{e}</div>', e=earlier) if earlier else Html(""))
+             earlier=h('<div class="earlier">{e}</div>', e=earlier) if earlier else Html(""),
+             # always on screen (it sat under the last answer, below the fold on a phone); the chat shown now
+             clear=h('<form class="act clearbtn" data-post="/chat/{n}/clear" data-confirm="Clear this chat? An open '
+                     'conversation is ended first — {name} writes it up in its journal — and the chat is kept in Earlier '
+                     'web chats and Transcripts."><button type="submit" class="small" title="empty this page; nothing is '
+                     'deleted">Clear chat</button></form>', n=q(name), name=name) if clear else Html(""))
     return frame(f"{name} · chat", join([head, body]), names, csrf, current=f"i:{name}")
 
 
@@ -692,24 +698,15 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
     elif chat["state"] == "ended":
         feed.append(h('<p class="dim ended">Ended {e}: written up in its journal. Your next message starts a new '
                       'conversation.</p>', e=chat.get("ended", "")[:16].replace("T", " ")))
-    clear = h('<form class="act" data-post="/chat/{n}/clear" data-confirm="{c}"><input type="hidden" name="cid" '
-              'value="{cid}"><button type="submit" class="act small">Clear the chat</button></form>', n=q(name),
-              cid=chat["id"],
-              c=("Clear this chat from the page? It is kept in Earlier web chats and Transcripts."
-                 if chat["state"] == "ended" else
-                 f"Clear this chat? The conversation is ended first — {name} writes it up in its journal — and it is "
-                 "kept in Earlier web chats and Transcripts."))
     if chat.get("pending_edits"):
         feed.append(h('<p class="pending-edits">✎ Your edits to {p} go to {n} with your next message.</p>',
                       p=", ".join(sorted(chat["pending_edits"])), n=name))
     if archived:                                  # a past chat's page: nothing here acts on the current one
         return join(feed)
     if chat["state"] not in ("replying", "ended") and chat["turns"]:
-        feed.append(h('<div class="actions">{b}{c}</div>', b=button(
+        feed.append(h('<div class="actions">{b}</div>', b=button(
             "chat-end", "End the conversation", f"end this conversation with {name}? It writes it up in its journal "
-            "now, and your next message starts a new one.", {"cid": chat["id"]}, cls="small"), c=clear))
-    elif chat["state"] == "ended" and chat["turns"]:
-        feed.append(h('<div class="actions">{c}</div>', c=clear))
+            "now, and your next message starts a new one.", {"cid": chat["id"]}, cls="small")))
     return join(feed)
 
 
@@ -740,4 +737,4 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
     aside = h('<aside class="docs" id="docs" data-poll="/fragment/docs/{n}?doc={d}" data-every="1500">{p}</aside>',
               n=q(name), d=q(doc), p=panel)
     return chat_frame(name, live, h('<div class="chatgrid"><div class="chatpage">{b}</div>{a}</div>', b=body, a=aside),
-                      names, csrf, earlier)
+                      names, csrf, earlier, clear=bool(chat) and not read_only)

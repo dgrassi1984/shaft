@@ -867,3 +867,21 @@ class ArchivedClearTest(ChatRoutesTest):
         with self.assertRaisesRegex(web_chat.Refused, "not the chat on this page"):
             web_chat.clear("wren", past["id"])
         self.assertEqual(web_chat.load(now["id"])["state"], "idle")   # the current one untouched
+
+
+class ClearInHeaderTest(ChatRoutesTest):
+    def test_clear_is_in_the_header_always_on_screen(self):
+        """Daniele, on his phone: "I don't see the button to clear the chat" — it sat under the last answer, at the
+        bottom of a feed that scrolls in its own box."""
+        self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
+                        {"role": "assistant", "content": "a", "ts": "2026-10-19T12:00:05"}])
+        body = self.req("/i/wren/chat", cookie=self.cookie).body.decode()
+        head = body[body.index('<header class="chathead">'):body.index("</header>")]
+        self.assertIn('data-post="/chat/wren/clear"', head)
+        feed = self.req("/fragment/chat/wren", cookie=self.cookie).body.decode()
+        self.assertNotIn("/clear", feed)
+        self.assertIn("chat-end", feed)                                    # End stays with the conversation
+
+    def test_no_chat_no_clear(self):
+        body = self.req("/i/wren/chat", cookie=self.cookie).body.decode()
+        self.assertNotIn("/chat/wren/clear", body)

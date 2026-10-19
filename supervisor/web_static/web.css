@@ -351,3 +351,4 @@ form.docedit textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monosp
 .md th.al-r, .md td.al-r { text-align: right; }
 .md th.al-c, .md td.al-c { text-align: center; }
 .md blockquote { margin: .4rem 0; }
+form.clearbtn { display: inline; margin: 0; }
