@@ -308,6 +308,17 @@ a command you run from a shell that sets it.
 2. `shaft web pair --name phone` prints a one-time link, valid for 10 minutes. Open it in the browser you want to use
    and press Pair. `shaft web status` lists the paired browsers; `shaft web unpair <id|name>|--all` revokes them.
 
+**On your iPhone** (PLAN-pwa.md): open the URL in Safari, then Share → **Add to Home Screen**. The app keeps its own
+cookies, separate from Safari's, so pair it from inside: run `shaft web pair --name phone-app`, copy the link, and
+paste it into the app's "not paired" page.
+- **Notifications:** in the app, ⋯ → **Notify me of replies** (iOS 16.4+). A reply that ends while SHAFT is closed or
+  locked then arrives as "thelos replied", with the badge, through Web Push. The push carries nothing: the app fetches
+  the text over the tailnet. Pushes are signed with a key made by `/usr/bin/openssl`, kept in `.supervisor/web/`.
+- **Typing:** on a phone, Return makes a new line and Send sends.
+- **Layout:** the chat fills the screen. ☰ lists the chats and pages, 📄 the documents, ⋯ the instance's pages and
+  actions.
+- **Offline:** when SHAFT cannot be reached, the app says so and retries.
+
 Every request needs your tailnet login **and** a paired browser. Every POST needs the page's own token, and every
 response forbids inline script. Instances cannot reach the port. Every action runs the matching `shaft`
 subcommand, logged as `web: operator …`; config, drive, document and settings edits go through `shaft config` /
