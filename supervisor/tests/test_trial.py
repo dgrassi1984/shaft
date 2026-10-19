@@ -240,6 +240,50 @@ class ReplayLeavesTheMindStoreTest(ReplayEndToEndTest):
         self.assertEqual(mind.head(NAME, self.project), self.m1)
 
 
+class ReplaySeesItsRealVenvTest(Fixture):
+    """Bug (M4 of PLAN-browser, 2026-10-19): the replay copy had no .venv/, so `.venv/bin/python …` — the path
+    Thelos's 07:51 cycle drove its browser with — failed with "no such file" in a replay, and a replayed cycle
+    could tell it was a replay ("NO_VENV", then a `uv venv` rebuild). The copy now links the instance's real
+    .venv/ and .uv/, and the sandbox still keeps them read-only."""
+
+    def setUp(self):
+        self.fake = FakeLLM([
+            {"tool_calls": [("declare_intent", {"goal": "use my venv", "success_criterion": "ran",
+                                                "confidence": 60, "origin": "instance", "origin_ref": "-"})]},
+            {"tool_calls": [("run", {"command": "[ -d .venv ] && echo VENV_OK || echo NO_VENV; "
+                                                ".venv/bin/python hello; "
+                                                "touch .venv/bin/planted 2>/dev/null && echo WROTE || echo DENIED; "
+                                                "rm -f .uv/marker 2>/dev/null; [ -e .uv/marker ] && echo KEPT"})]},
+            {"tool_calls": [("finish_cycle", {"what_happened": "ran", "criterion_met": "yes", "learned": "-"})]},
+        ])
+        self.addCleanup(self.fake.close)
+        self.llm_url = self.fake.url
+        super().setUp()
+        (self.root / ".venv" / "bin").mkdir(parents=True)
+        py = self.root / ".venv" / "bin" / "python"
+        py.write_text('#!/bin/sh\necho "FAKE-VENV-PY $@"\n')
+        py.chmod(0o755)
+        (self.root / ".uv").mkdir()
+        (self.root / ".uv" / "marker").write_text("x")
+
+    def test_the_copy_runs_the_real_venv_read_only(self):
+        with mock.patch.object(broker, "notify"), \
+                mock.patch.object(broker.Broker, "_send", side_effect=AssertionError("a write left the broker")):
+            rec = trial.replay_arm(self.project, NAME, self.state(), trial.committed_code(self.project, NAME),
+                                   model="local", cache={}, cache_lock=threading.Lock(), billed=f"{NAME}@trial:t")
+        self.assertTrue(rec["completed"], rec["output_tail"])
+        out = next(c["result"] for c in rec["trace"] if c["tool"] == "run")
+        self.assertIn("VENV_OK", out)
+        self.assertNotIn("NO_VENV", out)
+        self.assertIn("FAKE-VENV-PY hello", out)
+        self.assertIn("DENIED", out)                                    # read-only through the link
+        self.assertIn("KEPT", out)
+        self.assertFalse((self.root / ".venv" / "bin" / "planted").exists())
+        self.assertTrue((self.root / ".uv" / "marker").exists())
+        self.assertTrue((self.root / ".venv" / "bin" / "python").is_file())   # the copy's cleanup left it
+        self.assertNotIn(".venv", rec["diff"])
+
+
 class PreemptTest(Fixture):
     def setUp(self):
         from supervisor.tests.test_pause import SlowModel

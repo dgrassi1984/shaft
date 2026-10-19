@@ -297,6 +297,18 @@ def reconstruct(project: Path, name: str, state: dict, code: dict[str, bytes | N
     return dest
 
 
+def link_env(dest: Path, real: Path) -> None:
+    """The instance's Python environment (.venv/, .uv/) at its usual place in the copy, as links to the real one:
+    a replayed `.venv/bin/python …` runs as it did live, and the cycle cannot tell from a missing .venv/ that it is
+    a replay. Read-only all the same: the sandbox checks the resolved path, and the real folder is not writable
+    from a replay (`_env_reads` only lets it read)."""
+    from .pyenv import ENV_DIRS
+    real = Path(real).resolve()
+    for d in ENV_DIRS:
+        if (real / d).is_dir() and not (dest / d).exists() and not (dest / d).is_symlink():
+            (dest / d).symlink_to(real / d, target_is_directory=True)
+
+
 def copy_attachments(src: Path, dest: Path, before: datetime) -> int:
     """Files sent to the instance before `before` (attachments/<from-who>/<YYYYmmdd-HHMMSS…>/): they are versioned
     nowhere (not in git, not in the mind store), and a replay must see the photo the original cycle could look at
@@ -383,6 +395,7 @@ def _replay(project, name, state, code, tmp, *, model, cache, cache_lock, billed
     from .broker import ReplayBroker
     from .core import BROKER_MAX_CALLS
     dest = reconstruct(project, name, state, code, tmp / name)
+    link_env(dest, project / "instances" / name)
     before, seen = _files_now(dest), _episode_lines(dest)
     broker = ReplayBroker(name, project, secrets_env(), SUP_DIR / "trials" / "broker.log", state_root=dest,
                           start_commit=state["start_commit"], as_of=datetime.fromisoformat(state["t0"]),
