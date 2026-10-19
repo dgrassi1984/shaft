@@ -19,7 +19,7 @@ import urllib.request
 from datetime import datetime
 from pathlib import Path
 
-from . import gate, judge, metrics, mind
+from . import gate, judge, localmodel, metrics, mind
 from .core import (HOME, INSTANCES, LLM_PORTS, MIND_PATHS, add_all_but_mind, NAME_RE, PROJECT, SUP_DIR, git, git_wt, instance_names,
                    instance_root, journal_note, log, safe_mkdir, safe_write)
 from .runner import run_agent
@@ -149,6 +149,8 @@ def _base_answer(root: Path, question: str) -> str:
     if url.hostname not in ("127.0.0.1", "localhost") or url.port not in LLM_PORTS:
         raise RuntimeError(f"{root.name}'s LLM_BASE_URL {cfg['LLM_BASE_URL']!r} is not an allowed local "
                            f"model port {LLM_PORTS}")
+    if localmodel.is_service(cfg["LLM_BASE_URL"]):
+        localmodel.ensure(f"{root.name}'s baseline")   # it runs only while used (localmodel.py)
     body = {"model": cfg["LLM_MODEL"], "max_tokens": int(cfg.get("MAX_TOKENS_TALK", 4096)),
             "messages": [{"role": "user", "content": question + " (Answer in at most 150 words.)"}]}
     req = urllib.request.Request(cfg["LLM_BASE_URL"].rstrip("/") + "/chat/completions",

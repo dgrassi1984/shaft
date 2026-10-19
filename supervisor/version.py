@@ -88,5 +88,7 @@ def describe(name: str) -> str:
                      f"(temp {s.get('temp')}, think {s.get('think_budget')})"
                      + (" — older code, restart: shaft model on" if model["stale"] else ""))
     else:
-        parts.append("model server: not running")
+        from . import localmodel
+        parts.append("model server: idle — starts on demand" if localmodel.plist().exists()
+                     else "model server: not installed (shaft model on)")
     return " · ".join(parts)

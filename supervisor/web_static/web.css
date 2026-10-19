@@ -43,6 +43,7 @@ nav .unpair button { font-size: .8rem; color: var(--dim); width: 100%; }
 .services { display: flex; flex-wrap: wrap; gap: .3rem .9rem; }
 .svc.up { color: var(--good); }
 .svc.down { color: var(--bad); }
+.svc.idle { color: var(--dim); }
 .svc .dim { font-size: .85em; }
 .alerts { list-style: none; padding: .6rem .8rem; margin: 0 0 .8rem; border: 1px solid var(--bad); border-radius: 8px;
           color: var(--bad); font-weight: 600; }

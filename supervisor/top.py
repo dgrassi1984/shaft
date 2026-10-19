@@ -309,8 +309,8 @@ def recap_line(r: dict | None) -> Text | None:
 def render_main(snap: dict, ui: UI, width: int = 100):
     head = Text(f" SHAFT · {snap['at']}   ", style="bold")
     for s in snap["services"]:
-        head.append("● " if s["running"] else "○ ", style="green" if s["running"] else "red")
-        head.append(s["name"], style="bold" if s["running"] else "red")
+        head.append("● " if s["running"] else "○ ", style="green" if s["running"] else "dim" if s.get("idle") else "red")
+        head.append(s["name"], style="bold" if s["running"] else "dim" if s.get("idle") else "red")
         if s["detail"]:
             head.append(f" {s['detail']}", style="dim")
         head.append("   ")
@@ -427,7 +427,7 @@ def render(snap: dict, ui: UI | None = None, width: int = 100, height: int = 40)
 
 
 def plain(snap: dict) -> str:
-    lines = [f"SHAFT {snap['at']} · " + " · ".join(f"{s['name']} {'up' if s['running'] else 'DOWN'}"
+    lines = [f"SHAFT {snap['at']} · " + " · ".join(f"{s['name']} {'up' if s['running'] else 'idle' if s.get('idle') else 'DOWN'}"
                                                   for s in snap["services"])
              + (f" · ${snap['spend']:.2f} spent today" if snap.get("spend") is not None else "")]
     lines += [f"ALERT {a['text']}" for a in snap.get("alerts") or []]

@@ -13,7 +13,7 @@ import time
 from datetime import date, datetime
 from pathlib import Path
 
-from . import messages
+from . import localmodel, messages
 from .core import SUP_DIR, disabled_tools, instance_config, instance_names, instance_root, paused
 
 SERVICES = ("model", "embed", "api", "scheduler", "telegram", "web")
@@ -193,13 +193,15 @@ def services() -> list[dict]:
             out.append({"name": name, "running": _scheduler_running(), "detail": ""})
             continue
         rec = version.service(name, stale=False)
-        detail = ""
+        detail, idle = "", False
         if rec:
             detail = f"{rec['commit']} since {rec['started'][11:16]}"
             if name == "model":
                 s = rec.get("settings", {})
                 detail += f" · temp {s.get('temp')} · think {s.get('think_budget')}"
-        out.append({"name": name, "running": bool(rec), "detail": detail})
+        elif name == "model" and localmodel.plist().exists():   # runs only while used (localmodel.py): not down
+            detail, idle = "idle · starts on demand", True
+        out.append({"name": name, "running": bool(rec), "idle": idle, "detail": detail})
     return out
 
 

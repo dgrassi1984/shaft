@@ -99,6 +99,19 @@ class EveryPageShowsWhatItsTabShows(PagesTest):
         self.has("/services", "older code than checked out", "NOT RUNNING", "line one", 'data-poll="/fragment/services"')
         self.has("/fragment/services", "NOT RUNNING")
 
+    def test_an_idle_model_server_is_idle_not_down(self):
+        """main 86b2d72: the model server runs only while used; an idle one is not a fault (shown dim, as in the TUI)."""
+        with mock.patch.object(panel, "services_detail", return_value=[
+                {"name": "model", "running": False, "idle": True, "detail": "idle · starts on demand"}]):
+            body = self.get("/services")
+        model_row = next(r for r in body.split("<tr") if "log=model" in r)
+        self.assertIn("○ idle", model_row)
+        self.assertNotIn("NOT RUNNING", model_row)
+        s = snap()
+        s["services"] = [{"name": "model", "running": False, "idle": True, "detail": "idle · starts on demand"}]
+        from supervisor import web_pages
+        self.assertIn('class="svc idle"', web_pages.overview(s))
+
     def test_an_unknown_instance_or_page_is_404(self):
         self.get("/i/nobody", 404)
         self.get("/i/shaft/nothing", 404)

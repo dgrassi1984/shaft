@@ -578,8 +578,8 @@ def services_live(svcs: list[dict], order: list[str], runs: list[str], busy: lis
     for name in order:
         s = by.get(name, {"running": False, "detail": ""})
         body.append(([h('<a href="/services?log={n}">{n}</a>', n=name),
-                      h('<span class="{c}">{t}</span>', c="good" if s["running"] else "bad",
-                        t="● running" if s["running"] else "○ NOT RUNNING"),
+                      h('<span class="{c}">{t}</span>', c="good" if s["running"] else "dim" if s.get("idle") else "bad",
+                        t="● running" if s["running"] else "○ idle" if s.get("idle") else "○ NOT RUNNING"),
                       f"pid {s['pid']}" if s.get("pid") else "", s.get("detail", ""),
                       h('<span class="warn">older code than checked out: restart it</span>') if s.get("stale") else "",
                       service_buttons(name, s["running"], runs, busy)],

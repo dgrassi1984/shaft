@@ -20,6 +20,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from . import localmodel
 from .core import PROJECT, PYTHON, SUP_DIR, instance_config, instance_names, log, paused
 from .runner import Busy, is_busy, run_agent
 
@@ -29,12 +30,16 @@ WAKE_FLOOR_MIN = 10                     # config.env is the instance's own file:
 SLEEP_AT = (4, 0)                       # hour, minute — daily; caught up later that day if missed
 STATE = SUP_DIR / "schedule.json"       # last wake per instance / last nightly sleep, written by the runs
 LEGACY_JOBS = ("com.shaft.tick", "com.shaft.sleep")
+BOOTSTRAP_TRIES = 20                    # x 0.5 s: launchd lets go of a booted-out job a moment after bootout returns
 
 
-# Long-running services (KeepAlive): SHAFT's own model server, the OpenAI-compatible API, the web UI, ….
+# Long-running services (KeepAlive): SHAFT's own model server, the OpenAI-compatible API, the web UI, …. The model
+# server runs only while used (localmodel.py): not at login, restarted after a crash but not after its own idle exit
+# (code 0).
 SERVICES = {
-    "model": {"label": "com.shaft.model",
-              "args": [str(PROJECT / ".venv-bonsai" / "bin" / "python"), "-E", "-s", "-m", "supervisor.bonsai_server"]},
+    "model": {"label": localmodel.LABEL,
+              "args": [str(PROJECT / ".venv-bonsai" / "bin" / "python"), "-E", "-s", "-m", "supervisor.bonsai_server"],
+              "plist": {"RunAtLoad": False, "KeepAlive": {"SuccessfulExit": False}}},
     "api": {"label": "com.shaft.api", "args": [PYTHON, "-E", "-s", "-m", "supervisor", "api", "serve"]},
     "embed": {"label": "com.shaft.embed",
               "args": [str(PROJECT / ".venv-bonsai" / "bin" / "python"), "-E", "-s", "-m", "supervisor.embed_server"]},
@@ -53,7 +58,8 @@ def service(name: str, action: str) -> int:
         r = _launchctl("print", f"{domain}/{label}")
         state = next((l.strip() for l in r.stdout.splitlines() if l.strip().startswith("state =")), "not loaded")
         pid = next((l.strip() for l in r.stdout.splitlines() if l.strip().startswith("pid =")), "")
-        print(f"{label:16} {state} {pid} · {'installed' if path.exists() else 'not installed'}")
+        print(f"{label:16} {state} {pid} · {'installed' if path.exists() else 'not installed'}"
+              + (" · starts on demand, exits when idle (localmodel.py)" if name == "model" else ""))
         return 0
     _launchctl("bootout", f"{domain}/{label}")
     if action == "off":
@@ -67,14 +73,21 @@ def service(name: str, action: str) -> int:
         "Label": label, "ProgramArguments": svc["args"], "WorkingDirectory": str(PROJECT),
         "StandardOutPath": str(SUP_DIR / f"{label}.log"), "StandardErrorPath": str(SUP_DIR / f"{label}.log"),
         "EnvironmentVariables": {"PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"},
-        "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 30}))
-    r = _launchctl("bootstrap", domain, str(path))
+        "RunAtLoad": True, "KeepAlive": True, "ThrottleInterval": 30, **svc.get("plist", {})}))
+    # bootout returns before launchd has let go of the old job: a bootstrap right after it failed with
+    # "5: Input/output error" and left the service unloaded (`shaft model on`, 2026-10-19; it worked a moment later).
+    for _ in range(BOOTSTRAP_TRIES):
+        r = _launchctl("bootstrap", domain, str(path))
+        if r.returncode == 0:
+            break
+        time.sleep(0.5)
     if r.returncode != 0:
         print(f"{label}: launchctl bootstrap failed: {r.stderr.strip()}", file=sys.stderr)
         return 1
     _launchctl("kickstart", f"{domain}/{label}")   # an explicit start works even in on-demand-only mode
     log(f"service {name} on")
-    print(f"{label} installed: starts at login, restarted if it stops")
+    print(f"{label} installed: " + ("started now; exits when idle, started again on demand (localmodel.py)"
+                                    if name == "model" else "starts at login, restarted if it stops"))
     return 0
 
 

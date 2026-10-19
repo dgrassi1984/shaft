@@ -41,7 +41,7 @@ def join(parts, sep: str = "") -> Html:
 
 
 # -- the page ------------------------------------------------------------------------------------------------------
-STATIC_VERSION = "9"        # bump when web_static changes, so a browser does not keep an old copy
+STATIC_VERSION = "10"       # bump when web_static changes, so a browser does not keep an old copy
 
 
 def page(title: str, body: Html, nav: Html = Html(""), csrf: str = "") -> Html:
@@ -176,7 +176,8 @@ def message_line(m: dict) -> Html:
 def overview(snap: dict) -> Html:
     """The live part of the overview page (polled as /fragment/overview)."""
     services = join(h('<span class="svc {cls}">{dot} {name}{detail}</span>',
-                      cls="up" if s["running"] else "down", dot="●" if s["running"] else "○", name=s["name"],
+                      cls="up" if s["running"] else "idle" if s.get("idle") else "down",
+                      dot="●" if s["running"] else "○", name=s["name"],
                       detail=h(' <span class="dim">{d}</span>', d=s["detail"]) if s.get("detail") else Html(""))
                     for s in snap["services"])
     spend = (h(' · <b>${s}</b> spent today', s=f"{snap['spend']:.2f}") if snap.get("spend") is not None

@@ -7,11 +7,12 @@ fine-tuning uses (bonsai_lora.load_text_model), optionally with a kept LoRA adap
 model name a client asks for, it gets Bonsai.
 
 Run with the Bonsai venv:  .venv-bonsai/bin/python -m supervisor.bonsai_server [--port 8780] [--adapter DIR]
-Normally started by launchd (shaft model on).
+Normally started by launchd (shaft model on), on demand: it exits once idle and unpinned (localmodel.py).
 
 Settings (environment): SHAFT_MODEL_TEMP (0.6), SHAFT_THINK_BUDGET (4096 reasoning tokens, then </think> is
 forced; 0 = off; a request may ask for less with chat_template_kwargs.thinking_budget), SHAFT_PROMPT_CACHE_GB (8,
-trimmed by mlx_lm when the next request starts). Presence penalty is sent per request by the agent.
+trimmed by mlx_lm when the next request starts), SHAFT_MODEL_IDLE_MINUTES (15; 0 = never exit when idle).
+Presence penalty is sent per request by the agent.
 """
 from __future__ import annotations
 
@@ -21,12 +22,13 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 import traceback
 
-from . import bonsai_lora
+from . import bonsai_lora, localmodel
 
-PORT = 8780
+PORT = localmodel.PORT
 THINK_START, THINK_END = 248068, 248069   # <think>, </think> in Bonsai's tokenizer
 
 
@@ -150,6 +152,64 @@ def exit_if_generation_dies(S, exit=os._exit):
     S.ResponseGenerator._generate = _generate
 
 
+class Activity:
+    """Requests in progress and when the last one ended (or the server started), for the idle exit."""
+
+    def __init__(self, clock=time.monotonic):
+        self.clock, self.lock = clock, threading.Lock()
+        self.in_flight, self.last = 0, clock()
+
+    def begin(self):
+        with self.lock:
+            self.in_flight += 1
+            self.last = self.clock()
+
+    def end(self):
+        with self.lock:
+            self.in_flight -= 1
+            self.last = self.clock()
+
+
+def exit_when_idle(S, port: int, idle_minutes: int = localmodel.IDLE_MINUTES, exit=os._exit,
+                   pinned=localmodel.pinned_by, every_s: float = 60.0, start: bool = True,
+                   clock=time.monotonic) -> tuple[Activity, object]:
+    """Count mlx_lm's POST requests (a streamed reply is in progress until its last byte) and exit (code 0) once
+    the server is idle and no instance is configured straight on it (localmodel.idle_exit_due). launchd does not
+    restart a clean exit (KeepAlive SuccessfulExit=false); the next user starts it again (localmodel.ensure).
+    Returns (activity, check) — check() runs one decision, the thread runs it every `every_s`."""
+    activity, post = Activity(clock), S.APIHandler.do_POST
+
+    def do_POST(self):
+        activity.begin()
+        try:
+            return post(self)
+        finally:
+            activity.end()
+
+    S.APIHandler.do_POST = do_POST
+
+    def check() -> bool:
+        with activity.lock:
+            now, last, n = activity.clock(), activity.last, activity.in_flight
+        if idle_minutes <= 0 or n or now - last < idle_minutes * 60:
+            return False   # skip reading config files while there is no question
+        if not localmodel.idle_exit_due(now, last, n, pinned(port), idle_minutes):
+            return False
+        print(f"bonsai_server: idle for {(now - last) / 60:.0f} min and no instance is configured on :{port}; "
+              f"exiting (0) to free its memory — the next user starts it again", file=sys.stderr, flush=True)
+        exit(0)
+        return True
+
+    def watch():
+        while True:
+            time.sleep(every_s)
+            check()
+
+    if start and idle_minutes > 0:
+        threading.Thread(target=watch, name="idle-exit", daemon=True).start()
+    return activity, check
+
+
 CACHE_BOOKKEEPING = ("left_padding", "lengths", "offset")
 
 
@@ -215,6 +275,7 @@ def main(argv: list[str]) -> int:
 
     S.ModelProvider = BonsaiProvider
     exit_if_generation_dies(S)
+    exit_when_idle(S, args.port)
     bound_cache_graphs(importlib.import_module("mlx_lm.generate"))   # not `import ... as`: mlx_lm.generate is also a function
     budget = int(os.environ.get("SHAFT_THINK_BUDGET", "4096"))   # Daniele: "not too low"
     original = S._make_logits_processors
@@ -241,7 +302,7 @@ def main(argv: list[str]) -> int:
                 "--prompt-cache-bytes", str(cap)]
     from .version import record_service   # `shaft talk` shows which code and settings are serving
     record_service("model", {"temp": float(temp), "think_budget": budget, "prompt_cache_gb": cache_gb,
-                             "adapter": args.adapter, "port": args.port})
+                             "adapter": args.adapter, "port": args.port, "idle_minutes": localmodel.IDLE_MINUTES})
     S.main()
     return 0
 
