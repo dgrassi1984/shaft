@@ -18,7 +18,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from supervisor import gate, mind, sandbox
+from supervisor import core, gate, mind, sandbox
 from supervisor.tests.mindfix import IGNORE_MIND
 
 OPERATOR = 'LLM_MODEL="claude-opus-5-5"   # Daniele, 2026-10-13'
@@ -132,6 +132,29 @@ class ConfigWritersTest(unittest.TestCase):
 
     def commits(self) -> list[str]:
         return git(self.root, "log", "--format=%an|%B%x00").split("\0")
+
+    def test_a_revert_names_every_failing_test(self):
+        # Regression (2026-10-19): the note kept the last 1,500 characters, and the gate itself the last 3,000 of the
+        # supervisor stage; 8 failing supervisor tests with long messages left no test name in either, and five of
+        # thelos's good changes were reverted with nobody able to say which tests failed.
+        names = [f"FAIL: test_{i} (supervisor.tests.test_web_chat.T.test_{i})" for i in range(8)]
+        stderr = "".join(f"{'=' * 70}\n{n}\n{'-' * 70}\nAssertionError: {'x' * 800}\n\n" for n in names) \
+            + "Ran 1109 tests\n\nFAILED (failures=8)\n"
+        stage = subprocess.CompletedProcess([], 1, "", stderr)
+        with mock.patch.object(gate, "committed_tree", return_value=(self.project, "abc")), \
+             mock.patch.object(gate, "_stage", return_value=stage), \
+             mock.patch.object(core, "SUP_DIR", self.project / ".supervisor"):
+            ok, out = REAL_RUN_TESTS(self.root, self.project)       # the real gate, its stages stubbed
+        self.assertFalse(ok)
+        self.assertNotIn(names[0], stderr[-3000:])                  # the old cut lost it...
+        kept = Path(out.rsplit("full log: ", 1)[1].strip())
+        for n in names:                                             # ...the kept log has every failure whole
+            self.assertIn(f"{n}\n{'-' * 70}\nAssertionError: {'x' * 800}", kept.read_text())
+
+        self.cycle(FAILING, lambda broker: None, gate_tests=lambda root, home: (False, out))
+        reverted = self.journal_entry("Supervisor: code change reverted")
+        listed = reverted.split("Failing tests:", 1)[1].split("Last lines", 1)[0]
+        self.assertEqual([l[2:] for l in listed.strip().splitlines()], names)
 
     def test_an_operator_edit_mid_cycle_survives_the_instance_failing_its_tests(self):
         self.cycle(FAILING, lambda broker: self.operator_edits(OPERATOR))

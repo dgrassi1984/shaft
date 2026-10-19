@@ -593,11 +593,15 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
             gate.restore(root, before["code"], touched)
             back = gate.revert_config(root, list(config_writes))
             undone = touched + ([f"config.env ({', '.join(back)})"] if back else [])
-            log(f"{name}: code change FAILED tests, reverted: {touched} config: {back}")
+            names = gate.failing_tests(test_log)
+            kept_at = next((l[len("full log: "):] for l in test_log.splitlines() if l.startswith("full log: ")), "")
+            log(f"{name}: code change FAILED tests, reverted: {touched} config: {back}"
+                + (f"; failing: {'; '.join(names)}" if names else "") + (f"; full log {kept_at}" if kept_at else ""))
             if undone:
                 journal_note(root, "Supervisor: code change reverted",
-                             "My changes to " + ", ".join(undone) + " were reverted because the tests "
-                             "failed. Last lines of the test output:\n\n```\n" + test_log[-1500:] + "\n```")
+                             "My changes to " + ", ".join(undone) + " were reverted because the tests failed."
+                             + ("\n\nFailing tests:\n" + "\n".join(f"- {n}" for n in names) if names else "")
+                             + "\n\nLast lines of the test output:\n\n```\n" + test_log[-1500:] + "\n```")
     _commit_outside_config(name, root, list(config_writes) if "config.env" in kept else [])
     _commit_outside_drive(name, root)
     applied = [h for h in handoffs if h.get("applied")]

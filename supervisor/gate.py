@@ -7,9 +7,11 @@ are restored byte-for-byte from the snapshot.
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 from . import sandbox
@@ -224,6 +226,7 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = 900,
     py = pyenv.python(env_root)
     tmp = safe_mkdir(instance_root, ".tmp")
     outputs, ok = [], True
+    full: list[str] = []   # the supervisor stage uncut, kept in a file when the gate fails (keep_log)
 
     try:
         tree, label = committed_tree()
@@ -238,7 +241,9 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = 900,
         sup = _stage(f"supervisor invariants ({label})",
                      [PYTHON, "-E", "-s", "-m", "unittest", "discover", "-s", "supervisor/tests", "-t", "."],
                      timeout_s, cwd=tree, env=sup_env)
-        outputs.append(f"== supervisor invariants ({label}) ==\n" + sup.stderr[-3000:])
+        outputs.append(f"== supervisor invariants ({label}) ==\n"
+                       + "".join(f"{t}\n" for t in failing_tests(sup.stderr)) + sup.stderr[-3000:])
+        full.append(f"== supervisor invariants ({label}) ==\n" + sup.stderr)
         ok &= sup.returncode == 0
 
         env = sandbox.agent_env(os.environ, TMPDIR=str(tmp), SHAFT_PYTHON=py)
@@ -258,7 +263,32 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = 900,
         ok = False
     finally:
         prof.unlink(missing_ok=True)
+    if not ok:
+        outputs.append(f"full log: {keep_log(instance_root, full + outputs[1:])}")
     return ok, "\n".join(outputs)
+
+
+GATE_LOGS_KEPT = 50
+
+
+def failing_tests(output: str) -> list[str]:
+    """The FAIL:/ERROR: header of every test a unittest run names as failed, in order, each once. The gate puts them
+    ahead of each stage's cut output, so they survive any later cut."""
+    return list(dict.fromkeys(m.group(0) for m in re.finditer(r"^(?:FAIL|ERROR): .+$", output, re.M)))
+
+
+def keep_log(instance_root: Path, parts: list[str]) -> Path:
+    """A failed gate's whole output in .supervisor/gate-logs/, newest GATE_LOGS_KEPT kept: what is returned is cut
+    to fit a journal note, and on 2026-10-19 that cut lost the name of every one of 8 failing supervisor tests, so
+    neither the instance nor the operator could tell what had reverted five good changes."""
+    from .core import SUP_DIR
+    d = SUP_DIR / "gate-logs"
+    d.mkdir(parents=True, exist_ok=True)
+    path = d / f"{Path(instance_root).name}-{datetime.now():%Y%m%d-%H%M%S-%f}.log"
+    path.write_text("\n".join(parts))
+    for old in sorted(d.glob("*.log"), key=lambda q: q.stat().st_mtime)[:-GATE_LOGS_KEPT]:
+        old.unlink(missing_ok=True)
+    return path
 
 
 NO_TESTS_RAN = 5   # unittest's exit code when discovery finds no tests (Python 3.12+)
