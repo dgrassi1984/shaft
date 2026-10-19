@@ -539,3 +539,130 @@ class DocsPanelTest(ChatRoutesTest):
 
     def test_an_unknown_instance_has_no_panel(self):
         self.assertEqual(self.req("/fragment/docs/nobody", cookie=self.cookie).status, 404)
+
+
+class DocEditsTest(DocsInChatTest):
+    """PLAN-webui-chat §3 D2: what the instance is told of the operator's edits, and when."""
+
+    def test_the_diff_says_what_changed_and_only_that(self):
+        self.assertEqual(web_chat.edit_diff("p.md", None, "# P\n"), "[Daniele created notes/docs/p.md:]\n```markdown\n# P\n\n```")
+        d = web_chat.edit_diff("p.md", "a\nb\nc\n", "a\nB\nc\n")
+        self.assertTrue(d.startswith("[Daniele edited notes/docs/p.md:]\n```diff\n--- a/notes/docs/p.md"))
+        self.assertIn("\n-b\n+B\n", d)
+        self.assertEqual(web_chat.edit_diff("p.md", "same", "same"), "[Daniele saved notes/docs/p.md unchanged.]")
+        long = web_chat.edit_diff("p.md", "", "\n".join(f"line {i}" for i in range(3000)))
+        self.assertIn("+3000 −0 lines, too long to show here — read the file", long)
+
+    def test_saves_while_it_is_idle_go_once_with_the_next_message_as_one_diff(self):
+        chat, _ = web_chat.send("wren", ME, "start", [])
+        self.wait_idle(chat["id"])
+        said = web_chat.doc_saved("wren", ME, "plan.md", "one\ntwo\n", "one\n2\n", "sha1")
+        self.assertEqual(said, "saved · wren gets the change with your next message")
+        web_chat.doc_saved("wren", ME, "plan.md", "one\n2\n", "one\n2\nthree\n", "sha2")      # folded: from "one\ntwo"
+        self.assertEqual(len(self.api.chats()), 1)                                        # nothing sent yet
+        web_chat.send("wren", ME, "continue it", [])
+        c = self.wait_idle(chat["id"])
+        sent = self.api.chats()[1][2]["messages"][-1]["content"]
+        self.assertTrue(sent.startswith("continue it\n\n[Daniele edited notes/docs/plan.md:]"))
+        self.assertIn("-two\n+2\n+three", sent)
+        self.assertEqual(sent.count("[Daniele edited"), 1)
+        self.assertEqual(c["turns"][2]["edits"], ["plan.md"])
+        self.assertEqual(c["turns"][2]["shown"], "continue it")
+        self.assertNotIn("pending_edits", c)
+        web_chat.send("wren", ME, "and now?", [])
+        self.wait_idle(chat["id"])
+        self.assertNotIn("Daniele edited", self.api.chats()[2][2]["messages"][-1]["content"])   # never twice
+
+    def test_a_save_while_it_replies_reaches_it_at_once(self):
+        self.api.hold.set()
+        chat, _ = web_chat.send("wren", ME, "write the plan", [])
+        time.sleep(0.3)
+        said = web_chat.doc_saved("wren", ME, "plan.md", "a\n", "a\nmine\n", "sha1")
+        self.assertEqual(said, "saved · wren reads it at its next step")
+        body = [r for r in self.api.requests if r[0] == "/v1/chat/interject"][0][2]
+        self.assertIn("[Daniele edited notes/docs/plan.md:]", body["messages"][-1]["content"])
+        self.assertIn("+mine", body["messages"][-1]["content"])
+        self.api.hold.clear()
+        self.api.heard = 1
+        c = self.wait_idle(chat["id"], 15)
+        self.assertTrue(c["turns"][1]["interjected"])
+        self.assertEqual(c["turns"][1]["shown"], "")
+
+    def test_an_empty_message_is_sent_only_to_carry_an_edit(self):
+        with self.assertRaises(web_chat.Refused):
+            web_chat.send("wren", ME, "  ", [])
+        web_chat.doc_saved("wren", ME, "plan.md", None, "# new\n", "sha1")
+        chat, said = web_chat.send("wren", ME, "", [])
+        self.assertEqual(said, "sent to wren")
+        c = self.wait_idle(chat["id"])
+        self.assertIn("[Daniele created notes/docs/plan.md:]", c["turns"][0]["content"])
+        self.assertIn(web_chat.DOCS_NOTE, c["turns"][0]["content"])           # still its first message
+
+
+class DocSaveRouteTest(DocsPanelTest):
+    def setUp(self):
+        super().setUp()
+        from supervisor import actions, docs
+
+        def run_now(args, timeout=60, who="top"):        # the CLI verb, in this process (with this test's folders)
+            self.ran.append(args)
+            name, _, path = args[1:4]
+            out = []
+            with mock.patch("builtins.print", side_effect=lambda *a, **k: out.append(" ".join(map(str, a)))):
+                code = docs.command(name, "set", path, args[5], args[7])
+            return code == 0, out[-1] if out else ""
+        self.ran = []
+        for p in (mock.patch.object(actions, "run_now", side_effect=run_now), mock.patch.object(docs, "log"),
+                  mock.patch("supervisor.core.SUP_DIR", self.sup)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def post(self, **form):
+        import urllib.parse
+        return self.req("/docs/wren/save", "POST", cookie=self.cookie, body=urllib.parse.urlencode(form).encode(),
+                        headers={"sec-fetch-site": "same-origin", "x-csrf-token": self.csrf(self.cookie),
+                                 "content-type": "application/x-www-form-urlencoded"})
+
+    def test_a_save_goes_through_the_cli_and_is_queued_for_the_instance(self):
+        from supervisor import docs
+        (self.docs / "plan.md").write_text("one\n")
+        r = self.post(path="plan.md", text="one\nmine\n", sha=docs.sha(b"one\n"))
+        self.assertEqual(r.status, 200, r.body)
+        self.assertEqual(r.headers["X-Doc"], "plan.md")
+        self.assertEqual(self.ran[0][:4], ["docs", "wren", "set", "plan.md"])
+        self.assertEqual((self.docs / "plan.md").read_text(), "one\nmine\n")
+        chat = web_chat.open_chat("wren")
+        self.assertEqual(chat["pending_edits"]["plan.md"], {"old": "one\n", "new": "one\nmine\n"})
+        feed = self.req("/fragment/chat/wren", cookie=self.cookie).body.decode()
+        self.assertIn("Your edits to plan.md go to wren with your next message", feed)
+
+    def test_a_stale_save_is_refused_shows_what_changed_and_writes_nothing(self):
+        from supervisor import docs
+        (self.docs / "plan.md").write_text("one\nby the instance\n")
+        r = self.post(path="plan.md", text="one\nmine\n", sha=docs.sha(b"one\n"))
+        self.assertEqual(r.status, 409)
+        body = r.body.decode()
+        self.assertIn("changed since you looked", body)
+        self.assertIn("+by the instance", body)
+        self.assertEqual((self.docs / "plan.md").read_text(), "one\nby the instance\n")
+        self.assertIsNone(web_chat.open_chat("wren"))
+
+    def test_a_new_document_by_name(self):
+        r = self.post(path="ideas", text="", sha="none")
+        self.assertEqual((r.status, r.headers.get("X-Doc")), (200, "ideas.md"))
+        self.assertTrue((self.docs / "ideas.md").is_file())
+        self.assertEqual(self.post(path="ideas", text="", sha="none").status, 409)     # exists already
+
+    def test_a_later_write_that_dropped_his_lines_is_said_with_his_version(self):
+        from supervisor import docs
+        (self.docs / "plan.md").write_text("one\n")
+        self.post(path="plan.md", text="one\nmy line\n", sha=docs.sha(b"one\n"))
+        (self.docs / "plan.md").write_text("one\nmy line\nits addition\n")             # built on it: no warning
+        panel = self.req("/fragment/docs/wren?doc=plan.md", cookie=self.cookie).body.decode()
+        self.assertNotIn("no longer in it", panel)
+        (self.docs / "plan.md").write_text("one\nits rewrite\n")                       # dropped it: said
+        panel = self.req("/fragment/docs/wren?doc=plan.md", cookie=self.cookie).body.decode()
+        self.assertIn("1 line(s) you wrote at", panel)
+        self.assertIn("Restore yours", panel)
+        self.assertIn('data-post="/docs/wren/save"', panel)
+        self.assertIn(f'name="sha" value="{docs.sha(b"one" + bytes([10]) + b"its rewrite" + bytes([10]))}"', panel)

@@ -679,24 +679,59 @@ def in_chat(chat: dict | None) -> set[str]:
     return {d["path"] for t in (chat or {}).get("turns", []) for d in t.get("docs") or []}
 
 
+def _overwritten(saved: dict | None, sha: str, text: str | None) -> Html:
+    """Lines the operator wrote that a later write of the instance dropped: said, with his version to put back."""
+    import difflib
+    if not saved or text is None or saved.get("sha") == sha:
+        return Html("")
+    now = {l.strip() for l in text.splitlines()}
+    lost = [l for l in saved.get("added") or [] if l not in now]
+    if not lost:
+        return Html("")
+    diff = "\n".join(difflib.unified_diff(saved["text"].splitlines(), text.splitlines(), "yours", "now", lineterm="", n=1))
+    return h('<div class="overwritten warn"><p>{n} line(s) you wrote at {ts} are no longer in it.</p>'
+             '<details><summary>Your version against now</summary><pre class="diff">{d}</pre></details>'
+             '<form class="act" data-post="/docs/{i}/save" data-confirm="Put your version back? It replaces the '
+             'current one: its changes since are lost (they are in the diff)." data-after="doc-saved">'
+             '<input type="hidden" name="path" value="{p}"><input type="hidden" name="sha" value="{sha}">'
+             '<textarea name="text" hidden>{yours}</textarea><button type="submit" class="small">Restore yours'
+             '</button></form></div>', n=len(lost), ts=saved.get("ts", "")[11:16], d=diff, i=q(saved.get("name", "")),
+             p=saved.get("path", ""), sha=sha, yours=saved["text"])
+
+
 def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None, sha: str, marked: set[str],
-               problem: str = "") -> Html:
+               problem: str = "", saved: dict | None = None) -> Html:
     """The documents panel beside the chat (/fragment/docs/<name>): the list, and the open one rendered."""
     from .docs import DIR
     items = [h('<a href="?doc={u}" data-open-doc="{p}" class="{cls}" title="{b} bytes">{dot}{p}</a>', u=q(d["path"]),
                p=d["path"], b=d["bytes"], cls="on" if d["path"] == open_path else "",
                dot=Html('<span class="mark" title="changed in this chat">●</span> ') if d["path"] in marked else Html(""))
              for d in listing]
-    head = h('<div class="docshead"><b>Documents</b> <span class="dim">{dir}/</span></div><div class="doclist">{i}</div>',
-             dir=DIR, i=join(items) if items else h('<p class="dim">none yet: ask {n} for one, it appears here as it '
-                                                     'writes it.</p>', n=name))
+    new = h('<details class="newdoc"><summary>New document</summary><form data-post="/docs/{n}/save" '
+            'data-after="doc-saved"><input type="hidden" name="sha" value="none"><input name="path" required '
+            'placeholder="name, e.g. plan" pattern="[A-Za-z0-9][A-Za-z0-9 _.\\-]*" maxlength="80">'
+            '<textarea name="text" hidden></textarea><button type="submit" class="small">Create</button></form></details>',
+            n=q(name))
+    head = h('<div class="docshead"><b>Documents</b> <span class="dim">{dir}/</span>{new}</div><div class="doclist">{i}</div>',
+             dir=DIR, new=new, i=join(items) if items else h('<p class="dim">none yet: ask {n} for one, it appears here '
+                                                              'as it writes it.</p>', n=name))
     if problem:
         view = h('<p class="bad">{p}</p>', p=problem)
     elif open_path and text is not None:
+        if saved:
+            saved = {**saved, "name": name, "path": open_path}
         view = h('<div class="docview" data-doc="{p}" data-sha="{s}"><div class="doctitle"><b>{p}</b>'
+                 '<button type="button" class="small" data-edit-doc>Edit</button>'
                  '<button type="button" class="copy small" data-copy-doc title="copy the document\'s Markdown">Copy</button>'
-                 '</div>{md}<textarea class="raw" hidden readonly>{raw}</textarea></div>',
-                 p=open_path, s=sha, md=markdown(text) if text.strip() else Html('<p class="dim">(empty)</p>'), raw=text)
+                 '</div>{over}<div class="docmd">{md}</div><textarea class="raw" hidden readonly>{raw}</textarea>'
+                 '<form class="docedit" data-post="/docs/{n}/save" data-after="doc-saved" hidden>'
+                 '<input type="hidden" name="path" value="{p}"><input type="hidden" name="sha" value="{s}">'
+                 '<textarea name="text" spellcheck="true">{raw}</textarea><div class="actions">'
+                 '<button type="submit">Save</button><button type="button" data-cancel-edit>Cancel</button>'
+                 '<span class="dim">{n} hears of your change: with your next message, or now if it is replying</span>'
+                 '</div><div class="bad wrap" data-refusal></div></form></div>',
+                 p=open_path, s=sha, n=q(name), over=_overwritten(saved, sha, text),
+                 md=markdown(text) if text.strip() else Html('<p class="dim">(empty)</p>'), raw=text)
     elif open_path:
         view = h('<p class="dim">{p} is not there (any more).</p>', p=open_path)
     else:
@@ -713,6 +748,9 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict]) -> Html:
     for k, t in enumerate(chat["turns"]):
         if t["role"] == "user":
             tag = h(' <span class="dim">· during its reply</span>') if t.get("interjected") else Html("")
+            if t.get("edits"):
+                tag = join([tag, join(h(' <a class="editchip" href="?doc={u}" data-open-doc="{p}">✎ edited {p}</a>',
+                                        u=q(p), p=p) for p in t["edits"])])
             items.append((t["ts"], h('<div class="turn me"><div class="who">you <span class="dim">{ts}</span>{tag}</div>'
                                      '{text}{atts}</div>', ts=t["ts"][11:16], tag=tag,
                                      text=_my_text(t.get("shown", t["content"])), atts=_chat_attachments(chat["id"], k, t.get("attachments")))))
@@ -748,7 +786,10 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict]) -> Html:
     elif chat["state"] == "ended":
         feed.append(h('<p class="dim ended">Ended {e}: written up in its journal. Your next message starts a new '
                       'conversation.</p>', e=chat.get("ended", "")[:16].replace("T", " ")))
-    else:
+    if chat.get("pending_edits"):
+        feed.append(h('<p class="pending-edits">✎ Your edits to {p} go to {n} with your next message.</p>',
+                      p=", ".join(sorted(chat["pending_edits"])), n=name))
+    if chat["state"] not in ("replying", "ended") and chat["turns"]:
         feed.append(h('<div class="actions">{b}</div>', b=button(
             "chat-end", "End the conversation", f"end this conversation with {name}? It writes it up in its journal "
             "now, and your next message starts a new one.", {"cid": chat["id"]}, cls="small")))

@@ -371,6 +371,10 @@ def _post(req: Request, dev: str) -> Response:
         except web_chat.Refused as e:
             return _html(409, web_pages.h("<p>{t}</p>", t=str(e)))
         return _html(200, web_pages.h("<p>{t}</p>", t=said))
+    if m := re.match(r"^/docs/([A-Za-z0-9_-]+)/save$", req.path):
+        if m[1] not in _names():
+            return _not_found(req.path)
+        return _save_doc(m[1], (req.headers.get("tailscale-user-login") or "").lower(), req.form())
     if req.path in ("/action/chat-stop", "/action/chat-end"):
         from . import web_chat
         cid = req.form().get("cid", "")
@@ -489,6 +493,43 @@ def _get(req: Request, csrf: str) -> Response | None:
     return None
 
 
+def _save_doc(name: str, login: str, form: dict) -> Response:
+    """The operator's edit of a document (or a new one): through `shaft docs set` and its compare-and-set; then the
+    instance hears of it (web_chat.doc_saved). Refused: what the document has now that his text has not."""
+    import difflib
+    import secrets as _secrets
+    from . import actions, docs, web_chat
+    path = form.get("path", "").strip()
+    if path and not path.endswith(".md"):
+        path += ".md"
+    text, sha = form.get("text", "").replace("\r\n", "\n"), form.get("sha", "")
+    try:
+        old, _ = docs.read(name, path)
+    except docs.Refused as e:
+        return _html(409, web_pages.h("<p>refused: {e}</p>", e=str(e)))
+    tmp = SUP_DIR / "web" / f"doc-{_secrets.token_hex(6)}.md"
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_text(text)
+    try:
+        ok, last = actions.run_now(["docs", name, "set", path, "--file", str(tmp), "--expect-sha", sha], who="web")
+    finally:
+        tmp.unlink(missing_ok=True)
+    if not ok:
+        now, _ = docs.read(name, path)
+        diff = "\n".join(difflib.unified_diff(text.splitlines(), (now or "").splitlines(), "yours", "now", lineterm="",
+                                              n=1)) if now is not None and sha != "none" else ""
+        return _html(409, web_pages.h('<p>{l}</p>{d}', l=last if last.startswith("refused") else f"refused: {last}",
+                                      d=web_pages.h('<p>What it has now that your text has not (your text is kept in '
+                                                    'the box):</p><pre class="diff">{x}</pre>', x=diff) if diff else ""))
+    _, new_sha = docs.read(name, path)
+    rel = docs._rel(path)
+    try:
+        said = web_chat.doc_saved(name, login, rel, old, text, new_sha)
+    except web_chat.Refused as e:                  # written: only telling the instance failed — say both
+        said = f"saved, but {name} was not told yet: {e}"
+    return _html(200, web_pages.h("<p>{t}</p>", t=said), {"X-Doc": rel})
+
+
 def _docs_panel(name: str, chat: dict | None, doc: str):
     """(the open document, the panel): the one asked for, else the last this chat changed, else none open."""
     from . import docs, web_views as v
@@ -506,7 +547,8 @@ def _docs_panel(name: str, chat: dict | None, doc: str):
             text, sha = docs.read(name, doc)
         except docs.Refused as e:
             problem = str(e)
-    return doc, v.docs_panel(name, listing, doc, text, sha, marked, problem)
+    return doc, v.docs_panel(name, listing, doc, text, sha, marked, problem,
+                             ((chat or {}).get("saved_docs") or {}).get(doc))
 
 
 LAST_CHAT = "shaft_last"                                     # the instance whose chat / opens

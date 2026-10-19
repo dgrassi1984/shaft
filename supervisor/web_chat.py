@@ -295,11 +295,59 @@ def _run(relay: Relay) -> None:
 
 
 # -- what the page does ----------------------------------------------------------------------------------------------
+# -- the operator's edits to its documents (PLAN-webui-chat §3 D2) ---------------------------------------------------
+EDIT_DIFF_MAX = 12000                  # a diff longer than this is summarised: the instance reads the file itself
+
+
+def edit_diff(path: str, old: str | None, new: str) -> str:
+    """What the operator changed in a document, as the instance is told it."""
+    import difflib
+    rel = f"notes/docs/{path}"
+    if old is None:
+        body = new if len(new) <= EDIT_DIFF_MAX else new[:EDIT_DIFF_MAX] + "\n…(cut: read the file)"
+        return f"[Daniele created {rel}:]\n```markdown\n{body}\n```"
+    diff = "\n".join(difflib.unified_diff(old.splitlines(), new.splitlines(), f"a/{rel}", f"b/{rel}", lineterm="", n=2))
+    if not diff:
+        return f"[Daniele saved {rel} unchanged.]"
+    if len(diff) > EDIT_DIFF_MAX:
+        added = sum(l.startswith("+") for l in diff.splitlines()[2:])
+        dropped = sum(l.startswith("-") for l in diff.splitlines()[2:])
+        return f"[Daniele edited {rel}: +{added} −{dropped} lines, too long to show here — read the file.]"
+    return f"[Daniele edited {rel}:]\n```diff\n{diff}\n```"
+
+
+def doc_saved(name: str, login: str, path: str, old: str | None, new: str, sha: str) -> str:
+    """After the operator saved a document: the instance hears of it — at once (an interjection) while it replies, else
+    with his next message; several saves before then are one diff (from what it last saw). The chat also keeps his
+    version, so the panel can say when a later write of the instance dropped lines he wrote. (what to tell him)"""
+    chat = open_chat(name) or new_chat(name, login)
+    with _lock(chat["id"]):
+        chat = load(chat["id"])
+        pend = chat.setdefault("pending_edits", {})
+        first = pend.get(path, {}).get("old", old) if path in pend else old
+        pend[path] = {"old": first, "new": new}
+        added = sorted({l.strip() for l in new.splitlines() if l.strip()} - {l.strip() for l in (old or "").splitlines()})
+        chat.setdefault("saved_docs", {})[path] = {"sha": sha, "text": new, "ts": _now(), "added": added[:400]}
+        save(chat)
+        replying_now = chat["state"] == "replying"
+    if replying_now:
+        _, said = send(name, login, "", [])
+        return f"saved · {said}"
+    return f"saved · {name} gets the change with your next message"
+
+
+def _take_edits(chat: dict) -> tuple[str, list[str]]:
+    """The pending edits as the message's extra text, and their paths; cleared from the chat (the caller saves it)."""
+    pend = chat.pop("pending_edits", None) or {}
+    blocks = [edit_diff(p, e["old"], e["new"]) for p, e in sorted(pend.items())]
+    return ("\n\n".join(blocks), sorted(pend))
+
+
 def send(name: str, login: str, text: str, files: list[tuple[str, bytes]]) -> tuple[dict, str]:
     """A message from the operator: a new reply if none is running, an interjection otherwise. (chat, what to say)"""
     from . import messages
     text = text.strip()
-    if not text and not files:
+    if not text and not files and not (open_chat(name) or {}).get("pending_edits"):
         raise Refused("an empty message is not sent")
     if len(text) > MAX_TEXT:
         raise Refused(f"a message is at most {MAX_TEXT} characters ({len(text)})")
@@ -313,11 +361,15 @@ def send(name: str, login: str, text: str, files: list[tuple[str, bytes]]) -> tu
             raise Refused(str(e)) from None
     turn = {"role": "user", "content": (text + lines).strip(), "shown": text, "ts": _now(),
             "attachments": [{k: a[k] for k in ("name", "path", "bytes")} for a in atts]}
-    if not chat["turns"]:
-        turn["content"] += "\n\n" + DOCS_NOTE
     with _lock(cid):                               # the relay's last save takes it too: the chat's state is the truth
         chat = load(cid)
         chat["login"] = login
+        edits, paths = _take_edits(chat)
+        if edits:
+            turn["content"] = (turn["content"] + "\n\n" + edits).strip()
+            turn["edits"] = paths
+        if not any(t["role"] == "user" for t in chat["turns"]):
+            turn["content"] += "\n\n" + DOCS_NOTE
         if chat["state"] == "replying":
             status, body = _post(chat, "interject", {"model": name, "messages": _api_messages(chat) + [
                 {"role": "user", "content": turn["content"]}]})

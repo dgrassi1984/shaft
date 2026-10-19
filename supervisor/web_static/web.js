@@ -67,6 +67,7 @@
       if (running || !el.isConnected) return;
       if (document.visibilityState !== "visible" && !el.dataset.hidden) return;   // data-hidden: keeps going (the rail)
       if (selectingIn(el)) return;                  // replacing it would drop the text being selected (to quote it)
+      if (el.querySelector(".editing")) return;     // nor a document being edited: Save's check says if it changed
       running = true;
       try {
         const r = await fetch(url, { credentials: "same-origin", cache: "no-store" });
@@ -142,6 +143,9 @@
       });
       const body = await r.text();
       toast(textOf(body) || (r.ok ? "done" : `HTTP ${r.status}`), !r.ok);
+      const refusal = form.querySelector("[data-refusal]");
+      if (refusal) refusal.textContent = r.ok ? "" : fullText(body);     // all of it: what changed meanwhile
+      if (r.ok && form.dataset.after === "doc-saved") docSaved(form, r.headers.get("X-Doc"));
       if (r.ok && form.dataset.reset) { form.reset(); picked(form); }
       if (r.ok && form.dataset.draft) sent(form);
       if (!r.ok && shown) shown.remove();
@@ -252,12 +256,13 @@
   });
 
   // The text box grows with what is written in it (up to a third of the window), and keeps its draft.
-  function grow(box) {
+  function grow(box, part = 1 / 3) {           // at most `part` of the window
     box.style.height = "auto";
-    box.style.height = `${Math.min(box.scrollHeight + 2, Math.round(window.innerHeight / 3))}px`;
+    box.style.height = `${Math.min(box.scrollHeight + 2, Math.round(window.innerHeight * part))}px`;
   }
   const draftKey = (form) => `shaft.draft.${form.dataset.draft}`;
   document.addEventListener("input", (ev) => {
+    if (ev.target.closest && ev.target.closest("form.docedit")) { grow(ev.target, 0.7); return; }
     const form = ev.target.closest && ev.target.closest("form[data-draft]");
     if (!form || ev.target.tagName !== "TEXTAREA") return;
     grow(ev.target);
@@ -555,6 +560,39 @@
     history.replaceState(null, "", u);
     if (panel._tick) panel._tick();
     if (window.innerWidth <= 720) panel.scrollIntoView({ behavior: "smooth" });
+  });
+  // Editing a document: the rendered view becomes its Markdown in a box; the panel stops refreshing until Save or
+  // Cancel, and Save's compare-and-set refuses if the instance wrote it meanwhile (the box keeps your text).
+  function editing(view, on) {
+    view.classList.toggle("editing", on);
+    view.querySelector(".docmd").hidden = on;
+    view.querySelector("form.docedit").hidden = !on;
+    if (on) {
+      const box = view.querySelector("form.docedit textarea");
+      box.focus();
+      grow(box, 0.7);
+    }
+  }
+  function docSaved(form, doc) {
+    const panel = document.getElementById("docs");
+    const view = form.closest(".docview");
+    if (view) editing(view, false);
+    if (panel && doc) {
+      panel.dataset.poll = panel.dataset.poll.replace(/\?doc=.*$/, "") + `?doc=${encodeURIComponent(doc)}`;
+    }
+    if (panel && panel._tick) panel._tick();
+  }
+  document.addEventListener("click", (ev) => {
+    const edit = ev.target.closest && ev.target.closest("[data-edit-doc]");
+    const cancel = ev.target.closest && ev.target.closest("[data-cancel-edit]");
+    if (edit) editing(edit.closest(".docview"), true);
+    if (cancel) {
+      const view = cancel.closest(".docview");
+      const box = view.querySelector("form.docedit textarea");
+      if (box.value !== view.querySelector("textarea.raw").value && !window.confirm("Drop your changes?")) return;
+      box.value = view.querySelector("textarea.raw").value;
+      editing(view, false);
+    }
   });
   document.addEventListener("click", (ev) => {
     const b = ev.target.closest && ev.target.closest("[data-copy-doc]");

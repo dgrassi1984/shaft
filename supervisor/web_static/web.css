@@ -315,3 +315,16 @@ aside.docs { min-height: 0; overflow-y: auto; background: var(--panel); border: 
 .docview pre:hover > .copy { opacity: 1; }
 .doccards { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .4rem; }
 .doccard { font-size: .85rem; border: 1px solid var(--line); border-radius: 6px; padding: .2rem .5rem; background: var(--bg); }
+form.docedit { display: grid; gap: .4rem; }
+form.docedit textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .82rem; min-height: 14rem;
+                        width: 100%; resize: vertical; }
+.docview.editing .doctitle [data-edit-doc] { display: none; }
+.newdoc { margin-left: auto; font-size: .82rem; }
+.newdoc > summary { cursor: pointer; color: var(--accent); }
+.newdoc form { display: flex; gap: .3rem; margin-top: .3rem; }
+.newdoc input { font: inherit; padding: .2rem .4rem; border: 1px solid var(--line); border-radius: 5px; background: var(--bg);
+                color: var(--text); }
+.overwritten { border: 1px solid var(--warn); border-radius: 6px; padding: .3rem .5rem; margin: .3rem 0; font-size: .85rem; }
+.overwritten p { margin: 0 0 .2rem; }
+.editchip { font-size: .78rem; margin-left: .3rem; }
+.pending-edits { font-size: .85rem; color: var(--accent); margin: 0; }
