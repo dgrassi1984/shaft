@@ -21,9 +21,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import judge
-from .core import INSTANCES, SUP_DIR, config_values, git_wt, journal_note, knob, log, safe_write
+from .core import INSTANCES, SUP_DIR, config_values, git_wt, journal_note, knob, positive_int, log, safe_write
 
-PROBATION_CYCLES, _ = knob("SHAFT_PROBATION_CYCLES", "6", int)
+PROBATION_CYCLES, _ = knob(
+    "SHAFT_PROBATION_CYCLES", "6", positive_int, "judged cycles a kept self-change stays on probation (reverted on a "
+    "clear drop)", group="Runs and conversations", services=("runs", "api"))
 PROBATION_MARGIN = 0.15   # revert only on a clear drop, not noise
 
 JUDGE_SYSTEM = """\

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import hashlib
 import http.client
 import json
@@ -36,27 +37,213 @@ DEFAULT_INSTANCE = "shaft"
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
 
 
-def knob(name: str, default: str, parse):
-    """CLI-less operator knob: env var > default; a bad value warns and falls back."""
-    raw = os.environ.get(name)
-    if raw is None:
-        return parse(default), "default"
+# -- knobs: the supervisor's settings (PLAN-webui-chat.md §4) ---------------------------------------------------------
+# Each is read once, when a process starts: from its environment, else the operator's settings file, else its default
+# (env > file > default). The launchd services run with PATH alone in their environment, so for them the file is what
+# sets a knob; `shaft settings` writes it (settings.py), the web UI's Settings page runs that verb.
+SETTINGS_FILE = SUP_DIR / "settings.env"     # the operator's, gitignored (.supervisor/): KEY=value, value verbatim
+SETTING_KEY = re.compile(r"^SHAFT_[A-Z0-9_]{1,60}$")
+# Where a knob is read, for the operator: a long-running service holds the value it read at its start until it
+# restarts; "runs" — cycles, sleeps, trials, batteries, write-ups, CLI commands — are fresh processes that read it
+# when they start.
+SERVICE_NAMES = ("api", "scheduler", "telegram", "web", "model", "embed")
+KNOB_GROUPS = ("Judging", "Models and spend", "Trials", "Runs and conversations", "Inbox and benchmarks",
+               "Local model", "Ports and paths")
+
+
+@dataclasses.dataclass(frozen=True)
+class Knob:
+    name: str
+    default: str
+    parse: object                   # str -> value; ValueError (with the reason) for a value it cannot take
+    help: str                       # one line: what it does
+    group: str                      # a KNOB_GROUPS entry: where the Settings page shows it
+    services: tuple                 # the long-running services that hold it (SERVICE_NAMES), plus "runs"
+    web: bool                       # settable from the web UI; False: CLI only (ports, interpreters, endpoints)
+
+
+KNOBS: dict[str, Knob] = {}         # every knob() call, in the order they were made
+HELD: dict[str, dict] = {}          # what this process read for each knob: {"raw", "source"} (a service records it)
+_on_knob = None                     # set by version.record_service: a knob read after start-up is recorded too
+_file_cache: dict = {"stamp": None, "values": {}}
+
+
+def settings_file() -> dict[str, str]:
+    """The settings file's KEY=value lines (the value verbatim to the end of its line), read again when it changes."""
     try:
-        return parse(raw), "env"
-    except ValueError:
-        print(f"warning: {name}={raw!r} is invalid; using {default} [default]", file=sys.stderr)
-        return parse(default), "default"
+        st = SETTINGS_FILE.stat()
+        stamp = (str(SETTINGS_FILE), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return {}
+    if _file_cache["stamp"] != stamp:
+        values = {}
+        for line in SETTINGS_FILE.read_text().splitlines():
+            key, eq, value = line.partition("=")
+            if line.strip() and not line.lstrip().startswith("#") and eq and SETTING_KEY.match(key.strip()):
+                values[key.strip()] = value
+        _file_cache.update(stamp=stamp, values=values)
+    return _file_cache["values"]
 
 
-CYCLE_TIMEOUT_S, CYCLE_SRC = knob("SHAFT_CYCLE_TIMEOUT_S", "2400", int)
-SLEEP_TIMEOUT_S, SLEEP_SRC = knob("SHAFT_SLEEP_TIMEOUT_S", "5400", int)   # nightly, nobody waiting
+def resolve(k: Knob, env=None) -> tuple[object, str, str]:
+    """(value, source, the raw text it was parsed from): env > settings file > default. A value its parser refuses
+    is warned about and the next layer is used."""
+    env = os.environ if env is None else env
+    for source, raw in (("env", env.get(k.name)), ("file", settings_file().get(k.name))):
+        if raw is None:
+            continue
+        try:
+            return k.parse(raw), source, raw
+        except (ValueError, TypeError) as e:
+            where = "the environment" if source == "env" else SETTINGS_FILE
+            print(f"warning: {k.name}={raw!r} in {where} is invalid ({e}); ignored", file=sys.stderr)
+    return k.parse(k.default), "default", k.default
+
+
+def knob(name: str, default: str, parse, help: str = "", *, group: str = "", services=("runs",), web: bool = True):
+    """An operator setting: (value, source). Every call in the supervisor's code registers it with a one-line `help`,
+    its Settings `group` and the `services` that hold it (test_settings checks each call does)."""
+    k = KNOBS.get(name)
+    if help or k is None:
+        k = Knob(name, default, parse, help, group, tuple(services), web)
+        if help:
+            KNOBS[name] = k
+    value, source, raw = resolve(k)
+    HELD[name] = {"raw": raw, "source": source}
+    if _on_knob:
+        _on_knob()
+    return value, source
+
+
+# Parsers that refuse what the code using a knob could not run on: a bad value is refused when it is set, and an
+# unusable one already in the environment or the file is warned about and skipped (resolve).
+def positive_int(s: str) -> int:
+    n = int(s)
+    if n <= 0:
+        raise ValueError(f"must be a whole number above 0, not {s!r}")
+    return n
+
+
+def whole(s: str) -> int:
+    n = int(s)
+    if n < 0:
+        raise ValueError(f"must be a whole number, 0 or more, not {s!r}")
+    return n
+
+
+def dollars(s: str) -> float:
+    x = float(s)
+    if not 0 <= x < float("inf"):
+        raise ValueError(f"must be an amount in dollars, 0 or more, not {s!r}")
+    return x
+
+
+def hours(s: str) -> float:
+    x = float(s)
+    if not 0 <= x < float("inf"):
+        raise ValueError(f"must be a number of hours, 0 or more, not {s!r}")
+    return x
+
+
+def port(s: str) -> int:
+    n = int(s)
+    if not 1 <= n <= 65535:
+        raise ValueError(f"must be a port, 1–65535, not {s!r}")
+    return n
+
+
+def temperature(s: str) -> float:
+    x = float(s)
+    if not 0 <= x <= 2:
+        raise ValueError(f"must be a temperature, 0–2, not {s!r}")
+    return x
+
+
+def gigabytes(s: str) -> float:
+    x = float(s)
+    if not 0 < x < 1024:
+        raise ValueError(f"must be a number of gigabytes above 0, not {s!r}")
+    return x
+
+
+def ports(s: str) -> list[int]:
+    return [port(p.strip()) for p in s.split(",")]
+
+
+def model_name(s: str) -> str:
+    s = s.strip()
+    if not s or any(c.isspace() or c == "," for c in s):
+        raise ValueError(f"must be one model name, e.g. claude-haiku-5-5 or openrouter/xiaomi/mimo-v2.6-pro, not {s!r}")
+    return s
+
+
+def model_names(s: str) -> list[str]:
+    """A comma-separated list of model names (may be empty)."""
+    return [model_name(m) for m in s.split(",") if m.strip()]
+
+
+def cloud_model(s: str) -> str:
+    """A model the supervisor calls itself: Claude (claude-…) on Anthropic's API, else openrouter/…."""
+    s = model_name(s)
+    if not (s.startswith("claude-") or s.startswith("openrouter/")):
+        raise ValueError(f"must be a claude-… or openrouter/… model, not {s!r}")
+    return s
+
+
+def claude_model(s: str) -> str:
+    """A Claude model, called on Anthropic's API."""
+    s = model_name(s)
+    if not s.startswith("claude-"):
+        raise ValueError(f"must be a Claude model (claude-…): it is called on Anthropic's API, not {s!r}")
+    return s
+
+
+def openrouter_model(s: str) -> str:
+    s = model_name(s)
+    if not s.startswith("openrouter/"):
+        raise ValueError(f"must be an openrouter/… model: it is called on OpenRouter, not {s!r}")
+    return s
+
+
+def cloud_models(s: str) -> list[str]:
+    """A non-empty comma-separated list of cloud_model names."""
+    out = [cloud_model(m) for m in s.split(",") if m.strip()]
+    if not out:
+        raise ValueError("must name at least one model")
+    return out
+
+
+def json_object(s: str) -> dict:
+    v = json.loads(s)
+    if not isinstance(v, dict):
+        raise ValueError(f"must be a JSON object ({{…}}), not {type(v).__name__}")
+    return v
+
+
+CYCLE_TIMEOUT_S, CYCLE_SRC = knob(
+    "SHAFT_CYCLE_TIMEOUT_S", "2400", positive_int, "seconds a cycle (and a trial's replayed cycle) may run before it "
+    "is stopped", group="Runs and conversations")
+SLEEP_TIMEOUT_S, SLEEP_SRC = knob(
+    "SHAFT_SLEEP_TIMEOUT_S", "5400", positive_int, "seconds the nightly sleep (consolidation) may run; nobody is "
+    "waiting for it", group="Runs and conversations")
 # 8780: SHAFT's own Bonsai 2 server (supervisor/bonsai_server.py); Atomic Chat's 1337 is no longer used.
-LLM_PORTS, PORTS_SRC = knob("SHAFT_LLM_PORTS", "8780", lambda s: [int(p) for p in s.split(",")])
-CORE_MIN_HOURS, CORE_SRC = knob("SHAFT_CORE_MIN_HOURS", "72", int)
-EMBED_PORT, EMBED_SRC = knob("SHAFT_EMBED_PORT", "8782", int)   # SHAFT's embedding service (memory search)
-BROKER_MAX_CALLS, BROKER_SRC = knob("SHAFT_BROKER_MAX_CALLS", "60", int)
+LLM_PORTS, PORTS_SRC = knob(
+    "SHAFT_LLM_PORTS", "8780", ports, "the local model servers' ports a run's sandbox may reach (the first is SHAFT's "
+    "own server)", group="Ports and paths", services=("runs", "api", "web"), web=False)
+CORE_MIN_HOURS, CORE_SRC = knob(
+    "SHAFT_CORE_MIN_HOURS", "72", whole, "hours an instance's core personality must stay unchanged before it may "
+    "change it again", group="Runs and conversations", services=("runs", "api"))
+EMBED_PORT, EMBED_SRC = knob(   # SHAFT's embedding service (memory search)
+    "SHAFT_EMBED_PORT", "8782", port, "the embedding service's port (memory search), which every run may reach",
+    group="Ports and paths", services=("runs", "api", "web"), web=False)
+BROKER_MAX_CALLS, BROKER_SRC = knob(
+    "SHAFT_BROKER_MAX_CALLS", "60", positive_int, "supervisor tool calls (broker) one run may make",
+    group="Runs and conversations", services=("runs", "api"))
 # A conversation (terminal or API) quiet this long is closed and written up into the journal.
-IDLE_MINUTES, IDLE_SRC = knob("SHAFT_IDLE_MINUTES", "30", int)
+IDLE_MINUTES, IDLE_SRC = knob(
+    "SHAFT_IDLE_MINUTES", "30", positive_int, "minutes a conversation (terminal, web, Telegram, API) may stay quiet "
+    "before it is closed and written up into the journal", group="Runs and conversations",
+    services=("runs", "api", "telegram"))
 API_TALKS = SUP_DIR / "api_talks.json"
 
 

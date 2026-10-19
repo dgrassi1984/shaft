@@ -49,12 +49,18 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .core import (API_TALKS as TALKS, IDLE_MINUTES, SUP_DIR, UnsafePath, instance_names, instance_root, knob, log,
-                   safe_write, secrets_env)
+                   port, safe_write, secrets_env, whole)
 from .runner import Reply, busy_with, request_yield, run_agent, spawn_recover
 
-PORT, _ = knob("SHAFT_API_PORT", "8781", int)
-INBOX_PER_HOUR, _ = knob("SHAFT_INBOX_PER_HOUR", "30", int)
-INBOX_WAKES_PER_HOUR, _ = knob("SHAFT_INBOX_WAKES_PER_HOUR", "4", int)
+PORT, _ = knob(
+    "SHAFT_API_PORT", "8781", port, "the API's local port (OpenAI-compatible; the web UI and Telegram chat through it)",
+    group="Ports and paths", services=("api", "web", "telegram"), web=False)
+INBOX_PER_HOUR, _ = knob(
+    "SHAFT_INBOX_PER_HOUR", "30", whole, "messages per hour the API's inbox (doorbell) accepts for one instance",
+    group="Inbox and benchmarks", services=("api",))
+INBOX_WAKES_PER_HOUR, _ = knob(
+    "SHAFT_INBOX_WAKES_PER_HOUR", "4", whole, "wakes per hour inbox messages may start for one instance",
+    group="Inbox and benchmarks", services=("api",))
 DOORBELL_LOG = "doorbell.jsonl"
 CONVERSATION_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")   # X-Shaft-Conversation: a client's own name for a conversation       # one line per accepted message: when, instance, source, wake outcome
 
@@ -541,7 +547,9 @@ def serve() -> int:
 
 
 # -- operator commands: shaft api on | off | status | key | serve ---------------------------
-HTTPS_PORT, _ = knob("SHAFT_API_HTTPS_PORT", "8443", int)
+HTTPS_PORT, _ = knob(
+    "SHAFT_API_HTTPS_PORT", "8443", port, "the API's https port on the tailnet (tailscale serve)",
+    group="Ports and paths", services=("api",), web=False)
 
 
 def _tailscale(*args: str) -> "subprocess.CompletedProcess":

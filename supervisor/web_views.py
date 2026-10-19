@@ -14,7 +14,6 @@ MARK = {"yes": ("✓", "good"), "partial": ("½", "warn"), "no": ("✗", "bad")}
 INSTANCE_TABS = [("chat", "Chat"), ("", "Summary"), ("config", "Config"), ("drive", "Drive"), ("access", "Access"),
                  ("judge", "Judge"), ("changes", "Changes"), ("benchmarks", "Benchmarks"),
                  ("transcripts", "Transcripts"), ("journal", "Journal"), ("activity", "Activity")]
-GLOBAL_PAGES = [("/trials", "Trials"), ("/messages", "Messages"), ("/costs", "Costs"), ("/services", "Services")]
 
 
 def q(value: str) -> str:
@@ -23,7 +22,7 @@ def q(value: str) -> str:
 
 
 def frame(title: str, body: Html, names: list[str], csrf: str, current: str = "") -> Html:
-    return page(title, body, nav(names, current, GLOBAL_PAGES), csrf)
+    return page(title, body, nav(names, current), csrf)
 
 
 def instance_frame(name: str, tab: str, title: str, body: Html, names: list[str], csrf: str) -> Html:

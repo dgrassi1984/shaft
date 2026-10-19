@@ -18,11 +18,13 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from . import browser, egress, pyenv
-from .core import (SUP_DIR, calendar_grants, disabled_tools, git, instance_config, instance_names, instance_root,
-                   journal_entries, knob, mail_grants, paused, shared_folder)
+from .core import (SUP_DIR, calendar_grants, disabled_tools, dollars, git, instance_config, instance_names,
+                   instance_root, journal_entries, knob, mail_grants, paused, shared_folder)
 from . import selfhosted
 
-JUDGE_ALERT_USD, _ = knob("SHAFT_JUDGE_ALERT_USD", "10", float)   # the judge has no cap (Daniele): only an alert
+JUDGE_ALERT_USD, _ = knob(   # the judge has no cap (Daniele): only an alert
+    "SHAFT_JUDGE_ALERT_USD", "10", dollars, "judge spend per day that raises an alert (the judge has no cap)",
+    group="Judging", services=("web",))
 CAP_ALERT = 0.8                                                    # a cap this full raises an alert
 ALERT_HOURS = 12                                                   # log alerts this recent are shown
 SERVICE_LOGS = {"model": "com.shaft.model.log", "embed": "com.shaft.embed.log", "api": "com.shaft.api.log",

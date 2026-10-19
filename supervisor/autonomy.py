@@ -191,6 +191,8 @@ def serve(poll_s: int = 30) -> int:
     processes (an instance on a cloud model does not wait behind one on the local model); log every decision."""
     log(f"scheduler started (wakes per instance, WAKE_INTERVAL_MINUTES, default {WAKE_DEFAULT_MIN}; "
         f"sleep daily from {SLEEP_AT[0]:02d}:{SLEEP_AT[1]:02d})")
+    from .version import record_service   # the settings it holds (settings.not_live)
+    record_service("scheduler", {})
     from .browser import startup_note
     if (note := startup_note()):
         log(note)

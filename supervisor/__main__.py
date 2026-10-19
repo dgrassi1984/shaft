@@ -848,6 +848,17 @@ def main(argv: list[str]) -> int:
     p.add_argument("--expect", action="append", default=[], metavar="KEY=VALUE",
                    help="refuse unless KEY's value is still VALUE")
     p.add_argument("--expect-unset", action="append", default=[], metavar="KEY", help="refuse unless KEY is not set")
+    p = sub.add_parser("settings", help="the supervisor's settings (knobs): list them with their value, source and "
+                                        "default, set KEY=VALUE …, unset KEY … (.supervisor/settings.env; env > file > "
+                                        "default; --expect refuses if a value changed since you looked)")
+    p.add_argument("action", nargs="?", choices=["set", "unset"])
+    p.add_argument("items", nargs="*", help="set: KEY=VALUE … · unset: KEY …")
+    p.add_argument("--expect", action="append", default=[], metavar="KEY=VALUE",
+                   help="refuse unless KEY's value in the file is still VALUE")
+    p.add_argument("--expect-unset", action="append", default=[], metavar="KEY",
+                   help="refuse unless KEY is not in the file")
+    p.add_argument("--json", action="store_true", help="the listing as JSON (the web UI reads it)")
+    p.add_argument("--from-web", action="store_true", help="refuse the settings only a terminal may set (ports, paths)")
     p = sub.add_parser("drive", help="an instance's drive.md (what it is for): show it, set --file FILE, or remove it "
                                      "(the default drive applies); --expect-sha from `shaft drive <name>`")
     p.add_argument("name")
@@ -1087,6 +1098,9 @@ def main(argv: list[str]) -> int:
     if args.cmd == "config":
         from . import opconfig
         return opconfig.config_command(args.name, args.action, args.items, args.expect, args.expect_unset)
+    if args.cmd == "settings":
+        from . import settings
+        return settings.command(args.action, args.items, args.expect, args.expect_unset, args.json, args.from_web)
     if args.cmd == "drive":
         from . import opconfig
         return opconfig.drive_command(args.name, args.action, args.file, args.expect_sha)

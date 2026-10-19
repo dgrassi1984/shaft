@@ -298,7 +298,7 @@ class NavTest(PagesTest):
         body = self.get("/i/shaft")
         for href in ("/i/shaft/judge", "/i/shaft/changes", "/i/shaft/journal", "/i/shaft/activity",
                      "/i/shaft/transcripts", "/i/shaft/benchmarks", "/trials", "/messages", "/costs", "/services",
-                     "/overview", 'href="/i/wren/chat"'):
+                     "/overview", "/settings", 'href="/i/wren/chat"'):
             self.assertIn(href, body)
 
     def test_the_summary_refreshes_its_live_part(self):

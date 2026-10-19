@@ -68,8 +68,10 @@ def page(title: str, body: Html, nav: Html = Html(""), csrf: str = "") -> Html:
              meta=meta, title=title, v=STATIC_VERSION, nav=nav, body=body)
 
 
+# The pages used now and then, under the rail's chats: the one list of them (a second list, passed in and ignored,
+# would have dropped the Settings page from the nav when the two were merged).
 MANAGE = [("/overview", "Overview"), ("/messages", "Messages"), ("/trials", "Trials"), ("/costs", "Costs"),
-          ("/services", "Services")]
+          ("/services", "Services"), ("/settings", "Settings")]
 
 
 def rail(names: list[str], current: str = "", snap: dict | None = None, chats: dict | None = None) -> Html:
@@ -96,8 +98,8 @@ def rail(names: list[str], current: str = "", snap: dict | None = None, chats: d
              '{manage}</details>', items=join(items), manage=join(manage))
 
 
-def nav(names: list[str], current: str = "overview", pages: list[tuple[str, str]] = ()) -> Html:
-    """The left nav: the rail (refreshed live), then unpairing. `pages` is kept for callers; the rail lists MANAGE."""
+def nav(names: list[str], current: str = "overview") -> Html:
+    """The left nav: the rail (refreshed live: the chats, then MANAGE), then unpairing."""
     cur = "/overview" if current == "overview" else current
     return h('<nav><a class="brand" href="/">SHAFT</a><div class="rail" data-poll="/fragment/rail?c={c}" data-every="3000" '
              'data-now="1" data-hidden="1">{rail}</div>'
@@ -246,5 +248,4 @@ def overview(snap: dict) -> Html:
 def overview_page(snap: dict, csrf: str) -> Html:
     body = h('<h1 class="sr">Overview</h1><div id="overview" data-poll="/fragment/overview">{live}</div>',
              live=overview(snap))
-    from .web_views import GLOBAL_PAGES
-    return page("Overview", body, nav([i["name"] for i in snap["instances"]], "overview", GLOBAL_PAGES), csrf)
+    return page("Overview", body, nav([i["name"] for i in snap["instances"]], "overview"), csrf)

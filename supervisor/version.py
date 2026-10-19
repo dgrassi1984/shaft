@@ -1,7 +1,9 @@
 """Which code is actually running: the supervisor, an instance's own code, and the long-running services.
 
 Services (the model server, the API) record the commit they started from; a service started from older
-code than what is checked out now is flagged — it needs a restart to pick up the change.
+code than what is checked out now is flagged — it needs a restart to pick up the change. They also record every
+setting (core.knob) they read and the value they read: a setting changed since is not live in that service until it
+restarts (settings.not_live).
 """
 from __future__ import annotations
 
@@ -24,11 +26,22 @@ def supervisor_commit() -> str:
 
 
 def record_service(name: str, settings: dict) -> None:
-    """Called by a service at start-up."""
-    SERVICES.mkdir(parents=True, exist_ok=True)
-    (SERVICES / f"{name}.json").write_text(json.dumps({
-        "pid": os.getpid(), "commit": supervisor_commit(),
-        "started": datetime.now().isoformat(timespec="seconds"), "settings": settings}, indent=1))
+    """Called by a service at start-up. The record keeps the knobs this process has read (core.HELD), and is written
+    again whenever it reads another one later — a module imported on first use reads its knobs then."""
+    from . import core
+    rec = {"pid": os.getpid(), "commit": supervisor_commit(), "started": datetime.now().isoformat(timespec="seconds"),
+           "settings": settings, "knobs": dict(core.HELD)}
+
+    def write() -> None:
+        rec["knobs"] = dict(core.HELD)
+        SERVICES.mkdir(parents=True, exist_ok=True)
+        path = SERVICES / f"{name}.json"
+        tmp = path.with_name(f".{name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(rec, indent=1))
+        os.replace(tmp, path)                      # a reader never sees half a record
+
+    write()
+    core._on_knob = write
 
 
 def _alive(pid: int) -> bool:

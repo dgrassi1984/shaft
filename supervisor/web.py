@@ -43,10 +43,18 @@ from pathlib import Path
 
 from . import web_pages
 from .web_pages import Html
-from .core import EMBED_PORT, LLM_PORTS, SUP_DIR, knob, log
+from .core import EMBED_PORT, LLM_PORTS, SUP_DIR, knob, port, log
 
-PORT, _ = knob("SHAFT_WEB_PORT", "8785", int)               # not 8782: that is the embed port, which runs reach
-HTTPS_PORT, _ = knob("SHAFT_WEB_HTTPS_PORT", "8444", int)   # the tailnet's https port (`tailscale serve`)
+PORT, _ = knob(   # not 8782: that is the embed port, which runs reach
+    "SHAFT_WEB_PORT", "8785", port, "the web UI's local port (tailscale serve forwards to it)", group="Ports and paths",
+    services=("web",), web=False)
+HTTPS_PORT, _ = knob(
+    "SHAFT_WEB_HTTPS_PORT", "8444", port, "the web UI's https port on the tailnet (tailscale serve)",
+    group="Ports and paths", services=("web",), web=False)
+WEB_HOSTS, _ = knob(
+    "SHAFT_WEB_HOSTS", "", lambda s: {h.strip().lower() for h in s.split(",") if h.strip()},
+    "the host names the web UI answers to, comma-separated (empty: the tailnet name `shaft web on` recorded)",
+    group="Ports and paths", services=("web",), web=False)
 PAIR_MINUTES = 10
 COOKIE = "shaft_device"
 COOKIE_DAYS = 400                                           # the longest a browser keeps a cookie
@@ -88,8 +96,8 @@ def record_hosts() -> set[str]:
 def allowed_hosts() -> set[str]:
     """The names this UI answers to: SHAFT_WEB_HOSTS if set, else the tailnet name `shaft web on` recorded, else (no
     record yet: a terminal) tailscale's answer now."""
-    if raw := os.environ.get("SHAFT_WEB_HOSTS"):
-        return {h.strip().lower() for h in raw.split(",") if h.strip()}
+    if WEB_HOSTS:
+        return WEB_HOSTS
     if time.time() - _hosts["at"] > 60:
         recorded = _read("hosts.json").get("hosts")
         hosts = {str(h).lower() for h in recorded} if isinstance(recorded, list) and recorded else tailnet_hosts()
@@ -238,9 +246,9 @@ class Request:
 
     def form(self) -> dict:
         """The posted fields, blank ones included: a blank "saw" means "the page showed it unset", and dropping it
-        dropped the stale-edit check (M3)."""
-        return {k: v[0] for k, v in urllib.parse.parse_qs(self.body.decode(errors="replace"),
-                                                          keep_blank_values=True).items()}
+        dropped the stale-edit check (M3). A field named "…[]" (ticked boxes) keeps every value, as a list."""
+        return {k: v if k.endswith("[]") else v[0]
+                for k, v in urllib.parse.parse_qs(self.body.decode(errors="replace"), keep_blank_values=True).items()}
 
 
 @dataclass
@@ -484,6 +492,14 @@ def _get(req: Request, csrf: str) -> Response | None:
         return _file(urllib.parse.unquote(m[1]), int(m[2]))
     if path == "/costs":
         return _html(200, v.costs_page(panel.costs(days=7), names, csrf))
+    if path in ("/settings", "/fragment/settings"):
+        from . import actions, web_settings
+        data = web_settings.listing()
+        runs, busy = panel.scheduled_runs(), actions.busy_instances()
+        if path == "/fragment/settings":
+            return _html(200, web_settings.status(data["settings"], runs, busy))
+        return _html(200, v.frame("Settings", web_settings.page_body(data, runs, busy), names, csrf,
+                                  current="/settings"))
     if path in ("/services", "/fragment/services"):
         order = list(dashboard.SERVICES)
         from . import actions

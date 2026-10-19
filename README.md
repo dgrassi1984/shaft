@@ -124,6 +124,8 @@ shaft docs <name> [show PATH | set PATH --file F --expect-sha SHA]   # its docum
 shaft config <name> [set KEY=VALUE…|unset KEY…] [--expect KEY=VALUE]   # its config.env as the operator: one
                                 #   write and one commit; refused if a value changed since you looked
 shaft drive <name> [set --file F|remove] --expect-sha SHA   # what it is for (drive.md), compare-and-set
+shaft settings [set KEY=VALUE…|unset KEY…] [--expect KEY=VALUE]   # the supervisor's own settings (below): every
+                                #   knob with its value, source and default; set/unset write .supervisor/settings.env
 shaft status [name]             # how each instance is doing, open conversations, which code is running
 shaft model on|off|status       # SHAFT's own Bonsai 2 server (launchd, :8780; started on demand, exits when idle)
 shaft api on|off|status|key|inbox-key   # OpenAI-compatible API + inbox doorbell on your tailnet (below)
@@ -251,13 +253,41 @@ curl -s https://<mac>.<tailnet>.ts.net:8443/v1/inbox/wren -H "Authorization: Bea
   -H "Content-Type: application/json" -d '{"text": "CI on main is red", "source": "ci", "wake": true}'
 ```
 
+### Supervisor settings (`shaft settings`)
+
+The supervisor's own settings — the judge pool, the cloud models and caps, trial limits, timeouts, the local model
+server — are knobs (`core.knob`), about 55 of them. Each process reads them when it starts: from its **environment**,
+else **`.supervisor/settings.env`**, else the knob's **default** (env > file > default). The launchd services run with
+`PATH` alone in their environment, so the file is what sets a knob for them; an environment variable still wins for
+a command you run from a shell that sets it.
+
+- `shaft settings` lists every knob, grouped: its value, where it comes from (`env`, `file`, `default`), the default,
+  what it does and which services read it.
+- `shaft settings set SHAFT_JUDGE_MODELS=claude-sonnet-5-5,openrouter/xiaomi/mimo-v2.6-pro [--expect KEY=OLD]` and
+  `shaft settings unset KEY [--expect-unset KEY]` write the file, several keys in one write, under a lock. Each value
+  is checked by its knob's own parser first (a model the supervisor cannot call, a negative timeout, JSON that is not
+  an object): a value it refuses is never written. `--expect` refuses if the file's value changed since you looked.
+  Each change is logged in `supervisor.log`.
+- **Applying a change.** Runs (cycles, sleeps, trials, batteries, CLI commands) are fresh processes: they read the
+  file when they start. A long-running service (api, scheduler, telegram, web, model) holds what it read at its start;
+  each records the knobs it read (`.supervisor/services/<service>.json`), so `shaft settings` and the web UI's
+  Settings page say "not live yet: restart api (`shaft api on`), …" until the services holding another value
+  restart. A service holds the knobs of every module it imported, used or not, so the list errs towards a restart.
+  A service started before it recorded its knobs is taken to hold the defaults of the knobs it is declared to read.
+- Every `knob()` call registers its description, Settings group and readers; `test_settings` fails on a knob that is
+  not registered, and on a `SHAFT_` variable read straight from the environment.
+- Ports, interpreter paths, `SHAFT_WEB_HOSTS` and `SHAFT_TELEGRAM_API` are set from a terminal only: a wrong value there
+  cuts the web UI off or breaks a service. Secrets stay in `.env` (`shaft secret` for an instance's own keys).
+
 ### The web UI (`shaft web on`)
 
 `shaft top` in a browser, for the tailnet only (PLAN-webui.md), and more — **chat first** (PLAN-webui-chat.md):
 
 - `/` opens the chat with the instance you last talked to. The left rail lists every instance's chat (its state, its
   last line, a mark when it answered while you were elsewhere; the tab title counts them), then **Manage**: Overview
-  (`/overview`, with the alert count), Messages, Trials, Costs, Services.
+  (`/overview`, with the alert count), Messages, Trials, Costs, Services, and the supervisor's **Settings** (see
+  *Supervisor settings* above: the judge pool as ticked models, every knob with its source and default, "saved, not
+  live yet" with the guarded restarts; ports and paths shown, set in a terminal).
 - The chat: files and images both ways (drop them anywhere on the page, paste or pick; each is a chip you can take
   out), the reply's activity and clock live, interject, Stop, End. Select text in a message and **↩ Reply** quotes
   it in your message. Copy an answer (its Markdown) or a code block. Your draft survives a reload; `/` writes,
@@ -280,8 +310,8 @@ curl -s https://<mac>.<tailnet>.ts.net:8443/v1/inbox/wren -H "Authorization: Bea
 
 Every request needs your tailnet login **and** a paired browser. Every POST needs the page's own token, and every
 response forbids inline script. Instances cannot reach the port. Every action runs the matching `shaft`
-subcommand, logged as `web: operator …`; config, drive and document edits go through `shaft config` / `shaft drive`
-/ `shaft docs`. Chat
+subcommand, logged as `web: operator …`; config, drive, document and settings edits go through `shaft config` /
+`shaft drive` / `shaft docs` / `shaft settings --from-web`. Chat
 goes through the API (`X-Shaft-Conversation`, `/v1/chat/end`), so restart the API on the same code
 (`shaft api on`). A reply keeps going if the browser closes; only Stop stops it. Secrets, `new`, `breed`,
 `finetune`, the Google logins and `mind cutover` stay in the terminal.

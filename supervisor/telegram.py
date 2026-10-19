@@ -34,7 +34,9 @@ from pathlib import Path
 
 from .core import IDLE_MINUTES, NETWORK_ERRORS, SUP_DIR, instance_names, knob, log, secrets_env
 
-API_BASE, _ = knob("SHAFT_TELEGRAM_API", "https://api.telegram.org", str)   # tests point it at a fake
+API_BASE, _ = knob(   # tests point it at a fake
+    "SHAFT_TELEGRAM_API", "https://api.telegram.org", str, "the Telegram Bot API endpoint", group="Ports and paths",
+    services=("telegram",), web=False)
 POLL_S = 30                      # long-poll timeout
 STATE = "telegram.json"          # pairing, update offsets, the outbound cursor, which bot message was which question
 PAIR_MINUTES = 10

@@ -20,17 +20,23 @@ from datetime import datetime
 from pathlib import Path
 
 from . import judge
-from .core import PROJECT, SUP_DIR, instance_root, knob, log
+from .core import PROJECT, SUP_DIR, instance_root, knob, model_name, log
 from .evolution import PROBES
 from . import metrics
 
 MIN_EXAMPLES = 20
-FT_PYTHON, _ = knob("SHAFT_FT_PYTHON", str(PROJECT / ".venv-ft" / "bin" / "python"), str)
-FT_BASE_MODEL, _ = knob("SHAFT_FT_BASE_MODEL", "mlx-community/Qwen3.8-27B-4bit", str)
+FT_PYTHON, _ = knob(
+    "SHAFT_FT_PYTHON", str(PROJECT / ".venv-ft" / "bin" / "python"), str, "the interpreter fine-tuning runs with",
+    group="Ports and paths", services=("runs", "api"), web=False)
+FT_BASE_MODEL, _ = knob(
+    "SHAFT_FT_BASE_MODEL", "mlx-community/Qwen3.8-27B-4bit", model_name, "the base model fine-tuning starts from when "
+    "it does not train Bonsai itself", group="Local model")
 NO_THINKING = '{"enable_thinking": false}'   # Qwen chat template: answer directly
 # Preferred backend: LoRA on Ternary-Bonsai itself (keeps its speed and memory) — see bonsai_lora.py.
 BONSAI_PACK = PROJECT / ".models" / "bonsai2-27b-mlx"
-BONSAI_PYTHON, _ = knob("SHAFT_BONSAI_PYTHON", str(PROJECT / ".venv-bonsai" / "bin" / "python"), str)
+BONSAI_PYTHON, _ = knob(
+    "SHAFT_BONSAI_PYTHON", str(PROJECT / ".venv-bonsai" / "bin" / "python"), str, "the interpreter Bonsai LoRA "
+    "training runs with", group="Ports and paths", web=False)
 
 
 def backend() -> str:

@@ -21,13 +21,30 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from .core import NETWORK_ERRORS, instance_config, instance_names, knob, log
+from .core import (NETWORK_ERRORS, gigabytes, instance_config, instance_names, knob, log, positive_int, temperature,
+                   whole)
 
 PORT = 8780   # SHAFT's own Bonsai server (bonsai_server.py); the first SHAFT_LLM_PORTS entry by default
 LABEL = "com.shaft.model"
 LOCALHOST = {"localhost", "127.0.0.1", "::1"}
-IDLE_MINUTES, IDLE_SRC = knob("SHAFT_MODEL_IDLE_MINUTES", "15", int)
-START_TIMEOUT_S, START_SRC = knob("SHAFT_MODEL_START_TIMEOUT_S", "300", int)   # a cold disk after a reboot
+IDLE_MINUTES, IDLE_SRC = knob(
+    "SHAFT_MODEL_IDLE_MINUTES", "15", whole, "minutes SHAFT's own model server stays up unused before it exits "
+    "(it starts again on demand); 0 = never exits", group="Local model", services=("model",))
+START_TIMEOUT_S, START_SRC = knob(   # a cold disk after a reboot
+    "SHAFT_MODEL_START_TIMEOUT_S", "300", positive_int, "seconds to wait for the model server to start on demand",
+    group="Local model", services=("runs", "api", "scheduler"))
+# The server's own settings, read when it starts (bonsai_server.main).
+THINK_BUDGET, _ = knob(   # Daniele: "not too low"
+    "SHAFT_THINK_BUDGET", "4096", whole, "reasoning tokens SHAFT's own model may think per reply before it is made to "
+    "answer (0: no limit)", group="Local model", services=("model",))
+TEMP, _ = knob(   # Daniele, 2026-10-13 (0.1 = near-greedy: verbatim loops; pack 1.0)
+    "SHAFT_MODEL_TEMP", "0.6", temperature, "SHAFT's own model's sampling temperature", group="Local model",
+    services=("model",))
+# mlx_lm trims the prompt cache to this when the next request starts. 8 GB holds the entries of a 40k-token
+# conversation with float16 KV; the Mac has 64 GB.
+PROMPT_CACHE_GB, _ = knob(
+    "SHAFT_PROMPT_CACHE_GB", "8", gigabytes, "gigabytes of prompt cache SHAFT's own model server keeps",
+    group="Local model", services=("model",))
 START_OK, START_FAILED = "model server started on demand", "model server failed to start on demand"   # supervisor.log
 
 
