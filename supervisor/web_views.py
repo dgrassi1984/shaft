@@ -108,112 +108,18 @@ def clip(text: str, n: int = CLIP) -> Html:
     return h('<span class="clip">{t}</span>', t=text if len(text) <= n else text[:n - 1] + "…")
 
 
-# -- a safe Markdown subset: escape first, then headings, lists, tables, code, emphasis, http(s) links -----------
-_CODE = re.compile(r"`([^`]+)`")
-_BOLD = re.compile(r"\*\*(.+?)\*\*")
-_EM = re.compile(r"(?<![*\w])\*(?![\s*])(.+?)(?<![\s*])\*(?![*\w])")
-_LINK = re.compile(r"\[([^\]]+)\]\((https?://[^\s)]+)\)")
+# -- Markdown: web_md.py (escape first; links to http(s) and mailto only) -----------------------------------------------
+_QUOTE = re.compile(r"^ {0,3}> ?")                    # a quoted line in the operator's own turns (_my_text)
 
 
 def inline(text: str) -> Html:
-    out = []
-    for k, part in enumerate(_CODE.split(str(esc(text)))):     # escaped once; odd parts are inside backticks
-        if k % 2:
-            out.append(f"<code>{part}</code>")
-            continue
-        part = _LINK.sub(r'<a href="\2" rel="noopener noreferrer" target="_blank">\1</a>', part)
-        part = _BOLD.sub(r"<b>\1</b>", part)
-        out.append(_EM.sub(r"<i>\1</i>", part))
-    return Html("".join(out))
-
-
-_LIST = re.compile(r"^(\s*)(?:[-*+]|\d+[.)])\s+(.*)$")
-_HEAD = re.compile(r"^(#{1,6})\s+(.*)$")
-_QUOTE = re.compile(r"^ {0,3}> ?")
+    from .web_md import inline as md_inline
+    return Html(md_inline(str(text)))
 
 
 def markdown(text: str) -> Html:
-    out: list[str] = []
-    para: list[str] = []
-    depth: list[int] = []                                   # indentation of each open <ul>
-    src = str(text).replace("\r\n", "\n").split("\n")
-
-    def close_para():
-        if para:
-            out.append(f"<p>{inline(' '.join(para))}</p>")
-            para.clear()
-
-    def close_lists(to: int = -1):
-        while depth and depth[-1] > to:
-            depth.pop()
-            out.append("</li></ul>")
-
-    i = 0
-    while i < len(src):
-        line = src[i]
-        if line.strip().startswith("```"):
-            close_para()
-            close_lists()
-            body = []
-            i += 1
-            while i < len(src) and not src[i].strip().startswith("```"):
-                body.append(src[i])
-                i += 1
-            out.append(str(pre("\n".join(body))))
-            i += 1
-            continue
-        if line.strip().startswith("|") and i + 1 < len(src) and re.match(r"^\s*\|?[\s:|-]+\|[\s:|-]*$", src[i + 1]):
-            close_para()
-            close_lists()
-            cells = lambda l: [c.strip() for c in l.strip().strip("|").split("|")]
-            head = cells(line)
-            body = []
-            i += 2
-            while i < len(src) and src[i].strip().startswith("|"):
-                body.append(cells(src[i]))
-                i += 1
-            out.append(str(table(head, [[inline(c) for c in r] for r in body], "md")))
-            continue
-        if _QUOTE.match(line):                              # > quoted lines (a reply quoting a message)
-            close_para()
-            close_lists()
-            body = []
-            while i < len(src) and _QUOTE.match(src[i]):
-                body.append(_QUOTE.sub("", src[i], count=1))
-                i += 1
-            out.append(f"<blockquote>{markdown(chr(10).join(body))}</blockquote>")
-            continue
-        if m := _HEAD.match(line):
-            close_para()
-            close_lists()
-            n = min(6, len(m[1]) + 1)                           # the page has its own h1
-            out.append(f"<h{n}>{inline(m[2])}</h{n}>")
-        elif m := _LIST.match(line):
-            close_para()
-            ind = len(m[1].expandtabs(4))
-            if not depth or ind > depth[-1]:
-                depth.append(ind)
-                out.append("<ul><li>")
-            else:
-                close_lists(ind)
-                if not depth:
-                    depth.append(ind)
-                    out.append("<ul><li>")
-                else:
-                    out.append("</li><li>")
-            out.append(str(inline(m[2])))
-        elif not line.strip():
-            close_para()
-            close_lists()
-        elif depth and line.startswith(" "):                 # a list item's continuation line
-            out.append(" " + str(inline(line.strip())))
-        else:
-            close_lists()
-            para.append(line.strip())
-        i += 1
-    close_para()
-    close_lists()
-    return Html(f'<div class="md">{"".join(out)}</div>')
+    from .web_md import render
+    return render(text)
 
 
 def spark(values: list, cls: str = "") -> Html:
