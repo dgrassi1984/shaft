@@ -26,8 +26,10 @@ CODER_MODEL, _ = knob("SHAFT_CODER_MODEL", "claude-opus-5-5", str)
 DAILY_USD, _ = knob("SHAFT_CODER_DAILY_USD", "5", float)
 MAX_TURNS = 16
 WRITABLE = ("shaft/", "plugins/", "skills/", "tests/")
-# secrets: the instance's keys, never to the coder; .venv/.uv: its Python environment, read in place, never copied
-HIDDEN = (".git", "logs", ".tmp", "__pycache__", "secrets", ".venv", ".uv")
+# secrets: the instance's keys, never to the coder; .venv/.uv: its Python environment, read in place, never copied;
+# .browser: its browser profile — its sessions and the passwords of its own accounts (PLAN-browser.md). Also what
+# trial.gate_check leaves out of its copy.
+HIDDEN = (".git", "logs", ".tmp", "__pycache__", "secrets", ".venv", ".uv", ".browser")
 USAGE = SUP_DIR / "coder_usage.jsonl"
 API = "https://api.anthropic.com/v1/messages"
 

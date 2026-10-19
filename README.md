@@ -370,7 +370,7 @@ due jobs as children.
 Each run happens in the `run` sandbox, with its own broker and egress proxy:
 - supervisor tools, mail and calendar grants, the instance's keys, its Python environment and the internet;
 - no model, and no `delegate_coding`, `trial` or `send_message`;
-- writes only to `.jobs/<plugin>/` (gitignored state) and `.tmp/`;
+- writes only to `.jobs/<plugin>/` (gitignored state), `.tmp/` and its browser profile `.browser/`;
 - at most 120 s and 30 tool calls, at least 5 minutes apart (`SHAFT_JOB_MIN_MINUTES`), at most 5 jobs per
   instance.
 
@@ -414,6 +414,34 @@ Image bytes are never stored: episodes, the journal, logs and the tool log keep 
 attachments sent before the replayed cycle. Battery exams get no image tools. A judge, which reads text only, is told
 when a cycle used an image.
 
+### A real browser (`shaft browser …`)
+
+Instances can drive a headless Chromium: pages that need JavaScript, logins, forms, clicks
+([PLAN-browser.md](PLAN-browser.md)). The supervisor provides only these:
+- **One Chromium for every instance.** `shaft browser install [--playwright X.Y.Z]` downloads Playwright's
+  Chromium builds into `.browsers/`, swapped in whole and gitignored. `shaft browser` shows the install and each
+  instance's profile.
+- **A profile per instance**, `.browser/` in its folder:
+  - it holds its sessions and the passwords of its own accounts;
+  - it is never committed, never copied to the coder or to trials, and never read by the judges.
+- **The environment:** `PLAYWRIGHT_BROWSERS_PATH`, `SHAFT_PLAYWRIGHT` (the version to pin) and
+  `SHAFT_BROWSER_PROFILE`, alongside the egress proxy.
+
+Everything else is the instance's: Playwright in its `.venv`, its plugin, signing up and logging in. The template's
+`skills/writing-plugins.md` tells it how.
+
+A browser runs only in `run` and in scheduled jobs, whose sandboxes reach nothing but the egress proxy (and a job's
+own broker). The agent's own sandbox, which its plugins inherit, carries the broker token and reaches the model ports,
+so it cannot read `.browsers/` and a launch there fails. A plugin browses through `broker.call("run", …)`.
+
+Playwright sends localhost and the LAN through the proxy too, which refuses them, and every host lands in the egress
+log. Chromium runs without its own sandbox: ours is the wall around it. Playwright's fake keychain keeps it away from
+your login keychain.
+
+When a run ends, a Chromium left orphaned on the profile is killed. Trial replays get the copy's empty profile and a
+proxy that refuses everything. The scheduler logs a line at start if nothing is installed, and the panel's *browser*
+row shows the install and the profile's size.
+
 ### The model server (`shaft model on`)
 
 `supervisor/bonsai_server.py`: mlx_lm's server with Bonsai's own loader (and a kept LoRA adapter, if
@@ -453,6 +481,8 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
   `requirements.txt` (code: tested and committed); a missing `.venv/` is rebuilt from them at wake, sandboxed.
   Scratch copies (coder, trials, battery) read the real environment read-only. The panel's *python* row says
   which interpreter it runs on.
+  **A real browser** ([PLAN-browser.md](PLAN-browser.md)): a shared Chromium (`.browsers/`, read-only) that only
+  `run` and jobs can read, and its own profile `.browser/`, writable there, hidden from the coder and trial copies.
   **One folder of yours it may read** (`shaft share <name> <folder>`, `shaft share <name> off`):
   read-only, in its sandbox and in `run`; its file tools show it as `shared/`. Kept in
   `.supervisor/tools/<name>.json`, not in its `config.env`; a folder overlapping SHAFT's own state is
@@ -474,9 +504,11 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
   the gate passes — code only, never `self/`, `memory/` or `config.env`; max 2 per cycle and
   `SHAFT_CODER_DAILY_USD` (5) per instance per day; commits and `self/stats.md` record what was
   delegated. **`run`**: shell commands (`zsh`) in a stricter sandbox — writes only to `notes/`,
-  `plugins/`, `skills/`, `tests/`, `shaft/`, `.tmp/`, `.venv/`, `.uv/`, `.python-version` and
-  `requirements.txt`, the internet only through the egress proxy, reads only its own folder;
-  60 s default time limit (the whole process group is killed), 100 MB file-size limit, output capped,
+  `plugins/`, `skills/`, `tests/`, `shaft/`, `.tmp/`, `.venv/`, `.uv/`, `.browser/`, `.python-version` and
+  `requirements.txt`, the internet only through the egress proxy, reads only its own folder (and the shared
+  Chromium);
+  60 s default time limit (the whole process group is killed), 1 GiB file-size limit (a file past it ends the
+  command with SIGXFSZ, and `run` says so), output capped,
   40 commands per run. So an instance can build and test its own tools and plugins. **`history`**: its
   own git log and diffs, each entry tagged `[code]` (its branch) or `[mind]` (its mind store) — git cannot
   run inside its sandbox; with `save_as`, one file as it was after a commit, written whole to a new path in its

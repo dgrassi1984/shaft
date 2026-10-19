@@ -142,13 +142,17 @@ SPECS = {
     "run": _spec(
         "run",
         "Run a shell command (zsh) inside your folder, in a stricter sandbox: it can read your folder and the "
-        "system, write only to notes/, plugins/, skills/, tests/, shaft/, .tmp/ and your Python environment "
-        "(.venv/, .uv/). It reaches the public internet through a proxy the supervisor runs (HTTPS_PROXY is set: "
-        "uv, pip, curl, git and Python's HTTP libraries use it; localhost, the LAN and the tailnet are not "
-        "reachable). Your Python is yours: `uv` is installed — e.g. `uv python install 3.13`, `uv venv --python "
+        "system, write only to notes/, plugins/, skills/, tests/, shaft/, .tmp/, your Python environment "
+        "(.venv/, .uv/) and your browser profile (.browser/). It reaches the public internet through a proxy the "
+        "supervisor runs (HTTPS_PROXY is set: uv, pip, curl, git and Python's HTTP libraries use it; localhost, "
+        "the LAN and the tailnet are not reachable). Your Python is yours: `uv` is installed — e.g. `uv python install 3.13`, `uv venv --python "
         "3.13 .venv`, `uv pip install PyJWT[crypto]`. Once .venv/ exists, `python3` here, your plugins and your "
         "tests run on it (otherwise the system Python 3). Record what you chose in .python-version and "
-        "requirements.txt: a missing .venv/ is rebuilt from them. Use `run` to install packages, run your tests, "
+        "requirements.txt: a missing .venv/ is rebuilt from them. A real browser runs here (and in your scheduled "
+        "jobs), nowhere else: a shared Chromium (PLAYWRIGHT_BROWSERS_PATH) for `uv pip install "
+        "playwright==$SHAFT_PLAYWRIGHT`, launched with p.chromium.launch_persistent_context($SHAFT_BROWSER_PROFILE, "
+        "proxy={server, username, password from HTTPS_PROXY}) — see skills/writing-plugins.md. Use `run` to install "
+        "packages, run your tests, "
         "scripts and plugins, inspect files, or compute things. Returns the exit code and output (truncated). "
         "Code you change is still tested by the supervisor. `git` cannot see your own repository here (it lives "
         "outside your folder): use `history`.",
@@ -356,6 +360,10 @@ MAX_HANDOFFS_PER_RUN = 2
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 SHOWN_HEADERS = ("content-type", "content-length", "location", "etag", "last-modified", "link", "retry-after")
 MAX_COMMANDS_PER_RUN = 40
+# The largest single file a `run` command may write: a backstop against one runaway file, not a disk quota. It was
+# 100 MB until 2026-10-18, which killed `uv pip install playwright` (its bundled node is 122 MB) with SIGXFSZ, exit
+# 153 and no message — and with it any package shipping a bigger file (torch's libraries) (PLAN-browser.md).
+RUN_MAX_FILE_BYTES = 1024 ** 3
 RUN_OUTPUT_CHARS = 12000
 
 
@@ -639,12 +647,15 @@ class Broker:
             self.server.server_close()
             self.server = None
         self.egress.stop()
+        from . import browser
+        browser.sweep(self.root)   # no orphaned Chromium keeps its profile locked past the run (PLAN-browser.md)
 
     def sandbox_env(self) -> dict[str, str]:
-        """What every sandboxed process of this run gets: the egress proxy, and the instance's interpreter for its
-        plugins (SHAFT_PYTHON)."""
-        from . import pyenv
-        return {**self.egress.env(), "SHAFT_PYTHON": pyenv.python(self.env_root)}
+        """What every sandboxed process of this run gets — the agent and its plugins, `run`, jobs: the egress proxy,
+        the instance's interpreter for its plugins (SHAFT_PYTHON), and the shared Chromium with its own profile
+        (supervisor/browser.py)."""
+        from . import browser, pyenv
+        return {**self.egress.env(), "SHAFT_PYTHON": pyenv.python(self.env_root), **browser.env(self._root())}
 
     # -- calls -------------------------------------------------------------------
     def call(self, tool: str, args: dict) -> dict:
@@ -876,7 +887,7 @@ class Broker:
         env = {"PATH": path, "HOME": str(home), "TMPDIR": str(home),
                "TMPPREFIX": str(home / "zsh"),   # zsh's here-document files (default /tmp/zsh: not writable here)
                "LANG": "en_US.UTF-8", "PYTHONDONTWRITEBYTECODE": "1", "TERM": "dumb",
-               **self.egress.env(), **pyenv.uv_env(root)}
+               **self.sandbox_env(), **pyenv.uv_env(root)}
         if self.shared:
             env["SHAFT_SHARED"] = str(self.shared)
         if (granted := self.mail_env()):
@@ -888,7 +899,7 @@ class Broker:
 
         def limits():
             resource.setrlimit(resource.RLIMIT_CPU, (timeout_s + 5, timeout_s + 5))
-            resource.setrlimit(resource.RLIMIT_FSIZE, (100 * 1024 ** 2, 100 * 1024 ** 2))   # 100 MB per file
+            resource.setrlimit(resource.RLIMIT_FSIZE, (RUN_MAX_FILE_BYTES, RUN_MAX_FILE_BYTES))
 
         started = time.monotonic()
         proc = subprocess.Popen(sandbox.wrap(Path(prof), ["/bin/zsh", "-f", "-c", command]), cwd=workdir, env=env,
@@ -897,6 +908,8 @@ class Broker:
         try:
             out, err = proc.communicate(timeout=timeout_s)
             status = f"exit {proc.returncode}"
+            if proc.returncode in (128 + signal.SIGXFSZ, -signal.SIGXFSZ):   # the shell's or its own: no message
+                status += f" (a file passed the {RUN_MAX_FILE_BYTES // 1024 ** 2} MB per-file limit: SIGXFSZ)"
         except subprocess.TimeoutExpired:
             os.killpg(proc.pid, signal.SIGKILL)               # the whole process group, children included
             out, err = proc.communicate()
