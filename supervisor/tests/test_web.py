@@ -245,6 +245,32 @@ class OverviewTest(WebTest):
         self.assertIn('data-poll="/fragment/overview"', body)
 
 
+class HostsTest(unittest.TestCase):
+    def setUp(self):
+        self.sup = Path(tempfile.mkdtemp(prefix="shaft-web-hosts-"))
+        self.addCleanup(shutil.rmtree, self.sup, True)
+        for p in (mock.patch.object(web, "SUP_DIR", self.sup), mock.patch.dict("os.environ", {"SHAFT_WEB_HOSTS": ""})):
+            p.start()
+            self.addCleanup(p.stop)
+        web._hosts.update(at=0.0, hosts=set())
+        self.addCleanup(web._hosts.update, at=0.0, hosts=set())
+
+    def test_the_service_reads_the_name_shaft_web_on_recorded_and_never_asks_tailscale(self):
+        """Live, 2026-10-19: under launchd the Tailscale CLI cannot run, every request was refused as the wrong host."""
+        with mock.patch.object(web, "tailnet_hosts", return_value={HOST}):
+            self.assertEqual(web.record_hosts(), {HOST})                 # shaft web on, in a terminal
+        web._hosts.update(at=0.0)
+        with mock.patch.object(web, "tailnet_hosts", side_effect=AssertionError("asked tailscale")):
+            self.assertEqual(web.allowed_hosts(), {HOST})                # the service
+
+    def test_on_refuses_when_the_tailnet_name_cannot_be_read(self):
+        with mock.patch.object(web, "allowed_logins", return_value={ME}), \
+                mock.patch.object(web, "tailnet_hosts", return_value=set()), \
+                mock.patch("supervisor.autonomy.service") as service:
+            self.assertEqual(web.command("on"), 1)
+        service.assert_not_called()
+
+
 class PortTest(unittest.TestCase):
     def test_the_web_port_is_one_no_run_can_reach(self):
         """A run's sandbox allows the LLM ports and the embed port (runner.py, `ports = …`); the web UI changes

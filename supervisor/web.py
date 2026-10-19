@@ -63,19 +63,36 @@ def allowed_logins() -> set[str]:
 _hosts: dict = {"at": 0.0, "hosts": set()}
 
 
+def tailnet_hosts() -> set[str]:
+    """This Mac's tailnet name with the https port, asked of tailscale now. Works from a terminal; under launchd the
+    Mac app's CLI refuses to run outside the GUI session ("Tailscale.CLIError error 3"), so the service never asks
+    it: `shaft web on` records the answer (record_hosts) and the service reads that (live, 2026-10-19)."""
+    from .api import _tailscale
+    try:
+        st = json.loads(_tailscale("status", "--json").stdout or "{}")
+    except (OSError, ValueError):
+        st = {}
+    name = (st.get("Self", {}).get("DNSName") or "").rstrip(".").lower()
+    return ({f"{name}:{HTTPS_PORT}"} | ({name} if HTTPS_PORT == 443 else set())) if name else set()
+
+
+def record_hosts() -> set[str]:
+    """Ask tailscale for this Mac's tailnet name and keep it for the service (.supervisor/web/hosts.json)."""
+    hosts = tailnet_hosts()
+    if hosts:
+        _write("hosts.json", {"hosts": sorted(hosts), "recorded": datetime.now().isoformat(timespec="seconds")})
+    return hosts
+
+
 def allowed_hosts() -> set[str]:
-    """The names this UI answers to: this Mac's tailnet name with the https port (SHAFT_WEB_HOSTS overrides)."""
+    """The names this UI answers to: SHAFT_WEB_HOSTS if set, else the tailnet name `shaft web on` recorded, else (no
+    record yet: a terminal) tailscale's answer now."""
     if raw := os.environ.get("SHAFT_WEB_HOSTS"):
         return {h.strip().lower() for h in raw.split(",") if h.strip()}
     if time.time() - _hosts["at"] > 60:
-        from .api import _tailscale
-        try:
-            st = json.loads(_tailscale("status", "--json").stdout or "{}")
-        except (OSError, ValueError):
-            st = {}
-        name = (st.get("Self", {}).get("DNSName") or "").rstrip(".").lower()
-        _hosts.update(at=time.time(), hosts={f"{name}:{HTTPS_PORT}"} | ({name} if HTTPS_PORT == 443 else set())
-                      if name else set())
+        recorded = _read("hosts.json").get("hosts")
+        hosts = {str(h).lower() for h in recorded} if isinstance(recorded, list) and recorded else tailnet_hosts()
+        _hosts.update(at=time.time(), hosts=hosts)
     return _hosts["hosts"]
 
 
@@ -713,6 +730,8 @@ def serve() -> int:
     record_service("web", {"port": PORT, "https_port": HTTPS_PORT})
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     server.daemon_threads = True
+    if not allowed_hosts():                  # every request would be refused: say so where it is read
+        log("web: no tailnet name recorded and tailscale cannot be asked from here: run shaft web on in a terminal")
     log(f"web listening on 127.0.0.1:{PORT} (logins {sorted(allowed_logins())}, hosts {sorted(allowed_hosts())})")
     print(f"SHAFT web UI on http://127.0.0.1:{PORT} (tailnet: {url()}) — {datetime.now():%H:%M}")
     server.serve_forever()
@@ -742,6 +761,10 @@ def command(action: str, name: str | None = None, everything: bool = False) -> i
         if not allowed_logins():
             print("no SHAFT_API_LOGINS — run: shaft api on (it records your tailnet login)")
             return 1
+        if not record_hosts():              # the service cannot ask tailscale itself (launchd): it reads this
+            print("cannot read this Mac's tailnet name: is Tailscale running? (tailscale status)")
+            return 1
+        _hosts["at"] = 0.0
         if autonomy.service("web", "on"):
             return 1
         r = _tailscale("serve", "--bg", f"--https={HTTPS_PORT}", f"http://127.0.0.1:{PORT}")
