@@ -93,3 +93,29 @@ class PhoneLayoutTest(unittest.TestCase):
         self.assertIn(".chathead .facts, .docslabel { display: none; }", phone)
         page = str(web_views.chat_page("wren", None, [], [], {"model": "m", "state": "idle"}, ["wren"], "t"))
         self.assertIn('<p class="dim menufacts">m · idle</p>', page)        # the facts move into ⋯
+
+
+class NetworkClientTest(unittest.TestCase):
+    """PLAN-pwa P3, in the page: what it sends and what it does when the network fails."""
+
+    def test_a_refresh_asks_for_what_changed_and_gives_up_in_time(self):
+        self.assertIn('{ "If-None-Match": el.dataset.etag }', JS)
+        self.assertIn("if (r.status === 304) { fails = 0; fresh(el); return; }", JS)
+        self.assertIn("const POLL_LIMIT_MS = 15000;", JS)
+        self.assertIn("signal: ctl.signal", JS)
+
+    def test_a_failure_backs_off_is_said_once_and_ends_when_the_network_returns(self):
+        self.assertIn("later(Math.min(every * slow * 2 ** Math.min(fails, 4), 15000 * slow));", JS)
+        self.assertIn('netNote(navigator.onLine === false ? "Offline', JS)
+        self.assertIn('window.addEventListener("online", () => { fails = 0; tick(); });', JS)
+        self.assertIn("if (r.status >= 502 && r.status <= 504) {", JS)     # Tailscale's 503: unreachable, said once
+        self.assertIn('window.addEventListener("pageshow", () => tick());', JS)
+
+    def test_a_send_carries_its_id_and_is_checked_before_uploading(self):
+        self.assertIn("if (mid && !mid.value) mid.value = crypto.randomUUID", JS)
+        self.assertIn("if (r.ok && mid) mid.value = \"\";", JS)
+        self.assertIn("const tooBig = filesRefused(form);", JS)
+
+    def test_the_feed_is_updated_item_by_item(self):
+        self.assertIn("if (el.dataset.keyed) morph(el, body);", JS)
+        self.assertIn("if (cur && cur.dataset.k && cur.dataset.k === n.dataset.k && cur._src === src) return;", JS)

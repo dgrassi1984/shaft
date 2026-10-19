@@ -83,22 +83,76 @@
     return !!(typing && el.contains(typing) && typing.matches("input, textarea"));
   }
 
+  // The network (PLAN-pwa P3). A refresh sends the version it has (If-None-Match) and an unchanged one costs a 304;
+  // it gives up after 15 s; a failure backs off (up to 30 s) and is said once, at the top, not under every panel;
+  // the connection coming back or the app coming to the front refreshes at once.
+  const POLL_LIMIT_MS = 15000;
+  const net = { down: 0 };
+  function netNote(text) {
+    let n = document.getElementById("netnote");
+    if (!text) { if (n) n.remove(); return; }
+    if (!n) {
+      n = document.createElement("div");
+      n.id = "netnote";
+      n.setAttribute("role", "status");
+      document.body.appendChild(n);
+    }
+    n.textContent = text;
+  }
+
+  // Replace a keyed feed's items one by one (data-k): what did not change stays in place, with its scroll, its open
+  // strips and anything the page added to it (copy buttons); a turn being sent stays until its own turn arrives.
+  function morph(el, html) {
+    const next = new DOMParser().parseFromString(`<!doctype html><body>${html}`, "text/html").body;
+    const sending = [...el.children].filter(c => c.classList.contains("sending") && !c.dataset.done);
+    const want = [...next.children];
+    want.forEach((n, i) => {
+      const cur = [...el.children].filter(c => !c.classList.contains("sending"))[i];
+      const src = n.outerHTML;
+      if (cur && cur.dataset.k && cur.dataset.k === n.dataset.k && cur._src === src) return;
+      const node = document.importNode(n, true);
+      node._src = src;
+      if (cur && cur.dataset.k === n.dataset.k) cur.replaceWith(node);
+      else if (cur) el.insertBefore(node, cur);
+      else el.appendChild(node);
+    });
+    [...el.children].filter(c => !c.classList.contains("sending")).slice(want.length).forEach(c => c.remove());
+    el.querySelectorAll(".sending").forEach(c => { if (!sending.includes(c)) c.remove(); });
+    sending.forEach(c => el.appendChild(c));          // kept last, until the server's turn replaces it
+  }
+
   function poll(el) {
     const every = Number(el.dataset.every || 2000);
-    let running = false;
+    let running = false, timer = null, fails = 0;
+    if (el.dataset.keyed) [...el.children].forEach(c => { c._src = c.outerHTML; });
+    const later = (ms) => { clearTimeout(timer); timer = setTimeout(tick, ms); };
     async function tick() {
       const url = el.dataset.poll;                  // read each time: the documents panel changes what it shows
       if (running || !el.isConnected) return;
-      if (document.visibilityState !== "visible" && !el.dataset.hidden) return;   // data-hidden: keeps going (the rail)
-      if (busyIn(el)) return;
+      const hidden = document.visibilityState !== "visible";
+      // Slower, not stopped: a hidden tab (the rail keeps the unread marks and the badge), a panel not on screen
+      // (the documents: an instance's first document must still make it appear).
+      const slow = (hidden ? 5 : 1) * (el.dataset.lazy && !el.getClientRects().length ? 6 : 1);
+      if ((hidden && !el.dataset.hidden) || busyIn(el)) { later(every); return; }
       running = true;
+      const ctl = new AbortController();
+      const limit = setTimeout(() => ctl.abort(), POLL_LIMIT_MS);
       try {
-        const r = await fetch(url, { credentials: "same-origin", cache: "no-store" });
-        const body = await r.text();
+        const headers = el.dataset.etag && el.dataset.etagUrl === url ? { "If-None-Match": el.dataset.etag } : {};
+        const r = await fetch(url, { credentials: "same-origin", cache: "no-store", signal: ctl.signal, headers });
         checkVersion(r);
+        if (r.status >= 502 && r.status <= 504) {      // the proxy answered, SHAFT did not (Tailscale's 503): unreachable
+          throw new Error(`its web service is not answering, HTTP ${r.status}`);
+        }
+        if (net.down) { net.down = 0; netNote(""); document.querySelectorAll(".stale").forEach(x => x.classList.remove("stale")); }
+        if (r.status === 304) { fails = 0; fresh(el); return; }
+        const body = await r.text();
         if (r.ok) {
+          fails = 0;
           // Asked again now: an edit or a selection begun while this refresh was on its way must survive it (Codex)
           if (busyIn(el) || el.dataset.poll !== url) return;
+          el.dataset.etag = r.headers.get("ETag") || "";
+          el.dataset.etagUrl = url;
           if (body !== el.dataset.last) {               // unchanged: nothing replaced, nothing collapsed
             const open = new Set([...el.querySelectorAll("details[data-key][open]")].map(d => d.dataset.key));
             const shut = new Set([...el.querySelectorAll("details[data-key]:not([open])")].map(d => d.dataset.key));
@@ -106,7 +160,8 @@
             const atBottom = box && box.scrollHeight > box.clientHeight
               ? box.scrollTop + box.clientHeight >= box.scrollHeight - 40
               : window.innerHeight + window.scrollY >= document.body.scrollHeight - 40;
-            el.innerHTML = body;
+            if (el.dataset.keyed) morph(el, body);
+            else el.innerHTML = body;
             el.dataset.last = body;
             el.querySelectorAll("details[data-key]").forEach(d => {
               if (open.has(d.dataset.key)) d.open = true;
@@ -117,22 +172,29 @@
           }
           fresh(el);
         } else {
-          const why = textOf(body) ||
-            (r.status >= 502 ? "the web service is not answering (shaft web status)" : "no reason given");
-          stale(el, `Not refreshed: HTTP ${r.status} — ${why}`);
+          fails += 1;
+          stale(el, `Not refreshed: HTTP ${r.status} — ${textOf(body) || "no reason given"}`);
         }
-      } catch (e) {
-        stale(el, `Not refreshed: ${e.message} (is the web service running?)`);
+      } catch (e) {                                    // no answer at all: the network, not this panel
+        fails += 1;
+        net.down += 1;
+        el.classList.add("stale");
+        netNote(navigator.onLine === false ? "Offline — it refreshes when the connection is back"
+          : `Cannot reach SHAFT: ${e.name === "AbortError" ? "no answer in 15 s" : e.message} — retrying`);
       } finally {
+        clearTimeout(limit);
         running = false;
+        later(Math.min(every * slow * 2 ** Math.min(fails, 4), 15000 * slow));   // back within 15 s
       }
     }
     el._tick = tick;
-    setInterval(tick, every);
-    if (el.dataset.now) tick();                        // a first render without live data (the rail): fill it now
-    document.addEventListener("visibilitychange", tick);
-    document.addEventListener("shaft:refresh", () => setTimeout(tick, 300));
+    later(el.dataset.now ? 0 : every);                 // a first render without live data (the rail): fill it now
+    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") tick(); });
+    window.addEventListener("pageshow", () => tick());   // back from the cache or the app switcher
+    window.addEventListener("online", () => { fails = 0; tick(); });
+    document.addEventListener("shaft:refresh", () => later(300));
   }
+
 
   document.addEventListener("submit", async (ev) => {
     const form = ev.target.closest("form[data-post]");
@@ -156,17 +218,23 @@
       }
     }
     if (form.dataset.busy) return;                  // one at a time: a second Enter sent it twice (Codex review)
+    const tooBig = filesRefused(form);
+    if (tooBig) { toast(tooBig, true); return; }      // before uploading it all to hear so (a phone's video)
     if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) return;
     const button = form.querySelector("button[type=submit]");
     if (button) button.disabled = true;
     form.dataset.busy = "1";
     const box = form.querySelector("textarea[name=text]");
     const typed = box ? box.value : null;            // what this send carries
+    const mid = form.querySelector("input[name=mid]");
+    if (mid && !mid.value) mid.value = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
     const shown = form.dataset.draft ? pending(form) : null;
+    const multipart = !!form.dataset.multipart;          // files go with it: the browser sets the boundary
+    const ctl = new AbortController();
+    const limit = setTimeout(() => ctl.abort(), multipart ? 180000 : 30000);
     try {
-      const multipart = !!form.dataset.multipart;          // files go with it: the browser sets the boundary
       const r = await fetch(form.dataset.post, {
-        method: "POST", credentials: "same-origin",
+        method: "POST", credentials: "same-origin", signal: ctl.signal,
         headers: multipart ? { "X-CSRF-Token": csrf() }
                            : { "X-CSRF-Token": csrf(), "Content-Type": "application/x-www-form-urlencoded" },
         body: multipart ? new FormData(form) : new URLSearchParams(new FormData(form)),
@@ -180,6 +248,8 @@
       const now = r.headers.get("X-Doc-Sha");         // refused as stale: Save again replaces it, knowingly
       if (!r.ok && now && form.querySelector("input[name=sha]")) form.querySelector("input[name=sha]").value = now;
       if (r.ok && form.dataset.after === "doc-saved") docSaved(form, r.headers.get("X-Doc"));
+      if (r.ok && mid) mid.value = "";               // sent: the next message gets an id of its own
+      if (r.ok && shown) shown.dataset.done = "1";   // goes when the feed brings the turn as the server saved it
       if (r.ok && form.dataset.reset) {
         const later = box && box.value !== typed ? box.value : null;   // typed while it was sending: kept
         form.reset();
@@ -191,10 +261,12 @@
       if (!r.ok && shown) shown.remove();
       if (r.ok && form.dataset.after === "reload") setTimeout(() => location.reload(), 800);
       document.dispatchEvent(new Event("shaft:refresh"));      // show what the action changed, now
-    } catch (e) {
+    } catch (e) {                                  // the answer was lost: it may have arrived — the id says so
       if (shown) shown.remove();
-      toast(`Not sent: ${e.message}`, true);
+      toast(e.name === "AbortError" ? "No answer: sending it again is safe (it is not sent twice)"
+        : `Not sent: ${e.message} — sending it again is safe`, true);
     } finally {
+      clearTimeout(limit);
       if (button) button.disabled = false;
       delete form.dataset.busy;
     }
@@ -207,6 +279,20 @@
 
   function touchOnly() {                         // a phone or tablet with no keyboard and no mouse
     return window.matchMedia("(hover: none) and (pointer: coarse)").matches;
+  }
+
+  function filesRefused(form) {                  // why the picked files cannot go, or ""
+    const input = form.querySelector("input[type=file]");
+    if (!input || !input.files.length) return "";
+    const files = [...input.files];
+    const mb = (n) => `${(n / 1048576).toFixed(0)} MB`;
+    const each = Number(form.dataset.maxFile || 0), total = Number(form.dataset.maxTotal || 0);
+    const count = Number(form.dataset.maxFiles || 0);
+    const big = files.find(f => each && f.size > each);
+    if (big) return `${big.name} is larger than ${mb(each)}: not sent`;
+    if (total && files.reduce((a, f) => a + f.size, 0) > total) return `together larger than ${mb(total)}: not sent`;
+    if (count && files.length > count) return `at most ${count} files at a time`;
+    return "";
   }
 
   function picked(form) {
@@ -234,6 +320,10 @@
       x.textContent = "×";
       x.dataset.unpick = String(k);
       chip.appendChild(x);
+      if (Number(form.dataset.maxFile || 0) && f.size > Number(form.dataset.maxFile)) {
+        chip.classList.add("over");
+        chip.title = "too large to send";
+      }
       box.appendChild(chip);
     });
   }
@@ -308,6 +398,8 @@
   const draftKey = (form) => `shaft.draft.${form.dataset.draft}`;
   document.addEventListener("input", (ev) => {
     if (ev.target.closest && ev.target.closest("form.docedit")) { grow(ev.target, 0.7); return; }
+    const midf = ev.target.closest && ev.target.closest("form[data-files]");
+    if (midf && midf.querySelector("input[name=mid]")) midf.querySelector("input[name=mid]").value = "";  // a new text
     const form = ev.target.closest && ev.target.closest("form[data-draft]");
     if (!form || ev.target.tagName !== "TEXTAREA") return;
     grow(ev.target);

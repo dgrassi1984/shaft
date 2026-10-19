@@ -103,12 +103,23 @@ def save(chat: dict) -> None:
     os.replace(tmp, d / f"{chat['id']}.json")
 
 
+_parsed: dict[str, tuple[tuple, dict]] = {}     # path -> ((inode, mtime_ns, size), chat): read again only when it changes
+
+
 def chats(name: str) -> list[dict]:
-    """This instance's web chats, newest first."""
+    """This instance's web chats, newest first. Read-only: a change goes through load() and save(). Every feed, panel
+    and rail refresh asks for them (PLAN-pwa P3: every chat file of every instance was parsed each time)."""
     out = []
     for p in _dir().glob("web-*.json") if _dir().is_dir() else []:
         try:
-            c = json.loads(p.read_text())
+            st = p.stat()
+            stamp = (st.st_ino, st.st_mtime_ns, st.st_size)       # save() replaces the file: a new inode each time
+            hit = _parsed.get(str(p))
+            if hit and hit[0] == stamp:
+                c = hit[1]
+            else:
+                c = json.loads(p.read_text())
+                _parsed[str(p)] = (stamp, c)
         except (OSError, ValueError):
             continue
         if c.get("instance") == name:
@@ -388,10 +399,22 @@ def _take_edits(chat: dict) -> tuple[str, list[str]]:
     return ("\n\n".join(blocks), sorted(pend))
 
 
-def send(name: str, login: str, text: str, files: list[tuple[str, bytes]]) -> tuple[dict, str]:
-    """A message from the operator: a new reply if none is running, an interjection otherwise. (chat, what to say)"""
+MIDS_KEPT = 50                       # the last message ids a chat remembers
+
+
+def send(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: str = "") -> tuple[dict, str]:
+    """A message from the operator: a new reply if none is running, an interjection otherwise. (chat, what to say)
+    `mid`: the page's id for this message — sent again after an answer that never arrived, it is not sent twice."""
     with _inst_lock(name):
-        return _send(name, login, text, files)
+        if mid and (c := open_chat(name)) and mid in (c.get("mids") or []):
+            return c, f"already sent to {name}"
+        chat, said = _send(name, login, text, files)
+        if mid:
+            with _lock(chat["id"]):
+                c = load(chat["id"])
+                c["mids"] = ((c.get("mids") or []) + [mid])[-MIDS_KEPT:]
+                save(c)
+        return chat, said
 
 
 def _send(name: str, login: str, text: str, files: list[tuple[str, bytes]]) -> tuple[dict, str]:

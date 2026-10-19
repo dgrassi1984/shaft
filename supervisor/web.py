@@ -305,6 +305,12 @@ def respond(req: Request) -> Response:
                       # a page open since before an update compares this with its own scripts' version
                       "X-Shaft-Static": web_pages.STATIC_VERSION})
     r.headers.setdefault("Cache-Control", "no-store")
+    if req.method == "GET" and r.status == 200 and req.path.startswith("/fragment/"):
+        # A refresh that changed nothing costs a header, not the whole feed again (PLAN-pwa P3: ~100 a minute)
+        tag = '"' + hashlib.sha1(r.body).hexdigest()[:20] + '"'
+        r.headers["ETag"] = tag
+        if req.headers.get("if-none-match") == tag:
+            r.status, r.body = 304, b""
     if req.set_cookies:                             # a list: one Set-Cookie header each
         own = r.headers.get("Set-Cookie")
         r.headers["Set-Cookie"] = ([own] if isinstance(own, str) else own or []) + req.set_cookies
@@ -428,7 +434,7 @@ def _post(req: Request, dev: str) -> Response:
         try:
             fields, files = web_chat.parse_multipart(req.headers.get("content-type", ""), req.body)
             _, said = web_chat.send(m[1], (req.headers.get("tailscale-user-login") or "").lower(),
-                                    fields.get("text", ""), files)
+                                    fields.get("text", ""), files, mid=fields.get("mid", ""))
         except web_chat.Refused as e:
             return _html(409, web_pages.h("<p>{t}</p>", t=str(e)))
         return _html(200, web_pages.h("<p>{t}</p>", t=said))

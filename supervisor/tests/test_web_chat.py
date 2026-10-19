@@ -306,7 +306,7 @@ class ChatRoutesTest(WebTest):
             no = self.req("/chat/wren/send", "POST", cookie=self.cookie, body=body,
                           headers={"content-type": ctype, "sec-fetch-site": "same-origin"})
         self.assertEqual((ok.status, no.status), (200, 403))
-        send.assert_called_once_with("wren", ME, "hi", [])
+        send.assert_called_once_with("wren", ME, "hi", [], mid="")
 
     def test_the_page_shows_the_conversation_escaped_and_polls_it(self):
         self.chat_with([{"role": "user", "content": "<script>x</script>", "shown": "<script>x</script>", "ts": "2026-10-19T12:00:00"},
@@ -887,3 +887,54 @@ class ClearInHeaderTest(ChatRoutesTest):
     def test_no_chat_no_clear(self):
         body = self.req("/i/wren/chat", cookie=self.cookie).body.decode()
         self.assertNotIn("/chat/wren/clear", body)
+
+
+class NetworkTest(ChatRoutesTest):
+    """PLAN-pwa P3: what a phone on cellular pays for a chat left open."""
+
+    def test_an_unchanged_refresh_is_a_304_with_no_body(self):
+        chat = self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"}])
+        first = self.req("/fragment/chat/wren", cookie=self.cookie)
+        tag = first.headers["ETag"]
+        self.assertTrue(tag.startswith('"') and len(first.body) > 100)
+        again = self.req("/fragment/chat/wren", cookie=self.cookie, headers={"if-none-match": tag})
+        self.assertEqual((again.status, again.body), (304, b""))
+        chat["turns"].append({"role": "user", "content": "q2", "ts": "2026-10-19T12:01:00"})   # changed: the body
+        web_chat.save(chat)
+        changed = self.req("/fragment/chat/wren", cookie=self.cookie, headers={"if-none-match": tag})
+        self.assertEqual(changed.status, 200)
+        page = self.req("/i/wren/chat", cookie=self.cookie)
+        self.assertNotIn("ETag", page.headers)                               # pages and actions: no conditionals
+
+    def test_every_feed_item_has_a_key_the_page_updates_by(self):
+        self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
+                        {"role": "assistant", "content": "a", "ts": "2026-10-19T12:00:05"}])
+        feed = self.req("/fragment/chat/wren", cookie=self.cookie).body.decode()
+        self.assertIn('class="turn me" data-k="u0"', feed)
+        self.assertIn('class="turn it" data-k="a1"', feed)
+        self.assertIn('data-k="acts"', feed)
+        page = self.req("/i/wren/chat", cookie=self.cookie).body.decode()
+        self.assertIn('data-keyed="1"', page)
+        self.assertIn('data-lazy="1"', page)                                 # the documents: slow while hidden
+        self.assertRegex(page, r'data-max-file="\d+" data-max-total="\d+" data-max-files="\d+"')
+
+    def test_chat_files_are_parsed_once_per_change(self):
+        chat = self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"}])
+        web_chat.chats("wren")
+        with mock.patch.object(web_chat.json, "loads", side_effect=AssertionError("parsed again")):
+            self.assertEqual(web_chat.chats("wren")[0]["id"], chat["id"])
+
+
+class ResendTest(ChatTest):
+    def test_a_message_sent_again_with_its_id_is_not_sent_twice(self):
+        """A send whose answer was lost (a phone on cellular) was sent again by the next tap: two replies."""
+        chat, said = web_chat.send("wren", ME, "hello", [], mid="m-1")
+        self.wait_idle(chat["id"])
+        again, said2 = web_chat.send("wren", ME, "hello", [], mid="m-1")
+        self.assertEqual(said2, "already sent to wren")
+        self.assertEqual(len(self.api.chats()), 1)
+        c = web_chat.load(chat["id"])
+        self.assertEqual([t["role"] for t in c["turns"]], ["user", "assistant"])
+        web_chat.send("wren", ME, "hello", [], mid="m-2")                     # a new id: a new message
+        self.wait_idle(chat["id"])
+        self.assertEqual(len(self.api.chats()), 2)
