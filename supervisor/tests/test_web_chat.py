@@ -380,7 +380,7 @@ class ChatCentricTest(ChatRoutesTest):
             body = self.req("/fragment/rail?c=i:wren", cookie=self.cookie).body.decode()
         self.assertIn('class="inst on"', body)
         self.assertIn('data-last="2026-10-19T12:00:05"', body)
-        self.assertIn('<span class="dot st-cycle" title="in a cycle">', body)
+        self.assertIn('<span class="dot st-cycle" title="in a cycle" role="img" aria-label="in a cycle">', body)
         self.assertIn("&lt;b&gt;first&lt;/b&gt; line", body)                  # escaped, and not the quoted line
         self.assertNotIn("quoted", body)
         self.assertIn('href="/overview"', body)

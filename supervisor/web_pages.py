@@ -95,7 +95,8 @@ def rail(names: list[str], current: str = "", snap: dict | None = None, chats: d
     items = []
     for n in names:
         i, c = live.get(n), (chats or {}).get(n) or {}
-        dot = h('<span class="dot st-{s}" title="{t}"></span>', s=state_class(i["state"]), t=i["state"]) if i else \
+        dot = h('<span class="dot st-{s}" title="{t}" role="img" aria-label="{t}"></span>', s=state_class(i["state"]),
+                t=i["state"]) if i else \
             Html('<span class="dot"></span>')
         line = (Html('<span class="last talk-text">replying…</span>') if c.get("replying") else
                 h('<span class="last">{t}</span>', t=c["line"]) if c.get("line") else Html(""))

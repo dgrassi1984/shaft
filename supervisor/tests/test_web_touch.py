@@ -119,3 +119,36 @@ class NetworkClientTest(unittest.TestCase):
     def test_the_feed_is_updated_item_by_item(self):
         self.assertIn("if (el.dataset.keyed) morph(el, body);", JS)
         self.assertIn("if (cur && cur.dataset.k && cur.dataset.k === n.dataset.k && cur._src === src) return;", JS)
+
+
+class AccessibilityTest(unittest.TestCase):
+    """PLAN-pwa P5."""
+
+    def test_a_new_answer_and_every_toast_are_read_out(self):
+        self.assertIn('region("toast", "status");', JS)                    # empty from the start: then it speaks
+        self.assertIn('region("announce", "status");', JS)
+        self.assertIn('box.setAttribute("role", bad ? "alert" : "status");', JS)
+        self.assertIn('announce(`${who ? who.textContent.trim() : "It"} replied:', JS)
+        self.assertIn('note.setAttribute("role", "status");', JS)            # a panel not refreshed
+
+    def test_icon_only_controls_and_state_dots_have_names(self):
+        from supervisor import web_pages
+        page = str(web_views.chat_page("wren", None, [], [], {"model": "m", "state": "idle"}, ["wren"], "t"))
+        for name in ('aria-label="Chats and pages"', 'aria-label="Documents"', 'aria-label="wren: pages and actions"',
+                     'aria-label="Message wren"'):
+            self.assertIn(name, page)
+        rail = str(web_pages.rail(["wren"], "", {"instances": [{"name": "wren", "state": "in a cycle"}]}))
+        self.assertIn('role="img" aria-label="in a cycle"', rail)
+        self.assertIn('x.setAttribute("aria-label", `remove ${f.name}`);', JS)
+
+    def test_the_keyboard_reaches_attach_and_reply(self):
+        self.assertIn("label.pick input { position: absolute; width: 1px; height: 1px; opacity: 0; }", CSS)
+        self.assertNotIn("label.pick input { display: none; }", CSS)
+        self.assertIn('b.addEventListener("click", () => quoteSelection());', JS)
+
+    def test_text_follows_the_phones_text_size_and_motion_can_be_off(self):
+        coarse = block("(pointer: coarse)")
+        self.assertIn("@supports (font: -apple-system-body) { html { font: -apple-system-body; } }", coarse)
+        self.assertIn("font-size: max(16px, 1rem)", coarse)
+        self.assertIn("body { font: 1rem/1.45", CSS)                         # rem: it follows the root's size
+        self.assertIn("transition: none !important", block("(prefers-reduced-motion: reduce)"))

@@ -20,14 +20,28 @@
     return fullText(html).slice(0, 300);
   }
 
-  function toast(text, bad) {
-    let box = document.getElementById("toast");
+  // Live regions (PLAN-pwa P5) exist, empty, from the start: a region created already filled is not read out.
+  function region(id, role) {
+    let box = document.getElementById(id);
     if (!box) {
       box = document.createElement("div");
-      box.id = "toast";
-      box.setAttribute("role", "status");
+      box.id = id;
+      box.setAttribute("role", role);
+      box.setAttribute("aria-live", role === "alert" ? "assertive" : "polite");
       document.body.appendChild(box);
     }
+    return box;
+  }
+  function announce(text) {                       // for VoiceOver only (visually hidden): a reply that arrived
+    const box = region("announce", "status");
+    box.textContent = "";
+    setTimeout(() => { box.textContent = text; }, 50);
+  }
+
+  function toast(text, bad) {
+    const box = region("toast", "status");
+    box.setAttribute("role", bad ? "alert" : "status");
+    box.setAttribute("aria-live", bad ? "assertive" : "polite");
     box.textContent = text;
     box.className = bad ? "bad show" : "show";
     clearTimeout(box._t);
@@ -41,6 +55,7 @@
     if (!note || !note.classList.contains("stale-note")) {
       note = document.createElement("p");
       note.className = "stale-note bad";
+      note.setAttribute("role", "status");
       el.parentNode.insertBefore(note, el);
     }
     note.textContent = why;
@@ -112,6 +127,13 @@
       if (cur && cur.dataset.k && cur.dataset.k === n.dataset.k && cur._src === src) return;
       const node = document.importNode(n, true);
       node._src = src;
+      if (!cur || cur.dataset.k !== n.dataset.k) {     // a new item: an answer is read out
+        if (node.classList.contains("turn") && node.classList.contains("it") && !node.classList.contains("live")) {
+          const who = (node.querySelector(".who") || {}).firstChild;
+          const first = (node.querySelector(".md p, .md li, .md h2, .md h3, p.warn") || {}).textContent || "";
+          announce(`${who ? who.textContent.trim() : "It"} replied: ${first.slice(0, 200)}`);
+        }
+      }
       if (cur && cur.dataset.k === n.dataset.k) cur.replaceWith(node);
       else if (cur) el.insertBefore(node, cur);
       else el.appendChild(node);
@@ -257,6 +279,7 @@
         picked(form);
         if (form.dataset.draft && later === null) sent(form);
         else if (box) grow(box);
+        if (box && form.dataset.draft && !touchOnly()) box.focus();   // write the next one (a phone keeps its keyboard down)
       }
       if (!r.ok && shown) shown.remove();
       if (r.ok && form.dataset.after === "reload") setTimeout(() => location.reload(), 800);
@@ -317,6 +340,7 @@
       x.type = "button";
       x.className = "unpick";
       x.title = `remove ${f.name}`;
+      x.setAttribute("aria-label", `remove ${f.name}`);
       x.textContent = "×";
       x.dataset.unpick = String(k);
       chip.appendChild(x);
@@ -566,6 +590,7 @@
       // mousedown, not click: a click would first clear the selection being quoted
       b.addEventListener("mousedown", (ev) => { ev.preventDefault(); quoteSelection(); });
       b.addEventListener("touchend", (ev) => { ev.preventDefault(); quoteSelection(); });
+      b.addEventListener("click", () => quoteSelection());   // the keyboard (Enter, Space); a mouse's has gone above
       document.body.appendChild(b);
     }
     return b;
@@ -745,7 +770,11 @@
   function docSaved(form, doc) {
     const panel = document.getElementById("docs");
     const view = form.closest(".docview");
-    if (view) editing(view, false);
+    if (view) {
+      editing(view, false);
+      const edit = view.querySelector("[data-edit-doc]");
+      if (edit) edit.focus();                       // focus where the editor was, not lost on the page
+    }
     if (panel && doc) {
       panel.dataset.poll = panel.dataset.poll.replace(/\?doc=.*$/, "") + `?doc=${encodeURIComponent(doc)}`;
     }
@@ -811,6 +840,8 @@
   }
 
   function start() {
+    region("toast", "status");
+    region("announce", "status");
     if (document.querySelector(".chatgrid")) document.body.classList.add("chatapp");
     fitViewport();
     if ("serviceWorker" in navigator) {             // the app's shell: offline page and cached static files
