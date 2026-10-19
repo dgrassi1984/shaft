@@ -305,6 +305,8 @@ def _route(req: Request) -> Response:
         return _refused("Open this page at its tailnet address.", url())
     if req.path.startswith("/static/"):
         return _static(urllib.parse.unquote(req.path.removeprefix("/static/")))
+    if req.path == "/favicon.ico":                  # asked by browsers on their own: the icon, not a refusal page
+        return _static("icon-180.png")
     if req.path == "/pair":
         return _pair(req, login)
     paired = _paired(req.headers.get("cookie", ""))

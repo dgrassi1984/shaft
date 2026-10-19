@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- SHAFT: a vertical shaft of light in a rounded tile; readable at 16 px, the same in light and dark tabs -->
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="#141413"/>
+  <rect x="26" y="10" width="12" height="44" rx="6" fill="#7aa2ff"/>
+  <circle cx="32" cy="18" r="4" fill="#ecece8"/>
+</svg>

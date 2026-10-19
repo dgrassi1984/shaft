@@ -60,6 +60,8 @@ def page(title: str, body: Html, nav: Html = Html(""), csrf: str = "") -> Html:
     return h('<!doctype html><html lang="en"><head><meta charset="utf-8">'
              '<meta name="viewport" content="width=device-width, initial-scale=1">'
              '<meta name="color-scheme" content="light dark">{meta}<title>{title} · SHAFT</title>'
+             '<link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v={v}">'
+             '<link rel="apple-touch-icon" href="/static/icon-180.png?v={v}">'
              '<link rel="stylesheet" href="/static/web.css?v={v}">'
              '<script src="/static/web.js?v={v}" defer></script></head>'
              '<body><div class="shell">{nav}<main>{body}</main></div></body></html>',

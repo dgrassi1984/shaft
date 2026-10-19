@@ -293,3 +293,15 @@ class PortTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FaviconTest(WebTest):
+    def test_every_page_names_its_icon_and_the_browsers_own_request_gets_it(self):
+        body = self.req("/overview", cookie=self.paired()).body.decode()
+        self.assertRegex(body, r'<link rel="icon" type="image/svg\+xml" href="/static/favicon\.svg\?v=[0-9a-f]+">')
+        self.assertIn('<link rel="apple-touch-icon" href="/static/icon-180.png', body)
+        for path, ctype in (("/static/favicon.svg", "image/svg+xml"), ("/favicon.ico", "image/png")):
+            r = self.req(path)                                    # the tailnet login, no paired cookie needed
+            self.assertEqual((r.status, r.headers["Content-Type"]), (200, ctype), path)
+        self.assertTrue(self.req("/favicon.ico").body.startswith(b"\x89PNG"))
+        self.assertEqual(self.req("/favicon.ico", login=None).status, 403)    # still the operator's tailnet only
