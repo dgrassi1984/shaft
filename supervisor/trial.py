@@ -38,7 +38,7 @@ from datetime import datetime, timedelta
 from math import comb
 from pathlib import Path
 
-from . import gate, mind
+from . import gate, localmodel, mind
 from .core import (CYCLE_TIMEOUT_S, HOME, LLM_PORTS, MIND_PATHS, PROJECT, SUP_DIR, UnsafePath, contained, knob, log,
                    safe_write, secrets_env)
 
@@ -408,6 +408,8 @@ def _replay(project, name, state, code, tmp, *, model, cache, cache_lock, billed
     if model == "local":
         port = model_of({k: v for k, v in code.items() if v is not None}).get("port")
         ports += [port] if port else []
+        if port == localmodel.PORT:
+            localmodel.ensure(f"{name}'s trial replay")   # it runs only while used (localmodel.py)
     else:
         extra.update(LLM_BASE_URL="broker", LLM_MODEL=model)   # the environment wins over config.env
     fd, prof = tempfile.mkstemp(prefix=f"shaft-trial-{name}-", suffix=".sb")

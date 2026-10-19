@@ -27,6 +27,7 @@ import urllib.request
 from typing import Callable
 
 from .cloudllm import CloudError, _record, _relay
+from . import localmodel
 from .core import LLM_PORTS, NETWORK_ERRORS, knob
 
 SERVERS, _ = knob("SHAFT_SELF_HOSTED", json.dumps({"racer": {
@@ -112,7 +113,14 @@ def open_reply(instance: str, body: dict, fallback: bool = True, note: Callable[
         raise CloudError(502, f"{model} at {srv['url']}: {why}; no local fallback"
                               f"{'' if fallback else ' for a trial (it never takes the local model)'}")
     note(f"{model} at {srv['url']}: {why} -> local fallback {target}")
-    resp, why_local = _open(target, {**body, "model": model.partition("/")[2]})
+    resp, why_local = None, None
+    if localmodel.is_service(target):   # it runs only while used: start it if it idled out (localmodel.py)
+        try:
+            localmodel.ensure(f"{instance}'s fallback from {model}")
+        except RuntimeError as e:
+            why_local = str(e)
+    if why_local is None:
+        resp, why_local = _open(target, {**body, "model": model.partition("/")[2]})
     if resp is None:
         _record(instance, model, None, None, 0.0, started, None, f"{why}; fallback: {why_local}")
         raise CloudError(502, f"{model} at {srv['url']}: {why}; local fallback {target}: {why_local}")

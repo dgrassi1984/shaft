@@ -35,9 +35,9 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import judge, metrics, sandbox
+from . import judge, localmodel, metrics, sandbox
 from .broker import CALENDAR_TOOLS, MAIL_TOOLS, Broker
-from .core import (BROKER_MAX_CALLS, EMBED_PORT, HOME, INSTANCES, LLM_PORTS, PROJECT, PYTHON, SUP_DIR,
+from .core import (BROKER_MAX_CALLS, EMBED_PORT, HOME, INSTANCES, LLM_PORTS, PROJECT, PYTHON, SUP_DIR, config_values,
                    git_wt, instance_config, instance_root, knob, log, secrets_env)
 
 VERSION, _ = knob("SHAFT_BATTERY_VERSION", "v1", str)
@@ -194,6 +194,8 @@ def make_control(name: str) -> Path:
 # -- one exam --------------------------------------------------------------------------
 def _exam(label: str, root: Path, broker: Broker, task: dict, until: float | None, interrupt) -> dict:
     """Run the agent's `exam` command on one task in its sandbox. Raises Interrupted."""
+    if localmodel.is_service(config_values((root / "config.env").read_text()).get("LLM_BASE_URL", "")):
+        localmodel.ensure(f"{label}'s exam")   # it runs only while used (localmodel.py)
     prof = base() / f"{label}.sb"
     prof.write_text(sandbox.profile(root, HOME, LLM_PORTS + [EMBED_PORT, broker.port, broker.egress.port],
                                     env_root=broker.env_root))   # its own Python environment, read-only

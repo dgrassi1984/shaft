@@ -359,7 +359,7 @@ def alerts(snap: dict | None = None, now: datetime | None = None, cost: dict | N
     now = now or datetime.now()
     out = []
     for s in (snap or {}).get("services", []):
-        if not s["running"] and s["name"] in ("model", "scheduler"):
+        if not s["running"] and not s.get("idle") and s["name"] in ("model", "scheduler"):
             out.append({"id": f"svc:{s['name']}:{now:%Y-%m-%d}", "text": f"service {s['name']} is not running"})
     cost = cost or costs(days=1)
     for c in cost["caps"]:

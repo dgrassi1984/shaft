@@ -26,7 +26,8 @@ Design, milestones and decisions: [PLAN.md](PLAN.md).
   with it) — no Python packages for the supervisor.
 - A model per instance, set in its `config.env`. The default is SHAFT's own model server:
   Ternary-Bonsai-2-27B (MLX, 2-bit) behind mlx_lm's OpenAI-compatible server on `127.0.0.1:8780`
-  (`shaft model on` installs it as a launchd service; needs `.venv-bonsai/` and the pack below).
+  (`shaft model on` installs it as a launchd service that runs only while used; needs `.venv-bonsai/` and the
+  pack below).
   Any other OpenAI-compatible endpoint with tool calling on localhost works too, or
   `LLM_BASE_URL="broker"` + e.g. `LLM_MODEL="claude-haiku-5-5"` or
   `LLM_MODEL="openrouter/xiaomi/mimo-v2.6-pro"` for a cloud model through the supervisor (the instance
@@ -113,7 +114,7 @@ shaft top                       # control panel, tabs 0–9: overview (state, no
                                 #   (SHAFT_RECAP_MODEL, default claude-haiku-5-5; supervisor/recap.py, about
                                 #   $0.0005 a line, in costs → recaps). ? lists the keys; --once prints a text snapshot
 shaft status [name]             # how each instance is doing, open conversations, which code is running
-shaft model on|off|status       # SHAFT's own Bonsai 2 server (launchd, :8780)
+shaft model on|off|status       # SHAFT's own Bonsai 2 server (launchd, :8780; started on demand, exits when idle)
 shaft api on|off|status|key|inbox-key   # OpenAI-compatible API + inbox doorbell on your tailnet (below)
 shaft telegram token <name>|pair|unpair|on|off|status   # talk with each instance from Telegram (below)
 shaft log [name] -n 5           # recent journal entries
@@ -458,6 +459,15 @@ After a tool result the agent asks for
 `LLM_THINK_FOLLOWUP` (1,024) reasoning tokens: Bonsai spent its full budget on every tool round (~4.5 min
 each); now a follow-up takes ~20–75 s. Agents send a presence penalty (`LLM_PRESENCE_PENALTY`)
 against loops. Prompt reading is reported as progress (`reading my memory · N%`).
+
+It runs only while used (`supervisor/localmodel.py`; Daniele, 2026-10-19): loaded it holds ~7.6 GB, and for five
+days its only user had been the racer → local fallback. While any instance's `config.env` points straight at it
+(`LLM_BASE_URL` on :8780) it stays up, as before. Otherwise it exits (code 0) once no request is in progress and
+none has come for `SHAFT_MODEL_IDLE_MINUTES` (15; 0 = never). launchd starts it neither at login nor after that
+exit (`RunAtLoad` false, `KeepAlive` = restart only after a crash). Every path that reaches it starts it first and
+waits until it answers (~2 s with the page cache warm, `SHAFT_MODEL_START_TIMEOUT_S` at most): a run of an instance
+on it, the racer fallback, a local trial replay, a battery exam, evolution's baseline. `shaft top` shows it as
+*idle* rather than down, and raises no alert for it.
 
 ## Rules the supervisor enforces
 

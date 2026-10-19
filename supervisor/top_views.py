@@ -525,9 +525,9 @@ def render_services(snap, ui, width, height):
     for k, name in enumerate(SERVICE_NAMES):
         s = svcs.get(name, {"running": False, "detail": ""})
         t = Text(no_wrap=True, overflow="ellipsis", style="reverse" if k == ui.sel else "")
-        t.append(" ● " if s["running"] else " ○ ", style="green" if s["running"] else "red")
+        t.append(" ● " if s["running"] else " ○ ", style="green" if s["running"] else "dim" if s.get("idle") else "red")
         t.append(f"{name:<10}", style="bold")
-        t.append(f"{'running' if s['running'] else 'NOT RUNNING':<12}")
+        t.append(f"{'running' if s['running'] else 'idle' if s.get('idle') else 'NOT RUNNING':<12}")
         if s.get("pid"):
             t.append(f"pid {s['pid']:<7}")
         t.append(s.get("detail", ""), style="dim")
