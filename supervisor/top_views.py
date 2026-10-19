@@ -17,7 +17,7 @@ from rich.console import Group
 from rich.table import Table
 from rich.text import Text
 
-from . import panel
+from . import dashboard, panel
 from .core import PROJECT, PYTHON, SUP_DIR, log
 
 TABS = [("1", "overview"), ("2", "instance"), ("3", "judge"), ("4", "trials"), ("5", "benchmarks"),
@@ -515,7 +515,7 @@ def render_costs(snap, ui, width, height):
 
 
 # -- 9 services ------------------------------------------------------------------------------------------------------
-SERVICE_NAMES = ["model", "embed", "api", "scheduler", "telegram"]
+SERVICE_NAMES = list(dashboard.SERVICES)
 
 
 def render_services(snap, ui, width, height):

@@ -26,7 +26,8 @@ JUDGE_ALERT_USD, _ = knob("SHAFT_JUDGE_ALERT_USD", "10", float)   # the judge ha
 CAP_ALERT = 0.8                                                    # a cap this full raises an alert
 ALERT_HOURS = 12                                                   # log alerts this recent are shown
 SERVICE_LOGS = {"model": "com.shaft.model.log", "embed": "com.shaft.embed.log", "api": "com.shaft.api.log",
-                "scheduler": "com.shaft.scheduler.log", "telegram": "com.shaft.telegram.log"}
+                "scheduler": "com.shaft.scheduler.log", "telegram": "com.shaft.telegram.log",
+                "web": "com.shaft.web.log"}
 
 # -- caching ------------------------------------------------------------------------------------------------
 _memo: dict[str, tuple[tuple, object]] = {}
@@ -351,6 +352,25 @@ def scheduled_runs() -> list[str]:
 # -- alerts ---------------------------------------------------------------------------------------------------------
 ALERT_LINE = re.compile(r"FAILED|failed tests|restore failed|run stopped|killed after|ended with an error|exit=[1-9]"
                         r"|exit=-|refused|ERROR")
+
+
+def extras(snap: dict) -> dict:
+    """The control panel's additions to a dashboard snapshot, for `shaft top` and the web UI alike: open alerts
+    (minus dismissed ones), today's total spend, and each instance's latest recap (recap.py) with whether a new one
+    is being written."""
+    from . import recap
+    stored = recap.load()
+    for i in snap["instances"]:
+        i["recap"] = {**stored.get(i["name"], {}), "running": recap.running(i["name"])}
+    try:
+        cost = costs(days=1)
+        gone = dismissed()
+        snap["alerts"] = [a for a in alerts(snap, cost=cost) if a["id"] not in gone]
+        snap["spend"] = cost["today"]["total"]
+    except Exception as e:                           # a broken log must not take the panel down; say so
+        snap["alerts"] = [{"id": "panel", "text": f"panel data unavailable: {type(e).__name__}: {e}"}]
+        snap["spend"] = None
+    return snap
 
 
 def alerts(snap: dict | None = None, now: datetime | None = None, cost: dict | None = None) -> list[dict]:

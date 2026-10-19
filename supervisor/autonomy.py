@@ -31,7 +31,7 @@ STATE = SUP_DIR / "schedule.json"       # last wake per instance / last nightly 
 LEGACY_JOBS = ("com.shaft.tick", "com.shaft.sleep")
 
 
-# Long-running services (KeepAlive): SHAFT's own model server and the OpenAI-compatible API.
+# Long-running services (KeepAlive): SHAFT's own model server, the OpenAI-compatible API, the web UI, ….
 SERVICES = {
     "model": {"label": "com.shaft.model",
               "args": [str(PROJECT / ".venv-bonsai" / "bin" / "python"), "-E", "-s", "-m", "supervisor.bonsai_server"]},
@@ -41,6 +41,7 @@ SERVICES = {
     "scheduler": {"label": "com.shaft.scheduler",
                   "args": [PYTHON, "-E", "-s", "-m", "supervisor", "autonomy", "serve"]},
     "telegram": {"label": "com.shaft.telegram", "args": [PYTHON, "-E", "-s", "-m", "supervisor", "telegram", "serve"]},
+    "web": {"label": "com.shaft.web", "args": [PYTHON, "-E", "-s", "-m", "supervisor", "web", "serve"]},
 }
 
 

@@ -821,6 +821,12 @@ def main(argv: list[str]) -> int:
     p.add_argument("name")
     p = sub.add_parser("api", help="OpenAI-compatible API for the instances, on your tailnet")
     p.add_argument("action", choices=["on", "off", "status", "key", "inbox-key", "serve"])
+    p = sub.add_parser("web", help="the web UI for managing the instances, on your tailnet (PLAN-webui.md): on, off, "
+                                   "status, pair [--name NAME] (a one-time link for a browser), unpair DEVICE|--all")
+    p.add_argument("action", choices=["on", "off", "status", "pair", "unpair", "serve"])
+    p.add_argument("device", nargs="?", help="unpair: the browser's id or name (shaft web status lists them)")
+    p.add_argument("--name", help="pair: what to call this browser (e.g. laptop, phone)")
+    p.add_argument("--all", action="store_true", help="unpair: every browser")
     p = sub.add_parser("telegram", help="talk with each instance from Telegram, one bot per instance, one paired account")
     p.add_argument("action", choices=["on", "off", "status", "token", "pair", "unpair", "serve"])
     p.add_argument("name", nargs="?", help="token: the instance the bot is for")
@@ -1026,6 +1032,9 @@ def main(argv: list[str]) -> int:
     if args.cmd == "api":
         from . import api
         return api.command(args.action)
+    if args.cmd == "web":
+        from . import web
+        return web.command(args.action, args.name if args.action == "pair" else args.device, args.all)
     if args.cmd == "telegram":
         from . import telegram
         return telegram.command(args.action, args.name)

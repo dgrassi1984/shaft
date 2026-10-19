@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import time
 from datetime import date, datetime
@@ -15,8 +16,24 @@ from pathlib import Path
 from . import messages
 from .core import SUP_DIR, disabled_tools, instance_config, instance_names, instance_root, paused
 
-SERVICES = ("model", "embed", "api", "scheduler", "telegram")
+SERVICES = ("model", "embed", "api", "scheduler", "telegram", "web")
 NOISE = ('api "GET', 'api "POST', "background journal write-up started")   # feed lines that say nothing new
+
+
+# Instance-written text (goals, messages, events) is shown by the TUI and the web UI: neither may pass control
+# characters through (rich passes ESC on to the terminal).
+CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def clean(s: str) -> str:
+    return CONTROL.sub("", s.expandtabs(4))
+
+
+def event_tone(line: str) -> str:
+    """How a supervisor event reads at a glance: "bad", "warn", "good" or ""."""
+    return ("bad" if any(w in line for w in ("FAILED", "failed", "ERROR", "stopped", "killed")) else
+            "warn" if any(w in line for w in ("paused", "skipped", "reverted")) else
+            "good" if any(w in line for w in ("passed", "resumed", "committed live")) else "")
 
 
 def _alive(pid: int) -> bool:

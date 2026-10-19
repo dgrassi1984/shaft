@@ -14,7 +14,6 @@ scroll, n/p next/previous message, Esc back to the list. The other tabs are in t
 from __future__ import annotations
 
 import os
-import re
 import select
 import sys
 import termios
@@ -32,17 +31,13 @@ from rich.table import Table
 from rich.text import Text
 
 from . import dashboard, panel, recap, top_views
+from .dashboard import clean
 
 STATE_STYLE = {"idle": "dim", "in a cycle": "green", "sleeping": "blue", "talking": "cyan",
                "answering (API)": "cyan", "writing up a conversation": "magenta", "being updated": "yellow"}
-CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")   # rich passes ESC through: message text is instance-written
 KEYS = {"\x1b[A": "up", "\x1bOA": "up", "\x1b[B": "down", "\x1bOB": "down", "\x1b[C": "right", "\x1bOC": "right",
         "\x1b[D": "left", "\x1bOD": "left", "\x1b[5~": "pgup", "\x1b[6~": "pgdn", "\x1b[H": "home", "\x1b[F": "end",
         "\r": "enter", "\n": "enter", "\x7f": "back", "\x08": "back", "\t": "down", "\x1b[Z": "up"}
-
-
-def clean(s: str) -> str:
-    return CONTROL.sub("", s.expandtabs(4))
 
 
 def _state_style(state: str) -> str:
@@ -57,9 +52,7 @@ def _k(n: int) -> str:
 
 def _event(line: str) -> Text:
     line = clean(line.split(" cycle_timeout_s=")[0])          # the run's settings: in shaft status, not here
-    style = ("red" if any(w in line for w in ("FAILED", "failed", "ERROR", "stopped", "killed")) else
-             "yellow" if any(w in line for w in ("paused", "skipped", "reverted")) else
-             "green" if any(w in line for w in ("passed", "resumed", "committed live")) else "")
+    style = {"bad": "red", "warn": "yellow", "good": "green"}.get(dashboard.event_tone(line), "")
     return Text(line[:200], style=style)
 
 
@@ -248,20 +241,8 @@ def dispatch(ui: UI, key: str, snap: dict, page: int, start_wake) -> bool:
 
 
 def extras(snap: dict) -> dict:
-    """The panel's additions to a snapshot: open alerts (minus dismissed ones), today's total spend, and each
-    instance's latest recap (recap.py) with whether a new one is being written."""
-    stored = recap.load()
-    for i in snap["instances"]:
-        i["recap"] = {**stored.get(i["name"], {}), "running": recap.running(i["name"])}
-    try:
-        cost = panel.costs(days=1)
-        gone = panel.dismissed()
-        snap["alerts"] = [a for a in panel.alerts(snap, cost=cost) if a["id"] not in gone]
-        snap["spend"] = cost["today"]["total"]
-    except Exception as e:                           # a broken log must not take the panel down; say so
-        snap["alerts"] = [{"id": "panel", "text": f"panel data unavailable: {type(e).__name__}: {e}"}]
-        snap["spend"] = None
-    return snap
+    """The panel's additions to a snapshot (panel.extras, shared with the web UI)."""
+    return panel.extras(snap)
 
 
 # -- rendering --------------------------------------------------------------------------------------------
