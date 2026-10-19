@@ -369,7 +369,8 @@ class PanelKeys(unittest.TestCase):
 
 
 DETAIL = {"name": "shaft", "paused": False, "model": "bonsai", "via": "local", "wake": "10", "effort": "medium",
-          "tools_off": [], "shared": "", "mail": "", "calendar": "", "python": ".venv · Python 3.13.1", "internet": "3 today · pypi.org ×2", "stats": "# My measured performance\n- rate 70%",
+          "tools_off": [], "shared": "", "mail": "", "calendar": "", "python": ".venv · Python 3.13.1", "internet": "3 today · pypi.org ×2",
+          "browser": "Chromium 141 · profile 3.1 MB", "jobs": "watcher every 15 min (can wake)", "stats": "# My measured performance\n- rate 70%",
           "journal": ["2026-10-13 17:32 — Conversation with Daniele"], "questions": [],
           "probation": [{"commit": "abcdef1234", "since": "2026-10-13T15:00", "files": ["plugins/x/main.py"],
                          "baseline": 0.5, "restore_failed": "file changed since"}],

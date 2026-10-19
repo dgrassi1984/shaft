@@ -30,6 +30,7 @@ import hmac
 import json
 import mimetypes
 import os
+import re
 import secrets
 import sys
 import threading
@@ -300,14 +301,19 @@ def _route(req: Request) -> Response:
     if req.method != "GET":
         return _html(405, web_pages.message_page("Not allowed", f"{req.method} is not supported."))
     try:
-        if req.path == "/":
-            return _html(200, web_pages.overview_page(overview(), csrf_token(secret)))
-        if req.path == "/fragment/overview":
-            return _html(200, web_pages.overview(overview()))
+        r = _get(req, csrf_token(secret))
     except Exception as e:          # say what broke: an empty page reads as "nothing to show"
         log(f"web: {req.path} failed: {type(e).__name__}: {e}")
-        return _html(500, web_pages.h('<p class="bad">{p} failed: {e}</p>', p=req.path, e=f"{type(e).__name__}: {e}"))
-    return _html(404, web_pages.message_page("Not found", f"No page at {req.path}."))
+        why = f"{type(e).__name__}: {e}"
+        if req.path.startswith("/fragment/"):
+            return _html(500, web_pages.h('<p class="bad">{p} failed: {e}</p>', p=req.path, e=why))
+        return _html(500, web_pages.message_page("This page failed", f"{req.path} failed: {why}",
+                                                 "The error is in supervisor.log too."))
+    return r or _not_found(req.path)
+
+
+def _not_found(what: str) -> Response:
+    return _html(404, web_pages.message_page("Not found", f"Nothing at {what}."))
 
 
 def _pair(req: Request, login: str) -> Response:
@@ -332,6 +338,216 @@ def _post(req: Request, dev: str) -> Response:
         unpair(dev)
         return _html(200, web_pages.h('<p>This browser is unpaired.</p>'))
     return _html(404, web_pages.message_page("Not found", f"No action at {req.path}."))
+
+
+# -- read-only pages (M1): each from the same panel reader as its TUI tab --------------------------------------------
+INSTANCE_PAGE = re.compile(r"^/i/(?P<name>[A-Za-z0-9_-]+)(?:/(?P<tab>[a-z]+))?$")
+TEXT_TYPES = (".md", ".txt", ".csv", ".json", ".log", ".py", ".yaml", ".yml", ".toml", ".html", ".xml")
+TEXT_MAX = 200_000                                          # an attachment shown inline as text, at most
+IMAGE_MAGIC = ((b"\xff\xd8\xff", "image/jpeg"), (b"\x89PNG\r\n\x1a\n", "image/png"), (b"GIF87a", "image/gif"),
+               (b"GIF89a", "image/gif"))
+
+
+def _names() -> list[str]:
+    from .core import instance_names
+    return instance_names()
+
+
+def _get(req: Request, csrf: str) -> Response | None:
+    from . import dashboard, panel, web_views as v
+    path, qs = req.path, req.query
+    if path == "/":
+        return _html(200, web_pages.overview_page(overview(), csrf))
+    if path == "/fragment/overview":
+        return _html(200, web_pages.overview(overview()))
+    names = _names()
+    if m := re.match(r"^/fragment/i/([A-Za-z0-9_-]+)/live$", path):
+        if m[1] not in names:
+            return None
+        return _html(200, v.instance_live(_live(m[1]), panel.instance_detail(m[1])))
+    if m := INSTANCE_PAGE.match(path):
+        name, tab = m["name"], m["tab"] or ""
+        if name not in names:
+            return None
+        return _instance_page(name, tab, qs, names, csrf)
+    if path == "/trials":
+        only = qs.get("i", "")
+        only = only if only in names else ""
+        return _html(200, v.trials_page(panel.trials(only or None), panel.costs(days=1), only, panel.trial_progress,
+                                        names, csrf))
+    if m := re.match(r"^/trials/([A-Za-z0-9_-]+)/([^/]+)$", path):
+        from . import trial
+        if m[1] not in names:
+            return None
+        t = next((t for t in panel.trials(m[1]) if t.get("id") == urllib.parse.unquote(m[2])), None)
+        return _html(200, v.trial_page(t, trial.report(t), names, csrf)) if t else None
+    if path == "/messages":
+        from . import messages
+        ms = messages.history()
+        people = sorted({p for x in ms for p in (x["from"], x["to"])})
+        who = qs.get("who", "")
+        return _html(200, v.messages_page(ms, who if who in people else "", people, names, csrf))
+    if m := re.match(r"^/messages/([^/]+)$", path):
+        msg = _message(urllib.parse.unquote(m[1]))
+        if not msg:
+            return None
+        return _html(200, v.message_page(msg, _attachment_texts(msg), names, csrf))
+    if m := re.match(r"^/files/([^/]+)/(\d+)$", path):
+        return _file(urllib.parse.unquote(m[1]), int(m[2]))
+    if path == "/costs":
+        return _html(200, v.costs_page(panel.costs(days=7), names, csrf))
+    if path in ("/services", "/fragment/services"):
+        order = list(dashboard.SERVICES)
+        live = v.services_live(panel.services_detail(), order, panel.scheduled_runs())
+        if path == "/fragment/services":
+            return _html(200, live)
+        sel = qs.get("log") if qs.get("log") in order else order[0]
+        return _html(200, v.services_page(live, sel, panel.SERVICE_LOGS[sel], panel.log_tail(sel, 40), names, csrf))
+    return None
+
+
+def _live(name: str) -> dict:
+    return next((i for i in overview()["instances"] if i["name"] == name), {})
+
+
+def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str) -> Response | None:
+    from . import panel, web_views as v
+    from .core import instance_root, journal_entries
+    if tab == "":
+        return _html(200, v.instance_summary(name, panel.instance_detail(name), _live(name), names, csrf))
+    if tab == "judge":
+        js = panel.judgments(name)
+        if ts := qs.get("ts"):
+            j = next((j for j in js if j.get("episode_ts") == ts), None)
+            return _html(200, v.judge_detail_page(name, j, names, csrf)) if j else None
+        return _html(200, v.judge_page(name, js, panel.traits(name), names, csrf))
+    if tab == "changes":
+        return _html(200, v.changes_page(name, panel.instance_detail(name), panel.probation_events(name),
+                                         panel.template_merges(name), names, csrf))
+    if tab == "benchmarks":
+        return _html(200, v.benchmarks_page(name, panel.battery_status(name), panel.evals(name),
+                                            panel.surprise_summary(name), names, csrf))
+    if tab == "journal":
+        try:
+            at = max(0, int(qs.get("at", "0")))
+        except ValueError:
+            at = 0
+        return _html(200, v.journal_page(name, journal_entries(instance_root(name)), at, names, csrf))
+    if tab == "activity":
+        return _html(200, v.activity_page(name, activity(name), names, csrf))
+    if tab == "transcripts":
+        filt = qs.get("f", "") if qs.get("f", "") in v.TX_FILTERS else ""
+        es = panel.transcripts(name)
+        if filt == "cycles":
+            es = [e for e in es if e["kind"] != "conversation"]
+        elif filt == "conversations":
+            es = [e for e in es if e["kind"] == "conversation"]
+        return _html(200, v.transcripts_page(name, es, filt, panel.transcript_summary, _live(name), names, csrf))
+    if tab == "transcript":
+        e = next((e for e in panel.transcripts(name) if e["id"] == qs.get("id")), None)
+        if not e:
+            return None
+        thinking = qs.get("thinking") == "1"
+        return _html(200, v.transcript_page(name, e, panel.transcript_lines(name, e, thinking), thinking, names, csrf))
+    return None
+
+
+def activity(name: str) -> dict:
+    """What an instance does with its reach: its connections (egress log), the plugins it built, its scheduled jobs,
+    its Python, browser and mind store — each from the reader its CLI command uses."""
+    from datetime import date
+    from . import browser, egress, jobs, mind, pyenv
+    from .core import instance_root
+    root = instance_root(name)
+    plugins = []
+    for manifest in sorted((root / "plugins").glob("*/plugin.json")) if (root / "plugins").is_dir() else []:
+        try:
+            spec = json.loads(manifest.read_text(errors="replace"))
+        except (OSError, ValueError) as e:
+            spec = {"description": f"(plugin.json does not parse: {e})"}
+        spec = spec if isinstance(spec, dict) else {}
+        plugins.append({"name": manifest.parent.name, "description": str(spec.get("description", ""))[:300],
+                        "scheduled": "schedule" in spec})
+    log_path = egress.log_path(name)
+    return {"egress": egress.describe(egress.recent(log_path, 50)),
+            "internet_today": egress.summary(egress.recent(log_path, 2000), date.today().isoformat()),
+            "plugins": plugins, "jobs": jobs.describe(name), "python": pyenv.describe(root),
+            "browser": browser.describe(root), "mind": mind.describe(name)}
+
+
+def _message(file: str) -> dict | None:
+    from . import messages
+    return next((m for m in messages.history() if m["file"] == file), None)
+
+
+def attachment_path(a: dict) -> Path | None:
+    """Where a message's attachment is, if it is a file inside an instance's folder or the operator's inbox
+    attachments, reached without following any link below that folder; None otherwise. Only paths a message names
+    are ever served (PLAN-webui.md: a file an instance wrote never runs as a page)."""
+    from .core import INSTANCES, PROJECT
+    rel = Path(str(a.get("path", "")))
+    if rel.is_absolute() or ".." in rel.parts:
+        return None
+    if rel.parts[:1] == (".supervisor",):                    # the supervisor's folder, wherever SUP_DIR points
+        base, rest = SUP_DIR / "operator-inbox" / "attachments", Path(*rel.parts[1:])
+        if rest.parts[:2] != ("operator-inbox", "attachments"):
+            return None
+        rest = Path(*rest.parts[2:])
+    elif rel.parts[:1] == ("instances",):
+        base, rest = INSTANCES, Path(*rel.parts[1:])
+    else:
+        return None
+    if not rest.parts:
+        return None
+    real_base = base.resolve()
+    path = real_base / rest
+    try:
+        if path.resolve() != path or not path.is_file():   # a link anywhere below the folder: refused
+            return None
+    except OSError:
+        return None
+    return path
+
+
+def _attachment_texts(m: dict) -> dict:
+    out = {}
+    for k, a in enumerate(m.get("attachments") or []):
+        if not a.get("name", "").lower().endswith(TEXT_TYPES) or a.get("bytes", 0) > TEXT_MAX:
+            continue
+        path = attachment_path(a)
+        if path is None:
+            continue
+        try:
+            out[k] = path.read_bytes()[:TEXT_MAX].decode("utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+    return out
+
+
+def _image_type(data: bytes) -> str | None:
+    for magic, ctype in IMAGE_MAGIC:
+        if data.startswith(magic):
+            return ctype
+    return "image/webp" if data[:4] == b"RIFF" and data[8:12] == b"WEBP" else None
+
+
+def _file(file: str, k: int) -> Response | None:
+    m = _message(file)
+    atts = (m or {}).get("attachments") or []
+    if not 0 <= k < len(atts):
+        return None
+    path = attachment_path(atts[k])
+    if path is None:
+        log(f"web refused to serve attachment {k} of {file}: {atts[k].get('path')!r} is not a plain file in an "
+            "instance's folder or the operator's inbox")
+        return None
+    data = path.read_bytes()
+    name = atts[k].get("name") or path.name
+    disposition = "attachment; filename*=UTF-8''" + urllib.parse.quote(name, safe="")
+    if ctype := _image_type(data):
+        return Response(200, data, {"Content-Type": ctype, "Content-Disposition": disposition.replace(
+            "attachment", "inline", 1)})
+    return Response(200, data, {"Content-Type": "application/octet-stream", "Content-Disposition": disposition})
 
 
 # -- the server ------------------------------------------------------------------------------------------------------

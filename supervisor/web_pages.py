@@ -33,7 +33,7 @@ def join(parts, sep: str = "") -> Html:
 
 
 # -- the page ------------------------------------------------------------------------------------------------------
-STATIC_VERSION = "3"        # bump when web_static changes, so a browser does not keep an old copy
+STATIC_VERSION = "5"        # bump when web_static changes, so a browser does not keep an old copy
 
 
 def page(title: str, body: Html, nav: Html = Html(""), csrf: str = "") -> Html:
@@ -47,13 +47,17 @@ def page(title: str, body: Html, nav: Html = Html(""), csrf: str = "") -> Html:
              meta=meta, title=title, v=STATIC_VERSION, nav=nav, body=body)
 
 
-def nav(names: list[str], current: str = "overview") -> Html:
+def nav(names: list[str], current: str = "overview", pages: list[tuple[str, str]] = ()) -> Html:
+    """The left nav: the overview, each instance (its own pages), then the global pages."""
     items = [h('<a href="/" class="{cls}">Overview</a>', cls="on" if current == "overview" else "")]
-    items += [h('<a href="/#inst-{n}" class="inst">{n}</a>', n=n) for n in names]
+    items += [h('<a href="/i/{n}" class="inst {cls}">{n}</a>', n=n, cls="on" if current == f"i:{n}" else "")
+              for n in names]
+    items += [h('<a href="{href}" class="{cls}">{label}</a>', href=href, label=label,
+                cls="on" if current == href else "") for href, label in pages]
     return h('<nav><div class="brand">SHAFT</div>{items}'
-             '<form class="unpair" data-post="/unpair" data-after="reload" data-confirm="Unpair this browser? You will need a new link '
-             'from `shaft web pair` to use it again."><button type="submit">Unpair this browser</button></form>'
-             '</nav>', items=join(items))
+             '<form class="unpair" data-post="/unpair" data-after="reload" data-confirm="Unpair this browser? You will '
+             'need a new link from `shaft web pair` to use it again."><button type="submit">Unpair this browser</button>'
+             '</form></nav>', items=join(items))
 
 
 def message_page(title: str, text: str, detail: str = "") -> Html:
@@ -136,7 +140,7 @@ def instance_card(i: dict) -> Html:
     rows.append(_row("plan", f"{sched}{off}", "dim"))
     if i.get("trial"):
         rows.append(_row("trial", i["trial"], "trial-text"))
-    return h('<article class="card st-{cls}" id="inst-{name}"><header><b>{name}</b> '
+    return h('<article class="card st-{cls}" id="inst-{name}"><header><a href="/i/{name}"><b>{name}</b></a> '
              '<span class="dim">· {model}</span></header>{rows}</article>',
              cls=state_class(i["state"]), name=i["name"], model=i["model"], rows=join(rows))
 
@@ -188,4 +192,5 @@ def overview(snap: dict) -> Html:
 def overview_page(snap: dict, csrf: str) -> Html:
     body = h('<h1 class="sr">Overview</h1><div id="overview" data-poll="/fragment/overview">{live}</div>',
              live=overview(snap))
-    return page("Overview", body, nav([i["name"] for i in snap["instances"]]), csrf)
+    from .web_views import GLOBAL_PAGES
+    return page("Overview", body, nav([i["name"] for i in snap["instances"]], "overview", GLOBAL_PAGES), csrf)
