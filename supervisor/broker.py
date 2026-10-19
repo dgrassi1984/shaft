@@ -1187,16 +1187,14 @@ class Broker:
         """The instance's only way to change its config.env (its sandbox cannot write the file). Each change is
         recorded, so the gate knows exactly which lines are the instance's: the operator edits the same file,
         even mid-run, and the gate once reverted his model switch as the instance's (kant, 2026-10-13)."""
-        from .core import CONFIG_KEY, config_line, config_values, config_with, contained, safe_write
+        from .core import config_line, config_lock, config_set_line, config_values, config_with, contained, safe_write
         key, value = str(key).strip(), str(value)
-        if not CONFIG_KEY.match(key):
-            raise ValueError(f"{key!r}: a key is an UPPER_CASE name, e.g. WAKE_INTERVAL_MINUTES")
-        if len(value) > 500 or any(c in value for c in '"\n\r\0'):
-            raise ValueError("a value is one line of at most 500 characters, without double quotes")
+        new = config_set_line(key, value)
         path = contained(self._root(), "config.env")
-        text = path.read_text() if path.is_file() else ""
-        old, new = config_line(text, key), f'{key}="{value}"'
-        safe_write(self._root(), "config.env", config_with(text, key, new))
+        with config_lock(path):                      # the operator may be writing it too (shaft config, the web UI)
+            text = path.read_text() if path.is_file() else ""
+            old = config_line(text, key)
+            safe_write(self._root(), "config.env", config_with(text, key, new))
         self.config_writes.append({"key": key, "old": old, "new": new})
         was = repr(config_values(old)[key]) if old else "not set"
         return f"config.env: {key} is now {value!r} (was {was}); your own settings take effect from your next run"

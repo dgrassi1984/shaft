@@ -69,13 +69,14 @@ def config_without(text: str, writes: list[dict]) -> tuple[str, list[str]]:
 
 def revert_config(instance_root: Path, writes: list[dict]) -> list[str]:
     """Undo the instance's set_config writes in its config.env, keeping every other line. Returns the keys."""
-    from .core import contained, safe_write
+    from .core import config_lock, contained, safe_write
     if not writes:
         return []
     path = contained(instance_root, "config.env")
-    text, back = config_without(path.read_text() if path.is_file() else "", writes)
-    if back:
-        safe_write(instance_root, "config.env", text)
+    with config_lock(path):                          # not over an operator's write landing at the same moment
+        text, back = config_without(path.read_text() if path.is_file() else "", writes)
+        if back:
+            safe_write(instance_root, "config.env", text)
     return back
 
 

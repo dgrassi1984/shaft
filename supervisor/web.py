@@ -42,6 +42,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from . import web_pages
+from .web_pages import Html
 from .core import EMBED_PORT, LLM_PORTS, SUP_DIR, knob, log
 
 PORT, _ = knob("SHAFT_WEB_PORT", "8785", int)               # not 8782: that is the embed port, which runs reach
@@ -218,7 +219,10 @@ class Request:
         self.headers = {k.lower(): v for k, v in self.headers.items()}
 
     def form(self) -> dict:
-        return {k: v[0] for k, v in urllib.parse.parse_qs(self.body.decode(errors="replace")).items()}
+        """The posted fields, blank ones included: a blank "saw" means "the page showed it unset", and dropping it
+        dropped the stale-edit check (M3)."""
+        return {k: v[0] for k, v in urllib.parse.parse_qs(self.body.decode(errors="replace"),
+                                                          keep_blank_values=True).items()}
 
 
 @dataclass
@@ -338,6 +342,12 @@ def _post(req: Request, dev: str) -> Response:
     if req.path == "/unpair":
         unpair(dev)
         return _html(200, web_pages.h('<p>This browser is unpaired.</p>'))
+    if m := re.match(r"^/preview/drive/([A-Za-z0-9_-]+)$", req.path):
+        from . import opconfig, web_config
+        if m[1] not in _names():
+            return _not_found(req.path)
+        old, _ = opconfig.drive(m[1])
+        return _html(200, web_pages.h("{d}", d=web_config.drive_diff(old, req.form().get("text", ""))))
     if m := re.match(r"^/action/([a-z-]+)$", req.path):
         from . import dashboard, web_actions
         with _snap_lock:
@@ -449,6 +459,16 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str) -
         return _html(200, v.journal_page(name, journal_entries(instance_root(name)), at, names, csrf))
     if tab == "activity":
         return _html(200, v.activity_page(name, activity(name), names, csrf))
+    if tab in ("config", "drive", "access"):
+        from . import opconfig, web_config
+        if tab == "config":
+            body = web_config.config_page(name, opconfig.fields(name), _config_history(name))
+        elif tab == "drive":
+            text, sha = opconfig.drive(name)
+            body = web_config.drive_page(name, text, sha, v.markdown(text) if text is not None else Html(""))
+        else:
+            body = web_config.access_page(name, web_config.access(name))
+        return _html(200, v.instance_frame(name, tab, tab, body, names, csrf))
     if tab == "transcripts":
         filt = qs.get("f", "") if qs.get("f", "") in v.TX_FILTERS else ""
         es = panel.transcripts(name)
@@ -464,6 +484,17 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str) -
         thinking = qs.get("thinking") == "1"
         return _html(200, v.transcript_page(name, e, panel.transcript_lines(name, e, thinking), thinking, names, csrf))
     return None
+
+
+def _config_history(name: str) -> list[str]:
+    """The last commits that touched config.env: the operator's ("changed from outside") and the instance's runs."""
+    from .core import git_wt, instance_root
+    try:
+        out = git_wt(instance_root(name), "log", "-n", "12", "--date=format:%Y-%m-%d %H:%M", "--format=%ad · %an · %s",
+                     "--", "config.env", check=False)
+    except (Exception, SystemExit) as e:          # the page still works without its history
+        return [f"(no history: {e})"]
+    return [l for l in out.stdout.splitlines() if l.strip()] if out.returncode == 0 else [f"(git log failed: {out.stderr.strip()})"]
 
 
 def activity(name: str) -> dict:

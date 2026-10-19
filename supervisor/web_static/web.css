@@ -174,3 +174,15 @@ form.msg label { display: grid; gap: .3rem; font-size: .9rem; }
 form.msg button { justify-self: start; }
 textarea { font: inherit; width: 100%; padding: .4rem .5rem; border-radius: 6px; border: 1px solid var(--line);
            background: var(--bg); color: var(--text); resize: vertical; }
+
+/* M3 config, drive, access */
+form.cfg { display: flex; flex-wrap: wrap; gap: .3rem; align-items: center; margin: 0; }
+form.cfg.add { margin-top: .3rem; }
+input, select { font: inherit; font-size: .85rem; padding: .2rem .4rem; border-radius: 5px; border: 1px solid var(--line);
+                background: var(--bg); color: var(--text); max-width: 100%; }
+table.config td.help { font-size: .8rem; max-width: 28rem; }
+table.config td { vertical-align: middle; }
+pre.diff:empty { display: none; }
+pre.diff { background: var(--bg); padding: .4rem .6rem; border-radius: 6px; border: 1px solid var(--line); }
+form.drive { display: grid; gap: .4rem; }
+form.drive textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .82rem; }

@@ -28,7 +28,7 @@ def _ok(text: str) -> tuple[int, str]:
 
 def _ran(args: list[str], timeout: float = 60) -> tuple[int, str]:
     ok, last = actions.run_now(args, timeout, who=WHO)
-    return (200, last) if ok else (409, f"refused: {last}")
+    return (200, last) if ok else (409, last if last.startswith("refused") else f"refused: {last}")
 
 
 def _started(args: list[str]) -> tuple[int, str]:
@@ -80,6 +80,9 @@ def _run(verb: str, form: dict, snap: dict, names: list[str], services: list[str
             raise Refused(f"not now: {why}")
         return _ran(["autonomy", op], timeout=90)
     name = _inst(form, names)
+    from . import web_config
+    if verb in web_config.VERBS:
+        return web_config.run(verb, name, form)
     state = _state(snap, name)
     if verb == "cycle":
         if state != "idle":

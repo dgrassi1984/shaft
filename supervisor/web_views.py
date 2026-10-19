@@ -11,8 +11,9 @@ import urllib.parse
 from .web_pages import Html, esc, h, join, nav, page
 
 MARK = {"yes": ("✓", "good"), "partial": ("½", "warn"), "no": ("✗", "bad")}
-INSTANCE_TABS = [("", "Summary"), ("judge", "Judge"), ("changes", "Changes"), ("benchmarks", "Benchmarks"),
-                 ("transcripts", "Transcripts"), ("journal", "Journal"), ("activity", "Activity")]
+INSTANCE_TABS = [("", "Summary"), ("config", "Config"), ("drive", "Drive"), ("access", "Access"), ("judge", "Judge"),
+                 ("changes", "Changes"), ("benchmarks", "Benchmarks"), ("transcripts", "Transcripts"),
+                 ("journal", "Journal"), ("activity", "Activity")]
 GLOBAL_PAGES = [("/trials", "Trials"), ("/messages", "Messages"), ("/costs", "Costs"), ("/services", "Services")]
 
 
@@ -241,10 +242,9 @@ def instance_summary(name: str, d: dict, live: dict, names: list[str], csrf: str
                                                          else "") for c in d["changes"][:5])))
     if d["merges"]:
         parts.append(section("Template updates (shaft update)", lines(d["merges"])))
-    from .web_actions import message_forms, tool_switches
+    from .web_actions import message_forms
     question = next((x for x in d["questions"] if x.get("kind") == "question"), None)
     parts.insert(1, section("Write to it", message_forms(name, question)))
-    parts.append(section("Supervisor tools (shaft tools)", tool_switches(name, set(d["tools_off"]))))
     parts.append(section("self/stats.md (written by the supervisor)", markdown(d["stats"])))
     return instance_frame(name, "", "summary", join(parts), names, csrf)
 

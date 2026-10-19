@@ -839,6 +839,20 @@ def main(argv: list[str]) -> int:
     p.add_argument("name")
     p = sub.add_parser("api", help="OpenAI-compatible API for the instances, on your tailnet")
     p.add_argument("action", choices=["on", "off", "status", "key", "inbox-key", "serve"])
+    p = sub.add_parser("config", help="an instance's config.env as the operator: list it, set KEY=VALUE …, unset KEY …"
+                                      " (one write, one commit; --expect refuses if a value changed since you looked)")
+    p.add_argument("name")
+    p.add_argument("action", nargs="?", choices=["set", "unset"])
+    p.add_argument("items", nargs="*", help="set: KEY=VALUE … · unset: KEY …")
+    p.add_argument("--expect", action="append", default=[], metavar="KEY=VALUE",
+                   help="refuse unless KEY's value is still VALUE")
+    p.add_argument("--expect-unset", action="append", default=[], metavar="KEY", help="refuse unless KEY is not set")
+    p = sub.add_parser("drive", help="an instance's drive.md (what it is for): show it, set --file FILE, or remove it "
+                                     "(the default drive applies); --expect-sha from `shaft drive <name>`")
+    p.add_argument("name")
+    p.add_argument("action", nargs="?", choices=["set", "remove"])
+    p.add_argument("--file")
+    p.add_argument("--expect-sha")
     p = sub.add_parser("cycle", help="start one cycle of an idle instance now, detached (as shaft top's c and the web "
                                      "UI do); refused if it is paused or already awake")
     p.add_argument("name")
@@ -1059,6 +1073,12 @@ def main(argv: list[str]) -> int:
     if args.cmd == "api":
         from . import api
         return api.command(args.action)
+    if args.cmd == "config":
+        from . import opconfig
+        return opconfig.config_command(args.name, args.action, args.items, args.expect, args.expect_unset)
+    if args.cmd == "drive":
+        from . import opconfig
+        return opconfig.drive_command(args.name, args.action, args.file, args.expect_sha)
     if args.cmd == "cycle":
         instance_root(args.name)
         try:

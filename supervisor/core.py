@@ -1,6 +1,8 @@
 """Shared supervisor plumbing: paths, knobs, logging, git, instance lookup, commits."""
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import http.client
 import json
 import os
@@ -102,8 +104,21 @@ def git_wt(root: Path, *args: str, check: bool = True, project: Path | None = No
         cwd=root, capture_output=True, text=text, check=check, input=input)
 
 
+def _git_common_dir(project: Path) -> Path:
+    """The project's own git directory: .git, or — when the supervisor's checkout is itself a linked worktree (a branch
+    being worked on) — the main repository's, which its .git file names. Read from the supervisor's checkout, never
+    from an instance's."""
+    dot = project / ".git"
+    if not dot.is_file():
+        return dot
+    gitdir = Path(dot.read_text().strip().removeprefix("gitdir:").strip())
+    gitdir = gitdir if gitdir.is_absolute() else (project / gitdir).resolve()
+    common = gitdir / "commondir"
+    return (gitdir / common.read_text().strip()).resolve() if common.is_file() else gitdir
+
+
 def _worktree_admin_dir(root: Path, project: Path) -> Path:
-    for admin in (project / ".git" / "worktrees").glob("*"):
+    for admin in (_git_common_dir(project) / "worktrees").glob("*"):
         gitdir = admin / "gitdir"
         if gitdir.exists() and Path(gitdir.read_text().strip()).resolve() == (root / ".git").resolve():
             return admin
@@ -135,6 +150,36 @@ def instance_config(name: str) -> dict[str, str]:
 
 
 CONFIG_KEY = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+
+
+def config_set_line(key: str, value, comment: str = "") -> str:
+    """The config.env line that sets `key` to `value`, as both writers write it (the instance's set_config and the
+    operator's `shaft config`), or ValueError: a line that would not read back as exactly this one value."""
+    key, value = str(key).strip(), str(value)
+    if not CONFIG_KEY.match(key):
+        raise ValueError(f"{key!r}: a key is an UPPER_CASE name, e.g. WAKE_INTERVAL_MINUTES")
+    if len(value) > 500 or any(c in value for c in '"\n\r\0'):
+        raise ValueError("a value is one line of at most 500 characters, without double quotes")
+    if any(c in comment for c in "\n\r\0"):
+        raise ValueError("a comment is one line")
+    return f'{key}="{value}"' + (f"   # {comment}" if comment else "")
+
+
+@contextlib.contextmanager
+def config_lock(path: Path):
+    """One writer of a config.env at a time, across processes: the broker's set_config, the gate undoing it and the
+    operator's `shaft config` each read the file, change one line and write it back. Without the lock an operator
+    write landing between set_config's read and write was lost (PLAN-webui.md M3)."""
+    import fcntl
+    locks = SUP_DIR / "locks"
+    locks.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha1(str(Path(path).resolve()).encode()).hexdigest()[:16]
+    with (locks / f"config-{digest}.lock").open("a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
 
 
 def _config_key(line: str) -> str | None:

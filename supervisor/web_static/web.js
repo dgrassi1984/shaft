@@ -2,7 +2,8 @@
 // need with data- attributes, and this file binds it once.
 //   data-poll="/fragment/…"  the element's content is refreshed from that URL every 2 s while the tab is visible
 //   <form data-post="/…">    sent with fetch as a POST carrying the CSRF token; data-confirm asks first, data-reset
-//                            clears it once sent; the reply is shown as a toast and the polled parts refresh
+//                            clears it once sent, data-diff="/preview/…" shows what would change before asking;
+//                            the reply is shown as a toast and the polled parts refresh
 // Listeners are delegated from the document, so content swapped in by a poll needs no re-binding.
 (() => {
   "use strict";
@@ -11,8 +12,12 @@
 
   const csrf = () => (document.querySelector('meta[name="csrf"]') || {}).content || "";
 
-  function textOf(html) {
-    return new DOMParser().parseFromString(html, "text/html").body.textContent.trim().slice(0, 300);
+  function fullText(html) {
+    return new DOMParser().parseFromString(html, "text/html").body.textContent.trim();
+  }
+
+  function textOf(html) {                    // for a toast or a note: the first 300 characters
+    return fullText(html).slice(0, 300);
   }
 
   function toast(text, bad) {
@@ -81,6 +86,23 @@
     const form = ev.target.closest("form[data-post]");
     if (!form) return;
     ev.preventDefault();
+    if (form.dataset.diff) {                    // show what would change first, then ask
+      const out = form.querySelector("[data-diff-out]");
+      try {
+        const d = await fetch(form.dataset.diff, {
+          method: "POST", credentials: "same-origin",
+          headers: { "X-CSRF-Token": csrf(), "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams(new FormData(form)),
+        });
+        const text = fullText(await d.text());        // the whole diff, never cut like a toast
+        if (out) out.textContent = text;
+        if (!d.ok) { toast(`No diff: HTTP ${d.status} — ${text}`, true); return; }
+        if (text === "(no change)") { toast("Nothing to save: no change"); return; }
+      } catch (e) {
+        toast(`No diff: ${e.message}`, true);
+        return;
+      }
+    }
     if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) return;
     const button = form.querySelector("button[type=submit]");
     if (button) button.disabled = true;
