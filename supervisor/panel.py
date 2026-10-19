@@ -375,12 +375,19 @@ def extras(snap: dict) -> dict:
 
 def alerts(snap: dict | None = None, now: datetime | None = None, cost: dict | None = None) -> list[dict]:
     """What needs the operator: a service down, a cap at 80% or more, judge spend past its alert line, and
-    failures in the supervisor log of the last ALERT_HOURS hours. Each has a stable id, so it can be dismissed."""
+    failures in the supervisor log of the last ALERT_HOURS hours. Each has a stable id, so it can be dismissed.
+    The model server is down most of the day by design (it exits idle and is started on demand, localmodel.py):
+    only a down that is a fault raises an alert (model_down_problem)."""
     now = now or datetime.now()
     out = []
     for s in (snap or {}).get("services", []):
-        if not s["running"] and not s.get("idle") and s["name"] in ("model", "scheduler"):
-            out.append({"id": f"svc:{s['name']}:{now:%Y-%m-%d}", "text": f"service {s['name']} is not running"})
+        if s["running"]:
+            continue
+        if s["name"] == "scheduler":
+            out.append({"id": f"svc:scheduler:{now:%Y-%m-%d}", "text": "service scheduler is not running"})
+        elif s["name"] == "model" and (why := model_down_problem(now)):
+            out.append({"id": f"svc:model:{now:%Y-%m-%d}:{hashlib.sha1(why.encode()).hexdigest()[:8]}",
+                        "text": f"service model is not running: {why}"})
     cost = cost or costs(days=1)
     for c in cost["caps"]:
         for comp in ("cloud", "coder", "trials"):
@@ -396,6 +403,33 @@ def alerts(snap: dict | None = None, now: datetime | None = None, cost: dict | N
         if line[1:20] >= since:
             out.append({"id": log_alert_id(line), "text": line[12:20] + line[21:200]})
     return out
+
+
+def model_down_problem(now: datetime | None = None) -> str | None:
+    """Why the local model server not running is a fault (localmodel.down_problem), or None when it exited idle
+    and its next user starts it. A failed on-demand start counts for ALERT_HOURS, until any later start of it."""
+    from . import localmodel
+    since = ((now or datetime.now()) - timedelta(hours=ALERT_HOURS)).strftime("%Y-%m-%d %H:%M:%S")
+    try:   # its record outlives the process: when it last started, on demand or by hand
+        started = json.loads((SUP_DIR / "services" / "model.json").read_text()).get("started", "").replace("T", " ")
+    except (OSError, ValueError):
+        started = ""
+    return localmodel.down_problem(_model_starts(), max(since, started), names=instance_names(),
+                                   config_of=instance_config)
+
+
+def _model_starts() -> list[str]:
+    """supervisor.log's lines on starting the model server on demand (localmodel.ensure), oldest first."""
+    from .localmodel import START_FAILED, START_OK
+    path = SUP_DIR / "supervisor.log"
+
+    def read():
+        try:
+            lines = path.read_text(errors="replace").splitlines()
+        except OSError:
+            return []
+        return [l for l in lines if l.startswith("[") and (START_OK in l or START_FAILED in l)]
+    return cached("model-starts", [path], read)
 
 
 def log_alert_id(line: str) -> str:
