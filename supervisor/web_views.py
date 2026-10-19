@@ -108,6 +108,7 @@ def inline(text: str) -> Html:
 
 _LIST = re.compile(r"^(\s*)(?:[-*+]|\d+[.)])\s+(.*)$")
 _HEAD = re.compile(r"^(#{1,6})\s+(.*)$")
+_QUOTE = re.compile(r"^ {0,3}> ?")
 
 
 def markdown(text: str) -> Html:
@@ -151,6 +152,15 @@ def markdown(text: str) -> Html:
                 body.append(cells(src[i]))
                 i += 1
             out.append(str(table(head, [[inline(c) for c in r] for r in body], "md")))
+            continue
+        if _QUOTE.match(line):                              # > quoted lines (a reply quoting a message)
+            close_para()
+            close_lists()
+            body = []
+            while i < len(src) and _QUOTE.match(src[i]):
+                body.append(_QUOTE.sub("", src[i], count=1))
+                i += 1
+            out.append(f"<blockquote>{markdown(chr(10).join(body))}</blockquote>")
             continue
         if m := _HEAD.match(line):
             close_para()
@@ -618,6 +628,22 @@ def _activity(lines_: list[str], key: str, open_: bool = False) -> Html:
              k=key, o=Html(" open") if open_ else "", n=len(lines_), l=join(h("<p>{x}</p>", x=x) for x in lines_))
 
 
+def _my_text(text: str) -> Html:
+    """What the operator wrote, as written — except the lines he quoted (Reply on a selection), shown as a quote."""
+    blocks: list[tuple[bool, list[str]]] = []               # (quoted, lines), runs of one kind
+    for line in str(text).replace("\r\n", "\n").split("\n"):
+        quoted = bool(_QUOTE.match(line))
+        if not blocks or blocks[-1][0] != quoted:
+            blocks.append((quoted, []))
+        blocks[-1][1].append(_QUOTE.sub("", line, count=1) if quoted else line)
+    out = []
+    for quoted, b in blocks:
+        body = "\n".join(b).strip("\n")
+        if body:
+            out.append(h('<blockquote class="wrap">{t}</blockquote>' if quoted else '<div class="wrap">{t}</div>', t=body))
+    return join(out)
+
+
 def chat_feed(name: str, chat: dict | None, sent: list[dict]) -> Html:
     """The conversation as it stands: each turn, the files it sent you meanwhile, and the reply running now."""
     from .web_actions import button
@@ -628,8 +654,8 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict]) -> Html:
         if t["role"] == "user":
             tag = h(' <span class="dim">· during its reply</span>') if t.get("interjected") else Html("")
             items.append((t["ts"], h('<div class="turn me"><div class="who">you <span class="dim">{ts}</span>{tag}</div>'
-                                     '<div class="wrap">{text}</div>{atts}</div>', ts=t["ts"][11:16], tag=tag,
-                                     text=t.get("shown", t["content"]), atts=_chat_attachments(chat["id"], k, t.get("attachments")))))
+                                     '{text}{atts}</div>', ts=t["ts"][11:16], tag=tag,
+                                     text=_my_text(t.get("shown", t["content"])), atts=_chat_attachments(chat["id"], k, t.get("attachments")))))
         else:
             note = h('<p class="warn">{n}</p>', n=t["note"]) if t.get("note") else Html("")
             body = markdown(t["content"]) if t.get("content") else Html('<p class="dim">(no answer)</p>')

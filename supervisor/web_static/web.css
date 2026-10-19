@@ -205,3 +205,9 @@ form.composer { display: grid; gap: .4rem; margin: .6rem 0 1rem; position: stick
                 padding: .4rem 0; }
 label.pick { font-size: .85rem; cursor: pointer; color: var(--accent); }
 label.pick input { display: none; }
+/* reply to part of a message (select it in the feed) */
+#quote-reply { position: absolute; z-index: 20; font-size: .8rem; padding: .2rem .55rem; border-radius: 6px;
+               box-shadow: 0 2px 8px rgba(0, 0, 0, .25); }
+#quote-reply[hidden] { display: none; }
+blockquote { margin: .3rem 0; padding: .1rem .6rem; border-left: 3px solid var(--line); color: var(--dim); }
+.turn.me blockquote { margin: 0 0 .3rem; }

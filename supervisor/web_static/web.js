@@ -59,6 +59,7 @@
     let running = false;
     async function tick() {
       if (running || document.visibilityState !== "visible" || !el.isConnected) return;
+      if (selectingIn(el)) return;                  // replacing it would drop the text being selected (to quote it)
       running = true;
       try {
         const r = await fetch(url, { credentials: "same-origin", cache: "no-store" });
@@ -176,6 +177,74 @@
       ev.preventDefault();
       form.requestSubmit();
     }
+  });
+
+  // Reply to part of a message: select text in the chat's feed and a "Reply" button appears by it; it puts the text,
+  // quoted ("> "), in the composer, where the rest of the message is written.
+  function selectingIn(el) {
+    const s = window.getSelection();
+    return !!s && !s.isCollapsed && s.rangeCount > 0 && el.contains(s.getRangeAt(0).commonAncestorContainer);
+  }
+
+  function quoteButton() {
+    let b = document.getElementById("quote-reply");
+    if (!b) {
+      b = document.createElement("button");
+      b.id = "quote-reply";
+      b.type = "button";
+      b.textContent = "↩ Reply";
+      b.hidden = true;
+      // mousedown, not click: a click would first clear the selection being quoted
+      b.addEventListener("mousedown", (ev) => { ev.preventDefault(); quoteSelection(); });
+      b.addEventListener("touchend", (ev) => { ev.preventDefault(); quoteSelection(); });
+      document.body.appendChild(b);
+    }
+    return b;
+  }
+
+  function quotable() {                         // the selection, when it lies inside one message of a chat feed
+    const s = window.getSelection();
+    if (!s || s.isCollapsed || !s.rangeCount) return null;
+    const range = s.getRangeAt(0);
+    const node = range.commonAncestorContainer;
+    const host = (node.nodeType === 1 ? node : node.parentElement);
+    const feed = host && host.closest(".feed");
+    const composer = document.querySelector("form.composer textarea");
+    if (!feed || !composer || !s.toString().trim()) return null;
+    return { text: s.toString(), range, composer };
+  }
+
+  function placeQuoteButton() {
+    const b = quoteButton();
+    const q = quotable();
+    if (!q) { b.hidden = true; return; }
+    const r = q.range.getBoundingClientRect();
+    b.hidden = false;
+    // below the selection: a phone shows its own copy/paste menu above it
+    b.style.top = `${window.scrollY + r.bottom + 6}px`;
+    b.style.left = `${Math.max(8, Math.min(window.scrollX + r.left, window.scrollX + window.innerWidth - b.offsetWidth - 8))}px`;
+  }
+
+  function quoteSelection() {
+    const q = quotable();
+    quoteButton().hidden = true;
+    if (!q) return;
+    const quoted = q.text.trim().split(/\r?\n/).map(l => `> ${l}`.trimEnd()).join("\n") + "\n\n";
+    const box = q.composer;
+    const before = box.value.slice(0, box.selectionStart);
+    const after = box.value.slice(box.selectionEnd);
+    const lead = before && !before.endsWith("\n\n") ? (before.endsWith("\n") ? "\n" : "\n\n") : "";
+    box.value = before + lead + quoted + after;
+    const at = (before + lead + quoted).length;
+    window.getSelection().removeAllRanges();
+    box.focus();
+    box.setSelectionRange(at, at);
+  }
+
+  let quoteTimer = null;
+  document.addEventListener("selectionchange", () => {
+    clearTimeout(quoteTimer);
+    quoteTimer = setTimeout(placeQuoteButton, 120);    // after the selection settles (a drag, a phone's handles)
   });
 
   function start() {

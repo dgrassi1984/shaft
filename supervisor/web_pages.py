@@ -8,8 +8,10 @@ Content-Security-Policy (web.py) forbids both, and web_static/web.js binds behav
 """
 from __future__ import annotations
 
+import hashlib
 import html
 import time
+from pathlib import Path
 
 from .dashboard import clean, event_tone
 
@@ -41,7 +43,16 @@ def join(parts, sep: str = "") -> Html:
 
 
 # -- the page ------------------------------------------------------------------------------------------------------
-STATIC_VERSION = "10"       # bump when web_static changes, so a browser does not keep an old copy
+def _static_version(folder: Path = Path(__file__).parent / "web_static") -> str:
+    """The static files' own fingerprint: a changed web.js or web.css gets a new URL, so a browser never keeps running an
+    old copy against new pages (it was a constant bumped by hand, and a change without the bump went unseen)."""
+    d = hashlib.sha256()
+    for f in sorted(folder.glob("*")):
+        d.update(f.name.encode() + b"\0" + f.read_bytes())
+    return d.hexdigest()[:10]
+
+
+STATIC_VERSION = _static_version()      # read once at start: the service is restarted to load new code anyway
 
 
 def page(title: str, body: Html, nav: Html = Html(""), csrf: str = "") -> Html:
