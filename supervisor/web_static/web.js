@@ -53,12 +53,19 @@
     el.classList.remove("stale");
   }
 
+  function toBottom(el) {
+    const box = el.closest("[data-scroll]");
+    if (box) box.scrollTop = box.scrollHeight;
+    else window.scrollTo(0, document.body.scrollHeight);
+  }
+
   function poll(el) {
     const url = el.dataset.poll;
     const every = Number(el.dataset.every || 2000);
     let running = false;
     async function tick() {
-      if (running || document.visibilityState !== "visible" || !el.isConnected) return;
+      if (running || !el.isConnected) return;
+      if (document.visibilityState !== "visible" && !el.dataset.hidden) return;   // data-hidden: keeps going (the rail)
       if (selectingIn(el)) return;                  // replacing it would drop the text being selected (to quote it)
       running = true;
       try {
@@ -68,14 +75,18 @@
           if (body !== el.dataset.last) {               // unchanged: nothing replaced, nothing collapsed
             const open = new Set([...el.querySelectorAll("details[data-key][open]")].map(d => d.dataset.key));
             const shut = new Set([...el.querySelectorAll("details[data-key]:not([open])")].map(d => d.dataset.key));
-            const atBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 40;
+            const box = el.closest("[data-scroll]");      // a feed that scrolls in its own box (the chat), else the page
+            const atBottom = box && box.scrollHeight > box.clientHeight
+              ? box.scrollTop + box.clientHeight >= box.scrollHeight - 40
+              : window.innerHeight + window.scrollY >= document.body.scrollHeight - 40;
             el.innerHTML = body;
             el.dataset.last = body;
             el.querySelectorAll("details[data-key]").forEach(d => {
               if (open.has(d.dataset.key)) d.open = true;
               if (shut.has(d.dataset.key)) d.open = false;
             });
-            if (atBottom && el.dataset.follow) window.scrollTo(0, document.body.scrollHeight);
+            if (atBottom && el.dataset.follow) toBottom(el);
+            el.dispatchEvent(new CustomEvent("shaft:swapped", { bubbles: true }));
           }
           fresh(el);
         } else {
@@ -90,6 +101,7 @@
       }
     }
     setInterval(tick, every);
+    if (el.dataset.now) tick();                        // a first render without live data (the rail): fill it now
     document.addEventListener("visibilitychange", tick);
     document.addEventListener("shaft:refresh", () => setTimeout(tick, 300));
   }
@@ -247,8 +259,42 @@
     quoteTimer = setTimeout(placeQuoteButton, 120);    // after the selection settles (a drag, a phone's handles)
   });
 
+  // The rail (PLAN-webui-chat §1): an instance whose last answer this browser has not seen is marked unread. What was
+  // seen is kept in this browser only (a convenience: losing it marks a chat unread, nothing more).
+  function seenGet() {
+    try { return JSON.parse(localStorage.getItem("shaft.seen") || "{}"); } catch (e) { return {}; }
+  }
+  function seenSet(v) {
+    try { localStorage.setItem("shaft.seen", JSON.stringify(v)); } catch (e) { /* private window: no marks kept */ }
+  }
+  function markRail(rail) {
+    const seen = seenGet();
+    let changed = false;
+    rail.querySelectorAll("a[data-inst]").forEach(a => {
+      const last = a.dataset.last || "";
+      if (a.classList.contains("on") && document.visibilityState === "visible") {
+        if (last && seen[a.dataset.inst] !== last) { seen[a.dataset.inst] = last; changed = true; }
+      }
+      // the chat on screen is unread too while this tab is hidden: the title says a reply landed
+      const away = !a.classList.contains("on") || document.visibilityState !== "visible";
+      a.classList.toggle("unread", !!last && away && (seen[a.dataset.inst] || "") < last);
+    });
+    if (changed) seenSet(seen);
+    const unread = rail.querySelectorAll("a.unread").length;
+    document.title = document.title.replace(/^\(\d+\) /, "");
+    if (unread) document.title = `(${unread}) ${document.title}`;
+  }
+  document.addEventListener("shaft:swapped", (ev) => {
+    if (ev.target.classList && ev.target.classList.contains("rail")) markRail(ev.target);
+  });
+  document.addEventListener("visibilitychange", () => {
+    const rail = document.querySelector("nav .rail");
+    if (rail) markRail(rail);                          // back on the tab: the chat on screen is seen
+  });
+
   function start() {
     document.querySelectorAll("[data-poll]").forEach(poll);
+    document.querySelectorAll("[data-follow]").forEach(toBottom);   // a chat opens on its latest message
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start);
   else start();

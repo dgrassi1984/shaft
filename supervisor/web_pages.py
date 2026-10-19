@@ -66,17 +66,42 @@ def page(title: str, body: Html, nav: Html = Html(""), csrf: str = "") -> Html:
              meta=meta, title=title, v=STATIC_VERSION, nav=nav, body=body)
 
 
+MANAGE = [("/overview", "Overview"), ("/messages", "Messages"), ("/trials", "Trials"), ("/costs", "Costs"),
+          ("/services", "Services")]
+
+
+def rail(names: list[str], current: str = "", snap: dict | None = None, chats: dict | None = None) -> Html:
+    """The left rail (PLAN-webui-chat §1): a chat per instance first, then the pages used now and then. Without `snap`
+    (a page's first render) it lists the names; web.js refreshes it from /fragment/rail at once, with each instance's
+    state, its last line and when it last answered (data-last: the browser marks a reply it has not seen)."""
+    live = {i["name"]: i for i in (snap or {}).get("instances", [])}
+    items = []
+    for n in names:
+        i, c = live.get(n), (chats or {}).get(n) or {}
+        dot = h('<span class="dot st-{s}" title="{t}"></span>', s=state_class(i["state"]), t=i["state"]) if i else \
+            Html('<span class="dot"></span>')
+        line = (Html('<span class="last talk-text">replying…</span>') if c.get("replying") else
+                h('<span class="last">{t}</span>', t=c["line"]) if c.get("line") else Html(""))
+        items.append(h('<a href="/i/{n}/chat" class="inst {on}" data-inst="{n}" data-last="{last}">{dot}'
+                       '<span class="who">{n}</span>{line}</a>', n=n, on="on" if current == f"i:{n}" else "",
+                       last=c.get("last", ""), dot=dot, line=line))
+    alerts = len((snap or {}).get("alerts") or [])
+    manage = [h('<a href="{href}" class="{on}">{label}{badge}</a>', href=href, label=label,
+                on="on" if current in (href, href.strip("/")) else "",
+                badge=h(' <span class="badge bad" title="alerts">{n}</span>', n=alerts) if href == "/overview" and alerts
+                else Html("")) for href, label in MANAGE]
+    return h('<div class="group">Chats</div>{items}<details class="manage" open><summary class="group">Manage</summary>'
+             '{manage}</details>', items=join(items), manage=join(manage))
+
+
 def nav(names: list[str], current: str = "overview", pages: list[tuple[str, str]] = ()) -> Html:
-    """The left nav: the overview, each instance (its own pages), then the global pages."""
-    items = [h('<a href="/" class="{cls}">Overview</a>', cls="on" if current == "overview" else "")]
-    items += [h('<a href="/i/{n}" class="inst {cls}">{n}</a>', n=n, cls="on" if current == f"i:{n}" else "")
-              for n in names]
-    items += [h('<a href="{href}" class="{cls}">{label}</a>', href=href, label=label,
-                cls="on" if current == href else "") for href, label in pages]
-    return h('<nav><div class="brand">SHAFT</div>{items}'
+    """The left nav: the rail (refreshed live), then unpairing. `pages` is kept for callers; the rail lists MANAGE."""
+    cur = "/overview" if current == "overview" else current
+    return h('<nav><a class="brand" href="/">SHAFT</a><div class="rail" data-poll="/fragment/rail?c={c}" data-every="3000" '
+             'data-now="1" data-hidden="1">{rail}</div>'
              '<form class="unpair" data-post="/unpair" data-after="reload" data-confirm="Unpair this browser? You will '
              'need a new link from `shaft web pair` to use it again."><button type="submit">Unpair this browser</button>'
-             '</form></nav>', items=join(items))
+             '</form></nav>', c=cur, rail=rail(names, cur))
 
 
 def message_page(title: str, text: str, detail: str = "") -> Html:

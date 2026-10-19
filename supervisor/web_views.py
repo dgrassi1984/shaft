@@ -11,7 +11,7 @@ import urllib.parse
 from .web_pages import Html, esc, h, join, nav, page
 
 MARK = {"yes": ("✓", "good"), "partial": ("½", "warn"), "no": ("✗", "bad")}
-INSTANCE_TABS = [("", "Summary"), ("chat", "Chat"), ("config", "Config"), ("drive", "Drive"), ("access", "Access"),
+INSTANCE_TABS = [("chat", "Chat"), ("", "Summary"), ("config", "Config"), ("drive", "Drive"), ("access", "Access"),
                  ("judge", "Judge"), ("changes", "Changes"), ("benchmarks", "Benchmarks"),
                  ("transcripts", "Transcripts"), ("journal", "Journal"), ("activity", "Activity")]
 GLOBAL_PAGES = [("/trials", "Trials"), ("/messages", "Messages"), ("/costs", "Costs"), ("/services", "Services")]
@@ -31,6 +31,25 @@ def instance_frame(name: str, tab: str, title: str, body: Html, names: list[str]
                   cls="on" if t == tab else "", label=label) for t, label in INSTANCE_TABS)
     head = h('<header class="pagehead"><h1>{name}</h1><div class="tabs">{tabs}</div></header>', name=name, tabs=tabs)
     return frame(f"{name} · {title}", join([head, body]), names, csrf, current=f"i:{name}")
+
+
+def chat_frame(name: str, live: dict, body: Html, names: list[str], csrf: str, earlier: Html = Html("")) -> Html:
+    """The chat's own frame (PLAN-webui-chat §1): the instance's model, state and spend in one line, and everything
+    else about it — its pages and its actions — behind the ⋯ menu, out of the conversation's way."""
+    from .web_actions import instance_buttons
+    pages = join(h('<a href="{href}">{label}</a>', href=f"/i/{q(name)}" + (f"/{t}" if t else ""), label=label)
+                 for t, label in INSTANCE_TABS if t != "chat")
+    state = live.get("state", "?")
+    facts = [live.get("model") or "", state + (f" since {live['since']}" if live.get("since") else "")]
+    if live.get("usd_today"):
+        facts.append(f"${live['usd_today']:.2f} today")
+    buttons = instance_buttons(live) if live.get("name") else Html("")
+    head = h('<header class="chathead"><h1>{name}</h1><span class="dim facts">{facts}</span>'
+             '<details class="menu"><summary title="{name}: pages and actions">⋯</summary><div class="menubody">'
+             '<div class="menupages">{pages}</div><div class="actions">{buttons}</div>{earlier}</div></details></header>',
+             name=name, facts=" · ".join(f for f in facts if f), pages=pages, buttons=buttons,
+             earlier=h('<div class="earlier">{e}</div>', e=earlier) if earlier else Html(""))
+    return frame(f"{name} · chat", join([head, body]), names, csrf, current=f"i:{name}")
 
 
 def section(title: str, body, cls: str = "") -> Html:
@@ -681,7 +700,8 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict]) -> Html:
                       stop=button("chat-stop", "Stop the reply", f"stop {name}'s reply?", {"cid": chat["id"]},
                                   cls="small")))
     elif chat["state"] == "ended":
-        feed.append(h('<p class="dim">Ended {e}: written up in its journal.</p>', e=chat.get("ended", "")[:16]))
+        feed.append(h('<p class="dim ended">Ended {e}: written up in its journal. Your next message starts a new '
+                      'conversation.</p>', e=chat.get("ended", "")[:16].replace("T", " ")))
     else:
         feed.append(h('<div class="actions">{b}</div>', b=button(
             "chat-end", "End the conversation", f"end this conversation with {name}? It writes it up in its journal "
@@ -704,9 +724,9 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
         '<span class="picked dim" data-picked></span><button type="submit">Send</button></div></form>', n=name)
     pasts = [link(f"/i/{q(name)}/chat?id={q(c['id'])}", f"{c['created'][:16].replace('T', ' ')} · "
                   f"{len([t for t in c['turns'] if t['role'] == 'user'])} message(s)") for c in past]
-    body = join([busy, h('<section class="panel chat"><div class="feed" data-poll="{u}" data-every="1500" data-follow="1">{f}</div>'
-                         '</section>', u=feed_url, f=chat_feed(name, chat, sent)), composer,
-                 section("Earlier web chats", join([lines(pasts, "none yet"), h(
-                     '<p class="dim">Every conversation, from any client, is in <a href="/i/{n}/transcripts?f='
-                     'conversations">Transcripts</a>.</p>', n=q(name))]))])
-    return instance_frame(name, "chat", "chat", body, names, csrf)
+    earlier = join([h("<h3>Earlier web chats</h3>"), lines(pasts, "none yet"), h(
+        '<p class="dim">Every conversation, from any client, is in <a href="/i/{n}/transcripts?f=conversations">'
+        'Transcripts</a>.</p>', n=q(name))])
+    body = join([busy, h('<section class="panel chat" data-scroll><div class="feed" data-poll="{u}" data-every="1500" '
+                         'data-follow="1">{f}</div></section>', u=feed_url, f=chat_feed(name, chat, sent)), composer])
+    return chat_frame(name, live, h('<div class="chatpage">{b}</div>', b=body), names, csrf, earlier)

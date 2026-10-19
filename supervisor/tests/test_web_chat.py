@@ -14,7 +14,7 @@ from pathlib import Path
 from unittest import mock
 
 from supervisor import messages, web, web_chat
-from supervisor.tests.test_web import WebTest
+from supervisor.tests.test_web import WebTest, snap
 
 KEY, ME = "sk-shaft-test", "daniele@example.com"
 PNG = b"\x89PNG\r\n\x1a\n" + b"\0" * 64
@@ -346,3 +346,72 @@ class ChatRoutesTest(WebTest):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ChatCentricTest(ChatRoutesTest):
+    """PLAN-webui-chat §1: the chat is the front page, a live rail lists every chat, the instance's pages sit behind ⋯."""
+
+    def test_the_front_page_is_the_chat_last_opened_else_the_first(self):
+        r = self.req("/", cookie=self.cookie)
+        self.assertEqual((r.status, r.headers["Location"]), (302, "/i/wren/chat"))
+        r = self.req("/", cookie=self.cookie + "; shaft_last=wren")
+        self.assertEqual(r.headers["Location"], "/i/wren/chat")
+        r = self.req("/", cookie=self.cookie + "; shaft_last=gone")          # an instance that is no more: the first
+        self.assertEqual(r.headers["Location"], "/i/wren/chat")
+        with mock.patch.object(web, "_names", return_value=[]):
+            self.assertEqual(self.req("/", cookie=self.cookie).headers["Location"], "/overview")
+        self.assertEqual(self.req("/overview", cookie=self.cookie).status, 200)
+
+    def test_opening_a_chat_remembers_it_for_the_front_page(self):
+        r = self.req("/i/wren/chat", cookie=self.cookie)
+        self.assertIn("shaft_last=wren;", r.headers["Set-Cookie"])
+        self.assertIn("SameSite=Strict", r.headers["Set-Cookie"])
+
+    def test_the_rail_shows_state_last_line_and_when_it_last_answered(self):
+        self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
+                        {"role": "assistant", "content": "> quoted\n<b>first</b> line\nsecond", "ts": "2026-10-19T12:00:05"}])
+        with mock.patch.object(web, "overview", return_value=snap(state="in a cycle")):
+            body = self.req("/fragment/rail?c=i:wren", cookie=self.cookie).body.decode()
+        self.assertIn('class="inst on"', body)
+        self.assertIn('data-last="2026-10-19T12:00:05"', body)
+        self.assertIn('<span class="dot st-cycle" title="in a cycle">', body)
+        self.assertIn("&lt;b&gt;first&lt;/b&gt; line", body)                  # escaped, and not the quoted line
+        self.assertNotIn("quoted", body)
+        self.assertIn('href="/overview"', body)
+
+    def test_the_rail_says_replying_and_counts_alerts(self):
+        self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"}], "replying")
+        s = snap()
+        s["alerts"] = [{"id": "a", "text": "x"}, {"id": "b", "text": "y"}]
+        with mock.patch.object(web, "overview", return_value=s):
+            body = self.req("/fragment/rail", cookie=self.cookie).body.decode()
+        self.assertIn("replying…", body)
+        self.assertIn('data-last=""', body)                                    # it has not answered yet
+        self.assertIn('<span class="badge bad" title="alerts">2</span>', body)
+
+    def test_the_chat_page_keeps_the_instance_pages_behind_its_menu(self):
+        body = self.req("/i/wren/chat", cookie=self.cookie).body.decode()
+        self.assertIn('<header class="chathead"><h1>wren</h1>', body)
+        self.assertIn("cloud mimo-v2.6-pro · idle · $0.12 today", body)
+        self.assertNotIn('class="tabs"', body)
+        for page in ("/i/wren", "/i/wren/config", "/i/wren/drive", "/i/wren/access", "/i/wren/judge",
+                     "/i/wren/changes", "/i/wren/benchmarks", "/i/wren/transcripts", "/i/wren/journal",
+                     "/i/wren/activity"):
+            self.assertIn(f'href="{page}"', body, page)
+        self.assertIn('data-post="/action/cycle"', body)                       # its actions too
+        self.assertIn('data-poll="/fragment/rail?c=i:wren"', body)
+
+    def test_with_no_chat_going_on_the_page_shows_the_last_one_and_a_composer(self):
+        """It showed "No chat open" over an empty box, though the conversation had just ended."""
+        old = self.chat_with([{"role": "user", "content": "earlier question", "ts": "2026-10-19T12:00:00"},
+                              {"role": "assistant", "content": "earlier answer", "ts": "2026-10-19T12:00:05"}], "ended")
+        old["ended"] = "2026-10-19T12:30:00"
+        web_chat.save(old)
+        body = self.req("/i/wren/chat", cookie=self.cookie).body.decode()
+        self.assertIn("earlier answer", body)
+        self.assertIn("Your next message starts a new conversation", body)
+        self.assertIn('data-post="/chat/wren/send"', body)
+        self.assertIn('<div class="earlier"><h3>Earlier web chats</h3>', body)       # in the ⋯ menu
+        self.assertIn(f"/i/wren/chat?id={old['id']}", body)
+        frag = self.req("/fragment/chat/wren", cookie=self.cookie).body.decode()
+        self.assertIn("earlier answer", frag)                                       # its refresh shows the same

@@ -91,6 +91,24 @@ def open_chat(name: str) -> dict | None:
     return next((c for c in chats(name) if c.get("state") != "ended"), None)
 
 
+def summary(name: str) -> dict:
+    """For the rail: the newest chat's last line, when the instance last answered in it, and whether it is replying."""
+    c = next(iter(chats(name)), None)
+    if not c:
+        return {}
+    turns = c.get("turns") or []
+    last = next((t for t in reversed(turns) if t["role"] == "assistant"), None)
+    text = (turns[-1].get("shown", turns[-1].get("content")) or "") if turns else ""
+    who = "you: " if turns and turns[-1]["role"] == "user" else ""
+    first = next((l.strip() for l in text.splitlines() if l.strip() and not l.lstrip().startswith(">")), "")
+    return {"line": (who + first)[:80], "last": last["ts"] if last else "", "replying": c.get("state") == "replying"}
+
+
+def shown(name: str) -> dict | None:
+    """The chat its page shows: the one going on, else the last one (ended: the next message starts a new one)."""
+    return open_chat(name) or next(iter(chats(name)), None)
+
+
 def new_chat(name: str, login: str) -> dict:
     chat = {"id": f"web-{secrets.token_hex(8)}", "instance": name, "login": login, "created": _now(), "state": "idle",
             "turns": [], "reply": None}

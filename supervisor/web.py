@@ -415,11 +415,18 @@ def _names() -> list[str]:
 def _get(req: Request, csrf: str) -> Response | None:
     from . import dashboard, panel, web_views as v
     path, qs = req.path, req.query
-    if path == "/":
+    names = _names()
+    if path == "/":                                  # chat first (PLAN-webui-chat §1): the instance last talked to
+        last = _last_chat(req)
+        to = f"/i/{last}/chat" if last in names else f"/i/{names[0]}/chat" if names else "/overview"
+        return Response(302, b"", {"Location": to})
+    if path == "/overview":
         return _html(200, web_pages.overview_page(overview(), csrf))
     if path == "/fragment/overview":
         return _html(200, web_pages.overview(overview()))
-    names = _names()
+    if path == "/fragment/rail":
+        from . import web_chat
+        return _html(200, web_pages.rail(names, qs.get("c", ""), overview(), {n: web_chat.summary(n) for n in names}))
     if m := re.match(r"^/fragment/i/([A-Za-z0-9_-]+)/live$", path):
         if m[1] not in names:
             return None
@@ -433,7 +440,7 @@ def _get(req: Request, csrf: str) -> Response | None:
         if m[1] not in names:
             return None
         from . import web_chat
-        chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.open_chat(m[1])
+        chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.shown(m[1])
         if chat and chat.get("instance") != m[1]:
             return None
         return _html(200, v.chat_feed(m[1], chat, _sent_during(m[1], chat)))
@@ -476,6 +483,17 @@ def _get(req: Request, csrf: str) -> Response | None:
     return None
 
 
+LAST_CHAT = "shaft_last"                                     # the instance whose chat / opens
+
+
+def _last_chat(req: Request) -> str:
+    for part in (req.headers.get("cookie") or "").split(";"):
+        k, _, v = part.strip().partition("=")
+        if k == LAST_CHAT:
+            return v
+    return ""
+
+
 def _live(name: str) -> dict:
     return next((i for i in overview()["instances"] if i["name"] == name), {})
 
@@ -507,12 +525,13 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str) -
         return _html(200, v.activity_page(name, activity(name), names, csrf))
     if tab == "chat":
         from . import web_chat
-        chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.open_chat(name)
+        chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.shown(name)
         if chat and chat.get("instance") != name:
             return None
         past = [c for c in web_chat.chats(name) if c.get("state") == "ended"][:20]
         return _html(200, v.chat_page(name, chat, _sent_during(name, chat), past, _live(name), names, csrf,
-                                      read_only=bool(qs.get("id")) and bool(chat) and chat.get("state") == "ended"))
+                                      read_only=bool(qs.get("id")) and bool(chat) and chat.get("state") == "ended"),
+                     {"Set-Cookie": f"{LAST_CHAT}={name}; Path=/; Max-Age={COOKIE_DAYS * 86400}; Secure; SameSite=Strict"})
     if tab in ("config", "drive", "access"):
         from . import opconfig, web_config
         if tab == "config":

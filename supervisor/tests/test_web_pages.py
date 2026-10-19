@@ -298,7 +298,7 @@ class NavTest(PagesTest):
         body = self.get("/i/shaft")
         for href in ("/i/shaft/judge", "/i/shaft/changes", "/i/shaft/journal", "/i/shaft/activity",
                      "/i/shaft/transcripts", "/i/shaft/benchmarks", "/trials", "/messages", "/costs", "/services",
-                     'href="/i/wren"'):
+                     "/overview", 'href="/i/wren/chat"'):
             self.assertIn(href, body)
 
     def test_the_summary_refreshes_its_live_part(self):
@@ -314,7 +314,7 @@ class NoMarkupShownAsTextTest(PagesTest):
 
     def test_no_page_shows_its_own_markup_escaped(self):
         with mock.patch.object(panel, "transcripts", return_value=[]):
-            for path in ("/", "/fragment/overview", "/i/shaft", "/i/shaft/judge", "/i/shaft/changes",
+            for path in ("/overview", "/fragment/overview", "/fragment/rail", "/i/shaft", "/i/shaft/chat", "/i/shaft/judge", "/i/shaft/changes",
                          "/i/shaft/benchmarks", "/i/shaft/transcripts", "/i/shaft/journal", "/trials", "/costs",
                          "/services", "/fragment/services", "/messages"):
                 body = self.get(path)
