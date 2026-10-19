@@ -95,7 +95,7 @@ def _mb(n: int) -> str:
 def describe_install() -> str:
     if not (v := version()):
         return "not installed (shaft browser install)"
-    revisions = sorted(p.name for p in BROWSERS.iterdir() if p.is_dir())
+    revisions = sorted(p.name for p in BROWSERS.iterdir() if p.is_dir() and not p.name.startswith("."))   # .links
     return f"Playwright {v} · {', '.join(revisions)}"
 
 

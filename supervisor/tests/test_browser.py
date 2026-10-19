@@ -119,6 +119,8 @@ class EnvironmentTest(Fixture):
 
     def test_the_panel_line(self):
         self.assertIsNone(browser.startup_note())
+        (self.browsers / ".links").mkdir()                          # Playwright's own bookkeeping, not a revision
+        self.assertEqual(browser.describe_install(), "Playwright 1.64.0 · chromium-1248")
         self.assertEqual(browser.describe(self.root), "Playwright 1.64.0 · no profile yet")
         (self.root / ".browser").mkdir()
         (self.root / ".browser" / "Cookies").write_bytes(b"x" * 3000)
