@@ -267,14 +267,7 @@ main:has(> .chatgrid) { display: flex; flex-direction: column; height: 100vh; pa
 .earlier { border-top: 1px solid var(--line); margin-top: .5rem; padding-top: .4rem; font-size: .88rem; max-height: 14rem;
            overflow-y: auto; }
 .earlier h3 { font-size: .8rem; color: var(--dim); margin: 0 0 .2rem; }
-@media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
-  main:has(> .chatgrid) { height: auto; min-height: 0; }
-  .chatgrid, .chatgrid:has(.docview), .chatgrid:has(.doclist a), .chatgrid.showdocs {
-    grid-template-columns: minmax(0, 1fr); }
-  aside.docs { max-height: none; }
-  .chatpage > .chat { max-height: calc(100dvh - 19rem); }
-  .chatpage > form.composer { position: sticky; bottom: 0; background: var(--bg); padding: .3rem 0 .4rem; }
-}
+
 /* chat UX (PLAN-webui-chat §2) */
 .chips { display: flex; flex-wrap: wrap; gap: .3rem; }
 .chips:empty { display: none; }
@@ -396,7 +389,46 @@ a.button { display: inline-block; padding: .45rem .9rem; border: 1px solid var(-
            background: var(--panel); color: var(--text); }
 @media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
   nav { height: auto; }
-  main:has(> .chatgrid) { height: auto; }
-  .chatpage > form.composer { padding-bottom: calc(.4rem + env(safe-area-inset-bottom)); }
   .menubody { top: calc(3.5rem + env(safe-area-inset-top)); max-height: calc(100dvh - 4.5rem - env(safe-area-inset-top)); }
+}
+
+/* PLAN-pwa P2: on a phone the chat is the whole screen — the header, the conversation, the composer. The rail is a
+   sheet behind ☰, the documents a sheet over the chat, and the page is as tall as the keyboard leaves visible
+   (--vvh, set from visualViewport by web.js), so the composer sits right above the keyboard. */
+.navbtn, .closedocs, .menufacts, .closenav { display: none; }
+.navbtn { font-size: 1.1rem; padding: .1rem .5rem; position: relative; }
+.navbtn.news::after { content: ""; position: absolute; top: .3rem; right: .3rem; width: .5rem; height: .5rem;
+                      border-radius: 50%; background: var(--accent); }
+@media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
+  body:has(.chatgrid) { height: var(--vvh, 100dvh); overflow: hidden; }
+  body:has(.chatgrid) .shell { display: block; height: 100%; min-height: 0; }
+  body:has(.chatgrid) nav { display: none; }
+  body.navopen:has(.chatgrid) nav { display: flex; flex-direction: column; flex-wrap: nowrap; align-items: stretch;
+      position: fixed; inset: 0; z-index: 60; height: auto; background: var(--bg); overflow-y: auto; border: 0;
+      padding: calc(env(safe-area-inset-top) + .8rem) 1rem calc(env(safe-area-inset-bottom) + 1rem); }
+  body.navopen nav .rail { flex-direction: column; flex-wrap: nowrap; align-items: stretch; order: 0; }
+  body.navopen nav .rail .group:first-child { display: block; }
+  body.navopen nav a.inst { display: grid; border: 0; white-space: normal; }
+  body.navopen nav a.inst .last { display: block; }
+  body.navopen .rail details.manage > a { display: flex; }
+  body.navopen nav .unpair { margin: 1rem 0 0; }
+  body.navopen nav .closenav { display: inline-flex; align-items: center; justify-content: center; position: absolute;
+      top: calc(env(safe-area-inset-top) + .5rem); right: 1rem; }    /* a phone has no Escape key */
+  body:has(.chatgrid) main { display: flex; flex-direction: column; height: 100%; min-height: 0;
+      padding: .3rem .6rem calc(.3rem + env(safe-area-inset-bottom)); }
+  body.kbd:has(.chatgrid) main { padding-bottom: .3rem; }    /* the keyboard covers the home indicator */
+  .chathead { flex-wrap: nowrap; align-items: center; gap: .3rem; margin: 0 0 .3rem; }
+  .chathead h1 { font-size: 1.1rem; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+                 white-space: nowrap; }
+  .chathead .facts, .docslabel { display: none; }
+  .navbtn, .closedocs { display: inline-flex; align-items: center; justify-content: center; }
+  .menufacts { display: block; margin: 0 0 .4rem; font-size: .85rem; }
+  .chatgrid { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+  .chatpage { flex: 1 1 auto; min-height: 0; max-width: none; }
+  .chatpage > .chat { flex: 1 1 auto; min-height: 0; max-height: none; margin-bottom: .3rem; }
+  .chatpage > form.composer { position: static; padding: 0; background: none; }
+  .chatgrid > aside.docs { display: none; }
+  .chatgrid.showdocs > aside.docs { display: block; position: fixed; inset: 0; z-index: 55; border: 0; border-radius: 0;
+      padding: calc(env(safe-area-inset-top) + .6rem) 1rem calc(env(safe-area-inset-bottom) + 1rem); overflow-y: auto; }
+  .closedocs { margin-left: auto; }
 }

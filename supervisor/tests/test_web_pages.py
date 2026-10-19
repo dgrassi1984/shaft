@@ -354,4 +354,6 @@ class StylesTest(TestCase):
         """Codex review: 📄 Documents with no documents yet (.showdocs) kept two columns wider than a phone."""
         css = (Path(web_pages.__file__).parent / "web_static" / "web.css").read_text()
         phone = css[css.index("@media (max-width: 720px)"):]
-        self.assertRegex(phone, r"\.chatgrid\.showdocs\s*\{\s*grid-template-columns: minmax\(0, 1fr\)")
+        # on a phone the chat is one column (a flex column), and the documents a sheet over it (PLAN-pwa P2)
+        self.assertRegex(phone, r"\.chatgrid \{ display: flex; flex-direction: column;")
+        self.assertRegex(phone, r"\.chatgrid\.showdocs > aside\.docs \{ display: block; position: fixed; inset: 0;")

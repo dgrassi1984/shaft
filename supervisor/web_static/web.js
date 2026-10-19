@@ -552,6 +552,7 @@
     });
     if (changed) seenSet(seen);
     const unread = rail.querySelectorAll("a.unread").length;
+    document.querySelectorAll("[data-toggle-nav]").forEach(b => b.classList.toggle("news", unread > 0));
     if (navigator.setAppBadge) {                    // the Home Screen icon's count: an app shows no tab title
       (unread ? navigator.setAppBadge(unread) : navigator.clearAppBadge()).catch(() => {});
     }
@@ -615,7 +616,8 @@
     u.searchParams.set("doc", doc);
     history.replaceState(null, "", u);
     if (panel._tick) panel._tick();
-    if (window.innerWidth <= 720) panel.scrollIntoView({ behavior: "smooth" });
+    const grid = document.querySelector(".chatgrid");
+    if (grid) grid.classList.add("showdocs");      // on a phone the panel is a sheet over the chat: open it
   });
   // Editing a document: the rendered view becomes its Markdown in a box; the panel stops refreshing until Save or
   // Cancel, and Save's compare-and-set refuses if the instance wrote it meanwhile (the box keeps your text).
@@ -644,7 +646,6 @@
     const panel = document.getElementById("docs");
     if (!grid || !panel) return;
     grid.classList.toggle("showdocs");
-    if (grid.classList.contains("showdocs")) panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
   });
   document.addEventListener("click", (ev) => {
     const edit = ev.target.closest && ev.target.closest("[data-edit-doc]");
@@ -665,7 +666,42 @@
     copyText(raw ? raw.value : "", b);
   });
 
+  // On a phone (PLAN-pwa P2) the chat is the whole screen: the rail is a sheet behind ☰, the documents a sheet over
+  // the chat, and the page is as tall as what the keyboard leaves visible, so the composer sits right above it.
+  document.addEventListener("click", (ev) => {
+    const t = ev.target.closest && ev.target.closest("[data-toggle-nav], [data-close-docs], nav a");
+    if (!t) return;
+    if (t.matches("[data-close-docs]")) {
+      const grid = document.querySelector(".chatgrid");
+      if (grid) grid.classList.remove("showdocs");
+      return;
+    }
+    const open = t.matches("[data-toggle-nav]") ? !document.body.classList.contains("navopen") : false;
+    document.body.classList.toggle("navopen", open);
+    document.querySelectorAll("[data-toggle-nav]").forEach(b => b.setAttribute("aria-expanded", String(open)));
+  });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Escape") return;
+    document.body.classList.remove("navopen");
+    const grid = document.querySelector(".chatgrid");
+    if (grid) grid.classList.remove("showdocs");
+  });
+  function fitViewport() {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    document.documentElement.style.setProperty("--vvh", `${Math.round(vv.height)}px`);
+    document.body.classList.toggle("kbd", vv.height < window.innerHeight - 120);   // the keyboard is up
+    // iOS scrolls the whole page to show a focused field; the page is already the visible height: put it back
+    if (document.body.classList.contains("chatapp") && window.scrollY) window.scrollTo(0, 0);
+  }
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", fitViewport);
+    window.visualViewport.addEventListener("scroll", fitViewport);
+  }
+
   function start() {
+    if (document.querySelector(".chatgrid")) document.body.classList.add("chatapp");
+    fitViewport();
     if ("serviceWorker" in navigator) {             // the app's shell: offline page and cached static files
       navigator.serviceWorker.register("/sw.js").catch(() => { /* not over https, or refused: the page works */ });
     }

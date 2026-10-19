@@ -44,9 +44,12 @@ def chat_frame(name: str, live: dict, body: Html, names: list[str], csrf: str, e
     if live.get("usd_today"):
         facts.append(f"${live['usd_today']:.2f} today")
     buttons = instance_buttons(live) if live.get("name") else Html("")
-    head = h('<header class="chathead"><h1>{name}</h1><span class="dim facts">{facts}</span>'
-             '<button type="button" class="small docsbtn" data-show-docs title="its documents (notes/docs/)">📄 Documents'
-             '</button>{clear}<details class="menu"><summary title="{name}: pages and actions">⋯</summary><div class="menubody">'
+    head = h('<header class="chathead"><button type="button" class="navbtn" data-toggle-nav aria-label="Chats and pages" '
+             'aria-expanded="false">☰</button><h1>{name}</h1><span class="dim facts">{facts}</span>'
+             '<button type="button" class="small docsbtn" data-show-docs title="its documents (notes/docs/)" '
+             'aria-label="Documents">📄<span class="docslabel"> Documents</span></button>{clear}'
+             '<details class="menu"><summary title="{name}: pages and actions" aria-label="{name}: pages and actions">⋯'
+             '</summary><div class="menubody"><p class="dim menufacts">{facts}</p>'
              '<div class="menupages">{pages}</div><div class="actions">{buttons}</div>'
              '<div class="actions"><button type="button" class="small" data-notify>Notify me of replies</button></div>'
              '{earlier}</div></details></header>',
@@ -56,7 +59,8 @@ def chat_frame(name: str, live: dict, body: Html, names: list[str], csrf: str, e
              clear=h('<form class="act clearbtn" data-post="/chat/{n}/clear" data-confirm="Clear this chat? An open '
                      'conversation is ended first — {name} writes it up in its journal — and the chat is kept in Earlier '
                      'web chats and Transcripts."><button type="submit" class="small" title="empty this page; nothing is '
-                     'deleted">Clear chat</button></form>', n=q(name), name=name) if clear else Html(""))
+                     'deleted">Clear<span class="docslabel"> chat</span></button></form>', n=q(name), name=name)
+             if clear else Html(""))
     return frame(f"{name} · chat", join([head, body]), names, csrf, current=f"i:{name}")
 
 
@@ -625,7 +629,9 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
             'placeholder="name, e.g. plan" pattern="[A-Za-z0-9][A-Za-z0-9 _.\\-]*" maxlength="80">'
             '<textarea name="text" hidden></textarea><button type="submit" class="small">Create</button></form></details>',
             n=q(name))
-    head = h('<div class="docshead"><b>Documents</b> <span class="dim">{dir}/</span>{new}</div><div class="doclist">{i}</div>',
+    head = h('<div class="docshead"><b>Documents</b> <span class="dim">{dir}/</span>{new}<button type="button" '
+             'class="small closedocs" data-close-docs aria-label="Close the documents">✕</button></div>'
+             '<div class="doclist">{i}</div>',
              dir=DIR, new=new, i=join(items) if items else h('<p class="dim">none yet: ask {n} for one, it appears here '
                                                               'as it writes it.</p>', n=name))
     if problem:

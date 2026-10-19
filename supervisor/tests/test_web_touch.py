@@ -64,3 +64,32 @@ class TouchTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PhoneLayoutTest(unittest.TestCase):
+    """PLAN-pwa P2: on a phone the chat is the whole screen."""
+    PHONE = "(max-width: 720px), (pointer: coarse) and (max-height: 520px)"
+
+    def test_the_page_is_as_tall_as_the_keyboard_leaves(self):
+        phone = block(self.PHONE)
+        self.assertIn("body:has(.chatgrid) { height: var(--vvh, 100dvh); overflow: hidden; }", phone)
+        self.assertIn('style.setProperty("--vvh", `${Math.round(vv.height)}px`)', JS)
+        self.assertIn('window.visualViewport.addEventListener("resize", fitViewport)', JS)
+        self.assertNotIn("100dvh - 19rem", CSS)                    # the guess the feed was sized by
+
+    def test_the_rail_and_the_documents_are_sheets(self):
+        phone = block(self.PHONE)
+        self.assertIn("body:has(.chatgrid) nav { display: none; }", phone)
+        self.assertRegex(phone, r"body\.navopen:has\(\.chatgrid\) nav \{ display: flex;[^}]*position: fixed; inset: 0;")
+        page = str(web_views.chat_page("wren", None, [], [], {}, ["wren"], "t"))
+        self.assertIn('class="navbtn" data-toggle-nav aria-label="Chats and pages"', page)
+        self.assertIn("data-close-docs", str(web_views.docs_panel("wren", [], "", None, "none", set())))
+        self.assertIn('class="small closenav" data-toggle-nav aria-label="Close the chats"', page)  # no Escape key
+        self.assertIn('if (grid) grid.classList.add("showdocs");', JS)   # a card opens the sheet
+
+    def test_the_header_is_one_line(self):
+        phone = block(self.PHONE)
+        self.assertIn(".chathead { flex-wrap: nowrap;", phone)
+        self.assertIn(".chathead .facts, .docslabel { display: none; }", phone)
+        page = str(web_views.chat_page("wren", None, [], [], {"model": "m", "state": "idle"}, ["wren"], "t"))
+        self.assertIn('<p class="dim menufacts">m · idle</p>', page)        # the facts move into ⋯

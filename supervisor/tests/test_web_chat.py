@@ -396,7 +396,7 @@ class ChatCentricTest(ChatRoutesTest):
 
     def test_the_chat_page_keeps_the_instance_pages_behind_its_menu(self):
         body = self.req("/i/wren/chat", cookie=self.cookie).body.decode()
-        self.assertIn('<header class="chathead"><h1>wren</h1>', body)
+        self.assertRegex(body, r'<header class="chathead">.*?<h1>wren</h1>')
         self.assertIn("cloud mimo-v2.6-pro · idle · $0.12 today", body)
         self.assertNotIn('class="tabs"', body)
         for page in ("/i/wren", "/i/wren/config", "/i/wren/drive", "/i/wren/access", "/i/wren/judge",
