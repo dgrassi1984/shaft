@@ -19,6 +19,8 @@ error, and the job backs off (its interval doubles, up to a day) until it succee
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -67,16 +69,28 @@ def _load_state() -> dict:
 
 def _save_state(st: dict) -> None:
     _dir().mkdir(parents=True, exist_ok=True)
-    tmp = _state_path().with_suffix(".tmp")
+    tmp = _state_path().with_name(f"state.{os.getpid()}.tmp")   # one per process: a shared name was renamed away
     tmp.write_text(json.dumps(st, indent=1))
     tmp.replace(_state_path())
 
 
+@contextlib.contextmanager
+def _editing_state():
+    """Load, change and save the state under one lock. Every job run is its own process, and the scheduler and the
+    jobs write the same file: until 2026-10-19 two jobs ending in the same second shared one temp name (the second
+    rename failed: FileNotFoundError, the job counted as failed) and could overwrite each other's update."""
+    _dir().mkdir(parents=True, exist_ok=True)
+    with open(_dir() / "state.lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        st = _load_state()
+        yield st
+        _save_state(st)
+
+
 def _update(name: str, plugin: str, **changes) -> dict:
-    st = _load_state()
-    entry = st.setdefault("jobs", {}).setdefault(name, {}).setdefault(plugin, {})
-    entry.update(changes)
-    _save_state(st)
+    with _editing_state() as st:
+        entry = st.setdefault("jobs", {}).setdefault(name, {}).setdefault(plugin, {})
+        entry.update(changes)
     return entry
 
 
@@ -187,11 +201,10 @@ def report_problems(name: str, problems: list[str]) -> None:
     if not problems:
         return
     key = hashlib.sha256("\n".join(problems).encode()).hexdigest()[:16]
-    st = _load_state()
-    if st.setdefault("reported", {}).get(name) == key:
-        return
-    st["reported"][name] = key
-    _save_state(st)
+    with _editing_state() as st:
+        if st.setdefault("reported", {}).get(name) == key:
+            return
+        st["reported"][name] = key
     _deliver(name, "scheduler", "Some of my scheduled jobs are not run:\n\n" + "\n".join(f"- {p}" for p in problems))
     log(f"{name}: jobs not run — " + "; ".join(problems))
 
@@ -338,18 +351,15 @@ def _log_row(name: str, row: dict) -> None:
 # -- waking ----------------------------------------------------------------------------------------------------------------
 def request_wake(name: str, plugin: str) -> None:
     """Kept once: several requests before the instance is idle make one wake, not a queue."""
-    st = _load_state()
-    st.setdefault("wake", {}).setdefault(name, {"since": datetime.now().isoformat(timespec="seconds"), "by": []})
-    if plugin not in st["wake"][name]["by"]:
-        st["wake"][name]["by"].append(plugin)
-    _save_state(st)
+    with _editing_state() as st:
+        st.setdefault("wake", {}).setdefault(name, {"since": datetime.now().isoformat(timespec="seconds"), "by": []})
+        if plugin not in st["wake"][name]["by"]:
+            st["wake"][name]["by"].append(plugin)
 
 
 def take_wake(name: str) -> dict | None:
-    st = _load_state()
-    req = st.get("wake", {}).pop(name, None)
-    if req is not None:
-        _save_state(st)
+    with _editing_state() as st:
+        req = st.get("wake", {}).pop(name, None)
     return req
 
 

@@ -289,3 +289,26 @@ class RunTest(JobCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConcurrentStateTest(unittest.TestCase):
+    """Regression (2026-10-19): thelos's and wren's `watcher` jobs ran in the same second. Both wrote
+    .supervisor/jobs/state.json through one temp name, state.tmp; the second rename failed (FileNotFoundError) and
+    thelos's job counted as failed. Unlocked, one process's update could also overwrite the other's."""
+
+    def test_two_processes_updating_at_once_lose_nothing_and_never_fail(self):
+        sup = Path(tempfile.mkdtemp(prefix="shaft-jobs-state-")).resolve()
+        self.addCleanup(shutil.rmtree, sup, True)
+        script = ("import sys\nfrom supervisor import jobs\n"
+                  "for i in range(60): jobs._update(sys.argv[1], 'watcher', n=i)\n"
+                  "jobs.request_wake(sys.argv[1], 'watcher')\n")
+        env = {**__import__("os").environ, "SHAFT_SUPERVISOR_DIR": str(sup)}
+        procs = [subprocess.Popen([core.PYTHON, "-c", script, name], cwd=core.PROJECT, env=env,
+                                  stderr=subprocess.PIPE, text=True) for name in ("thelos", "wren", "kant")]
+        errs = [p.communicate(timeout=60)[1] for p in procs]
+        self.assertEqual([p.returncode for p in procs], [0, 0, 0], errs)
+        st = json.loads((sup / "jobs" / "state.json").read_text())
+        self.assertEqual({n: st["jobs"][n]["watcher"]["n"] for n in ("thelos", "wren", "kant")},
+                         {"thelos": 59, "wren": 59, "kant": 59})                  # no update lost
+        self.assertEqual(sorted(st["wake"]), ["kant", "thelos", "wren"])
+        self.assertEqual(sorted(p.name for p in (sup / "jobs").glob("*.tmp")), [])
