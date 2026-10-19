@@ -709,3 +709,76 @@ class DocsButtonTest(DocsPanelTest):
         body = self.req("/i/wren/chat", cookie=self.cookie).body.decode()
         self.assertIn("data-show-docs", body)
         self.assertIn('data-post="/docs/wren/save"', body)                       # the New document form is there
+
+
+class ClearTest(DocsInChatTest):
+    """Clear the chat: the page and the rail start empty; nothing is deleted; an open conversation is ended first."""
+
+    def test_an_open_chat_is_ended_then_cleared_and_kept(self):
+        chat, _ = web_chat.send("wren", ME, "hello", [])
+        self.wait_idle(chat["id"])
+        said = web_chat.clear("wren")
+        self.assertTrue(said.startswith("cleared · ended"), said)
+        self.assertEqual(len([r for r in self.api.requests if r[0] == "/v1/chat/end"]), 1)   # written up
+        c = web_chat.load(chat["id"])
+        self.assertEqual(c["state"], "ended")
+        self.assertTrue(c["cleared"])
+        self.assertEqual(len(c["turns"]), 2)                       # nothing deleted
+        self.assertIsNone(web_chat.shown("wren"))
+        self.assertEqual(web_chat.summary("wren"), {})
+        self.assertIn(c, web_chat.chats("wren"))                   # still listed with the earlier chats
+        with self.assertRaisesRegex(web_chat.Refused, "nothing to clear"):
+            web_chat.clear("wren")
+
+    def test_an_ended_chat_is_only_hidden(self):
+        chat, _ = web_chat.send("wren", ME, "hello", [])
+        self.wait_idle(chat["id"])
+        web_chat.end(chat["id"])
+        ends = len([r for r in self.api.requests if r[0] == "/v1/chat/end"])
+        self.assertEqual(web_chat.clear("wren"), "cleared · it is kept in Earlier web chats")
+        self.assertEqual(len([r for r in self.api.requests if r[0] == "/v1/chat/end"]), ends)
+        chat2, _ = web_chat.send("wren", ME, "again", [])          # the next message starts a new chat, shown
+        self.assertNotEqual(chat2["id"], chat["id"])
+        self.assertEqual(web_chat.shown("wren")["id"], chat2["id"])
+        self.wait_idle(chat2["id"])
+
+    def test_a_reply_running_is_not_cleared(self):
+        self.api.hold.set()
+        chat, _ = web_chat.send("wren", ME, "long one", [])
+        time.sleep(0.3)
+        with self.assertRaisesRegex(web_chat.Refused, "stop the reply first"):
+            web_chat.clear("wren")
+        self.api.hold.clear()
+        self.wait_idle(chat["id"], 15)
+
+    def test_edits_not_yet_sent_reach_the_instance_after_a_clear_or_an_end(self):
+        """They stayed on the old chat and were lost: the next message starts a new one."""
+        chat, _ = web_chat.send("wren", ME, "hello", [])
+        self.wait_idle(chat["id"])
+        web_chat.doc_saved("wren", ME, "plan.md", "a\n", "a\nmine\n", "s1")
+        web_chat.clear("wren")
+        chat2, _ = web_chat.send("wren", ME, "go on", [])
+        c = self.wait_idle(chat2["id"])
+        self.assertIn("[Daniele edited notes/docs/plan.md:]", c["turns"][0]["content"])
+        self.assertNotIn("pending_edits", web_chat.load(chat["id"]))
+        web_chat.doc_saved("wren", ME, "plan.md", "a\nmine\n", "a\nmine\nmore\n", "s2")
+        web_chat.end(chat2["id"])
+        chat3, _ = web_chat.send("wren", ME, "and now", [])
+        c3 = self.wait_idle(chat3["id"])
+        self.assertIn("+more", c3["turns"][0]["content"])
+
+
+class ClearRouteTest(ChatRoutesTest):
+    def test_the_page_offers_clear_and_the_route_takes_the_page_token_only(self):
+        self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
+                        {"role": "assistant", "content": "a", "ts": "2026-10-19T12:00:05"}], "ended")
+        body = self.req("/i/wren/chat", cookie=self.cookie).body.decode()
+        self.assertIn('data-post="/chat/wren/clear"', body)
+        no = self.req("/chat/wren/clear", "POST", cookie=self.cookie, headers={"sec-fetch-site": "same-origin"})
+        self.assertEqual(no.status, 403)
+        ok = self.req("/chat/wren/clear", "POST", cookie=self.cookie,
+                      headers={"sec-fetch-site": "same-origin", "x-csrf-token": self.csrf(self.cookie)})
+        self.assertEqual(ok.status, 200, ok.body)
+        body = self.req("/i/wren/chat", cookie=self.cookie).body.decode()
+        self.assertIn("No chat open with wren", body)
+        self.assertIn("1 message(s)", body)                        # in Earlier web chats, kept

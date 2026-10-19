@@ -786,13 +786,21 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict]) -> Html:
     elif chat["state"] == "ended":
         feed.append(h('<p class="dim ended">Ended {e}: written up in its journal. Your next message starts a new '
                       'conversation.</p>', e=chat.get("ended", "")[:16].replace("T", " ")))
+    clear = h('<form class="act" data-post="/chat/{n}/clear" data-confirm="{c}"><button type="submit" class="act small">'
+              'Clear the chat</button></form>', n=q(name),
+              c=("Clear this chat from the page? It is kept in Earlier web chats and Transcripts."
+                 if chat["state"] == "ended" else
+                 f"Clear this chat? The conversation is ended first — {name} writes it up in its journal — and it is "
+                 "kept in Earlier web chats and Transcripts."))
     if chat.get("pending_edits"):
         feed.append(h('<p class="pending-edits">✎ Your edits to {p} go to {n} with your next message.</p>',
                       p=", ".join(sorted(chat["pending_edits"])), n=name))
     if chat["state"] not in ("replying", "ended") and chat["turns"]:
-        feed.append(h('<div class="actions">{b}</div>', b=button(
+        feed.append(h('<div class="actions">{b}{c}</div>', b=button(
             "chat-end", "End the conversation", f"end this conversation with {name}? It writes it up in its journal "
-            "now, and your next message starts a new one.", {"cid": chat["id"]}, cls="small")))
+            "now, and your next message starts a new one.", {"cid": chat["id"]}, cls="small"), c=clear))
+    elif chat["state"] == "ended" and chat["turns"]:
+        feed.append(h('<div class="actions">{c}</div>', c=clear))
     return join(feed)
 
 

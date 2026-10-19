@@ -385,6 +385,15 @@ def _post(req: Request, dev: str) -> Response:
         if m[1] not in _names():
             return _not_found(req.path)
         return _save_doc(m[1], (req.headers.get("tailscale-user-login") or "").lower(), req.form())
+    if m := re.match(r"^/chat/([A-Za-z0-9_-]+)/clear$", req.path):
+        from . import web_chat
+        if m[1] not in _names():
+            return _not_found(req.path)
+        try:
+            said = web_chat.clear(m[1])
+        except web_chat.Refused as e:
+            return _html(409, web_pages.h("<p>{t}</p>", t=str(e)))
+        return _html(200, web_pages.h("<p>{t}</p>", t=said))
     if req.path in ("/action/chat-stop", "/action/chat-end"):
         from . import web_chat
         cid = req.form().get("cid", "")

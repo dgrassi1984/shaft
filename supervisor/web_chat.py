@@ -113,7 +113,7 @@ def open_chat(name: str) -> dict | None:
 def summary(name: str) -> dict:
     """For the rail: the newest chat's last line, when the instance last answered in it, and whether it is replying."""
     c = next(iter(chats(name)), None)
-    if not c:
+    if not c or c.get("cleared"):
         return {}
     turns = c.get("turns") or []
     last = next((t for t in reversed(turns) if t["role"] == "assistant"), None)
@@ -124,15 +124,32 @@ def summary(name: str) -> dict:
 
 
 def shown(name: str) -> dict | None:
-    """The chat its page shows: the one going on, else the last one (ended: the next message starts a new one)."""
-    return open_chat(name) or next(iter(chats(name)), None)
+    """The chat its page shows: the one going on, else the last one (ended: the next message starts a new one) — unless
+    the operator cleared it: then none, until he writes again."""
+    c = open_chat(name) or next(iter(chats(name)), None)
+    return None if c and c.get("cleared") else c
 
 
 def new_chat(name: str, login: str) -> dict:
     chat = {"id": f"web-{secrets.token_hex(8)}", "instance": name, "login": login, "created": _now(), "state": "idle",
             "turns": [], "reply": None}
+    _adopt_edits(name, chat)
     save(chat)
     return chat
+
+
+def _adopt_edits(name: str, chat: dict) -> None:
+    """Edits to its documents saved but not yet sent, left on a chat that was ended or cleared since: the new chat
+    takes them, so the instance still hears of them with the next message (they were lost with the old chat)."""
+    for old in chats(name):
+        if old["id"] == chat["id"] or not old.get("pending_edits"):
+            continue
+        with _lock(old["id"]):
+            o = load(old["id"])
+            pend = o.pop("pending_edits", None) or {}
+            save(o)
+        for path, e in pend.items():
+            chat.setdefault("pending_edits", {}).setdefault(path, e)
 
 
 def reap() -> None:
@@ -430,6 +447,23 @@ def end(cid: str) -> str:
         save(chat)
     log(f"web: chat {cid} with {chat['instance']} ended by the operator")
     return "ended: it writes the conversation up in its journal now" if status == 202 else "ended"
+
+
+def clear(name: str) -> str:
+    """Clear the chat from view: the page and the rail start empty. Nothing is deleted — the chat stays in Earlier web
+    chats and Transcripts. A conversation still open is ended first (written up, as End does); one replying is not."""
+    chat = shown(name)
+    if not chat:
+        raise Refused("there is nothing to clear")
+    if replying(chat["id"]) or chat.get("state") == "replying":
+        raise Refused("it is still replying: stop the reply first")
+    said = end(chat["id"]) if chat.get("state") != "ended" else ""
+    with _lock(chat["id"]):
+        c = load(chat["id"])
+        c["cleared"] = _now()                 # edits still unsent stay: the next chat takes them (_adopt_edits)
+        save(c)
+    log(f"web: chat {chat['id']} with {name} cleared by the operator")
+    return "cleared" + (f" · {said}" if said else "") + " · it is kept in Earlier web chats"
 
 
 def parse_multipart(content_type: str, body: bytes) -> tuple[dict, list[tuple[str, bytes]]]:
