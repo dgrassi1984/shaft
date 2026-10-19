@@ -51,7 +51,9 @@ ABILITIES_TOOLS = (
     "run(**args) -> str; a plugin may call the supervisor's tools via `from shaft import broker; "
     "broker.call(name, **args)`, and may run on a timer as a scheduled job — see skills/writing-plugins.md), "
     "shaft/ (your own code), .venv/ (your own Python environment, which you set up and change with uv "
-    "in `run`: plugins and tests use it). Your sandbox reaches the public internet through the supervisor's "
+    "in `run`: plugins and tests use it), .browser/ (your own browser profile: a shared Chromium you drive with "
+    "Playwright in `run` and in jobs — see skills/writing-plugins.md). Your sandbox reaches the public internet "
+    "through the supervisor's "
     "proxy (localhost and Daniele's network are not reachable); your keys stay with the supervisor's "
     "tools (http_request).")
 DELEGATION = (" For any non-trivial code, use delegate_coding: your coder writes it faster and more reliably than "

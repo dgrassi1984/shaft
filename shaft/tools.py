@@ -255,7 +255,8 @@ class Toolbox:
         in_shared = bool(self.shared) and (base == self.shared or self.shared in base.parents)
         top, prefix = (self.shared, SHARED + "/") if in_shared else (self.root, "")
         skip = {".git", "__pycache__", ".tmp", "logs", "secrets"}
-        bulky = {".venv", ".uv"} - set(base.relative_to(top).parts)   # tens of thousands of files: listed, not walked
+        # Tens of thousands of files (an environment, a browser profile's caches): listed, not walked.
+        bulky = {".venv", ".uv", ".browser"} - set(base.relative_to(top).parts)
         rows = []
         for here, dirs, files in os.walk(base) if not skip & set(base.relative_to(top).parts) else ():
             rel = Path(here).relative_to(top)
