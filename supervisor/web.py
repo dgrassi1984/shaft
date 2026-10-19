@@ -51,7 +51,8 @@ PAIR_MINUTES = 10
 COOKIE = "shaft_device"
 COOKIE_DAYS = 400                                           # the longest a browser keeps a cookie
 STATIC = Path(__file__).resolve().parent / "web_static"
-CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; "
+# blob: images are the composer's previews of files picked in this page (URL.createObjectURL), nothing fetched
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; "
        "frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'")
 
 
@@ -370,6 +371,10 @@ def _post(req: Request, dev: str) -> Response:
         except web_chat.Refused as e:
             return _html(409, web_pages.h("<p>{t}</p>", t=str(e)))
         return _html(200, web_pages.h("<p>{t}</p>", t=said))
+    if m := re.match(r"^/docs/([A-Za-z0-9_-]+)/save$", req.path):
+        if m[1] not in _names():
+            return _not_found(req.path)
+        return _save_doc(m[1], (req.headers.get("tailscale-user-login") or "").lower(), req.form())
     if req.path in ("/action/chat-stop", "/action/chat-end"):
         from . import web_chat
         cid = req.form().get("cid", "")
@@ -415,11 +420,18 @@ def _names() -> list[str]:
 def _get(req: Request, csrf: str) -> Response | None:
     from . import dashboard, panel, web_views as v
     path, qs = req.path, req.query
-    if path == "/":
+    names = _names()
+    if path == "/":                                  # chat first (PLAN-webui-chat §1): the instance last talked to
+        last = _last_chat(req)
+        to = f"/i/{last}/chat" if last in names else f"/i/{names[0]}/chat" if names else "/overview"
+        return Response(302, b"", {"Location": to})
+    if path == "/overview":
         return _html(200, web_pages.overview_page(overview(), csrf))
     if path == "/fragment/overview":
         return _html(200, web_pages.overview(overview()))
-    names = _names()
+    if path == "/fragment/rail":
+        from . import web_chat
+        return _html(200, web_pages.rail(names, qs.get("c", ""), overview(), {n: web_chat.summary(n) for n in names}))
     if m := re.match(r"^/fragment/i/([A-Za-z0-9_-]+)/live$", path):
         if m[1] not in names:
             return None
@@ -433,10 +445,15 @@ def _get(req: Request, csrf: str) -> Response | None:
         if m[1] not in names:
             return None
         from . import web_chat
-        chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.open_chat(m[1])
+        chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.shown(m[1])
         if chat and chat.get("instance") != m[1]:
             return None
         return _html(200, v.chat_feed(m[1], chat, _sent_during(m[1], chat)))
+    if m := re.match(r"^/fragment/docs/([A-Za-z0-9_-]+)$", path):
+        if m[1] not in names:
+            return None
+        from . import web_chat
+        return _html(200, _docs_panel(m[1], web_chat.shown(m[1]), qs.get("doc", ""))[1])
     if m := re.match(r"^/chatfiles/(web-[a-f0-9]+)/(\d+)/(\d+)$", path):
         return _chat_file(m[1], int(m[2]), int(m[3]))
     if path == "/trials":
@@ -476,6 +493,78 @@ def _get(req: Request, csrf: str) -> Response | None:
     return None
 
 
+def _save_doc(name: str, login: str, form: dict) -> Response:
+    """The operator's edit of a document (or a new one): through `shaft docs set` and its compare-and-set; then the
+    instance hears of it (web_chat.doc_saved). Refused: what the document has now that his text has not."""
+    import difflib
+    import secrets as _secrets
+    from . import actions, docs, web_chat
+    path = form.get("path", "").strip()
+    if path and not path.endswith(".md"):
+        path += ".md"
+    text, sha = form.get("text", "").replace("\r\n", "\n"), form.get("sha", "")
+    try:
+        old, _ = docs.read(name, path)
+    except docs.Refused as e:
+        return _html(409, web_pages.h("<p>refused: {e}</p>", e=str(e)))
+    tmp = SUP_DIR / "web" / f"doc-{_secrets.token_hex(6)}.md"
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_text(text)
+    try:
+        ok, last = actions.run_now(["docs", name, "set", path, "--file", str(tmp), "--expect-sha", sha], who="web")
+    finally:
+        tmp.unlink(missing_ok=True)
+    if not ok:
+        now, now_sha = docs.read(name, path)
+        diff = "\n".join(difflib.unified_diff(text.splitlines(), (now or "").splitlines(), "yours", "now", lineterm="",
+                                              n=1)) if now is not None and sha != "none" else ""
+        # The sha it has now goes back to the page: Save again replaces it with yours, knowingly (Cancel takes it).
+        return _html(409, web_pages.h('<p>{l}</p>{d}', l=last if last.startswith("refused") else f"refused: {last}",
+                                      d=web_pages.h('<p>What it has now that your text has not. Your text is kept in '
+                                                    'the box: Save again to replace it with yours, or Cancel to take '
+                                                    'its version.</p><pre class="diff">{x}</pre>', x=diff) if diff else ""),
+                     {"X-Doc-Sha": now_sha} if diff else {})
+    _, new_sha = docs.read(name, path)
+    rel = docs._rel(path)
+    try:
+        said = web_chat.doc_saved(name, login, rel, old, text, new_sha)
+    except web_chat.Refused as e:                  # written: only telling the instance failed — say both
+        said = f"saved, but {name} was not told yet: {e}"
+    return _html(200, web_pages.h("<p>{t}</p>", t=said), {"X-Doc": rel})
+
+
+def _docs_panel(name: str, chat: dict | None, doc: str):
+    """(the open document, the panel): the one asked for, else the last this chat changed, else none open."""
+    from . import docs, web_views as v
+    marked = v.in_chat(chat)
+    try:
+        listing = docs.listing(name)
+    except (Exception, SystemExit) as e:          # the documents never take the chat down with them: say what failed
+        log(f"web: {name}'s documents: {type(e).__name__}: {e}")
+        return doc, v.docs_panel(name, [], doc, None, "none", marked, f"documents not readable: {e}")
+    if not doc:
+        doc = next((d["path"] for d in listing if d["path"] in marked), "")
+    text, sha, problem = None, "none", ""
+    if doc:
+        try:
+            text, sha = docs.read(name, doc)
+        except docs.Refused as e:
+            problem = str(e)
+    return doc, v.docs_panel(name, listing, doc, text, sha, marked, problem,
+                             ((chat or {}).get("saved_docs") or {}).get(doc))
+
+
+LAST_CHAT = "shaft_last"                                     # the instance whose chat / opens
+
+
+def _last_chat(req: Request) -> str:
+    for part in (req.headers.get("cookie") or "").split(";"):
+        k, _, v = part.strip().partition("=")
+        if k == LAST_CHAT:
+            return v
+    return ""
+
+
 def _live(name: str) -> dict:
     return next((i for i in overview()["instances"] if i["name"] == name), {})
 
@@ -507,12 +596,15 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str) -
         return _html(200, v.activity_page(name, activity(name), names, csrf))
     if tab == "chat":
         from . import web_chat
-        chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.open_chat(name)
+        chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.shown(name)
         if chat and chat.get("instance") != name:
             return None
         past = [c for c in web_chat.chats(name) if c.get("state") == "ended"][:20]
+        doc, panel = _docs_panel(name, chat, qs.get("doc", ""))
         return _html(200, v.chat_page(name, chat, _sent_during(name, chat), past, _live(name), names, csrf,
-                                      read_only=bool(qs.get("id")) and bool(chat) and chat.get("state") == "ended"))
+                                      read_only=bool(qs.get("id")) and bool(chat) and chat.get("state") == "ended",
+                                      panel=panel, doc=doc),
+                     {"Set-Cookie": f"{LAST_CHAT}={name}; Path=/; Max-Age={COOKIE_DAYS * 86400}; Secure; SameSite=Strict"})
     if tab in ("config", "drive", "access"):
         from . import opconfig, web_config
         if tab == "config":

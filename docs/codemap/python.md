@@ -22,6 +22,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/coder.py` | `CoderError` | `spent_today`, `write`, `check_targets`, `test_in_scratch`, `delegate` |
 | `supervisor/core.py` | `UnsafePath` | `knob`, `describe_knobs`, `log`, `secrets_env`, `git`, `git_wt`, `instance_root`, `instance_names`, `paused`, `instance_config`, `config_set_line`, `config_lock`, `config_values`, `config_line`, `config_with`, `disabled_tools`, `shared_folder`, `check_shared_folder`, `set_shared_folder`, `mail_grants`, `set_mail_grants`, `calendar_grants`, `set_calendar_grants`, `read_secrets`, `store_secret`, `store_google_key`, `is_google_key`, `describe_key`, `delete_secret`, `set_tool`, `journal_entries`, `contained`, `safe_write`, `safe_write_bytes`, `safe_mkdir`, `journal_note`, `not_mind`, `add_all_but_mind`, `commit_state` |
 | `supervisor/dashboard.py` | — | `clean`, `event_tone`, `activity`, `instance_state`, `services`, `events`, `snapshot` |
+| `supervisor/docs.py` | `Refused` | `sha`, `read`, `listing`, `snapshot`, `changed`, `write`, `command` |
 | `supervisor/egress.py` | `Refused`, `Egress` | `log_path`, `public_address`, `recent`, `describe`, `summary` |
 | `supervisor/embed_server.py` | `Embedder` | `make_handler`, `main` |
 | `supervisor/evolution.py` | — | `drift`, `distinct`, `breed` |
@@ -64,6 +65,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_dashboard.py` | `InstanceStateTest`, `EventsTest` | — |
 | `supervisor/tests/test_decide.py` | `DecideTest` | — |
 | `supervisor/tests/test_distinct.py` | `StripTest`, `ScoreTest`, `DistinctEndToEndTest` | `pairs_with`, `texts_in`, `clean`, `verdict` |
+| `supervisor/tests/test_docs.py` | `DocsTest` | — |
 | `supervisor/tests/test_drive.py` | `DrivePromptTest`, `DriveSandboxTest`, `DriveCommitTest`, `DriveDuringACycleTest` | — |
 | `supervisor/tests/test_egress.py` | `Upstream`, `PublicAddressTest`, `SummaryTest`, `ProxyTest`, `SandboxedRunTest`, `ReplayEgressTest` | `pretend_public` |
 | `supervisor/tests/test_embed_memory.py` | `EmbedCacheBoundTest` | — |
@@ -110,9 +112,9 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_vision.py` | `FakeModels`, `Case`, `CapabilityTest`, `PrepareTest`, `DescribeTest`, `ReplayAttachmentsTest`, `JudgeNoteTest`, `TemplateTest`, `AnswerEndToEndTest` | `png`, `image_part` |
 | `supervisor/tests/test_web.py` | `WebTest`, `WhoMayUseItTest`, `PairingTest`, `ForgedRequestsTest`, `EscapingTest`, `OverviewTest`, `HostsTest`, `PortTest` | `snap` |
 | `supervisor/tests/test_web_actions.py` | `ActionsTest`, `EveryActionRunsItsCommand`, `RefusedWhereTheTuiRefuses`, `PagesShowEachActionAsItRuns`, `RecapLockTest`, `NewVerbsTest`, `OneBrokenInstanceTest` | — |
-| `supervisor/tests/test_web_chat.py` | `FakeApi`, `ChatTest`, `RelayTest`, `OlderApiTest`, `FilesTest`, `ChatRoutesTest` | `chunk` |
+| `supervisor/tests/test_web_chat.py` | `FakeApi`, `ChatTest`, `RelayTest`, `OlderApiTest`, `FilesTest`, `ChatRoutesTest`, `ChatCentricTest`, `DocsInChatTest`, `DocsPanelTest`, `DocEditsTest`, `DocSaveRouteTest`, `DocsButtonTest` | `chunk` |
 | `supervisor/tests/test_web_config.py` | `ConfigActionsTest`, `ConfigPagesTest` | — |
-| `supervisor/tests/test_web_pages.py` | `PagesTest`, `EveryPageShowsWhatItsTabShows`, `JournalTest`, `MarkdownTest`, `TranscriptsTest`, `MessagesTest`, `ActivityTest`, `NavTest`, `NoMarkupShownAsTextTest` | — |
+| `supervisor/tests/test_web_pages.py` | `PagesTest`, `EveryPageShowsWhatItsTabShows`, `JournalTest`, `MarkdownTest`, `TranscriptsTest`, `MessagesTest`, `ActivityTest`, `NavTest`, `NoMarkupShownAsTextTest`, `StaticVersionTest`, `StylesTest` | — |
 | `supervisor/top.py` | `UI` | `keys`, `shown`, `participants`, `follow`, `handle`, `dispatch`, `extras`, `recap_line`, `render_main`, `render_list`, `wrap`, `render_message`, `render`, `plain`, `code_stamp`, `main` |
 | `supervisor/top_views.py` | `Overlay` | `run_now`, `run_detached`, `service_guard`, `tab_bar`, `footer`, `window`, `scroll_to`, `wrap`, `spark`, `page`, `current`, `render_instance`, `judge_line`, `judge_detail`, `render_judge`, `trial_line`, `render_trials`, `render_benchmarks`, `render_changes`, `render_costs`, `render_services`, `render_help`, `transcript_line`, `render_transcripts`, `ask`, `handle_overlay`, `render_pick`, `instance_action`, `handle_view` |
 | `supervisor/trial.py` | `TrialError` | `load`, `save`, `all_trials`, `usage_today`, `branch`, `committed_code`, `model_of`, `live_episodes`, `start_time`, `state_of`, `mind_rev`, `reconstruct`, `link_env`, `copy_attachments`, `file_diff`, `replay_arm`, `judge_case`, `state_context`, `judge_pair`, `decide`, `sign_p`, `verdict`, `create`, `request`, `gate_check`, `local_free_for`, `local_never_free`, `runnable`, `has_work`, `run_pair`, `conclude`, `report`, `deliver`, `sweep_scratch`, `work`, `describe`, `describe_all`, `match`, `stats_lines` |
@@ -120,7 +122,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/vision.py` | `VisionError` | `sees_images`, `sees_images_or_no`, `sniff`, `prepare_bytes`, `data_url`, `split_data_url`, `count`, `prepare`, `without_images` |
 | `supervisor/web.py` | `Request`, `Response`, `Handler` | `allowed_logins`, `tailnet_hosts`, `record_hosts`, `allowed_hosts`, `url`, `new_pairing`, `devices`, `unpair`, `device_from_cookie`, `csrf_token`, `overview`, `respond`, `activity`, `attachment_path`, `serve`, `command` |
 | `supervisor/web_actions.py` | `Refused` | `run`, `button`, `instance_buttons`, `message_forms`, `tool_switches`, `alert_buttons`, `service_buttons`, `autonomy_button` |
-| `supervisor/web_chat.py` | `Refused`, `Relay` | `load`, `save`, `chats`, `open_chat`, `new_chat`, `reap`, `replying`, `send`, `stop`, `end`, `parse_multipart` |
+| `supervisor/web_chat.py` | `Refused`, `Relay` | `load`, `save`, `chats`, `open_chat`, `summary`, `shown`, `new_chat`, `reap`, `replying`, `edit_diff`, `doc_saved`, `send`, `stop`, `end`, `parse_multipart` |
 | `supervisor/web_config.py` | — | `run`, `config_page`, `drive_diff`, `drive_page`, `access_page`, `access` |
-| `supervisor/web_pages.py` | `Html` | `esc`, `h`, `join`, `page`, `nav`, `message_page`, `pair_page`, `state_class`, `instance_card`, `message_line`, `overview`, `overview_page` |
-| `supervisor/web_views.py` | — | `q`, `frame`, `instance_frame`, `section`, `lines`, `rows`, `table`, `pre`, `link`, `when`, `clip`, `inline`, `markdown`, `spark`, `instance_live`, `instance_summary`, `judge_page`, `judge_detail_page`, `trials_page`, `trial_page`, `benchmarks_page`, `changes_page`, `journal_page`, `activity_page`, `transcripts_page`, `transcript_page`, `messages_page`, `message_page`, `costs_page`, `services_live`, `services_page`, `chat_feed`, `chat_page` |
+| `supervisor/web_pages.py` | `Html` | `esc`, `h`, `join`, `page`, `rail`, `nav`, `message_page`, `pair_page`, `state_class`, `instance_card`, `message_line`, `overview`, `overview_page` |
+| `supervisor/web_views.py` | — | `q`, `frame`, `instance_frame`, `chat_frame`, `section`, `lines`, `rows`, `table`, `pre`, `link`, `when`, `clip`, `inline`, `markdown`, `spark`, `instance_live`, `instance_summary`, `judge_page`, `judge_detail_page`, `trials_page`, `trial_page`, `benchmarks_page`, `changes_page`, `journal_page`, `activity_page`, `transcripts_page`, `transcript_page`, `messages_page`, `message_page`, `costs_page`, `services_live`, `services_page`, `doc_cards`, `in_chat`, `docs_panel`, `chat_feed`, `chat_page` |

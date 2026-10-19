@@ -8,9 +8,9 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from unittest import mock
+from unittest import TestCase, mock
 
-from supervisor import messages, panel, web, web_views
+from supervisor import messages, panel, web, web_pages, web_views
 from supervisor.tests.test_control_panel import COSTS, DETAIL, JUDGMENT, TRIAL
 from supervisor.tests.test_web import WebTest, snap
 
@@ -109,7 +109,6 @@ class EveryPageShowsWhatItsTabShows(PagesTest):
         self.assertNotIn("NOT RUNNING", model_row)
         s = snap()
         s["services"] = [{"name": "model", "running": False, "idle": True, "detail": "idle · starts on demand"}]
-        from supervisor import web_pages
         self.assertIn('class="svc idle"', web_pages.overview(s))
 
     def test_an_unknown_instance_or_page_is_404(self):
@@ -159,6 +158,21 @@ class MarkdownTest(PagesTest):
         self.assertEqual(out.count("<ul>"), 2)                      # the nested list is its own list
         self.assertIn('<td data-label="a">1</td>', out)
         self.assertEqual(out.count("<ul>"), out.count("</ul>"))
+
+    def test_quoted_lines_are_one_blockquote_escaped(self):
+        out = web_views.markdown("> you said **this**\n> and <script>x</script>\n\nmy answer")
+        self.assertEqual(out.count("<blockquote>"), 1)
+        self.assertIn("<b>this</b>", out)
+        self.assertIn("&lt;script&gt;", out)
+        self.assertNotIn("<script>", out)
+        self.assertIn("<p>my answer</p>", out)
+        self.assertNotIn("&gt; you said", out)                     # the marker is not shown as text
+
+    def test_a_reply_quoting_a_message_shows_the_quote_apart_from_what_he_wrote(self):
+        out = web_views._my_text("> it said <b>x</b>\n> and y\n\nwhy *that*?")
+        self.assertIn('<blockquote class="wrap">it said &lt;b&gt;x&lt;/b&gt;\nand y</blockquote>', out)
+        self.assertIn('<div class="wrap">why *that*?</div>', out)  # his own words as written, not as Markdown
+        self.assertEqual(str(web_views._my_text("plain\ntext")), '<div class="wrap">plain\ntext</div>')
 
     def test_a_list_item_wrapping_onto_the_next_line_stays_one_item(self):
         out = web_views.markdown("- one long item\n  that wraps\n- two")
@@ -284,7 +298,7 @@ class NavTest(PagesTest):
         body = self.get("/i/shaft")
         for href in ("/i/shaft/judge", "/i/shaft/changes", "/i/shaft/journal", "/i/shaft/activity",
                      "/i/shaft/transcripts", "/i/shaft/benchmarks", "/trials", "/messages", "/costs", "/services",
-                     'href="/i/wren"'):
+                     "/overview", 'href="/i/wren/chat"'):
             self.assertIn(href, body)
 
     def test_the_summary_refreshes_its_live_part(self):
@@ -300,7 +314,7 @@ class NoMarkupShownAsTextTest(PagesTest):
 
     def test_no_page_shows_its_own_markup_escaped(self):
         with mock.patch.object(panel, "transcripts", return_value=[]):
-            for path in ("/", "/fragment/overview", "/i/shaft", "/i/shaft/judge", "/i/shaft/changes",
+            for path in ("/overview", "/fragment/overview", "/fragment/rail", "/i/shaft", "/i/shaft/chat", "/i/shaft/judge", "/i/shaft/changes",
                          "/i/shaft/benchmarks", "/i/shaft/transcripts", "/i/shaft/journal", "/trials", "/costs",
                          "/services", "/fragment/services", "/messages"):
                 body = self.get(path)
@@ -317,3 +331,21 @@ class NoMarkupShownAsTextTest(PagesTest):
         self.assertEqual("<i>" + Html("<b>"), "&lt;i&gt;<b>")
         self.assertIsInstance("x" + Html("<b>"), Html)
         self.assertEqual(Html("<b>") + Html("<i>"), "<b><i>")
+
+
+class StaticVersionTest(TestCase):
+    def test_a_changed_static_file_gets_a_new_url(self):
+        """It was a constant bumped by hand: web.js changed without the bump and browsers kept the old script."""
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "web.js").write_text("one")
+            before = web_pages._static_version(Path(d))
+            (Path(d) / "web.js").write_text("two")
+            self.assertNotEqual(before, web_pages._static_version(Path(d)))
+        self.assertEqual(web_pages.STATIC_VERSION, web_pages._static_version())
+
+
+class StylesTest(TestCase):
+    def test_what_the_page_hides_stays_hidden(self):
+        """Found live: form.docedit { display: grid } showed the document editor the page had hidden."""
+        css = (Path(web_pages.__file__).parent / "web_static" / "web.css").read_text()
+        self.assertIn("[hidden] { display: none !important; }", css)

@@ -73,7 +73,7 @@ class WhoMayUseItTest(WebTest):
         self.assertNotIn(b"wren", r.body)          # nothing of the instances before pairing
 
     def test_a_paired_browser_sees_the_overview(self):
-        r = self.req(cookie=self.paired())
+        r = self.req("/overview", cookie=self.paired())
         self.assertEqual(r.status, 200)
         self.assertIn(b"wren", r.body)
 
@@ -143,14 +143,14 @@ class ForgedRequestsTest(WebTest):
         cookie = self.paired()
         r = self.req("/unpair", "POST", cookie=cookie, headers={"sec-fetch-site": "same-origin"})
         self.assertEqual(r.status, 403)
-        self.assertEqual(self.req(cookie=cookie).status, 200)          # still paired: nothing was done
+        self.assertEqual(self.req("/overview", cookie=cookie).status, 200)   # still paired: nothing was done
 
     def test_a_cross_site_post_refused_even_with_the_token(self):
         cookie = self.paired()
         r = self.req("/unpair", "POST", cookie=cookie,
                      headers={"sec-fetch-site": "cross-site", "x-csrf-token": self.csrf(cookie)})
         self.assertEqual(r.status, 403)
-        self.assertEqual(self.req(cookie=cookie).status, 200)
+        self.assertEqual(self.req("/overview", cookie=cookie).status, 200)
 
     def test_a_post_with_no_origin_information_refused(self):
         cookie = self.paired()
@@ -183,7 +183,7 @@ class ForgedRequestsTest(WebTest):
             self.assertEqual(r.headers.get("X-Content-Type-Options"), "nosniff")
 
     def test_no_page_has_inline_script(self):
-        body = self.req(cookie=self.paired()).body.decode()
+        body = self.req("/overview", cookie=self.paired()).body.decode()
         self.assertNotIn("<script>", body)
         self.assertNotRegex(body, r"<[^>]+\son[a-z]+\s*=")           # no inline event handlers either
         self.assertRegex(body, r'<script src="/static/web\.js[^"]*" defer></script>')
@@ -205,11 +205,12 @@ class EscapingTest(WebTest):
                           "kind": "note", "text": self.EVIL, "file": "m.md"}]
         s["alerts"] = [{"id": "x", "text": self.EVIL}]
         with mock.patch.object(web, "overview", return_value=s):
-            for path in ("/", "/fragment/overview"):
+            for path in ("/overview", "/fragment/overview", "/fragment/rail"):
                 body = self.req(path, cookie=self.paired()).body.decode()
                 self.assertNotIn("<script>alert", body)
                 self.assertNotIn("<img", body)
-                self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", body)
+                if path != "/fragment/rail":                   # the rail shows no instance text but its chats'
+                    self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", body)
 
     def test_control_characters_are_dropped(self):
         out = web_pages.overview(snap(goal="ok\x1b[31mred\x07"))
@@ -241,7 +242,7 @@ class OverviewTest(WebTest):
         self.assertIn(b"broken log", r.body)        # never an empty page that looks like "nothing to show"
 
     def test_the_overview_polls_its_own_fragment(self):
-        body = self.req(cookie=self.paired()).body.decode()
+        body = self.req("/overview", cookie=self.paired()).body.decode()
         self.assertIn('data-poll="/fragment/overview"', body)
 
 

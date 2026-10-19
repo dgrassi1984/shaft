@@ -22,6 +22,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import re
 import secrets
 import socket
 import threading
@@ -35,8 +36,26 @@ SAVE_EVERY_S = 1.0                 # how often a streaming reply's activity is w
 MAX_TEXT = 20000                   # a message, at most
 
 
+# Added, unseen by the operator, to the first message of each web chat: how the instance shares a document with him
+# (PLAN-webui-chat §3). In the message rather than its prompts, so every instance gets it whatever its own code says.
+DOCS_NOTE = ("[Web chat: a Markdown file you write under notes/docs/ appears beside this chat as a document Daniele sees "
+             "live and can edit. Write it whole (write_file with replace=true when you drop lines). His edits reach you "
+             "as a diff in his next message.]")
+
+
 class Refused(Exception):
     pass
+
+
+def _docs_now(name: str) -> dict[str, str]:
+    """The instance's documents as they are ({path: sha}); a reply's cards are what changed. Never fails a reply."""
+    from . import docs
+    try:
+        return docs.snapshot(name)
+    except (Exception, SystemExit) as e:          # noqa: BLE001 — a folder it broke must not stop the chat; SystemExit
+        #                                           is core.instance_root's way to say the instance is not there
+        log(f"web: could not read {name}'s documents: {type(e).__name__}: {e}")
+        return {}
 
 
 def _dir() -> Path:
@@ -89,6 +108,24 @@ def chats(name: str) -> list[dict]:
 def open_chat(name: str) -> dict | None:
     """The instance's web chat still going on (the newest not ended), if any."""
     return next((c for c in chats(name) if c.get("state") != "ended"), None)
+
+
+def summary(name: str) -> dict:
+    """For the rail: the newest chat's last line, when the instance last answered in it, and whether it is replying."""
+    c = next(iter(chats(name)), None)
+    if not c:
+        return {}
+    turns = c.get("turns") or []
+    last = next((t for t in reversed(turns) if t["role"] == "assistant"), None)
+    text = (turns[-1].get("shown", turns[-1].get("content")) or "") if turns else ""
+    who = "you: " if turns and turns[-1]["role"] == "user" else ""
+    first = next((l.strip() for l in text.splitlines() if l.strip() and not l.lstrip().startswith(">")), "")
+    return {"line": (who + first)[:80], "last": last["ts"] if last else "", "replying": c.get("state") == "replying"}
+
+
+def shown(name: str) -> dict | None:
+    """The chat its page shows: the one going on, else the last one (ended: the next message starts a new one)."""
+    return open_chat(name) or next(iter(chats(name)), None)
 
 
 def new_chat(name: str, login: str) -> dict:
@@ -239,14 +276,17 @@ def _run(relay: Relay) -> None:
         chat = load(cid)
         sent = chat["reply"].get("interjections", 0)
         note = ("stopped by you" if relay.stopped else f"error: {error}" if error else "")
+        from . import docs
+        made = docs.changed(chat["reply"].get("docs_before") or {}, _docs_now(chat["instance"]))
         chat["turns"].append({"role": "assistant", "content": answer.strip(), "ts": _now(), "activity": activity[-200:],
-                              "note": note})
+                              "note": note, **({"docs": made} if made else {})})
         chat["state"], chat["reply"] = "idle", None
         # An API older than the web UI does not say what it heard: then no second reply, rather than one per message.
         unheard = max(0, sent - heard) if heard is not None and not relay.stopped and not error else 0
         if unheard:                               # sent too late for this reply: answered by one of their own
             chat["state"], chat["reply"] = "replying", {"started": _now(), "activity": [], "answer": "",
-                                                        "interjections": 0, "followup": unheard}
+                                                        "interjections": 0, "followup": unheard,
+                                                        "docs_before": _docs_now(chat["instance"])}
         save(chat)
     if _relays.get(cid) is relay:                  # never a newer relay of the same chat
         del _relays[cid]
@@ -257,11 +297,69 @@ def _run(relay: Relay) -> None:
 
 
 # -- what the page does ----------------------------------------------------------------------------------------------
+# -- the operator's edits to its documents (PLAN-webui-chat §3 D2) ---------------------------------------------------
+EDIT_DIFF_MAX = 12000                  # a diff longer than this is summarised: the instance reads the file itself
+
+
+def _fence(text: str) -> str:
+    """A code fence longer than any run of backticks in the text: a document's own ``` must not close it."""
+    return "`" * max(3, 1 + max((len(m) for m in re.findall(r"`+", text)), default=0))
+
+
+def edit_diff(path: str, old: str | None, new: str) -> str:
+    """What the operator changed in a document, as the instance is told it."""
+    import difflib
+    rel = f"notes/docs/{path}"
+    if old is None:
+        body = new if len(new) <= EDIT_DIFF_MAX else new[:EDIT_DIFF_MAX] + "\n…(cut: read the file)"
+        f = _fence(body)
+        return f"[Daniele created {rel}:]\n{f}markdown\n{body}\n{f}"
+    diff = "\n".join(difflib.unified_diff(old.splitlines(), new.splitlines(), f"a/{rel}", f"b/{rel}", lineterm="", n=2))
+    if not diff:
+        return f"[Daniele saved {rel} unchanged.]"
+    if len(diff) > EDIT_DIFF_MAX:
+        added = sum(l.startswith("+") for l in diff.splitlines()[2:])
+        dropped = sum(l.startswith("-") for l in diff.splitlines()[2:])
+        return f"[Daniele edited {rel}: +{added} −{dropped} lines, too long to show here — read the file.]"
+    f = _fence(diff)
+    return f"[Daniele edited {rel}:]\n{f}diff\n{diff}\n{f}"
+
+
+def doc_saved(name: str, login: str, path: str, old: str | None, new: str, sha: str) -> str:
+    """After the operator saved a document: the instance hears of it — at once (an interjection) while it replies, else
+    with his next message; several saves before then are one diff (from what it last saw). The chat also keeps his
+    version, so the panel can say when a later write of the instance dropped lines he wrote. (what to tell him)"""
+    chat = open_chat(name) or new_chat(name, login)
+    with _lock(chat["id"]):
+        chat = load(chat["id"])
+        pend = chat.setdefault("pending_edits", {})
+        # Folded into one diff only while nobody else wrote it in between: if the instance wrote over his last save,
+        # it knows its own version, and the diff starts there (folding from the first save called its text his).
+        prev = pend.get(path)
+        first = prev["old"] if prev and prev["new"] == old else old
+        pend[path] = {"old": first, "new": new}
+        added = sorted({l.strip() for l in new.splitlines() if l.strip()} - {l.strip() for l in (old or "").splitlines()})
+        chat.setdefault("saved_docs", {})[path] = {"sha": sha, "text": new, "ts": _now(), "added": added[:400]}
+        save(chat)
+        replying_now = chat["state"] == "replying"
+    if replying_now:
+        _, said = send(name, login, "", [])
+        return f"saved · {said}"
+    return f"saved · {name} gets the change with your next message"
+
+
+def _take_edits(chat: dict) -> tuple[str, list[str]]:
+    """The pending edits as the message's extra text, and their paths; cleared from the chat (the caller saves it)."""
+    pend = chat.pop("pending_edits", None) or {}
+    blocks = [edit_diff(p, e["old"], e["new"]) for p, e in sorted(pend.items())]
+    return ("\n\n".join(blocks), sorted(pend))
+
+
 def send(name: str, login: str, text: str, files: list[tuple[str, bytes]]) -> tuple[dict, str]:
     """A message from the operator: a new reply if none is running, an interjection otherwise. (chat, what to say)"""
     from . import messages
     text = text.strip()
-    if not text and not files:
+    if not text and not files and not (open_chat(name) or {}).get("pending_edits"):
         raise Refused("an empty message is not sent")
     if len(text) > MAX_TEXT:
         raise Refused(f"a message is at most {MAX_TEXT} characters ({len(text)})")
@@ -278,6 +376,12 @@ def send(name: str, login: str, text: str, files: list[tuple[str, bytes]]) -> tu
     with _lock(cid):                               # the relay's last save takes it too: the chat's state is the truth
         chat = load(cid)
         chat["login"] = login
+        edits, paths = _take_edits(chat)
+        if edits:
+            turn["content"] = (turn["content"] + "\n\n" + edits).strip()
+            turn["edits"] = paths
+        if not any(t["role"] == "user" for t in chat["turns"]):
+            turn["content"] += "\n\n" + DOCS_NOTE
         if chat["state"] == "replying":
             status, body = _post(chat, "interject", {"model": name, "messages": _api_messages(chat) + [
                 {"role": "user", "content": turn["content"]}]})
@@ -292,7 +396,8 @@ def send(name: str, login: str, text: str, files: list[tuple[str, bytes]]) -> tu
             return chat, (f"{name} reads it at its next step" if status == 202 else
                           f"{name} was just finishing: it answers this next")
         chat["turns"].append(turn)
-        chat["state"], chat["reply"] = "replying", {"started": _now(), "activity": [], "answer": "", "interjections": 0}
+        chat["state"], chat["reply"] = "replying", {"started": _now(), "activity": [], "answer": "", "interjections": 0,
+                                                    "docs_before": _docs_now(name)}
         save(chat)
     _start(cid)
     return chat, f"sent to {name}"

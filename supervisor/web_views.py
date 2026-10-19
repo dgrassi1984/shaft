@@ -11,7 +11,7 @@ import urllib.parse
 from .web_pages import Html, esc, h, join, nav, page
 
 MARK = {"yes": ("✓", "good"), "partial": ("½", "warn"), "no": ("✗", "bad")}
-INSTANCE_TABS = [("", "Summary"), ("chat", "Chat"), ("config", "Config"), ("drive", "Drive"), ("access", "Access"),
+INSTANCE_TABS = [("chat", "Chat"), ("", "Summary"), ("config", "Config"), ("drive", "Drive"), ("access", "Access"),
                  ("judge", "Judge"), ("changes", "Changes"), ("benchmarks", "Benchmarks"),
                  ("transcripts", "Transcripts"), ("journal", "Journal"), ("activity", "Activity")]
 GLOBAL_PAGES = [("/trials", "Trials"), ("/messages", "Messages"), ("/costs", "Costs"), ("/services", "Services")]
@@ -31,6 +31,28 @@ def instance_frame(name: str, tab: str, title: str, body: Html, names: list[str]
                   cls="on" if t == tab else "", label=label) for t, label in INSTANCE_TABS)
     head = h('<header class="pagehead"><h1>{name}</h1><div class="tabs">{tabs}</div></header>', name=name, tabs=tabs)
     return frame(f"{name} · {title}", join([head, body]), names, csrf, current=f"i:{name}")
+
+
+def chat_frame(name: str, live: dict, body: Html, names: list[str], csrf: str, earlier: Html = Html("")) -> Html:
+    """The chat's own frame (PLAN-webui-chat §1): the instance's model, state and spend in one line, and everything
+    else about it — its pages and its actions — behind the ⋯ menu, out of the conversation's way."""
+    from .web_actions import instance_buttons
+    pages = join(h('<a href="{href}">{label}</a>', href=f"/i/{q(name)}" + (f"/{t}" if t else ""), label=label)
+                 for t, label in INSTANCE_TABS if t != "chat")
+    state = live.get("state", "?")
+    facts = [live.get("model") or "", state + (f" since {live['since']}" if live.get("since") else "")]
+    if live.get("usd_today"):
+        facts.append(f"${live['usd_today']:.2f} today")
+    buttons = instance_buttons(live) if live.get("name") else Html("")
+    head = h('<header class="chathead"><h1>{name}</h1><span class="dim facts">{facts}</span>'
+             '<button type="button" class="small docsbtn" data-show-docs title="its documents (notes/docs/)">📄 Documents'
+             '</button><details class="menu"><summary title="{name}: pages and actions">⋯</summary><div class="menubody">'
+             '<div class="menupages">{pages}</div><div class="actions">{buttons}</div>'
+             '<div class="actions"><button type="button" class="small" data-notify>Notify me of replies</button></div>'
+             '{earlier}</div></details></header>',
+             name=name, facts=" · ".join(f for f in facts if f), pages=pages, buttons=buttons,
+             earlier=h('<div class="earlier">{e}</div>', e=earlier) if earlier else Html(""))
+    return frame(f"{name} · chat", join([head, body]), names, csrf, current=f"i:{name}")
 
 
 def section(title: str, body, cls: str = "") -> Html:
@@ -108,6 +130,7 @@ def inline(text: str) -> Html:
 
 _LIST = re.compile(r"^(\s*)(?:[-*+]|\d+[.)])\s+(.*)$")
 _HEAD = re.compile(r"^(#{1,6})\s+(.*)$")
+_QUOTE = re.compile(r"^ {0,3}> ?")
 
 
 def markdown(text: str) -> Html:
@@ -151,6 +174,15 @@ def markdown(text: str) -> Html:
                 body.append(cells(src[i]))
                 i += 1
             out.append(str(table(head, [[inline(c) for c in r] for r in body], "md")))
+            continue
+        if _QUOTE.match(line):                              # > quoted lines (a reply quoting a message)
+            close_para()
+            close_lists()
+            body = []
+            while i < len(src) and _QUOTE.match(src[i]):
+                body.append(_QUOTE.sub("", src[i], count=1))
+                i += 1
+            out.append(f"<blockquote>{markdown(chr(10).join(body))}</blockquote>")
             continue
         if m := _HEAD.match(line):
             close_para()
@@ -618,6 +650,96 @@ def _activity(lines_: list[str], key: str, open_: bool = False) -> Html:
              k=key, o=Html(" open") if open_ else "", n=len(lines_), l=join(h("<p>{x}</p>", x=x) for x in lines_))
 
 
+def _my_text(text: str) -> Html:
+    """What the operator wrote, as written — except the lines he quoted (Reply on a selection), shown as a quote."""
+    blocks: list[tuple[bool, list[str]]] = []               # (quoted, lines), runs of one kind
+    for line in str(text).replace("\r\n", "\n").split("\n"):
+        quoted = bool(_QUOTE.match(line))
+        if not blocks or blocks[-1][0] != quoted:
+            blocks.append((quoted, []))
+        blocks[-1][1].append(_QUOTE.sub("", line, count=1) if quoted else line)
+    out = []
+    for quoted, b in blocks:
+        body = "\n".join(b).strip("\n")
+        if body:
+            out.append(h('<blockquote class="wrap">{t}</blockquote>' if quoted else '<div class="wrap">{t}</div>', t=body))
+    return join(out)
+
+
+def doc_cards(made: list[dict] | None) -> Html:
+    """The documents a reply created or changed: each opens in the documents panel."""
+    if not made:
+        return Html("")
+    return h('<div class="doccards">{c}</div>', c=join(
+        h('<a class="doccard" href="?doc={u}" data-open-doc="{p}">📄 {p} <span class="dim">— {what}</span></a>',
+          u=q(d["path"]), p=d["path"], what="created" if d.get("created") else "changed") for d in made))
+
+
+def in_chat(chat: dict | None) -> set[str]:
+    """The documents this chat's replies created or changed."""
+    return {d["path"] for t in (chat or {}).get("turns", []) for d in t.get("docs") or []}
+
+
+def _overwritten(saved: dict | None, sha: str, text: str | None) -> Html:
+    """Lines the operator wrote that a later write of the instance dropped: said, with his version to put back."""
+    import difflib
+    if not saved or text is None or saved.get("sha") == sha:
+        return Html("")
+    now = {l.strip() for l in text.splitlines()}
+    lost = [l for l in saved.get("added") or [] if l not in now]
+    if not lost:
+        return Html("")
+    diff = "\n".join(difflib.unified_diff(saved["text"].splitlines(), text.splitlines(), "yours", "now", lineterm="", n=1))
+    return h('<div class="overwritten warn"><p>{n} line(s) you wrote at {ts} are no longer in it.</p>'
+             '<details><summary>Your version against now</summary><pre class="diff">{d}</pre></details>'
+             '<form class="act" data-post="/docs/{i}/save" data-confirm="Put your version back? It replaces the '
+             'current one: its changes since are lost (they are in the diff)." data-after="doc-saved">'
+             '<input type="hidden" name="path" value="{p}"><input type="hidden" name="sha" value="{sha}">'
+             '<textarea name="text" hidden>{yours}</textarea><button type="submit" class="small">Restore yours'
+             '</button></form></div>', n=len(lost), ts=saved.get("ts", "")[11:16], d=diff, i=q(saved.get("name", "")),
+             p=saved.get("path", ""), sha=sha, yours=saved["text"])
+
+
+def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None, sha: str, marked: set[str],
+               problem: str = "", saved: dict | None = None) -> Html:
+    """The documents panel beside the chat (/fragment/docs/<name>): the list, and the open one rendered."""
+    from .docs import DIR
+    items = [h('<a href="?doc={u}" data-open-doc="{p}" class="{cls}" title="{b} bytes">{dot}{p}</a>', u=q(d["path"]),
+               p=d["path"], b=d["bytes"], cls="on" if d["path"] == open_path else "",
+               dot=Html('<span class="mark" title="changed in this chat">●</span> ') if d["path"] in marked else Html(""))
+             for d in listing]
+    new = h('<details class="newdoc" data-key="newdoc"><summary>New document</summary><form data-post="/docs/{n}/save" '
+            'data-after="doc-saved"><input type="hidden" name="sha" value="none"><input name="path" required '
+            'placeholder="name, e.g. plan" pattern="[A-Za-z0-9][A-Za-z0-9 _.\\-]*" maxlength="80">'
+            '<textarea name="text" hidden></textarea><button type="submit" class="small">Create</button></form></details>',
+            n=q(name))
+    head = h('<div class="docshead"><b>Documents</b> <span class="dim">{dir}/</span>{new}</div><div class="doclist">{i}</div>',
+             dir=DIR, new=new, i=join(items) if items else h('<p class="dim">none yet: ask {n} for one, it appears here '
+                                                              'as it writes it.</p>', n=name))
+    if problem:
+        view = h('<p class="bad">{p}</p>', p=problem)
+    elif open_path and text is not None:
+        if saved:
+            saved = {**saved, "name": name, "path": open_path}
+        view = h('<div class="docview" data-doc="{p}" data-sha="{s}"><div class="doctitle"><b>{p}</b>'
+                 '<button type="button" class="small" data-edit-doc>Edit</button>'
+                 '<button type="button" class="copy small" data-copy-doc title="copy the document\'s Markdown">Copy</button>'
+                 '</div>{over}<div class="docmd">{md}</div><textarea class="raw" hidden readonly>{raw}</textarea>'
+                 '<form class="docedit" data-post="/docs/{n}/save" data-after="doc-saved" hidden>'
+                 '<input type="hidden" name="path" value="{p}"><input type="hidden" name="sha" value="{s}">'
+                 '<textarea name="text" spellcheck="true">{raw}</textarea><div class="actions">'
+                 '<button type="submit">Save</button><button type="button" data-cancel-edit>Cancel</button>'
+                 '<span class="dim">{n} hears of your change: with your next message, or now if it is replying</span>'
+                 '</div><div class="bad wrap" data-refusal></div></form></div>',
+                 p=open_path, s=sha, n=q(name), over=_overwritten(saved, sha, text),
+                 md=markdown(text) if text.strip() else Html('<p class="dim">(empty)</p>'), raw=text)
+    elif open_path:
+        view = h('<p class="dim">{p} is not there (any more).</p>', p=open_path)
+    else:
+        view = Html("")
+    return join([head, view])
+
+
 def chat_feed(name: str, chat: dict | None, sent: list[dict]) -> Html:
     """The conversation as it stands: each turn, the files it sent you meanwhile, and the reply running now."""
     from .web_actions import button
@@ -627,15 +749,21 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict]) -> Html:
     for k, t in enumerate(chat["turns"]):
         if t["role"] == "user":
             tag = h(' <span class="dim">· during its reply</span>') if t.get("interjected") else Html("")
+            if t.get("edits"):
+                tag = join([tag, join(h(' <a class="editchip" href="?doc={u}" data-open-doc="{p}">✎ edited {p}</a>',
+                                        u=q(p), p=p) for p in t["edits"])])
             items.append((t["ts"], h('<div class="turn me"><div class="who">you <span class="dim">{ts}</span>{tag}</div>'
-                                     '<div class="wrap">{text}</div>{atts}</div>', ts=t["ts"][11:16], tag=tag,
-                                     text=t.get("shown", t["content"]), atts=_chat_attachments(chat["id"], k, t.get("attachments")))))
+                                     '{text}{atts}</div>', ts=t["ts"][11:16], tag=tag,
+                                     text=_my_text(t.get("shown", t["content"])), atts=_chat_attachments(chat["id"], k, t.get("attachments")))))
         else:
             note = h('<p class="warn">{n}</p>', n=t["note"]) if t.get("note") else Html("")
             body = markdown(t["content"]) if t.get("content") else Html('<p class="dim">(no answer)</p>')
-            items.append((t["ts"], h('<div class="turn it"><div class="who">{n} <span class="dim">{ts}</span></div>{act}'
-                                     '{body}{note}</div>', n=name, ts=t["ts"][11:16], act=_activity(t.get("activity", []), f"t{k}"),
-                                     body=body, note=note)))
+            copy = (h('<button type="button" class="copy small" data-copy title="copy the answer as Markdown">Copy</button>')
+                    if t.get("content") else Html(""))
+            items.append((t["ts"], h('<div class="turn it" data-raw="{raw}"><div class="who">{n} <span class="dim">{ts}</span>'
+                                     '{copy}</div>{act}{body}{cards}{note}</div>', raw=t.get("content") or "", n=name,
+                                     ts=t["ts"][11:16], copy=copy, act=_activity(t.get("activity", []), f"t{k}"),
+                                     body=body, cards=doc_cards(t.get("docs")), note=note)))
     for m in sent:
         atts = join(h('<a href="/files/{f}/{j}">{img}</a>', f=q(m["file"]), j=j,
                       img=h('<img class="thumb" src="/files/{f}/{j}" alt="{n}">', f=q(m["file"]), j=j, n=a["name"])
@@ -648,15 +776,21 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict]) -> Html:
     feed = [x[1] for x in items]
     if chat["state"] == "replying":
         r = chat.get("reply") or {}
-        feed.append(h('<div class="turn it live"><div class="who">{n} <span class="dim">replying since {s}</span></div>'
+        feed.append(h('<div class="turn it live"><div class="who">{n} <span class="dim">replying since {s}'
+                      '<span class="elapsed" data-since="{iso}"></span></span></div>'
                       '{act}{partial}<div class="actions">{stop}</div></div>', n=name, s=r.get("started", "")[11:16],
+                      iso=r.get("started", ""),
                       act=_activity(r.get("activity", []), "live", open_=True),
                       partial=h('<p class="dim">the answer appears when it is ready</p>'),
                       stop=button("chat-stop", "Stop the reply", f"stop {name}'s reply?", {"cid": chat["id"]},
                                   cls="small")))
     elif chat["state"] == "ended":
-        feed.append(h('<p class="dim">Ended {e}: written up in its journal.</p>', e=chat.get("ended", "")[:16]))
-    else:
+        feed.append(h('<p class="dim ended">Ended {e}: written up in its journal. Your next message starts a new '
+                      'conversation.</p>', e=chat.get("ended", "")[:16].replace("T", " ")))
+    if chat.get("pending_edits"):
+        feed.append(h('<p class="pending-edits">✎ Your edits to {p} go to {n} with your next message.</p>',
+                      p=", ".join(sorted(chat["pending_edits"])), n=name))
+    if chat["state"] not in ("replying", "ended") and chat["turns"]:
         feed.append(h('<div class="actions">{b}</div>', b=button(
             "chat-end", "End the conversation", f"end this conversation with {name}? It writes it up in its journal "
             "now, and your next message starts a new one.", {"cid": chat["id"]}, cls="small")))
@@ -664,23 +798,30 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict]) -> Html:
 
 
 def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], live: dict, names: list[str],
-              csrf: str, read_only: bool = False) -> Html:
+              csrf: str, read_only: bool = False, panel: Html = Html(""), doc: str = "") -> Html:
     state = live.get("state", "?")
     busy = (h('<p class="warn">{n} is {s} now: a cycle or sleep pauses for your message, anything else is waited for '
               '— the reply\'s activity says which.</p>', n=name, s=state)
             if state not in ("idle", "?") and not (chat and chat.get("state") == "replying") else Html(""))
     feed_url = f"/fragment/chat/{q(name)}" + (f"?id={q(chat['id'])}" if read_only and chat else "")
     composer = Html("") if read_only else h(
-        '<form class="composer" data-post="/chat/{n}/send" data-multipart="1" data-reset="1" data-files>'
-        '<textarea name="text" rows="3" maxlength="20000" placeholder="Message {n} — Enter sends, Shift-Enter is a new '
-        'line; paste or drop images and files here"></textarea>'
+        '<form class="composer" data-post="/chat/{n}/send" data-multipart="1" data-reset="1" data-files data-draft="{n}">'
+        '<div class="chips" data-picked></div>'
+        '<textarea name="text" rows="2" maxlength="20000" placeholder="Message {n} — Enter sends, Shift-Enter is a new '
+        'line; drop, paste or attach files"></textarea>'
         '<div class="actions"><label class="pick">Attach files<input type="file" name="files" multiple></label>'
-        '<span class="picked dim" data-picked></span><button type="submit">Send</button></div></form>', n=name)
+        '<span class="dim keys">/ to write · Alt-↑↓ another chat</span><button type="submit">Send</button></div></form>',
+        n=name)
     pasts = [link(f"/i/{q(name)}/chat?id={q(c['id'])}", f"{c['created'][:16].replace('T', ' ')} · "
                   f"{len([t for t in c['turns'] if t['role'] == 'user'])} message(s)") for c in past]
-    body = join([busy, h('<section class="panel chat"><div class="feed" data-poll="{u}" data-every="1500" data-follow="1">{f}</div>'
-                         '</section>', u=feed_url, f=chat_feed(name, chat, sent)), composer,
-                 section("Earlier web chats", join([lines(pasts, "none yet"), h(
-                     '<p class="dim">Every conversation, from any client, is in <a href="/i/{n}/transcripts?f='
-                     'conversations">Transcripts</a>.</p>', n=q(name))]))])
-    return instance_frame(name, "chat", "chat", body, names, csrf)
+    earlier = join([h("<h3>Earlier web chats</h3>"), lines(pasts, "none yet"), h(
+        '<p class="dim">Every conversation, from any client, is in <a href="/i/{n}/transcripts?f=conversations">'
+        'Transcripts</a>.</p>', n=q(name))])
+    body = join([busy, h('<section class="panel chat" data-scroll><div class="feed" data-poll="{u}" data-every="1500" '
+                         'data-follow="1">{f}</div></section><button type="button" class="newbelow" data-newbelow hidden>'
+                         '↓ New below</button>', u=feed_url, f=chat_feed(name, chat, sent)), composer,
+                 Html('<div class="dropzone" data-dropzone hidden>Drop to attach</div>') if not read_only else Html("")])
+    aside = h('<aside class="docs" id="docs" data-poll="/fragment/docs/{n}?doc={d}" data-every="1500">{p}</aside>',
+              n=q(name), d=q(doc), p=panel)
+    return chat_frame(name, live, h('<div class="chatgrid"><div class="chatpage">{b}</div>{a}</div>', b=body, a=aside),
+                      names, csrf, earlier)
