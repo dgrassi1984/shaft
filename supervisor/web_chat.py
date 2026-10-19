@@ -52,7 +52,8 @@ def _docs_now(name: str) -> dict[str, str]:
     from . import docs
     try:
         return docs.snapshot(name)
-    except Exception as e:                        # noqa: BLE001 — a folder it broke must not stop the chat
+    except (Exception, SystemExit) as e:          # noqa: BLE001 — a folder it broke must not stop the chat; SystemExit
+        #                                           is core.instance_root's way to say the instance is not there
         log(f"web: could not read {name}'s documents: {type(e).__name__}: {e}")
         return {}
 

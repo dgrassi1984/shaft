@@ -118,6 +118,9 @@ shaft web on|off|status|pair|unpair   # the same control panel in a browser, tai
 shaft cycle <name>              # one cycle of an idle instance now, detached (shaft top's c)
 shaft recap [names]             # write the one-line recaps now (shaft top's a)
 shaft alerts [dismiss ID…]      # the panel's open alerts, or dismiss some (shaft top's x)
+shaft docs <name> [show PATH | set PATH --file F --expect-sha SHA]   # its documents (notes/docs/*.md, shown
+                                #   beside the web chat): list, show one, or write one if it is still what you saw
+                                #   (none: a new one); its next run commits your edit with its notes
 shaft config <name> [set KEY=VALUE…|unset KEY…] [--expect KEY=VALUE]   # its config.env as the operator: one
                                 #   write and one commit; refused if a value changed since you looked
 shaft drive <name> [set --file F|remove] --expect-sha SHA   # what it is for (drive.md), compare-and-set
@@ -250,11 +253,25 @@ curl -s https://<mac>.<tailnet>.ts.net:8443/v1/inbox/wren -H "Authorization: Bea
 
 ### The web UI (`shaft web on`)
 
-`shaft top` in a browser, for the tailnet only (PLAN-webui.md), and more: every tab and action of the TUI, plus
-**chat** (files and images both ways, the reply's activity live, interject, Stop, End), each instance's **Config**
-(`config.env`, a field per key), **Drive** (`drive.md`, saved after its diff), **Access** (tools, wake floor and cloud
-cap, jobs, shared folder, mail and calendar grants, battery, key names), **Journal** and **Activity** (connections,
-plugins, jobs).
+`shaft top` in a browser, for the tailnet only (PLAN-webui.md), and more — **chat first** (PLAN-webui-chat.md):
+
+- `/` opens the chat with the instance you last talked to. The left rail lists every instance's chat (its state, its
+  last line, a mark when it answered while you were elsewhere; the tab title counts them), then **Manage**: Overview
+  (`/overview`, with the alert count), Messages, Trials, Costs, Services.
+- The chat: files and images both ways (drop them anywhere on the page, paste or pick; each is a chip you can take
+  out), the reply's activity and clock live, interject, Stop, End. Select text in a message and **↩ Reply** quotes
+  it in your message. Copy an answer (its Markdown) or a code block. Your draft survives a reload; `/` writes,
+  Alt-↑/↓ changes chat; opt-in desktop notifications (⋯ menu) for a reply that lands while the tab is hidden.
+- **Documents**: a Markdown file an instance writes under its `notes/docs/` shows beside the chat, live, as it writes
+  it; a reply's documents are cards under it. Edit one in the panel (or start one: 📄 Documents → New document):
+  Save is refused if it wrote the file meanwhile (you see what changed and keep your text), and it hears of your
+  change as a diff — with your next message, or at once if it is replying. If a later write of its drops lines you
+  wrote, the panel says so and offers your version back. The first message of each web chat tells the instance
+  this, in a line you do not see.
+- Each instance's other pages sit behind the chat's ⋯ menu: **Summary**, **Config** (`config.env`, a field per key),
+  **Drive** (`drive.md`, saved after its diff), **Access** (tools, wake floor and cloud cap, jobs, shared folder,
+  mail and calendar grants, battery, key names), **Judge**, **Changes**, **Benchmarks**, **Transcripts**,
+  **Journal**, **Activity** (connections, plugins, jobs), with its actions and earlier chats.
 
 1. `shaft web on` installs the service (`com.shaft.web`, `127.0.0.1:8785`) and exposes it with `tailscale serve` on
    port 8444 of this Mac's tailnet name. It needs `SHAFT_API_LOGINS` (`shaft api on` records your login).
@@ -263,7 +280,8 @@ plugins, jobs).
 
 Every request needs your tailnet login **and** a paired browser. Every POST needs the page's own token, and every
 response forbids inline script. Instances cannot reach the port. Every action runs the matching `shaft`
-subcommand, logged as `web: operator …`; config and drive edits go through `shaft config` / `shaft drive`. Chat
+subcommand, logged as `web: operator …`; config, drive and document edits go through `shaft config` / `shaft drive`
+/ `shaft docs`. Chat
 goes through the API (`X-Shaft-Conversation`, `/v1/chat/end`), so restart the API on the same code
 (`shaft api on`). A reply keeps going if the browser closes; only Stop stops it. Secrets, `new`, `breed`,
 `finetune`, the Google logins and `mind cutover` stay in the terminal.

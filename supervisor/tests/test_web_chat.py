@@ -94,6 +94,7 @@ class ChatTest(unittest.TestCase):
                                                                                                      timeout=timeout)),
                   mock.patch("supervisor.core.secrets_env", return_value={"SHAFT_API_KEY": KEY}),
                   mock.patch.object(messages, "INSTANCES", self.dir / "instances"),
+                  mock.patch("supervisor.docs.instance_root", lambda n: self.dir / "instances" / n),   # never the real
                   mock.patch.object(web_chat, "log"), mock.patch.object(messages, "log")):
             p.start()
             self.addCleanup(p.stop)
@@ -492,6 +493,17 @@ class DocsInChatTest(ChatTest):
         self.assertIn('data-open-doc="plan.md"', feed)
         self.assertIn("📄 new.md <span class=\"dim\">— created</span>", feed)
         self.assertEqual(web_views.in_chat(c), {"new.md", "plan.md"})
+
+    def test_a_reply_goes_on_when_the_documents_cannot_be_read(self):
+        """It claimed "never fails a reply" but caught Exception only: instance_root's SystemExit failed every send
+        (found by the full suite once the worktree had no instances folder)."""
+        def gone(name):
+            raise SystemExit(f"no instance named {name!r}")
+        with mock.patch("supervisor.docs.instance_root", side_effect=gone):
+            chat, said = web_chat.send("wren", ME, "hi", [])
+            c = self.wait_idle(chat["id"])
+        self.assertEqual(said, "sent to wren")
+        self.assertEqual(c["turns"][1]["content"], "Answer 1.")
 
     def test_a_reply_that_wrote_none_has_no_cards(self):
         chat, _ = web_chat.send("wren", ME, "hi", [])
