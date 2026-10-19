@@ -455,18 +455,16 @@ class Chat:
     def receive(self, files: list[tuple[str, str]]) -> str:
         """Save Daniele's files in the instance's attachments/ folder; returns the lines that tell it where."""
         from . import messages
-        from .core import INSTANCES
         got = []
         for file_id, name in files:
             data = download(self.token, file_id)
             if len(data) > messages.ATTACH_MAX_BYTES:
                 raise TelegramError(f"{name} is larger than {messages.size_text(messages.ATTACH_MAX_BYTES)}")
             got.append((name, data))
-        atts = messages.store_attachments(INSTANCES / self.name,
-                                          f"attachments/from-daniele/{datetime.now():%Y%m%d-%H%M%S}", got)
-        log(f"telegram: {len(atts)} file(s) from Daniele for {self.name}: {', '.join(a['rel'] for a in atts)}")
-        return ("\n\n[Daniele attached, saved in my folder:]\n"
-                + "\n".join(f"- {a['rel']} ({messages.size_text(a['bytes'])})" for a in atts))
+        try:
+            return messages.from_operator(self.name, got, "telegram")[1]   # the same as the web UI's uploads
+        except ValueError as e:
+            raise TelegramError(str(e)) from None
 
     def _typing(self, chat_id: int, stop: threading.Event) -> None:
         while not stop.is_set():

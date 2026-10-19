@@ -41,7 +41,7 @@ def join(parts, sep: str = "") -> Html:
 
 
 # -- the page ------------------------------------------------------------------------------------------------------
-STATIC_VERSION = "8"        # bump when web_static changes, so a browser does not keep an old copy
+STATIC_VERSION = "9"        # bump when web_static changes, so a browser does not keep an old copy
 
 
 def page(title: str, body: Html, nav: Html = Html(""), csrf: str = "") -> Html:

@@ -342,6 +342,25 @@ def _post(req: Request, dev: str) -> Response:
     if req.path == "/unpair":
         unpair(dev)
         return _html(200, web_pages.h('<p>This browser is unpaired.</p>'))
+    if m := re.match(r"^/chat/([A-Za-z0-9_-]+)/send$", req.path):
+        from . import web_chat
+        if m[1] not in _names():
+            return _not_found(req.path)
+        try:
+            fields, files = web_chat.parse_multipart(req.headers.get("content-type", ""), req.body)
+            _, said = web_chat.send(m[1], (req.headers.get("tailscale-user-login") or "").lower(),
+                                    fields.get("text", ""), files)
+        except web_chat.Refused as e:
+            return _html(409, web_pages.h("<p>{t}</p>", t=str(e)))
+        return _html(200, web_pages.h("<p>{t}</p>", t=said))
+    if req.path in ("/action/chat-stop", "/action/chat-end"):
+        from . import web_chat
+        cid = req.form().get("cid", "")
+        try:
+            said = (web_chat.stop if req.path.endswith("stop") else web_chat.end)(cid)
+        except web_chat.Refused as e:
+            return _html(409, web_pages.h("<p>{t}</p>", t=str(e)))
+        return _html(200, web_pages.h("<p>{t}</p>", t=said))
     if m := re.match(r"^/preview/drive/([A-Za-z0-9_-]+)$", req.path):
         from . import opconfig, web_config
         if m[1] not in _names():
@@ -393,6 +412,16 @@ def _get(req: Request, csrf: str) -> Response | None:
         if name not in names:
             return None
         return _instance_page(name, tab, qs, names, csrf)
+    if m := re.match(r"^/fragment/chat/([A-Za-z0-9_-]+)$", path):
+        if m[1] not in names:
+            return None
+        from . import web_chat
+        chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.open_chat(m[1])
+        if chat and chat.get("instance") != m[1]:
+            return None
+        return _html(200, v.chat_feed(m[1], chat, _sent_during(m[1], chat)))
+    if m := re.match(r"^/chatfiles/(web-[a-f0-9]+)/(\d+)/(\d+)$", path):
+        return _chat_file(m[1], int(m[2]), int(m[3]))
     if path == "/trials":
         only = qs.get("i", "")
         only = only if only in names else ""
@@ -459,6 +488,14 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str) -
         return _html(200, v.journal_page(name, journal_entries(instance_root(name)), at, names, csrf))
     if tab == "activity":
         return _html(200, v.activity_page(name, activity(name), names, csrf))
+    if tab == "chat":
+        from . import web_chat
+        chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.open_chat(name)
+        if chat and chat.get("instance") != name:
+            return None
+        past = [c for c in web_chat.chats(name) if c.get("state") == "ended"][:20]
+        return _html(200, v.chat_page(name, chat, _sent_during(name, chat), past, _live(name), names, csrf,
+                                      read_only=bool(qs.get("id")) and bool(chat) and chat.get("state") == "ended"))
     if tab in ("config", "drive", "access"):
         from . import opconfig, web_config
         if tab == "config":
@@ -484,6 +521,26 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str) -
         thinking = qs.get("thinking") == "1"
         return _html(200, v.transcript_page(name, e, panel.transcript_lines(name, e, thinking), thinking, names, csrf))
     return None
+
+
+def _sent_during(name: str, chat: dict | None) -> list[dict]:
+    """What the instance sent the operator (send_message) since the chat began: shown in it, as on Telegram."""
+    if not chat:
+        return []
+    from . import messages
+    end = chat.get("ended") or "9999"
+    return [m for m in messages.history() if m["from"] == name and m["to"] == "operator"
+            and chat["created"] <= m["ts"] <= end]
+
+
+def _chat_file(cid: str, k: int, j: int) -> Response | None:
+    from . import web_chat
+    chat = web_chat.load(cid)
+    turns = (chat or {}).get("turns") or []
+    atts = turns[k].get("attachments") or [] if 0 <= k < len(turns) else []
+    if not 0 <= j < len(atts):
+        return None
+    return _serve_attachment(atts[j], f"chat {cid} turn {k}")
 
 
 def _config_history(name: str) -> list[str]:
@@ -529,10 +586,22 @@ def attachment_path(a: dict) -> Path | None:
     """Where a message's attachment is, if it is a file inside an instance's folder or the operator's inbox
     attachments, reached without following any link below that folder; None otherwise. Only paths a message names
     are ever served (PLAN-webui.md: a file an instance wrote never runs as a page)."""
-    from .core import INSTANCES, PROJECT
+    from .core import INSTANCES
     rel = Path(str(a.get("path", "")))
-    if rel.is_absolute() or ".." in rel.parts:
+    if ".." in rel.parts:
         return None
+    if rel.is_absolute():               # store_attachments' fallback when the folder is not under the project
+        bases = [(b, prefix) for d, prefix in ((INSTANCES, "instances"), (SUP_DIR / "operator-inbox" / "attachments",
+                                                                         ".supervisor/operator-inbox/attachments"))
+                 for b in (d, d.resolve())]    # both spellings (/var and /private/var): links below are checked later
+        for base, prefix in bases:
+            try:
+                rel = Path(prefix) / rel.relative_to(base)
+                break
+            except ValueError:
+                continue
+        else:
+            return None
     if rel.parts[:1] == (".supervisor",):                    # the supervisor's folder, wherever SUP_DIR points
         base, rest = SUP_DIR / "operator-inbox" / "attachments", Path(*rel.parts[1:])
         if rest.parts[:2] != ("operator-inbox", "attachments"):
@@ -581,13 +650,17 @@ def _file(file: str, k: int) -> Response | None:
     atts = (m or {}).get("attachments") or []
     if not 0 <= k < len(atts):
         return None
-    path = attachment_path(atts[k])
+    return _serve_attachment(atts[k], f"message {file}")
+
+
+def _serve_attachment(a: dict, where: str) -> Response | None:
+    path = attachment_path(a)
     if path is None:
-        log(f"web refused to serve attachment {k} of {file}: {atts[k].get('path')!r} is not a plain file in an "
-            "instance's folder or the operator's inbox")
+        log(f"web refused to serve an attachment of {where}: {a.get('path')!r} is not a plain file in an instance's "
+            "folder or the operator's inbox")
         return None
     data = path.read_bytes()
-    name = atts[k].get("name") or path.name
+    name = a.get("name") or path.name
     disposition = "attachment; filename*=UTF-8''" + urllib.parse.quote(name, safe="")
     if ctype := _image_type(data):
         return Response(200, data, {"Content-Type": ctype, "Content-Disposition": disposition.replace(
@@ -604,9 +677,11 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def _serve(self, method: str) -> None:
+        from .messages import ATTACH_MAX_TOTAL
         length = int(self.headers.get("Content-Length") or 0)
-        if length > 1_000_000:
-            self.send_error(413)
+        limit = ATTACH_MAX_TOTAL + 1_000_000 if self.path.startswith("/chat/") else 1_000_000   # files go with a chat
+        if length > limit:
+            self.send_error(413, f"at most {limit} bytes")
             return
         body = self.rfile.read(length) if length else b""
         r = respond(Request(method, self.path, dict(self.headers.items()), body))
@@ -632,7 +707,9 @@ def serve() -> int:
     if not allowed_logins():
         print("no SHAFT_API_LOGINS — run: shaft api on (it records your tailnet login)")
         return 2
+    from . import web_chat
     from .version import record_service
+    web_chat.reap()                              # replies the previous web server was relaying are over
     record_service("web", {"port": PORT, "https_port": HTTPS_PORT})
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     server.daemon_threads = True

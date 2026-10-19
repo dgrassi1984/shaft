@@ -186,3 +186,21 @@ pre.diff:empty { display: none; }
 pre.diff { background: var(--bg); padding: .4rem .6rem; border-radius: 6px; border: 1px solid var(--line); }
 form.drive { display: grid; gap: .4rem; }
 form.drive textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .82rem; }
+
+/* M4 chat */
+.chat .feed { display: grid; gap: .6rem; }
+.turn { padding: .5rem .7rem; border-radius: 8px; border: 1px solid var(--line); max-width: 52rem; }
+.turn.me { background: var(--bg); justify-self: end; }
+.turn.it { background: var(--panel); }
+.turn.sent { border-style: dashed; }
+.turn.live { border-color: var(--talk); }
+.turn .who { font-size: .8rem; font-weight: 600; margin-bottom: .2rem; }
+.activity { font-size: .78rem; color: var(--dim); margin: .2rem 0 .4rem; }
+.activity div { max-height: 14rem; overflow-y: auto; }
+.activity p { margin: .1rem 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.atts { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .3rem; }
+img.thumb { max-width: 12rem; max-height: 9rem; border-radius: 6px; border: 1px solid var(--line); }
+form.composer { display: grid; gap: .4rem; margin: .6rem 0 1rem; position: sticky; bottom: 0; background: var(--bg);
+                padding: .4rem 0; }
+label.pick { font-size: .85rem; cursor: pointer; color: var(--accent); }
+label.pick input { display: none; }

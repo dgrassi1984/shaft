@@ -68,6 +68,23 @@ def store_attachments(root: Path, rel_dir: str, files: list[tuple[str, bytes]]) 
     return out
 
 
+def from_operator(name: str, files: list[tuple[str, bytes]], via: str) -> tuple[list[dict], str]:
+    """Files the operator sends an instance (on Telegram, in the web UI): saved in its folder under
+    attachments/from-daniele/<time>/, and the lines its message gets saying where — the same whichever way they came,
+    so it finds an image the same way (PLAN-vision.md: natively, or with describe_image)."""
+    if len(files) > ATTACH_MAX_FILES:
+        raise ValueError(f"at most {ATTACH_MAX_FILES} files at a time ({len(files)})")
+    for n, data in files:
+        if len(data) > ATTACH_MAX_BYTES:
+            raise ValueError(f"{n} is larger than {size_text(ATTACH_MAX_BYTES)}")
+    if sum(len(d) for _, d in files) > ATTACH_MAX_TOTAL:
+        raise ValueError(f"together larger than {size_text(ATTACH_MAX_TOTAL)}")
+    atts = store_attachments(INSTANCES / name, f"attachments/from-daniele/{datetime.now():%Y%m%d-%H%M%S}", files)
+    log(f"{via}: {len(atts)} file(s) from Daniele for {name}: {', '.join(a['rel'] for a in atts)}")
+    return atts, ("\n\n[Daniele attached, saved in my folder:]\n"
+                  + "\n".join(f"- {a['rel']} ({size_text(a['bytes'])})" for a in atts))
+
+
 def attachment_lines(atts: list[dict], key: str = "rel") -> str:
     if not atts:
         return ""

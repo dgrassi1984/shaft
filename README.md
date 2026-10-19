@@ -112,6 +112,14 @@ shaft top                       # control panel, tabs 0–9: overview (state, no
                                 #   and did in the last hour — by a small model from its own records
                                 #   (SHAFT_RECAP_MODEL, default claude-haiku-5-5; supervisor/recap.py, about
                                 #   $0.0005 a line, in costs → recaps). ? lists the keys; --once prints a text snapshot
+shaft web on|off|status|pair|unpair   # the same control panel in a browser, tailnet only, plus chat, config,
+                                #   drive and access (below)
+shaft cycle <name>              # one cycle of an idle instance now, detached (shaft top's c)
+shaft recap [names]             # write the one-line recaps now (shaft top's a)
+shaft alerts [dismiss ID…]      # the panel's open alerts, or dismiss some (shaft top's x)
+shaft config <name> [set KEY=VALUE…|unset KEY…] [--expect KEY=VALUE]   # its config.env as the operator: one
+                                #   write and one commit; refused if a value changed since you looked
+shaft drive <name> [set --file F|remove] --expect-sha SHA   # what it is for (drive.md), compare-and-set
 shaft status [name]             # how each instance is doing, open conversations, which code is running
 shaft model on|off|status       # SHAFT's own Bonsai 2 server (launchd, :8780)
 shaft api on|off|status|key|inbox-key   # OpenAI-compatible API + inbox doorbell on your tailnet (below)
@@ -216,7 +224,8 @@ streaming or not), served on `127.0.0.1:8781` and exposed by `tailscale serve` o
 tailnet name — tailnet only, never Funnel. Every request needs the key (`shaft api key`) and a
 Tailscale login listed in `SHAFT_API_LOGINS`. The instance answers as itself, with its tools; tool
 activity arrives as `reasoning_content`. A conversation keeps one id while its first message stays the
-same, and is written up into the journal after `SHAFT_IDLE_MINUTES` without a message. `POST /v1/chat/interject`
+same (or, with an `X-Shaft-Conversation: <name>` header, while it keeps that name), and is written up into the journal
+after `SHAFT_IDLE_MINUTES` without a message, or at once with `POST /v1/chat/end`. `POST /v1/chat/interject`
 (same body as a chat request) adds the last message to the reply still running in that conversation: the instance
 reads it at its next step and its answer covers it; the reply's JSON says how many it heard
 (`interjections_heard`), and 409 means no reply is running there (PLAN-interject.md).
@@ -237,6 +246,26 @@ poll GitHub itself, or a GitHub Action can join the tailnet.
 curl -s https://<mac>.<tailnet>.ts.net:8443/v1/inbox/wren -H "Authorization: Bearer $(shaft api inbox-key 2>/dev/null)" \
   -H "Content-Type: application/json" -d '{"text": "CI on main is red", "source": "ci", "wake": true}'
 ```
+
+### The web UI (`shaft web on`)
+
+`shaft top` in a browser, for the tailnet only (PLAN-webui.md), and more: every tab and action of the TUI, plus
+**chat** (files and images both ways, the reply's activity live, interject, Stop, End), each instance's **Config**
+(`config.env`, a field per key), **Drive** (`drive.md`, saved after its diff), **Access** (tools, wake floor and cloud
+cap, jobs, shared folder, mail and calendar grants, battery, key names), **Journal** and **Activity** (connections,
+plugins, jobs).
+
+1. `shaft web on` installs the service (`com.shaft.web`, `127.0.0.1:8785`) and exposes it with `tailscale serve` on
+   port 8444 of this Mac's tailnet name. It needs `SHAFT_API_LOGINS` (`shaft api on` records your login).
+2. `shaft web pair --name phone` prints a one-time link, valid for 10 minutes. Open it in the browser you want to use
+   and press Pair. `shaft web status` lists the paired browsers; `shaft web unpair <id|name>|--all` revokes them.
+
+Every request needs your tailnet login **and** a paired browser. Every POST needs the page's own token, and every
+response forbids inline script. Instances cannot reach the port. Every action runs the matching `shaft`
+subcommand, logged as `web: operator …`; config and drive edits go through `shaft config` / `shaft drive`. Chat
+goes through the API (`X-Shaft-Conversation`, `/v1/chat/end`), so restart the API on the same code
+(`shaft api on`). A reply keeps going if the browser closes; only Stop stops it. Secrets, `new`, `breed`,
+`finetune`, the Google logins and `mind cutover` stay in the terminal.
 
 ### Telegram (`shaft telegram …`)
 

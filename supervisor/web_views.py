@@ -11,9 +11,9 @@ import urllib.parse
 from .web_pages import Html, esc, h, join, nav, page
 
 MARK = {"yes": ("✓", "good"), "partial": ("½", "warn"), "no": ("✗", "bad")}
-INSTANCE_TABS = [("", "Summary"), ("config", "Config"), ("drive", "Drive"), ("access", "Access"), ("judge", "Judge"),
-                 ("changes", "Changes"), ("benchmarks", "Benchmarks"), ("transcripts", "Transcripts"),
-                 ("journal", "Journal"), ("activity", "Activity")]
+INSTANCE_TABS = [("", "Summary"), ("chat", "Chat"), ("config", "Config"), ("drive", "Drive"), ("access", "Access"),
+                 ("judge", "Judge"), ("changes", "Changes"), ("benchmarks", "Benchmarks"),
+                 ("transcripts", "Transcripts"), ("journal", "Journal"), ("activity", "Activity")]
 GLOBAL_PAGES = [("/trials", "Trials"), ("/messages", "Messages"), ("/costs", "Costs"), ("/services", "Services")]
 
 
@@ -596,3 +596,91 @@ def services_page(live: Html, sel: str, log_name: str, tail: list[str], names: l
                                            '</section>', l=live),
                  section(f"{sel} log (.supervisor/{log_name})", pre("\n".join(tail) or "(empty)"))])
     return frame("Services", body, names, csrf, current="/services")
+
+
+# -- instance › chat (M4) ----------------------------------------------------------------------------------------------
+def _chat_attachments(cid: str, k: int, atts: list[dict]) -> Html:
+    out = []
+    for j, a in enumerate(atts or []):
+        url = f"/chatfiles/{q(cid)}/{k}/{j}"
+        if a["name"].lower().endswith(IMAGE_TYPES):
+            out.append(h('<a href="{u}"><img class="thumb" src="{u}" alt="{n}"></a>', u=url, n=a["name"]))
+        else:
+            out.append(h('<a class="file" href="{u}">📎 {n}</a>', u=url, n=a["name"]))
+    return h('<div class="atts">{o}</div>', o=join(out)) if out else Html("")
+
+
+def _activity(lines_: list[str], key: str, open_: bool = False) -> Html:
+    """What it did during a reply, collapsible; `key` keeps it open or shut across the feed's refreshes."""
+    if not lines_:
+        return Html("")
+    return h('<details class="activity" data-key="{k}"{o}><summary>what it did ({n})</summary><div>{l}</div></details>',
+             k=key, o=Html(" open") if open_ else "", n=len(lines_), l=join(h("<p>{x}</p>", x=x) for x in lines_))
+
+
+def chat_feed(name: str, chat: dict | None, sent: list[dict]) -> Html:
+    """The conversation as it stands: each turn, the files it sent you meanwhile, and the reply running now."""
+    from .web_actions import button
+    if not chat:
+        return h('<p class="dim">No chat open with {n}. Write below to start one.</p>', n=name)
+    items = []
+    for k, t in enumerate(chat["turns"]):
+        if t["role"] == "user":
+            tag = h(' <span class="dim">· during its reply</span>') if t.get("interjected") else Html("")
+            items.append((t["ts"], h('<div class="turn me"><div class="who">you <span class="dim">{ts}</span>{tag}</div>'
+                                     '<div class="wrap">{text}</div>{atts}</div>', ts=t["ts"][11:16], tag=tag,
+                                     text=t.get("shown", t["content"]), atts=_chat_attachments(chat["id"], k, t.get("attachments")))))
+        else:
+            note = h('<p class="warn">{n}</p>', n=t["note"]) if t.get("note") else Html("")
+            body = markdown(t["content"]) if t.get("content") else Html('<p class="dim">(no answer)</p>')
+            items.append((t["ts"], h('<div class="turn it"><div class="who">{n} <span class="dim">{ts}</span></div>{act}'
+                                     '{body}{note}</div>', n=name, ts=t["ts"][11:16], act=_activity(t.get("activity", []), f"t{k}"),
+                                     body=body, note=note)))
+    for m in sent:
+        atts = join(h('<a href="/files/{f}/{j}">{img}</a>', f=q(m["file"]), j=j,
+                      img=h('<img class="thumb" src="/files/{f}/{j}" alt="{n}">', f=q(m["file"]), j=j, n=a["name"])
+                      if a["name"].lower().endswith(IMAGE_TYPES) else h("📎 {n}", n=a["name"]))
+                    for j, a in enumerate(m.get("attachments") or []))
+        items.append((m["ts"], h('<div class="turn sent"><div class="who">{n} sent you <a href="/messages/{f}">a message'
+                                 '</a> <span class="dim">{ts}</span></div><div class="wrap">{t}</div><div class="atts">'
+                                 '{a}</div></div>', n=name, f=q(m["file"]), ts=m["ts"][11:16], t=m["text"][:600], a=atts)))
+    items.sort(key=lambda x: x[0])
+    feed = [x[1] for x in items]
+    if chat["state"] == "replying":
+        r = chat.get("reply") or {}
+        feed.append(h('<div class="turn it live"><div class="who">{n} <span class="dim">replying since {s}</span></div>'
+                      '{act}{partial}<div class="actions">{stop}</div></div>', n=name, s=r.get("started", "")[11:16],
+                      act=_activity(r.get("activity", []), "live", open_=True),
+                      partial=h('<p class="dim">the answer appears when it is ready</p>'),
+                      stop=button("chat-stop", "Stop the reply", f"stop {name}'s reply?", {"cid": chat["id"]},
+                                  cls="small")))
+    elif chat["state"] == "ended":
+        feed.append(h('<p class="dim">Ended {e}: written up in its journal.</p>', e=chat.get("ended", "")[:16]))
+    else:
+        feed.append(h('<div class="actions">{b}</div>', b=button(
+            "chat-end", "End the conversation", f"end this conversation with {name}? It writes it up in its journal "
+            "now, and your next message starts a new one.", {"cid": chat["id"]}, cls="small")))
+    return join(feed)
+
+
+def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], live: dict, names: list[str],
+              csrf: str, read_only: bool = False) -> Html:
+    state = live.get("state", "?")
+    busy = (h('<p class="warn">{n} is {s} now: a cycle or sleep pauses for your message, anything else is waited for '
+              '— the reply\'s activity says which.</p>', n=name, s=state)
+            if state not in ("idle", "?") and not (chat and chat.get("state") == "replying") else Html(""))
+    feed_url = f"/fragment/chat/{q(name)}" + (f"?id={q(chat['id'])}" if read_only and chat else "")
+    composer = Html("") if read_only else h(
+        '<form class="composer" data-post="/chat/{n}/send" data-multipart="1" data-reset="1" data-files>'
+        '<textarea name="text" rows="3" maxlength="20000" placeholder="Message {n} — Enter sends, Shift-Enter is a new '
+        'line; paste or drop images and files here"></textarea>'
+        '<div class="actions"><label class="pick">Attach files<input type="file" name="files" multiple></label>'
+        '<span class="picked dim" data-picked></span><button type="submit">Send</button></div></form>', n=name)
+    pasts = [link(f"/i/{q(name)}/chat?id={q(c['id'])}", f"{c['created'][:16].replace('T', ' ')} · "
+                  f"{len([t for t in c['turns'] if t['role'] == 'user'])} message(s)") for c in past]
+    body = join([busy, h('<section class="panel chat"><div class="feed" data-poll="{u}" data-every="1500" data-follow="1">{f}</div>'
+                         '</section>', u=feed_url, f=chat_feed(name, chat, sent)), composer,
+                 section("Earlier web chats", join([lines(pasts, "none yet"), h(
+                     '<p class="dim">Every conversation, from any client, is in <a href="/i/{n}/transcripts?f='
+                     'conversations">Transcripts</a>.</p>', n=q(name))]))])
+    return instance_frame(name, "chat", "chat", body, names, csrf)

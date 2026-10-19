@@ -64,7 +64,18 @@
         const r = await fetch(url, { credentials: "same-origin", cache: "no-store" });
         const body = await r.text();
         if (r.ok) {
-          el.innerHTML = body;
+          if (body !== el.dataset.last) {               // unchanged: nothing replaced, nothing collapsed
+            const open = new Set([...el.querySelectorAll("details[data-key][open]")].map(d => d.dataset.key));
+            const shut = new Set([...el.querySelectorAll("details[data-key]:not([open])")].map(d => d.dataset.key));
+            const atBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 40;
+            el.innerHTML = body;
+            el.dataset.last = body;
+            el.querySelectorAll("details[data-key]").forEach(d => {
+              if (open.has(d.dataset.key)) d.open = true;
+              if (shut.has(d.dataset.key)) d.open = false;
+            });
+            if (atBottom && el.dataset.follow) window.scrollTo(0, document.body.scrollHeight);
+          }
           fresh(el);
         } else {
           const why = textOf(body) ||
@@ -107,20 +118,63 @@
     const button = form.querySelector("button[type=submit]");
     if (button) button.disabled = true;
     try {
+      const multipart = !!form.dataset.multipart;          // files go with it: the browser sets the boundary
       const r = await fetch(form.dataset.post, {
         method: "POST", credentials: "same-origin",
-        headers: { "X-CSRF-Token": csrf(), "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams(new FormData(form)),
+        headers: multipart ? { "X-CSRF-Token": csrf() }
+                           : { "X-CSRF-Token": csrf(), "Content-Type": "application/x-www-form-urlencoded" },
+        body: multipart ? new FormData(form) : new URLSearchParams(new FormData(form)),
       });
       const body = await r.text();
       toast(textOf(body) || (r.ok ? "done" : `HTTP ${r.status}`), !r.ok);
-      if (r.ok && form.dataset.reset) form.reset();
+      if (r.ok && form.dataset.reset) { form.reset(); picked(form); }
       if (r.ok && form.dataset.after === "reload") setTimeout(() => location.reload(), 800);
       document.dispatchEvent(new Event("shaft:refresh"));      // show what the action changed, now
     } catch (e) {
       toast(`Not sent: ${e.message}`, true);
     } finally {
       if (button) button.disabled = false;
+    }
+  });
+
+  // A composer (form[data-files]): files picked, pasted or dropped go with the message; Enter sends.
+  function picked(form) {
+    const input = form.querySelector("input[type=file]");
+    const label = form.querySelector("[data-picked]");
+    if (input && label) label.textContent = [...input.files].map(f => f.name).join(", ");
+  }
+
+  function addFiles(form, files) {
+    const input = form.querySelector("input[type=file]");
+    if (!input || !files.length) return;
+    const all = new DataTransfer();
+    for (const f of input.files) all.items.add(f);
+    for (const f of files) all.items.add(f);
+    input.files = all.files;
+    picked(form);
+  }
+
+  document.addEventListener("change", (ev) => {
+    const form = ev.target.closest("form[data-files]");
+    if (form && ev.target.type === "file") picked(form);
+  });
+  document.addEventListener("paste", (ev) => {
+    const form = ev.target.closest && ev.target.closest("form[data-files]");
+    const files = [...(ev.clipboardData && ev.clipboardData.files || [])];
+    if (form && files.length) { ev.preventDefault(); addFiles(form, files); }
+  });
+  document.addEventListener("dragover", (ev) => {
+    if (ev.target.closest && ev.target.closest("form[data-files]")) ev.preventDefault();
+  });
+  document.addEventListener("drop", (ev) => {
+    const form = ev.target.closest && ev.target.closest("form[data-files]");
+    if (form && ev.dataTransfer && ev.dataTransfer.files.length) { ev.preventDefault(); addFiles(form, [...ev.dataTransfer.files]); }
+  });
+  document.addEventListener("keydown", (ev) => {
+    const form = ev.target.closest && ev.target.closest("form[data-files]");
+    if (form && ev.target.tagName === "TEXTAREA" && ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) {
+      ev.preventDefault();
+      form.requestSubmit();
     }
   });
 

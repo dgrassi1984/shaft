@@ -442,3 +442,73 @@ class InboxDoorbellTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConversationIdTest(unittest.TestCase):
+    """X-Shaft-Conversation and /v1/chat/end (PLAN-webui.md M4): a client that names its conversations never has two
+    merged because they opened the same way, and can close one now."""
+    setUp = ApiTest.setUp                                        # its server, not its tests
+
+    def post(self, path, body, cid=None):
+        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {KEY}", "Tailscale-User-Login": ME}
+        if cid:
+            headers["X-Shaft-Conversation"] = cid
+        r = urllib.request.Request(self.base + path, data=json.dumps(body).encode(), headers=headers)
+        try:
+            with urllib.request.urlopen(r, timeout=10) as resp:
+                return resp.status, json.load(resp)
+        except urllib.error.HTTPError as e:
+            return e.code, json.load(e)
+
+    def chat(self, cid=None, text="hi"):
+        status, _ = self.post("/chat/completions", {"model": "wren", "messages": [{"role": "user", "content": text}]},
+                              cid)
+        self.assertEqual(status, 200)
+        return fake_run_agent.request["talk_id"]
+
+    def test_two_named_chats_that_open_alike_are_two_conversations(self):
+        a, b = self.chat("web-a"), self.chat("web-b")
+        self.assertNotEqual(a, b)
+        self.assertEqual(self.chat("web-a"), a)                 # the same name: the same conversation
+        self.assertNotIn(self.chat(None), (a, b))                # unnamed: keyed by its first message, as before
+
+    def test_end_closes_that_conversation_and_writes_it_up(self):
+        a, b = self.chat("web-a"), self.chat("web-b")
+        with mock.patch.object(api, "spawn_recover") as recover:
+            status, body = self.post("/chat/end", {"model": "wren"}, "web-a")
+        self.assertEqual((status, body["ended"]), (202, a))
+        recover.assert_called_once_with("wren")
+        self.assertNotEqual(self.chat("web-a"), a)               # its next message starts a new conversation
+        self.assertEqual(self.chat("web-b"), b)                  # the other is untouched
+        with mock.patch.object(api, "spawn_recover"):
+            self.assertEqual(self.post("/chat/end", {"model": "wren"}, "nobody")[0], 404)
+
+    def test_end_is_refused_while_it_replies(self):
+        a = self.chat("web-a")
+        api.Handler.live.replies[a] = {"model": "wren", "talk_id": a, "held": [], "started": True}
+        self.addCleanup(api.Handler.live.replies.pop, a, None)
+        with mock.patch.object(api, "spawn_recover") as recover:
+            status, body = self.post("/chat/end", {"model": "wren"}, "web-a")
+        self.assertEqual(status, 409)
+        self.assertIn("still replying", body["error"]["message"])
+        recover.assert_not_called()
+
+    def test_a_malformed_name_is_refused(self):
+        status, _ = self.post("/chat/completions", {"model": "wren", "messages": [{"role": "user", "content": "x"}]},
+                              "../../etc")
+        self.assertEqual(status, 400)
+
+
+class StreamHeardTest(unittest.TestCase):
+    setUp = ApiTest.setUp
+
+    def test_the_last_stream_chunk_says_how_many_interjections_were_heard(self):
+        body = {"model": "wren", "stream": True, "messages": [{"role": "user", "content": "hi"}]}
+        r = urllib.request.Request(self.base + "/chat/completions", data=json.dumps(body).encode(),
+                                   headers={"Content-Type": "application/json", "Authorization": f"Bearer {KEY}",
+                                            "Tailscale-User-Login": ME})
+        with urllib.request.urlopen(r, timeout=10) as resp:
+            chunks = [json.loads(l[6:]) for l in resp.read().decode().splitlines()
+                      if l.startswith("data: {")]
+        self.assertEqual(chunks[-1]["choices"][0]["finish_reason"], "stop")
+        self.assertEqual(chunks[-1]["interjections_heard"], 0)

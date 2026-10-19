@@ -235,6 +235,13 @@ class MessagesTest(PagesTest):
         for k in (4, 5, 6, 7):                    # a symlink, .., an absolute path, another .supervisor file
             self.assertEqual(self.req(f"/files/m1.md/{k}", cookie=self.cookie).status, 404, k)
 
+    def test_an_absolute_path_inside_the_attachment_folders_is_served_and_any_other_is_not(self):
+        """store_attachments records an absolute path when the folder is not under the project (live, 2026-10-19)."""
+        a = {"name": "photo.png", "path": str(self.inbox / "photo.png"), "bytes": 40}
+        self.assertEqual(web.attachment_path(a), (self.inbox / "photo.png").resolve())
+        self.assertIsNone(web.attachment_path({"name": "h", "path": "/etc/hosts"}))
+        self.assertIsNone(web.attachment_path({"name": "l", "path": str(self.inbox / "link.txt")}))
+
     def test_only_a_file_a_message_names_is_served(self):
         self.assertEqual(self.req("/files/m1.md/99", cookie=self.cookie).status, 404)
         self.assertEqual(self.req("/files/nope.md/0", cookie=self.cookie).status, 404)

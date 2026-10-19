@@ -4,12 +4,13 @@
   POST /v1/chat/completions    stream or not; the instance answers as itself, with its tools
   POST /v1/chat/interject      a message for the conversation whose reply is still running: the instance reads it at
                                its next step and its reply covers it (202), or 409 when no reply is running
+  POST /v1/chat/end            the conversation is over: written up now (202), 404 if none is open, 409 while it replies
   POST /v1/inbox/<instance>    the doorbell: drop a message in its inbox (read at its next wake), and
                                optionally wake it now — for scripts, a phone shortcut, CI on the tailnet
 
 Each request is a normal sandboxed run (broker, run lock, gate, commit). The client's conversation
 is the dialogue; the instance's own identity and memory come first. A conversation (same instance,
-same first user message) keeps one id; after IDLE_MINUTES (SHAFT_IDLE_MINUTES) without a message it is closed and its journal entry is
+same first user message — or, if the client sends X-Shaft-Conversation, that name: the web UI does) keeps one id; after IDLE_MINUTES (SHAFT_IDLE_MINUTES) without a message it is closed and its journal entry is
 written. Tool activity and status are sent as `reasoning_content`, which "thinking"-aware clients
 show and others ignore.
 
@@ -35,6 +36,7 @@ import json
 import subprocess
 import os
 import queue
+import re
 import secrets
 import select
 import signal
@@ -53,7 +55,8 @@ from .runner import Reply, busy_with, request_yield, run_agent, spawn_recover
 PORT, _ = knob("SHAFT_API_PORT", "8781", int)
 INBOX_PER_HOUR, _ = knob("SHAFT_INBOX_PER_HOUR", "30", int)
 INBOX_WAKES_PER_HOUR, _ = knob("SHAFT_INBOX_WAKES_PER_HOUR", "4", int)
-DOORBELL_LOG = "doorbell.jsonl"       # one line per accepted message: when, instance, source, wake outcome
+DOORBELL_LOG = "doorbell.jsonl"
+CONVERSATION_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")   # X-Shaft-Conversation: a client's own name for a conversation       # one line per accepted message: when, instance, source, wake outcome
 
 
 def allowed_logins() -> set[str]:
@@ -73,18 +76,32 @@ class Conversations:
         TALKS.write_text(json.dumps(self.talks, indent=1))
 
     @staticmethod
-    def _key(model: str, messages: list[dict]) -> str:
+    def _key(model: str, messages: list[dict], cid: str | None = None) -> str:
+        """A client that names its conversation (X-Shaft-Conversation: the web UI) is keyed by that name; any other by
+        its first user message, so two web chats opening with "hi" are never one conversation."""
+        if cid:
+            return "cid:" + hashlib.sha256(json.dumps([model, cid]).encode()).hexdigest()[:16]
         first = next((m for m in messages if m.get("role") == "user"), {})
         return hashlib.sha256(json.dumps([model, first.get("content")], sort_keys=True).encode()).hexdigest()[:16]
 
-    def current(self, model: str, messages: list[dict]) -> str | None:
+    def current(self, model: str, messages: list[dict], cid: str | None = None) -> str | None:
         """The talk id of this conversation if it has one still going on (never creates one)."""
         with self.lock:
-            t = self.talks.get(self._key(model, messages))
+            t = self.talks.get(self._key(model, messages, cid))
             return t["talk_id"] if t and not t.get("written") else None
 
-    def talk_id(self, model: str, messages: list[dict]) -> str:
-        key = self._key(model, messages)
+    def end(self, model: str, messages: list[dict], cid: str | None = None) -> str | None:
+        """Close the conversation now (as SHAFT_IDLE_MINUTES of silence would): its talk id, or None if none is open."""
+        with self.lock:
+            t = self.talks.get(self._key(model, messages, cid))
+            if not t or t.get("written"):
+                return None
+            t["written"] = True
+            self._save()
+            return t["talk_id"]
+
+    def talk_id(self, model: str, messages: list[dict], cid: str | None = None) -> str:
+        key = self._key(model, messages, cid)
         with self.lock:
             t = self.talks.get(key)
             if not t or t.get("written"):   # new, or its earlier part is already in the journal
@@ -155,10 +172,11 @@ class Live:
             (instance_root(entry["model"]) / self._rel(entry["talk_id"])).unlink(missing_ok=True)
 
 
-def _chunk(cid: str, model: str, delta: dict, finish: str | None = None) -> bytes:
+def _chunk(cid: str, model: str, delta: dict, finish: str | None = None, **extra) -> bytes:
+    """One stream chunk; `extra` adds top-level keys OpenAI clients ignore (the last carries interjections_heard)."""
     return b"data: " + json.dumps({"id": cid, "object": "chat.completion.chunk", "created": int(time.time()),
                                    "model": model, "choices": [{"index": 0, "delta": delta,
-                                                                "finish_reason": finish}]}).encode() + b"\n\n"
+                                                                "finish_reason": finish}], **extra}).encode() + b"\n\n"
 
 
 def _note(ev: dict) -> str | None:
@@ -283,7 +301,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not self._authorised():
             return
-        if route not in ("/v1/chat/completions", "/v1/chat/interject"):
+        if route not in ("/v1/chat/completions", "/v1/chat/interject", "/v1/chat/end"):
             return self._error(404, f"no route {self.path}")
         try:
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
@@ -292,21 +310,40 @@ class Handler(BaseHTTPRequestHandler):
         model = body.get("model")
         if model not in instance_names():
             return self._error(404, f"no instance {model!r}; models: {', '.join(instance_names())}")
+        cid = self.headers.get("X-Shaft-Conversation") or None
+        if cid is not None and not CONVERSATION_ID.match(cid):
+            return self._error(400, "X-Shaft-Conversation is 1-64 letters, digits, - or _")
         messages = body.get("messages") or []
+        if route == "/v1/chat/end":
+            return self._end(model, messages, cid)
         if not messages or messages[-1].get("role") != "user":
             return self._error(400, "messages must end with a user message")
         if route == "/v1/chat/interject":
-            return self._interject(model, messages)
-        self._chat(model, messages, bool(body.get("stream")), self.headers.get("User-Agent", "an app"))
+            return self._interject(model, messages, cid)
+        self._chat(model, messages, bool(body.get("stream")), self.headers.get("User-Agent", "an app"), cid)
 
-    def _interject(self, model: str, messages: list[dict]) -> None:
+    def _end(self, model: str, messages: list[dict], cid: str | None) -> None:
+        """POST /v1/chat/end: the conversation is over — written up now instead of after SHAFT_IDLE_MINUTES."""
+        if not cid and not messages:
+            return self._error(400, "which conversation? X-Shaft-Conversation, or its messages")
+        talk_id = self.conversations.current(model, messages, cid)
+        if not talk_id:
+            return self._error(404, f"no open conversation with {model} to end", "not_found")
+        if talk_id in self.live.replies:
+            return self._error(409, f"{model} is still replying: stop the reply first", "conflict")
+        self.conversations.end(model, messages, cid)
+        spawn_recover(model)
+        log(f"api: conversation {talk_id} with {model} ended by its client")
+        self._json(202, {"ended": talk_id})
+
+    def _interject(self, model: str, messages: list[dict], cid: str | None = None) -> None:
         """The last user message joins the reply running in this conversation (same first user message)."""
         content = messages[-1].get("content")
         text = (content if isinstance(content, str) else "\n".join(
             p.get("text", "") for p in content or [] if isinstance(p, dict) and p.get("type") == "text")).strip()
         if not text:
             return self._error(400, "the message to add is empty")
-        talk_id = self.conversations.current(model, messages)
+        talk_id = self.conversations.current(model, messages, cid)
         try:
             ok = bool(talk_id) and self.live.interject(talk_id, text)
         except (OSError, UnsafePath) as e:
@@ -325,10 +362,10 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             return True
 
-    def _chat(self, model: str, messages: list[dict], stream: bool, app: str) -> None:
+    def _chat(self, model: str, messages: list[dict], stream: bool, app: str, cid: str | None = None) -> None:
         events: queue.Queue = queue.Queue()
         procs: list = []
-        talk_id = self.conversations.talk_id(model, messages)
+        talk_id = self.conversations.talk_id(model, messages, cid)
         live = self.live.begin(model, talk_id)
         request = {"messages": messages, "talk_id": talk_id, "client": app.split()[0][:40]}
 
@@ -453,7 +490,7 @@ class Handler(BaseHTTPRequestHandler):
             if stream:
                 if error and not content:
                     self.wfile.write(_chunk(cid, model, {"content": f"[error: {error}]"}))
-                self.wfile.write(_chunk(cid, model, {}, "stop"))
+                self.wfile.write(_chunk(cid, model, {}, "stop", interjections_heard=heard))
                 self.wfile.write(b"data: [DONE]\n\n")
                 self.wfile.flush()
             elif error and not content:
