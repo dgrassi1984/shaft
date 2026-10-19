@@ -651,44 +651,63 @@
     document.title = document.title.replace(/^\(\d+\) /, "");
     if (unread) document.title = `(${unread}) ${document.title}`;
   }
-  // Desktop notifications, only after you ask for them (the ⋯ menu): a reply that lands while this tab is hidden.
-  const notified = {};
-  function notifyButton() {
+  // Notifications (PLAN-pwa P4): Web Push, the only way a reply reaches a phone whose app is closed or locked (an
+  // iPhone stops a page's scripts in the background). The button says what is true on this device.
+  const standalone = () => window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+  const ios = () => /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  function keyBytes(b64) {
+    const s = atob(b64.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((b64.length + 3) % 4));
+    return Uint8Array.from(s, c => c.charCodeAt(0));
+  }
+  async function pushState() {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
+      return ios() && !standalone() ? "home" : "none";
+    }
+    if (Notification.permission === "denied") return "blocked";
+    const reg = await navigator.serviceWorker.ready;
+    return (await reg.pushManager.getSubscription()) ? "on" : "off";
+  }
+  async function notifyButton() {
     const b = document.querySelector("[data-notify]");
     if (!b) return;
-    if (!("Notification" in window)) { b.hidden = true; return; }
-    b.textContent = Notification.permission === "granted" ? "Notifications on (browser settings turn them off)"
-      : Notification.permission === "denied" ? "Notifications blocked in this browser" : "Notify me of replies";
-    b.disabled = Notification.permission !== "default";
+    const state = await pushState().catch(() => "none");
+    b.dataset.state = state;
+    b.hidden = state === "none";
+    b.disabled = state === "blocked" || state === "home";
+    b.textContent = { home: "For notifications, add SHAFT to your Home Screen (Share → Add to Home Screen)",
+                      blocked: "Notifications are blocked for SHAFT in this browser's settings",
+                      on: "Notifications on — turn off", off: "Notify me of replies" }[state] || "";
+  }
+  async function post(url, body) {
+    const r = await fetch(url, { method: "POST", credentials: "same-origin", body,
+                                 headers: { "X-CSRF-Token": csrf(), "Content-Type": "application/json" } });
+    toast(textOf(await r.text()) || `HTTP ${r.status}`, !r.ok);
+    return r.ok;
   }
   document.addEventListener("click", async (ev) => {
-    if (!(ev.target.closest && ev.target.closest("[data-notify]"))) return;
-    try { await Notification.requestPermission(); } catch (e) { /* refused */ }
+    const b = ev.target.closest && ev.target.closest("[data-notify]");
+    if (!b || b.disabled) return;
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      if (b.dataset.state === "on") {
+        const sub = await reg.pushManager.getSubscription();
+        if (sub) await sub.unsubscribe();
+        await post("/push/unsubscribe", "{}");
+      } else {
+        if (await Notification.requestPermission() !== "granted") { notifyButton(); return; }
+        const r = await fetch("/push/key", { credentials: "same-origin" });
+        const { key, error } = await r.json();
+        if (!key) throw new Error(error || "no key");
+        const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(key) });
+        await post("/push/subscribe", JSON.stringify(sub));
+      }
+    } catch (e) {
+      toast(`Notifications: ${e.message}`, true);
+    }
     notifyButton();
   });
-  function notifyUnread(rail) {
-    if (!("Notification" in window) || Notification.permission !== "granted" || document.visibilityState === "visible") {
-      return;
-    }
-    rail.querySelectorAll("a.unread[data-inst]").forEach(a => {
-      const key = `${a.dataset.inst}@${a.dataset.last}`;
-      if (notified[key]) return;
-      notified[key] = true;
-      const last = a.querySelector(".last");
-      const n = new Notification(`${a.dataset.inst} replied`, { body: last ? last.textContent : "", tag: a.dataset.inst });
-      n.onclick = () => { window.focus(); location.href = a.href; };
-    });
-  }
-  let railSeeded = false;                         // what was already unread when the page opened is not news
   document.addEventListener("shaft:swapped", (ev) => {
-    if (!(ev.target.classList && ev.target.classList.contains("rail"))) return;
-    markRail(ev.target);
-    if (!railSeeded) {
-      ev.target.querySelectorAll("a.unread[data-inst]").forEach(a => { notified[`${a.dataset.inst}@${a.dataset.last}`] = true; });
-      railSeeded = true;
-    } else {
-      notifyUnread(ev.target);
-    }
+    if (ev.target.classList && ev.target.classList.contains("rail")) markRail(ev.target);
   });
   document.addEventListener("visibilitychange", () => {
     const rail = document.querySelector("nav .rail");

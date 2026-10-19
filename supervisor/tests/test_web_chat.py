@@ -95,6 +95,7 @@ class ChatTest(unittest.TestCase):
                   mock.patch("supervisor.core.secrets_env", return_value={"SHAFT_API_KEY": KEY}),
                   mock.patch.object(messages, "INSTANCES", self.dir / "instances"),
                   mock.patch("supervisor.docs.instance_root", lambda n: self.dir / "instances" / n),   # never the real
+                  mock.patch("supervisor.webpush.notify"),                  # never a real push from a test
                   mock.patch.object(web_chat, "log"), mock.patch.object(messages, "log")):
             p.start()
             self.addCleanup(p.stop)
@@ -938,3 +939,19 @@ class ResendTest(ChatTest):
         web_chat.send("wren", ME, "hello", [], mid="m-2")                     # a new id: a new message
         self.wait_idle(chat["id"])
         self.assertEqual(len(self.api.chats()), 2)
+
+
+class PushWhenTest(ChatTest):
+    def test_a_reply_that_ends_unwatched_wakes_the_phone_and_a_watched_one_does_not(self):
+        web_chat._watched.clear()
+        with mock.patch("supervisor.webpush.notify") as notify:
+            chat, _ = web_chat.send("wren", ME, "hello", [])
+            self.wait_idle(chat["id"])
+            time.sleep(0.2)
+        notify.assert_called_once_with("wren replied")
+        web_chat.watching("wren")                                # its page is open and refreshing
+        with mock.patch("supervisor.webpush.notify") as notify:
+            web_chat.send("wren", ME, "again", [])
+            self.wait_idle(chat["id"])
+            time.sleep(0.2)
+        notify.assert_not_called()

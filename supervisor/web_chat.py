@@ -132,6 +132,36 @@ def open_chat(name: str) -> dict | None:
     return next((c for c in chats(name) if c.get("state") != "ended"), None)
 
 
+# A chat being looked at: its feed is refreshed every 1.5 s while its page is visible (a hidden page does not
+# refresh it). A reply that ends while someone looks at it needs no notification.
+WATCH_S = 6.0
+_watched: dict[str, float] = {}
+
+
+def watching(name: str) -> None:
+    _watched[name] = time.monotonic()
+
+
+def watched(name: str) -> bool:
+    return time.monotonic() - _watched.get(name, -1e9) < WATCH_S
+
+
+def latest_reply() -> dict:
+    """What a push notification shows: the newest answer of any instance's chat, said briefly."""
+    from .core import instance_names
+    best = None
+    for name in instance_names():
+        c = next(iter(chats(name)), None)
+        t = next((t for t in reversed((c or {}).get("turns", [])) if t["role"] == "assistant"), None)
+        if t and (best is None or t["ts"] > best[1]["ts"]):
+            best = (name, t)
+    if not best:
+        return {"title": "SHAFT", "body": "A reply landed", "url": "/", "tag": "shaft"}
+    name, t = best
+    first = next((l.strip() for l in (t.get("content") or "").splitlines() if l.strip()), "") or (t.get("note") or "")
+    return {"title": f"{name} replied", "body": first[:160], "url": f"/i/{name}/chat", "tag": name}
+
+
 def summary(name: str) -> dict:
     """For the rail: the newest chat's last line, when the instance last answered in it, and whether it is replying."""
     c = next(iter(chats(name)), None)
@@ -329,6 +359,9 @@ def _run(relay: Relay) -> None:
         save(chat)
     if _relays.get(cid) is relay:                  # never a newer relay of the same chat
         del _relays[cid]
+    if not unheard and not relay.stopped and not watched(chat["instance"]):
+        from . import webpush                       # nobody is looking: the phone is told (PLAN-pwa P4)
+        webpush.notify(f"{chat['instance']} replied")
     log(f"web: chat {cid} with {chat['instance']}: reply {'stopped' if relay.stopped else 'failed' if error else 'done'}"
         + (f" ({unheard} interjection(s) answered next)" if unheard else ""))
     if unheard:

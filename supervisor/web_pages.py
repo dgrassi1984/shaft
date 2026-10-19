@@ -177,6 +177,32 @@ self.addEventListener("fetch", (ev) => {
     })));
   }
 });
+
+// A push (PLAN-pwa P4) carries nothing: what to say is fetched from SHAFT over the tailnet, with this device's own
+// cookie, so the push service never sees it. iOS requires every push to show a notification: one always shows.
+self.addEventListener("push", (ev) => {
+  ev.waitUntil((async () => {
+    let n = { title: "SHAFT", body: "A reply landed", url: "/", tag: "shaft" };
+    try {
+      const r = await fetch("/push/latest", { credentials: "same-origin", cache: "no-store" });
+      if (r.ok) n = Object.assign(n, await r.json());
+    } catch (e) { /* off the tailnet: the plain notification */ }
+    if (self.navigator.setAppBadge) self.navigator.setAppBadge().catch(() => {});
+    await self.registration.showNotification(n.title, {
+      body: n.body, tag: n.tag, data: { url: n.url }, icon: "/static/icon-192.png?v=@V@" });
+  })());
+});
+
+self.addEventListener("notificationclick", (ev) => {     // open the chat that replied, in the app if it is open
+  ev.notification.close();
+  const url = (ev.notification.data || {}).url || "/";
+  ev.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
+    for (const c of list) {
+      if ("focus" in c) return (c.navigate ? c.navigate(url) : Promise.resolve()).then(() => c.focus());
+    }
+    return self.clients.openWindow(url);
+  }));
+});
 """
 
 

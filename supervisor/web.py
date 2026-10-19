@@ -442,6 +442,16 @@ def _post(req: Request, dev: str) -> Response:
         if m[1] not in _names():
             return _not_found(req.path)
         return _save_doc(m[1], (req.headers.get("tailscale-user-login") or "").lower(), req.form())
+    if req.path in ("/push/subscribe", "/push/unsubscribe"):
+        from . import webpush
+        try:
+            if req.path.endswith("unsubscribe"):
+                webpush.unsubscribe(dev)
+                return _html(200, web_pages.h("<p>Notifications off on this device</p>"))
+            webpush.subscribe(dev, json.loads(req.body or b"{}"))
+        except (webpush.PushError, ValueError) as e:
+            return _html(409, web_pages.h("<p>refused: {e}</p>", e=str(e)))
+        return _html(200, web_pages.h("<p>Notifications on: a reply that lands while SHAFT is closed shows here</p>"))
     if m := re.match(r"^/chat/([A-Za-z0-9_-]+)/clear$", req.path):
         from . import web_chat
         if m[1] not in _names():
@@ -524,7 +534,16 @@ def _get(req: Request, csrf: str) -> Response | None:
         chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.shown(m[1])
         if chat and chat.get("instance") != m[1]:
             return None
+        if not qs.get("id"):
+            web_chat.watching(m[1])                 # its page is open and visible: a reply needs no push
         return _html(200, v.chat_feed(m[1], chat, _sent_during(m[1], chat), archived=bool(qs.get("id"))))
+    if path in ("/push/key", "/push/latest"):
+        from . import web_chat, webpush
+        try:
+            data = {"key": webpush.public_key()} if path == "/push/key" else web_chat.latest_reply()
+        except webpush.PushError as e:
+            return Response(503, json.dumps({"error": str(e)}).encode(), {"Content-Type": "application/json"})
+        return Response(200, json.dumps(data).encode(), {"Content-Type": "application/json"})
     if m := re.match(r"^/fragment/docs/([A-Za-z0-9_-]+)$", path):
         if m[1] not in names:
             return None
