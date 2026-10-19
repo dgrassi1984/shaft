@@ -75,6 +75,17 @@ def _lock(cid: str) -> threading.Lock:
         return _locks.setdefault(cid, threading.Lock())
 
 
+_inst_locks: dict[str, threading.RLock] = {}
+
+
+def _inst_lock(name: str) -> threading.RLock:
+    """One instance's chat lifecycle at a time — which chat is open, a new one, End, Clear — so two devices never open
+    two chats at once and End never closes a reply that a message started meanwhile (Codex review, 2026-10-19). Taken
+    before a chat's own lock, never after it; re-entrant, as a save during a reply sends through send()."""
+    with _locks_lock:
+        return _inst_locks.setdefault(name, threading.RLock())
+
+
 def load(cid: str) -> dict | None:
     if not cid.startswith("web-") or not cid[4:].isalnum():
         return None
@@ -346,6 +357,11 @@ def doc_saved(name: str, login: str, path: str, old: str | None, new: str, sha: 
     """After the operator saved a document: the instance hears of it — at once (an interjection) while it replies, else
     with his next message; several saves before then are one diff (from what it last saw). The chat also keeps his
     version, so the panel can say when a later write of the instance dropped lines he wrote. (what to tell him)"""
+    with _inst_lock(name):
+        return _doc_saved(name, login, path, old, new, sha)
+
+
+def _doc_saved(name: str, login: str, path: str, old: str | None, new: str, sha: str) -> str:
     chat = open_chat(name) or new_chat(name, login)
     with _lock(chat["id"]):
         chat = load(chat["id"])
@@ -374,6 +390,11 @@ def _take_edits(chat: dict) -> tuple[str, list[str]]:
 
 def send(name: str, login: str, text: str, files: list[tuple[str, bytes]]) -> tuple[dict, str]:
     """A message from the operator: a new reply if none is running, an interjection otherwise. (chat, what to say)"""
+    with _inst_lock(name):
+        return _send(name, login, text, files)
+
+
+def _send(name: str, login: str, text: str, files: list[tuple[str, bytes]]) -> tuple[dict, str]:
     from . import messages
     text = text.strip()
     if not text and not files and not (open_chat(name) or {}).get("pending_edits"):
@@ -430,9 +451,17 @@ def stop(cid: str) -> str:
 
 def end(cid: str) -> str:
     chat = load(cid)
+    if not chat:
+        raise Refused("this chat is already over")
+    with _inst_lock(chat["instance"]):
+        return _end(cid)
+
+
+def _end(cid: str) -> str:
+    chat = load(cid)                                # again, under the lock: a message may have come meanwhile
     if not chat or chat.get("state") == "ended":
         raise Refused("this chat is already over")
-    if replying(cid):
+    if replying(cid) or chat.get("state") == "replying":
         raise Refused("it is still replying: stop the reply first")
     status, body = _post(chat, "end", {"model": chat["instance"]})
     err = body.get("error") or {}
@@ -443,18 +472,29 @@ def end(cid: str) -> str:
         raise Refused(err.get("message") or f"API HTTP {status}")
     with _lock(cid):
         chat = load(cid)
+        if chat.get("state") == "replying":         # a reply of its own began meanwhile (a message heard too late)
+            raise Refused("a reply began meanwhile: it is written up when that reply ends and the chat is quiet")
         chat["state"], chat["ended"] = "ended", _now()
         save(chat)
     log(f"web: chat {cid} with {chat['instance']} ended by the operator")
     return "ended: it writes the conversation up in its journal now" if status == 202 else "ended"
 
 
-def clear(name: str) -> str:
+def clear(name: str, cid: str = "") -> str:
     """Clear the chat from view: the page and the rail start empty. Nothing is deleted — the chat stays in Earlier web
-    chats and Transcripts. A conversation still open is ended first (written up, as End does); one replying is not."""
+    chats and Transcripts. A conversation still open is ended first (written up, as End does); one replying is not.
+    `cid`: the chat the page showed — refused if that is no longer the one shown (it cleared the current one instead,
+    from a past chat's page: Codex review)."""
+    with _inst_lock(name):
+        return _clear(name, cid)
+
+
+def _clear(name: str, cid: str) -> str:
     chat = shown(name)
     if not chat:
         raise Refused("there is nothing to clear")
+    if cid and chat["id"] != cid:
+        raise Refused("that is not the chat on this page any more: reload it")
     if replying(chat["id"]) or chat.get("state") == "replying":
         raise Refused("it is still replying: stop the reply first")
     said = end(chat["id"]) if chat.get("state") != "ended" else ""

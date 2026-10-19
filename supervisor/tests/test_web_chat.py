@@ -782,3 +782,88 @@ class ClearRouteTest(ChatRoutesTest):
         body = self.req("/i/wren/chat", cookie=self.cookie).body.decode()
         self.assertIn("No chat open with wren", body)
         self.assertIn("1 message(s)", body)                        # in Earlier web chats, kept
+
+
+class SaveRecordTest(DocSaveRouteTest):
+    def test_a_write_right_after_the_save_is_not_taken_for_his(self):
+        """Codex review: the save's sha was read again after the write, so an instance writing in between had its
+        version recorded as his and the overwrite warning never came."""
+        from supervisor import actions, docs
+        (self.docs / "plan.md").write_text("one\n")
+        real = actions.run_now.side_effect
+
+        def save_then_instance_writes(args, timeout=60, who="top"):
+            out = real(args, timeout, who)
+            (self.docs / "plan.md").write_text("its rewrite\n")
+            return out
+        with mock.patch.object(actions, "run_now", side_effect=save_then_instance_writes):
+            r = self.post(path="plan.md", text="one\nmy line\n", sha=docs.sha(b"one\n"))
+        self.assertEqual(r.status, 200)
+        saved = web_chat.open_chat("wren")["saved_docs"]["plan.md"]
+        self.assertEqual(saved["sha"], docs.sha(b"one\nmy line\n"))
+        panel = self.req("/fragment/docs/wren?doc=plan.md", cookie=self.cookie).body.decode()
+        self.assertIn("you wrote at", panel)
+
+    def test_a_stale_save_is_refused_before_the_cli_runs(self):
+        from supervisor import docs
+        (self.docs / "plan.md").write_text("changed\n")
+        r = self.post(path="plan.md", text="mine\n", sha=docs.sha(b"one\n"))
+        self.assertEqual(r.status, 409)
+        self.assertEqual(self.ran, [])
+
+
+class LifecycleRaceTest(ChatTest):
+    """Codex review: chat choice, End and Clear raced with a send from another device."""
+
+    def test_two_devices_writing_first_open_one_chat(self):
+        self.api.hold.set()
+        go = threading.Barrier(2)
+        out = []
+
+        def send(text):
+            go.wait()
+            out.append(web_chat.send("wren", ME, text, [])[0]["id"])
+        ts = [threading.Thread(target=send, args=(t,)) for t in ("from the phone", "from the laptop")]
+        [t.start() for t in ts]
+        [t.join() for t in ts]
+        self.assertEqual(len(set(out)), 1)                       # one chat: the second message joined it
+        self.assertEqual(len(web_chat.chats("wren")), 1)
+        self.api.hold.clear()
+        self.wait_idle(out[0], 15)
+
+    def test_a_message_sent_while_end_is_on_its_way_starts_a_new_chat(self):
+        chat, _ = web_chat.send("wren", ME, "hello", [])
+        self.wait_idle(chat["id"])
+        real_post, sent = web_chat._post, {}
+
+        def post(c, route, body, timeout=15):
+            if route == "end":                                   # the other device sends now
+                t = threading.Thread(target=lambda: sent.update(chat=web_chat.send("wren", ME, "one more", [])[0]))
+                t.start()
+                t.join(0.3)                                      # it waits for End: it does not get in first
+                self.assertNotIn("chat", sent)
+                sent["thread"] = t
+            return real_post(c, route, body, timeout)
+        with mock.patch.object(web_chat, "_post", side_effect=post):
+            web_chat.end(chat["id"])
+        sent["thread"].join(5)
+        old = web_chat.load(chat["id"])
+        self.assertEqual((old["state"], len(old["turns"])), ("ended", 2))
+        self.assertNotEqual(sent["chat"]["id"], chat["id"])
+        self.wait_idle(sent["chat"]["id"])
+        self.assertEqual(web_chat.load(sent["chat"]["id"])["turns"][0]["shown"], "one more")
+
+
+class ArchivedClearTest(ChatRoutesTest):
+    def test_a_past_chats_page_acts_on_nothing_and_a_stale_clear_is_refused(self):
+        past = self.chat_with([{"role": "user", "content": "old", "ts": "2026-10-19T11:00:00"}], "ended")
+        now = self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
+                              {"role": "assistant", "content": "a", "ts": "2026-10-19T12:00:05"}])
+        page = self.req(f"/i/wren/chat?id={past['id']}", cookie=self.cookie).body.decode()
+        frag = self.req(f"/fragment/chat/wren?id={past['id']}", cookie=self.cookie).body.decode()
+        for body in (page, frag):
+            self.assertNotIn("/chat/wren/clear", body)
+            self.assertNotIn("chat-end", body)
+        with self.assertRaisesRegex(web_chat.Refused, "not the chat on this page"):
+            web_chat.clear("wren", past["id"])
+        self.assertEqual(web_chat.load(now["id"])["state"], "idle")   # the current one untouched

@@ -59,6 +59,14 @@
     else window.scrollTo(0, document.body.scrollHeight);
   }
 
+  // What a refresh must not replace: text being selected (to quote it), a document being edited (Save's check says
+  // if it changed), a field being typed in (a new document's name).
+  function busyIn(el) {
+    if (selectingIn(el) || el.querySelector(".editing")) return true;
+    const typing = document.activeElement;
+    return !!(typing && el.contains(typing) && typing.matches("input, textarea"));
+  }
+
   function poll(el) {
     const every = Number(el.dataset.every || 2000);
     let running = false;
@@ -66,15 +74,14 @@
       const url = el.dataset.poll;                  // read each time: the documents panel changes what it shows
       if (running || !el.isConnected) return;
       if (document.visibilityState !== "visible" && !el.dataset.hidden) return;   // data-hidden: keeps going (the rail)
-      if (selectingIn(el)) return;                  // replacing it would drop the text being selected (to quote it)
-      if (el.querySelector(".editing")) return;     // nor a document being edited: Save's check says if it changed
-      const typing = document.activeElement;        // nor a field being typed in (a new document's name)
-      if (typing && el.contains(typing) && typing.matches("input, textarea")) return;
+      if (busyIn(el)) return;
       running = true;
       try {
         const r = await fetch(url, { credentials: "same-origin", cache: "no-store" });
         const body = await r.text();
         if (r.ok) {
+          // Asked again now: an edit or a selection begun while this refresh was on its way must survive it (Codex)
+          if (busyIn(el) || el.dataset.poll !== url) return;
           if (body !== el.dataset.last) {               // unchanged: nothing replaced, nothing collapsed
             const open = new Set([...el.querySelectorAll("details[data-key][open]")].map(d => d.dataset.key));
             const shut = new Set([...el.querySelectorAll("details[data-key]:not([open])")].map(d => d.dataset.key));
@@ -131,9 +138,13 @@
         return;
       }
     }
+    if (form.dataset.busy) return;                  // one at a time: a second Enter sent it twice (Codex review)
     if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) return;
     const button = form.querySelector("button[type=submit]");
     if (button) button.disabled = true;
+    form.dataset.busy = "1";
+    const box = form.querySelector("textarea[name=text]");
+    const typed = box ? box.value : null;            // what this send carries
     const shown = form.dataset.draft ? pending(form) : null;
     try {
       const multipart = !!form.dataset.multipart;          // files go with it: the browser sets the boundary
@@ -152,8 +163,14 @@
       const now = r.headers.get("X-Doc-Sha");         // refused as stale: Save again replaces it, knowingly
       if (!r.ok && now && form.querySelector("input[name=sha]")) form.querySelector("input[name=sha]").value = now;
       if (r.ok && form.dataset.after === "doc-saved") docSaved(form, r.headers.get("X-Doc"));
-      if (r.ok && form.dataset.reset) { form.reset(); picked(form); }
-      if (r.ok && form.dataset.draft) sent(form);
+      if (r.ok && form.dataset.reset) {
+        const later = box && box.value !== typed ? box.value : null;   // typed while it was sending: kept
+        form.reset();
+        if (later !== null) box.value = later;
+        picked(form);
+        if (form.dataset.draft && later === null) sent(form);
+        else if (box) grow(box);
+      }
       if (!r.ok && shown) shown.remove();
       if (r.ok && form.dataset.after === "reload") setTimeout(() => location.reload(), 800);
       document.dispatchEvent(new Event("shaft:refresh"));      // show what the action changed, now
@@ -162,6 +179,7 @@
       toast(`Not sent: ${e.message}`, true);
     } finally {
       if (button) button.disabled = false;
+      delete form.dataset.busy;
     }
   });
 

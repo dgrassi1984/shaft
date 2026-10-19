@@ -114,3 +114,45 @@ class DocsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NoLinkFollowedAfterTheCheckTest(DocsTest):
+    """Codex review: the path was checked, then opened again by name — a link swapped in between was followed."""
+
+    def test_a_folder_swapped_for_a_link_after_the_check_takes_no_write(self):
+        from supervisor import core
+        (self.root / "notes/docs/sub").mkdir()
+        real = core.contained
+
+        def check_then_swap(root, *parts):              # the check passes; then the instance swaps the folder
+            out = real(root, *parts)
+            sub = self.root / "notes/docs/sub"
+            if sub.is_dir() and not sub.is_symlink():
+                sub.rmdir()
+                sub.symlink_to(self.outside, target_is_directory=True)
+            return out
+        with mock.patch.object(core, "contained", side_effect=check_then_swap):   # the write's own, last check
+            with self.assertRaises(docs.Refused):
+                docs.write("wren", "sub/x.md", "operator text", "none")
+        self.assertEqual(list(self.outside.iterdir()), [])
+
+    def test_a_file_swapped_for_a_link_after_the_check_is_not_read(self):
+        from supervisor import core
+        (self.outside / "secret.md").write_text("not the instance's")
+        p = self.doc("plan.md", "mine")
+        real_read = core.read_beneath
+
+        def swap_then_read(root, parts, limit=None):
+            p.unlink()
+            p.symlink_to(self.outside / "secret.md")
+            return real_read(root, parts, limit)
+        with mock.patch.object(docs, "read_beneath", side_effect=swap_then_read):
+            self.assertEqual(docs.read("wren", "plan.md"), (None, "none"))
+
+    def test_open_beneath_refuses_links_at_every_step(self):
+        from supervisor import core
+        (self.root / "notes/docs/lnk").symlink_to(self.outside, target_is_directory=True)
+        (self.outside / "f.md").write_text("x")
+        for parts in (["notes", "docs", "lnk", "f.md"], ["notes", "..", "x"], ["notes", "docs", "lnk"]):
+            with self.assertRaises(core.UnsafePath, msg=parts):
+                core.open_beneath(self.root, parts, os.O_RDONLY)

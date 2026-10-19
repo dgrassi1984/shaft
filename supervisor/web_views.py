@@ -645,7 +645,7 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
     return join([head, view])
 
 
-def chat_feed(name: str, chat: dict | None, sent: list[dict]) -> Html:
+def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = False) -> Html:
     """The conversation as it stands: each turn, the files it sent you meanwhile, and the reply running now."""
     from .web_actions import button
     if not chat:
@@ -692,8 +692,9 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict]) -> Html:
     elif chat["state"] == "ended":
         feed.append(h('<p class="dim ended">Ended {e}: written up in its journal. Your next message starts a new '
                       'conversation.</p>', e=chat.get("ended", "")[:16].replace("T", " ")))
-    clear = h('<form class="act" data-post="/chat/{n}/clear" data-confirm="{c}"><button type="submit" class="act small">'
-              'Clear the chat</button></form>', n=q(name),
+    clear = h('<form class="act" data-post="/chat/{n}/clear" data-confirm="{c}"><input type="hidden" name="cid" '
+              'value="{cid}"><button type="submit" class="act small">Clear the chat</button></form>', n=q(name),
+              cid=chat["id"],
               c=("Clear this chat from the page? It is kept in Earlier web chats and Transcripts."
                  if chat["state"] == "ended" else
                  f"Clear this chat? The conversation is ended first — {name} writes it up in its journal — and it is "
@@ -701,6 +702,8 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict]) -> Html:
     if chat.get("pending_edits"):
         feed.append(h('<p class="pending-edits">✎ Your edits to {p} go to {n} with your next message.</p>',
                       p=", ".join(sorted(chat["pending_edits"])), n=name))
+    if archived:                                  # a past chat's page: nothing here acts on the current one
+        return join(feed)
     if chat["state"] not in ("replying", "ended") and chat["turns"]:
         feed.append(h('<div class="actions">{b}{c}</div>', b=button(
             "chat-end", "End the conversation", f"end this conversation with {name}? It writes it up in its journal "
@@ -732,7 +735,7 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
         'Transcripts</a>.</p>', n=q(name))])
     body = join([busy, h('<section class="panel chat" data-scroll><div class="feed" data-poll="{u}" data-every="1500" '
                          'data-follow="1">{f}</div></section><button type="button" class="newbelow" data-newbelow hidden>'
-                         '↓ New below</button>', u=feed_url, f=chat_feed(name, chat, sent)), composer,
+                         '↓ New below</button>', u=feed_url, f=chat_feed(name, chat, sent, archived=read_only)), composer,
                  Html('<div class="dropzone" data-dropzone hidden>Drop to attach</div>') if not read_only else Html("")])
     aside = h('<aside class="docs" id="docs" data-poll="/fragment/docs/{n}?doc={d}" data-every="1500">{p}</aside>',
               n=q(name), d=q(doc), p=panel)

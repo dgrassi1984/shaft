@@ -173,3 +173,18 @@ class TelegramAttachmentsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SameSecondTest(unittest.TestCase):
+    def test_two_sends_in_one_second_keep_both_files(self):
+        """Codex review: one folder per second and an overwriting write — the second image.png replaced the first."""
+        import tempfile
+        from pathlib import Path
+        from supervisor import messages
+        root = Path(tempfile.mkdtemp(prefix="shaft-same-second-")).resolve()
+        a = messages.store_attachments(root, "attachments/from-daniele/t", [("image.png", b"first")])
+        b = messages.store_attachments(root, "attachments/from-daniele/t", [("image.png", b"second")])
+        self.assertNotEqual(a[0]["rel"], b[0]["rel"])
+        self.assertEqual((root / a[0]["rel"]).read_bytes(), b"first")
+        self.assertEqual((root / b[0]["rel"]).read_bytes(), b"second")
+        self.assertEqual(b[0]["name"], "2-image.png")

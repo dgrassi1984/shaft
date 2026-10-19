@@ -13,7 +13,7 @@ import re
 import sys
 from pathlib import Path
 
-from .core import UnsafePath, config_lock, contained, instance_root, log, safe_write_bytes
+from .core import UnsafePath, config_lock, contained, instance_root, log, read_beneath, safe_write_bytes
 
 DIR = "notes/docs"
 MAX_BYTES = 256 * 1024
@@ -53,9 +53,13 @@ def read(name: str, path: str) -> tuple[str | None, str]:
     p = _path(name, rel)
     if p.is_symlink() or not p.is_file():
         return None, "none"
-    if (size := p.stat().st_size) > MAX_BYTES:
-        raise Refused(f"{DIR}/{rel} is {size} bytes: too big to show or edit here (at most {MAX_BYTES})")
-    data = p.read_bytes()
+    try:                                          # opened with no link followed: nothing swapped in after the check
+        data = read_beneath(instance_root(name), Path(DIR, rel).parts, MAX_BYTES)
+    except ValueError:
+        raise Refused(f"{DIR}/{rel} is {p.stat().st_size} bytes: too big to show or edit here (at most {MAX_BYTES})") \
+            from None
+    except (UnsafePath, FileNotFoundError):
+        return None, "none"
     return data.decode(errors="replace"), sha(data)
 
 
@@ -74,8 +78,9 @@ def listing(name: str) -> list[dict]:
                                                          if str(x) != "."):
                 continue
             st = p.stat()
-            digest = sha(p.read_bytes()) if st.st_size <= MAX_BYTES else "too-big"
-        except (Refused, OSError):
+            digest = (sha(read_beneath(instance_root(name), Path(DIR, rel).parts)) if st.st_size <= MAX_BYTES
+                      else "too-big")
+        except (Refused, OSError, UnsafePath):
             continue
         out.append({"path": rel, "bytes": st.st_size, "mtime": st.st_mtime, "sha": digest})
     return sorted(out, key=lambda d: d["mtime"], reverse=True)
@@ -135,7 +140,7 @@ def command(name: str, action: str | None, path: str | None, file: str | None, e
         if not file or not expect_sha:
             print("usage: shaft docs <name> set PATH --file FILE --expect-sha SHA  (none: a new document)")
             return 2
-        r = write(name, path, Path(file).read_text(), expect_sha)
+        r = write(name, path, Path(file).read_text(encoding="utf-8"), expect_sha)
     except (Refused, OSError) as e:
         print(f"refused: {e}")
         return 1

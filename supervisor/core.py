@@ -634,11 +634,59 @@ def safe_write(root: Path, rel: str, text: str, append: bool = False) -> Path:
     return path
 
 
-def safe_write_bytes(root: Path, rel: str, data: bytes) -> Path:
-    """safe_write for a file's bytes (attachments); the last component is opened without following a link."""
-    contained(root, *Path(rel).parent.parts).mkdir(parents=True, exist_ok=True)
-    path = contained(root, *Path(rel).parts)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
+def open_beneath(root: Path, parts, flags: int, mode: int = 0o644, make_dirs: bool = False) -> int:
+    """A descriptor for root/parts, opened one component at a time from the folder down, none of them followed if it
+    is a link (O_NOFOLLOW on each directory, through its parent's descriptor). Checking a path and then opening it by
+    name lets an instance swap a link in between (Codex review, 2026-10-19); this leaves no between. UnsafePath if a
+    component is a link, not a directory, or not a plain name."""
+    import errno
+    parts = [str(p) for p in parts]
+    if not parts or any(p in ("", ".", "..") or "/" in p for p in parts):
+        raise UnsafePath(f"{'/'.join(parts)!r} is not a plain path below {root}")
+    try:
+        fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as e:
+        raise UnsafePath(f"{root}: {e.strerror}") from None
+    try:
+        for part in parts[:-1]:
+            if make_dirs:
+                try:
+                    os.mkdir(part, 0o755, dir_fd=fd)
+                except FileExistsError:
+                    pass
+            nfd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = nfd
+        return os.open(parts[-1], flags | os.O_NOFOLLOW, mode, dir_fd=fd)
+    except OSError as e:
+        if e.errno in (errno.ELOOP, errno.ENOTDIR, errno.EMLINK):
+            raise UnsafePath(f"{root}/{'/'.join(parts)}: a link on the way; the supervisor does not follow links "
+                             "inside instances") from None
+        raise
+    finally:
+        os.close(fd)
+
+
+def read_beneath(root: Path, parts, limit: int | None = None) -> bytes:
+    """A regular file's bytes, opened with open_beneath (no link followed anywhere); ValueError if bigger than limit."""
+    import stat
+    fd = open_beneath(root, parts, os.O_RDONLY)
+    with os.fdopen(fd, "rb") as f:
+        st = os.fstat(f.fileno())
+        if not stat.S_ISREG(st.st_mode):
+            raise UnsafePath(f"{root}/{'/'.join(map(str, parts))} is not a plain file")
+        if limit is not None and st.st_size > limit:
+            raise ValueError(f"{st.st_size} bytes, more than {limit}")
+        return f.read()
+
+
+def safe_write_bytes(root: Path, rel: str, data: bytes, exclusive: bool = False) -> Path:
+    """safe_write for a file's bytes (attachments, documents): every component opened without following a link
+    (open_beneath), so nothing swapped in after the check can aim the write elsewhere."""
+    path = contained(root, *Path(rel).parts)       # the clear refusal for a link already there
+    Path(root).mkdir(parents=True, exist_ok=True)  # the folder itself is the supervisor's choice (an inbox, an instance)
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_EXCL if exclusive else os.O_TRUNC)   # exclusive: FileExistsError
+    fd = open_beneath(root, Path(rel).parts, flags, 0o644, make_dirs=True)
     with os.fdopen(fd, "wb") as f:
         f.write(data)
     return path

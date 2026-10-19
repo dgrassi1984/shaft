@@ -349,3 +349,9 @@ class StylesTest(TestCase):
         """Found live: form.docedit { display: grid } showed the document editor the page had hidden."""
         css = (Path(web_pages.__file__).parent / "web_static" / "web.css").read_text()
         self.assertIn("[hidden] { display: none !important; }", css)
+
+    def test_at_phone_width_the_documents_never_force_two_columns(self):
+        """Codex review: 📄 Documents with no documents yet (.showdocs) kept two columns wider than a phone."""
+        css = (Path(web_pages.__file__).parent / "web_static" / "web.css").read_text()
+        phone = css[css.index("@media (max-width: 720px)"):]
+        self.assertRegex(phone, r"\.chatgrid\.showdocs\s*\{\s*grid-template-columns: minmax\(0, 1fr\)")

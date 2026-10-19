@@ -268,7 +268,8 @@ main:has(> .chatgrid) { display: flex; flex-direction: column; height: 100vh; pa
 .earlier h3 { font-size: .8rem; color: var(--dim); margin: 0 0 .2rem; }
 @media (max-width: 720px) {
   main:has(> .chatgrid) { height: auto; min-height: 0; }
-  .chatgrid, .chatgrid:has(.docview), .chatgrid:has(.doclist a) { grid-template-columns: minmax(0, 1fr); }
+  .chatgrid, .chatgrid:has(.docview), .chatgrid:has(.doclist a), .chatgrid.showdocs {
+    grid-template-columns: minmax(0, 1fr); }
   aside.docs { max-height: none; }
   .chatpage > .chat { max-height: calc(100dvh - 19rem); }
   .chatpage > form.composer { position: sticky; bottom: 0; background: var(--bg); padding: .3rem 0 .4rem; }

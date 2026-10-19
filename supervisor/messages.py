@@ -55,11 +55,17 @@ def store_attachments(root: Path, rel_dir: str, files: list[tuple[str, bytes]]) 
     `root` (where its reader finds it), `path` from the project root (where the supervisor finds it)."""
     out, used = [], set()
     for k, (name, data) in enumerate(files):
-        n = attachment_name(name)
-        if n in used:
-            n = f"{k + 1}-{n}"
+        base = attachment_name(name)
+        n = base if base not in used else f"{k + 1}-{base}"
+        for j in range(2, 1000):                 # created, never overwritten: two sends in the same second (one folder
+            try:                                 # per second) each keep their file (Codex review, 2026-10-19)
+                path = safe_write_bytes(root, f"{rel_dir}/{n}", data, exclusive=True)
+                break
+            except FileExistsError:
+                n = f"{j}-{base}"
+        else:
+            raise ValueError(f"{base}: too many files of that name in {rel_dir}")
         used.add(n)
-        path = safe_write_bytes(root, f"{rel_dir}/{n}", data)
         try:
             from_project = str(path.resolve().relative_to(PROJECT.resolve()))
         except ValueError:

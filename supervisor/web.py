@@ -43,7 +43,7 @@ from pathlib import Path
 
 from . import web_pages
 from .web_pages import Html
-from .core import EMBED_PORT, LLM_PORTS, SUP_DIR, knob, port, log
+from .core import EMBED_PORT, LLM_PORTS, SUP_DIR, UnsafePath, knob, port, log, read_beneath
 
 PORT, _ = knob(   # not 8782: that is the embed port, which runs reach
     "SHAFT_WEB_PORT", "8785", port, "the web UI's local port (tailscale serve forwards to it)", group="Ports and paths",
@@ -390,7 +390,7 @@ def _post(req: Request, dev: str) -> Response:
         if m[1] not in _names():
             return _not_found(req.path)
         try:
-            said = web_chat.clear(m[1])
+            said = web_chat.clear(m[1], req.form().get("cid", ""))
         except web_chat.Refused as e:
             return _html(409, web_pages.h("<p>{t}</p>", t=str(e)))
         return _html(200, web_pages.h("<p>{t}</p>", t=said))
@@ -467,7 +467,7 @@ def _get(req: Request, csrf: str) -> Response | None:
         chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.shown(m[1])
         if chat and chat.get("instance") != m[1]:
             return None
-        return _html(200, v.chat_feed(m[1], chat, _sent_during(m[1], chat)))
+        return _html(200, v.chat_feed(m[1], chat, _sent_during(m[1], chat), archived=bool(qs.get("id"))))
     if m := re.match(r"^/fragment/docs/([A-Za-z0-9_-]+)$", path):
         if m[1] not in names:
             return None
@@ -530,18 +530,8 @@ def _save_doc(name: str, login: str, form: dict) -> Response:
     if path and not path.endswith(".md"):
         path += ".md"
     text, sha = form.get("text", "").replace("\r\n", "\n"), form.get("sha", "")
-    try:
-        old, _ = docs.read(name, path)
-    except docs.Refused as e:
-        return _html(409, web_pages.h("<p>refused: {e}</p>", e=str(e)))
-    tmp = SUP_DIR / "web" / f"doc-{_secrets.token_hex(6)}.md"
-    tmp.parent.mkdir(parents=True, exist_ok=True)
-    tmp.write_text(text)
-    try:
-        ok, last = actions.run_now(["docs", name, "set", path, "--file", str(tmp), "--expect-sha", sha], who="web")
-    finally:
-        tmp.unlink(missing_ok=True)
-    if not ok:
+
+    def refused(last: str) -> Response:
         now, now_sha = docs.read(name, path)
         diff = "\n".join(difflib.unified_diff(text.splitlines(), (now or "").splitlines(), "yours", "now", lineterm="",
                                               n=1)) if now is not None and sha != "none" else ""
@@ -551,7 +541,23 @@ def _save_doc(name: str, login: str, form: dict) -> Response:
                                                     'the box: Save again to replace it with yours, or Cancel to take '
                                                     'its version.</p><pre class="diff">{x}</pre>', x=diff) if diff else ""),
                      {"X-Doc-Sha": now_sha} if diff else {})
-    _, new_sha = docs.read(name, path)
+    try:
+        old, old_sha = docs.read(name, path)
+    except docs.Refused as e:
+        return _html(409, web_pages.h("<p>refused: {e}</p>", e=str(e)))
+    if old_sha != sha:          # stale already: and from here, the CLI's --expect-sha makes `old` what it replaces
+        return refused(f"refused: notes/docs/{path} changed since you looked" if sha != "none" else
+                       f"refused: notes/docs/{path} exists already")
+    tmp = SUP_DIR / "web" / f"doc-{_secrets.token_hex(6)}.md"
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_text(text, encoding="utf-8")
+    try:
+        ok, last = actions.run_now(["docs", name, "set", path, "--file", str(tmp), "--expect-sha", sha], who="web")
+    finally:
+        tmp.unlink(missing_ok=True)
+    if not ok:
+        return refused(last)
+    new_sha = docs.sha(text.encode())             # what was written — never read again: the instance may write next
     rel = docs._rel(path)
     try:
         said = web_chat.doc_saved(name, login, rel, old, text, new_sha)
@@ -718,6 +724,18 @@ def _message(file: str) -> dict | None:
     return next((m for m in messages.history() if m["file"] == file), None)
 
 
+def _attachment_root(path: Path) -> tuple[Path, Path]:
+    """(the folder an attachment_path() is below, the rest): the folder open_beneath starts from."""
+    from .core import INSTANCES
+    for base in (INSTANCES.resolve(), (SUP_DIR / "operator-inbox" / "attachments").resolve()):
+        try:
+            rest = path.relative_to(base)
+        except ValueError:
+            continue
+        return (base / rest.parts[0], Path(*rest.parts[1:])) if base == INSTANCES.resolve() else (base, rest)
+    raise UnsafePath(f"{path} is below no attachment folder")
+
+
 def attachment_path(a: dict) -> Path | None:
     """Where a message's attachment is, if it is a file inside an instance's folder or the operator's inbox
     attachments, reached without following any link below that folder; None otherwise. Only paths a message names
@@ -795,7 +813,12 @@ def _serve_attachment(a: dict, where: str) -> Response | None:
         log(f"web refused to serve an attachment of {where}: {a.get('path')!r} is not a plain file in an instance's "
             "folder or the operator's inbox")
         return None
-    data = path.read_bytes()
+    root, rest = _attachment_root(path)
+    try:                                          # opened with no link followed: nothing swapped in after the check
+        data = read_beneath(root, rest.parts)
+    except (UnsafePath, OSError) as e:
+        log(f"web refused to serve an attachment of {where}: {e}")
+        return None
     name = a.get("name") or path.name
     disposition = "attachment; filename*=UTF-8''" + urllib.parse.quote(name, safe="")
     if ctype := _image_type(data):
