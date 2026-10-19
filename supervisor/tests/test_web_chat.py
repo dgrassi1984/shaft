@@ -119,7 +119,8 @@ class RelayTest(ChatTest):
         path, headers, body = self.api.chats()[0]
         self.assertEqual(headers["X-Shaft-Conversation"], chat["id"])
         self.assertEqual((headers["Authorization"], headers["Tailscale-User-Login"]), (f"Bearer {KEY}", ME))
-        self.assertEqual(body, {"model": "wren", "messages": [{"role": "user", "content": "hello <b>"}], "stream": True})
+        self.assertEqual(body, {"model": "wren", "messages": [
+            {"role": "user", "content": "hello <b>\n\n" + web_chat.DOCS_NOTE}], "stream": True})
         self.assertNotIn(KEY, (self.dir / "sup" / "web" / "chats" / f"{chat['id']}.json").read_text())
 
     def test_the_next_message_carries_the_conversation_so_far(self):
@@ -127,7 +128,7 @@ class RelayTest(ChatTest):
         self.wait_idle(chat["id"])
         web_chat.send("wren", ME, "two", [])
         self.wait_idle(chat["id"])
-        self.assertEqual(self.api.chats()[1][2]["messages"], [{"role": "user", "content": "one"},
+        self.assertEqual(self.api.chats()[1][2]["messages"], [{"role": "user", "content": "one\n\n" + web_chat.DOCS_NOTE},
                                                              {"role": "assistant", "content": "Answer 1."},
                                                              {"role": "user", "content": "two"}])
 
@@ -281,6 +282,7 @@ class ChatRoutesTest(WebTest):
         super().setUp()
         self.inst = Path(tempfile.mkdtemp(prefix="shaft-chat-inst-")).resolve()
         self.addCleanup(shutil.rmtree, self.inst, True)
+        (self.inst / "wren").mkdir()
         for p in (mock.patch.object(web, "_names", return_value=["wren"]),
                   mock.patch.object(web_chat, "SUP_DIR", self.sup), mock.patch.object(web, "_sent_during", return_value=[]),
                   mock.patch("supervisor.core.INSTANCES", self.inst)):
@@ -442,3 +444,98 @@ class ChatCentricTest(ChatRoutesTest):
         csp = self.req("/i/wren/chat", cookie=self.cookie).headers["Content-Security-Policy"]
         self.assertIn("img-src 'self' data: blob:;", csp)
         self.assertIn("script-src 'self';", csp)
+
+
+class DocsInChatTest(ChatTest):
+    """PLAN-webui-chat §3 D1: the instance is told about documents once per chat; a reply's documents get cards."""
+
+    def setUp(self):
+        super().setUp()
+        self.docs = self.dir / "instances" / "wren" / "notes" / "docs"
+        from supervisor import docs
+        p = mock.patch.object(docs, "instance_root", lambda n: self.dir / "instances" / n)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_only_the_first_message_carries_the_note_and_he_never_sees_it(self):
+        chat, _ = web_chat.send("wren", ME, "one", [])
+        self.wait_idle(chat["id"])
+        web_chat.send("wren", ME, "two", [])
+        c = self.wait_idle(chat["id"])
+        self.assertIn(web_chat.DOCS_NOTE, c["turns"][0]["content"])
+        self.assertEqual(c["turns"][0]["shown"], "one")
+        self.assertNotIn("Web chat:", c["turns"][2]["content"])
+        from supervisor import web_views
+        self.assertNotIn("Web chat:", web_views.chat_feed("wren", c, []))
+
+    def test_a_reply_that_wrote_documents_gets_a_card_for_each(self):
+        self.docs.mkdir(parents=True)
+        (self.docs / "old.md").write_text("untouched")
+        (self.docs / "plan.md").write_text("v1")
+        real = web_chat._docs_now
+
+        def write_during_reply(name):                    # the second call is the reply's end: write before it
+            out = real(name)
+            if calls.append(1) or len(calls) == 2:
+                (self.docs / "plan.md").write_text("v2")
+                (self.docs / "new.md").write_text("hello")
+                out = real(name)
+            return out
+        calls = []
+        with mock.patch.object(web_chat, "_docs_now", side_effect=write_during_reply):
+            chat, _ = web_chat.send("wren", ME, "write the plan", [])
+            c = self.wait_idle(chat["id"])
+        self.assertEqual(c["turns"][1]["docs"], [{"path": "new.md", "created": True},
+                                                 {"path": "plan.md", "created": False}])
+        from supervisor import web_views
+        feed = web_views.chat_feed("wren", c, [])
+        self.assertIn('data-open-doc="plan.md"', feed)
+        self.assertIn("📄 new.md <span class=\"dim\">— created</span>", feed)
+        self.assertEqual(web_views.in_chat(c), {"new.md", "plan.md"})
+
+    def test_a_reply_that_wrote_none_has_no_cards(self):
+        chat, _ = web_chat.send("wren", ME, "hi", [])
+        c = self.wait_idle(chat["id"])
+        self.assertNotIn("docs", c["turns"][1])
+
+
+class DocsPanelTest(ChatRoutesTest):
+    def setUp(self):
+        super().setUp()
+        self.docs = self.inst / "wren" / "notes" / "docs"
+        self.docs.mkdir(parents=True)
+        from supervisor import docs
+        p = mock.patch.object(docs, "instance_root", lambda n: self.inst / n)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_the_panel_lists_documents_and_opens_one_rendered_never_as_markup(self):
+        (self.docs / "plan.md").write_text("# Plan\n\n- **step** <script>alert(1)</script>\n")
+        (self.docs / "other.md").write_text("x")
+        body = self.req("/fragment/docs/wren?doc=plan.md", cookie=self.cookie).body.decode()
+        self.assertIn('data-open-doc="other.md"', body)
+        self.assertIn('<div class="docview" data-doc="plan.md"', body)
+        self.assertIn("<b>step</b>", body)
+        self.assertNotIn("<script>alert", body)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", body)
+
+    def test_with_none_asked_it_opens_the_last_this_chat_changed(self):
+        (self.docs / "plan.md").write_text("the plan")
+        (self.docs / "notes.md").write_text("not this one")
+        self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
+                        {"role": "assistant", "content": "done", "ts": "2026-10-19T12:00:05",
+                         "docs": [{"path": "plan.md", "created": True}]}])
+        page = self.req("/i/wren/chat", cookie=self.cookie).body.decode()
+        self.assertIn('data-poll="/fragment/docs/wren?doc=plan.md"', page)
+        self.assertIn("the plan", page)
+        self.assertIn('<span class="mark" title="changed in this chat">●</span> plan.md', page)
+
+    def test_a_path_out_of_the_folder_is_refused_in_the_panel_not_the_page(self):
+        r = self.req("/fragment/docs/wren?doc=../config.env", cookie=self.cookie)
+        self.assertEqual(r.status, 200)
+        self.assertIn('class="bad"', r.body.decode())
+        self.assertIn("a document is a .md file", r.body.decode())
+        self.assertEqual(self.req("/i/wren/chat?doc=../x.md", cookie=self.cookie).status, 200)
+
+    def test_an_unknown_instance_has_no_panel(self):
+        self.assertEqual(self.req("/fragment/docs/nobody", cookie=self.cookie).status, 404)

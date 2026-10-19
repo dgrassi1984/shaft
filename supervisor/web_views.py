@@ -665,6 +665,45 @@ def _my_text(text: str) -> Html:
     return join(out)
 
 
+def doc_cards(made: list[dict] | None) -> Html:
+    """The documents a reply created or changed: each opens in the documents panel."""
+    if not made:
+        return Html("")
+    return h('<div class="doccards">{c}</div>', c=join(
+        h('<a class="doccard" href="?doc={u}" data-open-doc="{p}">📄 {p} <span class="dim">— {what}</span></a>',
+          u=q(d["path"]), p=d["path"], what="created" if d.get("created") else "changed") for d in made))
+
+
+def in_chat(chat: dict | None) -> set[str]:
+    """The documents this chat's replies created or changed."""
+    return {d["path"] for t in (chat or {}).get("turns", []) for d in t.get("docs") or []}
+
+
+def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None, sha: str, marked: set[str],
+               problem: str = "") -> Html:
+    """The documents panel beside the chat (/fragment/docs/<name>): the list, and the open one rendered."""
+    from .docs import DIR
+    items = [h('<a href="?doc={u}" data-open-doc="{p}" class="{cls}" title="{b} bytes">{dot}{p}</a>', u=q(d["path"]),
+               p=d["path"], b=d["bytes"], cls="on" if d["path"] == open_path else "",
+               dot=Html('<span class="mark" title="changed in this chat">●</span> ') if d["path"] in marked else Html(""))
+             for d in listing]
+    head = h('<div class="docshead"><b>Documents</b> <span class="dim">{dir}/</span></div><div class="doclist">{i}</div>',
+             dir=DIR, i=join(items) if items else h('<p class="dim">none yet: ask {n} for one, it appears here as it '
+                                                     'writes it.</p>', n=name))
+    if problem:
+        view = h('<p class="bad">{p}</p>', p=problem)
+    elif open_path and text is not None:
+        view = h('<div class="docview" data-doc="{p}" data-sha="{s}"><div class="doctitle"><b>{p}</b>'
+                 '<button type="button" class="copy small" data-copy-doc title="copy the document\'s Markdown">Copy</button>'
+                 '</div>{md}<textarea class="raw" hidden readonly>{raw}</textarea></div>',
+                 p=open_path, s=sha, md=markdown(text) if text.strip() else Html('<p class="dim">(empty)</p>'), raw=text)
+    elif open_path:
+        view = h('<p class="dim">{p} is not there (any more).</p>', p=open_path)
+    else:
+        view = Html("")
+    return join([head, view])
+
+
 def chat_feed(name: str, chat: dict | None, sent: list[dict]) -> Html:
     """The conversation as it stands: each turn, the files it sent you meanwhile, and the reply running now."""
     from .web_actions import button
@@ -683,9 +722,9 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict]) -> Html:
             copy = (h('<button type="button" class="copy small" data-copy title="copy the answer as Markdown">Copy</button>')
                     if t.get("content") else Html(""))
             items.append((t["ts"], h('<div class="turn it" data-raw="{raw}"><div class="who">{n} <span class="dim">{ts}</span>'
-                                     '{copy}</div>{act}{body}{note}</div>', raw=t.get("content") or "", n=name,
+                                     '{copy}</div>{act}{body}{cards}{note}</div>', raw=t.get("content") or "", n=name,
                                      ts=t["ts"][11:16], copy=copy, act=_activity(t.get("activity", []), f"t{k}"),
-                                     body=body, note=note)))
+                                     body=body, cards=doc_cards(t.get("docs")), note=note)))
     for m in sent:
         atts = join(h('<a href="/files/{f}/{j}">{img}</a>', f=q(m["file"]), j=j,
                       img=h('<img class="thumb" src="/files/{f}/{j}" alt="{n}">', f=q(m["file"]), j=j, n=a["name"])
@@ -717,7 +756,7 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict]) -> Html:
 
 
 def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], live: dict, names: list[str],
-              csrf: str, read_only: bool = False) -> Html:
+              csrf: str, read_only: bool = False, panel: Html = Html(""), doc: str = "") -> Html:
     state = live.get("state", "?")
     busy = (h('<p class="warn">{n} is {s} now: a cycle or sleep pauses for your message, anything else is waited for '
               '— the reply\'s activity says which.</p>', n=name, s=state)
@@ -740,4 +779,7 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
                          'data-follow="1">{f}</div></section><button type="button" class="newbelow" data-newbelow hidden>'
                          '↓ New below</button>', u=feed_url, f=chat_feed(name, chat, sent)), composer,
                  Html('<div class="dropzone" data-dropzone hidden>Drop to attach</div>') if not read_only else Html("")])
-    return chat_frame(name, live, h('<div class="chatpage">{b}</div>', b=body), names, csrf, earlier)
+    aside = h('<aside class="docs" id="docs" data-poll="/fragment/docs/{n}?doc={d}" data-every="1500">{p}</aside>',
+              n=q(name), d=q(doc), p=panel)
+    return chat_frame(name, live, h('<div class="chatgrid"><div class="chatpage">{b}</div>{a}</div>', b=body, a=aside),
+                      names, csrf, earlier)

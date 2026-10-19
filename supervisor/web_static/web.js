@@ -60,10 +60,10 @@
   }
 
   function poll(el) {
-    const url = el.dataset.poll;
     const every = Number(el.dataset.every || 2000);
     let running = false;
     async function tick() {
+      const url = el.dataset.poll;                  // read each time: the documents panel changes what it shows
       if (running || !el.isConnected) return;
       if (document.visibilityState !== "visible" && !el.dataset.hidden) return;   // data-hidden: keeps going (the rail)
       if (selectingIn(el)) return;                  // replacing it would drop the text being selected (to quote it)
@@ -100,6 +100,7 @@
         running = false;
       }
     }
+    el._tick = tick;
     setInterval(tick, every);
     if (el.dataset.now) tick();                        // a first render without live data (the rail): fill it now
     document.addEventListener("visibilitychange", tick);
@@ -354,7 +355,7 @@
                  : (b.closest("[data-raw]") || {}).dataset?.raw || "", b);
   });
   function decorate(root) {                    // a copy button on each code block of an answer
-    root.querySelectorAll(".turn.it pre").forEach(pre => {
+    root.querySelectorAll(".turn.it pre, .docview pre").forEach(pre => {
       if (pre.querySelector("[data-copy]")) return;
       const code = document.createElement("span");
       code.className = "code";
@@ -381,8 +382,8 @@
   // Scrolled up when something new arrives: say so, and one click goes down to it.
   document.addEventListener("shaft:swapped", (ev) => {
     const feed = ev.target;
+    if (feed.querySelectorAll) decorate(feed);
     if (!feed.dataset || !feed.dataset.follow) return;
-    decorate(feed);
     const box = feed.closest("[data-scroll]");
     const nb = document.querySelector("[data-newbelow]");
     if (box && nb && box.scrollTop + box.clientHeight < box.scrollHeight - 40) nb.hidden = false;
@@ -431,10 +432,10 @@
     const range = s.getRangeAt(0);
     const node = range.commonAncestorContainer;
     const host = (node.nodeType === 1 ? node : node.parentElement);
-    const feed = host && host.closest(".feed");
+    const feed = host && host.closest(".feed, .docview");
     const composer = document.querySelector("form.composer textarea");
     if (!feed || !composer || !s.toString().trim()) return null;
-    return { text: s.toString(), range, composer };
+    return { text: s.toString(), range, composer, doc: feed.dataset.doc || "" };
   }
 
   function placeQuoteButton() {
@@ -452,7 +453,8 @@
     const q = quotable();
     quoteButton().hidden = true;
     if (!q) return;
-    const quoted = q.text.trim().split(/\r?\n/).map(l => `> ${l}`.trimEnd()).join("\n") + "\n\n";
+    const from = q.doc ? `> (from notes/docs/${q.doc})\n` : "";     // a quote from a document names it
+    const quoted = from + q.text.trim().split(/\r?\n/).map(l => `> ${l}`.trimEnd()).join("\n") + "\n\n";
     const box = q.composer;
     const before = box.value.slice(0, box.selectionStart);
     const after = box.value.slice(box.selectionEnd);
@@ -539,9 +541,32 @@
     if (rail) markRail(rail);                          // back on the tab: the chat on screen is seen
   });
 
+  // The documents panel (PLAN-webui-chat §3): a card in a reply or a name in its list opens that document in the
+  // panel, which then refreshes it as the instance writes it; the address keeps ?doc= so a reload shows the same one.
+  document.addEventListener("click", (ev) => {
+    const a = ev.target.closest && ev.target.closest("[data-open-doc]");
+    const panel = document.getElementById("docs");
+    if (!a || !panel || ev.metaKey || ev.ctrlKey) return;
+    ev.preventDefault();
+    const doc = a.dataset.openDoc;
+    panel.dataset.poll = panel.dataset.poll.replace(/\?doc=.*$/, "") + `?doc=${encodeURIComponent(doc)}`;
+    const u = new URL(location.href);
+    u.searchParams.set("doc", doc);
+    history.replaceState(null, "", u);
+    if (panel._tick) panel._tick();
+    if (window.innerWidth <= 720) panel.scrollIntoView({ behavior: "smooth" });
+  });
+  document.addEventListener("click", (ev) => {
+    const b = ev.target.closest && ev.target.closest("[data-copy-doc]");
+    if (!b) return;
+    const raw = b.closest(".docview").querySelector("textarea.raw");
+    copyText(raw ? raw.value : "", b);
+  });
+
   function start() {
     document.querySelectorAll("[data-poll]").forEach(poll);
     document.querySelectorAll("[data-follow]").forEach(el => { decorate(el); toBottom(el); });  // opens on the latest
+    document.querySelectorAll(".docview").forEach(decorate);
     restoreDraft();
     notifyButton();
   }

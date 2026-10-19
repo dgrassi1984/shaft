@@ -445,6 +445,11 @@ def _get(req: Request, csrf: str) -> Response | None:
         if chat and chat.get("instance") != m[1]:
             return None
         return _html(200, v.chat_feed(m[1], chat, _sent_during(m[1], chat)))
+    if m := re.match(r"^/fragment/docs/([A-Za-z0-9_-]+)$", path):
+        if m[1] not in names:
+            return None
+        from . import web_chat
+        return _html(200, _docs_panel(m[1], web_chat.shown(m[1]), qs.get("doc", ""))[1])
     if m := re.match(r"^/chatfiles/(web-[a-f0-9]+)/(\d+)/(\d+)$", path):
         return _chat_file(m[1], int(m[2]), int(m[3]))
     if path == "/trials":
@@ -482,6 +487,26 @@ def _get(req: Request, csrf: str) -> Response | None:
         sel = qs.get("log") if qs.get("log") in order else order[0]
         return _html(200, v.services_page(live, sel, panel.SERVICE_LOGS[sel], panel.log_tail(sel, 40), names, csrf))
     return None
+
+
+def _docs_panel(name: str, chat: dict | None, doc: str):
+    """(the open document, the panel): the one asked for, else the last this chat changed, else none open."""
+    from . import docs, web_views as v
+    marked = v.in_chat(chat)
+    try:
+        listing = docs.listing(name)
+    except (Exception, SystemExit) as e:          # the documents never take the chat down with them: say what failed
+        log(f"web: {name}'s documents: {type(e).__name__}: {e}")
+        return doc, v.docs_panel(name, [], doc, None, "none", marked, f"documents not readable: {e}")
+    if not doc:
+        doc = next((d["path"] for d in listing if d["path"] in marked), "")
+    text, sha, problem = None, "none", ""
+    if doc:
+        try:
+            text, sha = docs.read(name, doc)
+        except docs.Refused as e:
+            problem = str(e)
+    return doc, v.docs_panel(name, listing, doc, text, sha, marked, problem)
 
 
 LAST_CHAT = "shaft_last"                                     # the instance whose chat / opens
@@ -530,8 +555,10 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str) -
         if chat and chat.get("instance") != name:
             return None
         past = [c for c in web_chat.chats(name) if c.get("state") == "ended"][:20]
+        doc, panel = _docs_panel(name, chat, qs.get("doc", ""))
         return _html(200, v.chat_page(name, chat, _sent_during(name, chat), past, _live(name), names, csrf,
-                                      read_only=bool(qs.get("id")) and bool(chat) and chat.get("state") == "ended"),
+                                      read_only=bool(qs.get("id")) and bool(chat) and chat.get("state") == "ended",
+                                      panel=panel, doc=doc),
                      {"Set-Cookie": f"{LAST_CHAT}={name}; Path=/; Max-Age={COOKIE_DAYS * 86400}; Secure; SameSite=Strict"})
     if tab in ("config", "drive", "access"):
         from . import opconfig, web_config

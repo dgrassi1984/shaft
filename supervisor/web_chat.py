@@ -35,8 +35,25 @@ SAVE_EVERY_S = 1.0                 # how often a streaming reply's activity is w
 MAX_TEXT = 20000                   # a message, at most
 
 
+# Added, unseen by the operator, to the first message of each web chat: how the instance shares a document with him
+# (PLAN-webui-chat §3). In the message rather than its prompts, so every instance gets it whatever its own code says.
+DOCS_NOTE = ("[Web chat: a Markdown file you write under notes/docs/ appears beside this chat as a document Daniele sees "
+             "live and can edit. Write it whole (write_file with replace=true when you drop lines). His edits reach you "
+             "as a diff in his next message.]")
+
+
 class Refused(Exception):
     pass
+
+
+def _docs_now(name: str) -> dict[str, str]:
+    """The instance's documents as they are ({path: sha}); a reply's cards are what changed. Never fails a reply."""
+    from . import docs
+    try:
+        return docs.snapshot(name)
+    except Exception as e:                        # noqa: BLE001 — a folder it broke must not stop the chat
+        log(f"web: could not read {name}'s documents: {type(e).__name__}: {e}")
+        return {}
 
 
 def _dir() -> Path:
@@ -257,14 +274,17 @@ def _run(relay: Relay) -> None:
         chat = load(cid)
         sent = chat["reply"].get("interjections", 0)
         note = ("stopped by you" if relay.stopped else f"error: {error}" if error else "")
+        from . import docs
+        made = docs.changed(chat["reply"].get("docs_before") or {}, _docs_now(chat["instance"]))
         chat["turns"].append({"role": "assistant", "content": answer.strip(), "ts": _now(), "activity": activity[-200:],
-                              "note": note})
+                              "note": note, **({"docs": made} if made else {})})
         chat["state"], chat["reply"] = "idle", None
         # An API older than the web UI does not say what it heard: then no second reply, rather than one per message.
         unheard = max(0, sent - heard) if heard is not None and not relay.stopped and not error else 0
         if unheard:                               # sent too late for this reply: answered by one of their own
             chat["state"], chat["reply"] = "replying", {"started": _now(), "activity": [], "answer": "",
-                                                        "interjections": 0, "followup": unheard}
+                                                        "interjections": 0, "followup": unheard,
+                                                        "docs_before": _docs_now(chat["instance"])}
         save(chat)
     if _relays.get(cid) is relay:                  # never a newer relay of the same chat
         del _relays[cid]
@@ -293,6 +313,8 @@ def send(name: str, login: str, text: str, files: list[tuple[str, bytes]]) -> tu
             raise Refused(str(e)) from None
     turn = {"role": "user", "content": (text + lines).strip(), "shown": text, "ts": _now(),
             "attachments": [{k: a[k] for k in ("name", "path", "bytes")} for a in atts]}
+    if not chat["turns"]:
+        turn["content"] += "\n\n" + DOCS_NOTE
     with _lock(cid):                               # the relay's last save takes it too: the chat's state is the truth
         chat = load(cid)
         chat["login"] = login
@@ -310,7 +332,8 @@ def send(name: str, login: str, text: str, files: list[tuple[str, bytes]]) -> tu
             return chat, (f"{name} reads it at its next step" if status == 202 else
                           f"{name} was just finishing: it answers this next")
         chat["turns"].append(turn)
-        chat["state"], chat["reply"] = "replying", {"started": _now(), "activity": [], "answer": "", "interjections": 0}
+        chat["state"], chat["reply"] = "replying", {"started": _now(), "activity": [], "answer": "", "interjections": 0,
+                                                    "docs_before": _docs_now(name)}
         save(chat)
     _start(cid)
     return chat, f"sent to {name}"
