@@ -38,16 +38,22 @@ import urllib.error
 import urllib.request
 from datetime import date, datetime
 
-from .core import NETWORK_ERRORS, SUP_DIR, knob
+from .core import NETWORK_ERRORS, SUP_DIR, knob, dollars, model_names, cloud_models, json_object
 
 API = "https://api.anthropic.com/v1/messages"
 OPENROUTER_API = "https://openrouter.ai/api/v1/chat/completions"
-CLOUD_MODELS, _ = knob("SHAFT_CLOUD_MODELS", "claude-haiku-5-5,claude-opus-5-5,openrouter/xiaomi/mimo-v2.6-pro",
-                       lambda s: [m.strip() for m in s.split(",") if m.strip()])
+CLOUD_MODELS, _ = knob(
+    "SHAFT_CLOUD_MODELS", "claude-haiku-5-5,claude-opus-5-5,openrouter/xiaomi/mimo-v2.6-pro", cloud_models, "the cloud "
+    "models an instance may run on (through the broker)", group="Models and spend", services=("runs", "api", "web"))
 # Daniele's choice of provider (2026-10-13): NovitaAI only, no fallback; plus the data policy.
-OPENROUTER_PROVIDER, _ = knob("SHAFT_OPENROUTER_PROVIDER",
-                              '{"only": ["novita"], "allow_fallbacks": false, "data_collection": "deny", "zdr": true, "require_parameters": true}', json.loads)
-DAILY_USD, _ = knob("SHAFT_CLOUD_DAILY_USD", "8", float)
+OPENROUTER_PROVIDER, _ = knob(
+    "SHAFT_OPENROUTER_PROVIDER",
+    '{"only": ["novita"], "allow_fallbacks": false, "data_collection": "deny", "zdr": true, "require_parameters": true}',
+    json_object, "OpenRouter's provider routing for every openrouter/ call (JSON): which providers, and the data policy",
+    group="Models and spend", services=("runs", "api"))
+DAILY_USD, _ = knob(
+    "SHAFT_CLOUD_DAILY_USD", "8", dollars, "dollars per day an instance may spend on its cloud model (shaft limits can "
+    "set one instance's own cap)", group="Models and spend", services=("runs", "api", "web"))
 
 
 def daily_cap(instance: str) -> float:
@@ -58,10 +64,13 @@ def daily_cap(instance: str) -> float:
     own = _tool_settings(instance).get("cloud_daily_usd") if instance.replace("-", "").isalnum() else None
     return float(own) if isinstance(own, (int, float)) and not isinstance(own, bool) and own > 0 else DAILY_USD
 DECISIONS_API = "https://openrouter.ai/api/alpha/decisions"
-DECISION_MODELS, _ = knob("SHAFT_DECISION_MODELS", "typesafe/jev-1.13,~typesafe/jev-latest",
-                          lambda s: [m.strip() for m in s.split(",") if m.strip()])
-DECISION_PROVIDER, _ = knob("SHAFT_DECISION_PROVIDER",
-                            '{"data_collection": "deny", "zdr": true, "allow_fallbacks": false}', json.loads)
+DECISION_MODELS, _ = knob(
+    "SHAFT_DECISION_MODELS", "typesafe/jev-1.13,~typesafe/jev-latest", model_names, "the models the broker's decide "
+    "tool may call (OpenRouter's decisions API); the first is its default", group="Models and spend",
+    services=("runs", "api"))
+DECISION_PROVIDER, _ = knob(
+    "SHAFT_DECISION_PROVIDER", '{"data_collection": "deny", "zdr": true, "allow_fallbacks": false}', json_object,
+    "the decide tool's provider routing and data policy (JSON)", group="Models and spend", services=("runs", "api"))
 # $ per million tokens (input, output, cache read) — prompts ≤ 100K tokens; from the Claude API price table.
 # Cache writes cost 1.25× input (5-minute entries) or 2× (1-hour). One table for every Claude call the supervisor
 # pays for: instances, the coder, the judges (usd() below).

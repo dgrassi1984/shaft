@@ -39,16 +39,30 @@ from math import comb
 from pathlib import Path
 
 from . import gate, localmodel, mind
-from .core import (CYCLE_TIMEOUT_S, HOME, LLM_PORTS, MIND_PATHS, PROJECT, SUP_DIR, UnsafePath, contained, knob, log,
-                   safe_write, secrets_env)
+from .core import (CYCLE_TIMEOUT_S, HOME, LLM_PORTS, MIND_PATHS, PROJECT, SUP_DIR, UnsafePath, cloud_model, contained,
+                   dollars, hours, knob, log, positive_int, safe_write, secrets_env, whole)
 
-TRIALS_PER_DAY, TRIALS_PER_DAY_SRC = knob("SHAFT_TRIALS_PER_DAY", "2", int)
-DAILY_USD, DAILY_USD_SRC = knob("SHAFT_TRIAL_DAILY_USD", "3", float)
-LOCAL_UNITS_PER_DAY, LOCAL_UNITS_SRC = knob("SHAFT_TRIAL_LOCAL_UNITS_PER_DAY", "24", int)
-N_MAX, N_MAX_SRC = knob("SHAFT_TRIAL_N_MAX", "10", int)
-LOCAL_WAIT_H, LOCAL_WAIT_SRC = knob("SHAFT_TRIAL_LOCAL_WAIT_H", "6", float)
-FALLBACK_MODEL, FALLBACK_SRC = knob("SHAFT_TRIAL_FALLBACK_MODEL", "openrouter/xiaomi/mimo-v2.6-pro", str)
-PARALLEL, PARALLEL_SRC = knob("SHAFT_TRIAL_PARALLEL", "3", int)
+TRIALS_PER_DAY, TRIALS_PER_DAY_SRC = knob(
+    "SHAFT_TRIALS_PER_DAY", "2", whole, "trials an instance may ask for per day (the operator's are not counted)",
+    group="Trials", services=("runs", "api", "scheduler", "web"))
+DAILY_USD, DAILY_USD_SRC = knob(
+    "SHAFT_TRIAL_DAILY_USD", "3", dollars, "dollars per day an instance's own trials may spend on cloud models",
+    group="Trials", services=("runs", "api", "scheduler", "web"))
+LOCAL_UNITS_PER_DAY, LOCAL_UNITS_SRC = knob(
+    "SHAFT_TRIAL_LOCAL_UNITS_PER_DAY", "24", whole, "replayed cycles per day an instance's own trials may run on the "
+    "local model; past it they run on the fallback model", group="Trials", services=("runs", "scheduler"))
+N_MAX, N_MAX_SRC = knob(
+    "SHAFT_TRIAL_N_MAX", "10", positive_int, "the most past cycles one trial replays", group="Trials",
+    services=("runs", "api"))
+LOCAL_WAIT_H, LOCAL_WAIT_SRC = knob(
+    "SHAFT_TRIAL_LOCAL_WAIT_H", "6", hours, "hours a trial waits for the local model's idle time before it runs on the "
+    "fallback model", group="Trials", services=("runs", "scheduler"))
+FALLBACK_MODEL, FALLBACK_SRC = knob(
+    "SHAFT_TRIAL_FALLBACK_MODEL", "openrouter/xiaomi/mimo-v2.6-pro", cloud_model, "the cloud model a local-model "
+    "trial runs on when the local model stays busy", group="Trials", services=("runs", "scheduler"))
+PARALLEL, PARALLEL_SRC = knob(
+    "SHAFT_TRIAL_PARALLEL", "3", positive_int, "replayed cycles a cloud-model trial runs at once", group="Trials",
+    services=("runs",))
 N_DEFAULT, N_MIN, EXTEND_BY = 6, 2, 4
 ALPHA = 0.1                    # one-sided sign test on the states that were not ties (decision D5)
 STALE_H = 48                   # a trial still unfinished after this is concluded with the pairs it has

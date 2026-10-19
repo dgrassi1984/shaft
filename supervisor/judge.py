@@ -20,10 +20,12 @@ import time
 import urllib.error
 import urllib.request
 
-from .core import NETWORK_ERRORS, SUP_DIR, knob, secrets_env
+from .core import NETWORK_ERRORS, SUP_DIR, cloud_models, knob, openrouter_model, secrets_env, whole
 
-JUDGE_MODELS, JUDGE_SRC = knob("SHAFT_JUDGE_MODELS", "openrouter/xiaomi/mimo-v2.6-pro,claude-sonnet-5-5",
-                               lambda s: [m.strip() for m in s.split(",") if m.strip()])
+JUDGE_MODELS, JUDGE_SRC = knob(
+    "SHAFT_JUDGE_MODELS", "openrouter/xiaomi/mimo-v2.6-pro,claude-sonnet-5-5", cloud_models, "the judge pool: each "
+    "judgment picks one at random, never the judged instance's own model", group="Judging",
+    services=("runs", "api", "web"))   # web: its stats count verdicts by the judges in the pool (by_current_judge)
 API = "https://api.anthropic.com/v1/messages"
 
 
@@ -153,8 +155,12 @@ def _log(purpose, model, usage, seconds, error, usd=None, provider=None, reasoni
 # data policy as the instances' cloud models (cloudllm.OPENROUTER_PROVIDER: Novita only, no data collection or
 # retention). Novita does not offer structured outputs for this model, so the schema is in the instructions and
 # the answer is checked here.
-JUDGE2_MODEL, _ = knob("SHAFT_JUDGE2_MODEL", "openrouter/z-ai/glm-5.3-flash", str)
-JUDGE2_EVERY, _ = knob("SHAFT_JUDGE2_EVERY", "4", int)        # one cycle in this many; 0 = no second judge
+JUDGE2_MODEL, _ = knob(
+    "SHAFT_JUDGE2_MODEL", "openrouter/z-ai/glm-5.3-flash", openrouter_model, "the second judge, which grades a "
+    "sample of cycles again to measure the judges' agreement", group="Judging", services=("runs", "api"))
+JUDGE2_EVERY, _ = knob(
+    "SHAFT_JUDGE2_EVERY", "4", whole, "the second judge grades one cycle in this many (0: never)", group="Judging",
+    services=("runs", "api"))
 # Its hidden reasoning shares this ceiling: measured over 84 calls (2026-10-14/15) p50 6.3k, p90 12.2k, max 16.5k
 # reasoning tokens, and 22.9k in one replay — 16000 left no room. At ~47 tokens/s (Novita), 32000 is also about
 # what fits in the 600 s HTTP timeout (cloudllm._send): a higher ceiling would trade a length re-ask for a timeout.

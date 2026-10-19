@@ -28,14 +28,20 @@ from typing import Callable
 
 from .cloudllm import CloudError, _record, _relay
 from . import localmodel
-from .core import LLM_PORTS, NETWORK_ERRORS, knob
+from .core import LLM_PORTS, NETWORK_ERRORS, knob, positive_int, json_object
 
 SERVERS, _ = knob("SHAFT_SELF_HOSTED", json.dumps({"racer": {
     "url": "http://100.120.0.1:8080/v1",   # DMDRacer over Tailscale: Bonsai 2 27B on an RTX 5070 Ti (llama.cpp)
     "sampling": {"temperature": 1.0, "top_p": 0.95, "top_k": 20, "min_p": 0.05},   # Daniele's opencode config
-    "think_budget": 4096}}), json.loads)   # the same ceiling as SHAFT's own server (SHAFT_THINK_BUDGET)
-FALLBACK, _ = knob("SHAFT_SELF_HOSTED_FALLBACK", f"http://127.0.0.1:{LLM_PORTS[0]}/v1", str)   # "" = none
-TIMEOUT_S, _ = knob("SHAFT_SELF_HOSTED_TIMEOUT_S", "1800", int)   # a long prompt is read before the first byte
+    "think_budget": 4096}}), json_object,   # the same ceiling as SHAFT's own server (SHAFT_THINK_BUDGET)
+    "self-hosted model servers instances may run on through the broker (JSON: name -> url, sampling, think_budget)",
+    group="Local model", services=("runs", "api", "web"))
+FALLBACK, _ = knob(
+    "SHAFT_SELF_HOSTED_FALLBACK", f"http://127.0.0.1:{LLM_PORTS[0]}/v1", str, "the server a self-hosted model's "
+    "calls fall back to when it is unreachable (empty: none)", group="Local model", services=("runs", "api"))
+TIMEOUT_S, _ = knob(   # a long prompt is read before the first byte
+    "SHAFT_SELF_HOSTED_TIMEOUT_S", "1800", positive_int, "seconds a self-hosted server may take to answer one call",
+    group="Local model", services=("runs", "api"))
 PROBE_S = 3   # an offline tailnet host does not refuse: it lets a connection hang until the timeout
 
 

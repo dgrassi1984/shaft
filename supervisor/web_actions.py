@@ -84,6 +84,9 @@ def _run(verb: str, form: dict, snap: dict, names: list[str], services: list[str
         if why := actions.service_guard("autonomy", op):
             raise Refused(f"not now: {why}")
         return _ran(["autonomy", op], timeout=90)
+    from . import web_settings
+    if verb in web_settings.VERBS:
+        return web_settings.run(verb, form)
     name = _inst(form, names)
     from . import web_config
     if verb in web_config.VERBS:

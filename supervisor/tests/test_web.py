@@ -249,7 +249,7 @@ class HostsTest(unittest.TestCase):
     def setUp(self):
         self.sup = Path(tempfile.mkdtemp(prefix="shaft-web-hosts-"))
         self.addCleanup(shutil.rmtree, self.sup, True)
-        for p in (mock.patch.object(web, "SUP_DIR", self.sup), mock.patch.dict("os.environ", {"SHAFT_WEB_HOSTS": ""})):
+        for p in (mock.patch.object(web, "SUP_DIR", self.sup), mock.patch.object(web, "WEB_HOSTS", set())):
             p.start()
             self.addCleanup(p.stop)
         web._hosts.update(at=0.0, hosts=set())

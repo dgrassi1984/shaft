@@ -20,10 +20,25 @@ from datetime import date, datetime
 from pathlib import Path
 
 from . import cloudllm
-from .core import HOME, NETWORK_ERRORS, SUP_DIR, UnsafePath, contained, knob, safe_write, secrets_env
+from .core import (HOME, NETWORK_ERRORS, SUP_DIR, UnsafePath, claude_model, contained, dollars, knob, safe_write,
+                   secrets_env)
 
-CODER_MODEL, _ = knob("SHAFT_CODER_MODEL", "claude-opus-5-5", str)
-DAILY_USD, _ = knob("SHAFT_CODER_DAILY_USD", "5", float)
+
+
+def _priced_claude(s: str) -> str:
+    """A Claude model with a price (cloudllm.PRICES): an unpriced one would be uncapped, and a hand-off refuses it."""
+    s = claude_model(s)
+    if s not in cloudllm.PRICES:
+        raise ValueError(f"{s!r} has no price in cloudllm.PRICES ({', '.join(sorted(cloudllm.PRICES))})")
+    return s
+
+
+CODER_MODEL, _ = knob(
+    "SHAFT_CODER_MODEL", "claude-opus-5-5", _priced_claude, "the model an instance hands a coding task to (delegate)",
+    group="Models and spend", services=("runs", "api"))
+DAILY_USD, _ = knob(
+    "SHAFT_CODER_DAILY_USD", "5", dollars, "dollars per day per instance its coding hand-offs may spend",
+    group="Models and spend", services=("runs", "api", "web"))
 MAX_TURNS = 16
 WRITABLE = ("shaft/", "plugins/", "skills/", "tests/")
 # secrets: the instance's keys, never to the coder; .venv/.uv: its Python environment, read in place, never copied;

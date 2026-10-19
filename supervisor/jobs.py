@@ -32,9 +32,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from .core import (HOME, PYTHON, SUP_DIR, _tool_settings, _update_tool_settings, instance_root,
-                   knob, log, safe_mkdir, safe_write)
+                   knob, positive_int, log, safe_mkdir, safe_write)
 
-MIN_MINUTES, _ = knob("SHAFT_JOB_MIN_MINUTES", "5", int)
+MIN_MINUTES, _ = knob(
+    "SHAFT_JOB_MIN_MINUTES", "5", positive_int, "the shortest interval an instance's own job (a plugin on a timer) may "
+    "run at", group="Inbox and benchmarks", services=("runs", "api", "scheduler"))
 MAX_MINUTES = 7 * 24 * 60
 MAX_JOBS = 5
 TIMEOUT_S = 120

@@ -27,13 +27,15 @@ from html.parser import HTMLParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from .core import NETWORK_ERRORS, knob
+from .core import NETWORK_ERRORS, cloud_model, knob, whole
 
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36"
 MAX_FETCH_BYTES = 3_000_000
 MAX_MESSAGE_CHARS = 8000
 # Messages to the operator per instance per day; 0 = no limit (Daniele, 2026-10-13, with Telegram: "No limit").
-OPERATOR_DAILY_LIMIT = int(os.environ.get("SHAFT_OPERATOR_PER_DAY") or 0)
+OPERATOR_DAILY_LIMIT, _ = knob(
+    "SHAFT_OPERATOR_PER_DAY", "0", whole, "messages per day one instance may send the operator (0: no limit)",
+    group="Runs and conversations", services=("runs", "api"))
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
 
 
@@ -350,7 +352,9 @@ SPECS["describe_image"] = _spec(
                                                "20261016-0912/photo-123.jpg"},
      "question": {"type": "string", "description": "what you want to know (optional: a full description)"}},
     ["path"])
-DESCRIBE_MODEL, _ = knob("SHAFT_DESCRIBE_MODEL", "claude-haiku-5-5", str)
+DESCRIBE_MODEL, _ = knob(
+    "SHAFT_DESCRIBE_MODEL", "claude-haiku-5-5", cloud_model, "the model describe_image uses for an instance whose "
+    "own model cannot see images", group="Models and spend", services=("runs", "api"))
 DESCRIBE_CALLS_PER_RUN = 10
 DESCRIBE_PROMPT = ("You describe an image for an AI assistant that cannot see it. Answer its question precisely. "
                    "Transcribe any text in the image exactly, and say what you cannot make out rather than guess.\n\n"

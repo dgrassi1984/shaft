@@ -21,9 +21,11 @@ import urllib.request
 from collections import Counter
 from datetime import datetime
 
-from .core import NETWORK_ERRORS, SUP_DIR, knob, secrets_env
+from .core import NETWORK_ERRORS, SUP_DIR, claude_model, knob, secrets_env
 
-MODEL, _ = knob("SHAFT_RECAP_MODEL", "claude-haiku-5-5", str)
+MODEL, _ = knob(
+    "SHAFT_RECAP_MODEL", "claude-haiku-5-5", claude_model, "the model that writes the overview's one-line recap of "
+    "each instance", group="Models and spend")
 API = "https://api.anthropic.com/v1/messages"
 STORE = SUP_DIR / "recaps.json"
 USAGE = SUP_DIR / "recap_usage.jsonl"

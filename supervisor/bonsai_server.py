@@ -277,7 +277,7 @@ def main(argv: list[str]) -> int:
     exit_if_generation_dies(S)
     exit_when_idle(S, args.port)
     bound_cache_graphs(importlib.import_module("mlx_lm.generate"))   # not `import ... as`: mlx_lm.generate is also a function
-    budget = int(os.environ.get("SHAFT_THINK_BUDGET", "4096"))   # Daniele: "not too low"
+    budget = localmodel.THINK_BUDGET
     original = S._make_logits_processors
 
     wrap_ids = load_tokenizer(pack).encode(WRAP_UP, add_special_tokens=False)
@@ -286,12 +286,12 @@ def main(argv: list[str]) -> int:
         b = request_budget(gen_args, budget)
         return list(original(gen_args) or []) + ([ThinkingBudget(b, wrap_ids)] if b > 0 else [])
     S._make_logits_processors = with_budget
-    temp = os.environ.get("SHAFT_MODEL_TEMP", "0.6")   # Daniele, 2026-10-13 (0.1 = near-greedy: verbatim loops; pack 1.0)
+    temp = str(localmodel.TEMP)
     # mlx_lm trims the prompt cache to this when the next request starts — after that request has taken its
     # prefix. Enforcing it on every insert instead (2026-10-13 morning) evicted each new entry at once on
     # long agent prompts: from ~16k tokens every tool round re-read the whole prompt (42k tokens, ~2 min).
-    # 8 GB holds the entries of a 40k-token conversation with float16 KV; the Mac has 64 GB.
-    cache_gb = float(os.environ.get("SHAFT_PROMPT_CACHE_GB", "8"))
+    # (SHAFT_PROMPT_CACHE_GB, localmodel.py)
+    cache_gb = localmodel.PROMPT_CACHE_GB
     cap = int(cache_gb * 1024 ** 3)
     handler, serve_http = tool_progress_handler(S), S._run_http_server
     S._run_http_server = lambda host, port, generator, **kw: serve_http(host, port, generator,

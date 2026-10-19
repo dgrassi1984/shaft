@@ -26,11 +26,13 @@ import time
 import urllib.request
 from pathlib import Path
 
-from .core import NETWORK_ERRORS, SUP_DIR, knob, log
+from .core import NETWORK_ERRORS, SUP_DIR, knob, positive_int, log
 
 MAX_EDGE = 1568                 # Claude's advice: larger images are scaled down anyway, at the same token cost
 MAX_BYTES = 3_750_000           # under Claude's 5 MB per image once base64-encoded
-MAX_IMAGES, _ = knob("SHAFT_MAX_IMAGES", "4", int)
+MAX_IMAGES, _ = knob(
+    "SHAFT_MAX_IMAGES", "4", positive_int, "images one model call may carry", group="Runs and conversations",
+    services=("runs", "api"))
 MODELS_URL = "https://openrouter.ai/api/v1/models"
 MODELS_TTL_S = 86400
 TYPES = {"image/jpeg", "image/png", "image/gif", "image/webp"}

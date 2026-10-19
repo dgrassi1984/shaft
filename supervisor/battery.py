@@ -38,15 +38,25 @@ from pathlib import Path
 from . import judge, localmodel, metrics, sandbox
 from .broker import CALENDAR_TOOLS, MAIL_TOOLS, Broker
 from .core import (BROKER_MAX_CALLS, EMBED_PORT, HOME, INSTANCES, LLM_PORTS, PROJECT, PYTHON, SUP_DIR, config_values,
-                   git_wt, instance_config, instance_root, knob, log, secrets_env)
+                   git_wt, instance_config, instance_root, knob, positive_int, whole, model_name, log, secrets_env)
 
-VERSION, _ = knob("SHAFT_BATTERY_VERSION", "v1", str)
-EVERY_DAYS, _ = knob("SHAFT_BATTERY_EVERY_DAYS", "5", int)          # 0 = never scheduled (Daniele, 2026-10-13: 5)
+VERSION, _ = knob(
+    "SHAFT_BATTERY_VERSION", "v1", model_name, "the battery item set in use (.supervisor/battery/items/<version>)",
+    group="Inbox and benchmarks", services=("runs", "scheduler", "web"))
+EVERY_DAYS, _ = knob(   # Daniele, 2026-10-13: 5
+    "SHAFT_BATTERY_EVERY_DAYS", "5", whole, "nights between an instance's scheduled capability batteries (0: never "
+    "scheduled)", group="Inbox and benchmarks", services=("runs", "scheduler", "web"))
 WINDOW_START = (1, 0)                                                # the night window opens at 01:00 ...
 WINDOW_MARGIN_MIN = 10                                               # ... and closes 10 min before the sleep
-ITEM_TIMEOUT_S, _ = knob("SHAFT_BATTERY_ITEM_TIMEOUT_S", "1800", int)
-CONTROL_REF, _ = knob("SHAFT_BATTERY_CONTROL_REF", "template", str)  # the branch a control is made from
-RECALL_MIN_AGE_H, _ = knob("SHAFT_BATTERY_RECALL_MIN_AGE_H", "48", int)
+ITEM_TIMEOUT_S, _ = knob(
+    "SHAFT_BATTERY_ITEM_TIMEOUT_S", "1800", positive_int, "seconds one battery item may run",
+    group="Inbox and benchmarks")
+CONTROL_REF, _ = knob(
+    "SHAFT_BATTERY_CONTROL_REF", "template", model_name, "the git branch a battery control instance is made from",
+    group="Inbox and benchmarks")
+RECALL_MIN_AGE_H, _ = knob(
+    "SHAFT_BATTERY_RECALL_MIN_AGE_H", "48", whole, "hours old a journal entry must be to make a battery recall item",
+    group="Inbox and benchmarks")
 RECALL_ITEMS = 6
 CATEGORIES = ("coding", "research", "recall", "self")
 CONTROLLED = ("coding", "research")          # a fresh mind cannot know an instance's memory or record
