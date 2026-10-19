@@ -12,7 +12,7 @@ import time
 from datetime import date, datetime
 from pathlib import Path
 
-from . import localmodel, messages
+from . import messages
 from .core import SUP_DIR, disabled_tools, instance_config, instance_names, instance_root, paused
 
 SERVICES = ("model", "embed", "api", "scheduler", "telegram")
@@ -182,8 +182,10 @@ def services() -> list[dict]:
             if name == "model":
                 s = rec.get("settings", {})
                 detail += f" · temp {s.get('temp')} · think {s.get('think_budget')}"
-        elif name == "model" and localmodel.plist().exists():   # runs only while used (localmodel.py): not down
-            detail, idle = "idle · starts on demand", True
+        elif name == "model":   # runs only while used (localmodel.py): down is a fault only if it is needed
+            from .panel import model_down_problem
+            why = model_down_problem()
+            detail, idle = (f"down · {why}" if why else "idle · starts on demand"), not why
         out.append({"name": name, "running": bool(rec), "idle": idle, "detail": detail})
     return out
 

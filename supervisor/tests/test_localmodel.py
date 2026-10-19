@@ -209,7 +209,9 @@ class CallersTest(unittest.TestCase):
 class StatusTest(unittest.TestCase):
     def test_an_idle_model_server_is_not_an_outage(self):
         from supervisor import dashboard, panel
+        sup = Path(self.enterContext(tempfile.TemporaryDirectory()))   # no failed start logged, no instance on it
         with mock.patch("supervisor.version.service", return_value=None), \
+                mock.patch.object(panel, "SUP_DIR", sup), mock.patch.object(panel, "instance_names", lambda: []), \
                 mock.patch.object(localmodel, "plist", return_value=Path(__file__)), \
                 mock.patch.object(dashboard, "_scheduler_running", return_value=True):
             svcs = {s["name"]: s for s in dashboard.services()}

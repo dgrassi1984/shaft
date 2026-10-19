@@ -462,12 +462,14 @@ against loops. Prompt reading is reported as progress (`reading my memory · N%`
 
 It runs only while used (`supervisor/localmodel.py`; Daniele, 2026-10-19): loaded it holds ~7.6 GB, and for five
 days its only user had been the racer → local fallback. While any instance's `config.env` points straight at it
-(`LLM_BASE_URL` on :8780) it stays up, as before. Otherwise it exits (code 0) once no request is in progress and
+(`LLM_BASE_URL` on :8780, or a self-hosted model in `SHAFT_SELF_HOSTED` whose server is it) it stays up, as before. Otherwise it exits (code 0) once no request is in progress and
 none has come for `SHAFT_MODEL_IDLE_MINUTES` (15; 0 = never). launchd starts it neither at login nor after that
 exit (`RunAtLoad` false, `KeepAlive` = restart only after a crash). Every path that reaches it starts it first and
 waits until it answers (~2 s with the page cache warm, `SHAFT_MODEL_START_TIMEOUT_S` at most): a run of an instance
-on it, the racer fallback, a local trial replay, a battery exam, evolution's baseline. `shaft top` shows it as
-*idle* rather than down, and raises no alert for it.
+on it, the racer fallback, a local trial replay, a battery exam, evolution's baseline. `shaft top` (and the web UI)
+shows it as *idle* rather than down, with no alert — unless its being down is a fault: an instance's calls go to it
+(it never idles out then), or its latest on-demand start failed (logged as `model server failed to start on demand`;
+alerted for 12 h, until any later start).
 
 ## Rules the supervisor enforces
 

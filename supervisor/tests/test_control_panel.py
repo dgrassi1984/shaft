@@ -19,7 +19,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
-from supervisor import cloudllm, coder, panel, trial
+from supervisor import cloudllm, coder, core, dashboard, localmodel, panel, selfhosted, trial
 from supervisor.core import PROJECT
 
 try:
@@ -47,9 +47,14 @@ class PanelData(unittest.TestCase):
                   mock.patch.object(trial, "LEDGER", self.sup / "trial_usage.jsonl"),
                   mock.patch.object(cloudllm, "USAGE", self.sup / "cloud_usage.jsonl"),
                   mock.patch.object(coder, "USAGE", self.sup / "coder_usage.jsonl"),
-                  mock.patch.object(panel, "instance_names", lambda: ["shaft", "wren"])):
+                  mock.patch.object(panel, "instance_names", lambda: ["shaft", "wren"]),
+                  mock.patch.object(panel, "instance_config", lambda n: self.cfgs.get(n, {})),
+                  mock.patch.object(localmodel, "plist", lambda: self.sup / "com.shaft.model.plist")):
             p.start()
             self.addCleanup(p.stop)
+        (self.sup / "com.shaft.model.plist").write_text("")   # the model server is installed
+        self.cfgs = {"shaft": {"LLM_BASE_URL": "broker", "LLM_MODEL": "claude-opus-5-5"},
+                     "wren": {"LLM_BASE_URL": "broker", "LLM_MODEL": "racer/bonsai2"}}   # racer: local fallback only
         panel._memo.clear()
 
     def _spend(self):
@@ -102,9 +107,11 @@ class PanelData(unittest.TestCase):
             f"[{recent}] wren: probation 1234abcd passed (0.9 vs baseline 0.8)\n"
             f"[{recent}] shaft: committed live on instance/shaft (2 files)\n")
         with mock.patch.object(panel, "JUDGE_ALERT_USD", 1.0):
-            a = panel.alerts({"services": [{"name": "model", "running": False}, {"name": "api", "running": False}]})
+            a = panel.alerts({"services": [{"name": "model", "running": False}, {"name": "api", "running": False},
+                                           {"name": "scheduler", "running": False}]})
         text = "\n".join(x["text"] for x in a)
-        self.assertIn("service model is not running", text)
+        self.assertIn("service scheduler is not running", text)
+        self.assertNotIn("service model", text)               # down by design: nobody needs it (test_model_*)
         self.assertNotIn("service api", text)                 # only the services runs depend on
         self.assertIn("wren: cloud $7.00 of $8.00", text)
         self.assertIn("judge spend $4.61", text)
@@ -112,6 +119,71 @@ class PanelData(unittest.TestCase):
         self.assertNotIn("kant", text)                        # older than ALERT_HOURS
         self.assertNotIn("passed", text)
         self.assertEqual(len({x["id"] for x in a}), len(a))   # dismissable one by one
+
+    # Regression (2026-10-19, web UI overview): "service model is not running" showed whenever the local model server
+    # was down, though it exits after 15 idle minutes by design and its next user starts it (localmodel.py) — a false
+    # alert most of the day. Now only a down that is a fault raises it: an instance whose calls go to the server, or
+    # a failed on-demand start.
+    MODEL_DOWN = {"services": [{"name": "model", "running": False}]}
+
+    def _model_alerts(self):
+        return [a for a in panel.alerts(self.MODEL_DOWN, cost=panel.costs(days=1)) if a["id"].startswith("svc:model")]
+
+    def _log(self, *lines):
+        with (self.sup / "supervisor.log").open("a") as f:
+            f.writelines(f"[{t:%Y-%m-%d %H:%M:%S}] {msg}\n" for t, msg in lines)
+
+    def test_model_server_that_exited_idle_raises_no_alert(self):
+        self._log((NOW - timedelta(hours=3), f"{localmodel.START_FAILED} for wren's fallback from racer/bonsai2: "
+                                             "com.shaft.model did not answer on :8780 within 300s of starting it"),
+                  (NOW - timedelta(hours=2), f"{localmodel.START_OK} for wren's fallback from racer/bonsai2 in 2.2s"))
+        # ...then, as on 2026-10-19 12:54 -> 13:10, it served and exited idle (that goes to com.shaft.model.log)
+        self.assertEqual(self._model_alerts(), [])
+        self.assertIsNone(panel.model_down_problem())
+
+    def test_model_server_whose_on_demand_start_failed_raises_an_alert(self):
+        with mock.patch.object(core, "SUP_DIR", self.sup), mock.patch.object(localmodel, "answers", return_value=False), \
+                mock.patch.object(localmodel, "_launchctl", return_value=subprocess.CompletedProcess([], 113, "",
+                                                                                                    "Could not find service")):
+            with self.assertRaises(RuntimeError):
+                localmodel.ensure("wren's fallback from racer/bonsai2")   # the real path writes the log line
+        a = self._model_alerts()
+        self.assertEqual(len(a), 1, a)
+        self.assertIn("service model is not running: its on-demand start failed", a[0]["text"])
+        self.assertIn("wren's fallback", a[0]["text"])
+        self.assertIn("launchctl kickstart: Could not find service", a[0]["text"])   # why, for the operator
+        later = datetime.now() + timedelta(seconds=2)
+        (self.sup / "services").mkdir()                        # started by hand after it: no longer a fault
+        (self.sup / "services" / "model.json").write_text(json.dumps({"pid": 1, "started": f"{later:%Y-%m-%dT%H:%M:%S}"}))
+        self.assertEqual(self._model_alerts(), [])
+        (self.sup / "services" / "model.json").unlink()
+        self._log((later, f"{localmodel.START_OK} for kant's live in 2.0s"))   # or a later start on demand succeeded
+        self.assertEqual(self._model_alerts(), [])
+        old = NOW - timedelta(hours=panel.ALERT_HOURS + 1)     # a failure older than the alert window is not shown
+        (self.sup / "supervisor.log").write_text(f"[{old:%Y-%m-%d %H:%M:%S}] {localmodel.START_FAILED} for x: y\n")
+        self.assertEqual(self._model_alerts(), [])
+
+    def test_model_server_down_while_an_instance_uses_it_raises_an_alert(self):
+        self.cfgs["wren"] = {"LLM_BASE_URL": "http://localhost:8780/v1"}   # it never idles out: down is a fault
+        a = self._model_alerts()
+        self.assertEqual([x["text"] for x in a], ["service model is not running: wren uses it (calls go to :8780)"])
+        self.cfgs["wren"] = {"LLM_BASE_URL": "broker", "LLM_MODEL": "box/bonsai2"}   # a self-hosted model sent to it
+        with mock.patch.object(selfhosted, "SERVERS", {"box": {"url": "http://127.0.0.1:8780/v1"}}):
+            self.assertIn("wren uses it", self._model_alerts()[0]["text"])
+            self.assertEqual(localmodel.pinned_by(8780, ["wren"], self.cfgs.__getitem__), ["wren"])  # never idles
+        self.assertEqual(self._model_alerts(), [])               # racer/bonsai2 again: fallback only
+        (self.sup / "com.shaft.model.plist").unlink()            # uninstalled: no user could start it
+        self.assertIn("not installed", self._model_alerts()[0]["text"])
+
+    def test_the_services_line_shows_a_needed_model_server_down_and_an_unneeded_one_idle(self):
+        with mock.patch.object(dashboard, "_scheduler_running", return_value=True), \
+                mock.patch("supervisor.version.service", return_value=None):
+            model = next(s for s in dashboard.services() if s["name"] == "model")
+            self.assertEqual((model["idle"], model["detail"]), (True, "idle · starts on demand"))
+            self.cfgs["wren"] = {"LLM_BASE_URL": "http://127.0.0.1:8780/v1"}
+            model = next(s for s in dashboard.services() if s["name"] == "model")
+            self.assertFalse(model["idle"])
+            self.assertEqual(model["detail"], "down · wren uses it (calls go to :8780)")
 
     def test_dismissed_alerts_stay_dismissed(self):
         panel.dismiss(["log:x"])
@@ -369,7 +441,7 @@ class PanelKeys(unittest.TestCase):
 
 
 DETAIL = {"name": "shaft", "paused": False, "model": "bonsai", "via": "local", "wake": "10", "effort": "medium",
-          "tools_off": [], "shared": "", "mail": "", "calendar": "", "python": ".venv · Python 3.13.1", "internet": "3 today · pypi.org ×2", "stats": "# My measured performance\n- rate 70%",
+          "tools_off": [], "shared": "", "mail": "", "calendar": "", "python": ".venv · Python 3.13.1", "browser": "chromium 140 · profile 2 MB", "internet": "3 today · pypi.org ×2", "stats": "# My measured performance\n- rate 70%",
           "journal": ["2026-10-13 17:32 — Conversation with Daniele"], "questions": [],
           "probation": [{"commit": "abcdef1234", "since": "2026-10-13T15:00", "files": ["plugins/x/main.py"],
                          "baseline": 0.5, "restore_failed": "file changed since"}],

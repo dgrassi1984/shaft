@@ -28,6 +28,7 @@ LABEL = "com.shaft.model"
 LOCALHOST = {"localhost", "127.0.0.1", "::1"}
 IDLE_MINUTES, IDLE_SRC = knob("SHAFT_MODEL_IDLE_MINUTES", "15", int)
 START_TIMEOUT_S, START_SRC = knob("SHAFT_MODEL_START_TIMEOUT_S", "300", int)   # a cold disk after a reboot
+START_OK, START_FAILED = "model server started on demand", "model server failed to start on demand"   # supervisor.log
 
 
 def server_of(url: str) -> str | None:
@@ -46,9 +47,15 @@ def is_service(url: str, port: int = PORT) -> bool:
 
 
 def pinned_by(port: int = PORT, names: list[str] | None = None, config_of=instance_config) -> list[str]:
-    """The instances whose config.env points straight at the server: while there is one, it never idles out."""
-    return [n for n in (instance_names() if names is None else names)
-            if is_service(config_of(n).get("LLM_BASE_URL", ""), port)]
+    """The instances whose model calls go to the server: config.env straight on it, or a self-hosted model the
+    broker sends to it (SHAFT_SELF_HOSTED). While there is one, it never idles out — and it being down is a fault
+    (down_problem). The racer -> local fallback does not pin it: that path starts it itself (ensure)."""
+    from . import selfhosted   # here: selfhosted imports this module
+
+    def url(cfg: dict) -> str:
+        u, model = cfg.get("LLM_BASE_URL", "").strip(), cfg.get("LLM_MODEL")
+        return selfhosted.server(model)["url"] if u == "broker" and selfhosted.serves(model) else u
+    return [n for n in (instance_names() if names is None else names) if is_service(url(config_of(n)), port)]
 
 
 def idle_exit_due(now: float, last_activity: float, in_flight: int, pinned: list[str],
@@ -76,9 +83,18 @@ def plist() -> Path:
 
 def ensure(who: str, timeout_s: float | None = None) -> None:
     """Make the local Bonsai server answer, starting its launchd service if it does not. Raises RuntimeError with the
-    reason (not installed, did not come up in time) — never silently goes on without it."""
+    reason (not installed, did not come up in time) — never silently goes on without it — and logs it (START_FAILED:
+    the panel's alert while it stays down, down_problem)."""
     if answers():
         return
+    try:
+        _start(who, timeout_s)
+    except RuntimeError as e:
+        log(f"{START_FAILED} for {who}: {e}")
+        raise
+
+
+def _start(who: str, timeout_s: float | None) -> None:
     if not plist().exists():
         raise RuntimeError(f"the local model server is not installed ({plist()} missing): shaft model on")
     domain, started = f"gui/{os.getuid()}", time.monotonic()
@@ -94,4 +110,25 @@ def ensure(who: str, timeout_s: float | None = None) -> None:
             raise RuntimeError(f"{LABEL} did not answer on :{PORT} within {deadline - started:.0f}s of starting it "
                                f"(see .supervisor/{LABEL}.log)")
         time.sleep(0.5)
-    log(f"model server started on demand for {who} in {time.monotonic() - started:.1f}s")
+    log(f"{START_OK} for {who} in {time.monotonic() - started:.1f}s")
+
+
+def down_problem(log_lines: list[str], since: str = "", port: int = PORT, names: list[str] | None = None,
+                 config_of=instance_config) -> str | None:
+    """Why the server not answering is a fault, or None when it is just idle (it exited idle, as designed, and its
+    next user starts it). A fault: it is not installed (no user could start it), an instance's calls go to it
+    (pinned_by: it never idles out while there is one), or the latest on-demand start in `log_lines` (supervisor.log)
+    failed, at or after `since` ('YYYY-mm-dd HH:MM:SS': the caller passes the later of its alert window and the
+    server's last start, so any start after it clears it)."""
+    if not plist().exists():
+        return "not installed, so nothing can start it (shaft model on)"
+    users = pinned_by(port, names, config_of)
+    if users:
+        return f"{', '.join(users)} {'uses' if len(users) == 1 else 'use'} it (calls go to :{port})"
+    for line in reversed(log_lines):
+        if START_OK in line:
+            return None
+        if START_FAILED in line:
+            what = line[line.index(START_FAILED) + len(START_FAILED):].strip()   # "for kant's live: <reason>"
+            return f"its on-demand start failed at {line[12:20]} {what}"[:300] if line[1:20] >= since else None
+    return None
