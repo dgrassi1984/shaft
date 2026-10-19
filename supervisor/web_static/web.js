@@ -53,6 +53,22 @@
     el.classList.remove("stale");
   }
 
+  // The server was updated while this page stayed open (a phone keeps an app's page for days): it says so, once.
+  function checkVersion(r) {
+    const mine = (document.querySelector('meta[name="static-version"]') || {}).content;
+    const theirs = r.headers.get("X-Shaft-Static");
+    if (!mine || !theirs || mine === theirs || document.getElementById("updated")) return;
+    const bar = document.createElement("div");
+    bar.id = "updated";
+    bar.setAttribute("role", "status");
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = "SHAFT was updated — reload";
+    b.addEventListener("click", () => location.reload());
+    bar.appendChild(b);
+    document.body.appendChild(bar);
+  }
+
   function toBottom(el) {
     const box = el.closest("[data-scroll]");
     if (box) box.scrollTop = box.scrollHeight;
@@ -79,6 +95,7 @@
       try {
         const r = await fetch(url, { credentials: "same-origin", cache: "no-store" });
         const body = await r.text();
+        checkVersion(r);
         if (r.ok) {
           // Asked again now: an edit or a selection begun while this refresh was on its way must survive it (Codex)
           if (busyIn(el) || el.dataset.poll !== url) return;
@@ -535,6 +552,9 @@
     });
     if (changed) seenSet(seen);
     const unread = rail.querySelectorAll("a.unread").length;
+    if (navigator.setAppBadge) {                    // the Home Screen icon's count: an app shows no tab title
+      (unread ? navigator.setAppBadge(unread) : navigator.clearAppBadge()).catch(() => {});
+    }
     document.title = document.title.replace(/^\(\d+\) /, "");
     if (unread) document.title = `(${unread}) ${document.title}`;
   }
@@ -646,6 +666,9 @@
   });
 
   function start() {
+    if ("serviceWorker" in navigator) {             // the app's shell: offline page and cached static files
+      navigator.serviceWorker.register("/sw.js").catch(() => { /* not over https, or refused: the page works */ });
+    }
     document.querySelectorAll("[data-poll]").forEach(poll);
     document.querySelectorAll("[data-follow]").forEach(el => { decorate(el); toBottom(el); });  // opens on the latest
     document.querySelectorAll(".docview").forEach(decorate);

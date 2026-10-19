@@ -547,9 +547,10 @@ def _chat_attachments(cid: str, k: int, atts: list[dict]) -> Html:
     for j, a in enumerate(atts or []):
         url = f"/chatfiles/{q(cid)}/{k}/{j}"
         if a["name"].lower().endswith(IMAGE_TYPES):
-            out.append(h('<a href="{u}"><img class="thumb" src="{u}" alt="{n}"></a>', u=url, n=a["name"]))
+            out.append(h('<a href="{u}" target="_blank"><img class="thumb" src="{u}" alt="{n}" loading="lazy"></a>',
+                         u=url, n=a["name"]))
         else:
-            out.append(h('<a class="file" href="{u}">📎 {n}</a>', u=url, n=a["name"]))
+            out.append(h('<a class="file" href="{u}" target="_blank">📎 {n}</a>', u=url, n=a["name"]))
     return h('<div class="atts">{o}</div>', o=join(out)) if out else Html("")
 
 
@@ -675,9 +676,10 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
                                      '{copy}</div>{act}{body}{cards}{note}</div>', raw=t.get("content") or "", n=name,
                                      ts=t["ts"][11:16], copy=copy, act=_activity(t.get("activity", []), f"t{k}"),
                                      body=body, cards=doc_cards(t.get("docs")), note=note)))
-    for m in sent:
-        atts = join(h('<a href="/files/{f}/{j}">{img}</a>', f=q(m["file"]), j=j,
-                      img=h('<img class="thumb" src="/files/{f}/{j}" alt="{n}">', f=q(m["file"]), j=j, n=a["name"])
+    for m in sent:             # files open in a sheet of their own: in an app, a link replaced its only view
+        atts = join(h('<a href="/files/{f}/{j}" target="_blank">{img}</a>', f=q(m["file"]), j=j,
+                      img=h('<img class="thumb" src="/files/{f}/{j}" alt="{n}" loading="lazy">', f=q(m["file"]), j=j,
+                            n=a["name"])
                       if a["name"].lower().endswith(IMAGE_TYPES) else h("📎 {n}", n=a["name"]))
                     for j, a in enumerate(m.get("attachments") or []))
         items.append((m["ts"], h('<div class="turn sent"><div class="who">{n} sent you <a href="/messages/{f}">a message'

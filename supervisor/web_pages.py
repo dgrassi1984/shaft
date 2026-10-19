@@ -55,17 +55,30 @@ def _static_version(folder: Path = Path(__file__).parent / "web_static") -> str:
 STATIC_VERSION = _static_version()      # read once at start: the service is restarted to load new code anyway
 
 
+APP_NAME = "SHAFT"
+THEME = {"light": "#f6f6f4", "dark": "#141413"}       # the page's --bg in each scheme (web.css)
+
+
 def page(title: str, body: Html, nav: Html = Html(""), csrf: str = "") -> Html:
     meta = h('<meta name="csrf" content="{csrf}">', csrf=csrf) if csrf else Html("")
     return h('<!doctype html><html lang="en"><head><meta charset="utf-8">'
-             '<meta name="viewport" content="width=device-width, initial-scale=1">'
+             '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">'
              '<meta name="color-scheme" content="light dark">{meta}<title>{title} · SHAFT</title>'
+             # an app on the Home Screen (PLAN-pwa P1): its manifest, its name, its bar and colours
+             '<link rel="manifest" href="/manifest.webmanifest">'
+             '<meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes">'
+             '<meta name="apple-mobile-web-app-title" content="{app}">'
+             '<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">'
+             '<meta name="theme-color" content="{light}" media="(prefers-color-scheme: light)">'
+             '<meta name="theme-color" content="{dark}" media="(prefers-color-scheme: dark)">'
+             '<meta name="static-version" content="{v}">'
              '<link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v={v}">'
              '<link rel="apple-touch-icon" href="/static/icon-180.png?v={v}">'
              '<link rel="stylesheet" href="/static/web.css?v={v}">'
              '<script src="/static/web.js?v={v}" defer></script></head>'
              '<body><div class="shell">{nav}<main>{body}</main></div></body></html>',
-             meta=meta, title=title, v=STATIC_VERSION, nav=nav, body=body)
+             meta=meta, title=title, v=STATIC_VERSION, nav=nav, body=body, app=APP_NAME, light=THEME["light"],
+             dark=THEME["dark"])
 
 
 # The pages used now and then, under the rail's chats: the one list of them (a second list, passed in and ignored,
@@ -113,6 +126,83 @@ def message_page(title: str, text: str, detail: str = "") -> Html:
     extra = h('<p class="dim">{d}</p>', d=detail) if detail else Html("")
     return page(title, h('<section class="notice"><h1>{t}</h1><p>{text}</p>{extra}</section>',
                          t=title, text=text, extra=extra))
+
+
+# -- the app's shell (PLAN-pwa P1): served before pairing, nothing private in it -----------------------------------
+def manifest() -> str:
+    """The web app manifest: what Add to Home Screen installs. start_url / reopens the last chat (its cookie)."""
+    import json
+    icon = lambda name, size, purpose="any": {"src": f"/static/{name}?v={STATIC_VERSION}", "sizes": f"{size}x{size}",
+                                              "type": "image/png", "purpose": purpose}
+    return json.dumps({
+        "id": "/", "start_url": "/", "scope": "/", "display": "standalone", "name": APP_NAME,
+        "short_name": APP_NAME, "description": "Chat with and run SHAFT's instances",
+        "background_color": THEME["dark"], "theme_color": THEME["dark"],
+        "icons": [icon("icon-192.png", 192), icon("icon-512.png", 512), icon("icon-maskable-512.png", 512, "maskable"),
+                  icon("icon-180.png", 180)]}, indent=1)
+
+
+SW = """// SHAFT's service worker (PLAN-pwa P1), written by web_pages.service_worker() for static version @V@.
+// It keeps only what never changes under a URL — the versioned static files — and an offline page. Every page,
+// fragment, file and POST goes to the server as it always did: nothing private is ever cached.
+const VERSION = "@V@";
+const CACHE = "shaft-" + VERSION;
+const SHELL = ["/offline", "/static/web.css?v=@V@", "/static/web.js?v=@V@", "/static/favicon.svg?v=@V@",
+               "/static/icon-192.png?v=@V@"];
+
+self.addEventListener("install", (ev) => {
+  ev.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+});
+
+self.addEventListener("activate", (ev) => {           // an older version's cache goes; this one serves at once
+  ev.waitUntil(caches.keys()
+    .then((keys) => Promise.all(keys.filter((k) => k.startsWith("shaft-") && k !== CACHE).map((k) => caches.delete(k))))
+    .then(() => self.clients.claim()));
+});
+
+self.addEventListener("fetch", (ev) => {
+  const req = ev.request;
+  if (req.method !== "GET") return;
+  const url = new URL(req.url);
+  if (url.origin !== self.location.origin) return;
+  if (req.mode === "navigate") {                     // the server, always; when it cannot be reached, say so
+    ev.respondWith(fetch(req).catch(() => caches.match("/offline")));
+    return;
+  }
+  if (url.pathname.startsWith("/static/") && url.searchParams.get("v") === VERSION) {
+    ev.respondWith(caches.match(req).then((hit) => hit || fetch(req).then((r) => {
+      if (r.ok) { const copy = r.clone(); caches.open(CACHE).then((c) => c.put(req, copy)); }
+      return r;
+    })));
+  }
+});
+"""
+
+
+def service_worker() -> str:
+    return SW.replace("@V@", STATIC_VERSION)
+
+
+def offline_page() -> Html:
+    """Shown by the service worker when the server cannot be reached (the app opened with the Mac asleep, or the
+    phone off the tailnet): a standalone app has no address bar or reload of its own."""
+    return page("Not reachable", h(
+        '<section class="notice"><h1>SHAFT is not reachable</h1>'
+        '<p>The phone cannot reach the Mac running SHAFT. Check that Tailscale is connected on this phone and that the '
+        'Mac is awake.</p><p><a class="button" href="/">Try again</a></p></section>'))
+
+
+def unpaired_page() -> Html:
+    """Not paired: how to pair this browser — or this Home Screen app, which has cookies of its own and no address
+    bar to open a pairing link in: the link is pasted here instead."""
+    return page("Pair this app", h(
+        '<section class="notice"><h1>This app or browser is not paired</h1>'
+        '<p>In your terminal run <code>shaft web pair --name phone-app</code>, copy the link it prints, and paste it '
+        'here. It works once, for 10 minutes.</p>'
+        '<form method="post" action="/pair" class="pairform"><input name="link" type="url" inputmode="url" required '
+        'autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://…/pair?t=…" '
+        'aria-label="Pairing link"><button type="submit">Pair</button></form>'
+        '<p class="dim">In a browser you can also just open the link.</p></section>'))
 
 
 def pair_page(token: str, device: str) -> Html:

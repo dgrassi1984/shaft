@@ -125,11 +125,13 @@ class PairingTest(WebTest):
         r = self.req("/pair", "POST", body=f"t={token}".encode(), headers={"sec-fetch-site": "cross-site"})
         self.assertEqual(r.status, 403)
 
-    def test_the_cookie_is_httponly_secure_and_strict(self):
+    def test_the_cookie_is_httponly_secure_and_lax(self):
+        """Lax, not Strict (PLAN-pwa P1): a link to the UI opened from Telegram or Messages is a cross-site navigation
+        and a Strict cookie was not sent. Every POST still needs the page's token and same-origin (ForgedRequestsTest)."""
         url = web.new_pairing("laptop")
         r = self.req("/pair", "POST", body=f"t={url.split('t=')[1]}".encode(), headers={"sec-fetch-site": "same-origin"})
         flags = r.headers["Set-Cookie"].lower()
-        for f in ("httponly", "secure", "samesite=strict", "path=/"):
+        for f in ("httponly", "secure", "samesite=lax", "path=/"):
             self.assertIn(f, flags)
 
 

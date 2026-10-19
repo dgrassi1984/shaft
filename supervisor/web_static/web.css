@@ -381,3 +381,22 @@ form.clearbtn { display: inline; margin: 0; }
   .menubody { position: fixed; left: .5rem; right: .5rem; top: 3.5rem; width: auto;
               max-height: calc(100dvh - 4.5rem); overflow-y: auto; }
 }
+
+/* An app on the Home Screen (PLAN-pwa P1): its status bar is translucent (black-translucent) and the page runs under
+   the notch and over the home indicator, so the page keeps clear of both (0 in a browser tab). */
+body { padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); }
+nav { height: calc(100vh - env(safe-area-inset-top)); }
+main:has(> .chatgrid) { height: calc(100dvh - env(safe-area-inset-top)); padding-bottom: calc(.4rem + env(safe-area-inset-bottom)); }
+#toast { bottom: calc(1rem + env(safe-area-inset-bottom)); }
+#updated { position: fixed; left: 50%; transform: translateX(-50%); top: calc(.6rem + env(safe-area-inset-top)); z-index: 50; }
+#updated button { box-shadow: 0 2px 10px rgba(0, 0, 0, .3); border-color: var(--accent); }
+.pairform { display: flex; gap: .4rem; margin: .6rem 0; }
+.pairform input { flex: 1 1 auto; min-width: 0; }
+a.button { display: inline-block; padding: .45rem .9rem; border: 1px solid var(--line); border-radius: 6px;
+           background: var(--panel); color: var(--text); }
+@media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
+  nav { height: auto; }
+  main:has(> .chatgrid) { height: auto; }
+  .chatpage > form.composer { padding-bottom: calc(.4rem + env(safe-area-inset-bottom)); }
+  .menubody { top: calc(3.5rem + env(safe-area-inset-top)); max-height: calc(100dvh - 4.5rem - env(safe-area-inset-top)); }
+}

@@ -367,8 +367,10 @@ class ChatCentricTest(ChatRoutesTest):
 
     def test_opening_a_chat_remembers_it_for_the_front_page(self):
         r = self.req("/i/wren/chat", cookie=self.cookie)
-        self.assertIn("shaft_last=wren;", r.headers["Set-Cookie"])
-        self.assertIn("SameSite=Strict", r.headers["Set-Cookie"])
+        cookies = r.headers["Set-Cookie"]
+        last = next(c for c in ([cookies] if isinstance(cookies, str) else cookies) if c.startswith("shaft_last="))
+        self.assertIn("shaft_last=wren;", last)
+        self.assertIn("SameSite=Strict", last)
 
     def test_the_rail_shows_state_last_line_and_when_it_last_answered(self):
         self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},

@@ -237,6 +237,7 @@ class Request:
     body: bytes = b""
     path: str = ""
     query: dict = field(default_factory=dict)
+    set_cookies: list = field(default_factory=list)     # cookies to send with whatever the route answers
 
     def __post_init__(self):
         split = urllib.parse.urlsplit(self.target)
@@ -287,19 +288,26 @@ def overview() -> dict:
         return _snap["snap"]
 
 
-def _static(name: str) -> Response:
+def _static(name: str, versioned: bool = False) -> Response:
     path = (STATIC / name).resolve()
     if not name or path.parent != STATIC or not path.is_file():
         return _html(404, web_pages.message_page("Not found", "No such file."))
     ctype = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-    return Response(200, path.read_bytes(), {"Content-Type": ctype, "Cache-Control": "max-age=3600"})
+    # ?v= is the files' own hash (web_pages.STATIC_VERSION): that URL never changes content, so it is kept for good
+    cache = "public, max-age=31536000, immutable" if versioned else "max-age=3600"
+    return Response(200, path.read_bytes(), {"Content-Type": ctype, "Cache-Control": cache})
 
 
 def respond(req: Request) -> Response:
     r = _route(req)
     r.headers.update({"Content-Security-Policy": CSP, "X-Content-Type-Options": "nosniff",
-                      "Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY"})
+                      "Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY",
+                      # a page open since before an update compares this with its own scripts' version
+                      "X-Shaft-Static": web_pages.STATIC_VERSION})
     r.headers.setdefault("Cache-Control", "no-store")
+    if req.set_cookies:                             # a list: one Set-Cookie header each
+        own = r.headers.get("Set-Cookie")
+        r.headers["Set-Cookie"] = ([own] if isinstance(own, str) else own or []) + req.set_cookies
     return r
 
 
@@ -312,16 +320,28 @@ def _route(req: Request) -> Response:
         log(f"web refused host {req.headers.get('host')!r} ({req.method} {req.path})")
         return _refused("Open this page at its tailnet address.", url())
     if req.path.startswith("/static/"):
-        return _static(urllib.parse.unquote(req.path.removeprefix("/static/")))
+        return _static(urllib.parse.unquote(req.path.removeprefix("/static/")),
+                       versioned=req.query.get("v") == web_pages.STATIC_VERSION)
     if req.path == "/favicon.ico":                  # asked by browsers on their own: the icon, not a refusal page
         return _static("icon-180.png")
+    # The app's shell (PLAN-pwa P1): fetched by the browser before it is paired, with nothing private in it.
+    if req.path == "/manifest.webmanifest":
+        return Response(200, web_pages.manifest().encode(), {"Content-Type": "application/manifest+json",
+                                                             "Cache-Control": "no-cache"})
+    if req.path == "/sw.js":                        # at the root: its scope is the whole app
+        return Response(200, web_pages.service_worker().encode(), {"Content-Type": "text/javascript; charset=utf-8",
+                                                                   "Cache-Control": "no-cache"})
+    if req.path == "/offline":
+        return _html(200, web_pages.offline_page())
     if req.path == "/pair":
         return _pair(req, login)
     paired = _paired(req.headers.get("cookie", ""))
     if not paired:
-        return _refused("This browser is not paired.",
-                        "Run `shaft web pair` in your terminal and open the link it prints in this browser.")
+        # A Home Screen app has cookies of its own and no address bar: it pairs by pasting the link here.
+        return _html(403, web_pages.unpaired_page())
     dev, secret = paired
+    if _renew_due(dev):                             # the cookie's 400 days start again: a used app never lapses
+        req.set_cookies.append(_device_cookie(dev, secret))
     if req.method == "POST":
         if not _same_origin(req):
             log(f"web refused a cross-site POST {req.path} (device {dev})")
@@ -357,13 +377,44 @@ def _pair(req: Request, login: str) -> Response:
         return _html(200, web_pages.pair_page(req.query["t"], p["device"]))
     if req.method != "POST" or not _same_origin(req):
         return _refused("This request did not come from this page.")
-    got = _use_pairing(req.form().get("t", ""), login)
+    form = req.form()
+    token = form.get("t") or _token_from_link(form.get("link", ""))
+    got = _use_pairing(token, login)
     if not got:
         return _refused("This pairing link is unknown, used or expired.", "Run `shaft web pair` for a new one.")
     dev, secret = got
-    cookie = (f"{COOKIE}={dev}.{secret}; Path=/; Max-Age={COOKIE_DAYS * 86400}; HttpOnly; Secure; "
-              "SameSite=Strict")
-    return Response(303, b"", {"Location": "/", "Set-Cookie": cookie})
+    return Response(303, b"", {"Location": "/", "Set-Cookie": _device_cookie(dev, secret)})
+
+
+def _token_from_link(link: str) -> str:
+    """The token of a pasted pairing link (…/pair?t=TOKEN), or the token pasted alone."""
+    link = link.strip()
+    if "t=" in link:
+        return urllib.parse.parse_qs(urllib.parse.urlsplit(link).query).get("t", [""])[0]
+    return link
+
+
+def _device_cookie(dev: str, secret: str) -> str:
+    """Lax, not Strict: a link to the UI opened from another app (Telegram, Messages) is a cross-site navigation, and a
+    Strict cookie was not sent — the page said "not paired". Every POST still needs the page's token and same-origin."""
+    return (f"{COOKIE}={dev}.{secret}; Path=/; Max-Age={COOKIE_DAYS * 86400}; HttpOnly; Secure; SameSite=Lax")
+
+
+RENEW_S = 86400                                     # the device cookie is sent again at most once a day
+
+
+def _renew_due(dev: str) -> bool:
+    """True once a day per paired device (recorded in devices.json): its cookie is then sent again with a fresh
+    Max-Age, so a browser or app in use never reaches the 400 days and finds itself unpaired."""
+    rec = devices().get(dev) or {}
+    if time.time() - _stamp(rec.get("renewed") or rec.get("created", "")) < RENEW_S:
+        return False
+    with _lock:
+        ds = _read("devices.json")
+        if dev in ds:
+            ds[dev]["renewed"] = datetime.now().isoformat(timespec="seconds")
+            _write("devices.json", ds)
+    return True
 
 
 def _post(req: Request, dev: str) -> Response:
@@ -846,7 +897,8 @@ class Handler(BaseHTTPRequestHandler):
         r = respond(Request(method, self.path, dict(self.headers.items()), body))
         self.send_response(r.status)
         for k, v in r.headers.items():
-            self.send_header(k, v)
+            for one in v if isinstance(v, list) else [v]:
+                self.send_header(k, one)
         self.send_header("Content-Length", str(len(r.body)))
         self.end_headers()
         self.wfile.write(r.body)
