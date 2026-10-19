@@ -51,7 +51,8 @@ PAIR_MINUTES = 10
 COOKIE = "shaft_device"
 COOKIE_DAYS = 400                                           # the longest a browser keeps a cookie
 STATIC = Path(__file__).resolve().parent / "web_static"
-CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; "
+# blob: images are the composer's previews of files picked in this page (URL.createObjectURL), nothing fetched
+CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self'; "
        "frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'")
 
 

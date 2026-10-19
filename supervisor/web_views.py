@@ -46,7 +46,9 @@ def chat_frame(name: str, live: dict, body: Html, names: list[str], csrf: str, e
     buttons = instance_buttons(live) if live.get("name") else Html("")
     head = h('<header class="chathead"><h1>{name}</h1><span class="dim facts">{facts}</span>'
              '<details class="menu"><summary title="{name}: pages and actions">⋯</summary><div class="menubody">'
-             '<div class="menupages">{pages}</div><div class="actions">{buttons}</div>{earlier}</div></details></header>',
+             '<div class="menupages">{pages}</div><div class="actions">{buttons}</div>'
+             '<div class="actions"><button type="button" class="small" data-notify>Notify me of replies</button></div>'
+             '{earlier}</div></details></header>',
              name=name, facts=" · ".join(f for f in facts if f), pages=pages, buttons=buttons,
              earlier=h('<div class="earlier">{e}</div>', e=earlier) if earlier else Html(""))
     return frame(f"{name} · chat", join([head, body]), names, csrf, current=f"i:{name}")
@@ -678,8 +680,11 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict]) -> Html:
         else:
             note = h('<p class="warn">{n}</p>', n=t["note"]) if t.get("note") else Html("")
             body = markdown(t["content"]) if t.get("content") else Html('<p class="dim">(no answer)</p>')
-            items.append((t["ts"], h('<div class="turn it"><div class="who">{n} <span class="dim">{ts}</span></div>{act}'
-                                     '{body}{note}</div>', n=name, ts=t["ts"][11:16], act=_activity(t.get("activity", []), f"t{k}"),
+            copy = (h('<button type="button" class="copy small" data-copy title="copy the answer as Markdown">Copy</button>')
+                    if t.get("content") else Html(""))
+            items.append((t["ts"], h('<div class="turn it" data-raw="{raw}"><div class="who">{n} <span class="dim">{ts}</span>'
+                                     '{copy}</div>{act}{body}{note}</div>', raw=t.get("content") or "", n=name,
+                                     ts=t["ts"][11:16], copy=copy, act=_activity(t.get("activity", []), f"t{k}"),
                                      body=body, note=note)))
     for m in sent:
         atts = join(h('<a href="/files/{f}/{j}">{img}</a>', f=q(m["file"]), j=j,
@@ -693,8 +698,10 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict]) -> Html:
     feed = [x[1] for x in items]
     if chat["state"] == "replying":
         r = chat.get("reply") or {}
-        feed.append(h('<div class="turn it live"><div class="who">{n} <span class="dim">replying since {s}</span></div>'
+        feed.append(h('<div class="turn it live"><div class="who">{n} <span class="dim">replying since {s}'
+                      '<span class="elapsed" data-since="{iso}"></span></span></div>'
                       '{act}{partial}<div class="actions">{stop}</div></div>', n=name, s=r.get("started", "")[11:16],
+                      iso=r.get("started", ""),
                       act=_activity(r.get("activity", []), "live", open_=True),
                       partial=h('<p class="dim">the answer appears when it is ready</p>'),
                       stop=button("chat-stop", "Stop the reply", f"stop {name}'s reply?", {"cid": chat["id"]},
@@ -717,16 +724,20 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
             if state not in ("idle", "?") and not (chat and chat.get("state") == "replying") else Html(""))
     feed_url = f"/fragment/chat/{q(name)}" + (f"?id={q(chat['id'])}" if read_only and chat else "")
     composer = Html("") if read_only else h(
-        '<form class="composer" data-post="/chat/{n}/send" data-multipart="1" data-reset="1" data-files>'
-        '<textarea name="text" rows="3" maxlength="20000" placeholder="Message {n} — Enter sends, Shift-Enter is a new '
-        'line; paste or drop images and files here"></textarea>'
+        '<form class="composer" data-post="/chat/{n}/send" data-multipart="1" data-reset="1" data-files data-draft="{n}">'
+        '<div class="chips" data-picked></div>'
+        '<textarea name="text" rows="2" maxlength="20000" placeholder="Message {n} — Enter sends, Shift-Enter is a new '
+        'line; drop, paste or attach files"></textarea>'
         '<div class="actions"><label class="pick">Attach files<input type="file" name="files" multiple></label>'
-        '<span class="picked dim" data-picked></span><button type="submit">Send</button></div></form>', n=name)
+        '<span class="dim keys">/ to write · Alt-↑↓ another chat</span><button type="submit">Send</button></div></form>',
+        n=name)
     pasts = [link(f"/i/{q(name)}/chat?id={q(c['id'])}", f"{c['created'][:16].replace('T', ' ')} · "
                   f"{len([t for t in c['turns'] if t['role'] == 'user'])} message(s)") for c in past]
     earlier = join([h("<h3>Earlier web chats</h3>"), lines(pasts, "none yet"), h(
         '<p class="dim">Every conversation, from any client, is in <a href="/i/{n}/transcripts?f=conversations">'
         'Transcripts</a>.</p>', n=q(name))])
     body = join([busy, h('<section class="panel chat" data-scroll><div class="feed" data-poll="{u}" data-every="1500" '
-                         'data-follow="1">{f}</div></section>', u=feed_url, f=chat_feed(name, chat, sent)), composer])
+                         'data-follow="1">{f}</div></section><button type="button" class="newbelow" data-newbelow hidden>'
+                         '↓ New below</button>', u=feed_url, f=chat_feed(name, chat, sent)), composer,
+                 Html('<div class="dropzone" data-dropzone hidden>Drop to attach</div>') if not read_only else Html("")])
     return chat_frame(name, live, h('<div class="chatpage">{b}</div>', b=body), names, csrf, earlier)

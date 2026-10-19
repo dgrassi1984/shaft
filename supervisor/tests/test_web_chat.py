@@ -415,3 +415,30 @@ class ChatCentricTest(ChatRoutesTest):
         self.assertIn(f"/i/wren/chat?id={old['id']}", body)
         frag = self.req("/fragment/chat/wren", cookie=self.cookie).body.decode()
         self.assertIn("earlier answer", frag)                                       # its refresh shows the same
+
+    def test_the_chat_page_carries_what_its_script_needs(self):
+        """PLAN-webui-chat §2: copy an answer as written, the reply's clock, a draft per instance, drop anywhere."""
+        chat = self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
+                               {"role": "assistant", "content": '**a** "<x>"', "ts": "2026-10-19T12:00:05"},
+                               {"role": "user", "content": "q2", "ts": "2026-10-19T12:01:00"}], "replying")
+        chat["reply"] = {"started": "2026-10-19T12:01:01", "activity": [], "answer": ""}
+        web_chat.save(chat)
+        body = self.req("/i/wren/chat", cookie=self.cookie).body.decode()
+        self.assertIn('data-raw="**a** &quot;&lt;x&gt;&quot;"', body)              # the Markdown, escaped once
+        self.assertIn('data-copy', body)
+        self.assertIn('<span class="elapsed" data-since="2026-10-19T12:01:01">', body)
+        self.assertIn('data-draft="wren"', body)
+        self.assertIn('data-dropzone hidden', body)
+        self.assertIn('data-newbelow hidden', body)
+        self.assertIn("data-notify", body)
+
+    def test_a_past_chat_read_only_takes_no_drop(self):
+        old = self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"}], "ended")
+        body = self.req(f"/i/wren/chat?id={old['id']}", cookie=self.cookie).body.decode()
+        self.assertNotIn("data-dropzone", body)
+        self.assertNotIn('data-post="/chat/wren/send"', body)
+
+    def test_previews_of_picked_files_are_allowed_and_nothing_else_is(self):
+        csp = self.req("/i/wren/chat", cookie=self.cookie).headers["Content-Security-Policy"]
+        self.assertIn("img-src 'self' data: blob:;", csp)
+        self.assertIn("script-src 'self';", csp)
