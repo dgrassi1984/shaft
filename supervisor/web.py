@@ -442,6 +442,10 @@ def _post(req: Request, dev: str) -> Response:
         if m[1] not in _names():
             return _not_found(req.path)
         return _save_doc(m[1], (req.headers.get("tailscale-user-login") or "").lower(), req.form())
+    if m := re.match(r"^/docs/([A-Za-z0-9_-]+)/delete$", req.path):
+        if m[1] not in _names():
+            return _not_found(req.path)
+        return _delete_doc(m[1], (req.headers.get("tailscale-user-login") or "").lower(), req.form())
     if m := re.fullmatch(r"/docs/([A-Za-z0-9_-]+)/comment(?:/(edit|delete|send|state))?", req.path):
         if m[1] not in _names():
             return _not_found(req.path)
@@ -552,7 +556,8 @@ def _get(req: Request, csrf: str) -> Response | None:
         if m[1] not in names:
             return None
         from . import web_chat
-        return _html(200, _docs_panel(m[1], web_chat.shown(m[1]), qs.get("doc", ""), qs.get("thread", ""))[1])
+        return _html(200, _docs_panel(m[1], web_chat.shown(m[1]), qs.get("doc", ""), qs.get("thread", ""),
+                                      listing_only=qs.get("list") == "1")[1])
     if m := re.match(r"^/chatfiles/(web-[a-f0-9]+)/(\d+)/(\d+)$", path):
         return _chat_file(m[1], int(m[2]), int(m[3]))
     if path == "/trials":
@@ -646,6 +651,28 @@ def _save_doc(name: str, login: str, form: dict) -> Response:
     return _html(200, web_pages.h("<p>{t}</p>", t=said), {"X-Doc": rel})
 
 
+def _delete_doc(name: str, login: str, form: dict) -> Response:
+    """The CLI owns the deletion and its compare-and-set, just as it owns a save."""
+    from . import actions, docs, web_chat
+    try:
+        path, sha = docs._rel(form.get("path", "")), form.get("sha", "")
+        old, now = docs.read(name, path)
+        if old is None:
+            raise docs.Refused(f"notes/docs/{path} is not there (any more)")
+        if sha != now:
+            raise docs.Refused(f"notes/docs/{path} changed since you looked")
+        ok, last = actions.run_now(["docs", name, "rm", path, "--expect-sha", sha], who="web")
+        if not ok:
+            return _html(409, web_pages.h("<p>{t}</p>", t=last))
+    except docs.Refused as e:
+        return _html(409, web_pages.h("<p>refused: {e}</p>", e=str(e)))
+    try:
+        said = web_chat.doc_saved(name, login, path, old, None, "none")
+    except web_chat.Refused as e:
+        said = f"deleted, but {name} was not told yet: {e}"
+    return _html(200, web_pages.h("<p>{t}</p>", t=said))
+
+
 def _comment(name: str, login: str, action: str | None, form: dict) -> Response:
     from . import doc_comments, web_chat
     pid, text = form.get("pid", ""), form.get("text", "")
@@ -687,8 +714,9 @@ def _comment(name: str, login: str, action: str | None, form: dict) -> Response:
     return _html(200, web_pages.h("<p>{t}</p>", t=said), {"X-Thread": tid})
 
 
-def _docs_panel(name: str, chat: dict | None, doc: str, thread: str = ""):
-    """(the open document, the panel): the one asked for, else the last this chat changed, else none open. With its
+def _docs_panel(name: str, chat: dict | None, doc: str, thread: str = "", listing_only: bool = False):
+    """(the open document, the panel): the one asked for, else the last this chat changed (what it is writing shows as it
+    writes it), else the list; listing_only (← Documents, ?list=1): the list, whatever this chat changed. With its
     comment threads (docs/plans/PLAN-comments.md), which are in the fragment so a comment alone changes its ETag."""
     from . import doc_comments, docs, web_views as v
     marked = v.in_chat(chat)
@@ -697,7 +725,7 @@ def _docs_panel(name: str, chat: dict | None, doc: str, thread: str = ""):
     except (Exception, SystemExit) as e:          # the documents never take the chat down with them: say what failed
         log(f"web: {name}'s documents: {type(e).__name__}: {e}")
         return doc, v.docs_panel(name, [], doc, None, "none", marked, f"documents not readable: {e}")
-    if not doc:
+    if not doc and not listing_only:
         doc = next((d["path"] for d in listing if d["path"] in marked), "")
     text, sha, problem = None, "none", ""
     if doc:

@@ -410,10 +410,12 @@ def _fence(text: str) -> str:
     return "`" * max(3, 1 + max((len(m) for m in re.findall(r"`+", text)), default=0))
 
 
-def edit_diff(path: str, old: str | None, new: str) -> str:
+def edit_diff(path: str, old: str | None, new: str | None) -> str:
     """What the operator changed in a document, as the instance is told it."""
     import difflib
     rel = f"notes/docs/{path}"
+    if new is None:
+        return f"[The operator deleted {rel}.]"
     if old is None:
         body = new if len(new) <= EDIT_DIFF_MAX else new[:EDIT_DIFF_MAX] + "\n…(cut: read the file)"
         f = _fence(body)
@@ -429,7 +431,7 @@ def edit_diff(path: str, old: str | None, new: str) -> str:
     return f"[The operator edited {rel}:]\n{f}diff\n{diff}\n{f}"
 
 
-def doc_saved(name: str, login: str, path: str, old: str | None, new: str, sha: str) -> str:
+def doc_saved(name: str, login: str, path: str, old: str | None, new: str | None, sha: str) -> str:
     """After the operator saved a document: the instance hears of it — at once (an interjection) while it replies, else
     with their next message; several saves before then are one diff (from what it last saw). The chat also keeps their
     version, so the panel can say when a later write of the instance dropped lines they wrote. (what to tell them)"""
@@ -437,7 +439,7 @@ def doc_saved(name: str, login: str, path: str, old: str | None, new: str, sha: 
         return _doc_saved(name, login, path, old, new, sha)
 
 
-def _doc_saved(name: str, login: str, path: str, old: str | None, new: str, sha: str) -> str:
+def _doc_saved(name: str, login: str, path: str, old: str | None, new: str | None, sha: str) -> str:
     chat = open_chat(name) or new_chat(name, login)
     with _lock(chat["id"]):
         chat = load(chat["id"])
@@ -447,21 +449,27 @@ def _doc_saved(name: str, login: str, path: str, old: str | None, new: str, sha:
         prev = pend.get(path)
         first = prev["old"] if prev and prev["new"] == old else old
         pend[path] = {"old": first, "new": new}
-        added = sorted({l.strip() for l in new.splitlines() if l.strip()} - {l.strip() for l in (old or "").splitlines()})
-        chat.setdefault("saved_docs", {})[path] = {"sha": sha, "text": new, "ts": _now(), "added": added[:400]}
+        if new is None:
+            chat.setdefault("saved_docs", {}).pop(path, None)
+        else:
+            added = sorted({l.strip() for l in new.splitlines() if l.strip()} - {l.strip() for l in (old or "").splitlines()})
+            chat.setdefault("saved_docs", {})[path] = {"sha": sha, "text": new, "ts": _now(), "added": added[:400]}
         save(chat)
         replying_now = chat["state"] == "replying"
+    verb = "deleted" if new is None else "saved"
     if replying_now:
         _, said = send(name, login, "", [])
-        return f"saved · {said}"
-    return f"saved · {name} gets the change with your next message"
+        return f"{verb} · {said}"
+    return f"{verb} · {name} gets the change with your next message"
 
 
-def _take_edits(chat: dict) -> tuple[str, list[str]]:
-    """The pending edits as the message's extra text, and their paths; cleared from the chat (the caller saves it)."""
+def _take_edits(chat: dict) -> tuple[str, list[str], list[str]]:
+    """The pending edits as the message's extra text, the paths edited and the paths deleted; cleared from the chat (the
+    caller saves it)."""
     pend = chat.pop("pending_edits", None) or {}
     blocks = [edit_diff(p, e["old"], e["new"]) for p, e in sorted(pend.items())]
-    return ("\n\n".join(blocks), sorted(pend))
+    return ("\n\n".join(blocks), sorted(p for p, e in pend.items() if e["new"] is not None),
+            sorted(p for p, e in pend.items() if e["new"] is None))
 
 
 MIDS_KEPT = 50                       # the last message ids a chat remembers
@@ -559,10 +567,13 @@ def _send(name: str, login: str, text: str, files: list[tuple[str, bytes]], *,
             chat["login"] = login
             if mid:
                 chat["mids"] = ((chat.get("mids") or []) + [mid])[-MIDS_KEPT:]
-            edits, paths = _take_edits(chat)
+            edits, paths, deleted = _take_edits(chat)
             if edits:
                 turn["content"] = (turn["content"] + "\n\n" + edits).strip()
-                turn["edits"] = paths
+                if paths:
+                    turn["edits"] = paths
+                if deleted:
+                    turn["deleted"] = deleted
             if notices:
                 turn["content"] += "\n\n" + "\n\n".join(notices)
             if not any(t["role"] == "user" for t in chat["turns"]):

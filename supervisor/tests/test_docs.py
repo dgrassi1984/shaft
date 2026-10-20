@@ -111,6 +111,38 @@ class DocsTest(unittest.TestCase):
         self.assertIn("refused: notes/docs/hi.md exists already", said)
         self.assertIn(f"sha256 {docs.sha(b'hello' + bytes([10]))}", said)
 
+    def test_remove_requires_the_existing_documents_sha(self):
+        p = self.doc("sub/plan.md", "one")
+        with self.assertRaisesRegex(docs.Refused, "changed since you looked"):
+            docs.remove("wren", "sub/plan.md", docs.sha(b"old"))
+        self.assertEqual(p.read_text(), "one")
+        result = docs.remove("wren", "notes/docs/sub/plan.md", docs.sha(b"one"))
+        self.assertEqual(result, {"path": "sub/plan.md", "old": "one", "sha": "none"})
+        self.assertFalse(p.exists())
+        docs.log.assert_called_with("wren: notes/docs/sub/plan.md deleted by the operator")
+        for sha in ("none", docs.sha(b"one")):
+            with self.assertRaisesRegex(docs.Refused, "not there"):
+                docs.remove("wren", "sub/plan.md", sha)
+
+    def test_remove_refuses_traversal_and_links(self):
+        outside = self.outside / "x.md"
+        outside.write_text("outside")
+        (self.root / "notes/docs/link.md").symlink_to(outside)
+        (self.root / "notes/docs/sub").symlink_to(self.outside, target_is_directory=True)
+        for path in ("../x", "../x.md", "/x.md", "link.md", "sub/x.md"):
+            with self.assertRaises(docs.Refused, msg=path):
+                docs.remove("wren", path, docs.sha(b"outside"))
+        self.assertEqual(outside.read_text(), "outside")
+
+    def test_remove_command_needs_sha_and_reports_deletion(self):
+        p = self.doc("plan.md", "one")
+        with mock.patch("builtins.print") as out:
+            self.assertEqual(docs.command("wren", "rm", "plan.md", None, None), 2)
+            self.assertEqual(docs.command("wren", "rm", "plan.md", None, "stale"), 1)
+            self.assertEqual(docs.command("wren", "rm", "plan.md", None, docs.sha(b"one")), 0)
+            self.assertIn("notes/docs/plan.md deleted", out.call_args.args[0])
+        self.assertFalse(p.exists())
+
 
 if __name__ == "__main__":
     unittest.main()
@@ -156,3 +188,19 @@ class NoLinkFollowedAfterTheCheckTest(DocsTest):
         for parts in (["notes", "docs", "lnk", "f.md"], ["notes", "..", "x"], ["notes", "docs", "lnk"]):
             with self.assertRaises(core.UnsafePath, msg=parts):
                 core.open_beneath(self.root, parts, os.O_RDONLY)
+
+    def test_remove_never_follows_a_parent_swapped_after_read(self):
+        p = self.doc("sub/x.md", "inside")
+        outside = self.outside / "x.md"
+        outside.write_text("outside")
+        real_read = docs.read
+
+        def read_then_swap(name, path):
+            result = real_read(name, path)
+            p.parent.rename(p.parent.with_name("was-sub"))
+            p.parent.symlink_to(self.outside, target_is_directory=True)
+            return result
+        with mock.patch.object(docs, "read", side_effect=read_then_swap):
+            with self.assertRaises(docs.Refused):
+                docs.remove("wren", "sub/x.md", docs.sha(b"inside"))
+        self.assertEqual(outside.read_text(), "outside")

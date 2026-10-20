@@ -36,9 +36,10 @@ class ActionsTest(WebTest):
 
     LOG_ID = "log:2026-10-19 09:48:34:2373c79a19f2"           # a real log alert's id: its time has a space
 
-    def act(self, verb: str, state: str = "idle", **form) -> tuple[int, str]:
+    def act(self, verb: str, state: str = "idle", alerts: list[dict] | None = None, **form) -> tuple[int, str]:
         s = snap(state=state)
-        s["alerts"] = [{"id": "a1", "text": "one"}, {"id": "a2", "text": "two"}, {"id": self.LOG_ID, "text": "log"}]
+        s["alerts"] = alerts or [{"id": "a1", "text": "one"}, {"id": "a2", "text": "two"},
+                                 {"id": self.LOG_ID, "text": "log"}]
         body = "&".join(f"{k}={v}" for k, v in form.items()).encode()
         with mock.patch.object(web, "overview", return_value=s):
             r = self.req(f"/action/{verb}", "POST", cookie=self.cookie, body=body,
@@ -142,6 +143,25 @@ class EveryActionRunsItsCommand(ActionsTest):
         self.assertEqual(_json.loads(ids), ["a1", self.LOG_ID])          # what the page posts
         self.assertEqual(self.act("dismiss", ids=up.quote(ids))[0], 200)
         self.assertRan(["alerts", "dismiss", "a1", self.LOG_ID])
+
+    def test_dismiss_all_when_more_are_open_than_shown(self):
+        """Live, 2026-10-20: 60 lookalike log alerts took 12 clicks of "Dismiss these alerts", five at a time, and the
+        list never seemed to change. With more than five open, one more button dismisses all, asked first."""
+        import html as _html
+        import json as _json
+        import urllib.parse as up
+        from supervisor import web_actions
+        few = [{"id": f"a{i}"} for i in range(5)]
+        self.assertNotIn("Dismiss all", str(web_actions.alert_buttons(few)))        # all on screen: one button
+        many = [{"id": f"a{i}"} for i in range(7)] + [{"id": self.LOG_ID}]
+        form = str(web_actions.alert_buttons(many))
+        self.assertIn("Dismiss these alerts", form)
+        self.assertIn("Dismiss all 8", form)
+        self.assertIn("the 3 not shown too?", form)                                  # asked: it reaches unseen ones
+        posted = [_json.loads(_html.unescape(v.split('"')[0])) for v in form.split('name="ids" value="')[1:]]
+        self.assertEqual(posted, [[f"a{i}" for i in range(5)], [a["id"] for a in many]])
+        self.assertEqual(self.act("dismiss", alerts=many, ids=up.quote(_json.dumps(posted[1])))[0], 200)
+        self.assertRan(["alerts", "dismiss", *[a["id"] for a in many]])
 
     def test_services_and_autonomy(self):
         self.act("service", service="model", op="on")

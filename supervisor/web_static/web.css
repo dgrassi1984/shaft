@@ -283,8 +283,8 @@ details.menu { position: relative; }
 /* the chat fills the window: its feed scrolls in its own box, the composer stays at the bottom */
 main:has(> .chatgrid) { display: flex; flex-direction: column; height: 100vh; padding-bottom: .4rem; }
 .chatgrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: .8rem; flex: 1 1 auto; min-height: 0; }
-.chatgrid:has(.docview), .chatgrid:has(.doclist a) { grid-template-columns: minmax(20rem, 1fr) minmax(18rem, 1fr); }
-.chatgrid:not(:has(.doclist a)):not(:has(.docview)):not(.showdocs) > aside.docs { display: none; }  /* none: all chat */
+.chatgrid:has([data-back-docs]), .chatgrid:has(.doclist a) { grid-template-columns: minmax(20rem, 1fr) minmax(18rem, 1fr); }
+.chatgrid:not(:has(.doclist a)):not(:has([data-back-docs])):not(.showdocs) > aside.docs { display: none; }  /* none: all chat */
 .chatgrid.showdocs { grid-template-columns: minmax(20rem, 1fr) minmax(18rem, 1fr); }
 /* closed by the operator (📄 or ✕): all chat again, whatever documents there are */
 .chatgrid.hidedocs { grid-template-columns: minmax(0, 1fr); }
@@ -315,8 +315,11 @@ form.composer textarea { resize: none; min-height: 2.6rem; }
 .newbelow { position: sticky; align-self: center; margin-top: -2.6rem; margin-bottom: .6rem; z-index: 5; font-size: .82rem;
             box-shadow: 0 2px 8px rgba(0, 0, 0, .25); }
 .newbelow[hidden] { display: none; }
-.turn .who .copy { float: right; margin-left: .5rem; opacity: .55; }
-.turn:hover .who .copy { opacity: 1; }
+.icon { display: inline-flex; align-items: center; justify-content: center; opacity: .55; }
+.icon:hover, .icon:focus-visible { opacity: 1; }
+.turn .who { display: flow-root; }           /* its icons stay in the header, not in the message's text */
+.turn .who .icon { float: right; margin-left: .5rem; }
+.turn:hover .who .icon { opacity: 1; }
 .turn.it pre { position: relative; }
 .turn.it pre > .copy { position: absolute; top: .2rem; right: .2rem; opacity: 0; }
 .turn.it pre:hover > .copy { opacity: 1; }
@@ -324,22 +327,31 @@ form.composer textarea { resize: none; min-height: 2.6rem; }
 @media (max-width: 720px), (pointer: coarse) and (max-height: 520px) { .keys { display: none; } }
 /* a very wide window: the conversation keeps a readable width (the documents panel takes the room beside it) */
 .chathead { max-width: 72rem; width: 100%; }
-.chatgrid:not(:has(.docview)):not(:has(.doclist a)) > .chatpage, .chatgrid.hidedocs > .chatpage { max-width: 72rem;
+.chatgrid:not(:has([data-back-docs])):not(:has(.doclist a)) > .chatpage, .chatgrid.hidedocs > .chatpage { max-width: 72rem;
                                                                                                width: 100%; }
 /* documents (docs/plans/PLAN-webui-chat §3) */
 aside.docs { min-height: 0; overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
              padding: .5rem .8rem; }
 .docshead { display: flex; align-items: baseline; gap: .4rem; margin-bottom: .3rem; }
-.doclist { display: flex; flex-wrap: wrap; gap: .2rem .3rem; margin-bottom: .5rem; font-size: .85rem; }
-.doclist a { padding: .1rem .45rem; border-radius: 5px; border: 1px solid var(--line); color: var(--text); }
-.doclist a.on { border-color: var(--accent); background: var(--bg); }
+.doclist { display: flex; flex-direction: column; margin-bottom: .5rem; font-size: .85rem; }
+.doclist a { display: flex; align-items: center; justify-content: space-between; gap: .6rem; padding: .6rem .2rem;
+             border-bottom: 1px solid var(--line); color: var(--text); overflow-wrap: anywhere; }
+.docsize { flex-shrink: 0; font-size: .75rem; }
 .doclist .mark { color: var(--accent); font-size: .7rem; }
 .docview { border-top: 1px solid var(--line); padding-top: .4rem; }
 .doctitle { display: flex; align-items: center; gap: .5rem; margin-bottom: .2rem; }
+.doctitle > b { min-width: 0; overflow-wrap: anywhere; }
+.doctitle > button, .doctitle > form { flex-shrink: 0; }
+.doctitle .docdelete { margin: 0; padding: 0; }
+.docshead .closedocs { margin-left: auto; }
 .doctitle .copy { margin-left: auto; }
 .docview pre { position: relative; }
 .docview pre > .copy { position: absolute; top: .2rem; right: .2rem; opacity: 0; }
 .docview pre:hover > .copy { opacity: 1; }
+@media (pointer: coarse) {
+  .icon { min-width: 32px; min-height: 32px; }
+  .icon, .turn.it pre > .copy, .docview pre > .copy { opacity: 1; }
+}
 .doccards { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .4rem; }
 .doccard { font-size: .85rem; border: 1px solid var(--line); border-radius: 6px; padding: .2rem .5rem; background: var(--bg); }
 form.docedit { display: grid; gap: .4rem; }
@@ -384,7 +396,7 @@ form.clearbtn { display: inline; margin: 0; }
 .doctitle b { flex: 1 1 auto; }
 @media (hover: none) {
   /* No hover on a phone: what showed on hover is always there. */
-  .turn .who .copy, .turn.it pre > .copy, .docview pre > .copy { opacity: 1; }
+  .icon, .turn.it pre > .copy, .docview pre > .copy { opacity: 1; }
   .keys { display: none; }                          /* "Enter sends" is not true where Return makes a new line */
 }
 @media (pointer: coarse) {

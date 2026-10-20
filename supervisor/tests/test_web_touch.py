@@ -42,7 +42,7 @@ class TouchTest(unittest.TestCase):
         self.assertRegex(coarse, r"\.chip \.unpick \{[^}]*min-width: 44px; min-height: 44px")
 
     def test_nothing_waits_for_a_hover(self):
-        self.assertRegex(block("(hover: none)"), r"\.turn \.who \.copy, \.turn\.it pre > \.copy, \.docview pre > \.copy "
+        self.assertRegex(block("(hover: none)"), r"\.icon, \.turn\.it pre > \.copy, \.docview pre > \.copy "
                                                  r"\{ opacity: 1; \}")
 
     def test_the_phone_layout_holds_sideways(self):
@@ -107,7 +107,8 @@ class DocumentsCloseTest(unittest.TestCase):
         self.assertIn(".chatgrid.hidedocs > aside.docs { display: none; }", css)
         self.assertIn(".chatgrid.hidedocs { grid-template-columns: minmax(0, 1fr); }", css)
         # same specificity as the rule holding it open: it must come after it to win
-        self.assertGreater(css.index(".chatgrid.hidedocs {"), css.index(".chatgrid:has(.docview), .chatgrid:has(.doclist a)"))
+        self.assertGreater(css.index(".chatgrid.hidedocs {"),
+                           css.index(".chatgrid:has([data-back-docs]), .chatgrid:has(.doclist a)"))
 
     def test_the_close_button_shows_beside_the_chat(self):
         hidden = re.search(r"^([^{\n]*)\{ display: none; \}", self.desktop().split(".navbtn.news")[0].split("PLAN-pwa P2:")[1],

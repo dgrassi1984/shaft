@@ -60,7 +60,7 @@ process.stdout.write(JSON.stringify(cases.map(([text, anchor]) =>
                 self.assertEqual(match, expected)
 
     def test_walk_leaves_out_the_pages_buttons(self):
-        """Grok review 2026-10-20: web.js puts a "Copy" button in each code block; it is not document text."""
+        """The copy button's SVG is not document text, even if an accessible title is added later."""
         script = r"""
 const fs = require("node:fs");
 const vm = require("node:vm");
@@ -72,7 +72,7 @@ const el = (tagName, ...childNodes) => {
   childNodes.forEach(c => { c.parentNode = node; });
   return node;
 };
-const pre = el("PRE", el("SPAN", text("x = 1")), el("BUTTON", text("Copy")));
+const pre = el("PRE", el("SPAN", text("x = 1")), el("BUTTON", el("SVG", el("TITLE", text("Copy")))));
 const root = el("DIV", pre, el("P", text("after")));
 process.stdout.write(JSON.stringify(context.window.shaftComments.walk(root).text));
 """

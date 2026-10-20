@@ -53,11 +53,13 @@ class CommentViewsTest(unittest.TestCase):
         self.assertEqual(str(threads_list("ada", "plan.md", "abc", [])), "")
 
     def test_counts_appear_on_rows_with_open_comments(self):
+        html_out = panel(open_path="", text=None, counts={"plan.md": 3, "notes.md": 0})
+        self.assertIn('data-open-doc="plan.md"><span>plan.md '
+                      '<span class="ccount" title="open comments">💬 3</span></span>'
+                      '<span class="dim docsize">12 bytes</span></a>', html_out)
+        self.assertIn('data-open-doc="notes.md"><span>notes.md</span>'
+                      '<span class="dim docsize">4 bytes</span></a>', html_out)
         html_out = panel(counts={"plan.md": 3, "notes.md": 0})
-        self.assertIn('data-open-doc="plan.md" class="on" title="12 bytes">plan.md '
-                      '<span class="ccount" title="open comments">💬 3</span></a>', html_out)
-        self.assertIn('data-open-doc="notes.md" class="" title="4 bytes">notes.md</a>', html_out)
-        self.assertNotIn("notes.md <span", html_out)
         self.assertIn('data-threads="[]"', html_out)
         self.assertIn('data-comment-doc aria-label="Comment on the whole document"', html_out)
         self.assertNotIn('class="threads"', html_out)
@@ -68,7 +70,8 @@ class CommentViewsTest(unittest.TestCase):
         self.assertIn('data-edit-doc>Edit</button><button type="button" class="small" data-comment-doc '
                       'aria-label="Comment on the whole document">💬</button><button type="button" class="copy',
                       html_out)
-        self.assertIn('Copy</button></div><details class="threads" data-key="threads-plan.md">'
+        self.assertIn('data-copy-doc title="copy the document\'s Markdown" aria-label="Copy the document"><svg', html_out)
+        self.assertIn('data-delete-refusal></div><details class="threads" data-key="threads-plan.md">'
                       '<summary>💬 1 open</summary>', html_out)
         self.assertNotIn('data-key="threads-plan.md" open>', html_out)
         self.assertIn('<article class="thread" id="thread-c1" data-thread="c1"><b>c1</b> <q>quoted line</q>', html_out)
@@ -89,6 +92,26 @@ class CommentViewsTest(unittest.TestCase):
                                [thr(anchor={"exact": long, "prefix": "", "suffix": "", "start": 0})]))
         self.assertIn("<q>" + ("q" * 300) + "…</q>", cut)
         self.assertNotIn("q" * 301, cut)
+
+    def test_message_icons_quote_shown_text_and_skip_empty_and_live_turns(self):
+        turns = [{"role": "user", "content": "private context", "shown": '> quote\nmy "<text>"', "ts": TS},
+                 {"role": "assistant", "content": "**answer**", "ts": TS},
+                 {"role": "user", "content": "comment context", "shown": "", "ts": TS},
+                 {"role": "assistant", "content": "", "ts": TS}]
+        out = str(chat_feed("ada", {"id": "web-1", "turns": turns, "state": "replying"}, []))
+        cards = re.split(r'(?=<div class="turn )', out)[1:]
+        self.assertEqual(len(cards), 5)
+        for card, role, raw in zip(cards[:2], ("me", "it"), ('> quote\nmy "<text>"', "**answer**")):
+            self.assertIn(f'class="turn {role}"', card)
+            self.assertIn(f'data-raw="{html.escape(raw, quote=True)}"', card)
+            self.assertIn('aria-label="Copy the message"><svg', card)
+            self.assertIn('aria-label="Reply to the message"><svg', card)
+            self.assertNotIn(">Copy</button>", card)
+        for card in cards[2:]:
+            self.assertNotIn("data-copy", card)
+            self.assertNotIn("data-reply-message", card)
+        self.assertNotIn("private context", out)
+        self.assertNotIn("comment context", out)
 
     def test_resolved_threads_fold_and_reopen(self):
         html_out = str(threads_list("ada", "plan.md", "abc",
