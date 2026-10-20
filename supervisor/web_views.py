@@ -805,9 +805,10 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
             body = markdown(t["content"]) if t.get("content") else Html('<p class="dim">(no answer)</p>')
             cards = join([doc_cards(t.get("docs")), _comment_chips(t.get("answered"), "answered"),
                           _comment_chips(t.get("opened"), "opened")])
-            items.append((t["ts"], h('<div class="turn it" data-k="a{k}" data-raw="{raw}"><div class="who">{n} <span class="dim">{ts}</span>'
+            seen = h(' data-seen-inst="{n}" data-seen-reply="{ts}"', n=name, ts=t["ts"]) if not archived else Html("")
+            items.append((t["ts"], h('<div class="turn it" data-k="a{k}" data-raw="{raw}"{seen}><div class="who">{n} <span class="dim">{ts}</span>'
                                      '{copy}</div>{act}{body}{cards}{note}</div>', k=k, raw=t.get("content") or "", n=name,
-                                     ts=_turn_time(t["ts"]), copy=controls, act=_activity(t.get("activity", []), f"t{k}"),
+                                     ts=_turn_time(t["ts"]), seen=seen, copy=controls, act=_activity(t.get("activity", []), f"t{k}"),
                                      body=body, cards=cards, note=note)))
     for m in sent:             # files open in a sheet of their own: in an app, a link replaced its only view
         atts = join(h('<a href="/files/{f}/{j}" target="_blank">{img}</a>', f=q(m["file"]), j=j,
