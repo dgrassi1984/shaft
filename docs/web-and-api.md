@@ -85,7 +85,13 @@ and [chat design](plans/PLAN-webui-chat.md).
   and press **💬 Comment** (or 💬 in its title bar for the whole document). **Send comment to <instance>** is ticked
   by default: it gets the comment at once (a message of its own, or an interjection while it replies) and answers
   under `### c7`, which lands in the thread. Unticked, it is a note only you see, to edit, delete or send later. It
-  opens threads of its own too. The commented text stays highlighted (click it to open its thread); a thread whose
+  opens threads of its own too. The button says **Send comment** when ticked, **Save private note** when unticked,
+  and **Save note** when editing a private note. Feedback says whether delivery succeeded or the note was saved
+  but not sent, with the reason. A saved, unsent note still has **Send** available.
+  Comment drafts and their send choice stay in this browser after Escape, Cancel, opening another comment, or
+  reload. Reopen the same document comment, selection, reply thread, or note edit to recover its draft. Recovery
+  never sends it. **Discard** removes the draft; a successful submission clears it, including when saved but not
+  sent. The commented text stays highlighted (click it to open its thread); a thread whose
   text left the document says so. **Resolve** folds a thread away, and the instance hears of it with your next
   message. The threads live in the supervisor (`.supervisor/web/comments/`), never in a file it could overwrite; a
   read-only copy of what it was sent is kept in its `notes/comments/`.
