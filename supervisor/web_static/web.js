@@ -270,6 +270,7 @@
       const now = r.headers.get("X-Doc-Sha");         // refused as stale: Save again replaces it, knowingly
       if (!r.ok && now && form.querySelector("input[name=sha]")) form.querySelector("input[name=sha]").value = now;
       if (r.ok && form.dataset.after === "doc-saved") docSaved(form, r.headers.get("X-Doc"));
+      if (r.ok && form.dataset.after === "comment-saved") refreshDocs();
       if (r.ok && mid) mid.value = "";               // sent: the next message gets an id of its own
       if (r.ok && shown) shown.dataset.done = "1";   // goes when the feed brings the turn as the server saved it
       if (r.ok && form.dataset.reset) {
@@ -766,6 +767,15 @@
       grow(box, 0.7);
     }
   }
+  function refreshDocs() {
+    const panel = document.getElementById("docs");
+    if (!panel) return;
+    delete panel.dataset.etag;
+    if (panel._tick) panel._tick();
+  }
+  // The separate comment composer shares the page's request and feedback conventions.
+  window.shaftWeb = { csrf, toast, textOf, refreshDocs };
+
   function docSaved(form, doc) {
     const panel = document.getElementById("docs");
     const view = form.closest(".docview");

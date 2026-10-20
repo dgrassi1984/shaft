@@ -186,3 +186,31 @@ class AccessibilityTest(unittest.TestCase):
         self.assertIn("font-size: max(16px, 1rem)", coarse)
         self.assertIn("body { font: 1rem/1.45", CSS)                         # rem: it follows the root's size
         self.assertIn("transition: none !important", block("(prefers-reduced-motion: reduce)"))
+
+
+class CommentsTouchTest(unittest.TestCase):
+    def test_comment_script_loads_after_web_and_is_cached(self):
+        from supervisor import web_pages
+        page = str(web_pages.page("test", web_pages.Html("")))
+        self.assertLess(page.index('/static/web.js?v='), page.index('/static/comments.js?v='))
+        self.assertRegex(page, r'<script src="/static/comments.js\?v=[^"]+" defer></script>')
+        shell = re.search(r"const SHELL = (\[.*?\]);", web_pages.SW, re.S).group(1)
+        self.assertIn('/static/comments.js?v=@V@', shell)
+
+    def test_comment_controls_are_above_the_phone_documents(self):
+        for selector in ('#quote-reply', '#comment-sel', '#comment-box'):
+            rule = re.search(re.escape(selector) + r" \{([^}]+)\}", CSS).group(1)
+            self.assertGreater(int(re.search(r'z-index: (\d+)', rule).group(1)), 55)
+
+    def test_composer_survives_panel_replacement(self):
+        comments = (STATIC / 'comments.js').read_text()
+        self.assertIn('form.id = "comment-box";', comments)
+        self.assertIn('document.body.appendChild(form);', comments)
+        self.assertNotRegex(comments, r'(panel|view|aside)\.append(?:Child)?\(form\)')
+
+    def test_comment_targets_are_finger_sized(self):
+        coarse = block('(pointer: coarse)')
+        for selector in ('#quote-reply', '#comment-sel', '#comment-box button', '#comment-box .comment-send'):
+            self.assertRegex(coarse, re.escape(selector) + r'[^{}]*\{[^}]*min-width: 44px; min-height: 44px')
+        self.assertIn('#comment-box textarea { font-size: 16px; }', coarse)
+        self.assertRegex(block(PhoneLayoutTest.PHONE), r'#comment-box \{ left: 0; right: 0; bottom: 0; width: 100%;')

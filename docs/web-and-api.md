@@ -68,6 +68,14 @@ and [chat design](plans/PLAN-webui-chat.md).
   change as a diff; with your next message, or at once if it is replying. If a later write of its drops lines you
   wrote, the panel says so and offers your version back. The first message of each web chat tells the instance
   this, in a line you do not see.
+- **Comments on a document** ([PLAN-comments](plans/PLAN-comments.md)), as on a Claude artifact: select text in it
+  and press **💬 Comment** (or 💬 in its title bar for the whole document). **Send comment to <instance>** is ticked
+  by default: it gets the comment at once (a message of its own, or an interjection while it replies) and answers
+  under `### c7`, which lands in the thread. Unticked, it is a note only you see, to edit, delete or send later. It
+  opens threads of its own too. The commented text stays highlighted (click it to open its thread); a thread whose
+  text left the document says so. **Resolve** folds a thread away, and the instance hears of it with your next
+  message. The threads live in the supervisor (`.supervisor/web/comments/`), never in a file it could overwrite; a
+  read-only copy of what it was sent is kept in its `notes/comments/`.
 - Each instance's other pages sit behind the chat's ⋯ menu: **Summary**, **Config** (`config.env`, a field per key),
   **Drive** (`drive.md`, saved after its diff), **Access** (tools, wake floor and cloud cap, jobs, shared folder,
   mail and calendar grants, battery, key names), **Judge**, **Changes**, **Benchmarks**, **Transcripts**,

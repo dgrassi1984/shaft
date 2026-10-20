@@ -235,9 +235,32 @@ label.pick { font-size: .85rem; cursor: pointer; color: var(--accent); }
 label.pick input { position: absolute; width: 1px; height: 1px; opacity: 0; }   /* hidden, still reachable by Tab */
 label.pick:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 /* reply to part of a message (select it in the feed) */
-#quote-reply { position: fixed; z-index: 20; font-size: .8rem; padding: .2rem .55rem; border-radius: 6px;
+#quote-reply { position: fixed; z-index: 60; font-size: .8rem; padding: .2rem .55rem; border-radius: 6px;
                box-shadow: 0 2px 8px rgba(0, 0, 0, .25); }
-#quote-reply[hidden] { display: none; }
+/* comments.js: the selection button and the comment box */
+#comment-sel { position: fixed; z-index: 60; font-size: .8rem; padding: .2rem .55rem; border-radius: 6px;
+               box-shadow: 0 2px 8px rgba(0, 0, 0, .25); }
+#comment-sel[hidden], #quote-reply[hidden] { display: none; }
+#comment-box { position: fixed; z-index: 61; right: 1rem; bottom: 1rem; width: min(28rem, calc(100vw - 2rem));
+               box-sizing: border-box; max-height: calc(var(--vvh, 100dvh) - 2rem); overflow-y: auto;
+               display: grid; gap: .6rem; padding: 1rem; border: 1px solid var(--line); border-radius: 10px;
+               background: var(--panel); color: var(--text); box-shadow: 0 4px 24px rgba(0, 0, 0, .3); }
+#comment-box textarea { display: block; width: 100%; box-sizing: border-box; resize: vertical; font: inherit; }
+#comment-box .comment-quote { margin: 0; max-height: 5rem; overflow-y: auto; white-space: pre-wrap; color: var(--dim); }
+#comment-box .comment-send { display: flex; align-items: center; gap: .4rem; }
+#comment-box .comment-actions { display: flex; gap: .5rem; }
+#comment-box .comment-result { margin: 0; white-space: pre-wrap; }
+::highlight(comment-open) { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+::highlight(comment-active) { background: color-mix(in srgb, var(--accent) 45%, transparent); }
+@media (pointer: coarse) {
+  #quote-reply, #comment-sel, #comment-box button, #comment-box .comment-send { min-width: 44px; min-height: 44px; }
+  #comment-box textarea { font-size: 16px; }
+}
+@media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
+  #comment-box { left: 0; right: 0; bottom: 0; width: 100%; border-radius: 12px 12px 0 0;
+                 padding-bottom: calc(1rem + env(safe-area-inset-bottom)); }
+}
+
 blockquote { margin: .3rem 0; padding: .1rem .6rem; border-left: 3px solid var(--line); color: var(--dim); }
 .turn.me blockquote { margin: 0 0 .3rem; }
 
@@ -457,4 +480,26 @@ textarea, input, select { border-color: var(--field); }        /* a field's edge
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+}
+
+/* comments: the threads list and the chips (web_views.threads_list, chat_feed) */
+details.threads { margin: .4rem 0; border-top: 1px solid var(--line); padding-top: .3rem; }
+details.threads > summary { cursor: pointer; font-size: .85rem; }
+article.thread { padding: .35rem .4rem .35rem .55rem; margin: .35rem 0; border-left: 3px solid var(--line); }
+article.thread.active { border-left-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
+article.thread.detached q, article.thread.ambiguous q { color: var(--dim); }
+details.threads q { display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical;
+                    overflow: hidden; margin: .15rem 0; font-style: italic; }
+.post { margin: .25rem 0; }                     /* not a grid: its Edit/Delete/Send buttons stay inline */
+.post .who { margin-bottom: .1rem; }
+.post p { margin: 0; }
+.post.unsent { outline: 1px dashed var(--line); border-radius: 6px; padding: .15rem .3rem; }
+.post .who { font-size: .78rem; font-weight: 600; }
+details.threads form.act { display: inline; margin: 0; }
+.ccount { color: var(--dim); font-size: .78rem; }
+.commentchip { font-size: .78rem; margin-left: .3rem; }
+@media (pointer: coarse) {
+  details.threads button, details.threads button.small {
+    min-height: 44px; min-width: 44px; padding-top: .45rem; padding-bottom: .45rem; }
+  .commentchip { min-height: 44px; display: inline-flex; align-items: center; }
 }

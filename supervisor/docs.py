@@ -116,7 +116,9 @@ def write(name: str, path: str, text: str, expect_sha: str) -> dict:
 
 
 # -- `shaft docs` -----------------------------------------------------------------------------------------------------
-def command(name: str, action: str | None, path: str | None, file: str | None, expect_sha: str | None) -> int:
+def command(name: str, action: str | None, path: str | None, file: str | None, expect_sha: str | None,
+            sync: bool = False) -> int:
+    from . import doc_comments
     instance_root(name)
     try:
         if not action:
@@ -125,6 +127,17 @@ def command(name: str, action: str | None, path: str | None, file: str | None, e
                 print(f"{d['sha'][:12]}  {d['bytes']:>7}  {d['path']}")
             if not docs:
                 print(f"(no documents in {DIR}/)")
+            return 0
+        if action == "comments":
+            if sync:
+                if not path:
+                    raise Refused("comments --sync needs PATH")
+                doc_comments.sync_copy(name, path)
+                print(f"{name}: notes/comments/{_rel(path)} rewritten")
+            else:
+                for thread in doc_comments.threads(name, path):
+                    first = thread["posts"][0]["text"].splitlines()[0]
+                    print(f"{thread['id']}  {thread['state']}  {thread['doc']}  {first}")
             return 0
         if not path:
             print(f"usage: shaft docs <name> {action} PATH")
@@ -141,7 +154,7 @@ def command(name: str, action: str | None, path: str | None, file: str | None, e
             print("usage: shaft docs <name> set PATH --file FILE --expect-sha SHA  (none: a new document)")
             return 2
         r = write(name, path, Path(file).read_text(encoding="utf-8"), expect_sha)
-    except (Refused, OSError) as e:
+    except (Refused, doc_comments.Refused, OSError) as e:
         print(f"refused: {e}")
         return 1
     print(f"{name}: {DIR}/{r['path']} {'created' if r['old'] is None else 'written'} · sha256 {r['sha']} · its next run "
