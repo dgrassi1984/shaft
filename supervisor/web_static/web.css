@@ -348,10 +348,10 @@ form.composer textarea { resize: none; min-height: 2.6rem; }
 .turn.it pre:hover > .copy, .turn.it pre > .copy:focus-visible { opacity: 1; }
 .turn.sending { opacity: .6; }
 @media (max-width: 720px), (pointer: coarse) and (max-height: 520px) { .keys { display: none; } }
-/* a very wide window: the conversation keeps a readable width (the documents panel takes the room beside it) */
-.chathead { max-width: 72rem; width: 100%; }
-.chatgrid:not(:has([data-back-docs])):not(:has(.doclist a)) > .chatpage, .chatgrid.hidedocs > .chatpage { max-width: 72rem;
-                                                                                               width: 100%; }
+/* The chat uses the whole width when the documents are closed (#71): each message keeps its own readable width
+   (.turn max-width), so a page cap only left a wide window empty — on 2560 px, closing the drawer made it narrower. */
+.chathead { width: 100%; }
+.chatgrid:not(:has([data-back-docs])):not(:has(.doclist a)) > .chatpage, .chatgrid.hidedocs > .chatpage { width: 100%; }
 /* documents (docs/plans/PLAN-webui-chat §3) */
 aside.docs { min-height: 0; overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
              padding: .5rem .8rem; }
