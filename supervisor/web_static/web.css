@@ -56,6 +56,7 @@ nav a.inst.unread .who::after { content: " ●"; color: var(--accent); }
 nav .unpair { margin-top: auto; }
 nav .nav-version { font-size: .8rem; padding: .5rem; overflow-wrap: anywhere; order: 4; }
 nav .nav-version a { display: block; padding: .2rem 0; color: inherit; }
+nav .nav-version button { display: block; margin-top: .4rem; width: 100%; }
 main { padding: 1rem 1.2rem 3rem; min-width: 0; }
 
 button { font: inherit; padding: .35rem .8rem; border-radius: 6px; border: 1px solid var(--line);

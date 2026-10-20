@@ -73,6 +73,13 @@ and [chat design](plans/PLAN-webui-chat.md).
   `checked out: …` linking to Services. Services shows the checkout above the live table and a version for
   every service, including the scheduler, alongside the existing older-code warning. Older records use their
   saved commit; a service without a record says `unknown — restart to record`.
+- **Reload / update** in the navigation footer and the chat's ⋯ menu asks the service worker to update,
+  deletes only `shaft-*` app caches, then reloads the current page. The update notice uses the same action.
+  It keeps saved drafts, the pairing cookie and notifications (the worker is not unregistered: that would drop
+  this device's push subscription).
+  If cleanup fails or a browser API is missing, it still reloads and shows which step failed.
+  Only that notice is stored in sessionStorage, then removed after it is shown. If the browser blocks
+  sessionStorage, the notice cannot survive reload.
 - Unread marks clear when the current chat's reply is rendered in a visible tab. Config, Journal, earlier chats,
   and a failed feed refresh do not consume a new reply. Marks are shared across tabs in the same browser.
 - The chat: files and images both ways (drop them anywhere on the page, paste or pick; each is a chip you can take

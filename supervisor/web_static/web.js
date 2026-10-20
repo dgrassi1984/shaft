@@ -58,6 +58,41 @@
     box._t = setTimeout(() => { box.className = ""; }, bad ? 10000 : 5000);
   }
 
+  let reloading = false;
+  const reloadFailure = "shaft.reload.failure";
+  async function hardReload() {
+    if (reloading) return;
+    reloading = true;
+    toast("Clearing the app's cache…");
+    const failed = new Set();
+    // The worker is updated, not unregistered: unregistering it would drop this device's push subscription
+    // (notifications), which belongs to the registration. Pages come from the network anyway (sw.js).
+    try {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      for (const reg of registrations) {
+        try { await reg.update(); } catch (e) { failed.add("service worker update"); }
+      }
+    } catch (e) { failed.add("service worker update"); }
+    try {
+      const keys = await caches.keys();
+      for (const key of keys.filter(k => k.startsWith("shaft-"))) {
+        try { await caches.delete(key); } catch (e) { failed.add("app cache deletion"); }
+      }
+    } catch (e) { failed.add("app cache deletion"); }
+    if (failed.size) {
+      const message = `Reloaded, but failed: ${[...failed].join("; ")}.`;
+      try { sessionStorage.setItem(reloadFailure, message); }
+      catch (e) { toast(`${message} Could not save this notice for after reload.`, true); }
+    }
+    location.reload();
+  }
+  document.addEventListener("click", (ev) => {
+    const b = ev.target.closest && ev.target.closest("[data-hard-reload]");
+    if (!b) return;
+    ev.preventDefault();
+    return hardReload();
+  });
+
   // A failed refresh is said, above the content it would have replaced (which stays, marked stale): an empty or
   // frozen panel must never pass for "nothing to show".
   function stale(el, why) {
@@ -89,7 +124,7 @@
     const b = document.createElement("button");
     b.type = "button";
     b.textContent = "SHAFT was updated — reload";
-    b.addEventListener("click", () => location.reload());
+    b.setAttribute("data-hard-reload", "");
     bar.appendChild(b);
     document.body.appendChild(bar);
   }
@@ -1376,6 +1411,13 @@
   function start() {
     region("toast", "status");
     region("announce", "status");
+    try {
+      const message = sessionStorage.getItem(reloadFailure);
+      if (message) {
+        toast(message, true);
+        sessionStorage.removeItem(reloadFailure);
+      }
+    } catch (e) { /* storage refused: the page still works */ }
     const grid = document.querySelector(".chatgrid");
     if (grid) {
       document.body.classList.add("chatapp");
