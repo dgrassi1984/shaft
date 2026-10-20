@@ -135,7 +135,8 @@ class NetworkClientTest(unittest.TestCase):
 
     def test_a_refresh_asks_for_what_changed_and_gives_up_in_time(self):
         self.assertIn('{ "If-None-Match": el.dataset.etag }', JS)
-        self.assertIn("if (r.status === 304) { fails = 0; fresh(el); return; }", JS)
+        self.assertIn("if (r.status === 304) {", JS)                       # unchanged: nothing re-rendered
+        self.assertIn("{ fails = 0; recovered(); }", JS)                   # #26: and this panel is fresh again
         self.assertIn("const POLL_LIMIT_MS = 15000;", JS)
         self.assertIn("signal: ctl.signal", JS)
 
@@ -153,7 +154,8 @@ class NetworkClientTest(unittest.TestCase):
 
     def test_the_feed_is_updated_item_by_item(self):
         self.assertIn("if (el.dataset.keyed) morph(el, body);", JS)
-        self.assertIn("if (cur && cur.dataset.k && cur.dataset.k === n.dataset.k && cur._src === src) return;", JS)
+        self.assertIn("const cur = keyed.get(n.dataset.k);", JS)          # #27: one keyed map per reconcile
+        self.assertIn("if (!cur || cur._src !== src) {", JS)              # an unchanged item is left alone
 
 
 class AccessibilityTest(unittest.TestCase):

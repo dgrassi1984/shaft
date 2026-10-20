@@ -168,11 +168,15 @@ assert.equal(p.innerHTML, 'new'); assert.equal(menu.open, false); assert.equal(d
 const key = /data-edit-doc data-focus="([^"]+)"/.exec(docHTML)?.[1];
 const p = panel(); ids.docs = p; let edit;
 p.rebuild = () => {edit = part('control', {focus: key}); p.parts = [edit];}; p.rebuild(); poll(p);
-const view = new Node(); view.querySelector = s => s === '[data-edit-doc]' ? edit : {};
-const form = {closest: () => view};
+const view = new Node();
+view.querySelector = s => s === '[data-edit-doc]' ? edit : s === 'textarea.raw' ? {value: ''} : {};
+// the editor docSaved reads since #5/#22: the saved revision, the draft note, the box (unchanged during Save)
+const fields = {'input[name=sha]': {value: 'old'}, '[data-doc-draft]': {textContent: ''},
+  'textarea': {value: 'hello'}, 'input[name=path]': {value: 'note.md'}};
+const form = {closest: () => view, dataset: {post: '/docs/wren/save'}, querySelector: s => fields[s] || {}};
 // Wait for the actual poll started by Save.
 const tick = p._tick; let refreshed; p._tick = () => refreshed = tick();
-docSaved(form, null); await refreshed;
+docSaved(form, null, 'hello', 'new-sha'); await refreshed;
 assert.equal(p.innerHTML, 'new'); assert.equal(document.activeElement, edit); assert.notEqual(document.activeElement, document.body);
 ''')
 
