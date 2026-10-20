@@ -788,7 +788,7 @@
                       blocked: "Notifications are blocked for SHAFT in this browser's settings",
                       on: "Notifications on — turn off",
                       incomplete: "Notifications incomplete — retry",
-                      off: "Notify me of replies" }[state] || "";
+                      off: "Notify me on this device" }[state] || "";
   }
   async function post(url, body) {
     const r = await fetch(url, { method: "POST", credentials: "same-origin", body,

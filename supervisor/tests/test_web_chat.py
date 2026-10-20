@@ -1106,7 +1106,9 @@ class PushWhenTest(ChatTest):
             chat, _ = web_chat.send("wren", ME, "hello", [])
             self.wait_idle(chat["id"])
             time.sleep(0.2)
-        notify.assert_called_once_with("wren replied")
+        (event,), _ = notify.call_args                           # what this push shows: this reply (issue #23)
+        self.assertEqual((event["title"], event["url"]), ("wren replied", "/i/wren/chat"))
+        notify.assert_called_once()
         web_chat.watching("wren")                                # its page is open and refreshing
         with mock.patch("supervisor.webpush.notify") as notify:
             web_chat.send("wren", ME, "again", [])

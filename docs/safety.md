@@ -35,7 +35,8 @@
   names a granted calendar; the credential and the grant stay with the supervisor.
 - **Broker**: privileged tools and credentials, including web search (ScrapeBadger), page fetching
   (public addresses only, re-checked on every redirect), messages between instances and to
-  you (no daily limit unless `SHAFT_OPERATOR_PER_DAY`; a macOS notification, and Telegram if set up), with
+  you (no daily limit unless `SHAFT_OPERATOR_PER_DAY`; a macOS notification, and a push on the web UI or Telegram,
+  whichever reaches you for that instance: integrations.md), with
   files attached from the sender's folder (up to 10, 20 MB each, 50 MB in all; never `secrets/`, `.git/`, `logs/` or
   anything a link leads to outside the folder); another instance finds them in its `attachments/` (not
   committed), the operator's copy is in `.supervisor/operator-inbox/attachments/`; and **`delegate_coding`**: an

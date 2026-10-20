@@ -358,6 +358,12 @@ def _route(req: Request) -> Response:
         return _post(req, dev)
     if req.method != "GET":
         return _html(405, web_pages.message_page("Not allowed", f"{req.method} is not supported."))
+    if req.path == "/push/latest":                  # what this device's push shows: what waits for it (webpush.take)
+        from . import webpush
+        if req.headers.get("sec-fetch-site") != "same-origin":   # it takes them: never a link from another site
+            return _refused("This request did not come from this page.")
+        return Response(200, json.dumps({"events": webpush.take(dev)}).encode(),
+                        {"Content-Type": "application/json", "Cache-Control": "no-store"})
     if req.path == "/push/status":                  # #23: "on" is SHAFT holding this device, not only the browser
         from . import webpush
         return Response(200, json.dumps({"subscribed": webpush.holds(dev)}).encode(),
@@ -463,7 +469,8 @@ def _post(req: Request, dev: str) -> Response:
             webpush.subscribe(dev, json.loads(req.body or b"{}"))
         except (webpush.PushError, ValueError) as e:
             return _html(409, web_pages.h("<p>refused: {e}</p>", e=str(e)))
-        return _html(200, web_pages.h("<p>Notifications on: a reply that lands while SHAFT is closed shows here</p>"))
+        return _html(200, web_pages.h("<p>Notifications on: a reply that lands while SHAFT is closed, and a message "
+                                      "an instance sends you here, show on this device</p>"))
     if m := re.match(r"^/chat/([A-Za-z0-9_-]+)/clear$", req.path):
         from . import web_chat
         if m[1] not in _names():
@@ -566,11 +573,12 @@ def _get(req: Request, csrf: str) -> Response | None:
             return None
         if not qs.get("id"):
             web_chat.watching(m[1])                 # its page is open and visible: a reply needs no push
-        return _html(200, v.chat_feed(m[1], chat, _sent_during(m[1], chat), archived=bool(qs.get("id"))))
-    if path in ("/push/key", "/push/latest"):
-        from . import web_chat, webpush
+        return _html(200, v.chat_feed(m[1], chat, _sent_during(m[1], chat, bool(qs.get("id"))),
+                                      archived=bool(qs.get("id"))))
+    if path == "/push/key":
+        from . import webpush
         try:
-            data = {"key": webpush.public_key()} if path == "/push/key" else web_chat.latest_reply()
+            data = {"key": webpush.public_key()}
         except webpush.PushError as e:
             return Response(503, json.dumps({"error": str(e)}).encode(), {"Content-Type": "application/json"})
         return Response(200, json.dumps(data).encode(), {"Content-Type": "application/json"})
@@ -823,7 +831,8 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str) -
             return None
         past = [c for c in web_chat.chats(name) if c.get("state") == "ended"][:20]
         doc, panel = _docs_panel(name, chat, qs.get("doc", ""), qs.get("thread", ""))
-        return _html(200, v.chat_page(name, chat, _sent_during(name, chat), past, _live(name), names, csrf,
+        return _html(200, v.chat_page(name, chat, _sent_during(name, chat, bool(qs.get("id"))), past, _live(name),
+                                      names, csrf,
                                       read_only=bool(qs.get("id")) and bool(chat) and chat.get("state") == "ended",
                                       panel=panel, doc=doc),
                      {"Set-Cookie": f"{LAST_CHAT}={name}; Path=/; Max-Age={COOKIE_DAYS * 86400}; Secure; SameSite=Strict"})
@@ -854,14 +863,20 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str) -
     return None
 
 
-def _sent_during(name: str, chat: dict | None) -> list[dict]:
-    """What the instance sent the operator (send_message) since the chat began: shown in it, as on Telegram."""
-    if not chat:
-        return []
+def _sent_during(name: str, chat: dict | None, archived: bool = False) -> list[dict]:
+    """What the instance sent the operator (send_message), shown in its chat as a Telegram bot chat shows it: since the
+    chat on screen began — and after it ended too, until the operator's next message starts a new chat, so a message
+    a push points at (channel.py, web_alerts.py) is there to answer. A past chat (`archived`) keeps its own span. With
+    no chat on screen: since the last one was cleared or ended, or, if it never had one, those still unread."""
     from . import messages
-    end = chat.get("ended") or "9999"
-    return [m for m in messages.history() if m["from"] == name and m["to"] == "operator"
-            and chat["created"] <= m["ts"] <= end]
+    if chat:
+        start, end = chat["created"], (chat.get("ended") or "9999") if archived else "9999"
+    else:
+        from . import web_chat
+        last = next(iter(web_chat.chats(name)), None)
+        start, end = (last.get("cleared") or last.get("ended") or last["created"]) if last else "", "9999"
+    rows = [m for m in messages.history() if m["from"] == name and m["to"] == "operator" and start <= m["ts"] <= end]
+    return rows if start else [m for m in rows if not m["read"]]
 
 
 def _chat_file(cid: str, k: int, j: int) -> Response | None:
@@ -1060,6 +1075,8 @@ def serve() -> int:
     from .version import record_service
     web_chat.reap()                              # replies the previous web server was relaying are over
     record_service("web", {"port": PORT, "https_port": HTTPS_PORT})
+    from . import web_alerts
+    web_alerts.start()                           # the instances' messages routed to the web: pushed (channel.py)
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     server.daemon_threads = True
     if not allowed_hosts():                  # every request would be refused: say so where it is read

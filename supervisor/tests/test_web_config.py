@@ -17,7 +17,8 @@ FIELDS = [{"key": "LLM_MODEL", "set": True, "value": "openrouter/xiaomi/mimo-v2.
            "numeric": False, "choices": None},
           {"key": "WAKE_INTERVAL_MINUTES", "set": False, "value": "", "default": "120", "help": "How often I wake.",
            "secret": False, "numeric": True, "choices": None}]
-ACCESS = {"tools_off": ["delegate_coding"], "wake_floor": 5, "wake_floor_default": 10, "wake_floor_own": True,
+ACCESS = {"channel": "web", "channel_now": "telegram", "channel_why": "the operator's conversation with wren there is open",
+          "tools_off": ["delegate_coding"], "wake_floor": 5, "wake_floor_default": 10, "wake_floor_own": True,
           "cloud_cap": 15.0, "cloud_cap_default": 8.0, "cloud_cap_own": True, "spent_today": 3.03, "jobs_off": False,
           "jobs_text": "wren: jobs on\n  watcher: every 15 min", "shared": "/Users/example/Shared",
           "mail": [{"account": "work", "label": "AssistantAccess"}],
@@ -67,19 +68,20 @@ class ConfigActionsTest(ActionsTest):
                            ("mail", {"op": "grant", "alias": "work", "what": "Assistant Access"}),
                            ("mail", {"op": "off"}),
                            ("calendar", {"op": "revoke", "alias": "home", "what": "abc@group.calendar.google.com"}),
-                           ("battery-switch", {"op": "on"})):
+                           ("battery-switch", {"op": "on"}), ("channel", {"value": "telegram"})):
             self.post(verb, name="wren", **form)
         self.assertEqual([r[1] for r in self.ran], [
             ["limits", "wren", "wake-floor", "10"], ["limits", "wren", "cloud-cap", "off"], ["jobs", "wren", "off"],
             ["share", "wren", "/Users/example/Shared"], ["share", "wren", "off"],
             ["mail", "wren", "grant", "work", "Assistant Access"], ["mail", "wren", "off"],
-            ["calendar", "wren", "revoke", "home", "abc@group.calendar.google.com"], ["battery", "on", "wren"]])
+            ["calendar", "wren", "revoke", "home", "abc@group.calendar.google.com"], ["battery", "on", "wren"],
+            ["channel", "wren", "telegram"]])
 
     def test_refused_before_anything_runs(self):
         for verb, form, why in (("config-set", {"key": ""}, "which key"), ("drive-set", {"text": "  ", "sha": "x"}, "empty"),
                                 ("limit", {"limit": "speed", "value": "9"}, "no limit"), ("jobs", {"op": "maybe"}, "on or off"),
                                 ("mail", {"op": "grant", "alias": "work"}, "needs an account and a label"),
-                                ("battery-switch", {"op": "x"}, "on or off")):
+                                ("battery-switch", {"op": "x"}, "on or off"), ("channel", {"value": "sms"}, "no channel")):
             status, body = self.post(verb, name="wren", **form)
             self.assertEqual(status, 409, verb)
             self.assertIn(why, body)
@@ -146,7 +148,10 @@ class ConfigPagesTest(ActionsTest):
         for want in ("5 min (yours)", "$15.00 a day (yours)", "spent today $3.03", "watcher: every 15 min",
                      "/Users/example/Shared", "work/AssistantAccess", "home/the operator&#x27;s Cal", "battery is <b>off</b>",
                      "github: hosts api.github.com", 'data-post="/action/limit"', 'data-post="/action/mail"',
-                     'value="abc@group.calendar.google.com"', "Switch the battery on", "delegate_coding"):
+                     'value="abc@group.calendar.google.com"', "Switch the battery on", "delegate_coding",
+                     # where it reaches you: the setting, where a message would go now and why, a button per choice
+                     "notify you on: <b>The web UI</b>", "would go to <b>Telegram</b>",
+                     "conversation with wren there is open", 'data-post="/action/channel"', 'value="auto"'):
             self.assertIn(want, body)
 
     def test_every_new_tab_is_linked(self):

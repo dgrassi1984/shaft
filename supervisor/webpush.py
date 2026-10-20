@@ -7,7 +7,11 @@ service worker, which shows the notification.
 What goes out, and how:
   - A push carries no content. The service worker, woken by it, fetches what to show (/push/latest) from this server
     over the tailnet, with the device's own cookie. So Apple's (or Google's, Mozilla's) server sees only that a push
-    was sent, never the text. (Encrypting a payload — RFC 8291 — needs AES-GCM and ECDH, which neither the stdlib nor
+    was sent, never the text. What to show is queued per device when the push is sent (.supervisor/web/push-queue.json)
+    and /push/latest hands the device what is waiting for it (take): two pushes in quick succession show two
+    notifications, each its own (it showed "the newest reply" for both: issue #23), and a wake that failed is shown with
+    the next one. Only a same-origin request takes them (the service worker's fetch). Chat replies (web_chat) and the instances' messages routed
+    to the web (channel.py, forwarded by the web service: web_alerts.py) both go through notify(). (Encrypting a payload — RFC 8291 — needs AES-GCM and ECDH, which neither the stdlib nor
     the system's LibreSSL command line offers; a push with no payload needs neither.)
   - Each push is signed for its push service (VAPID, RFC 8292): an ES256 JSON Web Token. The key pair is made once with
     /usr/bin/openssl (LibreSSL, on every Mac) and kept in .supervisor/web/vapid.pem (0600); signing also runs openssl.
@@ -163,7 +167,58 @@ def unsubscribe(device: str) -> bool:
         gone = subs.pop(device, None) is not None
         if gone:
             _save(subs)
+        queue = _queue()
+        if queue.pop(device, None) is not None:
+            _save_queue(queue)
     return gone
+
+
+# -- what each push shows -------------------------------------------------------------------------------------------
+QUEUE_MAX = 20                               # per device: older ones are dropped (a phone off for a day)
+NOTHING = {"title": "SHAFT", "body": "Open SHAFT to see what is new", "url": "/", "tag": "shaft"}
+
+
+def _queue_path() -> Path:
+    return _dir() / "push-queue.json"
+
+
+def _queue() -> dict:
+    try:
+        data = json.loads(_queue_path().read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_queue(queue: dict) -> None:
+    path = _queue_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".push-queue.{os.getpid()}.{threading.get_ident()}")
+    tmp.write_text(json.dumps(queue, indent=1, ensure_ascii=False))
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
+def _fields(event: dict) -> dict:
+    return {k: event[k] for k in ("title", "body", "url", "tag")}
+
+
+def take(device: str, now: float | None = None) -> list[dict]:
+    """What this device shows for the push that woke it: every event still queued for it that its push service could
+    still deliver (TTL_S), oldest first, taken off the queue. All of them, not one: a wake that failed (the network, a
+    push service's error) left its event behind, and the next wake shows it too, beside its own (Codex review,
+    2026-10-20). With nothing queued — an earlier wake showed it all — the last one shown again under its own tag
+    (it replaces itself), since iOS shows something for every push; with nothing ever, a plain one."""
+    now = time.time() if now is None else now
+    with _lock:
+        queue = _queue()
+        mine = queue.get(device) or {}
+        fresh = [e for e in mine.get("pending") or [] if now - e.get("at", 0) <= TTL_S]
+        last = fresh[-1] if fresh else mine.get("last")
+        if last:
+            queue[device] = {"pending": [], "last": last}
+            _save_queue(queue)
+    return [_fields(e) for e in fresh] if fresh else [_fields(last)] if last else [dict(NOTHING)]
 
 
 # -- sending --------------------------------------------------------------------------------------------------------
@@ -183,20 +238,41 @@ def _send_one(device: str, endpoint: str) -> str:
         return f"not sent: {e}"
 
 
-def notify(why: str) -> None:
-    """Wake every subscribed device (in a thread: a reply's end never waits on a push service)."""
+def notify(event: dict) -> None:
+    """Queue `event` ({title, body, url, tag}: what the notification shows) for every subscribed device and wake each
+    (in a thread: a reply's end never waits on a push service)."""
     subs = subscriptions()
     if not subs:
         return
+    why = event["title"]
+    with _lock:
+        queue = _queue()
+        for device in subs:
+            mine = queue.get(device) or {}
+            mine["pending"] = [*(mine.get("pending") or []), {**event, "at": time.time()}][-QUEUE_MAX:]
+            queue[device] = mine
+        _save_queue(queue)
+    _wake(subs, why)
 
-    def run():
-        for device, s in subs.items():
+
+RETRY_S = (20, 120)                           # a wake that failed is tried again after these
+
+
+def _wake(subs: dict, why: str) -> None:
+    """One empty push to each device, in a thread; one that fails is tried again (RETRY_S) — its event waits in the
+    queue either way, and shows with the next wake that gets through."""
+    def run(device: str, endpoint: str):
+        for wait in (0, *RETRY_S):
+            time.sleep(wait)
             try:
-                said = _send_one(device, s["endpoint"])
+                said = _send_one(device, endpoint)
             except PushError as e:
                 said = f"not sent: {e}"
             log(f"web: push to device {device} ({why}): {said}")
-    threading.Thread(target=run, daemon=True, name="webpush").start()
+            if said.startswith("2") or "gone" in said:
+                return
+    for device, s in subs.items():                # one thread each: a device's retries never hold up another's
+        threading.Thread(target=run, args=(device, s["endpoint"]), daemon=True, name="webpush").start()
 
 
 def fingerprint() -> str:

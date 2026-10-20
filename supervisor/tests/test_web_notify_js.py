@@ -75,7 +75,7 @@ const toast = () => (els.find((e) => e.id === "toast") || {}).textContent || "";
     const target = { closest: (q) => (q === "[data-notify]" ? button : null) };
     for (const fn of handlers.click) await fn({ target, preventDefault() {} });
     assert.equal(button.dataset.state, "off");
-    assert.equal(button.textContent, "Notify me of replies");
+    assert.equal(button.textContent, "Notify me on this device");
     assert.equal(box.sub, null);                       // the browser subscription a refusal left behind is gone
     assert.match(toast(), /refused/);                  // the reason is said, not only the button
     assert.ok(calls.includes("/push/subscribe"));

@@ -21,7 +21,7 @@ from .web_pages import Html, h, join
 
 WHO = "web"
 VERBS = ("config-set", "config-unset", "drive-set", "drive-remove", "limit", "jobs", "share", "mail", "calendar",
-         "battery-switch")
+         "battery-switch", "channel")
 DRIVE_MAX = 20000
 
 
@@ -65,6 +65,11 @@ def run(verb: str, name: str, form: dict) -> tuple[int, str]:
         if form.get("op") not in ("on", "off"):
             raise Refused("jobs on or off?")
         return _ran(["jobs", name, form["op"]])
+    if verb == "channel":
+        value = form.get("value", "")
+        if value not in ("auto", "web", "telegram"):
+            raise Refused(f"no channel {value!r}: auto, web or telegram")
+        return _ran(["channel", name, value])
     if verb == "share":
         folder = form.get("folder", "").strip()
         if not folder:
@@ -231,9 +236,19 @@ def access_page(name: str, a: dict, row: str = "") -> Html:
                            f"for {n}?", {"name": n, "op": bat_op}, cls="small")])
     keys = (h('<ul class="lines">{li}</ul>', li=join(h("<li>{k}</li>", k=k) for k in a["keys"])) if a["keys"]
             else h('<p class="dim">{n} has no keys of its own</p>', n=n))
+    labels = {"auto": "Auto: where you last wrote to it", "web": "The web UI", "telegram": "Telegram"}
+    reach = join([h('<p>Its messages to you notify you on: <b>{s}</b>. A message now would go to <b>{w}</b> — {why}.</p>'
+                    '<p class="dim">Every message is in your web UI either way. While a conversation with {n} is open on '
+                    'the web or Telegram, its messages alert you there.</p>', s=labels[a["channel"]], n=n,
+                    w="the web UI" if a["channel_now"] == "web" else "Telegram", why=a["channel_why"]),
+                  h('<div class="actions">{b}</div>', b=join(
+                      button("channel", labels[v].split(":")[0], f"notify you of {n}'s messages on: {labels[v]}?",
+                             {"name": n, "value": v}, "already set" if a["channel"] == v else "", cls="small")
+                      for v in ("auto", "web", "telegram")))])
     if row in ("wake-floor", "cloud-cap"):
         return floor if row == "wake-floor" else cap
-    sections = [("", "Supervisor tools (shaft tools)", tool_switches(n, set(a["tools_off"]))),
+    sections = [("channel", "Where it reaches you (shaft channel)", reach),
+                ("", "Supervisor tools (shaft tools)", tool_switches(n, set(a["tools_off"]))),
                 ("", "Limits (shaft limits)", join([floor, cap])), ("jobs", "Scheduled jobs (shaft jobs)", jobs),
                 ("share", "Shared folder (shaft share)", share),
                 ("mail", "Your mail it may read (shaft mail)", grants("mail", a["mail"], "label", "label")),
@@ -251,9 +266,12 @@ def access(name: str) -> dict:
     from . import autonomy, battery, cloudllm, google, jobs
     from .core import (calendar_grants, describe_key, disabled_tools, instance_root, mail_grants, read_secrets,
                        shared_folder)
+    from . import channel
     floor = autonomy.wake_floor(name)
     cap = cloudllm.daily_cap(name)
-    return {"tools_off": sorted(disabled_tools(name)), "wake_floor": floor, "wake_floor_default": autonomy.WAKE_FLOOR_MIN,
+    now, why = channel.route(name)
+    return {"channel": channel.preference(name), "channel_now": now, "channel_why": why,
+            "tools_off": sorted(disabled_tools(name)), "wake_floor": floor, "wake_floor_default": autonomy.WAKE_FLOOR_MIN,
             "wake_floor_own": floor != autonomy.WAKE_FLOOR_MIN, "cloud_cap": cap, "cloud_cap_default": cloudllm.DAILY_USD,
             "cloud_cap_own": cap != cloudllm.DAILY_USD, "spent_today": cloudllm.spent_today(name),
             "jobs_off": jobs.jobs_off(name), "jobs_text": jobs.describe(name), "shared": str(shared_folder(name) or ""),
