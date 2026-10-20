@@ -99,6 +99,59 @@ class EveryPageShowsWhatItsTabShows(PagesTest):
         self.has("/services", "older code than checked out", "NOT RUNNING", "line one", 'data-poll="/fragment/services"')
         self.has("/fragment/services", "NOT RUNNING")
 
+    def test_issue_29_trials_list_and_report_refresh(self):
+        """#29. The trials page had no data-poll, so a trial queued from it stayed off the list until a reload, and
+        the open report stayed the text from when the page opened. Reverting removes the poll URL or serves the
+        list and the report only as a full page."""
+        page = self.get("/trials")
+        self.assertIn('data-poll="/fragment/trials"', page)
+        self.assertNotIn('data-poll="/fragment/trials?', page)
+        frag = self.get("/fragment/trials")
+        self.assertIn("planted blatant harm", frag)
+        self.assertNotIn("data-poll", frag)
+        self.assertNotIn("<h1>", frag)
+        seen = []
+
+        def trials(name=None):
+            seen.append(name)
+            return [TRIAL]
+
+        with mock.patch.object(panel, "trials", side_effect=trials):
+            filtered = self.get("/trials?i=wren")
+            self.get("/fragment/trials?i=wren")
+        self.assertIn('data-poll="/fragment/trials?i=wren"', filtered)
+        self.assertIn("wren", seen)                               # the fragment asks for the same instance
+        with mock.patch("supervisor.trial.report", return_value="queued: 0/6 replayed") as report:
+            one = self.get("/trials/wren/t-1")
+            one_frag = self.get("/fragment/trials/wren/t-1")
+        self.assertIn('data-poll="/fragment/trials/wren/t-1"', one)
+        self.assertIn("queued: 0/6 replayed", one)
+        self.assertIn("queued: 0/6 replayed", one_frag)
+        self.assertNotIn("data-poll", one_frag)
+        self.assertNotIn("<h1>", one_frag)
+        self.assertGreaterEqual(report.call_count, 2)            # the page and the fragment each render it
+        self.get("/fragment/trials/wren/t-404", 404)
+        self.get("/fragment/trials/nobody/t-1", 404)
+
+    def test_issue_29_the_service_log_refreshes(self):
+        """#29. Services polled its state and left the log as a snapshot, with nothing saying so. Reverting drops
+        the log's poll (or folds the log into /fragment/services, which does not know which log is open). The tail
+        is the last 8 KB (panel.log_tail), so the poll is cheap."""
+        body = self.get("/services")
+        self.assertIn('data-poll="/fragment/services"', body)
+        self.assertIn('data-poll="/fragment/services/log?log=model"', body)
+        frag = self.get("/fragment/services/log?log=model")
+        self.assertIn("line one", frag)
+        self.assertIn("com.shaft.model.log", frag)
+        self.assertNotIn("data-poll", frag)
+        state = self.get("/fragment/services")
+        self.assertIn("NOT RUNNING", state)
+        self.assertNotIn("line one", state)                       # the state poll does not carry the log
+        chosen = self.get("/services?log=scheduler")
+        self.assertIn('data-poll="/fragment/services/log?log=scheduler"', chosen)
+        self.assertIn("com.shaft.scheduler.log", self.get("/fragment/services/log?log=scheduler"))
+        self.assertIn("com.shaft.model.log", self.get("/fragment/services/log?log=nope"))  # unknown: the page's default
+
     def test_an_idle_model_server_is_idle_not_down(self):
         """main 86b2d72: the model server runs only while used; an idle one is not a fault (shown dim, as in the TUI)."""
         with mock.patch.object(panel, "services_detail", return_value=[
@@ -316,7 +369,8 @@ class NoMarkupShownAsTextTest(PagesTest):
         with mock.patch.object(panel, "transcripts", return_value=[]):
             for path in ("/overview", "/fragment/overview", "/fragment/rail", "/i/shaft", "/i/shaft/chat", "/i/shaft/judge", "/i/shaft/changes",
                          "/i/shaft/benchmarks", "/i/shaft/transcripts", "/i/shaft/journal", "/trials", "/costs",
-                         "/services", "/fragment/services", "/messages"):
+                         "/services", "/fragment/services", "/fragment/services/log?log=model",
+                         "/fragment/trials", "/messages"):
                 body = self.get(path)
                 for tag in self.OWN:
                     self.assertNotIn(tag, body, f"{path} shows {tag}")

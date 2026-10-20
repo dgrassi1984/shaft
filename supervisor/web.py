@@ -569,17 +569,24 @@ def _get(req: Request, csrf: str) -> Response | None:
                                       listing_only=qs.get("list") == "1")[1])
     if m := re.match(r"^/chatfiles/(web-[a-f0-9]+)/(\d+)/(\d+)$", path):
         return _chat_file(m[1], int(m[2]), int(m[3]))
-    if path == "/trials":
+    if path in ("/trials", "/fragment/trials"):
         only = qs.get("i", "")
         only = only if only in names else ""
-        return _html(200, v.trials_page(panel.trials(only or None), panel.costs(days=1), only, panel.trial_progress,
-                                        names, csrf))
-    if m := re.match(r"^/trials/([A-Za-z0-9_-]+)/([^/]+)$", path):
+        live = v.trials_live(panel.trials(only or None), panel.costs(days=1), only, panel.trial_progress, names)
+        if path == "/fragment/trials":
+            return _html(200, live)
+        return _html(200, v.trials_page(live, only, names, csrf))
+    if m := re.match(r"^/(fragment/)?trials/([A-Za-z0-9_-]+)/([^/]+)$", path):
         from . import trial
-        if m[1] not in names:
+        if m[2] not in names:
             return None
-        t = next((t for t in panel.trials(m[1]) if t.get("id") == urllib.parse.unquote(m[2])), None)
-        return _html(200, v.trial_page(t, trial.report(t), names, csrf)) if t else None
+        t = next((t for t in panel.trials(m[2]) if t.get("id") == urllib.parse.unquote(m[3])), None)
+        if not t:
+            return None
+        text = trial.report(t)
+        if m[1]:
+            return _html(200, v.trial_report(text))
+        return _html(200, v.trial_page(t, text, names, csrf))
     if path == "/messages":
         from . import messages
         ms = messages.history()
@@ -603,13 +610,16 @@ def _get(req: Request, csrf: str) -> Response | None:
             return _html(200, web_settings.status(data["settings"], runs, busy))
         return _html(200, v.frame("Settings", web_settings.page_body(data, runs, busy), names, csrf,
                                   current="/settings"))
-    if path in ("/services", "/fragment/services"):
+    if path in ("/services", "/fragment/services", "/fragment/services/log"):
         order = list(dashboard.SERVICES)
         from . import actions
+        # The log fragment is its own poll: log_tail reads the last 8 KB, so a few seconds between refreshes is cheap.
+        sel = qs.get("log") if qs.get("log") in order else order[0]
+        if path == "/fragment/services/log":
+            return _html(200, v.services_log(sel, panel.SERVICE_LOGS[sel], panel.log_tail(sel, 40)))
         live = v.services_live(panel.services_detail(), order, panel.scheduled_runs(), actions.busy_instances())
         if path == "/fragment/services":
             return _html(200, live)
-        sel = qs.get("log") if qs.get("log") in order else order[0]
         return _html(200, v.services_page(live, sel, panel.SERVICE_LOGS[sel], panel.log_tail(sel, 40), names, csrf))
     return None
 

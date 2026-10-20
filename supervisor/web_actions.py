@@ -208,10 +208,17 @@ def tool_switches(name: str, off: set[str]) -> Html:
              '</tbody></table></div>', r=join(rows))
 
 
+def alert_line(a: dict) -> Html:
+    """One open alert and the action that dismisses it alone. `ids` is a JSON list of that one id — the same field
+    `dismiss` reads, a list because a log alert's id has a space in its time."""
+    return h('<li>⚠ {t} {b}</li>', t=a["text"],
+             b=button("dismiss", "Dismiss", "", {"ids": json.dumps([a["id"]])}, cls="small"))
+
+
 def alert_buttons(alerts: list[dict]) -> Html:
     """Dismiss the five shown, and — when more are open — all of them, asked first: those include alerts not on
     screen. Live, 2026-10-20: 60 lookalike log alerts took 12 clicks of "Dismiss these alerts", each showing the next
-    five, so the list never seemed to change."""
+    five, so the list never seemed to change. Each alert also has its own Dismiss (alert_line)."""
     shown = alerts[:5]
     if not shown:
         return Html("")

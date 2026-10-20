@@ -247,6 +247,60 @@ class OverviewTest(WebTest):
         body = self.req("/overview", cookie=self.paired()).body.decode()
         self.assertIn('data-poll="/fragment/overview"', body)
 
+    def test_issue_34_alerts_past_five_open_and_each_dismisses(self):
+        """#34. With more than five open alerts the rest was a "… N more" line, and the only dismissals were the
+        first five or all of them. Reverting that leaves alert 5 off the page (or with no Dismiss of its own) and
+        drops the data-key, so a refresh shuts the list the operator had opened."""
+        import html as _html
+        import json as _json
+        log_id = "log:2026-10-19 09:48:34:2373c79a19f2"          # a real log alert's id: its time has a space
+        many = [{"id": f"a{i}", "text": f"alert {i}"} for i in range(7)] + [{"id": log_id, "text": "a log line"}]
+        s = snap()
+        s["alerts"] = many
+        out = str(web_pages.overview(s))
+        self.assertIn("<summary>Show all 8 alerts</summary>", out)
+        self.assertIn('<details data-key="all-alerts">', out)
+        self.assertNotIn("… 3 more", out)
+        self.assertEqual(out.count("alert 0"), 2)                # on view, and again in the full list
+        self.assertEqual(out.count("alert 5"), 1)                # past the five: only once the list is open
+        self.assertEqual(out.count("a log line"), 1)
+        posted = [_json.loads(_html.unescape(v.split('"')[0])) for v in out.split('name="ids" value="')[1:]]
+        singles = [p[0] for p in posted if len(p) == 1]
+        self.assertEqual(set(singles), {a["id"] for a in many})
+        self.assertEqual(singles.count("a0"), 2)
+        self.assertEqual(singles.count(log_id), 1)               # one Dismiss, the whole id, space and all
+        self.assertIn([f"a{i}" for i in range(5)], posted)       # Dismiss these alerts, still the five on view
+        self.assertIn([a["id"] for a in many], posted)           # Dismiss all 8, still every open alert
+        self.assertIn("Dismiss all 8", out)
+        few = snap()
+        few["alerts"] = [{"id": "a0", "text": "only one"}]
+        short = str(web_pages.overview(few))
+        self.assertIn("only one", short)
+        self.assertIn(">Dismiss<", short)
+        self.assertIn("Dismiss these alerts", short)
+        self.assertNotIn("Show all", short)
+        self.assertNotIn("<details", short)
+        self.assertNotIn("Dismiss all", short)
+
+    def test_issue_34_no_instances_says_how_to_create_one(self):
+        """#34. A fresh install opens on /overview with an empty Chats group and no cards. Reverting the empty
+        state removes "No instances yet", the `shaft new` command, or the link to the README quickstart."""
+        s = snap()
+        s["instances"] = []
+        out = str(web_pages.overview(s))
+        self.assertIn("No instances yet", out)
+        self.assertIn("Instances are created from the terminal", out)
+        self.assertIn("<code>shaft new &lt;name&gt;</code>", out)
+        self.assertIn('href="https://github.com/dgrassi1984/shaft#quickstart-cloud-only"', out)
+        self.assertIn('rel="noopener noreferrer" target="_blank"', out)
+        self.assertNotIn("No instances yet", str(web_pages.overview(snap())))
+        with mock.patch.object(web, "overview", return_value=s):
+            page = self.req("/overview", cookie=self.paired()).body.decode()
+            frag = self.req("/fragment/overview", cookie=self.paired()).body.decode()
+        self.assertIn("No instances yet", page)
+        self.assertIn("shaft new &lt;name&gt;", frag)
+        self.assertIn("#quickstart-cloud-only", frag)
+
 
 class HostsTest(unittest.TestCase):
     def setUp(self):
