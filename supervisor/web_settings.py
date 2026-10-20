@@ -16,7 +16,7 @@ import subprocess
 
 from . import actions
 from .core import KNOB_GROUPS, PROJECT, secrets_env
-from .web_actions import NOT_FROM_HERE, Refused, button
+from .web_actions import NOT_FROM_HERE, Refused, button, guarded
 from .web_pages import Html, h, join
 
 WHO = "web"
@@ -71,8 +71,9 @@ def _restart_buttons(services: list[str], scheduled: list[str], busy: list[str])
                          'cannot restart itself</span>', svc=svc))
             continue
         why = actions.guard_reason(svc, "restart", scheduled, busy)
-        out.append(button("service", f"Restart {svc}", f"restart {svc} now? It picks up the saved settings.",
-                          {"service": svc, "op": "on"}, f"not now: {why}" if why else "", cls="small"))
+        out.append(guarded("service", f"Restart {svc}", f"restart {svc} now? It picks up the saved settings.",
+                           {"service": svc, "op": "on"}, actions.force_question(svc, "restart", why) if why else "",
+                           cls="small"))
     return join(out, " ")
 
 
