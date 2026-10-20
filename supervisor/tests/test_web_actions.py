@@ -170,6 +170,25 @@ class EveryActionRunsItsCommand(ActionsTest):
         self.assertEqual(self.act("dismiss", alerts=many, ids=up.quote(_json.dumps(posted[1])))[0], 200)
         self.assertRan(["alerts", "dismiss", *[a["id"] for a in many]])
 
+    def test_issue_34_one_alert_dismisses_on_its_own(self):
+        """#34. Each alert's Dismiss posts a JSON list of that one id — the same identity `alerts dismiss` takes,
+        including a log id with a space and one that is not among the five on view. Reverting to the batch buttons
+        only, this post never happens: the page has no single-id Dismiss for a7."""
+        import html as _html
+        import json as _json
+        import urllib.parse as up
+        from supervisor import web_pages
+        many = [{"id": f"a{i}", "text": f"alert {i}"} for i in range(7)] + [{"id": self.LOG_ID, "text": "a log line"}]
+        s = snap()
+        s["alerts"] = many
+        out = str(web_pages.overview(s))
+        posted = [_json.loads(_html.unescape(v.split('"')[0])) for v in out.split('name="ids" value="')[1:]]
+        self.assertIn(["a6"], posted)                             # past the five on view
+        self.assertIn([self.LOG_ID], posted)                      # the space stays inside the one id
+        self.ran.clear()
+        self.assertEqual(self.act("dismiss", alerts=many, ids=up.quote(_json.dumps(["a6"])))[0], 200)
+        self.assertRan(["alerts", "dismiss", "a6"])
+
     def test_services_and_autonomy(self):
         self.act("service", service="model", op="on")
         self.act("service", service="scheduler", op="off")

@@ -28,6 +28,7 @@ h2 { font-size: .95rem; margin: 0 0 .5rem; color: var(--dim); font-weight: 600; 
 .good { color: var(--good); }
 
 .shell { display: grid; grid-template-columns: 230px 1fr; min-height: 100vh; }
+.shell.single { grid-template-columns: minmax(0, 1fr); }
 nav { border-right: 1px solid var(--line); padding: 1rem .8rem; display: flex; flex-direction: column; gap: .2rem;
       position: sticky; top: 0; height: 100vh; overflow-y: auto; }
 nav .brand { font-weight: 700; letter-spacing: .08em; margin-bottom: .6rem; color: var(--text); padding: 0 .5rem; }
@@ -199,6 +200,8 @@ button.force { color: var(--warn); border-color: var(--warn); }   /* overrides a
 .card footer .actions { margin-top: 0; }
 .msglink { font-size: .82rem; }
 .alerts ul { list-style: none; margin: 0 0 .4rem; padding: 0; }
+.alerts details { margin: .15rem 0 .4rem; }
+.alerts summary { cursor: pointer; }
 .topline form.act { margin-left: auto; }
 form.msg { display: grid; gap: .4rem; margin: .4rem 0 .8rem; }
 form.msg label { display: grid; gap: .3rem; font-size: .9rem; }
@@ -283,7 +286,8 @@ details.menu { position: relative; }
 .menupages a { padding: .25rem .4rem; border-radius: 5px; color: var(--text); }
 .menupages a:hover { background: var(--bg); }
 /* the chat fills the window: its feed scrolls in its own box, the composer stays at the bottom */
-main:has(> .chatgrid) { display: flex; flex-direction: column; height: 100vh; padding-bottom: .4rem; }
+main:has(> .chatgrid) { display: flex; flex-direction: column; height: 100vh; padding-bottom: .4rem;
+                            container: chat-area / inline-size; }
 .chatgrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: .8rem; flex: 1 1 auto; min-height: 0; }
 .chatgrid:has([data-back-docs]), .chatgrid:has(.doclist a) { grid-template-columns: minmax(20rem, 1fr) minmax(18rem, 1fr); }
 .chatgrid:not(:has(.doclist a)):not(:has([data-back-docs])):not(.showdocs) > aside.docs { display: none; }  /* none: all chat */
@@ -475,6 +479,16 @@ a.button { display: inline-block; padding: .45rem .9rem; border: 1px solid var(-
   .chatgrid.showdocs > aside.docs { display: block; position: fixed; inset: 0; z-index: 55; border: 0; border-radius: 0;
       padding: calc(env(safe-area-inset-top) + .6rem) 1rem calc(env(safe-area-inset-bottom) + 1rem); overflow-y: auto; }
   .closedocs { margin-left: auto; }
+}
+
+/* Side by side needs 230 + (20 + 18 + .8 + 2 * 1.2) * 15 = 848px:
+   rail + chat/doc minimums + gap + main padding. Query the content width (38.8rem)
+   so larger text also gets a sheet before the columns overflow. The rail keeps its phone breakpoint. */
+@container chat-area (max-width: 38.8rem) {
+  .chatgrid { display: flex; flex-direction: column; }
+  .chatgrid > aside.docs { display: none; }
+  .chatgrid.showdocs > aside.docs { display: block; position: fixed; inset: 0; z-index: 55; border: 0; border-radius: 0;
+      padding: calc(env(safe-area-inset-top) + .6rem) 1rem calc(env(safe-area-inset-bottom) + 1rem); overflow-y: auto; }
 }
 
 /* docs/plans/PLAN-pwa P3 */

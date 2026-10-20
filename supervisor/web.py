@@ -344,7 +344,7 @@ def _route(req: Request) -> Response:
     paired = _paired(req.headers.get("cookie", ""))
     if not paired:
         # A Home Screen app has cookies of its own and no address bar: it pairs by pasting the link here.
-        return _html(403, web_pages.unpaired_page())
+        return _html(403, web_pages.unpaired_page(), {"X-Shaft-Pair": "required"})
     dev, secret = paired
     if _renew_due(dev):                             # the cookie's 400 days start again: a used app never lapses
         req.set_cookies.append(_device_cookie(dev, secret))
@@ -358,6 +358,10 @@ def _route(req: Request) -> Response:
         return _post(req, dev)
     if req.method != "GET":
         return _html(405, web_pages.message_page("Not allowed", f"{req.method} is not supported."))
+    if req.path == "/push/status":                  # #23: "on" is SHAFT holding this device, not only the browser
+        from . import webpush
+        return Response(200, json.dumps({"subscribed": webpush.holds(dev)}).encode(),
+                        {"Content-Type": "application/json", "Cache-Control": "no-store"})
     try:
         r = _get(req, csrf_token(secret))
     except (Exception, SystemExit) as e:    # say what broke: an empty page reads as "nothing to show" (SystemExit:
@@ -379,7 +383,7 @@ def _pair(req: Request, login: str) -> Response:
     if req.method == "GET":
         p = _pairing(req.query.get("t", ""))
         if not p:
-            return _refused("This pairing link is unknown, used or expired.", "Run `shaft web pair` for a new one.")
+            return _html(403, web_pages.unpaired_page(expired=True))
         return _html(200, web_pages.pair_page(req.query["t"], p["device"]))
     if req.method != "POST" or not _same_origin(req):
         return _refused("This request did not come from this page.")
@@ -387,7 +391,7 @@ def _pair(req: Request, login: str) -> Response:
     token = form.get("t") or _token_from_link(form.get("link", ""))
     got = _use_pairing(token, login)
     if not got:
-        return _refused("This pairing link is unknown, used or expired.", "Run `shaft web pair` for a new one.")
+        return _html(403, web_pages.unpaired_page(expired=True))
     dev, secret = got
     return Response(303, b"", {"Location": "/", "Set-Cookie": _device_cookie(dev, secret)})
 
@@ -494,6 +498,15 @@ def _post(req: Request, dev: str) -> Response:
             status, text = 500, f"{m[1]} failed: {type(e).__name__}: {e}"
         with _snap_lock:
             _snap["snap"] = None                     # the next refresh shows what the action changed
+        if status == 200 and req.headers.get("x-row") == "1":
+            try:
+                row = web_actions.saved_row(m[1], req.form())
+            except (Exception, SystemExit) as e:
+                log(f"web: saved row {m[1]} failed: {type(e).__name__}: {e}")
+                return _html(200, web_pages.h("<p>{t}</p><p>Saved, but the row could not refresh. "
+                                             "Reload before saving it again.</p>", t=text))
+            return _html(200, web_pages.h("<p>{t}</p><template data-saved-row>{row}</template>", t=text, row=row),
+                         {"X-Row": "1"})
         return _html(status, web_pages.h("<p>{t}</p>", t=text))
     return _html(404, web_pages.message_page("Not found", f"No action at {req.path}."))
 
@@ -535,6 +548,15 @@ def _get(req: Request, csrf: str) -> Response | None:
         if name not in names:
             return None
         return _instance_page(name, tab, qs, names, csrf)
+    if m := re.match(r"^/fragment/chat/([A-Za-z0-9_-]+)/header$", path):
+        if m[1] not in names:
+            return None
+        from . import web_chat
+        chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.shown(m[1])
+        if chat and chat.get("instance") != m[1]:
+            return None
+        past = [c for c in web_chat.chats(m[1]) if c.get("state") == "ended"][:20]
+        return _html(200, v.chat_header(m[1], _live(m[1]), chat, past, read_only=bool(qs.get("id"))))
     if m := re.match(r"^/fragment/chat/([A-Za-z0-9_-]+)$", path):
         if m[1] not in names:
             return None
@@ -560,17 +582,24 @@ def _get(req: Request, csrf: str) -> Response | None:
                                       listing_only=qs.get("list") == "1")[1])
     if m := re.match(r"^/chatfiles/(web-[a-f0-9]+)/(\d+)/(\d+)$", path):
         return _chat_file(m[1], int(m[2]), int(m[3]))
-    if path == "/trials":
+    if path in ("/trials", "/fragment/trials"):
         only = qs.get("i", "")
         only = only if only in names else ""
-        return _html(200, v.trials_page(panel.trials(only or None), panel.costs(days=1), only, panel.trial_progress,
-                                        names, csrf))
-    if m := re.match(r"^/trials/([A-Za-z0-9_-]+)/([^/]+)$", path):
+        live = v.trials_live(panel.trials(only or None), panel.costs(days=1), only, panel.trial_progress, names)
+        if path == "/fragment/trials":
+            return _html(200, live)
+        return _html(200, v.trials_page(live, only, names, csrf))
+    if m := re.match(r"^/(fragment/)?trials/([A-Za-z0-9_-]+)/([^/]+)$", path):
         from . import trial
-        if m[1] not in names:
+        if m[2] not in names:
             return None
-        t = next((t for t in panel.trials(m[1]) if t.get("id") == urllib.parse.unquote(m[2])), None)
-        return _html(200, v.trial_page(t, trial.report(t), names, csrf)) if t else None
+        t = next((t for t in panel.trials(m[2]) if t.get("id") == urllib.parse.unquote(m[3])), None)
+        if not t:
+            return None
+        text = trial.report(t)
+        if m[1]:
+            return _html(200, v.trial_report(text))
+        return _html(200, v.trial_page(t, text, names, csrf))
     if path == "/messages":
         from . import messages
         ms = messages.history()
@@ -594,13 +623,16 @@ def _get(req: Request, csrf: str) -> Response | None:
             return _html(200, web_settings.status(data["settings"], runs, busy))
         return _html(200, v.frame("Settings", web_settings.page_body(data, runs, busy), names, csrf,
                                   current="/settings"))
-    if path in ("/services", "/fragment/services"):
+    if path in ("/services", "/fragment/services", "/fragment/services/log"):
         order = list(dashboard.SERVICES)
         from . import actions
+        # The log fragment is its own poll: log_tail reads the last 8 KB, so a few seconds between refreshes is cheap.
+        sel = qs.get("log") if qs.get("log") in order else order[0]
+        if path == "/fragment/services/log":
+            return _html(200, v.services_log(sel, panel.SERVICE_LOGS[sel], panel.log_tail(sel, 40)))
         live = v.services_live(panel.services_detail(), order, panel.scheduled_runs(), actions.busy_instances())
         if path == "/fragment/services":
             return _html(200, live)
-        sel = qs.get("log") if qs.get("log") in order else order[0]
         return _html(200, v.services_page(live, sel, panel.SERVICE_LOGS[sel], panel.log_tail(sel, 40), names, csrf))
     return None
 

@@ -231,22 +231,59 @@ def message_forms(name: str, question: dict | None) -> Html:
 def tool_switches(name: str, off: set[str]) -> Html:
     """Every supervisor tool with its switch (TUI t)."""
     from .broker import SPECS
-    rows = []
-    for tool in sorted(SPECS):
-        to = "on" if tool in off else "off"
-        rows.append(h('<tr><td data-label="tool">{t}</td><td data-label="now" class="{c}">{now}</td>'
-                      '<td data-label="">{b}</td></tr>', t=tool, c="bad" if tool in off else "good",
-                      now="off" if tool in off else "on",
-                      b=button("tool", f"Switch {to}", f"switch {tool} {to} for {name}? (from its next run)",
-                               {"name": name, "tool": tool, "to": to})))
+    rows = [tool_row(name, tool, off) for tool in sorted(SPECS)]
     return h('<div class="tablewrap"><table><thead><tr><th>tool</th><th>now</th><th></th></tr></thead><tbody>{r}'
              '</tbody></table></div>', r=join(rows))
+
+
+def alert_line(a: dict) -> Html:
+    """One open alert and the action that dismisses it alone. `ids` is a JSON list of that one id — the same field
+    `dismiss` reads, a list because a log alert's id has a space in its time."""
+    return h('<li>⚠ {t} {b}</li>', t=a["text"],
+             b=button("dismiss", "Dismiss", "", {"ids": json.dumps([a["id"]])}, cls="small"))
+
+
+def tool_row(name: str, tool: str, off: set[str]) -> Html:
+    to = "on" if tool in off else "off"
+    return h('<tr data-row><td data-label="tool">{t}</td><td data-label="now" class="{c}">{now}</td>'
+             '<td data-label="">{b}</td></tr>', t=tool, c="bad" if tool in off else "good",
+             now="off" if tool in off else "on",
+             b=button("tool", f"Switch {to}", f"switch {tool} {to} for {name}? (from its next run)",
+                      {"name": name, "tool": tool, "to": to}))
+
+
+def saved_row(verb: str, form: dict) -> Html:
+    """Read back the saved control, including its next comparison token and button direction."""
+    from . import opconfig, web_config, web_settings, web_views
+    from .core import disabled_tools
+    name = form.get("name", "")
+    if verb in web_settings.VERBS:
+        field = next(f for f in web_settings.listing()["settings"] if f["name"] == form["key"].strip())
+        return web_settings._row(field)
+    if verb in ("config-set", "config-unset"):
+        key = form["key"].strip()
+        fields = {f["key"]: f for f in opconfig.fields(name)}
+        # Unsetting a custom key removes it from fields(); keep an empty row so it can be set again.
+        field = fields.get(key) or dict(key=key, set=False, value="", default=None, help="", secret=False,
+                                        choices=None, numeric=False)
+        # A model switch also writes LLM_BASE_URL: its row's saw goes with it, or its next save is refused
+        return join([web_config.config_row(name, field)] +
+                    [web_config.config_row(name, fields[k]) for k in opconfig.coupled(key) if k in fields])
+    if verb in ("drive-set", "drive-remove"):
+        text, sha = opconfig.drive(name)
+        return web_config.drive_page(name, text, sha, web_views.markdown(text) if text is not None else Html(""))
+    if verb == "tool":
+        return tool_row(name, form["tool"], disabled_tools(name))
+    if verb in web_config.VERBS:
+        row = form["limit"] if verb == "limit" else verb
+        return web_config.access_page(name, web_config.access(name), row)
+    raise ValueError(f"no saved row for {verb}")
 
 
 def alert_buttons(alerts: list[dict]) -> Html:
     """Dismiss the five shown, and — when more are open — all of them, asked first: those include alerts not on
     screen. Live, 2026-10-20: 60 lookalike log alerts took 12 clicks of "Dismiss these alerts", each showing the next
-    five, so the list never seemed to change."""
+    five, so the list never seemed to change. Each alert also has its own Dismiss (alert_line)."""
     shown = alerts[:5]
     if not shown:
         return Html("")
