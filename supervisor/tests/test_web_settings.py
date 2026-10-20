@@ -46,7 +46,7 @@ class SettingsPageTest(ActionsTest):
         for k in core.KNOBS.values():
             self.assertIn(f"<code>{k.name}</code>", body)
         self.assertIn('claude-sonnet-5-5,openrouter/some/new-model</code> <span class="dim">[settings.env]', body)
-        self.assertIn("default <code>openrouter/xiaomi/mimo-v2.6-pro,claude-sonnet-5-5</code>", body)
+        self.assertIn(f"default <code>{core.KNOBS['SHAFT_JUDGE_MODELS'].default}</code>", body)
         self.assertIn('2400</code> <span class="dim">[default]', body)                  # SHAFT_CYCLE_TIMEOUT_S
         self.assertIn('href="/settings" class="on"', body)
 

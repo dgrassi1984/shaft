@@ -150,6 +150,7 @@ class CycleVerdictTest(unittest.TestCase):
         for p in (mock.patch.object(metrics, "INSTANCES", self.tmp / "instances"),
                   mock.patch.object(metrics, "SUP_DIR", self.tmp / "sup"),
                   mock.patch.object(metrics, "second_sampled", return_value=False),
+                  mock.patch.object(judge, "JUDGE_EVERY", 1),
                   mock.patch.object(judge, "JUDGE_MODELS", POOL), mock.patch.object(judge, "available", return_value=True)):
             p.start()
             self.addCleanup(p.stop)
