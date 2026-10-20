@@ -158,5 +158,67 @@ class InlineTest(unittest.TestCase):
                          '<a href="https://ex.example/c.png" rel="noopener noreferrer" target="_blank">🖼 chart</a>')
 
 
+def _css_rule_bodies(css: str, selector: str) -> list[str]:
+    """Bodies of rules whose selector list includes `selector` exactly, in source order. Comments removed."""
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    bodies = []
+    for match in re.finditer(r"([^{}]+)\{([^{}]*)\}", css):
+        selectors = [re.sub(r"\s+", " ", part.strip()) for part in match.group(1).split(",")]
+        if selector in selectors:
+            bodies.append(match.group(2))
+    return bodies
+
+
+def _last_rem(css: str, selector: str, prop: str) -> float:
+    found = None
+    for body in _css_rule_bodies(css, selector):
+        for match in re.finditer(rf"(?:^|;)\s*{prop}\s*:\s*(\d*\.?\d+)rem", body):
+            found = float(match.group(1))
+    if found is None:
+        raise AssertionError(f"{selector} sets no {prop} in rem")
+    return found
+
+
+def _margin_above_below(css: str, selector: str) -> tuple[float, float]:
+    found = None
+    for body in _css_rule_bodies(css, selector):
+        for match in re.finditer(r"(?:^|;)\s*margin\s*:\s*(\d*\.?\d+)rem\s+0\s+(\d*\.?\d+)rem", body):
+            found = (float(match.group(1)), float(match.group(2)))
+    if found is None:
+        raise AssertionError(f"{selector} sets no margin shorthand")
+    return found
+
+
+class MarkdownHeadingScaleTest(unittest.TestCase):
+    """#59: markdown headings are a scale, larger than the text they introduce. Page titles outside .md stay put."""
+
+    def test_issue_59_markdown_headings_step_down_and_stay_at_least_body_size(self):
+        """Reverting #59 sets .md h2, h3 and h4 to the same .95rem, smaller than the 1rem body."""
+        css = (Path(__file__).parents[1] / "web_static" / "web.css").read_text()
+        sizes = {level: _last_rem(css, f".md {level}", "font-size") for level in ("h2", "h3", "h4", "h5", "h6")}
+        self.assertGreater(sizes["h2"], sizes["h3"])
+        self.assertGreater(sizes["h3"], sizes["h4"])
+        self.assertGreaterEqual(sizes["h4"], 1.0)          # body is 1rem (html is 15px)
+        self.assertGreaterEqual(sizes["h5"], 1.0)
+        self.assertGreaterEqual(sizes["h6"], 1.0)
+        self.assertLess(sizes["h2"], 1.3)                   # under the page's own h1
+        for level in ("h2", "h3", "h4", "h5", "h6"):
+            above, below = _margin_above_below(css, f".md {level}")
+            self.assertGreater(above, below, level)
+        for level in ("h5", "h6"):
+            weight = None
+            for body in _css_rule_bodies(css, f".md {level}"):
+                for match in re.finditer(r"(?:^|;)\s*font-weight\s*:\s*([^;]+)", body):
+                    weight = match.group(1).strip()
+            self.assertEqual(weight, "700", level)
+        # SHAFT's own section titles, not instance text
+        self.assertIn("h1 { font-size: 1.3rem; margin: 0 0 .8rem; }", css)
+        self.assertIn("h2 { font-size: .95rem; margin: 0 0 .5rem; color: var(--dim); font-weight: 600; }", css)
+        self.assertIn(".panel h3 { font-size: .9rem; margin: .8rem 0 .2rem; }", css)
+        self.assertIn(".earlier h3 { font-size: .8rem; color: var(--dim); margin: 0 0 .2rem; }", css)
+        self.assertIn(".chathead h1 { font-size: 1.1rem;", css)
+        self.assertRegex(css, r"\.turn, \.md,[^{]*\{[^}]*overflow-wrap: anywhere")
+
+
 if __name__ == "__main__":
     unittest.main()
