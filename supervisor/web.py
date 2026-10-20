@@ -494,6 +494,15 @@ def _post(req: Request, dev: str) -> Response:
             status, text = 500, f"{m[1]} failed: {type(e).__name__}: {e}"
         with _snap_lock:
             _snap["snap"] = None                     # the next refresh shows what the action changed
+        if status == 200 and req.headers.get("x-row") == "1":
+            try:
+                row = web_actions.saved_row(m[1], req.form())
+            except (Exception, SystemExit) as e:
+                log(f"web: saved row {m[1]} failed: {type(e).__name__}: {e}")
+                return _html(200, web_pages.h("<p>{t}</p><p>Saved, but the row could not refresh. "
+                                             "Reload before saving it again.</p>", t=text))
+            return _html(200, web_pages.h("<p>{t}</p><template data-saved-row>{row}</template>", t=text, row=row),
+                         {"X-Row": "1"})
         return _html(status, web_pages.h("<p>{t}</p>", t=text))
     return _html(404, web_pages.message_page("Not found", f"No action at {req.path}."))
 

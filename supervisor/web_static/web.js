@@ -4,6 +4,7 @@
 //   <form data-post="/…">    sent with fetch as a POST carrying the CSRF token; data-confirm asks first, data-reset
 //                            clears it once sent, data-diff="/preview/…" shows what would change before asking;
 //                            the reply is shown as a toast and the polled parts refresh
+//   data-row                 a saved form replaces only its nearest row with the server's new value and token
 // Listeners are delegated from the document, so content swapped in by a poll needs no re-binding.
 (() => {
   "use strict";
@@ -275,13 +276,15 @@
     if (mid && !mid.value) mid.value = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
     const shown = form.dataset.draft ? pending(form) : null;
     const multipart = !!form.dataset.multipart;          // files go with it: the browser sets the boundary
+    const row = form.closest("[data-row]");
     const ctl = new AbortController();
     const limit = setTimeout(() => ctl.abort(), multipart ? 180000 : 30000);
     try {
       const r = await fetch(form.dataset.post, {
         method: "POST", credentials: "same-origin", signal: ctl.signal,
-        headers: multipart ? { "X-CSRF-Token": csrf() }
-                           : { "X-CSRF-Token": csrf(), "Content-Type": "application/x-www-form-urlencoded" },
+        headers: { "X-CSRF-Token": csrf(),
+                   ...(!multipart ? { "Content-Type": "application/x-www-form-urlencoded" } : {}),
+                   ...(row || form.dataset.addRow ? { "X-Row": "1" } : {}) },
         body: multipart ? new FormData(form) : new URLSearchParams(new FormData(form)),
       });
       if (pairAgain(r)) { if (shown) shown.remove(); return; }
@@ -294,6 +297,21 @@
       }
       const now = r.headers.get("X-Doc-Sha");         // refused as stale: Save again replaces it, knowingly
       if (!r.ok && now && form.querySelector("input[name=sha]")) form.querySelector("input[name=sha]").value = now;
+      if (r.ok && r.headers.get("X-Row") === "1") {
+        const next = new DOMParser().parseFromString(body, "text/html")
+          .querySelector("template[data-saved-row]").content.firstElementChild;
+        // rows the same save also changed (a model switch writes its base URL): swapped by id, after the first
+        for (let more = next.nextElementSibling; more; more = more.nextElementSibling) {
+          const shownNow = more.id && document.getElementById(more.id);
+          if (shownNow) shownNow.replaceWith(more.cloneNode(true));
+        }
+        if (row) row.replaceWith(next);
+        else if (form.dataset.addRow) {
+          const existing = document.getElementById(next.id);   // Add can set a key already shown with its default
+          if (existing) existing.replaceWith(next);
+          else document.querySelector(form.dataset.addRow).appendChild(next);
+        }
+      }
       if (r.ok && form.dataset.after === "doc-saved") docSaved(form, r.headers.get("X-Doc"));
       if (r.ok && form.dataset.after === "doc-deleted") docsList();
       if (r.ok && form.dataset.after === "comment-saved") refreshDocs();
@@ -309,7 +327,6 @@
         if (box && form.dataset.draft && !touchOnly()) box.focus();   // write the next one (a phone keeps its keyboard down)
       }
       if (!r.ok && shown) shown.remove();
-      if (r.ok && form.dataset.after === "reload") setTimeout(() => location.reload(), 800);
       document.dispatchEvent(new Event("shaft:refresh"));      // show what the action changed, now
     } catch (e) {                                  // the answer was lost: it may have arrived — the id says so
       if (shown) shown.remove();
