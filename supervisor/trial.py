@@ -39,7 +39,7 @@ from math import comb
 from pathlib import Path
 
 from . import gate, localmodel, mind
-from .core import (CYCLE_TIMEOUT_S, HOME, LLM_PORTS, MIND_PATHS, PROJECT, SUP_DIR, UnsafePath, cloud_model, contained,
+from .core import (CYCLE_TIMEOUT_S, DOCS_COPY, HOME, LLM_PORTS, MIND_PATHS, PROJECT, SUP_DIR, UnsafePath, cloud_model, contained,
                    dollars, hours, knob, log, positive_int, safe_write, secrets_env, whole)
 
 TRIALS_PER_DAY, TRIALS_PER_DAY_SRC = knob(
@@ -75,7 +75,8 @@ TARGETS = ("shaft/", "plugins/", "skills/", "tests/")
 CODE = (*gate.CODE_PATHS, "config.env")
 # mail/: attachments downloaded from the operator's mail (docs/plans/PLAN-mail.md) are copies, not state: never in the judge's diff.
 # .browser/: a browser profile a replay's `run` created (docs/plans/PLAN-browser.md) — cookies, never shown to the judge.
-NOT_STATE = ("logs", ".tmp", "secrets", "__pycache__", ".venv", ".uv", "mail", ".browser")
+# shaft-docs/: the supervisor's copy of SHAFT's docs, staged at the replay's start (runner.stage_docs) — not its work.
+NOT_STATE = ("logs", ".tmp", "secrets", "__pycache__", ".venv", ".uv", "mail", ".browser", DOCS_COPY)
 LEDGER = SUP_DIR / "trial_usage.jsonl"
 
 

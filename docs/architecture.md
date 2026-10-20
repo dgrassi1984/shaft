@@ -34,6 +34,9 @@ skills/       how-tos it writes for itself
 config.env    its LLM settings and budgets (yours to edit; it changes it only through set_config)
 drive.md      what it is for; the drive paragraph of its system prompt (yours alone: its sandbox cannot
               write it; without one, the template's "improve yourself")
+shaft-docs/   the supervisor's copy of README.md and docs/*.md (not docs/plans/), refreshed at every start;
+              it reads it to tell you how to configure SHAFT (skills/helping-the-operator-configure.md),
+              never writes it, and it is never committed
 self/         self.md (self-model), personality.md (core/surface, every trait cites the journal),
               goals.md, stats.md (written by the supervisor: achieved difficulty, where its goals
               came from, judged success, calibration, battery scores)

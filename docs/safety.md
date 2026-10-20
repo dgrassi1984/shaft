@@ -1,7 +1,7 @@
 # Rules the supervisor enforces
 
 - **Sandbox** (macOS `sandbox-exec`): an instance writes inside its own folder,
-  except `config.env` and `drive.md`. It cannot read other files in your home or
+  except `config.env`, `drive.md` and `shaft-docs/`. It cannot read other files in your home or
   protected operator locations such as per-user temp/cache directories,
   `/private/tmp`, `/Users/Shared`, and `/Volumes`. Narrow temporary-file exceptions
   let `sips` convert images. It connects only to allowed model ports

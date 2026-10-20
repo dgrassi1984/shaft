@@ -27,10 +27,10 @@ from pathlib import Path
 
 from . import gate, localmodel, sandbox
 from .broker import Broker
-from .core import (API_TALKS, BROKER_MAX_CALLS, EMBED_PORT, CORE_MIN_HOURS, CYCLE_TIMEOUT_S, HOME, INSTANCES, LLM_PORTS, PROJECT, PYTHON,
-                   SLEEP_TIMEOUT_S, SUP_DIR, UnsafePath,
+from .core import (API_TALKS, BROKER_MAX_CALLS, DOCS_COPY, EMBED_PORT, CORE_MIN_HOURS, CYCLE_TIMEOUT_S, HOME, INSTANCES,
+                   LLM_PORTS, PROJECT, PYTHON, SLEEP_TIMEOUT_S, SUP_DIR, UnsafePath,
                    commit_state, describe_knobs, git_wt, instance_config, instance_root, journal_note, log, safe_mkdir,
-                   safe_write, secrets_env)
+                   safe_write, safe_write_bytes, secrets_env)
 
 CORE_RE = re.compile(r"^## Core\n(.*?)(?=^## |\Z)", re.M | re.S)
 
@@ -432,6 +432,10 @@ def agent_command(root: Path, broker: Broker, agent_args: list[str], profile: Pa
     ports = list(llm_ports) + [EMBED_PORT, broker.port, broker.egress.port]
     profile.write_text(sandbox.profile(root, HOME, ports, shared=broker.shared, env_root=broker.env_root))
     safe_mkdir(root, ".tmp")
+    try:
+        stage_docs(root)
+    except (OSError, UnsafePath) as e:   # not fatal: the instance finds no docs and says so (its skill tells it to)
+        log(f"{root.name}: {DOCS_COPY}/ NOT refreshed: {type(e).__name__}: {e}")
     cmd = sandbox.wrap(profile, [PYTHON, "-E", "-s", "-m", "shaft", *agent_args])
     env = sandbox.agent_env(os.environ, SHAFT_ROOT=str(root), TMPDIR=str(root / ".tmp"),
                             SHAFT_BROKER_URL=f"http://127.0.0.1:{broker.port}", SHAFT_BROKER_TOKEN=broker.token,
@@ -442,6 +446,36 @@ def agent_command(root: Path, broker: Broker, agent_args: list[str], profile: Pa
                             **({"SHAFT_VISION": "1"} if _sees_images(root) else {}),
                             **broker.sandbox_env(), **extra)
     return cmd, env
+
+
+# What the instance reads to tell the operator how to set SHAFT up: how to use it, not how it was built (docs/plans/).
+DOCS_SOURCES = ("README.md", "docs/*.md")
+
+
+def stage_docs(root: Path, project: Path = PROJECT) -> None:
+    """SHAFT's own docs, copied fresh into the instance's shaft-docs/ at every start (the operator, 2026-10-20: an
+    instance should read the docs and tell him how to configure SHAFT; skills/helping-the-operator-configure.md). Its
+    code reads only its own folder, so the docs come to it; a changed, renamed or deleted doc is current there from
+    its next start. Its sandbox reads the folder and never writes it (sandbox._no_docs_writes); it is never committed
+    or snapshotted (core.DOCS_COPY). Nothing in the folder is followed: a link or anything else that is not one of
+    the docs is removed, and every write opens each component without following a link (safe_write_bytes)."""
+    import shutil
+    docs = {p.name: p.read_bytes() for pattern in DOCS_SOURCES for p in sorted(project.glob(pattern)) if p.is_file()}
+    folder = root / DOCS_COPY
+    if folder.is_symlink() or (folder.exists() and not folder.is_dir()):
+        folder.unlink()   # the link itself, never its target
+    safe_mkdir(root, DOCS_COPY)
+    for entry in folder.iterdir():
+        if entry.name in docs and entry.is_file() and not entry.is_symlink():
+            continue
+        if entry.is_dir() and not entry.is_symlink():
+            shutil.rmtree(entry)
+        else:
+            entry.unlink()
+    for name, data in docs.items():
+        here = folder / name
+        if not (here.is_file() and here.read_bytes() == data):   # unchanged docs are left alone
+            safe_write_bytes(root, f"{DOCS_COPY}/{name}", data)
 
 
 def _sees_images(root: Path) -> bool:

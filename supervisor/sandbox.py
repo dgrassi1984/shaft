@@ -83,6 +83,13 @@ def _no_operator_file_writes(root: Path) -> str:
     return "(deny file-write* " + " ".join(f"(literal {_q(root / f)})" for f in OPERATOR_FILES) + ")"
 
 
+def _no_docs_writes(root: Path) -> str:
+    """shaft-docs/ is the supervisor's copy of SHAFT's own docs (runner.stage_docs), which the instance reads to tell
+    the operator how to configure SHAFT: it reads the folder, never creates, changes, renames or links it."""
+    from .core import DOCS_COPY
+    return f"(deny file-write* (subpath {_q(root / DOCS_COPY)}))"
+
+
 def _shared(shared: Path | None, home: Path) -> list[str]:
     """Read-only access to the operator's folder (`shaft share`): reads, and the metadata of its parents so the
     path resolves. No write rule: the instance still writes only in its own directory."""
@@ -133,6 +140,7 @@ def profile(instance_root: Path, home: Path, llm_ports: list[int], shared: Path 
         *_image_temp_names(),
         _no_secrets(root),
         _no_operator_file_writes(root),
+        _no_docs_writes(root),
         # Network: only the given localhost ports (the internet only through the egress proxy among them).
         "(deny network*)",
     ]

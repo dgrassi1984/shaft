@@ -33,6 +33,9 @@ MIND_PATHS = ("self", "memory", "notes", "inbox")
 # The non-code state the instance's branch still holds: skills/ is a gene (evolution recombines it, the template
 # ships one), not memory (docs/plans/PLAN-mind-out-of-git.md D2).
 SKILL_PATHS = ("skills",)
+# The supervisor's copy of SHAFT's own docs in each instance folder (runner.stage_docs), read-only to the instance:
+# refreshed at every start from the project, so never staged on its branch nor snapshotted around an exam.
+DOCS_COPY = "shaft-docs"
 DEFAULT_INSTANCE = "shaft"
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
 
@@ -710,12 +713,12 @@ def not_mind() -> list[str]:
 
 
 def add_all_but_mind(root: Path, project: Path | None = None) -> None:
-    """`git add -A` of everything git would add, except the mind paths, whatever .gitignore says. The files are
-    listed first (an exclude pathspec makes `add` fail once the excluded folder is ignored), so no mind file is
-    ever hashed into the project's repository either."""
+    """`git add -A` of everything git would add, except the mind paths and the supervisor's copy of the docs
+    (DOCS_COPY), whatever .gitignore says. The files are listed first (an exclude pathspec makes `add` fail once the
+    excluded folder is ignored), so no mind file is ever hashed into the project's repository either."""
     out = git_wt(root, "ls-files", "-z", "--others", "--exclude-standard", "--modified", "--deleted",
                  project=project).stdout
-    paths = sorted({p for p in out.split("\0") if p and Path(p).parts[0] not in MIND_PATHS})
+    paths = sorted({p for p in out.split("\0") if p and Path(p).parts[0] not in (*MIND_PATHS, DOCS_COPY)})
     if paths:
         git_wt(root, "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul", input="\0".join(paths),
                project=project)
