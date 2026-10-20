@@ -98,11 +98,11 @@ def _field_form(name: str, f: dict) -> Html:
     hidden = join(h('<input type="hidden" name="{k}" value="{v}">', k=k, v=v) for k, v in fields.items())
     if f["choices"]:
         opts = list(f["choices"]) + ([f["value"]] if f["set"] and f["value"] not in f["choices"] else [])
-        control = h('<select name="value">{o}</select>', o=join(
+        control = h('<select name="value" aria-label="{k} value">{o}</select>', k=f["key"], o=join(
             h('<option value="{v}"{s}>{v}</option>', v=o, s=Html(" selected") if o == f["value"] else "") for o in opts))
     else:
-        control = h('<input name="value" value="{v}" {num} maxlength="500" aria-label="{k}">', v=f["value"], k=f["key"],
-                    num=Html('inputmode="numeric" pattern="[0-9]+"') if f["numeric"] else "")
+        control = h('<input name="value" value="{v}" {num} maxlength="500" aria-label="{k} value">', v=f["value"],
+                    k=f["key"], num=Html('inputmode="numeric" pattern="[0-9]+"') if f["numeric"] else "")
     extra = (Html(" It also sets LLM_BASE_URL to match.") if f["key"] == "LLM_MODEL" else "")
     save = h('<form class="cfg" data-post="/action/config-set" data-confirm="Set {k} for {n}? Only that line of its '
              'config.env changes; it takes effect from its next run.{x}"{a}>{hidden}{control}<button type="submit" '
@@ -155,7 +155,8 @@ def drive_page(name: str, text: str | None, sha: str, rendered: Html) -> Html:
                h('<p class="dim">No drive.md: {n} has the drive every SHAFT instance starts with.</p>', n=name))
     edit = h('<form class="drive" data-post="/action/drive-set" data-diff="/preview/drive/{n}"{a}>'
              '<input type="hidden" name="name" value="{n}"><input type="hidden" name="sha" value="{sha}">'
-             '<textarea name="text" rows="14" maxlength="{max}">{t}</textarea>'
+             '<label>drive.md for {n}<textarea name="text" rows="14" maxlength="{max}" '
+             'aria-label="drive.md for {n}">{t}</textarea></label>'
              '<div class="actions" data-diff-ask><button type="submit">Show the diff and save</button></div>'
              '<div class="diffstep" data-diff-step hidden><pre class="diff" data-diff-out></pre>'
              '<p class="dim">Apply replaces {n}\'s drive.md. It reads it from its next run, and its journal says its '
