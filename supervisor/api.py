@@ -4,7 +4,7 @@
   POST /v1/chat/completions    stream or not; the instance answers as itself, with its tools
   POST /v1/chat/interject      a message for the conversation whose reply is still running: the instance reads it at
                                its next step and its reply covers it (202), or 409 when no reply is running
-  POST /v1/chat/end            the conversation is over: written up now (202), 404 if none is open, 409 while it replies
+  POST /v1/chat/end            the conversation is over: write-up requested (202), 404 if none is open, 409 while it replies
   POST /v1/inbox/<instance>    the doorbell: drop a message in its inbox (read at its next wake), and
                                optionally wake it now — for scripts, a phone shortcut, CI on the tailnet
 
@@ -12,8 +12,8 @@ Each request is a normal sandboxed run (broker, run lock, gate, commit). The cli
 is the dialogue; the instance's own identity and memory come first. A conversation (same instance,
 same first user message — or, if the client sends X-Shaft-Conversation, that name: the web UI does) keeps one id, and
 the channel the client names in X-Shaft-Channel (web, telegram; `api` when absent) — where a message the instance sends
-the operator while it is open alerts them (channel.py); after IDLE_MINUTES (SHAFT_IDLE_MINUTES) without a message it is closed and its journal entry is
-written. Tool activity and status are sent as `reasoning_content`, which "thinking"-aware clients
+the operator while it is open alerts them (channel.py); after IDLE_MINUTES (SHAFT_IDLE_MINUTES) without a message it is closed and a journal write-up is
+scheduled (the entry is written in the background, not before the 202). Tool activity and status are sent as `reasoning_content`, which "thinking"-aware clients
 show and others ignore.
 
 A message sent to /v1/chat/interject while that conversation's reply runs is appended to the agent's
@@ -344,7 +344,8 @@ class Handler(BaseHTTPRequestHandler):
         self._chat(model, messages, bool(body.get("stream")), self.headers.get("User-Agent", "an app"), cid, channel)
 
     def _end(self, model: str, messages: list[dict], cid: str | None) -> None:
-        """POST /v1/chat/end: the conversation is over — written up now instead of after SHAFT_IDLE_MINUTES."""
+        """POST /v1/chat/end: the conversation is over. The write-up is scheduled now (202) and finishes in the
+        background, instead of after SHAFT_IDLE_MINUTES. 202 is not a finished journal entry."""
         if not cid and not messages:
             return self._error(400, "which conversation? X-Shaft-Conversation, or its messages")
         talk_id = self.conversations.current(model, messages, cid)
@@ -451,6 +452,7 @@ class Handler(BaseHTTPRequestHandler):
         # reached the operator's Telegram as if the instance had said it (wren, 2026-10-14: 25 of 44 Telegram replies had
         # tool steps). So a step's text is held until the next event tells which it was.
         content, step, notes, error, ended, heard = [], [], [], None, None, 0
+        tools_ran = False
         if stream:
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -479,6 +481,8 @@ class Handler(BaseHTTPRequestHandler):
                 if t == "content":
                     step.append(ev["text"])
                     continue
+                if t in ("tool_start", "tool_end"):
+                    tools_ran = True
                 if t == "tool_start" and step:           # that step called tools: its text was narration
                     said = "".join(step).strip()
                     step = []
@@ -512,7 +516,8 @@ class Handler(BaseHTTPRequestHandler):
             if stream:
                 if error and not content:
                     self.wfile.write(_chunk(cid, model, {"content": f"[error: {error}]"}))
-                self.wfile.write(_chunk(cid, model, {}, "stop", interjections_heard=heard))
+                self.wfile.write(_chunk(cid, model, {}, "stop", interjections_heard=heard,
+                                        **({"reply_error": {"message": error, "tools_ran": tools_ran}} if error else {})))
                 self.wfile.write(b"data: [DONE]\n\n")
                 self.wfile.flush()
             elif error and not content:

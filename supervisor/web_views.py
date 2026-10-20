@@ -85,12 +85,13 @@ def chat_header(name: str, live: dict, chat: dict | None, past: list[dict], read
              '</div></details></header>',
              name=name, facts=" · ".join(f for f in facts if f), pages=pages, buttons=buttons,
              earlier=h('<div class="earlier">{e}</div>', e=earlier) if earlier else Html(""),
-             # always on screen (it sat under the last answer, below the fold on a phone); the chat shown now
-             clear=h('<form class="act clearbtn" data-post="/chat/{n}/clear" data-confirm="Clear this chat? An open '
-                     'conversation is ended first — {name} writes it up in its journal — and the chat is kept in Earlier '
-                     'web chats and Transcripts."{a}><input type="hidden" name="cid" value="{cid}">'
-                     '<button type="submit" class="small" title="empty this page; nothing is deleted" data-focus="clear">'
-                     'Clear<span class="docslabel"> chat</span></button></form>', n=q(name), name=name, cid=chat["id"],
+             # always on screen (it sat under the last answer, below the fold on a phone); the chat shown now.
+             # The label stays whole ("Clear" alone did not say what is kept); it fits a 375 px header.
+             clear=h('<form class="act clearbtn" data-post="/chat/{n}/clear" data-confirm="Clear this chat from the page? '
+                     'The conversation is kept in Earlier chats and Transcripts. An open conversation is ended first, and '
+                     'a journal write-up is requested."{a}><input type="hidden" name="cid" value="{cid}">'
+                     '<button type="submit" class="small" title="Empty this page. The conversation is kept." '
+                     'data-focus="clear">Clear chat</button></form>', n=q(name), cid=chat["id"],
                      a=post_attrs("this chat"))
              if chat and not read_only else Html(""))
     busy = (h('<p class="warn">{n} is {s} now: a cycle or sleep pauses for your message, anything else is waited for '
@@ -839,6 +840,27 @@ def _comment_chips(items: list[dict] | None, kind: str = "") -> Html:
                   u=q(item["doc"]), doc=item["doc"], id=item["id"], pre=pre) for item in items)
 
 
+def _reply_failure(name: str, turn: dict, archived: bool) -> Html:
+    """Keep raw errors available without making the operator interpret them."""
+    note = turn.get("note") or ""
+    if not note:
+        return Html("")
+    kind = turn.get("note_kind", "stopped" if note == "stopped by you" else "unknown")
+    if kind == "stopped":
+        return h('<p class="warn recovery">You stopped this reply.</p>')
+    offer = turn.get("note_retry") and turn.get("retry_text") and not archived
+    why = {"connection": "The connection to the instance failed.",
+           "service": "The service could not finish the reply.",
+           "model": "The model could not finish the reply."}.get(kind, "The reply failed.")
+    action = ("No external actions ran. Press Retry, then Send, to try the message again." if offer else
+              "Actions may already have run. Check Activity and Services before sending again.")
+    recovery = (h('<button type="button" class="small" data-retry="{text}">Retry</button>', text=turn["retry_text"])
+                if offer else h('<a href="/i/{n}/activity">Activity</a> · <a href="/services">Services</a>', n=q(name)))
+    return h('<p class="warn recovery">{why} {action}</p><div class="actions">{recovery}</div>'
+             '<details class="tech"><summary>Technical details</summary><pre>{raw}</pre></details>',
+             why=why, action=action, recovery=recovery, raw=note)
+
+
 def _turn_time(ts: str) -> Html:
     """Stored timestamps use the supervisor's local time, as do the other UI dates."""
     return h('<time datetime="{iso}" title="{full}">{short}</time>',
@@ -896,21 +918,27 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
                                      text=_my_text(shown) if shown else Html(""),
                                      atts=_chat_attachments(chat["id"], k, t.get("attachments")))))
         else:
-            note = h('<p class="warn">{n}</p>', n=t["note"]) if t.get("note") else Html("")
-            body = markdown(t["content"]) if t.get("content") else Html('<p class="dim">(no answer)</p>')
+            # Keep partial answers readable; put the failure and recovery below them.
+            mark = (h(' <span class="warn incomplete">incomplete</span>')
+                    if t.get("content") and t.get("note") else Html(""))
+            body = markdown(t["content"]) if t.get("content") else Html("")
+            if not t.get("content") and not t.get("note"):
+                body = Html('<p class="dim">(no answer)</p>')
+            recovery = _reply_failure(name, t, archived)
             cards = join([doc_cards(t.get("docs"), name if archived else ""), _comment_chips(t.get("answered"), "answered"),
                           _comment_chips(t.get("opened"), "opened")])
             seen = h(' data-seen-inst="{n}" data-seen-reply="{ts}"', n=name, ts=t["ts"]) if not archived else Html("")
-            items.append((t["ts"], h('<div class="turn it" data-k="a{k}" data-raw="{raw}"{seen}><div class="who">{n} <span class="dim">{ts}</span>'
-                                     '{copy}</div>{act}{body}{cards}{note}</div>', k=k, raw=t.get("content") or "", n=name,
-                                     ts=_turn_time(t["ts"]), seen=seen, copy=controls, act=_activity(t.get("activity", []), f"t{k}"),
-                                     body=body, cards=cards, note=note)))
+            items.append((t["ts"], h('<div class="turn it" data-k="a{k}" data-raw="{raw}"{seen}><div class="who">{n} '
+                                     '<span class="dim">{ts}</span>{mark}{copy}</div>{act}{body}{cards}{recovery}</div>',
+                                     k=k, raw=t.get("content") or "", n=name, ts=_turn_time(t["ts"]), seen=seen,
+                                     mark=mark, copy=controls, act=_activity(t.get("activity", []), f"t{k}"),
+                                     body=body, cards=cards, recovery=recovery)))
     items += [(m["ts"], card) for m, card in zip(sent, _sent_cards(name, sent))]
     if chat["state"] == "ended":   # in time order: what it sent you after the chat ended shows below the line
         when = chat.get("ended", "")[:16].replace("T", " ")
         items.append((chat.get("ended", ""), h('<p class="dim ended" data-k="ended">This conversation ended on {e}.</p>', e=when)
                       if archived else                # a past chat: when it ended, nothing about a next message
-                      h('<p class="dim ended" data-k="ended">Ended {e}: written up in its journal. Your next message starts a new '
+                      h('<p class="dim ended" data-k="ended">Ended {e}: journal write-up requested. Your next message starts a new '
                         'conversation.</p>', e=when)))
     items.sort(key=lambda x: x[0])
     feed = []
@@ -938,8 +966,9 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
                       iso=r.get("started", ""),
                       act=_activity(r.get("activity", []), "live", open_=True),
                       partial=h('<p class="dim">the answer appears when it is ready</p>'),
-                      stop=button("chat-stop", "Stop the reply", f"stop {name}'s reply?", {"cid": chat["id"]},
-                                  cls="small")))
+                      stop=button("chat-stop", "Stop the reply",
+                                  "stop this reply? Only the reply stops. The conversation stays open.",
+                                  {"cid": chat["id"]}, cls="small")))
     if chat.get("pending_edits") and not archived:
         feed.append(h('<p class="pending-edits" data-k="pend">✎ Your changes to {p} go to {n} with your next message.</p>',
                       p=", ".join(sorted(chat["pending_edits"])), n=name))
@@ -947,8 +976,9 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
         return join(feed)
     if chat["state"] not in ("replying", "ended") and chat["turns"]:
         feed.append(h('<div class="actions" data-k="acts">{b}</div>', b=button(
-            "chat-end", "End the conversation", f"end this conversation with {name}? It writes it up in its journal "
-            "now, and your next message starts a new one.", {"cid": chat["id"]}, cls="small")))
+            "chat-end", "End the conversation", f"end this conversation with {name}? The messages stay on this page. "
+            "Your next message starts a new conversation. A journal write-up is requested.",
+            {"cid": chat["id"]}, cls="small")))
     return join(feed)
 
 
