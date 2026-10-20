@@ -194,7 +194,7 @@ class RelayTest(ChatTest):
     def test_end_writes_it_up_through_the_api_and_the_next_message_starts_a_new_chat(self):
         chat, _ = web_chat.send("wren", ME, "hi", [])
         self.wait_idle(chat["id"])
-        self.assertIn("writes the conversation up", web_chat.end(chat["id"]))
+        self.assertIn("journal write-up requested", web_chat.end(chat["id"]))
         path, headers, body = [r for r in self.api.requests if r[0] == "/v1/chat/end"][0]
         self.assertEqual((headers["X-Shaft-Conversation"], body), (chat["id"], {"model": "wren"}))
         self.assertEqual(web_chat.load(chat["id"])["state"], "ended")

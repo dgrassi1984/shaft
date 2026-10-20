@@ -810,6 +810,22 @@
     const box = document.querySelector("form.composer textarea");
     if (b && box) quoteText(b.closest("[data-raw]").dataset.raw, box);
   });
+  // Retry fills the composer with the message that failed. It does not send: sending would run the request again.
+  document.addEventListener("click", (ev) => {
+    const b = ev.target.closest && ev.target.closest("[data-retry]");
+    if (!b) return;
+    const box = document.querySelector("form.composer textarea");
+    if (!box) return;
+    const text = b.dataset.retry;
+    if (!text) return;
+    if (box.value && box.value !== text && !confirm("Replace your draft with the failed message?")) return;
+    if (box.value !== text) {                  // a second click must not append a copy
+      box.value = text;
+      box.dispatchEvent(new Event("input", { bubbles: true }));   // a draft, and a new message id
+    }
+    box.focus();
+    box.setSelectionRange(text.length, text.length);
+  });
 
   let quoteTimer = null;
   document.addEventListener("selectionchange", () => {

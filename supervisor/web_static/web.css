@@ -233,6 +233,10 @@ form.drive textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospac
 .turn.live { border-color: var(--talk); }
 .turn .who { font-size: .8rem; font-weight: 600; margin-bottom: .2rem; }
 .activity { font-size: .78rem; color: var(--dim); margin: .2rem 0 .4rem; }
+.turn .incomplete { font-weight: 600; }
+details.tech { margin: .3rem 0; font-size: .85rem; }
+details.tech > summary { cursor: pointer; }
+details.tech pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: .3rem 0 0; font-size: .78rem; }
 .activity div { max-height: 14rem; overflow-y: auto; }
 .activity p { margin: .1rem 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .atts { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .3rem; }
