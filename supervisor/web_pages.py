@@ -116,13 +116,14 @@ def rail(names: list[str], current: str = "", snap: dict | None = None, chats: d
 
 def nav(names: list[str], current: str = "overview") -> Html:
     """The left nav: the rail (refreshed live: the chats, then MANAGE), then unpairing."""
+    from .web_actions import post_attrs
     cur = "/overview" if current == "overview" else current
     return h('<nav><a class="brand" href="/">SHAFT</a><button type="button" class="small closenav" data-toggle-nav '
              'aria-label="Close the chats">✕</button><div class="rail" data-poll="/fragment/rail?c={c}" data-every="3000" '
              'data-now="1" data-hidden="1">{rail}</div>'
              '<form class="unpair" data-post="/unpair" data-after="reload" data-confirm="Unpair this browser? You will '
-             'need a new link from `shaft web pair` to use it again."><button type="submit">Unpair this browser</button>'
-             '</form></nav>', c=cur, rail=rail(names, cur))
+             'need a new link from `shaft web pair` to use it again."{a}><button type="submit">Unpair this browser'
+             '</button></form></nav>', c=cur, rail=rail(names, cur), a=post_attrs("this page"))
 
 
 def message_page(title: str, text: str, detail: str = "") -> Html:

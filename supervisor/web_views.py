@@ -47,7 +47,7 @@ def chat_frame(name: str, head: Html, body: Html, names: list[str], csrf: str, h
 
 def chat_header(name: str, live: dict, chat: dict | None, past: list[dict], read_only: bool = False) -> Html:
     """The current facts and actions, refreshed independently of the composer and documents."""
-    from .web_actions import instance_buttons
+    from .web_actions import instance_buttons, post_attrs
     pages = join(h('<a href="{href}">{label}</a>', href=f"/i/{q(name)}" + (f"/{t}" if t else ""), label=label)
                  for t, label in INSTANCE_TABS if t != "chat")
     state = live.get("state", "?")
@@ -75,9 +75,10 @@ def chat_header(name: str, live: dict, chat: dict | None, past: list[dict], read
              # always on screen (it sat under the last answer, below the fold on a phone); the chat shown now
              clear=h('<form class="act clearbtn" data-post="/chat/{n}/clear" data-confirm="Clear this chat? An open '
                      'conversation is ended first — {name} writes it up in its journal — and the chat is kept in Earlier '
-                     'web chats and Transcripts."><input type="hidden" name="cid" value="{cid}">'
+                     'web chats and Transcripts."{a}><input type="hidden" name="cid" value="{cid}">'
                      '<button type="submit" class="small" title="empty this page; nothing is deleted" data-focus="clear">'
-                     'Clear<span class="docslabel"> chat</span></button></form>', n=q(name), name=name, cid=chat["id"])
+                     'Clear<span class="docslabel"> chat</span></button></form>', n=q(name), name=name, cid=chat["id"],
+                     a=post_attrs("this chat"))
              if chat and not read_only else Html(""))
     busy = (h('<p class="warn">{n} is {s} now: a cycle or sleep pauses for your message, anything else is waited for '
               '— the reply\'s activity says which.</p>', n=name, s=state)
@@ -643,6 +644,8 @@ def in_chat(chat: dict | None) -> set[str]:
 def _overwritten(saved: dict | None, sha: str, text: str | None) -> Html:
     """Lines the operator wrote that a later write of the instance dropped: said, with their version to put back."""
     import difflib
+    from . import actions
+    from .web_actions import post_attrs
     if not saved or text is None or saved.get("sha") == sha:
         return Html("")
     now = {l.strip() for l in text.splitlines()}
@@ -653,15 +656,17 @@ def _overwritten(saved: dict | None, sha: str, text: str | None) -> Html:
     return h('<div class="overwritten warn"><p>{n} line(s) you wrote at {ts} are no longer in it.</p>'
              '<details><summary>Your version against now</summary><pre class="diff">{d}</pre></details>'
              '<form class="act" data-post="/docs/{i}/save" data-confirm="Put your version back? It replaces the '
-             'current one: its changes since are lost (they are in the diff)." data-after="doc-saved">'
+             'current one: its changes since are lost (they are in the diff)." data-after="doc-saved"{a}>'
              '<input type="hidden" name="path" value="{p}"><input type="hidden" name="sha" value="{sha}">'
              '<textarea name="text" hidden>{yours}</textarea><button type="submit" class="small">Restore yours'
              '</button></form></div>', n=len(lost), ts=saved.get("ts", "")[11:16], d=diff, i=q(saved.get("name", "")),
-             p=saved.get("path", ""), sha=sha, yours=saved["text"])
+             p=saved.get("path", ""), sha=sha, yours=saved["text"],
+             a=post_attrs("Documents", actions.RUN_NOW_S))
 
 
 def threads_list(name: str, doc: str, sha: str, threads: list[dict], active: str = "") -> Html:
     """Open threads on one document, resolved ones folded under them. Nothing when there are no threads."""
+    from .web_actions import post_attrs
     if not threads:
         return Html("")
 
@@ -674,12 +679,13 @@ def threads_list(name: str, doc: str, sha: str, threads: list[dict], active: str
             buttons = join([
                 h('<button type="button" class="small" data-edit-post="{pid}">Edit</button>', pid=p["pid"]),
                 h('<form class="act" data-post="/docs/{n}/comment/delete" data-confirm="Delete this comment?" '
-                  'data-after="comment-saved"><input type="hidden" name="pid" value="{pid}">'
-                  '<button type="submit" class="small">Delete</button></form>', n=q(name), pid=p["pid"]),
-                h('<form class="act" data-post="/docs/{n}/comment/send" data-after="comment-saved">'
+                  'data-after="comment-saved"{a}><input type="hidden" name="pid" value="{pid}">'
+                  '<button type="submit" class="small">Delete</button></form>', n=q(name), pid=p["pid"],
+                  a=post_attrs("Documents")),
+                h('<form class="act" data-post="/docs/{n}/comment/send" data-after="comment-saved"{a}>'
                   '<input type="hidden" name="pid" value="{pid}">'
                   '<button type="submit" class="small">Send to {who}</button></form>',
-                  n=q(name), pid=p["pid"], who=name),
+                  n=q(name), pid=p["pid"], who=name, a=post_attrs("Documents")),
             ])
         return h('<div class="post{u}" data-pid="{pid}" data-text="{raw}"><div class="who">{who} <span class="dim">{ts}</span>{warn}'
                  '</div>{text}{btns}</div>',
@@ -705,11 +711,12 @@ def threads_list(name: str, doc: str, sha: str, threads: list[dict], active: str
         resolving = t["state"] == "resolved"
         return h('<article class="thread{on}" id="thread-{tid}" data-thread="{tid}"><b>{tid}</b>{by}{quote}{det}'
                  '{chg}{posts}{refs}<button type="button" class="small" data-reply-thread="{tid}">Reply</button>'
-                 '<form class="act" data-post="/docs/{n}/comment/state" data-after="comment-saved">'
+                 '<form class="act" data-post="/docs/{n}/comment/state" data-after="comment-saved"{a}>'
                  '<input type="hidden" name="thread" value="{tid}"><input type="hidden" name="state" value="{st}">'
                  '<button type="submit" class="small">{label}</button></form></article>',
                  on=Html(" active") if t["id"] == active else "", tid=t["id"], by=by, quote=quote, det=detached,
                  chg=changed, posts=join(post(p) for p in t["posts"]), refs=refs, n=q(name),
+                 a=post_attrs("Documents"),
                  st="open" if resolving else "resolved", label="Reopen" if resolving else "Resolve")
 
     opened = [t for t in threads if t["state"] != "resolved"]
@@ -728,7 +735,9 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
                problem: str = "", saved: dict | None = None, threads: list[dict] | None = None,
                counts: dict | None = None, thread: str = "") -> Html:
     """The documents panel beside the chat (/fragment/docs/<name>): the list or the open one rendered."""
+    from . import actions
     from .docs import DIR
+    from .web_actions import post_attrs
     items = []
     for d in listing:
         n = 0 if counts is None else counts.get(d["path"]) or 0
@@ -739,10 +748,10 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
                        if d["path"] in marked else Html(""),
                        ccount=h(' <span class="ccount" title="open comments">💬 {n}</span>', n=n) if n > 0 else ""))
     new = h('<details class="newdoc" data-key="newdoc"><summary>New document</summary><form data-post="/docs/{n}/save" '
-            'data-after="doc-saved"><input type="hidden" name="sha" value="none"><input name="path" required '
+            'data-after="doc-saved"{a}><input type="hidden" name="sha" value="none"><input name="path" required '
             'placeholder="name, e.g. plan" pattern="[A-Za-z0-9][A-Za-z0-9 _.\\-]*" maxlength="80">'
             '<textarea name="text" hidden></textarea><button type="submit" class="small">Create</button></form></details>',
-            n=q(name))
+            n=q(name), a=post_attrs("Documents", actions.RUN_NOW_S))
     back = Html('<button type="button" class="small" data-back-docs aria-label="Back to the documents">← Documents</button>')
     head = h('<div class="docshead">{title} <span class="dim">{dir}/</span>{new}<button type="button" '
              'class="small closedocs" data-close-docs aria-label="Close the documents">✕</button></div>{list}',
@@ -771,19 +780,19 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
                  '<button type="button" class="copy small icon" data-copy-doc title="copy the document\'s Markdown" '
                  'aria-label="Copy the document">{copy}</button>'
                  '<form class="docdelete" data-post="/docs/{n}/delete" data-after="doc-deleted" '
-                 'data-confirm="Delete notes/docs/{p}?"><input type="hidden" name="path" value="{p}">'
+                 'data-confirm="Delete notes/docs/{p}?"{a}><input type="hidden" name="path" value="{p}">'
                  '<input type="hidden" name="sha" value="{s}"><button type="submit" class="small icon" '
                  'title="Delete the document" aria-label="Delete the document">{delete}</button></form>'
                  '</div><div class="bad wrap" data-delete-refusal></div>{tlist}{over}<div class="docmd">{md}</div>'
                  '<textarea class="raw" hidden readonly>{raw}</textarea>'
-                 '<form class="docedit" data-post="/docs/{n}/save" data-after="doc-saved" hidden>'
+                 '<form class="docedit" data-post="/docs/{n}/save" data-after="doc-saved"{a} hidden>'
                  '<input type="hidden" name="path" value="{p}"><input type="hidden" name="sha" value="{s}">'
                  '<textarea name="text" spellcheck="true">{raw}</textarea><div class="actions">'
                  '<button type="submit">Save</button><button type="button" data-cancel-edit>Cancel</button>'
                  '<span class="dim">{n} hears of your change: with your next message, or now if it is replying</span>'
                  '</div><div class="bad wrap" data-refusal></div></form></div>',
                  p=open_path, s=sha, n=q(name), tattr=tattr, cbtn=cbtn, tlist=tlist, copy=ICONS["copy"], delete=ICONS["delete"],
-                 over=_overwritten(saved, sha, text),
+                 over=_overwritten(saved, sha, text), a=post_attrs("Documents", actions.RUN_NOW_S),
                  md=markdown(text) if text.strip() else Html('<p class="dim">(empty)</p>'), raw=text)
     elif open_path:
         view = h('<p class="dim">{p} is not there (any more).</p>', p=open_path)

@@ -111,7 +111,7 @@ and [chat design](plans/PLAN-webui-chat.md).
   message. The threads live in the supervisor (`.supervisor/web/comments/`), never in a file it could overwrite; a
   read-only copy of what it was sent is kept in its `notes/comments/`.
 - Each instance's other pages sit behind the chat's ⋯ menu: **Summary**, **Config** (`config.env`, a field per key),
-  **Drive** (`drive.md`, saved after its diff), **Access** (tools, wake floor and cloud cap, jobs, shared folder,
+  **Drive** (`drive.md`: the diff is shown in full, then Apply saves it and Back keeps your text), **Access** (tools, wake floor and cloud cap, jobs, shared folder,
   mail and calendar grants, battery, key names), **Judge**, **Changes**, **Benchmarks**, **Transcripts**,
   **Journal**, **Activity** (connections, plugins, jobs), with its actions and earlier chats.
 - **Kill** (with the other actions: overview cards, the ⋯ menu, Summary) pauses the instance and stops what it runs
@@ -152,7 +152,9 @@ next refresh or action opens the pairing page. Your chat draft stays in this bro
 Every request needs your tailnet login **and** a paired browser. Every POST needs the page's own token, and every
 response forbids inline script. Instances cannot reach the port. Every action runs the matching `shaft`
 subcommand, logged as `web: operator …`; config, drive, document and settings edits go through `shaft config` /
-`shaft drive` / `shaft docs` / `shaft settings --from-web`. Chat
+`shaft drive` / `shaft docs` / `shaft settings --from-web`. A chat message carries an id, so sending it again after
+no answer does not send it twice. Any other action that gets no answer says the outcome is unknown and which page
+to check; the page waits at least as long as the server allows that action. Chat
 goes through the API (`X-Shaft-Conversation`, `/v1/chat/end`), so restart the API on the same code
 (`shaft api on`). A reply keeps going if the browser closes; only Stop stops it. Secrets, `new`, `breed`,
 `finetune`, the Google logins and `mind cutover` stay in the terminal.

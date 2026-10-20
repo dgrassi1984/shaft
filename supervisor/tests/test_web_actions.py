@@ -194,7 +194,8 @@ class EveryActionRunsItsCommand(ActionsTest):
         self.act("service", service="scheduler", op="off")
         self.act("autonomy", op="on")
         self.assertEqual([(r[1], r[2]) for r in self.ran],
-                         [(["model", "on"], 90), (["autonomy", "off"], 90), (["autonomy", "on"], 90)])
+                         [(["model", "on"], actions.SLOW_S), (["autonomy", "off"], actions.SLOW_S),
+                          (["autonomy", "on"], actions.SLOW_S)])
 
 
 class RefusedWhereTheTuiRefuses(ActionsTest):
@@ -368,6 +369,48 @@ class PagesShowEachActionAsItRuns(ActionsTest):
             body = self.page("/services")
         self.assertIn("Force restart scheduler now? Not safe: the scheduler&#x27;s runs share its process group", body)
         self.assertIn("the web UI cannot stop or restart itself", body)
+
+
+class Issue20TimeoutTest(ActionsTest):
+    def page(self, path: str, s: dict | None = None) -> str:
+        with mock.patch.object(web, "overview", return_value=s or snap()):
+            r = self.req(path, cookie=self.cookie)
+        self.assertEqual(r.status, 200, r.body[:300])
+        return r.body.decode()
+
+    def test_issue_20_service_and_autonomy_forms_wait_at_least_the_server_limit(self):
+        """#20: the page used to give up at 30s while service and autonomy on/off are allowed SLOW_S on the server,
+        then say that sending the action again is safe. The form's data-timeout is that limit plus a grace, from the
+        same constant _ran passes to run_now. Reverting the attribute, or a timeout below the server limit, fails
+        this: a slow restart looks failed and a second one is invited while the first is still running."""
+        import re
+        with mock.patch.object(panel, "services_detail", return_value=[
+                {"name": "model", "running": True, "detail": ""},
+                {"name": "scheduler", "running": True, "detail": ""}]), \
+                mock.patch.object(panel, "scheduled_runs", return_value=[]), \
+                mock.patch.object(panel, "log_tail", return_value=[]), \
+                mock.patch.object(actions, "busy_instances", return_value=[]):
+            body = self.page("/services")
+        forms = re.findall(r'<form\b[^>]*data-post="/action/(?:service|autonomy)"[^>]*>', body)
+        self.assertTrue(any('data-post="/action/service"' in f for f in forms), body)
+        self.assertTrue(any('data-post="/action/autonomy"' in f for f in forms), body)
+        slow = web_actions.page_wait(actions.SLOW_S)
+        self.assertGreaterEqual(slow, actions.SLOW_S)
+        for form in forms:
+            got = re.search(r'data-timeout="(\d+)"', form)
+            self.assertIsNotNone(got, form)
+            self.assertEqual(int(got.group(1)), slow, form)
+            self.assertIn('data-check="Services"', form)
+        overview = self.page("/fragment/overview")
+        cycles = re.findall(r'<form\b[^>]*data-post="/action/cycle"[^>]*>', overview)
+        self.assertTrue(cycles, overview)
+        usual = web_actions.page_wait(actions.RUN_NOW_S)
+        self.assertGreaterEqual(usual, actions.RUN_NOW_S)
+        for form in cycles:
+            got = re.search(r'data-timeout="(\d+)"', form)
+            self.assertIsNotNone(got, form)
+            self.assertEqual(int(got.group(1)), usual, form)
+            self.assertIn('data-check="Overview"', form)
 
 
 class RecapLockTest(unittest.TestCase):

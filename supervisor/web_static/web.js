@@ -3,8 +3,10 @@
 //   data-poll="/fragment/…"  the element's content is refreshed from that URL every 2 s while the tab is visible
 //   <form data-post="/…">    sent with fetch as a POST carrying the CSRF token; data-confirm asks first (data-confirm-type:
 //                            the operator types that word instead of clicking OK), data-after="home" goes to / after; data-reset
-//                            clears it once sent, data-diff="/preview/…" shows what would change before asking;
-//                            the reply is shown as a toast and the polled parts refresh
+//                            clears it once sent, data-diff="/preview/…" shows the diff with Apply and Back (nothing
+//                            is saved until Apply); data-timeout is seconds to wait, from the server's own limit;
+//                            data-check names the page a lost answer tells you to look at. A form with input[name=mid]
+//                            can be sent again. The reply is a toast and the polled parts refresh
 //   data-row                 a saved form replaces only its nearest row with the server's new value and token
 // Listeners are delegated from the document, so content swapped in by a poll needs no re-binding.
 (() => {
@@ -242,12 +244,63 @@
   }
 
 
+  // data-timeout is seconds and comes from the server's own limit (plus a grace the page added). Without it, a
+  // chat with files waits longer than a plain form.
+  function waitMsFor(form) {
+    const asked = Number(form.dataset.timeout);
+    if (asked > 0) return asked * 1000;
+    return form.dataset.multipart ? 180000 : 30000;
+  }
+
+  // A lost answer. Only a chat send carries an id (input[name=mid]) the server will not apply twice. Every other
+  // action may have happened: say so, and where to look, and never that it was not sent.
+  function lostAnswer(form, err, waitMs) {
+    if (form.querySelector("input[name=mid]")) {
+      return err.name === "AbortError" ? "No answer: sending it again is safe (it is not sent twice)"
+        : `Not sent: ${err.message} — sending it again is safe`;
+    }
+    const where = form.dataset.check || "this page";
+    if (err.name === "AbortError") {
+      return `No answer within ${Math.round(waitMs / 1000)}s: it may still have happened — check ${where} before trying again`;
+    }
+    return `No answer (${err.message}): it may still have happened — check ${where} before trying again`;
+  }
+
+  function showDiff(form, text) {
+    const out = form.querySelector("[data-diff-out]");
+    if (out) out.textContent = text;
+    const step = form.querySelector("[data-diff-step]");
+    if (step) step.hidden = false;
+    const ask = form.querySelector("[data-diff-ask]");
+    if (ask) ask.hidden = true;
+    const show = form.querySelector("[data-diff-ask] button");
+    if (show) show.disabled = true;             // Enter now submits Apply; the diff stays the one just shown
+  }
+
+  function hideDiff(form) {                     // Back, or the text changed: the box is kept, nothing was saved
+    if (!form) return;
+    const step = form.querySelector("[data-diff-step]");
+    if (step) step.hidden = true;
+    const out = form.querySelector("[data-diff-out]");
+    if (out) out.textContent = "";
+    const ask = form.querySelector("[data-diff-ask]");
+    if (ask) ask.hidden = false;
+    const show = form.querySelector("[data-diff-ask] button");
+    if (show) show.disabled = false;
+  }
+
+  document.addEventListener("click", (ev) => {
+    const back = ev.target.closest && ev.target.closest("[data-diff-back]");
+    if (!back) return;
+    hideDiff(back.closest("form"));
+  });
+
   document.addEventListener("submit", async (ev) => {
     const form = ev.target.closest("form[data-post]");
     if (!form) return;
     ev.preventDefault();
-    if (form.dataset.diff) {                    // show what would change first, then ask
-      const out = form.querySelector("[data-diff-out]");
+    const applying = ev.submitter && ev.submitter.hasAttribute && ev.submitter.hasAttribute("data-diff-apply");
+    if (form.dataset.diff && !applying) {       // the diff first; Apply is what saves. No confirm over it.
       try {
         const d = await fetch(form.dataset.diff, {
           method: "POST", credentials: "same-origin",
@@ -256,13 +309,13 @@
         });
         if (pairAgain(d)) return;
         const text = fullText(await d.text());        // the whole diff, never cut like a toast
-        if (out) out.textContent = text;
         if (!d.ok) { toast(`No diff: HTTP ${d.status} — ${text}`, true); return; }
         if (text === "(no change)") { toast("Nothing to save: no change"); return; }
+        showDiff(form, text);
       } catch (e) {
         toast(`No diff: ${e.message}`, true);
-        return;
       }
+      return;
     }
     if (form.dataset.busy) return;                  // one at a time: a second Enter sent it twice (Codex review)
     const tooBig = filesRefused(form);
@@ -272,7 +325,7 @@
       if (typed === null) return;
       if (typed.trim() !== form.dataset.confirmType) { toast(`Not done: you typed "${typed}", not ${form.dataset.confirmType}`, true); return; }
       form.querySelector("input[name=confirm]").value = typed.trim();
-    } else if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) return;
+    } else if (form.dataset.confirm && !form.dataset.diff && !window.confirm(form.dataset.confirm)) return;
     const button = form.querySelector("button[type=submit]");
     if (button) button.disabled = true;
     form.dataset.busy = "1";
@@ -283,8 +336,9 @@
     const shown = form.dataset.draft ? pending(form) : null;
     const multipart = !!form.dataset.multipart;          // files go with it: the browser sets the boundary
     const row = form.closest("[data-row]");
+    const waitMs = waitMsFor(form);
     const ctl = new AbortController();
-    const limit = setTimeout(() => ctl.abort(), multipart ? 180000 : 30000);
+    const limit = setTimeout(() => ctl.abort(), waitMs);
     try {
       const r = await fetch(form.dataset.post, {
         method: "POST", credentials: "same-origin", signal: ctl.signal,
@@ -333,13 +387,13 @@
         if (box && form.dataset.draft && !touchOnly()) box.focus();   // write the next one (a phone keeps its keyboard down)
       }
       if (!r.ok && shown) shown.remove();
+      if (r.ok && form.dataset.diff) hideDiff(form);   // saved: back to the text, which is kept
       if (r.ok && form.dataset.after === "reload") setTimeout(() => location.reload(), 800);   // Unpair this browser
       if (r.ok && form.dataset.after === "home") setTimeout(() => { location.href = "/"; }, 1500);   // it is gone
       document.dispatchEvent(new Event("shaft:refresh"));      // show what the action changed, now
-    } catch (e) {                                  // the answer was lost: it may have arrived — the id says so
+    } catch (e) {                                  // the answer was lost. A chat id is safe to repeat; anything else may have happened
       if (shown) shown.remove();
-      toast(e.name === "AbortError" ? "No answer: sending it again is safe (it is not sent twice)"
-        : `Not sent: ${e.message} — sending it again is safe`, true);
+      toast(lostAnswer(form, e, waitMs), true);
     } finally {
       clearTimeout(limit);
       if (button) button.disabled = false;
@@ -473,6 +527,8 @@
   }
   const draftKey = (form) => `shaft.draft.${form.dataset.draft}`;
   document.addEventListener("input", (ev) => {
+    const reviewing = ev.target.closest && ev.target.closest("form[data-diff]");
+    if (reviewing && ev.target.name === "text") hideDiff(reviewing);   // the shown diff is no longer this text
     if (ev.target.closest && ev.target.closest("form.docedit")) { grow(ev.target, 0.7); return; }
     const midf = ev.target.closest && ev.target.closest("form[data-files]");
     if (midf && midf.querySelector("input[name=mid]")) midf.querySelector("input[name=mid]").value = "";  // a new text
