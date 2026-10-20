@@ -44,7 +44,7 @@ const panel = {dataset: {poll: "/fragment/chat/wren", every: "1500"}, isConnecte
   }, dispatchEvent(e) { emit(e.type, {target: this}); },
 };
 panel.innerHTML = input.html;
-const rail = {classList: classes("rail"), querySelectorAll: q => q === "a[data-inst]" ? [link] :
+const rail = {classList: classes("rail"), querySelector: () => null, querySelectorAll: q => q === "a[data-inst]" ? [link] :
   q === "a.unread" && link.classList.contains("unread") ? [link] : []};
 const emit = (type, e = {}) => { for (const f of handlers[type] || []) f(e); };
 const document = {readyState: "loading", visibilityState: "visible", title: "Config · SHAFT",

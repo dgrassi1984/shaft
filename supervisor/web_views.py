@@ -40,10 +40,13 @@ def instance_frame(name: str, tab: str, title: str, body: Html, names: list[str]
     return frame(f"{name} · {title}", join([head, body]), names, csrf, current=f"i:{name}")
 
 
-def chat_frame(name: str, live: dict, body: Html, names: list[str], csrf: str, earlier: Html = Html(""),
-               clear: bool = False) -> Html:
-    """The chat's own frame (docs/plans/PLAN-webui-chat §1): the instance's model, state and spend in one line, and everything
-    else about it — its pages and its actions — behind the ⋯ menu, out of the conversation's way."""
+def chat_frame(name: str, head: Html, body: Html, names: list[str], csrf: str, header_url: str) -> Html:
+    head = h('<div data-poll="{u}" data-every="1500">{head}</div>', u=header_url, head=head)
+    return frame(f"{name} · chat", join([head, body]), names, csrf, current=f"i:{name}")
+
+
+def chat_header(name: str, live: dict, chat: dict | None, past: list[dict], read_only: bool = False) -> Html:
+    """The current facts and actions, refreshed independently of the composer and documents."""
     from .web_actions import instance_buttons
     pages = join(h('<a href="{href}">{label}</a>', href=f"/i/{q(name)}" + (f"/{t}" if t else ""), label=label)
                  for t, label in INSTANCE_TABS if t != "chat")
@@ -52,24 +55,34 @@ def chat_frame(name: str, live: dict, body: Html, names: list[str], csrf: str, e
     if live.get("usd_today"):
         facts.append(f"${live['usd_today']:.2f} today")
     buttons = instance_buttons(live) if live.get("name") else Html("")
+    pasts = [link(f"/i/{q(name)}/chat?id={q(c['id'])}", f"{c['created'][:16].replace('T', ' ')} · "
+                  f"{len([t for t in c['turns'] if t['role'] == 'user'])} message(s)") for c in past]
+    earlier = join([h("<h3>Earlier web chats</h3>"), lines(pasts, "none yet"), h(
+        '<p class="dim">Every conversation, from any client, is in <a href="/i/{n}/transcripts?f=conversations">'
+        'Transcripts</a>.</p>', n=q(name))])
     head = h('<header class="chathead"><button type="button" class="navbtn" data-toggle-nav aria-label="Chats and pages" '
-             'aria-expanded="false">☰</button><h1>{name}</h1><span class="dim facts">{facts}</span>'
+             'aria-expanded="false" data-focus="nav">☰</button><h1>{name}</h1><span class="dim facts">{facts}</span>'
              '<button type="button" class="small docsbtn" data-show-docs title="its documents (notes/docs/)" '
-             'aria-label="Documents">📄<span class="docslabel"> Documents</span></button>{clear}'
-             '<details class="menu"><summary title="{name}: pages and actions" aria-label="{name}: pages and actions">⋯'
+             'aria-label="Documents" data-focus="docs">📄<span class="docslabel"> Documents</span></button>{clear}'
+             '<details class="menu" data-key="chat-menu"><summary data-focus="menu" title="{name}: pages and actions" '
+             'aria-label="{name}: pages and actions">⋯'
              '</summary><div class="menubody"><p class="dim menufacts">{facts}</p>'
              '<div class="menupages">{pages}</div><div class="actions">{buttons}</div>'
-             '<div class="actions"><button type="button" class="small" data-notify>Notify me of replies</button></div>'
+             '<div class="actions"><button type="button" class="small" data-notify data-focus="notify">Notify me of replies</button></div>'
              '{earlier}</div></details></header>',
              name=name, facts=" · ".join(f for f in facts if f), pages=pages, buttons=buttons,
              earlier=h('<div class="earlier">{e}</div>', e=earlier) if earlier else Html(""),
              # always on screen (it sat under the last answer, below the fold on a phone); the chat shown now
              clear=h('<form class="act clearbtn" data-post="/chat/{n}/clear" data-confirm="Clear this chat? An open '
                      'conversation is ended first — {name} writes it up in its journal — and the chat is kept in Earlier '
-                     'web chats and Transcripts."><button type="submit" class="small" title="empty this page; nothing is '
-                     'deleted">Clear<span class="docslabel"> chat</span></button></form>', n=q(name), name=name)
-             if clear else Html(""))
-    return frame(f"{name} · chat", join([head, body]), names, csrf, current=f"i:{name}")
+                     'web chats and Transcripts."><input type="hidden" name="cid" value="{cid}">'
+                     '<button type="submit" class="small" title="empty this page; nothing is deleted" data-focus="clear">'
+                     'Clear<span class="docslabel"> chat</span></button></form>', n=q(name), name=name, cid=chat["id"])
+             if chat and not read_only else Html(""))
+    busy = (h('<p class="warn">{n} is {s} now: a cycle or sleep pauses for your message, anything else is waited for '
+              '— the reply\'s activity says which.</p>', n=name, s=state)
+            if state not in ("idle", "?") and not (chat and chat.get("state") == "replying") else Html(""))
+    return join([head, busy])
 
 
 def section(title: str, body, cls: str = "") -> Html:
@@ -865,10 +878,6 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
 def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], live: dict, names: list[str],
               csrf: str, read_only: bool = False, panel: Html = Html(""), doc: str = "") -> Html:
     from . import messages
-    state = live.get("state", "?")
-    busy = (h('<p class="warn">{n} is {s} now: a cycle or sleep pauses for your message, anything else is waited for '
-              '— the reply\'s activity says which.</p>', n=name, s=state)
-            if state not in ("idle", "?") and not (chat and chat.get("state") == "replying") else Html(""))
     feed_url = f"/fragment/chat/{q(name)}" + (f"?id={q(chat['id'])}" if read_only and chat else "")
     composer = Html("") if read_only else h(
         '<form class="composer" data-post="/chat/{n}/send" data-multipart="1" data-reset="1" data-files data-draft="{n}" '
@@ -881,16 +890,13 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
         '<span class="dim keys">Enter sends · Shift-Enter new line · / to write · Alt-↑↓ another chat</span>'
         '<button type="submit">Send</button></div></form>',
         n=name, mf=messages.ATTACH_MAX_BYTES, mt=messages.ATTACH_MAX_TOTAL, mn=messages.ATTACH_MAX_FILES)
-    pasts = [link(f"/i/{q(name)}/chat?id={q(c['id'])}", f"{c['created'][:16].replace('T', ' ')} · "
-                  f"{len([t for t in c['turns'] if t['role'] == 'user'])} message(s)") for c in past]
-    earlier = join([h("<h3>Earlier web chats</h3>"), lines(pasts, "none yet"), h(
-        '<p class="dim">Every conversation, from any client, is in <a href="/i/{n}/transcripts?f=conversations">'
-        'Transcripts</a>.</p>', n=q(name))])
-    body = join([busy, h('<section class="panel chat" data-scroll><div class="feed" data-poll="{u}" data-every="1500" data-keyed="1" '
+    body = join([h('<section class="panel chat" data-scroll><div class="feed" data-poll="{u}" data-every="1500" data-keyed="1" '
                          'data-follow="1">{f}</div></section><button type="button" class="newbelow" data-newbelow hidden>'
                          '↓ New below</button>', u=feed_url, f=chat_feed(name, chat, sent, archived=read_only)), composer,
                  Html('<div class="dropzone" data-dropzone hidden>Drop to attach</div>') if not read_only else Html("")])
     aside = h('<aside class="docs" id="docs" data-poll="/fragment/docs/{n}?doc={d}" data-every="1500" data-lazy="1">{p}</aside>',
               n=q(name), d=q(doc), p=panel)
-    return chat_frame(name, live, h('<div class="chatgrid"><div class="chatpage">{b}</div>{a}</div>', b=body, a=aside),
-                      names, csrf, earlier, clear=bool(chat) and not read_only)
+    return chat_frame(name, chat_header(name, live, chat, past, read_only),
+                      h('<div class="chatgrid"><div class="chatpage">{b}</div>{a}</div>', b=body, a=aside),
+                      names, csrf, f"/fragment/chat/{q(name)}/header"
+                      + (f"?id={q(chat['id'])}" if read_only and chat else ""))

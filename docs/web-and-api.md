@@ -70,6 +70,10 @@ and [chat design](plans/PLAN-webui-chat.md).
   hover over a time for its full date and time.
   Markdown task lists use full-width items with a checkbox before the text. On phones, stacked Markdown
   table labels use the heading’s plain text.
+- The chat header refreshes every 1.5 seconds: state, model, today's spend, actions, busy warning, Clear and
+  Earlier web chats. The open ⋯ menu and keyboard focus survive refreshes; your draft and documents stay in place.
+  A failed refresh marks the header stale. Clear sends the conversation id shown by the header; a missing or
+  outdated id is refused with a request to reload. Cleared conversations stay in Earlier web chats and Transcripts.
 - **Documents**: a Markdown file an instance writes under its `notes/docs/` shows beside the chat, live, as it writes
   it; a reply's documents are cards under it. The drawer shows a vertical list with sizes, changed marks and comment
   counts, or one open document (by default the one this chat last changed). **← Documents** returns to the list

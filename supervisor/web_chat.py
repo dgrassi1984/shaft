@@ -656,10 +656,12 @@ def clear(name: str, cid: str = "") -> str:
 
 
 def _clear(name: str, cid: str) -> str:
+    if not cid:
+        raise Refused("that is not the chat on this page any more: reload it")
     chat = shown(name)
     if not chat:
         raise Refused("there is nothing to clear")
-    if cid and chat["id"] != cid:
+    if chat["id"] != cid:
         raise Refused("that is not the chat on this page any more: reload it")
     if replying(chat["id"]) or chat.get("state") == "replying":
         raise Refused("it is still replying: stop the reply first")
