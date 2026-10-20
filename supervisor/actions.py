@@ -118,3 +118,8 @@ def update_question(name: str) -> tuple[str, str]:
 
 
 SLEEP_QUESTION = "start a sleep (consolidation) for {name} now? It runs up to 90 minutes on its model."
+KILL_QUESTION = ("kill {name}? It is paused, and everything it is running now stops at once — a cycle, a reply, a job, "
+                 "the battery, a trial replay. What it did so far is checked and committed as usual. "
+                 "Resume undoes the pause.")
+DELETE_QUESTION = ("delete {name}? Its folder, branch, mind, records and its rows in the shared logs are removed; an "
+                   "archive is kept in .supervisor/deleted/. This cannot be undone from here.")

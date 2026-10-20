@@ -25,8 +25,10 @@ SPARK = "▁▂▃▄▅▆▇█"
 MARK = {"yes": ("✓", "green"), "partial": ("½", "yellow"), "no": ("✗", "red")}
 HELP = {
     "overview": "↑/↓ instance · Enter details · c cycle · p pause/resume · s sleep now · u update · w write · "
-                "r reply · a recap every instance (now + last hour, by a small model) · x dismiss alerts · m messages",
-    "instance": "←/→ instance · ↑/↓ scroll · c cycle · p pause/resume · s sleep · u update · t tools · w write · r reply",
+                "r reply · K kill · a recap every instance (now + last hour, by a small model) · x dismiss alerts · "
+                "m messages",
+    "instance": "←/→ instance · ↑/↓ scroll · c cycle · p pause/resume · s sleep · u update · t tools · w write · r reply"
+                " · K kill · D delete",
     "judge": "←/→ instance · ↑/↓ cycle · Enter verdict in full · Esc back",
     "trials": "↑/↓ trial · Enter report · f this instance / all · ←/→ instance · a queue an A/A calibration trial",
     "benchmarks": "←/→ instance · ↑/↓ scroll · b run the battery now (when installed)",
@@ -660,6 +662,21 @@ def instance_action(ui, key: str, snap: dict) -> bool:
             ui.say(nothing)
         else:
             ask(ui, question, lambda: run_detached(["update", name]))
+    elif key == "K":   # a capital: a stray key never does it
+        ask(ui, actions.KILL_QUESTION.format(name=name), lambda: run_detached(["kill", name]))
+    elif key == "D" and ui.tab == "instance":
+        if state not in ("idle", "paused by you"):
+            ui.say(f"{name} is {state} — kill it first (K)")
+        else:
+            def typed(text: str) -> str:
+                if text != name:
+                    return f"not deleted: you typed {text!r}, not {name}"
+                from . import kill
+                if left := kill.running(name):
+                    return f"not deleted: {name} is busy ({'; '.join(left)}) — kill it first (K)"
+                return run_detached(["delete", name, "--yes"])
+            ui.overlay = Overlay("input", actions.DELETE_QUESTION.format(name=name) + f" Type {name} to delete it: ",
+                                 typed)
     elif key == "w":
         ui.overlay = Overlay("input", f"message to {name}: ", lambda text: run_now(["send", name, text]))
     elif key == "r":

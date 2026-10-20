@@ -381,6 +381,33 @@ class PanelKeys(unittest.TestCase):
         self.keys(ui, snap, "p", "y")
         self.assertEqual(self.ran[-1], ["resume", "shaft"])
 
+    def test_kill_asks_and_runs_detached(self):
+        ui, snap = top.UI(), _snap()
+        self.keys(ui, snap, "k")                                     # lower case is not kill (it moves up)
+        self.assertIsNone(ui.overlay)
+        ui = top.UI()
+        self.keys(ui, snap, "K")
+        self.assertIn("kill shaft?", ui.overlay.text)
+        self.keys(ui, snap, "y")
+        self.assertEqual(self.ran, [["detached", "kill", "shaft"]])
+
+    def test_delete_wants_the_name_typed_on_the_instance_tab(self):
+        from supervisor import kill
+        ui, snap = top.UI(), _snap()
+        self.keys(ui, snap, "D")                                     # not from the overview
+        self.assertIsNone(ui.overlay)
+        ui = top.UI(tab="instance")
+        with mock.patch.object(kill, "running", return_value=[]):
+            self.keys(ui, snap, "D", "s", "h", "a", "f", "enter")    # a typo
+            self.assertIn("not deleted", ui.flash)
+            self.assertEqual(self.ran, [])
+            self.keys(ui, snap, "D", *"shaft", "enter")
+        self.assertEqual(self.ran, [["detached", "delete", "shaft", "--yes"]])
+        ui = top.UI(tab="instance", inst=1)                          # wren is in a cycle
+        self.keys(ui, snap, "D")
+        self.assertIsNone(ui.overlay)
+        self.assertIn("kill it first", ui.flash)
+
     def test_sleep_only_for_an_idle_instance(self):
         ui, snap = top.UI(inst=1), _snap()                           # wren is in a cycle
         self.keys(ui, snap, "s")

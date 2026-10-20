@@ -120,11 +120,15 @@ class Conversations:
 
     def write_up_idle(self) -> None:
         with self.lock:
+            names = set(instance_names())
+            gone = [k for k, t in self.talks.items() if t.get("model") not in names]
+            for k in gone:   # its instance was deleted (shaft delete): nothing to write up, nothing to keep
+                log(f"api: conversation {self.talks.pop(k)['talk_id']} dropped — its instance no longer exists")
             due = [t for t in self.talks.values()
                    if not t.get("written") and time.time() - t.get("last", 0) > IDLE_MINUTES * 60]
             for t in due:
                 t["written"] = True
-            if due:
+            if due or gone:
                 self._save()
         for model in sorted({t["model"] for t in due}):
             spawn_recover(model)

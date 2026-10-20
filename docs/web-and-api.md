@@ -80,6 +80,10 @@ and [chat design](plans/PLAN-webui-chat.md).
   **Drive** (`drive.md`, saved after its diff), **Access** (tools, wake floor and cloud cap, jobs, shared folder,
   mail and calendar grants, battery, key names), **Judge**, **Changes**, **Benchmarks**, **Transcripts**,
   **Journal**, **Activity** (connections, plugins, jobs), with its actions and earlier chats.
+- **Kill** (with the other actions: overview cards, the ⋯ menu, Summary) pauses the instance and stops what it runs
+  now, as `shaft kill`. **Delete…** is on its Summary page only, enabled once it runs nothing: you type its name to
+  confirm (the server checks it again), it runs `shaft delete <name> --yes` with the archive, and the page goes back
+  to the overview ([kill and delete](plans/PLAN-kill-delete.md)).
 
 1. Run `shaft api on` first to configure the API key and tailnet login.
    `shaft web on` installs the service (`com.shaft.web`, `127.0.0.1:8785`) and exposes it with `tailscale serve` on

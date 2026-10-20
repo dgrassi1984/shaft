@@ -124,7 +124,8 @@ This path needs no local model, only cloud API keys.
    This starts the scheduler for all instances. The default wake interval is
    120 minutes, with daily consolidation from 04:00 local time. Stop the scheduler
    with `bin/shaft autonomy off`; use `bin/shaft pause example` to pause an
-   instance.
+   instance, `bin/shaft kill example` to also stop what it is running now, and
+   `bin/shaft delete example` to remove it (archived first).
 
 The local model port is **8780**, also the default `SHAFT_LLM_PORTS` allowlist.
 It is unrelated to the cloud-only setup above.

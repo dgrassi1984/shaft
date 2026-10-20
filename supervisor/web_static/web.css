@@ -191,6 +191,7 @@ img.attachment { max-width: 100%; max-height: 70vh; border-radius: 6px; border: 
 .actions { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; margin-top: .5rem; }
 form.act { display: inline; margin: 0; }
 button.act { font-size: .82rem; padding: .25rem .6rem; }
+button.act.danger:not(:disabled) { color: var(--bad); border-color: var(--bad); }   /* kill, delete: not a casual click */
 button.small { font-size: .78rem; padding: .15rem .5rem; }
 button:not(:disabled):hover { border-color: var(--accent); }
 .card footer { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; margin-top: .5rem; }

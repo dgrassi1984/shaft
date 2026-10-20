@@ -157,7 +157,7 @@ def instance_live(live: dict, d: dict) -> Html:
         pairs.append(("goal", live["goal"]))
     pairs.append(("wakes", f"every {d['wake']} min · next {live.get('next_wake', '?')}"))
     from .web_actions import instance_buttons
-    buttons = instance_buttons(live) if live.get("name") else Html("")
+    buttons = instance_buttons(live, delete=True) if live.get("name") else Html("")
     return join([rows(pairs), buttons])
 
 

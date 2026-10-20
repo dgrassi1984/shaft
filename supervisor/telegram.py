@@ -558,6 +558,9 @@ def handle_update(name: str, token: str, chat: Chat, upd: dict) -> None:
 def poll(name: str, token: str, stop: threading.Event) -> None:
     chat = Chat(name, token)
     while not stop.is_set():
+        if name not in instance_names():   # deleted while the service runs (shaft delete): its bot answers no more
+            log(f"telegram: {name} no longer exists — its bot stops")
+            return
         offset = (load().get("offsets") or {}).get(name, 0)
         try:
             updates = call(token, "getUpdates", http_timeout=POLL_S + 15, offset=offset, timeout=POLL_S,
@@ -566,6 +569,8 @@ def poll(name: str, token: str, stop: threading.Event) -> None:
             log(f"telegram: {name}'s bot: {e}")
             stop.wait(30)
             continue
+        if name not in instance_names():
+            continue   # left at the top of the loop, without recording an offset for a deleted instance
         for upd in updates or []:
             update(lambda s: s.setdefault("offsets", {}).__setitem__(name, upd["update_id"] + 1))
             threading.Thread(target=_safe, args=(handle_update, name, token, chat, upd), daemon=True).start()

@@ -179,8 +179,10 @@ class JudgePendingTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.sup, True)
         self.ep = {"ts": "2026-10-13T04:42:00", "intent": {"goal": "g", "success_criterion": "c", "confidence": 70},
                    "finish": {"criterion_met": "yes"}, "tools": []}
+        instances = self.sup / "instances"                  # wren exists: a deleted one's cases are dropped instead
+        (instances / "wren" / "shaft").mkdir(parents=True)
         for p in (mock.patch.object(metrics, "SUP_DIR", self.sup), mock.patch.object(metrics, "log"),
-                  mock.patch.object(metrics, "write_stats")):
+                  mock.patch.object(metrics, "write_stats"), mock.patch.object(metrics, "INSTANCES", instances)):
             p.start()
             self.addCleanup(p.stop)
 

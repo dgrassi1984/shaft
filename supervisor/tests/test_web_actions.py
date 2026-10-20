@@ -62,6 +62,41 @@ class EveryActionRunsItsCommand(ActionsTest):
         self.act("resume", name="wren", state="paused by you")
         self.assertEqual([r[1] for r in self.ran], [["pause", "wren"], ["resume", "wren"]])
 
+    def test_kill_runs_the_cli_verb_and_a_slow_settle_is_no_refusal(self):
+        self.result = (False, "wren paused; stopped shaft live; after 20s it is still settling: live since 12:00")
+        status, body = self.act("kill", name="wren", state="live since 12:00")
+        self.assertEqual(status, 200)
+        self.assertIn("still settling", body)
+        self.assertRan(["kill", "wren", "--wait", str(web_actions.KILL_WAIT_S)], web_actions.KILL_WAIT_S + 8)
+
+    def test_delete_needs_the_name_typed_and_an_instance_that_runs_nothing(self):
+        from supervisor import kill
+        with mock.patch.object(kill, "running", return_value=[]):
+            self.assertEqual(self.act("delete", name="wren")[0], 409)                 # no typed name
+            self.assertEqual(self.act("delete", name="wren", confirm="wre")[0], 409)  # a typo
+            self.assertNothingRan()
+            self.assertEqual(self.act("delete", name="wren", confirm="wren")[0], 200)
+        self.assertRan(["detached", "delete", "wren", "--yes"], None)
+        self.ran.clear()
+        with mock.patch.object(kill, "running", return_value=["live since 12:00"]):
+            status, body = self.act("delete", name="wren", confirm="wren")
+        self.assertEqual(status, 409)
+        self.assertIn("kill it first", body)
+        self.assertNothingRan()
+
+    def test_delete_is_offered_on_the_instance_page_only_and_typed(self):
+        page = str(web_actions.instance_buttons(snap()["instances"][0], delete=True))
+        self.assertIn('data-post="/action/delete"', page)
+        self.assertIn('data-confirm-type="wren"', page)
+        self.assertIn('data-after="home"', page)
+        self.assertIn('data-post="/action/kill"', page)
+        card = str(web_actions.instance_buttons(snap()["instances"][0]))
+        self.assertNotIn("/action/delete", card)
+        self.assertIn("/action/kill", card)
+        busy = str(web_actions.instance_buttons(snap(state="live since 12:00")["instances"][0], delete=True))
+        self.assertNotIn('data-post="/action/delete"', busy)                     # off, with why
+        self.assertIn("kill it first", busy)
+
     def test_sleep_is_detached(self):
         self.act("sleep", name="wren")
         self.assertRan(["detached", "sleep", "wren"], None)

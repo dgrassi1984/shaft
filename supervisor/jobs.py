@@ -31,7 +31,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .core import (HOME, PYTHON, SUP_DIR, _tool_settings, _update_tool_settings, instance_root,
+from .core import (HOME, INSTANCES, PYTHON, SUP_DIR, _tool_settings, _update_tool_settings, instance_root,
                    knob, positive_int, log, safe_mkdir, safe_write)
 
 MIN_MINUTES, _ = knob(
@@ -77,13 +77,20 @@ def _save_state(st: dict) -> None:
 
 
 @contextlib.contextmanager
+def _editing_lock():
+    """The state file's lock, for anyone rewriting it (here, and `shaft delete`: supervisor/delete.py)."""
+    _dir().mkdir(parents=True, exist_ok=True)
+    with open(_dir() / "state.lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+@contextlib.contextmanager
 def _editing_state():
     """Load, change and save the state under one lock. Every job run is its own process, and the scheduler and the
     jobs write the same file: until 2026-10-19 two jobs ending in the same second shared one temp name (the second
     rename failed: FileNotFoundError, the job counted as failed) and could overwrite each other's update."""
-    _dir().mkdir(parents=True, exist_ok=True)
-    with open(_dir() / "state.lock", "a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with _editing_lock():
         st = _load_state()
         yield st
         _save_state(st)
@@ -394,6 +401,9 @@ def tick(children: dict, now: datetime, start, names: list[str], awake_of) -> No
                 continue
             children[key] = (start(["job", "run", name, job["plugin"]]), time.monotonic())
     for name, req in pending_wakes().items():
+        if name not in names and not (INSTANCES / name / "shaft").is_dir():   # deleted (shaft delete)
+            take_wake(name)
+            continue
         if paused(name):
             take_wake(name)
             log(f"{name}: wake asked by job(s) {', '.join(req['by'])} dropped — {name} is paused")

@@ -1,7 +1,8 @@
 // SHAFT web UI behaviour (docs/plans/PLAN-webui.md). No inline script anywhere (the CSP forbids it): pages declare what they
 // need with data- attributes, and this file binds it once.
 //   data-poll="/fragment/…"  the element's content is refreshed from that URL every 2 s while the tab is visible
-//   <form data-post="/…">    sent with fetch as a POST carrying the CSRF token; data-confirm asks first, data-reset
+//   <form data-post="/…">    sent with fetch as a POST carrying the CSRF token; data-confirm asks first (data-confirm-type:
+//                            the operator types that word instead of clicking OK), data-after="home" goes to / after; data-reset
 //                            clears it once sent, data-diff="/preview/…" shows what would change before asking;
 //                            the reply is shown as a toast and the polled parts refresh
 // Listeners are delegated from the document, so content swapped in by a poll needs no re-binding.
@@ -242,7 +243,12 @@
     if (form.dataset.busy) return;                  // one at a time: a second Enter sent it twice (Codex review)
     const tooBig = filesRefused(form);
     if (tooBig) { toast(tooBig, true); return; }      // before uploading it all to hear so (a phone's video)
-    if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) return;
+    if (form.dataset.confirmType) {                 // a word to type, not a click (shaft delete): the server checks it too
+      const typed = window.prompt(`${form.dataset.confirm || ""}\n\nType ${form.dataset.confirmType} to confirm:`);
+      if (typed === null) return;
+      if (typed.trim() !== form.dataset.confirmType) { toast(`Not done: you typed "${typed}", not ${form.dataset.confirmType}`, true); return; }
+      form.querySelector("input[name=confirm]").value = typed.trim();
+    } else if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) return;
     const button = form.querySelector("button[type=submit]");
     if (button) button.disabled = true;
     form.dataset.busy = "1";
@@ -284,6 +290,7 @@
       }
       if (!r.ok && shown) shown.remove();
       if (r.ok && form.dataset.after === "reload") setTimeout(() => location.reload(), 800);
+      if (r.ok && form.dataset.after === "home") setTimeout(() => { location.href = "/"; }, 1500);   // it is gone
       document.dispatchEvent(new Event("shaft:refresh"));      // show what the action changed, now
     } catch (e) {                                  // the answer was lost: it may have arrived — the id says so
       if (shown) shown.remove();

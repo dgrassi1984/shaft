@@ -927,12 +927,18 @@ def _within_caps(t: dict) -> bool:
 
 
 def runnable(project: Path = PROJECT) -> list[tuple[dict, int, str]]:
-    """(trial, state index, model) for each pair that may run now; testing trials count as work too."""
+    """(trial, state index, model) for each pair that may run now; testing trials count as work too. Not a paused
+    instance's replays (a kill stops them: kill.py), and nothing of an instance that no longer exists — its gate copy
+    would fail on every pass and keep the scheduler starting the worker forever."""
+    from .core import paused
     out = []
+    names = set(_instances(project))
     for t in all_trials():
+        if t["instance"] not in names:
+            continue
         if t["status"] == "testing":
             out.append((t, -1, ""))
-        elif t["status"] == "queued" and _within_caps(t):
+        elif t["status"] == "queued" and _within_caps(t) and not paused(t["instance"]):
             for i, s in enumerate(t["states"]):
                 if s["status"] == "pending":
                     m = _pair_model(t, s, project)
@@ -960,7 +966,9 @@ def run_pair(project: Path, t: dict, i: int, model: str) -> None:
     cache, lock = {}, threading.Lock()
     run_model = "local" if model in ("local", "own") else model
     local = run_model == "local" and t["llm"]["local"]
-    stop = (lambda: not local_free_for(PREEMPT_AHEAD_S, project)[0]) if local else (lambda: False)
+    from .core import paused
+    model_needed = (lambda: not local_free_for(PREEMPT_AHEAD_S, project)[0]) if local else (lambda: False)
+    stop = lambda: paused(name) or model_needed()   # a paused (or killed) instance's replays stop too
     order = ["A", "B"]
     random.Random(f"{t['id']}:{i}").shuffle(order)   # who meets the world first (and fills the cache) is random
     arms: dict[str, dict] = {}
@@ -992,6 +1000,10 @@ def run_pair(project: Path, t: dict, i: int, model: str) -> None:
         (_dir(name, t["id"]) / "arms").mkdir(parents=True, exist_ok=True)
         (_dir(name, t["id"]) / "arms" / f"{i:02d}{arm}.json").write_text(json.dumps(rec, indent=1, ensure_ascii=False))
     if any(a["ended"] == "preempted" for a in arms.values()) or len(arms) < 2:
+        if paused(name):   # not the model's preemption: no step towards the fallback model
+            log(f"{name}: trial {t['id']} past cycle {i + 1} stopped: {name} is paused (it runs again after resume)")
+            save(t)
+            return
         s["preempted"] += 1
         log(f"{name}: trial {t['id']} past cycle {i + 1} preempted ({s['preempted']}×): the model was needed")
         save(t)
@@ -1114,6 +1126,9 @@ def _unblind(judgments: list) -> str:
 def deliver(project: Path, t: dict) -> None:
     """The verdict goes to the instance's inbox (operator trials: only to the log and the record)."""
     if t["by"] != "instance" or t.get("delivered"):
+        return
+    if t["instance"] not in _instances(project):   # deleted: writing its inbox would recreate a half folder
+        log(f"{t['instance']}: trial {t['id']} verdict not delivered: the instance no longer exists")
         return
     stamp = datetime.now()
     try:

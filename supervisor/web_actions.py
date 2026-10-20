@@ -17,6 +17,8 @@ from .web_pages import Html, h, join
 
 WHO = "web"
 TEXT_MAX = 8000                       # a message to an instance, at most (it goes into its inbox as a file)
+KILL_WAIT_S = 20                      # a kill from here waits this long for its runs to settle (the page waits 30 s)
+DELETABLE = ("idle", "paused by you")
 NOT_FROM_HERE = {"web": "the web UI cannot stop or restart itself: shaft web on|off in a terminal"}
 
 
@@ -98,6 +100,18 @@ def _run(verb: str, form: dict, snap: dict, names: list[str], services: list[str
         return _ran(["cycle", name])
     if verb in ("pause", "resume"):
         return _ran([verb, name])
+    if verb == "kill":
+        ok, last = actions.run_now(["kill", name, "--wait", str(KILL_WAIT_S)], KILL_WAIT_S + 8, who=WHO)
+        return 200, last   # still settling after the wait is no refusal: it is paused, and its runs end on their own
+    if verb == "delete":
+        if form.get("confirm", "").strip() != name:
+            raise Refused(f"not deleted: type {name} to confirm")
+        from . import kill
+        if left := kill.running(name):
+            raise Refused(f"{name} is busy ({'; '.join(left)}): kill it first")
+        actions.run_detached(["delete", name, "--yes"], who=WHO)
+        return 200, (f"deleting {name}: it is archived to .supervisor/deleted/ and removed; it leaves the list when "
+                     f"done (output in .supervisor/{actions.log_name(WHO)})")
     if verb == "sleep":
         if state != "idle":
             raise Refused(f"{name} is {state} — a sleep starts only when it is idle")
@@ -131,13 +145,20 @@ def _run(verb: str, form: dict, snap: dict, names: list[str], services: list[str
 
 # -- what the pages show ---------------------------------------------------------------------------------------------
 def button(verb: str, label: str, confirm: str = "", fields: dict | None = None, disabled: str = "",
-           cls: str = "") -> Html:
-    """One action as a button. `disabled`: why it cannot run now (shown as its tooltip, and the button is off)."""
+           cls: str = "", typed: str = "", after: str = "") -> Html:
+    """One action as a button. `disabled`: why it cannot run now (shown as its tooltip, and the button is off).
+    `typed`: the word the operator must type to confirm (sent as the `confirm` field, checked again by the server).
+    `after`: what the page does once it succeeded (web.js: "home" goes to the overview)."""
     hidden = join(h('<input type="hidden" name="{k}" value="{v}">', k=k, v=v) for k, v in (fields or {}).items())
     if disabled:
         return h('<button type="button" class="act {cls}" disabled title="{why}">{label}</button>', cls=cls, why=disabled,
                  label=label)
     conf = h(' data-confirm="{c}"', c=confirm[0].upper() + confirm[1:]) if confirm else Html("")
+    if typed:
+        conf = join([conf, h(' data-confirm-type="{t}"', t=typed)])
+        hidden = join([hidden, Html('<input type="hidden" name="confirm" value="">')])
+    if after:
+        conf = join([conf, h(' data-after="{a}"', a=after)])
     return h('<form class="act" data-post="/action/{verb}"{conf}>{hidden}<button type="submit" class="act {cls}">'
              '{label}</button></form>', verb=verb, conf=conf, hidden=hidden, cls=cls, label=label)
 
@@ -158,8 +179,9 @@ def _update_question(name: str) -> tuple[str, str]:
     return hit[1]
 
 
-def instance_buttons(i: dict) -> Html:
-    """The instance actions of the overview and the instance page (TUI keys c, p, s, u)."""
+def instance_buttons(i: dict, delete: bool = False) -> Html:
+    """The instance actions of the overview and the instance page (TUI keys c, p, s, u, K); `delete`: also Delete…
+    (TUI D) — on the instance's own page only."""
     name, state = i["name"], i["state"]
     idle = state == "idle"
     paused = state == "paused by you"
@@ -172,7 +194,12 @@ def instance_buttons(i: dict) -> Html:
                   {"name": name}),
            button("sleep", "Sleep now", a.SLEEP_QUESTION.format(name=name), {"name": name},
                   "" if idle else f"{name} is {state} — a sleep starts only when it is idle"),
-           button("update", "Update", question, {"name": name}, nothing)]
+           button("update", "Update", question, {"name": name}, nothing),
+           button("kill", "Kill", a.KILL_QUESTION.format(name=name), {"name": name}, cls="danger")]
+    if delete:
+        out.append(button("delete", "Delete…", a.DELETE_QUESTION.format(name=name), {"name": name},
+                          "" if state in DELETABLE else f"{name} is {state} — kill it first", cls="danger",
+                          typed=name, after="home"))
     return h('<div class="actions">{b}</div>', b=join(out))
 
 
