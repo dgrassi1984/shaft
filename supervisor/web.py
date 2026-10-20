@@ -562,7 +562,7 @@ def _get(req: Request, csrf: str) -> Response | None:
         chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.shown(m[1])
         if chat and chat.get("instance") != m[1]:
             return None
-        past = [c for c in web_chat.chats(m[1]) if c.get("state") == "ended"][:20]
+        past = [c for c in web_chat.chats(m[1]) if c.get("state") == "ended"]
         return _html(200, v.chat_header(m[1], _live(m[1]), chat, past, read_only=bool(qs.get("id"))))
     if m := re.match(r"^/fragment/chat/([A-Za-z0-9_-]+)$", path):
         if m[1] not in names:
@@ -586,8 +586,12 @@ def _get(req: Request, csrf: str) -> Response | None:
         if m[1] not in names:
             return None
         from . import web_chat
-        return _html(200, _docs_panel(m[1], web_chat.shown(m[1]), qs.get("doc", ""), qs.get("thread", ""),
-                                      listing_only=qs.get("list") == "1")[1])
+        chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.shown(m[1])
+        if chat and chat.get("instance") != m[1]:
+            return None
+        return _html(200, _docs_panel(m[1], chat, qs.get("doc", ""), qs.get("thread", ""),
+                                      listing_only=qs.get("list") == "1",
+                                      archived=bool(qs.get("id")) and bool(chat) and chat.get("state") == "ended")[1])
     if m := re.match(r"^/chatfiles/(web-[a-f0-9]+)/(\d+)/(\d+)$", path):
         return _chat_file(m[1], int(m[2]), int(m[3]))
     if path in ("/trials", "/fragment/trials"):
@@ -688,7 +692,7 @@ def _save_doc(name: str, login: str, form: dict) -> Response:
         said = web_chat.doc_saved(name, login, rel, old, text, new_sha)
     except web_chat.Refused as e:                  # written: only telling the instance failed — say both
         said = f"saved, but {name} was not told yet: {e}"
-    return _html(200, web_pages.h("<p>{t}</p>", t=said), {"X-Doc": rel})
+    return _html(200, web_pages.h("<p>{t}</p>", t=said), {"X-Doc": rel, "X-Doc-Sha": new_sha})
 
 
 def _delete_doc(name: str, login: str, form: dict) -> Response:
@@ -754,7 +758,8 @@ def _comment(name: str, login: str, action: str | None, form: dict) -> Response:
     return _html(200, web_pages.h("<p>{t}</p>", t=said), {"X-Thread": tid})
 
 
-def _docs_panel(name: str, chat: dict | None, doc: str, thread: str = "", listing_only: bool = False):
+def _docs_panel(name: str, chat: dict | None, doc: str, thread: str = "", listing_only: bool = False,
+                archived: bool = False):
     """(the open document, the panel): the one asked for, else the last this chat changed (what it is writing shows as it
     writes it), else the list; listing_only (← Documents, ?list=1): the list, whatever this chat changed. With its
     comment threads (docs/plans/PLAN-comments.md), which are in the fragment so a comment alone changes its ETag."""
@@ -764,7 +769,7 @@ def _docs_panel(name: str, chat: dict | None, doc: str, thread: str = "", listin
         listing = docs.listing(name)
     except (Exception, SystemExit) as e:          # the documents never take the chat down with them: say what failed
         log(f"web: {name}'s documents: {type(e).__name__}: {e}")
-        return doc, v.docs_panel(name, [], doc, None, "none", marked, f"documents not readable: {e}")
+        return doc, v.docs_panel(name, [], doc, None, "none", marked, f"documents not readable: {e}", archived=archived)
     if not doc and not listing_only:
         doc = next((d["path"] for d in listing if d["path"] in marked), "")
     text, sha, problem = None, "none", ""
@@ -781,7 +786,7 @@ def _docs_panel(name: str, chat: dict | None, doc: str, thread: str = "", listin
         threads, counts = [], {}
     return doc, v.docs_panel(name, listing, doc, text, sha, marked, problem,
                              ((chat or {}).get("saved_docs") or {}).get(doc), threads=threads, counts=counts,
-                             thread=thread)
+                             thread=thread, archived=archived)
 
 
 LAST_CHAT = "shaft_last"                                     # the instance whose chat / opens
@@ -824,16 +829,22 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str) -
         return _html(200, v.journal_page(name, journal_entries(instance_root(name)), at, names, csrf))
     if tab == "activity":
         return _html(200, v.activity_page(name, activity(name), names, csrf))
+    if tab == "chats":
+        from . import web_chat
+        past = [c for c in web_chat.chats(name) if c.get("state") == "ended"]
+        body = v.join([v.link(f"/i/{v.q(name)}/chat", "Back to the current chat"),
+                       v.section("Earlier chats", v.earlier_chats(name, past))])
+        return _html(200, v.instance_frame(name, "chat", "Earlier chats", body, names, csrf))
     if tab == "chat":
         from . import web_chat
         chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.shown(name)
         if chat and chat.get("instance") != name:
             return None
-        past = [c for c in web_chat.chats(name) if c.get("state") == "ended"][:20]
-        doc, panel = _docs_panel(name, chat, qs.get("doc", ""), qs.get("thread", ""))
-        return _html(200, v.chat_page(name, chat, _sent_during(name, chat, bool(qs.get("id"))), past, _live(name),
-                                      names, csrf,
-                                      read_only=bool(qs.get("id")) and bool(chat) and chat.get("state") == "ended",
+        past = [c for c in web_chat.chats(name) if c.get("state") == "ended"]
+        read_only = bool(qs.get("id")) and bool(chat) and chat.get("state") == "ended"
+        doc, panel = _docs_panel(name, chat, qs.get("doc", ""), qs.get("thread", ""), archived=read_only)
+        return _html(200, v.chat_page(name, chat, _sent_during(name, chat, bool(qs.get("id"))), past, _live(name), names, csrf,
+                                      read_only=read_only,
                                       panel=panel, doc=doc),
                      {"Set-Cookie": f"{LAST_CHAT}={name}; Path=/; Max-Age={COOKIE_DAYS * 86400}; Secure; SameSite=Strict"})
     if tab in ("config", "drive", "access"):

@@ -52,7 +52,7 @@ class Overlay:
 
 
 # -- running actions: the same as the web UI's (actions.py), logged as `top: operator …` ------------------------
-def run_now(args: list[str], timeout: float = 60) -> str:
+def run_now(args: list[str], timeout: float = actions.RUN_NOW_S) -> str:
     """A quick subcommand: its last line of output, or "refused: …"."""
     ok, last = actions.run_now(args, timeout, who="top")
     return last if ok else f"refused: {last}"
@@ -786,10 +786,10 @@ def ask_guarded(ui, service: str, action: str, question: str, args: list[str], r
     a stopped one is never held back."""
     why = service_guard(service, action) if running else ""
     if not why:
-        ask(ui, question, lambda: run_now(args, timeout=90))
+        ask(ui, question, lambda: run_now(args, timeout=actions.SLOW_S))
         return
 
     def forced() -> str:
         actions.log_forced("top", args, why)
-        return run_now(args, timeout=90)
+        return run_now(args, timeout=actions.SLOW_S)
     ask(ui, actions.force_question(service, action, why) + " (y to force)", forced)

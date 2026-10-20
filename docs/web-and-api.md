@@ -29,7 +29,8 @@ activity arrives as `reasoning_content`. A conversation keeps one id while its f
 same (or, with an `X-Shaft-Conversation: <name>` header, while it keeps that name), keeps the channel its client names
 with `X-Shaft-Channel: web|telegram` (the web UI and the Telegram service send it; `api` without it), and is written
 up into the journal
-after `SHAFT_IDLE_MINUTES` without a message, or at once with `POST /v1/chat/end`. `POST /v1/chat/interject`
+after `SHAFT_IDLE_MINUTES` without a message. `POST /v1/chat/end` requests that write-up now;
+its 202 response confirms the request, not a completed journal entry. `POST /v1/chat/interject`
 (same body as a chat request) adds the last message to the reply still running in that conversation: the instance
 reads it at its next step and its answer covers it; the reply's JSON says how many it heard
 (`interjections_heard`), and 409 means no reply is running there ([PLAN-interject.md](plans/PLAN-interject.md)).
@@ -74,19 +75,54 @@ and [chat design](plans/PLAN-webui-chat.md).
   it in your message. Each message with text has Copy and Reply icons for its whole Markdown source, including
   your own messages. Code blocks and documents have Copy icons too. Your draft survives a reload; `/` writes,
   Alt-↑/↓ changes chat; opt-in desktop notifications (⋯ menu) for a reply that lands while the tab is hidden.
+  Quotes are saved as drafts too. Picking files again adds them to the current attachments. Files added during
+  a send stay in the composer. Leaving with attachments asks for confirmation because files cannot survive a reload.
+  An unchanged retry keeps its message ID, including after reload. A reload drops the saved draft if that ID is
+  already in the rendered chat. Editing text or changing attachments starts a new message ID.
   Chat days are separated by date, using the supervisor’s local time. Today’s messages show only HH:MM;
   hover over a time for its full date and time.
   Markdown task lists use full-width items with a checkbox before the text. On phones, stacked Markdown
   table labels use the heading’s plain text.
+- Each panel stays marked stale until its own refresh succeeds. The connection warning stays until every failed
+  panel recovers. **↓ New below** appears only for a new turn below the visible area.
+  Refreshes keep Manage open or closed, link focus, and activity scroll. Chat thumbnails reserve space;
+  images loading keep the feed at the bottom if you have not scrolled up. After Save, focus returns to Edit
+  and survives the document refresh.
 - The chat header refreshes every 1.5 seconds: state, model, today's spend, actions, busy warning, Clear and
-  Earlier web chats. The open ⋯ menu and keyboard focus survive refreshes; your draft and documents stay in place.
+  Earlier chats. The open history list and ⋯ menu and keyboard focus survive refreshes; your draft and documents stay in place.
   A failed refresh marks the header stale. Clear sends the conversation id shown by the header; a missing or
   outdated id is refused with a request to reload. Cleared conversations stay in Earlier web chats and Transcripts.
+- **Earlier chats** sits in the chat header. Its quick list shows the latest 20 and the total count;
+  **All earlier chats** opens `/i/<name>/chats`, with every saved ended web chat, newest first.
+  Each entry shows its date, the first line of the first user message, trimmed to 80 characters, and message count.
+  Archive links use `?id=` and support bookmarks and normal browser Back. An archive has an **Earlier chat**
+  banner with its date and **Back to the current chat**. Its footer says when it ended, with no invitation to type.
+  Beside an archive, Documents says **Current files — not as they were in this chat**. The files are current,
+  not snapshots. Editing, commenting, deleting, restoring and creating documents are unavailable there.
+  **Open in the current chat to edit or comment** opens the selected file in the current chat. Reply document
+  cards in an archive also open the file in the current chat.
+- **Clear chat** ends an open conversation and clears the page. The conversation stays in Earlier chats and
+  Transcripts. **End the conversation** leaves messages visible; the next message starts a new conversation.
+  The current chat's ended footer says **journal write-up requested**. The web UI has no completion marker.
+  **Stop the reply** stops only the running reply and keeps the conversation open.
+- Failed replies explain the next action and keep the raw error under **Technical details**. Partial answers remain
+  visible and are marked **incomplete**. **Retry** fills the composer with the original message; you must press Send.
+  It asks before replacing a different draft. Retry is offered only for a refused connection before sending, or a
+  known model HTTP 5xx failure with API evidence that no tools ran. Older records and uncertain outcomes link to
+  Activity and Services. Interjected requests need inspection rather than a one-message retry.
 - **Documents**: a Markdown file an instance writes under its `notes/docs/` shows beside the chat, live, as it writes
   it; a reply's documents are cards under it. The drawer shows a vertical list with sizes, changed marks and comment
   counts, or one open document (by default the one this chat last changed). **← Documents** returns to the list
   and asks before dropping unsaved edits. When the chat area is too narrow for both columns, Documents opens as
   a sheet over the chat. Close it with ✕ or Escape.
+  Switching documents offers Save, Discard, or Stay before changing the address. If you type during Save,
+  the editor keeps the newer text, based on the revision just saved.
+  Unsaved document drafts stay in this browser per instance and document across reloads, chat navigation,
+  and closing the panel. Reopening restores the editor and marks the draft. An older draft says
+  "Unsaved draft restored — started from an older version"; Save still checks its original revision and
+  shows the existing refusal and diff before you can choose to replace newer content.
+  Cancel or explicitly discarding edits removes the draft. Saving clears the saved draft and keeps any
+  newer typing. Reloading or leaving warns while the editor has unsaved changes.
   Edit one in the panel (or start one: Documents, then New document):
   Save is refused if it wrote the file meanwhile (you see what changed and keep your text), and it hears of your
   change as a diff; with your next message, or at once if it is replying. If a later write of its drops lines you
@@ -111,7 +147,7 @@ and [chat design](plans/PLAN-webui-chat.md).
   message. The threads live in the supervisor (`.supervisor/web/comments/`), never in a file it could overwrite; a
   read-only copy of what it was sent is kept in its `notes/comments/`.
 - Each instance's other pages sit behind the chat's ⋯ menu: **Summary**, **Config** (`config.env`, a field per key),
-  **Drive** (`drive.md`, saved after its diff), **Access** (tools, wake floor and cloud cap, jobs, shared folder,
+  **Drive** (`drive.md`: the diff is shown in full, then Apply saves it and Back keeps your text), **Access** (tools, wake floor and cloud cap, jobs, shared folder,
   mail and calendar grants, battery, key names), **Judge**, **Changes**, **Benchmarks**, **Transcripts**,
   **Journal**, **Activity** (connections, plugins, jobs), with its actions and earlier chats.
 - **Kill** (with the other actions: overview cards, the ⋯ menu, Summary) pauses the instance and stops what it runs
@@ -145,14 +181,19 @@ next refresh or action opens the pairing page. Your chat draft stays in this bro
   **Notifications incomplete — retry**.
 - **Typing:** on a phone, Return makes a new line and Send sends.
 - **Layout:** the chat fills the screen. ☰ lists the chats and pages, 📄 the documents, ⋯ the instance's pages and
-  actions.
+  actions. Chats and Documents sheets move focus inside and keep Tab there. The covered page is inactive.
+  Close with ✕ or Escape to return focus to the opener. Choosing a Chats link also closes that sheet.
+  Resizing restores normal interaction when a sheet becomes a side panel. Messages and network notices
+  appear above the sheets. Sheets and the ⋯ menu leave room for the notch in landscape.
 - **Offline:** when SHAFT cannot be reached, the app says so and retries. Opening a page also shows the cached
   offline page if the proxy returns 502, 503 or 504; **Try again** returns to the app.
 
 Every request needs your tailnet login **and** a paired browser. Every POST needs the page's own token, and every
 response forbids inline script. Instances cannot reach the port. Every action runs the matching `shaft`
 subcommand, logged as `web: operator …`; config, drive, document and settings edits go through `shaft config` /
-`shaft drive` / `shaft docs` / `shaft settings --from-web`. Chat
+`shaft drive` / `shaft docs` / `shaft settings --from-web`. A chat message carries an id, so sending it again after
+no answer does not send it twice. Any other action that gets no answer says the outcome is unknown and which page
+to check; the page waits at least as long as the server allows that action. Chat
 goes through the API (`X-Shaft-Conversation`, `/v1/chat/end`), so restart the API on the same code
 (`shaft api on`). A reply keeps going if the browser closes; only Stop stops it. Secrets, `new`, `breed`,
 `finetune`, the Google logins and `mind cutover` stay in the terminal.

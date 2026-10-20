@@ -1,0 +1,137 @@
+"""Issue #21: run the shipped composer in Node with a stub page."""
+import json
+from pathlib import Path
+import shutil
+import subprocess
+import unittest
+
+NODE = shutil.which("node")
+JS = Path(__file__).resolve().parents[1] / "web_static" / "web.js"
+
+
+@unittest.skipUnless(NODE, "node is not installed")
+class ComposerJsTest(unittest.TestCase):
+    def run_composer(self, scenario):
+        script = r"""
+const fs=require('node:fs'), vm=require('node:vm'), assert=require('node:assert/strict');
+const storage=new Map(); let serial=0;
+function page(mids=[]) {
+  const handlers={}, win={}, elements={}; let resolve, reject, payload;
+  const node=()=>({dataset:{},style:{},children:[],setAttribute(){},querySelectorAll:()=>[],
+    appendChild(n){this.children.push(n);},append(...ns){this.children.push(...ns);},remove(){},
+    addEventListener(k,fn){this[k]=fn;},classList:{add(){},remove(){},toggle(){}}});
+  const mid={value:''}, files={type:'file',files:[],closest:()=>form}, chips=node();
+  const box={value:'',tagName:'TEXTAREA',name:'text',style:{},scrollHeight:120,selectionStart:0,selectionEnd:0,
+    closest:q=>['form[data-files]','form[data-draft]'].includes(q)?form:null,focus(){},
+    setSelectionRange(a,b){this.selectionStart=a;this.selectionEnd=b;},
+    dispatchEvent(ev){for(const fn of handlers[ev.type]||[]) fn({target:box});}};
+  const form={dataset:{post:'/chat/wren/send',draft:'wren',files:'',multipart:'1',reset:'1',sentMids:JSON.stringify(mids)},
+    closest:()=>null,querySelector:q=>({'textarea':box,'textarea[name=text]':box,'input[name=mid]':mid,
+      'input[type=file]':files,'[data-picked]':chips,'button[type=submit]':{}})[q]||null,
+    reset(){box.value='';mid.value='';files.files=[];}};
+  const selection={isCollapsed:false,rangeCount:1,toString:()=> 'selected quote',removeAllRanges(){},
+    getRangeAt:()=>({commonAncestorContainer:{nodeType:1,closest:()=>({dataset:{}})}})};
+  const document={readyState:'loading',visibilityState:'hidden',body:node(),
+    addEventListener(k,fn){(handlers[k]||=[]).push(fn);},dispatchEvent(){},
+    querySelector:q=>q==='form.composer textarea'?box:['form[data-files]','form[data-draft]'].includes(q)?form:null,
+    querySelectorAll:()=>[],getElementById:id=>elements[id]||null,
+    createElement(){const n=node();Object.defineProperty(n,'id',{set(id){elements[id]=n;}});return n;}};
+  const context={document,URL,URLSearchParams,Event,AbortController,navigator:{},
+    crypto:{randomUUID:()=>`m-${++serial}`},location:{href:'https://shaft.test/i/wren/chat'},
+    window:{innerHeight:900,addEventListener(k,fn){(win[k]||=[]).push(fn);},getSelection:()=>selection,
+      matchMedia:()=>({matches:false})},
+    localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},
+    setTimeout(){},clearTimeout(){},setInterval(){},
+    DataTransfer:class {constructor(){this.files=[];this.items={add:f=>this.files.push(f)};}},
+    FormData:class {constructor(){this.text=box.value;this.mid=mid.value;this.files=[...files.files];}},
+    DOMParser:class {parseFromString(t){return {body:{textContent:t}};}},
+    fetch(u,o){payload=o.body;return new Promise((a,b)=>{resolve=a;reject=b;});}};
+  vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),context);
+  const emit=async(k,target,extra={})=>{for(const fn of handlers[k]||[]) await fn({target,preventDefault(){},...extra});};
+  return {box,mid,files,form, chips, payload:()=>payload,
+    load:()=>emit('DOMContentLoaded'),type:async t=>{box.value=t;await emit('input',box);},
+    pick:async(...fs)=>{files.files=fs;await emit('change',files);},
+    paste:(...fs)=>emit('paste',box,{clipboardData:{files:fs}}),
+    drop:(...fs)=>emit('drop',box,{dataTransfer:{types:['Files'],files:fs}}),
+    remove:k=>emit('click',{closest:q=>q==='[data-unpick]'?{dataset:{unpick:String(k)},closest:()=>form}:null}),
+    reply:()=>emit('click',{closest:q=>q==='[data-reply-message]'?{closest:()=>({dataset:{raw:'whole quote'}})}:null}),
+    async quote(){await emit('selectionchange');await emit('scroll',{});elements['quote-reply'].click();},
+    send:()=>emit('submit',{closest:()=>form}),
+    answer:()=>resolve({ok:true,status:200,headers:{get:()=>null},text:async()=> 'sent'}),fail:()=>reject(new Error('lost')),
+    unload(){const ev={preventDefault(){this.prevented=true;}};for(const fn of win.beforeunload||[])fn(ev);return !!ev.prevented;}};
+}
+const A={name:'a.txt',size:1,type:'text/plain'},B={name:'b.txt',size:1,type:'text/plain'};
+(async()=>{
+""" + scenario + r"""
+})().catch(e=>{console.error(e);process.exitCode=1;});
+"""
+        result = subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_issue_21_quotes_save_grow_and_reset_identity(self):
+        """Removing quote input dispatch loses the restored quote, growth and new retry identity."""
+        self.run_composer("""
+for(const kind of ['reply','quote']) {
+ storage.clear();const p=page();p.mid.value='old';await p[kind]();
+ assert.equal(p.mid.value,'');assert.equal(p.box.style.height,'122px');
+ const q=page();await q.load();assert.equal(q.box.value,p.box.value);assert.ok(q.box.value.includes('quote'));
+}
+""")
+
+    def test_issue_21_picker_adds_and_send_keeps_later_files(self):
+        """Reverting #21 replaces earlier picks and clears files added during a send."""
+        self.run_composer("""
+const p=page();await p.type('hello');await p.pick(A);await p.pick(B);
+assert.deepEqual(p.files.files,[A,B]);const sending=p.send();await Promise.resolve();
+assert.deepEqual(p.payload().files,[A,B]);await p.remove(1);await p.pick({...B});
+await p.type('next');p.answer();await sending;
+assert.equal(p.box.value,'next');assert.deepEqual(p.files.files,[B]);
+assert.equal(storage.get('shaft.draft.wren'),'next');
+""")
+
+    def test_issue_21_attachments_warn_and_change_retry_identity(self):
+        """Reverting #21 silently loses files on unload and reuses IDs after attachment edits."""
+        self.run_composer("""
+const p=page();assert.equal(p.unload(),false);
+for(const add of ['pick','paste','drop']) {p.mid.value='old';await p[add](A);assert.equal(p.mid.value,'');}
+assert.equal(p.unload(),true);
+while(p.files.files.length){p.mid.value='old';await p.remove(0);assert.equal(p.mid.value,'');}
+assert.equal(p.unload(),false);
+""")
+
+    def test_issue_21_reload_reconciles_lost_answers(self):
+        """Reverting #21 gives a restored retry a fresh ID and offers already delivered text again."""
+        self.run_composer("""
+const p=page();await p.type('hello');let sending=p.send();await Promise.resolve();const id=p.payload().mid;
+p.fail();await sending;sending=p.send();await Promise.resolve();assert.equal(p.payload().mid,id);p.fail();await sending;
+const q=page();await q.load();assert.equal(q.box.value,'hello');assert.equal(q.mid.value,id);
+const r=page([id]);await r.load();assert.equal(r.box.value,'');assert.equal(r.mid.value,'');
+assert.equal(storage.get('shaft.draft.wren'),undefined);
+""")
+
+    def test_issue_21_edits_during_send_survive_reload(self):
+        """Reverting #21 loses retry identity; reconciliation must also preserve edits made during a send."""
+        self.run_composer("""
+const p=page();await p.type('hello');const sending=p.send();await Promise.resolve();const id=p.payload().mid;
+const pending=JSON.parse(storage.get('shaft.pending.wren'));assert.equal(pending.mid,id);assert.equal(pending.text,'hello');
+await p.type('new text');p.fail();await sending;
+const q=page([id]);await q.load();assert.equal(q.box.value,'new text');assert.equal(q.mid.value,'');
+""")
+
+    def test_issue_21_markup_contains_saved_turn_ids(self):
+        """Reverting #21 prevents reload recovery from detecting accepted messages in the rendered chat."""
+        from html.parser import HTMLParser
+        from supervisor.web_views import chat_page
+
+        class Composer(HTMLParser):
+            attrs = {}
+
+            def handle_starttag(self, tag, attrs):
+                if tag == "form" and dict(attrs).get("class") == "composer":
+                    self.attrs = dict(attrs)
+
+        chat = {"id": "web-a", "state": "ended", "created": "2026-10-20T10:00:00", "turns": [
+            {"role": "user", "content": "hello", "ts": "2026-10-20T10:00:00", "mid": 'm-"1'}]}
+        parser = Composer()
+        parser.feed(str(chat_page("wren", chat, [], [], {}, ["wren"], "csrf")))
+        self.assertEqual(json.loads(parser.attrs["data-sent-mids"]), ['m-"1'])
