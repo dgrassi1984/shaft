@@ -121,6 +121,8 @@ and [chat design](plans/PLAN-webui-chat.md).
   counts, or one open document (by default the one this chat last changed). **← Documents** returns to the list
   and asks before dropping unsaved edits. When the chat area is too narrow for both columns, Documents opens as
   a sheet over the chat. Close it with ✕ or Escape.
+  **Download** saves the open document's current file from disk, including in earlier chats. Unsaved edits are
+  not included.
   Switching documents offers Save, Discard, or Stay before changing the address. If you type during Save,
   the editor keeps the newer text, based on the revision just saved.
   Unsaved document drafts stay in this browser per instance and document across reloads, chat navigation,
@@ -156,6 +158,14 @@ and [chat design](plans/PLAN-webui-chat.md).
 - Each instance's other pages sit behind the chat's ⋯ menu: **Summary**, **Config** (`config.env`, a field per key;
   each value is named for its key),
   **Drive** (`drive.md` for that instance: the diff is shown in full, then Apply saves it and Back keeps your text),
+  **Files** (`/i/<name>/files?path=notes/` lists one folder, folders first, with sizes and modified times.
+  Breadcrumbs and Up return to parent folders. The count includes all visible entries; pages show at most 200.
+  Folder and page addresses support reload, bookmarks and Back. Every file has Download; text files also have
+  Open, served as plain text with the same security policy. `/i/<name>/file?path=notes/example.md` downloads
+  the current bytes; `&open=1` opens recognized text types. Empty files download normally; unreadable paths
+  show the reason. `secrets/`, `config.env`, `.git/`, `mail/` and `.browser/` are hidden and refused at every
+  depth. Links, absolute paths and `..` are refused. Both routes require the tailnet login and paired browser.
+  Folder zip downloads are not available),
   **Access** (tools, wake floor and cloud cap, jobs, shared folder,
   mail and calendar grants, battery, key names), **Judge**, **Changes**, **Benchmarks**, **Transcripts**,
   **Journal**, **Activity** (connections, plugins, jobs), with its actions and earlier chats.
