@@ -88,7 +88,8 @@ and [chat design](plans/PLAN-webui-chat.md).
   Chat days are separated by date, using the supervisor’s local time. Today’s messages show only HH:MM;
   hover over a time for its full date and time.
   Markdown task lists use full-width items with a checkbox before the text. On phones, stacked Markdown
-  table labels use the heading’s plain text.
+  table labels use the heading’s plain text. Markdown headings step down by level and stay at least as large
+  as the paragraph under them, with more space above a heading than below it.
 - Each panel stays marked stale until its own refresh succeeds. The connection warning stays until every failed
   panel recovers. **↓ New below** appears only for a new turn below the visible area.
   Refreshes keep Manage open or closed, link focus, and activity scroll. Chat thumbnails reserve space;

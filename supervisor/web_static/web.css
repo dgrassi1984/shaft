@@ -155,7 +155,11 @@ tr.unread td { font-weight: 600; }
 table.num td:not(:first-child), table.num th:not(:first-child) { text-align: right; }
 td:empty::before { content: ""; }
 
-.md h2, .md h3, .md h4 { font-size: .95rem; margin: .9rem 0 .3rem; color: var(--text); }
+/* # renders as h2: the page h1 is 1.3rem, so a document title stays under it. More space above than below. */
+.md h2, .md h3, .md h4 { margin: .9rem 0 .3rem; color: var(--text); font-weight: 700; }   /* not the page h2's 600 */
+.md h2 { font-size: 1.25rem; }
+.md h3 { font-size: 1.12rem; }
+.md h4 { font-size: 1rem; }
 .md ul { margin: .2rem 0 .4rem; padding-left: 1.2rem; }
 .md p { margin: .35rem 0; }
 .md code, code { background: var(--bg); padding: 0 .2rem; border-radius: 3px; }
@@ -396,7 +400,7 @@ form.docedit textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monosp
 .md li.task-item { list-style: none; margin-left: -1.1rem; }
 .md span.task { display: inline-block; width: 1.1rem; color: var(--dim); }
 .md span.task.done { color: var(--good); }
-.md h5, .md h6 { font-size: .88rem; margin: .7rem 0 .2rem; color: var(--dim); }
+.md h5, .md h6 { font-size: 1rem; font-weight: 700; margin: .7rem 0 .2rem; color: var(--dim); }
 .md hr { border: 0; border-top: 1px solid var(--line); margin: .8rem 0; }
 .md s { color: var(--dim); }
 .md a { overflow-wrap: anywhere; }
