@@ -44,7 +44,7 @@ def join(parts, sep: str = "") -> Html:
 
 # -- the page ------------------------------------------------------------------------------------------------------
 def _static_version(folder: Path = Path(__file__).parent / "web_static") -> str:
-    """The static files' own fingerprint: a changed web.js or web.css gets a new URL, so a browser never keeps running an
+    """The static files' own fingerprint: a changed static asset gets a new URL, so a browser never keeps running an
     old copy against new pages (it was a constant bumped by hand, and a change without the bump went unseen)."""
     d = hashlib.sha256()
     for f in sorted(folder.glob("*")):
@@ -75,7 +75,8 @@ def page(title: str, body: Html, nav: Html = Html(""), csrf: str = "") -> Html:
              '<link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v={v}">'
              '<link rel="apple-touch-icon" href="/static/icon-180.png?v={v}">'
              '<link rel="stylesheet" href="/static/web.css?v={v}">'
-             '<script src="/static/web.js?v={v}" defer></script></head>'
+             '<script src="/static/web.js?v={v}" defer></script>'
+             '<script src="/static/comments.js?v={v}" defer></script></head>'
              '<body><div class="shell">{nav}<main>{body}</main></div></body></html>',
              meta=meta, title=title, v=STATIC_VERSION, nav=nav, body=body, app=APP_NAME, light=THEME["light"],
              dark=THEME["dark"])
@@ -149,7 +150,8 @@ SW = """// SHAFT's service worker (PLAN-pwa P1), written by web_pages.service_wo
 // fragment, file and POST goes to the server as it always did: nothing private is ever cached.
 const VERSION = "@V@";
 const CACHE = "shaft-" + VERSION;
-const SHELL = ["/offline", "/static/web.css?v=@V@", "/static/web.js?v=@V@", "/static/favicon.svg?v=@V@",
+const SHELL = ["/offline", "/static/web.css?v=@V@", "/static/web.js?v=@V@", "/static/comments.js?v=@V@",
+               "/static/favicon.svg?v=@V@",
                "/static/icon-192.png?v=@V@"];
 
 self.addEventListener("install", (ev) => {
