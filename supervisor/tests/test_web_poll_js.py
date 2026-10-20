@@ -60,6 +60,7 @@ setTimeout(() => {                       // 2.05 s: the first poll (sent at 2 s)
 
 HEADER_HARNESS = r"""
 const POLL_LIMIT_MS = 15000, net = { down: 0 };
+const pairAgain = () => false;
 const busyIn = () => false, netNote = () => {}, checkVersion = () => {};
 const textOf = s => s, toBottom = () => {};
 globalThis.setTimeout = () => 1;
