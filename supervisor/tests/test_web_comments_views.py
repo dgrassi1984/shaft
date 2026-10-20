@@ -1,0 +1,176 @@
+"""Comment threads in the documents panel (PLAN-comments.md §6.1)."""
+from __future__ import annotations
+
+import html
+import json
+import re
+import unittest
+
+from supervisor.web_views import docs_panel, threads_list
+
+HOSTILE = '"><script>x</script>'
+LISTING = [{"path": "plan.md", "bytes": 12}, {"path": "notes.md", "bytes": 4}]
+TS = "2026-10-20T15:04:03"
+_DEFAULT_ANCHOR = object()
+
+
+def post(pid="p1", by="daniele", text="hello", ts=TS, sent="web-1#1", **extra) -> dict:
+    row = {"pid": pid, "by": by, "text": text, "ts": ts, "sent": sent}
+    row.update(extra)
+    return row
+
+
+def thr(id="c1", state="open", by="daniele", sha="abc", anchor=_DEFAULT_ANCHOR, posts=None,
+        unsectioned=None) -> dict:
+    if anchor is _DEFAULT_ANCHOR:
+        anchor = {"exact": "quoted line", "prefix": "pre", "suffix": "suf", "start": 4}
+    return {"id": id, "doc": "plan.md", "by": by, "state": state, "sha": sha, "anchor": anchor, "created": TS,
+            "posts": [post()] if posts is None else posts, "unsectioned": unsectioned or []}
+
+
+def panel(**kw) -> str:
+    args = dict(name="ada", listing=LISTING, open_path="plan.md", text="Hello\n", sha="abc", marked=set())
+    args.update(kw)
+    return str(docs_panel(**args))
+
+
+class CommentViewsTest(unittest.TestCase):
+    def test_defaults_are_byte_identical(self):
+        listing = [{"path": "plan.md", "bytes": 12}, {"path": "a b.md", "bytes": 1}]
+        marked = {"plan.md"}
+        bare = docs_panel("ada", listing, "plan.md", "Hello\n", "abc", marked)
+        explicit = docs_panel("ada", listing, "plan.md", "Hello\n", "abc", marked, problem="", saved=None,
+                              threads=None, counts=None, thread="")
+        self.assertEqual(bare, explicit)
+        self.assertNotIn("data-threads", str(bare))
+        self.assertNotIn("data-comment-doc", str(bare))
+        self.assertNotIn("ccount", str(bare))
+        self.assertEqual(docs_panel("ada", listing, "plan.md", None, "abc", marked),
+                         docs_panel("ada", listing, "plan.md", None, "abc", marked, threads=None, counts=None))
+        self.assertEqual(docs_panel("ada", listing, "plan.md", "Hello\n", "abc", marked, problem="nope"),
+                         docs_panel("ada", listing, "plan.md", "Hello\n", "abc", marked, problem="nope",
+                                    threads=None, counts=None))
+        self.assertEqual(str(threads_list("ada", "plan.md", "abc", [])), "")
+
+    def test_counts_appear_on_rows_with_open_comments(self):
+        html_out = panel(counts={"plan.md": 3, "notes.md": 0})
+        self.assertIn('data-open-doc="plan.md" class="on" title="12 bytes">plan.md '
+                      '<span class="ccount" title="open comments">💬 3</span></a>', html_out)
+        self.assertIn('data-open-doc="notes.md" class="" title="4 bytes">notes.md</a>', html_out)
+        self.assertNotIn("notes.md <span", html_out)
+        self.assertIn('data-threads="[]"', html_out)
+        self.assertIn('data-comment-doc aria-label="Comment on the whole document"', html_out)
+        self.assertNotIn('class="threads"', html_out)
+
+    def test_open_thread_shows_quote_resolve_and_sits_under_the_title(self):
+        t = thr()
+        html_out = panel(threads=[t])
+        self.assertIn('data-edit-doc>Edit</button><button type="button" class="small" data-comment-doc '
+                      'aria-label="Comment on the whole document">💬</button><button type="button" class="copy',
+                      html_out)
+        self.assertIn('Copy</button></div><details class="threads" data-key="threads-plan.md">'
+                      '<summary>💬 1 open</summary>', html_out)
+        self.assertNotIn('data-key="threads-plan.md" open>', html_out)
+        self.assertIn('<article class="thread" id="thread-c1" data-thread="c1"><b>c1</b> <q>quoted line</q>', html_out)
+        self.assertNotIn("by daniele", html_out)
+        self.assertIn('hidden data-detached-note>text no longer in the document</p>', html_out)
+        self.assertNotIn("the document changed since this comment", html_out)
+        self.assertIn('class="who">you <span class="dim">15:04</span></div>', html_out)
+        self.assertIn('data-reply-thread="c1">Reply</button>', html_out)
+        self.assertIn('data-post="/docs/ada/comment/state" data-after="comment-saved"', html_out)
+        self.assertIn('name="thread" value="c1"', html_out)
+        self.assertIn('name="state" value="resolved"', html_out)
+        self.assertIn(">Resolve</button>", html_out)
+        self.assertNotIn(">Reopen</button>", html_out)
+        payload = json.dumps([{"id": "c1", "state": "open", "anchor": t["anchor"]}], separators=(",", ":"))
+        self.assertIn('data-threads="' + html.escape(payload, quote=True) + '"', html_out)
+        long = "q" * 301
+        cut = str(threads_list("ada", "plan.md", "abc",
+                               [thr(anchor={"exact": long, "prefix": "", "suffix": "", "start": 0})]))
+        self.assertIn("<q>" + ("q" * 300) + "…</q>", cut)
+        self.assertNotIn("q" * 301, cut)
+
+    def test_resolved_threads_fold_and_reopen(self):
+        html_out = str(threads_list("ada", "plan.md", "abc",
+                                    [thr(id="c1"), thr(id="c2", state="resolved", posts=[post(pid="p2")])]))
+        self.assertIn("<summary>💬 1 open, 1 resolved</summary>", html_out)
+        self.assertLess(html_out.index('id="thread-c1"'), html_out.index('class="resolved"'))
+        self.assertLess(html_out.index('data-key="resolved-plan.md"'), html_out.index('id="thread-c2"'))
+        self.assertIn("<summary>1 resolved</summary>", html_out)
+        self.assertIn('name="state" value="open"', html_out)
+        self.assertIn(">Reopen</button>", html_out)
+        self.assertIn(">Resolve</button>", html_out)
+
+    def test_whole_document_thread_has_no_quote(self):
+        html_out = str(threads_list("ada", "plan.md", "abc", [thr(anchor=None)]))
+        self.assertIn('<span class="dim">the whole document</span>', html_out)
+        self.assertNotIn("<q>", html_out)
+        self.assertNotIn("data-detached-note", html_out)
+        page = panel(threads=[thr(anchor=None)])
+        self.assertIn("&quot;anchor&quot;:null", page)
+
+    def test_unsent_post_is_private_with_edit_delete_send(self):
+        html_out = str(threads_list("ada", "plan.md", "abc", [thr(posts=[post(sent=None, text="draft note")])]))
+        self.assertIn('class="post unsent" data-pid="p1"', html_out)
+        self.assertIn("only you see this", html_out)
+        self.assertIn('data-edit-post="p1">Edit</button>', html_out)
+        self.assertIn('data-post="/docs/ada/comment/delete" data-confirm="Delete this comment?" '
+                      'data-after="comment-saved"', html_out)
+        self.assertIn('name="pid" value="p1"', html_out)
+        self.assertIn(">Delete</button>", html_out)
+        self.assertIn('data-post="/docs/ada/comment/send" data-after="comment-saved"', html_out)
+        self.assertIn(">Send to ada</button>", html_out)
+        sent = str(threads_list("ada", "plan.md", "abc", [thr(posts=[post(sent="web-9#2")])]))
+        self.assertNotIn("unsent", sent)
+        self.assertNotIn("only you see this", sent)
+        self.assertNotIn("data-edit-post", sent)
+        self.assertNotIn("comment/delete", sent)
+        self.assertNotIn("comment/send", sent)
+        answered = str(threads_list("ada", "plan.md", "abc",
+                                    [thr(posts=[post(by="ada", sent=None, turn="web-9#3")])]))
+        self.assertNotIn("unsent", answered)
+        self.assertNotIn("only you see this", answered)
+
+    def test_instance_opened_thread_names_the_author(self):
+        html_out = str(threads_list("ada", "plan.md", "abc", [thr(
+            by="ada", posts=[post(by="ada", text="started", sent="web-1#3", turn="web-1#3")])]))
+        self.assertIn('<b>c1</b> <span class="dim">by ada</span> <q>quoted line</q>', html_out)
+        self.assertIn('class="who">ada <span class="dim">15:04</span>', html_out)
+        self.assertNotIn('class="who">you ', html_out)
+
+    def test_unsectioned_reply_links_the_chat_turn(self):
+        html_out = str(threads_list("ada", "plan.md", "abc", [thr(id="c7", unsectioned=["web-1#5", "web-1#6"])]))
+        self.assertEqual(html_out.count("data-chat-turn"), 2)
+        self.assertIn('<a href="#" data-chat-turn="web-1#5">answered in the chat, without a section for c7 →</a>',
+                      html_out)
+        self.assertIn('data-chat-turn="web-1#6"', html_out)
+
+    def test_changed_sha_says_the_document_moved(self):
+        moved = str(threads_list("ada", "plan.md", "new", [thr(sha="old")]))
+        self.assertIn('<p class="dim">the document changed since this comment</p>', moved)
+        self.assertIn("data-detached-note", moved)
+        same = str(threads_list("ada", "plan.md", "abc", [thr(sha="abc")]))
+        self.assertNotIn("the document changed since this comment", same)
+
+    def test_active_thread_is_open_and_marked(self):
+        html_out = str(threads_list("ada", "plan.md", "abc", [thr(id="c1"), thr(id="c2")], "c2"))
+        self.assertIn('<details class="threads" data-key="threads-plan.md" open>', html_out)
+        self.assertIn('<article class="thread" id="thread-c1" data-thread="c1">', html_out)
+        self.assertIn('<article class="thread active" id="thread-c2" data-thread="c2">', html_out)
+        wired = panel(threads=[thr(id="c1"), thr(id="c2")], thread="c2")
+        self.assertIn('data-key="threads-plan.md" open>', wired)
+        self.assertIn('class="thread active" id="thread-c2"', wired)
+
+    def test_hostile_text_never_appears_unescaped(self):
+        anchor = {"exact": HOSTILE, "prefix": HOSTILE, "suffix": "s", "start": 0}
+        t = thr(by=HOSTILE, anchor=anchor, posts=[post(by=HOSTILE, text=HOSTILE, sent="web-1#1")])
+        html_out = panel(threads=[t], counts={"plan.md": 1}, thread="c1")
+        self.assertNotIn(HOSTILE, html_out)
+        self.assertNotIn("<script", html_out)
+        self.assertNotIn("</script>", html_out)
+        attr = re.search(r'data-threads="([^"]*)"', html_out)
+        self.assertIsNotNone(attr)
+        self.assertNotIn("<", attr.group(1))
+        self.assertNotIn(">", attr.group(1))
+        self.assertIn("&lt;script&gt;", attr.group(1))
+        self.assertGreaterEqual(html_out.count("&lt;script&gt;"), 3)

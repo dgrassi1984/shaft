@@ -616,14 +616,83 @@ def _overwritten(saved: dict | None, sha: str, text: str | None) -> Html:
              p=saved.get("path", ""), sha=sha, yours=saved["text"])
 
 
+def threads_list(name: str, doc: str, sha: str, threads: list[dict], active: str = "") -> Html:
+    """Open threads on one document, resolved ones folded under them. Nothing when there are no threads."""
+    if not threads:
+        return Html("")
+
+    def post(p: dict) -> Html:
+        # Unsent is the operator's note the instance has not been given: no send id and no answer turn.
+        unsent = p.get("sent") is None and not p.get("turn")
+        who = "you" if p["by"] == "daniele" else p["by"]
+        buttons = Html("")
+        if unsent:
+            buttons = join([
+                h('<button type="button" class="small" data-edit-post="{pid}">Edit</button>', pid=p["pid"]),
+                h('<form class="act" data-post="/docs/{n}/comment/delete" data-confirm="Delete this comment?" '
+                  'data-after="comment-saved"><input type="hidden" name="pid" value="{pid}">'
+                  '<button type="submit" class="small">Delete</button></form>', n=q(name), pid=p["pid"]),
+                h('<form class="act" data-post="/docs/{n}/comment/send" data-after="comment-saved">'
+                  '<input type="hidden" name="pid" value="{pid}">'
+                  '<button type="submit" class="small">Send to {who}</button></form>',
+                  n=q(name), pid=p["pid"], who=name),
+            ])
+        return h('<div class="post{u}" data-pid="{pid}"><div class="who">{who} <span class="dim">{ts}</span>{warn}'
+                 '</div>{text}{btns}</div>',
+                 u=Html(" unsent") if unsent else "", pid=p["pid"], who=who, ts=p["ts"][11:16],
+                 warn=Html(' <span class="warn">only you see this</span>') if unsent else "",
+                 text=markdown(p["text"]), btns=buttons)
+
+    def one(t: dict) -> Html:
+        by = h(' <span class="dim">by {by}</span>', by=t["by"]) if t["by"] != "daniele" else Html("")
+        anchor = t["anchor"]
+        if anchor is None:
+            quote, detached = Html(' <span class="dim">the whole document</span>'), Html("")
+        else:
+            exact = anchor["exact"]
+            if len(exact) > 300:
+                exact = exact[:300] + "…"
+            quote = h(' <q>{t}</q>', t=exact)
+            detached = Html('<p class="dim detached" hidden data-detached-note>text no longer in the document</p>')
+        changed = (Html('<p class="dim">the document changed since this comment</p>')
+                   if t["sha"] != sha else Html(""))
+        refs = join(h('<p class="dim"><a href="#" data-chat-turn="{ref}">answered in the chat, without a section '
+                      'for {tid} →</a></p>', ref=ref, tid=t["id"]) for ref in t.get("unsectioned") or [])
+        resolving = t["state"] == "resolved"
+        return h('<article class="thread{on}" id="thread-{tid}" data-thread="{tid}"><b>{tid}</b>{by}{quote}{det}'
+                 '{chg}{posts}{refs}<button type="button" class="small" data-reply-thread="{tid}">Reply</button>'
+                 '<form class="act" data-post="/docs/{n}/comment/state" data-after="comment-saved">'
+                 '<input type="hidden" name="thread" value="{tid}"><input type="hidden" name="state" value="{st}">'
+                 '<button type="submit" class="small">{label}</button></form></article>',
+                 on=Html(" active") if t["id"] == active else "", tid=t["id"], by=by, quote=quote, det=detached,
+                 chg=changed, posts=join(post(p) for p in t["posts"]), refs=refs, n=q(name),
+                 st="open" if resolving else "resolved", label="Reopen" if resolving else "Resolve")
+
+    opened = [t for t in threads if t["state"] != "resolved"]
+    done = [t for t in threads if t["state"] == "resolved"]
+    body = join(one(t) for t in opened)
+    if done:
+        body = join([body, h('<details class="resolved" data-key="resolved-{doc}"><summary>{m} resolved</summary>'
+                             '{items}</details>', doc=doc, m=len(done), items=join(one(t) for t in done))])
+    summary = (h('💬 {n} open, {m} resolved', n=len(opened), m=len(done)) if done
+               else h('💬 {n} open', n=len(opened)))
+    return h('<details class="threads" data-key="threads-{doc}"{o}><summary>{s}</summary>{body}</details>',
+             doc=doc, o=Html(" open") if active else "", s=summary, body=body)
+
+
 def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None, sha: str, marked: set[str],
-               problem: str = "", saved: dict | None = None) -> Html:
+               problem: str = "", saved: dict | None = None, threads: list[dict] | None = None,
+               counts: dict | None = None, thread: str = "") -> Html:
     """The documents panel beside the chat (/fragment/docs/<name>): the list, and the open one rendered."""
     from .docs import DIR
-    items = [h('<a href="?doc={u}" data-open-doc="{p}" class="{cls}" title="{b} bytes">{dot}{p}</a>', u=q(d["path"]),
-               p=d["path"], b=d["bytes"], cls="on" if d["path"] == open_path else "",
-               dot=Html('<span class="mark" title="changed in this chat">●</span> ') if d["path"] in marked else Html(""))
-             for d in listing]
+    items = []
+    for d in listing:
+        n = 0 if counts is None else counts.get(d["path"]) or 0
+        items.append(h('<a href="?doc={u}" data-open-doc="{p}" class="{cls}" title="{b} bytes">{dot}{p}{ccount}</a>',
+                       u=q(d["path"]), p=d["path"], b=d["bytes"], cls="on" if d["path"] == open_path else "",
+                       dot=Html('<span class="mark" title="changed in this chat">●</span> ')
+                       if d["path"] in marked else Html(""),
+                       ccount=h(' <span class="ccount" title="open comments">💬 {n}</span>', n=n) if n > 0 else ""))
     new = h('<details class="newdoc" data-key="newdoc"><summary>New document</summary><form data-post="/docs/{n}/save" '
             'data-after="doc-saved"><input type="hidden" name="sha" value="none"><input name="path" required '
             'placeholder="name, e.g. plan" pattern="[A-Za-z0-9][A-Za-z0-9 _.\\-]*" maxlength="80">'
@@ -639,17 +708,29 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
     elif open_path and text is not None:
         if saved:
             saved = {**saved, "name": name, "path": open_path}
-        view = h('<div class="docview" data-doc="{p}" data-sha="{s}"><div class="doctitle"><b>{p}</b>'
-                 '<button type="button" class="small" data-edit-doc>Edit</button>'
+        # Absent on both sides (the call the panel has always had) leaves this branch byte-identical.
+        commenting = threads is not None or counts is not None
+        tattr, cbtn, tlist = Html(""), Html(""), Html("")
+        if commenting:
+            import json
+            payload = json.dumps([{"id": t["id"], "state": t["state"], "anchor": t["anchor"]}
+                                  for t in (threads or [])], separators=(",", ":"))
+            tattr = h(' data-threads="{j}"', j=payload)
+            cbtn = Html('<button type="button" class="small" data-comment-doc '
+                        'aria-label="Comment on the whole document">💬</button>')
+            tlist = threads_list(name, open_path, sha, threads or [], thread)
+        view = h('<div class="docview" data-doc="{p}" data-sha="{s}"{tattr}><div class="doctitle"><b>{p}</b>'
+                 '<button type="button" class="small" data-edit-doc>Edit</button>{cbtn}'
                  '<button type="button" class="copy small" data-copy-doc title="copy the document\'s Markdown">Copy</button>'
-                 '</div>{over}<div class="docmd">{md}</div><textarea class="raw" hidden readonly>{raw}</textarea>'
+                 '</div>{tlist}{over}<div class="docmd">{md}</div><textarea class="raw" hidden readonly>{raw}</textarea>'
                  '<form class="docedit" data-post="/docs/{n}/save" data-after="doc-saved" hidden>'
                  '<input type="hidden" name="path" value="{p}"><input type="hidden" name="sha" value="{s}">'
                  '<textarea name="text" spellcheck="true">{raw}</textarea><div class="actions">'
                  '<button type="submit">Save</button><button type="button" data-cancel-edit>Cancel</button>'
                  '<span class="dim">{n} hears of your change: with your next message, or now if it is replying</span>'
                  '</div><div class="bad wrap" data-refusal></div></form></div>',
-                 p=open_path, s=sha, n=q(name), over=_overwritten(saved, sha, text),
+                 p=open_path, s=sha, n=q(name), tattr=tattr, cbtn=cbtn, tlist=tlist,
+                 over=_overwritten(saved, sha, text),
                  md=markdown(text) if text.strip() else Html('<p class="dim">(empty)</p>'), raw=text)
     elif open_path:
         view = h('<p class="dim">{p} is not there (any more).</p>', p=open_path)
