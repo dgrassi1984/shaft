@@ -2,7 +2,7 @@
   "use strict";
 
   // Offsets are UTF-16, like DOM Range offsets. Synthetic separators have DOM boundary
-  // points too; M3 can split highlights over the non-synthetic spans without changing HTML.
+  // points too; highlights split over the non-synthetic spans without changing HTML.
   function walk(root) {
     let text = "";
     const spans = [];
@@ -52,7 +52,135 @@
     };
     return { text, map };
   }
-  window.shaftComments = { walk };
+  function locate(text, anchor) {
+    const exact = anchor.exact;
+    if (!exact) return { detached: true };
+    const hits = [];
+    for (let at = text.indexOf(exact); at !== -1; at = text.indexOf(exact, at + 1)) hits.push(at);
+    if (!hits.length) return { detached: true };
+    if (hits.length === 1) return { start: hits[0], end: hits[0] + exact.length };
+    const prefix = anchor.prefix || "", suffix = anchor.suffix || "";
+    const neighbours = hits.filter(at =>
+      text.slice(Math.max(0, at - prefix.length), at) === prefix &&
+      text.slice(at + exact.length, at + exact.length + suffix.length) === suffix);
+    if (neighbours.length === 1) {
+      return { start: neighbours[0], end: neighbours[0] + exact.length };
+    }
+    const candidates = neighbours.length ? neighbours : hits;
+    if (!Number.isFinite(anchor.start)) return { ambiguous: true };
+    let best = null, distance = Infinity, tied = false;
+    for (const at of candidates) {
+      const delta = Math.abs(at - anchor.start);
+      if (delta < distance) { best = at; distance = delta; tied = false; }
+      else if (delta === distance) tied = true;
+    }
+    return tied ? { ambiguous: true } : { start: best, end: best + exact.length };
+  }
+  window.shaftComments = { walk, locate };
+  // The text helpers also load in Node without a browser DOM.
+  if (typeof document === "undefined") return;
+
+  let highlighted = [];
+  let lastActive = null;
+  const hasHighlights = () => window.CSS && window.CSS.highlights && typeof window.Highlight === "function";
+  function paintActive() {
+    if (!hasHighlights()) return;
+    const active = new window.Highlight();
+    for (const entry of highlighted) {
+      for (const match of entry.matches) {
+        if (match.article && match.article.classList.contains("active")) {
+          for (const range of match.ranges) active.add(range);
+        }
+      }
+    }
+    // Reinsert last so the active thread paints over the other open threads.
+    window.CSS.highlights.delete("comment-active");
+    window.CSS.highlights.set("comment-active", active);
+  }
+  function activate(article, view) {
+    view.querySelectorAll("article[data-thread]").forEach(a => a.classList.toggle("active", a === article));
+    const panel = view.closest("#docs");
+    lastActive = { id: article.dataset.thread, doc: view.dataset.doc, poll: panel && panel.dataset.poll };
+    for (let p = article.parentElement; p && p !== panel; p = p.parentElement) {
+      if (p.tagName === "DETAILS") p.open = true;
+    }
+    article.scrollIntoView({ block: "nearest" });
+    paintActive();
+  }
+  function rebuildHighlights() {
+    if (!hasHighlights()) return;
+    window.CSS.highlights.delete("comment-open");
+    window.CSS.highlights.delete("comment-active");
+    highlighted = [];
+    const all = new window.Highlight();
+    const panel = document.getElementById("docs");
+    for (const view of panel ? panel.querySelectorAll(".docview[data-threads]") : []) {
+      const md = view.querySelector(".docmd");
+      if (!md) continue;
+      const { text, map } = walk(md);
+      const articles = new Map([...view.querySelectorAll("article[data-thread]")].map(a => [a.dataset.thread, a]));
+      if (lastActive && lastActive.doc === view.dataset.doc && lastActive.poll === panel.dataset.poll) {
+        const article = articles.get(lastActive.id);
+        if (article) articles.forEach(a => a.classList.toggle("active", a === article));
+      }
+      const matches = [];
+      highlighted.push({ md, view, map, matches });
+      for (const thread of JSON.parse(view.dataset.threads)) {
+        if (thread.state !== "open" || !thread.anchor) continue;
+        const match = locate(text, thread.anchor);
+        const article = articles.get(thread.id);
+        if (article) {
+          article.classList.toggle("detached", !!match.detached);
+          article.classList.toggle("ambiguous", !!match.ambiguous);
+          const note = article.querySelector("p[data-detached-note]");
+          if (note) {
+            note.hidden = !(match.detached || match.ambiguous);
+            note.textContent = match.ambiguous ? "text found more than once" : "text no longer in the document";
+          }
+        }
+        if (match.detached || match.ambiguous) continue;
+        const start = map.pointAt(match.start, "start"), end = map.pointAt(match.end, "end");
+        const ranges = [];
+        if (start && end) {
+          for (const span of map.spans) {
+            if (span.synthetic || span.end <= match.start || span.start >= match.end || span.start === span.end) continue;
+            const range = document.createRange();
+            range.setStart(span.node, span.node === start.node ? start.offset : span.from);
+            range.setEnd(span.node, span.node === end.node ? end.offset : span.to);
+            ranges.push(range);
+            all.add(range);
+          }
+        }
+        matches.push({ ...match, article, ranges });
+      }
+    }
+    window.CSS.highlights.set("comment-open", all);
+    paintActive();
+  }
+  document.addEventListener("click", ev => {
+    if (!hasHighlights() || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed) return;
+    const entry = highlighted.find(item => item.md.contains(ev.target));
+    if (!entry) return;
+    let node, offset;
+    if (document.caretPositionFromPoint) {
+      const point = document.caretPositionFromPoint(ev.clientX, ev.clientY);
+      if (!point) return;
+      node = point.offsetNode; offset = point.offset;
+    } else if (document.caretRangeFromPoint) {
+      const range = document.caretRangeFromPoint(ev.clientX, ev.clientY);
+      if (!range) return;
+      node = range.startContainer; offset = range.startOffset;
+    } else return;
+    const at = entry.map.offsetAt(node, offset);
+    let shortest = null;
+    for (const match of entry.matches) {
+      if (match.article && match.start <= at && at < match.end &&
+          (!shortest || match.end - match.start < shortest.end - shortest.start)) shortest = match;
+    }
+    if (shortest) activate(shortest.article, entry.view);
+  });
 
   function selection() {
     const s = window.getSelection();
@@ -202,14 +330,16 @@
     if (!view || view.dataset.doc !== pendingThread.doc) return;
     const article = document.getElementById(`thread-${pendingThread.id}`);
     if (!article || !view.contains(article)) return;
-    view.querySelectorAll("article[data-thread]").forEach(a => a.classList.toggle("active", a === article));
-    for (let p = article.parentElement; p && p !== panel; p = p.parentElement) {
-      if (p.tagName === "DETAILS") p.open = true;
-    }
-    article.scrollIntoView({ block: "nearest" });
+    activate(article, view);
     pendingThread = null;
   }
-  document.addEventListener("shaft:swapped", ev => { if (ev.target.id === "docs") revealThread(); });
+  document.addEventListener("shaft:swapped", ev => {
+    if (ev.target.id !== "docs") return;
+    rebuildHighlights();
+    revealThread();
+  });
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", rebuildHighlights, { once: true });
+  else rebuildHighlights();
   document.addEventListener("click", ev => {
     const target = ev.target.closest && ev.target.closest("[data-comment-doc], [data-reply-thread], [data-edit-post], [data-chat-turn], [data-open-doc]");
     if (!target || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
@@ -235,7 +365,7 @@
     if (target.matches("[data-reply-thread]")) open(view, "reply", { thread: target.dataset.replyThread });
     else if (target.matches("[data-edit-post]")) {
       const post = [...view.querySelectorAll(".post[data-pid]")].find(p => p.dataset.pid === target.dataset.editPost);
-      if (post) open(view, "edit", { pid: target.dataset.editPost, text: post.textContent.trim() });
+      if (post) open(view, "edit", { pid: target.dataset.editPost, text: post.dataset.text ?? post.textContent.trim() });
     } else open(view, "new");
   });
 })();
