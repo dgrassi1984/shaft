@@ -122,6 +122,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_version.py` | `VersionTest` | `done` |
 | `supervisor/tests/test_vision.py` | `FakeModels`, `Case`, `CapabilityTest`, `PrepareTest`, `DescribeTest`, `ReplayAttachmentsTest`, `JudgeNoteTest`, `TemplateTest`, `AnswerEndToEndTest` | `png`, `image_part` |
 | `supervisor/tests/test_web.py` | `WebTest`, `WhoMayUseItTest`, `PairingTest`, `ForgedRequestsTest`, `EscapingTest`, `OverviewTest`, `HostsTest`, `PortTest`, `FaviconTest` | `snap` |
+| `supervisor/tests/test_web_a11y.py` | `FieldNamesTest`, `StylesTest` | `declarations`, `contrast` |
 | `supervisor/tests/test_web_actions.py` | `ActionsTest`, `EveryActionRunsItsCommand`, `RefusedWhereTheTuiRefuses`, `AGuardTheOperatorForces`, `PagesShowEachActionAsItRuns`, `Issue20TimeoutTest`, `RecapLockTest`, `NewVerbsTest`, `OneBrokenInstanceTest` | `actions_services` |
 | `supervisor/tests/test_web_archive.py` | `ArchiveTest` | — |
 | `supervisor/tests/test_web_chat.py` | `FakeApi`, `ChatTest`, `RelayTest`, `OlderApiTest`, `FilesTest`, `ChatRoutesTest`, `ChatCentricTest`, `DocsInChatTest`, `DocsPanelTest`, `DocEditsTest`, `DocSaveRouteTest`, `DocsButtonTest`, `ClearTest`, `ClearRouteTest`, `SaveRecordTest`, `LifecycleRaceTest`, `ArchivedClearTest`, `ClearInHeaderTest`, `NetworkTest`, `ResendTest`, `PushWhenTest` | `chunk` |
