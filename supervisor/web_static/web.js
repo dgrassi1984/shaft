@@ -58,6 +58,41 @@
     box._t = setTimeout(() => { box.className = ""; }, bad ? 10000 : 5000);
   }
 
+  let reloading = false;
+  const reloadFailure = "shaft.reload.failure";
+  async function hardReload() {
+    if (reloading) return;
+    reloading = true;
+    toast("Clearing the app's cache…");
+    const failed = new Set();
+    // The worker is updated, not unregistered: unregistering it would drop this device's push subscription
+    // (notifications), which belongs to the registration. Pages come from the network anyway (sw.js).
+    try {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      for (const reg of registrations) {
+        try { await reg.update(); } catch (e) { failed.add("service worker update"); }
+      }
+    } catch (e) { failed.add("service worker update"); }
+    try {
+      const keys = await caches.keys();
+      for (const key of keys.filter(k => k.startsWith("shaft-"))) {
+        try { await caches.delete(key); } catch (e) { failed.add("app cache deletion"); }
+      }
+    } catch (e) { failed.add("app cache deletion"); }
+    if (failed.size) {
+      const message = `Reloaded, but failed: ${[...failed].join("; ")}.`;
+      try { sessionStorage.setItem(reloadFailure, message); }
+      catch (e) { toast(`${message} Could not save this notice for after reload.`, true); }
+    }
+    location.reload();
+  }
+  document.addEventListener("click", (ev) => {
+    const b = ev.target.closest && ev.target.closest("[data-hard-reload]");
+    if (!b) return;
+    ev.preventDefault();
+    return hardReload();
+  });
+
   // A failed refresh is said, above the content it would have replaced (which stays, marked stale): an empty or
   // frozen panel must never pass for "nothing to show".
   function stale(el, why) {
@@ -89,7 +124,7 @@
     const b = document.createElement("button");
     b.type = "button";
     b.textContent = "SHAFT was updated — reload";
-    b.addEventListener("click", () => location.reload());
+    b.setAttribute("data-hard-reload", "");
     bar.appendChild(b);
     document.body.appendChild(bar);
   }
@@ -185,7 +220,8 @@
     const later = (ms) => { clearTimeout(timer); timer = setTimeout(tick, ms); };
     async function tick() {
       const url = el.dataset.poll;                  // read each time: the documents panel changes what it shows
-      if (running || !el.isConnected) return;
+      if (!el.isConnected) return;
+      if (running) { again = true; return; }
       const hidden = document.visibilityState !== "visible";
       // Slower, not stopped: a hidden tab (the rail keeps the unread marks and the badge), a panel not on screen
       // (the documents: an instance's first document must still make it appear).
@@ -221,6 +257,7 @@
             const restoreFocus = focused && el.contains(focused) && focused.matches(controls);
             const key = restoreFocus ? focusKey(focused) : null;
             const open = new Set([...el.querySelectorAll("details[data-key][open]")].map(d => d.dataset.key));
+            const hover = new Set([...el.querySelectorAll("details[data-key][open]")].filter(d => d._hover).map(d => d.dataset.key));
             const shut = new Set([...el.querySelectorAll("details[data-key]:not([open])")].map(d => d.dataset.key));
             const box = el.closest("[data-scroll]");      // a feed that scrolls in its own box (the chat), else the page
             const atBottom = box && box.scrollHeight > box.clientHeight
@@ -233,6 +270,7 @@
             el.dataset.last = body;
             el.querySelectorAll("details[data-key]").forEach(d => {
               if (open.has(d.dataset.key)) d.open = true;
+              if (hover.has(d.dataset.key)) d._hover = true;
               if (shut.has(d.dataset.key)) d.open = false;
             });
             if (restoreFocus) {
@@ -648,7 +686,41 @@
     return turn;
   }
 
+  document.addEventListener("mouseover", (ev) => {
+    const d = ev.target && ev.target.closest && ev.target.closest('details[data-key="busy-state"]');
+    if (d && !d.open && !touchOnly()) { d.open = true; d._hover = true; }
+  });
+  document.addEventListener("mouseout", (ev) => {
+    const d = ev.target && ev.target.closest && ev.target.closest('details[data-key="busy-state"]');
+    if (d && d._hover && (!ev.relatedTarget || !d.contains || !d.contains(ev.relatedTarget))) {
+      d.open = false;
+      delete d._hover;
+    }
+  });
+  document.addEventListener("click", (ev) => {
+    const s = ev.target && ev.target.closest && ev.target.closest('details[data-key="busy-state"] > summary');
+    const busy = s && s.closest('details[data-key="busy-state"]');
+    if (busy) {
+      ev.preventDefault();
+      if (busy._hover) delete busy._hover;
+      else busy.open = !busy.open;
+    }
+    document.querySelectorAll("details.menu[open]").forEach(d => {
+      if (d !== busy && (!ev.target || !d.contains || !d.contains(ev.target))) {
+        d.open = false;
+        delete d._hover;
+      }
+    });
+  });
+
   document.addEventListener("keydown", (ev) => {
+    const busySummary = ev.target && ev.target.closest && ev.target.closest('details[data-key="busy-state"] > summary');
+    if (busySummary && (ev.key === "Enter" || ev.key === " ")) {
+      ev.preventDefault();
+      const d = busySummary.closest('details[data-key="busy-state"]');
+      if (d) { delete d._hover; d.open = !d.open; }
+      return;
+    }
     const form = ev.target.closest && ev.target.closest("form[data-files]");
     // Enter sends on a computer (Shift-Enter: a new line). A touch-only device has no Shift: there Return is a new
     // line and the Send button sends (docs/plans/PLAN-pwa P0: on the iPhone a message could not have two lines).
@@ -662,7 +734,7 @@
     // Shortcuts on a chat: / writes, Esc closes a menu, Alt-↑ / Alt-↓ go to the chat above or below in the rail.
     const typing = ev.target.closest && ev.target.closest("input, textarea, select, [contenteditable]");
     if (ev.key === "Escape") {
-      document.querySelectorAll("details.menu[open]").forEach(d => { d.open = false; });
+      document.querySelectorAll("details.menu[open]").forEach(d => { d.open = false; delete d._hover; });
       return;
     }
     if (ev.key === "/" && !typing && composer()) {
@@ -1004,10 +1076,11 @@
   // panel, which then refreshes it as the instance writes it; the address keeps ?doc= so a reload shows the same one.
   // What the panel polls for: one document (?doc=), or the list (?list=1: without it the server opens what this chat
   // last changed, so ← Documents would bounce straight back to it).
-  function docsPoll(panel, doc) {
+  function docsPoll(panel, doc, thread = "") {
     const poll = new URL(panel.dataset.poll, location.href);
     for (const k of ["doc", "thread", "list"]) poll.searchParams.delete(k);
     poll.searchParams.set(doc ? "doc" : "list", doc || "1");
+    if (doc && thread) poll.searchParams.set("thread", thread);
     panel.dataset.poll = poll.pathname + poll.search;
   }
   function docDirty(view) {
@@ -1110,13 +1183,18 @@
     if (!a || !panel || ev.metaKey || ev.ctrlKey) return;
     ev.preventDefault();
     const doc = a.dataset.openDoc;
+    showDocs(true, a);                              // closed, or on a phone a sheet not yet open: open it
+    const view = document.querySelector("#docs .docview.editing");
+    if (view && view.dataset.doc === doc && docDirty(view) && !a.dataset.openThread) return;
     leaveDoc(() => {
-      docsPoll(panel, doc);
+      docsPoll(panel, doc, a.dataset.openThread);
       const u = new URL(location.href);
       u.searchParams.set("doc", doc);
+      if (a.dataset.openThread) u.searchParams.set("thread", a.dataset.openThread);
+      else u.searchParams.delete("thread");
       history.replaceState(null, "", u);
-      if (panel._tick) panel._tick();
-      showDocs(true, a);                              // closed, or on a phone a sheet not yet open: open it
+      showDocs(true, a);
+      refreshDocs();
     });
   });
   // Editing a document: the rendered view becomes its Markdown in a box; the panel stops refreshing until Save or
@@ -1333,11 +1411,21 @@
   function start() {
     region("toast", "status");
     region("announce", "status");
+    try {
+      const message = sessionStorage.getItem(reloadFailure);
+      if (message) {
+        toast(message, true);
+        sessionStorage.removeItem(reloadFailure);
+      }
+    } catch (e) { /* storage refused: the page still works */ }
     const grid = document.querySelector(".chatgrid");
     if (grid) {
       document.body.classList.add("chatapp");
-      try { if (localStorage.getItem("shaft.docs.closed")) grid.classList.add("hidedocs"); } catch (e) { /* none */ }
-      syncSheets();
+      if (new URL(location.href).searchParams.get("doc")) showDocs(true);
+      else {
+        try { if (localStorage.getItem("shaft.docs.closed")) grid.classList.add("hidedocs"); } catch (e) { /* none */ }
+        syncSheets();
+      }
       window.matchMedia("(max-width: 720px), (pointer: coarse) and (max-height: 520px)")
         .addEventListener("change", () => syncSheets());
       const observer = new ResizeObserver(() => syncSheets());

@@ -32,7 +32,8 @@ class InstanceDirCase(unittest.TestCase):
             (self.root / d).mkdir(parents=True)
         self.sup = self.tmp / "sup"
         self.patches = [mock.patch.object(metrics, "INSTANCES", self.instances),
-                        mock.patch.object(metrics, "SUP_DIR", self.sup)]
+                        mock.patch.object(metrics, "SUP_DIR", self.sup),
+                        mock.patch.object(judge, "JUDGE_EVERY", 1)]   # every run judged: sampling is JudgeLessOftenTest
         for p in self.patches:
             p.start()
 
@@ -293,7 +294,7 @@ class ValueTest(unittest.TestCase):
     def test_the_instance_reads_its_value_in_the_judgment_text(self):
         from supervisor import broker
         j = {**valued_j("2026-10-15T09:00:00", 1, "own_record", value_judge="haiku"),
-             "second": {"judge": "glm", **valued_j("x", 3)}}
+             "second": {**valued_j("x", 3), "judge": "glm"}}   # after the spread: a judge other than the main one
         text = broker.judgment_text(j)
         self.assertIn("Value 1/5, for own_record: output at 2026-10-15T09:00:00 (graded later by haiku)", text)
         self.assertIn("value 3/5", text)

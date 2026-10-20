@@ -68,6 +68,18 @@ and [chat design](plans/PLAN-webui-chat.md).
   live yet" with the guarded restarts; ports and paths shown, set in a terminal). A service action that would kill
   or cut off runs in progress (a scheduler restart, autonomy off, api/model/embed while runs use them) shows as
   **Force …**, asks first naming those runs, and is logged as `web: operator forced … past the guard`.
+- The navigation footer shows the web service's running version, including `+changes` for edits present at
+  start-up. It is also visible in the phone's chat list sheet. After HEAD moves, the next page load shows
+  `checked out: …` linking to Services. Services shows the checkout above the live table and a version for
+  every service, including the scheduler, alongside the existing older-code warning. Older records use their
+  saved commit; a service without a record says `unknown — restart to record`.
+- **Reload / update** in the navigation footer and the chat's ⋯ menu asks the service worker to update,
+  deletes only `shaft-*` app caches, then reloads the current page. The update notice uses the same action.
+  It keeps saved drafts, the pairing cookie and notifications (the worker is not unregistered: that would drop
+  this device's push subscription).
+  If cleanup fails or a browser API is missing, it still reloads and shows which step failed.
+  Only that notice is stored in sessionStorage, then removed after it is shown. If the browser blocks
+  sessionStorage, the notice cannot survive reload.
 - Unread marks clear when the current chat's reply is rendered in a visible tab. Config, Journal, earlier chats,
   and a failed feed refresh do not consume a new reply. Marks are shared across tabs in the same browser.
 - The chat: files and images both ways (drop them anywhere on the page, paste or pick; each is a chip you can take
@@ -83,14 +95,18 @@ and [chat design](plans/PLAN-webui-chat.md).
   Chat days are separated by date, using the supervisor’s local time. Today’s messages show only HH:MM;
   hover over a time for its full date and time.
   Markdown task lists use full-width items with a checkbox before the text. On phones, stacked Markdown
-  table labels use the heading’s plain text.
+  table labels use the heading’s plain text. Markdown headings step down by level and stay at least as large
+  as the paragraph under them, with more space above a heading than below it.
 - Each panel stays marked stale until its own refresh succeeds. The connection warning stays until every failed
   panel recovers. **↓ New below** appears only for a new turn below the visible area.
   Refreshes keep Manage open or closed, link focus, and activity scroll. Chat thumbnails reserve space;
   images loading keep the feed at the bottom if you have not scrolled up. After Save, focus returns to Edit
   and survives the document refresh.
-- The chat header refreshes every 1.5 seconds: state, model, today's spend, actions, busy warning, Clear and
-  Earlier chats. The open history list and ⋯ menu and keyboard focus survive refreshes; your draft and documents stay in place.
+- The chat header refreshes every 1.5 seconds: state, model, today's spend, actions, busy state icon, Clear and
+  Earlier chats. When the instance is busy and not writing a reply, an icon next to its name (⏳ in a cycle or
+  working, 💤 sleeping, ⏸ paused by you, 💬 in a conversation, • other states) opens the busy notice on hover, tap
+  or keyboard. The open state notice, history list and ⋯ menu and keyboard focus survive refreshes; your draft and
+  documents stay in place.
   A failed refresh marks the header stale. Clear sends the conversation id shown by the header; a missing or
   outdated id is refused with a request to reload. Cleared conversations stay in Earlier web chats and Transcripts.
 - **Earlier chats** sits in the chat header. Its quick list shows the latest 20 and the total count;
@@ -115,7 +131,10 @@ and [chat design](plans/PLAN-webui-chat.md).
   it; a reply's documents are cards under it. The drawer shows a vertical list with sizes, changed marks and comment
   counts, or one open document (by default the one this chat last changed). **← Documents** returns to the list
   and asks before dropping unsaved edits. When the chat area is too narrow for both columns, Documents opens as
-  a sheet over the chat. Close it with ✕ or Escape.
+  a sheet over the chat. Close it with ✕ or Escape; loading a `?doc=` address or clicking a document card, list
+  entry or chip opens the panel again.
+  **Download** saves the open document's current file from disk, including in earlier chats. Unsaved edits are
+  not included.
   Switching documents offers Save, Discard, or Stay before changing the address. If you type during Save,
   the editor keeps the newer text, based on the revision just saved.
   Unsaved document drafts stay in this browser per instance and document across reloads, chat navigation,
@@ -154,6 +173,14 @@ and [chat design](plans/PLAN-webui-chat.md).
 - Each instance's other pages sit behind the chat's ⋯ menu: **Summary**, **Config** (`config.env`, a field per key;
   each value is named for its key),
   **Drive** (`drive.md` for that instance: the diff is shown in full, then Apply saves it and Back keeps your text),
+  **Files** (`/i/<name>/files?path=notes/` lists one folder, folders first, with sizes and modified times.
+  Breadcrumbs and Up return to parent folders. The count includes all visible entries; pages show at most 200.
+  Folder and page addresses support reload, bookmarks and Back. Every file has Download; text files also have
+  Open, served as plain text with the same security policy. `/i/<name>/file?path=notes/example.md` downloads
+  the current bytes; `&open=1` opens recognized text types. Empty files download normally; unreadable paths
+  show the reason. `secrets/`, `config.env`, `.git/`, `mail/` and `.browser/` are hidden and refused at every
+  depth. Links, absolute paths and `..` are refused. Both routes require the tailnet login and paired browser.
+  Folder zip downloads are not available),
   **Access** (tools, wake floor and cloud cap, jobs, shared folder,
   mail and calendar grants, battery, key names), **Judge**, **Changes**, **Benchmarks**, **Transcripts**,
   **Journal**, **Activity** (connections, plugins, jobs), with its actions and earlier chats.

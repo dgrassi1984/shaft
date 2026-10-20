@@ -20,9 +20,11 @@ ICONS = {name: h('<svg width="14" height="14" viewBox="0 0 24 24" fill="none" st
              "reply": '<path d="m9 4-6 6 6 6M3 10h10a8 8 0 0 1 8 8v2"/>',
              "delete": '<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/>',
          }.items()}
-INSTANCE_TABS = [("chat", "Chat"), ("", "Summary"), ("config", "Config"), ("drive", "Drive"), ("access", "Access"),
+INSTANCE_TABS = [("chat", "Chat"), ("", "Summary"), ("config", "Config"), ("drive", "Drive"), ("files", "Files"), ("access", "Access"),
                  ("judge", "Judge"), ("changes", "Changes"), ("benchmarks", "Benchmarks"),
                  ("transcripts", "Transcripts"), ("journal", "Journal"), ("activity", "Activity")]
+BUSY_ICONS = {"in a cycle": "⏳", "working": "⏳", "sleeping": "💤", "paused by you": "⏸",
+              "in a conversation (waiting for you)": "💬"}
 
 
 def q(value: str) -> str:
@@ -39,6 +41,39 @@ def instance_frame(name: str, tab: str, title: str, body: Html, names: list[str]
                   cls="on" if t == tab else "", label=label) for t, label in INSTANCE_TABS)
     head = h('<header class="pagehead"><h1>{name}</h1><div class="tabs">{tabs}</div></header>', name=name, tabs=tabs)
     return frame(f"{name} · {title}", join([head, body]), names, csrf, current=f"i:{name}")
+
+
+def files_page(name: str, parts: tuple, entries: list[dict], total: int, page_number: int, page_size: int,
+               names: list[str], csrf: str) -> Html:
+    base = f"/i/{q(name)}/files?path="
+    folder = "/".join(parts) + ("/" if parts else "")
+    crumbs = [link(base, name)]
+    for k, part in enumerate(parts):
+        crumbs.extend([" / ", link(base + q("/".join(parts[:k + 1]) + "/"), part)])
+    if parts:
+        parent = "/".join(parts[:-1]) + ("/" if len(parts) > 1 else "")
+        crumbs.extend([" · ", link(base + q(parent), "Up")])
+    rows = []
+    for entry in entries:
+        path = folder + entry["name"]
+        if entry["directory"]:
+            label = link(base + q(path + "/"), entry["name"] + "/")
+            controls = Html("")
+        else:
+            label = entry["name"]
+            url = f"/i/{q(name)}/file?path={q(path)}"
+            controls = join([link(url, "Download"), " · ", link(url + "&open=1", "Open")]) if entry["text"] else link(url, "Download")
+        rows.append([label, f'{entry["bytes"]} bytes',
+                     time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(entry["mtime"])), controls])
+    paging = []
+    if page_number > 1:
+        paging.append(link(base + q(folder) + f"&page={page_number - 1}", "Previous"))
+    if page_number * page_size < total:
+        paging.extend([" ", link(base + q(folder) + f"&page={page_number + 1}", "Next")])
+    body = join([h('<div class="crumbs" role="navigation" aria-label="File path">{crumbs}</div><p>{total} {noun} · Page {page}</p>',
+                   crumbs=join(crumbs), noun="entry" if total == 1 else "entries", total=total, page=page_number),
+                 table(["Name", "Size", "Modified", "Actions"], rows), h('<p>{links}</p>', links=join(paging))])
+    return instance_frame(name, "files", "Files", section("Files", body), names, csrf)
 
 
 def chat_frame(name: str, head: Html, body: Html, names: list[str], csrf: str, header_url: str) -> Html:
@@ -72,33 +107,36 @@ def chat_header(name: str, live: dict, chat: dict | None, past: list[dict], read
     buttons = instance_buttons(live) if live.get("name") else Html("")
     earlier = join([h('<p class="dim">latest {limit} of {total}</p>', limit=min(20, len(past)), total=len(past)),
                     earlier_chats(name, past[:20]), link(f"/i/{q(name)}/chats", "All earlier chats")])
-    head = h('<header class="chathead"><button type="button" class="navbtn" data-toggle-nav aria-label="Chats and pages" '
-             'aria-expanded="false" data-focus="nav">☰</button><h1>{name}</h1>'
-             '<details class="menu earliermenu" data-key="earlier-chats"><summary data-focus="earlier">Earlier chats</summary>'
+    busy = (h('<details class="menu busystate" data-key="busy-state"><summary data-focus="busy" '
+              'aria-label="{n} is {s}">{icon}</summary><div class="menubody">{n} is {s} now: a cycle or sleep '
+              'pauses for your message, anything else is waited for — the reply\'s activity says which.</div></details>',
+              n=name, s=state, icon=BUSY_ICONS.get(state, "•"))
+            if state not in ("idle", "?") and not (chat and chat.get("state") == "replying") else Html(""))
+    return h('<header class="chathead"><button type="button" class="navbtn" data-toggle-nav aria-label="Chats and pages" '
+             'aria-expanded="false" data-focus="nav">☰</button><h1>{name}</h1>{busy}'
+             '<details class="menu earliermenu" data-key="earlier-chats"><summary data-focus="earlier" aria-label="Earlier chats" title="Earlier chats">🕘<span class="docslabel"> Earlier chats</span></summary>'
              '<div class="menubody">{earlier}</div></details><span class="dim facts">{facts}</span>'
              '<button type="button" class="small docsbtn" data-show-docs title="its documents (notes/docs/)" '
              'aria-label="Documents" data-focus="docs">📄<span class="docslabel"> Documents</span></button>{clear}'
              '<details class="menu" data-key="chat-menu"><summary data-focus="menu" title="{name}: pages and actions" '
              'aria-label="{name}: pages and actions">⋯'
              '</summary><div class="menubody"><p class="dim menufacts">{facts}</p>'
-             '<div class="menupages">{pages}</div><div class="actions">{buttons}</div>'
+             '<div class="menupages">{pages}</div><div class="actions">{buttons}'
+             '<button type="button" class="small" data-hard-reload data-focus="hard-reload" '
+             'title="Clear the app cache and load the current version">Reload / update</button></div>'
              '<div class="actions"><button type="button" class="small" data-notify data-focus="notify">Notify me on this device</button></div>'
              '</div></details></header>',
-             name=name, facts=" · ".join(f for f in facts if f), pages=pages, buttons=buttons,
+             name=name, busy=busy, facts=" · ".join(f for f in facts if f), pages=pages, buttons=buttons,
              earlier=h('<div class="earlier">{e}</div>', e=earlier) if earlier else Html(""),
              # always on screen (it sat under the last answer, below the fold on a phone); the chat shown now.
-             # The label stays whole ("Clear" alone did not say what is kept); it fits a 375 px header.
+             # On a phone it reads "Clear" (the header also holds the state icon and Earlier chats); its confirm says what is kept.
              clear=h('<form class="act clearbtn" data-post="/chat/{n}/clear" data-confirm="Clear this chat from the page? '
                      'The conversation is kept in Earlier chats and Transcripts. An open conversation is ended first, and '
                      'a journal write-up is requested."{a}><input type="hidden" name="cid" value="{cid}">'
                      '<button type="submit" class="small" title="Empty this page. The conversation is kept." '
-                     'data-focus="clear">Clear chat</button></form>', n=q(name), cid=chat["id"],
+                     'data-focus="clear">Clear<span class="docslabel"> chat</span></button></form>', n=q(name), cid=chat["id"],
                      a=post_attrs("this chat"))
              if chat and not read_only else Html(""))
-    busy = (h('<p class="warn">{n} is {s} now: a cycle or sleep pauses for your message, anything else is waited for '
-              '— the reply\'s activity says which.</p>', n=name, s=state)
-            if state not in ("idle", "?") and not (chat and chat.get("state") == "replying") else Html(""))
-    return join([head, busy])
 
 
 def section(title: str, body, cls: str = "") -> Html:
@@ -572,6 +610,7 @@ def costs_page(c: dict, names: list[str], csrf: str) -> Html:
 
 # -- services (TUI tab 9) --------------------------------------------------------------------------------------------
 def services_live(svcs: list[dict], order: list[str], runs: list[str], busy: list[str]) -> Html:
+    from . import version
     from .web_actions import autonomy_button, service_buttons
     by = {s["name"]: s for s in svcs}
     body = []
@@ -580,12 +619,14 @@ def services_live(svcs: list[dict], order: list[str], runs: list[str], busy: lis
         body.append(([h('<a href="/services?log={n}">{n}</a>', n=name),
                       h('<span class="{c}">{t}</span>', c="good" if s["running"] else "dim" if s.get("idle") else "bad",
                         t="● running" if s["running"] else "○ idle" if s.get("idle") else "○ NOT RUNNING"),
-                      f"pid {s['pid']}" if s.get("pid") else "", s.get("detail", ""),
+                      f"pid {s['pid']}" if s.get("pid") else "",
+                      s.get("version", "unknown — restart to record"), s.get("detail", ""),
                       h('<span class="warn">older code than checked out: restart it</span>') if s.get("stale") else "",
                       service_buttons(name, s["running"], runs, busy)],
                      ""))
     sched = by.get("scheduler", {}).get("running", False)
-    return join([table(["service", "state", "pid", "detail", "", ""], body),
+    return join([h('<p class="dim">checked out: {v}</p>', v=version.commit_describe(version.supervisor_commit())),
+                 table(["service", "state", "pid", "version", "detail", "", ""], body),
                  h('<p class="{c}">Runs a scheduler restart would kill: {r}</p>', c="warn" if runs else "dim",
                    r=", ".join(runs) or "none"),
                  h('<div class="actions">{b}</div>', b=autonomy_button(sched, runs))])
@@ -782,14 +823,17 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
                                           h('<p class="dim">No current files.</p>') if archived else
                                           h('<p class="dim">none yet: ask {n} for one, it appears here as it writes it.</p>',
                                             n=name)))
+    download = (link(f"/i/{q(name)}/file?path={q(DIR + '/' + open_path)}", "Download")
+                if open_path and text is not None and not problem else Html(""))
     if archived:
         notice = h('<p>Current files — not as they were in this chat</p><p><a href="/i/{n}/chat{query}">'
                    'Open in the current chat to edit or comment</a></p>', n=q(name),
                    query=f"?doc={q(open_path)}" if open_path else "")
         view = (h('<p class="bad">{p}</p>', p=problem) if problem else
                 h('<div class="docview" data-read-only="1"><b>{p}</b><div class="docmd">{md}</div></div>',
-                  p=open_path, md=markdown(text)) if text is not None else Html(""))
-        return join([notice, head, view])
+                  p=open_path, md=markdown(text)) if text is not None else
+                h('<p class="dim">{p} is not there (any more).</p>', p=open_path) if open_path else Html(""))
+        return join([notice, head, download, view])
     if problem:
         view = h('<p class="bad">{p}</p>', p=problem)
     elif open_path and text is not None:
@@ -810,7 +854,7 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
                  '<button type="button" class="small" data-edit-doc data-focus="doc-edit">Edit</button>{cbtn}'
                  '<button type="button" class="copy small icon" data-copy-doc title="copy the document\'s Markdown" '
                  'aria-label="Copy the document">{copy}</button>'
-                 '<form class="docdelete" data-post="/docs/{n}/delete" data-after="doc-deleted" '
+                 '{download}<form class="docdelete" data-post="/docs/{n}/delete" data-after="doc-deleted" '
                  'data-confirm="Delete notes/docs/{p}?"{a}><input type="hidden" name="path" value="{p}">'
                  '<input type="hidden" name="sha" value="{s}"><button type="submit" class="small icon" '
                  'title="Delete the document" aria-label="Delete the document">{delete}</button></form>'
@@ -825,7 +869,7 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
                  '<span class="dim">{n} hears of your change: with your next message, or now if it is replying</span>'
                  '</div><div class="bad wrap" data-refusal></div></form></div>',
                  p=open_path, s=sha, n=q(name), tattr=tattr, cbtn=cbtn, tlist=tlist, copy=ICONS["copy"], delete=ICONS["delete"],
-                 over=_overwritten(saved, sha, text), a=post_attrs("Documents", actions.RUN_NOW_S),
+                 over=_overwritten(saved, sha, text), a=post_attrs("Documents", actions.RUN_NOW_S), download=download,
                  md=markdown(text) if text.strip() else Html('<p class="dim">(empty)</p>'), raw=text)
     elif open_path:
         view = h('<p class="dim">{p} is not there (any more).</p>', p=open_path)

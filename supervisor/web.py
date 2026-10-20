@@ -32,6 +32,7 @@ import mimetypes
 import os
 import re
 import secrets
+import stat
 import sys
 import threading
 import time
@@ -522,6 +523,9 @@ def _post(req: Request, dev: str) -> Response:
 INSTANCE_PAGE = re.compile(r"^/i/(?P<name>[A-Za-z0-9_-]+)(?:/(?P<tab>[a-z]+))?$")
 TEXT_TYPES = (".md", ".txt", ".csv", ".json", ".log", ".py", ".yaml", ".yml", ".toml", ".html", ".xml")
 TEXT_MAX = 200_000                                          # an attachment shown inline as text, at most
+FILE_EXCLUSIONS = frozenset({"secrets", "config.env", ".git", "mail", ".browser"})
+FILES_PER_PAGE = 200
+FILE_MAX = 100 * 2**20            # a download is read whole into the web service: past this, a terminal copies it
 IMAGE_MAGIC = ((b"\xff\xd8\xff", "image/jpeg"), (b"\x89PNG\r\n\x1a\n", "image/png"), (b"GIF87a", "image/gif"),
                (b"GIF89a", "image/gif"))
 
@@ -812,6 +816,8 @@ def _live(name: str) -> dict:
 def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str) -> Response | None:
     from . import panel, web_views as v
     from .core import instance_root, journal_entries
+    if tab in ("files", "file"):
+        return _instance_files(name, tab, qs, names, csrf)
     if tab == "":
         return _html(200, v.instance_summary(name, panel.instance_detail(name), _live(name), names, csrf))
     if tab == "judge":
@@ -942,6 +948,73 @@ def activity(name: str) -> dict:
 def _message(file: str) -> dict | None:
     from . import messages
     return next((m for m in messages.history() if m["file"] == file), None)
+
+
+def _instance_files(name: str, tab: str, qs: dict, names: list[str], csrf: str) -> Response:
+    """Browse or open below an instance with the attachment reader's no-follow descriptor walk."""
+    from .core import instance_root, open_beneath
+    from . import web_views as v
+    raw = qs.get("path", "")
+    rel = Path(raw)
+    if (rel.is_absolute() or ".." in rel.parts or "\0" in raw
+            or FILE_EXCLUSIONS.intersection(p.casefold() for p in rel.parts)):
+        return Response(403, b"This path is not available in Files.", {"Content-Type": "text/plain; charset=utf-8"})
+    root = instance_root(name)
+    try:
+        if tab == "file":
+            # Nonblocking prevents a named pipe from hanging before the regular-file check.
+            fd = open_beneath(root, rel.parts, os.O_RDONLY | os.O_NONBLOCK)
+            with os.fdopen(fd, "rb") as f:
+                st = os.fstat(f.fileno())
+                if not stat.S_ISREG(st.st_mode):
+                    raise UnsafePath("Only regular files can be downloaded.")
+                if st.st_size > FILE_MAX:
+                    return Response(413, (f"{rel.name} is {st.st_size / 2**20:.0f} MB, over the {FILE_MAX // 2**20} MB "
+                                          "the web UI serves: copy it in a terminal.").encode(),
+                                    {"Content-Type": "text/plain; charset=utf-8"})
+                data = f.read()
+            inline = qs.get("open") == "1" and rel.suffix.lower() in TEXT_TYPES
+            disposition = ("inline" if inline else "attachment") + "; filename*=UTF-8''"
+            return Response(200, data, {
+                "Content-Type": "text/plain; charset=utf-8" if inline else "application/octet-stream",
+                "Content-Disposition": disposition + urllib.parse.quote(rel.name, safe="")})
+        fd = (open_beneath(root, rel.parts, os.O_RDONLY | os.O_DIRECTORY) if rel.parts
+              else os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW))
+        entries = []
+        try:
+            with os.scandir(fd) as scan:
+                for entry in scan:
+                    if entry.name.casefold() in FILE_EXCLUSIONS or entry.is_symlink():
+                        continue
+                    try:
+                        st = entry.stat(follow_symlinks=False)
+                    except FileNotFoundError:             # removed while the directory was being listed
+                        continue
+                    if not (stat.S_ISDIR(st.st_mode) or stat.S_ISREG(st.st_mode)):
+                        continue
+                    entries.append({"name": entry.name, "directory": stat.S_ISDIR(st.st_mode),
+                                    "bytes": st.st_size, "mtime": st.st_mtime,
+                                    "text": Path(entry.name).suffix.lower() in TEXT_TYPES})
+        finally:
+            os.close(fd)
+    except (UnsafePath, OSError) as e:
+        # in words, never the host's paths: a link, a missing file, a folder that cannot be read
+        msg = str(e)
+        why = ("it does not exist" if isinstance(e, FileNotFoundError) else
+               "Permission denied" if isinstance(e, PermissionError) else
+               "it is a link, or it leaves the instance's folder" if "is not a plain path below" in msg else
+               msg if os.sep not in msg else msg.rsplit(": ", 1)[-1])    # open_beneath: "<root>: <strerror>"
+        return Response(403, f"Cannot open {raw or 'this folder'}: {why}.".encode(),
+                        {"Content-Type": "text/plain; charset=utf-8"})
+    entries.sort(key=lambda e: (not e["directory"], e["name"].casefold(), e["name"]))
+    try:
+        page = max(1, int(qs.get("page", "1")))
+    except ValueError:
+        page = 1
+    page = min(page, max(1, (len(entries) + FILES_PER_PAGE - 1) // FILES_PER_PAGE))
+    start = (page - 1) * FILES_PER_PAGE
+    return _html(200, v.files_page(name, rel.parts, entries[start:start + FILES_PER_PAGE], len(entries),
+                                   page, FILES_PER_PAGE, names, csrf))
 
 
 def _attachment_root(path: Path) -> tuple[Path, Path]:

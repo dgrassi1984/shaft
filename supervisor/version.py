@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 from datetime import datetime
+from functools import lru_cache
 
 from .core import SUP_DIR, git, git_wt, instance_config, instance_root
 
@@ -25,12 +26,28 @@ def supervisor_commit() -> str:
     return head + ("+changes" if dirty else "")
 
 
+@lru_cache(maxsize=128)
+def commit_describe(commit: str) -> str:
+    """Describe a recorded commit, retaining its start-up dirty marker. Cache by commit, never by HEAD."""
+    sha, _, changes = commit.partition("+")
+    label = git("describe", "--tags", "--always", sha, check=False).stdout.strip() or sha
+    return label + ("+changes" if changes else "")
+
+
+def service_version(rec: dict | None) -> str:
+    """Older records have only a commit; no record means the running version is unknown."""
+    if not rec:
+        return "unknown — restart to record"
+    return rec.get("describe") or commit_describe(rec["commit"])
+
+
 def record_service(name: str, settings: dict) -> None:
     """Called by a service at start-up. The record keeps the knobs this process has read (core.HELD), and is written
     again whenever it reads another one later — a module imported on first use reads its knobs then."""
     from . import core
     rec = {"pid": os.getpid(), "commit": supervisor_commit(), "started": datetime.now().isoformat(timespec="seconds"),
            "settings": settings, "knobs": dict(core.HELD)}
+    rec["describe"] = commit_describe(rec["commit"])
 
     def write() -> None:
         rec["knobs"] = dict(core.HELD)

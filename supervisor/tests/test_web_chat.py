@@ -18,6 +18,7 @@ from supervisor.tests.test_web import WebTest, snap
 
 KEY, ME = "sk-shaft-test", "operator@example.com"
 PNG = b"\x89PNG\r\n\x1a\n" + b"\0" * 64
+HOLD_MAX_S = 60                    # a held reply nobody releases or leaves still ends
 
 
 def chunk(delta: dict, finish=None, **extra) -> bytes:
@@ -30,6 +31,7 @@ class FakeApi:
     def __init__(self):
         self.requests, self.script, self.hold, self.gone = [], None, threading.Event(), threading.Event()
         self.heard, self.interject_status, self.end_status, self.end_type = 0, 202, 202, "not_found"
+        self.pause = time.sleep                      # between a held reply's keep-alives
         fake = self
 
         class H(BaseHTTPRequestHandler):
@@ -51,11 +53,14 @@ class FakeApi:
                 try:
                     self.wfile.write(chunk({"reasoning_content": "🔧 read_file notes.md\n"}))
                     self.wfile.flush()
-                    if fake.hold.is_set():                       # a long reply, until the client leaves
-                        for _ in range(100):
-                            time.sleep(0.05)
-                            self.wfile.write(b": still working\n\n")
-                            self.wfile.flush()
+                    # A long reply: until the test releases it (hold.clear()) or the client leaves. Never a count of
+                    # sleeps: inside a cycle the gate runs at launchd's utility QoS, where timer coalescing made 100
+                    # sleeps of 50 ms last 12-15 s, past wait_idle's budget (HoldTest).
+                    deadline = time.monotonic() + HOLD_MAX_S
+                    while fake.hold.is_set() and time.monotonic() < deadline:
+                        fake.pause(0.05)
+                        self.wfile.write(b": still working\n\n")
+                        self.wfile.flush()
                     self.wfile.write(chunk({"content": f"Answer {len(fake.requests)}."}))
                     self.wfile.write(chunk({}, "stop", **({} if fake.heard is None else
                                                            {"interjections_heard": fake.heard})))
@@ -76,6 +81,11 @@ class FakeApi:
         self.server.daemon_threads = True
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
+    def close(self):
+        self.hold.clear()
+        self.server.shutdown()
+        self.server.server_close()
+
     def chats(self):
         return [r for r in self.requests if r[0] == "/v1/chat/completions"]
 
@@ -86,7 +96,7 @@ class ChatTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.dir, True)
         (self.dir / "instances" / "wren").mkdir(parents=True)
         self.api = FakeApi()
-        self.addCleanup(self.api.server.shutdown)
+        self.addCleanup(self.api.close)
         import http.client
         port = self.api.server.server_address[1]
         for p in (mock.patch.object(web_chat, "SUP_DIR", self.dir / "sup"),
@@ -100,6 +110,18 @@ class ChatTest(unittest.TestCase):
                   mock.patch.object(web_chat, "log"), mock.patch.object(messages, "log")):
             p.start()
             self.addCleanup(p.stop)
+        self.addCleanup(self.end_relays)             # registered last, so run first: while the patches still hold
+
+    def end_relays(self):
+        """A reply still running when the test ends is stopped and waited for while the patches still hold. Left
+        running, it read its chat from the SUP_DIR the test had restored, and died on None with a TypeError that
+        looked like the cause of the gate failures of 2026-10-19/20 (HoldTest); it was only their echo."""
+        left = list(web_chat._relays.items())
+        for _, relay in left:
+            relay.stop()
+        end = time.monotonic() + 10
+        while any(web_chat._relays.get(cid) is relay for cid, relay in left) and time.monotonic() < end:
+            time.sleep(0.05)
 
     def wait_idle(self, cid: str, timeout: float = 10) -> dict:
         end = time.time() + timeout
@@ -174,8 +196,8 @@ class RelayTest(ChatTest):
         self.api.interject_status = 409
         chat, _ = web_chat.send("wren", ME, "start", [])
         time.sleep(0.3)
+        web_chat.send("wren", ME, "late", [])                    # while it still replies: the API refuses it (409)
         self.api.hold.clear()
-        web_chat.send("wren", ME, "late", [])
         c = self.wait_idle(chat["id"], 15)
         self.assertEqual(c["turns"][-1]["role"], "assistant")
         self.assertIn({"role": "user", "content": "late"}, self.api.chats()[-1][2]["messages"])
@@ -244,6 +266,33 @@ class OlderApiTest(ChatTest):
         self.api.hold.clear()
         self.wait_idle(chat["id"], 15)
         self.assertEqual(len(self.api.chats()), 1)
+
+
+class HoldTest(ChatTest):
+    """The gate reverted thelos's changes eight times (2026-10-19/20) on these 8 tests, never outside a cycle: the
+    fake API's long reply was 100 sleeps of 50 ms, and a cycle (so its gate) runs at launchd's utility QoS — priority
+    20, as `taskpolicy -c utility` gives — where macOS timer coalescing makes those 100 sleeps last 11.8 s instead of
+    5.3 s (measured). With a live cycle's load on top, the reply outlasted wait_idle's 15 s."""
+
+    def test_a_held_reply_ends_when_released_however_slow_the_timers(self):
+        self.api.pause = lambda s: time.sleep(3 * s)        # a 50 ms sleep at utility QoS under load: 150 ms
+        self.api.hold.set()
+        chat, _ = web_chat.send("wren", ME, "long one", [])
+        time.sleep(0.3)
+        self.assertEqual(web_chat.load(chat["id"])["state"], "replying")    # held: still going
+        self.api.hold.clear()
+        released = time.monotonic()
+        c = self.wait_idle(chat["id"], 15)
+        self.assertLess(time.monotonic() - released, 3)       # the old 100 ticks: ~14 s more
+        self.assertEqual(c["turns"][-1]["content"], "Answer 1.")
+
+    def test_a_reply_left_running_by_a_test_is_stopped_before_its_patches_go(self):
+        self.api.hold.set()
+        chat, _ = web_chat.send("wren", ME, "never released", [])
+        time.sleep(0.3)
+        self.end_relays()
+        self.assertFalse(web_chat.replying(chat["id"]))
+        self.assertEqual(web_chat.load(chat["id"])["turns"][-1]["note"], "stopped by you")
 
 
 class FilesTest(ChatTest):
@@ -418,7 +467,7 @@ class ChatCentricTest(ChatRoutesTest):
         self.assertIn("earlier answer", body)
         self.assertIn("Your next message starts a new conversation", body)
         self.assertIn('data-post="/chat/wren/send"', body)
-        self.assertIn('<summary data-focus="earlier">Earlier chats</summary>', body)  # #8: beside navigation
+        self.assertIn('<summary data-focus="earlier" aria-label="Earlier chats" title="Earlier chats">🕘<span class="docslabel"> Earlier chats</span></summary>', body)  # #8: beside navigation
         self.assertIn(f"/i/wren/chat?id={old['id']}", body)
         frag = self.req("/fragment/chat/wren", cookie=self.cookie).body.decode()
         self.assertIn("earlier answer", frag)                                       # its refresh shows the same
@@ -633,8 +682,8 @@ class DocEditsTest(DocsInChatTest):
         body = [r for r in self.api.requests if r[0] == "/v1/chat/interject"][0][2]
         self.assertIn("[The operator edited notes/docs/plan.md:]", body["messages"][-1]["content"])
         self.assertIn("+mine", body["messages"][-1]["content"])
+        self.api.heard = 1                                        # before the release: the reply ends at once
         self.api.hold.clear()
-        self.api.heard = 1
         c = self.wait_idle(chat["id"], 15)
         self.assertTrue(c["turns"][1]["interjected"])
         self.assertEqual(c["turns"][1]["shown"], "")
@@ -675,8 +724,8 @@ class DocEditsTest(DocsInChatTest):
         self.assertEqual(said, "deleted · wren reads it at its next step")
         body = [r for r in self.api.requests if r[0] == "/v1/chat/interject"][0][2]
         self.assertEqual(body["messages"][-1]["content"], "[The operator deleted notes/docs/plan.md.]")
+        self.api.heard = 1                                        # before the release: the reply ends at once
         self.api.hold.clear()
-        self.api.heard = 1
         self.wait_idle(chat["id"], 15)
 
 

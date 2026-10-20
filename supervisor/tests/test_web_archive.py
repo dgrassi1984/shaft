@@ -40,7 +40,7 @@ class ArchiveTest(WebTest):
         """Reverting #8 hides history in tools, omits topics and makes the oldest five unreachable."""
         for path in ("/i/wren/chat", "/fragment/chat/wren/header"):
             body = self.get(path)
-            self.assertIn('data-key="earlier-chats"><summary data-focus="earlier">Earlier chats</summary>', body)
+            self.assertIn('data-key="earlier-chats"><summary data-focus="earlier" aria-label="Earlier chats" title="Earlier chats">🕘<span class="docslabel"> Earlier chats</span></summary>', body)
             self.assertIn("latest 20 of 25", body)
             self.assertIn('href="/i/wren/chats"', body)
             self.assertEqual(len(re.findall(r'href="/i/wren/chat\?id=', body)), 20)

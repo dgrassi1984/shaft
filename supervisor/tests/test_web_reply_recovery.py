@@ -163,7 +163,7 @@ class RecoveryTest(unittest.TestCase):
         """Reverting #11 hides Clear's full label and leaves End/Stop consequences unexplained."""
         chat = self.chat()
         header = str(web_views.chat_header("wren", {}, chat, []))
-        self.assertIn('>Clear chat</button>', header)
+        self.assertIn('>Clear<span class="docslabel"> chat</span></button>', header)   # 'Clear chat'; 'Clear' on a phone
         self.assertIn("kept in Earlier chats and Transcripts", header)
         self.assertIn("Only the reply stops. The conversation stays open.", str(web_views.chat_feed("wren", chat, [])))
         chat["state"] = "idle"

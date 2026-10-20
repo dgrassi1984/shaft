@@ -1,10 +1,11 @@
 """The cloud judge: models that grade instances, never live their lives.
 
 A rotation (Opus 5.5 was too costly; "stochastic rotation I prefer"): every judgment picks one
-model at random from SHAFT_JUDGE_MODELS (MiMo and Sonnet 5.5; Haiku 5.5 left on 2026-10-16: on the same cycles it
-called 54% of wren's claims unsupported where the blind GLM judge called 4%, Sonnet 21% and Opus 17% —
-docs/plans/PLAN-judge-mix.md), never the model the judged instance runs on (no self-preference — wren runs
-on MiMo). Every verdict records the model that gave it. Claude models go straight to the Claude Messages API with the
+model at random from SHAFT_JUDGE_MODELS, never the model the judged instance runs on (no self-preference — wren runs
+on MiMo). Haiku 5.5 left on 2026-10-16: on the same cycles it called 54% of wren's claims unsupported where the blind
+GLM judge called 4%, Sonnet 21% and Opus 17% (docs/plans/PLAN-judge-mix.md). Sonnet 5.5 left on 2026-10-20 for cost
+($12-25 a day); MiMo, GLM 5.3 Flash and DeepSeek V4.1 Flash since, DeepSeek admitted after it matched GLM on 40 of
+wren's and thelos's runs (#45). The main judge grades one live run in SHAFT_JUDGE_EVERY. Every verdict records the model that gave it. Claude models go straight to the Claude Messages API with the
 supervisor's key (structured JSON output via output_config.format; refusals re-run server-side with
 `fallbacks: "default"`); "openrouter/…" models go through OpenRouter under the instances' data policy
 (cloudllm.OPENROUTER_PROVIDER: no data collection, zero retention), with the schema in the instructions and the
@@ -20,12 +21,20 @@ import time
 import urllib.error
 import urllib.request
 
-from .core import NETWORK_ERRORS, SUP_DIR, cloud_models, knob, openrouter_model, secrets_env, whole
+from .core import NETWORK_ERRORS, SUP_DIR, cloud_models, knob, openrouter_model, positive_int, secrets_env, whole
 
 JUDGE_MODELS, JUDGE_SRC = knob(
-    "SHAFT_JUDGE_MODELS", "openrouter/xiaomi/mimo-v2.6-pro,claude-sonnet-5-5", cloud_models, "the judge pool: each "
-    "judgment picks one at random, never the judged instance's own model", group="Judging",
-    services=("runs", "api", "web"))   # web: its stats count verdicts by the judges in the pool (by_current_judge)
+    "SHAFT_JUDGE_MODELS",
+    "openrouter/xiaomi/mimo-v2.6-pro,openrouter/z-ai/glm-5.3-flash,openrouter/deepseek/deepseek-v4.1-flash",
+    cloud_models, "the judge pool: each judgment picks one at random, never the judged instance's own model",
+    group="Judging", services=("runs", "api", "web"))   # web: its stats count verdicts by the judges in the pool
+# Every live run was judged: 250+ a day at ~$0.07 a Sonnet judgment cost $12-25 a day (2026-10-17/19, #45). Which
+# runs are judged is drawn at random when a run is first up for judging, and a run left out is recorded apart
+# (metrics.judge_sampled), so nothing the instance can see tells it beforehand which of its runs will be graded. A run
+# left out has no verdict: not judged, never a failure.
+JUDGE_EVERY, _ = knob(
+    "SHAFT_JUDGE_EVERY", "2", positive_int, "the main judge grades one live run in this many (1: every run)",
+    group="Judging", services=("runs", "api"))          # api: record(kind='judgments') in a conversation says so
 API = "https://api.anthropic.com/v1/messages"
 
 
@@ -43,9 +52,11 @@ def same_model(a: str | None, b: str | None) -> bool:
     return bool(a and b) and _norm(a) == _norm(b)
 
 
-def pick(exclude=(), rng=random) -> str:
-    """One judge for one judgment: at random from the pool, never one of `exclude` (the judged instance's models)."""
+def pick(exclude=(), rng=random, avoid=()) -> str:
+    """One judge for one judgment: at random from the pool, never one of `exclude` (the judged instance's models).
+    `avoid` (the second judge, on a run it will grade too) is left out as well while another judge is left."""
     pool = [m for m in JUDGE_MODELS if not any(same_model(m, x) for x in exclude)]
+    pool = [m for m in pool if not any(same_model(m, x) for x in avoid)] or pool
     if not pool:
         raise JudgeError(f"no judge left in SHAFT_JUDGE_MODELS={JUDGE_MODELS} once the instance's own model "
                          f"{[x for x in exclude if x]} is left out: an instance is never judged by its own model")
@@ -151,19 +162,22 @@ def _log(purpose, model, usage, seconds, error, usd=None, provider=None, reasoni
 
 # -- the second judge ---------------------------------------------------------------------------------------------
 # Another model family grades a sample of cycles blind, so an instance can tell the main judge's idiosyncrasies
-# from what its tool log shows (wren, 2026-10-13; the operator chose GLM 5.3 Flash). Through OpenRouter, under the same
-# data policy as the instances' cloud models (cloudllm.OPENROUTER_PROVIDER: Novita, DeepInfra if Novita is down, no data
-# collection or retention). Novita does not offer structured outputs for this model, so the schema is in the instructions and
-# the answer is checked here.
+# from what its tool log shows (wren, 2026-10-13). GLM 5.3 Flash until 2026-10-20, when the operator made it a main
+# judge too and it graded four runs twice, agreeing with itself (#45); DeepSeek V4.1 Flash since, which no instance runs
+# on. A run the second judge will grade is never given its model as the main judge (pick's `avoid`), and the agreement
+# in stats.md counts only the current second judge against another model (metrics._second_section). Through
+# OpenRouter, under the same data policy as the instances' cloud models (cloudllm.OPENROUTER_PROVIDER: Novita,
+# DeepInfra if Novita is down, no data collection or retention); the schema is in the instructions and the answer is
+# checked here (_ask_openrouter).
 JUDGE2_MODEL, _ = knob(
-    "SHAFT_JUDGE2_MODEL", "openrouter/z-ai/glm-5.3-flash", openrouter_model, "the second judge, which grades a "
-    "sample of cycles again to measure the judges' agreement", group="Judging", services=("runs", "api"))
+    "SHAFT_JUDGE2_MODEL", "openrouter/deepseek/deepseek-v4.1-flash", openrouter_model, "the second judge, which "
+    "grades a sample of cycles again to measure the judges' agreement", group="Judging", services=("runs", "api"))
 JUDGE2_EVERY, _ = knob(
     "SHAFT_JUDGE2_EVERY", "4", whole, "the second judge grades one cycle in this many (0: never)", group="Judging",
     services=("runs", "api"))
-# Its hidden reasoning shares this ceiling: measured over 84 calls (2026-10-14/15) p50 6.3k, p90 12.2k, max 16.5k
-# reasoning tokens, and 22.9k in one replay — 16000 left no room. At ~47 tokens/s (Novita), 32000 is also about
-# what fits in the 600 s HTTP timeout (cloudllm._send): a higher ceiling would trade a length re-ask for a timeout.
+# Its hidden reasoning shares this ceiling: measured on GLM 5.3 Flash over 84 calls (2026-10-14/15) p50 6.3k, p90
+# 12.2k, max 16.5k reasoning tokens, and 22.9k in one replay — 16000 left no room. At ~47 tokens/s (Novita), 32000
+# is also about what fits in the 600 s HTTP timeout (cloudllm._send): a higher ceiling would trade a length re-ask for a timeout.
 JUDGE2_MAX_TOKENS = 32000
 
 
