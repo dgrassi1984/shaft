@@ -145,7 +145,10 @@
 
   function poll(el) {
     const every = Number(el.dataset.every || 2000);
-    let running = false, timer = null, fails = 0;
+    // again: an action asked for a refresh while one was on its way. That one may hold the state from before the
+    // action, so it is not shown, and the next one goes at once. Without it the refresh the action asked for was
+    // cancelled by the one in flight (its finally reschedules), and dismissed alerts stayed up to 2 s more (2026-10-20).
+    let running = false, timer = null, fails = 0, again = false;
     if (el.dataset.keyed) [...el.children].forEach(c => { c._src = c.outerHTML; });
     const later = (ms) => { clearTimeout(timer); timer = setTimeout(tick, ms); };
     async function tick() {
@@ -172,7 +175,7 @@
         if (r.ok) {
           fails = 0;
           // Asked again now: an edit or a selection begun while this refresh was on its way must survive it (Codex)
-          if (busyIn(el) || el.dataset.poll !== url) return;
+          if (busyIn(el) || el.dataset.poll !== url || again) return;
           el.dataset.etag = r.headers.get("ETag") || "";
           el.dataset.etagUrl = url;
           if (body !== el.dataset.last) {               // unchanged: nothing replaced, nothing collapsed
@@ -206,7 +209,8 @@
       } finally {
         clearTimeout(limit);
         running = false;
-        later(Math.min(every * slow * 2 ** Math.min(fails, 4), 15000 * slow));   // back within 15 s
+        if (again) { again = false; later(0); }
+        else later(Math.min(every * slow * 2 ** Math.min(fails, 4), 15000 * slow));   // back within 15 s
       }
     }
     el._tick = tick;
@@ -214,7 +218,7 @@
     document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") tick(); });
     window.addEventListener("pageshow", () => tick());   // back from the cache or the app switcher
     window.addEventListener("online", () => { fails = 0; tick(); });
-    document.addEventListener("shaft:refresh", () => later(300));
+    document.addEventListener("shaft:refresh", () => { if (running) again = true; else later(300); });
   }
 
 

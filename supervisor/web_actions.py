@@ -209,10 +209,18 @@ def tool_switches(name: str, off: set[str]) -> Html:
 
 
 def alert_buttons(alerts: list[dict]) -> Html:
+    """Dismiss the five shown, and — when more are open — all of them, asked first: those include alerts not on
+    screen. Live, 2026-10-20: 60 lookalike log alerts took 12 clicks of "Dismiss these alerts", each showing the next
+    five, so the list never seemed to change."""
     shown = alerts[:5]
     if not shown:
         return Html("")
-    return button("dismiss", "Dismiss these alerts", "", {"ids": json.dumps([a["id"] for a in shown])}, cls="small")
+    these = button("dismiss", "Dismiss these alerts", "", {"ids": json.dumps([a["id"] for a in shown])}, cls="small")
+    if len(alerts) <= len(shown):
+        return these
+    n = len(alerts)
+    return join([these, button("dismiss", f"Dismiss all {n}", f"dismiss all {n} open alerts, the {n - len(shown)} "
+                               "not shown too?", {"ids": json.dumps([a["id"] for a in alerts])}, cls="small")])
 
 
 def service_buttons(name: str, running: bool, scheduled: list[str], busy: list[str]) -> Html:

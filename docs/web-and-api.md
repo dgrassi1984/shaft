@@ -55,7 +55,8 @@ and [chat design](plans/PLAN-webui-chat.md).
 
 - `/` opens the chat with the instance you last talked to. The left rail lists every instance's chat (its state, its
   last line, a mark when it answered while you were elsewhere; the tab title counts them), then **Manage**: Overview
-  (`/overview`, with the alert count), Messages, Trials, Costs, Services, and the supervisor's **Settings** (see
+  (`/overview`, with the alert count; its alerts show five at a time, with **Dismiss these alerts**, and **Dismiss
+  all N** when more are open), Messages, Trials, Costs, Services, and the supervisor's **Settings** (see
   [configuration reference](configuration.md): the judge pool as ticked models, every knob with its source and default, "saved, not
   live yet" with the guarded restarts; ports and paths shown, set in a terminal).
 - The chat: files and images both ways (drop them anywhere on the page, paste or pick; each is a chip you can take
