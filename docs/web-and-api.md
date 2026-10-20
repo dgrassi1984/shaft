@@ -68,6 +68,11 @@ and [chat design](plans/PLAN-webui-chat.md).
   live yet" with the guarded restarts; ports and paths shown, set in a terminal). A service action that would kill
   or cut off runs in progress (a scheduler restart, autonomy off, api/model/embed while runs use them) shows as
   **Force …**, asks first naming those runs, and is logged as `web: operator forced … past the guard`.
+- The navigation footer shows the web service's running version, including `+changes` for edits present at
+  start-up. It is also visible in the phone's chat list sheet. After HEAD moves, the next page load shows
+  `checked out: …` linking to Services. Services shows the checkout above the live table and a version for
+  every service, including the scheduler, alongside the existing older-code warning. Older records use their
+  saved commit; a service without a record says `unknown — restart to record`.
 - Unread marks clear when the current chat's reply is rendered in a visible tab. Config, Journal, earlier chats,
   and a failed feed refresh do not consume a new reply. Marks are shared across tabs in the same browser.
 - The chat: files and images both ways (drop them anywhere on the page, paste or pick; each is a chip you can take

@@ -572,6 +572,7 @@ def costs_page(c: dict, names: list[str], csrf: str) -> Html:
 
 # -- services (TUI tab 9) --------------------------------------------------------------------------------------------
 def services_live(svcs: list[dict], order: list[str], runs: list[str], busy: list[str]) -> Html:
+    from . import version
     from .web_actions import autonomy_button, service_buttons
     by = {s["name"]: s for s in svcs}
     body = []
@@ -580,12 +581,14 @@ def services_live(svcs: list[dict], order: list[str], runs: list[str], busy: lis
         body.append(([h('<a href="/services?log={n}">{n}</a>', n=name),
                       h('<span class="{c}">{t}</span>', c="good" if s["running"] else "dim" if s.get("idle") else "bad",
                         t="● running" if s["running"] else "○ idle" if s.get("idle") else "○ NOT RUNNING"),
-                      f"pid {s['pid']}" if s.get("pid") else "", s.get("detail", ""),
+                      f"pid {s['pid']}" if s.get("pid") else "",
+                      s.get("version", "unknown — restart to record"), s.get("detail", ""),
                       h('<span class="warn">older code than checked out: restart it</span>') if s.get("stale") else "",
                       service_buttons(name, s["running"], runs, busy)],
                      ""))
     sched = by.get("scheduler", {}).get("running", False)
-    return join([table(["service", "state", "pid", "detail", "", ""], body),
+    return join([h('<p class="dim">checked out: {v}</p>', v=version.commit_describe(version.supervisor_commit())),
+                 table(["service", "state", "pid", "version", "detail", "", ""], body),
                  h('<p class="{c}">Runs a scheduler restart would kill: {r}</p>', c="warn" if runs else "dim",
                    r=", ".join(runs) or "none"),
                  h('<div class="actions">{b}</div>', b=autonomy_button(sched, runs))])

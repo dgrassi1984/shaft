@@ -66,6 +66,41 @@ class PagesTest(WebTest):
 class EveryPageShowsWhatItsTabShows(PagesTest):
     """The strings test_control_panel.test_every_tab_renders_its_data asserts for each TUI tab."""
 
+    def test_issue_61_running_web_version_outside_polled_rail(self):
+        """#61: reverting removes the running version and checkout link from shared navigation."""
+        from supervisor import version
+        rec = {"commit": "abc1234+changes", "describe": "v0.2.0-60-gabc1234+changes"}
+        with mock.patch.object(version, "service", return_value=rec), \
+             mock.patch.object(version, "commit_describe", return_value="v0.2.0-61-gdef5678"):
+            for path in ("/overview", "/services", "/costs", "/i/shaft"):
+                body = self.get(path)
+                nav = body.split("<nav>", 1)[1].split("</nav>", 1)[0]
+                self.assertIn("web: v0.2.0-60-gabc1234+changes", nav)
+                self.assertNotIn("checked out:", nav)
+                self.assertGreater(nav.index('class="nav-version'), nav.index("</form>"))
+            with mock.patch.object(version, "supervisor_commit", return_value="def5678"):
+                body = self.get("/overview")
+                self.assertIn('<a href="/services">checked out: v0.2.0-61-gdef5678</a>', body)
+                rec.update(commit="def5678", describe="v0.2.0-61-gdef5678")
+                self.assertNotIn("checked out:", self.get("/overview"))
+        self.assertNotIn("nav-version", web_pages.rail([]))
+        self.assertIn("web: unknown — restart to record", self.get("/overview"))
+
+    def test_issue_61_services_version_column_and_checkout(self):
+        """#61: reverting loses the version column, scheduler version, and missing-record prompt."""
+        from supervisor import version
+        rows = [{"name": n, "running": True, "version": f"v0.2.0-{k}-gabc1234", "stale": True}
+                for k, n in enumerate(("api", "scheduler", "telegram", "web", "model"))]
+        with mock.patch.object(panel, "services_detail", return_value=rows), \
+             mock.patch.object(version, "commit_describe", return_value="v0.2.0-60-gabc1234"):
+            body = self.get("/fragment/services")
+        self.assertEqual(body.count("checked out: v0.2.0-60-gabc1234"), 1)
+        self.assertIn(">version</th>", body)
+        for k in range(5):
+            self.assertIn(f"v0.2.0-{k}-gabc1234", body)
+        self.assertIn("unknown — restart to record", body)
+        self.assertIn("older code than checked out: restart it", body)
+
     def test_instance(self):
         self.has("/i/shaft", "Recent journal", "abcdef12", "plugins/weather/main.py", "My measured performance",
                  "bonsai via local · effort medium", "Chromium 141", "watcher every 15 min")
@@ -414,6 +449,13 @@ class StaticVersionTest(TestCase):
 
 
 class StylesTest(TestCase):
+    def test_issue_61_nav_version_wraps_at_phone_width(self):
+        """#61: reverting removes the small footer style and lets long version labels overflow the phone sheet."""
+        css = (Path(web_pages.__file__).parent / "web_static" / "web.css").read_text()
+        self.assertRegex(css, r"nav \.nav-version \{[^}]*font-size: \.8rem;[^}]*overflow-wrap: anywhere;[^}]*order: 4;")
+        self.assertRegex(css, r"nav \.nav-version a \{[^}]*display: block;")
+        self.assertRegex(css, r"body\.navopen:has\(\.chatgrid\) nav \{[^}]*overflow-y: auto;")
+
     def test_what_the_page_hides_stays_hidden(self):
         """Found live: form.docedit { display: grid } showed the document editor the page had hidden."""
         css = (Path(web_pages.__file__).parent / "web_static" / "web.css").read_text()
