@@ -147,18 +147,10 @@ def watched(name: str) -> bool:
     return time.monotonic() - _watched.get(name, -1e9) < WATCH_S
 
 
-def latest_reply() -> dict:
-    """What a push notification shows: the newest answer of any instance's chat, said briefly."""
-    from .core import instance_names
-    best = None
-    for name in instance_names():
-        c = next(iter(chats(name)), None)
-        t = next((t for t in reversed((c or {}).get("turns", [])) if t["role"] == "assistant"), None)
-        if t and (best is None or t["ts"] > best[1]["ts"]):
-            best = (name, t)
-    if not best:
-        return {"title": "SHAFT", "body": "A reply landed", "url": "/", "tag": "shaft"}
-    name, t = best
+def reply_event(chat: dict) -> dict:
+    """What the push for this chat's reply shows: its first line."""
+    name = chat["instance"]
+    t = next((t for t in reversed(chat.get("turns") or []) if t["role"] == "assistant"), {})
     first = next((l.strip() for l in (t.get("content") or "").splitlines() if l.strip()), "") or (t.get("note") or "")
     return {"title": f"{name} replied", "body": first[:160], "url": f"/i/{name}/chat", "tag": name}
 
@@ -234,7 +226,7 @@ def _headers(chat: dict) -> dict:
     if not key:
         raise Refused("the API is not set up: shaft api on")
     return {"Content-Type": "application/json", "Authorization": f"Bearer {key}", "Tailscale-User-Login": chat["login"],
-            "X-Shaft-Conversation": chat["id"], "User-Agent": "SHAFT web UI"}
+            "X-Shaft-Conversation": chat["id"], "X-Shaft-Channel": "web", "User-Agent": "SHAFT web UI"}
 
 
 def _post(chat: dict, route: str, body: dict, timeout: float = 15) -> tuple[int, dict]:
@@ -393,7 +385,7 @@ def _finish(relay: Relay, answer: str, activity: list, error: str | None, heard:
         del _relays[cid]
     if not unheard and not relay.stopped and not watched(chat["instance"]):
         from . import webpush                       # nobody is looking: the phone is told (docs/plans/PLAN-pwa P4)
-        webpush.notify(f"{chat['instance']} replied")
+        webpush.notify(reply_event(chat))
     log(f"web: chat {cid} with {chat['instance']}: reply {'stopped' if relay.stopped else 'failed' if error else 'done'}"
         + (f" ({unheard} interjection(s) answered next)" if unheard else ""))
     if unheard:
@@ -536,7 +528,12 @@ def send(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: 
     with _inst_lock(name):
         if mid and (c := open_chat(name)) and mid in (c.get("mids") or []):
             return c, f"already sent to {name}"
-        return _send(name, login, text, files, comment_block=comment_block, comments=comments, mid=mid)
+        chat, said = _send(name, login, text, files, comment_block=comment_block, comments=comments, mid=mid)
+    from . import messages                         # a question it quotes is answered, as a Telegram reply answers it
+    if (answered := messages.answer_quoted(name, text)):
+        log(f"web: {name}'s question {', '.join(answered)} answered in the web chat")
+        said += " · answers its question"
+    return chat, said
 
 
 def _send(name: str, login: str, text: str, files: list[tuple[str, bytes]], *,
@@ -662,10 +659,12 @@ def clear(name: str, cid: str = "") -> str:
 
 
 def _clear(name: str, cid: str) -> str:
+    if not cid:
+        raise Refused("that is not the chat on this page any more: reload it")
     chat = shown(name)
     if not chat:
         raise Refused("there is nothing to clear")
-    if cid and chat["id"] != cid:
+    if chat["id"] != cid:
         raise Refused("that is not the chat on this page any more: reload it")
     if replying(chat["id"]) or chat.get("state") == "replying":
         raise Refused("it is still replying: stop the reply first")

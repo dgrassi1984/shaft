@@ -5,6 +5,7 @@
 //                            the operator types that word instead of clicking OK), data-after="home" goes to / after; data-reset
 //                            clears it once sent, data-diff="/preview/…" shows what would change before asking;
 //                            the reply is shown as a toast and the polled parts refresh
+//   data-row                 a saved form replaces only its nearest row with the server's new value and token
 // Listeners are delegated from the document, so content swapped in by a poll needs no re-binding.
 (() => {
   "use strict";
@@ -12,6 +13,12 @@
   window.__shaftWeb = true;
 
   const csrf = () => (document.querySelector('meta[name="csrf"]') || {}).content || "";
+
+  function pairAgain(r) {
+    if ((r.status !== 401 && r.status !== 403) || r.headers.get("X-Shaft-Pair") !== "required") return false;
+    location.assign("/");                         // the pairing form; local drafts stay until a successful send
+    return true;
+  }
 
   function fullText(html) {
     return new DOMParser().parseFromString(html, "text/html").body.textContent.trim();
@@ -166,6 +173,7 @@
       try {
         const headers = el.dataset.etag && el.dataset.etagUrl === url ? { "If-None-Match": el.dataset.etag } : {};
         const r = await fetch(url, { credentials: "same-origin", cache: "no-store", signal: ctl.signal, headers });
+        if (pairAgain(r)) return;
         checkVersion(r);
         if (r.status >= 502 && r.status <= 504) {      // the proxy answered, SHAFT did not (Tailscale's 503): unreachable
           throw new Error(`its web service is not answering, HTTP ${r.status}`);
@@ -180,6 +188,12 @@
           el.dataset.etag = r.headers.get("ETag") || "";
           el.dataset.etagUrl = url;
           if (body !== el.dataset.last) {               // unchanged: nothing replaced, nothing collapsed
+            const focused = document.activeElement;
+            const controls = 'button, a[href], summary';
+            const focusKey = n => n.dataset.focus || n.getAttribute("href")
+              || (n.closest("form[data-post]") || { dataset: {} }).dataset.post;
+            const restoreFocus = focused && el.contains(focused) && focused.matches(controls);
+            const key = restoreFocus ? focusKey(focused) : null;
             const open = new Set([...el.querySelectorAll("details[data-key][open]")].map(d => d.dataset.key));
             const shut = new Set([...el.querySelectorAll("details[data-key]:not([open])")].map(d => d.dataset.key));
             const box = el.closest("[data-scroll]");      // a feed that scrolls in its own box (the chat), else the page
@@ -193,6 +207,11 @@
               if (open.has(d.dataset.key)) d.open = true;
               if (shut.has(d.dataset.key)) d.open = false;
             });
+            if (restoreFocus) {
+              const target = [...el.querySelectorAll(controls)].find(n => key && focusKey(n) === key)
+                || el.querySelector('details[data-key] summary');
+              if (target) target.focus({ preventScroll: true });
+            }
             if (atBottom && el.dataset.follow) toBottom(el);
             el.dispatchEvent(new CustomEvent("shaft:swapped", { bubbles: true }));
           }
@@ -235,6 +254,7 @@
           headers: { "X-CSRF-Token": csrf(), "Content-Type": "application/x-www-form-urlencoded" },
           body: new URLSearchParams(new FormData(form)),
         });
+        if (pairAgain(d)) return;
         const text = fullText(await d.text());        // the whole diff, never cut like a toast
         if (out) out.textContent = text;
         if (!d.ok) { toast(`No diff: HTTP ${d.status} — ${text}`, true); return; }
@@ -262,15 +282,18 @@
     if (mid && !mid.value) mid.value = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
     const shown = form.dataset.draft ? pending(form) : null;
     const multipart = !!form.dataset.multipart;          // files go with it: the browser sets the boundary
+    const row = form.closest("[data-row]");
     const ctl = new AbortController();
     const limit = setTimeout(() => ctl.abort(), multipart ? 180000 : 30000);
     try {
       const r = await fetch(form.dataset.post, {
         method: "POST", credentials: "same-origin", signal: ctl.signal,
-        headers: multipart ? { "X-CSRF-Token": csrf() }
-                           : { "X-CSRF-Token": csrf(), "Content-Type": "application/x-www-form-urlencoded" },
+        headers: { "X-CSRF-Token": csrf(),
+                   ...(!multipart ? { "Content-Type": "application/x-www-form-urlencoded" } : {}),
+                   ...(row || form.dataset.addRow ? { "X-Row": "1" } : {}) },
         body: multipart ? new FormData(form) : new URLSearchParams(new FormData(form)),
       });
+      if (pairAgain(r)) { if (shown) shown.remove(); return; }
       const body = await r.text();
       toast(textOf(body) || (r.ok ? "done" : `HTTP ${r.status}`), !r.ok);
       const refusal = form.querySelector("[data-refusal]") || (form.dataset.after === "doc-deleted"
@@ -280,6 +303,21 @@
       }
       const now = r.headers.get("X-Doc-Sha");         // refused as stale: Save again replaces it, knowingly
       if (!r.ok && now && form.querySelector("input[name=sha]")) form.querySelector("input[name=sha]").value = now;
+      if (r.ok && r.headers.get("X-Row") === "1") {
+        const next = new DOMParser().parseFromString(body, "text/html")
+          .querySelector("template[data-saved-row]").content.firstElementChild;
+        // rows the same save also changed (a model switch writes its base URL): swapped by id, after the first
+        for (let more = next.nextElementSibling; more; more = more.nextElementSibling) {
+          const shownNow = more.id && document.getElementById(more.id);
+          if (shownNow) shownNow.replaceWith(more.cloneNode(true));
+        }
+        if (row) row.replaceWith(next);
+        else if (form.dataset.addRow) {
+          const existing = document.getElementById(next.id);   // Add can set a key already shown with its default
+          if (existing) existing.replaceWith(next);
+          else document.querySelector(form.dataset.addRow).appendChild(next);
+        }
+      }
       if (r.ok && form.dataset.after === "doc-saved") docSaved(form, r.headers.get("X-Doc"));
       if (r.ok && form.dataset.after === "doc-deleted") docsList();
       if (r.ok && form.dataset.after === "comment-saved") refreshDocs();
@@ -295,7 +333,7 @@
         if (box && form.dataset.draft && !touchOnly()) box.focus();   // write the next one (a phone keeps its keyboard down)
       }
       if (!r.ok && shown) shown.remove();
-      if (r.ok && form.dataset.after === "reload") setTimeout(() => location.reload(), 800);
+      if (r.ok && form.dataset.after === "reload") setTimeout(() => location.reload(), 800);   // Unpair this browser
       if (r.ok && form.dataset.after === "home") setTimeout(() => { location.href = "/"; }, 1500);   // it is gone
       document.dispatchEvent(new Event("shaft:refresh"));      // show what the action changed, now
     } catch (e) {                                  // the answer was lost: it may have arrived — the id says so
@@ -684,19 +722,25 @@
   function seenSet(v) {
     try { localStorage.setItem("shaft.seen", JSON.stringify(v)); } catch (e) { /* private window: no marks kept */ }
   }
-  function markRail(rail) {
+  function seenFeed() {
+    if (document.visibilityState !== "visible") return;
     const seen = seenGet();
     let changed = false;
-    rail.querySelectorAll("a[data-inst]").forEach(a => {
-      const last = a.dataset.last || "";
-      if (a.classList.contains("on") && document.visibilityState === "visible") {
-        if (last && seen[a.dataset.inst] !== last) { seen[a.dataset.inst] = last; changed = true; }
+    document.querySelectorAll(".feed [data-seen-reply]").forEach(reply => {
+      const { seenInst: inst, seenReply: last } = reply.dataset;
+      if (reply.getClientRects().length && last && (seen[inst] || "") < last) {
+        seen[inst] = last;
+        changed = true;
       }
-      // the chat on screen is unread too while this tab is hidden: the title says a reply landed
-      const away = !a.classList.contains("on") || document.visibilityState !== "visible";
-      a.classList.toggle("unread", !!last && away && (seen[a.dataset.inst] || "") < last);
     });
     if (changed) seenSet(seen);
+  }
+  function markRail(rail) {
+    const seen = seenGet();
+    rail.querySelectorAll("a[data-inst]").forEach(a => {
+      const last = a.dataset.last || "";
+      a.classList.toggle("unread", !!last && (seen[a.dataset.inst] || "") < last);
+    });
     const unread = rail.querySelectorAll("a.unread").length;
     document.querySelectorAll("[data-toggle-nav]").forEach(b => b.classList.toggle("news", unread > 0));
     if (navigator.setAppBadge) {                    // the Home Screen icon's count: an app shows no tab title
@@ -705,8 +749,13 @@
     document.title = document.title.replace(/^\(\d+\) /, "");
     if (unread) document.title = `(${unread}) ${document.title}`;
   }
+  function unreadState() {
+    seenFeed();                                    // only rendered current-chat replies carry these attributes
+    const rail = document.querySelector("nav .rail");
+    if (rail) markRail(rail);
+  }
   // Notifications (docs/plans/PLAN-pwa P4): Web Push, the only way a reply reaches a phone whose app is closed or locked (an
-  // iPhone stops a page's scripts in the background). The button says what is true on this device.
+  // iPhone stops a page's scripts in the background). "On" means SHAFT has this device's subscription, not only the browser.
   const standalone = () => window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
   const ios = () => /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   function keyBytes(b64) {
@@ -719,7 +768,14 @@
     }
     if (Notification.permission === "denied") return "blocked";
     const reg = await navigator.serviceWorker.ready;
-    return (await reg.pushManager.getSubscription()) ? "on" : "off";
+    if (!(await reg.pushManager.getSubscription())) return "off";
+    try {                                    // a later visit: SHAFT may have dropped this device since
+      const r = await fetch("/push/status", { credentials: "same-origin", cache: "no-store" });
+      if (!r.ok) return "incomplete";
+      return (await r.json()).subscribed ? "on" : "incomplete";
+    } catch (e) {
+      return "incomplete";
+    }
   }
   async function notifyButton() {
     const b = document.querySelector("[data-notify]");
@@ -730,42 +786,57 @@
     b.disabled = state === "blocked" || state === "home";
     b.textContent = { home: "For notifications, add SHAFT to your Home Screen (Share → Add to Home Screen)",
                       blocked: "Notifications are blocked for SHAFT in this browser's settings",
-                      on: "Notifications on — turn off", off: "Notify me of replies" }[state] || "";
+                      on: "Notifications on — turn off",
+                      incomplete: "Notifications incomplete — retry",
+                      off: "Notify me on this device" }[state] || "";
   }
   async function post(url, body) {
     const r = await fetch(url, { method: "POST", credentials: "same-origin", body,
                                  headers: { "X-CSRF-Token": csrf(), "Content-Type": "application/json" } });
+    if (pairAgain(r)) return false;
     toast(textOf(await r.text()) || `HTTP ${r.status}`, !r.ok);
     return r.ok;
   }
   document.addEventListener("click", async (ev) => {
     const b = ev.target.closest && ev.target.closest("[data-notify]");
     if (!b || b.disabled) return;
+    let sub = null;                          // set only while a browser subscription is not yet accepted by SHAFT
     try {
       const reg = await navigator.serviceWorker.ready;
       if (b.dataset.state === "on") {
-        const sub = await reg.pushManager.getSubscription();
-        if (sub) await sub.unsubscribe();
-        await post("/push/unsubscribe", "{}");
+        // the browser drops it only after SHAFT has: a failed unsubscribe must not read as off
+        if (await post("/push/unsubscribe", "{}")) {
+          sub = await reg.pushManager.getSubscription();
+          if (sub) await sub.unsubscribe();
+          sub = null;
+        }
       } else {
         if (await Notification.requestPermission() !== "granted") { notifyButton(); return; }
-        const r = await fetch("/push/key", { credentials: "same-origin" });
-        const { key, error } = await r.json();
-        if (!key) throw new Error(error || "no key");
-        const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(key) });
-        await post("/push/subscribe", JSON.stringify(sub));
+        sub = await reg.pushManager.getSubscription();   // incomplete: send the one the browser already has
+        if (!sub) {
+          const r = await fetch("/push/key", { credentials: "same-origin" });
+          if (pairAgain(r)) return;
+          const { key, error } = await r.json();
+          if (!key) throw new Error(error || "no key");
+          sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(key) });
+        }
+        if (!await post("/push/subscribe", JSON.stringify(sub))) {
+          try { await sub.unsubscribe(); } catch (e) { /* refused: the button must not say on */ }
+        }
+        sub = null;
       }
     } catch (e) {
+      if (sub) { try { await sub.unsubscribe(); } catch (e2) { /* the button must not say on */ } }
       toast(`Notifications: ${e.message}`, true);
     }
     notifyButton();
   });
   document.addEventListener("shaft:swapped", (ev) => {
-    if (ev.target.classList && ev.target.classList.contains("rail")) markRail(ev.target);
+    if (ev.target.classList && (ev.target.classList.contains("rail") || ev.target.classList.contains("feed"))) unreadState();
   });
-  document.addEventListener("visibilitychange", () => {
-    const rail = document.querySelector("nav .rail");
-    if (rail) markRail(rail);                          // back on the tab: the chat on screen is seen
+  document.addEventListener("visibilitychange", unreadState);
+  window.addEventListener("storage", (ev) => {
+    if (ev.key === "shaft.seen" || ev.key === null) unreadState();
   });
 
   // The documents panel (docs/plans/PLAN-webui-chat §3): a card in a reply or a name in its list opens that document in the
@@ -830,7 +901,7 @@
     if (panel._tick) panel._tick();
   }
   // The separate comment composer shares the page's request and feedback conventions.
-  window.shaftWeb = { csrf, toast, textOf, refreshDocs };
+  window.shaftWeb = { csrf, toast, textOf, refreshDocs, pairAgain };
 
   function docSaved(form, doc) {
     const panel = document.getElementById("docs");
@@ -863,8 +934,18 @@
     catch (e) { /* no storage: it opens again on the next page */ }
     docsAria();
   }
+  function chatHeaderState(el) {
+    if (!el.querySelector(".chathead")) return;
+    notifyButton();
+    docsAria();
+    const nav = el.querySelector("[data-toggle-nav]");
+    if (nav) nav.setAttribute("aria-expanded", String(document.body.classList.contains("navopen")));
+    const rail = document.querySelector("nav .rail");
+    if (rail) markRail(rail);
+  }
   document.addEventListener("shaft:swapped", (ev) => {   // an instance's first document opens the panel beside the chat
     if (ev.target.id === "docs") docsAria();
+    chatHeaderState(ev.target);
   });
   document.addEventListener("click", (ev) => {           // 📄 Documents: open or close the panel
     if (!(ev.target.closest && ev.target.closest("[data-show-docs]"))) return;
@@ -936,6 +1017,7 @@
     }
     document.querySelectorAll("[data-poll]").forEach(poll);
     document.querySelectorAll("[data-follow]").forEach(el => { decorate(el); toBottom(el); });  // opens on the latest
+    unreadState();
     document.querySelectorAll(".docview").forEach(decorate);
     restoreDraft();
     notifyButton();

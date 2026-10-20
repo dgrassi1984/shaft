@@ -235,11 +235,16 @@ class TelegramTest(unittest.TestCase):
         self.assertEqual(telegram.forward_new(), 0)                  # first run: from now on, no backlog
         inbox = self.sup / "operator-inbox"
         inbox.mkdir()
-        for who, kind, text in (("wren", "question", "Notify once or every time?"), ("kant", "note", "no bot")):
-            path = inbox / f"20991231-235959-00000{len(text)}-from-{who}.md"
+        for who, kind, text, alert in (("wren", "question", "Notify once or every time?", "telegram"),
+                                       ("kant", "note", "no bot", "telegram"),
+                                       ("wren", "note", "routed to the web UI", "web")):
+            path = inbox / f"20991231-235959-0000{len(text):02d}-from-{who}.md"
             path.write_text(f"From: {who}\nKind: {kind}\n\n{text}\n")
-            messages.record(self.sup, path, who, "operator", kind, datetime(2099, 12, 31, 23, 59, 59), text)
-        self.assertEqual(telegram.forward_new(), 1)                  # kant has no bot: skipped, not stuck
+            messages.record(self.sup, path, who, "operator", kind, datetime(2099, 12, 31, 23, 59, 59), text,
+                            alert=(alert, "test"))
+        # kant has no bot: skipped, not stuck; wren's note was routed to the web (channel.py): not sent here
+        self.assertEqual(telegram.forward_new(), 1)
+        self.assertNotIn("routed to the web UI", [p["text"] for _, p in self.api.sent(TOK["wren"])])
         (tok, p), = self.api.sent(TOK["wren"])[-1:]
         self.assertEqual(p["chat_id"], 42)
         self.assertEqual(p["text"], "❓ <b>Question</b>\n\nNotify once or every time?")   # its own bot: no "from wren"
@@ -248,7 +253,9 @@ class TelegramTest(unittest.TestCase):
         shown = "❓ Question\n\nNotify once or every time?"     # Telegram quotes the rendered text
         self.upd(_msg(ME, "Once.", mid=30, reply_to={"message_id": mid, "text": shown}))
         self.assertTrue(self.asked[-1][1][-1]["content"].startswith("> ❓ Question"))
-        self.assertFalse(any(p.name.endswith("from-wren.md") for p in inbox.glob("*.md")))   # answered: archived
+        left = sorted(p.read_text() for p in inbox.glob("*-from-wren.md"))
+        self.assertEqual(len(left), 1)                               # the question, answered, is archived
+        self.assertIn("routed to the web UI", left[0])                # the note stays
 
     def test_a_failed_forward_is_retried(self):
         self.pair()
@@ -257,12 +264,44 @@ class TelegramTest(unittest.TestCase):
         inbox.mkdir()
         path = inbox / "20991231-235959-000001-from-wren.md"
         path.write_text("x")
-        messages.record(self.sup, path, "wren", "operator", "note", datetime(2099, 12, 31, 23, 59, 59), "later")
+        messages.record(self.sup, path, "wren", "operator", "note", datetime(2099, 12, 31, 23, 59, 59), "later",
+                        alert=("telegram", "test"))
         self.api.fail.add("sendMessage")
         self.assertEqual(telegram.forward_new(), 0)
         self.api.fail.clear()
         self.assertEqual(telegram.forward_new(), 1)
         self.assertEqual(self.api.sent(TOK["wren"])[-1][1]["text"], "later")   # a note is just its text, no "📝 Note from wren" header
+
+    def test_a_message_logged_after_a_later_stamped_one_is_still_forwarded(self):
+        """Codex review 2026-10-20: forward_new skipped every row stamped before the last one it sent — but a message is
+        stamped before it is logged, so of two sent at once the earlier-stamped one can be logged second, and was lost."""
+        self.pair()
+        telegram.forward_new()
+        inbox = self.sup / "operator-inbox"
+        inbox.mkdir()
+        for k, (at, text) in enumerate(((datetime(2099, 12, 31, 23, 59, 59), "stamped second, logged first"),
+                                        (datetime(2099, 12, 31, 23, 59, 58), "stamped first, logged second"))):
+            path = inbox / f"2099123{k}-from-wren.md"
+            path.write_text("x")
+            messages.record(self.sup, path, "wren", "operator", "note", at, text, alert=("telegram", "test"))
+            self.assertEqual(telegram.forward_new(), 1)
+            self.assertEqual(self.api.sent(TOK["wren"])[-1][1]["text"], text)
+
+    def test_the_older_timestamp_cursor_resumes_where_it_was(self):
+        """A state saved before the log offsets (sent_cursor "ts|file") resumes at the first row logged after it."""
+        self.pair()
+        inbox = self.sup / "operator-inbox"
+        inbox.mkdir()
+        for k, text in enumerate(("sent before", "not yet sent")):
+            path = inbox / f"2099123{k}-from-wren.md"
+            path.write_text("x")
+            messages.record(self.sup, path, "wren", "operator", "note", datetime(2099, 12, 31, 23, 59, k), text,
+                            alert=("telegram", "test"))
+        telegram.update(lambda s: (s.pop("sent_offset", None),
+                                   s.__setitem__("sent_cursor", "2099-12-31T23:59:00|20991230-from-wren.md")))
+        self.assertEqual(telegram.forward_new(), 1)
+        self.assertEqual(self.api.sent(TOK["wren"])[-1][1]["text"], "not yet sent")
+        self.assertNotIn("sent_cursor", telegram.load())
 
     def test_commands(self):
         self.pair()
@@ -349,13 +388,31 @@ class ToldTheyCanReachOperatorTest(unittest.TestCase):
         from supervisor import broker
         b = broker.Broker.__new__(broker.Broker)
         b.name, b.disabled, b.grants_allowed = "wren", set(), False
-        with mock.patch.object(telegram, "reachable", return_value="@SampleAssistantBot"):
+        from supervisor import channel
+        with mock.patch.object(telegram, "reachable", return_value="@SampleAssistantBot"), \
+                mock.patch.object(channel, "route", return_value=("telegram", "the operator last wrote to wren there")):
             spec = next(t for t in b.tool_specs() if t["function"]["name"] == "send_message")
-        self.assertIn("on Telegram, from your own bot @SampleAssistantBot", spec["function"]["description"])
+        self.assertIn("Your own Telegram bot is @SampleAssistantBot", spec["function"]["description"])
+        self.assertIn("now would notify them on Telegram (the operator last wrote to wren there)",
+                      spec["function"]["description"])
         self.assertNotIn("@SampleAssistantBot", broker.SPECS["send_message"]["function"]["description"])   # not shared
-        with mock.patch.object(telegram, "reachable", return_value=""):
+        with mock.patch.object(telegram, "reachable", return_value=""), \
+                mock.patch.object(channel, "route", return_value=("web", "the operator set it for wren")):
             spec = next(t for t in b.tool_specs() if t["function"]["name"] == "send_message")
-        self.assertNotIn("Telegram, from your own bot", spec["function"]["description"])
+        self.assertNotIn("Telegram bot", spec["function"]["description"])
+        self.assertIn("now would notify them in the web UI (the operator set it for wren)", spec["function"]["description"])
+
+    def test_a_bot_does_not_make_the_instance_think_its_messages_go_to_telegram(self):
+        """The bug (2026-10-20): with a bot set up, send_message said every message to the operator reached them "at
+        once on their phone, on Telegram" — even for an instance the operator wants to hear from in the web UI."""
+        from supervisor import broker, channel
+        b = broker.Broker.__new__(broker.Broker)
+        b.name, b.disabled, b.grants_allowed = "wren", set(), False
+        with mock.patch.object(telegram, "reachable", return_value="@SampleAssistantBot"), \
+                mock.patch.object(channel, "route", return_value=("web", "the operator set it for wren")):
+            text = next(t for t in b.tool_specs() if t["function"]["name"] == "send_message")["function"]["description"]
+        self.assertNotIn("at once on their phone, on Telegram", text)
+        self.assertIn("in the web UI", text)
 
     def test_reachable_needs_token_bot_pairing_and_the_service(self):
         sup = Path(tempfile.mkdtemp(prefix="shaft-tg-"))
