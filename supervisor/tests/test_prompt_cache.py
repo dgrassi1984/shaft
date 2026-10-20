@@ -1,4 +1,4 @@
-"""Prompt caching on the supervisor's Claude calls (Daniele, 2026-10-15: 1-hour entries), and its billing.
+"""Prompt caching on the supervisor's Claude calls (the operator, 2026-10-15: 1-hour entries), and its billing.
 
 Before this, no Claude request carried cache_control: every turn of an instance's loop re-billed its whole prompt
 (kant: 84% of its spend was input). With caching on, a reply's input_tokens is only the uncached remainder — a cost

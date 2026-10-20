@@ -40,10 +40,10 @@ more than you do: say what the cut hides instead of counting it as the agent's o
 
 Then, separately — these ratings never change the verdict above:
 
-Origin: who chose this goal's specific content? 'operator' = Daniele, or someone writing \
-or talking for him (e.g. Claude Code), asked for it, suggested it or directed it — also when \
+Origin: who chose this goal's specific content? 'operator' = the operator, or someone writing \
+or talking for them (e.g. Claude Code), asked for it, suggested it or directed it — also when \
 the agent rephrased it, or adopted it as a standing goal earlier (a goals.md item recorded as \
-his directive counts). 'instance' = another SHAFT instance asked for it. 'self' = the agent \
+their directive counts). 'instance' = another SHAFT instance asked for it. 'self' = the agent \
 chose it. A general permission ("research, read, explore") is not an origin: what the agent \
 then picks is 'self'. Decide from the evidence the supervisor collected (messages, \
 conversations, goals.md), not from the agent's declaration; goals.md is the agent's own \
@@ -79,10 +79,10 @@ bookkeeping whose only reader is the judge or the agent's own stats; \
 will use; \
 3 = useful: a new verified fact, a working fix, or a tool or skill that will be used again — someone would \
 act on it; \
-4 = worth telling Daniele or another instance about: a primary-source finding, a real bug fixed in shared \
+4 = worth telling the operator or another instance about: a primary-source finding, a real bug fixed in shared \
 code, a capability gained and shown working; \
 5 = exceptional: an output most competent people could not have produced in one cycle. \
-Who would miss it: 'operator' = Daniele; 'instance' = another SHAFT instance; 'own_capability' = a tool, \
+Who would miss it: 'operator' = the operator; 'instance' = another SHAFT instance; 'own_capability' = a tool, \
 skill, fix or verified fact this agent will use again; 'own_record' = bookkeeping about itself (its stats, \
 judge verdicts, notes about its own cycles); 'nobody' = nothing was kept that anyone would miss."""
 
@@ -148,7 +148,7 @@ def by_current_judge(j: dict) -> bool:
     met and a claim was supported are counted only from these. The judges grade both far apart: on the same cycles
     Haiku 5.5 (retired 2026-10-16) called 54% of wren's claims unsupported, the blind second judge 4%, Sonnet 21%.
     A count pooled across a change of judges moved with the judges, not with the cycles, and wren read the pooled
-    count as "the central fact about my accuracy" (PLAN-judge-mix.md). Value grades agree across judges: not filtered."""
+    count as "the central fact about my accuracy" (docs/plans/PLAN-judge-mix.md). Value grades agree across judges: not filtered."""
     by = j.get("judge")
     return by == "rule" or any(judge.same_model(by, m) for m in judge.JUDGE_MODELS)
 
@@ -477,7 +477,7 @@ def _seconds_path(name: str) -> Path:
 
 def stash_second(name: str, episode_ts: str, case: str) -> None:
     """Keep the exact case the main judge saw, for the second judge to grade once the run has let go of the
-    instance: it takes minutes (GLM 5.3 Flash: 128 s on a real case), and a message from Daniele must not wait
+    instance: it takes minutes (GLM 5.3 Flash: 128 s on a real case), and a message from the operator must not wait
     for it."""
     d = _second_cases()
     d.mkdir(parents=True, exist_ok=True)
@@ -653,7 +653,7 @@ def _case(ep: dict, files: str = "", provenance: str = "", prior: str = "") -> s
             + (IMAGES_NOTE if any(t.get("tool") in IMAGE_TOOLS for t in ep.get("tools", [])) else ""))
 
 
-# Cycles that looked at an image (PLAN-vision.md): the judges read text only. Only these cases carry the note, so every
+# Cycles that looked at an image (docs/plans/PLAN-vision.md): the judges read text only. Only these cases carry the note, so every
 # other case stays as it was when the judges were calibrated.
 IMAGE_TOOLS = ("view_image", "describe_image")
 IMAGES_NOTE = ("\n\n## Images\nThe agent looked at an image (view_image) or had one described to it "
@@ -786,7 +786,7 @@ def _achieved_section(js: list[dict]) -> list[str]:
     return lines + [""]
 
 
-VALUE_FOR_LABEL = {"operator": "Daniele", "instance": "another instance", "own_capability": "my own future work",
+VALUE_FOR_LABEL = {"operator": "the operator", "instance": "another instance", "own_capability": "my own future work",
                    "own_record": "my own record-keeping", "nobody": "nobody"}
 
 
@@ -827,7 +827,7 @@ def _value_section(js: list[dict]) -> list[str]:
                                                          for m, rs in others.items()))
     levels = " · ".join(f"{v}: {n}" for v in range(6) if (n := sum(1 for j in last if j["value"] == v)))
     lines.append(f"- Grades over those {len(last)} (0 = worse than not running, 1 = nothing anyone would miss, "
-                 f"3 = useful, 4 = worth telling Daniele): {levels}")
+                 f"3 = useful, 4 = worth telling the operator): {levels}")
     lines.append("- Who would miss them: " + " · ".join(f"{VALUE_FOR_LABEL[k]} {n}"
                                                        for k, n in value_shares(last).items()))
     best = sorted((j for j in rows if j["value"] >= 3), key=lambda j: (j["value"], j["episode_ts"]))[-3:][::-1]
@@ -1054,7 +1054,7 @@ def chance_of_drop(before: list[float], after: list[float]) -> float:
 def start_probation(name: str, commit: str, files: list[str], trial: dict | None = None) -> None:
     """`trial`: the finished trial whose change this is, byte for byte (supervisor/trial.py match). A change
     adopted against a 'worse' verdict is undone on any drop, without the chance test: the trial is already the
-    evidence against it (PLAN-trials.md, D3). A change no cycle runs (tests only) is not put on probation."""
+    evidence against it (docs/plans/PLAN-trials.md, D3). A change no cycle runs (tests only) is not put on probation."""
     if not any(map(_runtime, files)):
         log(f"{name}: change {commit[:8]} not on probation: no cycle runs {', '.join(files)}")
         return

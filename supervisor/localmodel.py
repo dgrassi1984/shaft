@@ -1,14 +1,14 @@
-"""The local Bonsai server (com.shaft.model) runs only while something uses it (Daniele, 2026-10-19).
+"""The local Bonsai server (com.shaft.model) runs only while something uses it.
 
 It holds ~7.6 GB loaded and takes ~2 s to load (measured 2026-10-19, page cache warm). Before, it ran always; for
-five days its only user was the racer -> local fallback, which last fired on 2026-10-14.
+five days its only user was the gpu -> local fallback, which last fired on 2026-10-14.
 
 - Pinned: while any instance's config.env points straight at it (LLM_BASE_URL on its port), it never exits on its
   own — such an instance's agent calls it directly from the sandbox, between runs and in the middle of one, paused
   or not (a paused instance can still be talked to).
 - Otherwise it exits (code 0) once no request is in progress and none has arrived for SHAFT_MODEL_IDLE_MINUTES
   (15; 0 = never). launchd restarts it only after a crash (KeepAlive SuccessfulExit=false), not after that exit.
-- Every supervisor path that reaches it calls ensure() first: a run of an instance on it (runner), the racer ->
+- Every supervisor path that reaches it calls ensure() first: a run of an instance on it (runner), the gpu ->
   local fallback (selfhosted), a local trial replay, an exam of the battery, evolution's baseline. ensure() starts the
   launchd service if the port does not answer and waits until it does.
 """
@@ -34,10 +34,10 @@ START_TIMEOUT_S, START_SRC = knob(   # a cold disk after a reboot
     "SHAFT_MODEL_START_TIMEOUT_S", "300", positive_int, "seconds to wait for the model server to start on demand",
     group="Local model", services=("runs", "api", "scheduler"))
 # The server's own settings, read when it starts (bonsai_server.main).
-THINK_BUDGET, _ = knob(   # Daniele: "not too low"
+THINK_BUDGET, _ = knob(   # the operator: "not too low"
     "SHAFT_THINK_BUDGET", "4096", whole, "reasoning tokens SHAFT's own model may think per reply before it is made to "
     "answer (0: no limit)", group="Local model", services=("model",))
-TEMP, _ = knob(   # Daniele, 2026-10-13 (0.1 = near-greedy: verbatim loops; pack 1.0)
+TEMP, _ = knob(   # the operator, 2026-10-13 (0.1 = near-greedy: verbatim loops; pack 1.0)
     "SHAFT_MODEL_TEMP", "0.6", temperature, "SHAFT's own model's sampling temperature", group="Local model",
     services=("model",))
 # mlx_lm trims the prompt cache to this when the next request starts. 8 GB holds the entries of a 40k-token
@@ -66,7 +66,7 @@ def is_service(url: str, port: int = PORT) -> bool:
 def pinned_by(port: int = PORT, names: list[str] | None = None, config_of=instance_config) -> list[str]:
     """The instances whose model calls go to the server: config.env straight on it, or a self-hosted model the
     broker sends to it (SHAFT_SELF_HOSTED). While there is one, it never idles out — and it being down is a fault
-    (down_problem). The racer -> local fallback does not pin it: that path starts it itself (ensure)."""
+    (down_problem). The gpu -> local fallback does not pin it: that path starts it itself (ensure)."""
     from . import selfhosted   # here: selfhosted imports this module
 
     def url(cfg: dict) -> str:

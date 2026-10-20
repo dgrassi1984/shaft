@@ -1,4 +1,4 @@
-"""Data for `shaft top`'s control-panel views (PLAN-control-panel.md): one instance in full, the judge's
+"""Data for `shaft top`'s control-panel views (docs/plans/PLAN-control-panel.md): one instance in full, the judge's
 verdicts, trials, benchmarks, self-changes and probation, spending against the caps, services, alerts.
 
 Stdlib only, like dashboard.py, so every view is testable without a terminal. Each function reuses the
@@ -22,7 +22,7 @@ from .core import (SUP_DIR, calendar_grants, disabled_tools, dollars, git, insta
                    instance_root, journal_entries, knob, mail_grants, paused, shared_folder)
 from . import selfhosted
 
-JUDGE_ALERT_USD, _ = knob(   # the judge has no cap (Daniele): only an alert
+JUDGE_ALERT_USD, _ = knob(   # the judge has no cap (the operator): only an alert
     "SHAFT_JUDGE_ALERT_USD", "10", dollars, "judge spend per day that raises an alert (the judge has no cap)",
     group="Judging", services=("web",))
 CAP_ALERT = 0.8                                                    # a cap this full raises an alert
@@ -600,7 +600,7 @@ def dismiss(ids: list[str]) -> None:
 
 
 def _jobs_summary(name: str) -> str:
-    """'watcher every 15 min (can wake), digest every 60 min' — or why none run (PLAN-jobs.md)."""
+    """'watcher every 15 min (can wake), digest every 60 min' — or why none run (docs/plans/PLAN-jobs.md)."""
     from . import jobs
     if jobs.jobs_off(name):
         return "off (shaft jobs " + name + " on)"

@@ -31,15 +31,15 @@ def _no_secrets(root: Path) -> str:
 @functools.lru_cache(maxsize=1)
 def user_folder() -> Path | None:
     """macOS's per-user folder (/private/var/folders/<xx>/<id>/: T temp files, C caches): outside the home, but the
-    operator's — every app he runs keeps its temp files and caches there. None if macOS does not say where it is."""
+    operator's — every app they run keeps its temp files and caches there. None if macOS does not say where it is."""
     r = subprocess.run(["/usr/bin/getconf", "DARWIN_USER_TEMP_DIR"], capture_output=True, text=True)
     temp = r.stdout.strip()
     return Path(temp).resolve().parent if r.returncode == 0 and temp else None
 
 
-# The operator's places outside his home. Until 2026-10-16 only the home was denied, and any sandboxed process could
-# list and read these: /private/tmp held Claude Code's working files for every project of his; /Users/Shared and
-# /Volumes (other disks) hold whatever he puts there.
+# The operator's places outside their home. Until 2026-10-16 only the home was denied, and any sandboxed process could
+# list and read these: /private/tmp held Claude Code's working files for every project of theirs; /Users/Shared and
+# /Volumes (other disks) hold whatever they put there.
 OUTSIDE_HOME = ("/private/tmp", "/Users/Shared", "/Volumes")
 
 
@@ -78,7 +78,7 @@ def _no_operator_file_writes(root: Path) -> str:
     """config.env has two writers: the operator, and the instance through the broker's set_config, which records
     each change. Writing it directly would make its changes indistinguishable from the operator's (the gate
     reverted an operator's mid-run model switch as the instance's, kant 2026-10-13). drive.md, what the instance is
-    for (PLAN-thelos.md), has one writer: the operator — the instance changes how it pursues its drive, not the
+    for (docs/plans/PLAN-thelos.md), has one writer: the operator — the instance changes how it pursues its drive, not the
     drive. This also stops creating, renaming, unlinking or hard-linking either file."""
     return "(deny file-write* " + " ".join(f"(literal {_q(root / f)})" for f in OPERATOR_FILES) + ")"
 
@@ -113,7 +113,7 @@ def profile(instance_root: Path, home: Path, llm_ports: list[int], shared: Path 
     """The agent's own sandbox. `llm_ports` are the local ports it may connect to: its models, the embedding
     service, its broker and its egress proxy. The gate passes none: an instance's tests and plugin check get no
     network at all, like `run` without its proxy. Until 2026-10-18 the gate's profile allowed any localhost port
-    (network* on "localhost:*"), so instance-written tests could reach every service on the operator's Mac — his dev
+    (network* on "localhost:*"), so instance-written tests could reach every service on the operator's Mac — their dev
     servers and databases, the model and embedding servers; no instance's tests used it."""
     root, home = Path(instance_root).resolve(), Path(home).resolve()
     lines = [
@@ -145,7 +145,7 @@ RUN_WRITABLE = ("notes", "plugins", "skills", "tests", "shaft", ".tmp", ".venv",
 
 
 def _browser_reads(home: Path) -> list[str]:
-    """The shared Chromium (supervisor/browser.py, PLAN-browser.md), read-only — only in the sandboxes that may
+    """The shared Chromium (supervisor/browser.py, docs/plans/PLAN-browser.md), read-only — only in the sandboxes that may
     browse: `run` (nothing but the egress proxy) and jobs. The agent's own sandbox, which its plugins inherit, carries
     the broker token and reaches the model ports, and the gate's has no network: neither reads it, so a browser
     started there fails to launch."""
@@ -166,7 +166,7 @@ def _ancestors_metadata(root: Path, home: Path) -> str:
 def run_profile(instance_root: Path, home: Path, shared: Path | None = None, egress_port: int = 0,
                 env_root: Path | None = None) -> str:
     """Stricter than the agent's own sandbox, for commands the agent runs via the broker's `run`:
-    writes only to its working areas, its Python environment and its browser profile (.browser/, PLAN-browser.md;
+    writes only to its working areas, its Python environment and its browser profile (.browser/, docs/plans/PLAN-browser.md;
     never self/, memory/, inbox/, config.env, .git), reads only its own folder in the home directory (and the
     operator's shared folder, if any, and the shared Chromium), and no network but the run's egress proxy (the
     public internet, nothing local)."""
@@ -179,7 +179,7 @@ def run_profile(instance_root: Path, home: Path, shared: Path | None = None, egr
 
 def job_profile(instance_root: Path, home: Path, state_dir: Path, shared: Path | None = None, egress_port: int = 0,
                 broker_port: int = 0, env_root: Path | None = None) -> str:
-    """For a scheduled job (PLAN-jobs.md): the `run` sandbox, but writes only to the job's own state folder
+    """For a scheduled job (docs/plans/PLAN-jobs.md): the `run` sandbox, but writes only to the job's own state folder
     (.jobs/<plugin>/), .tmp/ and its browser profile — a cycle running at the same time works on the code, notes and
     mind, and nothing of the job's may be mistaken for its change (the profile is never code and never committed) —
     and the network adds the job's own broker (its supervisor tools)."""

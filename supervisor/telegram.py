@@ -1,4 +1,4 @@
-"""Telegram: talk with each instance from your phone, and get its messages to you there (Daniele, 2026-10-13).
+"""Telegram: talk with each instance from your phone, and get its messages to you there.
 
 One bot per instance (its token in .env as TELEGRAM_TOKEN_<NAME>, `shaft telegram token <name>`), and ONE paired
 Telegram account for all of them: `shaft telegram pair` prints a one-time code, you send `/pair <code>` to any
@@ -11,8 +11,8 @@ and logged; pairing again needs `shaft telegram unpair` in your terminal.
   was a question. A message sent while it is still replying joins that reply at its next step (/v1/chat/interject);
   one that arrives too late for it (the answer was already being written) is answered straight after. /new starts a new conversation, /wake starts a cycle now, /status says what it is doing.
 - Instance → you: every message an instance sends the operator (send_message to "operator") also arrives from its
-  bot, read from the supervisor's message log (.supervisor/messages.jsonl). No daily limit (Daniele).
-- Full text both ways (Daniele accepted that Telegram's servers see it: bot chats are not end-to-end encrypted).
+  bot, read from the supervisor's message log (.supervisor/messages.jsonl). No daily limit (the operator).
+- Full text both ways (the operator accepted that Telegram's servers see it: bot chats are not end-to-end encrypted).
 - Nothing listens for Telegram: the service long-polls getUpdates, so no port is opened and no webhook, tunnel
   or Funnel is needed. Tokens stay in the supervisor's .env and never reach an instance or a log line.
 """
@@ -164,7 +164,7 @@ def send_file(token: str, chat_id: int, name: str, data: bytes, reply_to: int | 
 
 
 def download(token: str, file_id: str) -> bytes:
-    """A file Daniele sent: getFile, then the file itself (Telegram lets a bot download up to 20 MB)."""
+    """A file the operator sent: getFile, then the file itself (Telegram lets a bot download up to 20 MB)."""
     from .messages import ATTACH_MAX_BYTES
     path = call(token, "getFile", file_id=file_id)["file_path"]
     try:
@@ -323,7 +323,7 @@ def paired_id() -> int | None:
 
 
 def reachable(name: str) -> str:
-    """'@its_bot' when Daniele can be reached on Telegram through this instance's bot: a token, a known bot name,
+    """'@its_bot' when the operator can be reached on Telegram through this instance's bot: a token, a known bot name,
     a paired account and the service running; '' otherwise. Instances are told this in send_message."""
     from .version import service
     st = load()
@@ -402,7 +402,7 @@ class Chat:
             text = "> " + "\n> ".join(quoted["text"].splitlines()) + "\n\n" + text
             answer_question(self.name, quoted.get("message_id"))
         with self.mu:
-            if self.inflight is not None:            # a reply is running: this message joins it (PLAN-interject.md)
+            if self.inflight is not None:            # a reply is running: this message joins it (docs/plans/PLAN-interject.md)
                 self.inflight.append(text)
                 try:                                 # under mu: it can never reach two replies
                     if not interject_api(self.name, [self.history[0], {"role": "user", "content": text}]):
@@ -455,7 +455,7 @@ class Chat:
             stop.set()
 
     def receive(self, files: list[tuple[str, str]]) -> str:
-        """Save Daniele's files in the instance's attachments/ folder; returns the lines that tell it where."""
+        """Save the operator's files in the instance's attachments/ folder; returns the lines that tell it where."""
         from . import messages
         got = []
         for file_id, name in files:

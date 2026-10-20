@@ -10,12 +10,12 @@ orders (judge_pair); the verdict — better / worse / no clear difference, by a 
 inbox. The instance decides whether to adopt the change; if the files it keeps match the trial's exactly,
 probation knows the verdict (match).
 
-Trials on the local model never take an instance's time (Daniele, 2026-10-13: "this should not cannibalise its
+Trials on the local model never take an instance's time ("this should not cannibalise its
 time. Otherwise, it can use Mimo"): a pair runs on the local model only while nothing else needs it, and is killed
 and requeued the moment a cycle, a sleep or a conversation does; pairs still waiting after SHAFT_TRIAL_LOCAL_WAIT_H
 (or preempted twice) run on SHAFT_TRIAL_FALLBACK_MODEL. The work is done by work(), which the scheduler starts.
 
-Plan, decisions and acceptance criteria: PLAN-trials.md.
+Plan, decisions and acceptance criteria: docs/plans/PLAN-trials.md.
 """
 from __future__ import annotations
 
@@ -73,8 +73,8 @@ TARGETS = ("shaft/", "plugins/", "skills/", "tests/")
 # The gate no longer counts config.env as code (the operator edits it too; the instance only via set_config),
 # but an arm still runs with — and a trial still refuses to change — the config it was committed with.
 CODE = (*gate.CODE_PATHS, "config.env")
-# mail/: attachments downloaded from the operator's mail (PLAN-mail.md) are copies, not state: never in the judge's diff.
-# .browser/: a browser profile a replay's `run` created (PLAN-browser.md) — cookies, never shown to the judge.
+# mail/: attachments downloaded from the operator's mail (docs/plans/PLAN-mail.md) are copies, not state: never in the judge's diff.
+# .browser/: a browser profile a replay's `run` created (docs/plans/PLAN-browser.md) — cookies, never shown to the judge.
 NOT_STATE = ("logs", ".tmp", "secrets", "__pycache__", ".venv", ".uv", "mail", ".browser")
 LEDGER = SUP_DIR / "trial_usage.jsonl"
 
@@ -247,7 +247,7 @@ def state_of(project: Path, name: str, ep: dict, starts: list[str] | None = None
         return None
     # --first-parent: the branch's own line. Without it the walk also reached template commits merged later
     # (`shaft update`), and a template commit dated between the last run and t0 became the start: a replay with
-    # the template's tree and an empty mind (8 of the 50 replayed states on disk, found by PLAN-mind-out-of-git M0).
+    # the template's tree and an empty mind (8 of the 50 replayed states on disk, found by docs/plans/PLAN-mind-out-of-git M0).
     commit = _git(project, "log", "-1", "--first-parent", "--format=%H", f"--before={t0:%Y-%m-%dT%H:%M:%S}",
                   branch(name)).stdout.strip()
     if not commit:
@@ -326,7 +326,7 @@ def link_env(dest: Path, real: Path) -> None:
 def copy_attachments(src: Path, dest: Path, before: datetime) -> int:
     """Files sent to the instance before `before` (attachments/<from-who>/<YYYYmmdd-HHMMSS…>/): they are versioned
     nowhere (not in git, not in the mind store), and a replay must see the photo the original cycle could look at
-    (PLAN-vision.md). Later ones are left out, as later mail is. Regular files only: a link is never followed."""
+    (docs/plans/PLAN-vision.md). Later ones are left out, as later mail is. Regular files only: a link is never followed."""
     copied = 0
     base = src / "attachments"
     for batch in sorted(base.glob("*/*")) if base.is_dir() and not base.is_symlink() else []:

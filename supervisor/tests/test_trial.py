@@ -1,4 +1,4 @@
-"""Trials (PLAN-trials.md): a past cycle is rebuilt faithfully, replayed with no side effects, judged blind in both
+"""Trials (docs/plans/PLAN-trials.md): a past cycle is rebuilt faithfully, replayed with no side effects, judged blind in both
 orders, and the verdict reaches the instance and its probation. Local-model trials never take an instance's time."""
 from __future__ import annotations
 
@@ -129,7 +129,7 @@ class ReconstructTest(Fixture):
         self.assertIn(b"PURPLE-OWL", laid["inbox/20261010-100500-from-x.md"])         # from the store's tip
 
     def test_state_of_follows_the_instance_line_not_a_merged_template_commit(self):
-        # Regression (M0 of PLAN-mind-out-of-git): kant's cycle of 2026-10-13 20:58 got the template commit
+        # Regression (M0 of docs/plans/PLAN-mind-out-of-git): kant's cycle of 2026-10-13 20:58 got the template commit
         # a8c52d5 (17:27:32, merged into kant later) as its start, because the walk followed the merge's second
         # parent: a replay with the template's tree and an empty mind. 8 of the 50 replayed states on disk.
         tpl = self.project / "tpl"
@@ -173,7 +173,7 @@ class ReplayEndToEndTest(Fixture):
             {"tool_calls": [("declare_intent", {"goal": "answer x about the owl", "success_criterion": "reply sent",
                                                 "confidence": 60, "origin": "instance",
                                                 "origin_ref": "x's message about the owl"})]},
-            {"tool_calls": [("send_message", {"to": "operator", "text": "hello Daniele", "kind": "note"})]},
+            {"tool_calls": [("send_message", {"to": "operator", "text": "hello the operator", "kind": "note"})]},
             {"tool_calls": [("send_message", {"to": "x", "text": "the owl is purple"})]},
             {"tool_calls": [("http_request", {"url": "https://example.com/v1/post", "method": "POST",
                                               "body": {"a": 1}})]},
@@ -241,7 +241,7 @@ class ReplayLeavesTheMindStoreTest(ReplayEndToEndTest):
 
 
 class ReplaySeesItsRealVenvTest(Fixture):
-    """Bug (M4 of PLAN-browser, 2026-10-19): the replay copy had no .venv/, so `.venv/bin/python …` — the path
+    """Bug (M4 of docs/plans/PLAN-browser, 2026-10-19): the replay copy had no .venv/, so `.venv/bin/python …` — the path
     Thelos's 07:51 cycle drove its browser with — failed with "no such file" in a replay, and a replayed cycle
     could tell it was a replay ("NO_VENV", then a `uv venv` rebuild). The copy now links the instance's real
     .venv/ and .uv/, and the sandbox still keeps them read-only."""
@@ -457,7 +457,7 @@ class RequestTest(Fixture):
 
 
 class LocalTimeTest(Fixture):
-    """Daniele (2026-10-13): a trial "should not cannibalise its time. Otherwise, it can use Mimo"."""
+    """the operator (2026-10-13): a trial "should not cannibalise its time. Otherwise, it can use Mimo"."""
 
     llm_url = "http://127.0.0.1:8780/v1"
 

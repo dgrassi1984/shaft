@@ -1,4 +1,4 @@
-"""Memory beyond the context window (Daniele, 2026-10-13: the review's two criticisms, and "also embeddings").
+"""Memory beyond the context window (the operator, 2026-10-13: the review's two criticisms, and "also embeddings").
 
 - the cycle's improvement plan comes from the last sleep (reflections are not scheduled) and is always in view;
 - recall is automatic: what memory holds about a message is added without the model thinking to search;
@@ -26,7 +26,7 @@ from shaft.state import State  # noqa: E402
 from shaft.tools import Toolbox  # noqa: E402
 
 CONCEPTS = [{"weather", "forecast", "meteo", "previsioni", "rain", "pioggia"},
-            {"work", "job", "lavoro", "example-co", "employer", "lavora"},
+            {"work", "job", "lavoro", "example", "employer", "lavora"},
             {"sleep", "dormito", "consolidated", "sonno"}]
 
 
@@ -92,20 +92,20 @@ class ImprovementPlanTest(unittest.TestCase):
 
 class RecallTest(unittest.TestCase):
     def test_recall_adds_what_the_context_does_not_show(self):
-        root = instance(["## 2026-10-10 09:00 — Conversation with Daniele\n\nDaniele works at Example Company on sample "
-                         "management.", "## 2026-10-13 10:00 — Cycle\n\nI read the weather."])
+        root = instance(["## 2026-10-10 09:00 — Conversation with the operator\n\nthe operator works at Example Company on sample "
+                         "projects.", "## 2026-10-13 10:00 — Cycle\n\nI read the weather."])
         shown = "## 2026-10-13 10:00 — Cycle\n\nI read the weather."
         with mock.patch.dict(os.environ, {"SHAFT_EMBED_URL": ""}):
-            block = memory.recall(root, "where does Daniele work, example-co?", shown=shown)
+            block = memory.recall(root, "where does the operator work, Example Company?", shown=shown)
         self.assertIn("Recalled automatically", block)
-        self.assertIn("example-co AI", block)
+        self.assertIn("Example Company", block)
         self.assertNotIn("I read the weather", block)          # already in view: not repeated
 
     def test_a_conversation_message_reaches_the_model_with_its_recall(self):
         from supervisor.tests.fakellm import FakeLLM
         fake = FakeLLM([{"content": "ok"}])
         self.addCleanup(fake.close)
-        root = instance(["## 2026-10-01 09:00 — Conversation with Daniele\n\nDaniele's son is called Jordan."])
+        root = instance(["## 2026-10-01 09:00 — Conversation with the operator\n\nthe operator's son is called Jordan."])
         (root / "config.env").write_text(f'LLM_BASE_URL="{fake.url}"\nLLM_MODEL="m"\nCONTEXT_JOURNAL_CHARS=10\n')
         subprocess.run([sys.executable, "-E", "-s", "-m", "shaft", "talk", "--json"], cwd=TEMPLATE, timeout=60,
                        env={"PATH": "/usr/bin:/bin", "SHAFT_ROOT": str(root)}, capture_output=True, text=True,
@@ -144,7 +144,7 @@ class SleepConsolidationTest(unittest.TestCase):
 
     def test_digests_are_kept_shown_and_searchable(self):
         self.assertEqual(self.run_tool("write_digest", text="Built the weather plugin; slept well."), "digest written")
-        cfg = mock.Mock(NAME="shaft", OPERATOR_NAME="Daniele", CONTEXT_JOURNAL_CHARS=1000)
+        cfg = mock.Mock(NAME="shaft", OPERATOR_NAME="the operator", CONTEXT_JOURNAL_CHARS=1000)
         self.assertIn("Built the weather plugin", prompts.system_prompt(State(self.root), cfg, "m"))
         with mock.patch.dict(os.environ, {"SHAFT_EMBED_URL": ""}):
             self.assertEqual(memory.search(self.root, "weather plugin")[0].source, "memory/digests.md")
@@ -157,7 +157,7 @@ class SemanticSearchTest(unittest.TestCase):
         self.fake = FakeEmbedder()
         self.addCleanup(self.fake.close)
         self.root = instance(["## 2026-10-12 17:00 — Cycle\n\nI built a plugin that reads tomorrow's rain forecast.",
-                              "## 2026-10-12 18:00 — Conversation with Daniele\n\nDaniele's employer is example-co AI.",
+                              "## 2026-10-12 18:00 — Conversation with the operator\n\nthe operator's employer is Example Company.",
                               "## 2026-10-12 19:00 — Cycle\n\nI fetched three pages about scheduling."])
 
     def search(self, q):
@@ -169,7 +169,7 @@ class SemanticSearchTest(unittest.TestCase):
         self.assertIn("rain forecast", hits[0].text)
         self.assertEqual(memory.semantic_error, "")
         hits = self.search("dove lavora?")
-        self.assertIn("example-co", hits[0].text)
+        self.assertIn("Example Company", hits[0].text)
 
     def test_vectors_are_cached_and_only_new_chunks_are_embedded(self):
         self.search("weather")
@@ -185,7 +185,7 @@ class SemanticSearchTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {"SHAFT_EMBED_URL": self.fake.url}):
             out = Toolbox(self.root).run("search_memory", json.dumps({"query": "dove lavora?"}))
         self.assertTrue(out.startswith("(searched by words + meaning)"), out[:200])
-        self.assertIn("example-co", out)
+        self.assertIn("Example Company", out)
 
     def test_nothing_searched_claims_nothing(self):
         with mock.patch.dict(os.environ, {"SHAFT_EMBED_URL": self.fake.url}):
@@ -195,9 +195,9 @@ class SemanticSearchTest(unittest.TestCase):
     def test_without_the_service_it_says_words_only(self):
         with mock.patch.dict(os.environ, {"SHAFT_EMBED_URL": "http://127.0.0.1:9/v1/embeddings"}), \
              mock.patch("sys.stderr"):
-            out = Toolbox(self.root).run("search_memory", json.dumps({"query": "example-co"}))
+            out = Toolbox(self.root).run("search_memory", json.dumps({"query": "Example Company"}))
         self.assertTrue(out.startswith("(searched by words only: semantic search is unavailable"), out[:200])
-        self.assertIn("example-co", out)
+        self.assertIn("Example Company", out)
 
 
 if __name__ == "__main__":

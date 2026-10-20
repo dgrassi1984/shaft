@@ -14,7 +14,7 @@ from supervisor import runner
 TEMPLATE = Path(__file__).resolve().parents[2] / "template"
 
 SLEEP = "## 2026-10-12 04:00 — Sleep\n\nI consolidated the agenda.\n\n*Consolidation actions:* remember: x"
-CHAT = "## 2026-10-12 {h}:00 — Conversation with Daniele\n\n" + "words " * 400
+CHAT = "## 2026-10-12 {h}:00 — Conversation with the operator\n\n" + "words " * 400
 
 
 def last_sleep(entries: list[str], window: int = 16000) -> str:

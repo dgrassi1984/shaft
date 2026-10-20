@@ -1,4 +1,4 @@
-"""Web Push for the web UI (PLAN-pwa P4): "thelos replied" on a phone whose app is closed or locked.
+"""Web Push for the web UI (docs/plans/PLAN-pwa P4): "thelos replied" on a phone whose app is closed or locked.
 
 An iPhone stops a page's scripts while its app is in the background, so nothing in the page can say a reply landed.
 Only a push can: the browser's push service (Apple's for an iPhone, iOS 16.4+, Home Screen apps only) wakes the app's
@@ -11,7 +11,7 @@ What goes out, and how:
     the system's LibreSSL command line offers; a push with no payload needs neither.)
   - Each push is signed for its push service (VAPID, RFC 8292): an ES256 JSON Web Token. The key pair is made once with
     /usr/bin/openssl (LibreSSL, on every Mac) and kept in .supervisor/web/vapid.pem (0600); signing also runs openssl.
-    This is the one place SHAFT's stdlib-only rule calls a system binary (Daniele, 2026-10-19).
+    This is the one place SHAFT's stdlib-only rule calls a system binary.
   - Subscriptions are per paired device (.supervisor/web/push.json), only to the known push services' hosts; one a
     push service says is gone (404, 410) is dropped.
 """

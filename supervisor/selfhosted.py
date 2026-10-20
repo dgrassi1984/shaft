@@ -1,9 +1,9 @@
 """Self-hosted model servers the supervisor reaches for instances, through the broker — with the local Bonsai as
 fallback.
 
-An instance whose config.env says LLM_BASE_URL="broker" and LLM_MODEL="<server>/<model>" (e.g. racer/bonsai2) thinks
-on that server: Daniele's RTX 5070 Ti PC ("racer", llama.cpp over Tailscale; Daniele, 2026-10-14). The instance
-cannot reach the tailnet itself — nothing of Daniele's is reachable from the sandbox — so the broker relays the
+An instance whose config.env says LLM_BASE_URL="broker" and LLM_MODEL="<server>/<model>" (e.g. gpu/bonsai2) thinks
+on that configured server. No self-hosted servers are configured by default. The instance
+cannot reach the tailnet itself — nothing of the operator's is reachable from the sandbox — so the broker relays the
 OpenAI-format request as it is (chat_template_kwargs included: llama.cpp applies them to Bonsai's template like
 SHAFT's own server does), and the stream back as it arrives.
 
@@ -30,10 +30,7 @@ from .cloudllm import CloudError, _record, _relay
 from . import localmodel
 from .core import LLM_PORTS, NETWORK_ERRORS, knob, positive_int, json_object
 
-SERVERS, _ = knob("SHAFT_SELF_HOSTED", json.dumps({"racer": {
-    "url": "http://100.120.0.1:8080/v1",   # DMDRacer over Tailscale: Bonsai 2 27B on an RTX 5070 Ti (llama.cpp)
-    "sampling": {"temperature": 1.0, "top_p": 0.95, "top_k": 20, "min_p": 0.05},   # Daniele's opencode config
-    "think_budget": 4096}}), json_object,   # the same ceiling as SHAFT's own server (SHAFT_THINK_BUDGET)
+SERVERS, _ = knob("SHAFT_SELF_HOSTED", "{}", json_object,
     "self-hosted model servers instances may run on through the broker (JSON: name -> url, sampling, think_budget)",
     group="Local model", services=("runs", "api", "web"))
 FALLBACK, _ = knob(
@@ -55,7 +52,7 @@ def server(model: str) -> dict:
 
 
 def host_port(model: str) -> str:
-    """'100.120.0.1:8080': which model server an instance on `model` takes (runner.model_server)."""
+    """'gpu-box.example:8080': which model server an instance on `model` takes (runner.model_server)."""
     parts = urllib.parse.urlsplit(server(model)["url"])
     return f"{parts.hostname}:{parts.port or (443 if parts.scheme == 'https' else 80)}"
 

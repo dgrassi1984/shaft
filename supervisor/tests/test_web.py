@@ -1,4 +1,4 @@
-"""The web UI's front door (PLAN-webui.md M0): who may use it (a tailnet login in SHAFT_API_LOGINS and a paired
+"""The web UI's front door (docs/plans/PLAN-webui.md M0): who may use it (a tailnet login in SHAFT_API_LOGINS and a paired
 browser), forged requests refused, instance-written text never running as markup, and a port no run can reach."""
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from unittest import mock
 from supervisor import core, web, web_pages
 
 HOST = "mac.tail1234.ts.net:8444"
-ME = "daniele@example.com"
+ME = "operator@example.com"
 
 
 def snap(**inst) -> dict:
@@ -64,7 +64,7 @@ class WhoMayUseItTest(WebTest):
         self.assertEqual(r.status, 403)
 
     def test_a_login_not_in_the_list_refused(self):
-        self.assertEqual(self.req(login="someone@else.com", cookie=self.paired()).status, 403)
+        self.assertEqual(self.req(login="someone@example.com", cookie=self.paired()).status, 403)
 
     def test_an_allowed_login_without_a_paired_browser_is_told_how_to_pair(self):
         r = self.req()
@@ -126,7 +126,7 @@ class PairingTest(WebTest):
         self.assertEqual(r.status, 403)
 
     def test_the_cookie_is_httponly_secure_and_lax(self):
-        """Lax, not Strict (PLAN-pwa P1): a link to the UI opened from Telegram or Messages is a cross-site navigation
+        """Lax, not Strict (docs/plans/PLAN-pwa P1): a link to the UI opened from Telegram or Messages is a cross-site navigation
         and a Strict cookie was not sent. Every POST still needs the page's token and same-origin (ForgedRequestsTest)."""
         url = web.new_pairing("laptop")
         r = self.req("/pair", "POST", body=f"t={url.split('t=')[1]}".encode(), headers={"sec-fetch-site": "same-origin"})

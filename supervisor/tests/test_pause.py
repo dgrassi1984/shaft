@@ -1,4 +1,4 @@
-"""A conversation pauses the instance's autonomous run at once (Daniele, 2026-10-13: "when I start a chat, its
+"""A conversation pauses the instance's autonomous run at once (the operator, 2026-10-13: "when I start a chat, its
 background cycle should be immediately paused"), and the run resumes when the conversation ends."""
 from __future__ import annotations
 
@@ -148,7 +148,7 @@ class SupervisorSideTest(unittest.TestCase):
             t.start()
             time.sleep(1)
             self.assertTrue(runner.is_busy("shaft"))
-            with runner.Presence("shaft", "chat1"):              # Daniele opens `shaft talk` and types nothing yet
+            with runner.Presence("shaft", "chat1"):              # the operator opens `shaft talk` and types nothing yet
                 time.sleep(2.5)
                 during["open_only"] = runner.is_busy("shaft")    # an idle open conversation does not pause it
                 with runner.Reply("shaft", "talk"):              # he sends a message: a reply wants the instance
@@ -164,7 +164,7 @@ class SupervisorSideTest(unittest.TestCase):
                 t.join(timeout=30)                               # reply done: it resumes with the talk still open
                 during["finished_while_open"] = not t.is_alive()
             t.join(timeout=30)
-        self.assertTrue(during["open_only"])                      # Daniele, 2026-10-13: "pause only while replying"
+        self.assertTrue(during["open_only"])                      # the operator, 2026-10-13: "pause only while replying"
         self.assertTrue(during["free"])
         self.assertTrue(during["finished_while_open"])
         # Regression (2026-10-13): another run's start-up cleanup deleted the paused cycle's pause file and resumed

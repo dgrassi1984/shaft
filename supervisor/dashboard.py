@@ -1,5 +1,5 @@
 """Everything `shaft top` shows, in one snapshot: each instance's state and what it is doing right now, the
-services, the latest supervisor events and the messages between instances (Daniele, 2026-10-13: "a supervisor TUI for having at glance the
+services, the latest supervisor events and the messages between instances ("a supervisor TUI for having at glance the
 status of all instances and what they are doing, in real time"). Stdlib only, so it can be tested without the
 terminal UI; top.py renders it.
 """

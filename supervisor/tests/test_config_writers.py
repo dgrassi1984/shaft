@@ -1,7 +1,7 @@
 """config.env has two writers — the operator, at any time, and the instance through the broker's set_config —
 and the gate reverts only the instance's lines.
 
-Regression (2026-10-13): Daniele switched kant to claude-opus-5-5 at about 15:00, during a live cycle. The gate
+Regression (2026-10-13): the operator switched kant to claude-opus-5-5 at about 15:00, during a live cycle. The gate
 counted every change to config.env as the instance's; kant's new plugin failed its tests, so at 15:20 the gate
 "reverted: ['config.env', 'plugins/text_stats/...']", told kant that *its* change was reverted, and the next
 reflection ran on Bonsai."""
@@ -21,7 +21,7 @@ from unittest import mock
 from supervisor import core, gate, mind, sandbox
 from supervisor.tests.mindfix import IGNORE_MIND
 
-OPERATOR = 'LLM_MODEL="claude-opus-5-5"   # Daniele, 2026-10-13'
+OPERATOR = 'LLM_MODEL="claude-opus-5-5"   # the operator, 2026-10-13'
 CONFIG = 'LLM_BASE_URL="broker"\nLLM_MODEL="bonsai"\nWAKE_INTERVAL_MINUTES=120\n'
 FAILING = "import unittest\n\nclass T(unittest.TestCase):\n    def test_x(self):\n        self.fail('broken')\n"
 PASSING = "import unittest\n\nclass T(unittest.TestCase):\n    def test_x(self):\n        self.assertTrue(True)\n"
@@ -117,7 +117,7 @@ class ConfigWritersTest(unittest.TestCase):
         return broker
 
     def operator_edits(self, *lines: str):
-        """Daniele, in his editor, outside the sandbox."""
+        """the operator, in his editor, outside the sandbox."""
         text = (self.root / "config.env").read_text()
         for line in lines:
             key = line.split("=", 1)[0]
@@ -293,7 +293,7 @@ class SetConfigTest(unittest.TestCase):
         text, back = gate.config_without((self.root / "config.env").read_text(), self.broker.config_writes)
         self.assertEqual(back, ["X"])
         self.assertIn("\nX=2\n", text)
-        later = (self.root / "config.env").read_text().replace('X="4"', "X=9")   # Daniele, after the instance
+        later = (self.root / "config.env").read_text().replace('X="4"', "X=9")   # the operator, after the instance
         text, back = gate.config_without(later, self.broker.config_writes)
         self.assertEqual(back, [])
         self.assertIn("\nX=9\n", text)

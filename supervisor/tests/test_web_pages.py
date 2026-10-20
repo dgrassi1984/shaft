@@ -1,4 +1,4 @@
-"""The web UI's read-only pages (PLAN-webui.md M1): each shows what its `shaft top` tab shows, from the same panel
+"""The web UI's read-only pages (docs/plans/PLAN-webui.md M1): each shows what its `shaft top` tab shows, from the same panel
 reader and the same fixtures as test_control_panel (the strings asserted there are asserted here), and
 attachments are served only as the plan says — only files a message names, no links, never as a page."""
 from __future__ import annotations
@@ -194,7 +194,7 @@ class TranscriptsTest(PagesTest):
         p = mock.patch.object(panel, "transcripts", return_value=[self.TALK, self.CYCLE])
         p.start()
         self.addCleanup(p.stop)
-        (self.inst / "shaft" / "config.env").write_text('OPERATOR_NAME="Daniele"\n')
+        (self.inst / "shaft" / "config.env").write_text('OPERATOR_NAME="the operator"\n')
 
     def test_the_list_and_its_filters(self):
         self.has("/i/shaft/transcripts", "2 transcripts", "tidy notes", "via api")
@@ -323,7 +323,7 @@ class NoMarkupShownAsTextTest(PagesTest):
 
     def test_the_summary_lists_its_journal_headings(self):
         body = self.get("/i/shaft")
-        self.assertIn('<li><span class="clip">2026-10-13 17:32 — Conversation with Daniele</span></li>', body)
+        self.assertIn('<li><span class="clip">2026-10-13 17:32 — Conversation with the operator</span></li>', body)
 
     def test_adding_to_html_escapes_the_text_side_only(self):
         from supervisor.web_pages import Html
@@ -354,6 +354,6 @@ class StylesTest(TestCase):
         """Codex review: 📄 Documents with no documents yet (.showdocs) kept two columns wider than a phone."""
         css = (Path(web_pages.__file__).parent / "web_static" / "web.css").read_text()
         phone = css[css.index("@media (max-width: 720px)"):]
-        # on a phone the chat is one column (a flex column), and the documents a sheet over it (PLAN-pwa P2)
+        # on a phone the chat is one column (a flex column), and the documents a sheet over it (docs/plans/PLAN-pwa P2)
         self.assertRegex(phone, r"\.chatgrid \{ display: flex; flex-direction: column;")
         self.assertRegex(phone, r"\.chatgrid\.showdocs > aside\.docs \{ display: block; position: fixed; inset: 0;")

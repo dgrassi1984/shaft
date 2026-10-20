@@ -1,4 +1,4 @@
-"""Markdown for the web UI (PLAN-webui.md §1, widened in PLAN-webui-chat.md): what instances write — answers, documents,
+"""Markdown for the web UI (docs/plans/PLAN-webui.md §1, widened in docs/plans/PLAN-webui-chat.md): what instances write — answers, documents,
 journals — rendered so that it reads as they meant it, and never runs as markup. Stdlib only.
 
 Safety, the one rule: nothing the text holds reaches the page unescaped. The pieces that must not be escaped twice

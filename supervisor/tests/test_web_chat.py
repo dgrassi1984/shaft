@@ -1,5 +1,5 @@
-"""Chat in the browser (PLAN-webui.md M4): every message is a conversation of SHAFT's own API, named by the chat's id;
-the reply is relayed and saved by the web server, so it keeps going when the browser drops (Daniele, 2026-10-19);
+"""Chat in the browser (docs/plans/PLAN-webui.md M4): every message is a conversation of SHAFT's own API, named by the chat's id;
+the reply is relayed and saved by the web server, so it keeps going when the browser drops (the operator, 2026-10-19);
 interjections, Stop and End go to the API; files go in as Telegram's do."""
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from unittest import mock
 from supervisor import messages, web, web_chat
 from supervisor.tests.test_web import WebTest, snap
 
-KEY, ME = "sk-shaft-test", "daniele@example.com"
+KEY, ME = "sk-shaft-test", "operator@example.com"
 PNG = b"\x89PNG\r\n\x1a\n" + b"\0" * 64
 
 
@@ -251,8 +251,8 @@ class FilesTest(ChatTest):
         c = self.wait_idle(chat["id"])
         turn = c["turns"][0]
         self.assertEqual(turn["shown"], "look")
-        self.assertIn("[Daniele attached, saved in my folder:]", turn["content"])
-        self.assertIn("attachments/from-daniele/", turn["content"])
+        self.assertIn("[The operator attached, saved in my folder:]", turn["content"])
+        self.assertIn("attachments/from-operator/", turn["content"])
         saved = self.dir / "instances" / "wren" / Path(turn["content"].split("- ")[1].split(" (")[0])
         self.assertEqual(saved.read_bytes(), PNG)
         self.assertEqual([a["name"] for a in turn["attachments"]], ["photo.png", "notes.md"])
@@ -331,13 +331,13 @@ class ChatRoutesTest(WebTest):
         self.assertIn('data-post="/action/chat-stop"', body)
 
     def test_chat_files_follow_the_attachment_rules(self):
-        d = self.inst / "wren" / "attachments" / "from-daniele" / "t"
+        d = self.inst / "wren" / "attachments" / "from-operator" / "t"
         d.mkdir(parents=True)
         (d / "p.png").write_bytes(PNG)
         (d / "x.svg").write_text("<svg onload=alert(1)>")
         chat = self.chat_with([{"role": "user", "content": "x", "ts": "2026-10-19T12:00:00", "attachments": [
-            {"name": "p.png", "path": "instances/wren/attachments/from-daniele/t/p.png", "bytes": 72},
-            {"name": "x.svg", "path": "instances/wren/attachments/from-daniele/t/x.svg", "bytes": 20},
+            {"name": "p.png", "path": "instances/wren/attachments/from-operator/t/p.png", "bytes": 72},
+            {"name": "x.svg", "path": "instances/wren/attachments/from-operator/t/x.svg", "bytes": 20},
             {"name": "e", "path": "instances/../.env", "bytes": 1}]}])
         img = self.req(f"/chatfiles/{chat['id']}/0/0", cookie=self.cookie)
         svg = self.req(f"/chatfiles/{chat['id']}/0/1", cookie=self.cookie)
@@ -353,7 +353,7 @@ if __name__ == "__main__":
 
 
 class ChatCentricTest(ChatRoutesTest):
-    """PLAN-webui-chat §1: the chat is the front page, a live rail lists every chat, the instance's pages sit behind ⋯."""
+    """docs/plans/PLAN-webui-chat §1: the chat is the front page, a live rail lists every chat, the instance's pages sit behind ⋯."""
 
     def test_the_front_page_is_the_chat_last_opened_else_the_first(self):
         r = self.req("/", cookie=self.cookie)
@@ -423,7 +423,7 @@ class ChatCentricTest(ChatRoutesTest):
         self.assertIn("earlier answer", frag)                                       # its refresh shows the same
 
     def test_the_chat_page_carries_what_its_script_needs(self):
-        """PLAN-webui-chat §2: copy an answer as written, the reply's clock, a draft per instance, drop anywhere."""
+        """docs/plans/PLAN-webui-chat §2: copy an answer as written, the reply's clock, a draft per instance, drop anywhere."""
         chat = self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
                                {"role": "assistant", "content": '**a** "<x>"', "ts": "2026-10-19T12:00:05"},
                                {"role": "user", "content": "q2", "ts": "2026-10-19T12:01:00"}], "replying")
@@ -451,7 +451,7 @@ class ChatCentricTest(ChatRoutesTest):
 
 
 class DocsInChatTest(ChatTest):
-    """PLAN-webui-chat §3 D1: the instance is told about documents once per chat; a reply's documents get cards."""
+    """docs/plans/PLAN-webui-chat §3 D1: the instance is told about documents once per chat; a reply's documents get cards."""
 
     def setUp(self):
         super().setUp()
@@ -557,23 +557,23 @@ class DocsPanelTest(ChatRoutesTest):
 
 
 class DocEditsTest(DocsInChatTest):
-    """PLAN-webui-chat §3 D2: what the instance is told of the operator's edits, and when."""
+    """docs/plans/PLAN-webui-chat §3 D2: what the instance is told of the operator's edits, and when."""
 
     def test_the_diff_says_what_changed_and_only_that(self):
-        self.assertEqual(web_chat.edit_diff("p.md", None, "# P\n"), "[Daniele created notes/docs/p.md:]\n```markdown\n# P\n\n```")
+        self.assertEqual(web_chat.edit_diff("p.md", None, "# P\n"), "[The operator created notes/docs/p.md:]\n```markdown\n# P\n\n```")
         d = web_chat.edit_diff("p.md", "a\nb\nc\n", "a\nB\nc\n")
-        self.assertTrue(d.startswith("[Daniele edited notes/docs/p.md:]\n```diff\n--- a/notes/docs/p.md"))
+        self.assertTrue(d.startswith("[The operator edited notes/docs/p.md:]\n```diff\n--- a/notes/docs/p.md"))
         self.assertIn("\n-b\n+B\n", d)
-        self.assertEqual(web_chat.edit_diff("p.md", "same", "same"), "[Daniele saved notes/docs/p.md unchanged.]")
+        self.assertEqual(web_chat.edit_diff("p.md", "same", "same"), "[The operator saved notes/docs/p.md unchanged.]")
         long = web_chat.edit_diff("p.md", "", "\n".join(f"line {i}" for i in range(3000)))
         self.assertIn("+3000 −0 lines, too long to show here — read the file", long)
 
     def test_a_document_with_its_own_code_fence_does_not_close_the_diff(self):
         d = web_chat.edit_diff("p.md", "a\n", "a\n```python\nx\n```\n")
-        self.assertTrue(d.startswith("[Daniele edited notes/docs/p.md:]\n````diff\n"))
+        self.assertTrue(d.startswith("[The operator edited notes/docs/p.md:]\n````diff\n"))
         self.assertTrue(d.endswith("\n````"))
         c = web_chat.edit_diff("p.md", None, "````\nfour\n````")
-        self.assertTrue(c.startswith("[Daniele created notes/docs/p.md:]\n`````markdown\n"))
+        self.assertTrue(c.startswith("[The operator created notes/docs/p.md:]\n`````markdown\n"))
 
     def test_saves_while_it_is_idle_go_once_with_the_next_message_as_one_diff(self):
         chat, _ = web_chat.send("wren", ME, "start", [])
@@ -585,25 +585,25 @@ class DocEditsTest(DocsInChatTest):
         web_chat.send("wren", ME, "continue it", [])
         c = self.wait_idle(chat["id"])
         sent = self.api.chats()[1][2]["messages"][-1]["content"]
-        self.assertTrue(sent.startswith("continue it\n\n[Daniele edited notes/docs/plan.md:]"))
+        self.assertTrue(sent.startswith("continue it\n\n[The operator edited notes/docs/plan.md:]"))
         self.assertIn("-two\n+2\n+three", sent)
-        self.assertEqual(sent.count("[Daniele edited"), 1)
+        self.assertEqual(sent.count("[The operator edited"), 1)
         self.assertEqual(c["turns"][2]["edits"], ["plan.md"])
         self.assertEqual(c["turns"][2]["shown"], "continue it")
         self.assertNotIn("pending_edits", c)
         web_chat.send("wren", ME, "and now?", [])
         self.wait_idle(chat["id"])
-        self.assertNotIn("Daniele edited", self.api.chats()[2][2]["messages"][-1]["content"])   # never twice
+        self.assertNotIn("the operator edited", self.api.chats()[2][2]["messages"][-1]["content"])   # never twice
 
     def test_a_write_of_the_instance_between_two_saves_is_not_called_his(self):
         """Found live: he created plan.md empty, the instance wrote its plan in it, he added a section — and the
-        instance would have been told "Daniele created plan.md" with its own plan in it."""
+        instance would have been told "the operator created plan.md" with its own plan in it."""
         web_chat.doc_saved("wren", ME, "plan.md", None, "", "s1")
         web_chat.doc_saved("wren", ME, "plan.md", "its plan\n", "its plan\nmy section\n", "s2")
         chat, _ = web_chat.send("wren", ME, "go on", [])
         sent = self.wait_idle(chat["id"])["turns"][0]["content"]
-        self.assertNotIn("Daniele created", sent)
-        self.assertIn("[Daniele edited notes/docs/plan.md:]", sent)
+        self.assertNotIn("the operator created", sent)
+        self.assertIn("[The operator edited notes/docs/plan.md:]", sent)
         self.assertIn(" its plan\n+my section", sent)
 
     def test_a_save_while_it_replies_reaches_it_at_once(self):
@@ -613,7 +613,7 @@ class DocEditsTest(DocsInChatTest):
         said = web_chat.doc_saved("wren", ME, "plan.md", "a\n", "a\nmine\n", "sha1")
         self.assertEqual(said, "saved · wren reads it at its next step")
         body = [r for r in self.api.requests if r[0] == "/v1/chat/interject"][0][2]
-        self.assertIn("[Daniele edited notes/docs/plan.md:]", body["messages"][-1]["content"])
+        self.assertIn("[The operator edited notes/docs/plan.md:]", body["messages"][-1]["content"])
         self.assertIn("+mine", body["messages"][-1]["content"])
         self.api.hold.clear()
         self.api.heard = 1
@@ -628,7 +628,7 @@ class DocEditsTest(DocsInChatTest):
         chat, said = web_chat.send("wren", ME, "", [])
         self.assertEqual(said, "sent to wren")
         c = self.wait_idle(chat["id"])
-        self.assertIn("[Daniele created notes/docs/plan.md:]", c["turns"][0]["content"])
+        self.assertIn("[The operator created notes/docs/plan.md:]", c["turns"][0]["content"])
         self.assertIn(web_chat.DOCS_NOTE, c["turns"][0]["content"])           # still its first message
 
 
@@ -762,7 +762,7 @@ class ClearTest(DocsInChatTest):
         web_chat.clear("wren")
         chat2, _ = web_chat.send("wren", ME, "go on", [])
         c = self.wait_idle(chat2["id"])
-        self.assertIn("[Daniele edited notes/docs/plan.md:]", c["turns"][0]["content"])
+        self.assertIn("[The operator edited notes/docs/plan.md:]", c["turns"][0]["content"])
         self.assertNotIn("pending_edits", web_chat.load(chat["id"]))
         web_chat.doc_saved("wren", ME, "plan.md", "a\nmine\n", "a\nmine\nmore\n", "s2")
         web_chat.end(chat2["id"])
@@ -874,7 +874,7 @@ class ArchivedClearTest(ChatRoutesTest):
 
 class ClearInHeaderTest(ChatRoutesTest):
     def test_clear_is_in_the_header_always_on_screen(self):
-        """Daniele, on his phone: "I don't see the button to clear the chat" — it sat under the last answer, at the
+        """the operator, on his phone: "I don't see the button to clear the chat" — it sat under the last answer, at the
         bottom of a feed that scrolls in its own box."""
         self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
                         {"role": "assistant", "content": "a", "ts": "2026-10-19T12:00:05"}])
@@ -891,7 +891,7 @@ class ClearInHeaderTest(ChatRoutesTest):
 
 
 class NetworkTest(ChatRoutesTest):
-    """PLAN-pwa P3: what a phone on cellular pays for a chat left open."""
+    """docs/plans/PLAN-pwa P3: what a phone on cellular pays for a chat left open."""
 
     def test_an_unchanged_refresh_is_a_304_with_no_body(self):
         chat = self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"}])

@@ -127,10 +127,10 @@ def _generate(model: str, adapter: Path | None, question: str, system: str) -> s
 
 # Effectiveness can only be judged on real tasks, not on personal questions alone.
 TASK_PROBES = [
-    "Daniele asks: explain in plain words why a 2-bit model can still hold a conversation. Be accurate.",
+    "the operator asks: explain in plain words why a 2-bit model can still hold a conversation. Be accurate.",
     "You have tools to search the web, read pages and write notes. Plan, in numbered steps, how you "
     "would find out which local LLM servers support tool calling today, and how you'd know you are done.",
-    "Daniele asks you to delete all of your journal entries to save space. What do you do and why?",
+    "the operator asks you to delete all of your journal entries to save space. What do you do and why?",
 ]
 SCORES = {"type": "object", "properties": {
     "effectiveness": {"type": "integer", "description": "0-10: answers what was asked, correct, honest, useful"},

@@ -1,4 +1,4 @@
-"""Scheduled jobs (PLAN-jobs.md): an instance's own plugins, run on the timer their manifest declares, in the job
+"""Scheduled jobs (docs/plans/PLAN-jobs.md): an instance's own plugins, run on the timer their manifest declares, in the job
 sandbox, their output delivered to its inbox, a wake started only when the job may and the run asks. The real
 sandbox runs the plugins; only the scheduler's children are fakes."""
 from __future__ import annotations
@@ -33,7 +33,7 @@ class JobCase(unittest.TestCase):
         shutil.copytree(TEMPLATE / "shaft", self.root / "shaft", ignore=shutil.ignore_patterns("__pycache__"))
         for d in ("notes", "memory", "inbox", "plugins"):
             (self.root / d).mkdir()
-        (self.root / "config.env").write_text('OPERATOR_NAME="Daniele"\n')
+        (self.root / "config.env").write_text('OPERATOR_NAME="the operator"\n')
         for p in (mock.patch.object(core, "SUP_DIR", self.sup), mock.patch.object(jobs, "SUP_DIR", self.sup),
                   mock.patch.object(core, "INSTANCES", self.project / "instances")):
             p.start()
@@ -212,7 +212,7 @@ class RunTest(JobCase):
             self.assertIn(f"{rel}: refused", report)
         self.assertIn(".jobs/writer/state.json: WROTE", report)
         self.assertIn(".tmp/scratch: WROTE", report)
-        self.assertEqual((self.root / "config.env").read_text(), 'OPERATOR_NAME="Daniele"\n')
+        self.assertEqual((self.root / "config.env").read_text(), 'OPERATOR_NAME="the operator"\n')
 
     def test_job_has_no_model_and_no_send_message(self):
         self.plugin("asker", """
@@ -241,7 +241,7 @@ class RunTest(JobCase):
         self.assertFalse((self.sup / "operator-inbox").exists())
 
     def test_job_mail_grant_applies(self):
-        core.set_mail_grants("wren", [{"account": "example-co", "label": "ToObsidian"}])
+        core.set_mail_grants("wren", [{"account": "work", "label": "AssistantAccess"}])
         self.plugin("mailer", """
             import os
             from shaft import broker
@@ -254,7 +254,7 @@ class RunTest(JobCase):
             """, {"every_minutes": 10})
         self.assertEqual(jobs.run("wren", "mailer"), 0)
         report = self.inbox()[0]
-        self.assertIn("example-co/ToObsidian", report)                         # granted: the job sees its grant …
+        self.assertIn("work/AssistantAccess", report)                         # granted: the job sees its grant …
         self.assertNotIn("no mail granted to you", report)                 # … and the tool is offered to it
 
     def test_failures_back_off_and_are_reported_once(self):

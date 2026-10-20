@@ -1,4 +1,4 @@
-"""PLAN-pwa P0: the web UI on a phone — fields iOS does not zoom into, finger-sized targets, nothing behind hover,
+"""docs/plans/PLAN-pwa P0: the web UI on a phone — fields iOS does not zoom into, finger-sized targets, nothing behind hover,
 the phone layout held sideways too, and Return as a new line where there is no Shift key."""
 from __future__ import annotations
 
@@ -67,7 +67,7 @@ if __name__ == "__main__":
 
 
 class PhoneLayoutTest(unittest.TestCase):
-    """PLAN-pwa P2: on a phone the chat is the whole screen."""
+    """docs/plans/PLAN-pwa P2: on a phone the chat is the whole screen."""
     PHONE = "(max-width: 720px), (pointer: coarse) and (max-height: 520px)"
 
     def test_the_page_is_as_tall_as_the_keyboard_leaves(self):
@@ -96,7 +96,7 @@ class PhoneLayoutTest(unittest.TestCase):
 
 
 class NetworkClientTest(unittest.TestCase):
-    """PLAN-pwa P3, in the page: what it sends and what it does when the network fails."""
+    """docs/plans/PLAN-pwa P3, in the page: what it sends and what it does when the network fails."""
 
     def test_a_refresh_asks_for_what_changed_and_gives_up_in_time(self):
         self.assertIn('{ "If-None-Match": el.dataset.etag }', JS)
@@ -122,7 +122,7 @@ class NetworkClientTest(unittest.TestCase):
 
 
 class AccessibilityTest(unittest.TestCase):
-    """PLAN-pwa P5."""
+    """docs/plans/PLAN-pwa P5."""
 
     def test_a_new_answer_and_every_toast_are_read_out(self):
         self.assertIn('region("toast", "status");', JS)                    # empty from the start: then it speaks

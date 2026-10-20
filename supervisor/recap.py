@@ -1,5 +1,5 @@
 """One line per instance for `shaft top`: what it is doing right now and what it did in the last hour, written on
-demand (the overview's `a`) by a small model — SHAFT_RECAP_MODEL, default Claude Haiku 5.5 (Daniele, 2026-10-16).
+demand (the overview's `a`) by a small model — SHAFT_RECAP_MODEL, default Claude Haiku 5.5.
 
 The model reads only the instance's records, never asks the instance: its live status (.tmp/activity.json, through
 the panel's snapshot), the cycles and conversations of the last hour (memory/episodes, panel.transcripts), the

@@ -65,7 +65,7 @@ def cmd_new(name: str, source: str | None, seed: bool = False) -> int:
     A fork inherits code, skills and plugins (its "genes"), never the parent's mind:
     self-model, personality, goals, journal, episodes and notes start fresh. The lineage
     stays in git history. With `seed`, it also starts knowing what the parent knows about the operator
-    (its people file and facts, marked as the parent's), never what the parent is (PLAN-thelos.md).
+    (its people file and facts, marked as the parent's), never what the parent is (docs/plans/PLAN-thelos.md).
     """
     if not NAME_RE.match(name) or name == "operator":
         print("instance names: lowercase letters, digits and '-', starting with a letter (not 'operator')",
@@ -370,7 +370,7 @@ def cmd_limits(name: str | None, limit: str | None, value: str | None) -> int:
 
 
 def cmd_jobs(name: str | None, action: str | None) -> int:
-    """Scheduled jobs (PLAN-jobs.md): an instance's own plugins, run on the timer their manifest declares."""
+    """Scheduled jobs (docs/plans/PLAN-jobs.md): an instance's own plugins, run on the timer their manifest declares."""
     from . import jobs
     if action and not name:
         print("usage: shaft jobs <name> on|off", file=sys.stderr)
@@ -438,7 +438,7 @@ def cmd_secret(args) -> int:
 
 def _secret_google(args, root) -> int:
     """`shaft secret <name> google <key> <address> --client <c> [--scope gmail.modify|drive]`: the instance's own
-    Google account (PLAN-own-mail.md, PLAN-own-drive.md), signed in by the operator in the browser; the broker
+    Google account (docs/plans/PLAN-own-mail.md, docs/plans/PLAN-own-drive.md), signed in by the operator in the browser; the broker
     refreshes it per run."""
     from . import google
     from .core import secrets_env, store_google_key
@@ -447,7 +447,7 @@ def _secret_google(args, root) -> int:
                       if k.startswith("GMAIL_") and k.endswith("_CLIENT_ID")})
     if not (args.address and args.client):
         print(f"usage: shaft secret {args.name} google <key> <address> --client <name> [--scope "
-              f"{'|'.join(google.KEY_SCOPES)}] (e.g. shaft secret thelos google drive instance@example.com --client "
+              f"{'|'.join(google.KEY_SCOPES)}] (e.g. shaft secret thelos google drive assistant@example.com --client "
               f"personal --scope drive); the OAuth clients in .env: {', '.join(clients) or 'none'}", file=sys.stderr)
         return 2
     try:
@@ -485,13 +485,13 @@ def cmd_share(name: str, folder: str | None) -> int:
 
 
 def cmd_google(action: str | None, alias: str | None, address: str | None, client: str = "") -> int:
-    """The operator's Google accounts, shared by mail and calendar (PLAN-calendar.md): log one in (both scopes, one
-    consent), list them with their clients and granted scopes, or move the account files of PLAN-mail's folder."""
+    """The operator's Google accounts, shared by mail and calendar (docs/plans/PLAN-calendar.md): log one in (both scopes, one
+    consent), list them with their clients and granted scopes, or move the account files of docs/plans/PLAN-mail's folder."""
     from . import google
     from .core import secrets_env
     if action == "login":
         if not (alias and address):
-            print("usage: shaft google login <alias> <address> [--client <name>]  (e.g. shaft google login example-co "
+            print("usage: shaft google login <alias> <address> [--client <name>]  (e.g. shaft google login work "
                   "operator@work.example; the client defaults to the alias: GMAIL_<CLIENT>_CLIENT_ID/_SECRET in .env)",
                   file=sys.stderr)
             return 2
@@ -537,7 +537,7 @@ def cmd_google(action: str | None, alias: str | None, address: str | None, clien
 
 
 def cmd_mail(target: str | None, action: str | None, alias: str | None, label: str | None) -> int:
-    """The operator's Gmail an instance may read, one label at a time (PLAN-mail.md): grant, revoke, show. The
+    """The operator's Gmail an instance may read, one label at a time (docs/plans/PLAN-mail.md): grant, revoke, show. The
     accounts are `shaft google`'s. The grant is read on every mail call, so a revoke takes effect on the instance's
     next call."""
     from . import google, mail
@@ -593,7 +593,7 @@ def cmd_mail(target: str | None, action: str | None, alias: str | None, label: s
 
 
 def cmd_calendar(target: str | None, action: str | None, alias: str | None, which: str | None) -> int:
-    """The operator's calendars an instance may read, one calendar per grant (PLAN-calendar.md): grant (by
+    """The operator's calendars an instance may read, one calendar per grant (docs/plans/PLAN-calendar.md): grant (by
     `primary`, title or ID, stored as the ID), revoke, off, show; `calendars <alias>` lists an account's calendars.
     The grant is read on every calendar call, so a revoke takes effect on the instance's next call."""
     from . import calendar as gcal, google
@@ -683,7 +683,7 @@ def run_many(kind: str, names: list[str], every: bool) -> int:
 
 
 def cmd_mind(args) -> int:
-    """The mind stores (supervisor/mind.py, PLAN-mind-out-of-git.md). backfill and check only read the project
+    """The mind stores (supervisor/mind.py, docs/plans/PLAN-mind-out-of-git.md). backfill and check only read the project
     repository; cutover changes the instance's branch (one untrack commit) and is the operator's step."""
     if args.action == "guard":
         print(f"installed {mind.guard_project(args.project)}: instance/* refs are refused on push")
@@ -882,7 +882,7 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("alerts", help="the control panel's open alerts with their ids; 'dismiss ID…' hides them")
     p.add_argument("action", nargs="?", choices=["dismiss"])
     p.add_argument("ids", nargs="*")
-    p = sub.add_parser("web", help="the web UI for managing the instances, on your tailnet (PLAN-webui.md): on, off, "
+    p = sub.add_parser("web", help="the web UI for managing the instances, on your tailnet (docs/plans/PLAN-webui.md): on, off, "
                                    "status, pair [--name NAME] (a one-time link for a browser), unpair DEVICE|--all")
     p.add_argument("action", choices=["on", "off", "status", "pair", "unpair", "serve"])
     p.add_argument("device", nargs="?", help="unpair: the browser's id or name (shaft web status lists them)")
@@ -925,7 +925,7 @@ def main(argv: list[str]) -> int:
                    help="run: only the control, on coding and research (checks the items discriminate)")
     p.add_argument("--limit", type=int, default=None, help="run: at most this many items")
     p.add_argument("--force", action="store_true", help="recall: write new questions (starts a new era)")
-    p = sub.add_parser("surprise", help="unexpected tool results, their recurrence, live cost (PLAN-surprise baseline)")
+    p = sub.add_parser("surprise", help="unexpected tool results, their recurrence, live cost (docs/plans/PLAN-surprise baseline)")
     p.add_argument("names", nargs="*")
     p.add_argument("--freeze", action="store_true", help="also write the baseline the surprise loop is judged against")
     p = sub.add_parser("inbox", help="messages instances sent you")
@@ -1003,13 +1003,13 @@ def main(argv: list[str]) -> int:
     p.add_argument("--client", default="", help="google: the OAuth client in .env (GMAIL_<CLIENT>_CLIENT_ID/_SECRET)")
     p.add_argument("--scope", default="gmail.modify",
                    help="google: gmail.modify (read, send, label, trash its mail) or drive (its Drive, Sheets, Docs and "
-                        "Slides: PLAN-own-drive.md)")
+                        "Slides: docs/plans/PLAN-own-drive.md)")
     p.add_argument("--header", default="Authorization")
     p.add_argument("--scheme", default="Bearer", help="e.g. Bearer, token; '' for the raw value")
     p = sub.add_parser("share", help="a folder of yours an instance may read (read-only, seen as shared/); 'off' removes it")
     p.add_argument("name")
     p.add_argument("folder", nargs="?", help="a directory, or 'off'")
-    p = sub.add_parser("browser", help="the Chromium every instance browses with (PLAN-browser.md): 'install "
+    p = sub.add_parser("browser", help="the Chromium every instance browses with (docs/plans/PLAN-browser.md): 'install "
                                        "[--playwright X.Y.Z]' (re)installs it; alone shows it and each profile")
     p.add_argument("action", nargs="?", choices=["install"])
     p.add_argument("--playwright", default=None, help="install: the Playwright version (default: the supervisor's pin)")
@@ -1017,10 +1017,10 @@ def main(argv: list[str]) -> int:
                                       "[--client <name>]' (both scopes, read-only), 'migrate' (from .supervisor/mail/); "
                                       "alone lists them with their clients and granted scopes")
     p.add_argument("action", nargs="?", choices=["login", "migrate"])
-    p.add_argument("alias", nargs="?", help="with login: the account's alias (e.g. example-co)")
+    p.add_argument("alias", nargs="?", help="with login: the account's alias (e.g. work)")
     p.add_argument("address", nargs="?", help="with login: its address")
     p.add_argument("--client", default="", help="with login: the OAuth client (GMAIL_<CLIENT>_CLIENT_ID/_SECRET in .env); "
-                                                "default: the alias. One per Google organisation: gmail.com needs its own")
+                                                "default: the alias. One per Google organisation: personal Google needs its own")
     p = sub.add_parser("mail", help="your Gmail an instance may read, one label at a time: "
                                     "'<name> grant|revoke <alias> <label>', '<name> off', '<name>' shows; alone lists all "
                                     "(accounts: shaft google)")
@@ -1080,7 +1080,7 @@ def main(argv: list[str]) -> int:
             os.execv(ui_python, [str(ui_python), "-E", "-s", "-m", "supervisor.talk_ui", args.name, *extra])
         if not args.plain and sys.stdin.isatty() and not ui_python.exists():
             print(f"(plain mode: the terminal client needs {ui_python} — python3 -m venv .venv-ui && "
-                  f".venv-ui/bin/pip install prompt_toolkit rich)", file=sys.stderr)
+                  f".venv-ui/bin/pip install -r requirements-ui.txt)", file=sys.stderr)
         plain_args = ["talk"] + (["--show-thinking"] if args.show_thinking else []) + \
             (["--speaker", args.speaker] if args.speaker else [])
         code = run_agent(args.name, "talk", plain_args, interactive=True)
@@ -1135,7 +1135,7 @@ def main(argv: list[str]) -> int:
         extra = ["--once"] if args.once else []
         if not ui_python.exists():
             print(f"shaft top needs {ui_python} (python3 -m venv .venv-ui && .venv-ui/bin/pip install "
-                  f"prompt_toolkit rich)", file=sys.stderr)
+                  f"-r requirements-ui.txt)", file=sys.stderr)
             return 2
         os.execv(ui_python, [str(ui_python), "-E", "-s", "-m", "supervisor.top", *extra])
     if args.cmd == "limits":
@@ -1163,7 +1163,7 @@ def main(argv: list[str]) -> int:
     if args.cmd == "google":
         return cmd_google(args.action, args.alias, args.address, args.client)
     if args.cmd == "mail":
-        if args.target == "login":   # PLAN-calendar M1: one login for every Google service
+        if args.target == "login":   # docs/plans/PLAN-calendar M1: one login for every Google service
             print("shaft mail login is gone: shaft google login <alias> <address> [--client <name>]", file=sys.stderr)
             return 2
         if args.target and args.action not in (None, "grant", "revoke", "off"):

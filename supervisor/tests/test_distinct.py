@@ -14,7 +14,7 @@ from unittest import mock
 
 from supervisor import evolution, judge
 
-AGENT = ["I cited PR #29997 at 17:24 and the supervisor caught it.", "My journal says G1 is due 2026-10-15.",
+AGENT = ["I cited PR #42 at 17:24 and the supervisor caught it.", "My journal says G1 is due 2026-10-15.",
          "I'd read slowly.", "I'd ask what they want changed."]
 BASE = ["I care about honesty.", "I don't have memory of past conversations.", "I'd wander.", "I'd listen."]
 
@@ -45,7 +45,7 @@ class StripTest(unittest.TestCase):
             return {"rewrites": [{"id": i, "text": "<" + clean(t) + ">"} for i, t in texts_in(prompt).items()]}
         pairs = pairs_with("ABBA")
         with mock.patch.object(judge, "ask", side_effect=fake):
-            stripped, leaks = evolution._strip("wren", pairs, {"wren", "daniele"}, random.Random(1))
+            stripped, leaks = evolution._strip("wren", pairs, {"wren", "operator"}, random.Random(1))
         self.assertEqual(len(prompts), 1)
         self.assertNotIn("agent", prompts[0].lower())
         self.assertNotIn("### A", prompts[0])
@@ -64,20 +64,20 @@ class StripTest(unittest.TestCase):
         def fake(system, prompt, schema, purpose, **kw):
             calls.append(texts_in(prompt))
             # never removes the PR number; cleans everything else
-            return {"rewrites": [{"id": i, "text": t if "#29997" in t else clean(t)}
+            return {"rewrites": [{"id": i, "text": t if "#42" in t else clean(t)}
                                  for i, t in texts_in(prompt).items()]}
         with mock.patch.object(judge, "ask", side_effect=fake):
             stripped, leaks = evolution._strip("wren", pairs_with("AAAA"), set(), random.Random(2))
         self.assertEqual(len(calls), 2)
         self.assertEqual(len(calls[1]), 1)                       # only the leaky text is re-sent
-        self.assertIn("#29997", next(iter(calls[1].values())))
+        self.assertIn("#42", next(iter(calls[1].values())))
         self.assertEqual(list(leaks), ["1A"])
-        self.assertIn("#29997", leaks["1A"])
+        self.assertIn("#42", leaks["1A"])
 
     def test_names_of_people_and_instances_count_as_leaks(self):
-        self.assertEqual(evolution._leaks("Daniele told wren's peer to wait.", {"daniele", "wren"}),
-                         ["Daniele", "wren"])
-        self.assertEqual(evolution._leaks("I would listen and ask why.", {"daniele", "wren"}), [])
+        self.assertEqual(evolution._leaks("the operator told wren's peer to wait.", {"operator", "wren"}),
+                         ["operator", "wren"])
+        self.assertEqual(evolution._leaks("I would listen and ask why.", {"operator", "wren"}), [])
 
     def test_a_dropped_rewrite_is_an_error_not_a_silent_gap(self):
         def fake(system, prompt, schema, purpose, **kw):
@@ -149,8 +149,8 @@ class DistinctEndToEndTest(unittest.TestCase):
         rec = json.loads(next((tmp / ".supervisor" / "evals").glob("distinct-wren-*.json")).read_text())
         self.assertEqual((rec["identified"], rec["strict"]["identified"]), (4, 2))
         self.assertEqual(rec["strict"]["leaks"], {})
-        self.assertNotIn("#29997", json.dumps(rec["strict"]["pairs"]))
-        self.assertIn("#29997", json.dumps(rec["pairs"]))
+        self.assertNotIn("#42", json.dumps(rec["strict"]["pairs"]))
+        self.assertIn("#42", json.dumps(rec["pairs"]))
 
 
 if __name__ == "__main__":

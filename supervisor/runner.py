@@ -91,7 +91,7 @@ def spawn_recover(name: str) -> None:
 
 def model_server(name: str) -> str | None:
     """The model server the instance's calls go to ('127.0.0.1:8780', or a self-hosted one through the broker:
-    '100.120.0.1:8080'), or None when it thinks with a cloud model. Two instances compete for the model only when
+    'gpu-box.example:8080'), or None when it thinks with a cloud model. Two instances compete for the model only when
     both use the same server."""
     from . import selfhosted
     cfg = instance_config(name)
@@ -174,7 +174,7 @@ def _held(folder: Path) -> dict[str, str]:
 def replying(name: str) -> list[str]:
     """Replies to the operator that want the instance right now — waiting for it or writing (Reply). A running
     cycle pauses only for these, and resumes as soon as they are done, even while the conversation stays open
-    (Daniele, 2026-10-13: "pause only while replying")."""
+    ("pause only while replying")."""
     return sorted(_held(SUP_DIR / "replying" / name))
 
 
@@ -340,7 +340,7 @@ def _pid_alive(pid: int) -> bool:
 
 
 def _pause(name: str, root: Path, kind: str, proc, held: _Held, run: dict, broker) -> float:
-    """A reply to Daniele needs this instance during its autonomous run (Daniele, 2026-10-13: "its background
+    """A reply to the operator needs this instance during its autonomous run ("its background
     cycle should be immediately paused", and later "pause only while replying"): signal it — a model call in flight is cut off, freeing the
     model; a tool in progress finishes first — settle what it did so far, give the instance to the conversation,
     and take it back when the conversation ends. Returns the seconds it was paused."""
@@ -427,7 +427,7 @@ def agent_command(root: Path, broker: Broker, agent_args: list[str], profile: Pa
     it may write only in `root` and reach only the model ports, the embedding service, its broker and its egress
     proxy (the public internet); it may read the operator's shared folder if the broker carries one (shaft share),
     is told which of the operator's mail labels and calendars its broker serves it (SHAFT_MAIL, shaft mail;
-    SHAFT_CALENDAR, shaft calendar), whether its model sees images (SHAFT_VISION, PLAN-vision.md),
+    SHAFT_CALENDAR, shaft calendar), whether its model sees images (SHAFT_VISION, docs/plans/PLAN-vision.md),
     and the instance's Python environment when `root` is a copy (trial replay)."""
     ports = list(llm_ports) + [EMBED_PORT, broker.port, broker.egress.port]
     profile.write_text(sandbox.profile(root, HOME, ports, shared=broker.shared, env_root=broker.env_root))
@@ -670,8 +670,8 @@ def _commit_outside_config(name: str, root: Path, writes: list[dict]) -> None:
 
 
 def _commit_outside_drive(name: str, root: Path) -> None:
-    """drive.md (what the instance is for, PLAN-thelos.md) as the operator left it, committed on its own: only he
-    writes it (the sandbox denies the instance), so any difference from HEAD is his. Uncommitted, it would stop
+    """drive.md (what the instance is for, docs/plans/PLAN-thelos.md) as the operator left it, committed on its own: only they
+    write it (the sandbox denies the instance), so any difference from HEAD is theirs. Uncommitted, it would stop
     `shaft update` (dirty worktree) and ride along in the instance's next commit as if it were its change. The
     instance is told in its journal: what it believes about its purpose may now be out of date."""
     path = root / "drive.md"

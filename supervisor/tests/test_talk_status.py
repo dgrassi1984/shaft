@@ -1,4 +1,4 @@
-"""The talk client's status line (Daniele: "add a status bar with context information, tokens/sec average")."""
+"""The talk client's status line (the operator: "add a status bar with context information, tokens/sec average")."""
 from __future__ import annotations
 
 import json

@@ -1,4 +1,4 @@
-"""The judge rotation (Daniele, 2026-10-14: Opus 5.5 too costly; "stochastic rotation I prefer"): MiMo through
+"""The judge rotation (the operator, 2026-10-14: Opus 5.5 too costly; "stochastic rotation I prefer"): MiMo through
 OpenRouter, Haiku 5.5 and Sonnet 5.5 through the Claude API, picked at random per judgment, never the model the
 judged instance runs on; every verdict records its judge, and each call's cost lands in judge_usage.jsonl."""
 from __future__ import annotations

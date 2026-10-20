@@ -1,9 +1,9 @@
-"""The operator's actions from a panel — `shaft top` and the web UI (PLAN-control-panel.md, PLAN-webui.md). Stdlib only.
+"""The operator's actions from a panel — `shaft top` and the web UI (docs/plans/PLAN-control-panel.md, docs/plans/PLAN-webui.md). Stdlib only.
 
 Every action runs the same CLI subcommand an operator would type (`python -m supervisor …`), so neither panel has
 authority of its own and both inherit each command's refusals. Each is logged as `<who>: operator …` (who = top or
 web); one that takes longer than a moment runs detached in its own session — it outlives the panel — with its output
-in .supervisor/<who>-actions.log. The guards here are the ones taken from incidents (PLAN-control-panel.md §1).
+in .supervisor/<who>-actions.log. The guards here are the ones taken from incidents (docs/plans/PLAN-control-panel.md §1).
 """
 from __future__ import annotations
 

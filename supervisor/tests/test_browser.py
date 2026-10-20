@@ -1,4 +1,4 @@
-"""Instances browse with a shared Chromium and a private profile each (PLAN-browser.md, Daniele 2026-10-18: "provide it
+"""Instances browse with a shared Chromium and a private profile each (docs/plans/PLAN-browser.md, the operator 2026-10-18: "provide it
 a profile on a shared chromium, and leave all the rest to it").
 
 What the supervisor guarantees, and these tests pin:

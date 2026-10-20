@@ -17,7 +17,7 @@ show and others ignore.
 A message sent to /v1/chat/interject while that conversation's reply runs is appended to the agent's
 .tmp/interject-<talk id>.jsonl; the agent takes it at its next step and says so (`heard`). The reply's JSON counts
 them in `interjections_heard` (in the order sent): the client answers any others with its next request
-(PLAN-interject.md).
+(docs/plans/PLAN-interject.md).
 
 Security: the server listens on 127.0.0.1 only; `tailscale serve` exposes it to the tailnet (never
 Funnel). Every request needs the bearer key SHAFT_API_KEY from .env AND a Tailscale-User-Login
@@ -432,7 +432,7 @@ class Handler(BaseHTTPRequestHandler):
         cid = f"chatcmpl-{uuid.uuid4().hex[:20]}"
         # Only the reply's last step is its answer. Text the model writes before calling a tool ("let me check my
         # notes…") is narration: it goes to reasoning_content with the tool activity, never into the reply — it
-        # reached Daniele's Telegram as if the instance had said it (wren, 2026-10-14: 25 of 44 Telegram replies had
+        # reached the operator's Telegram as if the instance had said it (wren, 2026-10-14: 25 of 44 Telegram replies had
         # tool steps). So a step's text is held until the next event tells which it was.
         content, step, notes, error, ended, heard = [], [], [], None, None, 0
         if stream:

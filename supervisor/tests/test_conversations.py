@@ -137,15 +137,15 @@ class WriteUpTest(unittest.TestCase):
         self.assertEqual(out, "[('old', ['back again', 'yes'])]")
 
     def test_api_reply_does_not_get_its_own_conversation_twice(self):
-        out = self.run_template(self.CODE + "print(recovery.unwritten_context(s, 'Daniele', exclude='open1'))", self.root)
+        out = self.run_template(self.CODE + "print(recovery.unwritten_context(s, 'the operator', exclude='open1'))", self.root)
         self.assertNotIn("hello", out)
         self.assertIn("back again", out)
 
 
 class SpeakerTest(unittest.TestCase):
     def test_conversation_with_someone_else_is_not_remembered_as_the_operator(self):
-        # Regression: Claude Code talked to shaft for Daniele (saying so); the write-up was titled
-        # "Conversation with Daniele" and filed "what I learned about Daniele" from what Claude Code did.
+        # Regression: Claude Code talked to shaft for the operator (saying so); the write-up was titled
+        # "Conversation with the operator" and filed "what I learned about the operator" from what Claude Code did.
         from supervisor.tests.fakellm import FakeLLM
         fake = FakeLLM([{"content": "## 2026-10-13 10:09 — Conversation with Claude Code (2026-10-13 10:09–10:10)\n\n"
                                     "Claude Code added a history tool."}])
@@ -161,11 +161,11 @@ class SpeakerTest(unittest.TestCase):
                            env={"PATH": "/usr/bin:/bin", "SHAFT_ROOT": str(root)}, capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
         journal = (root / "memory" / "journal.md").read_text()
-        self.assertIn("Conversation with Claude Code (for Daniele)", journal)
-        self.assertNotIn("Conversation with Daniele", journal)
+        self.assertIn("Conversation with Claude Code (for the operator)", journal)
+        self.assertNotIn("Conversation with the operator", journal)
         self.assertEqual(journal.count("## "), 1)   # MiMo opened its text with its own dated heading (wren, 10-13)
         sent = json.dumps(fake.requests[-1]["messages"])
-        self.assertIn("do not attribute what Claude Code said or did to Daniele", sent)
+        self.assertIn("do not attribute what Claude Code said or did to the operator", sent)
         self.assertIn("what you learned about Claude Code", sent)
 
 

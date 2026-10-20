@@ -1,4 +1,4 @@
-"""The talk client's keys (Daniele 2026-10-16: "Shift-enter should add a new line to the message, not submit ·
+"""The talk client's keys (the operator 2026-10-16: "Shift-enter should add a new line to the message, not submit ·
 Command-enter should queue the message").
 
 Regression: iTerm2 sends Shift-Enter as CR — the very byte Enter sends — unless the app asks it to report

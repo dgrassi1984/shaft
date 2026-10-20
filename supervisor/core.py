@@ -28,16 +28,16 @@ TEMPLATE = PROJECT / "template"
 SUP_DIR = Path(os.environ.get("SHAFT_SUPERVISOR_DIR") or PROJECT / ".supervisor")  # tests point it elsewhere
 HOME = Path.home()
 # The mind: what an instance remembers and writes for itself. Never in the project's git (which can be pushed):
-# versioned in its private mind store (supervisor/mind.py, PLAN-mind-out-of-git.md).
+# versioned in its private mind store (supervisor/mind.py, docs/plans/PLAN-mind-out-of-git.md).
 MIND_PATHS = ("self", "memory", "notes", "inbox")
 # The non-code state the instance's branch still holds: skills/ is a gene (evolution recombines it, the template
-# ships one), not memory (PLAN-mind-out-of-git.md D2).
+# ships one), not memory (docs/plans/PLAN-mind-out-of-git.md D2).
 SKILL_PATHS = ("skills",)
 DEFAULT_INSTANCE = "shaft"
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
 
 
-# -- knobs: the supervisor's settings (PLAN-webui-chat.md §4) ---------------------------------------------------------
+# -- knobs: the supervisor's settings (docs/plans/PLAN-webui-chat.md §4) ---------------------------------------------------------
 # Each is read once, when a process starts: from its environment, else the operator's settings file, else its default
 # (env > file > default). The launchd services run with PATH alone in their environment, so for them the file is what
 # sets a knob; `shaft settings` writes it (settings.py), the web UI's Settings page runs that verb.
@@ -356,7 +356,7 @@ def config_set_line(key: str, value, comment: str = "") -> str:
 def config_lock(path: Path):
     """One writer of a config.env at a time, across processes: the broker's set_config, the gate undoing it and the
     operator's `shaft config` each read the file, change one line and write it back. Without the lock an operator
-    write landing between set_config's read and write was lost (PLAN-webui.md M3)."""
+    write landing between set_config's read and write was lost (docs/plans/PLAN-webui.md M3)."""
     import fcntl
     locks = SUP_DIR / "locks"
     locks.mkdir(parents=True, exist_ok=True)
@@ -430,7 +430,7 @@ def disabled_tools(name: str) -> set[str]:
 
 
 # -- the operator's folder an instance may read ----------------------------------------------------------------
-# Daniele, 2026-10-13: shaft asked for "a clearly scoped folder" of his work. Read-only: the instance still writes
+# shaft asked for "a clearly scoped folder" of their work. Read-only: the instance still writes
 # only in its own folder. Its sandbox and `run` may read it; its file tools show it as shared/ (SHAFT_SHARED).
 def _share_forbidden() -> tuple[Path, ...]:
     """SHAFT's own state: the project (instances, supervisor code), the supervisor's folder wherever it is now, and
@@ -462,8 +462,8 @@ def set_shared_folder(name: str, folder: Path | str | None) -> Path | None:
     return path
 
 
-# -- the operator's mail an instance may read (PLAN-mail.md) ------------------------------------------------------
-# Daniele, 2026-10-15: an instance he picks reads the Gmail threads carrying a label he picks. No Gmail credential can
+# -- the operator's mail an instance may read (docs/plans/PLAN-mail.md) ------------------------------------------------------
+# an instance they pick reads the Gmail threads carrying a label they pick. No Gmail credential can
 # be limited to a label, so the grant and the credential stay here and supervisor/mail.py enforces the label.
 def mail_grants(name: str) -> list[dict]:
     """The labels this instance may read (`shaft mail <name> grant <alias> <label>`): [{account, label}]."""
@@ -482,8 +482,8 @@ def set_mail_grants(name: str, grants: list[dict]) -> list[dict]:
     return keep
 
 
-# -- the operator's calendars an instance may read (PLAN-calendar.md) ----------------------------------------------
-# Daniele, 2026-10-15: several instances, each with its own grants, one calendar per grant, full event details. A
+# -- the operator's calendars an instance may read (docs/plans/PLAN-calendar.md) ----------------------------------------------
+# several instances, each with its own grants, one calendar per grant, full event details. A
 # calendar token opens every calendar the account can see, so the grant stays here and supervisor/calendar.py makes
 # every API call name a granted calendar. Stored by calendar ID (it survives a rename), with its title at grant time.
 def calendar_grants(name: str) -> list[dict]:
@@ -506,7 +506,7 @@ def set_calendar_grants(name: str, grants: list[dict]) -> list[dict]:
 
 
 # -- an instance's own keys ---------------------------------------------------------------------------
-# Its own (Daniele, 2026-10-13: "they should have their own key and be able to manage them"), kept in its
+# Its own ("they should have their own key and be able to manage them"), kept in its
 # folder at secrets/secrets.json — but handled only by the supervisor: the instance stores, lists and
 # deletes keys through broker tools, and names a key in http_request for the broker to add. Its sandbox,
 # plugins and `run` cannot read the file, so a value never comes back into its context (prompts may go to
@@ -538,7 +538,7 @@ def store_secret(root: Path, key: str, value: str, hosts: list[str], header: str
 
 
 def store_google_key(root: Path, key: str, data: dict) -> None:
-    """An instance's own Google login (PLAN-own-mail.md), made by `shaft secret <name> google`: a refresh token the
+    """An instance's own Google login (docs/plans/PLAN-own-mail.md), made by `shaft secret <name> google`: a refresh token the
     broker turns into an access token and adds like any key, only to its hosts. It has no `value`: the token it adds
     is made per run and never stored."""
     if not SECRET_NAME_RE.match(key):

@@ -1,4 +1,4 @@
-"""An instance's own Python environment, in its own folder and under its control (Daniele, 2026-10-14).
+"""An instance's own Python environment, in its own folder and under its control.
 
 - `.venv/`: the environment its plugins, its tests and `python3` in `run` use, once it exists.
 - `.uv/`: uv's own state — the Pythons it installs (any version the instance picks), its cache and tools.

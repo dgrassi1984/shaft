@@ -1,0 +1,174 @@
+# Configuration reference
+
+## Supervisor settings (`shaft settings`)
+
+Supervisor settings cover the judge pool, cloud models and caps, trial limits, timeouts,
+and the local model server. These knobs (`core.knob`) are listed below. Each process reads them when it starts: from its **environment**,
+else **`.supervisor/settings.env`**, else the knob's **default** (env > file > default). The launchd services run with
+`PATH` alone in their environment, so the file is what sets a knob for them; an environment variable still wins for
+a command you run from a shell that sets it.
+
+- `shaft settings` lists every knob, grouped: its value, where it comes from (`env`, `file`, `default`), the default,
+  what it does and which services read it.
+- `shaft settings set SHAFT_JUDGE_MODELS=claude-sonnet-5-5,openrouter/xiaomi/mimo-v2.6-pro [--expect KEY=OLD]` and
+  `shaft settings unset KEY [--expect-unset KEY]` write the file, several keys in one write, under a lock. Each value
+  is checked by its knob's own parser first (for example, a negative timeout or JSON that is not an object): a value it refuses is never written. `--expect` refuses if the file's value changed since you looked.
+  Each change is logged in `supervisor.log`.
+- **Applying a change.** Runs (cycles, sleeps, trials, batteries, CLI commands) are fresh processes: they read the
+  file when they start. A long-running service (api, scheduler, telegram, web, model) holds what it read at its start;
+  each records the knobs it read (`.supervisor/services/<service>.json`), so `shaft settings` and the web UI's
+  Settings page say "not live yet: restart api (`shaft api on`), …" until the services holding another value
+  restart. A service holds the knobs of every module it imported, used or not, so the list errs towards a restart.
+  A service started before it recorded its knobs is taken to hold the defaults of the knobs it is declared to read.
+- Every `knob()` call registers its description, Settings group and readers; `test_settings` fails on a knob that is
+  not registered, and on a `SHAFT_` variable read straight from the environment.
+- Ports, interpreter paths, `SHAFT_WEB_HOSTS` and `SHAFT_TELEGRAM_API` are set from a terminal only: a wrong value there
+  cuts the web UI off or breaks a service. Secrets stay in `.env` (`shaft secret` for an instance's own keys).
+
+Sources: [settings registry and writes](../supervisor/settings.py),
+[knob precedence](../supervisor/core.py).
+
+## Supervisor secrets and identity
+
+Root `.env` is read by the supervisor, not passed to instances. Its parser accepts
+`KEY=value` and strips outer quotes; it does not evaluate shell syntax or expand
+variables. Keep comments on separate lines. Start with [.env.example](../.env.example).
+Source: [supervisor/core.py](../supervisor/core.py).
+
+| Key | Purpose | Source |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | Claude instance models, judges, coding, recaps, image descriptions | [cloudllm.py](../supervisor/cloudllm.py) |
+| `OPENROUTER_API_KEY` | OpenRouter chat, decision models, judges | [cloudllm.py](../supervisor/cloudllm.py), [judge.py](../supervisor/judge.py) |
+| `SCRAPEBADGER_API_KEY` | Web search | [broker.py](../supervisor/broker.py) |
+| `SHAFT_API_KEY` | API bearer key, created by `shaft api on` | [api.py](../supervisor/api.py) |
+| `SHAFT_INBOX_KEY` | Separate delivery-only inbox bearer key | [api.py](../supervisor/api.py) |
+| `SHAFT_API_LOGINS` | Allowed tailnet logins; identity policy, not a knob | [api.py](../supervisor/api.py) |
+| `TELEGRAM_TOKEN_<NAME>` | One bot token per instance; hyphens become underscores | [telegram.py](../supervisor/telegram.py) |
+| `GMAIL_<CLIENT>_CLIENT_ID` / `GMAIL_<CLIENT>_CLIENT_SECRET` | Named Google Desktop OAuth clients | [google.py](../supervisor/google.py) |
+
+`SHAFT_API_LOGINS` can also come from the process environment. Integration refresh
+tokens and instance-owned keys are stored by their setup commands, not in instance
+`config.env`. See [integrations](integrations.md).
+
+## Every supervisor knob
+
+This table is extracted statically from production `knob()` calls in `supervisor/*.py`.
+Defaults below are source defaults, not values read from this checkout's private state.
+`PROJECT` means the clone root. Paths are resolved under that root at runtime.
+
+| Name | Default | Meaning | Declaration |
+|---|---|---|---|
+| `SHAFT_API_PORT` | `8781` | the API's local port (OpenAI-compatible; the web UI and Telegram chat through it) | [api.py](../supervisor/api.py) |
+| `SHAFT_INBOX_PER_HOUR` | `30` | messages per hour the API's inbox (doorbell) accepts for one instance | [api.py](../supervisor/api.py) |
+| `SHAFT_INBOX_WAKES_PER_HOUR` | `4` | wakes per hour inbox messages may start for one instance | [api.py](../supervisor/api.py) |
+| `SHAFT_API_HTTPS_PORT` | `8443` | the API's https port on the tailnet (tailscale serve) | [api.py](../supervisor/api.py) |
+| `SHAFT_BATTERY_VERSION` | `v1` | the battery item set in use (.supervisor/battery/items/<version>) | [battery.py](../supervisor/battery.py) |
+| `SHAFT_BATTERY_EVERY_DAYS` | `5` | nights between an instance's scheduled capability batteries (0: never scheduled) | [battery.py](../supervisor/battery.py) |
+| `SHAFT_BATTERY_ITEM_TIMEOUT_S` | `1800` | seconds one battery item may run | [battery.py](../supervisor/battery.py) |
+| `SHAFT_BATTERY_CONTROL_REF` | `template` | the git branch a battery control instance is made from | [battery.py](../supervisor/battery.py) |
+| `SHAFT_BATTERY_RECALL_MIN_AGE_H` | `48` | hours old a journal entry must be to make a battery recall item | [battery.py](../supervisor/battery.py) |
+| `SHAFT_OPERATOR_PER_DAY` | `0` | messages per day one instance may send the operator (0: no limit) | [broker.py](../supervisor/broker.py) |
+| `SHAFT_DESCRIBE_MODEL` | `claude-haiku-5-5` | the model describe_image uses for an instance whose own model cannot see images | [broker.py](../supervisor/broker.py) |
+| `SHAFT_CLOUD_MODELS` | `claude-haiku-5-5,claude-opus-5-5,openrouter/xiaomi/mimo-v2.6-pro` | the cloud models an instance may run on (through the broker) | [cloudllm.py](../supervisor/cloudllm.py) |
+| `SHAFT_OPENROUTER_PROVIDER` | `{"only": ["novita"], "allow_fallbacks": false, "data_collection": "deny", "zdr": true, "require_parameters": true}` | OpenRouter's provider routing for every openrouter/ call (JSON): which providers, and the data policy | [cloudllm.py](../supervisor/cloudllm.py) |
+| `SHAFT_CLOUD_DAILY_USD` | `8` | dollars per day an instance may spend on its cloud model (shaft limits can set one instance's own cap) | [cloudllm.py](../supervisor/cloudllm.py) |
+| `SHAFT_DECISION_MODELS` | `typesafe/jev-1.13,~typesafe/jev-latest` | the models the broker's decide tool may call (OpenRouter's decisions API); the first is its default | [cloudllm.py](../supervisor/cloudllm.py) |
+| `SHAFT_DECISION_PROVIDER` | `{"data_collection": "deny", "zdr": true, "allow_fallbacks": false}` | the decide tool's provider routing and data policy (JSON) | [cloudllm.py](../supervisor/cloudllm.py) |
+| `SHAFT_CODER_MODEL` | `claude-opus-5-5` | the model an instance hands a coding task to (delegate) | [coder.py](../supervisor/coder.py) |
+| `SHAFT_CODER_DAILY_USD` | `5` | dollars per day per instance its coding hand-offs may spend | [coder.py](../supervisor/coder.py) |
+| `SHAFT_CYCLE_TIMEOUT_S` | `2400` | seconds a cycle (and a trial's replayed cycle) may run before it is stopped | [core.py](../supervisor/core.py) |
+| `SHAFT_SLEEP_TIMEOUT_S` | `5400` | seconds the nightly sleep (consolidation) may run; nobody is waiting for it | [core.py](../supervisor/core.py) |
+| `SHAFT_LLM_PORTS` | `8780` | the local model servers' ports a run's sandbox may reach (the first is SHAFT's own server) | [core.py](../supervisor/core.py) |
+| `SHAFT_CORE_MIN_HOURS` | `72` | hours an instance's core personality must stay unchanged before it may change it again | [core.py](../supervisor/core.py) |
+| `SHAFT_EMBED_PORT` | `8782` | the embedding service's port (memory search), which every run may reach | [core.py](../supervisor/core.py) |
+| `SHAFT_BROKER_MAX_CALLS` | `60` | supervisor tool calls (broker) one run may make | [core.py](../supervisor/core.py) |
+| `SHAFT_IDLE_MINUTES` | `30` | minutes a conversation (terminal, web, Telegram, API) may stay quiet before it is closed and written up into the journal | [core.py](../supervisor/core.py) |
+| `SHAFT_FT_PYTHON` | `str(PROJECT / ".venv-ft" / "bin" / "python")` | the interpreter fine-tuning runs with | [finetune.py](../supervisor/finetune.py) |
+| `SHAFT_FT_BASE_MODEL` | `mlx-community/Qwen3.8-27B-4bit` | the base model fine-tuning starts from when it does not train Bonsai itself | [finetune.py](../supervisor/finetune.py) |
+| `SHAFT_BONSAI_PYTHON` | `str(PROJECT / ".venv-bonsai" / "bin" / "python")` | the interpreter Bonsai LoRA training runs with | [finetune.py](../supervisor/finetune.py) |
+| `SHAFT_JOB_MIN_MINUTES` | `5` | the shortest interval an instance's own job (a plugin on a timer) may run at | [jobs.py](../supervisor/jobs.py) |
+| `SHAFT_JUDGE_MODELS` | `openrouter/xiaomi/mimo-v2.6-pro,claude-sonnet-5-5` | the judge pool: each judgment picks one at random, never the judged instance's own model | [judge.py](../supervisor/judge.py) |
+| `SHAFT_JUDGE2_MODEL` | `openrouter/z-ai/glm-5.3-flash` | the second judge, which grades a sample of cycles again to measure the judges' agreement | [judge.py](../supervisor/judge.py) |
+| `SHAFT_JUDGE2_EVERY` | `4` | the second judge grades one cycle in this many (0: never) | [judge.py](../supervisor/judge.py) |
+| `SHAFT_MODEL_IDLE_MINUTES` | `15` | minutes SHAFT's own model server stays up unused before it exits (it starts again on demand); 0 = never exits | [localmodel.py](../supervisor/localmodel.py) |
+| `SHAFT_MODEL_START_TIMEOUT_S` | `300` | seconds to wait for the model server to start on demand | [localmodel.py](../supervisor/localmodel.py) |
+| `SHAFT_THINK_BUDGET` | `4096` | reasoning tokens SHAFT's own model may think per reply before it is made to answer (0: no limit) | [localmodel.py](../supervisor/localmodel.py) |
+| `SHAFT_MODEL_TEMP` | `0.6` | SHAFT's own model's sampling temperature | [localmodel.py](../supervisor/localmodel.py) |
+| `SHAFT_PROMPT_CACHE_GB` | `8` | gigabytes of prompt cache SHAFT's own model server keeps | [localmodel.py](../supervisor/localmodel.py) |
+| `SHAFT_PROBATION_CYCLES` | `6` | judged cycles a kept self-change stays on probation (reverted on a clear drop) | [metrics.py](../supervisor/metrics.py) |
+| `SHAFT_JUDGE_ALERT_USD` | `10` | judge spend per day that raises an alert (the judge has no cap) | [panel.py](../supervisor/panel.py) |
+| `SHAFT_RECAP_MODEL` | `claude-haiku-5-5` | the model that writes the overview's one-line recap of each instance | [recap.py](../supervisor/recap.py) |
+| `SHAFT_SELF_HOSTED` | `{}` | self-hosted model servers instances may run on through the broker (JSON: name -> url, sampling, think_budget) | [selfhosted.py](../supervisor/selfhosted.py) |
+| `SHAFT_SELF_HOSTED_FALLBACK` | `f"http://127.0.0.1:{LLM_PORTS[0]}/v1"` | the server a self-hosted model's calls fall back to when it is unreachable (empty: none) | [selfhosted.py](../supervisor/selfhosted.py) |
+| `SHAFT_SELF_HOSTED_TIMEOUT_S` | `1800` | seconds a self-hosted server may take to answer one call | [selfhosted.py](../supervisor/selfhosted.py) |
+| `SHAFT_TELEGRAM_API` | `https://api.telegram.org` | the Telegram Bot API endpoint | [telegram.py](../supervisor/telegram.py) |
+| `SHAFT_TRIALS_PER_DAY` | `2` | trials an instance may ask for per day (the operator's are not counted) | [trial.py](../supervisor/trial.py) |
+| `SHAFT_TRIAL_DAILY_USD` | `3` | dollars per day an instance's own trials may spend on cloud models | [trial.py](../supervisor/trial.py) |
+| `SHAFT_TRIAL_LOCAL_UNITS_PER_DAY` | `24` | replayed cycles per day an instance's own trials may run on the local model; past it they run on the fallback model | [trial.py](../supervisor/trial.py) |
+| `SHAFT_TRIAL_N_MAX` | `10` | the most past cycles one trial replays | [trial.py](../supervisor/trial.py) |
+| `SHAFT_TRIAL_LOCAL_WAIT_H` | `6` | hours a trial waits for the local model's idle time before it runs on the fallback model | [trial.py](../supervisor/trial.py) |
+| `SHAFT_TRIAL_FALLBACK_MODEL` | `openrouter/xiaomi/mimo-v2.6-pro` | the cloud model a local-model trial runs on when the local model stays busy | [trial.py](../supervisor/trial.py) |
+| `SHAFT_TRIAL_PARALLEL` | `3` | replayed cycles a cloud-model trial runs at once | [trial.py](../supervisor/trial.py) |
+| `SHAFT_MAX_IMAGES` | `4` | images one model call may carry | [vision.py](../supervisor/vision.py) |
+| `SHAFT_WEB_PORT` | `8785` | the web UI's local port (tailscale serve forwards to it) | [web.py](../supervisor/web.py) |
+| `SHAFT_WEB_HTTPS_PORT` | `8444` | the web UI's https port on the tailnet (tailscale serve) | [web.py](../supervisor/web.py) |
+| `SHAFT_WEB_HOSTS` | empty | the host names the web UI answers to, comma-separated (empty: the tailnet name `shaft web on` recorded) | [web.py](../supervisor/web.py) |
+
+Special runtime variables are not settings: `SHAFT_PYTHON` selects the launcher
+interpreter ([bin/shaft](../bin/shaft)); `SHAFT_SUPERVISOR_DIR` redirects state
+for tests ([core.py](../supervisor/core.py)). Run-injected values such as broker
+tokens, proxy variables, `SHAFT_VISION`, and browser paths are supervisor-owned.
+Do not copy them into `.env` as operator settings.
+
+## Instance config.env
+
+Edit `instances/<name>/config.env`, or use `shaft config <name> set KEY=VALUE`.
+The latter validates and commits the edit; `--expect KEY=OLD` prevents overwriting
+a concurrent edit. Instances use `set_config`; direct writes are sandbox-denied.
+Sources: [opconfig.py](../supervisor/opconfig.py),
+[sandbox.py](../supervisor/sandbox.py).
+
+The template loader uses environment > nonempty config value > built-in default.
+An empty `OPERATOR_NAME` resolves to `the operator`; setting your name is recommended,
+not required. `LLM_BASE_URL` and `LLM_MODEL` are required. Leave `LLM_API_KEY` empty:
+cloud credentials belong to the broker. Config is versioned with instance code.
+
+The following defaults are from the template branch's `shaft/config.py:17`;
+the shipped `config.env:10` supplies the local URL and model. Inspect them without
+creating an instance with `git show template:shaft/config.py` and
+`git show template:config.env` after setup. During publication preparation the
+reviewed ref was `refs/heads/publish-prep-template`.
+
+| Key | Built-in default | Shipped config override |
+|---|---|---|
+| `NAME` | `''` | uses built-in default |
+| `LLM_BASE_URL` | `required` | `http://127.0.0.1:8780/v1` |
+| `LLM_MODEL` | `required` | `ternary-bonsai-2-27b-mlx` |
+| `LLM_API_KEY` | `''` | empty |
+| `LLM_TIMEOUT_S` | `900` | `900` |
+| `MAX_TOKENS_REFLECT` | `16384` | `16384` |
+| `MAX_TOKENS_TALK` | `8192` | `8192` |
+| `WAKE_INTERVAL_MINUTES` | `120` | `120` |
+| `LLM_CONTEXT_TOKENS` | `262144` | `262144` |
+| `LLM_REASONING_EFFORT` | `'medium'` | `medium` |
+| `LLM_THINK_FOLLOWUP` | `1024` | uses built-in default |
+| `LLM_PRESENCE_PENALTY` | `15` | `15` |
+| `MAX_TOKENS_STEP` | `16384` | `16384` |
+| `MAX_STEPS_LIVE` | `12` | `12` |
+| `MAX_STEPS_SLEEP` | `30` | `30` |
+| `MAX_STEPS_TALK` | `0` | `0` |
+| `CONTEXT_JOURNAL_CHARS` | `16000` | `16000` |
+| `OPERATOR_NAME` | `'the operator'` | empty |
+
+`LLM_PRESENCE_PENALTY` uses tenths (15 means 1.5). `MAX_STEPS_TALK=0` removes the
+conversation step limit. `WAKE_INTERVAL_MINUTES=0` disables periodic wakes; positive
+values are bounded by the operator's wake floor (default 10 minutes).
+Sources: template `shaft/config.py:17`, [autonomy.py](../supervisor/autonomy.py).
+
+Cloud routing uses `LLM_BASE_URL="broker"` and a model in `SHAFT_CLOUD_MODELS`.
+Self-hosted routing uses the same base URL and `<server>/<model>`, where the server
+is configured in `SHAFT_SELF_HOSTED`. Its fallback defaults to `:8780`; set
+`SHAFT_SELF_HOSTED_FALLBACK` to an empty value to fail instead of using local Bonsai.
+Trial replays disable fallback. Sources: [cloudllm.py](../supervisor/cloudllm.py),
+[selfhosted.py](../supervisor/selfhosted.py),
+[selfhosted.py](../supervisor/selfhosted.py).
