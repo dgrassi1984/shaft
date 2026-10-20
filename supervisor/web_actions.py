@@ -30,7 +30,7 @@ def _ok(text: str) -> tuple[int, str]:
     return 200, text
 
 
-def _ran(args: list[str], timeout: float = 60) -> tuple[int, str]:
+def _ran(args: list[str], timeout: float = actions.RUN_NOW_S) -> tuple[int, str]:
     ok, last = actions.run_now(args, timeout, who=WHO)
     return (200, last) if ok else (409, last if last.startswith("refused") else f"refused: {last}")
 
@@ -87,13 +87,13 @@ def _run(verb: str, form: dict, snap: dict, names: list[str], services: list[str
         args = ["autonomy" if svc == "scheduler" else svc, op]
         running = any(s["name"] == svc and s["running"] for s in snap.get("services", []))
         _guard(form, args, actions.service_guard(svc, op if op == "off" else "restart") if running else "")
-        return _ran(args, timeout=90)
+        return _ran(args, timeout=actions.SLOW_S)
     if verb == "autonomy":
         op = form.get("op", "")
         if op not in ("on", "off"):
             raise Refused(f"autonomy {op!r}?")
         _guard(form, ["autonomy", op], actions.service_guard("autonomy", op))
-        return _ran(["autonomy", op], timeout=90)
+        return _ran(["autonomy", op], timeout=actions.SLOW_S)
     from . import web_settings
     if verb in web_settings.VERBS:
         return web_settings.run(verb, form)
@@ -152,6 +152,34 @@ def _run(verb: str, form: dict, snap: dict, names: list[str], services: list[str
 
 
 # -- what the pages show ---------------------------------------------------------------------------------------------
+# Past the server's limit, so an action that uses the whole of it still gets its answer back to the page.
+ANSWER_GRACE_S = 15
+
+# Where a lost answer is visible. The page names it, and does not claim the action was not sent.
+CHECK = {"cycle": "Overview", "pause": "Overview", "resume": "Overview", "sleep": "Overview", "update": "Overview",
+         "recap": "Overview", "dismiss": "Overview", "tool": "Access", "aa-trial": "Trials", "service": "Services",
+         "autonomy": "Services", "config-set": "Config", "config-unset": "Config", "drive-set": "Drive",
+         "drive-remove": "Drive", "limit": "Access", "jobs": "Access", "share": "Access", "mail": "Access",
+         "calendar": "Access", "battery": "Access", "battery-switch": "Access", "settings-set": "Settings",
+         "settings-unset": "Settings", "chat-stop": "this chat", "chat-end": "this chat"}
+
+
+def page_wait(server_s: float) -> int:
+    """Seconds the browser waits for one action: the server's own limit, plus a grace for the answer to arrive."""
+    return int(server_s) + ANSWER_GRACE_S
+
+
+def server_limit(verb: str) -> float:
+    """How long this action's command is allowed to run. Service and autonomy on/off are the slow ones."""
+    return actions.SLOW_S if verb in ("service", "autonomy") else actions.RUN_NOW_S
+
+
+def post_attrs(where: str, server_s: float | None = None) -> Html:
+    """data-check, and data-timeout when the server waits: seconds, its limit plus a grace."""
+    timeout = Html("") if server_s is None else h(' data-timeout="{t}"', t=page_wait(server_s))
+    return timeout + h(' data-check="{w}"', w=where)
+
+
 def button(verb: str, label: str, confirm: str = "", fields: dict | None = None, disabled: str = "",
            cls: str = "", typed: str = "", after: str = "") -> Html:
     """One action as a button. `disabled`: why it cannot run now (shown as its tooltip, and the button is off).
@@ -167,8 +195,9 @@ def button(verb: str, label: str, confirm: str = "", fields: dict | None = None,
         hidden = join([hidden, Html('<input type="hidden" name="confirm" value="">')])
     if after:
         conf = join([conf, h(' data-after="{a}"', a=after)])
-    return h('<form class="act" data-post="/action/{verb}"{conf}>{hidden}<button type="submit" class="act {cls}">'
-             '{label}</button></form>', verb=verb, conf=conf, hidden=hidden, cls=cls, label=label)
+    extra = post_attrs(CHECK.get(verb, "this page"), server_limit(verb))
+    return h('<form class="act" data-post="/action/{verb}"{conf}{extra}>{hidden}<button type="submit" class="act {cls}">'
+             '{label}</button></form>', verb=verb, conf=conf, extra=extra, hidden=hidden, cls=cls, label=label)
 
 
 _updates: dict[str, tuple[float, tuple[str, str]]] = {}
@@ -214,17 +243,19 @@ def instance_buttons(i: dict, delete: bool = False) -> Html:
 def message_forms(name: str, question: dict | None) -> Html:
     """Write to the instance (TUI w), and reply to its oldest open question (TUI r)."""
     write = h('<form class="msg" id="write" data-post="/action/send" data-reset="1" data-confirm="Send this to {n}? It '
-              'reads it at its next cycle or conversation."><input type="hidden" name="name" value="{n}">'
+              'reads it at its next cycle or conversation."{a}><input type="hidden" name="name" value="{n}">'
               '<label>Message to {n}<textarea name="text" rows="3" maxlength="{max}" required></textarea></label>'
-              '<button type="submit">Send</button></form>', n=name, max=TEXT_MAX)
+              '<button type="submit">Send</button></form>', n=name, max=TEXT_MAX,
+              a=post_attrs("Messages", actions.RUN_NOW_S))
     if not question:
         return write
     ask = " ".join(question["body"].split())
-    reply = h('<form class="msg" data-post="/action/reply" data-reset="1" data-confirm="Send this reply to {n}?">'
+    reply = h('<form class="msg" data-post="/action/reply" data-reset="1" data-confirm="Send this reply to {n}?"{a}>'
               '<input type="hidden" name="name" value="{n}"><label>Reply to {n}\'s question <span class="dim">'
               '({date})</span>: <i>{q}</i><textarea name="text" rows="3" maxlength="{max}" required></textarea>'
               '</label><button type="submit">Reply</button></form>', n=name, date=question["date"][:16],
-              q=ask[:300] + ("…" if len(ask) > 300 else ""), max=TEXT_MAX)
+              q=ask[:300] + ("…" if len(ask) > 300 else ""), max=TEXT_MAX,
+              a=post_attrs("Messages", actions.RUN_NOW_S))
     return join([reply, write])
 
 

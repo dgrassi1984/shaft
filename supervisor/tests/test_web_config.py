@@ -142,6 +142,28 @@ class ConfigPagesTest(ActionsTest):
         self.assertIn("+Help with calendars.", diff)
         self.assertNothingRan()                                             # a preview changes nothing
 
+    def test_issue_33_the_diff_is_shown_with_apply_and_back(self):
+        """#33: Show the diff and save used to open the browser's confirm dialog on top of the diff, so a long diff
+        could not be read. The form shows the diff, then Apply and Back, and does not ask with a dialog. Reverting
+        to data-confirm on this form, or dropping Apply and Back, fails this."""
+        import re
+        with mock.patch.object(opconfig, "drive", return_value=("# Purpose\n", "sha1")):
+            body = self.page("/i/wren/drive")
+        form = body.split('<form class="drive"', 1)[1].split("</form>", 1)[0]
+        self.assertIn('data-diff="/preview/drive/wren"', form)
+        self.assertIn(">Show the diff and save</button>", form)
+        self.assertIn("data-diff-out", form)
+        self.assertIn("data-diff-step", form)
+        self.assertIn("data-diff-apply", form)
+        self.assertIn(">Apply</button>", form)
+        self.assertIn("data-diff-back", form)
+        self.assertIn(">Back</button>", form)
+        self.assertNotIn("data-confirm", form)
+        self.assertIn('data-check="Drive"', form)
+        got = re.search(r'data-timeout="(\d+)"', form)
+        self.assertIsNotNone(got, form)
+        self.assertGreaterEqual(int(got.group(1)), actions.RUN_NOW_S)
+
     def test_the_access_page_shows_every_grant_and_key_names_only(self):
         with mock.patch.object(web_config, "access", return_value=ACCESS):
             body = self.page("/i/wren/access")

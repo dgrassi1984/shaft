@@ -218,6 +218,8 @@ table.config td.help { font-size: .8rem; max-width: 28rem; }
 table.config td { vertical-align: middle; }
 pre.diff:empty { display: none; }
 pre.diff { background: var(--bg); padding: .4rem .6rem; border-radius: 6px; border: 1px solid var(--line); }
+.diffstep { display: grid; gap: .4rem; }
+.diffstep[hidden] { display: none; }   /* display:grid would override the hidden attribute */
 form.drive { display: grid; gap: .4rem; }
 form.drive textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .82rem; }
 

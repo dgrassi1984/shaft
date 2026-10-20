@@ -16,7 +16,7 @@ import secrets as _secrets
 
 from . import actions
 from .core import SUP_DIR
-from .web_actions import Refused, button
+from .web_actions import Refused, button, post_attrs
 from .web_pages import Html, h, join
 
 WHO = "web"
@@ -25,7 +25,7 @@ VERBS = ("config-set", "config-unset", "drive-set", "drive-remove", "limit", "jo
 DRIVE_MAX = 20000
 
 
-def _ran(args: list[str], timeout: float = 60) -> tuple[int, str]:
+def _ran(args: list[str], timeout: float = actions.RUN_NOW_S) -> tuple[int, str]:
     ok, last = actions.run_now(args, timeout, who=WHO)
     return (200, last) if ok else (409, last if last.startswith("refused") else f"refused: {last}")
 
@@ -105,8 +105,9 @@ def _field_form(name: str, f: dict) -> Html:
                     num=Html('inputmode="numeric" pattern="[0-9]+"') if f["numeric"] else "")
     extra = (Html(" It also sets LLM_BASE_URL to match.") if f["key"] == "LLM_MODEL" else "")
     save = h('<form class="cfg" data-post="/action/config-set" data-confirm="Set {k} for {n}? Only that line of its '
-             'config.env changes; it takes effect from its next run.{x}">{hidden}{control}<button type="submit" '
-             'class="small">Save</button></form>', k=f["key"], n=name, x=extra, hidden=hidden, control=control)
+             'config.env changes; it takes effect from its next run.{x}"{a}>{hidden}{control}<button type="submit" '
+             'class="small">Save</button></form>', k=f["key"], n=name, x=extra, hidden=hidden, control=control,
+             a=post_attrs("Config", actions.RUN_NOW_S))
     unset = (button("config-unset", "Unset", f"remove {f['key']} from {name}'s config.env? "
                     + (f"The default ({f['default']}) applies." if f["default"] is not None else "Its code's default applies."),
                     {k: v for k, v in fields.items() if k != "value"}, cls="small") if f["set"] else Html(""))
@@ -127,10 +128,11 @@ def config_page(name: str, fs: list[dict], history: list[str]) -> Html:
               '<th>what it is</th></tr></thead><tbody id="config-rows">{r}</tbody></table></div>', r=join(rows))
     add = h('<form class="cfg add" data-post="/action/config-set" data-add-row="#config-rows" data-reset="1" '
             'data-confirm="Add this key to {n}\'s '
-            'config.env?"><input type="hidden" name="name" value="{n}"><input name="key" placeholder="NEW_KEY" '
+            'config.env?"{a}><input type="hidden" name="name" value="{n}"><input name="key" placeholder="NEW_KEY" '
             'pattern="[A-Z][A-Z0-9_]*" required aria-label="key"><input name="value" placeholder="value" '
             'maxlength="500" aria-label="value"><input type="hidden" name="saw" value=""><input type="hidden" '
-            'name="saw_set" value="0"><button type="submit" class="small">Add</button></form>', n=name)
+            'name="saw_set" value="0"><button type="submit" class="small">Add</button></form>', n=name,
+            a=post_attrs("Config", actions.RUN_NOW_S))
     hist = (h('<ul class="lines">{li}</ul>', li=join(h("<li>{x}</li>", x=x) for x in history)) if history
             else Html('<p class="dim">no commits touch it yet</p>'))
     return join([h('<section class="panel"><h2>config.env</h2><p class="dim">Saved through <code>shaft config</code>: '
@@ -151,13 +153,16 @@ def drive_diff(old: str | None, new: str) -> str:
 def drive_page(name: str, text: str | None, sha: str, rendered: Html) -> Html:
     current = (rendered if text is not None else
                h('<p class="dim">No drive.md: {n} has the drive every SHAFT instance starts with.</p>', n=name))
-    edit = h('<form class="drive" data-post="/action/drive-set" data-diff="/preview/drive/{n}" data-confirm="Replace '
-             '{n}\'s drive.md with this? It reads it from its next run and is told in its journal that its purpose '
-             'changed.">'
+    edit = h('<form class="drive" data-post="/action/drive-set" data-diff="/preview/drive/{n}"{a}>'
              '<input type="hidden" name="name" value="{n}"><input type="hidden" name="sha" value="{sha}">'
              '<textarea name="text" rows="14" maxlength="{max}">{t}</textarea>'
-             '<div class="actions"><button type="submit">Show the diff and save</button></div>'
-             '<pre class="diff" data-diff-out></pre></form>', n=name, sha=sha, t=text or "", max=DRIVE_MAX)
+             '<div class="actions" data-diff-ask><button type="submit">Show the diff and save</button></div>'
+             '<div class="diffstep" data-diff-step hidden><pre class="diff" data-diff-out></pre>'
+             '<p class="dim">Apply replaces {n}\'s drive.md. It reads it from its next run, and its journal says its '
+             'purpose changed.</p>'
+             '<div class="actions"><button type="submit" data-diff-apply>Apply</button>'
+             '<button type="button" data-diff-back>Back</button></div></div></form>',
+             n=name, sha=sha, t=text or "", max=DRIVE_MAX, a=post_attrs("Drive", actions.RUN_NOW_S))
     remove = (button("drive-remove", "Remove drive.md", f"remove {name}'s drive.md? The default drive applies from "
                      "its next run.", {"name": name, "sha": sha}, cls="small") if text is not None else Html(""))
     return h('<div data-row>{body}</div>', body=join([
@@ -176,18 +181,19 @@ def access_page(name: str, a: dict, row: str = "") -> Html:
         '</div>'
         '<div class="actions">'
         '<form class="act" data-post="/action/limit" data-confirm="Set {n}\'s wake floor? It may not wake more often '
-        'than this, whatever its config.env says."><input type="hidden" name="name" value="{n}"><input type="hidden" '
+        'than this, whatever its config.env says."{a}><input type="hidden" name="name" value="{n}"><input type="hidden" '
         'name="limit" value="wake-floor"><input name="value" inputmode="numeric" pattern="[0-9]+" placeholder="minutes" '
         'aria-label="wake floor in minutes" required><button type="submit" class="small">Set wake floor</button></form>'
         '{wfoff}</div></div>', n=n, wf=a["wake_floor"], wfd="(yours)" if a["wake_floor_own"] else "(default)",
         wfoff=button("limit", "Default floor", f"put {n}'s wake floor back to the default ({a['wake_floor_default']} min)?",
                      {"name": n, "limit": "wake-floor", "value": "off"}, "" if a["wake_floor_own"] else "already the default",
-                     cls="small"))
+                     cls="small"),
+        a=post_attrs("Access", actions.RUN_NOW_S))
     cap = h('<div data-row><div class="kv">'
         '<div class="row"><span class="label">cloud cap</span><span>${cap} a day {capd} · spent today ${spent}</span>'
         '</div></div><div class="actions">'
         '<form class="act" data-post="/action/limit" data-confirm="Set {n}\'s daily cloud cap? Its cloud calls stop '
-        'for the day once it is spent."><input type="hidden" name="name" value="{n}"><input type="hidden" '
+        'for the day once it is spent."{a}><input type="hidden" name="name" value="{n}"><input type="hidden" '
         'name="limit" value="cloud-cap"><input name="value" inputmode="decimal" placeholder="dollars" '
         'aria-label="cloud cap in dollars" required><button type="submit" class="small">Set cloud cap</button></form>'
         '{capoff}</div></div>', n=n,
@@ -195,7 +201,8 @@ def access_page(name: str, a: dict, row: str = "") -> Html:
         spent=f"{a['spent_today']:.2f}",
         capoff=button("limit", "Default cap", f"put {n}'s cloud cap back to the default (${a['cloud_cap_default']:.2f})?",
                       {"name": n, "limit": "cloud-cap", "value": "off"}, "" if a["cloud_cap_own"] else "already the default",
-                      cls="small"))
+                      cls="small"),
+        a=post_attrs("Access", actions.RUN_NOW_S))
     jobs_op = "on" if a["jobs_off"] else "off"
     jobs = join([h('<p>Jobs are <b>{s}</b>.</p>', s="off" if a["jobs_off"] else "on"),
                  button("jobs", f"Switch jobs {jobs_op}", f"switch {n}'s scheduled jobs {jobs_op}?",
@@ -204,9 +211,9 @@ def access_page(name: str, a: dict, row: str = "") -> Html:
     share = join([h('<p>{s}</p>', s=f"{n} may read {a['shared']} as shared/ (read-only)" if a["shared"]
                     else f"{n} has no shared folder"),
                   h('<form class="act" data-post="/action/share" data-confirm="Let {n} read this folder (read-only, as '
-                    'shared/), from its next run?"><input type="hidden" name="name" value="{n}"><input name="folder" '
+                    'shared/), from its next run?"{a}><input type="hidden" name="name" value="{n}"><input name="folder" '
                     'placeholder="/Users/…/a folder" aria-label="folder" required size="40"><button type="submit" '
-                    'class="small">Share</button></form>', n=n),
+                    'class="small">Share</button></form>', n=n, a=post_attrs("Access", actions.RUN_NOW_S)),
                   button("share", "Stop sharing", f"stop sharing {a['shared']} with {n}?", {"name": n, "folder": "off"},
                          "" if a["shared"] else "nothing shared", cls="small")])
     accounts = a["accounts"]
@@ -218,11 +225,12 @@ def access_page(name: str, a: dict, row: str = "") -> Html:
                            f"{kind} call.", {"name": n, "op": "revoke", "alias": g["account"], "what": g[what_key]},
                            cls="small")) for g in items]
         grant = (h('<form class="act" data-post="/action/{k}" data-confirm="Let {n} read this {thing}? The check is '
-                   'made by the CLI."><input type="hidden" name="name" value="{n}"><input type="hidden" name="op" '
+                   'made by the CLI."{a}><input type="hidden" name="name" value="{n}"><input type="hidden" name="op" '
                    'value="grant"><select name="alias" aria-label="account">{o}</select><input name="what" '
                    'placeholder="{ph}" aria-label="{thing}" required><button type="submit" class="small">Grant</button>'
                    '</form>', k=kind, n=n, o=acct_opts, thing="label" if kind == "mail" else "calendar",
-                   ph="label" if kind == "mail" else "primary, a title or an ID")
+                   ph="label" if kind == "mail" else "primary, a title or an ID",
+                   a=post_attrs("Access", actions.RUN_NOW_S))
                  if accounts else h('<p class="dim">No Google account logged in: <code>shaft google login …</code> in '
                                     'your terminal.</p>'))
         off = button(kind, f"Revoke all {kind}", f"revoke every {kind} grant of {n}?", {"name": n, "op": "off"},
