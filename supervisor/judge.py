@@ -152,8 +152,8 @@ def _log(purpose, model, usage, seconds, error, usd=None, provider=None, reasoni
 # -- the second judge ---------------------------------------------------------------------------------------------
 # Another model family grades a sample of cycles blind, so an instance can tell the main judge's idiosyncrasies
 # from what its tool log shows (wren, 2026-10-13; the operator chose GLM 5.3 Flash). Through OpenRouter, under the same
-# data policy as the instances' cloud models (cloudllm.OPENROUTER_PROVIDER: Novita only, no data collection or
-# retention). Novita does not offer structured outputs for this model, so the schema is in the instructions and
+# data policy as the instances' cloud models (cloudllm.OPENROUTER_PROVIDER: Novita, DeepInfra if Novita is down, no data
+# collection or retention). Novita does not offer structured outputs for this model, so the schema is in the instructions and
 # the answer is checked here.
 JUDGE2_MODEL, _ = knob(
     "SHAFT_JUDGE2_MODEL", "openrouter/z-ai/glm-5.3-flash", openrouter_model, "the second judge, which grades a "

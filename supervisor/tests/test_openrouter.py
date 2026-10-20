@@ -99,7 +99,9 @@ class OpenRouterTest(_Base):
         out = cloudllm.complete("shaft", dict(self.BODY), {"OPENROUTER_API_KEY": "sk-or-test"}, {})
         sent = f.requests[0]
         self.assertEqual(sent["model"], "xiaomi/mimo-v2.6-pro")
-        self.assertEqual(sent["provider"], {"only": ["novita"], "allow_fallbacks": False, "data_collection": "deny",
+        # Novita first, DeepInfra only if Novita is down, never another provider (2026-10-20)
+        self.assertEqual(sent["provider"], {"only": ["novita", "deepinfra"], "order": ["novita", "deepinfra"],
+                                            "allow_fallbacks": False, "data_collection": "deny",
                                             "zdr": True, "require_parameters": True})
         for local_only in ("stream", "stream_options", "chat_template_kwargs"):
             self.assertNotIn(local_only, sent)
