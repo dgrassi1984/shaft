@@ -48,6 +48,14 @@ def _state(snap: dict, name: str) -> str:
     return next((i["state"] for i in snap["instances"] if i["name"] == name), "?")
 
 
+def _guard(form: dict, args: list[str], why: str) -> None:
+    """A service guard: refused unless the operator forced it (the "Force …" button, asked first), which is logged."""
+    if why and form.get("force") != "1":
+        raise Refused(f"not now: {why}")
+    if why:
+        actions.log_forced(WHO, args, why)
+
+
 def run(verb: str, form: dict, snap: dict, names: list[str], services: list[str]) -> tuple[int, str]:
     """Do one action: (HTTP status, what to tell the operator)."""
     try:
@@ -74,15 +82,15 @@ def _run(verb: str, form: dict, snap: dict, names: list[str], services: list[str
             raise Refused(f"no service action {svc!r} {op!r}")
         if svc in NOT_FROM_HERE:
             raise Refused(NOT_FROM_HERE[svc])
-        if why := actions.service_guard(svc, op if op == "off" else "restart"):
-            raise Refused(f"not now: {why}")
-        return _ran(["autonomy" if svc == "scheduler" else svc, op], timeout=90)
+        args = ["autonomy" if svc == "scheduler" else svc, op]
+        running = any(s["name"] == svc and s["running"] for s in snap.get("services", []))
+        _guard(form, args, actions.service_guard(svc, op if op == "off" else "restart") if running else "")
+        return _ran(args, timeout=90)
     if verb == "autonomy":
         op = form.get("op", "")
         if op not in ("on", "off"):
             raise Refused(f"autonomy {op!r}?")
-        if why := actions.service_guard("autonomy", op):
-            raise Refused(f"not now: {why}")
+        _guard(form, ["autonomy", op], actions.service_guard("autonomy", op))
         return _ran(["autonomy", op], timeout=90)
     from . import web_settings
     if verb in web_settings.VERBS:
@@ -226,19 +234,33 @@ def alert_buttons(alerts: list[dict]) -> Html:
 def service_buttons(name: str, running: bool, scheduled: list[str], busy: list[str]) -> Html:
     if name in NOT_FROM_HERE:
         return h('<span class="dim">{w}</span>', w=NOT_FROM_HERE[name])
-    why_off = actions.guard_reason(name, "off", scheduled, busy)
-    why_restart = actions.guard_reason(name, "restart", scheduled, busy)
+    # Only a running service can kill or cut off a run: starting a stopped one (the model server between uses, which
+    # the runs waiting on it need) is never held back.
+    why_off = actions.guard_reason(name, "off", scheduled, busy) if running else ""
+    why_restart = actions.guard_reason(name, "restart", scheduled, busy) if running else ""
     verb = "Restart" if running else "Start"
-    return join([button("service", verb, f"{verb.lower()} {name}?", {"service": name, "op": "on"},
-                        f"not now: {why_restart}" if why_restart else "", cls="small"),
-                 button("service", "Stop", f"stop {name}?", {"service": name, "op": "off"},
-                        "" if running and not why_off else (f"not now: {why_off}" if why_off else "not running"),
-                        cls="small")])
+    stop = guarded("service", "Stop", f"stop {name}?", {"service": name, "op": "off"},
+                   actions.force_question(name, "off", why_off) if why_off else "", cls="small") \
+        if running else button("service", "Stop", "", {}, "not running", cls="small")
+    return join([guarded("service", verb, f"{verb.lower()} {name}?", {"service": name, "op": "on"},
+                         actions.force_question(name, "restart", why_restart) if why_restart else "", cls="small"),
+                 stop])
+
+
+def guarded(verb: str, label: str, confirm: str, fields: dict, force: str, cls: str = "") -> Html:
+    """An action a guard may hold back. `force`: the question to override it (actions.force_question), empty when
+    nothing holds it back. Held back, it is offered as "Force …", asked first with what it would hurt — the operator
+    may still need it (live, 2026-10-20: two live cycles kept Restart api and Restart scheduler greyed out, with no
+    way to restart from the page)."""
+    if not force:
+        return button(verb, label, confirm, fields, cls=cls)
+    return button(verb, f"Force {label[0].lower()}{label[1:]}", force, {**fields, "force": "1"},
+                  cls=f"{cls} force".strip())
 
 
 def autonomy_button(scheduler_running: bool, scheduled: list[str]) -> Html:
     op = "off" if scheduler_running else "on"
     why = actions.guard_reason("autonomy", op, scheduled, [])
     effect = "no more scheduled wakes or sleeps" if op == "off" else "wakes and the nightly sleep resume"
-    return button("autonomy", f"Autonomy {op}", f"autonomy {op}? ({effect})", {"op": op},
-                  f"not now: {why}" if why else "")
+    return guarded("autonomy", f"Autonomy {op}", f"autonomy {op}? ({effect})", {"op": op},
+                   actions.force_question("autonomy", op, why) if why else "")

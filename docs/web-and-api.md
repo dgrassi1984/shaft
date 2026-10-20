@@ -58,7 +58,9 @@ and [chat design](plans/PLAN-webui-chat.md).
   (`/overview`, with the alert count; its alerts show five at a time, with **Dismiss these alerts**, and **Dismiss
   all N** when more are open), Messages, Trials, Costs, Services, and the supervisor's **Settings** (see
   [configuration reference](configuration.md): the judge pool as ticked models, every knob with its source and default, "saved, not
-  live yet" with the guarded restarts; ports and paths shown, set in a terminal).
+  live yet" with the guarded restarts; ports and paths shown, set in a terminal). A service action that would kill
+  or cut off runs in progress (a scheduler restart, autonomy off, api/model/embed while runs use them) shows as
+  **Force …**, asks first naming those runs, and is logged as `web: operator forced … past the guard`.
 - The chat: files and images both ways (drop them anywhere on the page, paste or pick; each is a chip you can take
   out), the reply's activity and clock live, interject, Stop, End. Select text in a message and **↩ Reply** quotes
   it in your message. Each message with text has Copy and Reply icons for its whole Markdown source, including
