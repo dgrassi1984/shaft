@@ -372,7 +372,7 @@
           else document.querySelector(form.dataset.addRow).appendChild(next);
         }
       }
-      if (r.ok && form.dataset.after === "doc-saved") docSaved(form, r.headers.get("X-Doc"));
+      if (r.ok && form.dataset.after === "doc-saved") docSaved(form, r.headers.get("X-Doc"), typed, now);
       if (r.ok && form.dataset.after === "doc-deleted") docsList();
       if (r.ok && form.dataset.after === "comment-saved") refreshDocs();
       if (r.ok && mid) mid.value = "";               // sent: the next message gets an id of its own
@@ -398,6 +398,7 @@
       clearTimeout(limit);
       if (button) button.disabled = false;
       delete form.dataset.busy;
+      delete form._afterDocSave;
     }
   });
 
@@ -529,7 +530,8 @@
   document.addEventListener("input", (ev) => {
     const reviewing = ev.target.closest && ev.target.closest("form[data-diff]");
     if (reviewing && ev.target.name === "text") hideDiff(reviewing);   // the shown diff is no longer this text
-    if (ev.target.closest && ev.target.closest("form.docedit")) { grow(ev.target, 0.7); return; }
+    const docform = ev.target.closest && ev.target.closest("form.docedit");
+    if (docform) { grow(ev.target, 0.7); keepDocDraft(docform); return; }
     const midf = ev.target.closest && ev.target.closest("form[data-files]");
     if (midf && midf.querySelector("input[name=mid]")) midf.querySelector("input[name=mid]").value = "";  // a new text
     const form = ev.target.closest && ev.target.closest("form[data-draft]");
@@ -905,6 +907,76 @@
     poll.searchParams.set(doc ? "doc" : "list", doc || "1");
     panel.dataset.poll = poll.pathname + poll.search;
   }
+  function docDirty(view) {
+    return view.querySelector("form.docedit textarea").value !== view.querySelector("textarea.raw").value;
+  }
+  function docDraftKey(form) {
+    return `shaft.draft.doc.${form.dataset.post}.${form.querySelector("input[name=path]").value}`;
+  }
+  function clearDocDraft(form) {
+    try { localStorage.removeItem(docDraftKey(form)); } catch (e) { /* no storage */ }
+  }
+  function keepDocDraft(form) {
+    const view = form.closest(".docview");
+    if (!docDirty(view)) { clearDocDraft(form); return; }
+    try {
+      localStorage.setItem(docDraftKey(form), JSON.stringify({
+        text: form.querySelector("textarea").value,
+        sha: form._draftSha || form.querySelector("input[name=sha]").value,
+      }));
+    } catch (e) { /* no storage: beforeunload still warns */ }
+  }
+  function restoreDocDraft(view) {
+    const form = view.querySelector("form.docedit");
+    if (!form || view.classList.contains("editing")) return;
+    try {
+      const draft = JSON.parse(localStorage.getItem(docDraftKey(form)));
+      if (!draft || typeof draft.text !== "string" || typeof draft.sha !== "string") return;
+      const sha = form.querySelector("input[name=sha]");
+      const note = form.querySelector("[data-doc-draft]");
+      note.textContent = draft.sha !== sha.value
+        ? "Unsaved draft restored — started from an older version" : "Unsaved draft restored";
+      form.querySelector("textarea").value = draft.text;
+      sha.value = draft.sha;
+      form._draftSha = draft.sha;
+      editing(view, true);
+    } catch (e) { /* no usable draft */ }
+  }
+  window.addEventListener("beforeunload", (ev) => {
+    const view = document.querySelector("#docs .docview.editing");
+    if (!view || !docDirty(view)) return;
+    keepDocDraft(view.querySelector("form.docedit"));
+    ev.preventDefault();
+    ev.returnValue = "";
+  });
+  function leaveDoc(next) {
+    const view = document.querySelector("#docs .docview.editing");
+    if (!view) { next(); return; }
+    const form = view.querySelector("form.docedit");
+    if (form.dataset.busy) return;
+    if (!docDirty(view)) { editing(view, false); next(); return; }
+    const old = form.querySelector("[data-doc-choice]");
+    if (old) old.remove();
+    const prompt = document.createElement("div");
+    prompt.dataset.docChoice = "";
+    prompt.setAttribute("role", "group");
+    prompt.setAttribute("aria-label", "Unsaved changes");
+    prompt.textContent = "Save your changes? ";
+    for (const label of ["Save", "Discard", "Stay"]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      button.addEventListener("click", () => {
+        if (form.dataset.busy) return;
+        prompt.remove();
+        if (label === "Save") { form._afterDocSave = next; form.requestSubmit(); }
+        if (label === "Discard") { clearDocDraft(form); editing(view, false); next(); }
+      });
+      prompt.appendChild(button);
+    }
+    form.appendChild(prompt);
+    prompt.lastElementChild.focus();
+  }
   function docsList() {
     const panel = document.getElementById("docs");
     if (!panel) return;
@@ -923,6 +995,10 @@
     const view = document.querySelector("#docs .docview.editing");
     if (view && view.querySelector("form.docedit textarea").value !== view.querySelector("textarea.raw").value
         && !window.confirm("Drop your changes?")) return;
+    if (view) {
+      if (view.querySelector("form.docedit").dataset.busy) return;
+      clearDocDraft(view.querySelector("form.docedit"));
+    }
     docsList();
   });
   document.addEventListener("click", (ev) => {
@@ -931,12 +1007,14 @@
     if (!a || !panel || ev.metaKey || ev.ctrlKey) return;
     ev.preventDefault();
     const doc = a.dataset.openDoc;
-    docsPoll(panel, doc);
-    const u = new URL(location.href);
-    u.searchParams.set("doc", doc);
-    history.replaceState(null, "", u);
-    if (panel._tick) panel._tick();
-    showDocs(true);                                 // closed, or on a phone a sheet not yet open: open it
+    leaveDoc(() => {
+      docsPoll(panel, doc);
+      const u = new URL(location.href);
+      u.searchParams.set("doc", doc);
+      history.replaceState(null, "", u);
+      if (panel._tick) panel._tick();
+      showDocs(true);                                 // closed, or on a phone a sheet not yet open: open it
+    });
   });
   // Editing a document: the rendered view becomes its Markdown in a box; the panel stops refreshing until Save or
   // Cancel, and Save's compare-and-set refuses if the instance wrote it meanwhile (the box keeps your text).
@@ -945,6 +1023,8 @@
     view.querySelector(".docmd").hidden = on;
     view.querySelector("form.docedit").hidden = !on;
     if (on) {
+      const form = view.querySelector("form.docedit");
+      if (!form._draftSha) form._draftSha = form.querySelector("input[name=sha]").value;
       const box = view.querySelector("form.docedit textarea");
       box.focus();
       grow(box, 0.7);
@@ -959,11 +1039,21 @@
   // The separate comment composer shares the page's request and feedback conventions.
   window.shaftWeb = { csrf, toast, textOf, refreshDocs, pairAgain };
 
-  function docSaved(form, doc) {
+  function docSaved(form, doc, typed, sha) {
     const panel = document.getElementById("docs");
     const view = form.closest(".docview");
     if (view) {
+      form.querySelector("input[name=sha]").value = sha;
+      form._draftSha = sha;
+      view.querySelector("textarea.raw").value = typed;
+      form.querySelector("[data-doc-draft]").textContent = "";
+      clearDocDraft(form);
+      if (form.querySelector("textarea").value !== typed) {
+        keepDocDraft(form);
+        return;
+      }
       editing(view, false);
+      if (form._afterDocSave) { form._afterDocSave(); return; }
       const edit = view.querySelector("[data-edit-doc]");
       if (edit) edit.focus();                       // focus where the editor was, not lost on the page
     }
@@ -1000,7 +1090,10 @@
     if (rail) markRail(rail);
   }
   document.addEventListener("shaft:swapped", (ev) => {   // an instance's first document opens the panel beside the chat
-    if (ev.target.id === "docs") docsAria();
+    if (ev.target.id === "docs") {
+      docsAria();
+      ev.target.querySelectorAll(".docview").forEach(restoreDocDraft);
+    }
     chatHeaderState(ev.target);
   });
   document.addEventListener("click", (ev) => {           // 📄 Documents: open or close the panel
@@ -1010,11 +1103,17 @@
   document.addEventListener("click", (ev) => {
     const edit = ev.target.closest && ev.target.closest("[data-edit-doc]");
     const cancel = ev.target.closest && ev.target.closest("[data-cancel-edit]");
-    if (edit) editing(edit.closest(".docview"), true);
+    if (edit) { restoreDocDraft(edit.closest(".docview")); editing(edit.closest(".docview"), true); }
     if (cancel) {
       const view = cancel.closest(".docview");
+      const form = view.querySelector("form.docedit");
+      if (form.dataset.busy) return;
       const box = view.querySelector("form.docedit textarea");
       if (box.value !== view.querySelector("textarea.raw").value && !window.confirm("Drop your changes?")) return;
+      clearDocDraft(form);
+      const choice = form.querySelector("[data-doc-choice]");
+      if (choice) choice.remove();
+      form.querySelector("[data-doc-draft]").textContent = "";
       box.value = view.querySelector("textarea.raw").value;
       editing(view, false);
     }
@@ -1075,6 +1174,7 @@
     document.querySelectorAll("[data-follow]").forEach(el => { decorate(el); toBottom(el); });  // opens on the latest
     unreadState();
     document.querySelectorAll(".docview").forEach(decorate);
+    document.querySelectorAll(".docview").forEach(restoreDocDraft);
     restoreDraft();
     notifyButton();
   }

@@ -87,6 +87,14 @@ and [chat design](plans/PLAN-webui-chat.md).
   counts, or one open document (by default the one this chat last changed). **← Documents** returns to the list
   and asks before dropping unsaved edits. When the chat area is too narrow for both columns, Documents opens as
   a sheet over the chat. Close it with ✕ or Escape.
+  Switching documents offers Save, Discard, or Stay before changing the address. If you type during Save,
+  the editor keeps the newer text, based on the revision just saved.
+  Unsaved document drafts stay in this browser per instance and document across reloads, chat navigation,
+  and closing the panel. Reopening restores the editor and marks the draft. An older draft says
+  "Unsaved draft restored — started from an older version"; Save still checks its original revision and
+  shows the existing refusal and diff before you can choose to replace newer content.
+  Cancel or explicitly discarding edits removes the draft. Saving clears the saved draft and keeps any
+  newer typing. Reloading or leaving warns while the editor has unsaved changes.
   Edit one in the panel (or start one: Documents, then New document):
   Save is refused if it wrote the file meanwhile (you see what changed and keep your text), and it hears of your
   change as a diff; with your next message, or at once if it is replying. If a later write of its drops lines you
