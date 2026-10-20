@@ -467,7 +467,7 @@ class ChatCentricTest(ChatRoutesTest):
         self.assertIn("earlier answer", body)
         self.assertIn("Your next message starts a new conversation", body)
         self.assertIn('data-post="/chat/wren/send"', body)
-        self.assertIn('<summary data-focus="earlier">Earlier chats</summary>', body)  # #8: beside navigation
+        self.assertIn('<summary data-focus="earlier" aria-label="Earlier chats" title="Earlier chats">🕘<span class="docslabel"> Earlier chats</span></summary>', body)  # #8: beside navigation
         self.assertIn(f"/i/wren/chat?id={old['id']}", body)
         frag = self.req("/fragment/chat/wren", cookie=self.cookie).body.decode()
         self.assertIn("earlier answer", frag)                                       # its refresh shows the same

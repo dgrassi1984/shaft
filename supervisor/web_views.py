@@ -23,6 +23,8 @@ ICONS = {name: h('<svg width="14" height="14" viewBox="0 0 24 24" fill="none" st
 INSTANCE_TABS = [("chat", "Chat"), ("", "Summary"), ("config", "Config"), ("drive", "Drive"), ("files", "Files"), ("access", "Access"),
                  ("judge", "Judge"), ("changes", "Changes"), ("benchmarks", "Benchmarks"),
                  ("transcripts", "Transcripts"), ("journal", "Journal"), ("activity", "Activity")]
+BUSY_ICONS = {"in a cycle": "⏳", "working": "⏳", "sleeping": "💤", "paused by you": "⏸",
+              "in a conversation (waiting for you)": "💬"}
 
 
 def q(value: str) -> str:
@@ -105,9 +107,14 @@ def chat_header(name: str, live: dict, chat: dict | None, past: list[dict], read
     buttons = instance_buttons(live) if live.get("name") else Html("")
     earlier = join([h('<p class="dim">latest {limit} of {total}</p>', limit=min(20, len(past)), total=len(past)),
                     earlier_chats(name, past[:20]), link(f"/i/{q(name)}/chats", "All earlier chats")])
-    head = h('<header class="chathead"><button type="button" class="navbtn" data-toggle-nav aria-label="Chats and pages" '
-             'aria-expanded="false" data-focus="nav">☰</button><h1>{name}</h1>'
-             '<details class="menu earliermenu" data-key="earlier-chats"><summary data-focus="earlier">Earlier chats</summary>'
+    busy = (h('<details class="menu busystate" data-key="busy-state"><summary data-focus="busy" '
+              'aria-label="{n} is {s}">{icon}</summary><div class="menubody">{n} is {s} now: a cycle or sleep '
+              'pauses for your message, anything else is waited for — the reply\'s activity says which.</div></details>',
+              n=name, s=state, icon=BUSY_ICONS.get(state, "•"))
+            if state not in ("idle", "?") and not (chat and chat.get("state") == "replying") else Html(""))
+    return h('<header class="chathead"><button type="button" class="navbtn" data-toggle-nav aria-label="Chats and pages" '
+             'aria-expanded="false" data-focus="nav">☰</button><h1>{name}</h1>{busy}'
+             '<details class="menu earliermenu" data-key="earlier-chats"><summary data-focus="earlier" aria-label="Earlier chats" title="Earlier chats">🕘<span class="docslabel"> Earlier chats</span></summary>'
              '<div class="menubody">{earlier}</div></details><span class="dim facts">{facts}</span>'
              '<button type="button" class="small docsbtn" data-show-docs title="its documents (notes/docs/)" '
              'aria-label="Documents" data-focus="docs">📄<span class="docslabel"> Documents</span></button>{clear}'
@@ -117,21 +124,17 @@ def chat_header(name: str, live: dict, chat: dict | None, past: list[dict], read
              '<div class="menupages">{pages}</div><div class="actions">{buttons}</div>'
              '<div class="actions"><button type="button" class="small" data-notify data-focus="notify">Notify me on this device</button></div>'
              '</div></details></header>',
-             name=name, facts=" · ".join(f for f in facts if f), pages=pages, buttons=buttons,
+             name=name, busy=busy, facts=" · ".join(f for f in facts if f), pages=pages, buttons=buttons,
              earlier=h('<div class="earlier">{e}</div>', e=earlier) if earlier else Html(""),
              # always on screen (it sat under the last answer, below the fold on a phone); the chat shown now.
-             # The label stays whole ("Clear" alone did not say what is kept); it fits a 375 px header.
+             # On a phone it reads "Clear" (the header also holds the state icon and Earlier chats); its confirm says what is kept.
              clear=h('<form class="act clearbtn" data-post="/chat/{n}/clear" data-confirm="Clear this chat from the page? '
                      'The conversation is kept in Earlier chats and Transcripts. An open conversation is ended first, and '
                      'a journal write-up is requested."{a}><input type="hidden" name="cid" value="{cid}">'
                      '<button type="submit" class="small" title="Empty this page. The conversation is kept." '
-                     'data-focus="clear">Clear chat</button></form>', n=q(name), cid=chat["id"],
+                     'data-focus="clear">Clear<span class="docslabel"> chat</span></button></form>', n=q(name), cid=chat["id"],
                      a=post_attrs("this chat"))
              if chat and not read_only else Html(""))
-    busy = (h('<p class="warn">{n} is {s} now: a cycle or sleep pauses for your message, anything else is waited for '
-              '— the reply\'s activity says which.</p>', n=name, s=state)
-            if state not in ("idle", "?") and not (chat and chat.get("state") == "replying") else Html(""))
-    return join([head, busy])
 
 
 def section(title: str, body, cls: str = "") -> Html:
@@ -825,7 +828,8 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
                    query=f"?doc={q(open_path)}" if open_path else "")
         view = (h('<p class="bad">{p}</p>', p=problem) if problem else
                 h('<div class="docview" data-read-only="1"><b>{p}</b><div class="docmd">{md}</div></div>',
-                  p=open_path, md=markdown(text)) if text is not None else Html(""))
+                  p=open_path, md=markdown(text)) if text is not None else
+                h('<p class="dim">{p} is not there (any more).</p>', p=open_path) if open_path else Html(""))
         return join([notice, head, download, view])
     if problem:
         view = h('<p class="bad">{p}</p>', p=problem)

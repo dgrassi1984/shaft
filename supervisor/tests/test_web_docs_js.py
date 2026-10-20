@@ -214,3 +214,146 @@ await type('mine'); assert.equal(unload(),true);
 await type('saved'); assert.equal(unload(),false); assert.equal(storage.size,0);
 await type('mine'); pending=submit(); await answer(); assert.equal(unload(),false);
 """)
+
+    def test_issue_58_load_with_doc_query_opens_closed_panel_and_clears_remembered_close(self):
+        """Reverting #58 re-adds .hidedocs on load when shaft.docs.closed is set, leaving a ?doc= page with the panel closed."""
+        script = r"""
+const fs = require("node:fs"), vm = require("node:vm"), assert = require("node:assert/strict");
+function runLoad(href, closed, narrowSheet) {
+  const handlers = {}, storage = new Map(closed ? [["shaft.docs.closed", "1"]] : []);
+  const classes = () => { const s = new Set(); return { contains: k => s.has(k), add: k => s.add(k),
+    remove: k => s.delete(k), toggle(k, on) { if (on === undefined) on = !s.has(k); on ? s.add(k) : s.delete(k); return on; } }; };
+  const attrs = () => { const m = new Map(); return { setAttribute: (k, v) => m.set(k, String(v)),
+    getAttribute: k => m.get(k) ?? null, hasAttribute: k => m.has(k), removeAttribute: k => m.delete(k) }; };
+  const body = { classList: classes(), children: [], appendChild(n) { this.children.push(n); } };
+  const main = { children: [], ...attrs() };
+  const grid = { classList: classes(), parentElement: main, ...attrs() };
+  const chat = { parentElement: grid, ...attrs() };
+  const docclose = { tabIndex: 0, getClientRects: () => [1], focus() { document.activeElement = this; }, closest: () => null };
+  const docs = { id: "docs", dataset: { poll: "/fragment/docs/thelos?doc=plan.md" }, parentElement: grid, ...attrs(),
+    getClientRects: () => !grid.classList.contains("hidedocs") && (!narrowSheet || grid.classList.contains("showdocs")) ? [1] : [],
+    querySelector: q => q === "[data-close-docs]" ? docclose : null, querySelectorAll: () => [docclose], focus() {} };
+  grid.children = [chat, docs]; main.children = [grid]; body.children = [main];
+  const docbtn = { ...attrs(), getClientRects: () => [1], focus() {} };
+  const document = { readyState: "loading", body, activeElement: null,
+    addEventListener(k, fn) { (handlers[k] ||= []).push(fn); },
+    createElement: () => ({ classList: classes(), setAttribute() {}, remove() {} }),
+    querySelector: q => ({ ".chatgrid": grid, "[data-show-docs]": docbtn })[q] || null,
+    querySelectorAll: q => q === "[data-show-docs]" ? [docbtn] : [],
+    getElementById: id => id === "docs" ? docs : null };
+  const window = { addEventListener() {}, matchMedia: () => ({ matches: true, addEventListener() {} }) };
+  vm.runInNewContext(fs.readFileSync(process.argv[1], "utf8"), { document, window, URL,
+    location: { href }, history: { replaceState() {} }, navigator: {}, setInterval() {}, setTimeout() {}, clearTimeout() {},
+    localStorage: { getItem: k => storage.get(k) || null, setItem: (k, v) => storage.set(k, v), removeItem: k => storage.delete(k) },
+    getComputedStyle: el => ({ position: el === docs && narrowSheet ? "fixed" : "static" }),
+    ResizeObserver: class { observe() {} } });
+  for (const fn of handlers.DOMContentLoaded || []) fn();
+  return { showdocs: grid.classList.contains("showdocs"), hidedocs: grid.classList.contains("hidedocs"),
+    closedKey: storage.get("shaft.docs.closed") || null, expanded: docbtn.getAttribute("aria-expanded"),
+    role: docs.getAttribute("role") };
+}
+const wide = runLoad("https://shaft.test/i/thelos/chat?doc=example-co-generative-model-brainstorm.md", true, false);
+assert.deepEqual(wide, { showdocs: true, hidedocs: false, closedKey: null, expanded: "true", role: null });
+const sheet = runLoad("https://shaft.test/i/thelos/chat?doc=example-co-generative-model-brainstorm.md", true, true);
+assert.deepEqual(sheet, { showdocs: true, hidedocs: false, closedKey: null, expanded: "true", role: "dialog" });
+const plain = runLoad("https://shaft.test/i/thelos/chat", true, false);
+assert.deepEqual(plain, { showdocs: false, hidedocs: true, closedKey: "1", expanded: "false", role: null });
+"""
+        result = subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_issue_58_clicking_doc_card_opens_closed_panel_and_missing_doc_says_so(self):
+        """Reverting #58 leaves a closed panel hidden when a dirty draft is inside it, drops a card click during an in-flight poll, or omits the missing-document notice in an archived panel."""
+        from supervisor import web_views
+        for archived in (False, True):
+            with self.subTest(archived=archived):
+                missing = str(web_views.docs_panel("thelos", [], "gone.md", None, "none", set(), archived=archived))
+                self.assertIn('<p class="dim">gone.md is not there (any more).</p>', missing)
+        script = r"""
+const fs = require("node:fs"), vm = require("node:vm"), assert = require("node:assert/strict");
+const handlers = {}, storage = new Map([["shaft.docs.closed", "1"]]), fetched = [];
+let url = "https://shaft.test/i/thelos/chat", editingView = null, inFlightResolve = null, timers = [];
+const classes = () => { const s = new Set(["hidedocs"]); return { contains: k => s.has(k), add: k => s.add(k),
+  remove: k => s.delete(k), toggle(k, on) { if (on === undefined) on = !s.has(k); on ? s.add(k) : s.delete(k); return on; } }; };
+const attrs = () => { const m = new Map(); return { setAttribute: (k, v) => m.set(k, String(v)),
+  getAttribute: k => m.get(k) ?? null, hasAttribute: k => m.has(k), removeAttribute: k => m.delete(k) }; };
+const body = { classList: classes(), children: [], appendChild(n) { this.children.push(n); } };
+const main = { children: [], ...attrs() };
+const grid = { classList: classes(), parentElement: main, ...attrs() };
+const chat = { parentElement: grid, ...attrs() };
+const docclose = { tabIndex: 0, getClientRects: () => [1], focus() { document.activeElement = this; }, closest: () => null, matches: () => false };
+const panel = { id: "docs", dataset: { poll: "/fragment/docs/thelos?list=1", lazy: "1", etag: '"old"', etagUrl: "/fragment/docs/thelos?list=1" },
+  isConnected: true, parentElement: grid, innerHTML: "", classList: classes(), ...attrs(),
+  contains: n => n === panel || n === docclose,
+  getClientRects: () => !grid.classList.contains("hidedocs") && grid.classList.contains("showdocs") ? [1] : [],
+  querySelector: q => q === "[data-close-docs]" ? docclose : null,
+  querySelectorAll: q => q === "[data-close-docs]" ? [docclose] : [],
+  closest: () => null, dispatchEvent() {}, focus() {} };
+grid.children = [chat, panel]; main.children = [grid]; body.children = [main];
+const docbtn = { ...attrs(), getClientRects: () => [1], focus() {} };
+const document = { readyState: "loading", visibilityState: "visible", body, activeElement: null,
+  addEventListener(k, fn) { (handlers[k] ||= []).push(fn); },
+  createElement: () => ({ dataset: {}, children: [], classList: classes(), setAttribute() {}, addEventListener(k, fn) { this[k] = fn; },
+    appendChild(n) { this.children.push(n); this.lastElementChild = n; }, focus() {}, remove() {} }),
+  querySelector: q => ({ ".chatgrid": grid, "[data-show-docs]": docbtn, "#docs .docview.editing": editingView })[q] || null,
+  querySelectorAll: q => ({ "[data-show-docs]": [docbtn], "[data-poll]": [panel] })[q] || [],
+  getElementById: id => id === "docs" ? panel : null };
+const window = { addEventListener() {}, innerHeight: 800, scrollY: 0, getSelection: () => null,
+  matchMedia: () => ({ matches: true, addEventListener() {} }) };
+vm.runInNewContext(fs.readFileSync(process.argv[1], "utf8"), { document, window, URL, CustomEvent: class {}, AbortController,
+  location: { get href() { return url; } }, history: { replaceState(a, b, u) { url = String(u); } }, navigator: { onLine: true },
+  setInterval() {}, setTimeout(fn, ms) { timers.push({ fn, ms }); return timers.length; }, clearTimeout() {},
+  localStorage: { getItem: k => storage.get(k) || null, setItem: (k, v) => storage.set(k, v), removeItem: k => storage.delete(k) },
+  getComputedStyle: el => ({ position: el === panel ? "fixed" : "static" }),
+  ResizeObserver: class { observe() {} },
+  fetch(u) { fetched.push(u); return new Promise(r => { inFlightResolve = r; }); } });
+for (const fn of handlers.DOMContentLoaded || []) fn();
+const clickCard = async (openDoc, openThread) => {
+  const a = { dataset: { openDoc, ...(openThread ? { openThread } : {}) }, isConnected: true, getClientRects: () => [1], focus() {} };
+  for (const fn of handlers.click) await fn({ target: { closest: q => q === "[data-open-doc]" ? a : null }, preventDefault() {} });
+};
+(async () => {
+  // Start an in-flight list poll before clicking the card.
+  const firstTick = panel._tick();
+  assert.equal(fetched.length, 1);
+  assert.equal(grid.classList.contains("hidedocs"), true);
+  await clickCard("example-co-generative-model-brainstorm.md");
+  assert.equal(grid.classList.contains("showdocs"), true);
+  assert.equal(grid.classList.contains("hidedocs"), false);
+  assert.equal(storage.has("shaft.docs.closed"), false);
+  assert.equal(url, "https://shaft.test/i/thelos/chat?doc=example-co-generative-model-brainstorm.md");
+  assert.equal(panel.dataset.poll, "/fragment/docs/thelos?doc=example-co-generative-model-brainstorm.md");
+  assert.equal(panel.dataset.etag, undefined);
+  // Finish the old in-flight poll: because the card click set again=true, it schedules an immediate 0 ms retry.
+  timers = [];
+  inFlightResolve({ ok: true, status: 200, headers: { get: () => "" }, text: async () => "list" });
+  await firstTick;
+  assert.equal(timers.at(-1).ms, 0);
+  // Close the panel while a dirty draft for p.md is inside #docs:
+  // clicking a card for p.md itself opens the panel directly without prompting to overwrite;
+  // clicking a card for other.md opens the panel so the Save/Discard/Stay prompt is visible.
+  grid.classList.remove("showdocs"); grid.classList.add("hidedocs");
+  let promptBox = null;
+  const form = { dataset: {}, appendChild(n) { promptBox = n; }, querySelector: () => null };
+  editingView = { dataset: { doc: "p.md" }, querySelector: q => ({ "form.docedit": form,
+    "form.docedit textarea": { value: "unsaved" }, "textarea.raw": { value: "saved" } })[q] || null };
+  await clickCard("p.md");
+  assert.equal(grid.classList.contains("showdocs"), true);
+  assert.equal(grid.classList.contains("hidedocs"), false);
+  assert.equal(promptBox, null);
+  grid.classList.remove("showdocs"); grid.classList.add("hidedocs");
+  await clickCard("other.md");
+  assert.equal(grid.classList.contains("showdocs"), true);
+  assert.equal(grid.classList.contains("hidedocs"), false);
+  assert.ok(promptBox);
+  // Clicking a comment chip opens the panel at that thread.
+  editingView = null;
+  grid.classList.remove("showdocs"); grid.classList.add("hidedocs");
+  await clickCard("plan.md", "c1");
+  assert.equal(grid.classList.contains("showdocs"), true);
+  assert.equal(url, "https://shaft.test/i/thelos/chat?doc=plan.md&thread=c1");
+  assert.equal(panel.dataset.poll, "/fragment/docs/thelos?doc=plan.md&thread=c1");
+})().catch(e => { console.error(e); process.exitCode = 1; });
+"""
+        result = subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
