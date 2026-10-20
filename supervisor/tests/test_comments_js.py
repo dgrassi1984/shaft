@@ -51,11 +51,11 @@ function page() {
     MutationObserver: class { observe() {} }, requestAnimationFrame() {},
     window: { addEventListener() {}, getSelection: () => selection,
       shaftWeb: { csrf: () => "token", textOf: s => s.replace(/<[^>]*>/g, ""),
-        toast: s => toasts.push(s), refreshDocs() {} } },
+        toast: s => toasts.push(s), refreshDocs() {}, pairAgain: () => false } },
     async fetch(url, options) {
       requests.push({ url, body: options.body });
       if (fail) throw Error("lost response");
-      return { ok: true, text: async () => `<p>${message}</p>` };
+      return { ok: true, status: 200, headers: { get: () => null }, text: async () => `<p>${message}</p>` };
     } };
   vm.runInNewContext(fs.readFileSync(process.argv[1], "utf8"), context);
   return { view, panel,

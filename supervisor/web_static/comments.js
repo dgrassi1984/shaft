@@ -323,6 +323,7 @@
           method: "POST", credentials: "same-origin", signal: ctl.signal,
           headers: { "X-CSRF-Token": api.csrf(), "Content-Type": "application/x-www-form-urlencoded" }, body,
         });
+        if (api.pairAgain(r)) return;
         const message = api.textOf(await r.text()) || (r.ok ? "done" : `HTTP ${r.status}`);
         if (!r.ok) { result.textContent = message; return; }
         try {

@@ -81,7 +81,8 @@ and [chat design](plans/PLAN-webui-chat.md).
 - **Documents**: a Markdown file an instance writes under its `notes/docs/` shows beside the chat, live, as it writes
   it; a reply's documents are cards under it. The drawer shows a vertical list with sizes, changed marks and comment
   counts, or one open document (by default the one this chat last changed). **← Documents** returns to the list
-  and asks before dropping unsaved edits.
+  and asks before dropping unsaved edits. When the chat area is too narrow for both columns, Documents opens as
+  a sheet over the chat. Close it with ✕ or Escape.
   Edit one in the panel (or start one: Documents, then New document):
   Save is refused if it wrote the file meanwhile (you see what changed and keep your text), and it hears of your
   change as a diff; with your next message, or at once if it is replying. If a later write of its drops lines you
@@ -118,14 +119,17 @@ and [chat design](plans/PLAN-webui-chat.md).
 
 **On your iPhone** ([PLAN-pwa.md](plans/PLAN-pwa.md)): open the URL in Safari, then **Share**, then **Add to Home Screen**. The app keeps its own
 cookies, separate from Safari's, so pair it from inside: run `shaft web pair --name phone-app`, copy the link, and
-paste it into the app's "not paired" page.
+paste it into the app's "not paired" page. Expired links show the same paste box for a new link. Pairing and notice
+pages are centred without a sidebar and link back to the app. If pairing is revoked while you use the app, the
+next refresh or action opens the pairing page. Your chat draft stays in this browser.
 - **Notifications:** in the app, ⋯ then **Notify me of replies** (iOS 16.4+). A reply that ends while SHAFT is closed or
   locked then arrives as "example replied", with the badge, through Web Push. The push carries nothing: the app fetches
   the text over the tailnet. Pushes are signed with a key made by `/usr/bin/openssl`, kept in `.supervisor/web/`.
 - **Typing:** on a phone, Return makes a new line and Send sends.
 - **Layout:** the chat fills the screen. ☰ lists the chats and pages, 📄 the documents, ⋯ the instance's pages and
   actions.
-- **Offline:** when SHAFT cannot be reached, the app says so and retries.
+- **Offline:** when SHAFT cannot be reached, the app says so and retries. Opening a page also shows the cached
+  offline page if the proxy returns 502, 503 or 504; **Try again** returns to the app.
 
 Every request needs your tailnet login **and** a paired browser. Every POST needs the page's own token, and every
 response forbids inline script. Instances cannot reach the port. Every action runs the matching `shaft`
