@@ -26,7 +26,9 @@ streaming or not), served on `127.0.0.1:8781` and exposed by `tailscale serve` o
 tailnet name; tailnet only, never Funnel. Every request needs the key (`shaft api key`) and a
 Tailscale login listed in `SHAFT_API_LOGINS`. The instance answers as itself, with its tools; tool
 activity arrives as `reasoning_content`. A conversation keeps one id while its first message stays the
-same (or, with an `X-Shaft-Conversation: <name>` header, while it keeps that name), and is written up into the journal
+same (or, with an `X-Shaft-Conversation: <name>` header, while it keeps that name), keeps the channel its client names
+with `X-Shaft-Channel: web|telegram` (the web UI and the Telegram service send it; `api` without it), and is written
+up into the journal
 after `SHAFT_IDLE_MINUTES` without a message, or at once with `POST /v1/chat/end`. `POST /v1/chat/interject`
 (same body as a chat request) adds the last message to the reply still running in that conversation: the instance
 reads it at its next step and its answer covers it; the reply's JSON says how many it heard
@@ -99,9 +101,13 @@ and [chat design](plans/PLAN-webui-chat.md).
 **On your iPhone** ([PLAN-pwa.md](plans/PLAN-pwa.md)): open the URL in Safari, then **Share**, then **Add to Home Screen**. The app keeps its own
 cookies, separate from Safari's, so pair it from inside: run `shaft web pair --name phone-app`, copy the link, and
 paste it into the app's "not paired" page.
-- **Notifications:** in the app, ⋯ then **Notify me of replies** (iOS 16.4+). A reply that ends while SHAFT is closed or
-  locked then arrives as "example replied", with the badge, through Web Push. The push carries nothing: the app fetches
-  the text over the tailnet. Pushes are signed with a key made by `/usr/bin/openssl`, kept in `.supervisor/web/`.
+- **Notifications:** in the app, ⋯ then **Notify me on this device** (iOS 16.4+). A reply that ends while SHAFT is closed
+  or locked then arrives as "example replied", with the badge, through Web Push; so does a message an instance sends
+  you when it is routed to the web ("example asks …", see
+  [Where an instance reaches you](integrations.md#where-an-instance-reaches-you-shaft-channel)). The push carries
+  nothing: the app fetches the text over the tailnet, each push its own (queued per device in
+  `.supervisor/web/push-queue.json`). Pushes are signed with a key made by `/usr/bin/openssl`, kept in
+  `.supervisor/web/`.
 - **Typing:** on a phone, Return makes a new line and Send sends.
 - **Layout:** the chat fills the screen. ☰ lists the chats and pages, 📄 the documents, ⋯ the instance's pages and
   actions.

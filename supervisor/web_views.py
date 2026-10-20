@@ -58,7 +58,7 @@ def chat_frame(name: str, live: dict, body: Html, names: list[str], csrf: str, e
              '<details class="menu"><summary title="{name}: pages and actions" aria-label="{name}: pages and actions">⋯'
              '</summary><div class="menubody"><p class="dim menufacts">{facts}</p>'
              '<div class="menupages">{pages}</div><div class="actions">{buttons}</div>'
-             '<div class="actions"><button type="button" class="small" data-notify>Notify me of replies</button></div>'
+             '<div class="actions"><button type="button" class="small" data-notify>Notify me on this device</button></div>'
              '{earlier}</div></details></header>',
              name=name, facts=" · ".join(f for f in facts if f), pages=pages, buttons=buttons,
              earlier=h('<div class="earlier">{e}</div>', e=earlier) if earlier else Html(""),
@@ -477,11 +477,13 @@ def message_page(m: dict, texts: dict, names: list[str], csrf: str) -> Html:
         elif k in texts:
             item.append(pre(texts[k], "wrap"))
         atts.append(h('<div class="att">{i}</div>', i=join(item)))
+    alert = (h('<p class="dim">notified on {c}: {why}</p>', c="the web UI" if m["alert"] == "web" else "Telegram",
+               why=m.get("alert_why", "")) if m.get("alert") else Html(""))      # channel.py: where it alerted you
     body = h('<p><a href="/messages">← every message</a></p><h1>{who}</h1>'
-             '<p class="dim">{ts} · {kind} · {status} · {file}</p>'
+             '<p class="dim">{ts} · {kind} · {status} · {file}</p>{alert}'
              '<section class="panel">{text}</section>{atts}',
              who=f"{m['from']} → {m['to']}", ts=m["ts"].replace("T", " "), kind=m.get("kind") or "note", status=status,
-             file=m["file"], text=pre(m["text"], "wrap"),
+             file=m["file"], text=pre(m["text"], "wrap"), alert=alert,
              atts=section(f"Attachments ({len(atts)})", join(atts)) if atts else Html(""))
     return frame("Message", body, names, csrf, current="/messages")
 
@@ -765,11 +767,33 @@ def _comment_chips(items: list[dict] | None, kind: str = "") -> Html:
                   u=q(item["doc"]), doc=item["doc"], id=item["id"], pre=pre) for item in items)
 
 
+def _sent_cards(name: str, sent: list[dict]) -> list[Html]:
+    """What the instance sent the operator (send_message), one card each; Reply quotes it in the composer, and a quoted
+    question is answered by the message that quotes it (web_chat.answer_quoted), as a Telegram reply answers it."""
+    cards = []
+    for m in sent:             # files open in a sheet of their own: in an app, a link replaced its only view
+        atts = join(h('<a href="/files/{f}/{j}" target="_blank">{img}</a>', f=q(m["file"]), j=j,
+                      img=h('<img class="thumb" src="/files/{f}/{j}" alt="{n}" loading="lazy">', f=q(m["file"]), j=j,
+                            n=a["name"])
+                      if a["name"].lower().endswith(IMAGE_TYPES) else h("📎 {n}", n=a["name"]))
+                    for j, a in enumerate(m.get("attachments") or []))
+        asks = m.get("kind") == "question"
+        what = ("a question" if asks else "a message") + (" (answered)" if asks and m.get("read") else "")
+        cards.append(h('<div class="turn sent" data-k="s{f}" data-raw="{raw}"><div class="who">{n} sent you '
+                       '<a href="/messages/{f}">{what}</a> <span class="dim">{ts}</span><button type="button" '
+                       'class="reply small icon" data-reply-message title="Reply to the message" '
+                       'aria-label="Reply to the message">{reply}</button></div><div class="wrap">{t}</div>'
+                       '<div class="atts">{a}</div></div>', n=name, f=q(m["file"]), raw=m["text"], what=what,
+                       ts=m["ts"][11:16], reply=ICONS["reply"], t=m["text"][:600], a=atts))
+    return cards
+
+
 def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = False) -> Html:
     """The conversation as it stands: each turn, the files it sent you meanwhile, and the reply running now."""
     from .web_actions import button
     if not chat:
-        return h('<p class="dim" data-k="empty">No chat open with {n}. Write below to start one.</p>', n=name)
+        return join([*_sent_cards(name, sent),
+                     h('<p class="dim" data-k="empty">No chat open with {n}. Write below to start one.</p>', n=name)])
     items = []
     for k, t in enumerate(chat["turns"]):
         raw = t.get("shown", t.get("content", "")) if t["role"] == "user" else t.get("content", "")
@@ -802,15 +826,11 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
                                      '{copy}</div>{act}{body}{cards}{note}</div>', k=k, raw=t.get("content") or "", n=name,
                                      ts=t["ts"][11:16], copy=controls, act=_activity(t.get("activity", []), f"t{k}"),
                                      body=body, cards=cards, note=note)))
-    for m in sent:             # files open in a sheet of their own: in an app, a link replaced its only view
-        atts = join(h('<a href="/files/{f}/{j}" target="_blank">{img}</a>', f=q(m["file"]), j=j,
-                      img=h('<img class="thumb" src="/files/{f}/{j}" alt="{n}" loading="lazy">', f=q(m["file"]), j=j,
-                            n=a["name"])
-                      if a["name"].lower().endswith(IMAGE_TYPES) else h("📎 {n}", n=a["name"]))
-                    for j, a in enumerate(m.get("attachments") or []))
-        items.append((m["ts"], h('<div class="turn sent" data-k="s{f}"><div class="who">{n} sent you <a href="/messages/{f}">a message'
-                                 '</a> <span class="dim">{ts}</span></div><div class="wrap">{t}</div><div class="atts">'
-                                 '{a}</div></div>', n=name, f=q(m["file"]), ts=m["ts"][11:16], t=m["text"][:600], a=atts)))
+    items += [(m["ts"], card) for m, card in zip(sent, _sent_cards(name, sent))]
+    if chat["state"] == "ended":   # in time order: what it sent you after the chat ended shows below the line
+        items.append((chat.get("ended", ""), h(
+            '<p class="dim ended" data-k="ended">Ended {e}: written up in its journal. Your next message starts a new '
+            'conversation.</p>', e=chat.get("ended", "")[:16].replace("T", " "))))
     items.sort(key=lambda x: x[0])
     feed = [x[1] for x in items]
     if chat["state"] == "replying":
@@ -823,9 +843,6 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
                       partial=h('<p class="dim">the answer appears when it is ready</p>'),
                       stop=button("chat-stop", "Stop the reply", f"stop {name}'s reply?", {"cid": chat["id"]},
                                   cls="small")))
-    elif chat["state"] == "ended":
-        feed.append(h('<p class="dim ended" data-k="ended">Ended {e}: written up in its journal. Your next message starts a new '
-                      'conversation.</p>', e=chat.get("ended", "")[:16].replace("T", " ")))
     if chat.get("pending_edits"):
         feed.append(h('<p class="pending-edits" data-k="pend">✎ Your changes to {p} go to {n} with your next message.</p>',
                       p=", ".join(sorted(chat["pending_edits"])), n=name))

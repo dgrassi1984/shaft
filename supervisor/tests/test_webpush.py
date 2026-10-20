@@ -16,6 +16,7 @@ from supervisor import webpush
 from supervisor.tests.test_web import WebTest
 
 APPLE = "https://web.push.apple.com/FAKE-endpoint-for-tests"
+SAME = {"sec-fetch-site": "same-origin"}                     # the service worker's own fetch
 
 
 def unb64(s: str) -> bytes:
@@ -110,6 +111,52 @@ class SubscriptionsTest(PushTest):
         self.assertEqual(webpush.subscriptions(), {})
 
 
+class QueueTest(PushTest):
+    def test_each_device_gets_its_own_copy_old_ones_expire_and_unsubscribing_drops_them(self):
+        for d in ("phone", "laptop"):
+            webpush.subscribe(d, {"endpoint": APPLE})
+        with mock.patch.object(webpush, "_wake"):
+            webpush.notify({"title": "a", "body": "", "url": "/", "tag": "a"})
+            with mock.patch.object(webpush.time, "time", return_value=time.time() - webpush.TTL_S - 5):
+                webpush.notify({"title": "stale", "body": "", "url": "/", "tag": "s"})
+            webpush.notify({"title": "b", "body": "", "url": "/", "tag": "b"})
+        self.assertEqual([e["title"] for e in webpush.take("phone")], ["a", "b"])   # older than its TTL: skipped
+        self.assertEqual([e["title"] for e in webpush.take("laptop")], ["a", "b"])  # the laptop's own copy
+        webpush.unsubscribe("laptop")
+        self.assertEqual(webpush.take("laptop"), [webpush.NOTHING])
+
+    def test_a_wake_that_failed_shows_with_the_next_and_an_empty_wake_shows_the_last_again(self):
+        """Codex review 2026-10-20: A's wake failed, B's got through and took A — B was never shown. A wake now shows
+        everything waiting; one with nothing waiting re-shows the last under its own tag (iOS shows every push)."""
+        webpush.subscribe("phone", {"endpoint": APPLE})
+        with mock.patch.object(webpush, "_wake"):
+            webpush.notify({"title": "A", "body": "", "url": "/", "tag": "a"})     # its wake failed: nothing taken
+            webpush.notify({"title": "B", "body": "", "url": "/", "tag": "b"})
+        self.assertEqual([e["title"] for e in webpush.take("phone")], ["A", "B"])
+        self.assertEqual(webpush.take("phone"), [{"title": "B", "body": "", "url": "/", "tag": "b"}])
+
+    def test_a_failed_wake_is_tried_again_a_gone_one_is_not(self):
+        said = iter(["not sent: no network", "201"])
+        with mock.patch.object(webpush, "_send_one", side_effect=lambda d, e: next(said)) as send, \
+                mock.patch.object(webpush.time, "sleep"), \
+                mock.patch.object(webpush.threading, "Thread", lambda target, args, **kw: mock.Mock(
+                    start=lambda: target(*args))):
+            webpush._wake({"phone": {"endpoint": APPLE}}, "x")
+            self.assertEqual(send.call_count, 2)
+            send.reset_mock(side_effect=True)
+            send.return_value = "410: gone, removed"
+            webpush._wake({"phone": {"endpoint": APPLE}}, "x")
+            self.assertEqual(send.call_count, 1)
+
+    def test_a_device_off_for_long_keeps_only_the_newest(self):
+        webpush.subscribe("phone", {"endpoint": APPLE})
+        with mock.patch.object(webpush, "_wake"):
+            for k in range(webpush.QUEUE_MAX + 5):
+                webpush.notify({"title": str(k), "body": "", "url": "/", "tag": "x"})
+        shown = webpush.take("phone")
+        self.assertEqual((len(shown), shown[0]["title"]), (webpush.QUEUE_MAX, "5"))
+
+
 class RoutesTest(WebTest):
     def setUp(self):
         super().setUp()
@@ -136,16 +183,38 @@ class RoutesTest(WebTest):
         self.assertEqual(self.req("/push/key").status, 403)                   # unpaired
         key = json.loads(self.req("/push/key", cookie=self.cookie).body)["key"]
         self.assertEqual(len(unb64(key)), 65)
-        with mock.patch("supervisor.web_chat.latest_reply", return_value={"title": "thelos replied", "body": "Done",
-                                                                          "url": "/i/thelos/chat", "tag": "thelos"}):
-            shown = json.loads(self.req("/push/latest", cookie=self.cookie).body)
-        self.assertEqual(shown["title"], "thelos replied")
+        self.assertEqual(self.req("/push/latest", headers=SAME).status, 403)  # unpaired
+        self.assertEqual(json.loads(self.latest().body), {"events": [webpush.NOTHING]})
+        # It takes what it returns: a link from another site (a top-level navigation carries the Lax cookie) never
+        # does (Codex review, 2026-10-20).
+        self.assertEqual(self.req("/push/latest", cookie=self.cookie, headers={"sec-fetch-site": "cross-site"}).status,
+                         403)
+        self.assertEqual(self.req("/push/latest", cookie=self.cookie).status, 403)
+
+    def latest(self):
+        return self.req("/push/latest", cookie=self.cookie, headers=SAME)
+
+    def test_two_quick_pushes_show_two_notifications_each_its_own(self):
+        """Issue #23 (part 2): each push fetched "the newest reply of any instance", so A's reply then B's, both pushed
+        before the phone fetched, showed B's text twice and A's never. Each push now shows its own event."""
+        from supervisor import web
+        self.assertEqual(self.post("/push/subscribe", {"endpoint": APPLE}).status, 200)
+        dev = web.device_from_cookie(self.cookie)[0]
+        with mock.patch.object(webpush, "_wake"):
+            webpush.notify({"title": "thelos replied", "body": "Done", "url": "/i/thelos/chat", "tag": "thelos"})
+            webpush.notify({"title": "wren asks", "body": "Which one?", "url": "/i/wren/chat", "tag": "wren-message"})
+        shown = json.loads(self.latest().body)["events"]
+        self.assertEqual([s["title"] for s in shown], ["thelos replied", "wren asks"])
+        self.assertEqual(shown[1], {"title": "wren asks", "body": "Which one?", "url": "/i/wren/chat",
+                                    "tag": "wren-message"})
+        self.assertEqual(webpush._queue()[dev]["pending"], [])               # all taken
 
     def test_the_service_worker_shows_what_it_fetches_and_opens_the_chat(self):
         sw = self.req("/sw.js").body.decode()
         self.assertIn('self.addEventListener("push"', sw)
         self.assertIn('fetch("/push/latest", { credentials: "same-origin", cache: "no-store" })', sw)
         self.assertIn("self.registration.showNotification(n.title", sw)        # always one: iOS requires it
+        self.assertIn("for (const n of shown)", sw)                            # each waiting event its own
         self.assertIn('self.addEventListener("notificationclick"', sw)
 
 

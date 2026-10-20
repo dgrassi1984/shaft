@@ -10,7 +10,9 @@
 
 Each request is a normal sandboxed run (broker, run lock, gate, commit). The client's conversation
 is the dialogue; the instance's own identity and memory come first. A conversation (same instance,
-same first user message — or, if the client sends X-Shaft-Conversation, that name: the web UI does) keeps one id; after IDLE_MINUTES (SHAFT_IDLE_MINUTES) without a message it is closed and its journal entry is
+same first user message — or, if the client sends X-Shaft-Conversation, that name: the web UI does) keeps one id, and
+the channel the client names in X-Shaft-Channel (web, telegram; `api` when absent) — where a message the instance sends
+the operator while it is open alerts them (channel.py); after IDLE_MINUTES (SHAFT_IDLE_MINUTES) without a message it is closed and its journal entry is
 written. Tool activity and status are sent as `reasoning_content`, which "thinking"-aware clients
 show and others ignore.
 
@@ -62,7 +64,8 @@ INBOX_WAKES_PER_HOUR, _ = knob(
     "SHAFT_INBOX_WAKES_PER_HOUR", "4", whole, "wakes per hour inbox messages may start for one instance",
     group="Inbox and benchmarks", services=("api",))
 DOORBELL_LOG = "doorbell.jsonl"
-CONVERSATION_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")   # X-Shaft-Conversation: a client's own name for a conversation       # one line per accepted message: when, instance, source, wake outcome
+CONVERSATION_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")   # X-Shaft-Conversation: a client's own name for a conversation
+CLIENT_CHANNELS = ("web", "telegram")    # X-Shaft-Channel: where the operator is talking (channel.py routes alerts there)       # one line per accepted message: when, instance, source, wake outcome
 
 
 def allowed_logins() -> set[str]:
@@ -78,8 +81,12 @@ class Conversations:
         self.talks = json.loads(TALKS.read_text()) if TALKS.exists() else {}
 
     def _save(self) -> None:
+        """Whole or not at all: others read this file while it is saved (channel.route, runner.open_conversations), and
+        a half-written one read as "no conversations" sent an alert to the wrong channel (Codex review, 2026-10-20)."""
         TALKS.parent.mkdir(exist_ok=True)
-        TALKS.write_text(json.dumps(self.talks, indent=1))
+        tmp = TALKS.with_name(f".{TALKS.name}.{os.getpid()}.{threading.get_ident()}")
+        tmp.write_text(json.dumps(self.talks, indent=1))
+        os.replace(tmp, TALKS)
 
     @staticmethod
     def _key(model: str, messages: list[dict], cid: str | None = None) -> str:
@@ -106,7 +113,7 @@ class Conversations:
             self._save()
             return t["talk_id"]
 
-    def talk_id(self, model: str, messages: list[dict], cid: str | None = None) -> str:
+    def talk_id(self, model: str, messages: list[dict], cid: str | None = None, channel: str = "api") -> str:
         key = self._key(model, messages, cid)
         with self.lock:
             t = self.talks.get(key)
@@ -114,6 +121,7 @@ class Conversations:
                 t = {"talk_id": f"api-{uuid.uuid4().hex[:10]}", "model": model}
                 self.talks[key] = t
             t["last"] = time.time()
+            t["channel"] = channel
             t["written"] = False
             self._save()
             return t["talk_id"]
@@ -319,6 +327,9 @@ class Handler(BaseHTTPRequestHandler):
         cid = self.headers.get("X-Shaft-Conversation") or None
         if cid is not None and not CONVERSATION_ID.match(cid):
             return self._error(400, "X-Shaft-Conversation is 1-64 letters, digits, - or _")
+        channel = (self.headers.get("X-Shaft-Channel") or "api").strip().lower()
+        if channel not in ("api", *CLIENT_CHANNELS):
+            return self._error(400, f"X-Shaft-Channel is one of {', '.join(CLIENT_CHANNELS)} (or absent), not {channel!r}")
         messages = body.get("messages") or []
         if route == "/v1/chat/end":
             return self._end(model, messages, cid)
@@ -326,7 +337,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(400, "messages must end with a user message")
         if route == "/v1/chat/interject":
             return self._interject(model, messages, cid)
-        self._chat(model, messages, bool(body.get("stream")), self.headers.get("User-Agent", "an app"), cid)
+        self._chat(model, messages, bool(body.get("stream")), self.headers.get("User-Agent", "an app"), cid, channel)
 
     def _end(self, model: str, messages: list[dict], cid: str | None) -> None:
         """POST /v1/chat/end: the conversation is over — written up now instead of after SHAFT_IDLE_MINUTES."""
@@ -368,10 +379,11 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             return True
 
-    def _chat(self, model: str, messages: list[dict], stream: bool, app: str, cid: str | None = None) -> None:
+    def _chat(self, model: str, messages: list[dict], stream: bool, app: str, cid: str | None = None,
+              channel: str = "api") -> None:
         events: queue.Queue = queue.Queue()
         procs: list = []
-        talk_id = self.conversations.talk_id(model, messages, cid)
+        talk_id = self.conversations.talk_id(model, messages, cid, channel)
         live = self.live.begin(model, talk_id)
         request = {"messages": messages, "talk_id": talk_id, "client": app.split()[0][:40]}
 

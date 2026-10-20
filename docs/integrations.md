@@ -22,12 +22,38 @@ does not wait for the reply to end); one that arrives once the answer is already
 after it. Replying to one of its messages quotes it, and answers it if it was a question. Files and
 photos you send a bot are saved in that instance's `attachments/from-operator/…` and the turn tells it where;
 files an instance attaches to a message for you arrive after its text (pictures as photos). `/new`
-starts a new conversation (not while a reply is running), `/wake` starts a cycle, `/status` says what it is doing. Every message an instance
-sends you (`send_message` to the operator) also arrives from its bot. The service long-polls Telegram; no port,
+starts a new conversation (not while a reply is running), `/wake` starts a cycle, `/status` says what it is doing. A message an
+instance sends you (`send_message` to the operator) arrives from its bot when it is routed to Telegram (see
+[Where an instance reaches you](#where-an-instance-reaches-you-shaft-channel)). The service long-polls Telegram; no port,
 webhook or Funnel. Full text both ways: bot chats are not end-to-end encrypted, so Telegram's servers see them
 .
 
 Source: [Telegram transport and pairing](../supervisor/telegram.py).
+
+## Where an instance reaches you (`shaft channel …`)
+
+Every message an instance sends you (`send_message` to the operator) lands in your inbox, which the web UI shows,
+and raises a banner on the Mac. It also notifies you on **one** channel, where you pick the conversation up:
+
+- **The web UI**: a push to every device with notifications on (⋯ then **Notify me on this device**). It opens the
+  instance's chat, where the message shows under the conversation with a Reply button; quoting a question there
+  answers it.
+- **Telegram**: from the instance's own bot. Replying to it answers a question.
+
+Which one, decided when the message is sent:
+
+1. A conversation with the instance still open on the web or Telegram: that one.
+2. Otherwise your setting for the instance: `shaft channel <name> web` or `telegram`, or the **Access** page's
+   *Where it reaches you*.
+3. `auto` (the default): where you last wrote to the instance, web or Telegram. With no conversation yet: Telegram if
+   its bot reaches you, else the web.
+
+A channel that cannot notify you now gives way to the other: Telegram with no bot, not paired or its service off;
+the web with its service off or no device with notifications on. `shaft channel <name>` shows the setting and where a
+message would go now; each message's page in the web UI says where it notified you and why. The instance's
+`send_message` tool tells it the same.
+
+Source: [channel routing](../supervisor/channel.py), [the web UI's pushes](../supervisor/web_alerts.py).
 
 ## Google accounts (`shaft google …`)
 

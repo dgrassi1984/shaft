@@ -70,6 +70,8 @@ shaft limits [name] [wake-floor <min>|cloud-cap <usd>|off]  # your own limits fo
 shaft jobs [name] [on|off]           # instances' scheduled jobs: their plugins on a timer (runs, errors, wakes)
 shaft tools <name> [on|off <tool>]   # an instance's supervisor tools, e.g. off delegate_coding (operator-only:
                                      # kept in .supervisor/, so the instance cannot switch it back on)
+shaft channel <name> [auto|web|telegram]   # where its messages to you notify you (integrations.md): auto = where
+                                     # you last wrote to it; an open conversation's channel comes first
 shaft google login <alias> <address> [--client <name>]   # log in a Google account: Gmail + Calendar, read-only
 shaft google [migrate]               # accounts, clients, granted scopes · migrate: move PLAN-mail's account files
 shaft mail <name> grant|revoke <alias> <label>   # the label's threads an instance may read · shaft mail <name> off

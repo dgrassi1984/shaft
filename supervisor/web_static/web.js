@@ -723,7 +723,7 @@
     b.disabled = state === "blocked" || state === "home";
     b.textContent = { home: "For notifications, add SHAFT to your Home Screen (Share → Add to Home Screen)",
                       blocked: "Notifications are blocked for SHAFT in this browser's settings",
-                      on: "Notifications on — turn off", off: "Notify me of replies" }[state] || "";
+                      on: "Notifications on — turn off", off: "Notify me on this device" }[state] || "";
   }
   async function post(url, body) {
     const r = await fetch(url, { method: "POST", credentials: "same-origin", body,

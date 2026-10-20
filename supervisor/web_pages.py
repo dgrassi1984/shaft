@@ -182,17 +182,21 @@ self.addEventListener("fetch", (ev) => {
 });
 
 // A push (docs/plans/PLAN-pwa P4) carries nothing: what to say is fetched from SHAFT over the tailnet, with this device's own
-// cookie, so the push service never sees it. iOS requires every push to show a notification: one always shows.
+// cookie, so the push service never sees it — every event waiting for this device (a reply, a message an instance sent
+// you: docs/plans/PLAN-operator-channel.md), each its own notification. iOS requires every push to show one: one always shows.
 self.addEventListener("push", (ev) => {
   ev.waitUntil((async () => {
-    let n = { title: "SHAFT", body: "A reply landed", url: "/", tag: "shaft" };
+    let shown = [{ title: "SHAFT", body: "Something new", url: "/", tag: "shaft" }];
     try {
       const r = await fetch("/push/latest", { credentials: "same-origin", cache: "no-store" });
-      if (r.ok) n = Object.assign(n, await r.json());
+      const got = r.ok ? ((await r.json()).events || []) : [];
+      if (got.length) shown = got;
     } catch (e) { /* off the tailnet: the plain notification */ }
     if (self.navigator.setAppBadge) self.navigator.setAppBadge().catch(() => {});
-    await self.registration.showNotification(n.title, {
-      body: n.body, tag: n.tag, data: { url: n.url }, icon: "/static/icon-192.png?v=@V@" });
+    for (const n of shown) {
+      await self.registration.showNotification(n.title, {
+        body: n.body, tag: n.tag, data: { url: n.url }, icon: "/static/icon-192.png?v=@V@" });
+    }
   })());
 });
 

@@ -402,6 +402,18 @@ def cmd_tools(name: str, action: str | None, tool: str | None) -> int:
     return 0
 
 
+def cmd_channel(name: str, value: str | None) -> int:
+    """Where this instance's messages to you alert you (docs/plans/PLAN-operator-channel.md): auto (where you last wrote
+    to it), web or telegram. An open conversation's channel comes first either way."""
+    from . import channel
+    instance_root(name)
+    if value:
+        channel.set_preference(name, value)
+        log(f"{name}: operator channel set to {value} by the operator")
+    print(channel.describe(name))
+    return 0
+
+
 def cmd_secret(args) -> int:
     """Give an instance a key without it passing through a conversation (and so through transcripts, journal
     write-ups and, for a cloud-brained instance, the provider's prompt)."""
@@ -995,6 +1007,10 @@ def main(argv: list[str]) -> int:
     p.add_argument("name")
     p.add_argument("action", nargs="?", choices=["on", "off"])
     p.add_argument("tool", nargs="?")
+    p = sub.add_parser("channel", help="where an instance's messages alert you: auto (where you last wrote to it), web "
+                                       "or telegram; alone shows it and where a message would go now")
+    p.add_argument("name")
+    p.add_argument("value", nargs="?", choices=["auto", "web", "telegram"])
     p = sub.add_parser("secret", help="an instance's own keys: give it one (value read from your terminal), list, delete")
     p.add_argument("name")
     p.add_argument("action", choices=["set", "google", "list", "delete"],
@@ -1150,6 +1166,8 @@ def main(argv: list[str]) -> int:
         return jobs.run(args.name, args.plugin)
     if args.cmd == "tools":
         return cmd_tools(args.name, args.action, args.tool)
+    if args.cmd == "channel":
+        return cmd_channel(args.name, args.value)
     if args.cmd == "secret":
         return cmd_secret(args)
     if args.cmd == "share":

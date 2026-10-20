@@ -20,13 +20,17 @@ LOG_NAME = "messages.jsonl"
 
 
 def record(sup_dir: Path, path: Path, sender: str, to: str, kind: str, at: datetime, text: str,
-           attachments: list[dict] | None = None) -> None:
+           attachments: list[dict] | None = None, alert: tuple[str, str] | None = None) -> None:
     """Append one delivered message to the log. One locked write per line: brokers of several instances
-    deliver concurrently. `attachments`: [{name, path (from the project root), bytes}]."""
+    deliver concurrently. `attachments`: [{name, path (from the project root), bytes}]. `alert`: for a message to the
+    operator, (channel, why) — where it alerts them (channel.route); the web and Telegram services send what names
+    them."""
     row = {"ts": at.isoformat(timespec="seconds"), "from": sender, "to": to, "kind": kind,
            "file": path.name, "text": text.strip()}
     if attachments:
         row["attachments"] = [{k: a[k] for k in ("name", "path", "bytes")} for a in attachments]
+    if alert:
+        row["alert"], row["alert_why"] = alert
     line = json.dumps(row, ensure_ascii=False) + "\n"
     sup_dir.mkdir(parents=True, exist_ok=True)
     with (sup_dir / LOG_NAME).open("a") as f:
@@ -127,6 +131,35 @@ def history() -> list[dict]:
     return [{**m, "read": m["file"] not in waiting[m["to"]]} for m in _cache["rows"]]
 
 
+def appended(offset: int | None) -> tuple[list[tuple[dict, int]], int]:
+    """What a forwarder sends from (telegram.forward_new, web_alerts.forward_new): the rows appended to the log after
+    byte `offset`, in the order they were appended, each with the offset just after it — and the log's end. Never by
+    timestamp: a message is stamped before it is routed and logged, so two instances sending at once can append the
+    earlier-stamped one second, and a cursor on timestamps skipped it for good (Codex review, 2026-10-20). A line not
+    yet whole is left for the next call. `offset` None (the first call) or past the end (a new log): nothing, from
+    the end on — no backlog."""
+    path = SUP_DIR / LOG_NAME
+    try:
+        with path.open("rb") as f:
+            end = f.seek(0, 2)
+            if offset is None or offset > end:
+                return [], end
+            f.seek(offset)
+            data = f.read()
+    except OSError:
+        return [], 0 if offset is None else offset
+    rows, at = [], offset
+    for line in data.splitlines(keepends=True):
+        if not line.endswith(b"\n"):
+            break
+        at += len(line)
+        try:
+            rows.append((json.loads(line), at))
+        except ValueError:
+            continue
+    return rows, at
+
+
 def _parse(path: Path) -> dict:
     head, _, body = path.read_text().partition("\n\n")
     meta = dict(line.split(": ", 1) for line in head.splitlines() if ": " in line)
@@ -201,6 +234,30 @@ def reply(name: str, text: str) -> int:
     log(f"operator -> {name}: {'reply to ' + ref if ref else 'message'}")
     print(f"delivered to {name} ({path.name}); it will read it in its next cycle or conversation.")
     return 0
+
+
+QUOTE_MIN = 20                             # a quote shorter than this answers a question only if it is all of it
+
+
+def answer_quoted(name: str, text: str) -> list[str]:
+    """The operator's message quotes ("> " lines, as the web chat's Reply writes them) an open question from `name`:
+    the question is answered — archived from the operator inbox, as a Telegram reply to it does. Returns the files."""
+    blocks, block = [], []
+    for line in text.splitlines() + [""]:
+        if line.startswith(">"):
+            block.append(line[1:].strip())
+        elif block:
+            blocks.append(" ".join(" ".join(block).split()))
+            block = []
+    done = []
+    for m in pending():
+        if m["from"] != name or m["kind"] != "question":
+            continue
+        body = " ".join(m["body"].split())
+        if any(b and b in body and len(b) >= min(len(body), QUOTE_MIN) for b in blocks):
+            _archive(m["path"])
+            done.append(m["path"].name)
+    return done
 
 
 def send(name: str, text: str) -> int:
