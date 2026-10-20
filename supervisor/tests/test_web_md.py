@@ -112,9 +112,20 @@ class BlocksTest(unittest.TestCase):
     def test_tables_align_and_format_their_cells(self):
         out = md("| **Name** | Qty | Note |\n|:--|--:|:-:|\n| `a\\|b` | 3 | *x* |\n| c |")
         self.assertIn('<th class="al-l"><b>Name</b></th><th class="al-r">Qty</th><th class="al-c">Note</th>', out)
-        self.assertIn('<td data-label="**Name**" class="al-l"><code>a|b</code></td>', out)
+        self.assertIn('<td data-label="Name" class="al-l"><code>a|b</code></td>', out)
         self.assertIn('<td data-label="Note" class="al-c"><i>x</i></td>', out)
         self.assertIn('<td data-label="Qty" class="al-r"></td>', out)              # a short row is filled
+
+    def test_issue_35_table_labels_are_visible_heading_text(self):
+        """Reverting #35 exposes Markdown delimiters and link destinations in phone labels."""
+        headings = '**Name** | *Kind* | `**literal**` | [the **docs**](https://ex.example) | __Bold__ _em_ ~~old~~'
+        out = md(f"| {headings} |\n|---|---|---|---|---|\n|a|b|c|d|e|")
+        self.assertEqual(re.findall(r'data-label="([^"]*)"', out),
+                         ["Name", "Kind", "**literal**", "the docs", "Bold em old"])
+        out = md('| **<b> & "x"** |\n|---|\n|value|')
+        self.assertIn('data-label="&lt;b&gt; &amp; &quot;x&quot;"', out)
+        self.assertNotIn('<b> &', out)
+
 
 
 class InlineTest(unittest.TestCase):

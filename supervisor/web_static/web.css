@@ -221,6 +221,7 @@ form.drive textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospac
 .turn { padding: .5rem .7rem; border-radius: 8px; border: 1px solid var(--line); max-width: 52rem; }
 .turn.me { background: var(--bg); justify-self: end; }
 .turn.it { background: var(--panel); }
+.chat-day { justify-self: center; font-size: .8rem; margin: .2rem 0; }
 .turn.sent { border-style: dashed; }
 .turn.live { border-color: var(--talk); }
 .turn .who { font-size: .8rem; font-weight: 600; margin-bottom: .2rem; }

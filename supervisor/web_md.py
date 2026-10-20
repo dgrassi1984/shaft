@@ -208,12 +208,13 @@ def _table(rows: list[str], seps: str) -> str:
     head = _cells(rows[0])
     cls = lambda k: f' class="al-{align[k]}"' if k < len(align) and align[k] else ""
     ths = "".join(f"<th{cls(k)}>{inline(x)}</th>" for k, x in enumerate(head))
+    labels = [html.unescape(re.sub(r"<[^>]*>", "", inline(x))) for x in head]
     trs = []
     for r in rows[1:]:
         cells = _cells(r)
         cells += [""] * (len(head) - len(cells))
         trs.append("<tr>" + "".join(
-            f'<td data-label="{esc(head[k]) if k < len(head) else ""}"{cls(k)}>{inline(v)}</td>'
+            f'<td data-label="{esc(labels[k]) if k < len(head) else ""}"{cls(k)}>{inline(v)}</td>'
             for k, v in enumerate(cells[:max(len(head), 1)])) + "</tr>")
     return (f'<div class="tablewrap"><table class="md"><thead><tr>{ths}</tr></thead><tbody>{"".join(trs)}</tbody>'
             "</table></div>")
