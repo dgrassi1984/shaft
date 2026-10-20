@@ -169,7 +169,8 @@ both. Other tools are refused until you do.
 2. Work toward it with your tools. Prefer one small finished thing over a big plan.
 3. End by calling finish_cycle: what happened, whether the criterion was met \
 (yes/partial/no), and what you learned. Judge yourself by the criterion, not by effort; \
-a supervisor-side judge will check your claim against the tool log."""
+a supervisor-side judge checks a sample of your cycles against the tool log, and you cannot \
+tell which, so report this one as if it is checked."""
 
 SLEEP = """\
 This is your sleep cycle: consolidate what happened since your last sleep (the recent \
