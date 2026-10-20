@@ -20,7 +20,7 @@ ICONS = {name: h('<svg width="14" height="14" viewBox="0 0 24 24" fill="none" st
              "reply": '<path d="m9 4-6 6 6 6M3 10h10a8 8 0 0 1 8 8v2"/>',
              "delete": '<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/>',
          }.items()}
-INSTANCE_TABS = [("chat", "Chat"), ("", "Summary"), ("config", "Config"), ("drive", "Drive"), ("access", "Access"),
+INSTANCE_TABS = [("chat", "Chat"), ("", "Summary"), ("config", "Config"), ("drive", "Drive"), ("files", "Files"), ("access", "Access"),
                  ("judge", "Judge"), ("changes", "Changes"), ("benchmarks", "Benchmarks"),
                  ("transcripts", "Transcripts"), ("journal", "Journal"), ("activity", "Activity")]
 
@@ -39,6 +39,39 @@ def instance_frame(name: str, tab: str, title: str, body: Html, names: list[str]
                   cls="on" if t == tab else "", label=label) for t, label in INSTANCE_TABS)
     head = h('<header class="pagehead"><h1>{name}</h1><div class="tabs">{tabs}</div></header>', name=name, tabs=tabs)
     return frame(f"{name} · {title}", join([head, body]), names, csrf, current=f"i:{name}")
+
+
+def files_page(name: str, parts: tuple, entries: list[dict], total: int, page_number: int, page_size: int,
+               names: list[str], csrf: str) -> Html:
+    base = f"/i/{q(name)}/files?path="
+    folder = "/".join(parts) + ("/" if parts else "")
+    crumbs = [link(base, name)]
+    for k, part in enumerate(parts):
+        crumbs.extend([" / ", link(base + q("/".join(parts[:k + 1]) + "/"), part)])
+    if parts:
+        parent = "/".join(parts[:-1]) + ("/" if len(parts) > 1 else "")
+        crumbs.extend([" · ", link(base + q(parent), "Up")])
+    rows = []
+    for entry in entries:
+        path = folder + entry["name"]
+        if entry["directory"]:
+            label = link(base + q(path + "/"), entry["name"] + "/")
+            controls = Html("")
+        else:
+            label = entry["name"]
+            url = f"/i/{q(name)}/file?path={q(path)}"
+            controls = join([link(url, "Download"), " · ", link(url + "&open=1", "Open")]) if entry["text"] else link(url, "Download")
+        rows.append([label, f'{entry["bytes"]} bytes',
+                     time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(entry["mtime"])), controls])
+    paging = []
+    if page_number > 1:
+        paging.append(link(base + q(folder) + f"&page={page_number - 1}", "Previous"))
+    if page_number * page_size < total:
+        paging.extend([" ", link(base + q(folder) + f"&page={page_number + 1}", "Next")])
+    body = join([h('<div class="crumbs" role="navigation" aria-label="File path">{crumbs}</div><p>{total} {noun} · Page {page}</p>',
+                   crumbs=join(crumbs), noun="entry" if total == 1 else "entries", total=total, page=page_number),
+                 table(["Name", "Size", "Modified", "Actions"], rows), h('<p>{links}</p>', links=join(paging))])
+    return instance_frame(name, "files", "Files", section("Files", body), names, csrf)
 
 
 def chat_frame(name: str, head: Html, body: Html, names: list[str], csrf: str, header_url: str) -> Html:
@@ -784,6 +817,8 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
                                           h('<p class="dim">No current files.</p>') if archived else
                                           h('<p class="dim">none yet: ask {n} for one, it appears here as it writes it.</p>',
                                             n=name)))
+    download = (link(f"/i/{q(name)}/file?path={q(DIR + '/' + open_path)}", "Download")
+                if open_path and text is not None and not problem else Html(""))
     if archived:
         notice = h('<p>Current files — not as they were in this chat</p><p><a href="/i/{n}/chat{query}">'
                    'Open in the current chat to edit or comment</a></p>', n=q(name),
@@ -791,7 +826,7 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
         view = (h('<p class="bad">{p}</p>', p=problem) if problem else
                 h('<div class="docview" data-read-only="1"><b>{p}</b><div class="docmd">{md}</div></div>',
                   p=open_path, md=markdown(text)) if text is not None else Html(""))
-        return join([notice, head, view])
+        return join([notice, head, download, view])
     if problem:
         view = h('<p class="bad">{p}</p>', p=problem)
     elif open_path and text is not None:
@@ -812,7 +847,7 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
                  '<button type="button" class="small" data-edit-doc data-focus="doc-edit">Edit</button>{cbtn}'
                  '<button type="button" class="copy small icon" data-copy-doc title="copy the document\'s Markdown" '
                  'aria-label="Copy the document">{copy}</button>'
-                 '<form class="docdelete" data-post="/docs/{n}/delete" data-after="doc-deleted" '
+                 '{download}<form class="docdelete" data-post="/docs/{n}/delete" data-after="doc-deleted" '
                  'data-confirm="Delete notes/docs/{p}?"{a}><input type="hidden" name="path" value="{p}">'
                  '<input type="hidden" name="sha" value="{s}"><button type="submit" class="small icon" '
                  'title="Delete the document" aria-label="Delete the document">{delete}</button></form>'
@@ -827,7 +862,7 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
                  '<span class="dim">{n} hears of your change: with your next message, or now if it is replying</span>'
                  '</div><div class="bad wrap" data-refusal></div></form></div>',
                  p=open_path, s=sha, n=q(name), tattr=tattr, cbtn=cbtn, tlist=tlist, copy=ICONS["copy"], delete=ICONS["delete"],
-                 over=_overwritten(saved, sha, text), a=post_attrs("Documents", actions.RUN_NOW_S),
+                 over=_overwritten(saved, sha, text), a=post_attrs("Documents", actions.RUN_NOW_S), download=download,
                  md=markdown(text) if text.strip() else Html('<p class="dim">(empty)</p>'), raw=text)
     elif open_path:
         view = h('<p class="dim">{p} is not there (any more).</p>', p=open_path)
