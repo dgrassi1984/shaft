@@ -110,6 +110,10 @@ and [chat design](plans/PLAN-webui-chat.md).
   **Drive** (`drive.md`, saved after its diff), **Access** (tools, wake floor and cloud cap, jobs, shared folder,
   mail and calendar grants, battery, key names), **Judge**, **Changes**, **Benchmarks**, **Transcripts**,
   **Journal**, **Activity** (connections, plugins, jobs), with its actions and earlier chats.
+- Settings and Config saves update only the saved row, including its next save's comparison value. Use the default,
+  Unset, Drive saves and removal, and Access switches update their control in place too. Other rows keep unsaved
+  edits. Adding a Config key adds its editable row. A save still refuses a value changed by another writer.
+  Settings saves do not reload the page; the saved-but-not-live notice refreshes separately.
 
 1. Run `shaft api on` first to configure the API key and tailnet login.
    `shaft web on` installs the service (`com.shaft.web`, `127.0.0.1:8785`) and exposes it with `tailscale serve` on

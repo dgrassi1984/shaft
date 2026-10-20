@@ -108,16 +108,20 @@ def _field_form(name: str, f: dict) -> Html:
     return join([save, unset])
 
 
+def config_row(name: str, f: dict) -> Html:
+    shown = f["value"] if f["set"] else h('<span class="dim">not set · default {d}</span>',
+                                         d=f["default"] if f["default"] is not None else "from its code")
+    return h('<tr data-row id="config-{k}"><td data-label="key"><code>{k}</code></td><td data-label="now">{v}</td>'
+             '<td data-label="change">{form}</td><td data-label="what it is" class="dim help">{help}</td></tr>',
+             k=f["key"], v=shown, form=_field_form(name, f), help=f["help"])
+
+
 def config_page(name: str, fs: list[dict], history: list[str]) -> Html:
-    rows = []
-    for f in fs:
-        shown = f["value"] if f["set"] else h('<span class="dim">not set · default {d}</span>', d=f["default"])
-        rows.append(h('<tr><td data-label="key"><code>{k}</code></td><td data-label="now">{v}</td>'
-                      '<td data-label="change">{form}</td><td data-label="what it is" class="dim help">{help}</td></tr>',
-                      k=f["key"], v=shown, form=_field_form(name, f), help=f["help"]))
+    rows = [config_row(name, f) for f in fs]
     table = h('<div class="tablewrap"><table class="config"><thead><tr><th>key</th><th>now</th><th>change</th>'
-              '<th>what it is</th></tr></thead><tbody>{r}</tbody></table></div>', r=join(rows))
-    add = h('<form class="cfg add" data-post="/action/config-set" data-reset="1" data-confirm="Add this key to {n}\'s '
+              '<th>what it is</th></tr></thead><tbody id="config-rows">{r}</tbody></table></div>', r=join(rows))
+    add = h('<form class="cfg add" data-post="/action/config-set" data-add-row="#config-rows" data-reset="1" '
+            'data-confirm="Add this key to {n}\'s '
             'config.env?"><input type="hidden" name="name" value="{n}"><input name="key" placeholder="NEW_KEY" '
             'pattern="[A-Z][A-Z0-9_]*" required aria-label="key"><input name="value" placeholder="value" '
             'maxlength="500" aria-label="value"><input type="hidden" name="saw" value=""><input type="hidden" '
@@ -151,36 +155,39 @@ def drive_page(name: str, text: str | None, sha: str, rendered: Html) -> Html:
              '<pre class="diff" data-diff-out></pre></form>', n=name, sha=sha, t=text or "", max=DRIVE_MAX)
     remove = (button("drive-remove", "Remove drive.md", f"remove {name}'s drive.md? The default drive applies from "
                      "its next run.", {"name": name, "sha": sha}, cls="small") if text is not None else Html(""))
-    return join([h('<section class="panel"><h2>What {n} is for (drive.md, as it reads it)</h2>{c}</section>', n=name,
+    return h('<div data-row>{body}</div>', body=join([
+                 h('<section class="panel"><h2>What {n} is for (drive.md, as it reads it)</h2>{c}</section>', n=name,
                    c=current),
                  h('<section class="panel"><h2>Change it</h2><p class="dim">Saved through <code>shaft drive</code>; '
-                   'refused if drive.md changed since this page was drawn.</p>{e}{r}</section>', e=edit, r=remove)])
+                   'refused if drive.md changed since this page was drawn.</p>{e}{r}</section>', e=edit, r=remove)]))
 
 
 # -- access ----------------------------------------------------------------------------------------------------------
-def access_page(name: str, a: dict) -> Html:
+def access_page(name: str, a: dict, row: str = "") -> Html:
     from .web_actions import tool_switches
     n = name
-    limits = h(
+    floor = h('<div data-row>'
         '<div class="kv"><div class="row"><span class="label">wake floor</span><span>{wf} min {wfd}</span></div>'
-        '<div class="row"><span class="label">cloud cap</span><span>${cap} a day {capd} · spent today ${spent}</span>'
-        '</div></div>'
+        '</div>'
         '<div class="actions">'
         '<form class="act" data-post="/action/limit" data-confirm="Set {n}\'s wake floor? It may not wake more often '
         'than this, whatever its config.env says."><input type="hidden" name="name" value="{n}"><input type="hidden" '
         'name="limit" value="wake-floor"><input name="value" inputmode="numeric" pattern="[0-9]+" placeholder="minutes" '
         'aria-label="wake floor in minutes" required><button type="submit" class="small">Set wake floor</button></form>'
-        '{wfoff}'
+        '{wfoff}</div></div>', n=n, wf=a["wake_floor"], wfd="(yours)" if a["wake_floor_own"] else "(default)",
+        wfoff=button("limit", "Default floor", f"put {n}'s wake floor back to the default ({a['wake_floor_default']} min)?",
+                     {"name": n, "limit": "wake-floor", "value": "off"}, "" if a["wake_floor_own"] else "already the default",
+                     cls="small"))
+    cap = h('<div data-row><div class="kv">'
+        '<div class="row"><span class="label">cloud cap</span><span>${cap} a day {capd} · spent today ${spent}</span>'
+        '</div></div><div class="actions">'
         '<form class="act" data-post="/action/limit" data-confirm="Set {n}\'s daily cloud cap? Its cloud calls stop '
         'for the day once it is spent."><input type="hidden" name="name" value="{n}"><input type="hidden" '
         'name="limit" value="cloud-cap"><input name="value" inputmode="decimal" placeholder="dollars" '
         'aria-label="cloud cap in dollars" required><button type="submit" class="small">Set cloud cap</button></form>'
-        '{capoff}</div>', n=n, wf=a["wake_floor"], wfd="(yours)" if a["wake_floor_own"] else "(default)",
+        '{capoff}</div></div>', n=n,
         cap=f"{a['cloud_cap']:.2f}", capd="(yours)" if a["cloud_cap_own"] else "(default)",
         spent=f"{a['spent_today']:.2f}",
-        wfoff=button("limit", "Default floor", f"put {n}'s wake floor back to the default ({a['wake_floor_default']} min)?",
-                     {"name": n, "limit": "wake-floor", "value": "off"}, "" if a["wake_floor_own"] else "already the default",
-                     cls="small"),
         capoff=button("limit", "Default cap", f"put {n}'s cloud cap back to the default (${a['cloud_cap_default']:.2f})?",
                       {"name": n, "limit": "cloud-cap", "value": "off"}, "" if a["cloud_cap_own"] else "already the default",
                       cls="small"))
@@ -224,16 +231,19 @@ def access_page(name: str, a: dict) -> Html:
                            f"for {n}?", {"name": n, "op": bat_op}, cls="small")])
     keys = (h('<ul class="lines">{li}</ul>', li=join(h("<li>{k}</li>", k=k) for k in a["keys"])) if a["keys"]
             else h('<p class="dim">{n} has no keys of its own</p>', n=n))
-    sections = [("Supervisor tools (shaft tools)", tool_switches(n, set(a["tools_off"]))),
-                ("Limits (shaft limits)", limits), ("Scheduled jobs (shaft jobs)", jobs),
-                ("Shared folder (shaft share)", share),
-                ("Your mail it may read (shaft mail)", grants("mail", a["mail"], "label", "label")),
-                ("Your calendars it may read (shaft calendar)", grants("calendar", a["calendar"], "calendar", "name")),
-                ("Capability battery", battery),
-                ("Its own keys (shaft secret): names only", join([keys, h(
+    if row in ("wake-floor", "cloud-cap"):
+        return floor if row == "wake-floor" else cap
+    sections = [("", "Supervisor tools (shaft tools)", tool_switches(n, set(a["tools_off"]))),
+                ("", "Limits (shaft limits)", join([floor, cap])), ("jobs", "Scheduled jobs (shaft jobs)", jobs),
+                ("share", "Shared folder (shaft share)", share),
+                ("mail", "Your mail it may read (shaft mail)", grants("mail", a["mail"], "label", "label")),
+                ("calendar", "Your calendars it may read (shaft calendar)", grants("calendar", a["calendar"], "calendar", "name")),
+                ("battery-switch", "Capability battery", battery),
+                ("", "Its own keys (shaft secret): names only", join([keys, h(
                     '<p class="dim">Set or delete a key in your terminal: <code>shaft secret {n} set &lt;key&gt; '
                     '--hosts …</code>. A value never passes through this page.</p>', n=n)]))]
-    return join(h('<section class="panel"><h2>{t}</h2>{b}</section>', t=t, b=b) for t, b in sections)
+    return join(h('<section class="panel"{swap}><h2>{t}</h2>{b}</section>',
+                  swap=Html(" data-row") if key else "", t=t, b=b) for key, t, b in sections if not row or key == row)
 
 
 def access(name: str) -> dict:
