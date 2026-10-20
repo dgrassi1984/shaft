@@ -95,6 +95,7 @@
   }
 
   function toBottom(el) {
+    el._atBottom = true;
     const box = el.closest("[data-scroll]");
     if (box) box.scrollTop = box.scrollHeight;
     else window.scrollTo(0, document.body.scrollHeight);
@@ -112,7 +113,7 @@
   // it gives up after 15 s; a failure backs off (up to 30 s) and is said once, at the top, not under every panel;
   // the connection coming back or the app coming to the front refreshes at once.
   const POLL_LIMIT_MS = 15000;
-  const net = { down: 0 };
+  const net = { down: new Set() };
   function netNote(text) {
     let n = document.getElementById("netnote");
     if (!text) { if (n) n.remove(); return; }
@@ -129,27 +130,48 @@
   // strips and anything the page added to it (copy buttons); a turn being sent stays until its own turn arrives.
   function morph(el, html) {
     const next = new DOMParser().parseFromString(`<!doctype html><body>${html}`, "text/html").body;
-    const sending = [...el.children].filter(c => c.classList.contains("sending") && !c.dataset.done);
-    const want = [...next.children];
-    want.forEach((n, i) => {
-      const cur = [...el.children].filter(c => !c.classList.contains("sending"))[i];
+    const children = [...el.children];
+    const sending = new Set(children.filter(c => c.classList.contains("sending") && !c.dataset.done));
+    const keyed = new Map(children.filter(c => !c.classList.contains("sending") && c.dataset.k)
+      .map(c => [c.dataset.k, c]));
+    const kept = new Set();
+    let cursor = el.firstElementChild;
+    [...next.children].forEach(n => {
+      const cur = keyed.get(n.dataset.k);
       const src = n.outerHTML;
-      if (cur && cur.dataset.k && cur.dataset.k === n.dataset.k && cur._src === src) return;
-      const node = document.importNode(n, true);
-      node._src = src;
-      if (!cur || cur.dataset.k !== n.dataset.k) {     // a new item: an answer is read out
-        if (node.classList.contains("turn") && node.classList.contains("it") && !node.classList.contains("live")) {
+      let node = cur;
+      if (!cur || cur._src !== src) {
+        node = document.importNode(n, true);
+        node._src = src;
+        if (cur) {
+          const details = new Map([...cur.querySelectorAll("details[data-key]")].map(d => [d.dataset.key, d.open]));
+          node.querySelectorAll("details[data-key]").forEach(d => {
+            if (details.has(d.dataset.key)) d.open = details.get(d.dataset.key);
+          });
+          const scrolls = new Map([...cur.querySelectorAll("[data-scroll-key]")].map(d => [d.dataset.scrollKey, d.scrollTop]));
+          // Restore after insertion: detached elements have no scrollable layout.
+          node._scrolls = scrolls;
+          const clocks = new Map([...cur.querySelectorAll(".elapsed[data-since]")].map(d => [d.dataset.since, d.textContent]));
+          node.querySelectorAll(".elapsed[data-since]").forEach(d => {
+            if (clocks.has(d.dataset.since)) d.textContent = clocks.get(d.dataset.since);
+          });
+        } else if (node.classList.contains("turn") && node.classList.contains("it") && !node.classList.contains("live")) {
           const who = (node.querySelector(".who") || {}).firstChild;
           const first = (node.querySelector(".md p, .md li, .md h2, .md h3, p.warn") || {}).textContent || "";
           announce(`${who ? who.textContent.trim() : "It"} replied: ${first.slice(0, 200)}`);
         }
       }
-      if (cur && cur.dataset.k === n.dataset.k) cur.replaceWith(node);
-      else if (cur) el.insertBefore(node, cur);
-      else el.appendChild(node);
+      if (node !== cursor) el.insertBefore(node, cursor);
+      cursor = node.nextElementSibling;
+      kept.add(node);
+      if (node._scrolls) {
+        node.querySelectorAll("[data-scroll-key]").forEach(d => {
+          if (node._scrolls.has(d.dataset.scrollKey)) d.scrollTop = node._scrolls.get(d.dataset.scrollKey);
+        });
+        delete node._scrolls;
+      }
     });
-    [...el.children].filter(c => !c.classList.contains("sending")).slice(want.length).forEach(c => c.remove());
-    el.querySelectorAll(".sending").forEach(c => { if (!sending.includes(c)) c.remove(); });
+    children.forEach(c => { if (!kept.has(c) && !sending.has(c)) c.remove(); });
     sending.forEach(c => el.appendChild(c));          // kept last, until the server's turn replaces it
   }
 
@@ -180,8 +202,10 @@
         if (r.status >= 502 && r.status <= 504) {      // the proxy answered, SHAFT did not (Tailscale's 503): unreachable
           throw new Error(`its web service is not answering, HTTP ${r.status}`);
         }
-        if (net.down) { net.down = 0; netNote(""); document.querySelectorAll(".stale").forEach(x => x.classList.remove("stale")); }
-        if (r.status === 304) { fails = 0; fresh(el); return; }
+        if (r.status === 304) {
+          if (!again && el.dataset.poll === url) { fails = 0; recovered(); }
+          return;
+        }
         const body = await r.text();
         if (r.ok) {
           fails = 0;
@@ -202,6 +226,8 @@
             const atBottom = box && box.scrollHeight > box.clientHeight
               ? box.scrollTop + box.clientHeight >= box.scrollHeight - 40
               : window.innerHeight + window.scrollY >= document.body.scrollHeight - 40;
+            const oldKeys = new Set([...el.querySelectorAll(".turn[data-k]")].map(n => n.dataset.k));
+            if (el.dataset.follow) el._atBottom = atBottom;
             if (el.dataset.keyed) morph(el, body);
             else el.innerHTML = body;
             el.dataset.last = body;
@@ -215,16 +241,19 @@
               if (target) target.focus({ preventScroll: true });
             }
             if (atBottom && el.dataset.follow) toBottom(el);
-            el.dispatchEvent(new CustomEvent("shaft:swapped", { bubbles: true }));
+            const newBelow = !!box && [...el.querySelectorAll(".turn[data-k]")].some(n =>
+              !oldKeys.has(n.dataset.k) && n.getBoundingClientRect().top >= box.getBoundingClientRect().bottom);
+            el.dispatchEvent(new CustomEvent("shaft:swapped", { bubbles: true, detail: { newBelow } }));
           }
-          fresh(el);
+          recovered();
         } else {
           fails += 1;
+          net.down.add(el);
           stale(el, `Not refreshed: HTTP ${r.status} — ${textOf(body) || "no reason given"}`);
         }
       } catch (e) {                                    // no answer at all: the network, not this panel
         fails += 1;
-        net.down += 1;
+        net.down.add(el);
         el.classList.add("stale");
         netNote(navigator.onLine === false ? "Offline — it refreshes when the connection is back"
           : `Cannot reach SHAFT: ${e.name === "AbortError" ? "no answer in 15 s" : e.message} — retrying`);
@@ -234,6 +263,12 @@
         if (again) { again = false; later(0); }
         else later(Math.min(every * slow * 2 ** Math.min(fails, 4), 15000 * slow));   // back within 15 s
       }
+    }
+    function recovered() {
+      fresh(el);
+      net.down.delete(el);
+      for (const panel of net.down) { if (!panel.isConnected) net.down.delete(panel); }
+      if (!net.down.size) netNote("");
     }
     el._tick = tick;
     later(el.dataset.now ? 0 : every);                 // a first render without live data (the rail): fill it now
@@ -672,10 +707,14 @@
     if (!feed.dataset || !feed.dataset.follow) return;
     const box = feed.closest("[data-scroll]");
     const nb = document.querySelector("[data-newbelow]");
-    if (box && nb && box.scrollTop + box.clientHeight < box.scrollHeight - 40) nb.hidden = false;
+    if (box && nb && ev.detail?.newBelow && !feed._atBottom) nb.hidden = false;
   });
   document.addEventListener("scroll", (ev) => {
     const box = ev.target;
+    if (box.matches && box.matches("[data-scroll]")) {
+      const feed = box.querySelector("[data-follow]");
+      if (feed) feed._atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
+    }
     const nb = document.querySelector("[data-newbelow]");
     if (nb && box.matches && box.matches("[data-scroll]") && box.scrollTop + box.clientHeight >= box.scrollHeight - 40) {
       nb.hidden = true;
@@ -688,6 +727,12 @@
     if (feed) toBottom(feed);
     nb.hidden = true;
   });
+
+  document.addEventListener("load", (ev) => {
+    if (!ev.target.matches || !ev.target.matches("img")) return;
+    const feed = ev.target.closest("[data-follow]");
+    if (feed && feed._atBottom) toBottom(feed);
+  }, true);
 
   // Reply to part of a message: select text in the chat's feed and a "Reply" button appears by it; it puts the text,
   // quoted ("> "), in the composer, where the rest of the message is written.

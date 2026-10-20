@@ -110,7 +110,7 @@ def rail(names: list[str], current: str = "", snap: dict | None = None, chats: d
                 on="on" if current in (href, href.strip("/")) else "",
                 badge=h(' <span class="badge bad" title="alerts">{n}</span>', n=alerts) if href == "/overview" and alerts
                 else Html("")) for href, label in MANAGE]
-    return h('<div class="group">Chats</div>{items}<details class="manage" open><summary class="group">Manage</summary>'
+    return h('<div class="group">Chats</div>{items}<details class="manage" data-key="manage" open><summary class="group">Manage</summary>'
              '{manage}</details>', items=join(items), manage=join(manage))
 
 
