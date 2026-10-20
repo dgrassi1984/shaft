@@ -280,6 +280,7 @@ blockquote { margin: .3rem 0; padding: .1rem .6rem; border-left: 3px solid var(-
 details.menu > summary { list-style: none; cursor: pointer; font-size: 1.2rem; line-height: 1; padding: .1rem .55rem;
                          border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
 details.menu > summary::-webkit-details-marker { display: none; }
+details.menu.earliermenu > summary { font-size: .78rem; }   /* a word, sized like the header's small buttons */
 details.menu[open] > summary { border-color: var(--accent); }
 details.menu { position: relative; }
 .menubody { position: absolute; left: 0; top: 2.2rem; z-index: 30; background: var(--panel); border: 1px solid var(--line);

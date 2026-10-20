@@ -79,9 +79,18 @@ and [chat design](plans/PLAN-webui-chat.md).
   Markdown task lists use full-width items with a checkbox before the text. On phones, stacked Markdown
   table labels use the heading’s plain text.
 - The chat header refreshes every 1.5 seconds: state, model, today's spend, actions, busy warning, Clear and
-  Earlier web chats. The open ⋯ menu and keyboard focus survive refreshes; your draft and documents stay in place.
+  Earlier chats. The open history list and ⋯ menu and keyboard focus survive refreshes; your draft and documents stay in place.
   A failed refresh marks the header stale. Clear sends the conversation id shown by the header; a missing or
   outdated id is refused with a request to reload. Cleared conversations stay in Earlier web chats and Transcripts.
+- **Earlier chats** sits in the chat header. Its quick list shows the latest 20 and the total count;
+  **All earlier chats** opens `/i/<name>/chats`, with every saved ended web chat, newest first.
+  Each entry shows its date, the first line of the first user message, trimmed to 80 characters, and message count.
+  Archive links use `?id=` and support bookmarks and normal browser Back. An archive has an **Earlier chat**
+  banner with its date and **Back to the current chat**. Its footer says when it ended, with no invitation to type.
+  Beside an archive, Documents says **Current files — not as they were in this chat**. The files are current,
+  not snapshots. Editing, commenting, deleting, restoring and creating documents are unavailable there.
+  **Open in the current chat to edit or comment** opens the selected file in the current chat. Reply document
+  cards in an archive also open the file in the current chat.
 - **Documents**: a Markdown file an instance writes under its `notes/docs/` shows beside the chat, live, as it writes
   it; a reply's documents are cards under it. The drawer shows a vertical list with sizes, changed marks and comment
   counts, or one open document (by default the one this chat last changed). **← Documents** returns to the list

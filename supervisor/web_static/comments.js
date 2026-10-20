@@ -193,7 +193,9 @@
     const host = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
     const md = host.closest(".docmd");
     if (!md || !md.contains(range.endContainer)) return null;
-    return { range, md, view: md.closest(".docview") };
+    const view = md.closest(".docview");
+    if (!view || view.dataset.readOnly) return null;
+    return { range, md, view };
   }
 
   const button = document.createElement("button");

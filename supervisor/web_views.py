@@ -45,6 +45,20 @@ def chat_frame(name: str, head: Html, body: Html, names: list[str], csrf: str, h
     return frame(f"{name} · chat", join([head, body]), names, csrf, current=f"i:{name}")
 
 
+def earlier_chats(name: str, past: list[dict]) -> Html:
+    """Shared labels for the quick list and the complete archive."""
+    items = []
+    for c in past:
+        users = [t for t in c["turns"] if t["role"] == "user"]
+        text = users[0].get("shown", users[0].get("content", "")) if users else ""
+        first = (text or "").splitlines()
+        excerpt = first[0].strip() if first else ""
+        excerpt = excerpt[:80] + ("…" if len(excerpt) > 80 else "")
+        label = f"{c['created'][:16].replace('T', ' ')} · {excerpt or 'No message text'} · {len(users)} message(s)"
+        items.append(link(f"/i/{q(name)}/chat?id={q(c['id'])}", label))
+    return lines(items, "No earlier chats yet.")
+
+
 def chat_header(name: str, live: dict, chat: dict | None, past: list[dict], read_only: bool = False) -> Html:
     """The current facts and actions, refreshed independently of the composer and documents."""
     from .web_actions import instance_buttons, post_attrs
@@ -55,13 +69,12 @@ def chat_header(name: str, live: dict, chat: dict | None, past: list[dict], read
     if live.get("usd_today"):
         facts.append(f"${live['usd_today']:.2f} today")
     buttons = instance_buttons(live) if live.get("name") else Html("")
-    pasts = [link(f"/i/{q(name)}/chat?id={q(c['id'])}", f"{c['created'][:16].replace('T', ' ')} · "
-                  f"{len([t for t in c['turns'] if t['role'] == 'user'])} message(s)") for c in past]
-    earlier = join([h("<h3>Earlier web chats</h3>"), lines(pasts, "none yet"), h(
-        '<p class="dim">Every conversation, from any client, is in <a href="/i/{n}/transcripts?f=conversations">'
-        'Transcripts</a>.</p>', n=q(name))])
+    earlier = join([h('<p class="dim">latest {limit} of {total}</p>', limit=min(20, len(past)), total=len(past)),
+                    earlier_chats(name, past[:20]), link(f"/i/{q(name)}/chats", "All earlier chats")])
     head = h('<header class="chathead"><button type="button" class="navbtn" data-toggle-nav aria-label="Chats and pages" '
-             'aria-expanded="false" data-focus="nav">☰</button><h1>{name}</h1><span class="dim facts">{facts}</span>'
+             'aria-expanded="false" data-focus="nav">☰</button><h1>{name}</h1>'
+             '<details class="menu earliermenu" data-key="earlier-chats"><summary data-focus="earlier">Earlier chats</summary>'
+             '<div class="menubody">{earlier}</div></details><span class="dim facts">{facts}</span>'
              '<button type="button" class="small docsbtn" data-show-docs title="its documents (notes/docs/)" '
              'aria-label="Documents" data-focus="docs">📄<span class="docslabel"> Documents</span></button>{clear}'
              '<details class="menu" data-key="chat-menu"><summary data-focus="menu" title="{name}: pages and actions" '
@@ -69,7 +82,7 @@ def chat_header(name: str, live: dict, chat: dict | None, past: list[dict], read
              '</summary><div class="menubody"><p class="dim menufacts">{facts}</p>'
              '<div class="menupages">{pages}</div><div class="actions">{buttons}</div>'
              '<div class="actions"><button type="button" class="small" data-notify data-focus="notify">Notify me on this device</button></div>'
-             '{earlier}</div></details></header>',
+             '</div></details></header>',
              name=name, facts=" · ".join(f for f in facts if f), pages=pages, buttons=buttons,
              earlier=h('<div class="earlier">{e}</div>', e=earlier) if earlier else Html(""),
              # always on screen (it sat under the last answer, below the fold on a phone); the chat shown now
@@ -627,10 +640,15 @@ def _my_text(text: str) -> Html:
     return join(out)
 
 
-def doc_cards(made: list[dict] | None) -> Html:
+def doc_cards(made: list[dict] | None, current_chat: str = "") -> Html:
     """The documents a reply created or changed: each opens in the documents panel."""
     if not made:
         return Html("")
+    if current_chat:
+        return h('<div class="doccards">{c}</div>', c=join(
+            h('<a class="doccard" href="/i/{n}/chat?doc={u}">📄 {p} <span class="dim">'
+              'Open in the current chat to edit or comment</span></a>', n=q(current_chat), u=q(d["path"]),
+              p=d["path"]) for d in made))
     return h('<div class="doccards">{c}</div>', c=join(
         h('<a class="doccard" href="?doc={u}" data-open-doc="{p}">📄 {p} <span class="dim">— {what}</span></a>',
           u=q(d["path"]), p=d["path"], what="created" if d.get("created") else "changed") for d in made))
@@ -733,7 +751,7 @@ def threads_list(name: str, doc: str, sha: str, threads: list[dict], active: str
 
 def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None, sha: str, marked: set[str],
                problem: str = "", saved: dict | None = None, threads: list[dict] | None = None,
-               counts: dict | None = None, thread: str = "") -> Html:
+               counts: dict | None = None, thread: str = "", archived: bool = False) -> Html:
     """The documents panel beside the chat (/fragment/docs/<name>): the list or the open one rendered."""
     from . import actions
     from .docs import DIR
@@ -755,10 +773,19 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
     back = Html('<button type="button" class="small" data-back-docs aria-label="Back to the documents">← Documents</button>')
     head = h('<div class="docshead">{title} <span class="dim">{dir}/</span>{new}<button type="button" '
              'class="small closedocs" data-close-docs aria-label="Close the documents">✕</button></div>{list}',
-             title=back if open_path else Html("<b>Documents</b>"), dir=DIR, new="" if open_path else new,
+             title=back if open_path else Html("<b>Documents</b>"), dir=DIR, new="" if open_path or archived else new,
              list="" if open_path else h('<div class="doclist">{i}</div>', i=join(items) if items else
+                                          h('<p class="dim">No current files.</p>') if archived else
                                           h('<p class="dim">none yet: ask {n} for one, it appears here as it writes it.</p>',
                                             n=name)))
+    if archived:
+        notice = h('<p>Current files — not as they were in this chat</p><p><a href="/i/{n}/chat{query}">'
+                   'Open in the current chat to edit or comment</a></p>', n=q(name),
+                   query=f"?doc={q(open_path)}" if open_path else "")
+        view = (h('<p class="bad">{p}</p>', p=problem) if problem else
+                h('<div class="docview" data-read-only="1"><b>{p}</b><div class="docmd">{md}</div></div>',
+                  p=open_path, md=markdown(text)) if text is not None else Html(""))
+        return join([notice, head, view])
     if problem:
         view = h('<p class="bad">{p}</p>', p=problem)
     elif open_path and text is not None:
@@ -871,7 +898,7 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
         else:
             note = h('<p class="warn">{n}</p>', n=t["note"]) if t.get("note") else Html("")
             body = markdown(t["content"]) if t.get("content") else Html('<p class="dim">(no answer)</p>')
-            cards = join([doc_cards(t.get("docs")), _comment_chips(t.get("answered"), "answered"),
+            cards = join([doc_cards(t.get("docs"), name if archived else ""), _comment_chips(t.get("answered"), "answered"),
                           _comment_chips(t.get("opened"), "opened")])
             seen = h(' data-seen-inst="{n}" data-seen-reply="{ts}"', n=name, ts=t["ts"]) if not archived else Html("")
             items.append((t["ts"], h('<div class="turn it" data-k="a{k}" data-raw="{raw}"{seen}><div class="who">{n} <span class="dim">{ts}</span>'
@@ -880,9 +907,11 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
                                      body=body, cards=cards, note=note)))
     items += [(m["ts"], card) for m, card in zip(sent, _sent_cards(name, sent))]
     if chat["state"] == "ended":   # in time order: what it sent you after the chat ended shows below the line
-        items.append((chat.get("ended", ""), h(
-            '<p class="dim ended" data-k="ended">Ended {e}: written up in its journal. Your next message starts a new '
-            'conversation.</p>', e=chat.get("ended", "")[:16].replace("T", " "))))
+        when = chat.get("ended", "")[:16].replace("T", " ")
+        items.append((chat.get("ended", ""), h('<p class="dim ended" data-k="ended">This conversation ended on {e}.</p>', e=when)
+                      if archived else                # a past chat: when it ended, nothing about a next message
+                      h('<p class="dim ended" data-k="ended">Ended {e}: written up in its journal. Your next message starts a new '
+                        'conversation.</p>', e=when)))
     items.sort(key=lambda x: x[0])
     feed = []
     today = time.strftime("%Y-%m-%d")
@@ -911,7 +940,7 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
                       partial=h('<p class="dim">the answer appears when it is ready</p>'),
                       stop=button("chat-stop", "Stop the reply", f"stop {name}'s reply?", {"cid": chat["id"]},
                                   cls="small")))
-    if chat.get("pending_edits"):
+    if chat.get("pending_edits") and not archived:
         feed.append(h('<p class="pending-edits" data-k="pend">✎ Your changes to {p} go to {n} with your next message.</p>',
                       p=", ".join(sorted(chat["pending_edits"])), n=name))
     if archived:                                  # a past chat's page: nothing here acts on the current one
@@ -938,12 +967,14 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
         '<span class="dim keys">Enter sends · Shift-Enter new line · / to write · Alt-↑↓ another chat</span>'
         '<button type="submit">Send</button></div></form>',
         n=name, mf=messages.ATTACH_MAX_BYTES, mt=messages.ATTACH_MAX_TOTAL, mn=messages.ATTACH_MAX_FILES)
-    body = join([h('<section class="panel chat" data-scroll><div class="feed" data-poll="{u}" data-every="1500" data-keyed="1" '
+    banner = (h('<p class="panel">Earlier chat, {date}. <a href="/i/{n}/chat">Back to the current chat</a></p>',
+                date=chat['created'][:16].replace('T', ' '), n=q(name)) if read_only and chat else Html(""))
+    body = join([banner, h('<section class="panel chat" data-scroll><div class="feed" data-poll="{u}" data-every="1500" data-keyed="1" '
                          'data-follow="1">{f}</div></section><button type="button" class="newbelow" data-newbelow hidden>'
                          '↓ New below</button>', u=feed_url, f=chat_feed(name, chat, sent, archived=read_only)), composer,
                  Html('<div class="dropzone" data-dropzone hidden>Drop to attach</div>') if not read_only else Html("")])
-    aside = h('<aside class="docs" id="docs" data-poll="/fragment/docs/{n}?doc={d}" data-every="1500" data-lazy="1">{p}</aside>',
-              n=q(name), d=q(doc), p=panel)
+    aside = h('<aside class="docs" id="docs" data-poll="/fragment/docs/{n}?doc={d}{archive}" data-every="1500" data-lazy="1">{p}</aside>',
+              n=q(name), d=q(doc), p=panel, archive=f"&id={q(chat['id'])}" if read_only and chat else "")
     return chat_frame(name, chat_header(name, live, chat, past, read_only),
                       h('<div class="chatgrid"><div class="chatpage">{b}</div>{a}</div>', b=body, a=aside),
                       names, csrf, f"/fragment/chat/{q(name)}/header"

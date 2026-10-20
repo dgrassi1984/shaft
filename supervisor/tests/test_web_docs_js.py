@@ -1,4 +1,5 @@
 """Drive the shipped delegated controls in Node; no browser or production instance is needed."""
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -11,6 +12,37 @@ JS = Path(__file__).resolve().parents[1] / "web_static" / "web.js"
 
 @unittest.skipUnless(NODE, "node is not installed")
 class DocumentControlsJsTest(unittest.TestCase):
+    def test_issue_15_archive_cards_use_normal_navigation(self):
+        """Reverting #15 intercepts archive cards and opens a live document inside the archive."""
+        from supervisor.web_views import chat_feed
+        chat = {"id": "web-a", "state": "ended", "ended": "2026-09-25T12:00:00",
+                "turns": [{"role": "assistant", "content": "Done", "ts": "2026-09-25T12:00:00",
+                           "docs": [{"path": "a b.md"}]}]}
+        markup = str(chat_feed("wren", chat, [], archived=True))
+        script = r"""
+const fs = require("node:fs"), vm = require("node:vm"), assert = require("node:assert/strict");
+const handlers = {}, markup = JSON.parse(process.argv[2]);
+const card = markup.match(/<a class="doccard"[^>]*>/)[0];
+let prevented = false, replaced = false;
+const panel = { dataset: { poll: "/fragment/docs/wren?id=web-a" } };
+const document = { readyState: "loading", addEventListener(k, fn) { (handlers[k] ||= []).push(fn); },
+  querySelector: () => null, querySelectorAll: () => [], getElementById: id => id === "docs" ? panel : null };
+vm.runInNewContext(fs.readFileSync(process.argv[1], "utf8"), { document, URL, setInterval() {},
+  location: { href: "https://shaft.test/i/wren/chat?id=web-a" }, navigator: {},
+  history: { replaceState() { replaced = true; } }, window: { addEventListener() {} } });
+const target = { closest: q => q === "[data-open-doc]" && card.includes("data-open-doc=")
+  ? { dataset: { openDoc: "a b.md" } } : null };
+(async () => {
+  for (const fn of handlers.click) await fn({ target, preventDefault() { prevented = true; } });
+  assert.equal(prevented, false);
+  assert.equal(replaced, false);
+  assert.ok(card.includes('href="/i/wren/chat?doc=a%20b.md"'));
+})().catch(e => { console.error(e); process.exitCode = 1; });
+"""
+        result = subprocess.run([NODE, "-e", script, str(JS), json.dumps(markup)], text=True,
+                                capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_reply_copy_and_back(self):
         script = r"""
 const fs = require("node:fs"), vm = require("node:vm"), assert = require("node:assert/strict");
