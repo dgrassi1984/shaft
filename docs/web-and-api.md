@@ -60,14 +60,22 @@ and [chat design](plans/PLAN-webui-chat.md).
   live yet" with the guarded restarts; ports and paths shown, set in a terminal).
 - The chat: files and images both ways (drop them anywhere on the page, paste or pick; each is a chip you can take
   out), the reply's activity and clock live, interject, Stop, End. Select text in a message and **↩ Reply** quotes
-  it in your message. Copy an answer (its Markdown) or a code block. Your draft survives a reload; `/` writes,
+  it in your message. Each message with text has Copy and Reply icons for its whole Markdown source, including
+  your own messages. Code blocks and documents have Copy icons too. Your draft survives a reload; `/` writes,
   Alt-↑/↓ changes chat; opt-in desktop notifications (⋯ menu) for a reply that lands while the tab is hidden.
 - **Documents**: a Markdown file an instance writes under its `notes/docs/` shows beside the chat, live, as it writes
-  it; a reply's documents are cards under it. Edit one in the panel (or start one: Documents, then New document):
+  it; a reply's documents are cards under it. The drawer shows a vertical list with sizes, changed marks and comment
+  counts, or one open document (by default the one this chat last changed). **← Documents** returns to the list
+  and asks before dropping unsaved edits.
+  Edit one in the panel (or start one: Documents, then New document):
   Save is refused if it wrote the file meanwhile (you see what changed and keep your text), and it hears of your
   change as a diff; with your next message, or at once if it is replying. If a later write of its drops lines you
   wrote, the panel says so and offers your version back. The first message of each web chat tells the instance
   this, in a line you do not see.
+  The trash icon asks before deleting a document and refuses if its sha changed or the file is gone. The instance
+  hears a short deletion notice with your next message, or immediately while replying. A pending edit followed by
+  deletion becomes one deletion notice. Comment threads and their copies are kept; old chat links show that the
+  document is gone. Its next run commits the deletion with its notes; earlier committed versions remain in git.
 - **Comments on a document** ([PLAN-comments](plans/PLAN-comments.md)), as on a Claude artifact: select text in it
   and press **💬 Comment** (or 💬 in its title bar for the whole document). **Send comment to <instance>** is ticked
   by default: it gets the comment at once (a message of its own, or an interjection while it replies) and answers

@@ -9,11 +9,12 @@ with the rest of it, and the instance hears of it as a diff in their next messag
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import sys
 from pathlib import Path
 
-from .core import UnsafePath, config_lock, contained, instance_root, log, read_beneath, safe_write_bytes
+from .core import UnsafePath, config_lock, contained, instance_root, log, open_beneath, read_beneath, safe_write_bytes
 
 DIR = "notes/docs"
 MAX_BYTES = 256 * 1024
@@ -115,6 +116,29 @@ def write(name: str, path: str, text: str, expect_sha: str) -> dict:
     return {"path": rel, "old": old, "sha": sha(data)}
 
 
+def remove(name: str, path: str, expect_sha: str) -> dict:
+    """The operator's deletion: only the existing document whose sha they saw may be removed."""
+    rel = _rel(path)
+    p = _path(name, rel)
+    with config_lock(p):
+        old, now = read(name, rel)
+        if old is None:
+            raise Refused(f"{DIR}/{rel} is not there (any more)")
+        if now != expect_sha:
+            raise Refused(f"{DIR}/{rel} changed since you looked")
+        try:
+            # Hold the parent directory open: a swapped link must never redirect the unlink outside notes/docs.
+            fd = open_beneath(instance_root(name), Path(DIR, rel).parent.parts, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.unlink(Path(rel).name, dir_fd=fd)
+            finally:
+                os.close(fd)
+        except (UnsafePath, OSError) as e:
+            raise Refused(f"{DIR}/{rel}: {e}") from None
+    log(f"{name}: {DIR}/{rel} deleted by the operator")
+    return {"path": rel, "old": old, "sha": "none"}
+
+
 # -- `shaft docs` -----------------------------------------------------------------------------------------------------
 def command(name: str, action: str | None, path: str | None, file: str | None, expect_sha: str | None,
             sync: bool = False) -> int:
@@ -149,6 +173,13 @@ def command(name: str, action: str | None, path: str | None, file: str | None, e
                 return 1
             print(f"sha256 {s}")
             print(text, end="" if text.endswith("\n") else "\n")
+            return 0
+        if action == "rm":
+            if not expect_sha:
+                print("usage: shaft docs <name> rm PATH --expect-sha SHA")
+                return 2
+            r = remove(name, path, expect_sha)
+            print(f"{name}: {DIR}/{r['path']} deleted · its next run commits it with its notes")
             return 0
         if not file or not expect_sha:
             print("usage: shaft docs <name> set PATH --file FILE --expect-sha SHA  (none: a new document)")

@@ -866,10 +866,11 @@ def main(argv: list[str]) -> int:
     p.add_argument("--file")
     p.add_argument("--expect-sha")
     p = sub.add_parser("docs", help="an instance's documents (notes/docs/*.md, shown beside the web chat): list them, "
-                                    "show PATH, or set PATH --file FILE --expect-sha SHA (none for a new one); its next "
+                                    "show PATH, set PATH --file FILE --expect-sha SHA (none for a new one), or "
+                                    "rm PATH --expect-sha SHA; its next "
                                     "run commits your edit with its notes")
     p.add_argument("name")
-    p.add_argument("action", nargs="?", choices=["show", "set", "comments"])
+    p.add_argument("action", nargs="?", choices=["show", "set", "rm", "comments"])
     p.add_argument("path", nargs="?", help="inside notes/docs/, e.g. plan.md")
     p.add_argument("--file")
     p.add_argument("--expect-sha")
