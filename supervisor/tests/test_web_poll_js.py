@@ -17,6 +17,7 @@ HARNESS = r"""
 const POLL_LIMIT_MS = 15000;
 const net = { down: 0 };
 const busyIn = () => false, fresh = () => {}, stale = () => {}, netNote = () => {}, checkVersion = () => {};
+const pairAgain = () => false;
 const textOf = (s) => s, toBottom = () => {}, morph = () => { throw new Error("not keyed"); };
 const listeners = {};
 const document = {

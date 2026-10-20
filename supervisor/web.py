@@ -344,7 +344,7 @@ def _route(req: Request) -> Response:
     paired = _paired(req.headers.get("cookie", ""))
     if not paired:
         # A Home Screen app has cookies of its own and no address bar: it pairs by pasting the link here.
-        return _html(403, web_pages.unpaired_page())
+        return _html(403, web_pages.unpaired_page(), {"X-Shaft-Pair": "required"})
     dev, secret = paired
     if _renew_due(dev):                             # the cookie's 400 days start again: a used app never lapses
         req.set_cookies.append(_device_cookie(dev, secret))
@@ -379,7 +379,7 @@ def _pair(req: Request, login: str) -> Response:
     if req.method == "GET":
         p = _pairing(req.query.get("t", ""))
         if not p:
-            return _refused("This pairing link is unknown, used or expired.", "Run `shaft web pair` for a new one.")
+            return _html(403, web_pages.unpaired_page(expired=True))
         return _html(200, web_pages.pair_page(req.query["t"], p["device"]))
     if req.method != "POST" or not _same_origin(req):
         return _refused("This request did not come from this page.")
@@ -387,7 +387,7 @@ def _pair(req: Request, login: str) -> Response:
     token = form.get("t") or _token_from_link(form.get("link", ""))
     got = _use_pairing(token, login)
     if not got:
-        return _refused("This pairing link is unknown, used or expired.", "Run `shaft web pair` for a new one.")
+        return _html(403, web_pages.unpaired_page(expired=True))
     dev, secret = got
     return Response(303, b"", {"Location": "/", "Set-Cookie": _device_cookie(dev, secret)})
 

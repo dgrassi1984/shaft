@@ -12,6 +12,12 @@
 
   const csrf = () => (document.querySelector('meta[name="csrf"]') || {}).content || "";
 
+  function pairAgain(r) {
+    if ((r.status !== 401 && r.status !== 403) || r.headers.get("X-Shaft-Pair") !== "required") return false;
+    location.assign("/");                         // the pairing form; local drafts stay until a successful send
+    return true;
+  }
+
   function fullText(html) {
     return new DOMParser().parseFromString(html, "text/html").body.textContent.trim();
   }
@@ -165,6 +171,7 @@
       try {
         const headers = el.dataset.etag && el.dataset.etagUrl === url ? { "If-None-Match": el.dataset.etag } : {};
         const r = await fetch(url, { credentials: "same-origin", cache: "no-store", signal: ctl.signal, headers });
+        if (pairAgain(r)) return;
         checkVersion(r);
         if (r.status >= 502 && r.status <= 504) {      // the proxy answered, SHAFT did not (Tailscale's 503): unreachable
           throw new Error(`its web service is not answering, HTTP ${r.status}`);
@@ -245,6 +252,7 @@
           headers: { "X-CSRF-Token": csrf(), "Content-Type": "application/x-www-form-urlencoded" },
           body: new URLSearchParams(new FormData(form)),
         });
+        if (pairAgain(d)) return;
         const text = fullText(await d.text());        // the whole diff, never cut like a toast
         if (out) out.textContent = text;
         if (!d.ok) { toast(`No diff: HTTP ${d.status} — ${text}`, true); return; }
@@ -276,6 +284,7 @@
                            : { "X-CSRF-Token": csrf(), "Content-Type": "application/x-www-form-urlencoded" },
         body: multipart ? new FormData(form) : new URLSearchParams(new FormData(form)),
       });
+      if (pairAgain(r)) { if (shown) shown.remove(); return; }
       const body = await r.text();
       toast(textOf(body) || (r.ok ? "done" : `HTTP ${r.status}`), !r.ok);
       const refusal = form.querySelector("[data-refusal]") || (form.dataset.after === "doc-deleted"
@@ -750,6 +759,7 @@
   async function post(url, body) {
     const r = await fetch(url, { method: "POST", credentials: "same-origin", body,
                                  headers: { "X-CSRF-Token": csrf(), "Content-Type": "application/json" } });
+    if (pairAgain(r)) return false;
     toast(textOf(await r.text()) || `HTTP ${r.status}`, !r.ok);
     return r.ok;
   }
@@ -765,6 +775,7 @@
       } else {
         if (await Notification.requestPermission() !== "granted") { notifyButton(); return; }
         const r = await fetch("/push/key", { credentials: "same-origin" });
+        if (pairAgain(r)) return;
         const { key, error } = await r.json();
         if (!key) throw new Error(error || "no key");
         const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(key) });
@@ -845,7 +856,7 @@
     if (panel._tick) panel._tick();
   }
   // The separate comment composer shares the page's request and feedback conventions.
-  window.shaftWeb = { csrf, toast, textOf, refreshDocs };
+  window.shaftWeb = { csrf, toast, textOf, refreshDocs, pairAgain };
 
   function docSaved(form, doc) {
     const panel = document.getElementById("docs");
