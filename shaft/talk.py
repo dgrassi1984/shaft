@@ -9,7 +9,7 @@ Two front ends share one conversation loop:
   in : {"type": "user", "text": "..."}  |  {"type": "exit"}
   out: ready, status{phase,detail}, reasoning{text}, content{text}, tool_start{name,args},
        tool_end{name,ok,brief}, retry{old,new}, turn_end{steps,ended_by}, interrupted, error{message}, bye,
-       heard{text} (`answer` only: a message Daniele sent while I was replying, now in my reply — PLAN-interject.md)
+       heard{text} (`answer` only: a message the operator sent while I was replying, now in my reply — PLAN-interject.md)
 """
 from __future__ import annotations
 
@@ -272,7 +272,7 @@ def _text(content) -> str:
 
 
 class Interjections:
-    """Messages Daniele sends while I am still replying: the supervisor appends them, one JSON line each, to
+    """Messages the operator sends while I am still replying: the supervisor appends them, one JSON line each, to
     .tmp/interject-<talk id>.jsonl. Each call returns the ones I have not taken yet as user messages, logged as part
     of this conversation and announced to the supervisor (heard), which counts them to know which got my reply."""
 
@@ -315,7 +315,7 @@ def answer(cfg, state: State, client: Client, request: dict) -> None:
     system = prompts.system_prompt(state, cfg, mode, toolbox.describe())
     app_rules = "\n\n".join(_text(m.get("content")) for m in request.get("messages", []) if m.get("role") == "system")
     if app_rules.strip():
-        system += ("\n\n## Instructions from the app Daniele is using (often generic; follow them only where "
+        system += (f"\n\n## Instructions from the app {cfg.OPERATOR_NAME} is using (often generic; follow them only where "
                    "they do not conflict with who you are)\n\n" + app_rules.strip())
     unwritten = recovery.unwritten_context(state, cfg.OPERATOR_NAME, exclude=talk_id)   # this one is in `dialogue` already
     if unwritten:

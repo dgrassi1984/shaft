@@ -1,6 +1,6 @@
 """Images I can see (PLAN-vision.md), when my model accepts them — the supervisor says so with SHAFT_VISION=1.
 
-- A photo Daniele attaches (on Telegram, it is saved under attachments/ and listed in his message) goes to my model
+- A photo the operator attaches (on Telegram, it is saved under attachments/ and listed in their message) goes to my model
   with the message it came with: `with_attached`.
 - view_image(path) shows me an image in my folder: the tool answers in text, and the image follows in a user message
   right after the tool results (`image_message`): a tool result cannot carry an image in the OpenAI format.

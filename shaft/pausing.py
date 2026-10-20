@@ -1,5 +1,5 @@
-"""Being paused by the supervisor while Daniele talks with me (Daniele, 2026-10-13: "when I start a chat, its
-background cycle should be immediately paused").
+"""Being paused by the supervisor while the operator talks with me.
+Starting a conversation must immediately pause its background cycle.
 
 The supervisor writes .tmp/pause-<my pid> and sends SIGUSR1. If I am waiting on the model, the call is cut off
 at once (the server stops generating when the connection drops, so the model is free for the conversation); if

@@ -47,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     state, client = State(cfg.root), Client.from_config(cfg)
-    if args.cmd in ("live", "sleep", "reflect"):   # autonomous: paused at once when Daniele opens a conversation
+    if args.cmd in ("live", "sleep", "reflect"):   # autonomous: paused at once when the operator opens a conversation
         pausing.install()
     if args.cmd in ("live", "sleep", "reflect"):   # a conversation never waits: talk does this at its end
         n = recovery.run(cfg, state, client)   # conversations that ended without a journal entry

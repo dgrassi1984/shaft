@@ -84,7 +84,7 @@ BUILTINS = [
     _spec("search_memory", "Search everything I remember (journal, facts, notes, conversations) "
           "and return the most relevant passages with their dates.",
           {"query": S, "k": {"type": "integer", "description": "max results, default 5"}}, ["query"]),
-    _spec("remember", "Store a durable fact in memory/facts.md (about the world, Daniele, or myself).",
+    _spec("remember", "Store a durable fact in memory/facts.md (about the world, the operator, or myself).",
           {"fact": S}),
     _spec("update_self_model", "Replace my self-model (self/self.md) with a complete new version "
           "starting with '# '. Include everything I want to keep.", {"text": S}),
@@ -97,7 +97,7 @@ BUILTINS = [
 
 
 # Shown only when my model sees images (SHAFT_VISION, PLAN-vision.md): the image follows the tool results.
-VIEW_IMAGE = _spec("view_image", "Look at an image file (JPEG, PNG, GIF or WebP) in my folder — a photo Daniele "
+VIEW_IMAGE = _spec("view_image", "Look at an image file (JPEG, PNG, GIF or WebP) in my folder — a photo the operator "
                    "attached (attachments/…), a mail attachment (mail/…), a file in shared/. The image is shown to "
                    "me right after the tool results.", {"path": S})
 

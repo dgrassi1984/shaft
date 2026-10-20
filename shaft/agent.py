@@ -36,8 +36,8 @@ REPEATED_STOP = "(stopped) The same call a third time in a row: this reply is en
 
 
 # The ledger: after each step, the calls I actually made so far, from my tool log, under the step's last result.
-# Twice on 2026-10-15 I told Daniele that an append_file of mine "returned success" and then vanished from disk:
-# I had never called it (no such call in my log or in the model's) — I remembered a write I had only planned.
+# The model can claim a planned write succeeded without ever calling the tool.
+# The ledger distinguishes executed writes from plans by recording actual tool calls.
 FILE_WRITERS = ("write_file", "append_file", "remember", "rewrite_facts", "write_digest", "update_self_model",
                 "update_personality")
 LEDGER_CALLS_CHARS = 600   # the list of other calls is cut from its oldest end; file writes are never cut
@@ -93,7 +93,7 @@ WRAP_UP_RESERVE_S = 900   # one heavy turn of a thinking model can take ~12 minu
 
 
 def yield_requested() -> bool:
-    """The supervisor asks me to finish early (Daniele started a conversation and needs the model)."""
+    """The supervisor asks me to finish early (the operator started a conversation and needs the model)."""
     root = os.environ.get("SHAFT_ROOT")
     return bool(root) and os.path.exists(os.path.join(root, ".tmp", "yield"))
 
@@ -116,7 +116,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
         interjections: Callable[[], list[dict]] | None = None) -> Outcome:
     """Run until the model answers without calling tools, a stopping control is called,
     or max_steps model turns have been used (max_steps <= 0: no limit — conversations, where
-    Daniele stops a reply with Ctrl-C). `call` defaults to client.complete; pass a streaming
+    the operator stops a reply with Ctrl-C). `call` defaults to client.complete; pass a streaming
     wrapper for conversations.
 
     On the last turn — or when the supervisor's deadline is near — the model is told to
@@ -127,7 +127,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
     the tool log), so I check what I did against the log, not against my memory of my plan. It goes only to
     the model: the tool log, which the judge and metrics read, keeps the results as the tools returned them.
 
-    `interjections` (conversations): messages Daniele sent while I am still replying. Each step starts by adding
+    `interjections` (conversations): messages the operator sent while I am still replying. Each step starts by adding
     the new ones after my last tool result, so the next model call already has them (PLAN-interject.md)."""
     controls = controls or {}
     tools = toolbox.specs() + [c.spec for c in controls.values()]
@@ -138,7 +138,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
     last_call, repeats = None, 0   # the previous tool call, and how many times in a row it came back unchanged
     first_logged = len(toolbox.log)   # a conversation's toolbox outlives one reply: the ledger counts this run's
     while max_steps <= 0 or step < max_steps:
-        if pausing.requested():   # Daniele opened a conversation: wait, then go on where I was
+        if pausing.requested():   # the operator opened a conversation: wait, then go on where I was
             pausing.activity(keep=True, phase="paused")
             pausing.wait_while_paused()
         if interjections:   # before the mark: a step redone after a pause keeps them
@@ -152,7 +152,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
         pausing.activity(keep=True, phase="thinking", step=step, purpose=purpose, tool=None, args=None)
         try:
             if last and wrap_up:
-                why = ("one turn: Daniele needs the model for a conversation" if yielding else
+                why = ("one turn: the operator needs the model for a conversation" if yielding else
                        f"about {left / 60:.0f} minutes" if left is not None and left < WRAP_UP_RESERVE_S else "one turn")
                 messages.append({"role": "user", "content": f"[supervisor] You have {why} left. {wrap_up}"})
                 reply = call(messages, final_tools)

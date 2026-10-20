@@ -75,7 +75,7 @@ def update(root: Path, layer: str, text: str) -> str:
 
 def _block(title: str, text: str) -> str:
     """A layer's block from its own lines only. Headings (`# Personality`, `## Core` …) and captions I sometimes
-    paste in once put a second Core block inside Surface, and the file then had two Cores (wren, 2026-10-13);
+    paste in once put a second Core block inside Surface, and the file then had two Cores;
     a pasted `# Personality` and its caption stayed inside shaft's Core block until cleaned here too."""
     lines = [l.rstrip() for l in text.strip().splitlines()
              if not l.lstrip().startswith("#") and not ITALIC.match(l.strip())]

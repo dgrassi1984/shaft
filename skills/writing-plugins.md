@@ -32,7 +32,7 @@ Example: `plugins/web_research/`.
 Add a `schedule` to its `plugin.json` and the supervisor's scheduler runs it for me, between my cycles:
 
 ```json
-"schedule": {"every_minutes": 15, "args": {"label": "ToObsidian"}, "can_wake": true}
+"schedule": {"every_minutes": 15, "args": {"label": "AssistantAccess"}, "can_wake": true}
 ```
 
 - `every_minutes`: at least 5. `args`: what `run()` gets. `can_wake`: whether a run may wake me (default false).

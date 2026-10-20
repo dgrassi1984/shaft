@@ -32,7 +32,7 @@ FIELDS: dict[str, tuple[type, object]] = {
     "MAX_STEPS_SLEEP": (int, 30),
     "MAX_STEPS_TALK": (int, 0),        # 0 = no limit (conversations)
     "CONTEXT_JOURNAL_CHARS": (int, 16000),
-    "OPERATOR_NAME": (str, "Daniele"),
+    "OPERATOR_NAME": (str, "the operator"),
 }
 
 

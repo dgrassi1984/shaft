@@ -54,7 +54,7 @@ ABILITIES_TOOLS = (
     "in `run`: plugins and tests use it), .browser/ (your own browser profile: a shared Chromium you drive with "
     "Playwright in `run` and in jobs — see skills/writing-plugins.md). Your sandbox reaches the public internet "
     "through the supervisor's "
-    "proxy (localhost and Daniele's network are not reachable); your keys stay with the supervisor's "
+    "proxy (localhost and the operator's network are not reachable); your keys stay with the supervisor's "
     "tools (http_request).")
 DELEGATION = (" For any non-trivial code, use delegate_coding: your coder writes it faster and more reliably than "
               "you do — you decide what to build and judge the result.")

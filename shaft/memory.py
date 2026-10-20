@@ -88,7 +88,7 @@ def corpus(root: Path) -> list[tuple[str, str]]:
             except ValueError:
                 continue
             if rec.get("kind") == "talk" and rec.get("content"):
-                who = (rec.get("speaker") or "Daniele") if rec.get("role") == "user" else "me"
+                who = (rec.get("speaker") or "the operator") if rec.get("role") == "user" else "me"
                 docs.append((f"conversation {rec.get('ts', '')} ({who})", rec["content"][:CHUNK * 2]))
     return docs
 

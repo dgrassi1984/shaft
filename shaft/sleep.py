@@ -41,7 +41,7 @@ def run(cfg, state: State, client: Client) -> str:
 
 
 def _action(entry: dict) -> str:
-    """'remember: <fact>' / 'write_file: memory/people/daniele.md' — what a consolidation step did."""
+    """'remember: <fact>' / 'write_file: memory/people/the-operator.md' — what a consolidation step did."""
     raw = entry.get("args") or "{}"
     try:
         args = json.loads(raw)
