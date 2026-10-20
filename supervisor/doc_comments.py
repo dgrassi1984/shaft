@@ -271,7 +271,9 @@ def block(name: str, thread_id: str, pid: str) -> str:
         if first < 0:
             intro += "\n[This is the text as shown on screen, not a literal quote from the raw file.]"
         elif raw.find(exact, first + 1) >= 0:
-            intro += f"\n[Neighbours: before {_quote(anchor['prefix'])}; after {_quote(anchor['suffix'])}.]"
+            # One line each, as JSON strings: a fenced block per neighbour read as two more quotes (seen 2026-10-20)
+            intro += (f"\n[It occurs more than once; this one is between {json.dumps(anchor['prefix'], ensure_ascii=False)}"
+                      f" and {json.dumps(anchor['suffix'], ensure_ascii=False)}.]")
     body = "> " + post["text"] if "\n" not in post["text"] else _quote(post["text"])
     contract = (f'[Answer it in your final reply under a line "### {tid}". Open a thread of your own with a line '
                 '\'### comment on notes/docs/<doc>.md: "exact text from it"\' followed by your comment.]')

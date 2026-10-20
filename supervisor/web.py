@@ -552,7 +552,7 @@ def _get(req: Request, csrf: str) -> Response | None:
         if m[1] not in names:
             return None
         from . import web_chat
-        return _html(200, _docs_panel(m[1], web_chat.shown(m[1]), qs.get("doc", ""))[1])
+        return _html(200, _docs_panel(m[1], web_chat.shown(m[1]), qs.get("doc", ""), qs.get("thread", ""))[1])
     if m := re.match(r"^/chatfiles/(web-[a-f0-9]+)/(\d+)/(\d+)$", path):
         return _chat_file(m[1], int(m[2]), int(m[3]))
     if path == "/trials":
@@ -687,9 +687,10 @@ def _comment(name: str, login: str, action: str | None, form: dict) -> Response:
     return _html(200, web_pages.h("<p>{t}</p>", t=said), {"X-Thread": tid})
 
 
-def _docs_panel(name: str, chat: dict | None, doc: str):
-    """(the open document, the panel): the one asked for, else the last this chat changed, else none open."""
-    from . import docs, web_views as v
+def _docs_panel(name: str, chat: dict | None, doc: str, thread: str = ""):
+    """(the open document, the panel): the one asked for, else the last this chat changed, else none open. With its
+    comment threads (PLAN-comments.md), which are in the fragment so a comment alone changes its ETag."""
+    from . import doc_comments, docs, web_views as v
     marked = v.in_chat(chat)
     try:
         listing = docs.listing(name)
@@ -704,8 +705,15 @@ def _docs_panel(name: str, chat: dict | None, doc: str):
             text, sha = docs.read(name, doc)
         except docs.Refused as e:
             problem = str(e)
+    try:
+        threads = doc_comments.threads(name, doc) if doc and text is not None else []
+        counts = doc_comments.open_counts(name)
+    except (Exception, SystemExit) as e:          # comments never take the documents down with them
+        log(f"web: {name}'s comments: {type(e).__name__}: {e}")
+        threads, counts = [], {}
     return doc, v.docs_panel(name, listing, doc, text, sha, marked, problem,
-                             ((chat or {}).get("saved_docs") or {}).get(doc))
+                             ((chat or {}).get("saved_docs") or {}).get(doc), threads=threads, counts=counts,
+                             thread=thread)
 
 
 LAST_CHAT = "shaft_last"                                     # the instance whose chat / opens
@@ -754,7 +762,7 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str) -
         if chat and chat.get("instance") != name:
             return None
         past = [c for c in web_chat.chats(name) if c.get("state") == "ended"][:20]
-        doc, panel = _docs_panel(name, chat, qs.get("doc", ""))
+        doc, panel = _docs_panel(name, chat, qs.get("doc", ""), qs.get("thread", ""))
         return _html(200, v.chat_page(name, chat, _sent_during(name, chat), past, _live(name), names, csrf,
                                       read_only=bool(qs.get("id")) and bool(chat) and chat.get("state") == "ended",
                                       panel=panel, doc=doc),

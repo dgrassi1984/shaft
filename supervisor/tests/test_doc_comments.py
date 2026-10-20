@@ -218,7 +218,7 @@ class CommentsTest(unittest.TestCase):
         block = comments.block("wren", tid, pid)
         self.assertIn('[Daniele commented on notes/docs/plan.md (c1), on the text "selected text":]', block)
         self.assertIn("> Question", block)
-        self.assertNotIn("Neighbours", block)
+        self.assertNotIn("occurs more than once", block)
         self.assertNotIn("on screen", block)
         whole, post = self.add()
         self.assertIn("on the whole document", comments.block("wren", whole, post))
@@ -240,7 +240,11 @@ class CommentsTest(unittest.TestCase):
         tid, pid = self.add(anchor=anchor)
         self.doc("aaa")                         # overlapping occurrences still ambiguous
         block = comments.block("wren", tid, pid)
-        self.assertIn('before "before"; after "after"', block)
+        self.assertIn('[It occurs more than once; this one is between "before" and "after".]', block)
+        # Neighbours that span blocks stay on one line (JSON-escaped), not two more fenced quotes (2026-10-20)
+        tid2, pid2 = self.add(anchor={"exact": "aa", "prefix": "end.\nNext", "suffix": "x\ny", "start": 0})
+        self.assertIn('between "end.\\nNext" and "x\\ny".]', comments.block("wren", tid2, pid2))
+        self.assertNotIn("```", comments.block("wren", tid2, pid2))
         self.doc("**a**a")
         self.assertIn("text as shown on screen", comments.block("wren", tid, pid))
 
