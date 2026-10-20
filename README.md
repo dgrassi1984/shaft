@@ -121,6 +121,8 @@ shaft alerts [dismiss ID…]      # the panel's open alerts, or dismiss some (sh
 shaft docs <name> [show PATH | set PATH --file F --expect-sha SHA]   # its documents (notes/docs/*.md, shown
                                 #   beside the web chat): list, show one, or write one if it is still what you saw
                                 #   (none: a new one); its next run commits your edit with its notes
+shaft docs <name> comments [PATH] [--sync]   # the comment threads on its documents; --sync rewrites the
+                                #   read-only copy notes/comments/PATH from the supervisor's store
 shaft config <name> [set KEY=VALUE…|unset KEY…] [--expect KEY=VALUE]   # its config.env as the operator: one
                                 #   write and one commit; refused if a value changed since you looked
 shaft drive <name> [set --file F|remove] --expect-sha SHA   # what it is for (drive.md), compare-and-set
@@ -298,6 +300,14 @@ a command you run from a shell that sets it.
   change as a diff — with your next message, or at once if it is replying. If a later write of its drops lines you
   wrote, the panel says so and offers your version back. The first message of each web chat tells the instance
   this, in a line you do not see.
+- **Comments on a document** (PLAN-comments.md), as on a Claude artifact: select text in it and press **💬 Comment**
+  (or 💬 in its title bar for the whole document). **Send comment to <instance>** is ticked by default: it gets the
+  comment at once (a message of its own, or an interjection while it replies) and answers under `### c7`, which
+  lands in the thread; unticked, it is a note only you see, to edit, delete or send later. It opens threads of its
+  own too. The commented text stays highlighted (click it to open its thread); a thread whose text left the
+  document says so. **Resolve** folds a thread away, and the instance hears of it with your next message. The
+  threads live in the supervisor (`.supervisor/web/comments/`), never in a file it could overwrite; a read-only
+  copy of what it was sent is kept in its `notes/comments/`.
 - Each instance's other pages sit behind the chat's ⋯ menu: **Summary**, **Config** (`config.env`, a field per key),
   **Drive** (`drive.md`, saved after its diff), **Access** (tools, wake floor and cloud cap, jobs, shared folder,
   mail and calendar grants, battery, key names), **Judge**, **Changes**, **Benchmarks**, **Transcripts**,
