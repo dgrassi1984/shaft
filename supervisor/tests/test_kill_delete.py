@@ -78,6 +78,19 @@ class TargetsTest(unittest.TestCase):
         self.assertEqual(kill.targets("kdx", procs, self.root), ([], []))   # the worker stops it itself
 
 
+class ProcessesTest(unittest.TestCase):
+    def test_processes_works_with_the_launchd_services_path(self):
+        """Regression: the web panel's kill raised FileNotFoundError 'lsof' — the services' PATH has no /usr/sbin."""
+        with mock.patch.dict(os.environ, {"PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"}):
+            procs = kill.processes()
+        self.assertEqual(procs[os.getpid()].cwd, os.getcwd())   # its own working folder, read through lsof
+
+    def test_no_working_folders_is_an_error_not_an_empty_kill(self):
+        with mock.patch.object(kill, "LSOF", "/usr/bin/true"):
+            with self.assertRaisesRegex(RuntimeError, "cannot list processes"):
+                kill.processes()
+
+
 class KillTest(unittest.TestCase):
     """A real process tree: a stand-in supervisor holder whose agent runs in the instance folder."""
 

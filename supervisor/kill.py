@@ -33,6 +33,7 @@ AGENT = re.compile(r"(^|\s)-m shaft(\s|$)")                       # the agent: p
 ORPHAN = re.compile(r"(^|\s)-m shaft(\.plugin_runner)?(\s|$)")       # an agent or plugin whose supervisor is gone
 GATE = re.compile(r"(^|\s)-m (unittest|pytest)(\s|$)|shaft\.plugin_runner --check")
 TERM_GRACE_S = 15
+PS, LSOF = "/bin/ps", "/usr/sbin/lsof"
 
 
 @dataclass
@@ -44,15 +45,23 @@ class Proc:
 
 
 def processes() -> dict[int, Proc]:
-    """Every process of this user: pid, parent, command line, working folder (lsof; one call for all of them)."""
-    out = subprocess.run(["ps", "-x", "-o", "pid=,ppid=,command="], capture_output=True, text=True).stdout
+    """Every process of this user: pid, parent, command line, working folder (lsof; one call for all of them).
+
+    Both tools by absolute path: the launchd services run with PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
+    (autonomy.py), which has no /usr/sbin — a bare "lsof" raised FileNotFoundError on the web panel's kill
+    (2026-10-20). No working folders means no process is ever the instance's, so an empty answer is an error, not
+    an empty kill."""
+    out = subprocess.run([PS, "-x", "-o", "pid=,ppid=,command="], capture_output=True, text=True).stdout
     procs: dict[int, Proc] = {}
     for line in out.splitlines():
         parts = line.split(None, 2)
         if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
             procs[int(parts[0])] = Proc(int(parts[0]), int(parts[1]), parts[2] if len(parts) > 2 else "")
-    cwd = subprocess.run(["lsof", "-a", "-d", "cwd", "-u", str(os.getuid()), "-Fpn"], capture_output=True,
-                         text=True).stdout
+    r = subprocess.run([LSOF, "-a", "-d", "cwd", "-u", str(os.getuid()), "-Fpn"], capture_output=True, text=True)
+    cwd = r.stdout
+    if not procs or "\nn" not in "\n" + cwd:
+        raise RuntimeError(f"cannot list processes and their folders: {PS} gave {len(procs)}, {LSOF} exited "
+                           f"{r.returncode}: {r.stderr.strip()[:300]}")
     pid = None
     for line in cwd.splitlines():
         if line.startswith("p") and line[1:].isdigit():
