@@ -747,7 +747,7 @@
     if (rail) markRail(rail);
   }
   // Notifications (docs/plans/PLAN-pwa P4): Web Push, the only way a reply reaches a phone whose app is closed or locked (an
-  // iPhone stops a page's scripts in the background). The button says what is true on this device.
+  // iPhone stops a page's scripts in the background). "On" means SHAFT has this device's subscription, not only the browser.
   const standalone = () => window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
   const ios = () => /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   function keyBytes(b64) {
@@ -760,7 +760,14 @@
     }
     if (Notification.permission === "denied") return "blocked";
     const reg = await navigator.serviceWorker.ready;
-    return (await reg.pushManager.getSubscription()) ? "on" : "off";
+    if (!(await reg.pushManager.getSubscription())) return "off";
+    try {                                    // a later visit: SHAFT may have dropped this device since
+      const r = await fetch("/push/status", { credentials: "same-origin", cache: "no-store" });
+      if (!r.ok) return "incomplete";
+      return (await r.json()).subscribed ? "on" : "incomplete";
+    } catch (e) {
+      return "incomplete";
+    }
   }
   async function notifyButton() {
     const b = document.querySelector("[data-notify]");
@@ -771,7 +778,9 @@
     b.disabled = state === "blocked" || state === "home";
     b.textContent = { home: "For notifications, add SHAFT to your Home Screen (Share → Add to Home Screen)",
                       blocked: "Notifications are blocked for SHAFT in this browser's settings",
-                      on: "Notifications on — turn off", off: "Notify me of replies" }[state] || "";
+                      on: "Notifications on — turn off",
+                      incomplete: "Notifications incomplete — retry",
+                      off: "Notify me of replies" }[state] || "";
   }
   async function post(url, body) {
     const r = await fetch(url, { method: "POST", credentials: "same-origin", body,
@@ -783,22 +792,33 @@
   document.addEventListener("click", async (ev) => {
     const b = ev.target.closest && ev.target.closest("[data-notify]");
     if (!b || b.disabled) return;
+    let sub = null;                          // set only while a browser subscription is not yet accepted by SHAFT
     try {
       const reg = await navigator.serviceWorker.ready;
       if (b.dataset.state === "on") {
-        const sub = await reg.pushManager.getSubscription();
-        if (sub) await sub.unsubscribe();
-        await post("/push/unsubscribe", "{}");
+        // the browser drops it only after SHAFT has: a failed unsubscribe must not read as off
+        if (await post("/push/unsubscribe", "{}")) {
+          sub = await reg.pushManager.getSubscription();
+          if (sub) await sub.unsubscribe();
+          sub = null;
+        }
       } else {
         if (await Notification.requestPermission() !== "granted") { notifyButton(); return; }
-        const r = await fetch("/push/key", { credentials: "same-origin" });
-        if (pairAgain(r)) return;
-        const { key, error } = await r.json();
-        if (!key) throw new Error(error || "no key");
-        const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(key) });
-        await post("/push/subscribe", JSON.stringify(sub));
+        sub = await reg.pushManager.getSubscription();   // incomplete: send the one the browser already has
+        if (!sub) {
+          const r = await fetch("/push/key", { credentials: "same-origin" });
+          if (pairAgain(r)) return;
+          const { key, error } = await r.json();
+          if (!key) throw new Error(error || "no key");
+          sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(key) });
+        }
+        if (!await post("/push/subscribe", JSON.stringify(sub))) {
+          try { await sub.unsubscribe(); } catch (e) { /* refused: the button must not say on */ }
+        }
+        sub = null;
       }
     } catch (e) {
+      if (sub) { try { await sub.unsubscribe(); } catch (e2) { /* the button must not say on */ } }
       toast(`Notifications: ${e.message}`, true);
     }
     notifyButton();

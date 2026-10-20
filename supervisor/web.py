@@ -358,6 +358,10 @@ def _route(req: Request) -> Response:
         return _post(req, dev)
     if req.method != "GET":
         return _html(405, web_pages.message_page("Not allowed", f"{req.method} is not supported."))
+    if req.path == "/push/status":                  # #23: "on" is SHAFT holding this device, not only the browser
+        from . import webpush
+        return Response(200, json.dumps({"subscribed": webpush.holds(dev)}).encode(),
+                        {"Content-Type": "application/json", "Cache-Control": "no-store"})
     try:
         r = _get(req, csrf_token(secret))
     except (Exception, SystemExit) as e:    # say what broke: an empty page reads as "nothing to show" (SystemExit:

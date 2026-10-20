@@ -129,6 +129,9 @@ next refresh or action opens the pairing page. Your chat draft stays in this bro
 - **Notifications:** in the app, ⋯ then **Notify me of replies** (iOS 16.4+). A reply that ends while SHAFT is closed or
   locked then arrives as "example replied", with the badge, through Web Push. The push carries nothing: the app fetches
   the text over the tailnet. Pushes are signed with a key made by `/usr/bin/openssl`, kept in `.supervisor/web/`.
+  The button says **Notifications on** only when SHAFT holds this device's subscription (it asks `/push/status` on
+  each visit): a refused registration leaves it off and says why, and a device SHAFT dropped shows
+  **Notifications incomplete — retry**.
 - **Typing:** on a phone, Return makes a new line and Send sends.
 - **Layout:** the chat fills the screen. ☰ lists the chats and pages, 📄 the documents, ⋯ the instance's pages and
   actions.
