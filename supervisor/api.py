@@ -4,14 +4,16 @@
   POST /v1/chat/completions    stream or not; the instance answers as itself, with its tools
   POST /v1/chat/interject      a message for the conversation whose reply is still running: the instance reads it at
                                its next step and its reply covers it (202), or 409 when no reply is running
-  POST /v1/chat/end            the conversation is over: written up now (202), 404 if none is open, 409 while it replies
+  POST /v1/chat/end            the conversation is over: write-up requested (202), 404 if none is open, 409 while it replies
   POST /v1/inbox/<instance>    the doorbell: drop a message in its inbox (read at its next wake), and
                                optionally wake it now — for scripts, a phone shortcut, CI on the tailnet
 
 Each request is a normal sandboxed run (broker, run lock, gate, commit). The client's conversation
 is the dialogue; the instance's own identity and memory come first. A conversation (same instance,
-same first user message — or, if the client sends X-Shaft-Conversation, that name: the web UI does) keeps one id; after IDLE_MINUTES (SHAFT_IDLE_MINUTES) without a message it is closed and its journal entry is
-written. Tool activity and status are sent as `reasoning_content`, which "thinking"-aware clients
+same first user message — or, if the client sends X-Shaft-Conversation, that name: the web UI does) keeps one id, and
+the channel the client names in X-Shaft-Channel (web, telegram; `api` when absent) — where a message the instance sends
+the operator while it is open alerts them (channel.py); after IDLE_MINUTES (SHAFT_IDLE_MINUTES) without a message it is closed and a journal write-up is
+scheduled (the entry is written in the background, not before the 202). Tool activity and status are sent as `reasoning_content`, which "thinking"-aware clients
 show and others ignore.
 
 A message sent to /v1/chat/interject while that conversation's reply runs is appended to the agent's
@@ -62,7 +64,8 @@ INBOX_WAKES_PER_HOUR, _ = knob(
     "SHAFT_INBOX_WAKES_PER_HOUR", "4", whole, "wakes per hour inbox messages may start for one instance",
     group="Inbox and benchmarks", services=("api",))
 DOORBELL_LOG = "doorbell.jsonl"
-CONVERSATION_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")   # X-Shaft-Conversation: a client's own name for a conversation       # one line per accepted message: when, instance, source, wake outcome
+CONVERSATION_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")   # X-Shaft-Conversation: a client's own name for a conversation
+CLIENT_CHANNELS = ("web", "telegram")    # X-Shaft-Channel: where the operator is talking (channel.py routes alerts there)       # one line per accepted message: when, instance, source, wake outcome
 
 
 def allowed_logins() -> set[str]:
@@ -78,8 +81,12 @@ class Conversations:
         self.talks = json.loads(TALKS.read_text()) if TALKS.exists() else {}
 
     def _save(self) -> None:
+        """Whole or not at all: others read this file while it is saved (channel.route, runner.open_conversations), and
+        a half-written one read as "no conversations" sent an alert to the wrong channel (Codex review, 2026-10-20)."""
         TALKS.parent.mkdir(exist_ok=True)
-        TALKS.write_text(json.dumps(self.talks, indent=1))
+        tmp = TALKS.with_name(f".{TALKS.name}.{os.getpid()}.{threading.get_ident()}")
+        tmp.write_text(json.dumps(self.talks, indent=1))
+        os.replace(tmp, TALKS)
 
     @staticmethod
     def _key(model: str, messages: list[dict], cid: str | None = None) -> str:
@@ -106,7 +113,7 @@ class Conversations:
             self._save()
             return t["talk_id"]
 
-    def talk_id(self, model: str, messages: list[dict], cid: str | None = None) -> str:
+    def talk_id(self, model: str, messages: list[dict], cid: str | None = None, channel: str = "api") -> str:
         key = self._key(model, messages, cid)
         with self.lock:
             t = self.talks.get(key)
@@ -114,17 +121,22 @@ class Conversations:
                 t = {"talk_id": f"api-{uuid.uuid4().hex[:10]}", "model": model}
                 self.talks[key] = t
             t["last"] = time.time()
+            t["channel"] = channel
             t["written"] = False
             self._save()
             return t["talk_id"]
 
     def write_up_idle(self) -> None:
         with self.lock:
+            names = set(instance_names())
+            gone = [k for k, t in self.talks.items() if t.get("model") not in names]
+            for k in gone:   # its instance was deleted (shaft delete): nothing to write up, nothing to keep
+                log(f"api: conversation {self.talks.pop(k)['talk_id']} dropped — its instance no longer exists")
             due = [t for t in self.talks.values()
                    if not t.get("written") and time.time() - t.get("last", 0) > IDLE_MINUTES * 60]
             for t in due:
                 t["written"] = True
-            if due:
+            if due or gone:
                 self._save()
         for model in sorted({t["model"] for t in due}):
             spawn_recover(model)
@@ -319,6 +331,9 @@ class Handler(BaseHTTPRequestHandler):
         cid = self.headers.get("X-Shaft-Conversation") or None
         if cid is not None and not CONVERSATION_ID.match(cid):
             return self._error(400, "X-Shaft-Conversation is 1-64 letters, digits, - or _")
+        channel = (self.headers.get("X-Shaft-Channel") or "api").strip().lower()
+        if channel not in ("api", *CLIENT_CHANNELS):
+            return self._error(400, f"X-Shaft-Channel is one of {', '.join(CLIENT_CHANNELS)} (or absent), not {channel!r}")
         messages = body.get("messages") or []
         if route == "/v1/chat/end":
             return self._end(model, messages, cid)
@@ -326,10 +341,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(400, "messages must end with a user message")
         if route == "/v1/chat/interject":
             return self._interject(model, messages, cid)
-        self._chat(model, messages, bool(body.get("stream")), self.headers.get("User-Agent", "an app"), cid)
+        self._chat(model, messages, bool(body.get("stream")), self.headers.get("User-Agent", "an app"), cid, channel)
 
     def _end(self, model: str, messages: list[dict], cid: str | None) -> None:
-        """POST /v1/chat/end: the conversation is over — written up now instead of after SHAFT_IDLE_MINUTES."""
+        """POST /v1/chat/end: the conversation is over. The write-up is scheduled now (202) and finishes in the
+        background, instead of after SHAFT_IDLE_MINUTES. 202 is not a finished journal entry."""
         if not cid and not messages:
             return self._error(400, "which conversation? X-Shaft-Conversation, or its messages")
         talk_id = self.conversations.current(model, messages, cid)
@@ -368,10 +384,11 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             return True
 
-    def _chat(self, model: str, messages: list[dict], stream: bool, app: str, cid: str | None = None) -> None:
+    def _chat(self, model: str, messages: list[dict], stream: bool, app: str, cid: str | None = None,
+              channel: str = "api") -> None:
         events: queue.Queue = queue.Queue()
         procs: list = []
-        talk_id = self.conversations.talk_id(model, messages, cid)
+        talk_id = self.conversations.talk_id(model, messages, cid, channel)
         live = self.live.begin(model, talk_id)
         request = {"messages": messages, "talk_id": talk_id, "client": app.split()[0][:40]}
 
@@ -435,6 +452,7 @@ class Handler(BaseHTTPRequestHandler):
         # reached the operator's Telegram as if the instance had said it (wren, 2026-10-14: 25 of 44 Telegram replies had
         # tool steps). So a step's text is held until the next event tells which it was.
         content, step, notes, error, ended, heard = [], [], [], None, None, 0
+        tools_ran = False
         if stream:
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -463,6 +481,8 @@ class Handler(BaseHTTPRequestHandler):
                 if t == "content":
                     step.append(ev["text"])
                     continue
+                if t in ("tool_start", "tool_end"):
+                    tools_ran = True
                 if t == "tool_start" and step:           # that step called tools: its text was narration
                     said = "".join(step).strip()
                     step = []
@@ -496,7 +516,8 @@ class Handler(BaseHTTPRequestHandler):
             if stream:
                 if error and not content:
                     self.wfile.write(_chunk(cid, model, {"content": f"[error: {error}]"}))
-                self.wfile.write(_chunk(cid, model, {}, "stop", interjections_heard=heard))
+                self.wfile.write(_chunk(cid, model, {}, "stop", interjections_heard=heard,
+                                        **({"reply_error": {"message": error, "tools_ran": tools_ran}} if error else {})))
                 self.wfile.write(b"data: [DONE]\n\n")
                 self.wfile.flush()
             elif error and not content:

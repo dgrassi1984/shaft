@@ -344,7 +344,7 @@ def _route(req: Request) -> Response:
     paired = _paired(req.headers.get("cookie", ""))
     if not paired:
         # A Home Screen app has cookies of its own and no address bar: it pairs by pasting the link here.
-        return _html(403, web_pages.unpaired_page())
+        return _html(403, web_pages.unpaired_page(), {"X-Shaft-Pair": "required"})
     dev, secret = paired
     if _renew_due(dev):                             # the cookie's 400 days start again: a used app never lapses
         req.set_cookies.append(_device_cookie(dev, secret))
@@ -358,6 +358,16 @@ def _route(req: Request) -> Response:
         return _post(req, dev)
     if req.method != "GET":
         return _html(405, web_pages.message_page("Not allowed", f"{req.method} is not supported."))
+    if req.path == "/push/latest":                  # what this device's push shows: what waits for it (webpush.take)
+        from . import webpush
+        if req.headers.get("sec-fetch-site") != "same-origin":   # it takes them: never a link from another site
+            return _refused("This request did not come from this page.")
+        return Response(200, json.dumps({"events": webpush.take(dev)}).encode(),
+                        {"Content-Type": "application/json", "Cache-Control": "no-store"})
+    if req.path == "/push/status":                  # #23: "on" is SHAFT holding this device, not only the browser
+        from . import webpush
+        return Response(200, json.dumps({"subscribed": webpush.holds(dev)}).encode(),
+                        {"Content-Type": "application/json", "Cache-Control": "no-store"})
     try:
         r = _get(req, csrf_token(secret))
     except (Exception, SystemExit) as e:    # say what broke: an empty page reads as "nothing to show" (SystemExit:
@@ -379,7 +389,7 @@ def _pair(req: Request, login: str) -> Response:
     if req.method == "GET":
         p = _pairing(req.query.get("t", ""))
         if not p:
-            return _refused("This pairing link is unknown, used or expired.", "Run `shaft web pair` for a new one.")
+            return _html(403, web_pages.unpaired_page(expired=True))
         return _html(200, web_pages.pair_page(req.query["t"], p["device"]))
     if req.method != "POST" or not _same_origin(req):
         return _refused("This request did not come from this page.")
@@ -387,7 +397,7 @@ def _pair(req: Request, login: str) -> Response:
     token = form.get("t") or _token_from_link(form.get("link", ""))
     got = _use_pairing(token, login)
     if not got:
-        return _refused("This pairing link is unknown, used or expired.", "Run `shaft web pair` for a new one.")
+        return _html(403, web_pages.unpaired_page(expired=True))
     dev, secret = got
     return Response(303, b"", {"Location": "/", "Set-Cookie": _device_cookie(dev, secret)})
 
@@ -459,7 +469,8 @@ def _post(req: Request, dev: str) -> Response:
             webpush.subscribe(dev, json.loads(req.body or b"{}"))
         except (webpush.PushError, ValueError) as e:
             return _html(409, web_pages.h("<p>refused: {e}</p>", e=str(e)))
-        return _html(200, web_pages.h("<p>Notifications on: a reply that lands while SHAFT is closed shows here</p>"))
+        return _html(200, web_pages.h("<p>Notifications on: a reply that lands while SHAFT is closed, and a message "
+                                      "an instance sends you here, show on this device</p>"))
     if m := re.match(r"^/chat/([A-Za-z0-9_-]+)/clear$", req.path):
         from . import web_chat
         if m[1] not in _names():
@@ -494,6 +505,15 @@ def _post(req: Request, dev: str) -> Response:
             status, text = 500, f"{m[1]} failed: {type(e).__name__}: {e}"
         with _snap_lock:
             _snap["snap"] = None                     # the next refresh shows what the action changed
+        if status == 200 and req.headers.get("x-row") == "1":
+            try:
+                row = web_actions.saved_row(m[1], req.form())
+            except (Exception, SystemExit) as e:
+                log(f"web: saved row {m[1]} failed: {type(e).__name__}: {e}")
+                return _html(200, web_pages.h("<p>{t}</p><p>Saved, but the row could not refresh. "
+                                             "Reload before saving it again.</p>", t=text))
+            return _html(200, web_pages.h("<p>{t}</p><template data-saved-row>{row}</template>", t=text, row=row),
+                         {"X-Row": "1"})
         return _html(status, web_pages.h("<p>{t}</p>", t=text))
     return _html(404, web_pages.message_page("Not found", f"No action at {req.path}."))
 
@@ -535,6 +555,15 @@ def _get(req: Request, csrf: str) -> Response | None:
         if name not in names:
             return None
         return _instance_page(name, tab, qs, names, csrf)
+    if m := re.match(r"^/fragment/chat/([A-Za-z0-9_-]+)/header$", path):
+        if m[1] not in names:
+            return None
+        from . import web_chat
+        chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.shown(m[1])
+        if chat and chat.get("instance") != m[1]:
+            return None
+        past = [c for c in web_chat.chats(m[1]) if c.get("state") == "ended"]
+        return _html(200, v.chat_header(m[1], _live(m[1]), chat, past, read_only=bool(qs.get("id"))))
     if m := re.match(r"^/fragment/chat/([A-Za-z0-9_-]+)$", path):
         if m[1] not in names:
             return None
@@ -544,11 +573,12 @@ def _get(req: Request, csrf: str) -> Response | None:
             return None
         if not qs.get("id"):
             web_chat.watching(m[1])                 # its page is open and visible: a reply needs no push
-        return _html(200, v.chat_feed(m[1], chat, _sent_during(m[1], chat), archived=bool(qs.get("id"))))
-    if path in ("/push/key", "/push/latest"):
-        from . import web_chat, webpush
+        return _html(200, v.chat_feed(m[1], chat, _sent_during(m[1], chat, bool(qs.get("id"))),
+                                      archived=bool(qs.get("id"))))
+    if path == "/push/key":
+        from . import webpush
         try:
-            data = {"key": webpush.public_key()} if path == "/push/key" else web_chat.latest_reply()
+            data = {"key": webpush.public_key()}
         except webpush.PushError as e:
             return Response(503, json.dumps({"error": str(e)}).encode(), {"Content-Type": "application/json"})
         return Response(200, json.dumps(data).encode(), {"Content-Type": "application/json"})
@@ -556,21 +586,32 @@ def _get(req: Request, csrf: str) -> Response | None:
         if m[1] not in names:
             return None
         from . import web_chat
-        return _html(200, _docs_panel(m[1], web_chat.shown(m[1]), qs.get("doc", ""), qs.get("thread", ""),
-                                      listing_only=qs.get("list") == "1")[1])
+        chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.shown(m[1])
+        if chat and chat.get("instance") != m[1]:
+            return None
+        return _html(200, _docs_panel(m[1], chat, qs.get("doc", ""), qs.get("thread", ""),
+                                      listing_only=qs.get("list") == "1",
+                                      archived=bool(qs.get("id")) and bool(chat) and chat.get("state") == "ended")[1])
     if m := re.match(r"^/chatfiles/(web-[a-f0-9]+)/(\d+)/(\d+)$", path):
         return _chat_file(m[1], int(m[2]), int(m[3]))
-    if path == "/trials":
+    if path in ("/trials", "/fragment/trials"):
         only = qs.get("i", "")
         only = only if only in names else ""
-        return _html(200, v.trials_page(panel.trials(only or None), panel.costs(days=1), only, panel.trial_progress,
-                                        names, csrf))
-    if m := re.match(r"^/trials/([A-Za-z0-9_-]+)/([^/]+)$", path):
+        live = v.trials_live(panel.trials(only or None), panel.costs(days=1), only, panel.trial_progress, names)
+        if path == "/fragment/trials":
+            return _html(200, live)
+        return _html(200, v.trials_page(live, only, names, csrf))
+    if m := re.match(r"^/(fragment/)?trials/([A-Za-z0-9_-]+)/([^/]+)$", path):
         from . import trial
-        if m[1] not in names:
+        if m[2] not in names:
             return None
-        t = next((t for t in panel.trials(m[1]) if t.get("id") == urllib.parse.unquote(m[2])), None)
-        return _html(200, v.trial_page(t, trial.report(t), names, csrf)) if t else None
+        t = next((t for t in panel.trials(m[2]) if t.get("id") == urllib.parse.unquote(m[3])), None)
+        if not t:
+            return None
+        text = trial.report(t)
+        if m[1]:
+            return _html(200, v.trial_report(text))
+        return _html(200, v.trial_page(t, text, names, csrf))
     if path == "/messages":
         from . import messages
         ms = messages.history()
@@ -594,13 +635,16 @@ def _get(req: Request, csrf: str) -> Response | None:
             return _html(200, web_settings.status(data["settings"], runs, busy))
         return _html(200, v.frame("Settings", web_settings.page_body(data, runs, busy), names, csrf,
                                   current="/settings"))
-    if path in ("/services", "/fragment/services"):
+    if path in ("/services", "/fragment/services", "/fragment/services/log"):
         order = list(dashboard.SERVICES)
         from . import actions
+        # The log fragment is its own poll: log_tail reads the last 8 KB, so a few seconds between refreshes is cheap.
+        sel = qs.get("log") if qs.get("log") in order else order[0]
+        if path == "/fragment/services/log":
+            return _html(200, v.services_log(sel, panel.SERVICE_LOGS[sel], panel.log_tail(sel, 40)))
         live = v.services_live(panel.services_detail(), order, panel.scheduled_runs(), actions.busy_instances())
         if path == "/fragment/services":
             return _html(200, live)
-        sel = qs.get("log") if qs.get("log") in order else order[0]
         return _html(200, v.services_page(live, sel, panel.SERVICE_LOGS[sel], panel.log_tail(sel, 40), names, csrf))
     return None
 
@@ -648,7 +692,7 @@ def _save_doc(name: str, login: str, form: dict) -> Response:
         said = web_chat.doc_saved(name, login, rel, old, text, new_sha)
     except web_chat.Refused as e:                  # written: only telling the instance failed — say both
         said = f"saved, but {name} was not told yet: {e}"
-    return _html(200, web_pages.h("<p>{t}</p>", t=said), {"X-Doc": rel})
+    return _html(200, web_pages.h("<p>{t}</p>", t=said), {"X-Doc": rel, "X-Doc-Sha": new_sha})
 
 
 def _delete_doc(name: str, login: str, form: dict) -> Response:
@@ -714,7 +758,8 @@ def _comment(name: str, login: str, action: str | None, form: dict) -> Response:
     return _html(200, web_pages.h("<p>{t}</p>", t=said), {"X-Thread": tid})
 
 
-def _docs_panel(name: str, chat: dict | None, doc: str, thread: str = "", listing_only: bool = False):
+def _docs_panel(name: str, chat: dict | None, doc: str, thread: str = "", listing_only: bool = False,
+                archived: bool = False):
     """(the open document, the panel): the one asked for, else the last this chat changed (what it is writing shows as it
     writes it), else the list; listing_only (← Documents, ?list=1): the list, whatever this chat changed. With its
     comment threads (docs/plans/PLAN-comments.md), which are in the fragment so a comment alone changes its ETag."""
@@ -724,7 +769,7 @@ def _docs_panel(name: str, chat: dict | None, doc: str, thread: str = "", listin
         listing = docs.listing(name)
     except (Exception, SystemExit) as e:          # the documents never take the chat down with them: say what failed
         log(f"web: {name}'s documents: {type(e).__name__}: {e}")
-        return doc, v.docs_panel(name, [], doc, None, "none", marked, f"documents not readable: {e}")
+        return doc, v.docs_panel(name, [], doc, None, "none", marked, f"documents not readable: {e}", archived=archived)
     if not doc and not listing_only:
         doc = next((d["path"] for d in listing if d["path"] in marked), "")
     text, sha, problem = None, "none", ""
@@ -741,7 +786,7 @@ def _docs_panel(name: str, chat: dict | None, doc: str, thread: str = "", listin
         threads, counts = [], {}
     return doc, v.docs_panel(name, listing, doc, text, sha, marked, problem,
                              ((chat or {}).get("saved_docs") or {}).get(doc), threads=threads, counts=counts,
-                             thread=thread)
+                             thread=thread, archived=archived)
 
 
 LAST_CHAT = "shaft_last"                                     # the instance whose chat / opens
@@ -784,15 +829,22 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str) -
         return _html(200, v.journal_page(name, journal_entries(instance_root(name)), at, names, csrf))
     if tab == "activity":
         return _html(200, v.activity_page(name, activity(name), names, csrf))
+    if tab == "chats":
+        from . import web_chat
+        past = [c for c in web_chat.chats(name) if c.get("state") == "ended"]
+        body = v.join([v.link(f"/i/{v.q(name)}/chat", "Back to the current chat"),
+                       v.section("Earlier chats", v.earlier_chats(name, past))])
+        return _html(200, v.instance_frame(name, "chat", "Earlier chats", body, names, csrf))
     if tab == "chat":
         from . import web_chat
         chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.shown(name)
         if chat and chat.get("instance") != name:
             return None
-        past = [c for c in web_chat.chats(name) if c.get("state") == "ended"][:20]
-        doc, panel = _docs_panel(name, chat, qs.get("doc", ""), qs.get("thread", ""))
-        return _html(200, v.chat_page(name, chat, _sent_during(name, chat), past, _live(name), names, csrf,
-                                      read_only=bool(qs.get("id")) and bool(chat) and chat.get("state") == "ended",
+        past = [c for c in web_chat.chats(name) if c.get("state") == "ended"]
+        read_only = bool(qs.get("id")) and bool(chat) and chat.get("state") == "ended"
+        doc, panel = _docs_panel(name, chat, qs.get("doc", ""), qs.get("thread", ""), archived=read_only)
+        return _html(200, v.chat_page(name, chat, _sent_during(name, chat, bool(qs.get("id"))), past, _live(name), names, csrf,
+                                      read_only=read_only,
                                       panel=panel, doc=doc),
                      {"Set-Cookie": f"{LAST_CHAT}={name}; Path=/; Max-Age={COOKIE_DAYS * 86400}; Secure; SameSite=Strict"})
     if tab in ("config", "drive", "access"):
@@ -822,14 +874,20 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str) -
     return None
 
 
-def _sent_during(name: str, chat: dict | None) -> list[dict]:
-    """What the instance sent the operator (send_message) since the chat began: shown in it, as on Telegram."""
-    if not chat:
-        return []
+def _sent_during(name: str, chat: dict | None, archived: bool = False) -> list[dict]:
+    """What the instance sent the operator (send_message), shown in its chat as a Telegram bot chat shows it: since the
+    chat on screen began — and after it ended too, until the operator's next message starts a new chat, so a message
+    a push points at (channel.py, web_alerts.py) is there to answer. A past chat (`archived`) keeps its own span. With
+    no chat on screen: since the last one was cleared or ended, or, if it never had one, those still unread."""
     from . import messages
-    end = chat.get("ended") or "9999"
-    return [m for m in messages.history() if m["from"] == name and m["to"] == "operator"
-            and chat["created"] <= m["ts"] <= end]
+    if chat:
+        start, end = chat["created"], (chat.get("ended") or "9999") if archived else "9999"
+    else:
+        from . import web_chat
+        last = next(iter(web_chat.chats(name)), None)
+        start, end = (last.get("cleared") or last.get("ended") or last["created"]) if last else "", "9999"
+    rows = [m for m in messages.history() if m["from"] == name and m["to"] == "operator" and start <= m["ts"] <= end]
+    return rows if start else [m for m in rows if not m["read"]]
 
 
 def _chat_file(cid: str, k: int, j: int) -> Response | None:
@@ -1028,6 +1086,8 @@ def serve() -> int:
     from .version import record_service
     web_chat.reap()                              # replies the previous web server was relaying are over
     record_service("web", {"port": PORT, "https_port": HTTPS_PORT})
+    from . import web_alerts
+    web_alerts.start()                           # the instances' messages routed to the web: pushed (channel.py)
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     server.daemon_threads = True
     if not allowed_hosts():                  # every request would be refused: say so where it is read

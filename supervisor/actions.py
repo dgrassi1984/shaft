@@ -21,11 +21,17 @@ def say(args: list[str]) -> str:
     return f"shaft {shown}"
 
 
+# How long run_now waits by default, and how long a service or autonomy on/off may take (launchd). The web page
+# waits at least this long (web_actions.page_wait), so it does not give up while the server is still allowed to run it.
+RUN_NOW_S = 60
+SLOW_S = 90
+
+
 def log_name(who: str) -> str:
     return f"{who}-actions.log"
 
 
-def run_now(args: list[str], timeout: float = 60, who: str = "top") -> tuple[bool, str]:
+def run_now(args: list[str], timeout: float = RUN_NOW_S, who: str = "top") -> tuple[bool, str]:
     """A quick subcommand: (it succeeded, its last line of output — or why it failed)."""
     log(f"{who}: operator ran {say(args)}")
     try:
@@ -68,11 +74,27 @@ def guard_reason(service: str, action: str, scheduled: list[str], busy: list[str
     """service_guard from what is running now (panel.scheduled_runs, busy_instances): for a page that shows every
     service's buttons at once and asks the system once."""
     if (service == "scheduler" or (service == "autonomy" and action == "off")) and scheduled:
-        return (f"the scheduler's runs share its process group, so this would kill them: {', '.join(scheduled)}. "
-                "Try again when they end.")
+        return (f"the scheduler's runs share its process group, so this would kill them: {', '.join(scheduled)}."
+                + LATER)
     if service in ("model", "embed", "api") and busy:
-        return f"runs in progress use it: {', '.join(busy)}. Try again when they end."
+        return f"runs in progress use it: {', '.join(busy)}." + LATER
     return ""
+
+
+LATER = " Try again when they end."
+
+
+def force_question(service: str, action: str, why: str) -> str:
+    """The question both panels ask before overriding a guard: what it would hurt, in the guard's own words. The
+    operator may force a restart the guard holds back (a run that will not end, a fix that cannot wait)."""
+    verb = {"off": "stop", "restart": "restart"}.get(action, f"turn {action}")
+    what = f"autonomy {action}" if service == "autonomy" else f"{verb} {service}"
+    then = "They end unfinished." if service in ("scheduler", "autonomy") else "Their calls to it fail while it is down."
+    return f"force {what} now? Not safe: {why.removesuffix(LATER)} {then}"
+
+
+def log_forced(who: str, args: list[str], why: str) -> None:
+    log(f"{who}: operator forced {say(args)} past the guard: {why.removesuffix(LATER)}")
 
 
 def trial_cost_estimate() -> float | None:
@@ -118,3 +140,8 @@ def update_question(name: str) -> tuple[str, str]:
 
 
 SLEEP_QUESTION = "start a sleep (consolidation) for {name} now? It runs up to 90 minutes on its model."
+KILL_QUESTION = ("kill {name}? It is paused, and everything it is running now stops at once — a cycle, a reply, a job, "
+                 "the battery, a trial replay. What it did so far is checked and committed as usual. "
+                 "Resume undoes the pause.")
+DELETE_QUESTION = ("delete {name}? Its folder, branch, mind, records and its rows in the shared logs are removed; an "
+                   "archive is kept in .supervisor/deleted/. This cannot be undone from here.")

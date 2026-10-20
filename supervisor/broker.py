@@ -131,17 +131,20 @@ SPECS = {
     "fetch_page": _spec("fetch_page", "Fetch a public web page and return its readable text.",
                         {"url": S, "max_chars": {"type": "integer", "description": "default 6000"}}, ["url"]),
     "send_message": _spec("send_message", "Send a message to another SHAFT instance, or to 'operator' "
-                          "(the operator) to ask them something or tell them something — they get a notification "
-                          "(and, if your bot is set up, a Telegram message from you) and their reply arrives in your "
-                          "inbox. Make them count: they read every one. You can attach files from your folder; files "
-                          "sent to you arrive in your attachments/ folder (the message says where).",
+                          "(the operator) to ask them something or tell them something — it lands in their inbox in "
+                          "SHAFT's web UI, and they are notified on their phone where they talk with you: the web UI "
+                          "or Telegram (an open conversation's channel, else the one they chose for you, else where "
+                          "they last wrote to you). Their reply arrives in your inbox. Make them count: they read "
+                          "every one. You can attach files from your folder; files sent to you arrive in your "
+                          "attachments/ folder (the message says where).",
                           {"to": S, "text": S,
                            "kind": {"type": "string", "enum": ["question", "note"],
                                     "description": "for the operator: question (wants an answer) or note"},
                            "attachments": {"type": "array", "items": {"type": "string"},
                                            "description": "paths of files in your folder (e.g. notes/report.md), "
-                                                          "up to 10, 20 MB each, 50 MB in all; the operator gets them "
-                                                          "on Telegram if your bot is set up"}},
+                                                          "up to 10, 20 MB each, 50 MB in all; the operator opens them "
+                                                          "in the web UI, and gets them on Telegram when your message "
+                                                          "goes there"}},
                           ["to", "text"]),
     "list_instances": _spec("list_instances", "List the other SHAFT instances you can message.", {}, []),
     "run": _spec(
@@ -842,14 +845,26 @@ class Broker:
             if tool == "calendar_events":
                 spec = json.loads(json.dumps(spec))
                 spec["function"]["description"] += " Granted to you: " + self.calendar_env() + " (account/name)."
-            if tool == "send_message" and self.bot:
+            if tool == "send_message":
                 spec = json.loads(json.dumps(spec))
-                spec["function"]["description"] += (
-                    f" Messages to 'operator' reach the operator at once on their phone, on Telegram, from your own bot "
-                    f"{self.bot}; they can answer there, and they can also write to you there — those are live "
-                    "conversations with you, like the terminal.")
+                spec["function"]["description"] += self._channel_line()
             out.append(spec)
         return out
+
+    def _channel_line(self) -> str:
+        """Where a message to the operator would reach them now, and the Telegram bot they can answer on."""
+        from . import channel
+        try:
+            where, why = channel.route(self.name)
+        except Exception:                      # unreadable state: the tool still works, without the line
+            return ""
+        line = (f" A message to 'operator' now would notify them {'in the web UI' if where == 'web' else 'on Telegram'}"
+                f" ({why}).")
+        if self.bot:
+            line += (f" Your own Telegram bot is {self.bot}: when your message goes there they can answer there, and "
+                     "they can also write to you there — those are live conversations with you, like the web UI's "
+                     "chat and the terminal.")
+        return line
 
     def _operator_sent_today(self, stamp: datetime) -> int:
         inbox = self.project / ".supervisor" / "operator-inbox"
@@ -865,7 +880,15 @@ class Broker:
             inbox.mkdir(parents=True, exist_ok=True)
             path = inbox / rel
             path.write_text(content)
-            messages.record(self.project / ".supervisor", path, self.name, "operator", kind, stamp, text, attachments)
+            from . import channel
+            from .core import log
+            try:
+                alert = channel.route(self.name)
+            except Exception as e:             # the message is in the inbox already: alert on the web, say why
+                alert = ("web", f"the channel could not be chosen ({type(e).__name__}: {e})")
+                log(f"{self.name}: message to the operator: {alert[1]}")
+            messages.record(self.project / ".supervisor", path, self.name, "operator", kind, stamp, text, attachments,
+                            alert)
             notify(f"SHAFT · {self.name} {'asks' if kind == 'question' else 'says'}", text)
         else:
             from .core import safe_write   # the recipient's folder is instance-controlled: no symlinks followed
@@ -1675,6 +1698,21 @@ class ReplayBroker(Broker):
         return status, dict(headers.items()) if headers else {}, raw
 
     # -- writes: checked like the real thing, recorded, not carried out ----------------------------------
+    def _channel_line(self) -> str:
+        """Where a message to the operator would reach them now, and the Telegram bot they can answer on."""
+        from . import channel
+        try:
+            where, why = channel.route(self.name)
+        except Exception:                      # unreadable state: the tool still works, without the line
+            return ""
+        line = (f" A message to 'operator' now would notify them {'in the web UI' if where == 'web' else 'on Telegram'}"
+                f" ({why}).")
+        if self.bot:
+            line += (f" Your own Telegram bot is {self.bot}: when your message goes there they can answer there, and "
+                     "they can also write to you there — those are live conversations with you, like the web UI's "
+                     "chat and the terminal.")
+        return line
+
     def _operator_sent_today(self, stamp: datetime) -> int:
         inbox = self.project / ".supervisor" / "operator-inbox"
         cut = f"{self.as_of:%Y%m%d-%H%M%S}"

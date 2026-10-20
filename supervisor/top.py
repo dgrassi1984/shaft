@@ -6,7 +6,7 @@ changes on disk. Runs with .venv-ui (rich). Without a terminal (`shaft top --onc
 snapshot as text.
 
 Keys — 0–9 switch tab, ? help, q quits. Overview: ↑/↓ pick an instance, Enter shows it in full, c starts a
-cycle if idle, p pause/resume, s sleep now, u update, w write, r reply, a recaps every instance in one line (what it
+cycle if idle, p pause/resume, s sleep now, u update, w write, r reply, K kill (pause + stop what it runs), a recaps every instance in one line (what it
 is doing now and did in the last hour, written by a small model: recap.py), x dismiss the alerts, m messages.
 Messages: ↑/↓ (j/k, PgUp/PgDn) move, f filters by instance, Enter reads one, Esc goes back. Reading: ↑/↓
 scroll, n/p next/previous message, Esc back to the list. The other tabs are in top_views.py.

@@ -25,8 +25,10 @@ SPARK = "▁▂▃▄▅▆▇█"
 MARK = {"yes": ("✓", "green"), "partial": ("½", "yellow"), "no": ("✗", "red")}
 HELP = {
     "overview": "↑/↓ instance · Enter details · c cycle · p pause/resume · s sleep now · u update · w write · "
-                "r reply · a recap every instance (now + last hour, by a small model) · x dismiss alerts · m messages",
-    "instance": "←/→ instance · ↑/↓ scroll · c cycle · p pause/resume · s sleep · u update · t tools · w write · r reply",
+                "r reply · K kill · a recap every instance (now + last hour, by a small model) · x dismiss alerts · "
+                "m messages",
+    "instance": "←/→ instance · ↑/↓ scroll · c cycle · p pause/resume · s sleep · u update · t tools · w write · r reply"
+                " · K kill · D delete",
     "judge": "←/→ instance · ↑/↓ cycle · Enter verdict in full · Esc back",
     "trials": "↑/↓ trial · Enter report · f this instance / all · ←/→ instance · a queue an A/A calibration trial",
     "benchmarks": "←/→ instance · ↑/↓ scroll · b run the battery now (when installed)",
@@ -50,7 +52,7 @@ class Overlay:
 
 
 # -- running actions: the same as the web UI's (actions.py), logged as `top: operator …` ------------------------
-def run_now(args: list[str], timeout: float = 60) -> str:
+def run_now(args: list[str], timeout: float = actions.RUN_NOW_S) -> str:
     """A quick subcommand: its last line of output, or "refused: …"."""
     ok, last = actions.run_now(args, timeout, who="top")
     return last if ok else f"refused: {last}"
@@ -660,6 +662,21 @@ def instance_action(ui, key: str, snap: dict) -> bool:
             ui.say(nothing)
         else:
             ask(ui, question, lambda: run_detached(["update", name]))
+    elif key == "K":   # a capital: a stray key never does it
+        ask(ui, actions.KILL_QUESTION.format(name=name), lambda: run_detached(["kill", name]))
+    elif key == "D" and ui.tab == "instance":
+        if state not in ("idle", "paused by you"):
+            ui.say(f"{name} is {state} — kill it first (K)")
+        else:
+            def typed(text: str) -> str:
+                if text != name:
+                    return f"not deleted: you typed {text!r}, not {name}"
+                from . import kill
+                if left := kill.running(name):
+                    return f"not deleted: {name} is busy ({'; '.join(left)}) — kill it first (K)"
+                return run_detached(["delete", name, "--yes"])
+            ui.overlay = Overlay("input", actions.DELETE_QUESTION.format(name=name) + f" Type {name} to delete it: ",
+                                 typed)
     elif key == "w":
         ui.overlay = Overlay("input", f"message to {name}: ", lambda text: run_now(["send", name, text]))
     elif key == "r":
@@ -752,18 +769,27 @@ def handle_view(ui, key: str, snap: dict, page_rows: int) -> None:
         cmd = "autonomy" if sel == "scheduler" else sel
         if key in ("r", "o"):
             action = "on" if key == "r" else "off"
-            why = service_guard(sel, action if key == "o" else "restart")
-            if why:
-                ui.say(f"not now: {why}", 10)
-            else:
-                verb = "start/restart" if key == "r" else "stop"
-                ask(ui, f"{verb} {sel}?", lambda: run_now([cmd, action], timeout=90))
+            guard = action if key == "o" else "restart"
+            verb = "start/restart" if key == "r" else "stop"
+            running = any(s["name"] == sel and s["running"] for s in snap.get("services", []))
+            ask_guarded(ui, sel, guard, f"{verb} {sel}?", [cmd, action], running)
         elif key == "a":
             running = any(s["name"] == "scheduler" and s["running"] for s in snap.get("services", []))
             action = "off" if running else "on"
-            why = service_guard("autonomy", action)
-            if why:
-                ui.say(f"not now: {why}", 10)
-            else:
-                ask(ui, f"autonomy {action}? ({'no more scheduled wakes or sleeps' if action == 'off' else 'wakes and the nightly sleep resume'})",
-                    lambda: run_now(["autonomy", action], timeout=90))
+            ask_guarded(ui, "autonomy", action, f"autonomy {action}? ({'no more scheduled wakes or sleeps' if action == 'off' else 'wakes and the nightly sleep resume'})",
+                        ["autonomy", action])
+
+
+def ask_guarded(ui, service: str, action: str, question: str, args: list[str], running: bool = True) -> None:
+    """A service action a guard may hold back: held back, the operator is asked whether to force it (the web UI's
+    "Force …" button, the same question), and a forced one is logged. Only a running service can hurt a run: starting
+    a stopped one is never held back."""
+    why = service_guard(service, action) if running else ""
+    if not why:
+        ask(ui, question, lambda: run_now(args, timeout=actions.SLOW_S))
+        return
+
+    def forced() -> str:
+        actions.log_forced("top", args, why)
+        return run_now(args, timeout=actions.SLOW_S)
+    ask(ui, actions.force_question(service, action, why) + " (y to force)", forced)

@@ -16,7 +16,7 @@ import subprocess
 
 from . import actions
 from .core import KNOB_GROUPS, PROJECT, secrets_env
-from .web_actions import NOT_FROM_HERE, Refused, button
+from .web_actions import NOT_FROM_HERE, Refused, button, guarded, post_attrs
 from .web_pages import Html, h, join
 
 WHO = "web"
@@ -27,7 +27,8 @@ LONG = 24                                                  # a value longer than
 
 def listing() -> dict:
     """`shaft settings --json`: {"settings": [...], "file": path}. Raises with what the command said if it fails."""
-    r = subprocess.run(actions._cli(["settings", "--json"]), cwd=PROJECT, capture_output=True, text=True, timeout=60)
+    r = subprocess.run(actions._cli(["settings", "--json"]), cwd=PROJECT, capture_output=True, text=True,
+                       timeout=actions.RUN_NOW_S)
     if r.returncode != 0:
         why = (r.stderr or r.stdout).strip()[-300:]
         raise RuntimeError(f"shaft settings --json failed (exit {r.returncode}): {why}")
@@ -36,7 +37,7 @@ def listing() -> dict:
 
 # -- actions ---------------------------------------------------------------------------------------------------------
 def _ran(args: list[str]) -> tuple[int, str]:
-    ok, last = actions.run_now(args, 60, who=WHO)
+    ok, last = actions.run_now(args, actions.RUN_NOW_S, who=WHO)
     return (200, last) if ok else (409, last if last.startswith("refused") else f"refused: {last}")
 
 
@@ -71,8 +72,9 @@ def _restart_buttons(services: list[str], scheduled: list[str], busy: list[str])
                          'cannot restart itself</span>', svc=svc))
             continue
         why = actions.guard_reason(svc, "restart", scheduled, busy)
-        out.append(button("service", f"Restart {svc}", f"restart {svc} now? It picks up the saved settings.",
-                          {"service": svc, "op": "on"}, f"not now: {why}" if why else "", cls="small"))
+        out.append(guarded("service", f"Restart {svc}", f"restart {svc} now? It picks up the saved settings.",
+                           {"service": svc, "op": "on"}, actions.force_question(svc, "restart", why) if why else "",
+                           cls="small"))
     return join(out, " ")
 
 
@@ -127,10 +129,11 @@ def _change(f: dict) -> Html:
     saw = {"key": f["name"], "saw": f["in_file"] or "", "saw_set": "1" if f["in_file"] is not None else "0"}
     hidden = join(h('<input type="hidden" name="{k}" value="{v}">', k=k, v=v) for k, v in saw.items())
     where = ", ".join(s for s in f["services"] if s != "runs")
-    save = h('<form class="cfg" data-post="/action/settings-set" data-after="reload" data-confirm="Save {k}? It goes '
-             'in settings.env. Runs read it when they start{w}.">{hidden}{control}<button type="submit" class="small">'
+    save = h('<form class="cfg" data-post="/action/settings-set" data-confirm="Save {k}? It goes '
+             'in settings.env. Runs read it when they start{w}."{a}>{hidden}{control}<button type="submit" class="small">'
              'Save</button></form>', k=f["name"], hidden=hidden, control=_control(f),
-             w=f"; running services that hold it ({where}) take it when they restart" if where else "")
+             w=f"; running services that hold it ({where}) take it when they restart" if where else "",
+             a=post_attrs("Settings", actions.RUN_NOW_S))
     reset = Html("") if f["in_file"] is None else button(
         "settings-unset", "Use the default", f"remove {f['name']} from settings.env? The default "
         f"({f['default'] or '(empty)'}) applies.", saw, cls="small")
@@ -140,7 +143,7 @@ def _change(f: dict) -> Html:
 def _row(f: dict) -> Html:
     default = Html("") if f["source"] == "default" else h(' <span class="dim">· default <code>{d}</code></span>',
                                                           d=f["default"] or "(empty)")
-    return h('<tr><td data-label="setting"><code>{k}</code></td><td data-label="now">{now}</td>'
+    return h('<tr data-row><td data-label="setting"><code>{k}</code></td><td data-label="now">{now}</td>'
              '<td data-label="change">{change}</td><td data-label="what it does" class="dim help">{help}{default} '
              '<span class="dim">· read by {by}</span></td></tr>', k=f["name"], now=_shown(f), change=_change(f),
              help=f["help"], default=default, by=", ".join(f["services"]))

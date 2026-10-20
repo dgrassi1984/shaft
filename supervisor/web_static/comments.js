@@ -193,7 +193,9 @@
     const host = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
     const md = host.closest(".docmd");
     if (!md || !md.contains(range.endContainer)) return null;
-    return { range, md, view: md.closest(".docview") };
+    const view = md.closest(".docview");
+    if (!view || view.dataset.readOnly) return null;
+    return { range, md, view };
   }
 
   const button = document.createElement("button");
@@ -234,8 +236,9 @@
   window.addEventListener("resize", () => requestAnimationFrame(place));
 
   let box = null;
-  function close() {
+  function close(keep = true) {
     if (!box) return;
+    if (keep) box._saveDraft();
     const focus = box._returnFocus;
     box.remove();
     box = null;
@@ -252,6 +255,8 @@
     const pid = "p-" + Array.from(crypto.getRandomValues(new Uint8Array(8)), n => n.toString(16).padStart(2, "0")).join("");
     const fields = mode === "edit" ? { pid: value.pid } : mode === "reply" ? { pid, thread: value.thread }
       : { pid, doc: view.dataset.doc, sha: view.dataset.sha, anchor: JSON.stringify(value.anchor || null) };
+    const draftKey = `shaft.draft.comment.${JSON.stringify([name, view.dataset.doc, mode,
+      mode === "edit" ? value.pid : mode === "reply" ? value.thread : value.anchor || null])}`;
     const form = document.createElement("form");
     form.id = "comment-box";
     form.setAttribute("role", "dialog");
@@ -260,15 +265,47 @@
     form.innerHTML = '<p class="comment-quote"></p><label>Comment<textarea name="text" rows="4" required></textarea></label>' +
       '<label class="comment-send"><input type="checkbox" name="send" checked> <span></span></label>' +
       '<p class="comment-result" role="status"></p><div class="comment-actions"><button type="submit">Save</button>' +
-      '<button type="button" data-comment-cancel>Cancel</button></div>';
+      '<button type="button" data-comment-cancel>Cancel</button>' +
+      '<button type="button" data-comment-discard>Discard</button></div>';
     form.querySelector(".comment-quote").textContent = mode === "edit" ? "editing your note"
       : mode === "reply" ? `reply in ${value.thread}` : value.anchor ? value.anchor.exact : "the whole document";
     const textarea = form.querySelector("textarea");
     textarea.value = value.text || "";
     const send = form.querySelector(".comment-send");
+    const checkbox = send.querySelector("input");
+    const save = form.querySelector("button[type=submit]");
+    try {
+      const draft = JSON.parse(localStorage.getItem(draftKey));
+      if (draft && typeof draft.text === "string" && typeof draft.send === "boolean" &&
+          /^p-[0-9a-f]{16}$/.test(draft.pid)) {
+        textarea.value = draft.text;
+        checkbox.checked = draft.send;
+        fields.pid = draft.pid;
+        if (mode === "new" && typeof draft.sha === "string") fields.sha = draft.sha;
+      }
+    } catch (e) { /* no readable draft */ }
+    function label() {
+      save.textContent = mode === "edit" ? "Save note" : checkbox.checked ? "Send comment" : "Save private note";
+    }
+    function draftValue() {
+      return JSON.stringify({ text: textarea.value, send: checkbox.checked, pid: fields.pid, sha: fields.sha });
+    }
+    form._saveDraft = () => {
+      try {
+        if (textarea.value) localStorage.setItem(draftKey, draftValue());
+        else localStorage.removeItem(draftKey);
+      } catch (e) { /* no storage: no draft kept */ }
+    };
+    textarea.addEventListener("input", form._saveDraft);
+    checkbox.addEventListener("change", () => { label(); form._saveDraft(); });
+    label();
     send.querySelector("span").textContent = `Send comment to ${name}`;
     if (mode === "edit") send.remove();
-    form.querySelector("[data-comment-cancel]").addEventListener("click", close);
+    form.querySelector("[data-comment-cancel]").addEventListener("click", () => close());
+    form.querySelector("[data-comment-discard]").addEventListener("click", () => {
+      try { localStorage.removeItem(draftKey); } catch (e) { /* none */ }
+      close(false);
+    });
     form.addEventListener("submit", async (ev) => {
       ev.preventDefault();
       if (form.dataset.busy) return;
@@ -276,6 +313,8 @@
       const result = form.querySelector(".comment-result");
       const body = new URLSearchParams({ ...fields, text: textarea.value });
       if (mode !== "edit" && send.querySelector("input").checked) body.set("send", "1");
+      form._saveDraft();
+      const submittedDraft = draftValue();
       form.dataset.busy = "1";
       save.disabled = true;
       const ctl = new AbortController();
@@ -286,13 +325,17 @@
           method: "POST", credentials: "same-origin", signal: ctl.signal,
           headers: { "X-CSRF-Token": api.csrf(), "Content-Type": "application/x-www-form-urlencoded" }, body,
         });
+        if (api.pairAgain(r)) return;
         const message = api.textOf(await r.text()) || (r.ok ? "done" : `HTTP ${r.status}`);
         if (!r.ok) { result.textContent = message; return; }
+        try {
+          if (localStorage.getItem(draftKey) === submittedDraft) localStorage.removeItem(draftKey);
+        } catch (e) { /* none */ }
         api.toast(message);
-        if (box === form) close();
+        if (box === form) close(false);
         api.refreshDocs();
       } catch (e) {
-        result.textContent = `No answer: ${e.message}. Save again to retry safely.`;
+        result.textContent = `No answer: ${e.message}. Submit again to retry safely.`;
       } finally {
         clearTimeout(timer);
         delete form.dataset.busy;

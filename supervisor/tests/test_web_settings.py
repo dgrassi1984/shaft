@@ -90,7 +90,8 @@ class SettingsPageTest(ActionsTest):
         self.assertIn("Saved, not live yet: restart api, scheduler, web.", body)
         self.assertIn('data-post="/action/service"', body)
         self.assertIn("Restart api", body)
-        self.assertIn('disabled title="not now: the scheduler&#x27;s runs share its process group', body)
+        self.assertIn("Force restart scheduler now? Not safe: the scheduler&#x27;s runs share its process group", body)
+        self.assertIn('>Restart api</button>', body)                    # the api is not held back by a scheduled run
         self.assertIn("the web UI cannot restart itself", body)
         live = self.page(FS, "/fragment/settings")
         self.assertIn("Every running service holds the saved settings", live)

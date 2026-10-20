@@ -14,10 +14,16 @@ from supervisor import actions, panel, recap, web, web_actions
 from supervisor.tests.test_web import WebTest, snap
 
 
+def actions_services() -> list[str]:
+    from supervisor import dashboard
+    return list(dashboard.SERVICES)
+
+
 class ActionsTest(WebTest):
     def setUp(self):
         super().setUp()
         self.ran, self.result = [], (True, "ok")
+        self.running = [n for n in actions_services() if n != "web"]      # the guards apply to a running service
         for p in (mock.patch.object(actions, "run_now", self._now), mock.patch.object(actions, "run_detached", self._bg),
                   mock.patch.object(web, "_names", return_value=["shaft", "wren"]),
                   mock.patch.object(actions, "busy_instances", return_value=[]),
@@ -36,9 +42,11 @@ class ActionsTest(WebTest):
 
     LOG_ID = "log:2026-10-19 09:48:34:2373c79a19f2"           # a real log alert's id: its time has a space
 
-    def act(self, verb: str, state: str = "idle", **form) -> tuple[int, str]:
+    def act(self, verb: str, state: str = "idle", alerts: list[dict] | None = None, **form) -> tuple[int, str]:
         s = snap(state=state)
-        s["alerts"] = [{"id": "a1", "text": "one"}, {"id": "a2", "text": "two"}, {"id": self.LOG_ID, "text": "log"}]
+        s["services"] = [{"name": n, "running": n in self.running, "detail": ""} for n in actions_services()]
+        s["alerts"] = alerts or [{"id": "a1", "text": "one"}, {"id": "a2", "text": "two"},
+                                 {"id": self.LOG_ID, "text": "log"}]
         body = "&".join(f"{k}={v}" for k, v in form.items()).encode()
         with mock.patch.object(web, "overview", return_value=s):
             r = self.req(f"/action/{verb}", "POST", cookie=self.cookie, body=body,
@@ -61,6 +69,41 @@ class EveryActionRunsItsCommand(ActionsTest):
         self.act("pause", name="wren")
         self.act("resume", name="wren", state="paused by you")
         self.assertEqual([r[1] for r in self.ran], [["pause", "wren"], ["resume", "wren"]])
+
+    def test_kill_runs_the_cli_verb_and_a_slow_settle_is_no_refusal(self):
+        self.result = (False, "wren paused; stopped shaft live; after 20s it is still settling: live since 12:00")
+        status, body = self.act("kill", name="wren", state="live since 12:00")
+        self.assertEqual(status, 200)
+        self.assertIn("still settling", body)
+        self.assertRan(["kill", "wren", "--wait", str(web_actions.KILL_WAIT_S)], web_actions.KILL_WAIT_S + 8)
+
+    def test_delete_needs_the_name_typed_and_an_instance_that_runs_nothing(self):
+        from supervisor import kill
+        with mock.patch.object(kill, "running", return_value=[]):
+            self.assertEqual(self.act("delete", name="wren")[0], 409)                 # no typed name
+            self.assertEqual(self.act("delete", name="wren", confirm="wre")[0], 409)  # a typo
+            self.assertNothingRan()
+            self.assertEqual(self.act("delete", name="wren", confirm="wren")[0], 200)
+        self.assertRan(["detached", "delete", "wren", "--yes"], None)
+        self.ran.clear()
+        with mock.patch.object(kill, "running", return_value=["live since 12:00"]):
+            status, body = self.act("delete", name="wren", confirm="wren")
+        self.assertEqual(status, 409)
+        self.assertIn("kill it first", body)
+        self.assertNothingRan()
+
+    def test_delete_is_offered_on_the_instance_page_only_and_typed(self):
+        page = str(web_actions.instance_buttons(snap()["instances"][0], delete=True))
+        self.assertIn('data-post="/action/delete"', page)
+        self.assertIn('data-confirm-type="wren"', page)
+        self.assertIn('data-after="home"', page)
+        self.assertIn('data-post="/action/kill"', page)
+        card = str(web_actions.instance_buttons(snap()["instances"][0]))
+        self.assertNotIn("/action/delete", card)
+        self.assertIn("/action/kill", card)
+        busy = str(web_actions.instance_buttons(snap(state="live since 12:00")["instances"][0], delete=True))
+        self.assertNotIn('data-post="/action/delete"', busy)                     # off, with why
+        self.assertIn("kill it first", busy)
 
     def test_sleep_is_detached(self):
         self.act("sleep", name="wren")
@@ -108,12 +151,51 @@ class EveryActionRunsItsCommand(ActionsTest):
         self.assertEqual(self.act("dismiss", ids=up.quote(ids))[0], 200)
         self.assertRan(["alerts", "dismiss", "a1", self.LOG_ID])
 
+    def test_dismiss_all_when_more_are_open_than_shown(self):
+        """Live, 2026-10-20: 60 lookalike log alerts took 12 clicks of "Dismiss these alerts", five at a time, and the
+        list never seemed to change. With more than five open, one more button dismisses all, asked first."""
+        import html as _html
+        import json as _json
+        import urllib.parse as up
+        from supervisor import web_actions
+        few = [{"id": f"a{i}"} for i in range(5)]
+        self.assertNotIn("Dismiss all", str(web_actions.alert_buttons(few)))        # all on screen: one button
+        many = [{"id": f"a{i}"} for i in range(7)] + [{"id": self.LOG_ID}]
+        form = str(web_actions.alert_buttons(many))
+        self.assertIn("Dismiss these alerts", form)
+        self.assertIn("Dismiss all 8", form)
+        self.assertIn("the 3 not shown too?", form)                                  # asked: it reaches unseen ones
+        posted = [_json.loads(_html.unescape(v.split('"')[0])) for v in form.split('name="ids" value="')[1:]]
+        self.assertEqual(posted, [[f"a{i}" for i in range(5)], [a["id"] for a in many]])
+        self.assertEqual(self.act("dismiss", alerts=many, ids=up.quote(_json.dumps(posted[1])))[0], 200)
+        self.assertRan(["alerts", "dismiss", *[a["id"] for a in many]])
+
+    def test_issue_34_one_alert_dismisses_on_its_own(self):
+        """#34. Each alert's Dismiss posts a JSON list of that one id — the same identity `alerts dismiss` takes,
+        including a log id with a space and one that is not among the five on view. Reverting to the batch buttons
+        only, this post never happens: the page has no single-id Dismiss for a7."""
+        import html as _html
+        import json as _json
+        import urllib.parse as up
+        from supervisor import web_pages
+        many = [{"id": f"a{i}", "text": f"alert {i}"} for i in range(7)] + [{"id": self.LOG_ID, "text": "a log line"}]
+        s = snap()
+        s["alerts"] = many
+        out = str(web_pages.overview(s))
+        posted = [_json.loads(_html.unescape(v.split('"')[0])) for v in out.split('name="ids" value="')[1:]]
+        self.assertIn(["a6"], posted)                             # past the five on view
+        self.assertIn([self.LOG_ID], posted)                      # the space stays inside the one id
+        self.ran.clear()
+        self.assertEqual(self.act("dismiss", alerts=many, ids=up.quote(_json.dumps(["a6"])))[0], 200)
+        self.assertRan(["alerts", "dismiss", "a6"])
+
     def test_services_and_autonomy(self):
         self.act("service", service="model", op="on")
         self.act("service", service="scheduler", op="off")
         self.act("autonomy", op="on")
         self.assertEqual([(r[1], r[2]) for r in self.ran],
-                         [(["model", "on"], 90), (["autonomy", "off"], 90), (["autonomy", "on"], 90)])
+                         [(["model", "on"], actions.SLOW_S), (["autonomy", "off"], actions.SLOW_S),
+                          (["autonomy", "on"], actions.SLOW_S)])
 
 
 class RefusedWhereTheTuiRefuses(ActionsTest):
@@ -179,6 +261,81 @@ class RefusedWhereTheTuiRefuses(ActionsTest):
         self.assertNothingRan()
 
 
+class AGuardTheOperatorForces(ActionsTest):
+    """Live, 2026-10-20: two live cycles (thelos, wren) kept Restart api and Restart scheduler greyed out on Settings
+    and Services, with no way to restart from the page. A guarded action is refused unless forced; forced, it runs and
+    the log names what it overrode."""
+
+    def setUp(self):
+        super().setUp()
+        runs = ["thelos (live since 14:06)", "wren (live since 14:08)"]
+        for p in (mock.patch.object(panel, "scheduled_runs", return_value=runs),
+                  mock.patch.object(actions, "busy_instances", return_value=runs)):
+            p.start()
+            self.addCleanup(p.stop)
+        self.logged = []
+        p = mock.patch.object(actions, "log", self.logged.append)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_unforced_it_is_refused(self):
+        for verb, form in (("service", {"service": "scheduler", "op": "on"}), ("service", {"service": "api", "op": "on"}),
+                           ("service", {"service": "api", "op": "off"}), ("autonomy", {"op": "off"})):
+            status, body = self.act(verb, **form)
+            self.assertEqual(status, 409, body)
+            self.assertIn("not now:", body)
+        self.assertNothingRan()
+        self.assertEqual(self.logged, [])
+
+    def test_forced_it_runs_and_is_logged(self):
+        self.assertEqual(self.act("service", service="scheduler", op="on", force="1")[0], 200)
+        self.assertEqual(self.act("service", service="api", op="on", force="1")[0], 200)
+        self.assertEqual(self.act("autonomy", op="off", force="1")[0], 200)
+        self.assertEqual([r[1] for r in self.ran], [["autonomy", "on"], ["api", "on"], ["autonomy", "off"]])
+        self.assertEqual(len(self.logged), 3)
+        self.assertIn("web: operator forced shaft autonomy on past the guard: the scheduler's runs", self.logged[0])
+        self.assertIn("thelos (live since 14:06), wren (live since 14:08)", self.logged[0])
+        self.assertNotIn("Try again", self.logged[0])
+
+    def test_a_stopped_service_starts_unforced_while_runs_are_in_progress(self):
+        """Live, 2026-10-20: the model server, stopped between uses, showed "Force start", asking to "force restart
+        model" — starting it cuts nothing off, and the runs waiting on it need it."""
+        self.running = ["api"]
+        self.assertEqual(self.act("service", service="model", op="on")[0], 200)
+        self.assertEqual(self.act("service", service="scheduler", op="on")[0], 200)
+        self.assertEqual([r[1] for r in self.ran], [["model", "on"], ["autonomy", "on"]])
+        self.assertEqual(self.logged, [])
+        runs = ["thelos (live since 14:06)"]
+        out = str(web_actions.service_buttons("model", False, runs, runs))
+        self.assertIn(">Start</button>", out)
+        self.assertNotIn("orce", out)
+
+    def test_the_web_ui_cannot_be_forced_to_restart_itself(self):
+        status, body = self.act("service", service="web", op="on", force="1")
+        self.assertEqual(status, 409)
+        self.assertIn("cannot stop or restart itself", body)
+        self.assertNothingRan()
+
+    def test_held_back_buttons_offer_force_and_say_what_it_kills(self):
+        runs = ["thelos (live since 14:06)"]
+        out = str(web_actions.service_buttons("scheduler", True, runs, runs))
+        self.assertNotIn("disabled", out)                                     # was a greyed-out button
+        self.assertIn(">Force restart</button>", out)
+        self.assertIn(">Force stop</button>", out)
+        self.assertIn('name="force" value="1"', out)
+        self.assertIn("Force restart scheduler now? Not safe: the scheduler&#x27;s runs share its process group, so "
+                      "this would kill them: thelos (live since 14:06). They end unfinished.", out)
+        api = str(web_actions.service_buttons("api", True, [], runs))
+        self.assertIn("Force restart api now? Not safe: runs in progress use it: thelos (live since 14:06). Their "
+                      "calls to it fail while it is down.", api)
+        self.assertIn('class="act small force"', api)
+        self.assertIn("Force autonomy off", str(web_actions.autonomy_button(True, runs)))
+        free = str(web_actions.service_buttons("api", True, [], []))          # nothing held back: the plain buttons
+        self.assertIn(">Restart</button>", free)
+        self.assertNotIn("force", free)
+        self.assertIn('disabled title="not running"', str(web_actions.service_buttons("api", False, [], runs)))
+
+
 class PagesShowEachActionAsItRuns(ActionsTest):
     def page(self, path: str, s: dict | None = None) -> str:
         with mock.patch.object(web, "overview", return_value=s or snap()):
@@ -204,14 +361,56 @@ class PagesShowEachActionAsItRuns(ActionsTest):
         self.assertIn("about $2.00 by the finished trials so far", body)
         self.assertIn("trials today $5.00", body)
 
-    def test_the_services_page_refuses_a_restart_that_would_kill_runs(self):
+    def test_the_services_page_asks_before_a_restart_that_would_kill_runs(self):
         with mock.patch.object(panel, "services_detail", return_value=[
                 {"name": "scheduler", "running": True, "detail": ""}, {"name": "web", "running": True, "detail": ""}]), \
                 mock.patch.object(panel, "scheduled_runs", return_value=["wren (live since 12:00)"]), \
                 mock.patch.object(panel, "log_tail", return_value=[]):
             body = self.page("/services")
-        self.assertIn("not now: the scheduler&#x27;s runs share its process group", body)
+        self.assertIn("Force restart scheduler now? Not safe: the scheduler&#x27;s runs share its process group", body)
         self.assertIn("the web UI cannot stop or restart itself", body)
+
+
+class Issue20TimeoutTest(ActionsTest):
+    def page(self, path: str, s: dict | None = None) -> str:
+        with mock.patch.object(web, "overview", return_value=s or snap()):
+            r = self.req(path, cookie=self.cookie)
+        self.assertEqual(r.status, 200, r.body[:300])
+        return r.body.decode()
+
+    def test_issue_20_service_and_autonomy_forms_wait_at_least_the_server_limit(self):
+        """#20: the page used to give up at 30s while service and autonomy on/off are allowed SLOW_S on the server,
+        then say that sending the action again is safe. The form's data-timeout is that limit plus a grace, from the
+        same constant _ran passes to run_now. Reverting the attribute, or a timeout below the server limit, fails
+        this: a slow restart looks failed and a second one is invited while the first is still running."""
+        import re
+        with mock.patch.object(panel, "services_detail", return_value=[
+                {"name": "model", "running": True, "detail": ""},
+                {"name": "scheduler", "running": True, "detail": ""}]), \
+                mock.patch.object(panel, "scheduled_runs", return_value=[]), \
+                mock.patch.object(panel, "log_tail", return_value=[]), \
+                mock.patch.object(actions, "busy_instances", return_value=[]):
+            body = self.page("/services")
+        forms = re.findall(r'<form\b[^>]*data-post="/action/(?:service|autonomy)"[^>]*>', body)
+        self.assertTrue(any('data-post="/action/service"' in f for f in forms), body)
+        self.assertTrue(any('data-post="/action/autonomy"' in f for f in forms), body)
+        slow = web_actions.page_wait(actions.SLOW_S)
+        self.assertGreaterEqual(slow, actions.SLOW_S)
+        for form in forms:
+            got = re.search(r'data-timeout="(\d+)"', form)
+            self.assertIsNotNone(got, form)
+            self.assertEqual(int(got.group(1)), slow, form)
+            self.assertIn('data-check="Services"', form)
+        overview = self.page("/fragment/overview")
+        cycles = re.findall(r'<form\b[^>]*data-post="/action/cycle"[^>]*>', overview)
+        self.assertTrue(cycles, overview)
+        usual = web_actions.page_wait(actions.RUN_NOW_S)
+        self.assertGreaterEqual(usual, actions.RUN_NOW_S)
+        for form in cycles:
+            got = re.search(r'data-timeout="(\d+)"', form)
+            self.assertIsNotNone(got, form)
+            self.assertEqual(int(got.group(1)), usual, form)
+            self.assertIn('data-check="Overview"', form)
 
 
 class RecapLockTest(unittest.TestCase):

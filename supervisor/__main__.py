@@ -127,6 +127,32 @@ def cmd_new(name: str, source: str | None, seed: bool = False) -> int:
     return 0
 
 
+def cmd_delete(name: str, yes: bool, keep_archive: bool) -> int:
+    """`shaft delete`: the confirmation, then delete.delete (docs/plans/PLAN-kill-delete.md)."""
+    from . import delete
+    if not yes:
+        if not sys.stdin.isatty():
+            print(f"deleting {name} needs a confirmation: run it in a terminal, or add --yes", file=sys.stderr)
+            return 2
+        found = delete.find(name)
+        if found.anything():
+            print(f"This removes {name}: " + ", ".join(found.describe()) + ".\n"
+                  + (f"An archive is kept in .supervisor/{delete.ARCHIVES}/." if keep_archive
+                     else "NO archive is kept (--no-archive): its mind is gone for good."))
+        try:
+            typed = input(f"Type {name} to delete it: ").strip()
+        except (EOFError, KeyboardInterrupt):   # Ctrl-D, Ctrl-C: a no
+            typed = ""
+        if typed != name:
+            print(f"\nnot deleted (you typed {typed!r}, not {name})", file=sys.stderr)
+            return 1
+    try:
+        return delete.delete(name, keep_archive=keep_archive)
+    except delete.Refused as e:
+        print(f"not deleted: {e}", file=sys.stderr)
+        return 2
+
+
 def _env_values(text: str) -> dict[str, str]:
     out = {}
     for line in text.splitlines():
@@ -399,6 +425,18 @@ def cmd_tools(name: str, action: str | None, tool: str | None) -> int:
         print(f"{t:18} {'off' if t in off else 'on'}")
     if action:
         print(f"(takes effect from {name}'s next run or conversation)")
+    return 0
+
+
+def cmd_channel(name: str, value: str | None) -> int:
+    """Where this instance's messages to you alert you (docs/plans/PLAN-operator-channel.md): auto (where you last wrote
+    to it), web or telegram. An open conversation's channel comes first either way."""
+    from . import channel
+    instance_root(name)
+    if value:
+        channel.set_preference(name, value)
+        log(f"{name}: operator channel set to {value} by the operator")
+    print(channel.describe(name))
     return 0
 
 
@@ -978,6 +1016,15 @@ def main(argv: list[str]) -> int:
     for verb in ("pause", "resume"):
         p = sub.add_parser(verb, help=f"{verb} autonomous runs (all, or one instance)")
         p.add_argument("name", nargs="?")
+    p = sub.add_parser("kill", help="pause an instance and stop everything it is running now (cycle, reply, job, "
+                                    "battery, trial replay); its runs settle as usual (gate, commit). shaft resume undoes it")
+    p.add_argument("name")
+    p.add_argument("--wait", type=float, default=120, help="seconds to wait for its runs to settle (default 120)")
+    p = sub.add_parser("delete", help="remove an instance and every trace of it, after archiving it in "
+                                      ".supervisor/deleted/ (refused while it runs: shaft kill first)")
+    p.add_argument("name")
+    p.add_argument("--yes", action="store_true", help="no question (otherwise you type its name to confirm)")
+    p.add_argument("--no-archive", action="store_true", help="keep no archive: its mind is gone for good")
     p = sub.add_parser("limits", help="the operator's own limits for an instance: its wake floor (shortest wake interval "
                                       "it may set itself) and its daily cloud cap; 'off' goes back to the default")
     p.add_argument("name", nargs="?")
@@ -995,6 +1042,10 @@ def main(argv: list[str]) -> int:
     p.add_argument("name")
     p.add_argument("action", nargs="?", choices=["on", "off"])
     p.add_argument("tool", nargs="?")
+    p = sub.add_parser("channel", help="where an instance's messages alert you: auto (where you last wrote to it), web "
+                                       "or telegram; alone shows it and where a message would go now")
+    p.add_argument("name")
+    p.add_argument("value", nargs="?", choices=["auto", "web", "telegram"])
     p = sub.add_parser("secret", help="an instance's own keys: give it one (value read from your terminal), list, delete")
     p.add_argument("name")
     p.add_argument("action", choices=["set", "google", "list", "delete"],
@@ -1150,6 +1201,8 @@ def main(argv: list[str]) -> int:
         return jobs.run(args.name, args.plugin)
     if args.cmd == "tools":
         return cmd_tools(args.name, args.action, args.tool)
+    if args.cmd == "channel":
+        return cmd_channel(args.name, args.value)
     if args.cmd == "secret":
         return cmd_secret(args)
     if args.cmd == "share":
@@ -1239,6 +1292,13 @@ def main(argv: list[str]) -> int:
         return cmd_update(instance_names() if args.all else (args.names or [DEFAULT_INSTANCE]))
     if args.cmd == "new":
         return cmd_new(args.name, args.source, args.seed)
+    if args.cmd == "kill":
+        from . import kill
+        if not (INSTANCES / args.name / "shaft").is_dir():
+            instance_root(args.name)   # says which instances there are
+        return kill.kill(args.name, args.wait)
+    if args.cmd == "delete":
+        return cmd_delete(args.name, args.yes, not args.no_archive)
     if args.cmd in ("pause", "resume"):
         if args.name:
             instance_root(args.name)

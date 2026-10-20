@@ -17,6 +17,8 @@ from .web_pages import Html, h, join
 
 WHO = "web"
 TEXT_MAX = 8000                       # a message to an instance, at most (it goes into its inbox as a file)
+KILL_WAIT_S = 20                      # a kill from here waits this long for its runs to settle (the page waits 30 s)
+DELETABLE = ("idle", "paused by you")
 NOT_FROM_HERE = {"web": "the web UI cannot stop or restart itself: shaft web on|off in a terminal"}
 
 
@@ -28,7 +30,7 @@ def _ok(text: str) -> tuple[int, str]:
     return 200, text
 
 
-def _ran(args: list[str], timeout: float = 60) -> tuple[int, str]:
+def _ran(args: list[str], timeout: float = actions.RUN_NOW_S) -> tuple[int, str]:
     ok, last = actions.run_now(args, timeout, who=WHO)
     return (200, last) if ok else (409, last if last.startswith("refused") else f"refused: {last}")
 
@@ -46,6 +48,14 @@ def _inst(form: dict, names: list[str]) -> str:
 
 def _state(snap: dict, name: str) -> str:
     return next((i["state"] for i in snap["instances"] if i["name"] == name), "?")
+
+
+def _guard(form: dict, args: list[str], why: str) -> None:
+    """A service guard: refused unless the operator forced it (the "Force …" button, asked first), which is logged."""
+    if why and form.get("force") != "1":
+        raise Refused(f"not now: {why}")
+    if why:
+        actions.log_forced(WHO, args, why)
 
 
 def run(verb: str, form: dict, snap: dict, names: list[str], services: list[str]) -> tuple[int, str]:
@@ -74,16 +84,16 @@ def _run(verb: str, form: dict, snap: dict, names: list[str], services: list[str
             raise Refused(f"no service action {svc!r} {op!r}")
         if svc in NOT_FROM_HERE:
             raise Refused(NOT_FROM_HERE[svc])
-        if why := actions.service_guard(svc, op if op == "off" else "restart"):
-            raise Refused(f"not now: {why}")
-        return _ran(["autonomy" if svc == "scheduler" else svc, op], timeout=90)
+        args = ["autonomy" if svc == "scheduler" else svc, op]
+        running = any(s["name"] == svc and s["running"] for s in snap.get("services", []))
+        _guard(form, args, actions.service_guard(svc, op if op == "off" else "restart") if running else "")
+        return _ran(args, timeout=actions.SLOW_S)
     if verb == "autonomy":
         op = form.get("op", "")
         if op not in ("on", "off"):
             raise Refused(f"autonomy {op!r}?")
-        if why := actions.service_guard("autonomy", op):
-            raise Refused(f"not now: {why}")
-        return _ran(["autonomy", op], timeout=90)
+        _guard(form, ["autonomy", op], actions.service_guard("autonomy", op))
+        return _ran(["autonomy", op], timeout=actions.SLOW_S)
     from . import web_settings
     if verb in web_settings.VERBS:
         return web_settings.run(verb, form)
@@ -98,6 +108,18 @@ def _run(verb: str, form: dict, snap: dict, names: list[str], services: list[str
         return _ran(["cycle", name])
     if verb in ("pause", "resume"):
         return _ran([verb, name])
+    if verb == "kill":
+        ok, last = actions.run_now(["kill", name, "--wait", str(KILL_WAIT_S)], KILL_WAIT_S + 8, who=WHO)
+        return 200, last   # still settling after the wait is no refusal: it is paused, and its runs end on their own
+    if verb == "delete":
+        if form.get("confirm", "").strip() != name:
+            raise Refused(f"not deleted: type {name} to confirm")
+        from . import kill
+        if left := kill.running(name):
+            raise Refused(f"{name} is busy ({'; '.join(left)}): kill it first")
+        actions.run_detached(["delete", name, "--yes"], who=WHO)
+        return 200, (f"deleting {name}: it is archived to .supervisor/deleted/ and removed; it leaves the list when "
+                     f"done (output in .supervisor/{actions.log_name(WHO)})")
     if verb == "sleep":
         if state != "idle":
             raise Refused(f"{name} is {state} — a sleep starts only when it is idle")
@@ -130,16 +152,52 @@ def _run(verb: str, form: dict, snap: dict, names: list[str], services: list[str
 
 
 # -- what the pages show ---------------------------------------------------------------------------------------------
+# Past the server's limit, so an action that uses the whole of it still gets its answer back to the page.
+ANSWER_GRACE_S = 15
+
+# Where a lost answer is visible. The page names it, and does not claim the action was not sent.
+CHECK = {"cycle": "Overview", "pause": "Overview", "resume": "Overview", "sleep": "Overview", "update": "Overview",
+         "recap": "Overview", "dismiss": "Overview", "tool": "Access", "aa-trial": "Trials", "service": "Services",
+         "autonomy": "Services", "config-set": "Config", "config-unset": "Config", "drive-set": "Drive",
+         "drive-remove": "Drive", "limit": "Access", "jobs": "Access", "share": "Access", "mail": "Access",
+         "calendar": "Access", "battery": "Access", "battery-switch": "Access", "settings-set": "Settings",
+         "settings-unset": "Settings", "chat-stop": "this chat", "chat-end": "this chat"}
+
+
+def page_wait(server_s: float) -> int:
+    """Seconds the browser waits for one action: the server's own limit, plus a grace for the answer to arrive."""
+    return int(server_s) + ANSWER_GRACE_S
+
+
+def server_limit(verb: str) -> float:
+    """How long this action's command is allowed to run. Service and autonomy on/off are the slow ones."""
+    return actions.SLOW_S if verb in ("service", "autonomy") else actions.RUN_NOW_S
+
+
+def post_attrs(where: str, server_s: float | None = None) -> Html:
+    """data-check, and data-timeout when the server waits: seconds, its limit plus a grace."""
+    timeout = Html("") if server_s is None else h(' data-timeout="{t}"', t=page_wait(server_s))
+    return timeout + h(' data-check="{w}"', w=where)
+
+
 def button(verb: str, label: str, confirm: str = "", fields: dict | None = None, disabled: str = "",
-           cls: str = "") -> Html:
-    """One action as a button. `disabled`: why it cannot run now (shown as its tooltip, and the button is off)."""
+           cls: str = "", typed: str = "", after: str = "") -> Html:
+    """One action as a button. `disabled`: why it cannot run now (shown as its tooltip, and the button is off).
+    `typed`: the word the operator must type to confirm (sent as the `confirm` field, checked again by the server).
+    `after`: what the page does once it succeeded (web.js: "home" goes to the overview)."""
     hidden = join(h('<input type="hidden" name="{k}" value="{v}">', k=k, v=v) for k, v in (fields or {}).items())
     if disabled:
         return h('<button type="button" class="act {cls}" disabled title="{why}">{label}</button>', cls=cls, why=disabled,
                  label=label)
     conf = h(' data-confirm="{c}"', c=confirm[0].upper() + confirm[1:]) if confirm else Html("")
-    return h('<form class="act" data-post="/action/{verb}"{conf}>{hidden}<button type="submit" class="act {cls}">'
-             '{label}</button></form>', verb=verb, conf=conf, hidden=hidden, cls=cls, label=label)
+    if typed:
+        conf = join([conf, h(' data-confirm-type="{t}"', t=typed)])
+        hidden = join([hidden, Html('<input type="hidden" name="confirm" value="">')])
+    if after:
+        conf = join([conf, h(' data-after="{a}"', a=after)])
+    extra = post_attrs(CHECK.get(verb, "this page"), server_limit(verb))
+    return h('<form class="act" data-post="/action/{verb}"{conf}{extra}>{hidden}<button type="submit" class="act {cls}">'
+             '{label}</button></form>', verb=verb, conf=conf, extra=extra, hidden=hidden, cls=cls, label=label)
 
 
 _updates: dict[str, tuple[float, tuple[str, str]]] = {}
@@ -158,8 +216,9 @@ def _update_question(name: str) -> tuple[str, str]:
     return hit[1]
 
 
-def instance_buttons(i: dict) -> Html:
-    """The instance actions of the overview and the instance page (TUI keys c, p, s, u)."""
+def instance_buttons(i: dict, delete: bool = False) -> Html:
+    """The instance actions of the overview and the instance page (TUI keys c, p, s, u, K); `delete`: also Delete…
+    (TUI D) — on the instance's own page only."""
     name, state = i["name"], i["state"]
     idle = state == "idle"
     paused = state == "paused by you"
@@ -172,65 +231,131 @@ def instance_buttons(i: dict) -> Html:
                   {"name": name}),
            button("sleep", "Sleep now", a.SLEEP_QUESTION.format(name=name), {"name": name},
                   "" if idle else f"{name} is {state} — a sleep starts only when it is idle"),
-           button("update", "Update", question, {"name": name}, nothing)]
+           button("update", "Update", question, {"name": name}, nothing),
+           button("kill", "Kill", a.KILL_QUESTION.format(name=name), {"name": name}, cls="danger")]
+    if delete:
+        out.append(button("delete", "Delete…", a.DELETE_QUESTION.format(name=name), {"name": name},
+                          "" if state in DELETABLE else f"{name} is {state} — kill it first", cls="danger",
+                          typed=name, after="home"))
     return h('<div class="actions">{b}</div>', b=join(out))
 
 
 def message_forms(name: str, question: dict | None) -> Html:
     """Write to the instance (TUI w), and reply to its oldest open question (TUI r)."""
     write = h('<form class="msg" id="write" data-post="/action/send" data-reset="1" data-confirm="Send this to {n}? It '
-              'reads it at its next cycle or conversation."><input type="hidden" name="name" value="{n}">'
+              'reads it at its next cycle or conversation."{a}><input type="hidden" name="name" value="{n}">'
               '<label>Message to {n}<textarea name="text" rows="3" maxlength="{max}" required></textarea></label>'
-              '<button type="submit">Send</button></form>', n=name, max=TEXT_MAX)
+              '<button type="submit">Send</button></form>', n=name, max=TEXT_MAX,
+              a=post_attrs("Messages", actions.RUN_NOW_S))
     if not question:
         return write
     ask = " ".join(question["body"].split())
-    reply = h('<form class="msg" data-post="/action/reply" data-reset="1" data-confirm="Send this reply to {n}?">'
+    reply = h('<form class="msg" data-post="/action/reply" data-reset="1" data-confirm="Send this reply to {n}?"{a}>'
               '<input type="hidden" name="name" value="{n}"><label>Reply to {n}\'s question <span class="dim">'
               '({date})</span>: <i>{q}</i><textarea name="text" rows="3" maxlength="{max}" required></textarea>'
               '</label><button type="submit">Reply</button></form>', n=name, date=question["date"][:16],
-              q=ask[:300] + ("…" if len(ask) > 300 else ""), max=TEXT_MAX)
+              q=ask[:300] + ("…" if len(ask) > 300 else ""), max=TEXT_MAX,
+              a=post_attrs("Messages", actions.RUN_NOW_S))
     return join([reply, write])
 
 
 def tool_switches(name: str, off: set[str]) -> Html:
     """Every supervisor tool with its switch (TUI t)."""
     from .broker import SPECS
-    rows = []
-    for tool in sorted(SPECS):
-        to = "on" if tool in off else "off"
-        rows.append(h('<tr><td data-label="tool">{t}</td><td data-label="now" class="{c}">{now}</td>'
-                      '<td data-label="">{b}</td></tr>', t=tool, c="bad" if tool in off else "good",
-                      now="off" if tool in off else "on",
-                      b=button("tool", f"Switch {to}", f"switch {tool} {to} for {name}? (from its next run)",
-                               {"name": name, "tool": tool, "to": to})))
+    rows = [tool_row(name, tool, off) for tool in sorted(SPECS)]
     return h('<div class="tablewrap"><table><thead><tr><th>tool</th><th>now</th><th></th></tr></thead><tbody>{r}'
              '</tbody></table></div>', r=join(rows))
 
 
+def alert_line(a: dict) -> Html:
+    """One open alert and the action that dismisses it alone. `ids` is a JSON list of that one id — the same field
+    `dismiss` reads, a list because a log alert's id has a space in its time."""
+    return h('<li>⚠ {t} {b}</li>', t=a["text"],
+             b=button("dismiss", "Dismiss", "", {"ids": json.dumps([a["id"]])}, cls="small"))
+
+
+def tool_row(name: str, tool: str, off: set[str]) -> Html:
+    to = "on" if tool in off else "off"
+    return h('<tr data-row><td data-label="tool">{t}</td><td data-label="now" class="{c}">{now}</td>'
+             '<td data-label="">{b}</td></tr>', t=tool, c="bad" if tool in off else "good",
+             now="off" if tool in off else "on",
+             b=button("tool", f"Switch {to}", f"switch {tool} {to} for {name}? (from its next run)",
+                      {"name": name, "tool": tool, "to": to}))
+
+
+def saved_row(verb: str, form: dict) -> Html:
+    """Read back the saved control, including its next comparison token and button direction."""
+    from . import opconfig, web_config, web_settings, web_views
+    from .core import disabled_tools
+    name = form.get("name", "")
+    if verb in web_settings.VERBS:
+        field = next(f for f in web_settings.listing()["settings"] if f["name"] == form["key"].strip())
+        return web_settings._row(field)
+    if verb in ("config-set", "config-unset"):
+        key = form["key"].strip()
+        fields = {f["key"]: f for f in opconfig.fields(name)}
+        # Unsetting a custom key removes it from fields(); keep an empty row so it can be set again.
+        field = fields.get(key) or dict(key=key, set=False, value="", default=None, help="", secret=False,
+                                        choices=None, numeric=False)
+        # A model switch also writes LLM_BASE_URL: its row's saw goes with it, or its next save is refused
+        return join([web_config.config_row(name, field)] +
+                    [web_config.config_row(name, fields[k]) for k in opconfig.coupled(key) if k in fields])
+    if verb in ("drive-set", "drive-remove"):
+        text, sha = opconfig.drive(name)
+        return web_config.drive_page(name, text, sha, web_views.markdown(text) if text is not None else Html(""))
+    if verb == "tool":
+        return tool_row(name, form["tool"], disabled_tools(name))
+    if verb in web_config.VERBS:
+        row = form["limit"] if verb == "limit" else verb
+        return web_config.access_page(name, web_config.access(name), row)
+    raise ValueError(f"no saved row for {verb}")
+
+
 def alert_buttons(alerts: list[dict]) -> Html:
+    """Dismiss the five shown, and — when more are open — all of them, asked first: those include alerts not on
+    screen. Live, 2026-10-20: 60 lookalike log alerts took 12 clicks of "Dismiss these alerts", each showing the next
+    five, so the list never seemed to change. Each alert also has its own Dismiss (alert_line)."""
     shown = alerts[:5]
     if not shown:
         return Html("")
-    return button("dismiss", "Dismiss these alerts", "", {"ids": json.dumps([a["id"] for a in shown])}, cls="small")
+    these = button("dismiss", "Dismiss these alerts", "", {"ids": json.dumps([a["id"] for a in shown])}, cls="small")
+    if len(alerts) <= len(shown):
+        return these
+    n = len(alerts)
+    return join([these, button("dismiss", f"Dismiss all {n}", f"dismiss all {n} open alerts, the {n - len(shown)} "
+                               "not shown too?", {"ids": json.dumps([a["id"] for a in alerts])}, cls="small")])
 
 
 def service_buttons(name: str, running: bool, scheduled: list[str], busy: list[str]) -> Html:
     if name in NOT_FROM_HERE:
         return h('<span class="dim">{w}</span>', w=NOT_FROM_HERE[name])
-    why_off = actions.guard_reason(name, "off", scheduled, busy)
-    why_restart = actions.guard_reason(name, "restart", scheduled, busy)
+    # Only a running service can kill or cut off a run: starting a stopped one (the model server between uses, which
+    # the runs waiting on it need) is never held back.
+    why_off = actions.guard_reason(name, "off", scheduled, busy) if running else ""
+    why_restart = actions.guard_reason(name, "restart", scheduled, busy) if running else ""
     verb = "Restart" if running else "Start"
-    return join([button("service", verb, f"{verb.lower()} {name}?", {"service": name, "op": "on"},
-                        f"not now: {why_restart}" if why_restart else "", cls="small"),
-                 button("service", "Stop", f"stop {name}?", {"service": name, "op": "off"},
-                        "" if running and not why_off else (f"not now: {why_off}" if why_off else "not running"),
-                        cls="small")])
+    stop = guarded("service", "Stop", f"stop {name}?", {"service": name, "op": "off"},
+                   actions.force_question(name, "off", why_off) if why_off else "", cls="small") \
+        if running else button("service", "Stop", "", {}, "not running", cls="small")
+    return join([guarded("service", verb, f"{verb.lower()} {name}?", {"service": name, "op": "on"},
+                         actions.force_question(name, "restart", why_restart) if why_restart else "", cls="small"),
+                 stop])
+
+
+def guarded(verb: str, label: str, confirm: str, fields: dict, force: str, cls: str = "") -> Html:
+    """An action a guard may hold back. `force`: the question to override it (actions.force_question), empty when
+    nothing holds it back. Held back, it is offered as "Force …", asked first with what it would hurt — the operator
+    may still need it (live, 2026-10-20: two live cycles kept Restart api and Restart scheduler greyed out, with no
+    way to restart from the page)."""
+    if not force:
+        return button(verb, label, confirm, fields, cls=cls)
+    return button(verb, f"Force {label[0].lower()}{label[1:]}", force, {**fields, "force": "1"},
+                  cls=f"{cls} force".strip())
 
 
 def autonomy_button(scheduler_running: bool, scheduled: list[str]) -> Html:
     op = "off" if scheduler_running else "on"
     why = actions.guard_reason("autonomy", op, scheduled, [])
     effect = "no more scheduled wakes or sleeps" if op == "off" else "wakes and the nightly sleep resume"
-    return button("autonomy", f"Autonomy {op}", f"autonomy {op}? ({effect})", {"op": op},
-                  f"not now: {why}" if why else "")
+    return guarded("autonomy", f"Autonomy {op}", f"autonomy {op}? ({effect})", {"op": op},
+                   actions.force_question("autonomy", op, why) if why else "")

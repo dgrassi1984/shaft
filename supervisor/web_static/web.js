@@ -1,9 +1,13 @@
 // SHAFT web UI behaviour (docs/plans/PLAN-webui.md). No inline script anywhere (the CSP forbids it): pages declare what they
 // need with data- attributes, and this file binds it once.
 //   data-poll="/fragment/…"  the element's content is refreshed from that URL every 2 s while the tab is visible
-//   <form data-post="/…">    sent with fetch as a POST carrying the CSRF token; data-confirm asks first, data-reset
-//                            clears it once sent, data-diff="/preview/…" shows what would change before asking;
-//                            the reply is shown as a toast and the polled parts refresh
+//   <form data-post="/…">    sent with fetch as a POST carrying the CSRF token; data-confirm asks first (data-confirm-type:
+//                            the operator types that word instead of clicking OK), data-after="home" goes to / after; data-reset
+//                            clears it once sent, data-diff="/preview/…" shows the diff with Apply and Back (nothing
+//                            is saved until Apply); data-timeout is seconds to wait, from the server's own limit;
+//                            data-check names the page a lost answer tells you to look at. A form with input[name=mid]
+//                            can be sent again. The reply is a toast and the polled parts refresh
+//   data-row                 a saved form replaces only its nearest row with the server's new value and token
 // Listeners are delegated from the document, so content swapped in by a poll needs no re-binding.
 (() => {
   "use strict";
@@ -11,6 +15,12 @@
   window.__shaftWeb = true;
 
   const csrf = () => (document.querySelector('meta[name="csrf"]') || {}).content || "";
+
+  function pairAgain(r) {
+    if ((r.status !== 401 && r.status !== 403) || r.headers.get("X-Shaft-Pair") !== "required") return false;
+    location.assign("/");                         // the pairing form; local drafts stay until a successful send
+    return true;
+  }
 
   function fullText(html) {
     return new DOMParser().parseFromString(html, "text/html").body.textContent.trim();
@@ -85,6 +95,7 @@
   }
 
   function toBottom(el) {
+    el._atBottom = true;
     const box = el.closest("[data-scroll]");
     if (box) box.scrollTop = box.scrollHeight;
     else window.scrollTo(0, document.body.scrollHeight);
@@ -102,7 +113,7 @@
   // it gives up after 15 s; a failure backs off (up to 30 s) and is said once, at the top, not under every panel;
   // the connection coming back or the app coming to the front refreshes at once.
   const POLL_LIMIT_MS = 15000;
-  const net = { down: 0 };
+  const net = { down: new Set() };
   function netNote(text) {
     let n = document.getElementById("netnote");
     if (!text) { if (n) n.remove(); return; }
@@ -119,33 +130,57 @@
   // strips and anything the page added to it (copy buttons); a turn being sent stays until its own turn arrives.
   function morph(el, html) {
     const next = new DOMParser().parseFromString(`<!doctype html><body>${html}`, "text/html").body;
-    const sending = [...el.children].filter(c => c.classList.contains("sending") && !c.dataset.done);
-    const want = [...next.children];
-    want.forEach((n, i) => {
-      const cur = [...el.children].filter(c => !c.classList.contains("sending"))[i];
+    const children = [...el.children];
+    const sending = new Set(children.filter(c => c.classList.contains("sending") && !c.dataset.done));
+    const keyed = new Map(children.filter(c => !c.classList.contains("sending") && c.dataset.k)
+      .map(c => [c.dataset.k, c]));
+    const kept = new Set();
+    let cursor = el.firstElementChild;
+    [...next.children].forEach(n => {
+      const cur = keyed.get(n.dataset.k);
       const src = n.outerHTML;
-      if (cur && cur.dataset.k && cur.dataset.k === n.dataset.k && cur._src === src) return;
-      const node = document.importNode(n, true);
-      node._src = src;
-      if (!cur || cur.dataset.k !== n.dataset.k) {     // a new item: an answer is read out
-        if (node.classList.contains("turn") && node.classList.contains("it") && !node.classList.contains("live")) {
+      let node = cur;
+      if (!cur || cur._src !== src) {
+        node = document.importNode(n, true);
+        node._src = src;
+        if (cur) {
+          const details = new Map([...cur.querySelectorAll("details[data-key]")].map(d => [d.dataset.key, d.open]));
+          node.querySelectorAll("details[data-key]").forEach(d => {
+            if (details.has(d.dataset.key)) d.open = details.get(d.dataset.key);
+          });
+          const scrolls = new Map([...cur.querySelectorAll("[data-scroll-key]")].map(d => [d.dataset.scrollKey, d.scrollTop]));
+          // Restore after insertion: detached elements have no scrollable layout.
+          node._scrolls = scrolls;
+          const clocks = new Map([...cur.querySelectorAll(".elapsed[data-since]")].map(d => [d.dataset.since, d.textContent]));
+          node.querySelectorAll(".elapsed[data-since]").forEach(d => {
+            if (clocks.has(d.dataset.since)) d.textContent = clocks.get(d.dataset.since);
+          });
+        } else if (node.classList.contains("turn") && node.classList.contains("it") && !node.classList.contains("live")) {
           const who = (node.querySelector(".who") || {}).firstChild;
           const first = (node.querySelector(".md p, .md li, .md h2, .md h3, p.warn") || {}).textContent || "";
           announce(`${who ? who.textContent.trim() : "It"} replied: ${first.slice(0, 200)}`);
         }
       }
-      if (cur && cur.dataset.k === n.dataset.k) cur.replaceWith(node);
-      else if (cur) el.insertBefore(node, cur);
-      else el.appendChild(node);
+      if (node !== cursor) el.insertBefore(node, cursor);
+      cursor = node.nextElementSibling;
+      kept.add(node);
+      if (node._scrolls) {
+        node.querySelectorAll("[data-scroll-key]").forEach(d => {
+          if (node._scrolls.has(d.dataset.scrollKey)) d.scrollTop = node._scrolls.get(d.dataset.scrollKey);
+        });
+        delete node._scrolls;
+      }
     });
-    [...el.children].filter(c => !c.classList.contains("sending")).slice(want.length).forEach(c => c.remove());
-    el.querySelectorAll(".sending").forEach(c => { if (!sending.includes(c)) c.remove(); });
+    children.forEach(c => { if (!kept.has(c) && !sending.has(c)) c.remove(); });
     sending.forEach(c => el.appendChild(c));          // kept last, until the server's turn replaces it
   }
 
   function poll(el) {
     const every = Number(el.dataset.every || 2000);
-    let running = false, timer = null, fails = 0;
+    // again: an action asked for a refresh while one was on its way. That one may hold the state from before the
+    // action, so it is not shown, and the next one goes at once. Without it the refresh the action asked for was
+    // cancelled by the one in flight (its finally reschedules), and dismissed alerts stayed up to 2 s more (2026-10-20).
+    let running = false, timer = null, fails = 0, again = false;
     if (el.dataset.keyed) [...el.children].forEach(c => { c._src = c.outerHTML; });
     const later = (ms) => { clearTimeout(timer); timer = setTimeout(tick, ms); };
     async function tick() {
@@ -162,26 +197,37 @@
       try {
         const headers = el.dataset.etag && el.dataset.etagUrl === url ? { "If-None-Match": el.dataset.etag } : {};
         const r = await fetch(url, { credentials: "same-origin", cache: "no-store", signal: ctl.signal, headers });
+        if (pairAgain(r)) return;
         checkVersion(r);
         if (r.status >= 502 && r.status <= 504) {      // the proxy answered, SHAFT did not (Tailscale's 503): unreachable
           throw new Error(`its web service is not answering, HTTP ${r.status}`);
         }
-        if (net.down) { net.down = 0; netNote(""); document.querySelectorAll(".stale").forEach(x => x.classList.remove("stale")); }
-        if (r.status === 304) { fails = 0; fresh(el); return; }
+        if (r.status === 304) {
+          if (!again && el.dataset.poll === url) { fails = 0; recovered(); }
+          return;
+        }
         const body = await r.text();
         if (r.ok) {
           fails = 0;
           // Asked again now: an edit or a selection begun while this refresh was on its way must survive it (Codex)
-          if (busyIn(el) || el.dataset.poll !== url) return;
+          if (busyIn(el) || el.dataset.poll !== url || again) return;
           el.dataset.etag = r.headers.get("ETag") || "";
           el.dataset.etagUrl = url;
           if (body !== el.dataset.last) {               // unchanged: nothing replaced, nothing collapsed
+            const focused = document.activeElement;
+            const controls = 'button, a[href], summary';
+            const focusKey = n => n.dataset.focus || n.getAttribute("href")
+              || (n.closest("form[data-post]") || { dataset: {} }).dataset.post;
+            const restoreFocus = focused && el.contains(focused) && focused.matches(controls);
+            const key = restoreFocus ? focusKey(focused) : null;
             const open = new Set([...el.querySelectorAll("details[data-key][open]")].map(d => d.dataset.key));
             const shut = new Set([...el.querySelectorAll("details[data-key]:not([open])")].map(d => d.dataset.key));
             const box = el.closest("[data-scroll]");      // a feed that scrolls in its own box (the chat), else the page
             const atBottom = box && box.scrollHeight > box.clientHeight
               ? box.scrollTop + box.clientHeight >= box.scrollHeight - 40
               : window.innerHeight + window.scrollY >= document.body.scrollHeight - 40;
+            const oldKeys = new Set([...el.querySelectorAll(".turn[data-k]")].map(n => n.dataset.k));
+            if (el.dataset.follow) el._atBottom = atBottom;
             if (el.dataset.keyed) morph(el, body);
             else el.innerHTML = body;
             el.dataset.last = body;
@@ -189,60 +235,132 @@
               if (open.has(d.dataset.key)) d.open = true;
               if (shut.has(d.dataset.key)) d.open = false;
             });
+            if (restoreFocus) {
+              const target = [...el.querySelectorAll(controls)].find(n => key && focusKey(n) === key)
+                || el.querySelector('details[data-key] summary');
+              if (target) target.focus({ preventScroll: true });
+            }
             if (atBottom && el.dataset.follow) toBottom(el);
-            el.dispatchEvent(new CustomEvent("shaft:swapped", { bubbles: true }));
+            const newBelow = !!box && [...el.querySelectorAll(".turn[data-k]")].some(n =>
+              !oldKeys.has(n.dataset.k) && n.getBoundingClientRect().top >= box.getBoundingClientRect().bottom);
+            el.dispatchEvent(new CustomEvent("shaft:swapped", { bubbles: true, detail: { newBelow } }));
           }
-          fresh(el);
+          recovered();
         } else {
           fails += 1;
+          net.down.add(el);
           stale(el, `Not refreshed: HTTP ${r.status} — ${textOf(body) || "no reason given"}`);
         }
       } catch (e) {                                    // no answer at all: the network, not this panel
         fails += 1;
-        net.down += 1;
+        net.down.add(el);
         el.classList.add("stale");
         netNote(navigator.onLine === false ? "Offline — it refreshes when the connection is back"
           : `Cannot reach SHAFT: ${e.name === "AbortError" ? "no answer in 15 s" : e.message} — retrying`);
       } finally {
         clearTimeout(limit);
         running = false;
-        later(Math.min(every * slow * 2 ** Math.min(fails, 4), 15000 * slow));   // back within 15 s
+        if (again) { again = false; later(0); }
+        else later(Math.min(every * slow * 2 ** Math.min(fails, 4), 15000 * slow));   // back within 15 s
       }
+    }
+    function recovered() {
+      fresh(el);
+      net.down.delete(el);
+      for (const panel of net.down) { if (!panel.isConnected) net.down.delete(panel); }
+      if (!net.down.size) netNote("");
     }
     el._tick = tick;
     later(el.dataset.now ? 0 : every);                 // a first render without live data (the rail): fill it now
     document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") tick(); });
     window.addEventListener("pageshow", () => tick());   // back from the cache or the app switcher
     window.addEventListener("online", () => { fails = 0; tick(); });
-    document.addEventListener("shaft:refresh", () => later(300));
+    document.addEventListener("shaft:refresh", () => { if (running) again = true; else later(300); });
   }
 
+
+  // data-timeout is seconds and comes from the server's own limit (plus a grace the page added). Without it, a
+  // chat with files waits longer than a plain form.
+  function waitMsFor(form) {
+    const asked = Number(form.dataset.timeout);
+    if (asked > 0) return asked * 1000;
+    return form.dataset.multipart ? 180000 : 30000;
+  }
+
+  // A lost answer. Only a chat send carries an id (input[name=mid]) the server will not apply twice. Every other
+  // action may have happened: say so, and where to look, and never that it was not sent.
+  function lostAnswer(form, err, waitMs) {
+    if (form.querySelector("input[name=mid]")) {
+      return err.name === "AbortError" ? "No answer: sending it again is safe (it is not sent twice)"
+        : `Not sent: ${err.message} — sending it again is safe`;
+    }
+    const where = form.dataset.check || "this page";
+    if (err.name === "AbortError") {
+      return `No answer within ${Math.round(waitMs / 1000)}s: it may still have happened — check ${where} before trying again`;
+    }
+    return `No answer (${err.message}): it may still have happened — check ${where} before trying again`;
+  }
+
+  function showDiff(form, text) {
+    const out = form.querySelector("[data-diff-out]");
+    if (out) out.textContent = text;
+    const step = form.querySelector("[data-diff-step]");
+    if (step) step.hidden = false;
+    const ask = form.querySelector("[data-diff-ask]");
+    if (ask) ask.hidden = true;
+    const show = form.querySelector("[data-diff-ask] button");
+    if (show) show.disabled = true;             // Enter now submits Apply; the diff stays the one just shown
+  }
+
+  function hideDiff(form) {                     // Back, or the text changed: the box is kept, nothing was saved
+    if (!form) return;
+    const step = form.querySelector("[data-diff-step]");
+    if (step) step.hidden = true;
+    const out = form.querySelector("[data-diff-out]");
+    if (out) out.textContent = "";
+    const ask = form.querySelector("[data-diff-ask]");
+    if (ask) ask.hidden = false;
+    const show = form.querySelector("[data-diff-ask] button");
+    if (show) show.disabled = false;
+  }
+
+  document.addEventListener("click", (ev) => {
+    const back = ev.target.closest && ev.target.closest("[data-diff-back]");
+    if (!back) return;
+    hideDiff(back.closest("form"));
+  });
 
   document.addEventListener("submit", async (ev) => {
     const form = ev.target.closest("form[data-post]");
     if (!form) return;
     ev.preventDefault();
-    if (form.dataset.diff) {                    // show what would change first, then ask
-      const out = form.querySelector("[data-diff-out]");
+    const applying = ev.submitter && ev.submitter.hasAttribute && ev.submitter.hasAttribute("data-diff-apply");
+    if (form.dataset.diff && !applying) {       // the diff first; Apply is what saves. No confirm over it.
       try {
         const d = await fetch(form.dataset.diff, {
           method: "POST", credentials: "same-origin",
           headers: { "X-CSRF-Token": csrf(), "Content-Type": "application/x-www-form-urlencoded" },
           body: new URLSearchParams(new FormData(form)),
         });
+        if (pairAgain(d)) return;
         const text = fullText(await d.text());        // the whole diff, never cut like a toast
-        if (out) out.textContent = text;
         if (!d.ok) { toast(`No diff: HTTP ${d.status} — ${text}`, true); return; }
         if (text === "(no change)") { toast("Nothing to save: no change"); return; }
+        showDiff(form, text);
       } catch (e) {
         toast(`No diff: ${e.message}`, true);
-        return;
       }
+      return;
     }
     if (form.dataset.busy) return;                  // one at a time: a second Enter sent it twice (Codex review)
     const tooBig = filesRefused(form);
     if (tooBig) { toast(tooBig, true); return; }      // before uploading it all to hear so (a phone's video)
-    if (form.dataset.confirm && !window.confirm(form.dataset.confirm)) return;
+    if (form.dataset.confirmType) {                 // a word to type, not a click (shaft delete): the server checks it too
+      const typed = window.prompt(`${form.dataset.confirm || ""}\n\nType ${form.dataset.confirmType} to confirm:`);
+      if (typed === null) return;
+      if (typed.trim() !== form.dataset.confirmType) { toast(`Not done: you typed "${typed}", not ${form.dataset.confirmType}`, true); return; }
+      form.querySelector("input[name=confirm]").value = typed.trim();
+    } else if (form.dataset.confirm && !form.dataset.diff && !window.confirm(form.dataset.confirm)) return;
     const button = form.querySelector("button[type=submit]");
     if (button) button.disabled = true;
     form.dataset.busy = "1";
@@ -250,17 +368,29 @@
     const typed = box ? box.value : null;            // what this send carries
     const mid = form.querySelector("input[name=mid]");
     if (mid && !mid.value) mid.value = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+    const sentMid = mid ? mid.value : "";
+    const sentFiles = [...(form.querySelector("input[type=file]") || { files: [] }).files];
+    if (form.dataset.draft && mid) {
+      try {
+        localStorage.setItem(draftKey(form), typed);
+        localStorage.setItem(pendingKey(form), JSON.stringify({ mid: sentMid, text: typed }));
+      } catch (e) { /* no storage: retry still works in this page */ }
+    }
     const shown = form.dataset.draft ? pending(form) : null;
     const multipart = !!form.dataset.multipart;          // files go with it: the browser sets the boundary
+    const row = form.closest("[data-row]");
+    const waitMs = waitMsFor(form);
     const ctl = new AbortController();
-    const limit = setTimeout(() => ctl.abort(), multipart ? 180000 : 30000);
+    const limit = setTimeout(() => ctl.abort(), waitMs);
     try {
       const r = await fetch(form.dataset.post, {
         method: "POST", credentials: "same-origin", signal: ctl.signal,
-        headers: multipart ? { "X-CSRF-Token": csrf() }
-                           : { "X-CSRF-Token": csrf(), "Content-Type": "application/x-www-form-urlencoded" },
+        headers: { "X-CSRF-Token": csrf(),
+                   ...(!multipart ? { "Content-Type": "application/x-www-form-urlencoded" } : {}),
+                   ...(row || form.dataset.addRow ? { "X-Row": "1" } : {}) },
         body: multipart ? new FormData(form) : new URLSearchParams(new FormData(form)),
       });
+      if (pairAgain(r)) { if (shown) shown.remove(); return; }
       const body = await r.text();
       toast(textOf(body) || (r.ok ? "done" : `HTTP ${r.status}`), !r.ok);
       const refusal = form.querySelector("[data-refusal]") || (form.dataset.after === "doc-deleted"
@@ -270,31 +400,54 @@
       }
       const now = r.headers.get("X-Doc-Sha");         // refused as stale: Save again replaces it, knowingly
       if (!r.ok && now && form.querySelector("input[name=sha]")) form.querySelector("input[name=sha]").value = now;
-      if (r.ok && form.dataset.after === "doc-saved") docSaved(form, r.headers.get("X-Doc"));
+      if (r.ok && r.headers.get("X-Row") === "1") {
+        const next = new DOMParser().parseFromString(body, "text/html")
+          .querySelector("template[data-saved-row]").content.firstElementChild;
+        // rows the same save also changed (a model switch writes its base URL): swapped by id, after the first
+        for (let more = next.nextElementSibling; more; more = more.nextElementSibling) {
+          const shownNow = more.id && document.getElementById(more.id);
+          if (shownNow) shownNow.replaceWith(more.cloneNode(true));
+        }
+        if (row) row.replaceWith(next);
+        else if (form.dataset.addRow) {
+          const existing = document.getElementById(next.id);   // Add can set a key already shown with its default
+          if (existing) existing.replaceWith(next);
+          else document.querySelector(form.dataset.addRow).appendChild(next);
+        }
+      }
+      if (r.ok && form.dataset.after === "doc-saved") docSaved(form, r.headers.get("X-Doc"), typed, now);
       if (r.ok && form.dataset.after === "doc-deleted") docsList();
       if (r.ok && form.dataset.after === "comment-saved") refreshDocs();
-      if (r.ok && mid) mid.value = "";               // sent: the next message gets an id of its own
+      if (r.ok && mid && mid.value === sentMid) mid.value = "";               // sent: the next message gets an id of its own
       if (r.ok && shown) shown.dataset.done = "1";   // goes when the feed brings the turn as the server saved it
       if (r.ok && form.dataset.reset) {
         const later = box && box.value !== typed ? box.value : null;   // typed while it was sending: kept
-        form.reset();
-        if (later !== null) box.value = later;
+        if (form.dataset.draft) {
+          box.value = later === null ? "" : later;
+          const input = form.querySelector("input[type=file]");
+          setFiles(form, [...input.files].filter(f => !sentFiles.includes(f)));
+        } else {
+          form.reset();
+          if (later !== null) box.value = later;
+        }
         picked(form);
         if (form.dataset.draft && later === null) sent(form);
         else if (box) grow(box);
         if (box && form.dataset.draft && !touchOnly()) box.focus();   // write the next one (a phone keeps its keyboard down)
       }
       if (!r.ok && shown) shown.remove();
-      if (r.ok && form.dataset.after === "reload") setTimeout(() => location.reload(), 800);
+      if (r.ok && form.dataset.diff) hideDiff(form);   // saved: back to the text, which is kept
+      if (r.ok && form.dataset.after === "reload") setTimeout(() => location.reload(), 800);   // Unpair this browser
+      if (r.ok && form.dataset.after === "home") setTimeout(() => { location.href = "/"; }, 1500);   // it is gone
       document.dispatchEvent(new Event("shaft:refresh"));      // show what the action changed, now
-    } catch (e) {                                  // the answer was lost: it may have arrived — the id says so
+    } catch (e) {                                  // the answer was lost. A chat id is safe to repeat; anything else may have happened
       if (shown) shown.remove();
-      toast(e.name === "AbortError" ? "No answer: sending it again is safe (it is not sent twice)"
-        : `Not sent: ${e.message} — sending it again is safe`, true);
+      toast(lostAnswer(form, e, waitMs), true);
     } finally {
       clearTimeout(limit);
       if (button) button.disabled = false;
       delete form.dataset.busy;
+      delete form._afterDocSave;
     }
   });
 
@@ -360,14 +513,16 @@
     if (!input) return;
     const all = new DataTransfer();
     for (const f of files) all.items.add(f);
+    form._attachments = all;
     input.files = all.files;
+    composerChanged(form);
     picked(form);
   }
 
   function addFiles(form, files) {
     const input = form.querySelector("input[type=file]");
     if (!input || !files.length) return;
-    setFiles(form, [...input.files, ...files]);
+    setFiles(form, [...(form._attachments ? form._attachments.files : []), ...files]);
   }
 
   document.addEventListener("click", (ev) => {
@@ -379,7 +534,7 @@
   });
   document.addEventListener("change", (ev) => {
     const form = ev.target.closest("form[data-files]");
-    if (form && ev.target.type === "file") picked(form);
+    if (form && ev.target.type === "file") addFiles(form, [...ev.target.files]);
   });
   document.addEventListener("paste", (ev) => {
     const form = ev.target.closest && ev.target.closest("form[data-files]");
@@ -423,10 +578,27 @@
     box.style.height = `${Math.min(box.scrollHeight + 2, Math.round(window.innerHeight * part))}px`;
   }
   const draftKey = (form) => `shaft.draft.${form.dataset.draft}`;
+  const pendingKey = (form) => `shaft.pending.${form.dataset.draft}`;
+  function composerChanged(form) {
+    const mid = form.querySelector("input[name=mid]");
+    if (mid) mid.value = "";
+    if (form.dataset.draft) {
+      try { localStorage.removeItem(pendingKey(form)); } catch (e) { /* none */ }
+    }
+  }
+  window.addEventListener("beforeunload", (ev) => {
+    const form = composer();
+    if (!form || !form.querySelector("input[type=file]").files.length) return;
+    ev.preventDefault();
+    ev.returnValue = "";
+  });
   document.addEventListener("input", (ev) => {
-    if (ev.target.closest && ev.target.closest("form.docedit")) { grow(ev.target, 0.7); return; }
+    const reviewing = ev.target.closest && ev.target.closest("form[data-diff]");
+    if (reviewing && ev.target.name === "text") hideDiff(reviewing);   // the shown diff is no longer this text
+    const docform = ev.target.closest && ev.target.closest("form.docedit");
+    if (docform) { grow(ev.target, 0.7); keepDocDraft(docform); return; }
     const midf = ev.target.closest && ev.target.closest("form[data-files]");
-    if (midf && midf.querySelector("input[name=mid]")) midf.querySelector("input[name=mid]").value = "";  // a new text
+    if (midf) composerChanged(midf);
     const form = ev.target.closest && ev.target.closest("form[data-draft]");
     if (!form || ev.target.tagName !== "TEXTAREA") return;
     grow(ev.target);
@@ -436,7 +608,18 @@
     const form = document.querySelector("form[data-draft]");
     if (!form) return;
     const box = form.querySelector("textarea");
-    try { if (!box.value) box.value = localStorage.getItem(draftKey(form)) || ""; } catch (e) { /* none */ }
+    try {
+      if (!box.value) box.value = localStorage.getItem(draftKey(form)) || "";
+      const attempt = JSON.parse(localStorage.getItem(pendingKey(form)) || "null");
+      if (attempt && attempt.text === box.value && typeof attempt.mid === "string") {
+        const delivered = JSON.parse(form.dataset.sentMids || "[]").includes(attempt.mid);
+        if (delivered) {
+          box.value = "";
+          localStorage.removeItem(draftKey(form));
+          localStorage.removeItem(pendingKey(form));
+        } else form.querySelector("input[name=mid]").value = attempt.mid;
+      }
+    } catch (e) { /* no usable saved attempt */ }
     grow(box);
   }
   function sent(form) {
@@ -475,6 +658,7 @@
       form.requestSubmit();
       return;
     }
+    if (sheet && ev.key !== "Escape") return;       // covered chat shortcuts stay inactive
     // Shortcuts on a chat: / writes, Esc closes a menu, Alt-↑ / Alt-↓ go to the chat above or below in the rail.
     const typing = ev.target.closest && ev.target.closest("input, textarea, select, [contenteditable]");
     if (ev.key === "Escape") {
@@ -565,10 +749,14 @@
     if (!feed.dataset || !feed.dataset.follow) return;
     const box = feed.closest("[data-scroll]");
     const nb = document.querySelector("[data-newbelow]");
-    if (box && nb && box.scrollTop + box.clientHeight < box.scrollHeight - 40) nb.hidden = false;
+    if (box && nb && ev.detail?.newBelow && !feed._atBottom) nb.hidden = false;
   });
   document.addEventListener("scroll", (ev) => {
     const box = ev.target;
+    if (box.matches && box.matches("[data-scroll]")) {
+      const feed = box.querySelector("[data-follow]");
+      if (feed) feed._atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
+    }
     const nb = document.querySelector("[data-newbelow]");
     if (nb && box.matches && box.matches("[data-scroll]") && box.scrollTop + box.clientHeight >= box.scrollHeight - 40) {
       nb.hidden = true;
@@ -581,6 +769,12 @@
     if (feed) toBottom(feed);
     nb.hidden = true;
   });
+
+  document.addEventListener("load", (ev) => {
+    if (!ev.target.matches || !ev.target.matches("img")) return;
+    const feed = ev.target.closest("[data-follow]");
+    if (feed && feed._atBottom) toBottom(feed);
+  }, true);
 
   // Reply to part of a message: select text in the chat's feed and a "Reply" button appears by it; it puts the text,
   // quoted ("> "), in the composer, where the rest of the message is written.
@@ -658,6 +852,22 @@
     const box = document.querySelector("form.composer textarea");
     if (b && box) quoteText(b.closest("[data-raw]").dataset.raw, box);
   });
+  // Retry fills the composer with the message that failed. It does not send: sending would run the request again.
+  document.addEventListener("click", (ev) => {
+    const b = ev.target.closest && ev.target.closest("[data-retry]");
+    if (!b) return;
+    const box = document.querySelector("form.composer textarea");
+    if (!box) return;
+    const text = b.dataset.retry;
+    if (!text) return;
+    if (box.value && box.value !== text && !confirm("Replace your draft with the failed message?")) return;
+    if (box.value !== text) {                  // a second click must not append a copy
+      box.value = text;
+      box.dispatchEvent(new Event("input", { bubbles: true }));   // a draft, and a new message id
+    }
+    box.focus();
+    box.setSelectionRange(text.length, text.length);
+  });
 
   let quoteTimer = null;
   document.addEventListener("selectionchange", () => {
@@ -673,19 +883,25 @@
   function seenSet(v) {
     try { localStorage.setItem("shaft.seen", JSON.stringify(v)); } catch (e) { /* private window: no marks kept */ }
   }
-  function markRail(rail) {
+  function seenFeed() {
+    if (document.visibilityState !== "visible") return;
     const seen = seenGet();
     let changed = false;
-    rail.querySelectorAll("a[data-inst]").forEach(a => {
-      const last = a.dataset.last || "";
-      if (a.classList.contains("on") && document.visibilityState === "visible") {
-        if (last && seen[a.dataset.inst] !== last) { seen[a.dataset.inst] = last; changed = true; }
+    document.querySelectorAll(".feed [data-seen-reply]").forEach(reply => {
+      const { seenInst: inst, seenReply: last } = reply.dataset;
+      if (reply.getClientRects().length && last && (seen[inst] || "") < last) {
+        seen[inst] = last;
+        changed = true;
       }
-      // the chat on screen is unread too while this tab is hidden: the title says a reply landed
-      const away = !a.classList.contains("on") || document.visibilityState !== "visible";
-      a.classList.toggle("unread", !!last && away && (seen[a.dataset.inst] || "") < last);
     });
     if (changed) seenSet(seen);
+  }
+  function markRail(rail) {
+    const seen = seenGet();
+    rail.querySelectorAll("a[data-inst]").forEach(a => {
+      const last = a.dataset.last || "";
+      a.classList.toggle("unread", !!last && (seen[a.dataset.inst] || "") < last);
+    });
     const unread = rail.querySelectorAll("a.unread").length;
     document.querySelectorAll("[data-toggle-nav]").forEach(b => b.classList.toggle("news", unread > 0));
     if (navigator.setAppBadge) {                    // the Home Screen icon's count: an app shows no tab title
@@ -694,8 +910,13 @@
     document.title = document.title.replace(/^\(\d+\) /, "");
     if (unread) document.title = `(${unread}) ${document.title}`;
   }
+  function unreadState() {
+    seenFeed();                                    // only rendered current-chat replies carry these attributes
+    const rail = document.querySelector("nav .rail");
+    if (rail) markRail(rail);
+  }
   // Notifications (docs/plans/PLAN-pwa P4): Web Push, the only way a reply reaches a phone whose app is closed or locked (an
-  // iPhone stops a page's scripts in the background). The button says what is true on this device.
+  // iPhone stops a page's scripts in the background). "On" means SHAFT has this device's subscription, not only the browser.
   const standalone = () => window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
   const ios = () => /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   function keyBytes(b64) {
@@ -708,7 +929,14 @@
     }
     if (Notification.permission === "denied") return "blocked";
     const reg = await navigator.serviceWorker.ready;
-    return (await reg.pushManager.getSubscription()) ? "on" : "off";
+    if (!(await reg.pushManager.getSubscription())) return "off";
+    try {                                    // a later visit: SHAFT may have dropped this device since
+      const r = await fetch("/push/status", { credentials: "same-origin", cache: "no-store" });
+      if (!r.ok) return "incomplete";
+      return (await r.json()).subscribed ? "on" : "incomplete";
+    } catch (e) {
+      return "incomplete";
+    }
   }
   async function notifyButton() {
     const b = document.querySelector("[data-notify]");
@@ -719,42 +947,57 @@
     b.disabled = state === "blocked" || state === "home";
     b.textContent = { home: "For notifications, add SHAFT to your Home Screen (Share → Add to Home Screen)",
                       blocked: "Notifications are blocked for SHAFT in this browser's settings",
-                      on: "Notifications on — turn off", off: "Notify me of replies" }[state] || "";
+                      on: "Notifications on — turn off",
+                      incomplete: "Notifications incomplete — retry",
+                      off: "Notify me on this device" }[state] || "";
   }
   async function post(url, body) {
     const r = await fetch(url, { method: "POST", credentials: "same-origin", body,
                                  headers: { "X-CSRF-Token": csrf(), "Content-Type": "application/json" } });
+    if (pairAgain(r)) return false;
     toast(textOf(await r.text()) || `HTTP ${r.status}`, !r.ok);
     return r.ok;
   }
   document.addEventListener("click", async (ev) => {
     const b = ev.target.closest && ev.target.closest("[data-notify]");
     if (!b || b.disabled) return;
+    let sub = null;                          // set only while a browser subscription is not yet accepted by SHAFT
     try {
       const reg = await navigator.serviceWorker.ready;
       if (b.dataset.state === "on") {
-        const sub = await reg.pushManager.getSubscription();
-        if (sub) await sub.unsubscribe();
-        await post("/push/unsubscribe", "{}");
+        // the browser drops it only after SHAFT has: a failed unsubscribe must not read as off
+        if (await post("/push/unsubscribe", "{}")) {
+          sub = await reg.pushManager.getSubscription();
+          if (sub) await sub.unsubscribe();
+          sub = null;
+        }
       } else {
         if (await Notification.requestPermission() !== "granted") { notifyButton(); return; }
-        const r = await fetch("/push/key", { credentials: "same-origin" });
-        const { key, error } = await r.json();
-        if (!key) throw new Error(error || "no key");
-        const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(key) });
-        await post("/push/subscribe", JSON.stringify(sub));
+        sub = await reg.pushManager.getSubscription();   // incomplete: send the one the browser already has
+        if (!sub) {
+          const r = await fetch("/push/key", { credentials: "same-origin" });
+          if (pairAgain(r)) return;
+          const { key, error } = await r.json();
+          if (!key) throw new Error(error || "no key");
+          sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(key) });
+        }
+        if (!await post("/push/subscribe", JSON.stringify(sub))) {
+          try { await sub.unsubscribe(); } catch (e) { /* refused: the button must not say on */ }
+        }
+        sub = null;
       }
     } catch (e) {
+      if (sub) { try { await sub.unsubscribe(); } catch (e2) { /* the button must not say on */ } }
       toast(`Notifications: ${e.message}`, true);
     }
     notifyButton();
   });
   document.addEventListener("shaft:swapped", (ev) => {
-    if (ev.target.classList && ev.target.classList.contains("rail")) markRail(ev.target);
+    if (ev.target.classList && (ev.target.classList.contains("rail") || ev.target.classList.contains("feed"))) unreadState();
   });
-  document.addEventListener("visibilitychange", () => {
-    const rail = document.querySelector("nav .rail");
-    if (rail) markRail(rail);                          // back on the tab: the chat on screen is seen
+  document.addEventListener("visibilitychange", unreadState);
+  window.addEventListener("storage", (ev) => {
+    if (ev.key === "shaft.seen" || ev.key === null) unreadState();
   });
 
   // The documents panel (docs/plans/PLAN-webui-chat §3): a card in a reply or a name in its list opens that document in the
@@ -766,6 +1009,76 @@
     for (const k of ["doc", "thread", "list"]) poll.searchParams.delete(k);
     poll.searchParams.set(doc ? "doc" : "list", doc || "1");
     panel.dataset.poll = poll.pathname + poll.search;
+  }
+  function docDirty(view) {
+    return view.querySelector("form.docedit textarea").value !== view.querySelector("textarea.raw").value;
+  }
+  function docDraftKey(form) {
+    return `shaft.draft.doc.${form.dataset.post}.${form.querySelector("input[name=path]").value}`;
+  }
+  function clearDocDraft(form) {
+    try { localStorage.removeItem(docDraftKey(form)); } catch (e) { /* no storage */ }
+  }
+  function keepDocDraft(form) {
+    const view = form.closest(".docview");
+    if (!docDirty(view)) { clearDocDraft(form); return; }
+    try {
+      localStorage.setItem(docDraftKey(form), JSON.stringify({
+        text: form.querySelector("textarea").value,
+        sha: form._draftSha || form.querySelector("input[name=sha]").value,
+      }));
+    } catch (e) { /* no storage: beforeunload still warns */ }
+  }
+  function restoreDocDraft(view) {
+    const form = view.querySelector("form.docedit");
+    if (!form || view.classList.contains("editing")) return;
+    try {
+      const draft = JSON.parse(localStorage.getItem(docDraftKey(form)));
+      if (!draft || typeof draft.text !== "string" || typeof draft.sha !== "string") return;
+      const sha = form.querySelector("input[name=sha]");
+      const note = form.querySelector("[data-doc-draft]");
+      note.textContent = draft.sha !== sha.value
+        ? "Unsaved draft restored — started from an older version" : "Unsaved draft restored";
+      form.querySelector("textarea").value = draft.text;
+      sha.value = draft.sha;
+      form._draftSha = draft.sha;
+      editing(view, true);
+    } catch (e) { /* no usable draft */ }
+  }
+  window.addEventListener("beforeunload", (ev) => {
+    const view = document.querySelector("#docs .docview.editing");
+    if (!view || !docDirty(view)) return;
+    keepDocDraft(view.querySelector("form.docedit"));
+    ev.preventDefault();
+    ev.returnValue = "";
+  });
+  function leaveDoc(next) {
+    const view = document.querySelector("#docs .docview.editing");
+    if (!view) { next(); return; }
+    const form = view.querySelector("form.docedit");
+    if (form.dataset.busy) return;
+    if (!docDirty(view)) { editing(view, false); next(); return; }
+    const old = form.querySelector("[data-doc-choice]");
+    if (old) old.remove();
+    const prompt = document.createElement("div");
+    prompt.dataset.docChoice = "";
+    prompt.setAttribute("role", "group");
+    prompt.setAttribute("aria-label", "Unsaved changes");
+    prompt.textContent = "Save your changes? ";
+    for (const label of ["Save", "Discard", "Stay"]) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      button.addEventListener("click", () => {
+        if (form.dataset.busy) return;
+        prompt.remove();
+        if (label === "Save") { form._afterDocSave = next; form.requestSubmit(); }
+        if (label === "Discard") { clearDocDraft(form); editing(view, false); next(); }
+      });
+      prompt.appendChild(button);
+    }
+    form.appendChild(prompt);
+    prompt.lastElementChild.focus();
   }
   function docsList() {
     const panel = document.getElementById("docs");
@@ -785,6 +1098,10 @@
     const view = document.querySelector("#docs .docview.editing");
     if (view && view.querySelector("form.docedit textarea").value !== view.querySelector("textarea.raw").value
         && !window.confirm("Drop your changes?")) return;
+    if (view) {
+      if (view.querySelector("form.docedit").dataset.busy) return;
+      clearDocDraft(view.querySelector("form.docedit"));
+    }
     docsList();
   });
   document.addEventListener("click", (ev) => {
@@ -793,12 +1110,14 @@
     if (!a || !panel || ev.metaKey || ev.ctrlKey) return;
     ev.preventDefault();
     const doc = a.dataset.openDoc;
-    docsPoll(panel, doc);
-    const u = new URL(location.href);
-    u.searchParams.set("doc", doc);
-    history.replaceState(null, "", u);
-    if (panel._tick) panel._tick();
-    showDocs(true);                                 // closed, or on a phone a sheet not yet open: open it
+    leaveDoc(() => {
+      docsPoll(panel, doc);
+      const u = new URL(location.href);
+      u.searchParams.set("doc", doc);
+      history.replaceState(null, "", u);
+      if (panel._tick) panel._tick();
+      showDocs(true, a);                              // closed, or on a phone a sheet not yet open: open it
+    });
   });
   // Editing a document: the rendered view becomes its Markdown in a box; the panel stops refreshing until Save or
   // Cancel, and Save's compare-and-set refuses if the instance wrote it meanwhile (the box keeps your text).
@@ -807,6 +1126,8 @@
     view.querySelector(".docmd").hidden = on;
     view.querySelector("form.docedit").hidden = !on;
     if (on) {
+      const form = view.querySelector("form.docedit");
+      if (!form._draftSha) form._draftSha = form.querySelector("input[name=sha]").value;
       const box = view.querySelector("form.docedit textarea");
       box.focus();
       grow(box, 0.7);
@@ -819,13 +1140,23 @@
     if (panel._tick) panel._tick();
   }
   // The separate comment composer shares the page's request and feedback conventions.
-  window.shaftWeb = { csrf, toast, textOf, refreshDocs };
+  window.shaftWeb = { csrf, toast, textOf, refreshDocs, pairAgain };
 
-  function docSaved(form, doc) {
+  function docSaved(form, doc, typed, sha) {
     const panel = document.getElementById("docs");
     const view = form.closest(".docview");
     if (view) {
+      form.querySelector("input[name=sha]").value = sha;
+      form._draftSha = sha;
+      view.querySelector("textarea.raw").value = typed;
+      form.querySelector("[data-doc-draft]").textContent = "";
+      clearDocDraft(form);
+      if (form.querySelector("textarea").value !== typed) {
+        keepDocDraft(form);
+        return;
+      }
       editing(view, false);
+      if (form._afterDocSave) { form._afterDocSave(); return; }
       const edit = view.querySelector("[data-edit-doc]");
       if (edit) edit.focus();                       // focus where the editor was, not lost on the page
     }
@@ -843,30 +1174,112 @@
   function docsAria() {                             // 📄 says whether the panel is on screen, however it got there
     document.querySelectorAll("[data-show-docs]").forEach(b => b.setAttribute("aria-expanded", String(docsOn())));
   }
-  function showDocs(on) {
+  let sheet = null;
+  const sheetOpeners = { docs: "[data-show-docs]", nav: ".chathead [data-toggle-nav]" };
+  function sheetFocusables(root) {
+    return [...root.querySelectorAll('button, a[href], input, textarea, select, summary, [tabindex], [contenteditable]')]
+      .filter(el => !el.disabled && el.tabIndex >= 0 && !el.closest("[inert]") && el.getClientRects().length);
+  }
+  function sheetRoots() {
+    // The document comment composer lives on body so a document refresh cannot destroy it.
+    return [sheet.panel, ...(sheet.kind === "docs" ? [document.getElementById("comment-box")] : [])].filter(Boolean);
+  }
+  function focusSheet() {
+    const close = sheet.panel.querySelector(sheet.kind === "nav" ? ".closenav" : "[data-close-docs]");
+    (close || sheetFocusables(sheet.panel)[0] || sheet.panel).focus();
+  }
+  function syncSheets(opener) {
+    const grid = document.querySelector(".chatgrid");
+    if (!grid) return;
+    const nav = document.querySelector("nav"), docs = document.getElementById("docs");
+    const fixed = el => el && el.getClientRects().length && getComputedStyle(el).position === "fixed";
+    // Read the actual layout: Documents also becomes a sheet at the chat-area container breakpoint.
+    const kind = document.body.classList.contains("navopen") && fixed(nav) ? "nav" : fixed(docs) ? "docs" : null;
+    const panel = kind === "nav" ? nav : docs;
+    if (sheet && (sheet.kind !== kind || sheet.panel !== panel)) {
+      const old = sheet;
+      old.inert.forEach(el => el.removeAttribute("inert"));
+      old.attrs.forEach(([key, value]) => value === null ? old.panel.removeAttribute(key) : old.panel.setAttribute(key, value));
+      sheet = null;
+      const back = old.opener && old.opener.isConnected ? old.opener : document.querySelector(sheetOpeners[old.kind]);
+      if (back && back.getClientRects().length) back.focus();
+      else if (old.panel.getClientRects().length) {
+        const first = sheetFocusables(old.panel)[0];
+        if (first) first.focus();                   // the phone opener is hidden beside the desktop rail
+      }
+    }
+    if (kind && !sheet) {
+      sheet = { kind, panel, opener: opener || document.querySelector(sheetOpeners[kind]), inert: [],
+        attrs: ["role", "aria-modal", "aria-label", "tabindex", "aria-owns"].map(k => [k, panel.getAttribute(k)]) };
+      panel.setAttribute("role", "dialog");
+      panel.setAttribute("aria-modal", "true");
+      panel.setAttribute("aria-label", kind === "nav" ? "Chats and pages" : "Documents");
+      panel.setAttribute("tabindex", "-1");
+      if (kind === "docs") panel.setAttribute("aria-owns", "comment-box comment-sel");
+      // Isolate siblings at each level, never an ancestor of the dialog. Leave live regions on body audible.
+      for (let branch = panel; branch !== document.body && branch.parentElement; branch = branch.parentElement) {
+        for (const sibling of branch.parentElement.children) {
+          const live = ["toast", "netnote", "announce"].includes(sibling.id);
+          const comment = kind === "docs" && ["comment-box", "comment-sel"].includes(sibling.id);
+          if (sibling !== branch && !live && !comment && !sibling.hasAttribute("inert")) {
+            sibling.setAttribute("inert", "");
+            sheet.inert.push(sibling);
+          }
+        }
+      }
+      focusSheet();
+    } else if (sheet && !sheetRoots().some(root => root.contains(document.activeElement))) {
+      focusSheet();                               // a polled document replaced the focused control
+    }
+    docsAria();
+    document.querySelectorAll("[data-toggle-nav]").forEach(b => b.setAttribute("aria-expanded", String(kind === "nav")));
+  }
+  function showNav(on, opener) {
+    document.body.classList.toggle("navopen", on);
+    syncSheets(opener);
+  }
+  function showDocs(on, opener) {
     const grid = document.querySelector(".chatgrid");
     if (!grid) return;
     grid.classList.toggle("showdocs", on);
     grid.classList.toggle("hidedocs", !on);
     try { if (on) localStorage.removeItem("shaft.docs.closed"); else localStorage.setItem("shaft.docs.closed", "1"); }
     catch (e) { /* no storage: it opens again on the next page */ }
-    docsAria();
+    syncSheets(opener);
+  }
+  function chatHeaderState(el) {
+    if (!el.querySelector(".chathead")) return;
+    notifyButton();
+    syncSheets();
+    const rail = document.querySelector("nav .rail");
+    if (rail) markRail(rail);
   }
   document.addEventListener("shaft:swapped", (ev) => {   // an instance's first document opens the panel beside the chat
-    if (ev.target.id === "docs") docsAria();
+    if (ev.target.id === "docs") {
+      syncSheets();
+      ev.target.querySelectorAll(".docview").forEach(restoreDocDraft);
+    }
+    chatHeaderState(ev.target);
   });
   document.addEventListener("click", (ev) => {           // 📄 Documents: open or close the panel
-    if (!(ev.target.closest && ev.target.closest("[data-show-docs]"))) return;
-    if (document.getElementById("docs")) showDocs(!docsOn());
+    const button = ev.target.closest && ev.target.closest("[data-show-docs]");
+    if (!button) return;
+    if (document.getElementById("docs")) showDocs(!docsOn(), button);
   });
   document.addEventListener("click", (ev) => {
     const edit = ev.target.closest && ev.target.closest("[data-edit-doc]");
     const cancel = ev.target.closest && ev.target.closest("[data-cancel-edit]");
-    if (edit) editing(edit.closest(".docview"), true);
+    if (edit) { restoreDocDraft(edit.closest(".docview")); editing(edit.closest(".docview"), true); }
     if (cancel) {
       const view = cancel.closest(".docview");
+      const form = view.querySelector("form.docedit");
+      if (form.dataset.busy) return;
       const box = view.querySelector("form.docedit textarea");
       if (box.value !== view.querySelector("textarea.raw").value && !window.confirm("Drop your changes?")) return;
+      clearDocDraft(form);
+      const choice = form.querySelector("[data-doc-choice]");
+      if (choice) choice.remove();
+      form.querySelector("[data-doc-draft]").textContent = "";
       box.value = view.querySelector("textarea.raw").value;
       editing(view, false);
     }
@@ -888,14 +1301,21 @@
       return;
     }
     const open = t.matches("[data-toggle-nav]") ? !document.body.classList.contains("navopen") : false;
-    document.body.classList.toggle("navopen", open);
-    document.querySelectorAll("[data-toggle-nav]").forEach(b => b.setAttribute("aria-expanded", String(open)));
+    showNav(open, open ? t : null);
   });
   document.addEventListener("keydown", (ev) => {
-    if (ev.key !== "Escape") return;
-    document.body.classList.remove("navopen");
-    const grid = document.querySelector(".chatgrid");
-    if (grid) { grid.classList.remove("showdocs"); docsAria(); }    // a phone's sheet; beside the chat, ✕ or 📄
+    if (!sheet) return;
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      if (sheet.kind === "nav") showNav(false); else showDocs(false);
+    } else if (ev.key === "Tab") {
+      const items = sheetRoots().flatMap(sheetFocusables);
+      const at = items.indexOf(document.activeElement);
+      ev.preventDefault();
+      if (!items.length) sheet.panel.focus();
+      else items[at < 0 ? (ev.shiftKey ? items.length - 1 : 0) :
+        (at + (ev.shiftKey ? -1 : 1) + items.length) % items.length].focus();
+    }
   });
   function fitViewport() {
     const vv = window.visualViewport;
@@ -917,7 +1337,11 @@
     if (grid) {
       document.body.classList.add("chatapp");
       try { if (localStorage.getItem("shaft.docs.closed")) grid.classList.add("hidedocs"); } catch (e) { /* none */ }
-      docsAria();
+      syncSheets();
+      window.matchMedia("(max-width: 720px), (pointer: coarse) and (max-height: 520px)")
+        .addEventListener("change", () => syncSheets());
+      const observer = new ResizeObserver(() => syncSheets());
+      observer.observe(grid.parentElement);        // main is the chat-area query container
     }
     fitViewport();
     if ("serviceWorker" in navigator) {             // the app's shell: offline page and cached static files
@@ -925,7 +1349,9 @@
     }
     document.querySelectorAll("[data-poll]").forEach(poll);
     document.querySelectorAll("[data-follow]").forEach(el => { decorate(el); toBottom(el); });  // opens on the latest
+    unreadState();
     document.querySelectorAll(".docview").forEach(decorate);
+    document.querySelectorAll(".docview").forEach(restoreDocDraft);
     restoreDraft();
     notifyButton();
   }

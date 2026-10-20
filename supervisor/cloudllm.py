@@ -8,9 +8,10 @@ Messages API (raw HTTP, like the judge), and the reply back. Models named "openr
 Rules:
 
 - Only models in SHAFT_CLOUD_MODELS (operator's choice) are allowed.
-- OpenRouter requests go only to the provider the operator chose (NovitaAI), with no fallback, and only if it
-  neither collects nor retains data (SHAFT_OPENROUTER_PROVIDER, default {"only": ["novita"],
-  "allow_fallbacks": false, "data_collection": "deny", "zdr": true, "require_parameters": true}): an
+- OpenRouter requests go only to the providers the operator chose — NovitaAI first, DeepInfra if Novita is down
+  (2026-10-20), never any other — and only if they neither collect nor retain data (SHAFT_OPENROUTER_PROVIDER,
+  default {"only": ["novita", "deepinfra"], "order": ["novita", "deepinfra"], "allow_fallbacks": false,
+  "data_collection": "deny", "zdr": true, "require_parameters": true}): an
   instance's prompt carries its whole memory, including what it knows about the operator. If the provider does
   not qualify, the call fails and says so — no silent fallback.
 - Spending per instance per day is capped (SHAFT_CLOUD_DAILY_USD, default 8: kant on Opus 5.5, 4 wakes a day) and logged in
@@ -45,10 +46,12 @@ OPENROUTER_API = "https://openrouter.ai/api/v1/chat/completions"
 CLOUD_MODELS, _ = knob(
     "SHAFT_CLOUD_MODELS", "claude-haiku-5-5,claude-opus-5-5,openrouter/xiaomi/mimo-v2.6-pro", cloud_models, "the cloud "
     "models an instance may run on (through the broker)", group="Models and spend", services=("runs", "api", "web"))
-# The operator's choice of provider (2026-10-13): NovitaAI only, no fallback; plus the data policy.
+# The operator's choice of provider (2026-10-13): NovitaAI; DeepInfra only if Novita is down (2026-10-20); no other
+# provider ("only" + allow_fallbacks false); plus the data policy.
 OPENROUTER_PROVIDER, _ = knob(
     "SHAFT_OPENROUTER_PROVIDER",
-    '{"only": ["novita"], "allow_fallbacks": false, "data_collection": "deny", "zdr": true, "require_parameters": true}',
+    '{"only": ["novita", "deepinfra"], "order": ["novita", "deepinfra"], "allow_fallbacks": false, '
+    '"data_collection": "deny", "zdr": true, "require_parameters": true}',
     json_object, "OpenRouter's provider routing for every openrouter/ call (JSON): which providers, and the data policy",
     group="Models and spend", services=("runs", "api"))
 DAILY_USD, _ = knob(

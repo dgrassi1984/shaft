@@ -16,9 +16,9 @@ shaft top                       # control panel, tabs 0–9: overview (state, no
                                 #   · services · transcripts (0: every finished cycle, sleep and reflection, and
                                 #   every conversation with you, in full; tool calls, results, write-up; f
                                 #   filters, t shows a conversation's thinking). Actions ask y/n and run the matching shaft subcommand: cycle,
-                                #   pause/resume, sleep, update, tools, write/reply, A/A trial, battery,
-                                #   services and autonomy (a scheduler restart is refused while its runs would
-                                #   be killed). a writes each instance a one-line recap; what it is doing now
+                                #   pause/resume, K kill, D delete (type the name), sleep, update, tools, write/reply, A/A trial, battery,
+                                #   services and autonomy (a restart that would kill the scheduler's runs, or cut
+                                #   off runs using api/model/embed, asks to be forced, naming them; logged). a writes each instance a one-line recap; what it is doing now
                                 #   and did in the last hour; by a small model from its own records
                                 #   (SHAFT_RECAP_MODEL, default claude-haiku-5-5; supervisor/recap.py, usage is recorded in the recaps cost category). ? lists the keys; --once prints a text snapshot
 shaft web on|off|status|pair|unpair   # the same control panel in a browser, tailnet only, plus chat, config,
@@ -70,6 +70,8 @@ shaft limits [name] [wake-floor <min>|cloud-cap <usd>|off]  # your own limits fo
 shaft jobs [name] [on|off]           # instances' scheduled jobs: their plugins on a timer (runs, errors, wakes)
 shaft tools <name> [on|off <tool>]   # an instance's supervisor tools, e.g. off delegate_coding (operator-only:
                                      # kept in .supervisor/, so the instance cannot switch it back on)
+shaft channel <name> [auto|web|telegram]   # where its messages to you notify you (integrations.md): auto = where
+                                     # you last wrote to it; an open conversation's channel comes first
 shaft google login <alias> <address> [--client <name>]   # log in a Google account: Gmail + Calendar, read-only
 shaft google [migrate]               # accounts, clients, granted scopes · migrate: move PLAN-mail's account files
 shaft mail <name> grant|revoke <alias> <label>   # the label's threads an instance may read · shaft mail <name> off
@@ -77,6 +79,15 @@ shaft mail [name]                    # accounts and grants
 shaft calendar <name> grant|revoke <alias> primary|<title>|<id>   # one calendar it may read · shaft calendar <name> off
 shaft calendar [name] · shaft calendar calendars <alias>          # grants · an account's calendars, to pick one
 shaft pause [name] · shaft resume [name] · shaft check [name] · shaft setup · shaft list
+shaft kill <name> [--wait S]         # pause it AND stop what it runs now: a cycle, a reply, a job, the battery,
+                                     # a trial replay; the run still settles (journal note, gate, commit). Waits up
+                                     # to S s (120) for that; shaft resume <name> undoes the pause
+shaft delete <name> [--yes] [--no-archive]   # remove it and every trace of it: folder, branch instance/<name>,
+                                     # mind store, its files and its rows in .supervisor/ (ledgers and logs too),
+                                     # its Telegram token. Refused while it runs (kill first); asks you to type the
+                                     # name (--yes: no question). Archive: .supervisor/deleted/<name>-<stamp>.tar.gz
+                                     # (mind, branch bundle, folder without .venv/.uv/.tmp, records, purged rows;
+                                     # RESTORE.md inside). Afterwards `shaft new <name>` works again
 
 shaft trial list [name]                    # trials of proposed changes (an instance asks with its `trial` tool)
 shaft trial show <name> <id>               # one trial: each replayed cycle, outcome, the report it was sent

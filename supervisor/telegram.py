@@ -10,8 +10,9 @@ and logged; pairing again needs `shaft telegram unpair` in your terminal.
   into the journal after SHAFT_IDLE_MINUTES). Replying to one of its messages quotes it — and answers it, if it
   was a question. A message sent while it is still replying joins that reply at its next step (/v1/chat/interject);
   one that arrives too late for it (the answer was already being written) is answered straight after. /new starts a new conversation, /wake starts a cycle now, /status says what it is doing.
-- Instance → you: every message an instance sends the operator (send_message to "operator") also arrives from its
-  bot, read from the supervisor's message log (.supervisor/messages.jsonl). No daily limit (the operator).
+- Instance → you: a message an instance sends the operator (send_message to "operator") that is routed to Telegram
+  (channel.py: an open Telegram conversation, the instance's setting, or where you last wrote to it) arrives from its
+  bot, read from the supervisor's message log (.supervisor/messages.jsonl, `alert`). No daily limit (the operator).
 - Full text both ways (the operator accepted that Telegram's servers see it: bot chats are not end-to-end encrypted).
 - Nothing listens for Telegram: the service long-polls getUpdates, so no port is opened and no webhook, tunnel
   or Funnel is needed. Tokens stay in the supervisor's .env and never reach an instance or a log line.
@@ -487,7 +488,8 @@ def _api(route: str, name: str, messages: list[dict], timeout: float) -> dict:
     req = urllib.request.Request(f"http://127.0.0.1:{api.PORT}/v1/chat/{route}",
                                  data=json.dumps({"model": name, "messages": messages}).encode(),
                                  headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}",
-                                          "Tailscale-User-Login": logins[0], "User-Agent": "Telegram"})
+                                          "Tailscale-User-Login": logins[0], "X-Shaft-Channel": "telegram",
+                                          "User-Agent": "Telegram"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.load(r)
@@ -558,6 +560,9 @@ def handle_update(name: str, token: str, chat: Chat, upd: dict) -> None:
 def poll(name: str, token: str, stop: threading.Event) -> None:
     chat = Chat(name, token)
     while not stop.is_set():
+        if name not in instance_names():   # deleted while the service runs (shaft delete): its bot answers no more
+            log(f"telegram: {name} no longer exists — its bot stops")
+            return
         offset = (load().get("offsets") or {}).get(name, 0)
         try:
             updates = call(token, "getUpdates", http_timeout=POLL_S + 15, offset=offset, timeout=POLL_S,
@@ -566,6 +571,8 @@ def poll(name: str, token: str, stop: threading.Event) -> None:
             log(f"telegram: {name}'s bot: {e}")
             stop.wait(30)
             continue
+        if name not in instance_names():
+            continue   # left at the top of the loop, without recording an offset for a deleted instance
         for upd in updates or []:
             update(lambda s: s.setdefault("offsets", {}).__setitem__(name, upd["update_id"] + 1))
             threading.Thread(target=_safe, args=(handle_update, name, token, chat, upd), daemon=True).start()
@@ -588,17 +595,13 @@ def forward_new(toks: dict[str, str] | None = None) -> int:
     st = load()
     if owner is None or not toks:
         return 0
-    cursor = st.get("sent_cursor")
-    rows = [m for m in messages.history() if m["to"] == "operator"]
-    if cursor is None:
-        update(lambda s: s.__setitem__("sent_cursor", rows[-1]["ts"] + "|" + rows[-1]["file"] if rows else ""))
-        return 0
+    rows, end = messages.appended(_sent_offset(st))   # in the order logged (messages.appended: never by timestamp)
     sent = 0
-    for m in rows:
-        key = m["ts"] + "|" + m["file"]
-        if key <= cursor:
+    for m, after in rows:
+        if m.get("to") != "operator":
+            update(lambda s: s.__setitem__("sent_offset", after))
             continue
-        tok = toks.get(m["from"])
+        tok = toks.get(m["from"]) if m.get("alert") == "telegram" else None   # routed elsewhere: channel.py
         if tok:
             # it comes from the instance's own bot, so no "from <name>"; a question is marked: a reply answers it
             body = f"❓ **Question**\n\n{m['text']}" if m.get("kind") == "question" else m["text"]
@@ -620,9 +623,30 @@ def forward_new(toks: dict[str, str] | None = None) -> int:
             if m.get("kind") == "question":
                 update(lambda s: s.setdefault("questions", {}).__setitem__(f"{m['from']}:{ids[0]}", m["file"]))
             sent += 1
-        cursor = key
-        update(lambda s: s.__setitem__("sent_cursor", key))
+        update(lambda s: s.__setitem__("sent_offset", after))
+    update(lambda s: s.__setitem__("sent_offset", end))
     return sent
+
+
+def _sent_offset(st: dict) -> int | None:
+    """Where forwarding resumes in the message log: its byte offset — or, from a state that kept the older cursor (the
+    last forwarded row's "ts|file"), the start of the first row logged after it, so nothing is skipped or sent twice."""
+    if isinstance(st.get("sent_offset"), int):
+        return st["sent_offset"]
+    old = st.get("sent_cursor")
+    if old is None:
+        return None
+    from . import messages
+    rows, end = messages.appended(0)
+    start = 0
+    for m, after in rows:
+        if m.get("ts", "") + "|" + m.get("file", "") > old:
+            break
+        start = after
+    else:
+        start = end
+    update(lambda s: (s.__setitem__("sent_offset", start), s.pop("sent_cursor", None)))
+    return start
 
 
 def serve() -> int:

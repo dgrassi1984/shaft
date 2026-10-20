@@ -28,6 +28,7 @@ h2 { font-size: .95rem; margin: 0 0 .5rem; color: var(--dim); font-weight: 600; 
 .good { color: var(--good); }
 
 .shell { display: grid; grid-template-columns: 230px 1fr; min-height: 100vh; }
+.shell.single { grid-template-columns: minmax(0, 1fr); }
 nav { border-right: 1px solid var(--line); padding: 1rem .8rem; display: flex; flex-direction: column; gap: .2rem;
       position: sticky; top: 0; height: 100vh; overflow-y: auto; }
 nav .brand { font-weight: 700; letter-spacing: .08em; margin-bottom: .6rem; color: var(--text); padding: 0 .5rem; }
@@ -98,7 +99,9 @@ nav .unpair button { font-size: .8rem; color: var(--dim); width: 100%; }
 .stale { opacity: .55; }
 .stale-note { margin: 0 0 .5rem; font-weight: 600; }
 
-#toast { position: fixed; bottom: 1rem; left: 50%; transform: translateX(-50%); max-width: calc(100vw - 2rem);
+/* Layer order: menu 30, drop target 40, update notice 50, Documents sheet 55,
+   selection actions and Chats sheet 60, comment composer 61, network notice 70, toast 71. */
+#toast { position: fixed; z-index: 71; bottom: 1rem; left: 50%; transform: translateX(-50%); max-width: calc(100vw - 2rem);
          background: var(--text); color: var(--bg); padding: .55rem .9rem; border-radius: 8px; opacity: 0;
          pointer-events: none; transition: opacity .2s; }
 #toast.show { opacity: 1; }
@@ -191,12 +194,16 @@ img.attachment { max-width: 100%; max-height: 70vh; border-radius: 6px; border: 
 .actions { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; margin-top: .5rem; }
 form.act { display: inline; margin: 0; }
 button.act { font-size: .82rem; padding: .25rem .6rem; }
+button.act.danger:not(:disabled) { color: var(--bad); border-color: var(--bad); }   /* kill, delete: not a casual click */
 button.small { font-size: .78rem; padding: .15rem .5rem; }
 button:not(:disabled):hover { border-color: var(--accent); }
+button.force { color: var(--warn); border-color: var(--warn); }   /* overrides a guard: asked first */
 .card footer { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; margin-top: .5rem; }
 .card footer .actions { margin-top: 0; }
 .msglink { font-size: .82rem; }
 .alerts ul { list-style: none; margin: 0 0 .4rem; padding: 0; }
+.alerts details { margin: .15rem 0 .4rem; }
+.alerts summary { cursor: pointer; }
 .topline form.act { margin-left: auto; }
 form.msg { display: grid; gap: .4rem; margin: .4rem 0 .8rem; }
 form.msg label { display: grid; gap: .3rem; font-size: .9rem; }
@@ -213,6 +220,8 @@ table.config td.help { font-size: .8rem; max-width: 28rem; }
 table.config td { vertical-align: middle; }
 pre.diff:empty { display: none; }
 pre.diff { background: var(--bg); padding: .4rem .6rem; border-radius: 6px; border: 1px solid var(--line); }
+.diffstep { display: grid; gap: .4rem; }
+.diffstep[hidden] { display: none; }   /* display:grid would override the hidden attribute */
 form.drive { display: grid; gap: .4rem; }
 form.drive textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .82rem; }
 
@@ -221,14 +230,19 @@ form.drive textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospac
 .turn { padding: .5rem .7rem; border-radius: 8px; border: 1px solid var(--line); max-width: 52rem; }
 .turn.me { background: var(--bg); justify-self: end; }
 .turn.it { background: var(--panel); }
+.chat-day { justify-self: center; font-size: .8rem; margin: .2rem 0; }
 .turn.sent { border-style: dashed; }
 .turn.live { border-color: var(--talk); }
 .turn .who { font-size: .8rem; font-weight: 600; margin-bottom: .2rem; }
 .activity { font-size: .78rem; color: var(--dim); margin: .2rem 0 .4rem; }
+.turn .incomplete { font-weight: 600; }
+details.tech { margin: .3rem 0; font-size: .85rem; }
+details.tech > summary { cursor: pointer; }
+details.tech pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: .3rem 0 0; font-size: .78rem; }
 .activity div { max-height: 14rem; overflow-y: auto; }
 .activity p { margin: .1rem 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .atts { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .3rem; }
-img.thumb { max-width: 12rem; max-height: 9rem; border-radius: 6px; border: 1px solid var(--line); }
+img.thumb { width: 12rem; height: 9rem; max-width: 100%; object-fit: contain; border-radius: 6px; border: 1px solid var(--line); }
 form.composer { display: grid; gap: .4rem; margin: .6rem 0 1rem; position: sticky; bottom: 0; background: var(--bg);
                 padding: .4rem 0; }
 label.pick { font-size: .85rem; cursor: pointer; color: var(--accent); }
@@ -272,6 +286,7 @@ blockquote { margin: .3rem 0; padding: .1rem .6rem; border-left: 3px solid var(-
 details.menu > summary { list-style: none; cursor: pointer; font-size: 1.2rem; line-height: 1; padding: .1rem .55rem;
                          border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
 details.menu > summary::-webkit-details-marker { display: none; }
+details.menu.earliermenu > summary { font-size: .78rem; }   /* a word, sized like the header's small buttons */
 details.menu[open] > summary { border-color: var(--accent); }
 details.menu { position: relative; }
 .menubody { position: absolute; left: 0; top: 2.2rem; z-index: 30; background: var(--panel); border: 1px solid var(--line);
@@ -280,7 +295,8 @@ details.menu { position: relative; }
 .menupages a { padding: .25rem .4rem; border-radius: 5px; color: var(--text); }
 .menupages a:hover { background: var(--bg); }
 /* the chat fills the window: its feed scrolls in its own box, the composer stays at the bottom */
-main:has(> .chatgrid) { display: flex; flex-direction: column; height: 100vh; padding-bottom: .4rem; }
+main:has(> .chatgrid) { display: flex; flex-direction: column; height: 100vh; padding-bottom: .4rem;
+                            container: chat-area / inline-size; }
 .chatgrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: .8rem; flex: 1 1 auto; min-height: 0; }
 .chatgrid:has([data-back-docs]), .chatgrid:has(.doclist a) { grid-template-columns: minmax(20rem, 1fr) minmax(18rem, 1fr); }
 .chatgrid:not(:has(.doclist a)):not(:has([data-back-docs])):not(.showdocs) > aside.docs { display: none; }  /* none: all chat */
@@ -372,9 +388,9 @@ form.docedit textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monosp
 .md ol { margin: .2rem 0 .4rem; padding-left: 1.5rem; }
 .md li { margin: .1rem 0; }
 .md li > p { margin: .2rem 0; }
-.md li.task { list-style: none; margin-left: -1.1rem; }
-.md .task { display: inline-block; width: 1.1rem; color: var(--dim); }
-.md .task.done { color: var(--good); }
+.md li.task-item { list-style: none; margin-left: -1.1rem; }
+.md span.task { display: inline-block; width: 1.1rem; color: var(--dim); }
+.md span.task.done { color: var(--good); }
 .md h5, .md h6 { font-size: .88rem; margin: .7rem 0 .2rem; color: var(--dim); }
 .md hr { border: 0; border-top: 1px solid var(--line); margin: .8rem 0; }
 .md s { color: var(--dim); }
@@ -413,7 +429,8 @@ form.clearbtn { display: inline; margin: 0; }
 @media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
   /* The ⋯ menu as a sheet across the screen: anchored to its button, it ran off the right edge. */
   .menubody { position: fixed; left: .5rem; right: .5rem; top: 3.5rem; width: auto;
-              max-height: calc(100dvh - 4.5rem); overflow-y: auto; }
+              max-height: calc(100dvh - 4.5rem); overflow-y: auto;
+              padding-left: max(1rem, env(safe-area-inset-left)); padding-right: max(1rem, env(safe-area-inset-right)); }
 }
 
 /* An app on the Home Screen (docs/plans/PLAN-pwa P1): its status bar is translucent (black-translucent) and the page runs under
@@ -446,7 +463,8 @@ a.button { display: inline-block; padding: .45rem .9rem; border: 1px solid var(-
   body:has(.chatgrid) nav { display: none; }
   body.navopen:has(.chatgrid) nav { display: flex; flex-direction: column; flex-wrap: nowrap; align-items: stretch;
       position: fixed; inset: 0; z-index: 60; height: auto; background: var(--bg); overflow-y: auto; border: 0;
-      padding: calc(env(safe-area-inset-top) + .8rem) 1rem calc(env(safe-area-inset-bottom) + 1rem); }
+      padding: calc(env(safe-area-inset-top) + .8rem) max(1rem, env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 1rem)
+               max(1rem, env(safe-area-inset-left)); }
   body.navopen nav .rail { flex-direction: column; flex-wrap: nowrap; align-items: stretch; order: 0; }
   body.navopen nav .rail .group:first-child { display: block; }
   body.navopen nav a.inst { display: grid; border: 0; white-space: normal; }
@@ -454,7 +472,7 @@ a.button { display: inline-block; padding: .45rem .9rem; border: 1px solid var(-
   body.navopen .rail details.manage > a { display: flex; }
   body.navopen nav .unpair { margin: 1rem 0 0; }
   body.navopen nav .closenav { display: inline-flex; align-items: center; justify-content: center; position: absolute;
-      top: calc(env(safe-area-inset-top) + .5rem); right: 1rem; }    /* a phone has no Escape key */
+      top: calc(env(safe-area-inset-top) + .5rem); right: max(1rem, env(safe-area-inset-right)); }    /* a phone has no Escape key */
   body:has(.chatgrid) main { display: flex; flex-direction: column; height: 100%; min-height: 0;
       padding: .3rem .6rem calc(.3rem + env(safe-area-inset-bottom)); }
   body.kbd:has(.chatgrid) main { padding-bottom: .3rem; }    /* the keyboard covers the home indicator */
@@ -470,12 +488,24 @@ a.button { display: inline-block; padding: .45rem .9rem; border: 1px solid var(-
   .chatpage > form.composer { position: static; padding: 0; background: none; }
   .chatgrid > aside.docs { display: none; }
   .chatgrid.showdocs > aside.docs { display: block; position: fixed; inset: 0; z-index: 55; border: 0; border-radius: 0;
-      padding: calc(env(safe-area-inset-top) + .6rem) 1rem calc(env(safe-area-inset-bottom) + 1rem); overflow-y: auto; }
+      padding: calc(env(safe-area-inset-top) + .6rem) max(1rem, env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 1rem)
+               max(1rem, env(safe-area-inset-left)); overflow-y: auto; }
   .closedocs { margin-left: auto; }
 }
 
+/* Side by side needs 230 + (20 + 18 + .8 + 2 * 1.2) * 15 = 848px:
+   rail + chat/doc minimums + gap + main padding. Query the content width (38.8rem)
+   so larger text also gets a sheet before the columns overflow. The rail keeps its phone breakpoint. */
+@container chat-area (max-width: 38.8rem) {
+  .chatgrid { display: flex; flex-direction: column; }
+  .chatgrid > aside.docs { display: none; }
+  .chatgrid.showdocs > aside.docs { display: block; position: fixed; inset: 0; z-index: 55; border: 0; border-radius: 0;
+      padding: calc(env(safe-area-inset-top) + .6rem) max(1rem, env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 1rem)
+               max(1rem, env(safe-area-inset-left)); overflow-y: auto; }
+}
+
 /* docs/plans/PLAN-pwa P3 */
-#netnote { position: fixed; left: 50%; transform: translateX(-50%); top: calc(.4rem + env(safe-area-inset-top)); z-index: 45;
+#netnote { position: fixed; left: 50%; transform: translateX(-50%); top: calc(.4rem + env(safe-area-inset-top)); z-index: 70;
            background: var(--panel); border: 1px solid var(--warn); color: var(--text); border-radius: 8px;
            padding: .35rem .7rem; font-size: .85rem; max-width: calc(100vw - 1rem); box-shadow: 0 2px 10px rgba(0, 0, 0, .25); }
 .chip.over { border-color: var(--bad); color: var(--bad); }

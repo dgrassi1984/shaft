@@ -216,7 +216,7 @@ class RelayTest(ChatTest):
     def test_end_writes_it_up_through_the_api_and_the_next_message_starts_a_new_chat(self):
         chat, _ = web_chat.send("wren", ME, "hi", [])
         self.wait_idle(chat["id"])
-        self.assertIn("writes the conversation up", web_chat.end(chat["id"]))
+        self.assertIn("journal write-up requested", web_chat.end(chat["id"]))
         path, headers, body = [r for r in self.api.requests if r[0] == "/v1/chat/end"][0]
         self.assertEqual((headers["X-Shaft-Conversation"], body), (chat["id"], {"model": "wren"}))
         self.assertEqual(web_chat.load(chat["id"])["state"], "ended")
@@ -467,7 +467,7 @@ class ChatCentricTest(ChatRoutesTest):
         self.assertIn("earlier answer", body)
         self.assertIn("Your next message starts a new conversation", body)
         self.assertIn('data-post="/chat/wren/send"', body)
-        self.assertIn('<div class="earlier"><h3>Earlier web chats</h3>', body)       # in the ⋯ menu
+        self.assertIn('<summary data-focus="earlier">Earlier chats</summary>', body)  # #8: beside navigation
         self.assertIn(f"/i/wren/chat?id={old['id']}", body)
         frag = self.req("/fragment/chat/wren", cookie=self.cookie).body.decode()
         self.assertIn("earlier answer", frag)                                       # its refresh shows the same
@@ -822,6 +822,14 @@ class DocSaveRouteTest(DocsPanelTest):
         feed = self.req("/fragment/chat/wren", cookie=self.cookie).body.decode()
         self.assertIn("Your changes to plan.md go to wren with your next message", feed)
 
+    def test_issue_22_success_returns_the_saved_revision(self):
+        """Reverting #22 leaves typing during Save based on the obsolete revision."""
+        from supervisor import docs
+        (self.docs / "plan.md").write_text("one")
+        r = self.post(path="plan.md", text="two", sha=docs.sha(b"one"))
+        self.assertEqual(r.status, 200)
+        self.assertEqual(r.headers["X-Doc-Sha"], docs.sha(b"two"))
+
     def test_a_stale_save_is_refused_shows_what_changed_and_writes_nothing(self):
         from supervisor import docs
         (self.docs / "plan.md").write_text("one\nby the instance\n")
@@ -873,7 +881,7 @@ class ClearTest(DocsInChatTest):
     def test_an_open_chat_is_ended_then_cleared_and_kept(self):
         chat, _ = web_chat.send("wren", ME, "hello", [])
         self.wait_idle(chat["id"])
-        said = web_chat.clear("wren")
+        said = web_chat.clear("wren", chat["id"])
         self.assertTrue(said.startswith("cleared · ended"), said)
         self.assertEqual(len([r for r in self.api.requests if r[0] == "/v1/chat/end"]), 1)   # written up
         c = web_chat.load(chat["id"])
@@ -884,14 +892,14 @@ class ClearTest(DocsInChatTest):
         self.assertEqual(web_chat.summary("wren"), {})
         self.assertIn(c, web_chat.chats("wren"))                   # still listed with the earlier chats
         with self.assertRaisesRegex(web_chat.Refused, "nothing to clear"):
-            web_chat.clear("wren")
+            web_chat.clear("wren", chat["id"])
 
     def test_an_ended_chat_is_only_hidden(self):
         chat, _ = web_chat.send("wren", ME, "hello", [])
         self.wait_idle(chat["id"])
         web_chat.end(chat["id"])
         ends = len([r for r in self.api.requests if r[0] == "/v1/chat/end"])
-        self.assertEqual(web_chat.clear("wren"), "cleared · it is kept in Earlier web chats")
+        self.assertEqual(web_chat.clear("wren", chat["id"]), "cleared · it is kept in Earlier web chats")
         self.assertEqual(len([r for r in self.api.requests if r[0] == "/v1/chat/end"]), ends)
         chat2, _ = web_chat.send("wren", ME, "again", [])          # the next message starts a new chat, shown
         self.assertNotEqual(chat2["id"], chat["id"])
@@ -903,7 +911,7 @@ class ClearTest(DocsInChatTest):
         chat, _ = web_chat.send("wren", ME, "long one", [])
         time.sleep(0.3)
         with self.assertRaisesRegex(web_chat.Refused, "stop the reply first"):
-            web_chat.clear("wren")
+            web_chat.clear("wren", chat["id"])
         self.api.hold.clear()
         self.wait_idle(chat["id"], 15)
 
@@ -912,7 +920,7 @@ class ClearTest(DocsInChatTest):
         chat, _ = web_chat.send("wren", ME, "hello", [])
         self.wait_idle(chat["id"])
         web_chat.doc_saved("wren", ME, "plan.md", "a\n", "a\nmine\n", "s1")
-        web_chat.clear("wren")
+        web_chat.clear("wren", chat["id"])
         chat2, _ = web_chat.send("wren", ME, "go on", [])
         c = self.wait_idle(chat2["id"])
         self.assertIn("[The operator edited notes/docs/plan.md:]", c["turns"][0]["content"])
@@ -926,13 +934,13 @@ class ClearTest(DocsInChatTest):
 
 class ClearRouteTest(ChatRoutesTest):
     def test_the_page_offers_clear_and_the_route_takes_the_page_token_only(self):
-        self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
+        chat = self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
                         {"role": "assistant", "content": "a", "ts": "2026-10-19T12:00:05"}], "ended")
         body = self.req("/i/wren/chat", cookie=self.cookie).body.decode()
         self.assertIn('data-post="/chat/wren/clear"', body)
         no = self.req("/chat/wren/clear", "POST", cookie=self.cookie, headers={"sec-fetch-site": "same-origin"})
         self.assertEqual(no.status, 403)
-        ok = self.req("/chat/wren/clear", "POST", cookie=self.cookie,
+        ok = self.req("/chat/wren/clear", "POST", cookie=self.cookie, body=f"cid={chat['id']}".encode(),
                       headers={"sec-fetch-site": "same-origin", "x-csrf-token": self.csrf(self.cookie)})
         self.assertEqual(ok.status, 200, ok.body)
         body = self.req("/i/wren/chat", cookie=self.cookie).body.decode()
@@ -1026,6 +1034,60 @@ class ArchivedClearTest(ChatRoutesTest):
 
 
 class ClearInHeaderTest(ChatRoutesTest):
+    def test_issue_10_18_header_refreshes_facts_actions_and_busy_warning(self):
+        """Reverting #10/#18 leaves the header frozen and Pause unchanged after pausing."""
+        page = self.req("/i/wren/chat", cookie=self.cookie).body.decode()
+        self.assertIn('data-poll="/fragment/chat/wren/header"', page)
+        first = self.req("/fragment/chat/wren/header", cookie=self.cookie)
+        self.assertEqual(first.status, 200)
+        self.assertIn('>Pause<', first.body.decode())
+        with mock.patch.object(web, "overview", return_value=snap(state="paused by you", model="different-model",
+                                                                usd_today=1.25)):
+            body = self.req("/fragment/chat/wren/header", cookie=self.cookie).body.decode()
+        self.assertIn('>Resume<', body)
+        self.assertNotIn('>Pause<', body)
+        self.assertIn('different-model · paused by you · $1.25 today', body)
+        self.assertIn('wren is paused by you now', body)
+        self.assertIn('details class="menu" data-key="chat-menu"', body)
+        idle = self.req("/fragment/chat/wren/header", cookie=self.cookie).body.decode()
+        self.assertNotIn('class="warn"', idle)
+        self.assertNotIn('textarea', body)
+        self.assertNotIn('id="docs"', body)
+        self.assertEqual(self.req("/fragment/chat/nobody/header", cookie=self.cookie).status, 404)
+
+    def test_issue_18_19_header_follows_chat_clear_and_earlier(self):
+        """Reverting #18/#19 keeps Clear absent or leaves its cid on the previous conversation."""
+        url = "/fragment/chat/wren/header"
+        self.assertNotIn('/chat/wren/clear', self.req(url, cookie=self.cookie).body.decode())
+        chat = self.chat_with([{"role": "user", "content": "hello", "ts": "2026-10-19T12:00:00"}], "ended")
+        body = self.req(url, cookie=self.cookie).body.decode()
+        self.assertIn('data-post="/chat/wren/clear"', body)
+        self.assertIn(f'name="cid" value="{chat["id"]}"', body)
+        headers = {"sec-fetch-site": "same-origin", "x-csrf-token": self.csrf(self.cookie)}
+        cleared = self.req("/chat/wren/clear", "POST", cookie=self.cookie, headers=headers,
+                           body=f"cid={chat['id']}".encode())
+        self.assertEqual(cleared.status, 200, cleared.body)
+        body = self.req(url, cookie=self.cookie).body.decode()
+        self.assertNotIn('/chat/wren/clear', body)
+        self.assertIn(f'/i/wren/chat?id={chat["id"]}', body)
+        next_chat = self.chat_with([{"role": "user", "content": "next", "ts": "2026-10-19T13:00:00"}])
+        body = self.req(url, cookie=self.cookie).body.decode()
+        self.assertIn(f'name="cid" value="{next_chat["id"]}"', body)
+        self.assertNotIn(f'name="cid" value="{chat["id"]}"', body)
+        archived = self.req(url + f"?id={chat['id']}", cookie=self.cookie).body.decode()
+        self.assertNotIn('/chat/wren/clear', archived)
+
+    def test_issue_19_clear_route_requires_the_shown_cid(self):
+        """Reverting #19 lets a POST without cid clear the current chat; stale ids must also be refused."""
+        chat = self.chat_with([{"role": "user", "content": "hello", "ts": "2026-10-19T12:00:00"}], "ended")
+        headers = {"sec-fetch-site": "same-origin", "x-csrf-token": self.csrf(self.cookie)}
+        for body in (b"cid=web-stale", b""):
+            with self.subTest(body=body):
+                r = self.req("/chat/wren/clear", "POST", cookie=self.cookie, headers=headers, body=body)
+                self.assertEqual(r.status, 409, r.body)
+                self.assertIn(b"that is not the chat on this page any more: reload it", r.body)
+                self.assertNotIn("cleared", web_chat.load(chat["id"]))
+
     def test_clear_is_in_the_header_always_on_screen(self):
         """the operator, on his phone: "I don't see the button to clear the chat" — it sat under the last answer, at the
         bottom of a feed that scrolls in its own box."""
@@ -1101,7 +1163,9 @@ class PushWhenTest(ChatTest):
             chat, _ = web_chat.send("wren", ME, "hello", [])
             self.wait_idle(chat["id"])
             time.sleep(0.2)
-        notify.assert_called_once_with("wren replied")
+        (event,), _ = notify.call_args                           # what this push shows: this reply (issue #23)
+        self.assertEqual((event["title"], event["url"]), ("wren replied", "/i/wren/chat"))
+        notify.assert_called_once()
         web_chat.watching("wren")                                # its page is open and refreshing
         with mock.patch("supervisor.webpush.notify") as notify:
             web_chat.send("wren", ME, "again", [])

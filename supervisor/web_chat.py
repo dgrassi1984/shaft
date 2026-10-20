@@ -9,8 +9,8 @@ A reply keeps going when the browser drops: it is relayed by a thread of the web
 saves its activity as it streams and the answer when it ends, so a reload, a phone that locked or a second device
 shows it. Only Stop stops it (the relay closes the API connection; the API then stops the agent). A message sent while
 it replies is an interjection (/v1/chat/interject): the instance reads it at its next step; one it did not hear in
-time is answered by a reply of its own once this one ends, as on Telegram. End writes the conversation up now
-(/v1/chat/end) instead of after SHAFT_IDLE_MINUTES.
+time is answered by a reply of its own once this one ends, as on Telegram. End asks for the journal write-up now
+(/v1/chat/end does not wait for the entry to be written) instead of after SHAFT_IDLE_MINUTES.
 
 Files go in with a message: saved in the instance's folder by messages.from_operator (as Telegram's are), and the
 message says where. Files it sends the operator meanwhile (send_message) are shown in the chat, as in Messages.
@@ -146,18 +146,10 @@ def watched(name: str) -> bool:
     return time.monotonic() - _watched.get(name, -1e9) < WATCH_S
 
 
-def latest_reply() -> dict:
-    """What a push notification shows: the newest answer of any instance's chat, said briefly."""
-    from .core import instance_names
-    best = None
-    for name in instance_names():
-        c = next(iter(chats(name)), None)
-        t = next((t for t in reversed((c or {}).get("turns", [])) if t["role"] == "assistant"), None)
-        if t and (best is None or t["ts"] > best[1]["ts"]):
-            best = (name, t)
-    if not best:
-        return {"title": "SHAFT", "body": "A reply landed", "url": "/", "tag": "shaft"}
-    name, t = best
+def reply_event(chat: dict) -> dict:
+    """What the push for this chat's reply shows: its first line."""
+    name = chat["instance"]
+    t = next((t for t in reversed(chat.get("turns") or []) if t["role"] == "assistant"), {})
     first = next((l.strip() for l in (t.get("content") or "").splitlines() if l.strip()), "") or (t.get("note") or "")
     return {"title": f"{name} replied", "body": first[:160], "url": f"/i/{name}/chat", "tag": name}
 
@@ -214,9 +206,11 @@ def reap() -> None:
             continue
         if c.get("state") == "replying":
             r = c.get("reply") or {}
+            # The request may have reached the API and run tools, so this is not a safe retry.
             c["turns"].append({"role": "assistant", "content": r.get("answer") or "", "ts": _now(),
                                "activity": r.get("activity", []),
-                               "note": "interrupted: the web service restarted while it replied"})
+                               "note": "interrupted: the web service restarted while it replied",
+                               "note_kind": "service", "note_retry": False})
             c["state"], c["reply"] = "idle", None
             save(c)
 
@@ -233,7 +227,7 @@ def _headers(chat: dict) -> dict:
     if not key:
         raise Refused("the API is not set up: shaft api on")
     return {"Content-Type": "application/json", "Authorization": f"Bearer {key}", "Tailscale-User-Login": chat["login"],
-            "X-Shaft-Conversation": chat["id"], "User-Agent": "SHAFT web UI"}
+            "X-Shaft-Conversation": chat["id"], "X-Shaft-Channel": "web", "User-Agent": "SHAFT web UI"}
 
 
 def _post(chat: dict, route: str, body: dict, timeout: float = 15) -> tuple[int, dict]:
@@ -254,6 +248,25 @@ def _post(chat: dict, route: str, body: dict, timeout: float = 15) -> tuple[int,
 
 def _api_messages(chat: dict) -> list[dict]:
     return [{"role": t["role"], "content": t["content"]} for t in chat["turns"] if t.get("content") or t["role"] == "user"]
+
+
+# -- why a reply failed ----------------------------------------------------------------------------------------------
+_STREAM_ERROR = re.compile(r"^\[error: (.*)\]$", re.DOTALL)  # older APIs put failures in content
+
+
+def classify_reply(*, stopped: bool, status: int | None, exc: BaseException | None, text: str,
+                   posted: bool, tools: bool | None) -> tuple[str, bool]:
+    """Retry requires evidence that the request could not have run tools. Unknown means inspect first."""
+    if stopped:
+        return "stopped", False
+    if isinstance(exc, (OSError, http.client.HTTPException)):
+        return "connection", isinstance(exc, ConnectionRefusedError) and not posted
+    if (status and status != 200) or isinstance(exc, Refused):
+        return "service", False
+    if "CloudError" in text or "OpenRouter" in text:
+        code = re.search(r"\bHTTP (\d{3})\b", text)
+        return "model", bool(code and 500 <= int(code[1]) < 600 and tools is False)
+    return "unknown", False
 
 
 # -- the relay: one reply, streamed, saved as it goes ----------------------------------------------------------------
@@ -290,6 +303,8 @@ def _start(cid: str) -> None:
 def _run(relay: Relay) -> None:
     cid = relay.cid
     answer, activity, error, heard, last_save = "", [], None, None, 0.0   # heard: None until the API says
+    status, posted, exc, tools = None, False, None, None
+    complete = False
     with _lock(cid):
         chat = load(cid)
         sent = chat["reply"].get("interjections", 0)
@@ -298,10 +313,12 @@ def _run(relay: Relay) -> None:
         conn.request("POST", "/v1/chat/completions",
                      json.dumps({"model": chat["instance"], "messages": _api_messages(chat), "stream": True}),
                      _headers(chat))
+        posted = True
         relay.sock = conn.sock
         if relay.stopped:                           # Stop came before the socket was there
             relay.stop()
         resp = conn.getresponse()
+        status = resp.status
         if resp.status != 200:
             try:
                 error = json.loads(resp.read())["error"]["message"]
@@ -313,11 +330,16 @@ def _run(relay: Relay) -> None:
                 if not line.startswith("data: "):
                     continue
                 if line == "data: [DONE]":
+                    complete = True
                     break
                 try:
                     ev = json.loads(line[6:])
                 except ValueError:
                     continue
+                if ev.get("reply_error"):
+                    failure = ev["reply_error"]
+                    error = failure["message"]
+                    tools = failure.get("tools_ran")
                 if "interjections_heard" in ev:
                     heard = int(ev["interjections_heard"])
                 delta = (ev.get("choices") or [{}])[0].get("delta") or {}
@@ -332,8 +354,11 @@ def _run(relay: Relay) -> None:
                         chat["reply"].update(activity=activity[-200:], answer=answer)
                         sent = chat["reply"].get("interjections", 0)
                         save(chat)
+            if not complete and not error and not relay.stopped:
+                raise ConnectionResetError("API stream ended before [DONE]")
     except (OSError, http.client.HTTPException, Refused) as e:
         if not relay.stopped:
+            exc = e
             error = f"{type(e).__name__}: {e}"
     finally:
         try:
@@ -341,13 +366,21 @@ def _run(relay: Relay) -> None:
                 relay.conn.close()
         except OSError:
             pass
+    # Older APIs put an error in the answer. Keep partial content, but remove the whole-answer error wrapper.
+    if not relay.stopped:
+        wrapped = _STREAM_ERROR.fullmatch(answer.strip())
+        if wrapped:
+            error = wrapped.group(1).strip()
+            answer = ""
     # A comment send must mark its post sent before even a very fast reply is attached.
     with _inst_lock(chat["instance"]):
-        docs_to_sync = _finish(relay, answer, activity, error, heard)
+        docs_to_sync = _finish(relay, answer, activity, error, heard, status=status, posted=posted, exc=exc, tools=tools)
     _sync_copies(chat["instance"], docs_to_sync)
 
 
-def _finish(relay: Relay, answer: str, activity: list, error: str | None, heard: int | None) -> list[str]:
+def _finish(relay: Relay, answer: str, activity: list, error: str | None, heard: int | None, *,
+            status: int | None = None, posted: bool = True, exc: BaseException | None = None,
+            tools: bool | None = None) -> list[str]:
     docs_to_sync = []
     cid = relay.cid
     with _lock(cid):
@@ -360,10 +393,20 @@ def _finish(relay: Relay, answer: str, activity: list, error: str | None, heard:
         started_by = None if sent else reply.get("started_by")
         assistant_index = len(chat["turns"])
         note = ("stopped by you" if relay.stopped else f"error: {error}" if error else "")
+        cause = {}
+        if note:
+            kind, retry = classify_reply(stopped=relay.stopped, status=status if status and status != 200 else None,
+                                         exc=exc, text=error or "", posted=posted, tools=tools)
+            # Interjections and attachment-only requests cannot be faithfully retried by prefilling one message.
+            original = next((t for t in reversed(chat["turns"]) if t["role"] == "user"), {})
+            request = original.get("shown", original.get("content", ""))
+            cause = {"note_kind": kind, "note_retry": retry and not sent and bool(request),
+                     "retry_text": request if retry and not sent else ""}
         from . import docs
         made = docs.changed(chat["reply"].get("docs_before") or {}, _docs_now(chat["instance"]))
-        chat["turns"].append({"role": "assistant", "content": answer.strip(), "ts": _now(), "activity": activity[-200:],
-                              "note": note, **({"docs": made} if made else {})})
+        chat["turns"].append({"role": "assistant", "content": answer.strip(), "ts": _now(),
+                              "activity": activity[-200:], "note": note, **cause,
+                              **({"docs": made} if made else {})})
         chat["state"], chat["reply"] = "idle", None
         # An API older than the web UI does not say what it heard: then no second reply, rather than one per message.
         unheard = max(0, sent - heard) if heard is not None and not relay.stopped and not error else 0
@@ -392,7 +435,7 @@ def _finish(relay: Relay, answer: str, activity: list, error: str | None, heard:
         del _relays[cid]
     if not unheard and not relay.stopped and not watched(chat["instance"]):
         from . import webpush                       # nobody is looking: the phone is told (docs/plans/PLAN-pwa P4)
-        webpush.notify(f"{chat['instance']} replied")
+        webpush.notify(reply_event(chat))
     log(f"web: chat {cid} with {chat['instance']}: reply {'stopped' if relay.stopped else 'failed' if error else 'done'}"
         + (f" ({unheard} interjection(s) answered next)" if unheard else ""))
     if unheard:
@@ -533,7 +576,12 @@ def send(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: 
     with _inst_lock(name):
         if mid and (c := open_chat(name)) and mid in (c.get("mids") or []):
             return c, f"already sent to {name}"
-        return _send(name, login, text, files, comment_block=comment_block, comments=comments, mid=mid)
+        chat, said = _send(name, login, text, files, comment_block=comment_block, comments=comments, mid=mid)
+    from . import messages                         # a question it quotes is answered, as a Telegram reply answers it
+    if (answered := messages.answer_quoted(name, text)):
+        log(f"web: {name}'s question {', '.join(answered)} answered in the web chat")
+        said += " · answers its question"
+    return chat, said
 
 
 def _send(name: str, login: str, text: str, files: list[tuple[str, bytes]], *,
@@ -634,7 +682,7 @@ def _end(cid: str) -> str:
     if status == 404 and err.get("type") != "not_found":   # "no route": an API older than the web UI
         raise Refused("the running API is older than the web UI and cannot end a conversation: restart it "
                       "(shaft api on); until then it is written up after SHAFT_IDLE_MINUTES of silence")
-    if status not in (202, 404):                    # 404 not_found: the API had already written it up (idle)
+    if status not in (202, 404):                    # 404 not_found: idle already closed it and scheduled a write-up
         raise Refused(err.get("message") or f"API HTTP {status}")
     with _lock(cid):
         chat = load(cid)
@@ -643,12 +691,13 @@ def _end(cid: str) -> str:
         chat["state"], chat["ended"] = "ended", _now()
         save(chat)
     log(f"web: chat {cid} with {chat['instance']} ended by the operator")
-    return "ended: it writes the conversation up in its journal now" if status == 202 else "ended"
+    return "ended: journal write-up requested" if status == 202 else "ended"
 
 
 def clear(name: str, cid: str = "") -> str:
     """Clear the chat from view: the page and the rail start empty. Nothing is deleted — the chat stays in Earlier web
-    chats and Transcripts. A conversation still open is ended first (written up, as End does); one replying is not.
+    chats and Transcripts. A conversation still open is ended first (a journal write-up is requested, as End does);
+    one replying is not.
     `cid`: the chat the page showed — refused if that is no longer the one shown (it cleared the current one instead,
     from a past chat's page: Codex review)."""
     with _inst_lock(name):
@@ -656,10 +705,12 @@ def clear(name: str, cid: str = "") -> str:
 
 
 def _clear(name: str, cid: str) -> str:
+    if not cid:
+        raise Refused("that is not the chat on this page any more: reload it")
     chat = shown(name)
     if not chat:
         raise Refused("there is nothing to clear")
-    if cid and chat["id"] != cid:
+    if chat["id"] != cid:
         raise Refused("that is not the chat on this page any more: reload it")
     if replying(chat["id"]) or chat.get("state") == "replying":
         raise Refused("it is still replying: stop the reply first")

@@ -495,6 +495,9 @@ def second_pending(names: list[str] | None = None) -> int:
         name = path.name.split("@")[0]
         if names and name not in names:
             continue
+        if not (INSTANCES / name / "shaft").is_dir():   # the instance was deleted: nobody to grade it for
+            path.unlink(missing_ok=True)
+            continue
         claimed = path.with_suffix(f".working-{os.getpid()}")
         try:
             path.rename(claimed)
@@ -985,6 +988,8 @@ def review_text(names: list[str], hours: float = 24, now: datetime | None = None
 
 
 def write_stats(name: str) -> None:
+    if not (INSTANCES / name / "shaft").is_dir():   # deleted: writing would recreate a half folder (shaft delete)
+        return
     safe_write(INSTANCES / name, "self/stats.md", stats_text(name))
 
 

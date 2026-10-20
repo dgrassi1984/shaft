@@ -135,7 +135,8 @@ class TelegramAttachmentsTest(unittest.TestCase):
         atts = messages.store_attachments(inbox, "attachments/m1", [("chart.png", PNG), ("data.csv", b"a,b\n1,2\n")])
         path = inbox / "20991231-235959-000001-from-wren.md"
         path.write_text("x")
-        messages.record(self.sup, path, "wren", "operator", "note", datetime(2099, 12, 31, 23, 59, 59), "see files", atts)
+        messages.record(self.sup, path, "wren", "operator", "note", datetime(2099, 12, 31, 23, 59, 59), "see files", atts,
+                        ("telegram", "test"))
         self.assertEqual(t.forward_new(), 1)
         methods = [(m, p) for tok, m, p in self.api.calls if tok == self.tok["wren"] and m.startswith("send")]
         self.assertEqual([m for m, _ in methods], ["sendMessage", "sendPhoto", "sendDocument"])   # picture inline
