@@ -1,4 +1,4 @@
-"""Images for instances (PLAN-vision.md): which models see them, and every image prepared in one place.
+"""Images for instances (docs/plans/PLAN-vision.md): which models see them, and every image prepared in one place.
 
 An image travels in the OpenAI chat format, as a user message part {"type": "image_url", "image_url": {"url":
 "data:<type>;base64,<data>"}}. The broker's /llm proxy runs `prepare` on every request before any provider sees it:
@@ -12,7 +12,7 @@ An image travels in the OpenAI chat format, as a user message part {"type": "ima
 
 Which models see images is learned, not listed: Claude models do; an OpenRouter model does if OpenRouter's model
 list says "image" among its input modalities (cached for a day in .supervisor/models.json); a self-hosted model
-(racer/bonsai2) does not.
+(gpu/bonsai2) does not.
 """
 from __future__ import annotations
 

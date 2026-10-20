@@ -45,7 +45,7 @@ class BrokerTest(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 403)
 
     def test_no_daily_limit_on_operator_messages_by_default(self):
-        """Daniele, 2026-10-13: "No limit" (SHAFT_OPERATOR_PER_DAY sets one; the run's own cap of 10 stays)."""
+        """the operator, 2026-10-13: "No limit" (SHAFT_OPERATOR_PER_DAY sets one; the run's own cap of 10 stays)."""
         self.assertEqual(broker.OPERATOR_DAILY_LIMIT, 0)
         with mock.patch.object(broker, "notify"):
             ok = [self.post("send_message", {"to": "operator", "text": f"q{i}"})["ok"] for i in range(6)]
@@ -185,7 +185,7 @@ class RunToolTest(unittest.TestCase):
     def test_no_network_and_no_reading_outside(self):
         r = self.run_cmd(f"python3 -c \"import urllib.request; urllib.request.urlopen('http://example.com', timeout=5)\"")
         self.assertNotIn("exit 0", r.splitlines()[0])
-        plan = Path(__file__).resolve().parents[2] / "PLAN.md"   # in the home folder, outside the instance
+        plan = Path(__file__).resolve().parents[2] / "docs/plans/PLAN.md"   # in the home folder, outside the instance
         r = self.run_cmd(f"head -c 200 {plan}")
         self.assertNotIn("SHAFT", r)
         self.assertIn("Operation not permitted", r)

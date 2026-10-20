@@ -41,11 +41,10 @@ issues:
 #   provision: docs/worktrees.md  # secrets, private db, port, asset build
 
 ship:
-  enabled: true
-  authorization: pre-authorized
-  after_merge: true
-  release_cadence: per-batch
-  release_every: 5
+  enabled: false
+  authorization: explicit
+  after_merge: false
+  # Contributors propose releases for maintainer review.
   versioning:
     scheme: semver
     bump: infer

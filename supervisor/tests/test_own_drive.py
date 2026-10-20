@@ -1,4 +1,4 @@
-"""An instance's own Drive, Sheets, Docs and Slides (PLAN-own-drive.md): a `drive` bundle for its own Google key,
+"""An instance's own Drive, Sheets, Docs and Slides (docs/plans/PLAN-own-drive.md): a `drive` bundle for its own Google key,
 every scope in it granted or nothing saved, the address checked through Drive's `about` (no Gmail scope to read a
 profile with); and http_request's binary bodies (`body_file`, `save_to`), which a Drive upload or download needs."""
 from __future__ import annotations
@@ -117,16 +117,16 @@ class DriveLoginTest(own_mail.LoginTest):
                       "slides.googleapis.com, www.googleapis.com", out)
         self.assertNotIn("1//refresh", out)
         code, listing, _ = self.cli("list")
-        self.assertIn("drive: Google account instance@example.com (documents, drive, presentations, spreadsheets",
+        self.assertIn("drive: Google account assistant@example.com (documents, drive, presentations, spreadsheets",
                       listing)
 
     def test_drive_signed_in_as_reads_drive_about(self):
-        # Before PLAN-own-drive, _signed_in_as knew only Gmail and Calendar: a Drive-only login was refused with
+        # Before docs/plans/PLAN-own-drive, _signed_in_as knew only Gmail and Calendar: a Drive-only login was refused with
         # "Google granted no Gmail or Calendar scope". Here the address comes from Drive's `about` and is checked.
-        self.tokens.address = "someone.else@gmail.com"
+        self.tokens.address = "someone.else@example.com"
         code, _, err = self.cli("google", "drive", THELOS, "--client", "personal", "--scope", "drive")
         self.assertEqual(code, 2)
-        self.assertIn("signed in as someone.else@gmail.com, not instance@example.com: nothing saved", err)
+        self.assertIn("signed in as someone.else@example.com, not assistant@example.com: nothing saved", err)
         self.assertEqual(core.read_secrets(self.root), {})
 
     def test_drive_bundle_partial_grant_saves_nothing(self):

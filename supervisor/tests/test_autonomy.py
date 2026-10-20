@@ -1,4 +1,4 @@
-"""The schedule SHAFT's scheduler keeps: per-instance wakes (Daniele: an interval in each config.env; a wake
+"""The schedule SHAFT's scheduler keeps: per-instance wakes (the operator: an interval in each config.env; a wake
 that comes while the agent is already awake is skipped) and the nightly sleep — including the sleep launchd
 silently skipped on 2026-10-13."""
 from __future__ import annotations

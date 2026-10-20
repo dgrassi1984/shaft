@@ -1,4 +1,4 @@
-"""Surprise measurement (PLAN-surprise M0): the rule flags, recurrence and the per-model baseline.
+"""Surprise measurement (docs/plans/PLAN-surprise M0): the rule flags, recurrence and the per-model baseline.
 
 The result strings are copied from real episodes (2026-10-12/13). The template's in-the-moment rule (M1) must
 flag these same strings the same way: SHARED_FIXTURES is the contract between the two copies.

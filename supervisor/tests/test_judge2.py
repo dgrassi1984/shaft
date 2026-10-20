@@ -1,6 +1,6 @@
 """wren, 2026-10-13: "I only see fragments of its reasoning (the middle of record(judgments) truncates), it's another
 model grading me with its own blind spots … full reasoning visible, and maybe a second judge occasionally".
-Daniele: GLM 5.3 Flash as the second judge, and the record fixed."""
+the operator: GLM 5.3 Flash as the second judge, and the record fixed."""
 from __future__ import annotations
 
 import json
@@ -98,7 +98,7 @@ class SecondJudgeTest(unittest.TestCase):
         self.assertEqual(out["criterion_met"], "partial")
         body = self.sent[0]
         self.assertEqual(body["model"], "z-ai/glm-5.3-flash")
-        self.assertEqual(body["provider"]["only"], ["novita"])            # Daniele's data policy, as for instances
+        self.assertEqual(body["provider"]["only"], ["novita"])            # the operator's data policy, as for instances
         self.assertNotIn("response_format", body)                         # Novita has no structured outputs here
         (u,) = self.usage()
         self.assertEqual((u["purpose"], u["usd"], u["provider"]), ("second wren", 0.002, "Novita"))
@@ -219,7 +219,7 @@ class JudgePendingTest(unittest.TestCase):
 
 class ReleasedBeforeTheSecondJudgeTest(unittest.TestCase):
     """The second judge takes minutes (128 s on a real case): the instance is let go first, so a message from
-    Daniele never waits for it, and the wake that ran the cycle does not linger."""
+    the operator never waits for it, and the wake that ran the cycle does not linger."""
 
     def test_the_lock_is_released_before_the_detached_second_judge_starts(self):
         from supervisor import runner

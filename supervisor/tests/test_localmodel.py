@@ -1,7 +1,7 @@
-"""The local Bonsai server runs only while something uses it (Daniele, 2026-10-19).
+"""The local Bonsai server runs only while something uses it (the operator, 2026-10-19).
 
 Regression: com.shaft.model ran always (launchd KeepAlive + RunAtLoad), holding ~7.6 GB, while no instance was
-configured on it — five days idle, its only user the racer -> local fallback, last fired 2026-10-14. Now it exits
+configured on it — five days idle, its only user the gpu -> local fallback, last fired 2026-10-14. Now it exits
 when idle and unpinned, launchd does not restart that exit, and every path that reaches it starts it first."""
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ class IdleRuleTest(unittest.TestCase):
 
     def test_pinned_by_the_instances_configured_straight_on_it_paused_or_not(self):
         cfgs = {"a": {"LLM_BASE_URL": LOCAL}, "b": {"LLM_BASE_URL": "http://localhost:8780/v1"},
-                "racer": {"LLM_BASE_URL": "broker", "LLM_MODEL": "racer/bonsai2"},   # fallback only: not pinned
+                "gpu": {"LLM_BASE_URL": "broker", "LLM_MODEL": "gpu/bonsai2"},   # fallback only: not pinned
                 "cloud": {"LLM_BASE_URL": "broker", "LLM_MODEL": "claude-opus-5-5"},
                 "other": {"LLM_BASE_URL": "http://127.0.0.1:8781/v1"}, "none": {}}
         self.assertEqual(localmodel.pinned_by(8780, list(cfgs), cfgs.__getitem__), ["a", "b"])
@@ -167,27 +167,27 @@ class EnsureTest(unittest.TestCase):
 class CallersTest(unittest.TestCase):
     """Every path that reaches the local server starts it first."""
 
-    def test_the_racer_fallback_starts_the_local_server(self):
+    def test_the_gpu_fallback_starts_the_local_server(self):
         from supervisor import selfhosted
         opened = object()
-        servers = {"racer": {"url": "http://100.120.0.1:8080/v1", "sampling": {}, "think_budget": 0}}
+        servers = {"gpu": {"url": "http://gpu-box.example:8080/v1", "sampling": {}, "think_budget": 0}}
         with mock.patch.object(selfhosted, "SERVERS", servers), mock.patch.object(selfhosted, "FALLBACK", LOCAL), \
                 mock.patch.object(selfhosted, "_open", side_effect=[(None, "network: refused"), (opened, None)]), \
                 mock.patch.object(localmodel, "ensure") as ensure:
-            resp, label, _ = selfhosted.open_reply("shaft", {"model": "racer/bonsai2", "messages": []})
+            resp, label, _ = selfhosted.open_reply("shaft", {"model": "gpu/bonsai2", "messages": []})
         ensure.assert_called_once()
         self.assertIs(resp, opened)
-        self.assertEqual(label, "racer/bonsai2 (local fallback)")
+        self.assertEqual(label, "gpu/bonsai2 (local fallback)")
 
     def test_a_fallback_whose_server_cannot_start_says_why(self):
         from supervisor import cloudllm, selfhosted
-        servers = {"racer": {"url": "http://100.120.0.1:8080/v1", "sampling": {}, "think_budget": 0}}
+        servers = {"gpu": {"url": "http://gpu-box.example:8080/v1", "sampling": {}, "think_budget": 0}}
         with mock.patch.object(selfhosted, "SERVERS", servers), mock.patch.object(selfhosted, "FALLBACK", LOCAL), \
                 mock.patch.object(selfhosted, "_open", side_effect=[(None, "network: refused")]) as op, \
                 mock.patch.object(selfhosted, "_record"), \
                 mock.patch.object(localmodel, "ensure", side_effect=RuntimeError("not installed: shaft model on")):
             with self.assertRaises(cloudllm.CloudError) as ctx:
-                selfhosted.open_reply("shaft", {"model": "racer/bonsai2", "messages": []})
+                selfhosted.open_reply("shaft", {"model": "gpu/bonsai2", "messages": []})
         self.assertIn("shaft model on", str(ctx.exception))
         self.assertEqual(op.call_count, 1)   # the local server was not tried while down
 

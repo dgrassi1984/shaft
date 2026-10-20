@@ -1,11 +1,11 @@
-"""Chat with an instance in the browser (PLAN-webui.md M4). Stdlib only.
+"""Chat with an instance in the browser (docs/plans/PLAN-webui.md M4). Stdlib only.
 
 Each web chat is a conversation of SHAFT's own API, as Telegram's are: the web server calls 127.0.0.1's
 /v1/chat/completions (streamed) with SHAFT_API_KEY and the operator's tailnet login, naming the conversation with
 X-Shaft-Conversation (the chat's id). So the reply is the API's — a normal sandboxed run with the run lock, the gate
 and the commit; its narration rule; waiting while the instance is busy — and the key never reaches the browser.
 
-A reply keeps going when the browser drops (Daniele, 2026-10-19): it is relayed by a thread of the web server, which
+A reply keeps going when the browser drops: it is relayed by a thread of the web server, which
 saves its activity as it streams and the answer when it ends, so a reload, a phone that locked or a second device
 shows it. Only Stop stops it (the relay closes the API connection; the API then stops the agent). A message sent while
 it replies is an interjection (/v1/chat/interject): the instance reads it at its next step; one it did not hear in
@@ -36,11 +36,11 @@ SAVE_EVERY_S = 1.0                 # how often a streaming reply's activity is w
 MAX_TEXT = 20000                   # a message, at most
 
 
-# Added, unseen by the operator, to the first message of each web chat: how the instance shares a document with him
-# (PLAN-webui-chat §3). In the message rather than its prompts, so every instance gets it whatever its own code says.
-DOCS_NOTE = ("[Web chat: a Markdown file you write under notes/docs/ appears beside this chat as a document Daniele sees "
+# Added, unseen by the operator, to the first message of each web chat: how the instance shares a document with them
+# (docs/plans/PLAN-webui-chat §3). In the message rather than its prompts, so every instance gets it whatever its own code says.
+DOCS_NOTE = ("[Web chat: a Markdown file you write under notes/docs/ appears beside this chat as a document the operator sees "
              "live and can edit. Write it whole (write_file with replace=true when you drop lines). His edits reach you "
-             "as a diff in his next message.]")
+             "as a diff in their next message.]")
 
 
 class Refused(Exception):
@@ -108,7 +108,7 @@ _parsed: dict[str, tuple[tuple, dict]] = {}     # path -> ((inode, mtime_ns, siz
 
 def chats(name: str) -> list[dict]:
     """This instance's web chats, newest first. Read-only: a change goes through load() and save(). Every feed, panel
-    and rail refresh asks for them (PLAN-pwa P3: every chat file of every instance was parsed each time)."""
+    and rail refresh asks for them (docs/plans/PLAN-pwa P3: every chat file of every instance was parsed each time)."""
     out = []
     for p in _dir().glob("web-*.json") if _dir().is_dir() else []:
         try:
@@ -177,7 +177,7 @@ def summary(name: str) -> dict:
 
 def shown(name: str) -> dict | None:
     """The chat its page shows: the one going on, else the last one (ended: the next message starts a new one) — unless
-    the operator cleared it: then none, until he writes again."""
+    the operator cleared it: then none, until they write again."""
     c = open_chat(name) or next(iter(chats(name)), None)
     return None if c and c.get("cleared") else c
 
@@ -391,7 +391,7 @@ def _finish(relay: Relay, answer: str, activity: list, error: str | None, heard:
     if _relays.get(cid) is relay:                  # never a newer relay of the same chat
         del _relays[cid]
     if not unheard and not relay.stopped and not watched(chat["instance"]):
-        from . import webpush                       # nobody is looking: the phone is told (PLAN-pwa P4)
+        from . import webpush                       # nobody is looking: the phone is told (docs/plans/PLAN-pwa P4)
         webpush.notify(f"{chat['instance']} replied")
     log(f"web: chat {cid} with {chat['instance']}: reply {'stopped' if relay.stopped else 'failed' if error else 'done'}"
         + (f" ({unheard} interjection(s) answered next)" if unheard else ""))
@@ -401,7 +401,7 @@ def _finish(relay: Relay, answer: str, activity: list, error: str | None, heard:
 
 
 # -- what the page does ----------------------------------------------------------------------------------------------
-# -- the operator's edits to its documents (PLAN-webui-chat §3 D2) ---------------------------------------------------
+# -- the operator's edits to its documents (docs/plans/PLAN-webui-chat §3 D2) ---------------------------------------------------
 EDIT_DIFF_MAX = 12000                  # a diff longer than this is summarised: the instance reads the file itself
 
 
@@ -417,22 +417,22 @@ def edit_diff(path: str, old: str | None, new: str) -> str:
     if old is None:
         body = new if len(new) <= EDIT_DIFF_MAX else new[:EDIT_DIFF_MAX] + "\n…(cut: read the file)"
         f = _fence(body)
-        return f"[Daniele created {rel}:]\n{f}markdown\n{body}\n{f}"
+        return f"[The operator created {rel}:]\n{f}markdown\n{body}\n{f}"
     diff = "\n".join(difflib.unified_diff(old.splitlines(), new.splitlines(), f"a/{rel}", f"b/{rel}", lineterm="", n=2))
     if not diff:
-        return f"[Daniele saved {rel} unchanged.]"
+        return f"[The operator saved {rel} unchanged.]"
     if len(diff) > EDIT_DIFF_MAX:
         added = sum(l.startswith("+") for l in diff.splitlines()[2:])
         dropped = sum(l.startswith("-") for l in diff.splitlines()[2:])
-        return f"[Daniele edited {rel}: +{added} −{dropped} lines, too long to show here — read the file.]"
+        return f"[The operator edited {rel}: +{added} −{dropped} lines, too long to show here — read the file.]"
     f = _fence(diff)
-    return f"[Daniele edited {rel}:]\n{f}diff\n{diff}\n{f}"
+    return f"[The operator edited {rel}:]\n{f}diff\n{diff}\n{f}"
 
 
 def doc_saved(name: str, login: str, path: str, old: str | None, new: str, sha: str) -> str:
     """After the operator saved a document: the instance hears of it — at once (an interjection) while it replies, else
-    with his next message; several saves before then are one diff (from what it last saw). The chat also keeps his
-    version, so the panel can say when a later write of the instance dropped lines he wrote. (what to tell him)"""
+    with their next message; several saves before then are one diff (from what it last saw). The chat also keeps their
+    version, so the panel can say when a later write of the instance dropped lines they wrote. (what to tell them)"""
     with _inst_lock(name):
         return _doc_saved(name, login, path, old, new, sha)
 
@@ -442,8 +442,8 @@ def _doc_saved(name: str, login: str, path: str, old: str | None, new: str, sha:
     with _lock(chat["id"]):
         chat = load(chat["id"])
         pend = chat.setdefault("pending_edits", {})
-        # Folded into one diff only while nobody else wrote it in between: if the instance wrote over his last save,
-        # it knows its own version, and the diff starts there (folding from the first save called its text his).
+        # Folded into one diff only while nobody else wrote it in between: if the instance wrote over their last save,
+        # it knows its own version, and the diff starts there (folding from the first save called its text theirs).
         prev = pend.get(path)
         first = prev["old"] if prev and prev["new"] == old else old
         pend[path] = {"old": first, "new": new}

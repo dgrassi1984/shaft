@@ -124,7 +124,7 @@ def _new(store: dict, pid: str, doc: str, anchor: dict | None, sha: str, text: s
 
 
 def add_thread(name: str, pid: str, doc: str, anchor: dict | None, sha: str, text: str,
-               by: str = "daniele") -> str:
+               by: str = "operator") -> str:
     """Create a thread, or return the thread already holding this post id."""
     _id(pid, PID, "post id")
     with _store(name, True) as store:
@@ -190,7 +190,7 @@ def set_state(name: str, thread: str, state: str) -> None:
         if item["state"] != state:
             item["state"] = state
             verb = "resolved" if state == "resolved" else "reopened"
-            store["notices"].append(f"[Daniele {verb} {thread} on notes/docs/{item['doc']}]")
+            store["notices"].append(f"[The operator {verb} {thread} on notes/docs/{item['doc']}]")
 
 
 def take_notices(name: str) -> list[str]:
@@ -249,7 +249,7 @@ def block(name: str, thread_id: str, pid: str) -> str:
         if tid != thread_id:
             raise Refused("post belongs to another thread")
         prior = thread["posts"][:thread["posts"].index(post)]
-    who = "Daniele" if post["by"] == "daniele" else post["by"]
+    who = "The operator" if post["by"] == "operator" else post["by"]
     where = f"notes/docs/{thread['doc']} ({tid})"
     if prior:
         intro = f"[{who} replied on {where}:]"

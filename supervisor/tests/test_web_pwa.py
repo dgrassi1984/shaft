@@ -1,4 +1,4 @@
-"""PLAN-pwa P1: the web UI as an app on the Home Screen — its manifest, icons, service worker and offline page,
+"""docs/plans/PLAN-pwa P1: the web UI as an app on the Home Screen — its manifest, icons, service worker and offline page,
 pairing from inside the app, a cookie that does not lapse, and a page that knows the server was updated."""
 from __future__ import annotations
 

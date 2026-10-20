@@ -1,5 +1,5 @@
 """The operator's folder an instance may read (shaft share): read-only, never SHAFT's own state, and kept when
-other per-instance settings change (Daniele, 2026-10-13: shaft asked for "a clearly scoped folder")."""
+other per-instance settings change (the operator, 2026-10-13: shaft asked for "a clearly scoped folder")."""
 from __future__ import annotations
 
 import json
@@ -42,8 +42,8 @@ class SettingsTest(unittest.TestCase):
         self.assertNotIn("shared", json.loads((self.sup / "tools" / "shaft.json").read_text()))
 
     def test_other_settings_do_not_wipe_the_mail_grant(self):
-        # The same class of bug for the mail grant (PLAN-mail.md): every setter must keep the keys it does not own.
-        grant = [{"account": "example-co", "label": "ToObsidian"}]
+        # The same class of bug for the mail grant (docs/plans/PLAN-mail.md): every setter must keep the keys it does not own.
+        grant = [{"account": "work", "label": "AssistantAccess"}]
         core.set_mail_grants("shaft", grant)
         core.set_tool("shaft", "delegate_coding", on=False)
         core.set_shared_folder("shaft", self.folder)

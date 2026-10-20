@@ -1,4 +1,4 @@
-"""The operator's edits of an instance's config.env and drive.md (PLAN-webui.md M3): `shaft config` and `shaft drive`,
+"""The operator's edits of an instance's config.env and drive.md (docs/plans/PLAN-webui.md M3): `shaft config` and `shaft drive`,
 which the web UI's Config and Drive pages run. Stdlib only.
 
 config.env has two writers, the operator and the instance (the broker's set_config); both write under

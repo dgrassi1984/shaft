@@ -1,7 +1,7 @@
-"""drive.md: what an instance is for, written by the operator (PLAN-thelos.md).
+"""drive.md: what an instance is for, written by the operator (docs/plans/PLAN-thelos.md).
 
 Before it, the drive was one paragraph of the template's IDENTITY prompt ("one innate drive: to improve yourself"),
-the same for every instance: Thelos — Wren's genes, the drive "be the best possible assistant to Daniele" — would
+the same for every instance: Thelos — Wren's genes, the drive "be the best possible assistant to the operator" — would
 have had to edit its own prompts.py, and every template update near those lines would then conflict with it.
 Now the paragraph comes from the instance's drive.md; without one, the default — byte for byte what every instance
 had. Only the operator writes drive.md: the sandbox denies the instance, and his edit is committed as his."""
@@ -32,7 +32,7 @@ DEFAULT = ("You were created with one innate drive: to improve yourself. That me
            "and decide what would show you have overcome it. Your prompts, code, skills and plugins are yours to "
            "change for this — the supervisor keeps only changes that pass its tests.")
 AFTER = "\n\nBe honest about uncertainty."
-THELOS = ("You were created with one drive: to be the best possible assistant to Daniele.\n"
+THELOS = ("You were created with one drive: to be the best possible assistant to the operator.\n"
           "- Know him from evidence.\n- Finish things for him.\n")
 
 
@@ -121,7 +121,7 @@ class DriveCommitTest(test_commit.UpdateCase):
         self.assertIn("Know him from evidence", commit)
         journal = (self.root / "memory" / "journal.md").read_text()
         self.assertEqual(journal.count("My drive was changed by the operator"), 1, journal)
-        self.assertIn("best possible assistant to Daniele", journal)
+        self.assertIn("best possible assistant to the operator", journal)
         self.assertEqual(git(self.root, "status", "--porcelain", "--untracked-files=all", "--", "drive.md"), "")
 
     def test_an_edit_and_a_removal_are_each_committed_once(self):

@@ -6,7 +6,7 @@ graded effectiveness first, and compared with a *control*: a fresh copy of the t
 with an empty mind. Improvement means the instance's scores rise relative to the control's, within one
 era (item set × model × judge model); comparisons across eras are never made.
 
-Four categories (PLAN-measurement.md, E3):
+Four categories (docs/plans/PLAN-measurement.md, E3):
   coding    task + hidden tests run by the supervisor (headline: share of hidden tests passed) + judge
   research  questions with stable answers needing primary sources; judged against a frozen key
   recall    questions about the instance's own older journal entries, generated once and frozen
@@ -43,7 +43,7 @@ from .core import (BROKER_MAX_CALLS, EMBED_PORT, HOME, INSTANCES, LLM_PORTS, PRO
 VERSION, _ = knob(
     "SHAFT_BATTERY_VERSION", "v1", model_name, "the battery item set in use (.supervisor/battery/items/<version>)",
     group="Inbox and benchmarks", services=("runs", "scheduler", "web"))
-EVERY_DAYS, _ = knob(   # Daniele, 2026-10-13: 5
+EVERY_DAYS, _ = knob(   # the operator, 2026-10-13: 5
     "SHAFT_BATTERY_EVERY_DAYS", "5", whole, "nights between an instance's scheduled capability batteries (0: never "
     "scheduled)", group="Inbox and benchmarks", services=("runs", "scheduler", "web"))
 WINDOW_START = (1, 0)                                                # the night window opens at 01:00 ...
@@ -62,7 +62,7 @@ CATEGORIES = ("coding", "research", "recall", "self")
 CONTROLLED = ("coding", "research")          # a fresh mind cannot know an instance's memory or record
 EXAM_OFF = {"send_message", "list_instances", "delegate_coding", "secret_set", "secret_delete",
             "decide",   # added 2026-10-14: exams keep the tools they were calibrated with
-            "describe_image",   # PLAN-vision: exams keep the tools they were calibrated with
+            "describe_image",   # docs/plans/PLAN-vision: exams keep the tools they were calibrated with
             *MAIL_TOOLS, *CALENDAR_TOOLS}   # the operator's mail and calendars never reach an exam (its broker has
                                             # none either: root= is set)
 BACKUP = HOME / "Library" / "Application Support" / "SHAFT" / "battery-backup"
@@ -78,7 +78,7 @@ def items_dir() -> Path:
 
 def off_path(name: str) -> Path:
     """Present: this instance gets no battery, scheduled or by hand (`shaft battery off|on <name>`).
-    Daniele, 2026-10-13: "Kant no battery" (on Opus a run costs about $15)."""
+    the operator, 2026-10-13: "Kant no battery" (on Opus a run costs about $15)."""
     return base() / f"off-{name}"
 
 

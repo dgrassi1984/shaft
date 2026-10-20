@@ -1,4 +1,4 @@
-"""Comment threads in the documents panel (PLAN-comments.md §6.1)."""
+"""Comment threads in the documents panel (docs/plans/PLAN-comments.md §6.1)."""
 from __future__ import annotations
 
 import html
@@ -14,13 +14,13 @@ TS = "2026-10-20T15:04:03"
 _DEFAULT_ANCHOR = object()
 
 
-def post(pid="p1", by="daniele", text="hello", ts=TS, sent="web-1#1", **extra) -> dict:
+def post(pid="p1", by="operator", text="hello", ts=TS, sent="web-1#1", **extra) -> dict:
     row = {"pid": pid, "by": by, "text": text, "ts": ts, "sent": sent}
     row.update(extra)
     return row
 
 
-def thr(id="c1", state="open", by="daniele", sha="abc", anchor=_DEFAULT_ANCHOR, posts=None,
+def thr(id="c1", state="open", by="operator", sha="abc", anchor=_DEFAULT_ANCHOR, posts=None,
         unsectioned=None) -> dict:
     if anchor is _DEFAULT_ANCHOR:
         anchor = {"exact": "quoted line", "prefix": "pre", "suffix": "suf", "start": 4}
@@ -72,7 +72,7 @@ class CommentViewsTest(unittest.TestCase):
                       '<summary>💬 1 open</summary>', html_out)
         self.assertNotIn('data-key="threads-plan.md" open>', html_out)
         self.assertIn('<article class="thread" id="thread-c1" data-thread="c1"><b>c1</b> <q>quoted line</q>', html_out)
-        self.assertNotIn("by daniele", html_out)
+        self.assertNotIn("by operator", html_out)
         self.assertIn('hidden data-detached-note>text no longer in the document</p>', html_out)
         self.assertNotIn("the document changed since this comment", html_out)
         self.assertIn('class="who">you <span class="dim">15:04</span></div>', html_out)

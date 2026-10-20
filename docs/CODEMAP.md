@@ -15,10 +15,10 @@ is behind the code, regenerate it.**
 
 |  |  |
 |---|---|
-| Tracked files | 176 |
-| Languages | 137 Python, 28 Markdown, 2 JavaScript, 1 YAML, 1 CSS |
+| Tracked files | 189 |
+| Languages | 138 Python, 37 Markdown, 2 JavaScript, 1 YAML, 1 CSS |
 | Tests | 79 |
-| Python files | 137 |
+| Python files | 138 |
 | Python modules with public symbols | 135 |
 
 ## Layout
@@ -26,8 +26,8 @@ is behind the code, regenerate it.**
 | Path | Files |
 |---|---|
 | `supervisor/` | 145 |
-| `(root)` | 27 |
-| `docs/` | 2 |
+| `docs/` | 34 |
+| `(root)` | 8 |
 | `.claude/` | 1 |
 | `bin/` | 1 |
 

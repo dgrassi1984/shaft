@@ -1,6 +1,6 @@
-"""Attachments (Daniele, 2026-10-14: "attach files to their messages to each other and on Telegram"): an instance
-attaches files from its folder to send_message — another instance finds them in its attachments/, Daniele gets them
-from the instance's bot — and files Daniele sends a bot are saved in that instance's attachments/."""
+"""Attachments (the operator, 2026-10-14: "attach files to their messages to each other and on Telegram"): an instance
+attaches files from its folder to send_message — another instance finds them in its attachments/, the operator gets them
+from the instance's bot — and files the operator sends a bot are saved in that instance's attachments/."""
 from __future__ import annotations
 
 import json
@@ -127,7 +127,7 @@ class TelegramAttachmentsTest(unittest.TestCase):
         messages._cache.update(key=None, rows=[])
         telegram.update(lambda s: s.__setitem__("paired", {"user_id": 42}))
 
-    def test_an_instances_attachments_reach_daniele_after_its_text(self):
+    def test_an_instances_attachments_reach_operator_after_its_text(self):
         from datetime import datetime
         t = self.telegram
         t.forward_new()                                                    # cursor: now
@@ -142,7 +142,7 @@ class TelegramAttachmentsTest(unittest.TestCase):
         self.assertIn('filename="chart.png"', self.api.uploads[0])
         self.assertIn('filename="data.csv"', self.api.uploads[1])
 
-    def test_daniele_sends_a_file_it_lands_in_the_instance_and_the_turn_says_where(self):
+    def test_operator_sends_a_file_it_lands_in_the_instance_and_the_turn_says_where(self):
         t = self.telegram
         asked = []
         chat = t.Chat("wren", self.tok["wren"])
@@ -150,7 +150,7 @@ class TelegramAttachmentsTest(unittest.TestCase):
                "document": {"file_id": "F1", "file_name": "paper.pdf"}}
         with mock.patch.object(t, "ask_api", lambda name, history: asked.append(history[-1]["content"]) or ("ok", 0)):
             t.handle_update("wren", self.tok["wren"], chat, {"update_id": 1, "message": msg})
-        (saved,) = (self.project / "instances" / "wren" / "attachments" / "from-daniele").glob("*/paper.pdf")
+        (saved,) = (self.project / "instances" / "wren" / "attachments" / "from-operator").glob("*/paper.pdf")
         self.assertEqual(saved.read_bytes(), self.api.FILE)
         self.assertTrue(asked[0].startswith("look at this"))
         self.assertIn(f"- {saved.relative_to(self.project / 'instances' / 'wren')} (", asked[0])
@@ -182,8 +182,8 @@ class SameSecondTest(unittest.TestCase):
         from pathlib import Path
         from supervisor import messages
         root = Path(tempfile.mkdtemp(prefix="shaft-same-second-")).resolve()
-        a = messages.store_attachments(root, "attachments/from-daniele/t", [("image.png", b"first")])
-        b = messages.store_attachments(root, "attachments/from-daniele/t", [("image.png", b"second")])
+        a = messages.store_attachments(root, "attachments/from-operator/t", [("image.png", b"first")])
+        b = messages.store_attachments(root, "attachments/from-operator/t", [("image.png", b"second")])
         self.assertNotEqual(a[0]["rel"], b[0]["rel"])
         self.assertEqual((root / a[0]["rel"]).read_bytes(), b"first")
         self.assertEqual((root / b[0]["rel"]).read_bytes(), b"second")

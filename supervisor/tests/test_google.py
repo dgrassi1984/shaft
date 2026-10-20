@@ -1,6 +1,6 @@
-"""The operator's Google accounts (PLAN-calendar.md M1): one `shaft google login` asks for gmail.readonly and
+"""The operator's Google accounts (docs/plans/PLAN-calendar.md M1): one `shaft google login` asks for gmail.readonly and
 calendar.readonly together and records what Google granted; account files live in .supervisor/google/, moved there
-from PLAN-mail's .supervisor/mail/ by `shaft google migrate`; `shaft mail login` is gone."""
+from docs/plans/PLAN-mail's .supervisor/mail/ by `shaft google migrate`; `shaft mail login` is gone."""
 from __future__ import annotations
 
 import io
@@ -52,7 +52,7 @@ class GoogleCase(unittest.TestCase):
         for p in (mock.patch.object(core, "SUP_DIR", self.sup), mock.patch.object(google, "urlopen", self.fake)):
             p.start()
             self.addCleanup(p.stop)
-        self.secrets = {"GMAIL_example-co_CLIENT_ID": "cid", "GMAIL_example-co_CLIENT_SECRET": "csecret",
+        self.secrets = {"GMAIL_CORP_CLIENT_ID": "cid", "GMAIL_CORP_CLIENT_SECRET": "csecret",
                         "GMAIL_WORK_CLIENT_ID": "wid", "GMAIL_WORK_CLIENT_SECRET": "wsecret"}
         self.asked: list[dict] = []
 
@@ -97,8 +97,8 @@ class LoginTest(GoogleCase):
         saved = self.login(ME)
         self.assertEqual(google.scopes(saved), {google.CALENDAR})
         self.assertIn(google.CALENDAR_PRIMARY, [u for u, _ in self.fake.requests])
-        self.fake.address = "someone@else.com"
-        with self.assertRaisesRegex(google.AccountError, "signed in as someone@else.com, not operator@work.example"):
+        self.fake.address = "someone@example.com"
+        with self.assertRaisesRegex(google.AccountError, "signed in as someone@example.com, not operator@work.example"):
             self.login(ME)
 
     def test_no_scope_granted_saves_nothing(self):
@@ -111,24 +111,24 @@ class LoginTest(GoogleCase):
 
     def test_login_records_its_client(self):
         self.assertEqual(self.login(ME)["client"], "work")           # default: the alias
-        self.assertEqual(self.login(ME, client="example-co")["client"], "example-co")
+        self.assertEqual(self.login(ME, client="corp")["client"], "corp")
         codes = [f["client_id"] for p, f in self.fake.requests if p == "token"]
         self.assertEqual(codes, ["wid", "cid"])
-        self.assertEqual(json.loads((self.sup / "google" / "work.json").read_text())["client"], "example-co")
+        self.assertEqual(json.loads((self.sup / "google" / "work.json").read_text())["client"], "corp")
         with self.assertRaisesRegex(google.AccountError, "Google client 'nope' needs GMAIL_NOPE_CLIENT_ID and "
                                                          "GMAIL_NOPE_CLIENT_SECRET"):
             self.login(ME, client="nope")
 
     def test_login_keeps_the_token_only_for_the_right_account(self):
-        saved = self.login("Daniele.Grassi@example-co.ai")
+        saved = self.login("Operator@Work.Example")
         self.assertEqual(saved["address"], ME)
         path = self.sup / "google" / "work.json"
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         self.assertEqual(json.loads(path.read_text())["refresh_token"], "rt-new")
         path.unlink()
-        with self.assertRaisesRegex(google.AccountError, "signed in as operator@work.example, not d@gmail.com: "
+        with self.assertRaisesRegex(google.AccountError, "signed in as operator@work.example, not operator@example.com: "
                                                          "nothing saved"):
-            self.login("d@gmail.com")
+            self.login("operator@example.com")
         self.assertFalse(path.exists())
 
     def test_a_forged_answer_is_refused(self):
@@ -147,35 +147,35 @@ class MigrateTest(GoogleCase):
         return path
 
     def test_migrate_moves_account_files_and_keeps_their_mode(self):
-        example-co = {"address": ME, "client": "example-co", "refresh_token": "rt", "scope": google.GMAIL}
-        home = {"address": "d@gmail.com", "client": "personal", "refresh_token": "rt2", "scope": google.GMAIL}
-        self.old("example-co", example-co)
+        work = {"address": ME, "client": "work", "refresh_token": "rt", "scope": google.GMAIL}
+        home = {"address": "operator@example.com", "client": "personal", "refresh_token": "rt2", "scope": google.GMAIL}
+        self.old("work", work)
         self.old("home", home)
         # Not read from the old folder (one location): the error names the migration.
-        with self.assertRaisesRegex(google.AccountError, r"'example-co' is not read: its file is still in .*/mail "
-                                                         r"\(PLAN-mail's folder\); the operator runs `shaft google "
+        with self.assertRaisesRegex(google.AccountError, r"'work' is not read: its file is still in .*/mail "
+                                                         r"\(docs/plans/PLAN-mail's folder\); the operator runs `shaft google "
                                                          r"migrate`$"):
-            google.Account("example-co", self.secrets).require(google.GMAIL)
-        self.assertEqual(google.unmigrated(), ["example-co", "home"])
+            google.Account("work", self.secrets).require(google.GMAIL)
+        self.assertEqual(google.unmigrated(), ["home", "work"])
         lines = google.migrate()
-        self.assertEqual(google.accounts(), {"example-co": example-co, "home": home})
-        for alias in ("example-co", "home"):
+        self.assertEqual(google.accounts(), {"work": work, "home": home})
+        for alias in ("work", "home"):
             self.assertEqual((self.sup / "google" / f"{alias}.json").stat().st_mode & 0o777, 0o600)
         self.assertEqual((self.sup / "google").stat().st_mode & 0o777, 0o700)
         self.assertFalse((self.sup / "mail").exists())
         self.assertIn("removed the empty", lines[-1])
         self.assertEqual(google.unmigrated(), [])
         self.assertEqual(google.migrate(), [f"nothing to migrate: {self.sup / 'mail'} does not exist"])   # idempotent
-        self.assertEqual(google.Account("example-co", self.secrets).require(google.GMAIL).alias, "example-co")
+        self.assertEqual(google.Account("work", self.secrets).require(google.GMAIL).alias, "work")
 
     def test_migrate_refuses_a_clash(self):
-        self.old("example-co", {"address": ME, "client": "example-co", "refresh_token": "old", "scope": google.GMAIL})
-        google._save_account("example-co", {"address": ME, "client": "example-co", "refresh_token": "new",
+        self.old("work", {"address": ME, "client": "work", "refresh_token": "old", "scope": google.GMAIL})
+        google._save_account("work", {"address": ME, "client": "work", "refresh_token": "new",
                                        "scope": f"{google.GMAIL} {google.CALENDAR}"})
-        with self.assertRaisesRegex(google.AccountError, "example-co exist in both"):
+        with self.assertRaisesRegex(google.AccountError, "work exist in both"):
             google.migrate()
-        self.assertEqual(json.loads((self.sup / "mail" / "example-co.json").read_text())["refresh_token"], "old")
-        self.assertEqual(google.account("example-co")["refresh_token"], "new")
+        self.assertEqual(json.loads((self.sup / "mail" / "work.json").read_text())["refresh_token"], "old")
+        self.assertEqual(google.account("work")["refresh_token"], "new")
 
 
 class CliTest(GoogleCase):
@@ -188,19 +188,19 @@ class CliTest(GoogleCase):
         return code, out.getvalue()
 
     def test_mail_login_is_gone(self):
-        code, out = self.cli("mail", "login", "example-co", ME)
+        code, out = self.cli("mail", "login", "work", ME)
         self.assertEqual(code, 2)
         self.assertIn("shaft mail login is gone: shaft google login <alias> <address> [--client <name>]", out)
         self.assertFalse((self.sup / "google").exists())
 
     def test_google_lists_accounts_with_scopes_and_unmigrated_files(self):
-        google._save_account("example-co", {"address": ME, "client": "example-co", "refresh_token": "rt", "scope": google.GMAIL,
+        google._save_account("work", {"address": ME, "client": "work", "refresh_token": "rt", "scope": google.GMAIL,
                                        "created": "2026-10-15T10:00:00"})
         (self.sup / "mail").mkdir()
         (self.sup / "mail" / "home.json").write_text("{}")
         code, out = self.cli("google")
         self.assertEqual(code, 0)
-        self.assertIn("example-co      operator@work.example · client example-co · granted gmail.readonly · since 2026-10-15", out)
+        self.assertIn("work       operator@work.example · client work · granted gmail.readonly · since 2026-10-15", out)
         self.assertIn("NOT READ: home still in", out)
         self.assertIn("(shaft google migrate)", out)
         code, out = self.cli("google", "migrate")

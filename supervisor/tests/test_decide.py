@@ -1,6 +1,6 @@
-"""Decision models (TypeSafe's Jev) through the broker's `decide` tool (Daniele, 2026-10-14).
+"""Decision models (TypeSafe's Jev) through the broker's `decide` tool (the operator, 2026-10-14).
 
-Jev is not a chat model, so the broker's /llm path could not reach it: wren had to ask Daniele for a key of its own.
+Jev is not a chat model, so the broker's /llm path could not reach it: wren had to ask the operator for a key of its own.
 Now the supervisor calls OpenRouter's decisions endpoint with its own key, under the same allowlist, daily cap,
 usage log and data policy as the chat models; a trial replay's pair shares one real answer.
 """

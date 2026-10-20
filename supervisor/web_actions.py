@@ -1,4 +1,4 @@
-"""The web UI's actions (PLAN-webui.md M2), at parity with `shaft top`'s: each runs the same CLI subcommand through
+"""The web UI's actions (docs/plans/PLAN-webui.md M2), at parity with `shaft top`'s: each runs the same CLI subcommand through
 actions.py (logged as `web: operator …`, long ones detached with output in .supervisor/web-actions.log), asks first
 with a line that states its exact effect and its cost where there is one, and is refused — 409, with the reason —
 where the TUI or the CLI refuses it. Guards are checked again when the POST arrives: the page may be older than the

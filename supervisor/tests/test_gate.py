@@ -290,7 +290,7 @@ REACH_OUT = (   # tries the operator's listener, says what happened in a file th
 
 
 class GateLocalhostTest(FakeProjectCase):
-    """Regression (found 2026-10-18, planning PLAN-browser.md): the gate sandboxed an instance's plugin check and its
+    """Regression (found 2026-10-18, planning docs/plans/PLAN-browser.md): the gate sandboxed an instance's plugin check and its
     own tests with network* allowed on "localhost:*", so instance-written code could connect to any service on the
     operator's Mac — his dev servers, databases, Jupyter, the model and embedding servers. Nothing of his may be
     reachable from an instance. A listener the gate's sandbox did not open, started here outside it, must see no

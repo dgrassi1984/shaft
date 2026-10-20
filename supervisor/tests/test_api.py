@@ -12,7 +12,7 @@ from unittest import mock
 
 from supervisor import api
 
-KEY, ME = "sk-shaft-test", "daniele@example.com"
+KEY, ME = "sk-shaft-test", "operator@example.com"
 EVENTS = [{"type": "ready", "name": "shaft"}, {"type": "status", "phase": "waiting for the model"},
           {"type": "tool_start", "name": "web_search", "args": '{"query": "teal"}'},
           {"type": "tool_end", "name": "web_search", "ok": True, "brief": "ok"},
@@ -80,7 +80,7 @@ class ApiTest(unittest.TestCase):
         return urllib.request.urlopen(r, timeout=10)
 
     def test_only_the_owner_with_the_key_gets_in(self):
-        for key, login, code in ((None, ME, 401), ("wrong", ME, 401), (KEY, "someone@else.com", 403), (KEY, None, 403)):
+        for key, login, code in ((None, ME, 401), ("wrong", ME, 401), (KEY, "someone@example.com", 403), (KEY, None, 403)):
             with self.subTest(key=key, login=login):
                 with self.assertRaises(urllib.error.HTTPError) as ctx:
                     self.req("/models", key=key, login=login)
@@ -111,7 +111,7 @@ class ApiTest(unittest.TestCase):
                 {"type": "turn_end", "steps": 2, "ended_by": "answer"}]
 
     def test_only_the_last_step_is_the_reply_narration_goes_to_reasoning(self):
-        # Regression (Daniele, 2026-10-14: "on Telegram I get more than what he actually says"): every step's text
+        # Regression (the operator, 2026-10-14: "on Telegram I get more than what he actually says"): every step's text
         # was joined into the reply, so what the instance wrote before calling a tool reached Telegram as if said.
         with mock.patch(f"{__name__}.EVENTS", self.NARRATED):
             out = json.load(self.req("/chat/completions", {"model": "wren", "messages": [{"role": "user", "content": "teal?"}]}))
@@ -149,7 +149,7 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(fake_run_agent.request["talk_id"], first)
 
     def test_request_whose_client_left_while_waiting_never_runs(self):
-        # Regression: my test request waited behind Daniele's conversation; after the client gave up,
+        # Regression: my test request waited behind the operator's conversation; after the client gave up,
         # the queued run would still have happened later, with nobody listening.
         import http.client
         import time
@@ -198,9 +198,9 @@ class ApiTest(unittest.TestCase):
 
 
 class InterjectTest(unittest.TestCase):
-    """Daniele, 2026-10-16: "When I send a message via telegram while the instance is still working on my previous
+    """the operator, 2026-10-16: "When I send a message via telegram while the instance is still working on my previous
     message, it should be injected immediately into it." Before, the second message waited for the whole first reply
-    and then got a reply of its own; the reply in progress never saw it (PLAN-interject.md)."""
+    and then got a reply of its own; the reply in progress never saw it (docs/plans/PLAN-interject.md)."""
 
     WAIT = object()
 
@@ -300,7 +300,7 @@ INBOX_KEY = "sk-shaft-inbox-test"
 
 
 class InboxDoorbellTest(unittest.TestCase):
-    """POST /v1/inbox/<instance> (wren's "doorbell", Daniele 2026-10-13): anything that can POST on the tailnet
+    """POST /v1/inbox/<instance> (wren's "doorbell", the operator 2026-10-13): anything that can POST on the tailnet
     drops a message in an instance's inbox, marked as outside content, rate-limited, optionally waking it."""
 
     def setUp(self):
@@ -445,7 +445,7 @@ if __name__ == "__main__":
 
 
 class ConversationIdTest(unittest.TestCase):
-    """X-Shaft-Conversation and /v1/chat/end (PLAN-webui.md M4): a client that names its conversations never has two
+    """X-Shaft-Conversation and /v1/chat/end (docs/plans/PLAN-webui.md M4): a client that names its conversations never has two
     merged because they opened the same way, and can close one now."""
     setUp = ApiTest.setUp                                        # its server, not its tests
 

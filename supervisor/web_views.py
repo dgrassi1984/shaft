@@ -1,4 +1,4 @@
-"""The web UI's read-only pages (PLAN-webui.md M1): the TUI's tabs 2–6, 8, 9, 0 and the messages browser, plus an
+"""The web UI's read-only pages (docs/plans/PLAN-webui.md M1): the TUI's tabs 2–6, 8, 9, 0 and the messages browser, plus an
 instance's journal and activity. Each takes the data the TUI's tab takes — the same `panel` readers, called by web.py
 — and shows the same fields, so the two UIs cannot disagree. Escaping, control characters and the page frame are
 web_pages'; nothing here writes anything.
@@ -34,7 +34,7 @@ def instance_frame(name: str, tab: str, title: str, body: Html, names: list[str]
 
 def chat_frame(name: str, live: dict, body: Html, names: list[str], csrf: str, earlier: Html = Html(""),
                clear: bool = False) -> Html:
-    """The chat's own frame (PLAN-webui-chat §1): the instance's model, state and spend in one line, and everything
+    """The chat's own frame (docs/plans/PLAN-webui-chat §1): the instance's model, state and spend in one line, and everything
     else about it — its pages and its actions — behind the ⋯ menu, out of the conversation's way."""
     from .web_actions import instance_buttons
     pages = join(h('<a href="{href}">{label}</a>', href=f"/i/{q(name)}" + (f"/{t}" if t else ""), label=label)
@@ -567,7 +567,7 @@ def _activity(lines_: list[str], key: str, open_: bool = False) -> Html:
 
 
 def _my_text(text: str) -> Html:
-    """What the operator wrote, as written — except the lines he quoted (Reply on a selection), shown as a quote."""
+    """What the operator wrote, as written — except the lines they quoted (Reply on a selection), shown as a quote."""
     blocks: list[tuple[bool, list[str]]] = []               # (quoted, lines), runs of one kind
     for line in str(text).replace("\r\n", "\n").split("\n"):
         quoted = bool(_QUOTE.match(line))
@@ -597,7 +597,7 @@ def in_chat(chat: dict | None) -> set[str]:
 
 
 def _overwritten(saved: dict | None, sha: str, text: str | None) -> Html:
-    """Lines the operator wrote that a later write of the instance dropped: said, with his version to put back."""
+    """Lines the operator wrote that a later write of the instance dropped: said, with their version to put back."""
     import difflib
     if not saved or text is None or saved.get("sha") == sha:
         return Html("")
@@ -624,7 +624,7 @@ def threads_list(name: str, doc: str, sha: str, threads: list[dict], active: str
     def post(p: dict) -> Html:
         # Unsent is the operator's note the instance has not been given: no send id and no answer turn.
         unsent = p.get("sent") is None and not p.get("turn")
-        who = "you" if p["by"] == "daniele" else p["by"]
+        who = "you" if p["by"] == "operator" else p["by"]
         buttons = Html("")
         if unsent:
             buttons = join([
@@ -644,7 +644,7 @@ def threads_list(name: str, doc: str, sha: str, threads: list[dict], active: str
                  text=markdown(p["text"]), btns=buttons, raw=p["text"])
 
     def one(t: dict) -> Html:
-        by = h(' <span class="dim">by {by}</span>', by=t["by"]) if t["by"] != "daniele" else Html("")
+        by = h(' <span class="dim">by {by}</span>', by=t["by"]) if t["by"] != "operator" else Html("")
         anchor = t["anchor"]
         if anchor is None:
             quote, detached = Html(' <span class="dim">the whole document</span>'), Html("")

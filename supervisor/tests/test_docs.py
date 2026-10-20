@@ -1,4 +1,4 @@
-"""An instance's documents (PLAN-webui-chat.md §3, D0): what `shaft docs` reads and writes, and what it refuses."""
+"""An instance's documents (docs/plans/PLAN-webui-chat.md §3, D0): what `shaft docs` reads and writes, and what it refuses."""
 from __future__ import annotations
 
 import os

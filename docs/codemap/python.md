@@ -100,7 +100,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_pyenv.py` | `ChoiceTest`, `SandboxTest`, `GateTest`, `TemplateTest` | `make_venv` |
 | `supervisor/tests/test_recap.py` | `RecapCase`, `Context`, `Ask`, `Store`, `Costs`, `Panel` | — |
 | `supervisor/tests/test_sandbox_temp.py` | `UserFolderTest` | `tiny_pdf` |
-| `supervisor/tests/test_selfhosted.py` | `RacerTest`, `FallbackTest`, `RoutingTest` | `closed_port` |
+| `supervisor/tests/test_selfhosted.py` | `HostedServerTest`, `FallbackTest`, `RoutingTest` | `closed_port` |
 | `supervisor/tests/test_settings.py` | `FileCase`, `PrecedenceTest`, `SetTest`, `NotLiveTest`, `RegistryTest`, `DocumentedValuesTest` | — |
 | `supervisor/tests/test_shared_folder.py` | `SettingsTest`, `SandboxTest`, `InstanceToolsTest` | — |
 | `supervisor/tests/test_sleep_awareness.py` | `LastSleepTest`, `FailedRunTest`, `SleepEntryTest` | `last_sleep` |
@@ -108,7 +108,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_surprise_rules.py` | `FlagTest`, `BaselineTest` | — |
 | `supervisor/tests/test_talk_input.py` | `DraftKeys`, `PromptKeys`, `QueuedMessages` | `fed` |
 | `supervisor/tests/test_talk_status.py` | `StatusLineTest`, `UsageEventTest` | — |
-| `supervisor/tests/test_telegram.py` | `FakeBotAPI`, `TelegramTest`, `MarkdownTest`, `ToldTheyCanReachDanieleTest` | — |
+| `supervisor/tests/test_telegram.py` | `FakeBotAPI`, `TelegramTest`, `MarkdownTest`, `ToldTheyCanReachOperatorTest` | — |
 | `supervisor/tests/test_template_client.py` | `StreamTest`, `ToolAnnouncementTest`, `LeakedThinkingTest`, `FollowupBudgetTest`, `ReasoningEffortTest`, `RepeatGuardTest`, `ReasoningAcrossStepsTest`, `CallLedgerTest`, `FileToolsTest` | — |
 | `supervisor/tests/test_tool_switch.py` | `ToolSwitchTest` | — |
 | `supervisor/tests/test_transcripts.py` | `TranscriptData`, `TranscriptView` | — |

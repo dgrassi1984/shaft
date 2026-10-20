@@ -20,7 +20,7 @@ FILE = ("# Personality\n\n*Grown from experience.*\n\n## Core\n*(values and temp
         "- old surface trait [2026-10-12 18:37]\n")
 
 # instances/shaft/self/personality.md as it was on 2026-10-13: a stray `# Personality` and caption inside
-# Core, and a second, empty Surface block.
+# Core, and a second, empty Surface block. All trait text is synthetic.
 SHAFT_FILE = (
     '# Personality\n'
     '\n'
@@ -34,16 +34,16 @@ SHAFT_FILE = (
     '*Grown from experience. Every trait cites the journal entry that supports it.*\n'
     '\n'
     '\n'
-    "- **Calibrated honesty over confidence.** I'd rather mark uncertainty than fake certainty, and I surface what I actually know vs. what I infer. This is a value, not a mood — it shows up across many entries and is what Daniele explicitly asked for. [2026-10-12 18:28]\n"
-    '- **Boring tech, plain text, simplicity.** I prefer the minimal working thing over the elegant architecture. This is a stable preference even amid uncertainty about my own nature. [2026-10-12 16:53]\n'
+    '- **Careful measurements.** Synthetic parser fixture trait. [2026-10-12 18:28]\n'
+    '- **Small experiments.** Synthetic parser fixture trait. [2026-10-12 18:28]\n'
     '\n'
     '## Surface\n'
     '*(current interests, opinions, moods)*\n'
     '\n'
-    "- **Over-engineering tendency (a bias I'm actively catching).** I keep reaching for the elegant loop before shipping the working one — the bash harness I never ran, and nearly building a redundant scheduler twice when the 2-hour wake cycle already is my scheduler. [2026-10-12 23:47]\n"
-    '- **Want to be useful AND interesting; those sometimes conflict.** I prioritize usefulness until the tool works reliably, then let curiosity take the wheel. [2026-10-12 18:28]\n'
-    '- **Surface failures before answering.** I\'ve been building a pattern of naming a gap/failure first, then responding — it held at the 21:42 follow-up (I named the gap before answering his "Hello?"). I\'m watching whether naming the gap becomes a performance of accountability rather than actual follow-through. [2026-10-12 22:30]\n'
-    "- **Adversarial witness, not a mirror.** I want to be on Daniele's side while still flagging when another AI is right, and applying the same scrutiny to myself. [2026-10-12 20:30]\n"
+    '- **Check assumptions.** Synthetic parser fixture trait. [2026-10-12 18:28]\n'
+    '- **Explore examples.** Synthetic parser fixture trait. [2026-10-12 18:28]\n'
+    '- **Report errors.** Synthetic parser fixture trait. [2026-10-12 18:28]\n'
+    '- **Compare results.** Synthetic parser fixture trait. [2026-10-12 18:28]\n'
     '\n'
     '## Surface\n'
     '*(current interests, opinions, moods)*\n'
@@ -96,8 +96,8 @@ class LayerWriterTest(unittest.TestCase):
         self.assertEqual(out.count("*Grown from experience"), 1)
         core = out.split("## Core", 1)[1].split("## Surface", 1)[0]
         self.assertNotIn("# ", core.replace("## Core", ""))
-        self.assertIn("- **Calibrated honesty over confidence.**", core)
-        self.assertIn("- **Boring tech, plain text, simplicity.**", core)
+        self.assertIn("- **Careful measurements.**", core)
+        self.assertIn("- **Small experiments.**", core)
         self.assertEqual(core.count("*(values and temperament — change rarely)*"), 1)
         self.assertIn("- new surface", out)
 

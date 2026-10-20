@@ -1,4 +1,4 @@
-"""An instance's own Google account as a key (PLAN-own-mail.md: Thelos's Gmail, gmail.modify). The operator signs it
+"""An instance's own Google account as a key (docs/plans/PLAN-own-mail.md: Thelos's Gmail, gmail.modify). The operator signs it
 in once (`shaft secret <name> google`); the broker makes an access token from its refresh token per run and adds it
 to http_request like any key, only to its hosts. It is never one of the operator's accounts, never minted in a
 battery exam, never sent from a trial replay; and a battery exam never writes with any of an instance's keys."""
@@ -22,7 +22,7 @@ from supervisor import broker as broker_mod
 from supervisor import core, google
 from supervisor.broker import Broker, ReplayBroker
 
-THELOS = "instance@example.com"
+THELOS = "assistant@example.com"
 OPERATOR = "operator@example.com"
 SECRETS = {"GMAIL_PERSONAL_CLIENT_ID": "pid", "GMAIL_PERSONAL_CLIENT_SECRET": "psecret"}
 
@@ -165,13 +165,13 @@ class TokenTest(OwnMailCase):
         core.store_google_key(self.root, "gmail", key())
         self.tokens.refused = True
         err = self.refused(self.broker(), "http_request", url=self.gmail.base + "/messages", auth="gmail")
-        self.assertIn("your Google key 'gmail' (instance@example.com): Google refused its login", err)
-        self.assertIn("shaft secret thelos google gmail instance@example.com --client personal", err)
+        self.assertIn("your Google key 'gmail' (assistant@example.com): Google refused its login", err)
+        self.assertIn("shaft secret thelos google gmail assistant@example.com --client personal", err)
         self.assertEqual(self.gmail.seen, [])                                    # no request without a token
 
     def test_google_key_cannot_be_operator_account_at_use(self):
         # Hand-written into the key file: an instance holding the operator's mailbox would read it whole, with no
-        # label check (PLAN-mail). Refused on every use, before a token is made.
+        # label check (docs/plans/PLAN-mail). Refused on every use, before a token is made.
         core.store_google_key(self.root, "gmail", key(address=OPERATOR.upper()))
         err = self.refused(self.broker(), "http_request", url=self.gmail.base + "/messages", auth="gmail")
         self.assertIn("the operator's own Google account", err)
@@ -183,7 +183,7 @@ class TokenTest(OwnMailCase):
         b = self.broker()
         self.ok(b, "http_request", url=self.gmail.base + "/messages", auth="gmail")
         listing = self.ok(b, "secret_list")
-        self.assertIn("gmail: Google account instance@example.com (gmail.modify; refreshed by the supervisor)", listing)
+        self.assertIn("gmail: Google account assistant@example.com (gmail.modify; refreshed by the supervisor)", listing)
         self.assertNotIn("ya29", listing)
         self.assertNotIn("1//refresh", listing)
 
@@ -213,7 +213,7 @@ class ExamAndReplayTest(OwnMailCase):
         self.assertEqual(self.gmail.seen, [])
 
     def test_battery_keyed_write_not_sent(self):
-        # Found while planning PLAN-own-mail (D5): an exam's broker reads the instance's real keys (root = its
+        # Found while planning docs/plans/PLAN-own-mail (D5): an exam's broker reads the instance's real keys (root = its
         # folder) and network=False only closed the proxy, so a keyed POST reached the real API.
         core.store_secret(self.root, "github", "ghp_TEST", ["127.0.0.1"])
         exam = self.broker(root=self.root, network=False)
@@ -281,7 +281,7 @@ class LoginTest(OwnMailCase):
         self.assertNotIn("1//refresh", out)
         self.assertIn("http_request(auth='gmail') to gmail.googleapis.com", out)
         code, listing, _ = self.cli("list")
-        self.assertIn("gmail: Google account instance@example.com (gmail.modify", listing)
+        self.assertIn("gmail: Google account assistant@example.com (gmail.modify", listing)
 
     def test_google_key_cannot_be_operator_account_at_login(self):
         code, _, err = self.cli("google", "gmail", OPERATOR, "--client", "personal")
@@ -291,10 +291,10 @@ class LoginTest(OwnMailCase):
         self.assertEqual(core.read_secrets(self.root), {})
 
     def test_signed_in_as_another_account_saves_nothing(self):
-        self.tokens.address = "someone.else@gmail.com"
+        self.tokens.address = "someone.else@example.com"
         code, _, err = self.cli("google", "gmail", THELOS, "--client", "personal")
         self.assertEqual(code, 2)
-        self.assertIn("not instance@example.com: nothing saved", err)
+        self.assertIn("not assistant@example.com: nothing saved", err)
         self.assertEqual(core.read_secrets(self.root), {})
 
     def test_scope_unticked_saves_nothing(self):

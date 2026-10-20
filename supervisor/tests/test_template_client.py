@@ -26,7 +26,7 @@ class StreamTest(unittest.TestCase):
 
 class ToolAnnouncementTest(unittest.TestCase):
     def test_a_tool_call_being_written_is_reported(self):
-        # Daniele: "when shaft calls a tool, the CLI doesn't show it until the tool has returned" — the server
+        # the operator: "when shaft calls a tool, the CLI doesn't show it until the tool has returned" — the server
         # buffers a tool call until complete; SHAFT's server now announces it while it is written.
         wire = (b": tool write_file 812\n\n: tool write_file 2304\n\n"
                 b'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\ndata: [DONE]\n\n')
@@ -83,7 +83,7 @@ class FollowupBudgetTest(unittest.TestCase):
         self.assertNotIn("thinking_budget", self.bodies(tool_last, think_followup=0)["chat_template_kwargs"])
 
     def test_through_the_broker_the_settings_still_go_out(self):
-        # racer/bonsai2 is reached through the broker and reads the same template settings as the local server;
+        # gpu/bonsai2 is reached through the broker and reads the same template settings as the local server;
         # the broker drops them for cloud models (test_openrouter, to_anthropic builds its own body).
         tool_last = [{"role": "tool", "tool_call_id": "1", "content": "r"}]
         body = self.bodies(tool_last, think_followup=1024, broker_token="t", reasoning_effort="medium")
@@ -171,7 +171,7 @@ class ReasoningAcrossStepsTest(unittest.TestCase):
 
 
 class CallLedgerTest(unittest.TestCase):
-    """Twice on 2026-10-15 shaft told Daniele an append_file of its had "returned success" ("appended 2029 chars")
+    """Twice on 2026-10-15 shaft told the operator an append_file of its had "returned success" ("appended 2029 chars")
     and then vanished from disk — it had never called it: no such call in its tool log or in the model's. Each step
     now ends with the calls actually made, from the tool log, so a remembered-but-planned write shows as missing."""
 
@@ -308,7 +308,7 @@ class FileToolsTest(unittest.TestCase):
         self.assertEqual((root / "notes/trend.md").read_text(), record)              # not one byte changed
         # the same for memory/ records, and a "true" string is read as true
         (root / "memory").mkdir()
-        (root / "memory/people.md").write_text("- Daniele: quant\n")
+        (root / "memory/people.md").write_text("- the operator: quant\n")
         self.assertTrue(call("write_file", path="memory/people.md", content="- new\n").startswith("ERROR"))
         self.assertIn("1 earlier line(s)", call("write_file", path="memory/people.md", content="- new\n",
                                                 replace="true"))

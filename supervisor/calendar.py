@@ -1,4 +1,4 @@
-"""The operator's Google Calendar, read for an instance he granted calendars to (PLAN-calendar.md).
+"""The operator's Google Calendar, read for an instance they granted calendars to (docs/plans/PLAN-calendar.md).
 
 calendar.readonly opens every calendar the account can see, other people's shared calendars included, and no token
 can be limited to one. So the instance never holds one: the account is google.py's, and this module is built so that
@@ -93,8 +93,8 @@ def resolve(acct: google.Account, which: str) -> dict:
 
 # -- time: the window asked for, and an event's span in the operator's time zone -------------------------------------
 def _local(dt: datetime) -> datetime:
-    """In the operator's time zone (the supervisor runs on his machine), DST of that very day included. A naive
-    time is read as his local time."""
+    """In the operator's time zone (the supervisor runs on their machine), DST of that very day included. A naive
+    time is read as their local time."""
     return dt.astimezone()
 
 
@@ -306,7 +306,7 @@ def render_event(hdl: str, cal_label: str, ev: dict, master: dict | None, operat
     if ev.get("visibility") in ("private", "confidential"):
         out.append(f"Visibility: {ev['visibility']} (shown: {operator} granted this calendar)")
     mine = own_response(ev)
-    if mine and mine != "organiser":   # his own event: the organiser line says so
+    if mine and mine != "organiser":   # their own event: the organiser line says so
         out.append(f"{operator}'s response: {mine}" + (f" ({operator} declined it)" if mine == "declined" else ""))
     org = ev.get("organizer") or {}
     out.append("Organiser: " + _who(org) + (f" ({operator})" if by_operator(ev, address) else ""))

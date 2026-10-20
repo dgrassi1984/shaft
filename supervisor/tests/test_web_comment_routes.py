@@ -48,7 +48,7 @@ class CommentRoutesTest(WebTest):
         thread = comments.threads("wren")[0]
         self.assertEqual((thread["doc"], thread["sha"], thread["anchor"]), ("plan.md", "seen-sha", None))
         self.assertIsNone(thread["posts"][0]["sent"])
-        self.assertEqual(thread["posts"][0]["by"], "daniele")
+        self.assertEqual(thread["posts"][0]["by"], "operator")
         r = self.post(pid="p-0000000000000002", thread="c1", text="Reply")
         self.assertEqual((r.status, r.headers["X-Thread"]), (200, "c1"))
         self.assertEqual([p["text"] for p in comments.threads("wren")[0]["posts"]], ["Question", "Reply"])
@@ -92,7 +92,7 @@ class CommentRoutesTest(WebTest):
             sync.assert_called_once_with("wren", ["plan.md"])
         self.assertEqual((r.status, r.headers["X-Thread"]), (200, "c1"))
         self.assertEqual(comments.threads("wren")[0]["state"], "resolved")
-        self.assertEqual(comments.take_notices("wren"), ["[Daniele resolved c1 on notes/docs/plan.md]"])
+        self.assertEqual(comments.take_notices("wren"), ["[The operator resolved c1 on notes/docs/plan.md]"])
 
     def test_invalid_inputs_and_missing_csrf_do_not_create_posts(self):
         for fields in ({"pid": "bad"}, {"doc": "../escape.md"}, {"anchor": "{"},

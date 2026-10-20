@@ -1,11 +1,11 @@
-"""The operator's Google accounts, shared by every Google service an instance may be granted (PLAN-calendar.md).
+"""The operator's Google accounts, shared by every Google service an instance may be granted (docs/plans/PLAN-calendar.md).
 
 One login per account covers Gmail and Calendar, both read-only (`shaft google login`). The supervisor keeps each
 account's refresh token in .supervisor/google/<alias>.json (0600, outside every sandbox) with the OAuth client that
 issued it and the scopes Google actually granted; instances never hold a credential. mail.py and calendar.py enforce
 their own grants on top of an `Account`; nothing here knows about labels or calendars.
 
-An instance's own Google account (PLAN-own-mail.md: Thelos's Gmail; PLAN-own-drive.md: its Drive, Sheets, Docs and
+An instance's own Google account (docs/plans/PLAN-own-mail.md: Thelos's Gmail; docs/plans/PLAN-own-drive.md: its Drive, Sheets, Docs and
 Slides) is not the operator's: each login is a `google` key in the instance's key store (`instance_key_login`, one
 bundle from KEY_SCOPES), refreshed by the broker (`refresh`) and added to its http_request calls like any key. It
 may never be one of the operator's accounts (`operator_addresses`).
@@ -46,7 +46,7 @@ SCOPE_NAMES = {GMAIL: "gmail.readonly", CALENDAR: "calendar.readonly", GMAIL_MOD
 # What an instance's own Google key may be granted (a bundle of scopes, all or nothing), and the hosts its token is
 # good for (the key is bound to them).
 # gmail.modify: read, send, label, trash; never a permanent delete, the settings or anything outside Gmail.
-# drive (PLAN-own-drive.md): every file in its Drive and every file shared with it, Sheets, Docs and Slides; it can
+# drive (docs/plans/PLAN-own-drive.md): every file in its Drive and every file shared with it, Sheets, Docs and Slides; it can
 # share, trash and permanently delete its own files. www.googleapis.com serves Drive v3 and its uploads (and other
 # Google APIs, which refuse a token without their scope).
 KEY_SCOPES = {"gmail.modify": ((GMAIL_MODIFY,), ("gmail.googleapis.com",)),
@@ -58,7 +58,7 @@ CALENDAR_PRIMARY = "https://www.googleapis.com/calendar/v3/calendars/primary"
 ALIAS_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
 CLIENT_RE = ALIAS_RE                                 # an OAuth client's name (GMAIL_<NAME>_CLIENT_ID)
 # Google's quotas are per user per minute, shared by every instance granted the account: Gmail's hit in M0 of
-# PLAN-mail (2026-10-15). An answer over quota is waited out, Retry-After first, for this long at most.
+# docs/plans/PLAN-mail (2026-10-15). An answer over quota is waited out, Retry-After first, for this long at most.
 QUOTA_WAIT_S = 60
 urlopen = urllib.request.urlopen
 sleep = time.sleep
@@ -80,7 +80,7 @@ def accounts_dir() -> Path:
 
 
 def old_accounts_dir() -> Path:
-    """Where PLAN-mail kept the account files, before PLAN-calendar M1 (`shaft google migrate` moves them)."""
+    """Where docs/plans/PLAN-mail kept the account files, before docs/plans/PLAN-calendar M1 (`shaft google migrate` moves them)."""
     return core.SUP_DIR / "mail"
 
 
@@ -169,14 +169,14 @@ def migrate() -> list[str]:
 
 def client_keys(client: str) -> tuple[str, str]:
     """The .env names of an OAuth client's ID and secret: GMAIL_<CLIENT>_CLIENT_ID / _CLIENT_SECRET (named in
-    PLAN-mail, kept for every Google service: the .env is the operator's)."""
+    docs/plans/PLAN-mail, kept for every Google service: the .env is the operator's)."""
     stem = f"GMAIL_{client.upper().replace('-', '_')}"
     return f"{stem}_CLIENT_ID", f"{stem}_CLIENT_SECRET"
 
 
 def _client(client: str, secrets_env: dict[str, str]) -> tuple[str, str]:
-    """An account's OAuth client, by name. One per Google organisation at least: an Internal app (example-co.ai) only
-    signs in its own organisation's users, so a gmail.com account needs its own client (an External app in
+    """An account's OAuth client, by name. One per Google organisation at least: an Internal app (work.example) only
+    signs in its own organisation's users, so a personal Google account needs its own client (an External app in
     production). A refresh token works only with the client that issued it, so each account records its own."""
     if not CLIENT_RE.match(client or ""):
         raise AccountError(f"{client!r} is not an OAuth client name (lowercase letters, digits, -)")
@@ -227,7 +227,7 @@ def refresh(client: str, refresh_token: str, secrets_env: dict[str, str], who: s
 
 def operator_addresses() -> set[str]:
     """The addresses of the operator's own Google accounts (casefolded): never an instance's own key, which has no
-    label check, so the operator's mailbox would be read whole (PLAN-own-mail.md, D2)."""
+    label check, so the operator's mailbox would be read whole (docs/plans/PLAN-own-mail.md, D2)."""
     return {str(a.get("address") or "").casefold() for a in accounts().values()} - {""}
 
 
@@ -253,7 +253,7 @@ class Account:
         saved = account(self.alias)
         if not saved and self.alias in unmigrated():
             raise AccountError(f"Google account {self.alias!r} is not read: its file is still in {old_accounts_dir()} "
-                               "(PLAN-mail's folder); the operator runs `shaft google migrate`")
+                               "(docs/plans/PLAN-mail's folder); the operator runs `shaft google migrate`")
         if not saved:
             raise AccountError(f"Google account {self.alias!r} is not logged in: the operator runs "
                                f"`shaft google login {self.alias} <address>`")
@@ -343,7 +343,7 @@ def login(alias: str, address: str, secrets_env: dict[str, str], client: str = "
     every step succeeds."""
     client = client or alias
     if not ALIAS_RE.match(alias or ""):
-        raise AccountError(f"{alias!r} is not an alias: lowercase letters, digits, -, starting with a letter (e.g. example-co)")
+        raise AccountError(f"{alias!r} is not an alias: lowercase letters, digits, -, starting with a letter (e.g. work)")
     data = consent(address, client, SCOPES, secrets_env, open_url=open_url, timeout_s=timeout_s)
     _save_account(alias, data)
     return data
@@ -351,7 +351,7 @@ def login(alias: str, address: str, secrets_env: dict[str, str], client: str = "
 
 def instance_key_login(address: str, client: str, scope: str, secrets_env: dict[str, str], open_url=None,
                        timeout_s: int = 300) -> dict:
-    """The consent flow for an instance's own Google account (PLAN-own-mail.md, PLAN-own-drive.md): one bundle from
+    """The consent flow for an instance's own Google account (docs/plans/PLAN-own-mail.md, docs/plans/PLAN-own-drive.md): one bundle from
     KEY_SCOPES, every scope in it granted or nothing saved (the consent page lets the operator untick one); never an
     operator account (checked before the browser opens and again on the address Google signed in). Returns the
     key's fields for core.store_google_key; nothing is stored here."""

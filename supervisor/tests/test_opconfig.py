@@ -1,4 +1,4 @@
-"""The operator's edits of config.env and drive.md (PLAN-webui.md M3: `shaft config`, `shaft drive`, the web UI's
+"""The operator's edits of config.env and drive.md (docs/plans/PLAN-webui.md M3: `shaft config`, `shaft drive`, the web UI's
 Config and Drive pages): only the named lines change, a stale edit is refused, the instance's set_config and the
 operator never lose each other's line, and the edit is committed as the operator's — at once when the instance is
 free, by its run otherwise, never undone by the gate as the instance's (kant, 2026-10-13)."""
@@ -19,11 +19,11 @@ from supervisor.tests import test_config_writers as cw
 
 TEMPLATE = ('# A local server, or "broker".\nLLM_BASE_URL="http://127.0.0.1:8780/v1"   # SHAFT\'s own\n'
             'LLM_MODEL="ternary-bonsai-2-27b-mlx"\nLLM_API_KEY=""\n# How hard I think.\nLLM_REASONING_EFFORT="medium"\n'
-            '# How often I wake.\nWAKE_INTERVAL_MINUTES=120\n\nOPERATOR_NAME="Daniele"\n')
+            '# How often I wake.\nWAKE_INTERVAL_MINUTES=120\n\nOPERATOR_NAME="the operator"\n')
 CONFIG = ('# SHAFT instance configuration\n\n# A local server, or "broker".\nLLM_BASE_URL="broker"\n'
           'LLM_MODEL="openrouter/xiaomi/mimo-v2.6-pro"\nLLM_API_KEY="sk-secret-value"\n# How hard I think.\n'
-          'LLM_REASONING_EFFORT="medium"\nWAKE_INTERVAL_MINUTES=5   # Daniele, 2026-10-17 (floor 5)\n'
-          'CUSTOM_KNOB=yes\n\nOPERATOR_NAME="Daniele"\n')
+          'LLM_REASONING_EFFORT="medium"\nWAKE_INTERVAL_MINUTES=5   # the operator, 2026-10-17 (floor 5)\n'
+          'CUSTOM_KNOB=yes\n\nOPERATOR_NAME="the operator"\n')
 AGENT_CONFIG = 'CHOICES = {"LLM_REASONING_EFFORT": ("medium", "xhigh", "low")}\n'
 TODAY = date.today().isoformat()
 REAL_COMMIT = opconfig._commit
@@ -46,7 +46,7 @@ class OpConfigTest(unittest.TestCase):
                   mock.patch.object(core, "SUP_DIR", self.dir / "sup"),
                   mock.patch.object(opconfig, "_commit", side_effect=lambda n, r, w: self.committed.append(w) or True),
                   mock.patch("supervisor.cloudllm.CLOUD_MODELS", ["claude-haiku-5-5", "openrouter/xiaomi/mimo-v2.6-pro"]),
-                  mock.patch("supervisor.selfhosted.SERVERS", {"racer": {"url": "http://x"}}),
+                  mock.patch("supervisor.selfhosted.SERVERS", {"gpu": {"url": "http://x"}}),
                   mock.patch("supervisor.autonomy.wake_floor", return_value=5),
                   mock.patch.object(opconfig, "log")):
             p.start()
@@ -61,7 +61,7 @@ class SetTest(OpConfigTest):
         r = opconfig.set_values("wren", {"LLM_REASONING_EFFORT": "xhigh"})
         self.assertEqual(r["changed"], ["LLM_REASONING_EFFORT"])
         self.assertEqual(self.text(), CONFIG.replace('LLM_REASONING_EFFORT="medium"',
-                                                     f'LLM_REASONING_EFFORT="xhigh"   # Daniele, {TODAY}'))
+                                                     f'LLM_REASONING_EFFORT="xhigh"   # the operator, {TODAY}'))
         self.assertEqual(self.committed, ["config"])
 
     def test_a_model_switch_sets_its_base_url_in_the_same_write(self):
@@ -73,7 +73,7 @@ class SetTest(OpConfigTest):
         values = core.config_values(self.text())
         self.assertEqual((values["LLM_MODEL"], values["LLM_BASE_URL"]),
                          ("ternary-bonsai-2-27b-mlx", "http://127.0.0.1:8780/v1"))
-        opconfig.set_values("wren", {"LLM_MODEL": "racer/bonsai2"})
+        opconfig.set_values("wren", {"LLM_MODEL": "gpu/bonsai2"})
         self.assertEqual(core.config_values(self.text())["LLM_BASE_URL"], "broker")
 
     def test_a_stale_edit_is_refused_and_names_the_value_now(self):
@@ -145,10 +145,10 @@ class FieldsTest(OpConfigTest):
         self.assertEqual(fs["LLM_API_KEY"]["value"], "(set, hidden)")
         self.assertNotIn("sk-secret-value", repr(fs))
         self.assertEqual(fs["LLM_REASONING_EFFORT"]["choices"], ["medium", "xhigh", "low"])
-        self.assertIn("racer/bonsai2", fs["LLM_MODEL"]["choices"])
+        self.assertIn("gpu/bonsai2", fs["LLM_MODEL"]["choices"])
         self.assertIn("ternary-bonsai-2-27b-mlx", fs["LLM_MODEL"]["choices"])
         self.assertEqual(fs["LLM_REASONING_EFFORT"]["help"], "How hard I think.")
-        self.assertIn("(Daniele, 2026-10-17 (floor 5))", fs["WAKE_INTERVAL_MINUTES"]["help"])
+        self.assertIn("(the operator, 2026-10-17 (floor 5))", fs["WAKE_INTERVAL_MINUTES"]["help"])
         self.assertTrue(fs["WAKE_INTERVAL_MINUTES"]["numeric"])
         self.assertTrue(fs["CUSTOM_KNOB"]["set"])                        # a key the template does not know
 
@@ -160,10 +160,10 @@ class FieldsTest(OpConfigTest):
 class DriveTest(OpConfigTest):
     def test_set_and_remove_with_compare_and_set(self):
         self.assertEqual(opconfig.drive("wren"), (None, "none"))
-        opconfig.set_drive("wren", "Help Daniele with his mail.", "none")
+        opconfig.set_drive("wren", "Help the operator with his mail.", "none")
         text, sha = opconfig.drive("wren")
-        self.assertEqual(text, "Help Daniele with his mail.\n")
-        self.assertEqual(sha, hashlib.sha256(b"Help Daniele with his mail.\n").hexdigest())
+        self.assertEqual(text, "Help the operator with his mail.\n")
+        self.assertEqual(sha, hashlib.sha256(b"Help the operator with his mail.\n").hexdigest())
         with self.assertRaisesRegex(opconfig.Refused, "changed since you looked"):
             opconfig.set_drive("wren", "Something else.", "none")
         with self.assertRaisesRegex(opconfig.Refused, "empty"):

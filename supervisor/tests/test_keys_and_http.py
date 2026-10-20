@@ -1,4 +1,4 @@
-"""An instance's own keys and http_request (Daniele, 2026-10-13: "they should have their own key and be able
+"""An instance's own keys and http_request (the operator, 2026-10-13: "they should have their own key and be able
 to manage them"). The instance stores and names its keys; only the supervisor ever handles a value."""
 from __future__ import annotations
 
@@ -88,7 +88,7 @@ class KeysAndHttpTest(unittest.TestCase):
         self.assertTrue(missing["result"].startswith("HTTP 404"))
 
     def test_post_goes_out_without_an_operator_allowlist(self):
-        # Daniele, 2026-10-14: writes are not gated per host any more (wren needed POST to api.github.com to mint
+        # the operator, 2026-10-14: writes are not gated per host any more (wren needed POST to api.github.com to mint
         # a GitHub App token). A POST to a host nobody allowed must be sent, not refused.
         out = self.call("http_request", url=self.api.base + "/issues", method="POST", body={"title": "hi"})
         self.assertTrue(out["ok"], out)

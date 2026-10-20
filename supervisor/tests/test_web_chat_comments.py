@@ -217,7 +217,7 @@ class CommentChatTest(unittest.TestCase):
         web_chat.doc_saved("wren", ME, "plan.md", "old", "new", "sha")
         chat, _ = web_chat.send("wren", ME, "Hello", [])
         content = chat["turns"][0]["content"]
-        self.assertLess(content.index("[Daniele edited"), content.index("[Daniele resolved"))
+        self.assertLess(content.index("[The operator edited"), content.index("[The operator resolved"))
         self.assertEqual(comments.take_notices("wren"), [])
         comments.set_state("wren", tid, "open")
         _, pid = self.add()
@@ -228,7 +228,7 @@ class CommentChatTest(unittest.TestCase):
         self.assertEqual(len(web_chat.load(chat["id"])["turns"]), 1)
         self.api.interject_status = 202
         c, _ = web_chat.send_comment("wren", ME, pid)
-        self.assertIn("[Daniele reopened c1", c["turns"][1]["content"])
+        self.assertIn("[The operator reopened c1", c["turns"][1]["content"])
         self.assertEqual(comments.take_notices("wren"), [])
 
     def test_section_for_earlier_reply_attaches(self):
@@ -304,4 +304,4 @@ class LiveCommentRelayTest(ChatTest):
             c = self.wait_idle(chat["id"])
         self.assertEqual(c["turns"][1]["answered"], [{"id": tid, "doc": "plan.md"}])
         self.assertEqual(comments.threads("wren")[0]["posts"][-1]["text"], "Answer 1.")
-        self.assertIn("[Daniele commented", self.api.chats()[0][2]["messages"][0]["content"])
+        self.assertIn("[The operator commented", self.api.chats()[0][2]["messages"][0]["content"])

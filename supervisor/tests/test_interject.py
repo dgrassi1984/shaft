@@ -1,5 +1,5 @@
-"""A message Daniele sends while the instance is still replying reaches that reply at its next step (Daniele,
-2026-10-16: "it should be injected immediately into it"; PLAN-interject.md). The agent side: the real talk.answer
+"""A message the operator sends while the instance is still replying reaches that reply at its next step (the operator,
+2026-10-16: "it should be injected immediately into it"; docs/plans/PLAN-interject.md). The agent side: the real talk.answer
 against a scripted model, with the supervisor's .tmp/interject-<talk id>.jsonl written while the model works."""
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ TALK = "api-0123456789"
 
 class AnswerHearsInterjectionsTest(unittest.TestCase):
     def answer(self, replies, send_on_request: int):
-        """Run one reply; when the model gets its `send_on_request`-th request, Daniele sends "and skip Friday"."""
+        """Run one reply; when the model gets its `send_on_request`-th request, the operator sends "and skip Friday"."""
         from shaft import config, talk
         from shaft.llm import Client
         from shaft.state import State
@@ -33,14 +33,14 @@ class AnswerHearsInterjectionsTest(unittest.TestCase):
         (root / "config.env").write_text(f'LLM_BASE_URL="{fake.url}"\nLLM_MODEL="m"\n')
         (root / ".tmp").mkdir()
 
-        def daniele_writes(body):
+        def operator_writes(body):
             if len(fake.requests) == send_on_request:   # 0: before the first call
                 with (root / ".tmp" / f"interject-{TALK}.jsonl").open("a") as f:
                     f.write(json.dumps({"text": "and skip Friday"}) + "\n")
 
-        fake.on_request = daniele_writes
+        fake.on_request = operator_writes
         if send_on_request == 0:
-            daniele_writes(None)
+            operator_writes(None)
         cfg = config.load(root, environ={"SHAFT_ROOT": str(root)})
         state = State(root)
         out = io.StringIO()

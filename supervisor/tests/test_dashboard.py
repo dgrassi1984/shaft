@@ -1,4 +1,4 @@
-"""`shaft top`'s snapshot: state and what each instance is doing right now (Daniele, 2026-10-13)."""
+"""`shaft top`'s snapshot: state and what each instance is doing right now (the operator, 2026-10-13)."""
 from __future__ import annotations
 
 import json

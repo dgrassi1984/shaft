@@ -75,7 +75,7 @@ class CommentsTest(unittest.TestCase):
         comments.edit("wren", pid, "Edited")
         self.assertEqual(comments.get_post("wren", pid)["text"], "Edited")
         reply = self.pid()
-        self.assertEqual(comments.reply("wren", reply, tid, "Reply", "daniele"), tid)
+        self.assertEqual(comments.reply("wren", reply, tid, "Reply", "operator"), tid)
         comments.mark_sent("wren", pid, "web-x#4")
         comments.mark_sent("wren", pid, "web-other#8")
         self.assertEqual(comments.get_post("wren", pid)["sent"], "web-x#4")
@@ -103,8 +103,8 @@ class CommentsTest(unittest.TestCase):
         self.assertEqual(comments.add_thread("wren", pid, "bad", {}, "new", "changed"), tid)
         self.assertEqual(comments.threads("wren"), before)
         reply = self.pid()
-        comments.reply("wren", reply, tid, "reply", "daniele")
-        comments.reply("wren", reply, tid, "changed", "daniele")
+        comments.reply("wren", reply, tid, "reply", "operator")
+        comments.reply("wren", reply, tid, "changed", "operator")
         self.assertEqual([p["text"] for p in self.thread()["posts"]], ["Question", "reply"])
 
     def test_validation(self):
@@ -137,11 +137,11 @@ class CommentsTest(unittest.TestCase):
         comments.set_state("wren", "c1", "resolved")
         comments.set_state("wren", "c1", "resolved")
         taken = comments.take_notices("wren")
-        self.assertEqual(taken, ["[Daniele resolved c1 on notes/docs/plan.md]"])
+        self.assertEqual(taken, ["[The operator resolved c1 on notes/docs/plan.md]"])
         self.assertEqual(comments.take_notices("wren"), [])
         comments.set_state("wren", "c1", "open")
         comments.put_back_notices("wren", taken)
-        self.assertEqual(comments.take_notices("wren"), taken + ["[Daniele reopened c1 on notes/docs/plan.md]"])
+        self.assertEqual(comments.take_notices("wren"), taken + ["[The operator reopened c1 on notes/docs/plan.md]"])
 
     def test_counts_order_and_interface(self):
         self.add()
@@ -216,7 +216,7 @@ class CommentsTest(unittest.TestCase):
         anchor = {"exact": "selected text", "prefix": "", "suffix": "", "start": 0}
         tid, pid = self.add(anchor=anchor)
         block = comments.block("wren", tid, pid)
-        self.assertIn('[Daniele commented on notes/docs/plan.md (c1), on the text "selected text":]', block)
+        self.assertIn('[The operator commented on notes/docs/plan.md (c1), on the text "selected text":]', block)
         self.assertIn("> Question", block)
         self.assertNotIn("occurs more than once", block)
         self.assertNotIn("on screen", block)
@@ -224,7 +224,7 @@ class CommentsTest(unittest.TestCase):
         self.assertIn("on the whole document", comments.block("wren", whole, post))
         comments.parse_answer("wren", "### c1\nAnswer\n```example```", [tid])
         reply = self.pid()
-        comments.reply("wren", reply, tid, "Follow up\n```", "daniele")
+        comments.reply("wren", reply, tid, "Follow up\n```", "operator")
         block = comments.block("wren", tid, reply)
         self.assertIn("[Last answer:]", block)
         self.assertIn("````\nAnswer\n```example```\n````", block)
@@ -352,7 +352,7 @@ class CommentsTest(unittest.TestCase):
     def test_copy_excludes_unsent_posts_and_rebuilds_after_overwrite(self):
         tid, _ = self.add(text="Public", doc="sub/plan.md")
         self.add(text="Private thread", doc="sub/plan.md", sent=False)
-        comments.reply("wren", self.pid(), tid, "Private reply", "daniele")
+        comments.reply("wren", self.pid(), tid, "Private reply", "operator")
         comments.parse_answer("wren", "### c1\nAnswer", [tid])
         text = comments.copy_text("wren", "sub/plan.md")
         self.assertIn("Public", text)

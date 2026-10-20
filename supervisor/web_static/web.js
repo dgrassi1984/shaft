@@ -1,4 +1,4 @@
-// SHAFT web UI behaviour (PLAN-webui.md). No inline script anywhere (the CSP forbids it): pages declare what they
+// SHAFT web UI behaviour (docs/plans/PLAN-webui.md). No inline script anywhere (the CSP forbids it): pages declare what they
 // need with data- attributes, and this file binds it once.
 //   data-poll="/fragment/…"  the element's content is refreshed from that URL every 2 s while the tab is visible
 //   <form data-post="/…">    sent with fetch as a POST carrying the CSRF token; data-confirm asks first, data-reset
@@ -20,7 +20,7 @@
     return fullText(html).slice(0, 300);
   }
 
-  // Live regions (PLAN-pwa P5) exist, empty, from the start: a region created already filled is not read out.
+  // Live regions (docs/plans/PLAN-pwa P5) exist, empty, from the start: a region created already filled is not read out.
   function region(id, role) {
     let box = document.getElementById(id);
     if (!box) {
@@ -98,7 +98,7 @@
     return !!(typing && el.contains(typing) && typing.matches("input, textarea"));
   }
 
-  // The network (PLAN-pwa P3). A refresh sends the version it has (If-None-Match) and an unchanged one costs a 304;
+  // The network (docs/plans/PLAN-pwa P3). A refresh sends the version it has (If-None-Match) and an unchanged one costs a 304;
   // it gives up after 15 s; a failure backs off (up to 30 s) and is said once, at the top, not under every panel;
   // the connection coming back or the app coming to the front refreshes at once.
   const POLL_LIMIT_MS = 15000;
@@ -466,7 +466,7 @@
   document.addEventListener("keydown", (ev) => {
     const form = ev.target.closest && ev.target.closest("form[data-files]");
     // Enter sends on a computer (Shift-Enter: a new line). A touch-only device has no Shift: there Return is a new
-    // line and the Send button sends (PLAN-pwa P0: on the iPhone a message could not have two lines).
+    // line and the Send button sends (docs/plans/PLAN-pwa P0: on the iPhone a message could not have two lines).
     if (form && ev.target.tagName === "TEXTAREA" && ev.key === "Enter" && !ev.shiftKey && !ev.isComposing
         && !touchOnly()) {
       ev.preventDefault();
@@ -648,7 +648,7 @@
     quoteTimer = setTimeout(placeQuoteButton, 120);    // after the selection settles (a drag, a phone's handles)
   });
 
-  // The rail (PLAN-webui-chat §1): an instance whose last answer this browser has not seen is marked unread. What was
+  // The rail (docs/plans/PLAN-webui-chat §1): an instance whose last answer this browser has not seen is marked unread. What was
   // seen is kept in this browser only (a convenience: losing it marks a chat unread, nothing more).
   function seenGet() {
     try { return JSON.parse(localStorage.getItem("shaft.seen") || "{}"); } catch (e) { return {}; }
@@ -677,7 +677,7 @@
     document.title = document.title.replace(/^\(\d+\) /, "");
     if (unread) document.title = `(${unread}) ${document.title}`;
   }
-  // Notifications (PLAN-pwa P4): Web Push, the only way a reply reaches a phone whose app is closed or locked (an
+  // Notifications (docs/plans/PLAN-pwa P4): Web Push, the only way a reply reaches a phone whose app is closed or locked (an
   // iPhone stops a page's scripts in the background). The button says what is true on this device.
   const standalone = () => window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
   const ios = () => /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
@@ -740,7 +740,7 @@
     if (rail) markRail(rail);                          // back on the tab: the chat on screen is seen
   });
 
-  // The documents panel (PLAN-webui-chat §3): a card in a reply or a name in its list opens that document in the
+  // The documents panel (docs/plans/PLAN-webui-chat §3): a card in a reply or a name in its list opens that document in the
   // panel, which then refreshes it as the instance writes it; the address keeps ?doc= so a reload shows the same one.
   document.addEventListener("click", (ev) => {
     const a = ev.target.closest && ev.target.closest("[data-open-doc]");
@@ -833,7 +833,7 @@
     copyText(raw ? raw.value : "", b);
   });
 
-  // On a phone (PLAN-pwa P2) the chat is the whole screen: the rail is a sheet behind ☰, the documents a sheet over
+  // On a phone (docs/plans/PLAN-pwa P2) the chat is the whole screen: the rail is a sheet behind ☰, the documents a sheet over
   // the chat, and the page is as tall as what the keyboard leaves visible, so the composer sits right above it.
   document.addEventListener("click", (ev) => {
     const t = ev.target.closest && ev.target.closest("[data-toggle-nav], [data-close-docs], nav a");

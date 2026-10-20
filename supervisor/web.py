@@ -1,4 +1,4 @@
-"""`shaft web`: the web UI for managing the instances (PLAN-webui.md) — the control panel of `shaft top` in a
+"""`shaft web`: the web UI for managing the instances (docs/plans/PLAN-webui.md) — the control panel of `shaft top` in a
 browser, for the tailnet only. Stdlib only, run by the system Python like every launchd service (core.PYTHON).
 
   shaft web on       install the service (com.shaft.web) and expose it with `tailscale serve` (never Funnel)
@@ -7,7 +7,7 @@ browser, for the tailnet only. Stdlib only, run by the system Python like every 
   shaft web pair [--name NAME]     a one-time link that pairs the browser you open it in
   shaft web unpair DEVICE | --all  revoke a paired browser
 
-Who may use it (Daniele, 2026-10-19): a request needs BOTH
+Who may use it: a request needs BOTH
   - a Tailscale-User-Login in SHAFT_API_LOGINS (set by `tailscale serve`; the server listens on 127.0.0.1 only), and
   - a paired browser's cookie. `shaft web pair` prints a link valid for PAIR_MINUTES, usable once; opening it shows a
     button, and pressing it (a POST: a link preview cannot spend it) sets an HttpOnly, Secure, SameSite=Strict
@@ -306,7 +306,7 @@ def respond(req: Request) -> Response:
                       "X-Shaft-Static": web_pages.STATIC_VERSION})
     r.headers.setdefault("Cache-Control", "no-store")
     if req.method == "GET" and r.status == 200 and req.path.startswith("/fragment/"):
-        # A refresh that changed nothing costs a header, not the whole feed again (PLAN-pwa P3: ~100 a minute)
+        # A refresh that changed nothing costs a header, not the whole feed again (docs/plans/PLAN-pwa P3: ~100 a minute)
         tag = '"' + hashlib.sha1(r.body).hexdigest()[:20] + '"'
         r.headers["ETag"] = tag
         if req.headers.get("if-none-match") == tag:
@@ -330,7 +330,7 @@ def _route(req: Request) -> Response:
                        versioned=req.query.get("v") == web_pages.STATIC_VERSION)
     if req.path == "/favicon.ico":                  # asked by browsers on their own: the icon, not a refusal page
         return _static("icon-180.png")
-    # The app's shell (PLAN-pwa P1): fetched by the browser before it is paired, with nothing private in it.
+    # The app's shell (docs/plans/PLAN-pwa P1): fetched by the browser before it is paired, with nothing private in it.
     if req.path == "/manifest.webmanifest":
         return Response(200, web_pages.manifest().encode(), {"Content-Type": "application/manifest+json",
                                                              "Cache-Control": "no-cache"})
@@ -511,7 +511,7 @@ def _get(req: Request, csrf: str) -> Response | None:
     from . import dashboard, panel, web_views as v
     path, qs = req.path, req.query
     names = _names()
-    if path == "/":                                  # chat first (PLAN-webui-chat §1): the instance last talked to
+    if path == "/":                                  # chat first (docs/plans/PLAN-webui-chat §1): the instance last talked to
         last = _last_chat(req)
         to = f"/i/{last}/chat" if last in names else f"/i/{names[0]}/chat" if names else "/overview"
         return Response(302, b"", {"Location": to})
@@ -602,7 +602,7 @@ def _get(req: Request, csrf: str) -> Response | None:
 
 def _save_doc(name: str, login: str, form: dict) -> Response:
     """The operator's edit of a document (or a new one): through `shaft docs set` and its compare-and-set; then the
-    instance hears of it (web_chat.doc_saved). Refused: what the document has now that his text has not."""
+    instance hears of it (web_chat.doc_saved). Refused: what the document has now that their text has not."""
     import difflib
     import secrets as _secrets
     from . import actions, docs, web_chat
@@ -652,7 +652,7 @@ def _comment(name: str, login: str, action: str | None, form: dict) -> Response:
     try:
         if action is None:
             if form.get("thread"):
-                tid = doc_comments.reply(name, pid, form["thread"], text, "daniele")
+                tid = doc_comments.reply(name, pid, form["thread"], text, "operator")
             else:
                 try:
                     anchor = json.loads(form["anchor"]) if form.get("anchor", "").strip() else None
@@ -689,7 +689,7 @@ def _comment(name: str, login: str, action: str | None, form: dict) -> Response:
 
 def _docs_panel(name: str, chat: dict | None, doc: str, thread: str = ""):
     """(the open document, the panel): the one asked for, else the last this chat changed, else none open. With its
-    comment threads (PLAN-comments.md), which are in the fragment so a comment alone changes its ETag."""
+    comment threads (docs/plans/PLAN-comments.md), which are in the fragment so a comment alone changes its ETag."""
     from . import doc_comments, docs, web_views as v
     marked = v.in_chat(chat)
     try:
@@ -868,7 +868,7 @@ def _attachment_root(path: Path) -> tuple[Path, Path]:
 def attachment_path(a: dict) -> Path | None:
     """Where a message's attachment is, if it is a file inside an instance's folder or the operator's inbox
     attachments, reached without following any link below that folder; None otherwise. Only paths a message names
-    are ever served (PLAN-webui.md: a file an instance wrote never runs as a page)."""
+    are ever served (docs/plans/PLAN-webui.md: a file an instance wrote never runs as a page)."""
     from .core import INSTANCES
     rel = Path(str(a.get("path", "")))
     if ".." in rel.parts:

@@ -1,4 +1,4 @@
-"""The supervisor's settings (PLAN-webui-chat.md §4): `shaft settings`, which the web UI's Settings page runs.
+"""The supervisor's settings (docs/plans/PLAN-webui-chat.md §4): `shaft settings`, which the web UI's Settings page runs.
 
 Every setting is a knob (core.knob): read once when a process starts, from its environment, else the operator's
 settings file (.supervisor/settings.env), else its default. The launchd services run with PATH alone in their

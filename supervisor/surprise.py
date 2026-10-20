@@ -1,4 +1,4 @@
-"""Surprise measurement (PLAN-surprise.md): which tool results contradicted what an instance must have
+"""Surprise measurement (docs/plans/PLAN-surprise.md): which tool results contradicted what an instance must have
 expected, whether the same kind comes back, and the baseline the surprise loop is judged against.
 
 Read from the instances' episodes and usage logs only: the supervisor never imports agent code, and an

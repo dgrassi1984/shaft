@@ -118,7 +118,7 @@ def _every(interval: timedelta) -> str:
 def describe_schedule(name: str, config: dict[str, str] | None = None) -> str:
     """What an instance should know about when it runs — from the scheduler and its own config.env."""
     if not (AGENTS / f"{SERVICES['scheduler']['label']}.plist").exists():
-        return ("Your autonomous schedule is off: you run only when Daniele talks to you or starts a cycle "
+        return ("Your autonomous schedule is off: you run only when the operator talks to you or starts a cycle "
                 "by hand.")
     interval = wake_interval(name, config)
     wakes = (f"wakes you for an autonomous cycle every {_every(interval)} (WAKE_INTERVAL_MINUTES in your "
@@ -177,7 +177,7 @@ def decide_wakes(now: datetime, st: dict, names: list[str], interval_of, awake_o
 
 def _awake(name: str) -> str:
     """Why the instance counts as awake right now ('' if it does not). An open conversation waiting for the
-    operator does not: a cycle starts, and pauses only while a reply is being written (Daniele, 2026-10-13)."""
+    operator does not: a cycle starts, and pauses only while a reply is being written."""
     from .runner import busy_with, replying
     if (b := busy_with(name)):
         return b
@@ -233,7 +233,7 @@ def serve(poll_s: int = 30) -> int:
 def battery_jobs(children: dict, now: datetime, sleeping_due: bool, names: list[str], due, awake_of) \
         -> tuple[list[str], list[str]]:
     """(battery jobs to stop, instances whose battery to start). Pure: the scheduler's battery rule. A battery
-    runs only inside the night window, which closes before the sleep (Daniele, 2026-10-13: never in the
+    runs only inside the night window, which closes before the sleep (never in the
     sleep's way); a due sleep or the window's end stops one that is still running."""
     from . import battery
     _, end = battery.window(now)
