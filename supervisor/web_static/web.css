@@ -490,7 +490,8 @@ article.thread.active { border-left-color: var(--accent); background: color-mix(
 article.thread.detached q, article.thread.ambiguous q { color: var(--dim); }
 details.threads q { display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical;
                     overflow: hidden; margin: .15rem 0; font-style: italic; }
-.post { display: grid; gap: .2rem; margin: .25rem 0; }
+.post { margin: .25rem 0; }                     /* not a grid: its Edit/Delete/Send buttons stay inline */
+.post .who { margin-bottom: .1rem; }
 .post p { margin: 0; }
 .post.unsent { outline: 1px dashed var(--line); border-radius: 6px; padding: .15rem .3rem; }
 .post .who { font-size: .78rem; font-weight: 600; }

@@ -119,7 +119,10 @@
       if (!md) continue;
       const { text, map } = walk(md);
       const articles = new Map([...view.querySelectorAll("article[data-thread]")].map(a => [a.dataset.thread, a]));
-      if (lastActive && lastActive.doc === view.dataset.doc && lastActive.poll === panel.dataset.poll) {
+      // The page opened on ?thread=c7 marks it active once: remember it, or the next refresh would drop it
+      const marked = !lastActive && view.querySelector("article[data-thread].active");
+      if (marked) lastActive = { id: marked.dataset.thread, doc: view.dataset.doc, poll: panel.dataset.poll };
+      if (lastActive && lastActive.doc === view.dataset.doc) {
         const article = articles.get(lastActive.id);
         if (article) articles.forEach(a => a.classList.toggle("active", a === article));
       }
