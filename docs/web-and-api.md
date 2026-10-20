@@ -86,11 +86,13 @@ and [chat design](plans/PLAN-webui-chat.md).
 - **Comments on a document** ([PLAN-comments](plans/PLAN-comments.md)), as on a Claude artifact: select text in it
   and press **💬 Comment** (or 💬 in its title bar for the whole document). **Send comment to <instance>** is ticked
   by default: it gets the comment at once (a message of its own, or an interjection while it replies) and answers
-  under `### c7`, which lands in the thread. Unticked, it is a note only you see, to edit, delete or send later. It
-  opens threads of its own too. The commented text stays highlighted (click it to open its thread); a thread whose
+  under `### c7`, which lands in the thread. Unticked, it starts no reply but the instance can read it: leave several,
+  then ask it to review them. Each message you send names the open ones waiting, and an answer under `### c7` lands
+  in the thread as well. You can edit, delete or send it until it is answered. It opens threads of its own too. The commented text stays highlighted (click it to open its thread); a thread whose
   text left the document says so. **Resolve** folds a thread away, and the instance hears of it with your next
   message. The threads live in the supervisor (`.supervisor/web/comments/`), never in a file it could overwrite; a
-  read-only copy of what it was sent is kept in its `notes/comments/`.
+  read-only copy in its `notes/comments/` holds every comment of an open thread, sent or not, and of a resolved one
+  what was sent.
 - Each instance's other pages sit behind the chat's ⋯ menu: **Summary**, **Config** (`config.env`, a field per key),
   **Drive** (`drive.md`, saved after its diff), **Access** (tools, wake floor and cloud cap, jobs, shared folder,
   mail and calendar grants, battery, key names), **Judge**, **Changes**, **Benchmarks**, **Transcripts**,

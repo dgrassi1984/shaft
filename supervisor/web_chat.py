@@ -40,7 +40,8 @@ MAX_TEXT = 20000                   # a message, at most
 # (docs/plans/PLAN-webui-chat §3). In the message rather than its prompts, so every instance gets it whatever its own code says.
 DOCS_NOTE = ("[Web chat: a Markdown file you write under notes/docs/ appears beside this chat as a document the operator sees "
              "live and can edit. Write it whole (write_file with replace=true when you drop lines). His edits reach you "
-             "as a diff in their next message.]")
+             "as a diff in their next message. The operator's comments on notes/docs/X.md, sent or not, are in "
+             "notes/comments/X.md.]")
 
 
 class Refused(Exception):
@@ -505,6 +506,8 @@ def send_comment(name: str, login: str, pid: str) -> tuple[dict, str]:
     with _inst_lock(name):
         try:
             post = doc_comments.get_post(name, pid)
+            if post.get("seen"):
+                return load(post["seen"].split("#", 1)[0]) or {}, f"{name} already answered it"
             if post.get("sent") or post.get("turn"):
                 cid = (post.get("sent") or post["turn"]).split("#", 1)[0]
                 return load(cid) or {}, f"already sent to {name}"
@@ -562,6 +565,7 @@ def _send(name: str, login: str, text: str, files: list[tuple[str, bytes]], *,
         turn["mid"] = mid
     notices = doc_comments.take_notices(name)
     try:
+        waiting = doc_comments.waiting(name, exclude=mid)
         with _lock(cid):                               # the relay's last save takes it too: the chat's state is the truth
             chat = load(cid)
             chat["login"] = login
@@ -576,6 +580,8 @@ def _send(name: str, login: str, text: str, files: list[tuple[str, bytes]], *,
                     turn["deleted"] = deleted
             if notices:
                 turn["content"] += "\n\n" + "\n\n".join(notices)
+            if waiting:
+                turn["content"] += "\n\n" + waiting
             if not any(t["role"] == "user" for t in chat["turns"]):
                 turn["content"] += "\n\n" + DOCS_NOTE
             if chat["state"] == "replying":

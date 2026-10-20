@@ -252,29 +252,33 @@ class CommentsTest(unittest.TestCase):
         self.add()
         self.add()
         self.add(sent=False)
-        result = comments.parse_answer("wren", "### c1\n first \n### c2   \nsecond\n### c3\nprivate\n### c99\nno",
-                                       ["c1", "c2", "c3", "c99"])
-        self.assertEqual(result, {"answered": [{"id": "c1", "doc": "plan.md"}, {"id": "c2", "doc": "plan.md"}],
+        result = comments.parse_answer("wren", "### c1\n first \n### c2   \nsecond\n### c3\nunsent\n### c99\nno",
+                                       ["c1", "c2", "c99"])
+        # c3 was never sent but is in the instance's copy: its answer lands too (bug 2026-10-20: it was dropped).
+        self.assertEqual(result, {"answered": [{"id": "c1", "doc": "plan.md"}, {"id": "c2", "doc": "plan.md"},
+                                               {"id": "c3", "doc": "plan.md"}],
                                   "opened": [], "unsectioned": []})
         self.assertEqual(self.thread()["posts"][-1]["text"], "first")
-        self.assertEqual(len(self.thread("c3")["posts"]), 1)
+        self.assertEqual(self.thread("c3")["posts"][-1]["text"], "unsent")
         result = comments.parse_answer("wren", "No sections", ["c1", "c2"], chat_turn_ref="web-x#7")
         self.assertEqual(len(result["unsectioned"]), 2)
         self.assertEqual(self.thread()["unsectioned"], ["web-x#7"])
         result = comments.parse_answer("wren", "### c1\nOnly one", ["c1"], chat_turn_ref="web-x#9")
         self.assertEqual(result["answered"], [{"id": "c1", "doc": "plan.md"}])
 
-    def test_parser_sections_for_earlier_sent_threads_only(self):
+    def test_parser_sections_for_open_threads_sent_or_not(self):
         self.add()
         self.add(sent=False)
         self.add()
         self.add()
         comments.set_state("wren", "c3", "resolved")
-        result = comments.parse_answer("wren", "### c1\nanswer\n### c2\nprivate\n### c3\nresolved", [])
-        self.assertEqual(result, {"answered": [{"id": "c1", "doc": "plan.md"}],
+        result = comments.parse_answer("wren", "### c1\nanswer\n### c2\nunsent\n### c3\nresolved", [])
+        self.assertEqual(result, {"answered": [{"id": "c1", "doc": "plan.md"}, {"id": "c2", "doc": "plan.md"}],
                                   "opened": [], "unsectioned": []})
         self.assertEqual(self.thread()["posts"][-1]["text"], "answer")
-        for tid in ("c2", "c3", "c4"):
+        self.assertEqual(self.thread("c2")["posts"][-1]["text"], "unsent")
+        self.assertEqual(self.thread("c2")["unsectioned"], [])
+        for tid in ("c3", "c4"):
             self.assertEqual(len(self.thread(tid)["posts"]), 1)
             self.assertEqual(self.thread(tid)["unsectioned"], [])
 
@@ -349,16 +353,26 @@ class CommentsTest(unittest.TestCase):
         with self.assertRaises(comments.Refused):
             comments.delete("wren", self.thread()["posts"][-1]["pid"])
 
-    def test_copy_excludes_unsent_posts_and_rebuilds_after_overwrite(self):
+    def test_copy_holds_every_open_comment_and_rebuilds_after_overwrite(self):
+        # Bug 2026-10-20: unsent comments were left out, so the operator could not leave several and ask for a review.
         tid, _ = self.add(text="Public", doc="sub/plan.md")
-        self.add(text="Private thread", doc="sub/plan.md", sent=False)
-        comments.reply("wren", self.pid(), tid, "Private reply", "operator")
-        comments.parse_answer("wren", "### c1\nAnswer", [tid])
+        self.add(text="Unsent thread", doc="sub/plan.md", sent=False)
+        comments.reply("wren", self.pid(), tid, "Unsent reply", "operator")
+        done, _ = self.add(text="Closed and sent", doc="sub/plan.md")
+        comments.reply("wren", self.pid(), done, "Left unsent on a resolved thread", "operator")
+        comments.set_state("wren", done, "resolved")
         text = comments.copy_text("wren", "sub/plan.md")
         self.assertIn("Public", text)
+        self.assertIn("## c2 (open)", text)
+        self.assertIn("Unsent thread", text)
+        self.assertIn("Unsent reply", text)
+        self.assertIn("· not sent as a message", text)
+        self.assertIn('under a line "### c<n>"', text)
+        self.assertIn("Closed and sent", text)
+        self.assertNotIn("Left unsent on a resolved thread", text)
+        comments.parse_answer("wren", "### c1\nAnswer", [tid])
+        text = comments.copy_text("wren", "sub/plan.md")
         self.assertIn("Answer", text)
-        self.assertNotIn("Private", text)
-        self.assertNotIn("c2", text)
         comments.sync_copy("wren", "notes/docs/sub/plan.md")
         path = self.root / "notes/comments/sub/plan.md"
         self.assertEqual(path.read_text(), text)

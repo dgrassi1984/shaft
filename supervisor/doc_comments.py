@@ -1,7 +1,11 @@
 """Document comments live in the supervisor's store, away from files the instance rewrites.
 
 Each instance has a thread lock and a file lock. Changes replace its JSON file atomically; no chat lock or chat
-module is involved. The Markdown in notes/comments/ is an explicit, rebuildable copy of sent posts only.
+module is involved. The Markdown in notes/comments/ is an explicit, rebuildable copy: every post of an open thread, sent
+or not, so the operator can leave several comments and then ask for a review; of a resolved one, only what was sent.
+
+A post's delivery: `sent` (a chat turn carried it as a message), `turn` (the instance's own answer), `seen` (left unsent
+but answered by the instance from the copy). Any of them freezes it: it can no longer be edited, deleted or sent.
 """
 from __future__ import annotations
 
@@ -151,8 +155,15 @@ def reply(name: str, pid: str, thread: str, text: str, by: str) -> str:
         return thread
 
 
+def delivered(post: dict) -> bool:
+    """The instance has it in its transcript: sent as a message, written by it, or answered by it from the copy."""
+    return bool(post.get("sent") or post.get("turn") or post.get("seen"))
+
+
 def _unsent(post: dict) -> None:
-    if post.get("sent") or post.get("turn"):
+    if post.get("seen"):
+        raise Refused("this comment was already answered; reply with a correction")
+    if delivered(post):
         raise Refused("a sent post cannot be edited or deleted; reply with a correction")
 
 
@@ -178,7 +189,7 @@ def mark_sent(name: str, pid: str, ref: str) -> None:
         raise Refused("a sent post needs a chat turn reference")
     with _store(name, True) as store:
         _, _, post = _find(store, pid)
-        if not post.get("turn") and not post.get("sent"):
+        if not delivered(post):
             post["sent"] = ref
 
 
@@ -212,6 +223,23 @@ def threads(name: str, doc: str | None = None) -> list[dict]:
         items = [{"id": tid, **{k: v for k, v in t.items() if k != "source"}}
                  for tid, t in store["threads"].items() if doc is None or t["doc"] == doc]
         return sorted(items, key=lambda t: (t["state"] != "open", int(t["id"][1:])))
+
+
+def waiting(name: str, exclude: str = "") -> str:
+    """One line for the operator's next message: the open threads holding a comment of theirs not sent as a message
+    (`exclude`: the post this very message carries), so "review my comments" finds them. Empty when there is none."""
+    with _store(name) as store:
+        found: dict[str, list[str]] = {}
+        for tid, t in store["threads"].items():
+            if t["state"] == "open" and any(p["by"] == "operator" and not delivered(p) and p["pid"] != exclude
+                                            for p in t["posts"]):
+                found.setdefault(t["doc"], []).append(tid)
+    if not found:
+        return ""
+    where = "; ".join(f"notes/docs/{doc} ({', '.join(sorted(ids, key=lambda i: int(i[1:])))}) in notes/comments/{doc}"
+                      for doc, ids in sorted(found.items()))
+    return (f"[Open comments the operator left on documents without sending them: {where}. Answer one in your final "
+            'reply under a line "### c<n>" when you take it up.]')
 
 
 def open_counts(name: str) -> dict[str, int]:
@@ -307,7 +335,8 @@ def _sections(answer: str) -> list[tuple[str, str]]:
 
 def parse_answer(name: str, answer: str, sent_ids: list, started_by: str | None = None,
                  chat_turn_ref: str = "web-x#5") -> dict:
-    """Attach sections to any open thread with a sent post, once per turn.
+    """Attach sections to any open thread, once per turn: every open thread is in the instance's copy, sent or not.
+    An operator post answered that way without having been sent is marked `seen`, which freezes it.
 
     sent_ids are only the threads this reply heard: only they receive unsectioned references or qualify for
     the started_by whole-answer fallback. The caller admits only normally completed replies.
@@ -315,9 +344,7 @@ def parse_answer(name: str, answer: str, sent_ids: list, started_by: str | None 
     result = {"answered": [], "opened": [], "unsectioned": []}
     sent = {i["id"] if isinstance(i, dict) else i for i in sent_ids}
     with _store(name, True) as store:
-        eligible = {tid: t for tid, t in store["threads"].items()
-                    if t["state"] == "open"
-                    and any(p.get("sent") or p.get("turn") for p in t["posts"])}
+        eligible = {tid: t for tid, t in store["threads"].items() if t["state"] == "open"}
         found = {}
         for index, (heading, body) in enumerate(_sections(answer)):
             match = re.fullmatch(r"### (c[1-9][0-9]*)", heading)
@@ -349,6 +376,9 @@ def parse_answer(name: str, answer: str, sent_ids: list, started_by: str | None 
                 continue
             item = {"id": tid, "doc": thread["doc"]}
             if tid in found:
+                for post in thread["posts"]:
+                    if not delivered(post):
+                        post["seen"] = chat_turn_ref
                 thread["posts"].append(_post("p-" + secrets.token_hex(8), found[tid], name, chat_turn_ref))
                 result["answered"].append(item)
             elif tid in sent:
@@ -359,14 +389,19 @@ def parse_answer(name: str, answer: str, sent_ids: list, started_by: str | None 
 
 def _copy(items: list[dict], doc: str) -> str:
     out = [f"# Comments on notes/docs/{doc}"]
+    if any(t["state"] == "open" for t in items):
+        out.append('Every comment of an open thread is here, sent as a message or not. Answer one in your final chat '
+                   'reply under a line "### c<n>".')
     for thread in items:
-        posts = [p for p in thread["posts"] if p.get("sent") or p.get("turn")]
+        # Resolved: only what reached the instance; a note left unsent on it is the operator's.
+        posts = [p for p in thread["posts"] if thread["state"] == "open" or delivered(p)]
         if not posts:
             continue
         out.append(f"## {thread['id']} ({thread['state']})")
         out.append("On " + _quote(thread["anchor"]["exact"]) if thread["anchor"] else "On the whole document.")
         for post in posts:
-            out.append(f"### {post['by']} · {post['ts']} · {post.get('turn') or post['sent']}\n\n{post['text']}")
+            how = post.get("turn") or post.get("sent") or "not sent as a message"
+            out.append(f"### {post['by']} · {post['ts']} · {how}\n\n{post['text']}")
         for ref in thread["unsectioned"]:
             out.append(f"Answered in the chat, without a section for {thread['id']}: {ref}")
     return "\n\n".join(out) + "\n"
