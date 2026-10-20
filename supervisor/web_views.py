@@ -276,7 +276,9 @@ def judge_detail_page(name: str, j: dict, names: list[str], csrf: str) -> Html:
 
 
 # -- trials (TUI tab 4) ----------------------------------------------------------------------------------------------
-def trials_page(ts: list[dict], c: dict, only: str, progress, names: list[str], csrf: str) -> Html:
+def trials_live(ts: list[dict], c: dict, only: str, progress, names: list[str]) -> Html:
+    """The list, the caps and the queue buttons. Polled (/fragment/trials): panel.trials is cached on the trial
+    files, and an unchanged fragment is a 304, so a trial queued from this page can show up within a poll."""
     caps = [f"{cap['name']} {cap['trials_started'][0]}/{cap['trials_started'][1]} trials "
             f"${cap['trials'][0]:.2f}/${cap['trials'][1]:.2f}" for cap in c["caps"]]
     filt = join([link("/trials", "all instances") if only else Html("<b>all instances</b>")] +
@@ -305,14 +307,26 @@ def trials_page(ts: list[dict], c: dict, only: str, progress, names: list[str], 
                      result, clip(t.get("hypothesis") or "")])
     listing = (table(["created", "instance", "by", "status", "result", "hypothesis"], body)
                if body else Html('<p class="dim">no trials yet</p>'))
-    return frame("Trials", join([h("<h1>Trials</h1>"), head, section("Newest last", listing)]), names, csrf,
-                 current="/trials")
+    return join([head, section("Newest last", listing)])
+
+
+def trials_page(live: Html, only: str, names: list[str], csrf: str) -> Html:
+    query = f"?i={q(only)}" if only else ""
+    body = join([h("<h1>Trials</h1>"), h('<div data-poll="/fragment/trials{q}">{live}</div>', q=query, live=live)])
+    return frame("Trials", body, names, csrf, current="/trials")
+
+
+def trial_report(report: str) -> Html:
+    """The report text. Polled: trial.report formats the trial already loaded, and an unchanged one is a 304."""
+    return section("Report (shaft trial show)", pre(report, "wrap"))
 
 
 def trial_page(t: dict, report: str, names: list[str], csrf: str) -> Html:
-    body = h('<p><a href="/trials">← every trial</a></p><h1>Trial {id} · {inst}</h1>{r}', id=t.get("id", ""),
-             inst=t.get("instance", ""), r=section("Report (shaft trial show)", pre(report, "wrap")))
-    return frame(f"Trial {t.get('id', '')}", body, names, csrf, current="/trials")
+    name, tid = t.get("instance", ""), t.get("id", "")
+    body = h('<p><a href="/trials">← every trial</a></p><h1>Trial {id} · {inst}</h1>'
+             '<div data-poll="/fragment/trials/{n}/{tid}">{r}</div>', id=tid, inst=name, n=q(name), tid=q(tid),
+             r=trial_report(report))
+    return frame(f"Trial {tid}", body, names, csrf, current="/trials")
 
 
 # -- instance › benchmarks (TUI tab 5) -------------------------------------------------------------------------------
@@ -559,10 +573,17 @@ def services_live(svcs: list[dict], order: list[str], runs: list[str], busy: lis
                  h('<div class="actions">{b}</div>', b=autonomy_button(sched, runs))])
 
 
+def services_log(sel: str, log_name: str, tail: list[str]) -> Html:
+    """One service's log, last lines only. panel.log_tail reads the last 8 KB (not the file), so polling this is
+    cheap, and an unchanged tail is a 304. A full-file poll would not be."""
+    return section(f"{sel} log (.supervisor/{log_name})", pre("\n".join(tail) or "(empty)"))
+
+
 def services_page(live: Html, sel: str, log_name: str, tail: list[str], names: list[str], csrf: str) -> Html:
     body = join([h("<h1>Services</h1>"), h('<section class="panel"><div data-poll="/fragment/services">{l}</div>'
                                            '</section>', l=live),
-                 section(f"{sel} log (.supervisor/{log_name})", pre("\n".join(tail) or "(empty)"))])
+                 h('<div data-poll="/fragment/services/log?log={s}">{log}</div>', s=sel,
+                   log=services_log(sel, log_name, tail))])
     return frame("Services", body, names, csrf, current="/services")
 
 
