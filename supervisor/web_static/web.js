@@ -752,8 +752,7 @@
     u.searchParams.set("doc", doc);
     history.replaceState(null, "", u);
     if (panel._tick) panel._tick();
-    const grid = document.querySelector(".chatgrid");
-    if (grid) grid.classList.add("showdocs");      // on a phone the panel is a sheet over the chat: open it
+    showDocs(true);                                 // closed, or on a phone a sheet not yet open: open it
   });
   // Editing a document: the rendered view becomes its Markdown in a box; the panel stops refreshing until Save or
   // Cancel, and Save's compare-and-set refuses if the instance wrote it meanwhile (the box keeps your text).
@@ -780,12 +779,30 @@
     }
     if (panel && panel._tick) panel._tick();
   }
-  document.addEventListener("click", (ev) => {           // 📄 Documents: show the panel (it hides when there are none)
-    if (!(ev.target.closest && ev.target.closest("[data-show-docs]"))) return;
-    const grid = document.querySelector(".chatgrid");
+  // Open or closed is the operator's: beside the chat the panel shows once there are documents unless he closed it
+  // (.hidedocs, remembered in this browser), and with none only when asked (.showdocs); on a phone it is a sheet.
+  function docsOn() {
     const panel = document.getElementById("docs");
-    if (!grid || !panel) return;
-    grid.classList.toggle("showdocs");
+    return !!panel && panel.getClientRects().length > 0;
+  }
+  function docsAria() {                             // 📄 says whether the panel is on screen, however it got there
+    document.querySelectorAll("[data-show-docs]").forEach(b => b.setAttribute("aria-expanded", String(docsOn())));
+  }
+  function showDocs(on) {
+    const grid = document.querySelector(".chatgrid");
+    if (!grid) return;
+    grid.classList.toggle("showdocs", on);
+    grid.classList.toggle("hidedocs", !on);
+    try { if (on) localStorage.removeItem("shaft.docs.closed"); else localStorage.setItem("shaft.docs.closed", "1"); }
+    catch (e) { /* no storage: it opens again on the next page */ }
+    docsAria();
+  }
+  document.addEventListener("shaft:swapped", (ev) => {   // an instance's first document opens the panel beside the chat
+    if (ev.target.id === "docs") docsAria();
+  });
+  document.addEventListener("click", (ev) => {           // 📄 Documents: open or close the panel
+    if (!(ev.target.closest && ev.target.closest("[data-show-docs]"))) return;
+    if (document.getElementById("docs")) showDocs(!docsOn());
   });
   document.addEventListener("click", (ev) => {
     const edit = ev.target.closest && ev.target.closest("[data-edit-doc]");
@@ -812,8 +829,7 @@
     const t = ev.target.closest && ev.target.closest("[data-toggle-nav], [data-close-docs], nav a");
     if (!t) return;
     if (t.matches("[data-close-docs]")) {
-      const grid = document.querySelector(".chatgrid");
-      if (grid) grid.classList.remove("showdocs");
+      showDocs(false);
       return;
     }
     const open = t.matches("[data-toggle-nav]") ? !document.body.classList.contains("navopen") : false;
@@ -824,7 +840,7 @@
     if (ev.key !== "Escape") return;
     document.body.classList.remove("navopen");
     const grid = document.querySelector(".chatgrid");
-    if (grid) grid.classList.remove("showdocs");
+    if (grid) { grid.classList.remove("showdocs"); docsAria(); }    // a phone's sheet; beside the chat, ✕ or 📄
   });
   function fitViewport() {
     const vv = window.visualViewport;
@@ -842,7 +858,12 @@
   function start() {
     region("toast", "status");
     region("announce", "status");
-    if (document.querySelector(".chatgrid")) document.body.classList.add("chatapp");
+    const grid = document.querySelector(".chatgrid");
+    if (grid) {
+      document.body.classList.add("chatapp");
+      try { if (localStorage.getItem("shaft.docs.closed")) grid.classList.add("hidedocs"); } catch (e) { /* none */ }
+      docsAria();
+    }
     fitViewport();
     if ("serviceWorker" in navigator) {             // the app's shell: offline page and cached static files
       navigator.serviceWorker.register("/sw.js").catch(() => { /* not over https, or refused: the page works */ });

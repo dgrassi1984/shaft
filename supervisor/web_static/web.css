@@ -262,6 +262,9 @@ main:has(> .chatgrid) { display: flex; flex-direction: column; height: 100vh; pa
 .chatgrid:has(.docview), .chatgrid:has(.doclist a) { grid-template-columns: minmax(20rem, 1fr) minmax(18rem, 1fr); }
 .chatgrid:not(:has(.doclist a)):not(:has(.docview)):not(.showdocs) > aside.docs { display: none; }  /* none: all chat */
 .chatgrid.showdocs { grid-template-columns: minmax(20rem, 1fr) minmax(18rem, 1fr); }
+/* closed by the operator (📄 or ✕): all chat again, whatever documents there are */
+.chatgrid.hidedocs { grid-template-columns: minmax(0, 1fr); }
+.chatgrid.hidedocs > aside.docs { display: none; }
 .chatpage { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
 .chatpage > .chat { flex: 1 1 auto; min-height: 8rem; overflow-y: auto; margin-bottom: .4rem; }
 .chatpage > form.composer { position: static; margin: 0; padding: 0; }
@@ -297,7 +300,8 @@ form.composer textarea { resize: none; min-height: 2.6rem; }
 @media (max-width: 720px), (pointer: coarse) and (max-height: 520px) { .keys { display: none; } }
 /* a very wide window: the conversation keeps a readable width (the documents panel takes the room beside it) */
 .chathead { max-width: 72rem; width: 100%; }
-.chatgrid:not(:has(.docview)):not(:has(.doclist a)) > .chatpage { max-width: 72rem; width: 100%; }
+.chatgrid:not(:has(.docview)):not(:has(.doclist a)) > .chatpage, .chatgrid.hidedocs > .chatpage { max-width: 72rem;
+                                                                                               width: 100%; }
 /* documents (docs/plans/PLAN-webui-chat §3) */
 aside.docs { min-height: 0; overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
              padding: .5rem .8rem; }
@@ -397,7 +401,7 @@ a.button { display: inline-block; padding: .45rem .9rem; border: 1px solid var(-
 /* docs/plans/PLAN-pwa P2: on a phone the chat is the whole screen — the header, the conversation, the composer. The rail is a
    sheet behind ☰, the documents a sheet over the chat, and the page is as tall as the keyboard leaves visible
    (--vvh, set from visualViewport by web.js), so the composer sits right above the keyboard. */
-.navbtn, .closedocs, .menufacts, .closenav { display: none; }
+.navbtn, .menufacts, .closenav { display: none; }    /* ✕ closes the documents beside the chat too */
 .navbtn { font-size: 1.1rem; padding: .1rem .5rem; position: relative; }
 .navbtn.news::after { content: ""; position: absolute; top: .3rem; right: .3rem; width: .5rem; height: .5rem;
                       border-radius: 50%; background: var(--accent); }

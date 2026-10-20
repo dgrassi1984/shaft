@@ -85,7 +85,7 @@ class PhoneLayoutTest(unittest.TestCase):
         self.assertIn('class="navbtn" data-toggle-nav aria-label="Chats and pages"', page)
         self.assertIn("data-close-docs", str(web_views.docs_panel("wren", [], "", None, "none", set())))
         self.assertIn('class="small closenav" data-toggle-nav aria-label="Close the chats"', page)  # no Escape key
-        self.assertIn('if (grid) grid.classList.add("showdocs");', JS)   # a card opens the sheet
+        self.assertIn("showDocs(true);", JS)                             # a card opens the sheet
 
     def test_the_header_is_one_line(self):
         phone = block(self.PHONE)
@@ -93,6 +93,40 @@ class PhoneLayoutTest(unittest.TestCase):
         self.assertIn(".chathead .facts, .docslabel { display: none; }", phone)
         page = str(web_views.chat_page("wren", None, [], [], {"model": "m", "state": "idle"}, ["wren"], "t"))
         self.assertIn('<p class="dim menufacts">m · idle</p>', page)        # the facts move into ⋯
+
+
+class DocumentsCloseTest(unittest.TestCase):
+    """Bug (2026-10-20): beside the chat the Documents panel could not be closed — once an instance had a document,
+    .chatgrid:has(.doclist a) held it open, 📄 only toggled .showdocs (no effect then) and ✕ was hidden off a phone."""
+
+    def desktop(self) -> str:
+        return re.sub(r"@media[^{]*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}", "", CSS)    # the rules outside any @media
+
+    def test_closed_beats_the_documents_holding_it_open(self):
+        css = self.desktop()
+        self.assertIn(".chatgrid.hidedocs > aside.docs { display: none; }", css)
+        self.assertIn(".chatgrid.hidedocs { grid-template-columns: minmax(0, 1fr); }", css)
+        # same specificity as the rule holding it open: it must come after it to win
+        self.assertGreater(css.index(".chatgrid.hidedocs {"), css.index(".chatgrid:has(.docview), .chatgrid:has(.doclist a)"))
+
+    def test_the_close_button_shows_beside_the_chat(self):
+        hidden = re.search(r"^([^{\n]*)\{ display: none; \}", self.desktop().split(".navbtn.news")[0].split("/* PLAN-pwa P2")[1],
+                           re.M)
+        self.assertNotIn("closedocs", hidden.group(1))
+        self.assertIn("data-close-docs", str(web_views.docs_panel("wren", [{"path": "plan.md", "bytes": 3}], "", None,
+                                                                    "none", set())))
+
+    def test_documents_and_close_really_close(self):
+        self.assertNotIn('grid.classList.toggle("showdocs");', JS)       # the toggle that could not close it
+        self.assertIn("showDocs(!docsOn())", JS)                          # 📄 closes what is on screen
+        self.assertRegex(JS, r'matches\("\[data-close-docs\]"\)\) \{\s*showDocs\(false\);')
+        self.assertIn('grid.classList.toggle("hidedocs", !on);', JS)
+        self.assertIn('localStorage.getItem("shaft.docs.closed")', JS)  # closed stays closed on the next page
+
+    def test_the_documents_button_says_whether_the_panel_is_on_screen(self):
+        """Found while checking the fix: Escape closed the phone's sheet and left 📄 saying aria-expanded="true"."""
+        self.assertRegex(JS, r'grid\.classList\.remove\("showdocs"\); docsAria\(\);')       # Escape
+        self.assertRegex(JS, r'"shaft:swapped", \(ev\) => \{[^}]*ev\.target\.id === "docs"\) docsAria\(\);')
 
 
 class NetworkClientTest(unittest.TestCase):
