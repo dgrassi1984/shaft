@@ -154,19 +154,19 @@ class PollRefreshTest(unittest.TestCase):
         self.assertIsNotNone(m)
         self.assertIn("chatHeaderState(ev.target);", src)
         script = r"""
-let notifications = 0, documents = 0, unread = 0, expanded;
-const notifyButton = () => notifications++, docsAria = () => documents++, markRail = () => unread++;
+let notifications = 0, sheets = 0, unread = 0;
+const notifyButton = () => notifications++, syncSheets = () => sheets++, markRail = () => unread++;
 const document = { body: { classList: { contains: () => true } }, querySelector: () => ({}) };
-const el = { querySelector: s => s === '.chathead' ? {} : { setAttribute: (k, v) => expanded = v } };
+const el = { querySelector: s => s === '.chathead' ? {} : null };
 //FUNCTION//
 chatHeaderState(el);
 chatHeaderState({ querySelector: () => null });
-console.log(JSON.stringify({ notifications, documents, unread, expanded }));
+console.log(JSON.stringify({ notifications, sheets, unread }));
 """
         r = subprocess.run([NODE, "-e", script.replace("//FUNCTION//", m.group(0))],
                            capture_output=True, text=True, timeout=10)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(json.loads(r.stdout), {"notifications": 1, "documents": 1, "unread": 1, "expanded": "true"})
+        self.assertEqual(json.loads(r.stdout), {"notifications": 1, "sheets": 1, "unread": 1})
 
     def test_a_refresh_asked_while_a_poll_is_on_its_way_shows_the_new_state_at_once(self):
         out = self.run_poll()

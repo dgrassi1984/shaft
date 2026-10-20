@@ -85,7 +85,24 @@ class PhoneLayoutTest(unittest.TestCase):
         self.assertIn('class="navbtn" data-toggle-nav aria-label="Chats and pages"', page)
         self.assertIn("data-close-docs", str(web_views.docs_panel("wren", [], "", None, "none", set())))
         self.assertIn('class="small closenav" data-toggle-nav aria-label="Close the chats"', page)  # no Escape key
-        self.assertIn("showDocs(true);", JS)                             # a card opens the sheet
+        self.assertIn("showDocs(true, a);", JS)                             # a card opens the sheet
+
+    def test_issue_24_notices_above_sheets_and_landscape_insets(self):
+        """Reverting #24 hides feedback below sheets and puts sheet/menu content under the landscape notch."""
+        sheet_layers = [int(z) for z in re.findall(r'position: fixed; inset: 0; z-index: (\d+)', CSS)]
+        self.assertEqual(sorted(sheet_layers), [55, 55, 60])
+        for selector in ("#toast", "#netnote"):
+            rule = re.search(re.escape(selector) + r" \{([^}]+)\}", CSS).group(1)
+            layer = re.search(r'z-index: (\d+)', rule)
+            self.assertIsNotNone(layer, selector)
+            self.assertGreater(int(layer.group(1)), max(sheet_layers))
+        for selector in ("body.navopen:has(.chatgrid) nav", ".chatgrid.showdocs > aside.docs", ".menubody"):
+            rules = re.findall(re.escape(selector) + r" \{([^}]+)\}", CSS)
+            fixed = [rule for rule in rules if "position: fixed" in rule]
+            self.assertTrue(fixed, selector)
+            for rule in fixed:
+                for side in ("left", "right"):
+                    self.assertIn(f"max(1rem, env(safe-area-inset-{side}))", rule)
 
     def test_the_header_is_one_line(self):
         phone = block(self.PHONE)
@@ -119,15 +136,16 @@ class DocumentsCloseTest(unittest.TestCase):
 
     def test_documents_and_close_really_close(self):
         self.assertNotIn('grid.classList.toggle("showdocs");', JS)       # the toggle that could not close it
-        self.assertIn("showDocs(!docsOn())", JS)                          # 📄 closes what is on screen
+        self.assertIn("showDocs(!docsOn(), button)", JS)                          # 📄 closes what is on screen
         self.assertRegex(JS, r'matches\("\[data-close-docs\]"\)\) \{\s*showDocs\(false\);')
         self.assertIn('grid.classList.toggle("hidedocs", !on);', JS)
         self.assertIn('localStorage.getItem("shaft.docs.closed")', JS)  # closed stays closed on the next page
 
     def test_the_documents_button_says_whether_the_panel_is_on_screen(self):
         """Found while checking the fix: Escape closed the phone's sheet and left 📄 saying aria-expanded="true"."""
-        self.assertRegex(JS, r'grid\.classList\.remove\("showdocs"\); docsAria\(\);')       # Escape
-        self.assertRegex(JS, r'"shaft:swapped", \(ev\) => \{[^}]*ev\.target\.id === "docs"\) \{?\s*docsAria\(\);')
+        self.assertIn('if (sheet.kind === "nav") showNav(false); else showDocs(false);', JS)
+        self.assertRegex(JS, r'if \(ev\.target\.id === "docs"\) \{\s*syncSheets\(\);')
+
 
 
 class NetworkClientTest(unittest.TestCase):
