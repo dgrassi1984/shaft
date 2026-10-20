@@ -368,6 +368,14 @@
     const typed = box ? box.value : null;            // what this send carries
     const mid = form.querySelector("input[name=mid]");
     if (mid && !mid.value) mid.value = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+    const sentMid = mid ? mid.value : "";
+    const sentFiles = [...(form.querySelector("input[type=file]") || { files: [] }).files];
+    if (form.dataset.draft && mid) {
+      try {
+        localStorage.setItem(draftKey(form), typed);
+        localStorage.setItem(pendingKey(form), JSON.stringify({ mid: sentMid, text: typed }));
+      } catch (e) { /* no storage: retry still works in this page */ }
+    }
     const shown = form.dataset.draft ? pending(form) : null;
     const multipart = !!form.dataset.multipart;          // files go with it: the browser sets the boundary
     const row = form.closest("[data-row]");
@@ -410,12 +418,18 @@
       if (r.ok && form.dataset.after === "doc-saved") docSaved(form, r.headers.get("X-Doc"), typed, now);
       if (r.ok && form.dataset.after === "doc-deleted") docsList();
       if (r.ok && form.dataset.after === "comment-saved") refreshDocs();
-      if (r.ok && mid) mid.value = "";               // sent: the next message gets an id of its own
+      if (r.ok && mid && mid.value === sentMid) mid.value = "";               // sent: the next message gets an id of its own
       if (r.ok && shown) shown.dataset.done = "1";   // goes when the feed brings the turn as the server saved it
       if (r.ok && form.dataset.reset) {
         const later = box && box.value !== typed ? box.value : null;   // typed while it was sending: kept
-        form.reset();
-        if (later !== null) box.value = later;
+        if (form.dataset.draft) {
+          box.value = later === null ? "" : later;
+          const input = form.querySelector("input[type=file]");
+          setFiles(form, [...input.files].filter(f => !sentFiles.includes(f)));
+        } else {
+          form.reset();
+          if (later !== null) box.value = later;
+        }
         picked(form);
         if (form.dataset.draft && later === null) sent(form);
         else if (box) grow(box);
@@ -499,14 +513,16 @@
     if (!input) return;
     const all = new DataTransfer();
     for (const f of files) all.items.add(f);
+    form._attachments = all;
     input.files = all.files;
+    composerChanged(form);
     picked(form);
   }
 
   function addFiles(form, files) {
     const input = form.querySelector("input[type=file]");
     if (!input || !files.length) return;
-    setFiles(form, [...input.files, ...files]);
+    setFiles(form, [...(form._attachments ? form._attachments.files : []), ...files]);
   }
 
   document.addEventListener("click", (ev) => {
@@ -518,7 +534,7 @@
   });
   document.addEventListener("change", (ev) => {
     const form = ev.target.closest("form[data-files]");
-    if (form && ev.target.type === "file") picked(form);
+    if (form && ev.target.type === "file") addFiles(form, [...ev.target.files]);
   });
   document.addEventListener("paste", (ev) => {
     const form = ev.target.closest && ev.target.closest("form[data-files]");
@@ -562,13 +578,27 @@
     box.style.height = `${Math.min(box.scrollHeight + 2, Math.round(window.innerHeight * part))}px`;
   }
   const draftKey = (form) => `shaft.draft.${form.dataset.draft}`;
+  const pendingKey = (form) => `shaft.pending.${form.dataset.draft}`;
+  function composerChanged(form) {
+    const mid = form.querySelector("input[name=mid]");
+    if (mid) mid.value = "";
+    if (form.dataset.draft) {
+      try { localStorage.removeItem(pendingKey(form)); } catch (e) { /* none */ }
+    }
+  }
+  window.addEventListener("beforeunload", (ev) => {
+    const form = composer();
+    if (!form || !form.querySelector("input[type=file]").files.length) return;
+    ev.preventDefault();
+    ev.returnValue = "";
+  });
   document.addEventListener("input", (ev) => {
     const reviewing = ev.target.closest && ev.target.closest("form[data-diff]");
     if (reviewing && ev.target.name === "text") hideDiff(reviewing);   // the shown diff is no longer this text
     const docform = ev.target.closest && ev.target.closest("form.docedit");
     if (docform) { grow(ev.target, 0.7); keepDocDraft(docform); return; }
     const midf = ev.target.closest && ev.target.closest("form[data-files]");
-    if (midf && midf.querySelector("input[name=mid]")) midf.querySelector("input[name=mid]").value = "";  // a new text
+    if (midf) composerChanged(midf);
     const form = ev.target.closest && ev.target.closest("form[data-draft]");
     if (!form || ev.target.tagName !== "TEXTAREA") return;
     grow(ev.target);
@@ -578,7 +608,18 @@
     const form = document.querySelector("form[data-draft]");
     if (!form) return;
     const box = form.querySelector("textarea");
-    try { if (!box.value) box.value = localStorage.getItem(draftKey(form)) || ""; } catch (e) { /* none */ }
+    try {
+      if (!box.value) box.value = localStorage.getItem(draftKey(form)) || "";
+      const attempt = JSON.parse(localStorage.getItem(pendingKey(form)) || "null");
+      if (attempt && attempt.text === box.value && typeof attempt.mid === "string") {
+        const delivered = JSON.parse(form.dataset.sentMids || "[]").includes(attempt.mid);
+        if (delivered) {
+          box.value = "";
+          localStorage.removeItem(draftKey(form));
+          localStorage.removeItem(pendingKey(form));
+        } else form.querySelector("input[name=mid]").value = attempt.mid;
+      }
+    } catch (e) { /* no usable saved attempt */ }
     grow(box);
   }
   function sent(form) {

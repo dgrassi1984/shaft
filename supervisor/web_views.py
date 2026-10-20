@@ -5,6 +5,7 @@ web_pages'; nothing here writes anything.
 """
 from __future__ import annotations
 
+import json
 import re
 import time
 import urllib.parse
@@ -987,7 +988,7 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
     from . import messages
     feed_url = f"/fragment/chat/{q(name)}" + (f"?id={q(chat['id'])}" if read_only and chat else "")
     composer = Html("") if read_only else h(
-        '<form class="composer" data-post="/chat/{n}/send" data-multipart="1" data-reset="1" data-files data-draft="{n}" '
+        '<form class="composer" data-post="/chat/{n}/send" data-multipart="1" data-reset="1" data-files data-draft="{n}" data-sent-mids="{mids}" '
         'data-max-file="{mf}" data-max-total="{mt}" data-max-files="{mn}"><input type="hidden" name="mid" value="">'
         '<div class="chips" data-picked></div>'
         '<textarea name="text" rows="2" maxlength="20000" placeholder="Message {n}" aria-label="Message {n}">'
@@ -996,7 +997,8 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
         '</label>'
         '<span class="dim keys">Enter sends · Shift-Enter new line · / to write · Alt-↑↓ another chat</span>'
         '<button type="submit">Send</button></div></form>',
-        n=name, mf=messages.ATTACH_MAX_BYTES, mt=messages.ATTACH_MAX_TOTAL, mn=messages.ATTACH_MAX_FILES)
+        n=name, mf=messages.ATTACH_MAX_BYTES, mt=messages.ATTACH_MAX_TOTAL, mn=messages.ATTACH_MAX_FILES,
+        mids=json.dumps([t["mid"] for t in (chat or {}).get("turns", []) if t.get("mid")]))
     banner = (h('<p class="panel">Earlier chat, {date}. <a href="/i/{n}/chat">Back to the current chat</a></p>',
                 date=chat['created'][:16].replace('T', ' '), n=q(name)) if read_only and chat else Html(""))
     body = join([banner, h('<section class="panel chat" data-scroll><div class="feed" data-poll="{u}" data-every="1500" data-keyed="1" '
