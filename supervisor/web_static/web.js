@@ -263,13 +263,15 @@
       });
       const body = await r.text();
       toast(textOf(body) || (r.ok ? "done" : `HTTP ${r.status}`), !r.ok);
-      const refusal = form.querySelector("[data-refusal]");
+      const refusal = form.querySelector("[data-refusal]") || (form.dataset.after === "doc-deleted"
+                      ? form.closest(".docview").querySelector("[data-delete-refusal]") : null);
       if (refusal) {                                  // all of it, as this server wrote it (escaped): what changed
         refusal.replaceChildren(...(r.ok ? [] : new DOMParser().parseFromString(body, "text/html").body.childNodes));
       }
       const now = r.headers.get("X-Doc-Sha");         // refused as stale: Save again replaces it, knowingly
       if (!r.ok && now && form.querySelector("input[name=sha]")) form.querySelector("input[name=sha]").value = now;
       if (r.ok && form.dataset.after === "doc-saved") docSaved(form, r.headers.get("X-Doc"));
+      if (r.ok && form.dataset.after === "doc-deleted") docsList();
       if (r.ok && form.dataset.after === "comment-saved") refreshDocs();
       if (r.ok && mid) mid.value = "";               // sent: the next message gets an id of its own
       if (r.ok && shown) shown.dataset.done = "1";   // goes when the feed brings the turn as the server saved it
@@ -493,6 +495,11 @@
   });
 
   // Copy an answer (as the Markdown it was written in) or a code block.
+  const icons = Object.fromEntries(Object.entries({
+    copy: '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H4v13h4"/>',
+    check: '<path d="m5 12 4 4L19 6"/>',
+  }).map(([name, path]) => [name, '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + path + '</svg>']));
   function copyByHand(text) {                   // where the Clipboard API is refused (a browser's site setting)
     const area = document.createElement("textarea");
     area.value = text;
@@ -513,15 +520,15 @@
       if (copyByHand(text)) why = "";
     }
     if (why) { toast(`Not copied: ${why}`, true); return; }
-    const was = button.textContent;
-    button.textContent = "Copied";
-    setTimeout(() => { button.textContent = was; }, 1200);
+    clearTimeout(button._copied);
+    button.innerHTML = icons.check;
+    button._copied = setTimeout(() => { button.innerHTML = icons.copy; }, 1200);
   }
   document.addEventListener("click", (ev) => {
     const b = ev.target.closest && ev.target.closest("[data-copy]");
     if (!b) return;
     const pre = b.closest("pre");
-    copyText(pre ? pre.querySelector("code, span.code")?.textContent ?? pre.textContent.replace(/Copy(ed)?$/, "")
+    copyText(pre ? pre.querySelector("code, span.code")?.textContent ?? pre.textContent
                  : (b.closest("[data-raw]") || {}).dataset?.raw || "", b);
   });
   function decorate(root) {                    // a copy button on each code block of an answer
@@ -532,9 +539,11 @@
       while (pre.firstChild) code.appendChild(pre.firstChild);
       const b = document.createElement("button");
       b.type = "button";
-      b.className = "copy small";
+      b.className = "copy small icon";
       b.dataset.copy = "";
-      b.textContent = "Copy";
+      b.title = "Copy the code";
+      b.setAttribute("aria-label", "Copy the code");
+      b.innerHTML = icons.copy;
       pre.append(code, b);
     });
   }
@@ -629,9 +638,11 @@
     const q = quotable();
     quoteButton().hidden = true;
     if (!q) return;
-    const from = q.doc ? `> (from notes/docs/${q.doc})\n` : "";     // a quote from a document names it
-    const quoted = from + q.text.trim().split(/\r?\n/).map(l => `> ${l}`.trimEnd()).join("\n") + "\n\n";
-    const box = q.composer;
+    quoteText(q.text, q.composer, q.doc);
+  }
+  function quoteText(text, box, doc = "") {
+    const from = doc ? `> (from notes/docs/${doc})\n` : "";     // a quote from a document names it
+    const quoted = from + text.trim().split(/\r?\n/).map(l => `> ${l}`.trimEnd()).join("\n") + "\n\n";
     const before = box.value.slice(0, box.selectionStart);
     const after = box.value.slice(box.selectionEnd);
     const lead = before && !before.endsWith("\n\n") ? (before.endsWith("\n") ? "\n" : "\n\n") : "";
@@ -640,7 +651,13 @@
     window.getSelection().removeAllRanges();
     box.focus();
     box.setSelectionRange(at, at);
+    box.dispatchEvent(new Event("input", { bubbles: true }));   // a quoted reply is a draft too
   }
+  document.addEventListener("click", (ev) => {
+    const b = ev.target.closest && ev.target.closest("[data-reply-message]");
+    const box = document.querySelector("form.composer textarea");
+    if (b && box) quoteText(b.closest("[data-raw]").dataset.raw, box);
+  });
 
   let quoteTimer = null;
   document.addEventListener("selectionchange", () => {
@@ -742,13 +759,41 @@
 
   // The documents panel (docs/plans/PLAN-webui-chat §3): a card in a reply or a name in its list opens that document in the
   // panel, which then refreshes it as the instance writes it; the address keeps ?doc= so a reload shows the same one.
+  // What the panel polls for: one document (?doc=), or the list (?list=1: without it the server opens what this chat
+  // last changed, so ← Documents would bounce straight back to it).
+  function docsPoll(panel, doc) {
+    const poll = new URL(panel.dataset.poll, location.href);
+    for (const k of ["doc", "thread", "list"]) poll.searchParams.delete(k);
+    poll.searchParams.set(doc ? "doc" : "list", doc || "1");
+    panel.dataset.poll = poll.pathname + poll.search;
+  }
+  function docsList() {
+    const panel = document.getElementById("docs");
+    if (!panel) return;
+    const view = panel.querySelector(".docview.editing");
+    if (view) editing(view, false);                 // polling resumes only after the editor lets go
+    docsPoll(panel, "");
+    const u = new URL(location.href);
+    u.searchParams.delete("doc");
+    u.searchParams.delete("thread");
+    history.replaceState(null, "", u);
+    refreshDocs();
+  }
+  document.addEventListener("click", (ev) => {
+    const b = ev.target.closest && ev.target.closest("[data-back-docs]");
+    if (!b) return;
+    const view = document.querySelector("#docs .docview.editing");
+    if (view && view.querySelector("form.docedit textarea").value !== view.querySelector("textarea.raw").value
+        && !window.confirm("Drop your changes?")) return;
+    docsList();
+  });
   document.addEventListener("click", (ev) => {
     const a = ev.target.closest && ev.target.closest("[data-open-doc]");
     const panel = document.getElementById("docs");
     if (!a || !panel || ev.metaKey || ev.ctrlKey) return;
     ev.preventDefault();
     const doc = a.dataset.openDoc;
-    panel.dataset.poll = panel.dataset.poll.replace(/\?doc=.*$/, "") + `?doc=${encodeURIComponent(doc)}`;
+    docsPoll(panel, doc);
     const u = new URL(location.href);
     u.searchParams.set("doc", doc);
     history.replaceState(null, "", u);
@@ -785,7 +830,7 @@
       if (edit) edit.focus();                       // focus where the editor was, not lost on the page
     }
     if (panel && doc) {
-      panel.dataset.poll = panel.dataset.poll.replace(/\?doc=.*$/, "") + `?doc=${encodeURIComponent(doc)}`;
+      docsPoll(panel, doc);
     }
     if (panel && panel._tick) panel._tick();
   }

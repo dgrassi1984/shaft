@@ -11,6 +11,13 @@ import urllib.parse
 from .web_pages import Html, esc, h, join, nav, page
 
 MARK = {"yes": ("✓", "good"), "partial": ("½", "warn"), "no": ("✗", "bad")}
+ICONS = {name: h('<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+                'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{p}</svg>', p=Html(path))
+         for name, path in {
+             "copy": '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H4v13h4"/>',
+             "reply": '<path d="m9 4-6 6 6 6M3 10h10a8 8 0 0 1 8 8v2"/>',
+             "delete": '<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/>',
+         }.items()}
 INSTANCE_TABS = [("chat", "Chat"), ("", "Summary"), ("config", "Config"), ("drive", "Drive"), ("access", "Access"),
                  ("judge", "Judge"), ("changes", "Changes"), ("benchmarks", "Benchmarks"),
                  ("transcripts", "Transcripts"), ("journal", "Journal"), ("activity", "Activity")]
@@ -683,13 +690,14 @@ def threads_list(name: str, doc: str, sha: str, threads: list[dict], active: str
 def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None, sha: str, marked: set[str],
                problem: str = "", saved: dict | None = None, threads: list[dict] | None = None,
                counts: dict | None = None, thread: str = "") -> Html:
-    """The documents panel beside the chat (/fragment/docs/<name>): the list, and the open one rendered."""
+    """The documents panel beside the chat (/fragment/docs/<name>): the list or the open one rendered."""
     from .docs import DIR
     items = []
     for d in listing:
         n = 0 if counts is None else counts.get(d["path"]) or 0
-        items.append(h('<a href="?doc={u}" data-open-doc="{p}" class="{cls}" title="{b} bytes">{dot}{p}{ccount}</a>',
-                       u=q(d["path"]), p=d["path"], b=d["bytes"], cls="on" if d["path"] == open_path else "",
+        items.append(h('<a href="?doc={u}" data-open-doc="{p}"><span>{dot}{p}{ccount}</span>'
+                       '<span class="dim docsize">{b} bytes</span></a>',
+                       u=q(d["path"]), p=d["path"], b=d["bytes"],
                        dot=Html('<span class="mark" title="changed in this chat">●</span> ')
                        if d["path"] in marked else Html(""),
                        ccount=h(' <span class="ccount" title="open comments">💬 {n}</span>', n=n) if n > 0 else ""))
@@ -698,11 +706,13 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
             'placeholder="name, e.g. plan" pattern="[A-Za-z0-9][A-Za-z0-9 _.\\-]*" maxlength="80">'
             '<textarea name="text" hidden></textarea><button type="submit" class="small">Create</button></form></details>',
             n=q(name))
-    head = h('<div class="docshead"><b>Documents</b> <span class="dim">{dir}/</span>{new}<button type="button" '
-             'class="small closedocs" data-close-docs aria-label="Close the documents">✕</button></div>'
-             '<div class="doclist">{i}</div>',
-             dir=DIR, new=new, i=join(items) if items else h('<p class="dim">none yet: ask {n} for one, it appears here '
-                                                              'as it writes it.</p>', n=name))
+    back = Html('<button type="button" class="small" data-back-docs aria-label="Back to the documents">← Documents</button>')
+    head = h('<div class="docshead">{title} <span class="dim">{dir}/</span>{new}<button type="button" '
+             'class="small closedocs" data-close-docs aria-label="Close the documents">✕</button></div>{list}',
+             title=back if open_path else Html("<b>Documents</b>"), dir=DIR, new="" if open_path else new,
+             list="" if open_path else h('<div class="doclist">{i}</div>', i=join(items) if items else
+                                          h('<p class="dim">none yet: ask {n} for one, it appears here as it writes it.</p>',
+                                            n=name)))
     if problem:
         view = h('<p class="bad">{p}</p>', p=problem)
     elif open_path and text is not None:
@@ -721,15 +731,21 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
             tlist = threads_list(name, open_path, sha, threads or [], thread)
         view = h('<div class="docview" data-doc="{p}" data-sha="{s}"{tattr}><div class="doctitle"><b>{p}</b>'
                  '<button type="button" class="small" data-edit-doc>Edit</button>{cbtn}'
-                 '<button type="button" class="copy small" data-copy-doc title="copy the document\'s Markdown">Copy</button>'
-                 '</div>{tlist}{over}<div class="docmd">{md}</div><textarea class="raw" hidden readonly>{raw}</textarea>'
+                 '<button type="button" class="copy small icon" data-copy-doc title="copy the document\'s Markdown" '
+                 'aria-label="Copy the document">{copy}</button>'
+                 '<form class="docdelete" data-post="/docs/{n}/delete" data-after="doc-deleted" '
+                 'data-confirm="Delete notes/docs/{p}?"><input type="hidden" name="path" value="{p}">'
+                 '<input type="hidden" name="sha" value="{s}"><button type="submit" class="small icon" '
+                 'title="Delete the document" aria-label="Delete the document">{delete}</button></form>'
+                 '</div><div class="bad wrap" data-delete-refusal></div>{tlist}{over}<div class="docmd">{md}</div>'
+                 '<textarea class="raw" hidden readonly>{raw}</textarea>'
                  '<form class="docedit" data-post="/docs/{n}/save" data-after="doc-saved" hidden>'
                  '<input type="hidden" name="path" value="{p}"><input type="hidden" name="sha" value="{s}">'
                  '<textarea name="text" spellcheck="true">{raw}</textarea><div class="actions">'
                  '<button type="submit">Save</button><button type="button" data-cancel-edit>Cancel</button>'
                  '<span class="dim">{n} hears of your change: with your next message, or now if it is replying</span>'
                  '</div><div class="bad wrap" data-refusal></div></form></div>',
-                 p=open_path, s=sha, n=q(name), tattr=tattr, cbtn=cbtn, tlist=tlist,
+                 p=open_path, s=sha, n=q(name), tattr=tattr, cbtn=cbtn, tlist=tlist, copy=ICONS["copy"], delete=ICONS["delete"],
                  over=_overwritten(saved, sha, text),
                  md=markdown(text) if text.strip() else Html('<p class="dim">(empty)</p>'), raw=text)
     elif open_path:
@@ -756,29 +772,35 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
         return h('<p class="dim" data-k="empty">No chat open with {n}. Write below to start one.</p>', n=name)
     items = []
     for k, t in enumerate(chat["turns"]):
+        raw = t.get("shown", t.get("content", "")) if t["role"] == "user" else t.get("content", "")
+        controls = (h('<button type="button" class="copy small icon" data-copy title="copy the message as Markdown" '
+                      'aria-label="Copy the message">{copy}</button><button type="button" class="reply small icon" '
+                      'data-reply-message title="Reply to the message" aria-label="Reply to the message">{reply}</button>',
+                      copy=ICONS["copy"], reply=ICONS["reply"]) if raw else Html(""))
         if t["role"] == "user":
             tag = h(' <span class="dim">· during its reply</span>') if t.get("interjected") else Html("")
             if t.get("edits"):
                 tag = join([tag, join(h(' <a class="editchip" href="?doc={u}" data-open-doc="{p}">✎ edited {p}</a>',
                                         u=q(p), p=p) for p in t["edits"])])
+            if t.get("deleted"):                 # nothing to open: it is gone
+                tag = join([tag, join(h(' <span class="editchip">🗑 deleted {p}</span>', p=p) for p in t["deleted"])])
             if t.get("comments"):
                 tag = join([tag, _comment_chips(t["comments"])])
             # A comment-only turn's shown text is empty: the chips are the turn, not an empty bubble.
             shown = t.get("shown", t["content"])
-            items.append((t["ts"], h('<div class="turn me" data-k="u{k}"><div class="who">you <span class="dim">{ts}</span>{tag}</div>'
-                                     '{text}{atts}</div>', k=k, ts=t["ts"][11:16], tag=tag,
+            items.append((t["ts"], h('<div class="turn me" data-k="u{k}" data-raw="{raw}"><div class="who">you '
+                                     '<span class="dim">{ts}</span>{tag}{controls}</div>'
+                                     '{text}{atts}</div>', k=k, ts=t["ts"][11:16], tag=tag, raw=shown, controls=controls,
                                      text=_my_text(shown) if shown else Html(""),
                                      atts=_chat_attachments(chat["id"], k, t.get("attachments")))))
         else:
             note = h('<p class="warn">{n}</p>', n=t["note"]) if t.get("note") else Html("")
             body = markdown(t["content"]) if t.get("content") else Html('<p class="dim">(no answer)</p>')
-            copy = (h('<button type="button" class="copy small" data-copy title="copy the answer as Markdown">Copy</button>')
-                    if t.get("content") else Html(""))
             cards = join([doc_cards(t.get("docs")), _comment_chips(t.get("answered"), "answered"),
                           _comment_chips(t.get("opened"), "opened")])
             items.append((t["ts"], h('<div class="turn it" data-k="a{k}" data-raw="{raw}"><div class="who">{n} <span class="dim">{ts}</span>'
                                      '{copy}</div>{act}{body}{cards}{note}</div>', k=k, raw=t.get("content") or "", n=name,
-                                     ts=t["ts"][11:16], copy=copy, act=_activity(t.get("activity", []), f"t{k}"),
+                                     ts=t["ts"][11:16], copy=controls, act=_activity(t.get("activity", []), f"t{k}"),
                                      body=body, cards=cards, note=note)))
     for m in sent:             # files open in a sheet of their own: in an app, a link replaced its only view
         atts = join(h('<a href="/files/{f}/{j}" target="_blank">{img}</a>', f=q(m["file"]), j=j,
@@ -805,7 +827,7 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
         feed.append(h('<p class="dim ended" data-k="ended">Ended {e}: written up in its journal. Your next message starts a new '
                       'conversation.</p>', e=chat.get("ended", "")[:16].replace("T", " ")))
     if chat.get("pending_edits"):
-        feed.append(h('<p class="pending-edits" data-k="pend">✎ Your edits to {p} go to {n} with your next message.</p>',
+        feed.append(h('<p class="pending-edits" data-k="pend">✎ Your changes to {p} go to {n} with your next message.</p>',
                       p=", ".join(sorted(chat["pending_edits"])), n=name))
     if archived:                                  # a past chat's page: nothing here acts on the current one
         return join(feed)

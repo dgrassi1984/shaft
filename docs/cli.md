@@ -29,6 +29,8 @@ shaft alerts [dismiss ID…]      # the panel's open alerts, or dismiss some (sh
 shaft docs <name> [show PATH | set PATH --file F --expect-sha SHA]   # its documents (notes/docs/*.md, shown
                                 #   beside the web chat): list, show one, or write one if it is still what you saw
                                 #   (none: a new one); its next run commits your edit with its notes
+shaft docs <name> rm PATH --expect-sha SHA   # delete an existing document only if its sha still matches;
+                                #   its next run commits the deletion; comment threads are kept
 shaft docs <name> comments [PATH] [--sync]   # the comment threads on its documents; --sync rewrites the
                                 #   read-only copy notes/comments/PATH from the supervisor's store
 shaft config <name> [set KEY=VALUE…|unset KEY…] [--expect KEY=VALUE]   # its config.env as the operator: one

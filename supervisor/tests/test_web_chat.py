@@ -529,13 +529,16 @@ class DocsPanelTest(ChatRoutesTest):
         (self.docs / "plan.md").write_text("# Plan\n\n- **step** <script>alert(1)</script>\n")
         (self.docs / "other.md").write_text("x")
         body = self.req("/fragment/docs/wren?doc=plan.md", cookie=self.cookie).body.decode()
-        self.assertIn('data-open-doc="other.md"', body)
+        self.assertNotIn('class="doclist"', body)
+        self.assertIn('data-back-docs aria-label="Back to the documents"', body)
         self.assertIn('<div class="docview" data-doc="plan.md"', body)
         self.assertIn("<b>step</b>", body)
         self.assertNotIn("<script>alert", body)
         self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", body)
 
-    def test_with_none_asked_it_opens_the_last_this_chat_changed(self):
+    def test_with_none_asked_it_opens_what_this_chat_changed_and_back_lists(self):
+        """Codex's first cut dropped this fallback, so a document the instance writes mid-reply no longer showed live
+        until clicked; ← Documents asks for the list explicitly (?list=1) instead."""
         (self.docs / "plan.md").write_text("the plan")
         (self.docs / "notes.md").write_text("not this one")
         self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
@@ -543,8 +546,22 @@ class DocsPanelTest(ChatRoutesTest):
                          "docs": [{"path": "plan.md", "created": True}]}])
         page = self.req("/i/wren/chat", cookie=self.cookie).body.decode()
         self.assertIn('data-poll="/fragment/docs/wren?doc=plan.md"', page)
-        self.assertIn("the plan", page)
-        self.assertIn('<span class="mark" title="changed in this chat">●</span> plan.md', page)
+        self.assertIn('<div class="docview" data-doc="plan.md"', page)
+        self.assertIn("data-back-docs", page)
+        fragment = self.req("/fragment/docs/wren", cookie=self.cookie).body.decode()
+        self.assertIn('<div class="docview" data-doc="plan.md"', fragment)
+        listed = self.req("/fragment/docs/wren?list=1", cookie=self.cookie).body.decode()
+        self.assertIn('class="doclist"', listed)
+        self.assertNotIn('class="docview"', listed)
+        self.assertNotIn("data-back-docs", listed)
+        self.assertIn('class="dim docsize">8 bytes</span>', listed)
+        self.assertIn('<span class="mark" title="changed in this chat">●</span> plan.md', listed)
+
+    def test_with_nothing_changed_in_this_chat_it_lists(self):
+        (self.docs / "plan.md").write_text("the plan")
+        fragment = self.req("/fragment/docs/wren", cookie=self.cookie).body.decode()
+        self.assertIn('class="doclist"', fragment)
+        self.assertNotIn('class="docview"', fragment)
 
     def test_a_path_out_of_the_folder_is_refused_in_the_panel_not_the_page(self):
         r = self.req("/fragment/docs/wren?doc=../config.env", cookie=self.cookie)
@@ -632,6 +649,36 @@ class DocEditsTest(DocsInChatTest):
         self.assertIn("[The operator created notes/docs/plan.md:]", c["turns"][0]["content"])
         self.assertIn(web_chat.DOCS_NOTE, c["turns"][0]["content"])           # still its first message
 
+    def test_delete_replaces_a_pending_edit_and_is_taken_once(self):
+        web_chat.doc_saved("wren", ME, "plan.md", "one", "two", "s1")
+        said = web_chat.doc_saved("wren", ME, "plan.md", "two", None, "none")
+        self.assertEqual(said, "deleted · wren gets the change with your next message")
+        c = web_chat.open_chat("wren")
+        self.assertNotIn("plan.md", c["saved_docs"])
+        self.assertEqual(web_chat._take_edits(c), ("[The operator deleted notes/docs/plan.md.]", [], ["plan.md"]))
+        self.assertEqual(web_chat._take_edits(c), ("", [], []))
+        chat, _ = web_chat.send("wren", ME, "continue", [])
+        self.wait_idle(chat["id"])
+        sent = self.api.chats()[0][2]["messages"][-1]["content"]
+        self.assertIn("continue\n\n[The operator deleted notes/docs/plan.md.]", sent)
+        self.assertNotIn("```diff", sent)
+        from supervisor import web_views
+        feed = str(web_views.chat_feed("wren", web_chat.load(chat["id"]), []))
+        self.assertIn('<span class="editchip">🗑 deleted plan.md</span>', feed)      # not "✎ edited": it is gone
+        self.assertNotIn("✎ edited plan.md", feed)
+
+    def test_delete_interjects_while_replying(self):
+        self.api.hold.set()
+        chat, _ = web_chat.send("wren", ME, "write", [])
+        time.sleep(0.3)
+        said = web_chat.doc_saved("wren", ME, "plan.md", "one", None, "none")
+        self.assertEqual(said, "deleted · wren reads it at its next step")
+        body = [r for r in self.api.requests if r[0] == "/v1/chat/interject"][0][2]
+        self.assertEqual(body["messages"][-1]["content"], "[The operator deleted notes/docs/plan.md.]")
+        self.api.hold.clear()
+        self.api.heard = 1
+        self.wait_idle(chat["id"], 15)
+
 
 class DocSaveRouteTest(DocsPanelTest):
     def setUp(self):
@@ -640,10 +687,10 @@ class DocSaveRouteTest(DocsPanelTest):
 
         def run_now(args, timeout=60, who="top"):        # the CLI verb, in this process (with this test's folders)
             self.ran.append(args)
-            name, _, path = args[1:4]
+            name, action, path = args[1:4]
             out = []
             with mock.patch("builtins.print", side_effect=lambda *a, **k: out.append(" ".join(map(str, a)))):
-                code = docs.command(name, "set", path, args[5], args[7])
+                code = docs.command(name, action, path, args[5] if action == "set" else None, args[-1])
             return code == 0, out[-1] if out else ""
         self.ran = []
         for p in (mock.patch.object(actions, "run_now", side_effect=run_now), mock.patch.object(docs, "log"),
@@ -657,6 +704,62 @@ class DocSaveRouteTest(DocsPanelTest):
                         headers={"sec-fetch-site": "same-origin", "x-csrf-token": self.csrf(self.cookie),
                                  "content-type": "application/x-www-form-urlencoded"})
 
+    def delete(self, csrf=True, **form):
+        import urllib.parse
+        headers = {"sec-fetch-site": "same-origin", "content-type": "application/x-www-form-urlencoded"}
+        if csrf:
+            headers["x-csrf-token"] = self.csrf(self.cookie)
+        return self.req("/docs/wren/delete", "POST", cookie=self.cookie,
+                        body=urllib.parse.urlencode(form).encode(), headers=headers)
+
+    def test_delete_uses_cli_preserves_threads_and_notifies_instance(self):
+        from supervisor import doc_comments, docs
+        p = self.docs / "plan.md"
+        p.write_text("one")
+        tid = doc_comments.add_thread("wren", "p-0123456789abcdef", "plan.md", None, docs.sha(b"one"), "keep this")
+        r = self.delete(path="plan.md", sha=docs.sha(b"one"))
+        self.assertEqual(r.status, 200, r.body)
+        self.assertIn("deleted", r.body.decode())
+        self.assertFalse(p.exists())
+        self.assertEqual(self.ran, [["docs", "wren", "rm", "plan.md", "--expect-sha", docs.sha(b"one")]])
+        self.assertEqual(web_chat._take_edits(web_chat.open_chat("wren")),
+                         ("[The operator deleted notes/docs/plan.md.]", [], ["plan.md"]))
+        self.assertEqual(doc_comments.threads("wren", "plan.md")[0]["id"], tid)
+        panel = self.req(f"/fragment/docs/wren?doc=plan.md&thread={tid}", cookie=self.cookie)
+        self.assertEqual(panel.status, 200)
+        self.assertIn("plan.md is not there (any more)", panel.body.decode())
+        self.assertIn("data-back-docs", panel.body.decode())
+
+    def test_delete_refuses_stale_missing_traversal_and_missing_csrf(self):
+        from supervisor import docs
+        p = self.docs / "plan.md"
+        p.write_text("one")
+        self.assertEqual(self.delete(path="plan.md", sha="old").status, 409)
+        self.assertEqual(self.delete(path="missing.md", sha="none").status, 409)
+        self.assertEqual(self.delete(path="../x", sha="none").status, 409)
+        self.assertEqual(self.delete(path="../x.md", sha="none").status, 409)
+        self.assertEqual(self.delete(csrf=False, path="plan.md", sha=docs.sha(b"one")).status, 403)
+        self.assertEqual(self.req("/docs/wren/delete", "POST").status, 403)
+        self.assertEqual(p.read_text(), "one")
+        self.assertEqual(self.ran, [])
+        self.assertIsNone(web_chat.open_chat("wren"))
+
+    def test_delete_refuses_a_write_between_the_route_check_and_cli(self):
+        from supervisor import actions, docs
+        p = self.docs / "plan.md"
+        p.write_text("one")
+        run = actions.run_now.side_effect
+
+        def changed(args, **kw):
+            p.write_text("two")
+            return run(args, **kw)
+        with mock.patch.object(actions, "run_now", side_effect=changed):
+            r = self.delete(path="plan.md", sha=docs.sha(b"one"))
+        self.assertEqual(r.status, 409)
+        self.assertIn("changed since you looked", r.body.decode())
+        self.assertEqual(p.read_text(), "two")
+        self.assertIsNone(web_chat.open_chat("wren"))
+
     def test_a_save_goes_through_the_cli_and_is_queued_for_the_instance(self):
         from supervisor import docs
         (self.docs / "plan.md").write_text("one\n")
@@ -668,7 +771,7 @@ class DocSaveRouteTest(DocsPanelTest):
         chat = web_chat.open_chat("wren")
         self.assertEqual(chat["pending_edits"]["plan.md"], {"old": "one\n", "new": "one\nmine\n"})
         feed = self.req("/fragment/chat/wren", cookie=self.cookie).body.decode()
-        self.assertIn("Your edits to plan.md go to wren with your next message", feed)
+        self.assertIn("Your changes to plan.md go to wren with your next message", feed)
 
     def test_a_stale_save_is_refused_shows_what_changed_and_writes_nothing(self):
         from supervisor import docs
