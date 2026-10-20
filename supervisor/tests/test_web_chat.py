@@ -359,6 +359,29 @@ class ChatRoutesTest(WebTest):
         self.assertEqual((ok.status, no.status), (200, 403))
         send.assert_called_once_with("wren", ME, "hi", [], mid="")
 
+    def test_issue_70_queue_routes_require_csrf(self):
+        """Reverting #70 bypasses queuing and leaves cancellation unavailable to the paired page."""
+        c = self.chat_with([{"role": "user", "content": "start", "ts": "2026-10-20T12:00:00"}], "replying")
+        c["reply"] = {"interjections": 0}
+        web_chat.save(c)
+        post = mock.patch.object(web_chat, "_post", return_value=(202, {}))
+        post.start()
+        self.addCleanup(post.stop)
+        body = b'--B\r\nContent-Disposition: form-data; name="text"\r\n\r\nnext\r\n' \
+               b'--B\r\nContent-Disposition: form-data; name="queue"\r\n\r\n1\r\n' \
+               b'--B\r\nContent-Disposition: form-data; name="mid"\r\n\r\nq1\r\n--B--\r\n'
+        headers = {"content-type": "multipart/form-data; boundary=B", "sec-fetch-site": "same-origin"}
+        self.assertEqual(self.req("/chat/wren/send", "POST", cookie=self.cookie, body=body, headers=headers).status, 403)
+        headers["x-csrf-token"] = self.csrf(self.cookie)
+        self.assertEqual(self.req("/chat/wren/send", "POST", cookie=self.cookie, body=body, headers=headers).status, 200)
+        self.assertEqual(web_chat.load(c["id"])["queued"][0]["shown"], "next")
+        headers = {"sec-fetch-site": "same-origin"}
+        self.assertEqual(self.req("/chat/wren/unqueue", "POST", cookie=self.cookie, body=b"mid=q1", headers=headers).status, 403)
+        self.assertEqual(len(web_chat.load(c["id"])["queued"]), 1)
+        headers["x-csrf-token"] = self.csrf(self.cookie)
+        self.assertEqual(self.req("/chat/wren/unqueue", "POST", cookie=self.cookie, body=b"mid=q1", headers=headers).status, 200)
+        self.assertEqual(web_chat.load(c["id"])["queued"], [])
+
     def test_the_page_shows_the_conversation_escaped_and_polls_it(self):
         self.chat_with([{"role": "user", "content": "<script>x</script>", "shown": "<script>x</script>", "ts": "2026-10-19T12:00:00"},
                         {"role": "assistant", "content": "**bold** <img src=x onerror=y>", "ts": "2026-10-19T12:00:05",

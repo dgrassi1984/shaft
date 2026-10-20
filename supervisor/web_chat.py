@@ -196,6 +196,31 @@ def _adopt_edits(name: str, chat: dict) -> None:
             chat.setdefault("pending_edits", {}).setdefault(path, e)
 
 
+def _flush_queue(chat: dict) -> bool:
+    """#70: the queued messages become one user turn (in order, attachments combined), with the document edits and
+    comment notices that were waiting, taken now; the caller starts the reply. True when there was something."""
+    from . import doc_comments
+    queued = chat.get("queued") or []
+    if not queued:
+        return False
+    turn = {"role": "user", "content": "\n\n".join(t["content"] for t in queued),
+            "shown": "\n\n".join(t.get("shown", "") for t in queued), "ts": _now(),
+            "attachments": [a for t in queued for a in t.get("attachments", [])]}
+    edits, paths, deleted = _take_edits(chat)
+    if edits:
+        turn["content"] = (turn["content"] + "\n\n" + edits).strip()
+        if paths:
+            turn["edits"] = paths
+        if deleted:
+            turn["deleted"] = deleted
+    notices = doc_comments.take_notices(chat["instance"])
+    if notices:
+        turn["content"] += "\n\n" + "\n\n".join(notices)
+    chat["turns"].append(turn)
+    chat["queued"] = []
+    return True
+
+
 def reap() -> None:
     """At start: a chat whose relay died with the previous web server is not replying any more (the API stopped that
     reply when its connection went), and says so."""
@@ -212,6 +237,13 @@ def reap() -> None:
                                "note": "interrupted: the web service restarted while it replied",
                                "note_kind": "service", "note_retry": False})
             c["state"], c["reply"] = "idle", None
+            if _flush_queue(c):                     # #70: what was queued for after that reply goes now
+                c["state"], c["reply"] = "replying", {"started": _now(), "activity": [], "answer": "",
+                                                      "interjections": 0, "docs_before": _docs_now(c["instance"]),
+                                                      "turn_start": len(c["turns"])}
+                save(c)
+                _start(c["id"])
+                continue
             save(c)
 
 
@@ -385,6 +417,9 @@ def _finish(relay: Relay, answer: str, activity: list, error: str | None, heard:
     cid = relay.cid
     with _lock(cid):
         chat = load(cid)
+        # an old relay finishing twice, or after a newer one took the chat over, changes nothing (#70)
+        if not chat or chat.get("cleared") or chat["state"] != "replying" or _relays.get(cid) not in (None, relay):
+            return docs_to_sync
         reply = chat["reply"]
         sent = reply.get("interjections", 0)
         interjected = [t for t in chat["turns"][reply.get("turn_start", len(chat["turns"])):]
@@ -410,11 +445,12 @@ def _finish(relay: Relay, answer: str, activity: list, error: str | None, heard:
         chat["state"], chat["reply"] = "idle", None
         # An API older than the web UI does not say what it heard: then no second reply, rather than one per message.
         unheard = max(0, sent - heard) if heard is not None and not relay.stopped and not error else 0
-        if unheard:                               # sent too late for this reply: answered by one of their own
+        queued = _flush_queue(chat)
+        if unheard or queued:                     # sent too late for this reply: answered by one of their own
             chat["state"], chat["reply"] = "replying", {"started": _now(), "activity": [], "answer": "",
                                                         "interjections": 0, "followup": unheard,
                                                         "docs_before": _docs_now(chat["instance"]),
-                                                        **_reply_comments(interjected[-unheard:]),
+                                                        **_reply_comments(interjected[-unheard:] if unheard else []),
                                                         "turn_start": len(chat["turns"])}
         save(chat)
     if not note:
@@ -433,12 +469,12 @@ def _finish(relay: Relay, answer: str, activity: list, error: str | None, heard:
             log(f"web: could not attach {cid}'s comments: {type(e).__name__}: {e}")
     if _relays.get(cid) is relay:                  # never a newer relay of the same chat
         del _relays[cid]
-    if not unheard and not relay.stopped and not watched(chat["instance"]):
+    if not unheard and not queued and not relay.stopped and not watched(chat["instance"]):
         from . import webpush                       # nobody is looking: the phone is told (docs/plans/PLAN-pwa P4)
         webpush.notify(reply_event(chat))
     log(f"web: chat {cid} with {chat['instance']}: reply {'stopped' if relay.stopped else 'failed' if error else 'done'}"
         + (f" ({unheard} interjection(s) answered next)" if unheard else ""))
-    if unheard:
+    if unheard or queued:
         _start(cid)
     return docs_to_sync
 
@@ -574,7 +610,7 @@ def send(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: 
     """A message from the operator: a new reply if none is running, an interjection otherwise. (chat, what to say)
     `mid`: the page's id for this message — sent again after an answer that never arrived, it is not sent twice."""
     with _inst_lock(name):
-        if mid and (c := open_chat(name)) and mid in (c.get("mids") or []):
+        if mid and (c := open_chat(name)) and (mid in (c.get("mids") or []) or any(t.get("mid") == mid for t in c.get("queued", []))):
             return c, f"already sent to {name}"
         chat, said = _send(name, login, text, files, comment_block=comment_block, comments=comments, mid=mid)
     from . import messages                         # a question it quotes is answered, as a Telegram reply answers it
@@ -584,8 +620,30 @@ def send(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: 
     return chat, said
 
 
+def queue(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: str = "") -> tuple[dict, str]:
+    """Keep a message for the next reply; an idle chat sends it now."""
+    with _inst_lock(name):
+        chat = open_chat(name)
+        if not chat or chat["state"] != "replying":
+            return send(name, login, text, files, mid=mid)
+        if mid and (mid in (chat.get("mids") or []) or any(t.get("mid") == mid for t in chat.get("queued", []))):
+            return chat, f"already sent to {name}"
+        return _send(name, login, text, files, mid=mid or secrets.token_hex(16), queued=True)
+
+
+def unqueue(name: str, mid: str) -> str:
+    with _inst_lock(name):
+        chat = open_chat(name)
+        if chat:
+            with _lock(chat["id"]):
+                chat = load(chat["id"])
+                chat["queued"] = [t for t in chat.get("queued", []) if t.get("mid") != mid]
+                save(chat)
+    return "queued message cancelled"
+
+
 def _send(name: str, login: str, text: str, files: list[tuple[str, bytes]], *,
-          comment_block: str = "", comments: list[dict] | None = None, mid: str = "") -> tuple[dict, str]:
+          comment_block: str = "", comments: list[dict] | None = None, mid: str = "", queued: bool = False) -> tuple[dict, str]:
     from . import messages, doc_comments
     text = text.strip()
     if not text and not files and not comment_block and not (open_chat(name) or {}).get("pending_edits"):
@@ -608,6 +666,15 @@ def _send(name: str, login: str, text: str, files: list[tuple[str, bytes]], *,
         turn["comments"] = comments
     if mid:
         turn["mid"] = mid
+    if queued:                                       # #70: kept raw; edits and notices go with it when it is sent
+        with _lock(cid):
+            chat = load(cid)
+            if chat["state"] == "replying":
+                if mid:
+                    chat["mids"] = ((chat.get("mids") or []) + [mid])[-MIDS_KEPT:]
+                chat.setdefault("queued", []).append(turn)
+                save(chat)
+                return chat, "queued — sent when this reply ends"
     notices = doc_comments.take_notices(name)
     try:
         with _lock(cid):                               # the relay's last save takes it too: the chat's state is the truth
