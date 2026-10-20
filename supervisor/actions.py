@@ -21,11 +21,17 @@ def say(args: list[str]) -> str:
     return f"shaft {shown}"
 
 
+# How long run_now waits by default, and how long a service or autonomy on/off may take (launchd). The web page
+# waits at least this long (web_actions.page_wait), so it does not give up while the server is still allowed to run it.
+RUN_NOW_S = 60
+SLOW_S = 90
+
+
 def log_name(who: str) -> str:
     return f"{who}-actions.log"
 
 
-def run_now(args: list[str], timeout: float = 60, who: str = "top") -> tuple[bool, str]:
+def run_now(args: list[str], timeout: float = RUN_NOW_S, who: str = "top") -> tuple[bool, str]:
     """A quick subcommand: (it succeeded, its last line of output — or why it failed)."""
     log(f"{who}: operator ran {say(args)}")
     try:

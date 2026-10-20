@@ -94,6 +94,16 @@ const submit = f => f.handlers.submit({ preventDefault() {} });
                                 capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_issue_15_archive_selection_cannot_comment(self):
+        """Reverting #15 lets selecting archive document text open a live comment composer."""
+        self.run_composer(r"""
+const p = page();
+p.view.dataset.readOnly = "1";
+assert.equal(p.select(0), undefined);
+delete p.view.dataset.readOnly;
+assert.ok(p.select(0));
+""")
+
     def test_issue_7_action_labels_and_feedback(self):
         """Reverting #7 hides the send/private outcome behind the same Save label."""
         self.run_composer(r"""

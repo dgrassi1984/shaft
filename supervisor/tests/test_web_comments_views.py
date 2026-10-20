@@ -67,7 +67,7 @@ class CommentViewsTest(unittest.TestCase):
     def test_open_thread_shows_quote_resolve_and_sits_under_the_title(self):
         t = thr()
         html_out = panel(threads=[t])
-        self.assertIn('data-edit-doc>Edit</button><button type="button" class="small" data-comment-doc '
+        self.assertIn('data-edit-doc data-focus="doc-edit">Edit</button><button type="button" class="small" data-comment-doc '
                       'aria-label="Comment on the whole document">💬</button><button type="button" class="copy',
                       html_out)
         self.assertIn('data-copy-doc title="copy the document\'s Markdown" aria-label="Copy the document"><svg', html_out)

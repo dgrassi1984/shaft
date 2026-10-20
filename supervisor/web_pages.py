@@ -110,19 +110,20 @@ def rail(names: list[str], current: str = "", snap: dict | None = None, chats: d
                 on="on" if current in (href, href.strip("/")) else "",
                 badge=h(' <span class="badge bad" title="alerts">{n}</span>', n=alerts) if href == "/overview" and alerts
                 else Html("")) for href, label in MANAGE]
-    return h('<div class="group">Chats</div>{items}<details class="manage" open><summary class="group">Manage</summary>'
+    return h('<div class="group">Chats</div>{items}<details class="manage" data-key="manage" open><summary class="group">Manage</summary>'
              '{manage}</details>', items=join(items), manage=join(manage))
 
 
 def nav(names: list[str], current: str = "overview") -> Html:
     """The left nav: the rail (refreshed live: the chats, then MANAGE), then unpairing."""
+    from .web_actions import post_attrs
     cur = "/overview" if current == "overview" else current
     return h('<nav><a class="brand" href="/">SHAFT</a><button type="button" class="small closenav" data-toggle-nav '
              'aria-label="Close the chats">✕</button><div class="rail" data-poll="/fragment/rail?c={c}" data-every="3000" '
              'data-now="1" data-hidden="1">{rail}</div>'
              '<form class="unpair" data-post="/unpair" data-after="reload" data-confirm="Unpair this browser? You will '
-             'need a new link from `shaft web pair` to use it again."><button type="submit">Unpair this browser</button>'
-             '</form></nav>', c=cur, rail=rail(names, cur))
+             'need a new link from `shaft web pair` to use it again."{a}><button type="submit">Unpair this browser'
+             '</button></form></nav>', c=cur, rail=rail(names, cur), a=post_attrs("this page"))
 
 
 def message_page(title: str, text: str, detail: str = "") -> Html:

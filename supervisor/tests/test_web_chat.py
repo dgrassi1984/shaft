@@ -194,7 +194,7 @@ class RelayTest(ChatTest):
     def test_end_writes_it_up_through_the_api_and_the_next_message_starts_a_new_chat(self):
         chat, _ = web_chat.send("wren", ME, "hi", [])
         self.wait_idle(chat["id"])
-        self.assertIn("writes the conversation up", web_chat.end(chat["id"]))
+        self.assertIn("journal write-up requested", web_chat.end(chat["id"]))
         path, headers, body = [r for r in self.api.requests if r[0] == "/v1/chat/end"][0]
         self.assertEqual((headers["X-Shaft-Conversation"], body), (chat["id"], {"model": "wren"}))
         self.assertEqual(web_chat.load(chat["id"])["state"], "ended")
@@ -418,7 +418,7 @@ class ChatCentricTest(ChatRoutesTest):
         self.assertIn("earlier answer", body)
         self.assertIn("Your next message starts a new conversation", body)
         self.assertIn('data-post="/chat/wren/send"', body)
-        self.assertIn('<div class="earlier"><h3>Earlier web chats</h3>', body)       # in the ⋯ menu
+        self.assertIn('<summary data-focus="earlier">Earlier chats</summary>', body)  # #8: beside navigation
         self.assertIn(f"/i/wren/chat?id={old['id']}", body)
         frag = self.req("/fragment/chat/wren", cookie=self.cookie).body.decode()
         self.assertIn("earlier answer", frag)                                       # its refresh shows the same
@@ -772,6 +772,14 @@ class DocSaveRouteTest(DocsPanelTest):
         self.assertEqual(chat["pending_edits"]["plan.md"], {"old": "one\n", "new": "one\nmine\n"})
         feed = self.req("/fragment/chat/wren", cookie=self.cookie).body.decode()
         self.assertIn("Your changes to plan.md go to wren with your next message", feed)
+
+    def test_issue_22_success_returns_the_saved_revision(self):
+        """Reverting #22 leaves typing during Save based on the obsolete revision."""
+        from supervisor import docs
+        (self.docs / "plan.md").write_text("one")
+        r = self.post(path="plan.md", text="two", sha=docs.sha(b"one"))
+        self.assertEqual(r.status, 200)
+        self.assertEqual(r.headers["X-Doc-Sha"], docs.sha(b"two"))
 
     def test_a_stale_save_is_refused_shows_what_changed_and_writes_nothing(self):
         from supervisor import docs
