@@ -156,6 +156,11 @@ def subscribe(device: str, sub: dict) -> None:
     log(f"web: device {device} subscribed to reply notifications ({urllib.parse.urlsplit(endpoint).hostname})")
 
 
+def holds(device: str) -> bool:
+    """SHAFT has a subscription for this paired device: what the web UI's "Notifications on" means (#23)."""
+    return device in subscriptions()
+
+
 def unsubscribe(device: str) -> bool:
     with _lock:
         subs = subscriptions()

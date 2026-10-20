@@ -150,6 +150,11 @@ def _check(name: str, root: Path, key: str, value: str) -> None:
         raise Refused(f"{key} is a whole number, not {value!r}")
 
 
+def coupled(key: str) -> list[str]:
+    """Keys a set of `key` also writes (set_values): a page showing them must refresh them with it."""
+    return ["LLM_BASE_URL"] if key == "LLM_MODEL" else []
+
+
 def set_values(name: str, changes: dict[str, str | None], expect: dict[str, str | None] | None = None) -> dict:
     """Set (a value) or unset (None) keys in one write and one commit. `expect`: key -> the value the editor saw
     (None: not set). Returns {"changed", "committed", "notes"}; raises Refused with the reason."""

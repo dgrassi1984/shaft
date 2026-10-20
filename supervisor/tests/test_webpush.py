@@ -179,6 +179,18 @@ class RoutesTest(WebTest):
         self.assertEqual(self.post("/push/unsubscribe", {}).status, 200)
         self.assertEqual(webpush.subscriptions(), {})
 
+    def test_issue_23_status_says_whether_shaft_holds_this_device(self):
+        """#23: the button's "on" asks /push/status. Without it a device SHAFT dropped (or refused) read as on."""
+        self.assertEqual(self.req("/push/status").status, 403)                # unpaired
+        status = lambda: json.loads(self.req("/push/status", cookie=self.cookie).body)["subscribed"]
+        self.assertIs(status(), False)
+        self.assertEqual(self.post("/push/subscribe", {"endpoint": "https://evil.example/x"}).status, 409)
+        self.assertIs(status(), False)                                        # refused: still off
+        self.assertEqual(self.post("/push/subscribe", {"endpoint": APPLE}).status, 200)
+        self.assertIs(status(), True)
+        self.assertEqual(self.post("/push/unsubscribe", {}).status, 200)
+        self.assertIs(status(), False)
+
     def test_the_key_and_what_to_show_are_for_a_paired_device_only(self):
         self.assertEqual(self.req("/push/key").status, 403)                   # unpaired
         key = json.loads(self.req("/push/key", cookie=self.cookie).body)["key"]
