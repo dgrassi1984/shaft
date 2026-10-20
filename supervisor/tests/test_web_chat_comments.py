@@ -117,6 +117,23 @@ class CommentChatTest(unittest.TestCase):
         self.assertEqual(len(chat["turns"]), 1)
         self.assertEqual(comments.get_post("wren", pid)["sent"], f"{chat['id']}#0")
 
+    def test_retry_after_mark_sent_failure_and_an_ended_chat_does_not_resend(self):
+        """Grok review 2026-10-20: the mid dedup only sees the open chat; an ended one still says the post went."""
+        _, pid = self.add()
+        with mock.patch.object(comments, "mark_sent", side_effect=OSError("disk full")):
+            with self.assertRaisesRegex(web_chat.Refused, "disk full"):
+                web_chat.send_comment("wren", ME, pid)
+        first = next(iter(web_chat.chats("wren")))
+        with web_chat._lock(first["id"]):
+            c = web_chat.load(first["id"])
+            c["state"], c["reply"] = "ended", None
+            web_chat.save(c)
+        self.assertIsNone(web_chat.open_chat("wren"))
+        _, said = web_chat.send_comment("wren", ME, pid)
+        self.assertEqual(said, "already sent to wren")
+        self.start.assert_called_once()                       # the first send only: never a second copy
+        self.assertEqual(comments.get_post("wren", pid)["sent"], f"{first['id']}#0")
+
     def test_section_c7_attaches_once_and_marks_assistant(self):
         for _ in range(7):
             tid, pid = self.add()

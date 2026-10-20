@@ -18,7 +18,8 @@
         emit(node.data, node, 0, node.length);
         return;
       }
-      if (node.nodeType !== 1) return;
+      // A control is the page's, not the document's: web.js puts a "Copy" button in each code block (Grok review)
+      if (node.nodeType !== 1 || node.tagName === "BUTTON") return;
       const parent = node.parentNode;
       const index = parent ? Array.prototype.indexOf.call(parent.childNodes, node) : 0;
       if (/^(P|H[1-6]|LI|PRE|TR|BLOCKQUOTE|BR)$/.test(node.tagName)) {

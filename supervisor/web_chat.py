@@ -500,6 +500,13 @@ def send_comment(name: str, login: str, pid: str) -> tuple[dict, str]:
             if post.get("sent") or post.get("turn"):
                 cid = (post.get("sent") or post["turn"]).split("#", 1)[0]
                 return load(cid) or {}, f"already sent to {name}"
+            # Sent before, but mark_sent failed and the chat has ended since: its mid is no longer on the open chat, so
+            # send() would not catch the retry. The turn that carried it says it went (Grok review, 2026-10-20).
+            for c in chats(name):
+                index = next((i for i, t in enumerate(c["turns"]) if t.get("mid") == pid), None)
+                if index is not None:
+                    doc_comments.mark_sent(name, pid, f"{c['id']}#{index}")
+                    return c, f"already sent to {name}"
             block = doc_comments.block(name, post["thread"], pid)
             chat, said = send(name, login, "", [], mid=pid, comment_block=block,
                               comments=[{"id": post["thread"], "doc": post["doc"]}])
