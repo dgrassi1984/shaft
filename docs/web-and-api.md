@@ -95,8 +95,11 @@ and [chat design](plans/PLAN-webui-chat.md).
   Refreshes keep Manage open or closed, link focus, and activity scroll. Chat thumbnails reserve space;
   images loading keep the feed at the bottom if you have not scrolled up. After Save, focus returns to Edit
   and survives the document refresh.
-- The chat header refreshes every 1.5 seconds: state, model, today's spend, actions, busy warning, Clear and
-  Earlier chats. The open history list and ⋯ menu and keyboard focus survive refreshes; your draft and documents stay in place.
+- The chat header refreshes every 1.5 seconds: state, model, today's spend, actions, busy state icon, Clear and
+  Earlier chats. When the instance is busy and not writing a reply, an icon next to its name (⏳ in a cycle or
+  working, 💤 sleeping, ⏸ paused by you, 💬 in a conversation, • other states) opens the busy notice on hover, tap
+  or keyboard. The open state notice, history list and ⋯ menu and keyboard focus survive refreshes; your draft and
+  documents stay in place.
   A failed refresh marks the header stale. Clear sends the conversation id shown by the header; a missing or
   outdated id is refused with a request to reload. Cleared conversations stay in Earlier web chats and Transcripts.
 - **Earlier chats** sits in the chat header. Its quick list shows the latest 20 and the total count;
@@ -121,7 +124,8 @@ and [chat design](plans/PLAN-webui-chat.md).
   it; a reply's documents are cards under it. The drawer shows a vertical list with sizes, changed marks and comment
   counts, or one open document (by default the one this chat last changed). **← Documents** returns to the list
   and asks before dropping unsaved edits. When the chat area is too narrow for both columns, Documents opens as
-  a sheet over the chat. Close it with ✕ or Escape.
+  a sheet over the chat. Close it with ✕ or Escape; loading a `?doc=` address or clicking a document card, list
+  entry or chip opens the panel again.
   **Download** saves the open document's current file from disk, including in earlier chats. Unsaved edits are
   not included.
   Switching documents offers Save, Discard, or Stay before changing the address. If you type during Save,

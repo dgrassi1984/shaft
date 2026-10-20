@@ -293,6 +293,7 @@ details.menu > summary { list-style: none; cursor: pointer; font-size: 1.2rem; l
                          border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
 details.menu > summary::-webkit-details-marker { display: none; }
 details.menu.earliermenu > summary { font-size: .78rem; }   /* a word, sized like the header's small buttons */
+details.menu.busystate > summary { font-size: .9rem; padding: .15rem .4rem; }
 details.menu[open] > summary { border-color: var(--accent); }
 details.menu { position: relative; }
 .menubody { position: absolute; left: 0; top: 2.2rem; z-index: 30; background: var(--panel); border: 1px solid var(--line);
@@ -492,8 +493,10 @@ a.button { display: inline-block; padding: .45rem .9rem; border: 1px solid var(-
       padding: .3rem .6rem calc(.3rem + env(safe-area-inset-bottom)); }
   body.kbd:has(.chatgrid) main { padding-bottom: .3rem; }    /* the keyboard covers the home indicator */
   .chathead { flex-wrap: nowrap; align-items: center; gap: .3rem; margin: 0 0 .3rem; }
-  .chathead h1 { font-size: 1.1rem; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  .chathead h1 { font-size: 1.1rem; flex: 0 1 auto; min-width: 4em;   /* the name stays readable: ~5 letters */
+ overflow: hidden; text-overflow: ellipsis;
                  white-space: nowrap; }
+  .chathead .earliermenu { margin-left: auto; }
   .chathead .facts, .docslabel { display: none; }
   .navbtn, .closedocs { display: inline-flex; align-items: center; justify-content: center; }
   .menufacts { display: block; margin: 0 0 .4rem; font-size: .85rem; }
