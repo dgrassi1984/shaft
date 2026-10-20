@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 import unittest
 
 from supervisor import web_md
@@ -79,6 +80,18 @@ class BlocksTest(unittest.TestCase):
         self.assertEqual(out.count('<span class="task done" aria-label="done">☑</span>'), 2)
         self.assertIn("☐</span> to do", out)
 
+    def test_issue_16_task_items_do_not_share_checkbox_width_or_colour(self):
+        """Reverting #16 gives the li the checkbox's narrow width and dim colour."""
+        text = "Review the proposal and send the summary to the team before Friday"
+        out = md(f"- [ ] {text}\n- [x] finished")
+        self.assertIn(f'<li class="task-item"><span class="task" aria-label="to do">☐</span> {text}</li>', out)
+        self.assertIn('<li class="task-item"><span class="task done" aria-label="done">☑</span> finished</li>', out)
+        css = (Path(__file__).parents[1] / "web_static" / "web.css").read_text()
+        self.assertRegex(css, r"\.md li\.task-item\s*\{[^}]*list-style: none;")
+        self.assertRegex(css, r"\.md span\.task\s*\{[^}]*width: 1.1rem;")
+        self.assertRegex(css, r"\.md span\.task\.done\s*\{[^}]*color: var\(--good\);")
+        self.assertNotRegex(css, r"\.md li\.task-item\s*\{[^}]*(?:width|color):")
+
     def test_a_list_right_after_a_paragraph_starts_without_a_blank_line(self):
         self.assertEqual(md("Steps:\n- a\n- b"), "<p>Steps:</p><ul><li>a</li><li>b</li></ul>")
         self.assertEqual(md("In 2026\n3. not a list"), "<p>In 2026 3. not a list</p>")   # only 1. interrupts
@@ -99,9 +112,20 @@ class BlocksTest(unittest.TestCase):
     def test_tables_align_and_format_their_cells(self):
         out = md("| **Name** | Qty | Note |\n|:--|--:|:-:|\n| `a\\|b` | 3 | *x* |\n| c |")
         self.assertIn('<th class="al-l"><b>Name</b></th><th class="al-r">Qty</th><th class="al-c">Note</th>', out)
-        self.assertIn('<td data-label="**Name**" class="al-l"><code>a|b</code></td>', out)
+        self.assertIn('<td data-label="Name" class="al-l"><code>a|b</code></td>', out)
         self.assertIn('<td data-label="Note" class="al-c"><i>x</i></td>', out)
         self.assertIn('<td data-label="Qty" class="al-r"></td>', out)              # a short row is filled
+
+    def test_issue_35_table_labels_are_visible_heading_text(self):
+        """Reverting #35 exposes Markdown delimiters and link destinations in phone labels."""
+        headings = '**Name** | *Kind* | `**literal**` | [the **docs**](https://ex.example) | __Bold__ _em_ ~~old~~'
+        out = md(f"| {headings} |\n|---|---|---|---|---|\n|a|b|c|d|e|")
+        self.assertEqual(re.findall(r'data-label="([^"]*)"', out),
+                         ["Name", "Kind", "**literal**", "the docs", "Bold em old"])
+        out = md('| **<b> & "x"** |\n|---|\n|value|')
+        self.assertIn('data-label="&lt;b&gt; &amp; &quot;x&quot;"', out)
+        self.assertNotIn('<b> &', out)
+
 
 
 class InlineTest(unittest.TestCase):

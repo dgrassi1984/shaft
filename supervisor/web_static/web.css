@@ -223,6 +223,7 @@ form.drive textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospac
 .turn { padding: .5rem .7rem; border-radius: 8px; border: 1px solid var(--line); max-width: 52rem; }
 .turn.me { background: var(--bg); justify-self: end; }
 .turn.it { background: var(--panel); }
+.chat-day { justify-self: center; font-size: .8rem; margin: .2rem 0; }
 .turn.sent { border-style: dashed; }
 .turn.live { border-color: var(--talk); }
 .turn .who { font-size: .8rem; font-weight: 600; margin-bottom: .2rem; }
@@ -374,9 +375,9 @@ form.docedit textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monosp
 .md ol { margin: .2rem 0 .4rem; padding-left: 1.5rem; }
 .md li { margin: .1rem 0; }
 .md li > p { margin: .2rem 0; }
-.md li.task { list-style: none; margin-left: -1.1rem; }
-.md .task { display: inline-block; width: 1.1rem; color: var(--dim); }
-.md .task.done { color: var(--good); }
+.md li.task-item { list-style: none; margin-left: -1.1rem; }
+.md span.task { display: inline-block; width: 1.1rem; color: var(--dim); }
+.md span.task.done { color: var(--good); }
 .md h5, .md h6 { font-size: .88rem; margin: .7rem 0 .2rem; color: var(--dim); }
 .md hr { border: 0; border-top: 1px solid var(--line); margin: .8rem 0; }
 .md s { color: var(--dim); }
