@@ -207,20 +207,35 @@ class CallersTest(unittest.TestCase):
 
 
 class StatusTest(unittest.TestCase):
-    def test_an_idle_model_server_is_not_an_outage(self):
+    NO_COST = {"caps": [], "judge_today_total": 0, "judge_alert": 10 ** 9}
+
+    def _status(self, names: list[str]) -> tuple[dict, str]:
+        """The services and the panel's alert texts on a host whose instances are `names`, each on the local server.
+        The alerts are computed inside the patches: panel.alerts reads the instances, SUP_DIR and the plist when it
+        runs, so outside them it read the host's real instances/ (a kdtest pinned to :8780 raised the model alert)."""
         from supervisor import dashboard, panel
-        sup = Path(self.enterContext(tempfile.TemporaryDirectory()))   # no failed start logged, no instance on it
+        sup = Path(self.enterContext(tempfile.TemporaryDirectory()))   # no failed start logged
         with mock.patch("supervisor.version.service", return_value=None), \
-                mock.patch.object(panel, "SUP_DIR", sup), mock.patch.object(panel, "instance_names", lambda: []), \
+                mock.patch.object(panel, "SUP_DIR", sup), mock.patch.object(panel, "instance_names", lambda: names), \
+                mock.patch.object(panel, "instance_config", lambda n: {"LLM_BASE_URL": LOCAL}), \
                 mock.patch.object(localmodel, "plist", return_value=Path(__file__)), \
                 mock.patch.object(dashboard, "_scheduler_running", return_value=True):
             svcs = {s["name"]: s for s in dashboard.services()}
+            alerts = panel.alerts({"services": list(svcs.values())}, cost=self.NO_COST)
+        return svcs, " ".join(a["text"] for a in alerts)
+
+    def test_an_idle_model_server_is_not_an_outage(self):
+        svcs, texts = self._status([])   # no instance on it
         self.assertTrue(svcs["model"]["idle"])
         self.assertIn("starts on demand", svcs["model"]["detail"])
         self.assertFalse(svcs["api"]["idle"])   # only the model server runs on demand
-        alerts = panel.alerts({"services": list(svcs.values())}, cost={"caps": [], "judge_today_total": 0, "judge_alert": 10 ** 9})
-        texts = " ".join(a["text"] for a in alerts)
         self.assertNotIn("service model", texts)
+
+    def test_the_model_alert_reads_the_test_instances_not_the_hosts(self):
+        """Regression: the alert ran after the patches were undone, so the result depended on the machine's real
+        instances (kdtest on :8780 failed the idle test). A fixture instance on the server must raise it, by name."""
+        _, texts = self._status(["fixture-inst"])
+        self.assertIn("service model is not running: fixture-inst uses it (calls go to :8780)", texts)
 
     def test_an_uninstalled_model_server_is_still_an_outage(self):
         from supervisor import dashboard
