@@ -56,10 +56,10 @@ class TouchTest(unittest.TestCase):
 
     def test_return_is_a_new_line_where_there_is_no_shift_key(self):
         self.assertIn('window.matchMedia("(hover: none) and (pointer: coarse)")', JS)
-        self.assertRegex(JS, r'ev\.key === "Enter" && !ev\.shiftKey && !ev\.isComposing\s*&& !touchOnly\(\)')
+        self.assertRegex(JS, r'ev\.key === "Enter" && !ev\.isComposing && !touchOnly\(\)')   # modifiers: #70
         composer = str(web_views.chat_page("wren", None, [], [], {}, ["wren"], "t"))
         self.assertIn('placeholder="Message wren"', composer)              # no "Enter sends" in the field itself
-        self.assertIn('<span class="dim keys">Enter sends · Shift-Enter new line', composer)
+        self.assertIn('<span class="dim keys">Enter sends · Alt-Enter new line · ⌘-Enter queues', composer)
 
 
 if __name__ == "__main__":

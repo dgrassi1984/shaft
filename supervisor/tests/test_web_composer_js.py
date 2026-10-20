@@ -15,18 +15,18 @@ class ComposerJsTest(unittest.TestCase):
         script = r"""
 const fs=require('node:fs'), vm=require('node:vm'), assert=require('node:assert/strict');
 const storage=new Map(); let serial=0;
-function page(mids=[]) {
+function page(mids=[], touch=false) {
   const handlers={}, win={}, elements={}; let resolve, reject, payload;
   const node=()=>({dataset:{},style:{},children:[],setAttribute(){},querySelectorAll:()=>[],
     appendChild(n){this.children.push(n);},append(...ns){this.children.push(...ns);},remove(){},
     addEventListener(k,fn){this[k]=fn;},classList:{add(){},remove(){},toggle(){}}});
-  const mid={value:''}, files={type:'file',files:[],closest:()=>form}, chips=node();
+  const mid={value:''}, queue={value:''}, files={type:'file',files:[],closest:()=>form}, chips=node();
   const box={value:'',tagName:'TEXTAREA',name:'text',style:{},scrollHeight:120,selectionStart:0,selectionEnd:0,
     closest:q=>['form[data-files]','form[data-draft]'].includes(q)?form:null,focus(){},
     setSelectionRange(a,b){this.selectionStart=a;this.selectionEnd=b;},
     dispatchEvent(ev){for(const fn of handlers[ev.type]||[]) fn({target:box});}};
   const form={dataset:{post:'/chat/wren/send',draft:'wren',files:'',multipart:'1',reset:'1',sentMids:JSON.stringify(mids)},
-    closest:()=>null,querySelector:q=>({'textarea':box,'textarea[name=text]':box,'input[name=mid]':mid,
+    closest:()=>null,querySelector:q=>({'textarea':box,'textarea[name=text]':box,'input[name=mid]':mid,'input[name=queue]':queue,
       'input[type=file]':files,'[data-picked]':chips,'button[type=submit]':{}})[q]||null,
     reset(){box.value='';mid.value='';files.files=[];}};
   const selection={isCollapsed:false,rangeCount:1,toString:()=> 'selected quote',removeAllRanges(){},
@@ -39,16 +39,18 @@ function page(mids=[]) {
   const context={document,URL,URLSearchParams,Event,AbortController,navigator:{},
     crypto:{randomUUID:()=>`m-${++serial}`},location:{href:'https://shaft.test/i/wren/chat'},
     window:{innerHeight:900,addEventListener(k,fn){(win[k]||=[]).push(fn);},getSelection:()=>selection,
-      matchMedia:()=>({matches:false})},
+      matchMedia:()=>({matches:touch})},
     localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},
     setTimeout(){},clearTimeout(){},setInterval(){},
     DataTransfer:class {constructor(){this.files=[];this.items={add:f=>this.files.push(f)};}},
-    FormData:class {constructor(){this.text=box.value;this.mid=mid.value;this.files=[...files.files];}},
+    FormData:class {constructor(){this.text=box.value;this.mid=mid.value;this.queue=queue.value;this.files=[...files.files];}},
     DOMParser:class {parseFromString(t){return {body:{textContent:t}};}},
     fetch(u,o){payload=o.body;return new Promise((a,b)=>{resolve=a;reject=b;});}};
   vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),context);
   const emit=async(k,target,extra={})=>{for(const fn of handlers[k]||[]) await fn({target,preventDefault(){},...extra});};
-  return {box,mid,files,form, chips, payload:()=>payload,
+  form.requestSubmit=()=>{form.sending=emit('submit',{closest:()=>form});};
+  return {box,mid,queue,files,form, chips, payload:()=>payload,
+    key:extra=>emit('keydown',box,{key:'Enter',...extra}),
     load:()=>emit('DOMContentLoaded'),type:async t=>{box.value=t;await emit('input',box);},
     pick:async(...fs)=>{files.files=fs;await emit('change',files);},
     paste:(...fs)=>emit('paste',box,{clipboardData:{files:fs}}),
@@ -135,3 +137,20 @@ const q=page([id]);await q.load();assert.equal(q.box.value,'new text');assert.eq
         parser = Composer()
         parser.feed(str(chat_page("wren", chat, [], [], {}, ["wren"], "csrf")))
         self.assertEqual(json.loads(parser.attrs["data-sent-mids"]), ['m-"1'])
+
+    def test_issue_70_newlines_and_queue_keys(self):
+        """Reverting #70 sends Alt-Enter text and sends modifier messages as interjections."""
+        self.run_composer("""
+for(const modifier of ['altKey','shiftKey']) {
+ storage.clear();const p=page();await p.type('abcd');p.box.setSelectionRange(1,3);
+ await p.key({[modifier]:true});assert.equal(p.box.value,'a\\nd');assert.equal(p.payload(),undefined);
+ assert.equal(p.box.selectionStart,2);assert.equal(storage.get('shaft.draft.wren'),'a\\nd');
+}
+for(const modifier of ['metaKey','ctrlKey',null]) {
+ const p=page();await p.type('next');await p.key(modifier?{[modifier]:true}:{});
+ assert.equal(p.payload().queue,modifier?'1':'');assert.equal(p.queue.value,'');
+ p.answer();await p.form.sending;
+}
+const p=page([],true);await p.type('touch');await p.key({});assert.equal(p.payload(),undefined);
+const q=page();await q.type('ime');await q.key({isComposing:true});assert.equal(q.payload(),undefined);
+""")
