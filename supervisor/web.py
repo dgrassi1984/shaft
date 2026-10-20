@@ -442,6 +442,10 @@ def _post(req: Request, dev: str) -> Response:
         if m[1] not in _names():
             return _not_found(req.path)
         return _save_doc(m[1], (req.headers.get("tailscale-user-login") or "").lower(), req.form())
+    if m := re.fullmatch(r"/docs/([A-Za-z0-9_-]+)/comment(?:/(edit|delete|send|state))?", req.path):
+        if m[1] not in _names():
+            return _not_found(req.path)
+        return _comment(m[1], (req.headers.get("tailscale-user-login") or "").lower(), m[2], req.form())
     if req.path in ("/push/subscribe", "/push/unsubscribe"):
         from . import webpush
         try:
@@ -640,6 +644,47 @@ def _save_doc(name: str, login: str, form: dict) -> Response:
     except web_chat.Refused as e:                  # written: only telling the instance failed — say both
         said = f"saved, but {name} was not told yet: {e}"
     return _html(200, web_pages.h("<p>{t}</p>", t=said), {"X-Doc": rel})
+
+
+def _comment(name: str, login: str, action: str | None, form: dict) -> Response:
+    from . import doc_comments, web_chat
+    pid, text = form.get("pid", ""), form.get("text", "")
+    try:
+        if action is None:
+            if form.get("thread"):
+                tid = doc_comments.reply(name, pid, form["thread"], text, "daniele")
+            else:
+                try:
+                    anchor = json.loads(form["anchor"]) if form.get("anchor", "").strip() else None
+                except ValueError:
+                    raise doc_comments.Refused("invalid anchor JSON") from None
+                tid = doc_comments.add_thread(name, pid, form.get("doc", ""), anchor,
+                                               form.get("sha", ""), text)
+            said = "kept for you: only you see this"
+            if form.get("send") == "1":
+                try:
+                    _, said = web_chat.send_comment(name, login, pid)
+                except (doc_comments.Refused, web_chat.Refused) as e:
+                    said = f"saved, but not sent: {e}"
+        elif action == "state":
+            tid = form.get("thread", "")
+            doc_comments.set_state(name, tid, form.get("state", ""))
+            thread = next(t for t in doc_comments.threads(name) if t["id"] == tid)
+            web_chat._sync_copies(name, [thread["doc"]])
+            said = f"{tid}: {form['state']}"
+        else:
+            tid = doc_comments.get_post(name, pid)["thread"]
+            if action == "edit":
+                doc_comments.edit(name, pid, text)
+                said = "comment edited"
+            elif action == "delete":
+                doc_comments.delete(name, pid)
+                said = "comment deleted"
+            else:
+                _, said = web_chat.send_comment(name, login, pid)
+    except (doc_comments.Refused, web_chat.Refused) as e:
+        return _html(409, web_pages.h("<p>refused: {e}</p>", e=str(e)))
+    return _html(200, web_pages.h("<p>{t}</p>", t=said), {"X-Thread": tid})
 
 
 def _docs_panel(name: str, chat: dict | None, doc: str):

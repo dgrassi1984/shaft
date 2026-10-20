@@ -869,10 +869,11 @@ def main(argv: list[str]) -> int:
                                     "show PATH, or set PATH --file FILE --expect-sha SHA (none for a new one); its next "
                                     "run commits your edit with its notes")
     p.add_argument("name")
-    p.add_argument("action", nargs="?", choices=["show", "set"])
+    p.add_argument("action", nargs="?", choices=["show", "set", "comments"])
     p.add_argument("path", nargs="?", help="inside notes/docs/, e.g. plan.md")
     p.add_argument("--file")
     p.add_argument("--expect-sha")
+    p.add_argument("--sync", action="store_true")
     p = sub.add_parser("cycle", help="start one cycle of an idle instance now, detached (as shaft top's c and the web "
                                      "UI do); refused if it is paused or already awake")
     p.add_argument("name")
@@ -1106,7 +1107,7 @@ def main(argv: list[str]) -> int:
         return opconfig.drive_command(args.name, args.action, args.file, args.expect_sha)
     if args.cmd == "docs":
         from . import docs
-        return docs.command(args.name, args.action, args.path, args.file, args.expect_sha)
+        return docs.command(args.name, args.action, args.path, args.file, args.expect_sha, sync=args.sync)
     if args.cmd == "cycle":
         instance_root(args.name)
         try:

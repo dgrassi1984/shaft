@@ -90,6 +90,7 @@ class ChatTest(unittest.TestCase):
         import http.client
         port = self.api.server.server_address[1]
         for p in (mock.patch.object(web_chat, "SUP_DIR", self.dir / "sup"),
+                  mock.patch("supervisor.core.SUP_DIR", self.dir / "sup"),
                   mock.patch.object(web_chat, "_api_conn", lambda timeout: http.client.HTTPConnection("127.0.0.1", port,
                                                                                                      timeout=timeout)),
                   mock.patch("supervisor.core.secrets_env", return_value={"SHAFT_API_KEY": KEY}),

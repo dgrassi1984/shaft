@@ -341,9 +341,24 @@ def _run(relay: Relay) -> None:
                 relay.conn.close()
         except OSError:
             pass
+    # A comment send must mark its post sent before even a very fast reply is attached.
+    with _inst_lock(chat["instance"]):
+        docs_to_sync = _finish(relay, answer, activity, error, heard)
+    _sync_copies(chat["instance"], docs_to_sync)
+
+
+def _finish(relay: Relay, answer: str, activity: list, error: str | None, heard: int | None) -> list[str]:
+    docs_to_sync = []
+    cid = relay.cid
     with _lock(cid):
         chat = load(cid)
-        sent = chat["reply"].get("interjections", 0)
+        reply = chat["reply"]
+        sent = reply.get("interjections", 0)
+        interjected = [t for t in chat["turns"][reply.get("turn_start", len(chat["turns"])):]
+                       if t["role"] == "user" and t.get("interjected")]
+        heard_ids = reply.get("comment_ids", []) + _comment_ids(interjected[:max(0, heard or 0)])
+        started_by = None if sent else reply.get("started_by")
+        assistant_index = len(chat["turns"])
         note = ("stopped by you" if relay.stopped else f"error: {error}" if error else "")
         from . import docs
         made = docs.changed(chat["reply"].get("docs_before") or {}, _docs_now(chat["instance"]))
@@ -355,8 +370,24 @@ def _run(relay: Relay) -> None:
         if unheard:                               # sent too late for this reply: answered by one of their own
             chat["state"], chat["reply"] = "replying", {"started": _now(), "activity": [], "answer": "",
                                                         "interjections": 0, "followup": unheard,
-                                                        "docs_before": _docs_now(chat["instance"])}
+                                                        "docs_before": _docs_now(chat["instance"]),
+                                                        **_reply_comments(interjected[-unheard:]),
+                                                        "turn_start": len(chat["turns"])}
         save(chat)
+    if not note:
+        from . import doc_comments
+        try:
+            result = doc_comments.parse_answer(chat["instance"], answer.strip(), heard_ids, started_by,
+                                               f"{cid}#{assistant_index}")
+            with _lock(cid):
+                chat = load(cid)
+                for key in ("answered", "opened"):
+                    if result[key]:
+                        chat["turns"][assistant_index][key] = result[key]
+                save(chat)
+            docs_to_sync = [item["doc"] for items in result.values() for item in items]
+        except (Exception, SystemExit) as e:
+            log(f"web: could not attach {cid}'s comments: {type(e).__name__}: {e}")
     if _relays.get(cid) is relay:                  # never a newer relay of the same chat
         del _relays[cid]
     if not unheard and not relay.stopped and not watched(chat["instance"]):
@@ -366,6 +397,7 @@ def _run(relay: Relay) -> None:
         + (f" ({unheard} interjection(s) answered next)" if unheard else ""))
     if unheard:
         _start(cid)
+    return docs_to_sync
 
 
 # -- what the page does ----------------------------------------------------------------------------------------------
@@ -435,25 +467,65 @@ def _take_edits(chat: dict) -> tuple[str, list[str]]:
 MIDS_KEPT = 50                       # the last message ids a chat remembers
 
 
-def send(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: str = "") -> tuple[dict, str]:
+def _sync_copies(name: str, docs: list[str]) -> None:
+    """The CLI owns writes into the instance; an unavailable verb must not fail a chat."""
+    from . import actions
+    for doc in sorted(set(docs)):
+        try:
+            ok, last = actions.run_now(["docs", name, "comments", doc, "--sync"], who="web")
+            if not ok:
+                log(f"web: could not sync {name}'s comments on {doc}: {last}")
+        except (Exception, SystemExit) as e:
+            log(f"web: could not sync {name}'s comments on {doc}: {type(e).__name__}: {e}")
+
+
+def _comment_ids(turns: list[dict]) -> list[str]:
+    return [c["id"] for t in turns for c in t.get("comments", [])]
+
+
+def _reply_comments(turns: list[dict]) -> dict:
+    only = turns[0] if len(turns) == 1 else {}
+    ids = _comment_ids(turns)
+    sole = (len(only.get("comments", [])) == 1 and not only.get("shown")
+            and not only.get("attachments") and not only.get("edits"))
+    return {"comment_ids": ids, "started_by": ids[0] if sole else None}
+
+
+def send_comment(name: str, login: str, pid: str) -> tuple[dict, str]:
+    """Send a stored post once; its post id also deduplicates retries before mark_sent succeeds."""
+    from . import doc_comments
+    with _inst_lock(name):
+        try:
+            post = doc_comments.get_post(name, pid)
+            if post.get("sent") or post.get("turn"):
+                cid = (post.get("sent") or post["turn"]).split("#", 1)[0]
+                return load(cid) or {}, f"already sent to {name}"
+            block = doc_comments.block(name, post["thread"], pid)
+            chat, said = send(name, login, "", [], mid=pid, comment_block=block,
+                              comments=[{"id": post["thread"], "doc": post["doc"]}])
+            index = next(i for i, t in enumerate(chat["turns"]) if t.get("mid") == pid)
+            doc_comments.mark_sent(name, pid, f"{chat['id']}#{index}")
+        except (Exception, SystemExit) as e:
+            raise Refused(str(e)) from e
+    _sync_copies(name, [post["doc"]])
+    return chat, said
+
+
+def send(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: str = "", *,
+         comment_block: str = "", comments: list[dict] | None = None) -> tuple[dict, str]:
     """A message from the operator: a new reply if none is running, an interjection otherwise. (chat, what to say)
     `mid`: the page's id for this message — sent again after an answer that never arrived, it is not sent twice."""
     with _inst_lock(name):
         if mid and (c := open_chat(name)) and mid in (c.get("mids") or []):
             return c, f"already sent to {name}"
-        chat, said = _send(name, login, text, files)
-        if mid:
-            with _lock(chat["id"]):
-                c = load(chat["id"])
-                c["mids"] = ((c.get("mids") or []) + [mid])[-MIDS_KEPT:]
-                save(c)
-        return chat, said
+        return _send(name, login, text, files, comment_block=comment_block, comments=comments, mid=mid)
 
 
-def _send(name: str, login: str, text: str, files: list[tuple[str, bytes]]) -> tuple[dict, str]:
-    from . import messages
+def _send(name: str, login: str, text: str, files: list[tuple[str, bytes]], *,
+          comment_block: str = "", comments: list[dict] | None = None, mid: str = "") -> tuple[dict, str]:
+    from . import messages, doc_comments
     text = text.strip()
-    if not text and not files and not (open_chat(name) or {}).get("pending_edits"):
+    if not text and not files and not comment_block and not (open_chat(name) or {}).get("pending_edits"):
         raise Refused("an empty message is not sent")
     if len(text) > MAX_TEXT:
         raise Refused(f"a message is at most {MAX_TEXT} characters ({len(text)})")
@@ -467,34 +539,54 @@ def _send(name: str, login: str, text: str, files: list[tuple[str, bytes]]) -> t
             raise Refused(str(e)) from None
     turn = {"role": "user", "content": (text + lines).strip(), "shown": text, "ts": _now(),
             "attachments": [{k: a[k] for k in ("name", "path", "bytes")} for a in atts]}
-    with _lock(cid):                               # the relay's last save takes it too: the chat's state is the truth
-        chat = load(cid)
-        chat["login"] = login
-        edits, paths = _take_edits(chat)
-        if edits:
-            turn["content"] = (turn["content"] + "\n\n" + edits).strip()
-            turn["edits"] = paths
-        if not any(t["role"] == "user" for t in chat["turns"]):
-            turn["content"] += "\n\n" + DOCS_NOTE
-        if chat["state"] == "replying":
-            status, body = _post(chat, "interject", {"model": name, "messages": _api_messages(chat) + [
-                {"role": "user", "content": turn["content"]}]})
-            if status not in (202, 409):
-                raise Refused(body.get("error", {}).get("message") or f"API HTTP {status}")
-            turn["interjected"] = True
+    if comment_block:
+        turn["content"] = (turn["content"] + "\n\n" + comment_block).strip()
+    if comments:
+        turn["comments"] = comments
+    if mid:
+        turn["mid"] = mid
+    notices = doc_comments.take_notices(name)
+    try:
+        with _lock(cid):                               # the relay's last save takes it too: the chat's state is the truth
+            chat = load(cid)
+            chat["login"] = login
+            if mid:
+                chat["mids"] = ((chat.get("mids") or []) + [mid])[-MIDS_KEPT:]
+            edits, paths = _take_edits(chat)
+            if edits:
+                turn["content"] = (turn["content"] + "\n\n" + edits).strip()
+                turn["edits"] = paths
+            if notices:
+                turn["content"] += "\n\n" + "\n\n".join(notices)
+            if not any(t["role"] == "user" for t in chat["turns"]):
+                turn["content"] += "\n\n" + DOCS_NOTE
+            if chat["state"] == "replying":
+                status, body = _post(chat, "interject", {"model": name, "messages": _api_messages(chat) + [
+                    {"role": "user", "content": turn["content"]}]})
+                if status not in (202, 409):
+                    raise Refused(body.get("error", {}).get("message") or f"API HTTP {status}")
+                turn["interjected"] = True
+                chat["turns"].append(turn)
+                # Counted as sent either way: one the API took but the reply did not hear in time, or one it refused (409:
+                # the reply was ending), is answered by a reply of its own when this one ends.
+                chat["reply"]["interjections"] = chat["reply"].get("interjections", 0) + 1
+                save(chat)
+                return chat, (f"{name} reads it at its next step" if status == 202 else
+                              f"{name} was just finishing: it answers this next")
             chat["turns"].append(turn)
-            # Counted as sent either way: one the API took but the reply did not hear in time, or one it refused (409:
-            # the reply was ending), is answered by a reply of its own when this one ends.
-            chat["reply"]["interjections"] = chat["reply"].get("interjections", 0) + 1
+            last_answer = max((i for i, t in enumerate(chat["turns"]) if t["role"] == "assistant"), default=-1)
+            starting = [t for t in chat["turns"][last_answer + 1:]
+                        if t["role"] == "user" and not t.get("interjected")]
+            chat["state"], chat["reply"] = "replying", {"started": _now(), "activity": [], "answer": "", "interjections": 0,
+                                                        "docs_before": _docs_now(name),
+                                                        **_reply_comments(starting),
+                                                        "turn_start": len(chat["turns"])}
             save(chat)
-            return chat, (f"{name} reads it at its next step" if status == 202 else
-                          f"{name} was just finishing: it answers this next")
-        chat["turns"].append(turn)
-        chat["state"], chat["reply"] = "replying", {"started": _now(), "activity": [], "answer": "", "interjections": 0,
-                                                    "docs_before": _docs_now(name)}
-        save(chat)
-    _start(cid)
-    return chat, f"sent to {name}"
+        _start(cid)
+        return chat, f"sent to {name}"
+    except BaseException:
+        doc_comments.put_back_notices(name, notices)
+        raise
 
 
 def stop(cid: str) -> str:
