@@ -14,10 +14,16 @@ from supervisor import actions, panel, recap, web, web_actions
 from supervisor.tests.test_web import WebTest, snap
 
 
+def actions_services() -> list[str]:
+    from supervisor import dashboard
+    return list(dashboard.SERVICES)
+
+
 class ActionsTest(WebTest):
     def setUp(self):
         super().setUp()
         self.ran, self.result = [], (True, "ok")
+        self.running = [n for n in actions_services() if n != "web"]      # the guards apply to a running service
         for p in (mock.patch.object(actions, "run_now", self._now), mock.patch.object(actions, "run_detached", self._bg),
                   mock.patch.object(web, "_names", return_value=["shaft", "wren"]),
                   mock.patch.object(actions, "busy_instances", return_value=[]),
@@ -38,6 +44,7 @@ class ActionsTest(WebTest):
 
     def act(self, verb: str, state: str = "idle", alerts: list[dict] | None = None, **form) -> tuple[int, str]:
         s = snap(state=state)
+        s["services"] = [{"name": n, "running": n in self.running, "detail": ""} for n in actions_services()]
         s["alerts"] = alerts or [{"id": "a1", "text": "one"}, {"id": "a2", "text": "two"},
                                  {"id": self.LOG_ID, "text": "log"}]
         body = "&".join(f"{k}={v}" for k, v in form.items()).encode()
@@ -234,6 +241,81 @@ class RefusedWhereTheTuiRefuses(ActionsTest):
         self.assertNothingRan()
 
 
+class AGuardTheOperatorForces(ActionsTest):
+    """Live, 2026-10-20: two live cycles (thelos, wren) kept Restart api and Restart scheduler greyed out on Settings
+    and Services, with no way to restart from the page. A guarded action is refused unless forced; forced, it runs and
+    the log names what it overrode."""
+
+    def setUp(self):
+        super().setUp()
+        runs = ["thelos (live since 14:06)", "wren (live since 14:08)"]
+        for p in (mock.patch.object(panel, "scheduled_runs", return_value=runs),
+                  mock.patch.object(actions, "busy_instances", return_value=runs)):
+            p.start()
+            self.addCleanup(p.stop)
+        self.logged = []
+        p = mock.patch.object(actions, "log", self.logged.append)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_unforced_it_is_refused(self):
+        for verb, form in (("service", {"service": "scheduler", "op": "on"}), ("service", {"service": "api", "op": "on"}),
+                           ("service", {"service": "api", "op": "off"}), ("autonomy", {"op": "off"})):
+            status, body = self.act(verb, **form)
+            self.assertEqual(status, 409, body)
+            self.assertIn("not now:", body)
+        self.assertNothingRan()
+        self.assertEqual(self.logged, [])
+
+    def test_forced_it_runs_and_is_logged(self):
+        self.assertEqual(self.act("service", service="scheduler", op="on", force="1")[0], 200)
+        self.assertEqual(self.act("service", service="api", op="on", force="1")[0], 200)
+        self.assertEqual(self.act("autonomy", op="off", force="1")[0], 200)
+        self.assertEqual([r[1] for r in self.ran], [["autonomy", "on"], ["api", "on"], ["autonomy", "off"]])
+        self.assertEqual(len(self.logged), 3)
+        self.assertIn("web: operator forced shaft autonomy on past the guard: the scheduler's runs", self.logged[0])
+        self.assertIn("thelos (live since 14:06), wren (live since 14:08)", self.logged[0])
+        self.assertNotIn("Try again", self.logged[0])
+
+    def test_a_stopped_service_starts_unforced_while_runs_are_in_progress(self):
+        """Live, 2026-10-20: the model server, stopped between uses, showed "Force start", asking to "force restart
+        model" — starting it cuts nothing off, and the runs waiting on it need it."""
+        self.running = ["api"]
+        self.assertEqual(self.act("service", service="model", op="on")[0], 200)
+        self.assertEqual(self.act("service", service="scheduler", op="on")[0], 200)
+        self.assertEqual([r[1] for r in self.ran], [["model", "on"], ["autonomy", "on"]])
+        self.assertEqual(self.logged, [])
+        runs = ["thelos (live since 14:06)"]
+        out = str(web_actions.service_buttons("model", False, runs, runs))
+        self.assertIn(">Start</button>", out)
+        self.assertNotIn("orce", out)
+
+    def test_the_web_ui_cannot_be_forced_to_restart_itself(self):
+        status, body = self.act("service", service="web", op="on", force="1")
+        self.assertEqual(status, 409)
+        self.assertIn("cannot stop or restart itself", body)
+        self.assertNothingRan()
+
+    def test_held_back_buttons_offer_force_and_say_what_it_kills(self):
+        runs = ["thelos (live since 14:06)"]
+        out = str(web_actions.service_buttons("scheduler", True, runs, runs))
+        self.assertNotIn("disabled", out)                                     # was a greyed-out button
+        self.assertIn(">Force restart</button>", out)
+        self.assertIn(">Force stop</button>", out)
+        self.assertIn('name="force" value="1"', out)
+        self.assertIn("Force restart scheduler now? Not safe: the scheduler&#x27;s runs share its process group, so "
+                      "this would kill them: thelos (live since 14:06). They end unfinished.", out)
+        api = str(web_actions.service_buttons("api", True, [], runs))
+        self.assertIn("Force restart api now? Not safe: runs in progress use it: thelos (live since 14:06). Their "
+                      "calls to it fail while it is down.", api)
+        self.assertIn('class="act small force"', api)
+        self.assertIn("Force autonomy off", str(web_actions.autonomy_button(True, runs)))
+        free = str(web_actions.service_buttons("api", True, [], []))          # nothing held back: the plain buttons
+        self.assertIn(">Restart</button>", free)
+        self.assertNotIn("force", free)
+        self.assertIn('disabled title="not running"', str(web_actions.service_buttons("api", False, [], runs)))
+
+
 class PagesShowEachActionAsItRuns(ActionsTest):
     def page(self, path: str, s: dict | None = None) -> str:
         with mock.patch.object(web, "overview", return_value=s or snap()):
@@ -259,13 +341,13 @@ class PagesShowEachActionAsItRuns(ActionsTest):
         self.assertIn("about $2.00 by the finished trials so far", body)
         self.assertIn("trials today $5.00", body)
 
-    def test_the_services_page_refuses_a_restart_that_would_kill_runs(self):
+    def test_the_services_page_asks_before_a_restart_that_would_kill_runs(self):
         with mock.patch.object(panel, "services_detail", return_value=[
                 {"name": "scheduler", "running": True, "detail": ""}, {"name": "web", "running": True, "detail": ""}]), \
                 mock.patch.object(panel, "scheduled_runs", return_value=["wren (live since 12:00)"]), \
                 mock.patch.object(panel, "log_tail", return_value=[]):
             body = self.page("/services")
-        self.assertIn("not now: the scheduler&#x27;s runs share its process group", body)
+        self.assertIn("Force restart scheduler now? Not safe: the scheduler&#x27;s runs share its process group", body)
         self.assertIn("the web UI cannot stop or restart itself", body)
 
 

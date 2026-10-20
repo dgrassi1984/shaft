@@ -17,8 +17,8 @@ shaft top                       # control panel, tabs 0–9: overview (state, no
                                 #   every conversation with you, in full; tool calls, results, write-up; f
                                 #   filters, t shows a conversation's thinking). Actions ask y/n and run the matching shaft subcommand: cycle,
                                 #   pause/resume, K kill, D delete (type the name), sleep, update, tools, write/reply, A/A trial, battery,
-                                #   services and autonomy (a scheduler restart is refused while its runs would
-                                #   be killed). a writes each instance a one-line recap; what it is doing now
+                                #   services and autonomy (a restart that would kill the scheduler's runs, or cut
+                                #   off runs using api/model/embed, asks to be forced, naming them; logged). a writes each instance a one-line recap; what it is doing now
                                 #   and did in the last hour; by a small model from its own records
                                 #   (SHAFT_RECAP_MODEL, default claude-haiku-5-5; supervisor/recap.py, usage is recorded in the recaps cost category). ? lists the keys; --once prints a text snapshot
 shaft web on|off|status|pair|unpair   # the same control panel in a browser, tailnet only, plus chat, config,

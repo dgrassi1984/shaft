@@ -68,11 +68,27 @@ def guard_reason(service: str, action: str, scheduled: list[str], busy: list[str
     """service_guard from what is running now (panel.scheduled_runs, busy_instances): for a page that shows every
     service's buttons at once and asks the system once."""
     if (service == "scheduler" or (service == "autonomy" and action == "off")) and scheduled:
-        return (f"the scheduler's runs share its process group, so this would kill them: {', '.join(scheduled)}. "
-                "Try again when they end.")
+        return (f"the scheduler's runs share its process group, so this would kill them: {', '.join(scheduled)}."
+                + LATER)
     if service in ("model", "embed", "api") and busy:
-        return f"runs in progress use it: {', '.join(busy)}. Try again when they end."
+        return f"runs in progress use it: {', '.join(busy)}." + LATER
     return ""
+
+
+LATER = " Try again when they end."
+
+
+def force_question(service: str, action: str, why: str) -> str:
+    """The question both panels ask before overriding a guard: what it would hurt, in the guard's own words. The
+    operator may force a restart the guard holds back (a run that will not end, a fix that cannot wait)."""
+    verb = {"off": "stop", "restart": "restart"}.get(action, f"turn {action}")
+    what = f"autonomy {action}" if service == "autonomy" else f"{verb} {service}"
+    then = "They end unfinished." if service in ("scheduler", "autonomy") else "Their calls to it fail while it is down."
+    return f"force {what} now? Not safe: {why.removesuffix(LATER)} {then}"
+
+
+def log_forced(who: str, args: list[str], why: str) -> None:
+    log(f"{who}: operator forced {say(args)} past the guard: {why.removesuffix(LATER)}")
 
 
 def trial_cost_estimate() -> float | None:

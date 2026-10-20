@@ -19,7 +19,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
-from supervisor import cloudllm, coder, core, dashboard, localmodel, panel, selfhosted, trial
+from supervisor import actions, cloudllm, coder, core, dashboard, localmodel, panel, selfhosted, trial
 from supervisor.core import PROJECT
 
 try:
@@ -422,23 +422,42 @@ class PanelKeys(unittest.TestCase):
         self.keys(ui, snap, "c", "y", start=lambda n: started.append(n) or f"started {n}")
         self.assertEqual(started, ["shaft"])
 
-    def test_a_scheduler_restart_is_refused_while_its_runs_would_be_killed(self):
-        """2026-10-13: the scheduler's children are in its process group — a launchd restart kills them."""
+    def test_a_scheduler_restart_asks_to_be_forced_while_its_runs_would_be_killed(self):
+        """2026-10-13: the scheduler's children are in its process group — a launchd restart kills them. 2026-10-20: the
+        guard held it back with no way past; it now asks whether to force it, naming the runs, and n leaves it."""
         ui, snap = top.UI(tab="services", sel=3), _snap()
-        with mock.patch.object(panel, "scheduled_runs", return_value=["wren (live since 13:47)"]):
+        logged = []
+        with mock.patch.object(panel, "scheduled_runs", return_value=["wren (live since 13:47)"]), \
+                mock.patch.object(actions, "log", logged.append):
             self.keys(ui, snap, "r")
-            self.assertIsNone(ui.overlay)
-            self.assertIn("wren (live since 13:47)", ui.flash)
+            self.assertIn("force restart scheduler now? Not safe:", ui.overlay.text)
+            self.assertIn("wren (live since 13:47). They end unfinished.", ui.overlay.text)
+            self.keys(ui, snap, "n")
             self.keys(ui, snap, "a")                                 # autonomy off would kill them too
-            self.assertIsNone(ui.overlay)
-        with mock.patch.object(panel, "scheduled_runs", return_value=[]):
+            self.assertIn("force autonomy off now?", ui.overlay.text)
+            self.keys(ui, snap, "n")
+            self.assertEqual((self.ran, logged), ([], []))
             self.keys(ui, snap, "r", "y")
         self.assertEqual(self.ran, [["autonomy", "on"]])
+        self.assertEqual(len(logged), 1)
+        self.assertIn("top: operator forced shaft autonomy on past the guard:", logged[0])
+        with mock.patch.object(panel, "scheduled_runs", return_value=[]):
+            self.keys(ui, snap, "r")
+            self.assertEqual(ui.overlay.text, "start/restart scheduler?")   # nothing held back: the plain question
 
-    def test_the_model_server_is_not_stopped_under_a_running_reply(self):
+    def test_the_model_server_is_not_stopped_under_a_running_reply_unless_forced(self):
         ui, snap = top.UI(tab="services", sel=0), _snap()
-        with mock.patch.object(top_views, "busy_instances", return_value=["shaft (talk since 16:18)"]):
+        snap["services"].append({"name": "model", "running": True, "detail": ""})
+        with mock.patch.object(top_views, "busy_instances", return_value=["shaft (talk since 16:18)"]), \
+                mock.patch.object(actions, "log", lambda line: None):
             self.keys(ui, snap, "o")
+            self.assertIn("force stop model now? Not safe: runs in progress use it: shaft (talk since 16:18). Their "
+                          "calls to it fail while it is down.", ui.overlay.text)
+            self.keys(ui, snap, "n")
+            snap["services"] = [{**s, "running": False} if s["name"] == "model" else s for s in snap["services"]]
+            self.keys(ui, snap, "r")                                 # stopped: starting it cuts nothing off
+            self.assertEqual(ui.overlay.text, "start/restart model?")
+            self.keys(ui, snap, "n")
         self.assertIsNone(ui.overlay)
         self.assertEqual(self.ran, [])
 

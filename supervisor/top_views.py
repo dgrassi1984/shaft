@@ -769,18 +769,27 @@ def handle_view(ui, key: str, snap: dict, page_rows: int) -> None:
         cmd = "autonomy" if sel == "scheduler" else sel
         if key in ("r", "o"):
             action = "on" if key == "r" else "off"
-            why = service_guard(sel, action if key == "o" else "restart")
-            if why:
-                ui.say(f"not now: {why}", 10)
-            else:
-                verb = "start/restart" if key == "r" else "stop"
-                ask(ui, f"{verb} {sel}?", lambda: run_now([cmd, action], timeout=90))
+            guard = action if key == "o" else "restart"
+            verb = "start/restart" if key == "r" else "stop"
+            running = any(s["name"] == sel and s["running"] for s in snap.get("services", []))
+            ask_guarded(ui, sel, guard, f"{verb} {sel}?", [cmd, action], running)
         elif key == "a":
             running = any(s["name"] == "scheduler" and s["running"] for s in snap.get("services", []))
             action = "off" if running else "on"
-            why = service_guard("autonomy", action)
-            if why:
-                ui.say(f"not now: {why}", 10)
-            else:
-                ask(ui, f"autonomy {action}? ({'no more scheduled wakes or sleeps' if action == 'off' else 'wakes and the nightly sleep resume'})",
-                    lambda: run_now(["autonomy", action], timeout=90))
+            ask_guarded(ui, "autonomy", action, f"autonomy {action}? ({'no more scheduled wakes or sleeps' if action == 'off' else 'wakes and the nightly sleep resume'})",
+                        ["autonomy", action])
+
+
+def ask_guarded(ui, service: str, action: str, question: str, args: list[str], running: bool = True) -> None:
+    """A service action a guard may hold back: held back, the operator is asked whether to force it (the web UI's
+    "Force …" button, the same question), and a forced one is logged. Only a running service can hurt a run: starting
+    a stopped one is never held back."""
+    why = service_guard(service, action) if running else ""
+    if not why:
+        ask(ui, question, lambda: run_now(args, timeout=90))
+        return
+
+    def forced() -> str:
+        actions.log_forced("top", args, why)
+        return run_now(args, timeout=90)
+    ask(ui, actions.force_question(service, action, why) + " (y to force)", forced)
