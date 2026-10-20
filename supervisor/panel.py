@@ -22,8 +22,11 @@ from .core import (SUP_DIR, calendar_grants, disabled_tools, dollars, git, insta
                    instance_root, journal_entries, knob, mail_grants, paused, shared_folder)
 from . import selfhosted
 
-JUDGE_ALERT_USD, _ = knob(   # the judge has no cap (the operator): only an alert
-    "SHAFT_JUDGE_ALERT_USD", "10", dollars, "judge spend per day that raises an alert (the judge has no cap)",
+# The judge has no cap (the operator): only an alert. $10 sat under the Sonnet judge's $12-25 a day and fired daily;
+# with cheap judges and one run in two judged (#45) a day is about $2 (~225 judgments at $0.002-0.01, ~55 second
+# opinions at ~$0.008), so $3 flags a day that is half again above that, e.g. a dear model back in the pool.
+JUDGE_ALERT_USD, _ = knob(
+    "SHAFT_JUDGE_ALERT_USD", "3", dollars, "judge spend per day that raises an alert (the judge has no cap)",
     group="Judging", services=("web",))
 CAP_ALERT = 0.8                                                    # a cap this full raises an alert
 ALERT_HOURS = 12                                                   # log alerts this recent are shown

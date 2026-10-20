@@ -17,6 +17,7 @@ import json
 import math
 import random
 import re
+import secrets
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -416,12 +417,42 @@ def own_models(name: str, ep: dict | None = None) -> list[str]:
     return [m for m in ((cycle_model(name, ep) if ep else None), configured) if m]
 
 
+def _unsampled_path(name: str, sup: Path | None = None) -> Path:
+    return (sup or SUP_DIR) / "judgments" / f"{name}-unsampled.jsonl"
+
+
+def unsampled_rows(name: str, sup: Path | None = None) -> list[dict]:
+    """The live runs the main judge left out (one judged in SHAFT_JUDGE_EVERY): not judged, never a failure. Kept
+    apart from the judgments, so no reader of those counts them; kept at all so the choice is made once — a later
+    SHAFT_JUDGE_EVERY=1 judges the runs from then on, not every run ever left out (#45)."""
+    p = _unsampled_path(name, sup)
+    return [json.loads(l) for l in p.read_text().splitlines() if l.strip()] if p.exists() else []
+
+
+def unsampled(name: str) -> set[str]:
+    return {r["episode_ts"] for r in unsampled_rows(name)}
+
+
+def judge_sampled(name: str, episode_ts: str) -> bool:
+    """Whether the main judge grades this live run: one in SHAFT_JUDGE_EVERY, drawn when it is first judged (and a run
+    left out recorded), so nothing the instance can see tells it beforehand which of its runs will be graded."""
+    if judge.JUDGE_EVERY <= 1 or secrets.randbelow(judge.JUDGE_EVERY) == 0:
+        return True
+    _unsampled_path(name).parent.mkdir(parents=True, exist_ok=True)
+    with _unsampled_path(name).open("a") as f:
+        f.write(json.dumps({"episode_ts": episode_ts, "decided_at": datetime.now().isoformat(timespec="seconds"),
+                            "every": judge.JUDGE_EVERY}) + "\n")
+    return False
+
+
 def judge_pending(name: str) -> int:
     js = judgments(name)
-    done = {j["episode_ts"] for j in js}
+    done = {j["episode_ts"] for j in js} | unsampled(name)
     new = 0
     for ep in live_episodes(name):
         if ep["ts"] in done:
+            continue
+        if not judge_sampled(name, ep["ts"]):   # before the no-intent rule too: the sample stays unbiased
             continue
         if not ep.get("intent"):
             verdict = {"criterion_met": "no", "claim_supported": True, "criterion_quality": "unverifiable",
@@ -433,11 +464,12 @@ def judge_pending(name: str) -> int:
         else:
             try:
                 case = _case(ep, _written_files(name, ep), _provenance_evidence(name, ep), _prior_goals(js, ep["ts"]))
-                by = judge.pick(exclude=own_models(name, ep))
+                second = second_sampled(name, ep["ts"])
+                by = judge.pick(exclude=own_models(name, ep), avoid=(judge.JUDGE2_MODEL,) if second else ())
                 verdict = judge.ask(JUDGE_SYSTEM, case, JUDGE_SCHEMA, purpose=f"judge {name}", model=by)
                 _check_ratings(verdict)
                 verdict["judge"] = by
-                if second_sampled(name, ep["ts"]):
+                if second and not judge.same_model(by, judge.JUDGE2_MODEL):   # never a model agreeing with itself
                     stash_second(name, ep["ts"], case)   # judged after the run lets go of the instance
             except judge.JudgeError as e:
                 log(f"{name}: judging {ep['ts']} failed: {e}")
@@ -527,9 +559,17 @@ def second_opinion(name: str, case: str) -> dict:
         return {"judge": judge.JUDGE2_MODEL, "error": str(e)[:300]}
 
 
+def second_counted(j: dict) -> bool:
+    """A second verdict that measures agreement: by today's second judge (one figure never pools two second judges)
+    and not by the model that gave the main verdict — GLM 5.3 Flash was both on four runs on 2026-10-20 (#45)."""
+    s = j.get("second")
+    return (isinstance(s, dict) and not s.get("error") and j.get("judge") not in (None, "rule")
+            and judge.same_model(s.get("judge"), judge.JUDGE2_MODEL)
+            and not judge.same_model(s.get("judge"), j["judge"]))
+
+
 def _second_section(js: list[dict]) -> list[str]:
-    both = [j for j in js if isinstance(j.get("second"), dict) and not j["second"].get("error")
-            and j.get("judge") not in (None, "rule")]
+    both = [j for j in js if second_counted(j)]
     if not both:
         return []
     agree = [j for j in both if j["criterion_met"] == j["second"]["criterion_met"]]
@@ -858,6 +898,15 @@ def _trials_section(name: str) -> list[str]:
         return []
 
 
+def _sample_note(name: str) -> list[str]:
+    left = len(unsampled(name))
+    if judge.JUDGE_EVERY <= 1 and not left:
+        return []
+    return ["", (f"*The main judge grades one live run in {judge.JUDGE_EVERY}, drawn after the run, so I cannot tell "
+                 "beforehand which. " if judge.JUDGE_EVERY > 1 else "*The main judge grades every live run now. ")
+            + f"{left} of my runs were left out: they have no verdict, and are not counted as failures.*"]
+
+
 def stats_text(name: str) -> str:
     js = judgments(name)
     if not js:
@@ -873,6 +922,7 @@ def stats_text(name: str) -> str:
     brier = sum((c - s) ** 2 for c, s in confs) / len(confs) if confs else None
     lines = ["# My measured performance", "",
              f"*Written by the supervisor from {len(all_js)} judged cycles. Updated {datetime.now():%Y-%m-%d %H:%M}.*",
+             *_sample_note(name),
              "", f"*Success, claims and achieved difficulty below count only the {len(js)} cycles graded by the "
              f"judges in today's rotation ({judge_mix(js)})."
              + (f" Not counted: {len(retired)} verdicts by judges no longer in it ({judge_mix(retired)}). Judges "

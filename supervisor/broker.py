@@ -27,6 +27,7 @@ from html.parser import HTMLParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from . import judge
 from .core import NETWORK_ERRORS, cloud_model, knob, whole
 
 UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36"
@@ -71,6 +72,9 @@ def judgment_text(j: dict) -> str:
     s = j.get("second")
     if isinstance(s, dict) and s.get("error"):
         out.append(f"Second judge ({s.get('judge')}): no verdict ({s['error'][:160]})")
+    elif isinstance(s, dict) and judge.same_model(s.get("judge"), j.get("judge")):   # GLM as both, 2026-10-20 (#45)
+        out.append(f"Second judge: the same model as the main judge ({j.get('judge')}), so not a second opinion; "
+                   "left out of the agreement in stats.md")
     elif isinstance(s, dict):
         agree = "agrees" if s.get("criterion_met") == j.get("criterion_met") else "DISAGREES"
         out.append(f"Second judge ({s.get('judge', '?').removeprefix('openrouter/')}, blind) {agree}: criterion met "
@@ -82,12 +86,16 @@ def judgment_text(j: dict) -> str:
 
 
 def judgments_text(rows: list[dict], limit: int = 20, cycle: str = "", before: str = "",
-                   budget: int = JUDGMENTS_BUDGET) -> str:
+                   budget: int = JUDGMENTS_BUDGET, left_out: set[str] = frozenset()) -> str:
     """Whole verdicts, newest first, as many as fit in `budget` — never one cut in half (wren, 2026-10-13: "I
-    only see fragments"). `cycle` gives one in full; `before` pages back."""
+    only see fragments"). `cycle` gives one in full; `before` pages back. `left_out`: the runs the main judge
+    did not sample (metrics.unsampled), which have no verdict and are not failures."""
     if cycle:
         want = cycle.strip().replace("T", " ")[:16]
         hit = [r for r in rows if _when(r.get("episode_ts")) == want]
+        if not hit and any(_when(ts) == want for ts in left_out):
+            return (f"the cycle at {want} was not judged: the main judge grades one live run in {judge.JUDGE_EVERY}, "
+                    "drawn after the run, and this one was left out. That is not a failure; it has no verdict.")
         return judgment_text(hit[-1]) if hit else (f"no judged cycle at {want}; the latest: "
                                                    + ", ".join(_when(r.get("episode_ts")) for r in rows[-5:][::-1]))
     if before:
@@ -1075,12 +1083,14 @@ class Broker:
             rows = [json.loads(l) for l in _tail_lines(path, 100000)]
             return [r for r in rows if known(str(r.get(field, "")).replace("T", " "))][-limit:]
         if kind == "judgments":
-            from .metrics import judgments
+            from .metrics import judgments, unsampled_rows
             rows = [r for r in judgments(self.name, SUP_DIR) if known(str(r.get("judged_at", "")).replace("T", " "))]
+            left_out = {r["episode_ts"] for r in unsampled_rows(self.name, SUP_DIR)
+                        if known(str(r.get("decided_at", "")).replace("T", " "))}
             for r in rows:   # a replay sees a second verdict only if it existed then
                 if isinstance(r.get("second"), dict) and not known(str(r["second"].get("judged_at", "")).replace("T", " ")):
                     del r["second"]
-            return judgments_text(rows, limit, cycle, before)
+            return judgments_text(rows, limit, cycle, before, left_out=left_out)
         elif kind == "runs":
             mine = f"] {self.name}: "
             text = "\n".join(_tail_lines(SUP_DIR / "supervisor.log", 20000,
