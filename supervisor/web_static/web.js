@@ -677,19 +677,25 @@
   function seenSet(v) {
     try { localStorage.setItem("shaft.seen", JSON.stringify(v)); } catch (e) { /* private window: no marks kept */ }
   }
-  function markRail(rail) {
+  function seenFeed() {
+    if (document.visibilityState !== "visible") return;
     const seen = seenGet();
     let changed = false;
-    rail.querySelectorAll("a[data-inst]").forEach(a => {
-      const last = a.dataset.last || "";
-      if (a.classList.contains("on") && document.visibilityState === "visible") {
-        if (last && seen[a.dataset.inst] !== last) { seen[a.dataset.inst] = last; changed = true; }
+    document.querySelectorAll(".feed [data-seen-reply]").forEach(reply => {
+      const { seenInst: inst, seenReply: last } = reply.dataset;
+      if (reply.getClientRects().length && last && (seen[inst] || "") < last) {
+        seen[inst] = last;
+        changed = true;
       }
-      // the chat on screen is unread too while this tab is hidden: the title says a reply landed
-      const away = !a.classList.contains("on") || document.visibilityState !== "visible";
-      a.classList.toggle("unread", !!last && away && (seen[a.dataset.inst] || "") < last);
     });
     if (changed) seenSet(seen);
+  }
+  function markRail(rail) {
+    const seen = seenGet();
+    rail.querySelectorAll("a[data-inst]").forEach(a => {
+      const last = a.dataset.last || "";
+      a.classList.toggle("unread", !!last && (seen[a.dataset.inst] || "") < last);
+    });
     const unread = rail.querySelectorAll("a.unread").length;
     document.querySelectorAll("[data-toggle-nav]").forEach(b => b.classList.toggle("news", unread > 0));
     if (navigator.setAppBadge) {                    // the Home Screen icon's count: an app shows no tab title
@@ -697,6 +703,11 @@
     }
     document.title = document.title.replace(/^\(\d+\) /, "");
     if (unread) document.title = `(${unread}) ${document.title}`;
+  }
+  function unreadState() {
+    seenFeed();                                    // only rendered current-chat replies carry these attributes
+    const rail = document.querySelector("nav .rail");
+    if (rail) markRail(rail);
   }
   // Notifications (docs/plans/PLAN-pwa P4): Web Push, the only way a reply reaches a phone whose app is closed or locked (an
   // iPhone stops a page's scripts in the background). The button says what is true on this device.
@@ -754,11 +765,11 @@
     notifyButton();
   });
   document.addEventListener("shaft:swapped", (ev) => {
-    if (ev.target.classList && ev.target.classList.contains("rail")) markRail(ev.target);
+    if (ev.target.classList && (ev.target.classList.contains("rail") || ev.target.classList.contains("feed"))) unreadState();
   });
-  document.addEventListener("visibilitychange", () => {
-    const rail = document.querySelector("nav .rail");
-    if (rail) markRail(rail);                          // back on the tab: the chat on screen is seen
+  document.addEventListener("visibilitychange", unreadState);
+  window.addEventListener("storage", (ev) => {
+    if (ev.key === "shaft.seen" || ev.key === null) unreadState();
   });
 
   // The documents panel (docs/plans/PLAN-webui-chat §3): a card in a reply or a name in its list opens that document in the
@@ -929,6 +940,7 @@
     }
     document.querySelectorAll("[data-poll]").forEach(poll);
     document.querySelectorAll("[data-follow]").forEach(el => { decorate(el); toBottom(el); });  // opens on the latest
+    unreadState();
     document.querySelectorAll(".docview").forEach(decorate);
     restoreDraft();
     notifyButton();

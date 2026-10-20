@@ -59,6 +59,8 @@ and [chat design](plans/PLAN-webui-chat.md).
   all N** when more are open), Messages, Trials, Costs, Services, and the supervisor's **Settings** (see
   [configuration reference](configuration.md): the judge pool as ticked models, every knob with its source and default, "saved, not
   live yet" with the guarded restarts; ports and paths shown, set in a terminal).
+- Unread marks clear when the current chat's reply is rendered in a visible tab. Config, Journal, earlier chats,
+  and a failed feed refresh do not consume a new reply. Marks are shared across tabs in the same browser.
 - The chat: files and images both ways (drop them anywhere on the page, paste or pick; each is a chip you can take
   out), the reply's activity and clock live, interject, Stop, End. Select text in a message and **↩ Reply** quotes
   it in your message. Each message with text has Copy and Reply icons for its whole Markdown source, including
