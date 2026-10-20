@@ -177,7 +177,10 @@ next refresh or action opens the pairing page. Your chat draft stays in this bro
   **Notifications incomplete — retry**.
 - **Typing:** on a phone, Return makes a new line and Send sends.
 - **Layout:** the chat fills the screen. ☰ lists the chats and pages, 📄 the documents, ⋯ the instance's pages and
-  actions.
+  actions. Chats and Documents sheets move focus inside and keep Tab there. The covered page is inactive.
+  Close with ✕ or Escape to return focus to the opener. Choosing a Chats link also closes that sheet.
+  Resizing restores normal interaction when a sheet becomes a side panel. Messages and network notices
+  appear above the sheets. Sheets and the ⋯ menu leave room for the notch in landscape.
 - **Offline:** when SHAFT cannot be reached, the app says so and retries. Opening a page also shows the cached
   offline page if the proxy returns 502, 503 or 504; **Try again** returns to the app.
 

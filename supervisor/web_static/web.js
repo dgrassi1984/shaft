@@ -617,6 +617,7 @@
       form.requestSubmit();
       return;
     }
+    if (sheet && ev.key !== "Escape") return;       // covered chat shortcuts stay inactive
     // Shortcuts on a chat: / writes, Esc closes a menu, Alt-↑ / Alt-↓ go to the chat above or below in the rail.
     const typing = ev.target.closest && ev.target.closest("input, textarea, select, [contenteditable]");
     if (ev.key === "Escape") {
@@ -1074,7 +1075,7 @@
       u.searchParams.set("doc", doc);
       history.replaceState(null, "", u);
       if (panel._tick) panel._tick();
-      showDocs(true);                                 // closed, or on a phone a sheet not yet open: open it
+      showDocs(true, a);                              // closed, or on a phone a sheet not yet open: open it
     });
   });
   // Editing a document: the rendered view becomes its Markdown in a box; the panel stops refreshing until Save or
@@ -1132,34 +1133,97 @@
   function docsAria() {                             // 📄 says whether the panel is on screen, however it got there
     document.querySelectorAll("[data-show-docs]").forEach(b => b.setAttribute("aria-expanded", String(docsOn())));
   }
-  function showDocs(on) {
+  let sheet = null;
+  const sheetOpeners = { docs: "[data-show-docs]", nav: ".chathead [data-toggle-nav]" };
+  function sheetFocusables(root) {
+    return [...root.querySelectorAll('button, a[href], input, textarea, select, summary, [tabindex], [contenteditable]')]
+      .filter(el => !el.disabled && el.tabIndex >= 0 && !el.closest("[inert]") && el.getClientRects().length);
+  }
+  function sheetRoots() {
+    // The document comment composer lives on body so a document refresh cannot destroy it.
+    return [sheet.panel, ...(sheet.kind === "docs" ? [document.getElementById("comment-box")] : [])].filter(Boolean);
+  }
+  function focusSheet() {
+    const close = sheet.panel.querySelector(sheet.kind === "nav" ? ".closenav" : "[data-close-docs]");
+    (close || sheetFocusables(sheet.panel)[0] || sheet.panel).focus();
+  }
+  function syncSheets(opener) {
+    const grid = document.querySelector(".chatgrid");
+    if (!grid) return;
+    const nav = document.querySelector("nav"), docs = document.getElementById("docs");
+    const fixed = el => el && el.getClientRects().length && getComputedStyle(el).position === "fixed";
+    // Read the actual layout: Documents also becomes a sheet at the chat-area container breakpoint.
+    const kind = document.body.classList.contains("navopen") && fixed(nav) ? "nav" : fixed(docs) ? "docs" : null;
+    const panel = kind === "nav" ? nav : docs;
+    if (sheet && (sheet.kind !== kind || sheet.panel !== panel)) {
+      const old = sheet;
+      old.inert.forEach(el => el.removeAttribute("inert"));
+      old.attrs.forEach(([key, value]) => value === null ? old.panel.removeAttribute(key) : old.panel.setAttribute(key, value));
+      sheet = null;
+      const back = old.opener && old.opener.isConnected ? old.opener : document.querySelector(sheetOpeners[old.kind]);
+      if (back && back.getClientRects().length) back.focus();
+      else if (old.panel.getClientRects().length) {
+        const first = sheetFocusables(old.panel)[0];
+        if (first) first.focus();                   // the phone opener is hidden beside the desktop rail
+      }
+    }
+    if (kind && !sheet) {
+      sheet = { kind, panel, opener: opener || document.querySelector(sheetOpeners[kind]), inert: [],
+        attrs: ["role", "aria-modal", "aria-label", "tabindex", "aria-owns"].map(k => [k, panel.getAttribute(k)]) };
+      panel.setAttribute("role", "dialog");
+      panel.setAttribute("aria-modal", "true");
+      panel.setAttribute("aria-label", kind === "nav" ? "Chats and pages" : "Documents");
+      panel.setAttribute("tabindex", "-1");
+      if (kind === "docs") panel.setAttribute("aria-owns", "comment-box comment-sel");
+      // Isolate siblings at each level, never an ancestor of the dialog. Leave live regions on body audible.
+      for (let branch = panel; branch !== document.body && branch.parentElement; branch = branch.parentElement) {
+        for (const sibling of branch.parentElement.children) {
+          const live = ["toast", "netnote", "announce"].includes(sibling.id);
+          const comment = kind === "docs" && ["comment-box", "comment-sel"].includes(sibling.id);
+          if (sibling !== branch && !live && !comment && !sibling.hasAttribute("inert")) {
+            sibling.setAttribute("inert", "");
+            sheet.inert.push(sibling);
+          }
+        }
+      }
+      focusSheet();
+    } else if (sheet && !sheetRoots().some(root => root.contains(document.activeElement))) {
+      focusSheet();                               // a polled document replaced the focused control
+    }
+    docsAria();
+    document.querySelectorAll("[data-toggle-nav]").forEach(b => b.setAttribute("aria-expanded", String(kind === "nav")));
+  }
+  function showNav(on, opener) {
+    document.body.classList.toggle("navopen", on);
+    syncSheets(opener);
+  }
+  function showDocs(on, opener) {
     const grid = document.querySelector(".chatgrid");
     if (!grid) return;
     grid.classList.toggle("showdocs", on);
     grid.classList.toggle("hidedocs", !on);
     try { if (on) localStorage.removeItem("shaft.docs.closed"); else localStorage.setItem("shaft.docs.closed", "1"); }
     catch (e) { /* no storage: it opens again on the next page */ }
-    docsAria();
+    syncSheets(opener);
   }
   function chatHeaderState(el) {
     if (!el.querySelector(".chathead")) return;
     notifyButton();
-    docsAria();
-    const nav = el.querySelector("[data-toggle-nav]");
-    if (nav) nav.setAttribute("aria-expanded", String(document.body.classList.contains("navopen")));
+    syncSheets();
     const rail = document.querySelector("nav .rail");
     if (rail) markRail(rail);
   }
   document.addEventListener("shaft:swapped", (ev) => {   // an instance's first document opens the panel beside the chat
     if (ev.target.id === "docs") {
-      docsAria();
+      syncSheets();
       ev.target.querySelectorAll(".docview").forEach(restoreDocDraft);
     }
     chatHeaderState(ev.target);
   });
   document.addEventListener("click", (ev) => {           // 📄 Documents: open or close the panel
-    if (!(ev.target.closest && ev.target.closest("[data-show-docs]"))) return;
-    if (document.getElementById("docs")) showDocs(!docsOn());
+    const button = ev.target.closest && ev.target.closest("[data-show-docs]");
+    if (!button) return;
+    if (document.getElementById("docs")) showDocs(!docsOn(), button);
   });
   document.addEventListener("click", (ev) => {
     const edit = ev.target.closest && ev.target.closest("[data-edit-doc]");
@@ -1196,14 +1260,21 @@
       return;
     }
     const open = t.matches("[data-toggle-nav]") ? !document.body.classList.contains("navopen") : false;
-    document.body.classList.toggle("navopen", open);
-    document.querySelectorAll("[data-toggle-nav]").forEach(b => b.setAttribute("aria-expanded", String(open)));
+    showNav(open, open ? t : null);
   });
   document.addEventListener("keydown", (ev) => {
-    if (ev.key !== "Escape") return;
-    document.body.classList.remove("navopen");
-    const grid = document.querySelector(".chatgrid");
-    if (grid) { grid.classList.remove("showdocs"); docsAria(); }    // a phone's sheet; beside the chat, ✕ or 📄
+    if (!sheet) return;
+    if (ev.key === "Escape") {
+      ev.preventDefault();
+      if (sheet.kind === "nav") showNav(false); else showDocs(false);
+    } else if (ev.key === "Tab") {
+      const items = sheetRoots().flatMap(sheetFocusables);
+      const at = items.indexOf(document.activeElement);
+      ev.preventDefault();
+      if (!items.length) sheet.panel.focus();
+      else items[at < 0 ? (ev.shiftKey ? items.length - 1 : 0) :
+        (at + (ev.shiftKey ? -1 : 1) + items.length) % items.length].focus();
+    }
   });
   function fitViewport() {
     const vv = window.visualViewport;
@@ -1225,7 +1296,11 @@
     if (grid) {
       document.body.classList.add("chatapp");
       try { if (localStorage.getItem("shaft.docs.closed")) grid.classList.add("hidedocs"); } catch (e) { /* none */ }
-      docsAria();
+      syncSheets();
+      window.matchMedia("(max-width: 720px), (pointer: coarse) and (max-height: 520px)")
+        .addEventListener("change", () => syncSheets());
+      const observer = new ResizeObserver(() => syncSheets());
+      observer.observe(grid.parentElement);        // main is the chat-area query container
     }
     fitViewport();
     if ("serviceWorker" in navigator) {             // the app's shell: offline page and cached static files
