@@ -127,7 +127,7 @@ class DocumentsCloseTest(unittest.TestCase):
     def test_the_documents_button_says_whether_the_panel_is_on_screen(self):
         """Found while checking the fix: Escape closed the phone's sheet and left 📄 saying aria-expanded="true"."""
         self.assertRegex(JS, r'grid\.classList\.remove\("showdocs"\); docsAria\(\);')       # Escape
-        self.assertRegex(JS, r'"shaft:swapped", \(ev\) => \{[^}]*ev\.target\.id === "docs"\) docsAria\(\);')
+        self.assertRegex(JS, r'"shaft:swapped", \(ev\) => \{[^}]*ev\.target\.id === "docs"\) \{?\s*docsAria\(\);')
 
 
 class NetworkClientTest(unittest.TestCase):
