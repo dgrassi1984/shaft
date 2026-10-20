@@ -768,8 +768,9 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
                        if d["path"] in marked else Html(""),
                        ccount=h(' <span class="ccount" title="open comments">💬 {n}</span>', n=n) if n > 0 else ""))
     new = h('<details class="newdoc" data-key="newdoc"><summary>New document</summary><form data-post="/docs/{n}/save" '
-            'data-after="doc-saved"{a}><input type="hidden" name="sha" value="none"><input name="path" required '
-            'placeholder="name, e.g. plan" pattern="[A-Za-z0-9][A-Za-z0-9 _.\\-]*" maxlength="80">'
+            'data-after="doc-saved"{a}><input type="hidden" name="sha" value="none"><label>Document name '
+            '<input name="path" required placeholder="name, e.g. plan" pattern="[A-Za-z0-9][A-Za-z0-9 _.\\-]*" '
+            'maxlength="80"></label>'
             '<textarea name="text" hidden></textarea><button type="submit" class="small">Create</button></form></details>',
             n=q(name), a=post_attrs("Documents", actions.RUN_NOW_S))
     back = Html('<button type="button" class="small" data-back-docs aria-label="Back to the documents">← Documents</button>')
@@ -817,7 +818,8 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
                  '<form class="docedit" data-post="/docs/{n}/save" data-after="doc-saved"{a} hidden>'
                  '<input type="hidden" name="path" value="{p}"><input type="hidden" name="sha" value="{s}">'
                  '<p class="dim" data-doc-draft role="status"></p>'
-                 '<textarea name="text" spellcheck="true">{raw}</textarea><div class="actions">'
+                 '<label>Markdown of {p}<textarea name="text" spellcheck="true" aria-label="Markdown of {p}">'
+                 '{raw}</textarea></label><div class="actions">'
                  '<button type="submit">Save</button><button type="button" data-cancel-edit>Cancel</button>'
                  '<span class="dim">{n} hears of your change: with your next message, or now if it is replying</span>'
                  '</div><div class="bad wrap" data-refusal></div></form></div>',

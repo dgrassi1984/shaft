@@ -73,7 +73,8 @@ and [chat design](plans/PLAN-webui-chat.md).
 - The chat: files and images both ways (drop them anywhere on the page, paste or pick; each is a chip you can take
   out), the reply's activity and clock live, interject, Stop, End. Select text in a message and **↩ Reply** quotes
   it in your message. Each message with text has Copy and Reply icons for its whole Markdown source, including
-  your own messages. Code blocks and documents have Copy icons too. Your draft survives a reload; `/` writes,
+  your own messages. Code blocks and documents have Copy icons too. Tabbing to a Copy button shows it,
+  with its focus ring. Your draft survives a reload; `/` writes,
   Alt-↑/↓ changes chat; opt-in desktop notifications (⋯ menu) for a reply that lands while the tab is hidden.
   Quotes are saved as drafts too. Picking files again adds them to the current attachments. Files added during
   a send stay in the composer. Leaving with attachments asks for confirmation because files cannot survive a reload.
@@ -123,7 +124,8 @@ and [chat design](plans/PLAN-webui-chat.md).
   shows the existing refusal and diff before you can choose to replace newer content.
   Cancel or explicitly discarding edits removes the draft. Saving clears the saved draft and keeps any
   newer typing. Reloading or leaving warns while the editor has unsaved changes.
-  Edit one in the panel (or start one: Documents, then New document):
+  Edit one in the panel, in the field labeled Markdown of that file, or start one: Documents, then New document.
+  The name field is labeled Document name.
   Save is refused if it wrote the file meanwhile (you see what changed and keep your text), and it hears of your
   change as a diff; with your next message, or at once if it is replying. If a later write of its drops lines you
   wrote, the panel says so and offers your version back. The first message of each web chat tells the instance
@@ -146,8 +148,10 @@ and [chat design](plans/PLAN-webui-chat.md).
   text left the document says so. **Resolve** folds a thread away, and the instance hears of it with your next
   message. The threads live in the supervisor (`.supervisor/web/comments/`), never in a file it could overwrite; a
   read-only copy of what it was sent is kept in its `notes/comments/`.
-- Each instance's other pages sit behind the chat's ⋯ menu: **Summary**, **Config** (`config.env`, a field per key),
-  **Drive** (`drive.md`: the diff is shown in full, then Apply saves it and Back keeps your text), **Access** (tools, wake floor and cloud cap, jobs, shared folder,
+- Each instance's other pages sit behind the chat's ⋯ menu: **Summary**, **Config** (`config.env`, a field per key;
+  each value is named for its key),
+  **Drive** (`drive.md` for that instance: the diff is shown in full, then Apply saves it and Back keeps your text),
+  **Access** (tools, wake floor and cloud cap, jobs, shared folder,
   mail and calendar grants, battery, key names), **Judge**, **Changes**, **Benchmarks**, **Transcripts**,
   **Journal**, **Activity** (connections, plugins, jobs), with its actions and earlier chats.
 - **Kill** (with the other actions: overview cards, the ⋯ menu, Summary) pauses the instance and stops what it runs
@@ -179,7 +183,9 @@ next refresh or action opens the pairing page. Your chat draft stays in this bro
   `.supervisor/web/`. The button says **Notifications on** only when SHAFT holds this device's subscription (it asks
   `/push/status` on each visit): a refused registration leaves it off and says why, and a device SHAFT dropped shows
   **Notifications incomplete — retry**.
-- **Typing:** on a phone, Return makes a new line and Send sends.
+- **Typing:** on a phone, Return makes a new line and Send sends. Fields, including the Drive editor, use at least 16 px text.
+  The reply's activity, a document's overwritten-lines disclosure, and each judge model have 44 px touch targets.
+  Field borders have at least 3:1 contrast against the page and panel backgrounds in both themes.
 - **Layout:** the chat fills the screen. ☰ lists the chats and pages, 📄 the documents, ⋯ the instance's pages and
   actions. Chats and Documents sheets move focus inside and keep Tab there. The covered page is inactive.
   Close with ✕ or Escape to return focus to the opener. Choosing a Chats link also closes that sheet.

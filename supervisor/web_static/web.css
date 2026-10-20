@@ -337,7 +337,7 @@ form.composer textarea { resize: none; min-height: 2.6rem; }
 .turn:hover .who .icon { opacity: 1; }
 .turn.it pre { position: relative; }
 .turn.it pre > .copy { position: absolute; top: .2rem; right: .2rem; opacity: 0; }
-.turn.it pre:hover > .copy { opacity: 1; }
+.turn.it pre:hover > .copy, .turn.it pre > .copy:focus-visible { opacity: 1; }
 .turn.sending { opacity: .6; }
 @media (max-width: 720px), (pointer: coarse) and (max-height: 520px) { .keys { display: none; } }
 /* a very wide window: the conversation keeps a readable width (the documents panel takes the room beside it) */
@@ -362,7 +362,9 @@ aside.docs { min-height: 0; overflow-y: auto; background: var(--panel); border: 
 .doctitle .copy { margin-left: auto; }
 .docview pre { position: relative; }
 .docview pre > .copy { position: absolute; top: .2rem; right: .2rem; opacity: 0; }
-.docview pre:hover > .copy { opacity: 1; }
+.docview pre:hover > .copy, .docview pre > .copy:focus-visible { opacity: 1; }
+.turn.it pre > .copy:focus-visible, .docview pre > .copy:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (pointer: coarse) {
   .icon { min-width: 32px; min-height: 32px; }
   .icon, .turn.it pre > .copy, .docview pre > .copy { opacity: 1; }
@@ -375,8 +377,9 @@ form.docedit textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monosp
 .docview.editing .doctitle [data-edit-doc] { display: none; }
 .newdoc { margin-left: auto; font-size: .82rem; }
 .newdoc > summary { cursor: pointer; color: var(--accent); }
-.newdoc form { display: flex; gap: .3rem; margin-top: .3rem; }
-.newdoc input { font: inherit; padding: .2rem .4rem; border: 1px solid var(--line); border-radius: 5px; background: var(--bg);
+.newdoc form { display: flex; gap: .3rem; margin-top: .3rem; align-items: flex-end; }
+.newdoc form label { display: flex; flex-direction: column; align-items: flex-start; gap: .15rem; }
+.newdoc input { font: inherit; padding: .2rem .4rem; border: 1px solid var(--field); border-radius: 5px; background: var(--bg);
                 color: var(--text); }
 .overwritten { border: 1px solid var(--warn); border-radius: 6px; padding: .3rem .5rem; margin: .3rem 0; font-size: .85rem; }
 .overwritten p { margin: 0 0 .2rem; }
@@ -415,8 +418,9 @@ form.clearbtn { display: inline; margin: 0; }
   .keys { display: none; }                          /* "Enter sends" is not true where Return makes a new line */
 }
 @media (pointer: coarse) {
-  /* iOS zooms the page into any field under 16 px when it is tapped. */
-  input, select, textarea, form.composer textarea, form.docedit textarea, .newdoc input { font-size: 16px; }
+  /* iOS zooms the page into any field under 16 px when it is tapped.
+     form.drive textarea is listed: its own .82rem rule outranks a bare textarea. */
+  input, select, textarea, form.composer textarea, form.docedit textarea, .newdoc input, form.drive textarea { font-size: 16px; }
   /* Fingers: 44 pt targets (Apple's guideline). */
   button, button.small, button.act, details.menu > summary, label.pick, .newdoc > summary {
     min-height: 44px; min-width: 44px; padding-top: .45rem; padding-bottom: .45rem; }
@@ -425,6 +429,11 @@ form.clearbtn { display: inline; margin: 0; }
   .chip .unpick { min-width: 44px; min-height: 44px; font-size: 1.3rem; }
   label.pick { display: inline-flex; align-items: center; }
   details.menu > summary { display: inline-flex; align-items: center; justify-content: center; }
+  details.activity > summary, .overwritten summary {
+    min-height: 44px; min-width: 44px; padding-top: .45rem; padding-bottom: .45rem; }
+  .models label {
+    min-height: 44px; min-width: 44px; display: inline-block; max-width: 100%;
+    padding-top: .45rem; padding-bottom: .45rem; }
 }
 @media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
   /* The ⋯ menu as a sheet across the screen: anchored to its button, it ran off the right edge. */
@@ -512,13 +521,13 @@ a.button { display: inline-block; padding: .45rem .9rem; border: 1px solid var(-
 
 /* docs/plans/PLAN-pwa P5: accessibility */
 #announce { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-:root { --field: #a9a9a1; }
-@media (prefers-color-scheme: dark) { :root { --field: #55554f; } }
-textarea, input, select { border-color: var(--field); }        /* a field's edge, visible (it was 1.2:1 on the page) */
+:root { --field: #8c8c84; }
+@media (prefers-color-scheme: dark) { :root { --field: #6b6b65; } }
+textarea, input, select { border-color: var(--field); }        /* ≥3:1 on the page and on a panel; --line stays the divider */
 @media (pointer: coarse) {
   /* The phone's text size (Settings → Display → Text Size) sets the page's (Dynamic Type); fields never under 16 px. */
   @supports (font: -apple-system-body) { html { font: -apple-system-body; } }
-  input, select, textarea, form.composer textarea, form.docedit textarea, .newdoc input { font-size: max(16px, 1rem); }
+  input, select, textarea, form.composer textarea, form.docedit textarea, .newdoc input, form.drive textarea { font-size: max(16px, 1rem); }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
