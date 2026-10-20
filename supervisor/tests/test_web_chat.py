@@ -773,6 +773,14 @@ class DocSaveRouteTest(DocsPanelTest):
         feed = self.req("/fragment/chat/wren", cookie=self.cookie).body.decode()
         self.assertIn("Your changes to plan.md go to wren with your next message", feed)
 
+    def test_issue_22_success_returns_the_saved_revision(self):
+        """Reverting #22 leaves typing during Save based on the obsolete revision."""
+        from supervisor import docs
+        (self.docs / "plan.md").write_text("one")
+        r = self.post(path="plan.md", text="two", sha=docs.sha(b"one"))
+        self.assertEqual(r.status, 200)
+        self.assertEqual(r.headers["X-Doc-Sha"], docs.sha(b"two"))
+
     def test_a_stale_save_is_refused_shows_what_changed_and_writes_nothing(self):
         from supervisor import docs
         (self.docs / "plan.md").write_text("one\nby the instance\n")

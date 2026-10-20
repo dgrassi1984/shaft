@@ -688,7 +688,7 @@ def _save_doc(name: str, login: str, form: dict) -> Response:
         said = web_chat.doc_saved(name, login, rel, old, text, new_sha)
     except web_chat.Refused as e:                  # written: only telling the instance failed — say both
         said = f"saved, but {name} was not told yet: {e}"
-    return _html(200, web_pages.h("<p>{t}</p>", t=said), {"X-Doc": rel})
+    return _html(200, web_pages.h("<p>{t}</p>", t=said), {"X-Doc": rel, "X-Doc-Sha": new_sha})
 
 
 def _delete_doc(name: str, login: str, form: dict) -> Response:

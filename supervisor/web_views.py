@@ -787,6 +787,7 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
                  '<textarea class="raw" hidden readonly>{raw}</textarea>'
                  '<form class="docedit" data-post="/docs/{n}/save" data-after="doc-saved"{a} hidden>'
                  '<input type="hidden" name="path" value="{p}"><input type="hidden" name="sha" value="{s}">'
+                 '<p class="dim" data-doc-draft role="status"></p>'
                  '<textarea name="text" spellcheck="true">{raw}</textarea><div class="actions">'
                  '<button type="submit">Save</button><button type="button" data-cancel-edit>Cancel</button>'
                  '<span class="dim">{n} hears of your change: with your next message, or now if it is replying</span>'
