@@ -197,6 +197,8 @@ button:not(:disabled):hover { border-color: var(--accent); }
 .card footer .actions { margin-top: 0; }
 .msglink { font-size: .82rem; }
 .alerts ul { list-style: none; margin: 0 0 .4rem; padding: 0; }
+.alerts details { margin: .15rem 0 .4rem; }
+.alerts summary { cursor: pointer; }
 .topline form.act { margin-left: auto; }
 form.msg { display: grid; gap: .4rem; margin: .4rem 0 .8rem; }
 form.msg label { display: grid; gap: .3rem; font-size: .9rem; }

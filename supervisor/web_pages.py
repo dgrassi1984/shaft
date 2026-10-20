@@ -333,6 +333,33 @@ def message_line(m: dict) -> Html:
              first=_first_line(m.get("text", "")))
 
 
+# `shaft new <name>` is the verb (cmd_new, docs/cli.md). The README section that walks through it, including
+# `bin/shaft new` from a fresh clone, is the quickstart (docs/local-model.md links this same anchor).
+_README_QUICKSTART = "https://github.com/dgrassi1984/shaft#quickstart-cloud-only"
+
+
+def _alerts(alerts: list[dict]) -> Html:
+    """Five alerts on view. Past that, "Show all N alerts" lists every one; data-key keeps it open across the
+    overview's refresh (web.js poll). Each alert dismisses on its own, beside the batch buttons."""
+    if not alerts:
+        return Html("")
+    from .web_actions import alert_buttons, alert_line
+    shown = join(alert_line(a) for a in alerts[:5])
+    more = Html("")
+    if len(alerts) > 5:
+        more = h('<details data-key="all-alerts"><summary>Show all {n} alerts</summary><ul>{a}</ul></details>',
+                 n=len(alerts), a=join(alert_line(a) for a in alerts))
+    return h('<div class="alerts"><ul>{a}</ul>{more}{b}</div>', a=shown, more=more, b=alert_buttons(alerts))
+
+
+def _no_instances() -> Html:
+    """A fresh install opens here (/ redirects to /overview) with an empty Chats group and no cards."""
+    return h('<section class="panel"><h2>No instances yet</h2>'
+             '<p>Instances are created from the terminal:</p><p><code>{cmd}</code></p>'
+             '<p>The <a href="{url}" rel="noopener noreferrer" target="_blank">README quickstart</a> explains it.'
+             '</p></section>', cmd="shaft new <name>", url=_README_QUICKSTART)
+
+
 def overview(snap: dict) -> Html:
     """The live part of the overview page (polled as /fragment/overview)."""
     services = join(h('<span class="svc {cls}">{dot} {name}{detail}</span>',
@@ -342,27 +369,23 @@ def overview(snap: dict) -> Html:
                     for s in snap["services"])
     spend = (h(' · <b>${s}</b> spent today', s=f"{snap['spend']:.2f}") if snap.get("spend") is not None
              else Html(""))
-    alerts = snap.get("alerts") or []
-    alert_html = join(h('<li>⚠ {t}</li>', t=a["text"]) for a in alerts[:5])
-    if len(alerts) > 5:
-        alert_html = join([alert_html, h('<li class="dim">… {n} more</li>', n=len(alerts) - 5)])
     ms = snap.get("messages") or []
     pending = sum(not m.get("read") for m in ms)
     msg_title = f"messages · {len(ms)}" + (f" · {pending} pending in an inbox" if pending else "")
     msgs = join(message_line(m) for m in ms[-5:]) if ms else Html('<li class="dim">—</li>')
     events = (join(h('<li class="{tone}">{line}</li>', tone=event_tone(e), line=e.split(" cycle_timeout_s=")[0][:200])
                    for e in snap["events"]) if snap["events"] else Html('<li class="dim">—</li>'))
-    from .web_actions import alert_buttons, button
+    from .web_actions import button
     recap = button("recap", "Recap every instance", "write every instance's one-line recap now? A small model call "
                    "each (SHAFT_RECAP_MODEL), counted under recaps in Costs.", cls="small")
+    cards = (h('<div class="cards">{c}</div>', c=join(instance_card(i) for i in snap["instances"]))
+             if snap["instances"] else _no_instances())
     return h('<div class="topline"><span class="dim">{at}</span>{spend}<div class="services">{services}</div>{recap}'
-             '</div>{alerts}<div class="cards">{cards}</div>'
+             '</div>{alerts}{cards}'
              '<section class="panel"><h2>{msg_title}</h2><ul class="lines">{msgs}</ul></section>'
              '<section class="panel"><h2>events</h2><ul class="lines events">{events}</ul></section>',
              at=snap["at"], spend=spend, services=services, recap=recap,
-             alerts=h('<div class="alerts"><ul>{a}</ul>{b}</div>', a=alert_html, b=alert_buttons(alerts))
-             if alerts else Html(""),
-             cards=join(instance_card(i) for i in snap["instances"]), msg_title=msg_title, msgs=msgs, events=events)
+             alerts=_alerts(snap.get("alerts") or []), cards=cards, msg_title=msg_title, msgs=msgs, events=events)
 
 
 def overview_page(snap: dict, csrf: str) -> Html:
