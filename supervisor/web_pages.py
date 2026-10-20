@@ -123,7 +123,9 @@ def nav(names: list[str], current: str = "overview") -> Html:
     checkout = version.supervisor_commit()
     moved = h('<a href="/services">checked out: {v}</a>', v=version.commit_describe(checkout)) \
         if rec and rec["commit"].split("+")[0] != checkout.split("+")[0] else Html("")
-    running = h('<div class="nav-version dim">web: {v}{m}</div>', v=version.service_version(rec), m=moved)
+    running = h('<div class="nav-version dim">web: {v}{m}'
+                '<button type="button" data-hard-reload title="Clear the app cache and load the current version">'
+                'Reload / update</button></div>', v=version.service_version(rec), m=moved)
     return h('<nav><a class="brand" href="/">SHAFT</a><button type="button" class="small closenav" data-toggle-nav '
              'aria-label="Close the chats">✕</button><div class="rail" data-poll="/fragment/rail?c={c}" data-every="3000" '
              'data-now="1" data-hidden="1">{rail}</div>'

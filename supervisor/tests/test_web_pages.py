@@ -382,6 +382,26 @@ class ActivityTest(PagesTest):
 
 
 class NavTest(PagesTest):
+    def test_issue_66_reload_in_every_page_nav(self):
+        """Reverting #66 removes cache recovery from page navigation."""
+        with mock.patch.object(panel, "transcripts", return_value=[]):
+            for path in ("/overview", "/messages", "/trials", "/costs", "/services", "/settings",
+                         "/i/shaft", "/i/shaft/chat", "/i/shaft/judge", "/i/shaft/changes",
+                         "/i/shaft/journal", "/i/shaft/transcripts", "/i/shaft/benchmarks"):
+                # not /activity: it reads live jobs, mind and egress data (ActivityTest mocks them); same nav anyway
+                body = self.get(path)
+                nav = body.split("<nav>", 1)[1].split("</nav>", 1)[0]
+                self.assertIn("data-hard-reload", nav, path)
+                self.assertIn("Reload / update</button>", nav, path)
+
+    def test_issue_66_reload_in_chat_menu(self):
+        """Reverting #66 removes cache recovery from the phone chat menu, including archived chats."""
+        for read_only in (False, True):
+            header = web_views.chat_header("shaft", {}, None, [], read_only=read_only)
+            menu = header.split('data-key="chat-menu"', 1)[1]
+            self.assertIn("data-hard-reload", menu)
+            self.assertIn("Reload / update</button>", menu)
+
     def test_every_page_links_every_other(self):
         body = self.get("/i/shaft")
         for href in ("/i/shaft/judge", "/i/shaft/changes", "/i/shaft/journal", "/i/shaft/activity",

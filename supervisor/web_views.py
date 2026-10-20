@@ -121,7 +121,9 @@ def chat_header(name: str, live: dict, chat: dict | None, past: list[dict], read
              '<details class="menu" data-key="chat-menu"><summary data-focus="menu" title="{name}: pages and actions" '
              'aria-label="{name}: pages and actions">⋯'
              '</summary><div class="menubody"><p class="dim menufacts">{facts}</p>'
-             '<div class="menupages">{pages}</div><div class="actions">{buttons}</div>'
+             '<div class="menupages">{pages}</div><div class="actions">{buttons}'
+             '<button type="button" class="small" data-hard-reload data-focus="hard-reload" '
+             'title="Clear the app cache and load the current version">Reload / update</button></div>'
              '<div class="actions"><button type="button" class="small" data-notify data-focus="notify">Notify me on this device</button></div>'
              '</div></details></header>',
              name=name, busy=busy, facts=" · ".join(f for f in facts if f), pages=pages, buttons=buttons,
