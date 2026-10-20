@@ -535,6 +535,15 @@ def _get(req: Request, csrf: str) -> Response | None:
         if name not in names:
             return None
         return _instance_page(name, tab, qs, names, csrf)
+    if m := re.match(r"^/fragment/chat/([A-Za-z0-9_-]+)/header$", path):
+        if m[1] not in names:
+            return None
+        from . import web_chat
+        chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.shown(m[1])
+        if chat and chat.get("instance") != m[1]:
+            return None
+        past = [c for c in web_chat.chats(m[1]) if c.get("state") == "ended"][:20]
+        return _html(200, v.chat_header(m[1], _live(m[1]), chat, past, read_only=bool(qs.get("id"))))
     if m := re.match(r"^/fragment/chat/([A-Za-z0-9_-]+)$", path):
         if m[1] not in names:
             return None

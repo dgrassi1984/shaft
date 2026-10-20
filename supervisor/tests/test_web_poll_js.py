@@ -57,6 +57,69 @@ setTimeout(() => {                       // 2.05 s: the first poll (sent at 2 s)
 """
 
 
+HEADER_HARNESS = r"""
+const POLL_LIMIT_MS = 15000, net = { down: 0 };
+const busyIn = () => false, netNote = () => {}, checkVersion = () => {};
+const textOf = s => s, toBottom = () => {};
+globalThis.setTimeout = () => 1;
+globalThis.clearTimeout = () => {};
+globalThis.CustomEvent = class {};
+const window = { addEventListener: () => {}, innerHeight: 0, scrollY: 0 };
+const navigator = { onLine: true };
+const document = { visibilityState: "visible", body: { scrollHeight: 0 }, addEventListener: () => {},
+  createElement: () => ({ classList: { contains: x => x === "stale-note" }, setAttribute: () => {}, remove() { el.previousElementSibling = null; } }),
+};
+let menu, summary, html = "old", status = 200, answer = "new";
+const composer = { value: "unfinished draft" };
+function makeSummary() {
+  return { dataset: { focus: "menu" }, matches: () => true, getAttribute: () => null,
+    focus: () => { document.activeElement = summary; } };
+}
+function resetHeader() { menu = { dataset: { key: "chat-menu" }, open: false }; summary = makeSummary(); }
+resetHeader();
+menu.open = true;
+document.activeElement = summary;
+const classes = new Set();
+const el = {
+  dataset: { poll: "/fragment/chat/wren/header" }, isConnected: true,
+  classList: { add: x => classes.add(x), remove: x => classes.delete(x) },
+  parentNode: { insertBefore: n => { el.previousElementSibling = n; } },
+  get innerHTML() { return html; },
+  set innerHTML(v) {
+    if (document.activeElement === summary) document.activeElement = document.body;
+    html = v; resetHeader();
+  },
+  contains: n => n === summary,
+  querySelectorAll: selector => {
+    if (selector === 'button, a[href], summary') return [summary];
+    if (selector === 'details[data-key][open]') return menu.open ? [menu] : [];
+    if (selector === 'details[data-key]:not([open])') return menu.open ? [] : [menu];
+    if (selector === 'details[data-key]') return [menu];
+    return [];
+  },
+  querySelector: () => summary, closest: () => null, dispatchEvent: () => {}, getClientRects: () => [1],
+};
+globalThis.fetch = async () => ({ status, ok: status === 200, headers: { get: () => "" }, text: async () => answer });
+//POLL//
+(async () => {
+  poll(el);
+  await el._tick();
+  const focused = document.activeElement === summary, open = menu.open;
+  document.activeElement = composer;
+  answer = "next";
+  await el._tick();
+  const typing = document.activeElement === composer && composer.value === "unfinished draft";
+  menu.open = false;
+  status = 500;
+  await el._tick();
+  const failed = classes.has("stale") && el.previousElementSibling.textContent.includes("HTTP 500") && html === "next";
+  status = 200; answer = "recovered";
+  await el._tick();
+  console.log(JSON.stringify({ focused, open, typing, failed, recovered: !classes.has("stale"), shut: !menu.open }));
+})();
+"""
+
+
 @unittest.skipUnless(NODE, "node is not installed")
 class PollRefreshTest(unittest.TestCase):
     def run_poll(self) -> dict:
@@ -67,6 +130,41 @@ class PollRefreshTest(unittest.TestCase):
                            timeout=20)
         self.assertEqual(r.returncode, 0, r.stderr)
         return json.loads(r.stdout)
+
+    def test_issue_10_18_header_preserves_menu_focus_draft_and_marks_failure(self):
+        """Reverting #10/#18 focus restoration drops keyboard focus when the header swaps."""
+        src = WEB_JS.read_text()
+        functions = []
+        for name in ("poll", "stale", "fresh"):
+            m = re.search(r"^  function " + name + r"\(.*?^  \}\n", src, re.S | re.M)
+            self.assertIsNotNone(m)
+            functions.append(m.group(0))
+        r = subprocess.run([NODE, "-e", HEADER_HARNESS.replace("//POLL//", "\n".join(functions))],
+                           capture_output=True, text=True, timeout=10)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout), {"focused": True, "open": True, "typing": True,
+                                               "failed": True, "recovered": True, "shut": True})
+
+    def test_issue_18_header_restores_device_controls_after_swap(self):
+        """Reverting #18's refresh hook resets notification state and open-panel accessibility after a swap."""
+        src = WEB_JS.read_text()
+        m = re.search(r"^  function chatHeaderState\(el\) \{\n.*?^  \}\n", src, re.S | re.M)
+        self.assertIsNotNone(m)
+        self.assertIn("chatHeaderState(ev.target);", src)
+        script = r"""
+let notifications = 0, documents = 0, unread = 0, expanded;
+const notifyButton = () => notifications++, docsAria = () => documents++, markRail = () => unread++;
+const document = { body: { classList: { contains: () => true } }, querySelector: () => ({}) };
+const el = { querySelector: s => s === '.chathead' ? {} : { setAttribute: (k, v) => expanded = v } };
+//FUNCTION//
+chatHeaderState(el);
+chatHeaderState({ querySelector: () => null });
+console.log(JSON.stringify({ notifications, documents, unread, expanded }));
+"""
+        r = subprocess.run([NODE, "-e", script.replace("//FUNCTION//", m.group(0))],
+                           capture_output=True, text=True, timeout=10)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout), {"notifications": 1, "documents": 1, "unread": 1, "expanded": "true"})
 
     def test_a_refresh_asked_while_a_poll_is_on_its_way_shows_the_new_state_at_once(self):
         out = self.run_poll()

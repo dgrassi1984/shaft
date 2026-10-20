@@ -179,6 +179,12 @@
           el.dataset.etag = r.headers.get("ETag") || "";
           el.dataset.etagUrl = url;
           if (body !== el.dataset.last) {               // unchanged: nothing replaced, nothing collapsed
+            const focused = document.activeElement;
+            const controls = 'button, a[href], summary';
+            const focusKey = n => n.dataset.focus || n.getAttribute("href")
+              || (n.closest("form[data-post]") || { dataset: {} }).dataset.post;
+            const restoreFocus = focused && el.contains(focused) && focused.matches(controls);
+            const key = restoreFocus ? focusKey(focused) : null;
             const open = new Set([...el.querySelectorAll("details[data-key][open]")].map(d => d.dataset.key));
             const shut = new Set([...el.querySelectorAll("details[data-key]:not([open])")].map(d => d.dataset.key));
             const box = el.closest("[data-scroll]");      // a feed that scrolls in its own box (the chat), else the page
@@ -192,6 +198,11 @@
               if (open.has(d.dataset.key)) d.open = true;
               if (shut.has(d.dataset.key)) d.open = false;
             });
+            if (restoreFocus) {
+              const target = [...el.querySelectorAll(controls)].find(n => key && focusKey(n) === key)
+                || el.querySelector('details[data-key] summary');
+              if (target) target.focus({ preventScroll: true });
+            }
             if (atBottom && el.dataset.follow) toBottom(el);
             el.dispatchEvent(new CustomEvent("shaft:swapped", { bubbles: true }));
           }
@@ -867,8 +878,18 @@
     catch (e) { /* no storage: it opens again on the next page */ }
     docsAria();
   }
+  function chatHeaderState(el) {
+    if (!el.querySelector(".chathead")) return;
+    notifyButton();
+    docsAria();
+    const nav = el.querySelector("[data-toggle-nav]");
+    if (nav) nav.setAttribute("aria-expanded", String(document.body.classList.contains("navopen")));
+    const rail = document.querySelector("nav .rail");
+    if (rail) markRail(rail);
+  }
   document.addEventListener("shaft:swapped", (ev) => {   // an instance's first document opens the panel beside the chat
     if (ev.target.id === "docs") docsAria();
+    chatHeaderState(ev.target);
   });
   document.addEventListener("click", (ev) => {           // 📄 Documents: open or close the panel
     if (!(ev.target.closest && ev.target.closest("[data-show-docs]"))) return;
