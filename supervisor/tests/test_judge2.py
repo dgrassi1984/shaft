@@ -98,7 +98,7 @@ class SecondJudgeTest(unittest.TestCase):
         self.assertEqual(out["criterion_met"], "partial")
         body = self.sent[0]
         self.assertEqual(body["model"], "z-ai/glm-5.3-flash")
-        self.assertEqual(body["provider"]["only"], ["novita"])            # the operator's data policy, as for instances
+        self.assertEqual(body["provider"]["only"], ["novita", "deepinfra"])  # the operator's data policy, as for instances
         self.assertNotIn("response_format", body)                         # Novita has no structured outputs here
         (u,) = self.usage()
         self.assertEqual((u["purpose"], u["usd"], u["provider"]), ("second wren", 0.002, "Novita"))
