@@ -116,14 +116,21 @@ def rail(names: list[str], current: str = "", snap: dict | None = None, chats: d
 
 def nav(names: list[str], current: str = "overview") -> Html:
     """The left nav: the rail (refreshed live: the chats, then MANAGE), then unpairing."""
+    from . import version
     from .web_actions import post_attrs
     cur = "/overview" if current == "overview" else current
+    rec = version.service("web", stale=False)
+    checkout = version.supervisor_commit()
+    moved = h('<a href="/services">checked out: {v}</a>', v=version.commit_describe(checkout)) \
+        if rec and rec["commit"].split("+")[0] != checkout.split("+")[0] else Html("")
+    running = h('<div class="nav-version dim">web: {v}{m}</div>', v=version.service_version(rec), m=moved)
     return h('<nav><a class="brand" href="/">SHAFT</a><button type="button" class="small closenav" data-toggle-nav '
              'aria-label="Close the chats">✕</button><div class="rail" data-poll="/fragment/rail?c={c}" data-every="3000" '
              'data-now="1" data-hidden="1">{rail}</div>'
              '<form class="unpair" data-post="/unpair" data-after="reload" data-confirm="Unpair this browser? You will '
              'need a new link from `shaft web pair` to use it again."{a}><button type="submit">Unpair this browser'
-             '</button></form></nav>', c=cur, rail=rail(names, cur), a=post_attrs("this page"))
+             '</button></form>{version}</nav>', c=cur, rail=rail(names, cur), a=post_attrs("this page"),
+             version=running)
 
 
 def message_page(title: str, text: str, detail: str = "") -> Html:

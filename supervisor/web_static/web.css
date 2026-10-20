@@ -54,6 +54,8 @@ nav a.inst.unread .who::after { content: " ●"; color: var(--accent); }
 .dot.st-update, .dot.st-paused { background: var(--paused); }
 .badge { font-size: .72rem; border: 1px solid currentColor; border-radius: 9px; padding: 0 .35rem; }
 nav .unpair { margin-top: auto; }
+nav .nav-version { font-size: .8rem; padding: .5rem; overflow-wrap: anywhere; order: 4; }
+nav .nav-version a { display: block; padding: .2rem 0; color: inherit; }
 main { padding: 1rem 1.2rem 3rem; min-width: 0; }
 
 button { font: inherit; padding: .35rem .8rem; border-radius: 6px; border: 1px solid var(--line);

@@ -189,9 +189,6 @@ def services() -> list[dict]:
     from . import version
     out = []
     for name in SERVICES:
-        if name == "scheduler":
-            out.append({"name": name, "running": _scheduler_running(), "detail": ""})
-            continue
         rec = version.service(name, stale=False)
         detail, idle = "", False
         if rec:
@@ -203,7 +200,8 @@ def services() -> list[dict]:
             from .panel import model_down_problem
             why = model_down_problem()
             detail, idle = (f"down · {why}" if why else "idle · starts on demand"), not why
-        out.append({"name": name, "running": bool(rec), "idle": idle, "detail": detail})
+        out.append({"name": name, "running": _scheduler_running() if name == "scheduler" else bool(rec),
+                    "idle": idle, "detail": detail})
     return out
 
 

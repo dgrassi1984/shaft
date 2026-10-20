@@ -326,9 +326,9 @@ def services_detail() -> list[dict]:
     from . import dashboard, version
     out = []
     for s in dashboard.services():
-        rec = version.service(s["name"], stale=True) if s["name"] != "scheduler" else None
+        rec = version.service(s["name"], stale=True)
         out.append({**s, "pid": (rec or {}).get("pid"), "stale": bool((rec or {}).get("stale")),
-                    "started": (rec or {}).get("started", "")})
+                    "started": (rec or {}).get("started", ""), "version": version.service_version(rec)})
     return out
 
 
