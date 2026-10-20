@@ -15,7 +15,7 @@ NODE = shutil.which("node")
 
 HARNESS = r"""
 const POLL_LIMIT_MS = 15000;
-const net = { down: 0 };
+const net = { down: new Set() };
 const busyIn = () => false, fresh = () => {}, stale = () => {}, netNote = () => {}, checkVersion = () => {};
 const pairAgain = () => false;
 const textOf = (s) => s, toBottom = () => {}, morph = () => { throw new Error("not keyed"); };
@@ -59,7 +59,7 @@ setTimeout(() => {                       // 2.05 s: the first poll (sent at 2 s)
 
 
 HEADER_HARNESS = r"""
-const POLL_LIMIT_MS = 15000, net = { down: 0 };
+const POLL_LIMIT_MS = 15000, net = { down: new Set() };
 const pairAgain = () => false;
 const busyIn = () => false, netNote = () => {}, checkVersion = () => {};
 const textOf = s => s, toBottom = () => {};

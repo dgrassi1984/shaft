@@ -236,7 +236,7 @@ form.drive textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospac
 .activity div { max-height: 14rem; overflow-y: auto; }
 .activity p { margin: .1rem 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .atts { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .3rem; }
-img.thumb { max-width: 12rem; max-height: 9rem; border-radius: 6px; border: 1px solid var(--line); }
+img.thumb { width: 12rem; height: 9rem; max-width: 100%; object-fit: contain; border-radius: 6px; border: 1px solid var(--line); }
 form.composer { display: grid; gap: .4rem; margin: .6rem 0 1rem; position: sticky; bottom: 0; background: var(--bg);
                 padding: .4rem 0; }
 label.pick { font-size: .85rem; cursor: pointer; color: var(--accent); }

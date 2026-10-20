@@ -609,7 +609,7 @@ def _chat_attachments(cid: str, k: int, atts: list[dict]) -> Html:
     for j, a in enumerate(atts or []):
         url = f"/chatfiles/{q(cid)}/{k}/{j}"
         if a["name"].lower().endswith(IMAGE_TYPES):
-            out.append(h('<a href="{u}" target="_blank"><img class="thumb" src="{u}" alt="{n}" loading="lazy"></a>',
+            out.append(h('<a href="{u}" target="_blank"><img class="thumb" src="{u}" alt="{n}" width="192" height="144" loading="lazy"></a>',
                          u=url, n=a["name"]))
         else:
             out.append(h('<a class="file" href="{u}" target="_blank">📎 {n}</a>', u=url, n=a["name"]))
@@ -620,7 +620,7 @@ def _activity(lines_: list[str], key: str, open_: bool = False) -> Html:
     """What it did during a reply, collapsible; `key` keeps it open or shut across the feed's refreshes."""
     if not lines_:
         return Html("")
-    return h('<details class="activity" data-key="{k}"{o}><summary>what it did ({n})</summary><div>{l}</div></details>',
+    return h('<details class="activity" data-key="{k}"{o}><summary>what it did ({n})</summary><div data-scroll-key="{k}">{l}</div></details>',
              k=key, o=Html(" open") if open_ else "", n=len(lines_), l=join(h("<p>{x}</p>", x=x) for x in lines_))
 
 
@@ -803,7 +803,7 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
                         'aria-label="Comment on the whole document">💬</button>')
             tlist = threads_list(name, open_path, sha, threads or [], thread)
         view = h('<div class="docview" data-doc="{p}" data-sha="{s}"{tattr}><div class="doctitle"><b>{p}</b>'
-                 '<button type="button" class="small" data-edit-doc>Edit</button>{cbtn}'
+                 '<button type="button" class="small" data-edit-doc data-focus="doc-edit">Edit</button>{cbtn}'
                  '<button type="button" class="copy small icon" data-copy-doc title="copy the document\'s Markdown" '
                  'aria-label="Copy the document">{copy}</button>'
                  '<form class="docdelete" data-post="/docs/{n}/delete" data-after="doc-deleted" '
@@ -851,7 +851,7 @@ def _sent_cards(name: str, sent: list[dict]) -> list[Html]:
     cards = []
     for m in sent:             # files open in a sheet of their own: in an app, a link replaced its only view
         atts = join(h('<a href="/files/{f}/{j}" target="_blank">{img}</a>', f=q(m["file"]), j=j,
-                      img=h('<img class="thumb" src="/files/{f}/{j}" alt="{n}" loading="lazy">', f=q(m["file"]), j=j,
+                      img=h('<img class="thumb" src="/files/{f}/{j}" alt="{n}" width="192" height="144" loading="lazy">', f=q(m["file"]), j=j,
                             n=a["name"])
                       if a["name"].lower().endswith(IMAGE_TYPES) else h("📎 {n}", n=a["name"]))
                     for j, a in enumerate(m.get("attachments") or []))

@@ -78,6 +78,11 @@ and [chat design](plans/PLAN-webui-chat.md).
   hover over a time for its full date and time.
   Markdown task lists use full-width items with a checkbox before the text. On phones, stacked Markdown
   table labels use the heading’s plain text.
+- Each panel stays marked stale until its own refresh succeeds. The connection warning stays until every failed
+  panel recovers. **↓ New below** appears only for a new turn below the visible area.
+  Refreshes keep Manage open or closed, link focus, and activity scroll. Chat thumbnails reserve space;
+  images loading keep the feed at the bottom if you have not scrolled up. After Save, focus returns to Edit
+  and survives the document refresh.
 - The chat header refreshes every 1.5 seconds: state, model, today's spend, actions, busy warning, Clear and
   Earlier chats. The open history list and ⋯ menu and keyboard focus survive refreshes; your draft and documents stay in place.
   A failed refresh marks the header stale. Clear sends the conversation id shown by the header; a missing or
