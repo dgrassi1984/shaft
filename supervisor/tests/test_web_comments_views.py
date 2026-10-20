@@ -6,7 +6,7 @@ import json
 import re
 import unittest
 
-from supervisor.web_views import docs_panel, threads_list
+from supervisor.web_views import chat_feed, docs_panel, threads_list
 
 HOSTILE = '"><script>x</script>'
 LISTING = [{"path": "plan.md", "bytes": 12}, {"path": "notes.md", "bytes": 4}]
@@ -174,3 +174,52 @@ class CommentViewsTest(unittest.TestCase):
         self.assertNotIn(">", attr.group(1))
         self.assertIn("&lt;script&gt;", attr.group(1))
         self.assertGreaterEqual(html_out.count("&lt;script&gt;"), 3)
+
+    def test_a_post_carries_its_raw_text_escaped_for_edit(self):
+        """Edit fills the box from data-text: the note as written, not the rendered Markdown."""
+        raw = 'a "quote"\n<tag> & **not bold**'
+        html_out = str(threads_list("ada", "plan.md", "abc", [thr(posts=[post(text=raw, sent=None)])]))
+        attr = re.search(r'data-text="([^"]*)"', html_out)
+        self.assertIsNotNone(attr)
+        self.assertNotIn("<", attr.group(1))
+        self.assertNotIn(">", attr.group(1))
+        self.assertNotIn('"', attr.group(1))
+        self.assertEqual(html.unescape(attr.group(1)), raw)
+        self.assertIn('class="post unsent" data-pid="p1" data-text="', html_out)
+        self.assertIn("**not bold**", attr.group(1))
+        self.assertNotIn(raw, html_out)
+
+    def test_chat_feed_chips_for_comments_answered_and_opened(self):
+        """PLAN-comments §6.1: 💬 chips, and a comment-only turn (empty shown text) has no empty bubble."""
+        chat = {"id": "web-1", "state": "idle", "turns": [
+            {"role": "user", "ts": TS, "content": "look", "shown": "look", "edits": ["plan.md"],
+             "comments": [{"id": "c7", "doc": "plan.md"}, {"id": "c8", "doc": 'a"b.md'}]},
+            {"role": "assistant", "ts": "2026-10-20T15:05:03", "content": "done",
+             "docs": [{"path": "plan.md", "created": False}],
+             "answered": [{"id": "c7", "doc": "plan.md"}],
+             "opened": [{"id": "c9", "doc": "notes.md"}]},
+            {"role": "user", "ts": "2026-10-20T15:06:03", "content": "COMMENT BLOCK not shown", "shown": "",
+             "comments": [{"id": "c3", "doc": "plan.md"}]},
+        ]}
+        feed = str(chat_feed("ada", chat, []))
+        edited = 'class="editchip" href="?doc=plan.md" data-open-doc="plan.md">✎ edited plan.md</a>'
+        comment = ('class="commentchip" href="?doc=plan.md&amp;thread=c7" data-open-doc="plan.md" '
+                   'data-open-thread="c7">💬 c7</a>')
+        self.assertIn(edited, feed)
+        self.assertIn(comment, feed)
+        self.assertLess(feed.index(edited), feed.index(comment))
+        self.assertIn('href="?doc=a%22b.md&amp;thread=c8" data-open-doc="a&quot;b.md" data-open-thread="c8"', feed)
+        reply = feed.split('data-k="a1"', 1)[1].split("data-k=", 1)[0]
+        self.assertIn('class="doccard"', reply)
+        self.assertIn('class="commentchip" href="?doc=plan.md&amp;thread=c7" data-open-doc="plan.md" '
+                      'data-open-thread="c7">💬 answered c7</a>', reply)
+        self.assertIn('class="commentchip" href="?doc=notes.md&amp;thread=c9" data-open-doc="notes.md" '
+                      'data-open-thread="c9">💬 opened c9</a>', reply)
+        self.assertLess(reply.index('class="doccard"'), reply.index("💬 answered c7"))
+        self.assertLess(reply.index("💬 answered c7"), reply.index("💬 opened c9"))
+        only = feed.split('data-k="u2"', 1)[1].split("data-k=", 1)[0]
+        self.assertIn('class="commentchip" href="?doc=plan.md&amp;thread=c3" data-open-doc="plan.md" '
+                      'data-open-thread="c3">💬 c3</a>', only)
+        self.assertNotIn("<p", only)
+        self.assertNotIn('class="wrap"', only)
+        self.assertNotIn("COMMENT BLOCK", only)

@@ -481,3 +481,24 @@ textarea, input, select { border-color: var(--field); }        /* a field's edge
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
 }
+
+/* comments: the threads list and the chips (web_views.threads_list, chat_feed) */
+details.threads { margin: .4rem 0; border-top: 1px solid var(--line); padding-top: .3rem; }
+details.threads > summary { cursor: pointer; font-size: .85rem; }
+article.thread { padding: .35rem .4rem .35rem .55rem; margin: .35rem 0; border-left: 3px solid var(--line); }
+article.thread.active { border-left-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
+article.thread.detached q, article.thread.ambiguous q { color: var(--dim); }
+details.threads q { display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical;
+                    overflow: hidden; margin: .15rem 0; font-style: italic; }
+.post { display: grid; gap: .2rem; margin: .25rem 0; }
+.post p { margin: 0; }
+.post.unsent { outline: 1px dashed var(--line); border-radius: 6px; padding: .15rem .3rem; }
+.post .who { font-size: .78rem; font-weight: 600; }
+details.threads form.act { display: inline; margin: 0; }
+.ccount { color: var(--dim); font-size: .78rem; }
+.commentchip { font-size: .78rem; margin-left: .3rem; }
+@media (pointer: coarse) {
+  details.threads button, details.threads button.small {
+    min-height: 44px; min-width: 44px; padding-top: .45rem; padding-bottom: .45rem; }
+  .commentchip { min-height: 44px; display: inline-flex; align-items: center; }
+}

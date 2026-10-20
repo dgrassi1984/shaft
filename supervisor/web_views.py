@@ -637,11 +637,11 @@ def threads_list(name: str, doc: str, sha: str, threads: list[dict], active: str
                   '<button type="submit" class="small">Send to {who}</button></form>',
                   n=q(name), pid=p["pid"], who=name),
             ])
-        return h('<div class="post{u}" data-pid="{pid}"><div class="who">{who} <span class="dim">{ts}</span>{warn}'
+        return h('<div class="post{u}" data-pid="{pid}" data-text="{raw}"><div class="who">{who} <span class="dim">{ts}</span>{warn}'
                  '</div>{text}{btns}</div>',
                  u=Html(" unsent") if unsent else "", pid=p["pid"], who=who, ts=p["ts"][11:16],
                  warn=Html(' <span class="warn">only you see this</span>') if unsent else "",
-                 text=markdown(p["text"]), btns=buttons)
+                 text=markdown(p["text"]), btns=buttons, raw=p["text"])
 
     def one(t: dict) -> Html:
         by = h(' <span class="dim">by {by}</span>', by=t["by"]) if t["by"] != "daniele" else Html("")
@@ -739,6 +739,16 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
     return join([head, view])
 
 
+def _comment_chips(items: list[dict] | None, kind: str = "") -> Html:
+    """💬 chips on a turn: comments the operator sent, or threads the reply answered or opened."""
+    if not items:
+        return Html("")
+    pre = f"{kind} " if kind else ""
+    return join(h(' <a class="commentchip" href="?doc={u}&amp;thread={id}" data-open-doc="{doc}" '
+                  'data-open-thread="{id}">💬 {pre}{id}</a>',
+                  u=q(item["doc"]), doc=item["doc"], id=item["id"], pre=pre) for item in items)
+
+
 def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = False) -> Html:
     """The conversation as it stands: each turn, the files it sent you meanwhile, and the reply running now."""
     from .web_actions import button
@@ -751,18 +761,25 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
             if t.get("edits"):
                 tag = join([tag, join(h(' <a class="editchip" href="?doc={u}" data-open-doc="{p}">✎ edited {p}</a>',
                                         u=q(p), p=p) for p in t["edits"])])
+            if t.get("comments"):
+                tag = join([tag, _comment_chips(t["comments"])])
+            # A comment-only turn's shown text is empty: the chips are the turn, not an empty bubble.
+            shown = t.get("shown", t["content"])
             items.append((t["ts"], h('<div class="turn me" data-k="u{k}"><div class="who">you <span class="dim">{ts}</span>{tag}</div>'
                                      '{text}{atts}</div>', k=k, ts=t["ts"][11:16], tag=tag,
-                                     text=_my_text(t.get("shown", t["content"])), atts=_chat_attachments(chat["id"], k, t.get("attachments")))))
+                                     text=_my_text(shown) if shown else Html(""),
+                                     atts=_chat_attachments(chat["id"], k, t.get("attachments")))))
         else:
             note = h('<p class="warn">{n}</p>', n=t["note"]) if t.get("note") else Html("")
             body = markdown(t["content"]) if t.get("content") else Html('<p class="dim">(no answer)</p>')
             copy = (h('<button type="button" class="copy small" data-copy title="copy the answer as Markdown">Copy</button>')
                     if t.get("content") else Html(""))
+            cards = join([doc_cards(t.get("docs")), _comment_chips(t.get("answered"), "answered"),
+                          _comment_chips(t.get("opened"), "opened")])
             items.append((t["ts"], h('<div class="turn it" data-k="a{k}" data-raw="{raw}"><div class="who">{n} <span class="dim">{ts}</span>'
                                      '{copy}</div>{act}{body}{cards}{note}</div>', k=k, raw=t.get("content") or "", n=name,
                                      ts=t["ts"][11:16], copy=copy, act=_activity(t.get("activity", []), f"t{k}"),
-                                     body=body, cards=doc_cards(t.get("docs")), note=note)))
+                                     body=body, cards=cards, note=note)))
     for m in sent:             # files open in a sheet of their own: in an app, a link replaced its only view
         atts = join(h('<a href="/files/{f}/{j}" target="_blank">{img}</a>', f=q(m["file"]), j=j,
                       img=h('<img class="thumb" src="/files/{f}/{j}" alt="{n}" loading="lazy">', f=q(m["file"]), j=j,
