@@ -167,7 +167,7 @@ class NetworkClientTest(unittest.TestCase):
 
     def test_a_send_carries_its_id_and_is_checked_before_uploading(self):
         self.assertIn("if (mid && !mid.value) mid.value = crypto.randomUUID", JS)
-        self.assertIn("if (r.ok && mid) mid.value = \"\";", JS)
+        self.assertIn("if (r.ok && mid && mid.value === sentMid) mid.value = \"\";", JS)   # #21: an edit made meanwhile keeps its new id
         self.assertIn("const tooBig = filesRefused(form);", JS)
 
     def test_the_feed_is_updated_item_by_item(self):

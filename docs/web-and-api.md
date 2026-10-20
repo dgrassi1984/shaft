@@ -75,6 +75,10 @@ and [chat design](plans/PLAN-webui-chat.md).
   it in your message. Each message with text has Copy and Reply icons for its whole Markdown source, including
   your own messages. Code blocks and documents have Copy icons too. Your draft survives a reload; `/` writes,
   Alt-↑/↓ changes chat; opt-in desktop notifications (⋯ menu) for a reply that lands while the tab is hidden.
+  Quotes are saved as drafts too. Picking files again adds them to the current attachments. Files added during
+  a send stay in the composer. Leaving with attachments asks for confirmation because files cannot survive a reload.
+  An unchanged retry keeps its message ID, including after reload. A reload drops the saved draft if that ID is
+  already in the rendered chat. Editing text or changing attachments starts a new message ID.
   Chat days are separated by date, using the supervisor’s local time. Today’s messages show only HH:MM;
   hover over a time for its full date and time.
   Markdown task lists use full-width items with a checkbox before the text. On phones, stacked Markdown
