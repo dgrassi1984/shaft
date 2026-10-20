@@ -64,6 +64,10 @@ and [chat design](plans/PLAN-webui-chat.md).
   it in your message. Each message with text has Copy and Reply icons for its whole Markdown source, including
   your own messages. Code blocks and documents have Copy icons too. Your draft survives a reload; `/` writes,
   Alt-↑/↓ changes chat; opt-in desktop notifications (⋯ menu) for a reply that lands while the tab is hidden.
+  Chat days are separated by date, using the supervisor’s local time. Today’s messages show only HH:MM;
+  hover over a time for its full date and time.
+  Markdown task lists use full-width items with a checkbox before the text. On phones, stacked Markdown
+  table labels use the heading’s plain text.
 - **Documents**: a Markdown file an instance writes under its `notes/docs/` shows beside the chat, live, as it writes
   it; a reply's documents are cards under it. The drawer shows a vertical list with sizes, changed marks and comment
   counts, or one open document (by default the one this chat last changed). **← Documents** returns to the list

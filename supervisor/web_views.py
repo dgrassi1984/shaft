@@ -6,6 +6,7 @@ web_pages'; nothing here writes anything.
 from __future__ import annotations
 
 import re
+import time
 import urllib.parse
 
 from .web_pages import Html, esc, h, join, nav, page
@@ -765,6 +766,12 @@ def _comment_chips(items: list[dict] | None, kind: str = "") -> Html:
                   u=q(item["doc"]), doc=item["doc"], id=item["id"], pre=pre) for item in items)
 
 
+def _turn_time(ts: str) -> Html:
+    """Stored timestamps use the supervisor's local time, as do the other UI dates."""
+    return h('<time datetime="{iso}" title="{full}">{short}</time>',
+             iso=ts, full=ts.replace("T", " "), short=ts[11:16]) if ts else Html("")
+
+
 def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = False) -> Html:
     """The conversation as it stands: each turn, the files it sent you meanwhile, and the reply running now."""
     from .web_actions import button
@@ -790,7 +797,7 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
             shown = t.get("shown", t["content"])
             items.append((t["ts"], h('<div class="turn me" data-k="u{k}" data-raw="{raw}"><div class="who">you '
                                      '<span class="dim">{ts}</span>{tag}{controls}</div>'
-                                     '{text}{atts}</div>', k=k, ts=t["ts"][11:16], tag=tag, raw=shown, controls=controls,
+                                     '{text}{atts}</div>', k=k, ts=_turn_time(t["ts"]), tag=tag, raw=shown, controls=controls,
                                      text=_my_text(shown) if shown else Html(""),
                                      atts=_chat_attachments(chat["id"], k, t.get("attachments")))))
         else:
@@ -800,7 +807,7 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
                           _comment_chips(t.get("opened"), "opened")])
             items.append((t["ts"], h('<div class="turn it" data-k="a{k}" data-raw="{raw}"><div class="who">{n} <span class="dim">{ts}</span>'
                                      '{copy}</div>{act}{body}{cards}{note}</div>', k=k, raw=t.get("content") or "", n=name,
-                                     ts=t["ts"][11:16], copy=controls, act=_activity(t.get("activity", []), f"t{k}"),
+                                     ts=_turn_time(t["ts"]), copy=controls, act=_activity(t.get("activity", []), f"t{k}"),
                                      body=body, cards=cards, note=note)))
     for m in sent:             # files open in a sheet of their own: in an app, a link replaced its only view
         atts = join(h('<a href="/files/{f}/{j}" target="_blank">{img}</a>', f=q(m["file"]), j=j,
@@ -810,14 +817,30 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
                     for j, a in enumerate(m.get("attachments") or []))
         items.append((m["ts"], h('<div class="turn sent" data-k="s{f}"><div class="who">{n} sent you <a href="/messages/{f}">a message'
                                  '</a> <span class="dim">{ts}</span></div><div class="wrap">{t}</div><div class="atts">'
-                                 '{a}</div></div>', n=name, f=q(m["file"]), ts=m["ts"][11:16], t=m["text"][:600], a=atts)))
+                                 '{a}</div></div>', n=name, f=q(m["file"]), ts=_turn_time(m["ts"]), t=m["text"][:600], a=atts)))
     items.sort(key=lambda x: x[0])
-    feed = [x[1] for x in items]
+    feed = []
+    today = time.strftime("%Y-%m-%d")
+    previous_day = ""
+
+    def day_separator(ts: str) -> None:
+        nonlocal previous_day
+        day = ts[:10]
+        if day and day != previous_day:
+            if previous_day or day != today:
+                feed.append(h('<p class="dim chat-day" data-k="day-{day}">{label}</p>',
+                              day=day, label="Today" if day == today else day))
+            previous_day = day
+
+    for ts, item in items:
+        day_separator(ts)
+        feed.append(item)
     if chat["state"] == "replying":
         r = chat.get("reply") or {}
+        day_separator(r.get("started", ""))
         feed.append(h('<div class="turn it live" data-k="live"><div class="who">{n} <span class="dim">replying since {s}'
                       '<span class="elapsed" data-since="{iso}"></span></span></div>'
-                      '{act}{partial}<div class="actions">{stop}</div></div>', n=name, s=r.get("started", "")[11:16],
+                      '{act}{partial}<div class="actions">{stop}</div></div>', n=name, s=_turn_time(r.get("started", "")),
                       iso=r.get("started", ""),
                       act=_activity(r.get("activity", []), "live", open_=True),
                       partial=h('<p class="dim">the answer appears when it is ready</p>'),
