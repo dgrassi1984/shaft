@@ -348,10 +348,10 @@ form.composer textarea { resize: none; min-height: 2.6rem; }
 .turn.it pre:hover > .copy, .turn.it pre > .copy:focus-visible { opacity: 1; }
 .turn.sending { opacity: .6; }
 @media (max-width: 720px), (pointer: coarse) and (max-height: 520px) { .keys { display: none; } }
-/* a very wide window: the conversation keeps a readable width (the documents panel takes the room beside it) */
-.chathead { max-width: 72rem; width: 100%; }
-.chatgrid:not(:has([data-back-docs])):not(:has(.doclist a)) > .chatpage, .chatgrid.hidedocs > .chatpage { max-width: 72rem;
-                                                                                               width: 100%; }
+/* The chat uses the whole width when the documents are closed (#71): each message keeps its own readable width
+   (.turn max-width), so a page cap only left a wide window empty — on 2560 px, closing the drawer made it narrower. */
+.chathead { width: 100%; }
+.chatgrid:not(:has([data-back-docs])):not(:has(.doclist a)) > .chatpage, .chatgrid.hidedocs > .chatpage { width: 100%; }
 /* documents (docs/plans/PLAN-webui-chat §3) */
 aside.docs { min-height: 0; overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
              padding: .5rem .8rem; }
@@ -432,8 +432,13 @@ form.clearbtn { display: inline; margin: 0; }
   /* Fingers: 44 pt targets (Apple's guideline). */
   button, button.small, button.act, details.menu > summary, label.pick, .newdoc > summary {
     min-height: 44px; min-width: 44px; padding-top: .45rem; padding-bottom: .45rem; }
-  nav a.inst, .doclist a, .doccard, .menupages a, .rail details.manage > a, .editchip, .tabs a {
+  .doclist a, .doccard, .menupages a, .editchip, .tabs a {
     min-height: 44px; display: inline-flex; align-items: center; }
+  /* The rail keeps its own layout: on an iPad it is a sidebar list (a chat is its name over its last line, Manage one
+     link per row); inline-flex here turned each chat into one jammed row and ran the links sideways (#69). The
+     phone's chip bar sets its own display in the max-width block. */
+  nav a.inst, .rail details.manage > a { min-height: 44px; }
+  nav a.inst { align-content: center; }
   .chip .unpick { min-width: 44px; min-height: 44px; font-size: 1.3rem; }
   label.pick { display: inline-flex; align-items: center; }
   details.menu > summary { display: inline-flex; align-items: center; justify-content: center; }
@@ -442,6 +447,10 @@ form.clearbtn { display: inline; margin: 0; }
   .models label {
     min-height: 44px; min-width: 44px; display: inline-block; max-width: 100%;
     padding-top: .45rem; padding-bottom: .45rem; }
+}
+/* A touch screen with the sidebar (an iPad): Manage stays one link per row, centred in its 44 px (#69). */
+@media (pointer: coarse) and (min-width: 721px) and (min-height: 521px) {
+  .rail details.manage > a { display: flex; align-items: center; }
 }
 @media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
   /* The ⋯ menu as a sheet across the screen: anchored to its button, it ran off the right edge. */

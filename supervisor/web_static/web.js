@@ -722,12 +722,19 @@
       return;
     }
     const form = ev.target.closest && ev.target.closest("form[data-files]");
-    // Enter sends on a computer (Shift-Enter: a new line). A touch-only device has no Shift: there Return is a new
-    // line and the Send button sends (docs/plans/PLAN-pwa P0: on the iPhone a message could not have two lines).
-    if (form && ev.target.tagName === "TEXTAREA" && ev.key === "Enter" && !ev.shiftKey && !ev.isComposing
-        && !touchOnly()) {
+    // Return stays a newline on touch-only devices. Modified desktop sends wait for the current reply.
+    if (form && ev.target.tagName === "TEXTAREA" && ev.key === "Enter" && !ev.isComposing && !touchOnly()) {
       ev.preventDefault();
-      form.requestSubmit();
+      if (ev.altKey || ev.shiftKey) {
+        const box = ev.target, at = box.selectionStart;
+        box.value = box.value.slice(0, at) + "\n" + box.value.slice(box.selectionEnd);
+        box.setSelectionRange(at + 1, at + 1);
+        box.dispatchEvent(new Event("input", { bubbles: true }));
+      } else {
+        const queue = form.querySelector("input[name=queue]");
+        if (queue) queue.value = ev.metaKey || ev.ctrlKey ? "1" : "";
+        try { form.requestSubmit(); } finally { if (queue) queue.value = ""; }
+      }
       return;
     }
     if (sheet && ev.key !== "Escape") return;       // covered chat shortcuts stay inactive

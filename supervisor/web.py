@@ -444,11 +444,17 @@ def _post(req: Request, dev: str) -> Response:
             return _not_found(req.path)
         try:
             fields, files = web_chat.parse_multipart(req.headers.get("content-type", ""), req.body)
-            _, said = web_chat.send(m[1], (req.headers.get("tailscale-user-login") or "").lower(),
+            send = web_chat.queue if fields.get("queue") == "1" else web_chat.send
+            _, said = send(m[1], (req.headers.get("tailscale-user-login") or "").lower(),
                                     fields.get("text", ""), files, mid=fields.get("mid", ""))
         except web_chat.Refused as e:
             return _html(409, web_pages.h("<p>{t}</p>", t=str(e)))
         return _html(200, web_pages.h("<p>{t}</p>", t=said))
+    if m := re.fullmatch(r"/chat/([A-Za-z0-9_-]+)/unqueue", req.path):
+        from . import web_chat
+        if m[1] not in _names():
+            return _not_found(req.path)
+        return _html(200, web_pages.h("<p>{t}</p>", t=web_chat.unqueue(m[1], req.form().get("mid", ""))))
     if m := re.match(r"^/docs/([A-Za-z0-9_-]+)/save$", req.path):
         if m[1] not in _names():
             return _not_found(req.path)

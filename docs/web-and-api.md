@@ -88,6 +88,13 @@ and [chat design](plans/PLAN-webui-chat.md).
   your own messages. Code blocks and documents have Copy icons too. Tabbing to a Copy button shows it,
   with its focus ring. Your draft survives a reload; `/` writes,
   Alt-↑/↓ changes chat; opt-in desktop notifications (⋯ menu) for a reply that lands while the tab is hidden.
+  Enter sends. Alt-Enter and Shift-Enter insert a new line. Cmd-Enter, or Ctrl-Enter off macOS, queues a message
+  until the current reply ends, including a failed or stopped reply. While idle it sends now. Queued messages
+  appear below the live reply with Cancel and survive a reload or closed tab. They become one next message,
+  joined in order with a blank line between texts and all attachments combined. Quotes stay with their text.
+  Touch-only devices keep Return as a new line; use Send to send.
+  `POST /chat/<name>/send` accepts multipart `queue=1`; `POST /chat/<name>/unqueue` cancels a queued `mid`.
+  Both require the same CSRF token as other web posts.
   Quotes are saved as drafts too. Picking files again adds them to the current attachments. Files added during
   a send stay in the composer. Leaving with attachments asks for confirmation because files cannot survive a reload.
   An unchanged retry keeps its message ID, including after reload. A reload drops the saved draft if that ID is

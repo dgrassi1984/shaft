@@ -469,6 +469,31 @@ class StaticVersionTest(TestCase):
 
 
 class StylesTest(TestCase):
+    def test_issue_71_the_chat_takes_the_room_of_a_closed_drawer(self):
+        """#71: .chatpage and .chathead were capped at 72rem exactly when the documents were closed, so on 2560 px
+        closing the drawer narrowed the chat (1141 -> 1080 px) and left 1214 px empty. Messages keep their own cap."""
+        import re
+        css = (Path(web_pages.__file__).parent / "web_static" / "web.css").read_text()
+        for selectors, body in re.findall(r"([^{}]+)\{([^}]*)\}", css):
+            if ".chatpage" in selectors or ".chathead {" in selectors + " {":
+                if "hidedocs > .chatpage" in selectors or selectors.strip() == ".chathead":
+                    self.assertNotIn("max-width", body, selectors.strip())
+        self.assertRegex(css, r"\.turn \{[^}]*max-width: 52rem")
+
+    def test_issue_69_touch_rules_keep_the_sidebar_rail_a_list(self):
+        """#69, iPad: a (pointer: coarse) rule gave nav a.inst and the Manage links display: inline-flex, meant for the
+        phone's chip bar. On a touch iPad the rail is a sidebar list: each chat's name and last line ran into one row
+        and Manage ran sideways. Touch may size them (44 px), never change their display, outside the phone layout."""
+        import re
+        css = (Path(web_pages.__file__).parent / "web_static" / "web.css").read_text()
+        for block in re.findall(r"@media \(pointer: coarse\) \{(.*?)\n\}", css, re.S):
+            for selectors, body in re.findall(r"([^{}]+)\{([^}]*)\}", block):
+                rail = [x.strip() for x in selectors.split(",") if x.strip() in ("nav a.inst", ".rail details.manage > a")]
+                self.assertFalse(rail and "display" in body, f"touch rule sets display on {rail}: {body.strip()}")
+        ipad = re.search(r"@media \(pointer: coarse\) and \(min-width: 721px\) and \(min-height: 521px\) \{(.*?)\n\}",
+                         css, re.S)
+        self.assertRegex(ipad.group(1), r"\.rail details\.manage > a \{[^}]*display: flex")
+
     def test_issue_61_nav_version_wraps_at_phone_width(self):
         """#61: reverting removes the small footer style and lets long version labels overflow the phone sheet."""
         css = (Path(web_pages.__file__).parent / "web_static" / "web.css").read_text()

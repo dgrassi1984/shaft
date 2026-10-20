@@ -1017,6 +1017,14 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
                       stop=button("chat-stop", "Stop the reply",
                                   "stop this reply? Only the reply stops. The conversation stays open.",
                                   {"cid": chat["id"]}, cls="small")))
+    for t in chat.get("queued", []):
+        cancel = Html("") if archived else h(
+            '<form data-post="/chat/{n}/unqueue"><input type="hidden" name="mid" value="{mid}">'
+            '<button type="submit" class="small">Cancel</button></form>', n=name, mid=t["mid"])
+        feed.append(h('<div class="turn me" data-k="queue-{mid}"><div class="who">you '
+                      '<span class="dim">queued — sent when this reply ends</span></div>{text}{atts}{cancel}</div>',
+                      mid=t["mid"], text=_my_text(t["shown"]), cancel=cancel,
+                      atts=join(h('<p class="dim">📎 {n}</p>', n=a["name"]) for a in t.get("attachments", []))))
     if chat.get("pending_edits") and not archived:
         feed.append(h('<p class="pending-edits" data-k="pend">✎ Your changes to {p} go to {n} with your next message.</p>',
                       p=", ".join(sorted(chat["pending_edits"])), n=name))
@@ -1037,15 +1045,17 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
     composer = Html("") if read_only else h(
         '<form class="composer" data-post="/chat/{n}/send" data-multipart="1" data-reset="1" data-files data-draft="{n}" data-sent-mids="{mids}" '
         'data-max-file="{mf}" data-max-total="{mt}" data-max-files="{mn}"><input type="hidden" name="mid" value="">'
+        '<input type="hidden" name="queue" value="">'
         '<div class="chips" data-picked></div>'
         '<textarea name="text" rows="2" maxlength="20000" placeholder="Message {n}" aria-label="Message {n}">'
         '</textarea>'
         '<div class="actions"><label class="pick">Attach files<input type="file" name="files" multiple class="sr-file">'
         '</label>'
-        '<span class="dim keys">Enter sends · Shift-Enter new line · / to write · Alt-↑↓ another chat</span>'
+        '<span class="dim keys">Enter sends · Alt-Enter new line · ⌘-Enter queues · / to write · Alt-↑↓ another chat</span>'
         '<button type="submit">Send</button></div></form>',
         n=name, mf=messages.ATTACH_MAX_BYTES, mt=messages.ATTACH_MAX_TOTAL, mn=messages.ATTACH_MAX_FILES,
-        mids=json.dumps([t["mid"] for t in (chat or {}).get("turns", []) if t.get("mid")]))
+        mids=json.dumps(list(dict.fromkeys((chat or {}).get("mids", []) +
+                        [t["mid"] for t in (chat or {}).get("turns", []) + (chat or {}).get("queued", []) if t.get("mid")]))))
     banner = (h('<p class="panel">Earlier chat, {date}. <a href="/i/{n}/chat">Back to the current chat</a></p>',
                 date=chat['created'][:16].replace('T', ' '), n=q(name)) if read_only and chat else Html(""))
     body = join([banner, h('<section class="panel chat" data-scroll><div class="feed" data-poll="{u}" data-every="1500" data-keyed="1" '
