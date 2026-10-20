@@ -276,6 +276,7 @@ class DeleteTest(unittest.TestCase):
         s = self.sup
         files = ["kdx.sb", "core-changed-kdx", "manual-wake-kdx.log", "talk-history-kdx", "locks/recap-kdx.lock",
                  "conversations/kdx/old.talk", "judgments/kdx.jsonl", "judgments/kdx-second.jsonl",
+                 "judgments/kdx-unsampled.jsonl",
                  "judgments/kdx-traits.json", "judgments/second-cases/kdx@2026-10-20T10-00-00.json",
                  "code_changes/kdx.jsonl", "probation/kdx.json", "egress/kdx.jsonl", "egress/kdx-offline.jsonl",
                  "trials/egress-kdx.jsonl", "trials/kdx/t-1/trial.json", "jobs/kdx.jsonl", "battery/off-kdx",

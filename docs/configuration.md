@@ -87,8 +87,9 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_FT_BASE_MODEL` | `mlx-community/Qwen3.8-27B-4bit` | the base model fine-tuning starts from when it does not train Bonsai itself | [finetune.py](../supervisor/finetune.py) |
 | `SHAFT_BONSAI_PYTHON` | `str(PROJECT / ".venv-bonsai" / "bin" / "python")` | the interpreter Bonsai LoRA training runs with | [finetune.py](../supervisor/finetune.py) |
 | `SHAFT_JOB_MIN_MINUTES` | `5` | the shortest interval an instance's own job (a plugin on a timer) may run at | [jobs.py](../supervisor/jobs.py) |
-| `SHAFT_JUDGE_MODELS` | `openrouter/xiaomi/mimo-v2.6-pro,claude-sonnet-5-5` | the judge pool: each judgment picks one at random, never the judged instance's own model | [judge.py](../supervisor/judge.py) |
-| `SHAFT_JUDGE2_MODEL` | `openrouter/z-ai/glm-5.3-flash` | the second judge, which grades a sample of cycles again to measure the judges' agreement | [judge.py](../supervisor/judge.py) |
+| `SHAFT_JUDGE_MODELS` | `openrouter/xiaomi/mimo-v2.6-pro,openrouter/z-ai/glm-5.3-flash,openrouter/deepseek/deepseek-v4.1-flash` | the judge pool: each judgment picks one at random, never the judged instance's own model | [judge.py](../supervisor/judge.py) |
+| `SHAFT_JUDGE_EVERY` | `2` | the main judge grades one live run in this many (1: every run) | [judge.py](../supervisor/judge.py) |
+| `SHAFT_JUDGE2_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | the second judge, which grades a sample of cycles again to measure the judges' agreement | [judge.py](../supervisor/judge.py) |
 | `SHAFT_JUDGE2_EVERY` | `4` | the second judge grades one cycle in this many (0: never) | [judge.py](../supervisor/judge.py) |
 | `SHAFT_MODEL_IDLE_MINUTES` | `15` | minutes SHAFT's own model server stays up unused before it exits (it starts again on demand); 0 = never exits | [localmodel.py](../supervisor/localmodel.py) |
 | `SHAFT_MODEL_START_TIMEOUT_S` | `300` | seconds to wait for the model server to start on demand | [localmodel.py](../supervisor/localmodel.py) |
@@ -96,7 +97,7 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_MODEL_TEMP` | `0.6` | SHAFT's own model's sampling temperature | [localmodel.py](../supervisor/localmodel.py) |
 | `SHAFT_PROMPT_CACHE_GB` | `8` | gigabytes of prompt cache SHAFT's own model server keeps | [localmodel.py](../supervisor/localmodel.py) |
 | `SHAFT_PROBATION_CYCLES` | `6` | judged cycles a kept self-change stays on probation (reverted on a clear drop) | [metrics.py](../supervisor/metrics.py) |
-| `SHAFT_JUDGE_ALERT_USD` | `10` | judge spend per day that raises an alert (the judge has no cap) | [panel.py](../supervisor/panel.py) |
+| `SHAFT_JUDGE_ALERT_USD` | `3` | judge spend per day that raises an alert (the judge has no cap) | [panel.py](../supervisor/panel.py) |
 | `SHAFT_RECAP_MODEL` | `claude-haiku-5-5` | the model that writes the overview's one-line recap of each instance | [recap.py](../supervisor/recap.py) |
 | `SHAFT_SELF_HOSTED` | `{}` | self-hosted model servers instances may run on through the broker (JSON: name -> url, sampling, think_budget) | [selfhosted.py](../supervisor/selfhosted.py) |
 | `SHAFT_SELF_HOSTED_FALLBACK` | `f"http://127.0.0.1:{LLM_PORTS[0]}/v1"` | the server a self-hosted model's calls fall back to when it is unreachable (empty: none) | [selfhosted.py](../supervisor/selfhosted.py) |

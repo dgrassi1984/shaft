@@ -106,9 +106,11 @@
   supervisor; memory, journal and self are never touched. A restore that cannot be done (a file was
   changed again since, or the tests fail with the earlier version) stays on probation and is logged.
   A change adopted against a trial's 'worse' verdict is undone on any drop, without the chance test.
-- **Judge**: every autonomous cycle is graded from its tool log by a cloud model picked at random from a
-  rotation (`SHAFT_JUDGE_MODELS`, default `openrouter/xiaomi/mimo-v2.6-pro,claude-sonnet-5-5`), never the model the judged instance runs on; each verdict records
-  its judge. Claude models go straight to the Claude API; OpenRouter ones under the instances' data policy (no data
+- **Judge**: one autonomous cycle in `SHAFT_JUDGE_EVERY` (default 2, drawn after the run, so the instance cannot
+  tell which) is graded from its tool log by a cloud model picked at random from a rotation (`SHAFT_JUDGE_MODELS`,
+  default MiMo, GLM 5.3 Flash and DeepSeek V4.1 Flash), never the model the judged instance runs on; each verdict
+  records its judge, and a cycle left out has no verdict rather than a failing one. A cycle the second judge
+  (`SHAFT_JUDGE2_MODEL`) also grades is never given that model as its main judge. Claude models go straight to the Claude API; OpenRouter ones under the instances' data policy (no data
   collection, zero retention). A trial pair keeps
   one judge for both orders; a battery item one grader for both arms, and a battery era is the whole pool. Results
   feed `self/stats.md`.

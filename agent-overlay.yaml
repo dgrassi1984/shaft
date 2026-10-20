@@ -36,9 +36,9 @@ issues:
 # gate:                          # unset: a workflow will ask, not invent
 #   - <test command>
 
-# worktree:
-#   root: ../<repo>-<slug>
-#   provision: docs/worktrees.md  # secrets, private db, port, asset build
+worktree:
+  root: ../shaft-<slug>
+  provision: docs/worktrees.md  # template worktree, .supervisor/
 
 ship:
   enabled: false

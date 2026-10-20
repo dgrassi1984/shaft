@@ -97,7 +97,7 @@ class SecondJudgeTest(unittest.TestCase):
         out = self.ask(_reply("```json\n" + json.dumps(VERDICT) + "\n```"))
         self.assertEqual(out["criterion_met"], "partial")
         body = self.sent[0]
-        self.assertEqual(body["model"], "z-ai/glm-5.3-flash")
+        self.assertEqual(body["model"], judge.JUDGE2_MODEL.removeprefix("openrouter/"))
         self.assertEqual(body["provider"]["only"], ["novita", "deepinfra"])  # the operator's data policy, as for instances
         self.assertNotIn("response_format", body)                         # Novita has no structured outputs here
         (u,) = self.usage()
@@ -162,9 +162,9 @@ class SecondJudgeTest(unittest.TestCase):
                              {"judge": judge.JUDGE2_MODEL, "error": "HTTP 503"})
 
     def test_stats_report_agreement_and_disagreements(self):
-        second_yes = {"judge": "openrouter/z-ai/glm-5.3-flash", **VERDICT, "criterion_met": "yes",
+        second_yes = {"judge": judge.JUDGE2_MODEL, **VERDICT, "criterion_met": "yes",
                       "reasoning": "exit=0 is in the log", "difficulty": 4}
-        js = [_judgment("2026-10-13T01:00:00", second={"judge": "x", **VERDICT, "criterion_met": "yes"}),
+        js = [_judgment("2026-10-13T01:00:00", second={"judge": judge.JUDGE2_MODEL, **VERDICT, "criterion_met": "yes"}),
               _judgment("2026-10-13T02:00:00", met="partial", second=second_yes),
               _judgment("2026-10-13T03:00:00")]
         text = "\n".join(metrics._second_section(js))
@@ -182,7 +182,8 @@ class JudgePendingTest(unittest.TestCase):
         instances = self.sup / "instances"                  # wren exists: a deleted one's cases are dropped instead
         (instances / "wren" / "shaft").mkdir(parents=True)
         for p in (mock.patch.object(metrics, "SUP_DIR", self.sup), mock.patch.object(metrics, "log"),
-                  mock.patch.object(metrics, "write_stats"), mock.patch.object(metrics, "INSTANCES", instances)):
+                  mock.patch.object(metrics, "write_stats"), mock.patch.object(metrics, "INSTANCES", instances),
+                  mock.patch.object(judge, "JUDGE_EVERY", 1)):
             p.start()
             self.addCleanup(p.stop)
 
@@ -248,6 +249,117 @@ class ReleasedBeforeTheSecondJudgeTest(unittest.TestCase):
         args, kw = popen.call_args
         self.assertEqual(args[0][-3:], ["supervisor", "judge", "second"])
         self.assertTrue(kw["start_new_session"])
+
+
+MIMO, GLM, DEEPSEEK = ("openrouter/xiaomi/mimo-v2.6-pro", "openrouter/z-ai/glm-5.3-flash",
+                       "openrouter/deepseek/deepseek-v4.1-flash")
+
+
+class JudgeLessOftenTest(unittest.TestCase):
+    """#45. Every live run was judged: 250+ a day at ~$0.07 a Sonnet judgment, $12-25 a day, so the $10 alert fired
+    daily. Now one run in SHAFT_JUDGE_EVERY is judged and a run left out is recorded apart, never as a failure. And on
+    2026-10-20 GLM 5.3 Flash was both a main judge and the second judge: it graded four runs twice and its agreement
+    with itself counted in stats.md. Reverting judge_sampled judges every run again (and a second pass re-decides);
+    reverting pick's `avoid` or second_counted lets one model grade a run twice and count it as agreement."""
+
+    def setUp(self):
+        self.sup = Path(tempfile.mkdtemp(prefix="shaft-jlo-"))
+        self.addCleanup(shutil.rmtree, self.sup, True)
+        instances = self.sup / "instances"
+        (instances / "wren" / "shaft").mkdir(parents=True)
+        self.eps = [{"ts": f"2026-10-20T10:{i:02d}:00", "finish": {"criterion_met": "yes"}, "tools": [],
+                     **({} if i % 3 == 2 else {"intent": {"goal": f"g{i}", "success_criterion": "c", "confidence": 70}})}
+                    for i in range(6)]                           # runs 2 and 5 declared no intent
+        self.asked = []
+        for p in (mock.patch.object(metrics, "SUP_DIR", self.sup), mock.patch.object(metrics, "log"),
+                  mock.patch.object(metrics, "write_stats"), mock.patch.object(metrics, "INSTANCES", instances),
+                  mock.patch.object(metrics, "live_episodes", side_effect=lambda name: list(self.eps)),
+                  mock.patch.object(metrics, "_written_files", return_value=""),
+                  mock.patch.object(metrics, "_provenance_evidence", return_value=""),
+                  mock.patch.object(metrics, "cycle_model", return_value=MIMO),
+                  mock.patch.object(metrics, "own_models", return_value=[MIMO]),
+                  mock.patch.object(judge, "available", return_value=True),
+                  mock.patch.object(judge, "ask", side_effect=self.ask),
+                  mock.patch.object(judge, "JUDGE_MODELS", [MIMO, GLM, DEEPSEEK]),
+                  mock.patch.object(judge, "JUDGE2_MODEL", DEEPSEEK),
+                  mock.patch.object(metrics, "second_sampled", return_value=False)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def ask(self, system, case, schema, purpose, model=None, **kw):
+        self.asked.append(model)
+        return dict(VERDICT, criterion_met="yes")
+
+    def judged(self) -> list[str]:
+        return [j["episode_ts"] for j in metrics.judgments("wren")]
+
+    def test_one_run_in_n_is_judged_and_the_rest_are_recorded_as_not_judged(self):
+        draws = iter([0, 1] * 3)                                   # judged, left out, judged, left out, ...
+        with mock.patch.object(judge, "JUDGE_EVERY", 2), \
+                mock.patch.object(metrics.secrets, "randbelow", side_effect=lambda n: next(draws)) as draw:
+            self.assertEqual(metrics.judge_pending("wren"), 3)
+            self.assertEqual(draw.call_count, 6)                   # no-intent runs drawn too: the sample stays unbiased
+            self.assertEqual(self.judged(), [e["ts"] for e in self.eps[0::2]])
+            self.assertEqual(metrics.unsampled("wren"), {e["ts"] for e in self.eps[1::2]})
+            self.assertEqual(len(self.asked), 2)                   # run 2 had no intent: the free rule, no judge call
+            self.assertNotIn(self.eps[5]["ts"], self.judged())     # left out: no rule verdict "never declared an intent"
+            self.assertEqual(metrics.judge_pending("wren"), 0)     # decided once: nothing drawn or asked again
+            self.assertEqual(draw.call_count, 6)
+        self.eps.append({"ts": "2026-10-20T11:00:00", "intent": {"goal": "g", "success_criterion": "c"},
+                         "finish": {"criterion_met": "yes"}, "tools": []})
+        with mock.patch.object(judge, "JUDGE_EVERY", 1):           # back to every run: from now on, not the backlog
+            self.assertEqual(metrics.judge_pending("wren"), 1)
+        self.assertEqual(self.judged()[-1], "2026-10-20T11:00:00")
+        self.assertEqual(len(self.judged()), 4)
+
+    def test_a_run_left_out_is_not_counted_as_a_failure(self):
+        draws = iter([0, 1] * 3)
+        with mock.patch.object(judge, "JUDGE_EVERY", 2), \
+                mock.patch.object(metrics.secrets, "randbelow", side_effect=lambda n: next(draws)):
+            metrics.judge_pending("wren")
+            rows = [dict(j, judge=GLM) for j in metrics.judgments("wren") if j.get("judge") != "rule"]
+            with mock.patch.object(metrics, "judgments", return_value=rows):
+                text = metrics.stats_text("wren")
+        self.assertIn("Judged success rate: **100%**", text)       # 2 judged, both yes; the 3 left out are not "no"
+        self.assertIn("The main judge grades one live run in 2", text)
+        self.assertIn("3 of my runs were left out: they have no verdict, and are not counted as failures", text)
+
+    def test_the_record_says_a_left_out_run_was_not_judged(self):
+        rows = [_judgment("2026-10-20T10:00:00")]
+        text = broker.judgments_text(rows, cycle="2026-10-20 10:01", left_out={"2026-10-20T10:01:00"})
+        self.assertIn("the cycle at 2026-10-20 10:01 was not judged", text)
+        self.assertIn("That is not a failure", text)
+        self.assertIn("no judged cycle at 2026-10-20 10:02", broker.judgments_text(rows, cycle="2026-10-20 10:02"))
+
+    def test_a_run_the_second_judge_grades_is_never_judged_by_its_model(self):
+        import random
+        rng = random.Random(0)
+        picks = {judge.pick(exclude=[MIMO], rng=rng, avoid=(DEEPSEEK,)) for _ in range(200)}
+        self.assertEqual(picks, {GLM})                             # wren on MiMo, DeepSeek to grade it second
+        self.assertEqual({judge.pick(exclude=[MIMO], rng=rng) for _ in range(200)}, {GLM, DEEPSEEK})
+        with mock.patch.object(judge, "JUDGE_EVERY", 1), mock.patch.object(metrics, "second_sampled", return_value=True):
+            metrics.judge_pending("wren")
+        self.assertEqual(set(self.asked), {GLM})
+        self.assertEqual(len(list((self.sup / "judgments" / "second-cases").glob("*.json"))), 4)
+
+    def test_no_second_opinion_when_only_the_second_judges_model_is_left(self):
+        with mock.patch.object(judge, "JUDGE_EVERY", 1), mock.patch.object(metrics, "second_sampled", return_value=True), \
+                mock.patch.object(judge, "JUDGE_MODELS", [MIMO, DEEPSEEK]):
+            metrics.judge_pending("wren")
+        self.assertEqual(set(self.asked), {DEEPSEEK})               # still judged: by the one judge left
+        self.assertFalse((self.sup / "judgments" / "second-cases").exists())   # but never graded twice by it
+
+    def test_agreement_never_counts_a_model_agreeing_with_itself_or_a_former_second_judge(self):
+        js = [dict(_judgment("2026-10-20T14:33:02", second={"judge": GLM, **VERDICT, "criterion_met": "yes"}), judge=GLM),
+              dict(_judgment("2026-10-20T13:00:00", second={"judge": GLM, **VERDICT, "criterion_met": "yes"}), judge=MIMO),
+              dict(_judgment("2026-10-20T15:00:00", second={"judge": DEEPSEEK, **VERDICT, "criterion_met": "no"}),
+                   judge=MIMO)]
+        text = "\n".join(metrics._second_section(js))
+        self.assertIn("Agreed with the main judge on whether my criterion was met: 0/1", text)   # pooled: 2/3
+        self.assertIn("deepseek/deepseek-v4.1-flash", text)
+        shown = broker.judgment_text(js[0])
+        self.assertIn("the same model as the main judge", shown)
+        self.assertNotIn("agrees", shown)
 
 
 if __name__ == "__main__":
