@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 import unittest
 
 from supervisor import web_md
@@ -78,6 +79,18 @@ class BlocksTest(unittest.TestCase):
         self.assertEqual(out.count('<span class="task" aria-label="to do">☐</span>'), 1)
         self.assertEqual(out.count('<span class="task done" aria-label="done">☑</span>'), 2)
         self.assertIn("☐</span> to do", out)
+
+    def test_issue_16_task_items_do_not_share_checkbox_width_or_colour(self):
+        """Reverting #16 gives the li the checkbox's narrow width and dim colour."""
+        text = "Review the proposal and send the summary to the team before Friday"
+        out = md(f"- [ ] {text}\n- [x] finished")
+        self.assertIn(f'<li class="task-item"><span class="task" aria-label="to do">☐</span> {text}</li>', out)
+        self.assertIn('<li class="task-item"><span class="task done" aria-label="done">☑</span> finished</li>', out)
+        css = (Path(__file__).parents[1] / "web_static" / "web.css").read_text()
+        self.assertRegex(css, r"\.md li\.task-item\s*\{[^}]*list-style: none;")
+        self.assertRegex(css, r"\.md span\.task\s*\{[^}]*width: 1.1rem;")
+        self.assertRegex(css, r"\.md span\.task\.done\s*\{[^}]*color: var\(--good\);")
+        self.assertNotRegex(css, r"\.md li\.task-item\s*\{[^}]*(?:width|color):")
 
     def test_a_list_right_after_a_paragraph_starts_without_a_blank_line(self):
         self.assertEqual(md("Steps:\n- a\n- b"), "<p>Steps:</p><ul><li>a</li><li>b</li></ul>")

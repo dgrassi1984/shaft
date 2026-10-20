@@ -278,5 +278,5 @@ def _list(lines: list[str], i: int, depth: int = 0) -> tuple[int, str]:
             box = f'<span class="task{" done" if done else ""}" aria-label="{"done" if done else "to do"}">' \
                   f'{"☑" if done else "☐"}</span> '
             body[0] = body[0][t.end():]
-        lis.append(f'<li{" class=" + chr(34) + "task" + chr(34) if box else ""}>{box}{_blocks(body, tight=not loose, depth=depth + 1)}</li>')
+        lis.append(f'<li{" class=" + chr(34) + "task-item" + chr(34) if box else ""}>{box}{_blocks(body, tight=not loose, depth=depth + 1)}</li>')
     return i, f"<{tag}{attr}>{''.join(lis)}</{tag}>"
