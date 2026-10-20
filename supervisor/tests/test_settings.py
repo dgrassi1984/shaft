@@ -1,9 +1,9 @@
-"""The supervisor's settings (PLAN-webui-chat.md §4, S0): knob() reads env > .supervisor/settings.env > default,
+"""The supervisor's settings (docs/plans/PLAN-webui-chat.md §4, S0): knob() reads env > .supervisor/settings.env > default,
 `shaft settings` writes the file with the knob's own check and compare-and-set, and each service's record says which
 saved value it does not hold yet.
 
 The bug this fixes: the launchd services run with PATH alone in their environment, so every knob was its default in
-every service — SHAFT_JUDGE_MODELS could not be set anywhere that lasted (Daniele, 2026-10-19)."""
+every service — SHAFT_JUDGE_MODELS could not be set anywhere that lasted (the operator, 2026-10-19)."""
 from __future__ import annotations
 
 import io

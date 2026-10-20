@@ -1,4 +1,4 @@
-"""The web UI's Config, Drive and Access pages and their actions (PLAN-webui.md M3).
+"""The web UI's Config, Drive and Access pages and their actions (docs/plans/PLAN-webui.md M3).
 
   Config  the instance's config.env, one field per key, saved through `shaft config` (opconfig.py): only that line
           changes, a value changed since the page was drawn is refused, a model switch sets its LLM_BASE_URL too.

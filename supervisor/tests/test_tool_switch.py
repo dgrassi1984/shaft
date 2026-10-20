@@ -1,4 +1,4 @@
-"""Supervisor tools switched on/off per instance by the operator (Daniele: wren without delegate_coding)."""
+"""Supervisor tools switched on/off per instance by the operator (the operator: wren without delegate_coding)."""
 from __future__ import annotations
 
 import json

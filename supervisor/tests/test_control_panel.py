@@ -1,4 +1,4 @@
-"""`shaft top` as the control panel (PLAN-control-panel.md, Daniele 2026-10-13: "a full control panel of the
+"""`shaft top` as the control panel (docs/plans/PLAN-control-panel.md, the operator 2026-10-13: "a full control panel of the
 infrastructure, including benchmarks, judge results, etc").
 
 Data (supervisor/panel.py) is tested on fixture files; the views and keys (top.py, top_views.py) with the data
@@ -42,7 +42,9 @@ class PanelData(unittest.TestCase):
     def setUp(self):
         self.sup = Path(tempfile.mkdtemp(prefix="shaft-panel-")).resolve()
         self.addCleanup(shutil.rmtree, self.sup, True)
-        for p in (mock.patch.object(panel, "SUP_DIR", self.sup),
+        for p in (mock.patch("supervisor.selfhosted.SERVERS",
+                             {"gpu": {"url": "http://gpu-box.example:8080/v1"}}),
+                  mock.patch.object(panel, "SUP_DIR", self.sup),
                   mock.patch.object(trial, "SUP_DIR", self.sup),
                   mock.patch.object(trial, "LEDGER", self.sup / "trial_usage.jsonl"),
                   mock.patch.object(cloudllm, "USAGE", self.sup / "cloud_usage.jsonl"),
@@ -54,7 +56,7 @@ class PanelData(unittest.TestCase):
             self.addCleanup(p.stop)
         (self.sup / "com.shaft.model.plist").write_text("")   # the model server is installed
         self.cfgs = {"shaft": {"LLM_BASE_URL": "broker", "LLM_MODEL": "claude-opus-5-5"},
-                     "wren": {"LLM_BASE_URL": "broker", "LLM_MODEL": "racer/bonsai2"}}   # racer: local fallback only
+                     "wren": {"LLM_BASE_URL": "broker", "LLM_MODEL": "gpu/bonsai2"}}   # gpu: local fallback only
         panel._memo.clear()
 
     def _spend(self):
@@ -134,9 +136,9 @@ class PanelData(unittest.TestCase):
             f.writelines(f"[{t:%Y-%m-%d %H:%M:%S}] {msg}\n" for t, msg in lines)
 
     def test_model_server_that_exited_idle_raises_no_alert(self):
-        self._log((NOW - timedelta(hours=3), f"{localmodel.START_FAILED} for wren's fallback from racer/bonsai2: "
+        self._log((NOW - timedelta(hours=3), f"{localmodel.START_FAILED} for wren's fallback from gpu/bonsai2: "
                                              "com.shaft.model did not answer on :8780 within 300s of starting it"),
-                  (NOW - timedelta(hours=2), f"{localmodel.START_OK} for wren's fallback from racer/bonsai2 in 2.2s"))
+                  (NOW - timedelta(hours=2), f"{localmodel.START_OK} for wren's fallback from gpu/bonsai2 in 2.2s"))
         # ...then, as on 2026-10-19 12:54 -> 13:10, it served and exited idle (that goes to com.shaft.model.log)
         self.assertEqual(self._model_alerts(), [])
         self.assertIsNone(panel.model_down_problem())
@@ -146,7 +148,7 @@ class PanelData(unittest.TestCase):
                 mock.patch.object(localmodel, "_launchctl", return_value=subprocess.CompletedProcess([], 113, "",
                                                                                                     "Could not find service")):
             with self.assertRaises(RuntimeError):
-                localmodel.ensure("wren's fallback from racer/bonsai2")   # the real path writes the log line
+                localmodel.ensure("wren's fallback from gpu/bonsai2")   # the real path writes the log line
         a = self._model_alerts()
         self.assertEqual(len(a), 1, a)
         self.assertIn("service model is not running: its on-demand start failed", a[0]["text"])
@@ -171,7 +173,7 @@ class PanelData(unittest.TestCase):
         with mock.patch.object(selfhosted, "SERVERS", {"box": {"url": "http://127.0.0.1:8780/v1"}}):
             self.assertIn("wren uses it", self._model_alerts()[0]["text"])
             self.assertEqual(localmodel.pinned_by(8780, ["wren"], self.cfgs.__getitem__), ["wren"])  # never idles
-        self.assertEqual(self._model_alerts(), [])               # racer/bonsai2 again: fallback only
+        self.assertEqual(self._model_alerts(), [])               # gpu/bonsai2 again: fallback only
         (self.sup / "com.shaft.model.plist").unlink()            # uninstalled: no user could start it
         self.assertIn("not installed", self._model_alerts()[0]["text"])
 
@@ -191,7 +193,7 @@ class PanelData(unittest.TestCase):
         self.assertEqual(panel.dismissed(), {"log:x", "cap:y"})
 
     def test_a_log_alerts_id_is_the_same_in_every_process(self):
-        # Regression (Daniele, 2026-10-14: "dismissed alerts keep popping up on next relaunch"): the id was built
+        # Regression (the operator, 2026-10-14: "dismissed alerts keep popping up on next relaunch"): the id was built
         # with hash(), which Python seeds afresh in every process, so a dismissal never matched after a relaunch.
         line = "[2026-10-14 01:31:59] wren: code change FAILED tests, reverted: ['plugins/x/main.py']"
         code = f"from supervisor import panel; print(panel.log_alert_id({line!r}))"
@@ -443,7 +445,7 @@ class PanelKeys(unittest.TestCase):
 DETAIL = {"name": "shaft", "paused": False, "model": "bonsai", "via": "local", "wake": "10", "effort": "medium",
           "tools_off": [], "shared": "", "mail": "", "calendar": "", "python": ".venv · Python 3.13.1", "internet": "3 today · pypi.org ×2",
           "browser": "Chromium 141 · profile 3.1 MB", "jobs": "watcher every 15 min (can wake)", "stats": "# My measured performance\n- rate 70%",
-          "journal": ["2026-10-13 17:32 — Conversation with Daniele"], "questions": [],
+          "journal": ["2026-10-13 17:32 — Conversation with the operator"], "questions": [],
           "probation": [{"commit": "abcdef1234", "since": "2026-10-13T15:00", "files": ["plugins/x/main.py"],
                          "baseline": 0.5, "restore_failed": "file changed since"}],
           "changes": [{"ts": "2026-10-13T10:40", "files": ["plugins/weather/main.py"], "delegated": []}],

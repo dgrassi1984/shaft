@@ -1,6 +1,6 @@
 """The web UI's app icons, drawn here (stdlib only: no image tools on the Mac) and written to web_static/.
 
-One drawing — a shaft of light on a dark tile, as favicon.svg — at the sizes a Home Screen app needs (PLAN-pwa P1):
+One drawing — a shaft of light on a dark tile, as favicon.svg — at the sizes a Home Screen app needs (docs/plans/PLAN-pwa P1):
   icon-180.png           Apple's touch icon: opaque and full bleed (iOS rounds the corners itself; a transparent
                          corner showed as black)
   icon-192.png, -512     the manifest's icons: the rounded tile, transparent outside it

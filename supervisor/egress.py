@@ -1,7 +1,7 @@
 """An instance's way to the internet: an HTTP proxy the supervisor runs for the length of one run.
 
-Daniele, 2026-10-14: instances may reach the network freely, as long as nothing of his is reachable. macOS's
-sandbox can filter connections only as "localhost" or "anywhere", so open sockets would also reach his own
+Instances may reach the network freely, as long as nothing of the operator's is reachable. macOS's
+sandbox can filter connections only as "localhost" or "anywhere", so open sockets would also reach their own
 services — dev servers, databases, the LAN and the tailnet. Instead the sandbox allows one local port, this proxy,
 and the proxy connects only to public addresses: it resolves the name itself and connects to the address it
 checked (no second lookup an attacker's DNS could answer differently). uv, pip, urllib, requests, httpx, curl and

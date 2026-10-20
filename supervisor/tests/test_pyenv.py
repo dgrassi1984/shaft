@@ -1,4 +1,4 @@
-"""An instance's own Python environment (Daniele, 2026-10-14): .venv/ and .uv/ in its folder, driven by uv in `run`.
+"""An instance's own Python environment (the operator, 2026-10-14): .venv/ and .uv/ in its folder, driven by uv in `run`.
 
 Regression for the gap that made wren plan a pure-stdlib RS256 signer: every process of an instance ran on the
 system Python with `-E -s` and nothing could be installed. Now its plugins, its tests and `python3` in `run` use its

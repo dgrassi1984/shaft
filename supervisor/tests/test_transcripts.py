@@ -1,4 +1,4 @@
-"""`shaft top`'s transcripts tab (Daniele, 2026-10-14: "look into each instance's transcripts, both operator-facing
+"""`shaft top`'s transcripts tab (the operator, 2026-10-14: "look into each instance's transcripts, both operator-facing
 and cycles"): every finished cycle, sleep and reflection, and every conversation with its turns, tools and write-up,
 read from the instance's memory/episodes/*.jsonl."""
 from __future__ import annotations
@@ -34,7 +34,7 @@ TALK = [
      "content": "Sent — one message to shaft.", "reasoning": "he is on a smaller model, keep it short",
      "tools": [{"tool": "send_message", "args": "{\"to\": \"shaft\"}", "result": "delivered to shaft"}]},
     {"ts": "2026-10-14T13:26:30", "kind": "talk_recovered", "talk_id": "t1",
-     "content": "Conversation with Daniele: shared my notes with shaft."},
+     "content": "Conversation with the operator: shared my notes with shaft."},
 ]
 SLEEP = {"ts": "2026-10-14T12:54:00", "kind": "sleep", "ended_by": "answer", "tools": [],
          "content": "Sleep journal — consolidated 23 facts into 18"}
@@ -49,7 +49,7 @@ class TranscriptData(unittest.TestCase):
         ep.parent.mkdir(parents=True)
         ep.write_text("".join(json.dumps(r) + "\n" for r in rows) + "not json\n")
         for p in (mock.patch.object(panel, "instance_root", lambda name: self.root),
-                  mock.patch.object(panel, "instance_config", lambda name: {"OPERATOR_NAME": "Daniele"})):
+                  mock.patch.object(panel, "instance_config", lambda name: {"OPERATOR_NAME": "the operator"})):
             p.start()
             self.addCleanup(p.stop)
         panel._memo.clear()
@@ -78,7 +78,7 @@ class TranscriptData(unittest.TestCase):
     def test_a_conversation_in_full_with_thinking_on_request(self):
         talk = panel.transcripts("wren")[1]
         text = "\n".join(l for l, _ in panel.transcript_lines("wren", talk))
-        self.assertIn("── 12:56:01 Daniele via Telegram", text)
+        self.assertIn("── 12:56:01 the operator via Telegram", text)
         self.assertIn("── 12:58:07 wren via Telegram", text)
         self.assertIn("▸ 1. send_message", text)
         self.assertIn("shared my notes with shaft", text)                   # the write-up
@@ -111,7 +111,7 @@ class TranscriptView(TranscriptData):
         self.assertIn("the cycle running now (since 15:00) appears when it ends", out)
         self.keys(ui, "down", "enter")
         out = self.text(ui)
-        self.assertIn("── 12:56:01 Daniele via Telegram", out)
+        self.assertIn("── 12:56:01 the operator via Telegram", out)
         self.assertIn("t thinking on", out)
         self.keys(ui, "t")
         self.assertIn("(thinking) he is on a smaller model", self.text(ui))

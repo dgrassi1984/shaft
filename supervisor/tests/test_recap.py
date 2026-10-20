@@ -1,5 +1,5 @@
 """`shaft top`'s one-line recap per instance: what it is doing now and what it did in the last hour, written on
-demand by a small model (supervisor/recap.py; Daniele, 2026-10-16)."""
+demand by a small model (supervisor/recap.py; the operator, 2026-10-16)."""
 from __future__ import annotations
 
 import io
@@ -30,7 +30,7 @@ def _at(minutes_ago: float, sep: str = "T") -> str:
 
 def _inst(name="wren", **kw) -> dict:
     return {"name": name, "state": "in a cycle", "since": "14:35", "doing": "thinking (step 2) · 4s",
-            "goal": "Prepare the LOI meeting pack", **kw}
+            "goal": "Prepare the planning task brief", **kw}
 
 
 def _reply(now: str, hour: str, stop: str = "end_turn", usage=None):
@@ -61,42 +61,42 @@ class Context(RecapCase):
     def test_reads_the_last_hour_oldest_first_and_nothing_older(self):
         self.transcripts = [   # newest first, as panel.transcripts returns them
             {"kind": "cycle", "ts": _at(10), "record": {
-                "intent": {"goal": "Post the TOC on drace #1357"}, "ended_by": "control",
+                "intent": {"goal": "Post the TOC on sample-project #42"}, "ended_by": "control",
                 "tools": [{"tool": "run"}, {"tool": "run"}, {"tool": "github_app"}],
                 "finish": {"criterion_met": "yes", "what_happened": "Posted the comment"}}},
             {"kind": "conversation", "ts": _at(80), "via": "telegram", "turns": [
                 {"ts": _at(80), "role": "user", "content": "too old to show"},
-                {"ts": _at(30), "role": "user", "speaker": "Daniele", "content": "do not work on drace"}]},
+                {"ts": _at(30), "role": "user", "speaker": "the operator", "content": "do not work on sample-project"}]},
             {"kind": "cycle", "ts": _at(90), "record": {"intent": {"goal": "an old cycle"}, "finish": {}}}]
-        self.history = [{"ts": _at(5), "from": "wren", "to": "operator", "text": "LOI pack ready", "kind": "note"},
+        self.history = [{"ts": _at(5), "from": "wren", "to": "operator", "text": "planning brief ready", "kind": "note"},
                         {"ts": _at(5), "from": "shaft", "to": "kant", "text": "not wren's", "kind": "note"},
                         {"ts": _at(70), "from": "wren", "to": "operator", "text": "too old", "kind": "note"}]
         c = recap.context(_inst(), NOW)
         self.assertIn("State now: in a cycle since 14:35", c)
-        self.assertIn("Current cycle goal: Prepare the LOI meeting pack", c)
-        self.assertIn("Daniele: do not work on drace", c)
+        self.assertIn("Current cycle goal: Prepare the planning task brief", c)
+        self.assertIn("the operator: do not work on sample-project", c)
         self.assertIn("tools run×2, github_app", c)
         self.assertIn("criterion met: yes", c)
-        self.assertIn("wren → operator: LOI pack ready", c)
+        self.assertIn("wren → operator: planning brief ready", c)
         for gone in ("too old to show", "an old cycle", "not wren's", "too old"):
             self.assertNotIn(gone, c)
         # oldest first, and each entry's details under its own header (2026-10-16: a whole-list reversal put
         # "what happened" above the cycle it belonged to)
-        self.assertLess(c.index("conversation via telegram"), c.index("Daniele: do not work"))
-        self.assertLess(c.index("Daniele: do not work"), c.index("cycle ended"))
+        self.assertLess(c.index("conversation via telegram"), c.index("the operator: do not work"))
+        self.assertLess(c.index("the operator: do not work"), c.index("cycle ended"))
         self.assertLess(c.index("cycle ended"), c.index("what happened: Posted the comment"))
 
     def test_broker_calls_cover_a_running_cycle_without_model_calls_or_other_instances(self):
         (self.sup / "broker.log").write_text("\n".join([
             "[header line, cut by the tail read]",
             f"[{_at(90, ' ')}] wren calendar_events {{}} -> ok (5 ms)",
-            f"[{_at(3, ' ')}] wren calendar_events {{\"query\": \"LOI\"}} -> ok (700 ms)",
+            f"[{_at(3, ' ')}] wren calendar_events {{\"query\": \"planning\"}} -> ok (700 ms)",
             f"[{_at(3, ' ')}] wren llm openrouter/xiaomi/mimo -> tool_calls (in 4000, out 100)",
             f"[{_at(2, ' ')}] wren@trial:t-1:1A web_search {{}} -> ok (5 ms)",
             f"[{_at(2, ' ')}] shaft fetch_page {{}} -> ok (5 ms)"]) + "\n")
         lines = recap._broker("wren", _at(60))
         self.assertEqual(len(lines), 1)
-        self.assertIn('calendar_events {"query": "LOI"} -> ok', lines[0])
+        self.assertIn('calendar_events {"query": "planning"} -> ok', lines[0])
 
     def test_credentials_in_logged_calls_never_reach_the_model(self):
         """2026-10-16: wren's http_request lines carry the start of GitHub bearer tokens and JWTs."""
@@ -104,10 +104,10 @@ class Context(RecapCase):
             "[x]\n"
             f'[{_at(3, " ")}] wren http_request {{"url": "https://api.github.com/x", "headers": {{"Authorization": '
             f'"Bearer ghs_test_only -> ok (300 ms)\n'
-            f'[{_at(2, " ")}] wren http_request {{"api_key": "sk-live-abcdefgh123", "note": "eyJhbGciOiJSUzI1NiIs.x"}} '
+            f'[{_at(2, " ")}] wren http_request {{"api_key": "sk-FAKE000000000000", "note": "eyJFAKEFAKEFAKEFAKE.x"}} '
             f"-> ok (3 ms)\n")
         c = recap.context(_inst(), NOW)
-        for secret in ("ghs_5311773", "eyJhbGci", "sk-live-abcdefgh123", "Bearer ghs"):
+        for secret in ("ghs_test_only", "eyJFAKE", "sk-FAKE000000000000", "Bearer ghs"):
             self.assertNotIn(secret, c)
         self.assertIn("[redacted]", c)
 
@@ -124,8 +124,8 @@ class Context(RecapCase):
 
 class Ask(RecapCase):
     def test_one_line_from_two_parts_and_its_cost_logged(self):
-        with mock.patch("urllib.request.urlopen", return_value=_reply("Preparing the LOI pack.", "Posted on drace")) as u:
-            self.assertEqual(recap.ask("records"), "Preparing the LOI pack · last hour: Posted on drace")
+        with mock.patch("urllib.request.urlopen", return_value=_reply("Preparing the planning brief.", "Posted on sample-project")) as u:
+            self.assertEqual(recap.ask("records"), "Preparing the planning brief · last hour: Posted on sample-project")
         body = json.loads(u.call_args[0][0].data)
         self.assertEqual(body["model"], recap.MODEL)
         self.assertEqual(body["output_config"]["format"]["schema"], recap.SCHEMA)
@@ -212,9 +212,9 @@ class Panel(RecapCase):
     def test_the_overview_shows_the_recap_and_how_old_it_is(self):
         # stamped now, not at import (NOW): a full run reaches this test minutes later
         five_ago = (datetime.now() - timedelta(minutes=5, seconds=10)).strftime("%Y-%m-%dT%H:%M:%S")
-        out = self.text(self._snap({"ts": five_ago, "text": "Preparing the LOI pack · last hour: Posted on drace",
+        out = self.text(self._snap({"ts": five_ago, "text": "Preparing the planning brief · last hour: Posted on sample-project",
                                     "running": False}))
-        self.assertIn("recap  Preparing the LOI pack · last hour: Posted on drace", out)
+        self.assertIn("recap  Preparing the planning brief · last hour: Posted on sample-project", out)
         self.assertIn("(5 min ago)", out)
         self.assertIsNone(top.recap_line({"running": False}))      # no row before the first `a`
         self.assertNotIn("recap  ", self.text(self._snap({"running": False})))

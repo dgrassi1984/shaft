@@ -1,4 +1,4 @@
-"""The web UI's Settings page (PLAN-webui-chat.md §4, S1): the supervisor's settings, saved through `shaft settings`.
+"""The web UI's Settings page (docs/plans/PLAN-webui-chat.md §4, S1): the supervisor's settings, saved through `shaft settings`.
 
 What the page shows comes from `shaft settings --json`, run as its own process: listing every knob imports every
 module that declares one, and the web service must not import them just to list them — its own record of the knobs

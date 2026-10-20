@@ -1,4 +1,4 @@
-"""Instances see images (PLAN-vision.md): native images for models that accept them, describe_image for every
+"""Instances see images (docs/plans/PLAN-vision.md): native images for models that accept them, describe_image for every
 instance. Against fakes: OpenRouter's model list behind vision.urlopen, the cloud model behind cloudllm.complete."""
 from __future__ import annotations
 
@@ -68,7 +68,7 @@ class CapabilityTest(Case):
         self.assertFalse(vision.sees_images("openrouter/xiaomi/mimo-v2.5-pro"))
         self.assertFalse(vision.sees_images("openrouter/nobody/unknown"))
         self.assertTrue(vision.sees_images("claude-opus-5-5"))
-        self.assertFalse(vision.sees_images("racer/bonsai2"))
+        self.assertFalse(vision.sees_images("gpu/bonsai2"))
         self.assertEqual(self.models.calls, 1)                    # cached: one fetch for all of them
 
     def test_cache_expires_and_a_failed_refresh_keeps_the_old_list(self):
@@ -93,7 +93,7 @@ class CapabilityTest(Case):
     def test_agent_environment_says_whether_the_model_sees_images(self):
         root = Path(tempfile.mkdtemp(prefix="shaft-vision-inst-"))
         for model, seen in (("claude-opus-5-5", True), ("openrouter/xiaomi/mimo-v2.6-pro", True),
-                            ("racer/bonsai2", False)):
+                            ("gpu/bonsai2", False)):
             (root / "config.env").write_text(f'LLM_MODEL="{model}"\n')
             self.assertEqual(runner._sees_images(root), seen, model)
 
@@ -117,8 +117,8 @@ class PrepareTest(Case):
         self.assertTrue(url.startswith("data:image/png;base64,"))
 
     def test_non_vision_model_refuses_image_part(self):
-        body = {"model": "racer/bonsai2", "messages": [{"role": "user", "content": [image_part(png(20, 20))]}]}
-        with self.assertRaisesRegex(vision.VisionError, "model 'racer/bonsai2' cannot see images; this request "
+        body = {"model": "gpu/bonsai2", "messages": [{"role": "user", "content": [image_part(png(20, 20))]}]}
+        with self.assertRaisesRegex(vision.VisionError, "model 'gpu/bonsai2' cannot see images; this request "
                                                         "carries 1 \\(describe_image"):
             vision.prepare(body)
 
@@ -158,7 +158,7 @@ class PrepareTest(Case):
         b = broker.Broker("shaft", root, {}, root / "broker.log")
         base = b.start()
         self.addCleanup(b.stop)
-        body = {"model": "racer/bonsai2", "messages": [{"role": "user", "content": [image_part(png(20, 20))]}]}
+        body = {"model": "gpu/bonsai2", "messages": [{"role": "user", "content": [image_part(png(20, 20))]}]}
         req = urllib.request.Request(base + "/llm/v1/chat/completions", data=json.dumps(body).encode(),
                                      headers={"X-Shaft-Token": b.token, "Content-Type": "application/json"})
         with self.assertRaises(urllib.error.HTTPError) as ctx:
@@ -172,8 +172,8 @@ class DescribeTest(Case):
     def setUp(self):
         super().setUp()
         self.root = Path(tempfile.mkdtemp(prefix="shaft-vision-wren-")).resolve()
-        (self.root / "attachments" / "from-daniele" / "20261016-091200").mkdir(parents=True)
-        self.photo = self.root / "attachments" / "from-daniele" / "20261016-091200" / "photo-1.png"
+        (self.root / "attachments" / "from-operator" / "20261016-091200").mkdir(parents=True)
+        self.photo = self.root / "attachments" / "from-operator" / "20261016-091200" / "photo-1.png"
         self.photo.write_bytes(png(64, 48))
         (self.root / "secrets").mkdir()
         (self.root / "secrets" / "x.png").write_bytes(png(8, 8))
@@ -193,7 +193,7 @@ class DescribeTest(Case):
 
     def test_describe_image_confined_and_billed(self):
         b = self.broker(usage_name="wren")
-        r = b.call("describe_image", {"path": "attachments/from-daniele/20261016-091200/photo-1.png",
+        r = b.call("describe_image", {"path": "attachments/from-operator/20261016-091200/photo-1.png",
                                       "question": "what colour?"})
         self.assertTrue(r["ok"], r)
         self.assertIn("[described by claude-haiku-5-5, not seen by you", r["result"])
@@ -256,19 +256,19 @@ class ReplayAttachmentsTest(unittest.TestCase):
         src = Path(tempfile.mkdtemp(prefix="shaft-vision-src-"))
         dest = Path(tempfile.mkdtemp(prefix="shaft-vision-dst-"))
         for stamp in ("20261016-080000", "20261016-100000-123456"):
-            d = src / "attachments" / "from-daniele" / stamp
+            d = src / "attachments" / "from-operator" / stamp
             d.mkdir(parents=True)
             (d / "photo.jpg").write_bytes(b"\xff\xd8\xff" + stamp.encode())
         outside = Path(tempfile.mkdtemp(prefix="shaft-vision-secret-"))
         (outside / "secret.txt").write_text("not the instance's")
-        (src / "attachments" / "from-daniele" / "20261016-070000").symlink_to(outside)
-        early = src / "attachments" / "from-daniele" / "20261016-080000"
+        (src / "attachments" / "from-operator" / "20261016-070000").symlink_to(outside)
+        early = src / "attachments" / "from-operator" / "20261016-080000"
         (early / "linked.txt").symlink_to(outside / "secret.txt")           # a link inside a real batch
         (early / "sub").symlink_to(outside)                                  # and a linked folder inside it
         n = trial.copy_attachments(src, dest, datetime(2026, 10, 16, 9, 0))
         self.assertEqual(n, 1)
-        self.assertTrue((dest / "attachments/from-daniele/20261016-080000/photo.jpg").is_file())
-        self.assertFalse((dest / "attachments/from-daniele/20261016-100000-123456").exists())
+        self.assertTrue((dest / "attachments/from-operator/20261016-080000/photo.jpg").is_file())
+        self.assertFalse((dest / "attachments/from-operator/20261016-100000-123456").exists())
         self.assertFalse(list(dest.rglob("secret.txt")))
 
 
@@ -292,10 +292,10 @@ class TemplateTest(unittest.TestCase):
 
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix="shaft-vision-tpl-")).resolve()
-        d = self.root / "attachments" / "from-daniele" / "20261016-091200"
+        d = self.root / "attachments" / "from-operator" / "20261016-091200"
         d.mkdir(parents=True)
         (d / "photo-7.jpg").write_bytes(b"\xff\xd8\xff\xe0fake jpeg")
-        self.line = "\n\n[Daniele attached, saved in my folder:]\n- attachments/from-daniele/20261016-091200/photo-7.jpg (1 KB)"
+        self.line = "\n\n[The operator attached, saved in my folder:]\n- attachments/from-operator/20261016-091200/photo-7.jpg (1 KB)"
 
     def env(self, vision: bool):
         p = mock.patch.dict(os.environ, {"SHAFT_VISION": "1"} if vision else {}, clear=False)
@@ -341,7 +341,7 @@ class TemplateTest(unittest.TestCase):
         box = self.tools.Toolbox(self.root)
         self.assertIn("view_image", [t["function"]["name"] for t in box.specs()])
         self.assertIn("shown below", box.run("view_image", json.dumps(
-            {"path": "attachments/from-daniele/20261016-091200/photo-7.jpg"})))
+            {"path": "attachments/from-operator/20261016-091200/photo-7.jpg"})))
         (self.root / "secrets").mkdir()
         (self.root / "secrets" / "k.png").write_bytes(b"\x89PNG")
         (self.root / "n.txt").write_text("x")
@@ -363,7 +363,7 @@ class TemplateTest(unittest.TestCase):
             if len(seen) == 1:
                 r = Reply(content="", max_tokens=10)
                 r.tool_calls = [{"id": "c1", "name": "view_image",
-                                 "arguments": json.dumps({"path": "attachments/from-daniele/20261016-091200/photo-7.jpg"})}]
+                                 "arguments": json.dumps({"path": "attachments/from-operator/20261016-091200/photo-7.jpg"})}]
                 return r
             return Reply(content="It is a photo.", max_tokens=10)
         box = self.tools.Toolbox(self.root)
@@ -387,11 +387,11 @@ class AnswerEndToEndTest(InstanceCase):
     """A Telegram photo through the instance's real answer path, in its sandbox, against a fake model."""
 
     def ask(self, vision_on: bool):
-        d = self.root / "attachments" / "from-daniele" / "20261016-091200"
+        d = self.root / "attachments" / "from-operator" / "20261016-091200"
         d.mkdir(parents=True, exist_ok=True)
         (d / "photo-9.png").write_bytes(png(32, 24))
-        text = ("what is this?\n\n[Daniele attached, saved in my folder:]\n"
-                "- attachments/from-daniele/20261016-091200/photo-9.png (1 KB)")
+        text = ("what is this?\n\n[The operator attached, saved in my folder:]\n"
+                "- attachments/from-operator/20261016-091200/photo-9.png (1 KB)")
         request = {"talk_id": "api-v1", "client": "Telegram", "messages": [{"role": "user", "content": text}]}
         r = self.run_agent([{"content": "A red rectangle."}], "answer", stdin=json.dumps(request),
                            extra_env={"SHAFT_VISION": "1"} if vision_on else {})

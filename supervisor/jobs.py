@@ -1,4 +1,4 @@
-"""Scheduled jobs (PLAN-jobs.md): an instance runs one of its own plugins every N minutes, without anyone installing
+"""Scheduled jobs (docs/plans/PLAN-jobs.md): an instance runs one of its own plugins every N minutes, without anyone installing
 anything. wren, 2026-10-16: "I can write the watcher … but the installation lives outside my sandbox".
 
 A job is declared in the plugin's own manifest — `"schedule": {"every_minutes": 15, "args": {…}, "can_wake": true}`

@@ -4,16 +4,16 @@ An instance whose config.env says LLM_BASE_URL="broker" sends OpenAI-style chat 
 to its run's broker at /llm/v1/chat/completions. Claude models are translated to the Claude
 Messages API (raw HTTP, like the judge), and the reply back. Models named "openrouter/<id>"
 (e.g. openrouter/xiaomi/mimo-v2.6-pro) go to OpenRouter, which speaks the OpenAI format. Models named
-"<server>/<id>" for a server in SHAFT_SELF_HOSTED (racer/bonsai2) go to that server: supervisor/selfhosted.py.
+"<server>/<id>" for a server in SHAFT_SELF_HOSTED (gpu/bonsai2) go to that server: supervisor/selfhosted.py.
 Rules:
 
 - Only models in SHAFT_CLOUD_MODELS (operator's choice) are allowed.
-- OpenRouter requests go only to the provider Daniele chose (NovitaAI), with no fallback, and only if it
+- OpenRouter requests go only to the provider the operator chose (NovitaAI), with no fallback, and only if it
   neither collects nor retains data (SHAFT_OPENROUTER_PROVIDER, default {"only": ["novita"],
   "allow_fallbacks": false, "data_collection": "deny", "zdr": true, "require_parameters": true}): an
-  instance's prompt carries its whole memory, including what it knows about Daniele. If the provider does
+  instance's prompt carries its whole memory, including what it knows about the operator. If the provider does
   not qualify, the call fails and says so — no silent fallback.
-- Spending per instance per day is capped (SHAFT_CLOUD_DAILY_USD, default 8: kant on Opus 5.5, 4 wakes a day — Daniele, 2026-10-13) and logged in
+- Spending per instance per day is capped (SHAFT_CLOUD_DAILY_USD, default 8: kant on Opus 5.5, 4 wakes a day) and logged in
   .supervisor/cloud_usage.jsonl.
 - Assistant turns are resent exactly as the model produced them (thinking blocks included):
   each reply's original content blocks are remembered and substituted when the instance
@@ -22,7 +22,7 @@ Rules:
   cache price. The usage log keeps cache reads and writes apart from input_tokens, and the cap prices them (usd()).
 - Claude models: upstream is non-streaming; a streaming request gets the whole reply as one SSE burst.
   OpenRouter models stream end to end (stream_openrouter): the instance sees its reply as it is written.
-- Decision models (Daniele, 2026-10-14: TypeSafe's Jev, through OpenRouter): not chat models — typed questions
+- Decision models (TypeSafe's Jev, through OpenRouter): not chat models — typed questions
   (choice / score / noul) about a state, answered with probabilities, at OpenRouter's /api/alpha/decisions.
   The broker's `decide` tool calls them (decide()). Only SHAFT_DECISION_MODELS; same daily cap and usage log as
   the chat models; the same data rule (SHAFT_DECISION_PROVIDER: no data collection, zero retention, no fallback
@@ -45,7 +45,7 @@ OPENROUTER_API = "https://openrouter.ai/api/v1/chat/completions"
 CLOUD_MODELS, _ = knob(
     "SHAFT_CLOUD_MODELS", "claude-haiku-5-5,claude-opus-5-5,openrouter/xiaomi/mimo-v2.6-pro", cloud_models, "the cloud "
     "models an instance may run on (through the broker)", group="Models and spend", services=("runs", "api", "web"))
-# Daniele's choice of provider (2026-10-13): NovitaAI only, no fallback; plus the data policy.
+# The operator's choice of provider (2026-10-13): NovitaAI only, no fallback; plus the data policy.
 OPENROUTER_PROVIDER, _ = knob(
     "SHAFT_OPENROUTER_PROVIDER",
     '{"only": ["novita"], "allow_fallbacks": false, "data_collection": "deny", "zdr": true, "require_parameters": true}',
@@ -76,7 +76,7 @@ DECISION_PROVIDER, _ = knob(
 # pays for: instances, the coder, the judges (usd() below).
 PRICES = {"claude-haiku-5-5": (0.10, 0.50, 0.01), "claude-sonnet-5-5": (2.0, 10.0, 0.20),
           "claude-opus-5-5": (4.0, 20.0, 0.20), "claude-fable-5-1": (10.0, 50.0, 0.25)}
-# Prompt caching (Daniele, 2026-10-15: 1-hour entries). Each request marks its end; the next turn of the same loop
+# Prompt caching (1-hour entries). Each request marks its end; the next turn of the same loop
 # reads everything before its new tail at the cache price. An hour also carries a loop over a pause — a conversation
 # that takes the model, a long tool run — which a 5-minute entry would not survive.
 CACHE = {"type": "ephemeral", "ttl": "1h"}
@@ -219,7 +219,7 @@ def from_anthropic(data: dict) -> dict:
 def complete(instance: str, body: dict, secrets: dict, remembered: dict[str, list]) -> dict:
     model = body.get("model")
     from . import selfhosted
-    if selfhosted.serves(model):   # a self-hosted server (racer/bonsai2): free, no cap, local fallback
+    if selfhosted.serves(model):   # a self-hosted server (gpu/bonsai2): free, no cap, local fallback
         return selfhosted.complete(instance, body)
     if model not in CLOUD_MODELS:
         raise CloudError(403, f"model {model!r} is not allowed for instances (SHAFT_CLOUD_MODELS={CLOUD_MODELS})")

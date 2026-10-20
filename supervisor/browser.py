@@ -1,6 +1,6 @@
-"""A real browser for instances (PLAN-browser.md): one Chromium shared by every instance, a private profile each.
+"""A real browser for instances (docs/plans/PLAN-browser.md): one Chromium shared by every instance, a private profile each.
 
-Daniele, 2026-10-18: "provide it a profile on a shared chromium, and leave all the rest to it." The supervisor only
+"provide it a profile on a shared chromium, and leave all the rest to it." The supervisor only
 - installs Playwright's Chromium builds once, in <project>/.browsers/ (`shaft browser install`, as the operator,
   outside any sandbox). The `run` and job sandboxes read it; nothing sandboxed writes it;
 - gives each instance a profile folder, <root>/.browser/: cookies, storage, the passwords it keeps for its own

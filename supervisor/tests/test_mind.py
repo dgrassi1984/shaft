@@ -1,4 +1,4 @@
-"""The instance's mind store (supervisor/mind.py, PLAN-mind-out-of-git.md): the past imported exactly, the cutover,
+"""The instance's mind store (supervisor/mind.py, docs/plans/PLAN-mind-out-of-git.md): the past imported exactly, the cutover,
 and every reader and creator of a mind going through the store."""
 from __future__ import annotations
 
@@ -305,9 +305,9 @@ class ReadersTest(unittest.TestCase):
     def parent_with_knowledge(self) -> Path:
         """A parent that has lived a little: a people file and facts about its operator, a self it wrote."""
         root = self.new("wren")
-        (root / "config.env").write_text('OPERATOR_NAME="Daniele"\n')
+        (root / "config.env").write_text('OPERATOR_NAME="the operator"\n')
         (root / "memory" / "people").mkdir(parents=True)
-        (root / "memory" / "people" / "daniele.md").write_text("# You (Daniele)\n\n- You created me (wren) "
+        (root / "memory" / "people" / "the-operator.md").write_text("# You (the operator)\n\n- You created me (wren) "
                                                                "[journal 2026-10-12 17:13].\n")
         (root / "memory" / "facts.md").write_text("# Facts I have learned\n\n- [2026-10-13 05:06] no piped tests\n")
         (root / "memory" / "facts-archive.md").write_text("OLD FACTS\n")
@@ -321,13 +321,13 @@ class ReadersTest(unittest.TestCase):
         self.parent_with_knowledge()
         with contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(cli.cmd_new("thelos", "wren", seed=True), 0)
-        self.assertIn("seeded from wren: memory/people/daniele.md, memory/facts.md", out.getvalue())
+        self.assertIn("seeded from wren: memory/people/the-operator.md, memory/facts.md", out.getvalue())
         files = sorted(mind.git("thelos", "ls-tree", "-r", "--name-only", "mind").stdout.split())
-        self.assertEqual(files, ["memory/facts.md", "memory/journal.md", "memory/people/daniele.md",
+        self.assertEqual(files, ["memory/facts.md", "memory/journal.md", "memory/people/the-operator.md",
                                  "self/goals.md", "self/self.md"])
-        people = mind.show("thelos", "mind", "memory/people/daniele.md")
-        self.assertTrue(people.startswith("# You (Daniele)\n\n> Seeded "), people)   # its heading first, then whose
-        self.assertIn("wren's beliefs about Daniele, written in wren's voice", people)
+        people = mind.show("thelos", "mind", "memory/people/the-operator.md")
+        self.assertTrue(people.startswith("# You (the operator)\n\n> Seeded "), people)   # its heading first, then whose
+        self.assertIn("wren's beliefs about the operator, written in wren's voice", people)
         self.assertIn("- You created me (wren) [journal 2026-10-12 17:13].", people)   # the text itself unchanged
         facts = mind.show("thelos", "mind", "memory/facts.md")
         self.assertIn("- [2026-10-13 05:06] no piped tests", facts)
@@ -335,10 +335,10 @@ class ReadersTest(unittest.TestCase):
         self.assertNotIn("WREN", mind.show("thelos", "mind", "self/self.md"))
         journal = mind.show("thelos", "mind", "memory/journal.md")
         self.assertNotIn("WREN'S JOURNAL", journal)
-        self.assertIn("of its memories only what it knows about Daniele", journal)
+        self.assertIn("of its memories only what it knows about the operator", journal)
         root = self.project / "instances" / "thelos"
         self.assertEqual(git(root, "ls-tree", "-r", "--name-only", "HEAD", "--", *MIND_PATHS), "")   # none on the branch
-        self.assertIn("of its memories only what it knows about Daniele", git(root, "log", "-1", "--format=%s"))
+        self.assertIn("of its memories only what it knows about the operator", git(root, "log", "-1", "--format=%s"))
 
     def test_without_seed_a_fork_knows_nothing_of_the_parent_s_operator(self):
         self.parent_with_knowledge()
@@ -356,7 +356,7 @@ class ReadersTest(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()) as err:
             self.assertEqual(cli.cmd_new("y", "plain", seed=True), 2)
         self.assertIn("sets no OPERATOR_NAME", err.getvalue())
-        (self.project / "instances" / "plain" / "config.env").write_text('OPERATOR_NAME="Daniele"\n')
+        (self.project / "instances" / "plain" / "config.env").write_text('OPERATOR_NAME="the operator"\n')
         shutil.rmtree(mind.store("plain"))
         with contextlib.redirect_stderr(io.StringIO()) as err:
             self.assertEqual(cli.cmd_new("y", "plain", seed=True), 2)
@@ -366,10 +366,10 @@ class ReadersTest(unittest.TestCase):
 
     def test_seed_from_a_parent_without_the_files_says_so(self):
         root = self.new("young")
-        (root / "config.env").write_text('OPERATOR_NAME="Daniele"\n')
+        (root / "config.env").write_text('OPERATOR_NAME="the operator"\n')
         with contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(cli.cmd_new("z", "young", seed=True), 0)
-        self.assertIn("seeded from young: nothing (young has no memory/people/daniele.md, memory/facts.md)",
+        self.assertIn("seeded from young: nothing (young has no memory/people/the-operator.md, memory/facts.md)",
                       out.getvalue())
         self.assertIn("none, it had neither file", mind.show("z", "mind", "memory/journal.md"))
 

@@ -1,10 +1,10 @@
-"""An instance's documents (PLAN-webui-chat.md §3): Markdown files in its notes/docs/, which the web chat shows beside the
+"""An instance's documents (docs/plans/PLAN-webui-chat.md §3): Markdown files in its notes/docs/, which the web chat shows beside the
 conversation, live, and the operator can edit. Stdlib only.
 
 No supervisor tool writes them for the instance: it writes them with the write_file it has, as any note. The operator's
-edits go through `shaft docs <name> set` (the web UI runs it), a compare-and-set on the sha he saw, so an edit never
+edits go through `shaft docs <name> set` (the web UI runs it), a compare-and-set on the sha they saw, so an edit never
 silently overwrites a write the instance made meanwhile. notes/ is the instance's mind: its next run commits the edit
-with the rest of it (Daniele, 2026-10-19), and the instance hears of it as a diff in his next message.
+with the rest of it, and the instance hears of it as a diff in their next message.
 """
 from __future__ import annotations
 
@@ -97,7 +97,7 @@ def changed(before: dict[str, str], after: dict[str, str]) -> list[dict]:
 
 
 def write(name: str, path: str, text: str, expect_sha: str) -> dict:
-    """The operator's edit: written only if the document is still what he saw ("none": it must not exist yet)."""
+    """The operator's edit: written only if the document is still what they saw ("none": it must not exist yet)."""
     rel = _rel(path)
     data = text.replace("\r\n", "\n").encode()
     if len(data) > MAX_BYTES:

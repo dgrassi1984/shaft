@@ -42,7 +42,7 @@ DAILY_USD, _ = knob(
 MAX_TURNS = 16
 WRITABLE = ("shaft/", "plugins/", "skills/", "tests/")
 # secrets: the instance's keys, never to the coder; .venv/.uv: its Python environment, read in place, never copied;
-# .browser: its browser profile — its sessions and the passwords of its own accounts (PLAN-browser.md). Also what
+# .browser: its browser profile — its sessions and the passwords of its own accounts (docs/plans/PLAN-browser.md). Also what
 # trial.gate_check leaves out of its copy.
 HIDDEN = (".git", "logs", ".tmp", "__pycache__", "secrets", ".venv", ".uv", ".browser")
 USAGE = SUP_DIR / "coder_usage.jsonl"

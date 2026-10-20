@@ -1,4 +1,4 @@
-"""`shaft top` shows the messages between instances and starts a cycle for an idle one (Daniele, 2026-10-13:
+"""`shaft top` shows the messages between instances and starts a cycle for an idle one (the operator, 2026-10-13:
 "see messages exchanges between instances (and their content) and browse them"; "support triggering the
 cycle for a idle instance").
 

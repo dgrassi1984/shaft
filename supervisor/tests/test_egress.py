@@ -1,4 +1,4 @@
-"""The egress proxy: instances reach the public internet, never anything of the operator's (Daniele, 2026-10-14).
+"""The egress proxy: instances reach the public internet, never anything of the operator's (the operator, 2026-10-14).
 
 Before it, `run` had no network at all and the agent could reach only its local ports, so wren could not install
 a crypto library and planned to hand-write RSA signing. Open sockets were not an option: macOS's sandbox filters

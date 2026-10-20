@@ -1,4 +1,4 @@
-"""The web UI's actions (PLAN-webui.md M2): each runs the exact CLI subcommand `shaft top` runs for it (the panel's
+"""The web UI's actions (docs/plans/PLAN-webui.md M2): each runs the exact CLI subcommand `shaft top` runs for it (the panel's
 whole authority), logged as the web's, and is refused — before anything runs — where the TUI or its CLI refuses it."""
 from __future__ import annotations
 
@@ -247,7 +247,7 @@ if __name__ == "__main__":
 
 
 class NewVerbsTest(unittest.TestCase):
-    """The CLI verbs the panels' in-process actions became (PLAN-webui.md M2): shaft cycle, recap, alerts."""
+    """The CLI verbs the panels' in-process actions became (docs/plans/PLAN-webui.md M2): shaft cycle, recap, alerts."""
 
     def cli(self, *argv) -> tuple[int, str]:
         import contextlib

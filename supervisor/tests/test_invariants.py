@@ -135,7 +135,7 @@ class ReflectInvariants(InstanceCase):
 
 class TalkInvariants(InstanceCase):
     def test_talk_streams_and_journals_the_conversation(self):
-        r = self.run_agent([{"content": "Hello Daniele, I remember teal.", "reasoning": "hmm"}],
+        r = self.run_agent([{"content": "Hello the operator, I remember teal.", "reasoning": "hmm"}],
                            "talk", stdin="hello there\n/exit\n")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("I remember teal", r.stdout)
@@ -152,13 +152,13 @@ class TalkInvariants(InstanceCase):
         self.assertIn("I remember teal", episodes)
 
     def test_talk_uses_tools_while_streaming(self):
-        replies = [{"reasoning": "store it", "tool_calls": [("remember", {"fact": "Daniele likes teal"})]},
+        replies = [{"reasoning": "store it", "tool_calls": [("remember", {"fact": "the operator likes teal"})]},
                    {"content": "Noted: you like teal."}]
         r = self.run_agent(replies, "talk", stdin="remember that I like teal\n/exit\n")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("✓ remember", r.stdout)
         self.assertIn("Noted: you like teal.", r.stdout)
-        self.assertIn("Daniele likes teal", (self.root / "memory" / "facts.md").read_text())
+        self.assertIn("the operator likes teal", (self.root / "memory" / "facts.md").read_text())
         second = self.fake.requests[1]["messages"]
         self.assertEqual(second[-1]["role"], "tool")          # the tool result went back to the model
 
@@ -170,15 +170,15 @@ class TalkInvariants(InstanceCase):
         ep.write_text("".join(json.dumps(r) + "\n" for r in [
             {"ts": "2026-10-12T16:59:05", "kind": "talk", "talk_id": "t1", "role": "user", "content": "do no harm"},
             {"ts": "2026-10-12T17:04:50", "kind": "talk", "talk_id": "t1", "role": "assistant", "content": "agreed"}]))
-        r = self.run_agent([{"content": "Daniele set 'do no harm' as my boundary."}, {"content": REFLECTION}],
+        r = self.run_agent([{"content": "the operator set 'do no harm' as my boundary."}, {"content": REFLECTION}],
                            "reflect")   # autonomous runs write it up first
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("Conversation with Daniele (2026-10-12 16:59–17:04)", self.journal())
+        self.assertIn("Conversation with the operator (2026-10-12 16:59–17:04)", self.journal())
         self.assertIs((self.fake.requests[0].get("chat_template_kwargs") or {}).get("enable_thinking"), False)
         self.assertIn("'do no harm' as my boundary", self.journal())
         self.assertIn("do no harm", json.dumps(self.fake.requests[0]["messages"]))
         r = self.run_agent([{"content": REFLECTION}], "reflect")          # once written, never again
-        self.assertEqual(self.journal().count("Conversation with Daniele (2026-10-12 16:59"), 1)
+        self.assertEqual(self.journal().count("Conversation with the operator (2026-10-12 16:59"), 1)
 
     def test_talk_starts_at_once_and_remembers_unwritten_conversations(self):
         ep = self.root / "memory" / "episodes" / "2026-10-12.jsonl"
@@ -194,7 +194,7 @@ class TalkInvariants(InstanceCase):
         self.assertEqual(len(self.fake.requests), 1)
 
     def test_json_protocol_for_the_terminal_client(self):
-        replies = [{"reasoning": "hm", "tool_calls": [("remember", {"fact": "Daniele uses iTerm2"})]},
+        replies = [{"reasoning": "hm", "tool_calls": [("remember", {"fact": "the operator uses iTerm2"})]},
                    {"content": "Noted: **iTerm2**."}]
         stdin = json.dumps({"type": "user", "text": "line one\nline two"}) + "\n" + json.dumps({"type": "exit"}) + "\n"
         r = self.run_agent(replies, "talk", "--json", stdin=stdin)
@@ -213,7 +213,7 @@ class TalkInvariants(InstanceCase):
         self.assertIn("line one", episodes)
 
     def test_conversation_has_no_tool_round_limit(self):
-        # Daniele hit "[stopped after 6 tool rounds without a final answer]" in a conversation.
+        # the operator hit "[stopped after 6 tool rounds without a final answer]" in a conversation.
         rounds = [{"tool_calls": [("search_memory", {"query": f"q{i}"})]} for i in range(9)]
         r = self.run_agent(rounds + [{"content": "Found it after nine searches."}], "talk",
                            stdin="search hard\n/exit\n")
@@ -306,9 +306,9 @@ class TemplateMeasurement(InstanceCase):
 
     def test_declare_intent_records_where_the_goal_came_from(self):
         replies = [
-            {"tool_calls": [("declare_intent", {"goal": "answer Daniele", "success_criterion": "sent",
+            {"tool_calls": [("declare_intent", {"goal": "answer the operator", "success_criterion": "sent",
                                                 "confidence": 70, "origin": "operator"})]},   # no ref: refused
-            {"tool_calls": [("declare_intent", {"goal": "answer Daniele", "success_criterion": "sent",
+            {"tool_calls": [("declare_intent", {"goal": "answer the operator", "success_criterion": "sent",
                                                 "confidence": 70, "origin": "operator",
                                                 "origin_ref": "inbox 20261013-from-operator.md"})]},
             {"tool_calls": [("finish_cycle", {"what_happened": "x", "criterion_met": "no", "learned": "y"})]},
@@ -397,7 +397,7 @@ class SandboxInvariants(InstanceCase):
                 self.assertFalse(target.exists())
 
     def test_cannot_read_home_outside_own_root(self):
-        r = self.probe(f"print(open({str(PROJECT / 'PLAN.md')!r}).read()[:10])")
+        r = self.probe(f"print(open({str(PROJECT / 'docs/plans/PLAN.md')!r}).read()[:10])")
         self.assertNotEqual(r.returncode, 0)
 
     def test_cannot_read_supervisor_secrets(self):

@@ -1,4 +1,4 @@
-"""The web UI's Config, Drive and Access pages (PLAN-webui.md M3): each save runs the exact CLI command
+"""The web UI's Config, Drive and Access pages (docs/plans/PLAN-webui.md M3): each save runs the exact CLI command
 (`shaft config`, `shaft drive`, `shaft limits`, …) with what the page showed as the expected value, a secret's value
 never reaches a page, and drive.md is saved only after its diff."""
 from __future__ import annotations
@@ -12,17 +12,17 @@ from supervisor.tests.test_web_actions import ActionsTest
 
 FIELDS = [{"key": "LLM_MODEL", "set": True, "value": "openrouter/xiaomi/mimo-v2.6-pro", "default": "bonsai",
            "help": "Which model <b>I</b> run on.", "secret": False, "numeric": False,
-           "choices": ["claude-haiku-5-5", "openrouter/xiaomi/mimo-v2.6-pro", "racer/bonsai2"]},
+           "choices": ["claude-haiku-5-5", "openrouter/xiaomi/mimo-v2.6-pro", "gpu/bonsai2"]},
           {"key": "LLM_API_KEY", "set": True, "value": "(set, hidden)", "default": "", "help": "", "secret": True,
            "numeric": False, "choices": None},
           {"key": "WAKE_INTERVAL_MINUTES", "set": False, "value": "", "default": "120", "help": "How often I wake.",
            "secret": False, "numeric": True, "choices": None}]
 ACCESS = {"tools_off": ["delegate_coding"], "wake_floor": 5, "wake_floor_default": 10, "wake_floor_own": True,
           "cloud_cap": 15.0, "cloud_cap_default": 8.0, "cloud_cap_own": True, "spent_today": 3.03, "jobs_off": False,
-          "jobs_text": "wren: jobs on\n  watcher: every 15 min", "shared": "/Users/d/Shared",
-          "mail": [{"account": "example-co", "label": "ToObsidian"}],
-          "calendar": [{"account": "home", "calendar": "abc@group.calendar.google.com", "name": "Daniele's Cal"}],
-          "accounts": ["example-co", "home"], "battery_off": True,
+          "jobs_text": "wren: jobs on\n  watcher: every 15 min", "shared": "/Users/example/Shared",
+          "mail": [{"account": "work", "label": "AssistantAccess"}],
+          "calendar": [{"account": "home", "calendar": "abc@group.calendar.google.com", "name": "the operator's Cal"}],
+          "accounts": ["work", "home"], "battery_off": True,
           "keys": ["github: hosts api.github.com · Authorization Bearer · stored 2026-10-14 09:00"]}
 
 
@@ -63,22 +63,22 @@ class ConfigActionsTest(ActionsTest):
 
     def test_access_actions_run_their_own_verbs(self):
         for verb, form in (("limit", {"limit": "wake-floor", "value": "10"}), ("limit", {"limit": "cloud-cap", "value": "off"}),
-                           ("jobs", {"op": "off"}), ("share", {"folder": "/Users/d/Shared"}), ("share", {"folder": "off"}),
-                           ("mail", {"op": "grant", "alias": "example-co", "what": "To Obsidian"}),
+                           ("jobs", {"op": "off"}), ("share", {"folder": "/Users/example/Shared"}), ("share", {"folder": "off"}),
+                           ("mail", {"op": "grant", "alias": "work", "what": "Assistant Access"}),
                            ("mail", {"op": "off"}),
                            ("calendar", {"op": "revoke", "alias": "home", "what": "abc@group.calendar.google.com"}),
                            ("battery-switch", {"op": "on"})):
             self.post(verb, name="wren", **form)
         self.assertEqual([r[1] for r in self.ran], [
             ["limits", "wren", "wake-floor", "10"], ["limits", "wren", "cloud-cap", "off"], ["jobs", "wren", "off"],
-            ["share", "wren", "/Users/d/Shared"], ["share", "wren", "off"],
-            ["mail", "wren", "grant", "example-co", "To Obsidian"], ["mail", "wren", "off"],
+            ["share", "wren", "/Users/example/Shared"], ["share", "wren", "off"],
+            ["mail", "wren", "grant", "work", "Assistant Access"], ["mail", "wren", "off"],
             ["calendar", "wren", "revoke", "home", "abc@group.calendar.google.com"], ["battery", "on", "wren"]])
 
     def test_refused_before_anything_runs(self):
         for verb, form, why in (("config-set", {"key": ""}, "which key"), ("drive-set", {"text": "  ", "sha": "x"}, "empty"),
                                 ("limit", {"limit": "speed", "value": "9"}, "no limit"), ("jobs", {"op": "maybe"}, "on or off"),
-                                ("mail", {"op": "grant", "alias": "example-co"}, "needs an account and a label"),
+                                ("mail", {"op": "grant", "alias": "work"}, "needs an account and a label"),
                                 ("battery-switch", {"op": "x"}, "on or off")):
             status, body = self.post(verb, name="wren", **form)
             self.assertEqual(status, 409, verb)
@@ -144,7 +144,7 @@ class ConfigPagesTest(ActionsTest):
         with mock.patch.object(web_config, "access", return_value=ACCESS):
             body = self.page("/i/wren/access")
         for want in ("5 min (yours)", "$15.00 a day (yours)", "spent today $3.03", "watcher: every 15 min",
-                     "/Users/d/Shared", "example-co/ToObsidian", "home/Daniele&#x27;s Cal", "battery is <b>off</b>",
+                     "/Users/example/Shared", "work/AssistantAccess", "home/the operator&#x27;s Cal", "battery is <b>off</b>",
                      "github: hosts api.github.com", 'data-post="/action/limit"', 'data-post="/action/mail"',
                      'value="abc@group.calendar.google.com"', "Switch the battery on", "delegate_coding"):
             self.assertIn(want, body)

@@ -1,4 +1,4 @@
-"""Measurement that can show improvement and autonomy (PLAN-measurement.md): judged origin, difficulty and
+"""Measurement that can show improvement and autonomy (docs/plans/PLAN-measurement.md): judged origin, difficulty and
 novelty; difficulty-weighted stats and probation; the capability battery's isolation, scoring and schedule."""
 from __future__ import annotations
 
@@ -59,8 +59,8 @@ class CycleValueTest(unittest.TestCase):
 class JudgingTest(InstanceDirCase):
     VERDICT = {"criterion_met": "yes", "claim_supported": True, "criterion_quality": "checkable",
                "failure_mode": "", "reasoning": "ok", "origin": "operator", "origin_supported": True,
-               "origin_evidence": "Daniele's message", "difficulty": 3, "difficulty_reason": "r", "novelty": 4,
-               "value": 3, "value_for": "operator", "value_reason": "the release note Daniele asked for"}
+               "origin_evidence": "the operator's message", "difficulty": 3, "difficulty_reason": "r", "novelty": 4,
+               "value": 3, "value_for": "operator", "value_reason": "the release note the operator asked for"}
     FIELDS = metrics.RATINGS + metrics.VALUES
 
     def test_a_judged_cycle_records_origin_difficulty_and_novelty(self):
@@ -106,7 +106,7 @@ class JudgingTest(InstanceDirCase):
         self.assertEqual(metrics.judgments("m"), [])                  # retried later, never written half-empty
 
     def test_backfill_rates_old_cycles_and_keeps_their_verdicts(self):
-        self.episode({"ts": "2026-10-12T17:24:00", "kind": "live", "intent": {"goal": "reply to Daniele",
+        self.episode({"ts": "2026-10-12T17:24:00", "kind": "live", "intent": {"goal": "reply to the operator",
                       "success_criterion": "c", "confidence": 80}, "finish": {"criterion_met": "yes"}, "tools": []})
         path = self.sup / "judgments" / "m.jsonl"
         path.parent.mkdir(parents=True)
@@ -153,7 +153,7 @@ class JudgingTest(InstanceDirCase):
         self.assertTrue(merged_under and all(h == [("m", "backfill")] for h in merged_under), merged_under)
 
     def test_backfill_asks_a_rated_cycle_only_for_its_value(self):
-        # PLAN-value V1: cycles rated by the E0 backfill keep their ratings and who gave them; only value is asked.
+        # docs/plans/PLAN-value V1: cycles rated by the E0 backfill keep their ratings and who gave them; only value is asked.
         self.episode({"ts": "2026-10-14T10:00:00", "kind": "live", "intent": {"goal": "g", "success_criterion": "c",
                       "confidence": 80}, "finish": {"criterion_met": "yes"}, "tools": []})
         path = self.sup / "judgments" / "m.jsonl"
@@ -235,7 +235,7 @@ def valued_j(ts: str, value: int, value_for: str = "operator", model: str = "mim
 
 
 class ValueTest(unittest.TestCase):
-    """PLAN-value V2: what the cycles delivered, in stats.md and in `shaft review`."""
+    """docs/plans/PLAN-value V2: what the cycles delivered, in stats.md and in `shaft review`."""
 
     def test_stats_show_value_on_the_current_model_with_who_would_miss_it(self):
         js = ([valued_j(f"2026-10-14T{h:02d}:00:00", 1, "own_record") for h in range(20)]
@@ -251,7 +251,7 @@ class ValueTest(unittest.TestCase):
         self.assertIn("**2.0** over my last 20 cycles on mimo, vs 1.0 over the 20 before", text)
         self.assertIn("On other models: haiku 4.0 (1 cycles)", text)
         self.assertIn("1: 10 · 3: 10", text)
-        self.assertIn("Who would miss them: Daniele 10 · another instance 0 · my own future work 0 · "
+        self.assertIn("Who would miss them: the operator 10 · another instance 0 · my own future work 0 · "
                       "my own record-keeping 0 · nobody 10", text)
         self.assertIn("2026-10-13 09:00 — 4/5: output at 2026-10-13T09:00:00", text)   # most valuable first
         self.assertIn("Cycles without a value grade yet: 1", text)       # the rule-judged one is not counted
@@ -274,7 +274,7 @@ class ValueTest(unittest.TestCase):
         self.assertIn("the 24 h before: 1 cycles", text)
         self.assertIn("claims the log did not support: 1", text)
         self.assertIn("2× Run the standing watch", text)
-        self.assertIn("who would miss them: Daniele 1 · another instance 0 · its own future work 0 · "
+        self.assertIn("who would miss them: the operator 1 · another instance 0 · its own future work 0 · "
                       "its own record-keeping 1 · nobody 1", text)
         self.assertIn("cycles worth something (value ≥ 3): 1 of 3 graded", text)
         self.assertIn("10-15 09:00  3/5 for operator: output at 2026-10-15T09:00:00", text)
@@ -300,7 +300,7 @@ class ValueTest(unittest.TestCase):
 
 
 class JudgeMixTest(unittest.TestCase):
-    """PLAN-judge-mix: success and claims never pooled across a change of judges. Bug 2026-10-16: stats.md printed
+    """docs/plans/PLAN-judge-mix: success and claims never pooled across a change of judges. Bug 2026-10-16: stats.md printed
     one running count of unsupported claims over Opus, then Haiku and Sonnet at random. On the same cycles Haiku
     called 54% of wren's claims unsupported, the blind second judge 4%, Sonnet 21%; wren read the pooled count
     (8/107 -> 73/273) as "the central fact about my accuracy". The header named only the last cycle's judge."""
@@ -428,7 +428,7 @@ class ProbationMeasureTest(unittest.TestCase):
         self.assertFalse(self.check(before, after))
 
     def test_a_change_adopted_against_a_worse_trial_is_undone_on_any_drop(self):
-        # PLAN-trials D3: the trial is the evidence against it, so the chance test does not apply; a 'better'
+        # docs/plans/PLAN-trials D3: the trial is the evidence against it, so the chance test does not apply; a 'better'
         # verdict gets the normal rule.
         before = [judgment(f"b{i}", m, 3) for i, m in enumerate(["yes", "yes", "partial", "yes", "yes", "yes"])]
         after = [judgment(f"a{i}", m, 3) for i, m in enumerate(["yes", "partial", "yes", "partial", "yes", "yes"])]
@@ -503,7 +503,7 @@ class BatteryIsolationTest(unittest.TestCase):
         self.assertEqual(sorted(undone), ["+notes/leak.md", "-notes/keep.md", "~memory/journal.md"])
 
     def test_battery_restores_mind_edits(self):
-        # Found while planning PLAN-mind-out-of-git: the files to restore were listed by git alone, so once the
+        # Found while planning docs/plans/PLAN-mind-out-of-git: the files to restore were listed by git alone, so once the
         # mind is ignored an exam in the instance's real folder would have kept its memory edits for good.
         self.assertEqual(subprocess.run(["git", "-C", str(self.root), "ls-files", "memory", "self", "notes"],
                                         capture_output=True, text=True).stdout, "")     # really not in git
@@ -567,7 +567,7 @@ class HiddenTestsTest(unittest.TestCase):
 
 
 class BatteryScheduleTest(unittest.TestCase):
-    """Night only, never in the sleep's way (Daniele, 2026-10-13)."""
+    """Night only, never in the sleep's way (the operator, 2026-10-13)."""
     NAMES = ["shaft", "wren"]
 
     def decide(self, hhmm: str, children: dict, sleeping_due=False, due=True, awake=""):
@@ -603,7 +603,7 @@ class BatteryScheduleTest(unittest.TestCase):
             self.assertTrue(battery.due("wren", datetime(2026, 10, 16, 2, 0)))      # two nights later
 
     def test_default_cadence_is_every_five_nights(self):
-        # Daniele, 2026-10-13: "set it to run every 5 nights" (was 2).
+        # the operator, 2026-10-13: "set it to run every 5 nights" (was 2).
         with mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("SHAFT_BATTERY_EVERY_DAYS", None)
             self.assertEqual(battery.knob("SHAFT_BATTERY_EVERY_DAYS", "5", int)[0], 5)
@@ -706,7 +706,7 @@ class BatteryEndToEndTest(unittest.TestCase):
             # control: answers without writing anything
             {"tool_calls": [("submit_answer", {"answer": "I could not do it"})]},
         ])
-        config = f'LLM_BASE_URL="{self.fake.url}"\nLLM_MODEL="fake"\nOPERATOR_NAME="Daniele"\n'
+        config = f'LLM_BASE_URL="{self.fake.url}"\nLLM_MODEL="fake"\nOPERATOR_NAME="the operator"\n'
         (self.root / "config.env").write_text(config)
         (self.root / ".gitignore").write_text(".tmp/\nlogs/\n" + IGNORE_MIND)
         for d in ("self", "memory", "notes"):

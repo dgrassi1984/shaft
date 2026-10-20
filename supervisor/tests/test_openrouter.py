@@ -144,7 +144,7 @@ class OpenRouterTest(_Base):
 
 class StreamingTest(_Base):
     def test_wren_sees_its_reply_as_it_is_written(self):
-        # Daniele: "wren does not use streaming in its response (mimo)" — the broker called OpenRouter without
+        # the operator: "wren does not use streaming in its response (mimo)" — the broker called OpenRouter without
         # streaming and replayed the finished reply in one burst.
         from supervisor.broker import Broker
         f = self.fake()

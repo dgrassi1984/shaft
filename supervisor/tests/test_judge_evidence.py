@@ -86,7 +86,7 @@ class JudgeCase(unittest.TestCase):
         self.assertIn("THE APPENDED ENTRY", out)
         self.assertIn("the last 6000 shown", out)
 
-    # PLAN-value V0: a judge grading what a cycle added to a running record (shaft's watch appends one entry per
+    # docs/plans/PLAN-value V0: a judge grading what a cycle added to a running record (shaft's watch appends one entry per
     # cycle to the same notes file) must see where the addition starts, or old entries read as new findings.
     ENTRY = "## 2026-10-15 09:40 watch\nNo new primary source since the 09:30 entry.\n"
 

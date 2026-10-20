@@ -1,6 +1,6 @@
 """The operator's per-user folder (/private/var/folders/<xx>/<id>/: every app's temp files and caches), /private/tmp,
 /Users/Shared and /Volumes are closed to instances, while Apple's `sips` still works in their sandbox — so an instance can turn a PDF page into an image for
-its own PDF tools (Daniele, 2026-10-16). Run under the real sandbox-exec."""
+its own PDF tools (the operator, 2026-10-16). Run under the real sandbox-exec."""
 from __future__ import annotations
 
 import os

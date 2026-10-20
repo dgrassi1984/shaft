@@ -1,4 +1,4 @@
-"""PLAN-pwa P4: Web Push — the key, the signed token a push service checks, the subscriptions, what is sent and when."""
+"""docs/plans/PLAN-pwa P4: Web Push — the key, the signed token a push service checks, the subscriptions, what is sent and when."""
 from __future__ import annotations
 
 import base64
@@ -15,7 +15,7 @@ from unittest import mock
 from supervisor import webpush
 from supervisor.tests.test_web import WebTest
 
-APPLE = "https://web.push.apple.com/QGuQyavXutnMbI7b-vBmUEKu6SQS1gbx3ofoRanwBVGRzETuuvd"
+APPLE = "https://web.push.apple.com/FAKE-endpoint-for-tests"
 
 
 def unb64(s: str) -> bytes:

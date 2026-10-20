@@ -1,9 +1,9 @@
 """The cloud judge: models that grade instances, never live their lives.
 
-A rotation (Daniele, 2026-10-14: Opus 5.5 was too costly; "stochastic rotation I prefer"): every judgment picks one
+A rotation (Opus 5.5 was too costly; "stochastic rotation I prefer"): every judgment picks one
 model at random from SHAFT_JUDGE_MODELS (MiMo and Sonnet 5.5; Haiku 5.5 left on 2026-10-16: on the same cycles it
 called 54% of wren's claims unsupported where the blind GLM judge called 4%, Sonnet 21% and Opus 17% —
-PLAN-judge-mix.md), never the model the judged instance runs on (no self-preference — wren runs
+docs/plans/PLAN-judge-mix.md), never the model the judged instance runs on (no self-preference — wren runs
 on MiMo). Every verdict records the model that gave it. Claude models go straight to the Claude Messages API with the
 supervisor's key (structured JSON output via output_config.format; refusals re-run server-side with
 `fallbacks: "default"`); "openrouter/…" models go through OpenRouter under the instances' data policy
@@ -151,7 +151,7 @@ def _log(purpose, model, usage, seconds, error, usd=None, provider=None, reasoni
 
 # -- the second judge ---------------------------------------------------------------------------------------------
 # Another model family grades a sample of cycles blind, so an instance can tell the main judge's idiosyncrasies
-# from what its tool log shows (wren, 2026-10-13; Daniele chose GLM 5.3 Flash). Through OpenRouter, under the same
+# from what its tool log shows (wren, 2026-10-13; the operator chose GLM 5.3 Flash). Through OpenRouter, under the same
 # data policy as the instances' cloud models (cloudllm.OPENROUTER_PROVIDER: Novita only, no data collection or
 # retention). Novita does not offer structured outputs for this model, so the schema is in the instructions and
 # the answer is checked here.

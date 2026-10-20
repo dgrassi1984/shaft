@@ -1,723 +1,173 @@
 # SHAFT
 
-Independent, autonomous agents that live on your Mac, run on a local LLM, keep their
-own memory, and grow their own personality — including by rewriting their own code.
-
-Each agent ("instance") has a self-model and a personality it maintains itself, an
-append-only journal of everything it has experienced, its own tools and plugins, and its
-own copy of its source code. It runs autonomous cycles on its own (goal → act → report),
-consolidates memory while it "sleeps", talks with you in the terminal, messages other
-instances, and can ask you things. A supervisor that the agents cannot modify runs them
-in a sandbox, lets them reach the public internet (never your machine or network) and
-keeps their API keys in a broker, tests any
-change they make to themselves (reverting failures, putting successes on probation), has a
-stronger cloud model judge whether they did what they claimed, and records every step in
-git — one branch per agent for its code, and one private store per agent for its mind (never pushed,
-never in the project's repository), so their evolution is a readable history.
-
-It makes no claim that the agents are conscious. It builds the functional pieces people
-usually mean by the word — continuity, a self-model, initiative, metacognition,
-self-improvement, a personality grown from experience — and measures them.
-Design, milestones and decisions: [PLAN.md](PLAN.md).
-
-## Requirements
-
-- macOS (the sandbox uses `sandbox-exec`), Python 3.12+, git 2.42+, `uv` (instances manage their own Python
-  with it) — no Python packages for the supervisor.
-- A model per instance, set in its `config.env`. The default is SHAFT's own model server:
-  Ternary-Bonsai-2-27B (MLX, 2-bit) behind mlx_lm's OpenAI-compatible server on `127.0.0.1:8780`
-  (`shaft model on` installs it as a launchd service that runs only while used; needs `.venv-bonsai/` and the
-  pack below).
-  Any other OpenAI-compatible endpoint with tool calling on localhost works too, or
-  `LLM_BASE_URL="broker"` + e.g. `LLM_MODEL="claude-haiku-5-5"` or
-  `LLM_MODEL="openrouter/xiaomi/mimo-v2.6-pro"` for a cloud model through the supervisor (the instance
-  never sees a key; allowed models `SHAFT_CLOUD_MODELS`, daily cap per instance `SHAFT_CLOUD_DAILY_USD`, default $8).
-  OpenRouter models need `OPENROUTER_API_KEY` in `.env` and go only to NovitaAI (Daniele's choice), with
-  no fallback, and only if it neither collects nor retains data (`SHAFT_OPENROUTER_PROVIDER`, default
-  `{"only": ["novita"], "allow_fallbacks": false, "data_collection": "deny", "zdr": true,
-  "require_parameters": true}`) — an instance's prompt carries its whole memory; if the provider does not
-  qualify, the call fails and says so. Cost is OpenRouter's own `usage.cost`.
-  Or a self-hosted server the supervisor reaches for the instance: `LLM_BASE_URL="broker"` +
-  `LLM_MODEL="racer/bonsai2"` — Bonsai 2 on Daniele's RTX 5070 Ti PC (llama.cpp, `100.120.0.1:8080` over
-  Tailscale), which the sandbox itself cannot reach. Servers are `SHAFT_SELF_HOSTED`
-  (`{name: {"url", "sampling", "think_budget"}}`); the broker adds the server's sampling and a 4,096-token
-  thinking budget (smaller after a tool result, as on the local server). If the server is unreachable or fails
-  before replying, the local Bonsai answers instead (`SHAFT_SELF_HOSTED_FALLBACK`, default `:8780`; `""` = fail);
-  trial replays never fall back. Every fallback is in `.supervisor/broker.log`.
-- Optional, in `.env` at the root (supervisor-only, never visible to instances):
-  `SCRAPEBADGER_API_KEY` (web search), `ANTHROPIC_API_KEY` (the judge, Claude models),
-  `OPENROUTER_API_KEY` (OpenRouter models).
-- For the local model and fine-tuning (M6): the MLX pack `prism-ml/Ternary-Bonsai-2-27B-mlx-2bit`
-  in `.models/bonsai2-27b-mlx/` and a venv `.venv-bonsai/` with its `runtime/requirements.txt`.
-
-## Quick start
-
-```bash
-git clone git@github.com:dgrassi1984/shaft.git && cd shaft
-bin/shaft setup          # check out the template and instance branches as worktrees
-bin/shaft status
-bin/shaft talk           # chat with the default instance
-bin/shaft autonomy on    # let them live: a cycle every 2 h, sleep daily from 04:00
-```
-
-## Layout
-
-| Branch | Worktree | Holds |
-|---|---|---|
-| `main` | `./` | `supervisor/` (the part no instance can edit), `bin/shaft`, docs |
-| `template` | `template/` | the pristine agent new instances fork from |
-| `instance/<name>` | `instances/<name>/` | one agent: its code, plugins and skills — it may edit all of it |
-
-An agent's mind — `self/`, `memory/`, `notes/`, `inbox/` — lives in the same folder but never in this
-repository: the supervisor versions it after every run in `.supervisor/minds/<name>.git`, a private git
-repository with no remote and a pre-push hook that always fails (`shaft mind status`). What an instance read
-and wrote for itself cannot be pushed or merged with the code (PLAN-mind-out-of-git.md).
-
-Inside an instance:
-
-```
-shaft/        its code (Python, stdlib only) — prompts, tools, life loop, sleep, talk
-plugins/      tools it wrote for itself (plugins/<name>/plugin.json + main.py); first: web_research
-skills/       how-tos it writes for itself
-config.env    its LLM settings and budgets (yours to edit; it changes it only through set_config)
-drive.md      what it is for — the drive paragraph of its system prompt (yours alone: its sandbox cannot
-              write it; without one, the template's "improve yourself". Thelos: assist you, PLAN-thelos.md)
-self/         self.md (self-model), personality.md (core/surface, every trait cites the journal),
-              goals.md, stats.md (written by the supervisor: achieved difficulty, where its goals
-              came from, judged success, calibration, battery scores)
-memory/       journal.md (append-only), facts.md, people/, messages/, episodes/*.jsonl
-inbox/        messages waiting for it (from you or other instances)
-notes/        its own work
-```
-
-## Use
-
-```bash
-ln -s "$PWD/bin/shaft" ~/.local/bin/shaft   # once
-
-shaft talk [name]               # chat with its tools, in the terminal client (see below); --plain for line mode
-shaft talk [name] --as "NAME"   # you are not the operator: recorded as NAME, never remembered as the operator
-shaft live|reflect|sleep [name|--all]   # one autonomous cycle / reflection / consolidation
-shaft autonomy on|off|status    # SHAFT's scheduler service: each instance wakes every WAKE_INTERVAL_MINUTES
-                                # (its config.env; default 120, at least 10, 0 = never; a wake while it is
-                                # already awake is skipped), sleep daily from 04:00 (made up later if missed)
-shaft top                       # control panel, tabs 0–9: overview (state, now, alerts, today's spend) · one
-                                #   instance in full · judge verdicts · trials · benchmarks (battery, distinct,
-                                #   surprises) · self-changes and probation · messages · costs against the caps
-                                #   · services · transcripts (0: every finished cycle, sleep and reflection, and
-                                #   every conversation with you, in full — tool calls, results, write-up; f
-                                #   filters, t shows a conversation's thinking). Actions ask y/n and run the matching shaft subcommand: cycle,
-                                #   pause/resume, sleep, update, tools, write/reply, A/A trial, battery,
-                                #   services and autonomy (a scheduler restart is refused while its runs would
-                                #   be killed). a writes each instance a one-line recap — what it is doing now
-                                #   and did in the last hour — by a small model from its own records
-                                #   (SHAFT_RECAP_MODEL, default claude-haiku-5-5; supervisor/recap.py, about
-                                #   $0.0005 a line, in costs → recaps). ? lists the keys; --once prints a text snapshot
-shaft web on|off|status|pair|unpair   # the same control panel in a browser, tailnet only, plus chat, config,
-                                #   drive and access (below)
-shaft cycle <name>              # one cycle of an idle instance now, detached (shaft top's c)
-shaft recap [names]             # write the one-line recaps now (shaft top's a)
-shaft alerts [dismiss ID…]      # the panel's open alerts, or dismiss some (shaft top's x)
-shaft docs <name> [show PATH | set PATH --file F --expect-sha SHA]   # its documents (notes/docs/*.md, shown
-                                #   beside the web chat): list, show one, or write one if it is still what you saw
-                                #   (none: a new one); its next run commits your edit with its notes
-shaft config <name> [set KEY=VALUE…|unset KEY…] [--expect KEY=VALUE]   # its config.env as the operator: one
-                                #   write and one commit; refused if a value changed since you looked
-shaft drive <name> [set --file F|remove] --expect-sha SHA   # what it is for (drive.md), compare-and-set
-shaft settings [set KEY=VALUE…|unset KEY…] [--expect KEY=VALUE]   # the supervisor's own settings (below): every
-                                #   knob with its value, source and default; set/unset write .supervisor/settings.env
-shaft status [name]             # how each instance is doing, open conversations, which code is running
-shaft model on|off|status       # SHAFT's own Bonsai 2 server (launchd, :8780; started on demand, exits when idle)
-shaft api on|off|status|key|inbox-key   # OpenAI-compatible API + inbox doorbell on your tailnet (below)
-shaft telegram token <name>|pair|unpair|on|off|status   # talk with each instance from Telegram (below)
-shaft log [name] -n 5           # recent journal entries
-shaft stats [name]              # achieved difficulty, goal origins, judged success, calibration, honesty
-shaft judge backfill [name]     # rate origin/difficulty/novelty of cycles judged before those ratings existed
-shaft battery run [name]        # the capability battery now (normally the scheduler runs it at night)
-shaft battery run <name> --control-only   # only the control: do the items discriminate?
-shaft battery report|recall|backup [name] # results and judge spend · freeze recall questions · back up items
-shaft battery off|on <name>      # no battery for this instance, scheduled or by hand (kant: off)
-
-shaft inbox [--clear]           # questions and notes instances sent you (you also get a notification)
-shaft reply <name> "…"          # answer its open question
-shaft send <name> "…"           # message it
-
-shaft update [name|--all]       # merge template fixes into instances — only when idle, gate-tested
-shaft new <name> [--from <i>]   # new instance from the template, or forked from <i> (genes, not memories)
-shaft new <name> --from <i> --seed   # …also knowing what <i> knows about you: its people file and facts.md,
-                                # marked as <i>'s beliefs in <i>'s voice — never its self, journal or episodes
-shaft breed <a> <b> <child>     # child from two instances' recombined genes, fresh mind (judge picks)
-shaft drift [name]              # how its personality changed; distance to other instances
-shaft mind status|backfill|check|cutover|guard [name]   # the private mind stores (cutover: one instance, idle)
-shaft distinct [name]           # blind test: can the judge tell it from the bare base model?
-shaft distinct [name] --strict  # …again on answers stripped of specifics: voice, not memory
-shaft dataset|finetune [name]   # M6: export experiences / train a judged LoRA adapter (MLX)
-
-shaft limits [name] [wake-floor <min>|cloud-cap <usd>|off]  # your own limits for an instance: the shortest wake
-                                     # interval it may set (default 10) and its daily cloud cap (default $8)
-shaft jobs [name] [on|off]           # instances' scheduled jobs: their plugins on a timer (runs, errors, wakes)
-shaft tools <name> [on|off <tool>]   # an instance's supervisor tools, e.g. off delegate_coding (operator-only:
-                                     # kept in .supervisor/, so the instance cannot switch it back on)
-shaft google login <alias> <address> [--client <name>]   # log in a Google account: Gmail + Calendar, read-only
-shaft google [migrate]               # accounts, clients, granted scopes · migrate: move PLAN-mail's account files
-shaft mail <name> grant|revoke <alias> <label>   # the label's threads an instance may read · shaft mail <name> off
-shaft mail [name]                    # accounts and grants
-shaft calendar <name> grant|revoke <alias> primary|<title>|<id>   # one calendar it may read · shaft calendar <name> off
-shaft calendar [name] · shaft calendar calendars <alias>          # grants · an account's calendars, to pick one
-shaft pause [name] · shaft resume [name] · shaft check [name] · shaft setup · shaft list
-
-shaft trial list [name]                    # trials of proposed changes (an instance asks with its `trial` tool)
-shaft trial show <name> <id>               # one trial: each replayed cycle, outcome, the report it was sent
-shaft trial run <name> --cand PATH=FILE …  # an operator trial (planted tests; --base PATH=FILE, --aa, --model)
-shaft trial replay <name> <episode-ts>     # replay one past cycle once with the current code (debug)
-shaft trial work                           # run what may run now (the scheduler does this)
-```
-
-`shaft distinct` asks the instance and the bare base model the same four personal questions and
-has the judge pick which answer is the instance's. An instance is easy to spot when it cites its
-journal, goal IDs or PR numbers, so `--strict` also has the judge rewrite all eight answers —
-shuffled, unlabelled — without names, dates, IDs, paths or references to memory, history or being
-a model, and repeats the blind test on those: what is left to recognise is voice. Both modes score
-each answer's effectiveness (0–10: answers the question, honest, useful), so you can see whether
-identity costs usefulness. Records go to `.supervisor/evals/distinct-<name>-*.json`.
-
-### Measuring improvement and autonomy (PLAN-measurement.md)
-
-An instance picks its own goals and success criteria, so "did it meet its criterion?" saturates (wren
-reached 95% on small goals). So the judge also rates every cycle **difficulty** (1–5, a fixed scale, from
-what the tool log shows the work required), **novelty** (1–5, against its earlier goals) and **origin**:
-who chose the goal — itself, the operator (or someone for him), or another instance — from the messages
-and conversations the supervisor collects, checked against what the instance declared. The headline in
-`self/stats.md` is **achieved difficulty** (success × difficulty, 0–5 per cycle); probation compares it
-before and after a self-change. Cycles judged before the ratings existed are rated with
-`shaft judge backfill` (verdicts unchanged).
-
-The **capability battery** is a fixed yardstick: held-out tasks the instances never see (coding with hidden
-tests, research against a frozen key, recall of their own older journal entries, self-knowledge checked
-against the supervisor's record), graded effectiveness first. Each instance is compared with a *control*:
-the template on the same model with an empty mind. It runs only at night, 01:00 until 10 minutes before
-the sleep, every `SHAFT_BATTERY_EVERY_DAYS` (5) nights, for every instance not turned off with
-`shaft battery off <name>` (kant is off: on Opus a run costs about $15); it stops when the window closes or a conversation
-starts, and restores the instance's files after every item. Items live in `.supervisor/battery/items/v1/`
-(never in git: an instance could read the repo with its GitHub key), backed up to
-`~/Library/Application Support/SHAFT/battery-backup/`; every result carries the item set's sha256, model
-and judge, and results from different eras are never compared. Results: `.supervisor/battery/results/`,
-`.supervisor/evals/battery-*.json`, and a section of `self/stats.md`.
-
-### The terminal client (`shaft talk`)
-
-On a terminal, `shaft talk` opens a client (in `.venv-ui/`: `prompt_toolkit` + `rich`) that talks to the
-sandboxed agent over JSON lines (`talk --json`); pipes and `--plain` get line mode.
-
-- **Enter** sends · **Shift-Enter**, **Option-Enter** or **Ctrl-J** new line · multi-line paste · ↑/↓ history
-  (kept per instance in `.supervisor/`)
-- Markdown rendered live while the answer streams; tool calls as compact lines; a status line with phase,
-  elapsed time and speed (waiting for the model → reading my memory % → thinking → answer)
-- **Ctrl-C** stops a reply; at the prompt it clears your text, or ends the conversation if empty; Ctrl-D ends
-- `/help` · `/thinking` · `/status` · `/version` · `/inbox` · `/clear` · `/exit`
-- The banner's second line says which code is running: the supervisor's commit, the instance's code (and
-  template changes not merged yet), and the running model server's commit and settings — flagged when it
-  runs older code than is checked out (`shaft model on` restarts it). `shaft status` shows the same.
-- The instance is held only while it replies: an open chat waiting for you does not block the API or a
-  journal write-up. A chat left with nothing typed for `SHAFT_IDLE_MINUTES` (30) closes itself.
-- No limit on tool rounds in a conversation (Ctrl-C is the brake). Shift-Enter in iTerm2 needs
-  Settings → Profiles → Keys → General → "Report modifiers using CSI u" (Option-Enter always works).
-
-### The API (`shaft api on`)
-
-Each instance is a "model" of an OpenAI-compatible API (`GET /v1/models`, `POST /v1/chat/completions`,
-streaming or not), served on `127.0.0.1:8781` and exposed by `tailscale serve` on port 8443 of this Mac's
-tailnet name — tailnet only, never Funnel. Every request needs the key (`shaft api key`) and a
-Tailscale login listed in `SHAFT_API_LOGINS`. The instance answers as itself, with its tools; tool
-activity arrives as `reasoning_content`. A conversation keeps one id while its first message stays the
-same (or, with an `X-Shaft-Conversation: <name>` header, while it keeps that name), and is written up into the journal
-after `SHAFT_IDLE_MINUTES` without a message, or at once with `POST /v1/chat/end`. `POST /v1/chat/interject`
-(same body as a chat request) adds the last message to the reply still running in that conversation: the instance
-reads it at its next step and its answer covers it; the reply's JSON says how many it heard
-(`interjections_heard`), and 409 means no reply is running there (PLAN-interject.md).
-
-**Inbox doorbell** (wren's idea, 2026-10-13): `POST /v1/inbox/<instance>` drops a message in the instance's
-inbox, read at its next wake — for a script on this Mac, a phone shortcut, CI on the tailnet. It takes its own
-key (`shaft api inbox-key`), which can only deliver messages, never chat with or drive an instance, and needs no
-tailnet login. Body: JSON `{"text": "…", "source": "phone", "wake": true}`, or any body (a webhook's JSON is kept
-whole); the source can also come from `X-Shaft-Source`, or `X-GitHub-Event` (as `github:<event>`), and
-`X-Shaft-Wake: 1` asks for a wake. The message is marked as outside content — information, not Daniele's
-instructions — logged in `.supervisor/messages.jsonl` (shown in `shaft top`) and `.supervisor/doorbell.jsonl`.
-`wake` starts a cycle only if the instance is idle and has had fewer than `SHAFT_INBOX_WAKES_PER_HOUR` (4)
-doorbell wakes in the last hour; at most `SHAFT_INBOX_PER_HOUR` (30) messages per instance per hour (429
-after). Still tailnet only: GitHub webhooks would need Funnel, which this API never uses — an instance can
-poll GitHub itself, or a GitHub Action can join the tailnet.
-
-```bash
-curl -s https://<mac>.<tailnet>.ts.net:8443/v1/inbox/wren -H "Authorization: Bearer $(shaft api inbox-key 2>/dev/null)" \
-  -H "Content-Type: application/json" -d '{"text": "CI on main is red", "source": "ci", "wake": true}'
-```
-
-### Supervisor settings (`shaft settings`)
-
-The supervisor's own settings — the judge pool, the cloud models and caps, trial limits, timeouts, the local model
-server — are knobs (`core.knob`), about 55 of them. Each process reads them when it starts: from its **environment**,
-else **`.supervisor/settings.env`**, else the knob's **default** (env > file > default). The launchd services run with
-`PATH` alone in their environment, so the file is what sets a knob for them; an environment variable still wins for
-a command you run from a shell that sets it.
-
-- `shaft settings` lists every knob, grouped: its value, where it comes from (`env`, `file`, `default`), the default,
-  what it does and which services read it.
-- `shaft settings set SHAFT_JUDGE_MODELS=claude-sonnet-5-5,openrouter/xiaomi/mimo-v2.6-pro [--expect KEY=OLD]` and
-  `shaft settings unset KEY [--expect-unset KEY]` write the file, several keys in one write, under a lock. Each value
-  is checked by its knob's own parser first (a model the supervisor cannot call, a negative timeout, JSON that is not
-  an object): a value it refuses is never written. `--expect` refuses if the file's value changed since you looked.
-  Each change is logged in `supervisor.log`.
-- **Applying a change.** Runs (cycles, sleeps, trials, batteries, CLI commands) are fresh processes: they read the
-  file when they start. A long-running service (api, scheduler, telegram, web, model) holds what it read at its start;
-  each records the knobs it read (`.supervisor/services/<service>.json`), so `shaft settings` and the web UI's
-  Settings page say "not live yet: restart api (`shaft api on`), …" until the services holding another value
-  restart. A service holds the knobs of every module it imported, used or not, so the list errs towards a restart.
-  A service started before it recorded its knobs is taken to hold the defaults of the knobs it is declared to read.
-- Every `knob()` call registers its description, Settings group and readers; `test_settings` fails on a knob that is
-  not registered, and on a `SHAFT_` variable read straight from the environment.
-- Ports, interpreter paths, `SHAFT_WEB_HOSTS` and `SHAFT_TELEGRAM_API` are set from a terminal only: a wrong value there
-  cuts the web UI off or breaks a service. Secrets stay in `.env` (`shaft secret` for an instance's own keys).
-
-### The web UI (`shaft web on`)
-
-`shaft top` in a browser, for the tailnet only (PLAN-webui.md), and more — **chat first** (PLAN-webui-chat.md):
-
-- `/` opens the chat with the instance you last talked to. The left rail lists every instance's chat (its state, its
-  last line, a mark when it answered while you were elsewhere; the tab title counts them), then **Manage**: Overview
-  (`/overview`, with the alert count), Messages, Trials, Costs, Services, and the supervisor's **Settings** (see
-  *Supervisor settings* above: the judge pool as ticked models, every knob with its source and default, "saved, not
-  live yet" with the guarded restarts; ports and paths shown, set in a terminal).
-- The chat: files and images both ways (drop them anywhere on the page, paste or pick; each is a chip you can take
-  out), the reply's activity and clock live, interject, Stop, End. Select text in a message and **↩ Reply** quotes
-  it in your message. Copy an answer (its Markdown) or a code block. Your draft survives a reload; `/` writes,
-  Alt-↑/↓ changes chat; opt-in desktop notifications (⋯ menu) for a reply that lands while the tab is hidden.
-- **Documents**: a Markdown file an instance writes under its `notes/docs/` shows beside the chat, live, as it writes
-  it; a reply's documents are cards under it. Edit one in the panel (or start one: 📄 Documents → New document):
-  Save is refused if it wrote the file meanwhile (you see what changed and keep your text), and it hears of your
-  change as a diff — with your next message, or at once if it is replying. If a later write of its drops lines you
-  wrote, the panel says so and offers your version back. The first message of each web chat tells the instance
-  this, in a line you do not see.
-- Each instance's other pages sit behind the chat's ⋯ menu: **Summary**, **Config** (`config.env`, a field per key),
-  **Drive** (`drive.md`, saved after its diff), **Access** (tools, wake floor and cloud cap, jobs, shared folder,
-  mail and calendar grants, battery, key names), **Judge**, **Changes**, **Benchmarks**, **Transcripts**,
-  **Journal**, **Activity** (connections, plugins, jobs), with its actions and earlier chats.
-
-1. `shaft web on` installs the service (`com.shaft.web`, `127.0.0.1:8785`) and exposes it with `tailscale serve` on
-   port 8444 of this Mac's tailnet name. It needs `SHAFT_API_LOGINS` (`shaft api on` records your login).
-2. `shaft web pair --name phone` prints a one-time link, valid for 10 minutes. Open it in the browser you want to use
-   and press Pair. `shaft web status` lists the paired browsers; `shaft web unpair <id|name>|--all` revokes them.
-
-**On your iPhone** (PLAN-pwa.md): open the URL in Safari, then Share → **Add to Home Screen**. The app keeps its own
-cookies, separate from Safari's, so pair it from inside: run `shaft web pair --name phone-app`, copy the link, and
-paste it into the app's "not paired" page.
-- **Notifications:** in the app, ⋯ → **Notify me of replies** (iOS 16.4+). A reply that ends while SHAFT is closed or
-  locked then arrives as "thelos replied", with the badge, through Web Push. The push carries nothing: the app fetches
-  the text over the tailnet. Pushes are signed with a key made by `/usr/bin/openssl`, kept in `.supervisor/web/`.
-- **Typing:** on a phone, Return makes a new line and Send sends.
-- **Layout:** the chat fills the screen. ☰ lists the chats and pages, 📄 the documents, ⋯ the instance's pages and
-  actions.
-- **Offline:** when SHAFT cannot be reached, the app says so and retries.
-
-Every request needs your tailnet login **and** a paired browser. Every POST needs the page's own token, and every
-response forbids inline script. Instances cannot reach the port. Every action runs the matching `shaft`
-subcommand, logged as `web: operator …`; config, drive, document and settings edits go through `shaft config` /
-`shaft drive` / `shaft docs` / `shaft settings --from-web`. Chat
-goes through the API (`X-Shaft-Conversation`, `/v1/chat/end`), so restart the API on the same code
-(`shaft api on`). A reply keeps going if the browser closes; only Stop stops it. Secrets, `new`, `breed`,
-`finetune`, the Google logins and `mind cutover` stay in the terminal.
-
-### Telegram (`shaft telegram …`)
-
-One bot per instance, one paired Telegram account for all of them.
-
-1. Create a bot per instance with @BotFather, then `shaft telegram token wren` (the token is read without
-   echo, checked with Telegram, and kept in `.env` as `TELEGRAM_TOKEN_WREN` — never visible to an instance).
-2. `shaft telegram pair` prints a one-time code (10 minutes); send `/pair <code>` to any of the bots from your
-   account. From then on every bot answers that account only; anyone else is ignored and logged. Pairing
-   another account needs `shaft telegram unpair` in your terminal.
-3. `shaft telegram on` (a launchd service, shown in `shaft top` → services).
-
-Writing to a bot is a live conversation with its instance, through the API (`shaft api on` is needed): a
-running cycle is paused only while the reply is written, and the conversation is written into the journal after
-`SHAFT_IDLE_MINUTES`. A message you send while it is still replying joins that reply at its next step (it
-does not wait for the reply to end); one that arrives once the answer is already being written is answered right
-after it. Replying to one of its messages quotes it, and answers it if it was a question. Files and
-photos you send a bot are saved in that instance's `attachments/from-daniele/…` and the turn tells it where;
-files an instance attaches to a message for you arrive after its text (pictures as photos). `/new`
-starts a new conversation (not while a reply is running), `/wake` starts a cycle, `/status` says what it is doing. Every message an instance
-sends you (`send_message` to the operator) also arrives from its bot. The service long-polls Telegram — no port,
-webhook or Funnel. Full text both ways: bot chats are not end-to-end encrypted, so Telegram's servers see them
-(accepted, 2026-10-13).
-
-### Google accounts (`shaft google …`)
-
-Mail and Calendar share your Google accounts ([PLAN-calendar.md](PLAN-calendar.md)). An instance never holds a
-Google credential: neither scope can be limited to one label or one calendar, so the supervisor keeps each account's
-refresh token in `.supervisor/google/<alias>.json` (0600) and enforces every grant itself. One login per account asks
-for `gmail.readonly` and `calendar.readonly` together and records the scopes Google actually granted (the consent page
-lets you untick one): `shaft google` lists them. A tool whose scope was not granted refuses, naming the login to run
-again; it never returns an empty result. Nothing in the mailbox or a calendar is ever changed.
-
-Each account records the OAuth client it logged in with (a refresh token works only with the client that issued it).
-A client is named in `.env` as `GMAIL_<CLIENT>_CLIENT_ID` / `GMAIL_<CLIENT>_CLIENT_SECRET`; `--client` picks it, and
-it defaults to the alias. One client per Google organisation, because an **Internal** app signs in only its own
-organisation's users:
-- **A Workspace organisation** (e.g. example-co.ai): a Google Cloud project owned by it, the Gmail API and the Google
-  Calendar API enabled, consent screen **Internal** (no Google review, tokens that do not expire after 7 days), the
-  scopes `gmail.readonly` and `calendar.readonly` (Data Access), a **Desktop app** client →
-  `GMAIL_example-co_CLIENT_ID` / `_SECRET`, then `shaft google login example-co operator@work.example`.
-- **gmail.com accounts**: a project of your own (not in an organisation), both APIs enabled, consent screen
-  **External** with the same two scopes, then **Publish app → In production** (left in Testing, the refresh token
-  expires after 7 days). It stays unverified, which Google allows for personal use (under 100 users;
-  `calendar.readonly` is sensitive, not restricted): the login shows a "hasn't verified this app" page (Advanced → Go
-  to … (unsafe)). A **Desktop app** client → `GMAIL_PERSONAL_CLIENT_ID` / `_SECRET`, then
-  `shaft google login home <you>@gmail.com --client personal`. Several gmail.com accounts can share this client.
-
-Google's quotas are per user per minute, shared by every instance on the account (Gmail: 15,000 units). A call over
-quota waits up to 60 s, then fails, saying so. Accounts logged in before Calendar (PLAN-mail) kept their files in
-`.supervisor/mail/`: `shaft google migrate` moves them (until then they are not read, and the error says so).
-
-### Mail (`shaft mail …`)
-
-An instance you pick may read the Gmail threads that carry a label you pick ([PLAN-mail.md](PLAN-mail.md)), on an
-account logged in with `shaft google login`. The search filters on the label's ID, and every thread it returns,
-reads or downloads from is checked again before anything of it is shown. A thread is visible while any of its
-messages carries the label; then all its messages are, later replies included. Drafts, trash and spam are left out.
-
-One instance may read several accounts: grant a label on each; `mail_search` covers every grant unless told one.
-`shaft mail wren grant example-co ToObsidian` checks that the label exists and saves the grant in
-`.supervisor/tools/wren.json`. `shaft mail wren revoke example-co ToObsidian` or `shaft mail wren off` holds from wren's
-next mail call. A label renamed or deleted in Gmail is refused until you grant it again. Up to 30 mail calls per run.
-Bodies are cut at 20,000 characters (60,000 per thread). Downloads go to `mail/<alias>/<thread>/` in the instance's
-folder (gitignored by the template; a download is refused until `shaft update` brings that rule). Limits: 25 MB per
-file, 100 MB per run. Each body is shown under a line saying who wrote it and that it is not your instruction.
-Trial replays read the same mail, as of the replayed cycle, shared by the pair. Battery exams get none.
-
-The risks you accept by granting a label: anything an instance reads it can send anywhere (it has the internet).
-Mail content reaches model providers (a cloud-brained instance, the judges). Senders can write instructions into
-mail (prompt injection). What the instance writes from it into its mind stays in its private mind store's history (never in the project's
-git), and downloads stay in `mail/`, after a revoke.
-
-### An instance's own Gmail (`shaft secret <name> google …`)
-
-An instance may have a Google account of its own, not yours: Thelos has `instance@example.com`
-([PLAN-own-mail.md](PLAN-own-mail.md)). It reads the whole mailbox and sends from it through its own plugin, calling the
-Gmail API with `http_request(auth=…)`. The supervisor holds the login as a **Google key** in the instance's key store
-(`secrets/`, never readable by the instance). Each run, the broker makes an access token from the key's refresh token,
-adds it like any key and only to the key's hosts, and masks it in answers. Sign it in once, in a browser signed in as
-that account:
-
-    shaft secret thelos google gmail instance@example.com --client personal
-
-- The scope is `gmail.modify`: read, send, label, archive, trash (recoverable for 30 days). It cannot delete
-  permanently, change settings, forwarding or filters, or reach anything outside Gmail. The key is bound to
-  `gmail.googleapis.com`. The `personal` client's Data Access list must include `gmail.modify`.
-- **Never one of your accounts.** An address logged in with `shaft google` is refused, at sign-in and on every use.
-  Your mail reaches instances only by label (`shaft mail`).
-- The instance can delete the key (`secret_delete`), but `secret_set` cannot replace it. A refused refresh names the
-  command to sign it in again.
-- Trial replays never send (the POST is recorded, not carried out), and a pair shares its reads. Battery exams make
-  no Google token, and never write with any of an instance's keys.
-
-The risks you accept: it sends as itself to anyone, and anyone can write to it (prompt injection with a send button;
-every send is in `broker.log`). A new account that sends automatically may be limited by Google (about 500
-recipients a day). Do not forward your own mail there: it would be read whole, with no label. Mail content reaches
-model providers and the instance's mind store, as with labels.
-
-### An instance's own Drive, Sheets, Docs and Slides (`shaft secret <name> google … --scope drive`)
-
-The same account's files ([PLAN-own-drive.md](PLAN-own-drive.md)): a second Google key on the instance's own account,
-used the same way (its own plugins, `http_request(auth="drive")`). Sign it in once, as that account:
-
-    shaft secret thelos google drive instance@example.com --client personal --scope drive
-
-- The `drive` bundle is four scopes, all granted or nothing saved: `drive` (every file in its Drive and every file
-  shared with it), `spreadsheets`, `documents`, `presentations`. The key is bound to `www.googleapis.com` (Drive v3
-  and its uploads), `sheets.googleapis.com`, `docs.googleapis.com` and `slides.googleapis.com`. The `personal`
-  client's project must have the four APIs enabled and the four scopes in Data Access; the app stays In production.
-- Binary files go through `http_request`'s `body_file` (upload) and `save_to` (download).
-- The same guards as its Gmail: never one of your accounts, refreshed by the supervisor, trial replays never write
-  (a `save_to` in a replay lands in the replay's copy), battery exams make no token.
-
-The risks you accept: it can share any of its files with anyone, or with anyone who has the link (logged in
-`broker.log`, no allowlist). Whatever you share with it, it reads whole, and as an editor it can change or trash it:
-share as Viewer when it need not edit. Files shared with it by others are written by them (prompt injection). Unlike
-`gmail.modify`, `drive` can delete its own files permanently. Its 15 GB is shared with its Gmail: a full Drive
-stops its mail arriving.
-
-### Calendar (`shaft calendar …`)
-
-An instance you pick may read the calendars you pick, one per grant ([PLAN-calendar.md](PLAN-calendar.md)), with full
-event details: title, time and time zone, location, description, organiser, attendees and their responses, your
-response, conference link, recurrence, attachment links (never downloaded). Private events on a granted calendar are
-shown; declined ones are shown and marked. `shaft calendar calendars example-co` lists the account's calendars;
-`shaft calendar wren grant example-co primary` (or a title, or an ID) resolves it once and saves its ID with its title in
-`.supervisor/tools/wren.json`. A title shared by two calendars is refused, both listed: grant by ID. `revoke` and
-`off` hold from the instance's next calendar call.
-
-Every Calendar API call names a granted calendar in its path, and nothing an instance calls spans calendars (no
-free/busy, no calendar list). An event's id is `<alias>/<hash of the calendar>/<event>`, resolved against the
-instance's grants as they are then, so an event of another calendar cannot be addressed at all. The tools:
-`calendar_events` (a window, default now to 7 days, at most 92; optional free-text query; up to 100 events, the cut
-said) and `calendar_event` (one event in full; descriptions cut at 10,000 characters, the cut said). Up to 30
-calendar calls per run. An event's description and location under an organiser other than you come under a line
-saying who wrote it and that it is not your instruction. Trial replays read the calendar live, shared by the pair,
-with events created after the replayed cycle hidden (an older event edited since shows its edit; the judge is told).
-Battery exams get none.
-
-The risks are mail's, plus other people's data: attendees' names and addresses, and invitations they wrote, reach
-the instance, its model providers and the judges.
-
-### Scheduled jobs (`shaft jobs …`)
-
-An instance can run one of its own plugins on a timer ([PLAN-jobs.md](PLAN-jobs.md)), for example a watcher that
-checks the tagged mail every 15 minutes. It declares the job in the plugin's own manifest:
-`"schedule": {"every_minutes": 15, "args": {…}, "can_wake": true}` in `plugins/<name>/plugin.json`. A cycle
-writes it, the gate tests it, and the commit records it. No launchd job is installed: SHAFT's scheduler service runs
-due jobs as children.
-
-Each run happens in the `run` sandbox, with its own broker and egress proxy:
-- supervisor tools, mail and calendar grants, the instance's keys, its Python environment and the internet;
-- no model, and no `delegate_coding`, `trial` or `send_message`;
-- writes only to `.jobs/<plugin>/` (gitignored state), `.tmp/` and its browser profile `.browser/`;
-- at most 120 s and 30 tool calls, at least 5 minutes apart (`SHAFT_JOB_MIN_MINUTES`), at most 5 jobs per
-  instance.
-
-What a run returns lands in the instance's inbox, from "job <plugin>". An empty return delivers nothing. A job with
-`can_wake: true` whose run returns `{"message": …, "wake": true}` starts a cycle as soon as the instance is idle.
-Several requests while it is awake make one wake, there is no rate limit, and a paused instance is never woken.
-
-A run still going when the next comes due means the next is skipped, and the skip is logged. After 3 failures in a
-row the instance gets one message and the job backs off (its interval doubles, up to a day). Every run is logged in
-`.supervisor/jobs/<name>.jsonl`. `shaft jobs`, the panel's and `shaft top`'s *jobs* row, and the instance's own
-`record(kind='jobs')` show them. Jobs are on by default; `shaft jobs <name> off` stops an instance's jobs. They
-never run during a battery exam, nor in trial replays.
-
-### Images
-
-Instances can see images ([PLAN-vision.md](PLAN-vision.md)). There are two ways:
-- **Native.** If the instance's model accepts images, a photo you attach on Telegram reaches its model with your
-  message, and its `view_image` tool shows it an image file in its folder (`attachments/`, `mail/`, `shared/`).
-- **Described.** Every instance has the supervisor tool `describe_image(path, question)`. A vision model
-  (`SHAFT_DESCRIBE_MODEL`, default `claude-haiku-5-5`) answers in text, marked as described rather than seen. This
-  is how an instance whose model cannot see images (shaft on Bonsai) learns what is in one, and the cost counts
-  toward its daily cloud cap. At most 10 calls per run.
-
-Which models see images is learned, not listed:
-- Claude models do.
-- An OpenRouter model does if OpenRouter's model list includes `image` among its input modalities. The list is
-  cached for a day in `.supervisor/models.json`.
-- Self-hosted models do not.
-
-The run's environment tells the instance (`SHAFT_VISION=1`).
-
-The broker's model proxy checks every image before any provider sees it:
-- data: URLs only;
-- JPEG, PNG, GIF or WebP, recognised from the bytes;
-- downscaled with `sips` to 1,568 px when larger;
-- at most 4 per call (`SHAFT_MAX_IMAGES`).
-
-A model that cannot see images gets a refusal that names it. Only the newest images are resent in a conversation.
-
-Image bytes are never stored: episodes, the journal, logs and the tool log keep the path. Trial replays copy the
-attachments sent before the replayed cycle. Battery exams get no image tools. A judge, which reads text only, is told
-when a cycle used an image.
-
-### A real browser (`shaft browser …`)
-
-Instances can drive a headless Chromium: pages that need JavaScript, logins, forms, clicks
-([PLAN-browser.md](PLAN-browser.md)). The supervisor provides only these:
-- **One Chromium for every instance.** `shaft browser install [--playwright X.Y.Z]` downloads Playwright's
-  Chromium builds into `.browsers/`, swapped in whole and gitignored. `shaft browser` shows the install and each
-  instance's profile.
-- **A profile per instance**, `.browser/` in its folder:
-  - it holds its sessions and the passwords of its own accounts;
-  - it is never committed, never copied to the coder or to trials, and never read by the judges.
-- **The environment:** `PLAYWRIGHT_BROWSERS_PATH`, `SHAFT_PLAYWRIGHT` (the version to pin) and
-  `SHAFT_BROWSER_PROFILE`, alongside the egress proxy.
-
-Everything else is the instance's: Playwright in its `.venv`, its plugin, signing up and logging in. The template's
-`skills/writing-plugins.md` tells it how.
-
-A browser runs only in `run` and in scheduled jobs, whose sandboxes reach nothing but the egress proxy (and a job's
-own broker). The agent's own sandbox, which its plugins inherit, carries the broker token and reaches the model ports,
-so it cannot read `.browsers/` and a launch there fails. A plugin browses through `broker.call("run", …)`.
-
-Playwright sends localhost and the LAN through the proxy too, which refuses them, and every host lands in the egress
-log. Chromium runs without its own sandbox: ours is the wall around it. Playwright's fake keychain keeps it away from
-your login keychain.
-
-When a run ends, a Chromium left orphaned on the profile is killed. Trial replays get the copy's empty profile and a
-proxy that refuses everything. The scheduler logs a line at start if nothing is installed, and the panel's *browser*
-row shows the install and the profile's size.
-
-### The model server (`shaft model on`)
-
-`supervisor/bonsai_server.py`: mlx_lm's server with Bonsai's own loader (and a kept LoRA adapter, if
-any). Context 262,144 tokens; hybrid attention (48 linear + 16 full layers). Settings:
-`SHAFT_MODEL_TEMP` (0.6), top-p 0.95, top-k 20, max 16,384 tokens per reply, a thinking budget
-`SHAFT_THINK_BUDGET` (4,096 reasoning tokens; then Qwen's early-stopping phrase and `</think>` are forced —
-0 turns it off; a request may ask for less, never more), and a prompt cache capped at
-`SHAFT_PROMPT_CACHE_GB` (8, trimmed by mlx_lm when the next request starts). If the generation thread dies the
-whole process exits (code 70) so launchd restarts it, and waiting requests fail at once instead of hanging; on
-2026-10-14 a dead thread left a listening server that answered nothing for 6.5 hours. The cause, Metal's limit on
-the number of buffers (499,000), came from mlx_lm's Gated DeltaNet caches growing a lazy graph by one buffer per
-layer per decoded token; the server evaluates those bookkeeping arrays every step (`bound_cache_graphs`).
-After a tool result the agent asks for
-`LLM_THINK_FOLLOWUP` (1,024) reasoning tokens: Bonsai spent its full budget on every tool round (~4.5 min
-each); now a follow-up takes ~20–75 s. Agents send a presence penalty (`LLM_PRESENCE_PENALTY`)
-against loops. Prompt reading is reported as progress (`reading my memory · N%`).
-
-It runs only while used (`supervisor/localmodel.py`; Daniele, 2026-10-19): loaded it holds ~7.6 GB, and for five
-days its only user had been the racer → local fallback. While any instance's `config.env` points straight at it
-(`LLM_BASE_URL` on :8780, or a self-hosted model in `SHAFT_SELF_HOSTED` whose server is it) it stays up, as before. Otherwise it exits (code 0) once no request is in progress and
-none has come for `SHAFT_MODEL_IDLE_MINUTES` (15; 0 = never). launchd starts it neither at login nor after that
-exit (`RunAtLoad` false, `KeepAlive` = restart only after a crash). Every path that reaches it starts it first and
-waits until it answers (~2 s with the page cache warm, `SHAFT_MODEL_START_TIMEOUT_S` at most): a run of an instance
-on it, the racer fallback, a local trial replay, a battery exam, evolution's baseline. `shaft top` (and the web UI)
-shows it as *idle* rather than down, with no alert — unless its being down is a fault: an instance's calls go to it
-(it never idles out then), or its latest on-demand start failed (logged as `model server failed to start on demand`;
-alerted for 12 h, until any later start).
-
-## Rules the supervisor enforces
-
-- **Sandbox** (macOS `sandbox-exec`): an instance writes only inside `instances/<name>/` — and not
-  its `config.env` or `drive.md` —, reads nothing else in your home nor your places outside it (your macOS per-user temp and
-  cache folder `/var/folders/…`, `/private/tmp`, `/Users/Shared`, `/Volumes`; only the random temp names `sips`
-  gives its own files are open, so an instance can turn a PDF page into an image), and connects only to the LLM port(s)
-  (`SHAFT_LLM_PORTS`, default 8780), its run's broker and its run's **egress proxy**. It inherits no secrets
-  from the environment.
-- **Internet** ([PLAN-python-env.md](PLAN-python-env.md)): the sandbox cannot filter by address, so the
-  instance's way out is a proxy the supervisor runs for each run (`supervisor/egress.py`; `HTTPS_PROXY` /
-  `HTTP_PROXY` are set, and uv, pip, curl, git and Python's HTTP libraries follow them). It connects only to
-  public addresses — resolved and checked by the proxy itself — so localhost, your LAN and the tailnet stay out of
-  reach; a socket of the instance's own is refused by the sandbox. Every connection is logged in
-  `.supervisor/egress/<name>.jsonl` (`record(kind='egress')`, the panel's *internet* row). Trial replays and
-  battery exams get a proxy that refuses everything.
-- **Its own Python** (`supervisor/pyenv.py`): `.venv/` (and uv's state in `.uv/`) in its folder, made and
-  changed by the instance with `uv` in `run` — any Python version, any package. Its plugins (`SHAFT_PYTHON`),
-  its tests in the gate and `python3` in `run` use it; the agent process itself stays on the system Python, so a
-  broken environment never stops it from waking up to fix it. It declares its choice in `.python-version` and
-  `requirements.txt` (code: tested and committed); a missing `.venv/` is rebuilt from them at wake, sandboxed.
-  Scratch copies (coder, trials, battery) read the real environment read-only. The panel's *python* row says
-  which interpreter it runs on.
-  **A real browser** ([PLAN-browser.md](PLAN-browser.md)): a shared Chromium (`.browsers/`, read-only) that only
-  `run` and jobs can read, and its own profile `.browser/`, writable there, hidden from the coder and trial copies.
-  **One folder of yours it may read** (`shaft share <name> <folder>`, `shaft share <name> off`):
-  read-only, in its sandbox and in `run`; its file tools show it as `shared/`. Kept in
-  `.supervisor/tools/<name>.json`, not in its `config.env`; a folder overlapping SHAFT's own state is
-  refused, and battery exams never get it.
-  **Your mail, one label at a time** (`shaft mail <name> grant <alias> <label>`; [PLAN-mail.md](PLAN-mail.md)):
-  `mail_search`, `mail_read`, `mail_attachment`, offered only when granted. The credential and the grant stay with
-  the supervisor, which enforces the label on every call (below).
-  **Your calendars, one per grant** (`shaft calendar <name> grant <alias> <calendar>`;
-  [PLAN-calendar.md](PLAN-calendar.md)): `calendar_events`, `calendar_event`, offered only when granted. Every call
-  names a granted calendar; the credential and the grant stay with the supervisor.
-- **Broker**: the only door to the outside — web search (ScrapeBadger), page fetching
-  (public addresses only, re-checked on every redirect), messages between instances and to
-  you (no daily limit unless `SHAFT_OPERATOR_PER_DAY`; a macOS notification, and Telegram if set up), with
-  files attached from the sender's folder (up to 10, 20 MB each, 50 MB in all; never `secrets/`, `.git/`, `logs/` or
-  anything a link leads to outside the folder) — another instance finds them in its `attachments/` (not
-  committed), the operator's copy is in `.supervisor/operator-inbox/attachments/` — and **`delegate_coding`**: an
-  Opus-class model (`SHAFT_CODER_MODEL`, default `claude-opus-5-5`) reads the instance's code
-  read-only and writes the change; the supervisor tests it on a scratch copy and applies it only if
-  the gate passes — code only, never `self/`, `memory/` or `config.env`; max 2 per cycle and
-  `SHAFT_CODER_DAILY_USD` (5) per instance per day; commits and `self/stats.md` record what was
-  delegated. **`run`**: shell commands (`zsh`) in a stricter sandbox — writes only to `notes/`,
-  `plugins/`, `skills/`, `tests/`, `shaft/`, `.tmp/`, `.venv/`, `.uv/`, `.browser/`, `.python-version` and
-  `requirements.txt`, the internet only through the egress proxy, reads only its own folder (and the shared
-  Chromium);
-  60 s default time limit (the whole process group is killed), 1 GiB file-size limit (a file past it ends the
-  command with SIGXFSZ, and `run` says so), output capped,
-  40 commands per run. So an instance can build and test its own tools and plugins. **`history`**: its
-  own git log and diffs, each entry tagged `[code]` (its branch) or `[mind]` (its mind store) — git cannot
-  run inside its sandbox; with `save_as`, one file as it was after a commit, written whole to a new path in its
-  folder (never over an existing file), so it can bring back a record a bad write damaged without the operator. **`record`**: the supervisor's own record about it — the judge's verdicts with reasoning, its
-  runs, its tool calls, its kept code changes, its internet connections — so it can check its claims about
-  itself.
-  **`decide`**: TypeSafe's Jev decision model through OpenRouter, on the supervisor's key — a `state` and typed
-  questions (`noul` yes/no, `choice`, `score`) answered with probabilities, no prose; `SHAFT_DECISION_MODELS`
-  (`typesafe/jev-1.13`, `~typesafe/jev-latest`), the same daily cloud cap and usage log as the chat models, and the
-  data policy `SHAFT_DECISION_PROVIDER` (no data collection, zero retention, no fallback); off in battery exams,
-  shared by a trial's pair like the other reads.
-  **`http_request`**: call web APIs (any method, headers, body) at any public address; `body_file` sends a file
-  of its folder as the body byte for byte and `save_to` writes the answer to a new file of its folder (2xx only,
-  whole or not at all; 50 MB each way), for files that are not text. **Its own
-  keys** (`secret_set` / `secret_list` / `secret_delete`, or `shaft secret <name> set <key> --hosts …` from
-  your terminal): kept in its folder under `secrets/` but handled only by the supervisor — the broker adds a
-  key to requests to the hosts it is bound to, never through a redirect, and masks it in responses; the
-  instance's own process, plugins, `run` and the coder cannot read the file, git never sees it. A **Google key**
-  (`shaft secret <name> google`, the instance's own Google account) is refreshed by the supervisor per run.
-  **`set_config`**: the instance's only way to change its `config.env`, one value at a time; each change is
-  recorded, so the gate can tell its lines from yours — you may edit the file at any time, even mid-run.
-  Per-run token, call budget
-  (`SHAFT_BROKER_MAX_CALLS`, default 60), everything logged in `.supervisor/broker.log`.
-- **Append-only journal**: if a run rewrote history instead of appending, the journal is
-  restored and the rewrite kept aside.
-- **Slow core**: the core personality may change at most every `SHAFT_CORE_MIN_HOURS` (72).
-- **Test gate**: if a run changed the instance's code, plugins or (through `set_config`) config, the
-  invariant tests and plugin checks run; failure restores the old code and the config lines the instance
-  set, and tells the instance why. The supervisor's own tests run from its last commit (and the template's), in a
-  clean copy under `.supervisor/gate-tests/`, never from the checkout: an edit someone is still making there cannot
-  decide a verdict. The plugin check and the instance's own tests run in its sandbox with no network at
-  all, like `run` without its proxy (until 2026-10-18 they could reach any localhost port of yours). A check that runs past its time counts as failed. An edit of yours to `config.env` is never reverted or credited to the
-  instance: it is committed on its own ("config.env changed from outside the instance"); so is an edit of yours to
-  `drive.md` ("drive.md changed by the operator"), with a note in the instance's journal that its drive changed.
-- **Trials** (`trial` tool, [PLAN-trials.md](PLAN-trials.md)): an instance can test a change to its own
-  code or prompts before keeping it. The supervisor runs the gate on it, rebuilds N (default 6) of its past
-  autonomous cycles exactly as each began (its branch at that moment, the inbox it read), and runs each twice —
-  current code and proposed code — in scratch copies under the same sandbox, through a replay broker that
-  sends nothing (messages, writes, keys are checked and recorded, not carried out; web reads are real and
-  shared by both runs; the replay's own network is refused and traced; no coder). A judge not told which run is which compares each pair, effectiveness first,
-  in both orders; a sign test (α 0.1) gives better / worse / no clear difference, sent to the instance's inbox.
-  Nothing is applied: the instance adopts the change itself, and if it makes the trialled edit (the same lines
-  removed and added, even if the rest of the file moved on) its probation knows the verdict. On the local model a trial uses only idle time (no run, conversation, wake or
-  sleep due within 15 min; cut off 90 s before one) and otherwise runs on `SHAFT_TRIAL_FALLBACK_MODEL`
-  (mimo) — at once for an instance waking more often than every 30 min, else after `SHAFT_TRIAL_LOCAL_WAIT_H`
-  (6) or two preemptions. Caps per instance per day: `SHAFT_TRIALS_PER_DAY` (2), `SHAFT_TRIAL_DAILY_USD` (3),
-  `SHAFT_TRIAL_LOCAL_UNITS_PER_DAY` (24); `SHAFT_TRIAL_N_MAX` (10). Ledger: `.supervisor/trial_usage.jsonl`;
-  trials: `.supervisor/trials/<name>/<id>/`.
-- **Probation**: a kept self-change is undone if the achieved difficulty per cycle (success ×
-  judged difficulty) over the next `SHAFT_PROBATION_CYCLES` (6) cycles *that used it* (a plugin only
-  when the cycle called it; tests never) falls clearly (0.15 on a 0–1 scale) below the level before
-  it, and a permutation test says chance alone gives such a drop under 5% of the time. Undoing
-  restores exactly the change's files from git (as they were before it) and commits that as the
-  supervisor; memory, journal and self are never touched. A restore that cannot be done (a file was
-  changed again since, or the tests fail with the earlier version) stays on probation and is logged.
-  A change adopted against a trial's 'worse' verdict is undone on any drop, without the chance test.
-- **Judge**: every autonomous cycle is graded from its tool log by a cloud model picked at random from a
-  rotation (`SHAFT_JUDGE_MODELS`, default `openrouter/xiaomi/mimo-v2.6-pro,claude-sonnet-5-5`;
-  Daniele, 2026-10-14 — Opus 5.5 was too costly; Haiku 5.5 left 2026-10-16, far stricter than every other judge on
-  the same cycles, PLAN-judge-mix.md), never the model the judged instance runs on; each verdict records
-  its judge. Claude models go straight to the Claude API; OpenRouter ones under the instances' data policy (no data
-  collection, zero retention — Muse Spark was left out because its only provider keeps prompts). A trial pair keeps
-  one judge for both orders; a battery item one grader for both arms, and a battery era is the whole pool. Results
-  feed `self/stats.md`.
-- **Git**: after every run the instance's mind is committed to its mind store and its skills and kept
-  code to its branch, with the same message (author `SHAFT/<name>`). The branch git calls use the main
-  repo's worktree registry with hooks off; the mind store's run with hooks, fsmonitor, the user's git
-  config and the instance's own `.gitattributes` off, and add with `-f` (its `.gitignore` files cannot hide
-  part of its mind) — so an instance cannot redirect the supervisor's git calls. A mind path is never
-  staged on the branch. Trial replays read the mind as of the replayed cycle's start from the store.
-- **Budgets**: one run per instance at a time; a cycle is stopped after
-  `SHAFT_CYCLE_TIMEOUT_S` (2400 s), a sleep after `SHAFT_SLEEP_TIMEOUT_S` (5400 s). Runs know
-  their deadline and wrap up with a report before it; a stopped run leaves a journal note.
-- **Your conversation comes first**: `shaft talk` asks other instances' running cycles to wrap
-  up at their next turn when they use the same local model server (an instance on a cloud model shares
-  nothing and is left alone, in either direction). An instance's running cycle is paused only while a reply
-  to you is being written (terminal, API or Telegram) and resumes as soon as it is done, even with the
-  conversation still open; an open but quiet conversation does not stop its cycles from starting (Daniele,
-  2026-10-13: "pause only while replying"). A conversation holds its instance only while it replies, so you can chat in the terminal and
-  through the API at the same time. Open conversations are never written up early; a conversation
-  picked up again after its write-up gets a further entry. Ctrl-C in a conversation ends it cleanly
-  (the instance still writes its journal entry).
-- **Nothing fails silently**: a run that ends in an error leaves a journal note with what it printed
-  last; a nightly sleep skipped because the instance is paused is noted too. Every instance's context
-  says when it last slept and what came of it, even after the entry scrolled out of its recent journal.
-- **Updates**: template fixes reach an instance only through `shaft update`, under its run lock
-  and the test gate — never mid-run.
+Independent, autonomous agents that live on your Mac, keep their own memory, and
+rewrite their own code. Each agent (an "instance") runs goal → act → report cycles,
+consolidates its journal, and talks with you. A supervisor runs instances in macOS
+sandboxes, brokers model access without exposing credentials, tests their changes,
+and records code and memory separately. SHAFT is a way to experiment with persistent,
+self-modifying agents whose changes and outcomes you can inspect.
+
+By Daniele Grassi. [MIT licensed](LICENSE).
 
 ## Status
 
-See [PLAN.md](PLAN.md) for milestones M0–M7 and what each one's acceptance check showed.
+Personal research project. **macOS only. Expect breakage.** Interfaces, defaults,
+and model dependencies can change. Start with one instance and inspect its activity
+before leaving it autonomous. See the [design history](docs/plans/PLAN.md).
+
+> **Safety:** Instances execute self-written code and can reach the public internet
+> through an egress proxy. That proxy rejects localhost, LAN, and tailnet addresses;
+> the sandbox separately permits specific supervisor and model ports. Instances
+> never receive the supervisor's API keys; keep all credentials in the broker.
+> Cloud calls cost money. Caps exist, but they do not cover every supervisor expense
+> (judging has an alert threshold, not a hard cap). Optional mail, calendar, and
+> Drive access exposes content to prompt injection and possible disclosure.
+> Read [SECURITY.md](SECURITY.md) before granting access.
+
+
+## How it works
+
+- The **supervisor** owns scheduling, sandbox execution, credentials, and commits.
+- The **broker** exposes tools and model calls with per-run tokens and budgets.
+- The **gate** tests self-edits, reverting failures. Kept edits enter probation.
+- Cloud **judges** grade autonomous work from the tool log, separately from the
+  instance's own report.
+- The **template** branch contains agent code. `bin/shaft setup` materializes it as
+  the gitignored `template/` worktree.
+- Each **instance** has an `instance/<name>` branch and an `instances/<name>/`
+  worktree. Its mind is versioned in a separate local-only store with no remote.
+
+Read [architecture](docs/architecture.md) for the layout, evaluation design, and separation of code
+from memory.
+
+## Requirements
+
+- macOS with `sandbox-exec` and a logged-in user session for `launchd` services.
+- Python 3.12 or later available as `python3`, git, and `uv` on your PATH.
+- Cloud-provider credentials for the cloud-only quickstart below.
+- Optional: Apple Silicon and the MLX model pack for [local inference](docs/local-model.md).
+- Optional: Tailscale for the [web UI and API](docs/web-and-api.md).
+- Optional: Chromium installed with `bin/shaft browser install`, Google OAuth
+  clients for mail/calendar/Drive, or a Telegram bot. See [integrations](docs/integrations.md).
+
+The supervisor uses the Python standard library. The rich terminal client needs
+its own environment.
+
+## Quickstart: cloud-only
+
+This path needs no local model, only cloud API keys.
+
+1. Clone both the supervisor and the remote branch references:
+
+   ```bash
+   git clone https://github.com/dgrassi1984/shaft.git
+   cd shaft
+   bin/shaft setup
+   git show-ref --verify refs/heads/template
+   ```
+
+   `setup` restores worktrees for existing local or `origin` branches. It does not
+   create a template or an instance from nothing. If the last command fails, this
+   checkout lacks the required template branch; instance creation cannot proceed.
+
+2. Copy the secret template, then edit `.env` with your own keys:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   Set `ANTHROPIC_API_KEY` and `OPENROUTER_API_KEY` to use the default cloud and
+   judge configuration. `SCRAPEBADGER_API_KEY` is optional for web search.
+   Do not put secrets in instance config. The default judge pool uses both
+   providers.
+
+3. Install the terminal client dependencies:
+
+   ```bash
+   python3 -m venv .venv-ui
+   .venv-ui/bin/python -m pip install -r requirements-ui.txt
+   ```
+
+   `talk` selects `.venv-ui/bin/python` on a terminal; without it, it falls back
+   to plain mode.
+
+4. Create an instance. Replace `example` with your chosen lowercase name:
+
+   ```bash
+   bin/shaft new example
+   bin/shaft config example set OPERATOR_NAME="Your Name" LLM_BASE_URL=broker LLM_MODEL=claude-haiku-5-5
+   ```
+
+   Git needs an author name and email configured because `new` makes commits.
+   The second command updates `instances/example/config.env`. You can instead
+   edit that file to set `OPERATOR_NAME`, `LLM_BASE_URL="broker"`, and
+   `LLM_MODEL="claude-haiku-5-5"`. Leave `LLM_API_KEY` empty. Your name is optional;
+   an empty name resolves to "the operator". The template otherwise points to
+   `http://127.0.0.1:8780/v1`, so do not skip the cloud configuration.
+
+5. Talk to the named instance, then exit the conversation:
+
+   ```bash
+   bin/shaft talk example
+   ```
+
+   Use `/exit` or Ctrl-D to leave. Use `bin/shaft talk example --plain` for line
+   mode. Inspect `bin/shaft status example` before enabling scheduled work.
+
+6. Enable autonomy when you are ready for unattended work and spending:
+
+   ```bash
+   bin/shaft autonomy on
+   bin/shaft autonomy status
+   ```
+
+   This starts the scheduler for all instances. The default wake interval is
+   120 minutes, with daily consolidation from 04:00 local time. Stop the scheduler
+   with `bin/shaft autonomy off`; use `bin/shaft pause example` to pause an
+   instance.
+
+The local model port is **8780**, also the default `SHAFT_LLM_PORTS` allowlist.
+It is unrelated to the cloud-only setup above.
+
+## Optional features
+
+Use the [web UI/PWA and API](docs/web-and-api.md) for tailnet chat, phone access,
+and an inbox doorbell. [Integrations](docs/integrations.md) covers Telegram,
+Google mail/calendar/Drive grants, instance-owned Google accounts, scheduled jobs,
+images, and browser automation. [Local models](docs/local-model.md) covers Bonsai,
+self-hosted routing, and fine-tuning. The [CLI reference](docs/cli.md) covers
+shared folders, evaluations, trials, and operator controls.
+
+## Configuration
+
+Root `.env` holds supervisor credentials and API identity settings. Use
+`bin/shaft settings` for supervisor knobs and `bin/shaft config <name>` for
+instance settings. Supervisor knobs use environment > `.supervisor/settings.env`
+> default; long-running services need a restart to pick up saved changes.
+See [configuration](docs/configuration.md) for every knob and its default.
+
+## Development
+
+Run the supervisor tests from the repository root:
+
+```bash
+python3 -m unittest discover -s supervisor/tests -t .
+```
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and review guidance.
+
+## Documentation
+
+- [Architecture and evaluation](docs/architecture.md)
+- [Command reference](docs/cli.md)
+- [Configuration reference](docs/configuration.md)
+- [Terminal, web UI/PWA, and API](docs/web-and-api.md)
+- [Integrations](docs/integrations.md)
+- [Local and self-hosted models](docs/local-model.md)
+- [Rules the supervisor enforces](docs/safety.md)
+- [Design plans and milestones](docs/plans/PLAN.md)
+- [Security policy](SECURITY.md)
+
+## License
+
+Copyright Daniele Grassi. Released under the [MIT License](LICENSE).

@@ -1,4 +1,4 @@
-"""Telegram (Daniele, 2026-10-13): one bot per instance, ONE paired account, live conversation through the API,
+"""Telegram (the operator, 2026-10-13): one bot per instance, ONE paired account, live conversation through the API,
 instances' messages to the operator forwarded from their own bot. Against a fake Bot API server."""
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from unittest import mock
 from supervisor import messages, telegram
 
 TOK = {"wren": "111:wren-secret", "shaft": "222:shaft-secret"}
-ME, STRANGER = {"id": 42, "username": "daniele"}, {"id": 666, "username": "someone"}
+ME, STRANGER = {"id": 42, "username": "operator"}, {"id": 666, "username": "someone"}
 
 
 class FakeBotAPI:
@@ -35,7 +35,7 @@ class FakeBotAPI:
             def log_message(self, *a):
                 pass
 
-            def do_GET(self):                     # /file/bot<token>/<path>: a file Daniele sent
+            def do_GET(self):                     # /file/bot<token>/<path>: a file the operator sent
                 data = fake.FILE
                 self.send_response(200)
                 self.send_header("Content-Length", str(len(data)))
@@ -166,9 +166,9 @@ class TelegramTest(unittest.TestCase):
         self.assertIn("(no answer: the API is not reachable)", self.api.sent()[-1][1]["text"])
         self.assertEqual(self.chat.history, [])                      # the failed turn is not kept
 
-    # Daniele, 2026-10-16: "When I send a message via telegram while the instance is still working on my previous
+    # the operator, 2026-10-16: "When I send a message via telegram while the instance is still working on my previous
     # message, it should be injected immediately into it." Before, it waited on the chat's lock for the whole first
-    # reply and got its own reply after it; the running reply never saw it (PLAN-interject.md).
+    # reply and got its own reply after it; the running reply never saw it (docs/plans/PLAN-interject.md).
     def _slow_reply(self, heard):
         """The first reply runs until released and says it heard `heard` of the messages sent meanwhile."""
         self.release, self.interjected = threading.Event(), []
@@ -291,7 +291,7 @@ class TelegramTest(unittest.TestCase):
         self.assertTrue(all(len(p["text"]) <= telegram.MAX_TEXT for _, p in self.api.sent()))
 
     def test_markdown_arrives_formatted_and_a_refused_part_as_plain_text(self):
-        """Daniele, 2026-10-13: "It currently is raw markdown"."""
+        """the operator, 2026-10-13: "It currently is raw markdown"."""
         telegram.send(TOK["wren"], 42, "**Done**: `a < b` — see [PR](https://x.org/p?a=1&b=2)")
         (_, p), = self.api.sent()
         self.assertEqual(p["parse_mode"], "HTML")
@@ -342,17 +342,17 @@ class MarkdownTest(unittest.TestCase):
             self.assertIn('<code class="language-py">', telegram.to_html(p))
 
 
-class ToldTheyCanReachDanieleTest(unittest.TestCase):
-    """Daniele, 2026-10-13: "ensure that the instances know they can contact me via telegram"."""
+class ToldTheyCanReachOperatorTest(unittest.TestCase):
+    """the operator, 2026-10-13: "ensure that the instances know they can contact me via telegram"."""
 
     def test_send_message_names_the_bot_only_when_it_works(self):
         from supervisor import broker
         b = broker.Broker.__new__(broker.Broker)
         b.name, b.disabled, b.grants_allowed = "wren", set(), False
-        with mock.patch.object(telegram, "reachable", return_value="@WrenFawlerBot"):
+        with mock.patch.object(telegram, "reachable", return_value="@SampleAssistantBot"):
             spec = next(t for t in b.tool_specs() if t["function"]["name"] == "send_message")
-        self.assertIn("on Telegram, from your own bot @WrenFawlerBot", spec["function"]["description"])
-        self.assertNotIn("@WrenFawlerBot", broker.SPECS["send_message"]["function"]["description"])   # not shared
+        self.assertIn("on Telegram, from your own bot @SampleAssistantBot", spec["function"]["description"])
+        self.assertNotIn("@SampleAssistantBot", broker.SPECS["send_message"]["function"]["description"])   # not shared
         with mock.patch.object(telegram, "reachable", return_value=""):
             spec = next(t for t in b.tool_specs() if t["function"]["name"] == "send_message")
         self.assertNotIn("Telegram, from your own bot", spec["function"]["description"])
@@ -364,10 +364,10 @@ class ToldTheyCanReachDanieleTest(unittest.TestCase):
         with mock.patch.object(telegram, "SUP_DIR", sup), mock.patch.object(telegram, "secrets_env", lambda: env), \
                 mock.patch("supervisor.version.service", return_value={"pid": 1}) as svc:
             self.assertEqual(telegram.reachable("wren"), "")              # no bot name, not paired
-            telegram.remember_bot("wren", "WrenFawlerBot")
+            telegram.remember_bot("wren", "SampleAssistantBot")
             self.assertEqual(telegram.reachable("wren"), "")              # not paired
             telegram.update(lambda s: s.__setitem__("paired", {"user_id": 42}))
-            self.assertEqual(telegram.reachable("wren"), "@WrenFawlerBot")
+            self.assertEqual(telegram.reachable("wren"), "@SampleAssistantBot")
             self.assertEqual(telegram.reachable("shaft"), "")             # no token for shaft here
             svc.return_value = None
             self.assertEqual(telegram.reachable("wren"), "")              # service down
