@@ -166,7 +166,7 @@ const saved = { id: "config-CUSTOM", value: "new", saw: "new" };
 const row = { replaceWith(next) { rows[0] = next; replaced = next; } };
 const form = { dataset: { post: "/action/config-set" },
   closest: q => q === "form[data-post]" ? form : q === "[data-row]" && !adding ? row : null,
-  querySelector: () => null };
+  querySelector: () => null, querySelectorAll: () => [] };
 const document = { readyState: "loading",
   addEventListener(k, fn) { (handlers[k] ||= []).push(fn); },
   querySelector: q => q === "#config-rows" ? { appendChild(next) { rows.push(next); } } : null,
