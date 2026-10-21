@@ -233,7 +233,7 @@ function runLoad(href, closed, narrowSheet) {
   const docclose = { tabIndex: 0, getClientRects: () => [1], focus() { document.activeElement = this; }, closest: () => null };
   const docs = { id: "docs", dataset: { poll: "/fragment/docs/thelos?doc=plan.md" }, parentElement: grid, ...attrs(),
     getClientRects: () => !grid.classList.contains("hidedocs") && (!narrowSheet || grid.classList.contains("showdocs")) ? [1] : [],
-    querySelector: q => q === "[data-close-docs]" ? docclose : null, querySelectorAll: () => [docclose], focus() {} };
+    querySelector: q => q === "[data-close-docs]" ? docclose : null, querySelectorAll: q => q === "[data-fullscreen-doc]" ? [] : [docclose], focus() {} };
   grid.children = [chat, docs]; main.children = [grid]; body.children = [main];
   const docbtn = { ...attrs(), getClientRects: () => [1], focus() {} };
   const document = { readyState: "loading", body, activeElement: null,

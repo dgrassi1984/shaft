@@ -182,7 +182,7 @@ def _last_rem(css: str, selector: str, prop: str) -> float:
 def _margin_above_below(css: str, selector: str) -> tuple[float, float]:
     found = None
     for body in _css_rule_bodies(css, selector):
-        for match in re.finditer(r"(?:^|;)\s*margin\s*:\s*(\d*\.?\d+)rem\s+0\s+(\d*\.?\d+)rem", body):
+        for match in re.finditer(r"(?:^|;)\s*margin\s*:\s*(\d*\.?\d+)(?:rem|em)\s+0\s+(\d*\.?\d+)(?:rem|em)", body):
             found = (float(match.group(1)), float(match.group(2)))
     if found is None:
         raise AssertionError(f"{selector} sets no margin shorthand")
@@ -201,7 +201,7 @@ class MarkdownHeadingScaleTest(unittest.TestCase):
         self.assertGreaterEqual(sizes["h4"], 1.0)          # body is 1rem (html is 15px)
         self.assertGreaterEqual(sizes["h5"], 1.0)
         self.assertGreaterEqual(sizes["h6"], 1.0)
-        self.assertLess(sizes["h2"], 1.3)                   # under the page's own h1
+        self.assertGreaterEqual(sizes["h2"], 2.0)          # a clear document title
         for level in ("h2", "h3", "h4", "h5", "h6"):
             above, below = _margin_above_below(css, f".md {level}")
             self.assertGreater(above, below, level)

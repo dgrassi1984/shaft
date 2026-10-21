@@ -1320,9 +1320,24 @@
     } else if (sheet && !sheetRoots().some(root => root.contains(document.activeElement))) {
       focusSheet();                               // a polled document replaced the focused control
     }
+    const expanded = grid.classList.contains("docfullscreen");
+    if (docs) docs.querySelectorAll("[data-fullscreen-doc]").forEach(button => {
+      button.textContent = expanded ? "Exit full screen" : "Full screen";
+      button.setAttribute("aria-pressed", String(expanded));
+    });
     docsAria();
     document.querySelectorAll("[data-toggle-nav]").forEach(b => b.setAttribute("aria-expanded", String(kind === "nav")));
   }
+  function fullscreenDoc(on, opener) {
+    const grid = document.querySelector(".chatgrid");
+    if (!grid) return;
+    grid.classList.toggle("docfullscreen", on);
+    syncSheets(opener);
+  }
+  document.addEventListener("click", (ev) => {
+    const button = ev.target.closest && ev.target.closest("[data-fullscreen-doc]");
+    if (button) fullscreenDoc(!document.querySelector(".chatgrid").classList.contains("docfullscreen"), button);
+  });
   function showNav(on, opener) {
     document.body.classList.toggle("navopen", on);
     syncSheets(opener);
@@ -1330,6 +1345,7 @@
   function showDocs(on, opener) {
     const grid = document.querySelector(".chatgrid");
     if (!grid) return;
+    if (!on) grid.classList.remove("docfullscreen");
     grid.classList.toggle("showdocs", on);
     grid.classList.toggle("hidedocs", !on);
     try { if (on) localStorage.removeItem("shaft.docs.closed"); else localStorage.setItem("shaft.docs.closed", "1"); }
@@ -1396,7 +1412,9 @@
     if (!sheet) return;
     if (ev.key === "Escape") {
       ev.preventDefault();
-      if (sheet.kind === "nav") showNav(false); else showDocs(false);
+      if (sheet.kind === "nav") showNav(false);
+      else if (document.querySelector(".chatgrid").classList.contains("docfullscreen")) fullscreenDoc(false);
+      else showDocs(false);
     } else if (ev.key === "Tab") {
       const items = sheetRoots().flatMap(sheetFocusables);
       const at = items.indexOf(document.activeElement);
