@@ -16,29 +16,30 @@ class ComposerJsTest(unittest.TestCase):
 const fs=require('node:fs'), vm=require('node:vm'), assert=require('node:assert/strict');
 const storage=new Map(); let serial=0;
 function page(mids=[], touch=false) {
-  const handlers={}, win={}, elements={}; let resolve, reject, payload;
+  const handlers={}, win={}, elements={}, viewportHandlers={}, viewport={height:900,addEventListener(k,fn){viewportHandlers[k]=fn;}}; let resolve, reject, payload;
   const node=()=>({dataset:{},style:{},children:[],setAttribute(){},querySelectorAll:()=>[],
     appendChild(n){this.children.push(n);},append(...ns){this.children.push(...ns);},remove(){},
-    addEventListener(k,fn){this[k]=fn;},classList:{add(){},remove(){},toggle(){}}});
+    addEventListener(k,fn){this[k]=fn;},classList:{add(){},remove(){},toggle(){},contains(){return false;}}});
+  const sendButton={dataset:{queue:''}}, queueButton={dataset:{queue:'1'}};
   const mid={value:''}, queue={value:''}, files={type:'file',files:[],closest:()=>form}, chips=node();
   const box={value:'',tagName:'TEXTAREA',name:'text',style:{},scrollHeight:120,selectionStart:0,selectionEnd:0,
     closest:q=>['form[data-files]','form[data-draft]'].includes(q)?form:null,focus(){},
     setSelectionRange(a,b){this.selectionStart=a;this.selectionEnd=b;},
     dispatchEvent(ev){for(const fn of handlers[ev.type]||[]) fn({target:box});}};
   const form={dataset:{post:'/chat/wren/send',draft:'wren',files:'',multipart:'1',reset:'1',sentMids:JSON.stringify(mids)},
-    closest:()=>null,querySelector:q=>({'textarea':box,'textarea[name=text]':box,'input[name=mid]':mid,'input[name=queue]':queue,
-      'input[type=file]':files,'[data-picked]':chips,'button[type=submit]':{}})[q]||null,
+    closest:()=>null,querySelectorAll:()=>[sendButton,queueButton],querySelector:q=>({'textarea':box,'textarea[name=text]':box,'input[name=mid]':mid,'input[name=queue]':queue,
+      'input[type=file]':files,'[data-picked]':chips,'button[type=submit]':sendButton})[q]||null,
     reset(){box.value='';mid.value='';files.files=[];}};
   const selection={isCollapsed:false,rangeCount:1,toString:()=> 'selected quote',removeAllRanges(){},
     getRangeAt:()=>({commonAncestorContainer:{nodeType:1,closest:()=>({dataset:{}})}})};
-  const document={readyState:'loading',visibilityState:'hidden',body:node(),
+  const document={readyState:'loading',visibilityState:'hidden',body:node(),documentElement:{style:{setProperty(){}}},
     addEventListener(k,fn){(handlers[k]||=[]).push(fn);},dispatchEvent(){},
     querySelector:q=>q==='form.composer textarea'?box:['form[data-files]','form[data-draft]'].includes(q)?form:null,
     querySelectorAll:()=>[],getElementById:id=>elements[id]||null,
     createElement(){const n=node();Object.defineProperty(n,'id',{set(id){elements[id]=n;}});return n;}};
   const context={document,URL,URLSearchParams,Event,AbortController,navigator:{},
     crypto:{randomUUID:()=>`m-${++serial}`},location:{href:'https://shaft.test/i/wren/chat'},
-    window:{innerHeight:900,addEventListener(k,fn){(win[k]||=[]).push(fn);},getSelection:()=>selection,
+    window:{innerHeight:900,visualViewport:viewport,addEventListener(k,fn){(win[k]||=[]).push(fn);},getSelection:()=>selection,
       matchMedia:()=>({matches:touch})},
     localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},
     setTimeout(){},clearTimeout(){},setInterval(){},
@@ -49,8 +50,9 @@ function page(mids=[], touch=false) {
   vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),context);
   const emit=async(k,target,extra={})=>{for(const fn of handlers[k]||[]) await fn({target,preventDefault(){},...extra});};
   form.requestSubmit=()=>{form.sending=emit('submit',{closest:()=>form});};
-  return {box,mid,queue,files,form, chips, payload:()=>payload,
+  return {box,mid,queue,files,form, chips, sendButton,queueButton, payload:()=>payload,
     key:extra=>emit('keydown',box,{key:'Enter',...extra}),
+    resize:height=>{viewport.height=height;viewportHandlers.resize();},
     load:()=>emit('DOMContentLoaded'),type:async t=>{box.value=t;await emit('input',box);},
     pick:async(...fs)=>{files.files=fs;await emit('change',files);},
     paste:(...fs)=>emit('paste',box,{clipboardData:{files:fs}}),
@@ -58,7 +60,7 @@ function page(mids=[], touch=false) {
     remove:k=>emit('click',{closest:q=>q==='[data-unpick]'?{dataset:{unpick:String(k)},closest:()=>form}:null}),
     reply:()=>emit('click',{closest:q=>q==='[data-reply-message]'?{closest:()=>({dataset:{raw:'whole quote'}})}:null}),
     async quote(){await emit('selectionchange');await emit('scroll',{});elements['quote-reply'].click();},
-    send:()=>emit('submit',{closest:()=>form}),
+    send:(queued=false)=>emit('submit',{closest:()=>form},{submitter:queued?queueButton:sendButton}),
     answer:()=>resolve({ok:true,status:200,headers:{get:()=>null},text:async()=> 'sent'}),fail:()=>reject(new Error('lost')),
     unload(){const ev={preventDefault(){this.prevented=true;}};for(const fn of win.beforeunload||[])fn(ev);return !!ev.prevented;}};
 }
@@ -153,4 +155,53 @@ for(const modifier of ['metaKey','ctrlKey',null]) {
 }
 const p=page([],true);await p.type('touch');await p.key({});assert.equal(p.payload(),undefined);
 const q=page();await q.type('ime');await q.key({isComposing:true});assert.equal(q.payload(),undefined);
+""")
+
+    def test_ipad_hardware_keyboard_can_queue(self):
+        self.run_composer("""
+for (const modifier of ['metaKey','ctrlKey']) {
+ const p=page([],true);await p.type('after this reply');await p.key({[modifier]:true});
+ assert.ok(p.payload(), 'Modified Enter must submit on an iPad');
+ assert.equal(p.payload().queue,'1');p.answer();await p.form.sending;
+}
+const p=page([],true);await p.type('touch');await p.key({});assert.equal(p.payload(),undefined);
+""")
+
+    def test_touch_buttons_choose_send_or_queue_without_leaking_mode(self):
+        self.run_composer("""
+const p=page([],true);await p.type('later');await p.pick(A);
+let sending=p.send(true);await Promise.resolve();
+assert.equal(p.payload().queue,'1');assert.deepEqual(p.payload().files,[A]);
+assert.equal(p.sendButton.disabled,true);assert.equal(p.queueButton.disabled,true);
+p.fail();await sending;
+assert.equal(p.box.value,'later');assert.equal(p.sendButton.disabled,false);assert.equal(p.queueButton.disabled,false);
+sending=p.send(true);await Promise.resolve();assert.equal(p.payload().queue,'1');p.answer();await sending;
+await p.type('now');sending=p.send();await Promise.resolve();assert.equal(p.payload().queue,'');p.answer();await sending;
+""")
+
+    def test_composer_has_named_touch_send_actions(self):
+        from supervisor.web_views import chat_page
+        from html.parser import HTMLParser
+        class Buttons(HTMLParser):
+            def __init__(self):
+                super().__init__(); self.labels = []; self.current = None
+            def handle_starttag(self, tag, attrs):
+                attrs = dict(attrs)
+                if tag == 'button' and 'data-queue' in attrs:
+                    self.current = [attrs['data-queue'], '']
+            def handle_data(self, data):
+                if self.current is not None: self.current[1] += data
+            def handle_endtag(self, tag):
+                if tag == 'button' and self.current is not None:
+                    self.labels.append(self.current); self.current = None
+        buttons = Buttons()
+        buttons.feed(str(chat_page('wren', None, [], [], {}, ['wren'], 't')))
+        self.assertEqual(buttons.labels, [['', 'Send now'], ['1', 'Queue after reply']])
+
+    def test_opening_keyboard_shrinks_and_closing_restores_long_draft(self):
+        self.run_composer("""
+const p=page([],true);p.box.scrollHeight=800;await p.type('long draft');
+assert.equal(p.box.style.height,'300px');
+p.resize(450);assert.equal(p.box.style.height,'150px');assert.equal(p.box.value,'long draft');
+p.resize(900);assert.equal(p.box.style.height,'300px');assert.equal(p.box.value,'long draft');
 """)

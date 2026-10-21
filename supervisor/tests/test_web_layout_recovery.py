@@ -109,7 +109,7 @@ const source = fs.readFileSync(process.argv[1], "utf8");
   const handlers = {}, storage = new Map([["shaft.draft.wren", "unsent message"]]);
   const box = { value: "unsent message" };
   const form = { dataset: { post: "/chat/wren", draft: "wren", reset: "1", ...(kind === "diff" ? { diff: "/preview/x" } : {}) },
-    querySelector(q) { return q.startsWith("textarea") ? box : null; }, closest: () => null,
+    querySelector(q) { return q.startsWith("textarea") ? box : null; }, querySelectorAll: () => [], closest: () => null,
     reset() { throw Error("cleared draft"); } };
   const document = { readyState: "loading", visibilityState: "visible", body: { scrollHeight: 0, appendChild() {} },
     createElement: () => ({ setAttribute() {}, classList: { add() {} } }),
