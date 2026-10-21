@@ -27,7 +27,7 @@ class Element {
     s=s.trim();
     if(s==='[inert]') return this.hasAttribute('inert');
     return ({'[data-show-docs]':['docbtn'],'[data-toggle-nav]':['navbtn','navclose'],
-      '[data-close-docs]':['docclose'],'nav a':['navlink'],'.closenav':['navclose'],
+      '[data-fullscreen-doc]':['expand'],'[data-close-docs]':['docclose'],'nav a':['navlink'],'.closenav':['navclose'],
       '.chathead':['head'],'[data-open-doc]':['card']})[s]?.includes(this.name) || false;
   });}
   querySelectorAll(q){
@@ -61,7 +61,7 @@ const window={addEventListener(){},matchMedia(q){assert.equal(q,'(max-width: 720
   return {addEventListener(k,fn){assert.equal(k,'change');media.push(fn);}};}};
 vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),{document,window,URL,location:{href:'https://shaft.test/i/wren/chat'},history:{replaceState(){}},navigator:{},setInterval(){},setTimeout(){},clearTimeout(){},
   localStorage:{getItem(){return null;},setItem(){},removeItem(){}},
-  getComputedStyle(el){return {position:el===nav?(phone?'fixed':'static'):(phone||narrow?'fixed':'static')};},
+  getComputedStyle(el){return {position:el===nav?(phone?'fixed':'static'):(phone||narrow||grid.classList.contains('docfullscreen')?'fixed':'static')};},
   ResizeObserver:class {constructor(fn){observers.push(fn);} observe(el){assert.equal(el,main);}}});
 async function event(type,props={}){const ev={target:document.activeElement,preventDefault(){this.prevented=true;},...props};
   for(const fn of handlers[type]||[]) await fn(ev);return ev;}
@@ -156,4 +156,28 @@ phone=false; rotate(); clear(); assert.equal(nav.getAttribute('aria-modal'),null
 assert.equal(navbtn.getAttribute('aria-expanded'),'false'); assert.equal(document.activeElement,navlink);
 phone=true; rotate(); modal(nav,'Chats and pages'); assert.equal(main.hasAttribute('inert'),true);
 await key('Escape'); clear();
+""")
+
+    def test_fullscreen_document_toggle_and_escape(self):
+        self.run_sheet(r"""
+phone=false; narrow=false;
+const expand=control('expand',docs);
+expand.focus();
+await click(expand);
+assert.equal(grid.classList.contains('docfullscreen'),true);
+assert.equal(expand.textContent,'Exit full screen');
+assert.equal(expand.getAttribute('aria-pressed'),'true');
+modal(docs,'Documents');
+assert.equal(chat.hasAttribute('inert'),true);
+await key('Escape');
+assert.equal(grid.classList.contains('docfullscreen'),false);
+assert.equal(grid.classList.contains('hidedocs'),false);
+assert.equal(document.activeElement,expand);
+assert.equal(expand.textContent,'Full screen');
+clear();
+await click(expand);
+await click(docclose);
+assert.equal(grid.classList.contains('docfullscreen'),false);
+assert.equal(grid.classList.contains('hidedocs'),true);
+clear();
 """)

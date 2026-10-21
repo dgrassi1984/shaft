@@ -156,13 +156,19 @@ tr.unread td { font-weight: 600; }
 table.num td:not(:first-child), table.num th:not(:first-child) { text-align: right; }
 td:empty::before { content: ""; }
 
-/* # renders as h2: the page h1 is 1.3rem, so a document title stays under it. More space above than below. */
-.md h2, .md h3, .md h4 { margin: .9rem 0 .3rem; color: var(--text); font-weight: 700; }   /* not the page h2's 600 */
-.md h2 { font-size: 1.25rem; }
-.md h3 { font-size: 1.12rem; }
-.md h4 { font-size: 1rem; }
-.md ul { margin: .2rem 0 .4rem; padding-left: 1.2rem; }
-.md p { margin: .35rem 0; }
+/* Markdown heading levels are offset by one under the page heading. */
+.md { line-height: 1.65; }
+.md h2, .md h3, .md h4, .md h5, .md h6 {
+  margin: 1.5em 0 .5em; color: var(--text); font-weight: 700; line-height: 1.25;
+}
+.md h2 { font-size: 2rem; }
+.md h3 { font-size: 1.6rem; }
+.md h4 { font-size: 1.3rem; }
+.md h5 { font-size: 1.15rem; }
+.md h6 { font-size: 1rem; }
+.md > :first-child { margin-top: 0; }
+.md ul { margin: .6rem 0; padding-left: 1.5rem; }
+.md p { margin: .75em 0; }
 .md code, code { background: var(--bg); padding: 0 .2rem; border-radius: 3px; }
 .entry .md h3:first-child, .entry .md h2:first-child { margin-top: 0; }
 
@@ -362,7 +368,7 @@ aside.docs { min-height: 0; overflow-y: auto; background: var(--panel); border: 
 .docsize { flex-shrink: 0; font-size: .75rem; }
 .doclist .mark { color: var(--accent); font-size: .7rem; }
 .docview { border-top: 1px solid var(--line); padding-top: .4rem; }
-.doctitle { display: flex; align-items: center; gap: .5rem; margin-bottom: .2rem; }
+.doctitle { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-bottom: .2rem; }
 .doctitle > b { min-width: 0; overflow-wrap: anywhere; }
 .doctitle > button, .doctitle > form { flex-shrink: 0; }
 .doctitle .docdelete { margin: 0; padding: 0; }
@@ -402,7 +408,7 @@ form.docedit textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monosp
 .md li.task-item { list-style: none; margin-left: -1.1rem; }
 .md span.task { display: inline-block; width: 1.1rem; color: var(--dim); }
 .md span.task.done { color: var(--good); }
-.md h5, .md h6 { font-size: 1rem; font-weight: 700; margin: .7rem 0 .2rem; color: var(--dim); }
+
 .md hr { border: 0; border-top: 1px solid var(--line); margin: .8rem 0; }
 .md s { color: var(--dim); }
 .md a { overflow-wrap: anywhere; }
@@ -576,3 +582,16 @@ details.threads form.act { display: inline; margin: 0; }
     min-height: 44px; min-width: 44px; padding-top: .45rem; padding-bottom: .45rem; }
   .commentchip { min-height: 44px; display: inline-flex; align-items: center; }
 }
+
+/* Expand the existing pane so editor contents, selection and drafts survive. */
+.chatgrid.docfullscreen > aside.docs {
+  display: block; position: fixed; inset: 0; z-index: 55; border: 0; border-radius: 0;
+  padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right))
+           max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+}
+.docfullscreen .docshead, .docfullscreen .docview { max-width: 75ch; margin-inline: auto; }
+.docfullscreen .docmd { font-size: 1.067rem; }
+.docfullscreen form.docedit textarea { min-height: 60vh; min-height: 60dvh; font-size: 1rem; line-height: 1.6; }
+.docshead { flex-wrap: wrap; }
+.docshead > [data-fullscreen-doc] { margin-left: auto; }
+.docshead:has([data-fullscreen-doc]) .closedocs { margin-left: 0; }

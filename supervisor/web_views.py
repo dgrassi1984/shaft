@@ -816,9 +816,12 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
             '<textarea name="text" hidden></textarea><button type="submit" class="small">Create</button></form></details>',
             n=q(name), a=post_attrs("Documents", actions.RUN_NOW_S))
     back = Html('<button type="button" class="small" data-back-docs aria-label="Back to the documents">← Documents</button>')
-    head = h('<div class="docshead">{title} <span class="dim">{dir}/</span>{new}<button type="button" '
+    expand = (Html('<button type="button" class="small" data-fullscreen-doc aria-pressed="false">'
+                   'Full screen</button>') if open_path and text is not None and not problem else Html(""))
+    head = h('<div class="docshead">{title} <span class="dim">{dir}/</span>{new}{expand}<button type="button" '
              'class="small closedocs" data-close-docs aria-label="Close the documents">✕</button></div>{list}',
-             title=back if open_path else Html("<b>Documents</b>"), dir=DIR, new="" if open_path or archived else new,
+             title=back if open_path else Html("<b>Documents</b>"), dir=DIR, expand=expand,
+             new="" if open_path or archived else new,
              list="" if open_path else h('<div class="doclist">{i}</div>', i=join(items) if items else
                                           h('<p class="dim">No current files.</p>') if archived else
                                           h('<p class="dim">none yet: ask {n} for one, it appears here as it writes it.</p>',
