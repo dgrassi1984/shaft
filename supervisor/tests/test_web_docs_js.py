@@ -137,6 +137,7 @@ function mount(revision='s1', text='saved', instance='wren', doc='p.md') {
   const path={value:doc}, button={};
   form={dataset:{post:`/docs/${instance}/save`,after:'doc-saved'},hidden:true,
     closest:q=>q==='.docview'?view:null,
+    querySelectorAll:q=>q==='button[type=submit]'?[button]:[],
     querySelector:q=>({'textarea':box,'textarea[name=text]':box,'input[name=sha]':sha,
       'input[name=path]':path,'button[type=submit]':button,'[data-doc-draft]':note,
       '[data-doc-choice]':choice,'[data-refusal]':{replaceChildren(...n){form.refusal=n;}}})[q]||null,

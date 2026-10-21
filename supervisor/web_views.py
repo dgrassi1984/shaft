@@ -1052,7 +1052,9 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
         '<div class="actions"><label class="pick">Attach files<input type="file" name="files" multiple class="sr-file">'
         '</label>'
         '<span class="dim keys">Enter sends · Alt-Enter new line · ⌘-Enter queues · / to write · Alt-↑↓ another chat</span>'
-        '<button type="submit">Send</button></div></form>',
+        '<button type="submit" data-queue="">Send now</button>'
+        '<button type="submit" data-queue="1" title="Wait for the current reply to finish; sends now if idle">'
+        'Queue after reply</button></div></form>',
         n=name, mf=messages.ATTACH_MAX_BYTES, mt=messages.ATTACH_MAX_TOTAL, mn=messages.ATTACH_MAX_FILES,
         mids=json.dumps(list(dict.fromkeys((chat or {}).get("mids", []) +
                         [t["mid"] for t in (chat or {}).get("turns", []) + (chat or {}).get("queued", []) if t.get("mid")]))))
