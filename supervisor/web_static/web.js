@@ -399,14 +399,18 @@
       if (typed.trim() !== form.dataset.confirmType) { toast(`Not done: you typed "${typed}", not ${form.dataset.confirmType}`, true); return; }
       form.querySelector("input[name=confirm]").value = typed.trim();
     } else if (form.dataset.confirm && !form.dataset.diff && !window.confirm(form.dataset.confirm)) return;
-    const button = form.querySelector("button[type=submit]");
-    if (button) button.disabled = true;
+    const buttons = [...form.querySelectorAll("button[type=submit]")].filter(b => !b.disabled);
+    const queue = form.querySelector("input[name=queue]");
+    if (queue && ev.submitter?.dataset.queue !== undefined) queue.value = ev.submitter.dataset.queue;
+    buttons.forEach(b => { b.disabled = true; });
     form.dataset.busy = "1";
     const box = form.querySelector("textarea[name=text]");
     const typed = box ? box.value : null;            // what this send carries
     const mid = form.querySelector("input[name=mid]");
     if (mid && !mid.value) mid.value = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
     const sentMid = mid ? mid.value : "";
+    const payload = new FormData(form);
+    if (queue) queue.value = "";              // the next send chooses its own mode
     const sentFiles = [...(form.querySelector("input[type=file]") || { files: [] }).files];
     if (form.dataset.draft && mid) {
       try {
@@ -426,7 +430,7 @@
         headers: { "X-CSRF-Token": csrf(),
                    ...(!multipart ? { "Content-Type": "application/x-www-form-urlencoded" } : {}),
                    ...(row || form.dataset.addRow ? { "X-Row": "1" } : {}) },
-        body: multipart ? new FormData(form) : new URLSearchParams(new FormData(form)),
+        body: multipart ? payload : new URLSearchParams(payload),
       });
       if (pairAgain(r)) { if (shown) shown.remove(); return; }
       const body = await r.text();
@@ -483,7 +487,7 @@
       toast(lostAnswer(form, e, waitMs), true);
     } finally {
       clearTimeout(limit);
-      if (button) button.disabled = false;
+      buttons.forEach(b => { b.disabled = false; });
       delete form.dataset.busy;
       delete form._afterDocSave;
     }
@@ -613,7 +617,7 @@
   // The text box grows with what is written in it (up to a third of the window), and keeps its draft.
   function grow(box, part = 1 / 3) {           // at most `part` of the window
     box.style.height = "auto";
-    box.style.height = `${Math.min(box.scrollHeight + 2, Math.round(window.innerHeight * part))}px`;
+    box.style.height = `${Math.min(box.scrollHeight + 2, Math.round((window.visualViewport?.height || window.innerHeight) * part))}px`;
   }
   const draftKey = (form) => `shaft.draft.${form.dataset.draft}`;
   const pendingKey = (form) => `shaft.pending.${form.dataset.draft}`;
@@ -722,8 +726,8 @@
       return;
     }
     const form = ev.target.closest && ev.target.closest("form[data-files]");
-    // Return stays a newline on touch-only devices. Modified desktop sends wait for the current reply.
-    if (form && ev.target.tagName === "TEXTAREA" && ev.key === "Enter" && !ev.isComposing && !touchOnly()) {
+    // Return stays a newline on touch-only devices; Cmd/Ctrl+Enter queues on hardware keyboards too.
+    if (form && ev.target.tagName === "TEXTAREA" && ev.key === "Enter" && !ev.isComposing && (!touchOnly() || ev.metaKey || ev.ctrlKey)) {
       ev.preventDefault();
       if (ev.altKey || ev.shiftKey) {
         const box = ev.target, at = box.selectionStart;
@@ -1406,6 +1410,8 @@
     const vv = window.visualViewport;
     if (!vv) return;
     document.documentElement.style.setProperty("--vvh", `${Math.round(vv.height)}px`);
+    const box = document.querySelector("form.composer textarea");
+    if (box) grow(box);
     document.body.classList.toggle("kbd", vv.height < window.innerHeight - 120);   // the keyboard is up
     // iOS scrolls the whole page to show a focused field; the page is already the visible height: put it back
     if (document.body.classList.contains("chatapp") && window.scrollY) window.scrollTo(0, 0);
