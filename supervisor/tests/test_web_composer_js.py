@@ -188,15 +188,38 @@ await p.type('now');sending=p.send();await Promise.resolve();assert.equal(p.payl
             def handle_starttag(self, tag, attrs):
                 attrs = dict(attrs)
                 if tag == 'button' and 'data-queue' in attrs:
-                    self.current = [attrs['data-queue'], '']
+                    self.current = [attrs['data-queue'], '', 'hidden' in attrs]
             def handle_data(self, data):
                 if self.current is not None: self.current[1] += data
             def handle_endtag(self, tag):
                 if tag == 'button' and self.current is not None:
                     self.labels.append(self.current); self.current = None
-        buttons = Buttons()
-        buttons.feed(str(chat_page('wren', None, [], [], {}, ['wren'], 't')))
-        self.assertEqual(buttons.labels, [['', 'Send now'], ['1', 'Queue after reply']])
+        for state, queue_hidden in ((None, True), ('idle', True), ('replying', False)):
+            buttons = Buttons()
+            chat = {'id': 'web-a', 'state': state, 'turns': [], 'started': '2026-10-22T09:00:00',
+                    'created': '2026-10-22T09:00:00'} if state else None
+            buttons.feed(str(chat_page('wren', chat, [], [], {}, ['wren'], 't')))
+            self.assertEqual(buttons.labels, [['', 'Send now', False], ['1', 'Queue after reply', queue_hidden]], state)
+
+    def test_queue_after_reply_shows_only_while_a_reply_runs(self):
+        """Reverting this leaves Queue after reply on screen when nothing is replying, or hidden once a reply starts."""
+        script = r"""
+const fs = require("node:fs"), vm = require("node:vm"), assert = require("node:assert/strict");
+const handlers = {}, queue = { hidden: true };
+let live = false;
+const feed = { dataset: { follow: "1" }, querySelectorAll: () => [], closest: () => null,
+  querySelector: q => q === '[data-k="live"]' && live ? {} : null };
+const document = { readyState: "loading", addEventListener(k, f) { (handlers[k] ||= []).push(f); },
+  querySelector: q => q === 'form[data-files] button[data-queue="1"]' ? queue : null,
+  querySelectorAll: () => [], getElementById: () => null };
+vm.runInNewContext(fs.readFileSync(process.argv[1], "utf8"), { document, URL, navigator: {}, setInterval() {},
+  window: { addEventListener() {} }, location: { href: "https://shaft.test/i/wren/chat" } });
+const swap = () => { for (const f of handlers["shaft:swapped"]) f({ target: feed, detail: {} }); };
+live = true; swap(); assert.equal(queue.hidden, false, "a reply started: offer to queue");
+live = false; swap(); assert.equal(queue.hidden, true, "the reply ended: only Send now");
+"""
+        result = subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_opening_keyboard_shrinks_and_closing_restores_long_draft(self):
         self.run_composer("""
