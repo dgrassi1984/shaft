@@ -605,6 +605,11 @@ def send_comment(name: str, login: str, pid: str) -> tuple[dict, str]:
     return chat, said
 
 
+def _in_chat(chat: dict | None, mid: str) -> bool:
+    """The page's message id is already in this chat: sent as a turn, or queued for after the reply."""
+    return bool(mid and chat and (mid in (chat.get("mids") or []) or any(t.get("mid") == mid for t in chat.get("queued", []))))
+
+
 def background(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: str = "", *,
                comment_block: str = "", comments: list[dict] | None = None) -> tuple[str, str]:
     """Next cycle (docs/plans/PLAN-background-messages.md): the message goes to the instance's inbox now and is read in
@@ -619,6 +624,8 @@ def background(name: str, login: str, text: str, files: list[tuple[str, bytes]],
     with _inst_lock(name):
         if (row := messages.sent_mid(name, mid)):
             return row["file"], f"already sent to {name}"
+        if _in_chat(open_chat(name), mid):        # sent now (or queued) before its answer was lost: not twice
+            return "", f"already sent to {name} in the chat"
         atts, lines = [], ""
         if files:
             try:
@@ -654,6 +661,8 @@ def send_comment_background(name: str, login: str, pid: str) -> str:
             # mid: the post id — after a mark_sent that failed, a retry finds the delivered message, not a second one
             file, said = background(name, login, "", [], mid=pid, comment_block=block,
                                     comments=[{"id": post["thread"], "doc": post["doc"]}])
+            if not file:                          # it went in the chat already (send_comment): not to the inbox too
+                return said
             doc_comments.mark_sent(name, pid, f"inbox/{file}")
         except Refused:
             raise
@@ -669,7 +678,7 @@ def send(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: 
     `mid`: the page's id for this message — sent again after an answer that never arrived, it is not sent twice."""
     from . import messages
     with _inst_lock(name):
-        if mid and (c := open_chat(name)) and (mid in (c.get("mids") or []) or any(t.get("mid") == mid for t in c.get("queued", []))):
+        if _in_chat(c := open_chat(name), mid):
             return c, f"already sent to {name}"
         if messages.sent_mid(name, mid):          # the same message, sent for its next cycle before its answer was lost
             return open_chat(name) or {}, f"already sent to {name} for its next cycle"
@@ -690,7 +699,7 @@ def queue(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid:
             return send(name, login, text, files, mid=mid)
         if messages.sent_mid(name, mid):
             return chat, f"already sent to {name} for its next cycle"
-        if mid and (mid in (chat.get("mids") or []) or any(t.get("mid") == mid for t in chat.get("queued", []))):
+        if _in_chat(chat, mid):
             return chat, f"already sent to {name}"
         return _send(name, login, text, files, mid=mid or secrets.token_hex(16), queued=True)
 

@@ -90,6 +90,18 @@ class NextCycleMessageTest(unittest.TestCase):
         self.assertEqual(len(messages.history()), 1)
         self.f.api.assert_not_called()
 
+    def test_a_message_sent_in_the_chat_is_not_also_left_for_the_next_cycle(self):
+        """Codex review of #78: Send now (or Queue after reply) went through, its answer was lost, and the page retried
+        the same mid with Next cycle — it was delivered to the inbox as well, so the instance got it twice."""
+        web_chat.save({"id": "web-c0ffee00", "instance": "wren", "login": ME, "created": "2026-10-22T09:00:00",
+                       "state": "replying", "turns": [], "reply": None, "mids": ["m2"], "queued": [{"mid": "m3"}]})
+        for mid in ("m2", "m3"):                  # sent as a turn; queued for after the reply
+            file, said = web_chat.background("wren", ME, "once", [], mid=mid)
+            self.assertEqual((file, said), ("", "already sent to wren in the chat"), mid)
+        self.assertEqual(self.f.inbox(), [])
+        self.assertEqual(messages.history(), [])
+        self.f.api.assert_not_called()
+
     def test_empty_and_too_long_are_refused(self):
         with self.assertRaises(web_chat.Refused):
             web_chat.background("wren", ME, "   ", [])
@@ -196,6 +208,17 @@ class NextCycleCommentTest(unittest.TestCase):
         [row] = messages.history()
         self.assertEqual(row["comments"], [{"id": self.tid, "doc": "plan.md"}])
         self.assertEqual(row["shown"], "")
+        self.f.api.assert_not_called()
+
+    def test_a_comment_already_sent_in_the_chat_is_not_left_for_the_next_cycle_too(self):
+        """send_comment uses the post id as its mid: sent in the chat (its mark lost), Next cycle must not deliver it
+        again, nor mark it sent to an inbox file that does not exist."""
+        web_chat.save({"id": "web-c0ffee01", "instance": "wren", "login": ME, "created": "2026-10-22T09:00:00",
+                       "state": "idle", "turns": [], "reply": None, "mids": ["p-0000000000000001"]})
+        said = web_chat.send_comment_background("wren", ME, "p-0000000000000001")
+        self.assertEqual(said, "already sent to wren in the chat")
+        self.assertEqual(self.f.inbox(), [])
+        self.assertFalse(comments.get_post("wren", "p-0000000000000001").get("sent"))
         self.f.api.assert_not_called()
 
     def test_its_answer_in_a_message_lands_in_the_thread(self):
