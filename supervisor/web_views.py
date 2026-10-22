@@ -753,11 +753,22 @@ def threads_list(name: str, doc: str, sha: str, threads: list[dict], active: str
                   '<input type="hidden" name="pid" value="{pid}">'
                   '<button type="submit" class="small">Send to {who}</button></form>',
                   n=q(name), pid=p["pid"], who=name, a=post_attrs("Documents")),
+                # for its next cycle: to its inbox, not answered now (PLAN-background-messages.md)
+                h('<form class="act" data-post="/docs/{n}/comment/send" data-after="comment-saved"{a}>'
+                  '<input type="hidden" name="pid" value="{pid}"><input type="hidden" name="when" value="cycle">'
+                  '<button type="submit" class="small" title="Not answered now: {who} reads it in its next cycle">'
+                  'Next cycle</button></form>', n=q(name), pid=p["pid"], who=name, a=post_attrs("Documents")),
             ])
-        return h('<div class="post{u}" data-pid="{pid}" data-text="{raw}"><div class="who">{who} <span class="dim">{ts}</span>{warn}'
+        # Where it went, when not as a chat message: its inbox for the next cycle, or the message that answered it
+        ref = p.get("sent") or p.get("turn") or ""
+        how = (h(' <a class="laterchip" href="/messages/{f}">⏾ for its next cycle</a>', f=q(ref[6:]))
+               if ref.startswith("inbox/") else
+               h(' <a class="laterchip" href="/messages/{f}">in a message</a>', f=q(ref[8:]))
+               if ref.startswith("message:") else Html(""))
+        return h('<div class="post{u}" data-pid="{pid}" data-text="{raw}"><div class="who">{who} <span class="dim">{ts}</span>{warn}{how}'
                  '</div>{text}{btns}</div>',
                  u=Html(" unsent") if unsent else "", pid=p["pid"], who=who, ts=p["ts"][11:16],
-                 warn=Html(' <span class="warn">only you see this</span>') if unsent else "",
+                 warn=Html(' <span class="warn">only you see this</span>') if unsent else "", how=how,
                  text=markdown(p["text"]), btns=buttons, raw=p["text"])
 
     def one(t: dict) -> Html:
@@ -941,12 +952,31 @@ def _turn_time(ts: str) -> Html:
              iso=ts, full=ts.replace("T", " "), short=ts[11:16]) if ts else Html("")
 
 
+def _later_card(m: dict) -> Html:
+    """What the operator left for the instance's next cycle (web_chat.background): their own message, in the chat
+    though not a turn of it — waiting in its inbox, or read once a cycle has taken it up."""
+    shown = m.get("shown", m["text"])
+    atts = join(h('<a href="/files/{f}/{j}" target="_blank">📎 {n}</a>', f=q(m["file"]), j=j, n=a["name"])
+                for j, a in enumerate(m.get("attachments") or []))
+    state = "read" if m.get("read") else "waiting"
+    return h('<div class="turn me later" data-k="b{f}" data-raw="{raw}"><div class="who">you <span class="dim">{ts}</span> '
+             '<a href="/messages/{f}" class="laterchip {state}" title="Not answered now: it reads this in its next '
+             'cycle">⏾ next cycle · {state}</a>{chips}<button type="button" class="copy small icon" data-copy '
+             'title="copy the message as Markdown" aria-label="Copy the message">{copy}</button></div>{text}'
+             '<div class="atts">{a}</div></div>', f=q(m["file"]), raw=shown, ts=_turn_time(m["ts"]), state=state,
+             chips=_comment_chips(m.get("comments")), copy=ICONS["copy"],
+             text=_my_text(shown) if shown else Html(""), a=atts)
+
+
 def _sent_cards(name: str, sent: list[dict], archived: bool = False) -> list[Html]:
     """What the instance sent the operator (send_message), one card each; Reply quotes it in the composer, and a quoted
     question is answered by the message that quotes it (web_chat.answer_quoted), as a Telegram reply answers it.
     data-sent-at: when it came, so opening the chat can start at the first one this browser has not seen (web.js)."""
     cards = []
     for m in sent:             # files open in a sheet of their own: in an app, a link replaced its only view
+        if m["from"] == "operator":
+            cards.append(_later_card(m))
+            continue
         # A text file previews in the documents panel (/fragment/docs/<name>?att=<file>/<j>); the link still downloads.
         atts = join(h('<a href="/files/{f}/{j}" target="_blank"{preview}>{img}</a>', f=q(m["file"]), j=j,
                       preview=h(' data-open-att="{f}/{j}"', f=m["file"], j=j)
@@ -1070,14 +1100,16 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
 
 
 def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], live: dict, names: list[str],
-              csrf: str, read_only: bool = False, panel: Html = Html(""), doc: str = "", att: str = "") -> Html:
-    """`att` (<message file>/<index>): the panel shows that text attachment, not a document (attachment_panel)."""
+              csrf: str, read_only: bool = False, panel: Html = Html(""), doc: str = "", att: str = "",
+              later: str = "") -> Html:
+    """`att` (<message file>/<index>): the panel shows that text attachment, not a document (attachment_panel).
+    `later`: when its next cycle is (autonomy.next_cycle), the Next cycle button's title."""
     from . import messages
     feed_url = f"/fragment/chat/{q(name)}" + (f"?id={q(chat['id'])}" if read_only and chat else "")
     composer = Html("") if read_only else h(
         '<form class="composer" data-post="/chat/{n}/send" data-multipart="1" data-reset="1" data-files data-draft="{n}" data-sent-mids="{mids}" '
         'data-max-file="{mf}" data-max-total="{mt}" data-max-files="{mn}"><input type="hidden" name="mid" value="">'
-        '<input type="hidden" name="queue" value="">'
+        '<input type="hidden" name="queue" value=""><input type="hidden" name="background" value="">'
         '<div class="chips" data-picked></div>'
         '<textarea name="text" rows="2" maxlength="20000" placeholder="Message {n}" aria-label="Message {n}">'
         '</textarea>'
@@ -1087,11 +1119,15 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
         '<button type="submit" data-queue="">Send now</button>'
         # Queue after reply only while a reply runs (web.js syncQueue keeps it in step with the feed's live turn).
         '<button type="submit" data-queue="1" title="Wait for the current reply to finish; sends now if idle"{qh}>'
-        'Queue after reply</button></div></form>',
-        qh="" if (chat or {}).get("state") == "replying" else Html(" hidden"),
+        'Queue after reply</button>'
+        # Next cycle: not answered now — to its inbox, read in its next cycle (PLAN-background-messages.md)
+        '<button type="submit" data-background="1" title="Not answered now: to {n}&#x27;s inbox, {later}">'
+        'Next cycle</button></div></form>',
+        qh="" if (chat or {}).get("state") == "replying" else Html(" hidden"), later=later or "for its next cycle",
         n=name, mf=messages.ATTACH_MAX_BYTES, mt=messages.ATTACH_MAX_TOTAL, mn=messages.ATTACH_MAX_FILES,
         mids=json.dumps(list(dict.fromkeys((chat or {}).get("mids", []) +
-                        [t["mid"] for t in (chat or {}).get("turns", []) + (chat or {}).get("queued", []) if t.get("mid")]))))
+                        [t["mid"] for t in (chat or {}).get("turns", []) + (chat or {}).get("queued", []) if t.get("mid")] +
+                        [m["mid"] for m in sent if m["from"] == "operator" and m.get("mid")]))))
     banner = (h('<p class="panel">Earlier chat, {date}. <a href="/i/{n}/chat">Back to the current chat</a></p>',
                 date=chat['created'][:16].replace('T', ' '), n=q(name)) if read_only and chat else Html(""))
     body = join([banner, h('<section class="panel chat" data-scroll><div class="feed" data-poll="{u}" data-every="1500" data-keyed="1" '

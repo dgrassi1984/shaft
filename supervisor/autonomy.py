@@ -110,6 +110,33 @@ def wake_floor(name: str) -> int:
     return own if isinstance(own, int) and not isinstance(own, bool) and own >= 1 else WAKE_FLOOR_MIN
 
 
+def next_wake(name: str, now: datetime | None = None, interval: timedelta | None | bool = False) -> str:
+    """When the scheduler wakes the instance next: 'HH:MM', 'due' or 'never' (WAKE_INTERVAL_MINUTES=0). The one rule
+    the dashboard, `shaft top` and the web chat's Next cycle say. `interval`: already read (False: read it here)."""
+    interval = wake_interval(name) if interval is False else interval
+    if interval is None:
+        return "never"
+    last = (_state().get("wakes") or {}).get(name)
+    if not last:
+        return "due"
+    at = datetime.fromisoformat(last) + interval
+    return "due" if at <= (now or datetime.now()) else f"{at:%H:%M}"
+
+
+def next_cycle(name: str) -> str:
+    """Where a message left for the instance's next cycle stands: what the web UI tells the operator who sends one."""
+    from .runner import busy_with
+    if paused(name):
+        return f"{name} is paused: it reads this in its first cycle after you resume it"
+    at = next_wake(name)
+    if at == "never":
+        return f"{name} has no scheduled cycles (WAKE_INTERVAL_MINUTES=0): it reads this when you next talk"
+    when = "due now" if at == "due" else f"≈{at}"
+    if (busy_with(name) or "").startswith("live"):
+        return f"a cycle is running and read its inbox when it began: this waits for the next one ({when})"
+    return f"for {name}'s next cycle ({when})"
+
+
 def _every(interval: timedelta) -> str:
     m = int(interval.total_seconds() // 60)
     return f"{m // 60} hours" if m % 60 == 0 and m >= 120 else "hour" if m == 60 else f"{m} minutes"

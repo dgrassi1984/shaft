@@ -138,15 +138,7 @@ def instance_state(name: str, now: float | None = None) -> dict:
         doing = f"{doing} · {since:.0f}s" if doing else ""
     cfg = instance_config(name)
     interval = autonomy.wake_interval(name)
-    st = autonomy._state()
-    last = (st.get("wakes") or {}).get(name)
-    if interval is None:
-        next_wake = "never"
-    elif not last:
-        next_wake = "due"
-    else:
-        at = datetime.fromisoformat(last) + interval
-        next_wake = "due" if at <= datetime.fromtimestamp(now) else f"{at:%H:%M}"
+    next_wake = autonomy.next_wake(name, datetime.fromtimestamp(now), interval)
     calls, tokens = _today_usage(root)
     n_judged, rate, achieved = _judged(name)
     return {"name": name, "state": state, "since": busy.partition(" since ")[2], "doing": doing,

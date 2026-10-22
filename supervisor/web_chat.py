@@ -605,15 +605,72 @@ def send_comment(name: str, login: str, pid: str) -> tuple[dict, str]:
     return chat, said
 
 
+def background(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: str = "", *,
+               comment_block: str = "", comments: list[dict] | None = None) -> tuple[str, str]:
+    """Next cycle (docs/plans/PLAN-background-messages.md): the message goes to the instance's inbox now and is read in
+    its next cycle — no chat turn, no reply, nothing holds the instance. Its answer, if any, is a send_message: a card
+    in the chat. Files and a quoted question as send()'s. (inbox file, what to say)"""
+    from . import autonomy, messages
+    text = text.replace("\r\n", "\n").strip()        # a browser form's line ends: the inbox file is the instance's
+    if not text and not files and not comment_block:
+        raise Refused("an empty message is not sent")
+    if len(text) > MAX_TEXT:
+        raise Refused(f"a message is at most {MAX_TEXT} characters ({len(text)})")
+    with _inst_lock(name):
+        if (row := messages.sent_mid(name, mid)):
+            return row["file"], f"already sent to {name}"
+        atts, lines = [], ""
+        if files:
+            try:
+                atts, lines = messages.from_operator(name, files, "web")
+            except ValueError as e:
+                raise Refused(str(e)) from None
+        asked = messages.quoted_questions(name, text)
+        body = "\n\n".join(x for x in ((text + lines).strip(), comment_block) if x)
+        path = messages.deliver_background(name, body, shown=text, in_reply_to=asked[0]["path"].name if asked else None,
+                                           attachments=atts, mid=mid, comments=comments)
+    said = autonomy.next_cycle(name)
+    if (answered := messages.answer_quoted(name, text)):
+        log(f"web: {name}'s question {', '.join(answered)} answered by a message for its next cycle")
+        said += " · answers its question"
+    log(f"web: {login or 'operator'} -> {name}: for its next cycle ({path.name})")
+    return path.name, said
+
+
+def send_comment_background(name: str, login: str, pid: str) -> str:
+    """A stored comment, sent for the instance's next cycle: its block goes to the inbox (background), the post is
+    marked sent there (frozen, and a retry is refused), and the answer comes as a send_message with a "### c<n>"
+    section (broker: doc_comments.parse_answer)."""
+    from . import doc_comments
+    with _inst_lock(name):
+        try:
+            post = doc_comments.get_post(name, pid)
+            if post.get("sent") or post.get("turn"):
+                return f"already sent to {name}"
+            block = doc_comments.block(name, post["thread"], pid, cycle=True)
+            file, said = background(name, login, "", [], mid=pid, comment_block=block,
+                                    comments=[{"id": post["thread"], "doc": post["doc"]}])
+            doc_comments.mark_sent(name, pid, f"inbox/{file}")
+        except (Exception, SystemExit) as e:
+            if isinstance(e, Refused):
+                raise
+            raise Refused(str(e)) from e
+    _sync_copies(name, [post["doc"]])
+    return said
+
+
 def send(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: str = "", *,
          comment_block: str = "", comments: list[dict] | None = None) -> tuple[dict, str]:
     """A message from the operator: a new reply if none is running, an interjection otherwise. (chat, what to say)
     `mid`: the page's id for this message — sent again after an answer that never arrived, it is not sent twice."""
+    from . import messages
     with _inst_lock(name):
         if mid and (c := open_chat(name)) and (mid in (c.get("mids") or []) or any(t.get("mid") == mid for t in c.get("queued", []))):
             return c, f"already sent to {name}"
+        if messages.sent_mid(name, mid):          # the same message, sent for its next cycle before its answer was lost
+            return open_chat(name) or {}, f"already sent to {name} for its next cycle"
         chat, said = _send(name, login, text, files, comment_block=comment_block, comments=comments, mid=mid)
-    from . import messages                         # a question it quotes is answered, as a Telegram reply answers it
+    # a question it quotes is answered, as a Telegram reply answers it
     if (answered := messages.answer_quoted(name, text)):
         log(f"web: {name}'s question {', '.join(answered)} answered in the web chat")
         said += " · answers its question"
@@ -622,10 +679,13 @@ def send(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: 
 
 def queue(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: str = "") -> tuple[dict, str]:
     """Keep a message for the next reply; an idle chat sends it now."""
+    from . import messages
     with _inst_lock(name):
         chat = open_chat(name)
         if not chat or chat["state"] != "replying":
             return send(name, login, text, files, mid=mid)
+        if messages.sent_mid(name, mid):
+            return chat, f"already sent to {name} for its next cycle"
         if mid and (mid in (chat.get("mids") or []) or any(t.get("mid") == mid for t in chat.get("queued", []))):
             return chat, f"already sent to {name}"
         return _send(name, login, text, files, mid=mid or secrets.token_hex(16), queued=True)
