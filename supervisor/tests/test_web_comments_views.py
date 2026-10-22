@@ -132,10 +132,11 @@ class CommentViewsTest(unittest.TestCase):
         page = panel(threads=[thr(anchor=None)])
         self.assertIn("&quot;anchor&quot;:null", page)
 
-    def test_unsent_post_is_private_with_edit_delete_send(self):
+    def test_unsent_post_says_not_sent_with_edit_delete_send(self):
         html_out = str(threads_list("ada", "plan.md", "abc", [thr(posts=[post(sent=None, text="draft note")])]))
         self.assertIn('class="post unsent" data-pid="p1"', html_out)
-        self.assertIn("only you see this", html_out)
+        self.assertIn('<span class="warn">not sent</span>', html_out)
+        self.assertNotIn("only you see this", html_out)       # untrue since the instance's copy holds it
         self.assertIn('data-edit-post="p1">Edit</button>', html_out)
         self.assertIn('data-post="/docs/ada/comment/delete" data-confirm="Delete this comment?" '
                       'data-after="comment-saved"', html_out)
@@ -145,14 +146,19 @@ class CommentViewsTest(unittest.TestCase):
         self.assertIn(">Send to ada</button>", html_out)
         sent = str(threads_list("ada", "plan.md", "abc", [thr(posts=[post(sent="web-9#2")])]))
         self.assertNotIn("unsent", sent)
-        self.assertNotIn("only you see this", sent)
+        self.assertNotIn("not sent", sent)
         self.assertNotIn("data-edit-post", sent)
         self.assertNotIn("comment/delete", sent)
         self.assertNotIn("comment/send", sent)
         answered = str(threads_list("ada", "plan.md", "abc",
                                     [thr(posts=[post(by="ada", sent=None, turn="web-9#3")])]))
         self.assertNotIn("unsent", answered)
-        self.assertNotIn("only you see this", answered)
+        self.assertNotIn("not sent", answered)
+        # Left unsent, then answered by the instance from its copy: frozen like a sent one.
+        seen = str(threads_list("ada", "plan.md", "abc", [thr(posts=[post(sent=None, seen="web-9#4")])]))
+        self.assertNotIn("unsent", seen)
+        self.assertNotIn("data-edit-post", seen)
+        self.assertNotIn("comment/send", seen)
 
     def test_instance_opened_thread_names_the_author(self):
         html_out = str(threads_list("ada", "plan.md", "abc", [thr(

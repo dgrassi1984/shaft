@@ -733,13 +733,14 @@ def _overwritten(saved: dict | None, sha: str, text: str | None) -> Html:
 
 def threads_list(name: str, doc: str, sha: str, threads: list[dict], active: str = "") -> Html:
     """Open threads on one document, resolved ones folded under them. Nothing when there are no threads."""
+    from . import doc_comments
     from .web_actions import post_attrs
     if not threads:
         return Html("")
 
     def post(p: dict) -> Html:
-        # Unsent is the operator's note the instance has not been given: no send id and no answer turn.
-        unsent = p.get("sent") is None and not p.get("turn")
+        # Unsent: not sent as a message nor answered yet. The instance can read it in notes/comments/, no reply starts.
+        unsent = not doc_comments.delivered(p)
         who = "you" if p["by"] == "operator" else p["by"]
         buttons = Html("")
         if unsent:
@@ -768,7 +769,7 @@ def threads_list(name: str, doc: str, sha: str, threads: list[dict], active: str
         return h('<div class="post{u}" data-pid="{pid}" data-text="{raw}"><div class="who">{who} <span class="dim">{ts}</span>{warn}{how}'
                  '</div>{text}{btns}</div>',
                  u=Html(" unsent") if unsent else "", pid=p["pid"], who=who, ts=p["ts"][11:16],
-                 warn=Html(' <span class="warn">only you see this</span>') if unsent else "", how=how,
+                 warn=Html(' <span class="warn">not sent</span>') if unsent else "", how=how,
                  text=markdown(p["text"]), btns=buttons, raw=p["text"])
 
     def one(t: dict) -> Html:

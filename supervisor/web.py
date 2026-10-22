@@ -744,13 +744,15 @@ def _comment(name: str, login: str, action: str | None, form: dict) -> Response:
                     raise doc_comments.Refused("invalid anchor JSON") from None
                 tid = doc_comments.add_thread(name, pid, form.get("doc", ""), anchor,
                                                form.get("sha", ""), text)
-            said = "kept for you: only you see this"
+            said = f"kept, not sent: {name} sees it in notes/comments/ and answers it when you ask"
             if form.get("send") in ("1", "cycle"):     # cycle: for its next cycle (PLAN-background-messages.md)
                 try:
                     said = (web_chat.send_comment_background(name, login, pid) if form["send"] == "cycle"
                             else web_chat.send_comment(name, login, pid)[1])
                 except (doc_comments.Refused, web_chat.Refused) as e:
                     said = f"saved, but not sent: {e}"
+            else:                                 # the instance's copy holds unsent comments too (sending syncs it)
+                web_chat._sync_copies(name, [doc_comments.get_post(name, pid)["doc"]])
         elif action == "state":
             tid = form.get("thread", "")
             doc_comments.set_state(name, tid, form.get("state", ""))
@@ -758,12 +760,15 @@ def _comment(name: str, login: str, action: str | None, form: dict) -> Response:
             web_chat._sync_copies(name, [thread["doc"]])
             said = f"{tid}: {form['state']}"
         else:
-            tid = doc_comments.get_post(name, pid)["thread"]
+            post = doc_comments.get_post(name, pid)
+            tid = post["thread"]
             if action == "edit":
                 doc_comments.edit(name, pid, text)
+                web_chat._sync_copies(name, [post["doc"]])
                 said = "comment edited"
             elif action == "delete":
                 doc_comments.delete(name, pid)
+                web_chat._sync_copies(name, [post["doc"]])
                 said = "comment deleted"
             elif form.get("when") == "cycle":
                 said = web_chat.send_comment_background(name, login, pid)

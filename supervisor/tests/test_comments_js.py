@@ -116,13 +116,13 @@ const p = page();
 for (const kind of ["doc", "reply"]) {
   let f = p.open(kind);
   assert.equal(label(f), "Send comment");
-  toggle(f, false); assert.equal(label(f), "Save private note");
+  toggle(f, false); assert.equal(label(f), "Save without sending");   // not private: its instance reads it
   toggle(f, true); assert.equal(label(f), "Send comment");
   type(f, "Question"); await submit(f);
   assert.equal(toasts.at(-1), "sent to wren");
   assert.equal(requests.at(-1).body.get("send"), "1");
   f = p.open(kind); toggle(f, false); type(f, "Private note");
-  message = "kept for you: only you see this"; await submit(f);
+  message = "saved, not sent: wren sees it in notes/comments/"; await submit(f);
   assert.equal(requests.at(-1).body.has("send"), false);
   assert.equal(toasts.at(-1), message); message = "sent to wren";
 }

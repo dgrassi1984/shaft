@@ -183,17 +183,20 @@ and [chat design](plans/PLAN-webui-chat.md).
   choices. **now** (the default): it gets the comment at once (a message of its own, or an interjection while it
   replies) and answers under `### c7`, which lands in the thread. **in its next cycle**: the comment goes to its
   inbox and it answers with a message to you under `### c7`, which lands in the thread too (marked **⏾ for its next
-  cycle**). **keep it for me**: a note only you see, to edit, delete or send later. It opens threads of its own too.
-  The button says **Send comment**, **Send for its next cycle** or **Save private note**, and **Save note** when
-  editing a private note. Feedback says whether delivery succeeded or the note was saved but not sent, with the
-  reason. A saved, unsent note still has **Send** and **Next cycle** available.
+  cycle**). **don't send**: it starts no reply but the instance can read it: leave several, then ask it to review
+  them. Each message you send names the open ones waiting, and an answer under `### c7` lands in the thread as well.
+  You can edit, delete or send it until it is answered. It opens threads of its own too. The button says
+  **Send comment**, **Send for its next cycle** or **Save without sending**, and **Save note** when editing one not
+  sent. Feedback says whether delivery succeeded or the comment was saved but not sent, with the reason. A saved,
+  unsent comment still has **Send** and **Next cycle** available.
   Comment drafts and their choice stay in this browser after Escape, Cancel, opening another comment, or
   reload. Reopen the same document comment, selection, reply thread, or note edit to recover its draft. Recovery
   never sends it. **Discard** removes the draft; a successful submission clears it, including when saved but not
   sent. The commented text stays highlighted (click it to open its thread); a thread whose
   text left the document says so. **Resolve** folds a thread away, and the instance hears of it with your next
   message. The threads live in the supervisor (`.supervisor/web/comments/`), never in a file it could overwrite; a
-  read-only copy of what it was sent is kept in its `notes/comments/`.
+  read-only copy in its `notes/comments/` holds every comment of an open thread, sent or not, and of a resolved one
+  what was sent.
 - Each instance's other pages sit behind the chat's ⋯ menu: **Summary**, **Config** (`config.env`, a field per key;
   each value is named for its key),
   **Drive** (`drive.md` for that instance: the diff is shown in full, then Apply saves it and Back keeps your text),

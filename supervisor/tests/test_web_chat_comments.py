@@ -85,6 +85,40 @@ class CommentChatTest(unittest.TestCase):
         self.assertEqual(len(web_chat.load(chat["id"])["turns"]), 1)
         self.sync.assert_called_once_with(["docs", "wren", "comments", "plan.md", "--sync"], who="web")
 
+    def test_unsent_comments_reach_a_review_message_and_their_answers_land(self):
+        # Bug 2026-10-20: comments left unsent were invisible to the instance, so the operator could not leave several
+        # and then ask for a review. Now each message names them, and an answer under ### cN lands in its thread.
+        c1, p1 = self.add()
+        c2, p2 = self.add()
+        _, p3 = self.add()
+        comments.set_state("wren", "c3", "resolved")
+        chat, _ = web_chat.send("wren", ME, "Please review my comments", [])
+        content = chat["turns"][0]["content"]
+        self.assertIn("notes/docs/plan.md (c1, c2) in notes/comments/plan.md", content)
+        waiting = next(l for l in content.split("\n\n") if l.startswith("[Open comments"))
+        self.assertNotIn("c3", waiting)                       # resolved: not waiting for an answer
+        self.assertIsNone(comments.get_post("wren", p1)["sent"])   # still not sent as a message: no chip, no block
+        chat = self.finish(chat["id"], "### c1\nDone.\n### c2\nNo, because…")
+        self.assertEqual(chat["turns"][-1]["answered"], [{"id": c1, "doc": "plan.md"}, {"id": c2, "doc": "plan.md"}])
+        self.assertEqual(self.thread(c1)["posts"][-1]["text"], "Done.")
+        self.assertEqual(comments.get_post("wren", p2)["seen"], f"{chat['id']}#1")
+        for op in (lambda: comments.edit("wren", p1, "changed"), lambda: comments.delete("wren", p2)):
+            with self.assertRaisesRegex(comments.Refused, "already answered"):
+                op()
+        self.start.reset_mock()
+        _, said = web_chat.send_comment("wren", ME, p1)       # answered already: never sent again
+        self.assertEqual(said, "wren already answered it")
+        self.start.assert_not_called()
+        self.assertEqual(comments.waiting("wren"), "")        # nothing left to name in the next message
+
+    def test_sending_one_comment_does_not_name_it_as_waiting(self):
+        _, p1 = self.add()
+        self.add()
+        chat, _ = web_chat.send_comment("wren", ME, p1)
+        content = chat["turns"][0]["content"]
+        self.assertIn("notes/docs/plan.md (c2) in notes/comments/plan.md", content)
+        self.assertNotIn("(c1, c2)", content)
+
     def test_copy_subprocess_does_not_hold_instance_lock_on_send_or_finish(self):
         acquired = []
 

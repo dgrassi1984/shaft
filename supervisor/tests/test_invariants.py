@@ -16,11 +16,16 @@ import unittest
 from pathlib import Path
 
 from supervisor import sandbox
+from supervisor.core import config_values
 from supervisor.tests.fakellm import FakeLLM
 
 PROJECT = Path(__file__).resolve().parents[2]
 TARGET = Path(os.environ.get("SHAFT_UNDER_TEST") or PROJECT / "template")
 HOME = Path.home()
+# Whom the target's write-ups name: its own config.env, as the agent reads it (template/shaft/config.py's default when
+# unset). Regression: the gate runs these against an instance whose config names the operator, so a test that
+# expected the template's "the operator" failed every instance's code change (thelos's gdrive fix, 2026-10-20).
+OPERATOR = config_values((TARGET / "config.env").read_text()).get("OPERATOR_NAME") or "the operator"
 
 SELF_SENTINEL = "I keep a lighthouse-keeper's log of my own changes."
 JOURNAL_SENTINEL = "The newest thing I remember is the color teal."
@@ -173,12 +178,12 @@ class TalkInvariants(InstanceCase):
         r = self.run_agent([{"content": "the operator set 'do no harm' as my boundary."}, {"content": REFLECTION}],
                            "reflect")   # autonomous runs write it up first
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("Conversation with the operator (2026-10-12 16:59–17:04)", self.journal())
+        self.assertIn(f"Conversation with {OPERATOR} (2026-10-12 16:59–17:04)", self.journal())
         self.assertIs((self.fake.requests[0].get("chat_template_kwargs") or {}).get("enable_thinking"), False)
         self.assertIn("'do no harm' as my boundary", self.journal())
         self.assertIn("do no harm", json.dumps(self.fake.requests[0]["messages"]))
         r = self.run_agent([{"content": REFLECTION}], "reflect")          # once written, never again
-        self.assertEqual(self.journal().count("Conversation with the operator (2026-10-12 16:59"), 1)
+        self.assertEqual(self.journal().count(f"Conversation with {OPERATOR} (2026-10-12 16:59"), 1)
 
     def test_talk_starts_at_once_and_remembers_unwritten_conversations(self):
         ep = self.root / "memory" / "episodes" / "2026-10-12.jsonl"

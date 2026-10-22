@@ -20,6 +20,10 @@ class CommentRoutesTest(WebTest):
                         mock.patch.object(web, "log")):
             patcher.start()
             self.addCleanup(patcher.stop)
+        # The real one runs the CLI as a subprocess against the project's instances; record the calls instead.
+        patcher = mock.patch.object(web_chat, "_sync_copies")
+        self.sync = patcher.start()
+        self.addCleanup(patcher.stop)
         self.cookie = self.paired()
         self.pid = "p-0000000000000001"
 
@@ -43,8 +47,10 @@ class CommentRoutesTest(WebTest):
             r = self.add()
             self.assertEqual(r.status, 200)
             self.assertEqual(r.headers["X-Thread"], "c1")
-            self.assertIn(b"kept for you: only you see this", r.body)
+            self.assertIn(b"kept, not sent: wren sees it in notes/comments/", r.body)
             send.assert_not_called()
+        # Bug 2026-10-20: an unsent comment never reached the instance's copy, so "review my comments" found nothing.
+        self.sync.assert_called_once_with("wren", ["plan.md"])
         thread = comments.threads("wren")[0]
         self.assertEqual((thread["doc"], thread["sha"], thread["anchor"]), ("plan.md", "seen-sha", None))
         self.assertIsNone(thread["posts"][0]["sent"])
@@ -65,9 +71,11 @@ class CommentRoutesTest(WebTest):
 
     def test_unsent_edit_delete_and_sent_refusals(self):
         self.add()
+        self.sync.reset_mock()
         r = self.post("edit", pid=self.pid, text="Edited")
         self.assertEqual((r.status, r.headers["X-Thread"]), (200, "c1"))
         self.assertEqual(comments.get_post("wren", self.pid)["text"], "Edited")
+        self.sync.assert_called_once_with("wren", ["plan.md"])      # the copy shows the edited text
         comments.mark_sent("wren", self.pid, "web-test#0")
         for action in ("edit", "delete"):
             r = self.post(action, pid=self.pid, text="No")
@@ -76,8 +84,10 @@ class CommentRoutesTest(WebTest):
         self.assertEqual(comments.get_post("wren", self.pid)["text"], "Edited")
         other = "p-0000000000000002"
         self.add(pid=other)
+        self.sync.reset_mock()
         r = self.post("delete", pid=other)
         self.assertEqual((r.status, r.headers["X-Thread"]), (200, "c2"))
+        self.sync.assert_called_once_with("wren", ["plan.md"])      # and no longer holds a deleted one
         self.assertEqual([t["id"] for t in comments.threads("wren")], ["c1"])
 
     def test_send_existing_post_and_resolve_queues_notice_and_syncs(self):

@@ -264,11 +264,11 @@
     form._returnFocus = document.activeElement;
     form.innerHTML = '<p class="comment-quote"></p><label>Comment<textarea name="text" rows="4" required></textarea></label>' +
       // When it goes: now (a chat message, answered now), in its next cycle (its inbox: PLAN-background-messages.md),
-      // or kept for you (only you see it).
+      // or not sent (no reply starts, but the instance's copy holds it: it can read it).
       '<fieldset class="comment-send"><legend></legend>' +
       '<label><input type="radio" name="when" value="now" checked> now</label>' +
       '<label><input type="radio" name="when" value="cycle"> in its next cycle</label>' +
-      '<label><input type="radio" name="when" value="keep"> keep it for me</label></fieldset>' +
+      '<label><input type="radio" name="when" value="keep"> don&#39;t send</label></fieldset>' +
       '<p class="comment-result" role="status"></p><div class="comment-actions"><button type="submit">Save</button>' +
       '<button type="button" data-comment-cancel>Cancel</button>' +
       '<button type="button" data-comment-discard>Discard</button></div>';
@@ -295,7 +295,7 @@
     } catch (e) { /* no readable draft */ }
     function label() {
       save.textContent = mode === "edit" ? "Save note"
-        : { now: "Send comment", cycle: "Send for its next cycle", keep: "Save private note" }[when()];
+        : { now: "Send comment", cycle: "Send for its next cycle", keep: "Save without sending" }[when()];
     }
     function draftValue() {
       return JSON.stringify({ text: textarea.value, when: when(), pid: fields.pid, sha: fields.sha });
