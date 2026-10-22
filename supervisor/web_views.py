@@ -974,7 +974,7 @@ def _sent_cards(name: str, sent: list[dict], archived: bool = False) -> list[Htm
     data-sent-at: when it came, so opening the chat can start at the first one this browser has not seen (web.js)."""
     cards = []
     for m in sent:             # files open in a sheet of their own: in an app, a link replaced its only view
-        if m["from"] == "operator":
+        if m.get("from") == "operator":         # left for its next cycle (web._sent_during)
             cards.append(_later_card(m))
             continue
         # A text file previews in the documents panel (/fragment/docs/<name>?att=<file>/<j>); the link still downloads.
@@ -1127,7 +1127,7 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
         n=name, mf=messages.ATTACH_MAX_BYTES, mt=messages.ATTACH_MAX_TOTAL, mn=messages.ATTACH_MAX_FILES,
         mids=json.dumps(list(dict.fromkeys((chat or {}).get("mids", []) +
                         [t["mid"] for t in (chat or {}).get("turns", []) + (chat or {}).get("queued", []) if t.get("mid")] +
-                        [m["mid"] for m in sent if m["from"] == "operator" and m.get("mid")]))))
+                        [m["mid"] for m in sent if m.get("from") == "operator" and m.get("mid")]))))
     banner = (h('<p class="panel">Earlier chat, {date}. <a href="/i/{n}/chat">Back to the current chat</a></p>',
                 date=chat['created'][:16].replace('T', ' '), n=q(name)) if read_only and chat else Html(""))
     body = join([banner, h('<section class="panel chat" data-scroll><div class="feed" data-poll="{u}" data-every="1500" data-keyed="1" '

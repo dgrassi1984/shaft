@@ -273,7 +273,8 @@ class NextWakeTest(unittest.TestCase):
         self.st = {}
         for p in (mock.patch.object(autonomy, "_state", lambda: self.st),
                   mock.patch.object(autonomy, "paused", return_value=False),
-                  mock.patch("supervisor.runner.busy_with", return_value=None)):
+                  mock.patch("supervisor.runner.busy_with", return_value=None),
+                  mock.patch("supervisor.runner.replying", return_value=False)):
             p.start()
             self.addCleanup(p.stop)
 
@@ -294,6 +295,13 @@ class NextWakeTest(unittest.TestCase):
                 self.assertIn("a cycle is running and read its inbox when it began", autonomy.next_cycle("wren"))
             with mock.patch.object(autonomy, "paused", return_value=True):
                 self.assertIn("wren is paused", autonomy.next_cycle("wren"))
+            # due now, but it is replying in a conversation: the scheduler skips that wake, it does not queue it
+            self.st["wakes"]["wren"] = (datetime.now() - timedelta(minutes=90)).isoformat(timespec="seconds")
+            with mock.patch("supervisor.runner.busy_with", return_value="api since 13:00"):
+                said = autonomy.next_cycle("wren")
+            self.assertNotIn("due now", said)
+            self.assertRegex(said, r"^for wren's next cycle \(≈\d\d:\d\d\), after what it is doing now \(api since 13:00\)$")
+            self.assertIn("due now", autonomy.next_cycle("wren"))
         with mock.patch.object(autonomy, "wake_interval", return_value=None):
             self.assertIn("no scheduled cycles", autonomy.next_cycle("wren"))
 

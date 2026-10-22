@@ -125,16 +125,19 @@ def next_wake(name: str, now: datetime | None = None, interval: timedelta | None
 
 def next_cycle(name: str) -> str:
     """Where a message left for the instance's next cycle stands: what the web UI tells the operator who sends one."""
-    from .runner import busy_with
     if paused(name):
         return f"{name} is paused: it reads this in its first cycle after you resume it"
-    at = next_wake(name)
+    interval = wake_interval(name)
+    at = next_wake(name, interval=interval)
     if at == "never":
         return f"{name} has no scheduled cycles (WAKE_INTERVAL_MINUTES=0): it reads this when you next talk"
+    why = _awake(name)
+    if at == "due" and why:              # a wake that comes due while it is awake is skipped, not queued (serve)
+        at = f"{datetime.now() + interval:%H:%M}"
     when = "due now" if at == "due" else f"≈{at}"
-    if (busy_with(name) or "").startswith("live"):
+    if why.startswith("live"):
         return f"a cycle is running and read its inbox when it began: this waits for the next one ({when})"
-    return f"for {name}'s next cycle ({when})"
+    return f"for {name}'s next cycle ({when})" + (f", after what it is doing now ({why})" if why else "")
 
 
 def _every(interval: timedelta) -> str:

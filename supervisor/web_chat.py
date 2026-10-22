@@ -30,7 +30,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from .core import SUP_DIR, log
+from .core import SUP_DIR, UnsafePath, log
 
 SAVE_EVERY_S = 1.0                 # how often a streaming reply's activity is written for the page to read
 MAX_TEXT = 20000                   # a message, at most
@@ -627,8 +627,11 @@ def background(name: str, login: str, text: str, files: list[tuple[str, bytes]],
                 raise Refused(str(e)) from None
         asked = messages.quoted_questions(name, text)
         body = "\n\n".join(x for x in ((text + lines).strip(), comment_block) if x)
-        path = messages.deliver_background(name, body, shown=text, in_reply_to=asked[0]["path"].name if asked else None,
-                                           attachments=atts, mid=mid, comments=comments)
+        try:
+            path = messages.deliver_background(name, body, shown=text, attachments=atts, mid=mid, comments=comments,
+                                               in_reply_to=asked[0]["path"].name if asked else None)
+        except (OSError, UnsafePath) as e:            # its inbox/ is its own folder: say what stopped it, not a 500
+            raise Refused(f"could not put it in {name}'s inbox: {e}") from None
     said = autonomy.next_cycle(name)
     if (answered := messages.answer_quoted(name, text)):
         log(f"web: {name}'s question {', '.join(answered)} answered by a message for its next cycle")
@@ -648,12 +651,13 @@ def send_comment_background(name: str, login: str, pid: str) -> str:
             if post.get("sent") or post.get("turn"):
                 return f"already sent to {name}"
             block = doc_comments.block(name, post["thread"], pid, cycle=True)
+            # mid: the post id — after a mark_sent that failed, a retry finds the delivered message, not a second one
             file, said = background(name, login, "", [], mid=pid, comment_block=block,
                                     comments=[{"id": post["thread"], "doc": post["doc"]}])
             doc_comments.mark_sent(name, pid, f"inbox/{file}")
+        except Refused:
+            raise
         except (Exception, SystemExit) as e:
-            if isinstance(e, Refused):
-                raise
             raise Refused(str(e)) from e
     _sync_copies(name, [post["doc"]])
     return said
