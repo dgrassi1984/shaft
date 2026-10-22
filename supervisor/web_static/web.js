@@ -830,10 +830,16 @@
     const feed = ev.target;
     if (feed.querySelectorAll) decorate(feed);
     if (!feed.dataset || !feed.dataset.follow) return;
+    syncQueue(feed);
     const box = feed.closest("[data-scroll]");
     const nb = document.querySelector("[data-newbelow]");
     if (box && nb && ev.detail?.newBelow && !feed._atBottom) nb.hidden = false;
   });
+  // Queue after reply is offered only while a reply runs: the feed shows it as its live turn (data-k="live").
+  function syncQueue(feed) {
+    const b = document.querySelector('form[data-files] button[data-queue="1"]');
+    if (b && feed.querySelector) b.hidden = !feed.querySelector('[data-k="live"]');
+  }
   document.addEventListener("scroll", (ev) => {
     const box = ev.target;
     if (box.matches && box.matches("[data-scroll]")) {
@@ -992,6 +998,24 @@
     }
     document.title = document.title.replace(/^\(\d+\) /, "");
     if (unread) document.title = `(${unread}) ${document.title}`;
+  }
+  // Opening a chat: the first reply or message it sent you that this browser has not seen yet goes to the top of the
+  // feed, so you read on from there (↓ New below takes you to the end). Nothing unread, or nothing seen here before
+  // (a new browser, cleared storage): it opens on the latest, as it always did.
+  function firstUnread(feed) {
+    const seen = seenGet();
+    return [...feed.querySelectorAll("[data-seen-inst]")].find(n => {
+      const mark = seen[n.dataset.seenInst], at = n.dataset.seenReply || n.dataset.sentAt || "";
+      return !!mark && at > mark;
+    }) || null;
+  }
+  function openFeed(feed) {
+    const box = feed.closest("[data-scroll]"), first = box && firstUnread(feed);
+    if (!first) { toBottom(feed); return; }
+    box.scrollTop += first.getBoundingClientRect().top - box.getBoundingClientRect().top - 8;
+    feed._atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
+    const nb = document.querySelector("[data-newbelow]");
+    if (nb) nb.hidden = feed._atBottom;
   }
   function unreadState() {
     seenFeed();                                    // only rendered current-chat replies carry these attributes
@@ -1491,8 +1515,8 @@
       navigator.serviceWorker.register("/sw.js").catch(() => { /* not over https, or refused: the page works */ });
     }
     document.querySelectorAll("[data-poll]").forEach(poll);
-    document.querySelectorAll("[data-follow]").forEach(el => { decorate(el); toBottom(el); });  // opens on the latest
-    unreadState();
+    document.querySelectorAll("[data-follow]").forEach(el => { decorate(el); openFeed(el); syncQueue(el); });
+    unreadState();                                  // after openFeed: what it scrolled past is now seen
     document.querySelectorAll(".docview").forEach(decorate);
     document.querySelectorAll(".docview").forEach(restoreDocDraft);
     restoreDraft();

@@ -82,6 +82,9 @@ and [chat design](plans/PLAN-webui-chat.md).
   sessionStorage, the notice cannot survive reload.
 - Unread marks clear when the current chat's reply is rendered in a visible tab. Config, Journal, earlier chats,
   and a failed feed refresh do not consume a new reply. Marks are shared across tabs in the same browser.
+  Opening an instance's chat starts at the first reply, or message it sent you, that this browser has not seen,
+  at the top of the feed, with **↓ New below** to jump to the end; with nothing unread, or no mark yet in this
+  browser, it opens on the latest. Earlier chats always open at the end.
 - The chat: files and images both ways (drop them anywhere on the page, paste or pick; each is a chip you can take
   out), the reply's activity and clock live, interject, Stop, End. Select text in a message and **↩ Reply** quotes
   it in your message. Each message with text has Copy and Reply icons for its whole Markdown source, including
@@ -89,7 +92,8 @@ and [chat design](plans/PLAN-webui-chat.md).
   with its focus ring. Your draft survives a reload; `/` writes,
   Alt-↑/↓ changes chat; opt-in desktop notifications (⋯ menu) for a reply that lands while the tab is hidden.
   Enter sends. Alt-Enter and Shift-Enter insert a new line. Cmd-Enter, or Ctrl-Enter off macOS, queues a message
-  until the current reply ends, including a failed or stopped reply. While idle it sends now. Queued messages
+  until the current reply ends, including a failed or stopped reply. While idle it sends now. The **Queue after
+  reply** button shows only while a reply is running; otherwise **Send now** is the only button. Queued messages
   appear below the live reply with Cancel and survive a reload or closed tab. They become one next message,
   joined in order with a blank line between texts and all attachments combined. Quotes stay with their text.
   Touch-only devices keep Return as a new line; use Send to send.

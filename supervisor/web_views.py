@@ -941,9 +941,10 @@ def _turn_time(ts: str) -> Html:
              iso=ts, full=ts.replace("T", " "), short=ts[11:16]) if ts else Html("")
 
 
-def _sent_cards(name: str, sent: list[dict]) -> list[Html]:
+def _sent_cards(name: str, sent: list[dict], archived: bool = False) -> list[Html]:
     """What the instance sent the operator (send_message), one card each; Reply quotes it in the composer, and a quoted
-    question is answered by the message that quotes it (web_chat.answer_quoted), as a Telegram reply answers it."""
+    question is answered by the message that quotes it (web_chat.answer_quoted), as a Telegram reply answers it.
+    data-sent-at: when it came, so opening the chat can start at the first one this browser has not seen (web.js)."""
     cards = []
     for m in sent:             # files open in a sheet of their own: in an app, a link replaced its only view
         # A text file previews in the documents panel (/fragment/docs/<name>?att=<file>/<j>); the link still downloads.
@@ -956,12 +957,13 @@ def _sent_cards(name: str, sent: list[dict]) -> list[Html]:
                     for j, a in enumerate(m.get("attachments") or []))
         asks = m.get("kind") == "question"
         what = ("a question" if asks else "a message") + (" (answered)" if asks and m.get("read") else "")
-        cards.append(h('<div class="turn sent" data-k="s{f}" data-raw="{raw}"><div class="who">{n} sent you '
+        cards.append(h('<div class="turn sent" data-k="s{f}" data-raw="{raw}"{at}><div class="who">{n} sent you '
                        '<a href="/messages/{f}">{what}</a> <span class="dim">{ts}</span><button type="button" '
                        'class="reply small icon" data-reply-message title="Reply to the message" '
                        'aria-label="Reply to the message">{reply}</button></div><div class="wrap">{t}</div>'
                        '<div class="atts">{a}</div></div>', n=name, f=q(m["file"]), raw=m["text"], what=what,
-                       ts=_turn_time(m["ts"]), reply=ICONS["reply"], t=m["text"][:600], a=atts))
+                       ts=_turn_time(m["ts"]), reply=ICONS["reply"], t=m["text"][:600], a=atts,
+                       at=h(' data-seen-inst="{n}" data-sent-at="{ts}"', n=name, ts=m["ts"]) if not archived else ""))
     return cards
 
 
@@ -969,7 +971,7 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
     """The conversation as it stands: each turn, the files it sent you meanwhile, and the reply running now."""
     from .web_actions import button
     if not chat:
-        return join([*_sent_cards(name, sent),
+        return join([*_sent_cards(name, sent, archived),
                      h('<p class="dim" data-k="empty">No chat open with {n}. Write below to start one.</p>', n=name)])
     items = []
     for k, t in enumerate(chat["turns"]):
@@ -1010,7 +1012,7 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
                                      k=k, raw=t.get("content") or "", n=name, ts=_turn_time(t["ts"]), seen=seen,
                                      mark=mark, copy=controls, act=_activity(t.get("activity", []), f"t{k}"),
                                      body=body, cards=cards, recovery=recovery)))
-    items += [(m["ts"], card) for m, card in zip(sent, _sent_cards(name, sent))]
+    items += [(m["ts"], card) for m, card in zip(sent, _sent_cards(name, sent, archived))]
     if chat["state"] == "ended":   # in time order: what it sent you after the chat ended shows below the line
         when = chat.get("ended", "")[:16].replace("T", " ")
         items.append((chat.get("ended", ""), h('<p class="dim ended" data-k="ended">This conversation ended on {e}.</p>', e=when)
@@ -1083,8 +1085,10 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
         '</label>'
         '<span class="dim keys">Enter sends · Alt-Enter new line · ⌘-Enter queues · / to write · Alt-↑↓ another chat</span>'
         '<button type="submit" data-queue="">Send now</button>'
-        '<button type="submit" data-queue="1" title="Wait for the current reply to finish; sends now if idle">'
+        # Queue after reply only while a reply runs (web.js syncQueue keeps it in step with the feed's live turn).
+        '<button type="submit" data-queue="1" title="Wait for the current reply to finish; sends now if idle"{qh}>'
         'Queue after reply</button></div></form>',
+        qh="" if (chat or {}).get("state") == "replying" else Html(" hidden"),
         n=name, mf=messages.ATTACH_MAX_BYTES, mt=messages.ATTACH_MAX_TOTAL, mn=messages.ATTACH_MAX_FILES,
         mids=json.dumps(list(dict.fromkeys((chat or {}).get("mids", []) +
                         [t["mid"] for t in (chat or {}).get("turns", []) + (chat or {}).get("queued", []) if t.get("mid")]))))
