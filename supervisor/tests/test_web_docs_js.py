@@ -358,3 +358,70 @@ const clickCard = async (openDoc, openThread) => {
 """
         result = subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_text_attachment_opens_in_the_panel_and_back_returns_to_the_list(self):
+        """Reverting the attachment preview makes a click on a text file a download, leaves ?att= in the poll after
+        ← Documents or a document card, or loads a ?att= page with the panel closed."""
+        script = r"""
+const fs = require("node:fs"), vm = require("node:vm"), assert = require("node:assert/strict");
+function boot(href) {
+  const handlers = {}, storage = new Map([["shaft.docs.closed", "1"]]);
+  let url = href;
+  const classes = () => { const s = new Set(["hidedocs"]); return { contains: k => s.has(k), add: k => s.add(k),
+    remove: k => s.delete(k), toggle(k, on) { if (on === undefined) on = !s.has(k); on ? s.add(k) : s.delete(k); return on; } }; };
+  const attrs = () => { const m = new Map(); return { setAttribute: (k, v) => m.set(k, String(v)),
+    getAttribute: k => m.get(k) ?? null, hasAttribute: k => m.has(k), removeAttribute: k => m.delete(k) }; };
+  const body = { classList: classes(), children: [], appendChild(n) { this.children.push(n); } };
+  const main = { children: [], ...attrs() };
+  const grid = { classList: classes(), parentElement: main, ...attrs() };
+  const chat = { parentElement: grid, ...attrs() };
+  const panel = { id: "docs", dataset: { poll: "/fragment/docs/wren?doc=" }, isConnected: true, parentElement: grid,
+    classList: classes(), ...attrs(), contains: n => n === panel,
+    getClientRects: () => !grid.classList.contains("hidedocs") ? [1] : [],
+    querySelector: () => null, querySelectorAll: () => [], closest: () => null, dispatchEvent() {}, focus() {} };
+  grid.children = [chat, panel]; main.children = [grid]; body.children = [main];
+  const document = { readyState: "loading", visibilityState: "visible", body, activeElement: null,
+    addEventListener(k, fn) { (handlers[k] ||= []).push(fn); },
+    createElement: () => ({ classList: classes(), setAttribute() {}, remove() {} }),
+    querySelector: q => ({ ".chatgrid": grid })[q] || null, querySelectorAll: () => [],
+    getElementById: id => id === "docs" ? panel : null };
+  const window = { addEventListener() {}, innerHeight: 800, scrollY: 0, getSelection: () => null,
+    matchMedia: () => ({ matches: false, addEventListener() {} }) };
+  vm.runInNewContext(fs.readFileSync(process.argv[1], "utf8"), { document, window, URL, CustomEvent: class {}, AbortController,
+    location: { get href() { return url; } }, history: { replaceState(a, b, u) { url = String(u); } }, navigator: { onLine: true },
+    setInterval() {}, setTimeout() { return 1; }, clearTimeout() {},
+    localStorage: { getItem: k => storage.get(k) || null, setItem: (k, v) => storage.set(k, v), removeItem: k => storage.delete(k) },
+    getComputedStyle: () => ({ position: "static" }), ResizeObserver: class { observe() {} },
+    fetch: () => new Promise(() => {}) });
+  for (const fn of handlers.DOMContentLoaded || []) fn();
+  const click = async (selector, dataset, keys = {}) => {
+    const a = { dataset, isConnected: true, getClientRects: () => [1], focus() {} };
+    let prevented = false;
+    for (const fn of handlers.click) await fn({ ...keys, target: { closest: q => q === selector ? a : null },
+                                               preventDefault() { prevented = true; } });
+    return prevented;
+  };
+  return { grid, panel, click, url: () => url };
+}
+(async () => {
+  const t = boot("https://shaft.test/i/wren/chat");
+  assert.equal(await t.click("[data-open-att]", { openAtt: "m3.md/0" }, { metaKey: true }), false);  // ⌘: the download
+  assert.equal(t.grid.classList.contains("showdocs"), false);
+  assert.equal(await t.click("[data-open-att]", { openAtt: "m3.md/0" }), true);
+  assert.equal(t.grid.classList.contains("showdocs"), true);
+  assert.equal(t.url(), "https://shaft.test/i/wren/chat?att=m3.md%2F0");
+  assert.equal(t.panel.dataset.poll, "/fragment/docs/wren?att=m3.md%2F0");
+  await t.click("[data-back-docs]", {});
+  assert.equal(t.url(), "https://shaft.test/i/wren/chat");
+  assert.equal(t.panel.dataset.poll, "/fragment/docs/wren?list=1");
+  await t.click("[data-open-att]", { openAtt: "m3.md/0" });
+  await t.click("[data-open-doc]", { openDoc: "plan.md" });
+  assert.equal(t.url(), "https://shaft.test/i/wren/chat?doc=plan.md");
+  assert.equal(t.panel.dataset.poll, "/fragment/docs/wren?doc=plan.md");
+  const loaded = boot("https://shaft.test/i/wren/chat?att=m3.md%2F0");
+  assert.equal(loaded.grid.classList.contains("showdocs"), true);
+  assert.equal(loaded.grid.classList.contains("hidedocs"), false);
+})().catch(e => { console.error(e); process.exitCode = 1; });
+"""
+        result = subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)

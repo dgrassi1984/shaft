@@ -545,6 +545,12 @@ def messages_page(ms: list[dict], who: str, people: list[str], names: list[str],
 
 
 IMAGE_TYPES = (".jpg", ".jpeg", ".png", ".gif", ".webp")
+TEXT_TYPES = (".md", ".txt", ".csv", ".json", ".log", ".py", ".yaml", ".yml", ".toml", ".html", ".xml")
+
+
+def text_view(file_name: str, text: str) -> Html:
+    """An attachment's text as it reads: Markdown rendered, any other text type as written."""
+    return markdown(text) if file_name.lower().endswith(".md") else pre(text, "wrap")
 
 
 def message_page(m: dict, texts: dict, names: list[str], csrf: str) -> Html:
@@ -557,7 +563,7 @@ def message_page(m: dict, texts: dict, names: list[str], csrf: str) -> Html:
         if a["name"].lower().endswith(IMAGE_TYPES):
             item.append(h('<img class="attachment" src="{u}" alt="{n}">', u=url, n=a["name"]))
         elif k in texts:
-            item.append(pre(texts[k], "wrap"))
+            item.append(h('<div class="docmd">{t}</div>', t=text_view(a["name"], texts[k])))
         atts.append(h('<div class="att">{i}</div>', i=join(item)))
     alert = (h('<p class="dim">notified on {c}: {why}</p>', c="the web UI" if m["alert"] == "web" else "Telegram",
                why=m.get("alert_why", "")) if m.get("alert") else Html(""))      # channel.py: where it alerted you
@@ -881,6 +887,24 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
     return join([head, view])
 
 
+def attachment_panel(name: str, file_name: str, url: str, text: str | None, problem: str = "") -> Html:
+    """A text file the instance sent you, read-only in the documents panel (?att=): it is the message's, not a document
+    in notes/docs/, so nothing here edits, comments on or deletes it. `problem`: why it shows no text (Download still
+    works whenever there is a file to download)."""
+    expand = (Html('<button type="button" class="small" data-fullscreen-doc aria-pressed="false">Full screen</button>')
+              if text is not None else Html(""))
+    head = h('<div class="docshead"><button type="button" class="small" data-back-docs aria-label="Back to the documents">'
+             '← Documents</button> <span class="dim">sent by {n}</span>{expand}<button type="button" class="small '
+             'closedocs" data-close-docs aria-label="Close the documents">✕</button></div>', n=name, expand=expand)
+    download = link(url, "Download") if url else Html("")
+    if text is None:
+        return join([head, h('<p class="bad">{p}</p>', p=problem or f"{file_name} cannot be shown."),
+                     h('<p>{d}</p>', d=download) if url else Html("")])
+    body = text_view(file_name, text) if text.strip() else Html('<p class="dim">(empty)</p>')
+    return join([head, h('<div class="docview" data-read-only="1"><div class="doctitle"><b>📎 {f}</b> {d}</div>'
+                         '<div class="docmd">{b}</div></div>', f=file_name, d=download, b=body)])
+
+
 def _comment_chips(items: list[dict] | None, kind: str = "") -> Html:
     """💬 chips on a turn: comments the operator sent, or threads the reply answered or opened."""
     if not items:
@@ -923,7 +947,10 @@ def _sent_cards(name: str, sent: list[dict]) -> list[Html]:
     question is answered by the message that quotes it (web_chat.answer_quoted), as a Telegram reply answers it."""
     cards = []
     for m in sent:             # files open in a sheet of their own: in an app, a link replaced its only view
-        atts = join(h('<a href="/files/{f}/{j}" target="_blank">{img}</a>', f=q(m["file"]), j=j,
+        # A text file previews in the documents panel (/fragment/docs/<name>?att=<file>/<j>); the link still downloads.
+        atts = join(h('<a href="/files/{f}/{j}" target="_blank"{preview}>{img}</a>', f=q(m["file"]), j=j,
+                      preview=h(' data-open-att="{f}/{j}"', f=m["file"], j=j)
+                      if a["name"].lower().endswith(TEXT_TYPES) else "",
                       img=h('<img class="thumb" src="/files/{f}/{j}" alt="{n}" width="192" height="144" loading="lazy">', f=q(m["file"]), j=j,
                             n=a["name"])
                       if a["name"].lower().endswith(IMAGE_TYPES) else h("📎 {n}", n=a["name"]))
@@ -1042,7 +1069,8 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
 
 
 def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], live: dict, names: list[str],
-              csrf: str, read_only: bool = False, panel: Html = Html(""), doc: str = "") -> Html:
+              csrf: str, read_only: bool = False, panel: Html = Html(""), doc: str = "", att: str = "") -> Html:
+    """`att` (<message file>/<index>): the panel shows that text attachment, not a document (attachment_panel)."""
     from . import messages
     feed_url = f"/fragment/chat/{q(name)}" + (f"?id={q(chat['id'])}" if read_only and chat else "")
     composer = Html("") if read_only else h(
@@ -1067,8 +1095,9 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
                          'data-follow="1">{f}</div></section><button type="button" class="newbelow" data-newbelow hidden>'
                          '↓ New below</button>', u=feed_url, f=chat_feed(name, chat, sent, archived=read_only)), composer,
                  Html('<div class="dropzone" data-dropzone hidden>Drop to attach</div>') if not read_only else Html("")])
-    aside = h('<aside class="docs" id="docs" data-poll="/fragment/docs/{n}?doc={d}{archive}" data-every="1500" data-lazy="1">{p}</aside>',
-              n=q(name), d=q(doc), p=panel, archive=f"&id={q(chat['id'])}" if read_only and chat else "")
+    aside = h('<aside class="docs" id="docs" data-poll="/fragment/docs/{n}?{d}{archive}" data-every="1500" data-lazy="1">{p}</aside>',
+              n=q(name), d=f"att={q(att)}" if att else f"doc={q(doc)}", p=panel,
+              archive=f"&id={q(chat['id'])}" if read_only and chat else "")
     return chat_frame(name, chat_header(name, live, chat, past, read_only),
                       h('<div class="chatgrid"><div class="chatpage">{b}</div>{a}</div>', b=body, a=aside),
                       names, csrf, f"/fragment/chat/{q(name)}/header"

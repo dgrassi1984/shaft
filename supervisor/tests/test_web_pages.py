@@ -330,8 +330,50 @@ class MessagesTest(PagesTest):
 
     def test_a_message_in_full_with_its_attachments(self):
         body = self.has("/messages/m1.md", "second line", "photo.png", '<img class="attachment" src="/files/m1.md/1"',
-                        "# prep", "&lt;script&gt;x&lt;/script&gt;")
+                        "<h2>prep</h2>", "&lt;script&gt;x&lt;/script&gt;")     # a .md attachment reads as Markdown
         self.assertNotIn("<script>x", body)
+        self.assertNotIn("# prep", body)
+
+    def sent_by_wren(self):
+        """m3: wren's message to the operator with a Markdown file, an image, non-UTF-8 text, a link and a big file."""
+        (self.inbox / "latin.txt").write_bytes("caff\xe8".encode("latin-1"))
+        (self.inbox / "big.txt").write_text("x" * 300)
+        atts = [{"name": n, "path": f".supervisor/operator-inbox/attachments/m1/{n}", "bytes": 10}
+                for n in ("notes.md", "photo.png", "latin.txt", "link.txt", "big.txt")]
+        self.ms.append({"ts": "2026-10-19T10:00:00", "from": "wren", "to": "operator", "kind": "note", "read": True,
+                        "file": "m3.md", "text": "the plan", "attachments": atts})
+
+    def test_a_text_attachment_previews_read_only_in_the_documents_panel(self):
+        """Reverting the preview leaves ?att= ignored: the panel lists documents and the file only downloads."""
+        self.sent_by_wren()
+        body = self.has("/fragment/docs/wren?att=m3.md%2F0", "sent by wren", "📎 notes.md", "<h2>prep</h2>",
+                        "&lt;script&gt;x&lt;/script&gt;", '<a href="/files/m3.md/0">Download</a>', "data-back-docs",
+                        "data-fullscreen-doc")
+        for absent in ("<script>x", "data-edit-doc", "docdelete", "data-comment-doc", "New document"):
+            self.assertNotIn(absent, body)          # the message's file, not a document: nothing edits or deletes it
+
+    def test_an_attachment_preview_says_why_it_shows_no_text(self):
+        """A preview that silently showed an empty panel, or another instance's file, would be a bug."""
+        self.sent_by_wren()
+        self.has("/fragment/docs/wren?att=m3.md%2F1", "photo.png is not a text file", 'href="/files/m3.md/1"')
+        self.has("/fragment/docs/wren?att=m3.md%2F2", "latin.txt is not UTF-8 text", 'href="/files/m3.md/2"')
+        self.has("/fragment/docs/wren?att=m3.md%2F3", "link.txt is not there (any more).")
+        with mock.patch.object(web, "TEXT_MAX", 100):
+            self.has("/fragment/docs/wren?att=m3.md%2F4", "big.txt is too big to show here", 'href="/files/m3.md/4"')
+        for att in ("m3.md%2F9", "m1.md%2F0", "m2.md%2F0", "nope.md%2F0", "m3.md%2Fx", "m3.md"):
+            body = self.has(f"/fragment/docs/wren?att={att}", "wren sent you no such attachment.")
+            self.assertNotIn("prep", body, att)     # m1 is thelos's message: never shown in wren's panel
+
+    def test_a_text_attachment_in_the_chat_opens_in_the_panel_and_still_downloads(self):
+        self.sent_by_wren()
+        card = str(web_views._sent_cards("wren", [self.ms[-1]])[0])
+        self.assertIn('<a href="/files/m3.md/0" target="_blank" data-open-att="m3.md/0">📎 notes.md</a>', card)
+        self.assertIn('<a href="/files/m3.md/2" target="_blank" data-open-att="m3.md/2">📎 latin.txt</a>', card)
+        self.assertNotIn('data-open-att="m3.md/1"', card)   # an image keeps its thumbnail
+        page = str(web_views.chat_page("wren", None, [self.ms[-1]], [], {}, ["wren"], "csrf", att="m3.md/0",
+                                       panel=web_views.attachment_panel("wren", "notes.md", "/files/m3.md/0", "# hi")))
+        self.assertIn('data-poll="/fragment/docs/wren?att=m3.md%2F0"', page)
+        self.assertIn("<h2>hi</h2>", page)
 
     def test_an_image_is_served_inline_by_its_bytes(self):
         r = self.req("/files/m1.md/1", cookie=self.cookie)

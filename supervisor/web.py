@@ -43,6 +43,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from . import web_pages
+from .web_views import TEXT_TYPES                  # files shown as text: Files, messages, the documents panel
 from .web_pages import Html
 from .core import EMBED_PORT, LLM_PORTS, SUP_DIR, UnsafePath, knob, port, log, read_beneath
 
@@ -527,7 +528,6 @@ def _post(req: Request, dev: str) -> Response:
 
 # -- read-only pages (M1): each from the same panel reader as its TUI tab --------------------------------------------
 INSTANCE_PAGE = re.compile(r"^/i/(?P<name>[A-Za-z0-9_-]+)(?:/(?P<tab>[a-z]+))?$")
-TEXT_TYPES = (".md", ".txt", ".csv", ".json", ".log", ".py", ".yaml", ".yml", ".toml", ".html", ".xml")
 TEXT_MAX = 200_000                                          # an attachment shown inline as text, at most
 FILE_EXCLUSIONS = frozenset({"secrets", "config.env", ".git", "mail", ".browser"})
 FILES_PER_PAGE = 200
@@ -601,7 +601,8 @@ def _get(req: Request, csrf: str) -> Response | None:
             return None
         return _html(200, _docs_panel(m[1], chat, qs.get("doc", ""), qs.get("thread", ""),
                                       listing_only=qs.get("list") == "1",
-                                      archived=bool(qs.get("id")) and bool(chat) and chat.get("state") == "ended")[1])
+                                      archived=bool(qs.get("id")) and bool(chat) and chat.get("state") == "ended",
+                                      att=qs.get("att", ""))[1])
     if m := re.match(r"^/chatfiles/(web-[a-f0-9]+)/(\d+)/(\d+)$", path):
         return _chat_file(m[1], int(m[2]), int(m[3]))
     if path in ("/trials", "/fragment/trials"):
@@ -774,11 +775,14 @@ def _comment(name: str, login: str, action: str | None, form: dict) -> Response:
 
 
 def _docs_panel(name: str, chat: dict | None, doc: str, thread: str = "", listing_only: bool = False,
-                archived: bool = False):
+                archived: bool = False, att: str = ""):
     """(the open document, the panel): the one asked for, else the last this chat changed (what it is writing shows as it
     writes it), else the list; listing_only (← Documents, ?list=1): the list, whatever this chat changed. With its
-    comment threads (docs/plans/PLAN-comments.md), which are in the fragment so a comment alone changes its ETag."""
+    comment threads (docs/plans/PLAN-comments.md), which are in the fragment so a comment alone changes its ETag.
+    att (?att=<message file>/<index>): a text file the instance sent you instead, read-only (_attachment_preview)."""
     from . import doc_comments, docs, web_views as v
+    if att:
+        return "", v.attachment_panel(name, *_attachment_preview(name, att))
     marked = v.in_chat(chat)
     try:
         listing = docs.listing(name)
@@ -859,10 +863,11 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str) -
             return None
         past = [c for c in web_chat.chats(name) if c.get("state") == "ended"]
         read_only = bool(qs.get("id")) and bool(chat) and chat.get("state") == "ended"
-        doc, panel = _docs_panel(name, chat, qs.get("doc", ""), qs.get("thread", ""), archived=read_only)
+        doc, panel = _docs_panel(name, chat, qs.get("doc", ""), qs.get("thread", ""), archived=read_only,
+                                 att=qs.get("att", ""))
         return _html(200, v.chat_page(name, chat, _sent_during(name, chat, bool(qs.get("id"))), past, _live(name), names, csrf,
                                       read_only=read_only,
-                                      panel=panel, doc=doc),
+                                      panel=panel, doc=doc, att=qs.get("att", "")),
                      {"Set-Cookie": f"{LAST_CHAT}={name}; Path=/; Max-Age={COOKIE_DAYS * 86400}; Secure; SameSite=Strict"})
     if tab in ("config", "drive", "access"):
         from . import opconfig, web_config
@@ -1089,6 +1094,37 @@ def _attachment_texts(m: dict) -> dict:
         except (OSError, UnicodeDecodeError):
             continue
     return out
+
+
+def _attachment_preview(name: str, att: str) -> tuple[str, str, str | None, str]:
+    """(its file name, its download URL, its text or None, why there is none) for ?att=<message file>/<index>: only a
+    text file one of `name`'s own messages carries, read as /files/ serves it (no link followed), at most TEXT_MAX."""
+    file, _, k = att.rpartition("/")
+    m = _message(file) if k.isdigit() else None
+    atts = (m or {}).get("attachments") or []
+    if not m or m.get("from") != name or not int(k) < len(atts):
+        return "", "", None, f"{name} sent you no such attachment."
+    a = atts[int(k)]
+    file_name, url = a.get("name") or f"attachment {k}", f"/files/{urllib.parse.quote(file, safe='')}/{k}"
+    if not file_name.lower().endswith(TEXT_TYPES):
+        return file_name, url, None, f"{file_name} is not a text file: download it to open it."
+    path = attachment_path(a)
+    if path is None:
+        log(f"web refused to preview an attachment of message {file}: {a.get('path')!r} is not a plain file in an "
+            "instance's folder or the operator's inbox")
+        return file_name, "", None, f"{file_name} is not there (any more)."
+    root, rest = _attachment_root(path)
+    try:
+        data = read_beneath(root, rest.parts, TEXT_MAX)
+    except ValueError as e:
+        return file_name, url, None, f"{file_name} is too big to show here ({e}): download it to read it."
+    except (UnsafePath, OSError) as e:
+        log(f"web refused to preview an attachment of message {file}: {e}")
+        return file_name, "", None, f"{file_name} cannot be read here (the reason is in supervisor.log)."
+    try:
+        return file_name, url, data.decode("utf-8"), ""
+    except UnicodeDecodeError:
+        return file_name, url, None, f"{file_name} is not UTF-8 text: download it to open it."
 
 
 def _image_type(data: bytes) -> str | None:
