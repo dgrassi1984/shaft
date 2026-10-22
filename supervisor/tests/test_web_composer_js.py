@@ -52,6 +52,7 @@ function page(mids=[], touch=false) {
   form.requestSubmit=()=>{form.sending=emit('submit',{closest:()=>form});};
   return {box,mid,queue,files,form, chips, sendButton,queueButton, payload:()=>payload,
     key:extra=>emit('keydown',box,{key:'Enter',...extra}),
+    async lineBreak(inputType='insertLineBreak'){let cancelled=false;await emit('beforeinput',box,{inputType,preventDefault(){cancelled=true;}});return cancelled;},
     resize:height=>{viewport.height=height;viewportHandlers.resize();},
     load:()=>emit('DOMContentLoaded'),type:async t=>{box.value=t;await emit('input',box);},
     pick:async(...fs)=>{files.files=fs;await emit('change',files);},
@@ -153,7 +154,7 @@ for(const modifier of ['metaKey','ctrlKey',null]) {
  assert.equal(p.payload().queue,modifier?'1':'');assert.equal(p.queue.value,'');
  p.answer();await p.form.sending;
 }
-const p=page([],true);await p.type('touch');await p.key({});assert.equal(p.payload(),undefined);
+const p=page([],true);p.resize(600);await p.type('touch');await p.key({});assert.equal(await p.lineBreak(),false);assert.equal(p.payload(),undefined);
 const q=page();await q.type('ime');await q.key({isComposing:true});assert.equal(q.payload(),undefined);
 """)
 
@@ -164,7 +165,31 @@ for (const modifier of ['metaKey','ctrlKey']) {
  assert.ok(p.payload(), 'Modified Enter must submit on an iPad');
  assert.equal(p.payload().queue,'1');p.answer();await p.form.sending;
 }
-const p=page([],true);await p.type('touch');await p.key({});assert.equal(p.payload(),undefined);
+const p=page([],true);p.resize(600);await p.type('touch');await p.key({});assert.equal(await p.lineBreak(),false);assert.equal(p.payload(),undefined);
+""")
+
+    def test_ipad_hardware_keyboard_return_sends(self):
+        """Return on an iPad with a hardware keyboard (iPadOS reports a touch pointer, but no on-screen keyboard hides the
+        page) must send once its line break arrives, after any autocorrection; with the on-screen keyboard up, or with
+        Shift/Alt, it stays a new line. Reverting the fix leaves a hardware-keyboard Return typing a new line."""
+        self.run_composer("""
+let p=page([],true);await p.type('hello');await p.key({});
+assert.equal(p.payload(),undefined, 'nothing is sent at keydown: the autocorrection comes after it');
+assert.equal(await p.lineBreak('insertReplacementText'),false);     // autocorrect lands first, the Return still sends
+assert.equal(await p.lineBreak(),true, 'the line break is cancelled');
+assert.ok(p.payload(), 'Return with a hardware keyboard must send');assert.equal(p.payload().queue,'');
+p.answer();await p.form.sending;
+p=page([],true);await p.type('para');await p.key({});assert.equal(await p.lineBreak('insertParagraph'),true);assert.ok(p.payload());
+for (const modifier of ['shiftKey','altKey']) {
+ p=page([],true);await p.type('two lines');await p.key({[modifier]:true});
+ assert.equal(await p.lineBreak(),false);assert.equal(p.payload(),undefined);
+}
+p=page([],true);p.resize(600);await p.type('on-screen');await p.key({});
+assert.equal(await p.lineBreak(),false);assert.equal(p.payload(),undefined);
+p=page([],true);await p.type('later');await p.key({});await p.key({key:'a'});   // another key: that Return is spent
+assert.equal(await p.lineBreak(),false);assert.equal(p.payload(),undefined);
+p=page([],true);await p.type('ime');await p.key({isComposing:true});assert.equal(await p.lineBreak(),false);
+p=page();await p.type('desk');await p.key({});assert.equal(p.payload().queue,'');   // a computer: sent at keydown
 """)
 
     def test_touch_buttons_choose_send_or_queue_without_leaking_mode(self):

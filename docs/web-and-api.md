@@ -96,7 +96,8 @@ and [chat design](plans/PLAN-webui-chat.md).
   reply** button shows only while a reply is running. Queued messages
   appear below the live reply with Cancel and survive a reload or closed tab. They become one next message,
   joined in order with a blank line between texts and all attachments combined. Quotes stay with their text.
-  Touch-only devices keep Return as a new line; use Send to send.
+  On a phone or tablet Return is a new line while the on-screen keyboard is up (use Send to send); with a hardware
+  keyboard (an iPad's), Return sends as on a computer, after its autocorrection, and Shift/Alt-Return is a new line.
   **Next cycle** ([PLAN-background-messages](plans/PLAN-background-messages.md)) is not answered now: the message,
   with its files, goes to the instance's `inbox/` and it takes it up in its next scheduled cycle, as it reads any
   inbox message. Nothing opens or holds a conversation. The button's tooltip and the confirmation say when that is
@@ -239,7 +240,7 @@ next refresh or action opens the pairing page. Your chat draft stays in this bro
   `.supervisor/web/`. The button says **Notifications on** only when SHAFT holds this device's subscription (it asks
   `/push/status` on each visit): a refused registration leaves it off and says why, and a device SHAFT dropped shows
   **Notifications incomplete — retry**.
-- **Typing:** on a phone, Return makes a new line and Send sends. Fields, including the Drive editor, use at least 16 px text.
+- **Typing:** on a phone, Return makes a new line and Send sends; with a hardware keyboard Return sends. Fields, including the Drive editor, use at least 16 px text.
   The reply's activity, a document's overwritten-lines disclosure, and each judge model have 44 px touch targets.
   Field borders have at least 3:1 contrast against the page and panel backgrounds in both themes.
 - **Layout:** the chat fills the screen. ☰ lists the chats and pages, 📄 the documents, ⋯ the instance's pages and

@@ -502,8 +502,14 @@
   // this browser (data-draft), so a reload or a closed tab does not lose it; the server's chat is the record.
   const composer = () => document.querySelector("form[data-files]");
 
-  function touchOnly() {                         // a phone or tablet with no keyboard and no mouse
-    return window.matchMedia("(hover: none) and (pointer: coarse)").matches;
+  function touchOnly() {                         // a phone or tablet: its primary pointer is a finger (iPadOS says so
+    return window.matchMedia("(hover: none) and (pointer: coarse)").matches;   // even with a keyboard and trackpad)
+  }
+  // The on-screen keyboard is up: it hides much of the page (measured 340 of 1078 px on an iPad, 153 of 537 on an
+  // iPhone), a hardware keyboard's shortcut bar far less. null where the browser cannot tell (no visualViewport).
+  function keyboardUp() {
+    const vv = window.visualViewport;
+    return vv ? vv.height < window.innerHeight - 120 : null;
   }
 
   function filesRefused(form) {                  // why the picked files cannot go, or ""
@@ -721,6 +727,19 @@
     });
   });
 
+  function sendComposer(form, queued) {
+    const queue = form.querySelector("input[name=queue]");
+    if (queue) queue.value = queued ? "1" : "";
+    try { form.requestSubmit(); } finally { if (queue) queue.value = ""; }
+  }
+  document.addEventListener("beforeinput", (ev) => {      // the touch Return the keydown above marked: send, no new line
+    const form = ev.target.closest && ev.target.closest("form[data-files]");
+    if (!form || !form._returnSends || (ev.inputType !== "insertLineBreak" && ev.inputType !== "insertParagraph")) return;
+    form._returnSends = false;
+    ev.preventDefault();
+    sendComposer(form, false);
+  });
+
   document.addEventListener("keydown", (ev) => {
     const busySummary = ev.target && ev.target.closest && ev.target.closest('details[data-key="busy-state"] > summary');
     if (busySummary && (ev.key === "Enter" || ev.key === " ")) {
@@ -730,8 +749,14 @@
       return;
     }
     const form = ev.target.closest && ev.target.closest("form[data-files]");
-    // Return stays a newline on touch-only devices; Cmd/Ctrl+Enter queues on hardware keyboards too.
-    if (form && ev.target.tagName === "TEXTAREA" && ev.key === "Enter" && !ev.isComposing && (!touchOnly() || ev.metaKey || ev.ctrlKey)) {
+    const inBox = form && ev.target.tagName === "TEXTAREA";
+    // On a touch device Return sends only while no on-screen keyboard is up (a hardware keyboard is typing, as on an
+    // iPad's), and then when its line break arrives (beforeinput below): iOS applies the Return's autocorrection after
+    // this keydown, so sending here would send the uncorrected word. With the on-screen keyboard it stays a new line.
+    if (inBox) form._returnSends = ev.key === "Enter" && !ev.isComposing && touchOnly() && !ev.metaKey && !ev.ctrlKey
+      && !ev.altKey && !ev.shiftKey && keyboardUp() === false;
+    // Cmd/Ctrl+Enter queues on hardware keyboards, touch devices too.
+    if (inBox && ev.key === "Enter" && !ev.isComposing && (!touchOnly() || ev.metaKey || ev.ctrlKey)) {
       ev.preventDefault();
       if (ev.altKey || ev.shiftKey) {
         const box = ev.target, at = box.selectionStart;
@@ -739,9 +764,7 @@
         box.setSelectionRange(at + 1, at + 1);
         box.dispatchEvent(new Event("input", { bubbles: true }));
       } else {
-        const queue = form.querySelector("input[name=queue]");
-        if (queue) queue.value = ev.metaKey || ev.ctrlKey ? "1" : "";
-        try { form.requestSubmit(); } finally { if (queue) queue.value = ""; }
+        sendComposer(form, ev.metaKey || ev.ctrlKey);
       }
       return;
     }
@@ -1481,7 +1504,7 @@
     document.documentElement.style.setProperty("--vvh", `${Math.round(vv.height)}px`);
     const box = document.querySelector("form.composer textarea");
     if (box) grow(box);
-    document.body.classList.toggle("kbd", vv.height < window.innerHeight - 120);   // the keyboard is up
+    document.body.classList.toggle("kbd", keyboardUp());
     // iOS scrolls the whole page to show a focused field; the page is already the visible height: put it back
     if (document.body.classList.contains("chatapp") && window.scrollY) window.scrollTo(0, 0);
   }
