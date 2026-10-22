@@ -402,6 +402,9 @@
     const buttons = [...form.querySelectorAll("button[type=submit]")].filter(b => !b.disabled);
     const queue = form.querySelector("input[name=queue]");
     if (queue && ev.submitter?.dataset.queue !== undefined) queue.value = ev.submitter.dataset.queue;
+    // Next cycle: to its inbox, read in its next cycle — only from its button; Enter and Cmd-Enter never send so
+    const background = form.querySelector("input[name=background]");
+    if (background) background.value = ev.submitter?.dataset.background || "";
     buttons.forEach(b => { b.disabled = true; });
     form.dataset.busy = "1";
     const box = form.querySelector("textarea[name=text]");
@@ -411,6 +414,7 @@
     const sentMid = mid ? mid.value : "";
     const payload = new FormData(form);
     if (queue) queue.value = "";              // the next send chooses its own mode
+    if (background) background.value = "";
     const sentFiles = [...(form.querySelector("input[type=file]") || { files: [] }).files];
     if (form.dataset.draft && mid) {
       try {

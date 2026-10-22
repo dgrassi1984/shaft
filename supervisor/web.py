@@ -445,7 +445,9 @@ def _post(req: Request, dev: str) -> Response:
             return _not_found(req.path)
         try:
             fields, files = web_chat.parse_multipart(req.headers.get("content-type", ""), req.body)
-            send = web_chat.queue if fields.get("queue") == "1" else web_chat.send
+            # Next cycle (background=1): to the inbox, read in its next cycle (PLAN-background-messages.md)
+            send = (web_chat.background if fields.get("background") == "1" else
+                    web_chat.queue if fields.get("queue") == "1" else web_chat.send)
             _, said = send(m[1], (req.headers.get("tailscale-user-login") or "").lower(),
                                     fields.get("text", ""), files, mid=fields.get("mid", ""))
         except web_chat.Refused as e:
@@ -743,9 +745,10 @@ def _comment(name: str, login: str, action: str | None, form: dict) -> Response:
                 tid = doc_comments.add_thread(name, pid, form.get("doc", ""), anchor,
                                                form.get("sha", ""), text)
             said = "kept for you: only you see this"
-            if form.get("send") == "1":
+            if form.get("send") in ("1", "cycle"):     # cycle: for its next cycle (PLAN-background-messages.md)
                 try:
-                    _, said = web_chat.send_comment(name, login, pid)
+                    said = (web_chat.send_comment_background(name, login, pid) if form["send"] == "cycle"
+                            else web_chat.send_comment(name, login, pid)[1])
                 except (doc_comments.Refused, web_chat.Refused) as e:
                     said = f"saved, but not sent: {e}"
         elif action == "state":
@@ -762,6 +765,8 @@ def _comment(name: str, login: str, action: str | None, form: dict) -> Response:
             elif action == "delete":
                 doc_comments.delete(name, pid)
                 said = "comment deleted"
+            elif form.get("when") == "cycle":
+                said = web_chat.send_comment_background(name, login, pid)
             else:
                 _, said = web_chat.send_comment(name, login, pid)
     except (doc_comments.Refused, web_chat.Refused) as e:
@@ -814,6 +819,16 @@ def _last_chat(req: Request) -> str:
     return ""
 
 
+def _next_cycle(name: str) -> str:
+    """When the instance reads a message left for its next cycle; never fails the chat page."""
+    from . import autonomy
+    try:
+        return autonomy.next_cycle(name)
+    except (Exception, SystemExit) as e:          # noqa: BLE001 — a schedule it cannot read: the button still works
+        log(f"web: could not tell {name}'s next cycle: {type(e).__name__}: {e}")
+        return ""
+
+
 def _live(name: str) -> dict:
     return next((i for i in overview()["instances"] if i["name"] == name), {})
 
@@ -862,7 +877,8 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str) -
                                  att=qs.get("att", ""))
         return _html(200, v.chat_page(name, chat, _sent_during(name, chat, bool(qs.get("id"))), past, _live(name), names, csrf,
                                       read_only=read_only,
-                                      panel=panel, doc=doc, att=qs.get("att", "")),
+                                      panel=panel, doc=doc, att=qs.get("att", ""),
+                                      later="" if read_only else _next_cycle(name)),
                      {"Set-Cookie": f"{LAST_CHAT}={name}; Path=/; Max-Age={COOKIE_DAYS * 86400}; Secure; SameSite=Strict"})
     if tab in ("config", "drive", "access"):
         from . import opconfig, web_config
@@ -895,7 +911,9 @@ def _sent_during(name: str, chat: dict | None, archived: bool = False) -> list[d
     """What the instance sent the operator (send_message), shown in its chat as a Telegram bot chat shows it: since the
     chat on screen began — and after it ended too, until the operator's next message starts a new chat, so a message
     a push points at (channel.py, web_alerts.py) is there to answer. A past chat (`archived`) keeps its own span. With
-    no chat on screen: since the last one was cleared or ended, or, if it never had one, those still unread."""
+    no chat on screen: since the last one was cleared or ended, or, if it never had one, those still unread.
+    With them, in the same span, what the operator left for its next cycle (messages.BACKGROUND): not a chat turn, its
+    `read` says whether a cycle has read it yet."""
     from . import messages
     if chat:
         start, end = chat["created"], (chat.get("ended") or "9999") if archived else "9999"
@@ -903,7 +921,9 @@ def _sent_during(name: str, chat: dict | None, archived: bool = False) -> list[d
         from . import web_chat
         last = next(iter(web_chat.chats(name)), None)
         start, end = (last.get("cleared") or last.get("ended") or last["created"]) if last else "", "9999"
-    rows = [m for m in messages.history() if m["from"] == name and m["to"] == "operator" and start <= m["ts"] <= end]
+    rows = [m for m in messages.history() if start <= m["ts"] <= end and (
+        (m["from"] == name and m["to"] == "operator") or
+        (m["from"] == "operator" and m["to"] == name and m.get("via") == messages.BACKGROUND))]
     return rows if start else [m for m in rows if not m["read"]]
 
 

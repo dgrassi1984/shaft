@@ -245,6 +245,11 @@ form.drive textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospac
 .turn.it { background: var(--panel); }
 .chat-day { justify-self: center; font-size: .8rem; margin: .2rem 0; }
 .turn.sent { border-style: dashed; }
+/* left for its next cycle (PLAN-background-messages.md): yours, not answered now */
+.turn.later { border-style: dashed; border-color: var(--cycle); }
+.laterchip { font-size: .78rem; font-weight: 400; margin-left: .3rem; }
+.laterchip.waiting { color: var(--warn); }
+.laterchip.read { color: var(--good); }
 .turn.live { border-color: var(--talk); }
 .turn .who { font-size: .8rem; font-weight: 600; margin-bottom: .2rem; }
 .activity { font-size: .78rem; color: var(--dim); margin: .2rem 0 .4rem; }
@@ -274,13 +279,17 @@ label.pick:focus-within { outline: 2px solid var(--accent); outline-offset: 2px;
                background: var(--panel); color: var(--text); box-shadow: 0 4px 24px rgba(0, 0, 0, .3); }
 #comment-box textarea { display: block; width: 100%; box-sizing: border-box; resize: vertical; font: inherit; }
 #comment-box .comment-quote { margin: 0; max-height: 5rem; overflow-y: auto; white-space: pre-wrap; color: var(--dim); }
-#comment-box .comment-send { display: flex; align-items: center; gap: .4rem; }
+#comment-box .comment-send { display: flex; flex-wrap: wrap; align-items: center; gap: .2rem .8rem; border: 0; margin: 0;
+  padding: 0; }
+#comment-box .comment-send legend { float: left; padding: 0; margin-right: .2rem; }
+#comment-box .comment-send label { display: inline-flex; align-items: center; gap: .3rem; }
 #comment-box .comment-actions { display: flex; gap: .5rem; }
 #comment-box .comment-result { margin: 0; white-space: pre-wrap; }
 ::highlight(comment-open) { background: color-mix(in srgb, var(--accent) 22%, transparent); }
 ::highlight(comment-active) { background: color-mix(in srgb, var(--accent) 45%, transparent); }
 @media (pointer: coarse) {
-  #quote-reply, #comment-sel, #comment-box button, #comment-box .comment-send { min-width: 44px; min-height: 44px; }
+  #quote-reply, #comment-sel, #comment-box button, #comment-box .comment-send,
+  #comment-box .comment-send label { min-width: 44px; min-height: 44px; }
   #comment-box textarea { font-size: 16px; }
 }
 @media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {

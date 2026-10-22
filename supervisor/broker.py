@@ -898,10 +898,24 @@ class Broker:
             messages.record(self.project / ".supervisor", path, self.name, "operator", kind, stamp, text, attachments,
                             alert)
             notify(f"SHAFT · {self.name} {'asks' if kind == 'question' else 'says'}", text)
+            self._answer_comments(path.name, text)
         else:
             from .core import safe_write   # the recipient's folder is instance-controlled: no symlinks followed
             path = safe_write(self.project / "instances" / to, rel, content)
             messages.record(self.project / ".supervisor", path, self.name, to, kind, stamp, text, attachments)
+
+    def _answer_comments(self, file: str, text: str) -> None:
+        """A message to the operator that answers document comments under "### c<n>" lines — how a comment sent for
+        its next cycle is answered (docs/plans/PLAN-background-messages.md) — puts each answer in its thread, as a chat
+        reply's sections do. Only explicit sections: a cycle sends unrelated messages too. Never fails the delivery."""
+        from . import doc_comments
+        from .core import log
+        try:
+            result = doc_comments.parse_answer(self.name, text, [], None, f"message:{file}")
+            for doc in sorted({item["doc"] for items in result.values() for item in items}):
+                doc_comments.sync_copy(self.name, doc)
+        except Exception as e:                 # the message is delivered: the thread just does not show the answer
+            log(f"{self.name}: message {file}: could not attach its comment answers: {type(e).__name__}: {e}")
 
     def _run(self, command: str, timeout_s: int = 60, cwd: str = ".") -> str:
         import resource
