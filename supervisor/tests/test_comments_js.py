@@ -34,7 +34,10 @@ function page() {
         }
         this.children["button[type=submit]"].textContent = html.match(/type="submit">([^<]*)/)[1];
         this.children[".comment-send"] = node();
-        this.children[".comment-send"].children = { input: node(), span: node() };
+        this.children[".comment-send"].children = { legend: node() };
+        const radios = ["now", "cycle", "keep"].map(v => Object.assign(node(), { value: v, checked: v === "now" }));
+        this.children[".comment-send"].radios = radios;
+        this.children[".comment-send"].querySelectorAll = () => radios;
       } };
   }
   const panel = { dataset: { poll: "/fragment/docs/wren?doc=plan.md" } };
@@ -80,10 +83,12 @@ function page() {
       for (const fn of handlers.keydown) fn({ key: "Escape", preventDefault() {}, stopImmediatePropagation() {} });
     }, box: () => elements["comment-box"] };
 }
-const text = f => f.querySelector("textarea"), send = f => f.querySelector(".comment-send").querySelector("input");
+const text = f => f.querySelector("textarea"), radios = f => f.querySelector(".comment-send").radios;
+const when = f => radios(f).find(r => r.checked).value;
+const choose = (f, v) => { radios(f).forEach(r => { r.checked = r.value === v; }); radios(f).find(r => r.value === v).handlers.change?.(); };
 const label = f => f.querySelector("button[type=submit]").textContent;
 const type = (f, value) => { text(f).value = value; text(f).handlers.input?.({ target: text(f) }); };
-const toggle = (f, checked) => { send(f).checked = checked; send(f).handlers.change?.(); };
+const toggle = (f, checked) => choose(f, checked ? "now" : "keep");
 const click = (f, action) => f.querySelector(`[data-comment-${action}]`).handlers.click();
 const submit = f => f.handlers.submit({ preventDefault() {} });
 (async () => {
@@ -133,11 +138,11 @@ assert.equal(toasts.at(-1), message); assert.equal(p.box(), undefined);
         self.run_composer(r"""
 let p = page(), f = p.open();
 type(f, "whole draft"); toggle(f, false); p.escape();
-f = p.open(); assert.equal(text(f).value, "whole draft"); assert.equal(send(f).checked, false);
+f = p.open(); assert.equal(text(f).value, "whole draft"); assert.equal(when(f), "keep");
 click(f, "cancel"); f = p.open("reply", "c1"); type(f, "reply one"); toggle(f, false);
 f = p.open("reply", "c2"); assert.equal(text(f).value, ""); type(f, "reply two");
-p = page(); f = p.open("reply", "c1"); assert.equal(text(f).value, "reply one"); assert.equal(send(f).checked, false);
-f = p.open(); assert.equal(text(f).value, "whole draft"); assert.equal(send(f).checked, false);
+p = page(); f = p.open("reply", "c1"); assert.equal(text(f).value, "reply one"); assert.equal(when(f), "keep");
+f = p.open(); assert.equal(text(f).value, "whole draft"); assert.equal(when(f), "keep");
 p.view.dataset.doc = "other.md"; f = p.open(); assert.equal(text(f).value, "");
 p.view.dataset.doc = "plan.md"; p.panel.dataset.poll = "/fragment/docs/robin";
 f = p.open(); assert.equal(text(f).value, "");
@@ -156,8 +161,27 @@ await submit(f); f = p.open("edit"); assert.equal(text(f).value, "old note");
 f = p.select(0); type(f, "first quote"); toggle(f, false);
 f = p.select(10); assert.equal(text(f).value, ""); type(f, "second quote");
 p = page(); f = p.select(0); assert.equal(text(f).value, "first quote");
-assert.equal(send(f).checked, false);
+assert.equal(when(f), "keep");
 f = p.select(10); assert.equal(text(f).value, "second quote");
+""")
+
+    def test_next_cycle_choice_sends_cycle_and_survives_reload(self):
+        """PLAN-background-messages: "in its next cycle" posts send=cycle (not 1), says so on its button, and a draft
+        keeps the choice; a draft kept before the choice existed (send: false) still opens as kept."""
+        self.run_composer(r"""
+let p = page(), f = p.open();
+assert.equal(f.querySelector(".comment-send").querySelector("legend").textContent, "Send to wren");
+choose(f, "cycle"); assert.equal(label(f), "Send for its next cycle");
+type(f, "look at this later"); p.escape();
+p = page(); f = p.open(); assert.equal(when(f), "cycle"); assert.equal(text(f).value, "look at this later");
+message = "for wren's next cycle (≈14:20)"; await submit(f);
+assert.equal(requests.at(-1).body.get("send"), "cycle");
+assert.equal(toasts.at(-1), message);
+f = p.open("reply", "c3"); choose(f, "now"); type(f, "now please"); await submit(f);
+assert.equal(requests.at(-1).body.get("send"), "1");
+storage.set(`shaft.draft.comment.${JSON.stringify(["wren", "plan.md", "reply", "c4"])}`,
+            JSON.stringify({ text: "old draft", send: false, pid: "p-00000000000000aa" }));
+f = p.open("reply", "c4"); assert.equal(text(f).value, "old draft"); assert.equal(when(f), "keep");
 """)
 
     def test_locate(self):

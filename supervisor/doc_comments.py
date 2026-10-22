@@ -269,8 +269,9 @@ def _quote(text: str) -> str:
     return f"\n{fence}\n{text}\n{fence}\n"
 
 
-def block(name: str, thread_id: str, pid: str) -> str:
-    """One comment's message, including the answer convention on every send."""
+def block(name: str, thread_id: str, pid: str, cycle: bool = False) -> str:
+    """One comment's message, including the answer convention on every send. `cycle`: sent for the instance's next
+    cycle (web_chat.send_comment_background), where it answers with send_message, not a chat reply."""
     with _store(name) as store:
         thread = _thread(store, thread_id)
         tid, _, post = _find(store, pid)
@@ -303,8 +304,13 @@ def block(name: str, thread_id: str, pid: str) -> str:
             intro += (f"\n[It occurs more than once; this one is between {json.dumps(anchor['prefix'], ensure_ascii=False)}"
                       f" and {json.dumps(anchor['suffix'], ensure_ascii=False)}.]")
     body = "> " + post["text"] if "\n" not in post["text"] else _quote(post["text"])
-    contract = (f'[Answer it in your final reply under a line "### {tid}". Open a thread of your own with a line '
-                '\'### comment on notes/docs/<doc>.md: "exact text from it"\' followed by your comment.]')
+    if cycle:
+        contract = (f'[Answer it with send_message to the operator, under a line "### {tid}" in your message. Open a '
+                    'thread of your own with a line \'### comment on notes/docs/<doc>.md: "exact text from it"\' '
+                    'followed by your comment.]')
+    else:
+        contract = (f'[Answer it in your final reply under a line "### {tid}". Open a thread of your own with a line '
+                    '\'### comment on notes/docs/<doc>.md: "exact text from it"\' followed by your comment.]')
     return f"{intro}\n{body}\n{contract}"
 
 

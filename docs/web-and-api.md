@@ -93,11 +93,19 @@ and [chat design](plans/PLAN-webui-chat.md).
   Alt-↑/↓ changes chat; opt-in desktop notifications (⋯ menu) for a reply that lands while the tab is hidden.
   Enter sends. Alt-Enter and Shift-Enter insert a new line. Cmd-Enter, or Ctrl-Enter off macOS, queues a message
   until the current reply ends, including a failed or stopped reply. While idle it sends now. The **Queue after
-  reply** button shows only while a reply is running; otherwise **Send now** is the only button. Queued messages
+  reply** button shows only while a reply is running. Queued messages
   appear below the live reply with Cancel and survive a reload or closed tab. They become one next message,
   joined in order with a blank line between texts and all attachments combined. Quotes stay with their text.
   Touch-only devices keep Return as a new line; use Send to send.
-  `POST /chat/<name>/send` accepts multipart `queue=1`; `POST /chat/<name>/unqueue` cancels a queued `mid`.
+  **Next cycle** ([PLAN-background-messages](plans/PLAN-background-messages.md)) is not answered now: the message,
+  with its files, goes to the instance's `inbox/` and it takes it up in its next scheduled cycle, as it reads any
+  inbox message. Nothing opens or holds a conversation. The button's tooltip and the confirmation say when that is
+  (the next wake's time, a cycle running now, no scheduled cycles, or paused). It shows in the chat as yours, marked
+  **⏾ next cycle · waiting**, then **read** once a cycle has read it. Its answer, if it sends one, is a message
+  like any other (a card with Reply, and a push). Quoting a question answers it, as Send now does. Only the
+  button does this: Enter and Cmd-Enter never do.
+  `POST /chat/<name>/send` accepts multipart `queue=1` or `background=1`; `POST /chat/<name>/unqueue` cancels a
+  queued `mid`.
   Both require the same CSRF token as other web posts.
   Quotes are saved as drafts too. Picking files again adds them to the current attachments. Files added during
   a send stay in the composer. Leaving with attachments asks for confirmation because files cannot survive a reload.
@@ -170,15 +178,17 @@ and [chat design](plans/PLAN-webui-chat.md).
   deletion becomes one deletion notice. Comment threads and their copies are kept; old chat links show that the
   document is gone. Its next run commits the deletion with its notes; earlier committed versions remain in git.
 - **Comments on a document** ([PLAN-comments](plans/PLAN-comments.md)), as on a Claude artifact: select text in it
-  and press **💬 Comment** (or 💬 in its title bar for the whole document). **Send comment to <instance>** is ticked
-  by default: it gets the comment at once (a message of its own, or an interjection while it replies) and answers
-  under `### c7`, which lands in the thread. Unticked, it starts no reply but the instance can read it: leave several,
-  then ask it to review them. Each message you send names the open ones waiting, and an answer under `### c7` lands
-  in the thread as well. You can edit, delete or send it until it is answered. It opens threads of its own too. The
-  button says **Send comment** when ticked, **Save without sending** when unticked, and **Save note** when editing
-  one not sent. Feedback says whether delivery succeeded or the comment was saved but not sent, with the reason. A
-  saved, unsent comment still has **Send** available.
-  Comment drafts and their send choice stay in this browser after Escape, Cancel, opening another comment, or
+  and press **💬 Comment** (or 💬 in its title bar for the whole document). **Send to <instance>** has three
+  choices. **now** (the default): it gets the comment at once (a message of its own, or an interjection while it
+  replies) and answers under `### c7`, which lands in the thread. **in its next cycle**: the comment goes to its
+  inbox and it answers with a message to you under `### c7`, which lands in the thread too (marked **⏾ for its next
+  cycle**). **don't send**: it starts no reply but the instance can read it: leave several, then ask it to review
+  them. Each message you send names the open ones waiting, and an answer under `### c7` lands in the thread as well.
+  You can edit, delete or send it until it is answered. It opens threads of its own too. The button says
+  **Send comment**, **Send for its next cycle** or **Save without sending**, and **Save note** when editing one not
+  sent. Feedback says whether delivery succeeded or the comment was saved but not sent, with the reason. A saved,
+  unsent comment still has **Send** and **Next cycle** available.
+  Comment drafts and their choice stay in this browser after Escape, Cancel, opening another comment, or
   reload. Reopen the same document comment, selection, reply thread, or note edit to recover its draft. Recovery
   never sends it. **Discard** removes the draft; a successful submission clears it, including when saved but not
   sent. The commented text stays highlighted (click it to open its thread); a thread whose

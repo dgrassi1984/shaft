@@ -263,7 +263,12 @@
     form.setAttribute("aria-label", "Document comment");
     form._returnFocus = document.activeElement;
     form.innerHTML = '<p class="comment-quote"></p><label>Comment<textarea name="text" rows="4" required></textarea></label>' +
-      '<label class="comment-send"><input type="checkbox" name="send" checked> <span></span></label>' +
+      // When it goes: now (a chat message, answered now), in its next cycle (its inbox: PLAN-background-messages.md),
+      // or not sent (no reply starts, but the instance's copy holds it: it can read it).
+      '<fieldset class="comment-send"><legend></legend>' +
+      '<label><input type="radio" name="when" value="now" checked> now</label>' +
+      '<label><input type="radio" name="when" value="cycle"> in its next cycle</label>' +
+      '<label><input type="radio" name="when" value="keep"> don&#39;t send</label></fieldset>' +
       '<p class="comment-result" role="status"></p><div class="comment-actions"><button type="submit">Save</button>' +
       '<button type="button" data-comment-cancel>Cancel</button>' +
       '<button type="button" data-comment-discard>Discard</button></div>';
@@ -272,23 +277,28 @@
     const textarea = form.querySelector("textarea");
     textarea.value = value.text || "";
     const send = form.querySelector(".comment-send");
-    const checkbox = send.querySelector("input");
+    const choices = [...send.querySelectorAll("input")];
+    const when = () => (choices.find(c => c.checked) || choices[0]).value;
+    const choose = (v) => choices.forEach(c => { c.checked = c.value === v; });
     const save = form.querySelector("button[type=submit]");
     try {
       const draft = JSON.parse(localStorage.getItem(draftKey));
-      if (draft && typeof draft.text === "string" && typeof draft.send === "boolean" &&
-          /^p-[0-9a-f]{16}$/.test(draft.pid)) {
+      // `send` (true/false): a draft kept before Next cycle existed
+      const kept = ["now", "cycle", "keep"].includes(draft && draft.when) ? draft.when
+        : typeof (draft && draft.send) === "boolean" ? (draft.send ? "now" : "keep") : null;
+      if (draft && typeof draft.text === "string" && kept && /^p-[0-9a-f]{16}$/.test(draft.pid)) {
         textarea.value = draft.text;
-        checkbox.checked = draft.send;
+        choose(kept);
         fields.pid = draft.pid;
         if (mode === "new" && typeof draft.sha === "string") fields.sha = draft.sha;
       }
     } catch (e) { /* no readable draft */ }
     function label() {
-      save.textContent = mode === "edit" ? "Save note" : checkbox.checked ? "Send comment" : "Save without sending";
+      save.textContent = mode === "edit" ? "Save note"
+        : { now: "Send comment", cycle: "Send for its next cycle", keep: "Save without sending" }[when()];
     }
     function draftValue() {
-      return JSON.stringify({ text: textarea.value, send: checkbox.checked, pid: fields.pid, sha: fields.sha });
+      return JSON.stringify({ text: textarea.value, when: when(), pid: fields.pid, sha: fields.sha });
     }
     form._saveDraft = () => {
       try {
@@ -297,9 +307,9 @@
       } catch (e) { /* no storage: no draft kept */ }
     };
     textarea.addEventListener("input", form._saveDraft);
-    checkbox.addEventListener("change", () => { label(); form._saveDraft(); });
+    choices.forEach(c => c.addEventListener("change", () => { label(); form._saveDraft(); }));
     label();
-    send.querySelector("span").textContent = `Send comment to ${name}`;
+    send.querySelector("legend").textContent = `Send to ${name}`;
     if (mode === "edit") send.remove();
     form.querySelector("[data-comment-cancel]").addEventListener("click", () => close());
     form.querySelector("[data-comment-discard]").addEventListener("click", () => {
@@ -312,7 +322,7 @@
       const save = form.querySelector("button[type=submit]");
       const result = form.querySelector(".comment-result");
       const body = new URLSearchParams({ ...fields, text: textarea.value });
-      if (mode !== "edit" && send.querySelector("input").checked) body.set("send", "1");
+      if (mode !== "edit" && when() !== "keep") body.set("send", when() === "now" ? "1" : "cycle");
       form._saveDraft();
       const submittedDraft = draftValue();
       form.dataset.busy = "1";

@@ -20,17 +20,29 @@ LOG_NAME = "messages.jsonl"
 
 
 def record(sup_dir: Path, path: Path, sender: str, to: str, kind: str, at: datetime, text: str,
-           attachments: list[dict] | None = None, alert: tuple[str, str] | None = None) -> None:
+           attachments: list[dict] | None = None, alert: tuple[str, str] | None = None, via: str = "",
+           mid: str = "", shown: str | None = None, comments: list[dict] | None = None) -> None:
     """Append one delivered message to the log. One locked write per line: brokers of several instances
     deliver concurrently. `attachments`: [{name, path (from the project root), bytes}]. `alert`: for a message to the
     operator, (channel, why) — where it alerts them (channel.route); the web and Telegram services send what names
-    them."""
+    them. `via`: how the operator sent it, when that matters to who shows it (BACKGROUND: the web chat shows it);
+    `mid`: the sending page's id for it, so a retry is not delivered twice (sent_mid). `shown`: what the operator
+    wrote, when the text the instance got says more (the files' lines, a comment's block); `comments`: [{id, doc}], the
+    document comments it carries."""
     row = {"ts": at.isoformat(timespec="seconds"), "from": sender, "to": to, "kind": kind,
            "file": path.name, "text": text.strip()}
     if attachments:
         row["attachments"] = [{k: a[k] for k in ("name", "path", "bytes")} for a in attachments]
     if alert:
         row["alert"], row["alert_why"] = alert
+    if via:
+        row["via"] = via
+    if mid:
+        row["mid"] = mid
+    if shown is not None and shown.strip() != row["text"]:
+        row["shown"] = shown.strip()
+    if comments:
+        row["comments"] = comments
     line = json.dumps(row, ensure_ascii=False) + "\n"
     sup_dir.mkdir(parents=True, exist_ok=True)
     with (sup_dir / LOG_NAME).open("a") as f:
@@ -186,15 +198,37 @@ def show_inbox() -> int:
     return 0
 
 
-def _deliver(name: str, text: str, kind: str, in_reply_to: str | None = None) -> Path:
+# The web chat's Next cycle (docs/plans/PLAN-background-messages.md): delivered to the inbox now, read in the next cycle.
+BACKGROUND = "web-background"
+BACKGROUND_NOTE = ("the web UI, for your next cycle — nobody is waiting on an answer now; answer with send_message "
+                   "if it needs one")
+
+
+def _deliver(name: str, text: str, kind: str, in_reply_to: str | None = None, *, attachments: list[dict] | None = None,
+             via: str = "", mid: str = "", shown: str | None = None, comments: list[dict] | None = None) -> Path:
     root = instance_root(name)
     stamp = datetime.now()
     ref = f"In-Reply-To: {in_reply_to}\n" if in_reply_to else ""
+    how = f"Via: {BACKGROUND_NOTE}\n" if via == BACKGROUND else ""
     path = safe_write(root, f"inbox/{stamp:%Y%m%d-%H%M%S-%f}-from-operator.md",
-                      f"From: operator\nTo: {name}\nKind: {kind}\n{ref}Date: {stamp:%Y-%m-%d %H:%M}\n\n"
+                      f"From: operator\nTo: {name}\nKind: {kind}\n{ref}{how}Date: {stamp:%Y-%m-%d %H:%M}\n\n"
                       f"{text.strip()}\n")
-    record(SUP_DIR, path, "operator", name, kind, stamp, text)
+    record(SUP_DIR, path, "operator", name, kind, stamp, text, attachments, via=via, mid=mid, shown=shown,
+           comments=comments)
     return path
+
+
+def deliver_background(name: str, text: str, *, shown: str, in_reply_to: str | None = None,
+                       attachments: list[dict] | None = None, mid: str = "", comments: list[dict] | None = None) -> Path:
+    """A message from the web chat's Next cycle: into the instance's inbox now, logged as BACKGROUND, read in its next
+    cycle. A reply when it answers one of its questions (`in_reply_to`), as `shaft reply` writes it."""
+    return _deliver(name, text, "reply" if in_reply_to else "message", in_reply_to, attachments=attachments,
+                    via=BACKGROUND, mid=mid, shown=shown, comments=comments)
+
+
+def sent_mid(name: str, mid: str) -> dict | None:
+    """The logged message to `name` the page sent with this id, if it was delivered already."""
+    return next((m for m in history() if m["to"] == name and m.get("mid") == mid), None) if mid else None
 
 
 SOURCE_RE = re.compile(r"^[a-z0-9][a-z0-9:._-]{0,39}$")
@@ -242,6 +276,15 @@ QUOTE_MIN = 20                             # a quote shorter than this answers a
 def answer_quoted(name: str, text: str) -> list[str]:
     """The operator's message quotes ("> " lines, as the web chat's Reply writes them) an open question from `name`:
     the question is answered — archived from the operator inbox, as a Telegram reply to it does. Returns the files."""
+    done = []
+    for m in quoted_questions(name, text):
+        _archive(m["path"])
+        done.append(m["path"].name)
+    return done
+
+
+def quoted_questions(name: str, text: str) -> list[dict]:
+    """The open questions from `name` that the operator's message quotes (answer_quoted), still in the inbox."""
     blocks, block = [], []
     for line in text.splitlines() + [""]:
         if line.startswith(">"):
@@ -249,15 +292,14 @@ def answer_quoted(name: str, text: str) -> list[str]:
         elif block:
             blocks.append(" ".join(" ".join(block).split()))
             block = []
-    done = []
+    found = []
     for m in pending():
         if m["from"] != name or m["kind"] != "question":
             continue
         body = " ".join(m["body"].split())
         if any(b and b in body and len(b) >= min(len(body), QUOTE_MIN) for b in blocks):
-            _archive(m["path"])
-            done.append(m["path"].name)
-    return done
+            found.append(m)
+    return found
 
 
 def send(name: str, text: str) -> int:
