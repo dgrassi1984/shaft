@@ -1086,11 +1086,12 @@
   // The documents panel (docs/plans/PLAN-webui-chat §3): a card in a reply or a name in its list opens that document in the
   // panel, which then refreshes it as the instance writes it; the address keeps ?doc= so a reload shows the same one.
   // What the panel polls for: one document (?doc=), or the list (?list=1: without it the server opens what this chat
-  // last changed, so ← Documents would bounce straight back to it).
-  function docsPoll(panel, doc, thread = "") {
+  // last changed, so ← Documents would bounce straight back to it), or a text file the instance sent (?att=).
+  function docsPoll(panel, doc, thread = "", att = "") {
     const poll = new URL(panel.dataset.poll, location.href);
-    for (const k of ["doc", "thread", "list"]) poll.searchParams.delete(k);
-    poll.searchParams.set(doc ? "doc" : "list", doc || "1");
+    for (const k of ["doc", "thread", "list", "att"]) poll.searchParams.delete(k);
+    if (att) poll.searchParams.set("att", att);
+    else poll.searchParams.set(doc ? "doc" : "list", doc || "1");
     if (doc && thread) poll.searchParams.set("thread", thread);
     panel.dataset.poll = poll.pathname + poll.search;
   }
@@ -1173,6 +1174,7 @@
     const u = new URL(location.href);
     u.searchParams.delete("doc");
     u.searchParams.delete("thread");
+    u.searchParams.delete("att");
     history.replaceState(null, "", u);
     refreshDocs();
   }
@@ -1200,9 +1202,30 @@
     leaveDoc(() => {
       docsPoll(panel, doc, a.dataset.openThread);
       const u = new URL(location.href);
+      u.searchParams.delete("att");
       u.searchParams.set("doc", doc);
       if (a.dataset.openThread) u.searchParams.set("thread", a.dataset.openThread);
       else u.searchParams.delete("thread");
+      history.replaceState(null, "", u);
+      showDocs(true, a);
+      refreshDocs();
+    });
+  });
+  // A text file the instance sent opens read-only in the same panel instead of downloading; ⌘/Ctrl-click still
+  // follows the link (a download), and so does a page without the panel.
+  document.addEventListener("click", (ev) => {
+    const a = ev.target.closest && ev.target.closest("[data-open-att]");
+    const panel = document.getElementById("docs");
+    if (!a || !panel || ev.metaKey || ev.ctrlKey) return;
+    ev.preventDefault();
+    const att = a.dataset.openAtt;
+    showDocs(true, a);
+    leaveDoc(() => {                                // an unsaved edit asks first, as opening another document does
+      docsPoll(panel, "", "", att);
+      const u = new URL(location.href);
+      u.searchParams.delete("doc");
+      u.searchParams.delete("thread");
+      u.searchParams.set("att", att);
       history.replaceState(null, "", u);
       showDocs(true, a);
       refreshDocs();
@@ -1452,7 +1475,8 @@
     const grid = document.querySelector(".chatgrid");
     if (grid) {
       document.body.classList.add("chatapp");
-      if (new URL(location.href).searchParams.get("doc")) showDocs(true);
+      const asked = new URL(location.href).searchParams;
+      if (asked.get("doc") || asked.get("att")) showDocs(true);
       else {
         try { if (localStorage.getItem("shaft.docs.closed")) grid.classList.add("hidedocs"); } catch (e) { /* none */ }
         syncSheets();
