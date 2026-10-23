@@ -991,9 +991,9 @@ def _sent_cards(name: str, sent: list[dict], archived: bool = False) -> list[Htm
         cards.append(h('<div class="turn sent" data-k="s{f}" data-raw="{raw}"{at}><div class="who">{n} sent you '
                        '<a href="/messages/{f}">{what}</a> <span class="dim">{ts}</span><button type="button" '
                        'class="reply small icon" data-reply-message title="Reply to the message" '
-                       'aria-label="Reply to the message">{reply}</button></div><div class="wrap">{t}</div>'
+                       'aria-label="Reply to the message">{reply}</button></div>{t}'
                        '<div class="atts">{a}</div></div>', n=name, f=q(m["file"]), raw=m["text"], what=what,
-                       ts=_turn_time(m["ts"]), reply=ICONS["reply"], t=m["text"][:600], a=atts,
+                       ts=_turn_time(m["ts"]), reply=ICONS["reply"], t=markdown(m["text"]), a=atts,
                        at=h(' data-seen-inst="{n}" data-sent-at="{ts}"', n=name, ts=m["ts"]) if not archived else ""))
     return cards
 

@@ -375,6 +375,16 @@ class MessagesTest(PagesTest):
         self.assertIn('data-poll="/fragment/docs/wren?att=m3.md%2F0"', page)
         self.assertIn("<h2>hi</h2>", page)
 
+    def test_a_long_message_shows_whole_in_the_chat_as_markdown(self):
+        """The chat card cut a message at 600 characters with no mark (83% of the messages to the operator, 2026-10-23:
+        "You got cut out"), and showed its Markdown as raw asterisks."""
+        tail = "Whenever you want, I'll review the recap and move its Status."
+        text = "Done — **created** the skill.\n\n" + "x " * 400 + tail
+        card = str(web_views._sent_cards("thelos", [{**self.ms[0], "text": text}])[0])
+        shown = card.split('<div class="who">', 1)[1]           # what is on screen, not the data-raw copy for Copy/Reply
+        self.assertIn(tail.replace("'", "&#x27;"), shown)
+        self.assertIn("<b>created</b>", shown)
+
     def test_an_image_is_served_inline_by_its_bytes(self):
         r = self.req("/files/m1.md/1", cookie=self.cookie)
         self.assertEqual((r.status, r.headers["Content-Type"]), (200, "image/png"))

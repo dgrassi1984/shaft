@@ -65,7 +65,15 @@ INBOX_WAKES_PER_HOUR, _ = knob(
     group="Inbox and benchmarks", services=("api",))
 DOORBELL_LOG = "doorbell.jsonl"
 CONVERSATION_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")   # X-Shaft-Conversation: a client's own name for a conversation
-CLIENT_CHANNELS = ("web", "telegram")    # X-Shaft-Channel: where the operator is talking (channel.py routes alerts there)       # one line per accepted message: when, instance, source, wake outcome
+CLIENT_CHANNELS = ("web", "telegram")    # X-Shaft-Channel: where the operator is talking (channel.py routes alerts there)
+# The rule of _chat below, told to the instance with every request (a system message: the instance's talk.py puts the
+# app's rules in its system prompt, whatever its own prompts say). Untold, instances wrote the answer beside a tool call
+# and ended with "Stored." or "." — all the operator got (shaft and wren, 2026-10-18..22).
+LAST_STEP_NOTE = ("[SHAFT, about how your reply is delivered — not the app] Only your last message, the one that calls "
+                  "no tool, reaches the operator. Text you write in a message that also calls a tool is never shown "
+                  "to them: it is kept as your working notes. So put your whole answer in that last message, even "
+                  "the parts you already wrote before a tool call; never end with only \"Done\", \"Stored\" or \".\" "
+                  "when the answer is above it.")       # one line per accepted message: when, instance, source, wake outcome
 
 
 def allowed_logins() -> set[str]:
@@ -390,7 +398,10 @@ class Handler(BaseHTTPRequestHandler):
         procs: list = []
         talk_id = self.conversations.talk_id(model, messages, cid, channel)
         live = self.live.begin(model, talk_id)
-        request = {"messages": messages, "talk_id": talk_id, "client": app.split()[0][:40]}
+        request = {"messages": [*(m for m in messages if m.get("role") == "system"),
+                                {"role": "system", "content": LAST_STEP_NOTE},
+                                *(m for m in messages if m.get("role") != "system")],
+                   "talk_id": talk_id, "client": app.split()[0][:40]}
 
         def driver(proc):
             procs.append(proc)

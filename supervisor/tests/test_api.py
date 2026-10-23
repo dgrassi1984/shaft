@@ -131,6 +131,23 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(text, "Teal is blue-green.")
         self.assertIn("Let me check my notes on teal first.", notes)
 
+    def test_the_instance_is_told_only_its_last_step_reaches_the_operator(self):
+        # Regression (2026-10-22/23, "your message got cut off"): never told the rule above, instances wrote the answer
+        # alongside a tool call (remember, append_file) and ended with "Stored." or "." — all the operator got.
+        system = [{"role": "system", "content": "be nice"}]
+        body = {"model": "wren", "messages": [*system, {"role": "user", "content": "teal?"}]}
+        self.req("/chat/completions", body).read()
+        first = fake_run_agent.request
+        rules = [m["content"] for m in first["messages"] if m["role"] == "system"]
+        self.assertEqual(rules[0], "be nice")                                # the app's own rules come first, kept
+        self.assertEqual(rules[1:], [api.LAST_STEP_NOTE])
+        self.assertEqual(first["messages"][-1], {"role": "user", "content": "teal?"})
+        body["messages"] += [{"role": "assistant", "content": "blue-green"}, {"role": "user", "content": "sure?"}]
+        self.req("/chat/completions", body).read()
+        self.assertEqual(fake_run_agent.request["talk_id"], first["talk_id"])   # still the same conversation
+        self.assertEqual([m["content"] for m in fake_run_agent.request["messages"] if m["role"] == "system"],
+                         ["be nice", api.LAST_STEP_NOTE])                    # once, every turn
+
     def test_a_reply_that_stops_before_answering_says_so(self):
         steps = [e for e in self.NARRATED[:7]] + [{"type": "turn_end", "steps": 30, "ended_by": "steps"}]
         with mock.patch(f"{__name__}.EVENTS", steps):
