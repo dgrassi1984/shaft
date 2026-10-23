@@ -355,6 +355,11 @@ form.composer textarea { resize: none; min-height: 2.6rem; max-height: calc(var(
 .newbelow[hidden] { display: none; }
 .icon { display: inline-flex; align-items: center; justify-content: center; opacity: .55; }
 .icon:hover, .icon:focus-visible { opacity: 1; }
+a.icon.small { padding: .15rem .5rem; border: 1px solid var(--line); border-radius: 6px; background: var(--panel);
+              color: var(--text); font-size: .78rem; }   /* a link drawn as button.small icon */
+a.icon.small:hover { border-color: var(--accent); }
+[data-fullscreen-doc][aria-pressed="false"] > svg:last-child,
+[data-fullscreen-doc][aria-pressed="true"] > svg:first-child { display: none; }
 .turn .who { display: flow-root; }           /* its icons stay in the header, not in the message's text */
 .turn .who .icon { float: right; margin-left: .5rem; }
 .turn:hover .who .icon { opacity: 1; }
@@ -370,7 +375,7 @@ form.composer textarea { resize: none; min-height: 2.6rem; max-height: calc(var(
 /* documents (docs/plans/PLAN-webui-chat §3) */
 aside.docs { min-height: 0; overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
              padding: .5rem .8rem; }
-.docshead { display: flex; align-items: baseline; gap: .4rem; margin-bottom: .3rem; }
+.docshead { display: flex; align-items: center; gap: .4rem; margin-bottom: .3rem; }   /* icons have no baseline */
 .doclist { display: flex; flex-direction: column; margin-bottom: .5rem; font-size: .85rem; }
 .doclist a { display: flex; align-items: center; justify-content: space-between; gap: .6rem; padding: .6rem .2rem;
              border-bottom: 1px solid var(--line); color: var(--text); overflow-wrap: anywhere; }
@@ -445,7 +450,7 @@ form.clearbtn { display: inline; margin: 0; }
      form.drive textarea is listed: its own .82rem rule outranks a bare textarea. */
   input, select, textarea, form.composer textarea, form.docedit textarea, .newdoc input, form.drive textarea { font-size: 16px; }
   /* Fingers: 44 pt targets (Apple's guideline). */
-  button, button.small, button.act, details.menu > summary, label.pick, .newdoc > summary {
+  button, button.small, button.act, a.icon.small, details.menu > summary, label.pick, .newdoc > summary {
     min-height: 44px; min-width: 44px; padding-top: .45rem; padding-bottom: .45rem; }
   .doclist a, .doccard, .menupages a, .editchip, .tabs a {
     min-height: 44px; display: inline-flex; align-items: center; }

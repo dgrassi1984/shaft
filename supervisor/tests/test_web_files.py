@@ -114,7 +114,7 @@ class FilesTest(WebTest):
         for archived in (False, True):
             text = str(web_views.docs_panel("wren", [], "folder/a b.md", "saved", "abc", set(), archived=archived))
             self.assertIn('href="/i/wren/file?path=notes%2Fdocs%2Ffolder%2Fa%20b.md"', text)
-            self.assertIn('>Download</a>', text)
+            self.assertIn('title="Download" aria-label="Download"><svg', text)
 
 
     # -- added after browser verification --

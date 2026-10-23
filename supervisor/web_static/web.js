@@ -1396,7 +1396,7 @@
     }
     const expanded = grid.classList.contains("docfullscreen");
     if (docs) docs.querySelectorAll("[data-fullscreen-doc]").forEach(button => {
-      button.textContent = expanded ? "Exit full screen" : "Full screen";
+      button.title = expanded ? "Exit full screen" : "Full screen";   // the label stays: aria-pressed says which
       button.setAttribute("aria-pressed", String(expanded));
     });
     docsAria();
