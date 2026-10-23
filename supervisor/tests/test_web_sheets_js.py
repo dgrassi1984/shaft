@@ -165,7 +165,7 @@ const expand=control('expand',docs);
 expand.focus();
 await click(expand);
 assert.equal(grid.classList.contains('docfullscreen'),true);
-assert.equal(expand.textContent,'Exit full screen');
+assert.equal(expand.title,'Exit full screen');
 assert.equal(expand.getAttribute('aria-pressed'),'true');
 modal(docs,'Documents');
 assert.equal(chat.hasAttribute('inert'),true);
@@ -173,7 +173,8 @@ await key('Escape');
 assert.equal(grid.classList.contains('docfullscreen'),false);
 assert.equal(grid.classList.contains('hidedocs'),false);
 assert.equal(document.activeElement,expand);
-assert.equal(expand.textContent,'Full screen');
+assert.equal(expand.title,'Full screen');
+assert.equal(expand.textContent,undefined);   // writing the label as text wiped its icons
 clear();
 await click(expand);
 await click(docclose);

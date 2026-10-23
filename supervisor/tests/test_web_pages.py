@@ -347,7 +347,7 @@ class MessagesTest(PagesTest):
         """Reverting the preview leaves ?att= ignored: the panel lists documents and the file only downloads."""
         self.sent_by_wren()
         body = self.has("/fragment/docs/wren?att=m3.md%2F0", "sent by wren", "📎 notes.md", "<h2>prep</h2>",
-                        "&lt;script&gt;x&lt;/script&gt;", '<a href="/files/m3.md/0">Download</a>', "data-back-docs",
+                        "&lt;script&gt;x&lt;/script&gt;", 'href="/files/m3.md/0" title="Download" aria-label="Download"><svg', "data-back-docs",
                         "data-fullscreen-doc")
         for absent in ("<script>x", "data-edit-doc", "docdelete", "data-comment-doc", "New document"):
             self.assertNotIn(absent, body)          # the message's file, not a document: nothing edits or deletes it

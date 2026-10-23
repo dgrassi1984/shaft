@@ -19,7 +19,14 @@ ICONS = {name: h('<svg width="14" height="14" viewBox="0 0 24 24" fill="none" st
              "copy": '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H4v13h4"/>',
              "reply": '<path d="m9 4-6 6 6 6M3 10h10a8 8 0 0 1 8 8v2"/>',
              "delete": '<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/>',
+             "edit": '<path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+             "download": '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>',
+             "expand": '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
+             "collapse": '<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/>',
          }.items()}
+# The documents drawer's full-screen toggle: both glyphs, CSS shows the one aria-pressed calls for (web.js flips it).
+FULLSCREEN = h('<button type="button" class="small icon" data-fullscreen-doc aria-pressed="false" title="Full screen" '
+               'aria-label="Full screen">{on}{off}</button>', on=ICONS["expand"], off=ICONS["collapse"])
 INSTANCE_TABS = [("chat", "Chat"), ("", "Summary"), ("config", "Config"), ("drive", "Drive"), ("files", "Files"), ("access", "Access"),
                  ("judge", "Judge"), ("changes", "Changes"), ("benchmarks", "Benchmarks"),
                  ("transcripts", "Transcripts"), ("journal", "Journal"), ("activity", "Activity")]
@@ -179,6 +186,12 @@ def pre(text: str, cls: str = "") -> Html:
 
 def link(href: str, text) -> Html:
     return h('<a href="{href}">{t}</a>', href=href, t=text)
+
+
+def download_icon(href: str) -> Html:
+    """The documents drawer's Download: a link drawn as an icon button beside Edit, copy and delete."""
+    return h('<a class="small icon" href="{href}" title="Download" aria-label="Download">{i}</a>',
+             href=href, i=ICONS["download"])
 
 
 def when(ts: str) -> str:
@@ -833,8 +846,7 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
             '<textarea name="text" hidden></textarea><button type="submit" class="small">Create</button></form></details>',
             n=q(name), a=post_attrs("Documents", actions.RUN_NOW_S))
     back = Html('<button type="button" class="small" data-back-docs aria-label="Back to the documents">← Documents</button>')
-    expand = (Html('<button type="button" class="small" data-fullscreen-doc aria-pressed="false">'
-                   'Full screen</button>') if open_path and text is not None and not problem else Html(""))
+    expand = FULLSCREEN if open_path and text is not None and not problem else Html("")
     head = h('<div class="docshead">{title} <span class="dim">{dir}/</span>{new}{expand}<button type="button" '
              'class="small closedocs" data-close-docs aria-label="Close the documents">✕</button></div>{list}',
              title=back if open_path else Html("<b>Documents</b>"), dir=DIR, expand=expand,
@@ -843,17 +855,17 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
                                           h('<p class="dim">No current files.</p>') if archived else
                                           h('<p class="dim">none yet: ask {n} for one, it appears here as it writes it.</p>',
                                             n=name)))
-    download = (link(f"/i/{q(name)}/file?path={q(DIR + '/' + open_path)}", "Download")
+    download = (download_icon(f"/i/{q(name)}/file?path={q(DIR + '/' + open_path)}")
                 if open_path and text is not None and not problem else Html(""))
     if archived:
         notice = h('<p>Current files — not as they were in this chat</p><p><a href="/i/{n}/chat{query}">'
                    'Open in the current chat to edit or comment</a></p>', n=q(name),
                    query=f"?doc={q(open_path)}" if open_path else "")
         view = (h('<p class="bad">{p}</p>', p=problem) if problem else
-                h('<div class="docview" data-read-only="1"><b>{p}</b><div class="docmd">{md}</div></div>',
-                  p=open_path, md=markdown(text)) if text is not None else
+                h('<div class="docview" data-read-only="1"><div class="doctitle"><b>{p}</b>{d}</div>'
+                  '<div class="docmd">{md}</div></div>', p=open_path, d=download, md=markdown(text)) if text is not None else
                 h('<p class="dim">{p} is not there (any more).</p>', p=open_path) if open_path else Html(""))
-        return join([notice, head, download, view])
+        return join([notice, head, view])
     if problem:
         view = h('<p class="bad">{p}</p>', p=problem)
     elif open_path and text is not None:
@@ -871,7 +883,8 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
                         'aria-label="Comment on the whole document">💬</button>')
             tlist = threads_list(name, open_path, sha, threads or [], thread)
         view = h('<div class="docview" data-doc="{p}" data-sha="{s}"{tattr}><div class="doctitle"><b>{p}</b>'
-                 '<button type="button" class="small" data-edit-doc data-focus="doc-edit">Edit</button>{cbtn}'
+                 '<button type="button" class="small icon" data-edit-doc data-focus="doc-edit" title="Edit the document" '
+                 'aria-label="Edit the document">{edit}</button>{cbtn}'
                  '<button type="button" class="copy small icon" data-copy-doc title="copy the document\'s Markdown" '
                  'aria-label="Copy the document">{copy}</button>'
                  '{download}<form class="docdelete" data-post="/docs/{n}/delete" data-after="doc-deleted" '
@@ -888,7 +901,8 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
                  '<button type="submit">Save</button><button type="button" data-cancel-edit>Cancel</button>'
                  '<span class="dim">{n} hears of your change: with your next message, or now if it is replying</span>'
                  '</div><div class="bad wrap" data-refusal></div></form></div>',
-                 p=open_path, s=sha, n=q(name), tattr=tattr, cbtn=cbtn, tlist=tlist, copy=ICONS["copy"], delete=ICONS["delete"],
+                 p=open_path, s=sha, n=q(name), tattr=tattr, cbtn=cbtn, tlist=tlist, edit=ICONS["edit"], copy=ICONS["copy"],
+                 delete=ICONS["delete"],
                  over=_overwritten(saved, sha, text), a=post_attrs("Documents", actions.RUN_NOW_S), download=download,
                  md=markdown(text) if text.strip() else Html('<p class="dim">(empty)</p>'), raw=text)
     elif open_path:
@@ -902,12 +916,11 @@ def attachment_panel(name: str, file_name: str, url: str, text: str | None, prob
     """A text file the instance sent you, read-only in the documents panel (?att=): it is the message's, not a document
     in notes/docs/, so nothing here edits, comments on or deletes it. `problem`: why it shows no text (Download still
     works whenever there is a file to download)."""
-    expand = (Html('<button type="button" class="small" data-fullscreen-doc aria-pressed="false">Full screen</button>')
-              if text is not None else Html(""))
+    expand = FULLSCREEN if text is not None else Html("")
     head = h('<div class="docshead"><button type="button" class="small" data-back-docs aria-label="Back to the documents">'
              '← Documents</button> <span class="dim">sent by {n}</span>{expand}<button type="button" class="small '
              'closedocs" data-close-docs aria-label="Close the documents">✕</button></div>', n=name, expand=expand)
-    download = link(url, "Download") if url else Html("")
+    download = download_icon(url) if url else Html("")
     if text is None:
         return join([head, h('<p class="bad">{p}</p>', p=problem or f"{file_name} cannot be shown."),
                      h('<p>{d}</p>', d=download) if url else Html("")])
