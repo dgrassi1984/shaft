@@ -67,6 +67,14 @@ def _is_committed(data: bytes | None, entry: tuple[str, str] | None) -> bool:
             and _oid(data, entry[1]) == entry[1])
 
 
+def _own_folder(name: str, root: Path) -> None:
+    """Only an instance's own folder has approved code: never a copy of it (a battery exam's, a trial's, the coder's
+    scratch), whose record would replace the instance's. BaselineError otherwise."""
+    if Path(root).resolve() != (core.INSTANCES / name).resolve():
+        raise BaselineError(f"{root} is not {name}'s folder ({core.INSTANCES / name}): no approved code is kept for "
+                            "a copy")
+
+
 def read(name: str, root: Path) -> dict | None:
     """The record, or None when the instance has none yet (or it was made for another folder of that name).
     BaselineError when it is there but cannot be read."""
@@ -86,6 +94,7 @@ def read(name: str, root: Path) -> dict | None:
 
 def write(name: str, root: Path, code: dict[str, bytes]) -> None:
     """Record `code` (a gate.snapshot the supervisor has just approved) as the instance's approved code."""
+    _own_folder(name, root)
     head = committed(root)
     approved: dict[str, dict] = {}
     for path in sorted(set(code) | {p for p, e in head.items() if e[0] in ("100644", "100755")}):
@@ -115,6 +124,7 @@ def write(name: str, root: Path, code: dict[str, bytes]) -> None:
 def unapproved(name: str, root: Path, now: dict[str, bytes]) -> dict[str, bytes | None] | None:
     """{path: the approved bytes to put back, or None for "absent"} for every code path whose content `now` is not
     approved; None when there is no record yet (the caller falls back to git). BaselineError if it cannot tell."""
+    _own_folder(name, root)
     record = read(name, root)
     if record is None:
         return None

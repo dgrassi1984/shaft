@@ -660,10 +660,11 @@ def _track(proc: subprocess.Popen, root: Path) -> subprocess.Popen:
 
 def _end_run(proc: subprocess.Popen, root: Path) -> None:
     """Nothing a run started outlives it, before anything of it is settled (B9): its whole process group, then any
-    process left in the instance's folder that slipped out of the group (_end_strays)."""
+    process left in the instance's folder that slipped out of the group (kill.end_left_in)."""
+    from . import kill
     try:
         gate.stop_group(proc)
-        _end_strays(root)
+        kill.end_left_in(root)
     finally:
         with _LIVE_LOCK:
             _LIVE.pop(proc.pid, None)
@@ -674,51 +675,6 @@ def end_all_runs() -> None:
         live = list(_LIVE.values())
     for proc, root in live:
         _end_run(proc, root)
-
-
-def _end_strays(root: Path) -> None:
-    """End what an agent or a `run` command started in a session of its own (setsid), out of its run's process group:
-    a process whose parent is gone (re-parented to launchd, pid 1) and whose working folder is in the instance's
-    folder, with everything below it, never this process or its ancestors (Codex on e77d5e5). The parent rule spares
-    the operator's own shells there. One that also left the folder (chdir) is not found: the sandbox is the boundary
-    then — it may write only the instance's folder, and what it writes there after this is gated at the next run
-    (_reconcile against the approved code)."""
-    from . import kill
-    root = Path(root).resolve()
-    try:
-        procs = kill.processes()
-    except Exception as e:
-        log(f"{root.name}: FAILED to look for processes left in its folder after its run: {type(e).__name__}: {e}")
-        return
-    mine, pid = set(), os.getpid()
-    while pid in procs and pid not in mine:
-        mine.add(pid)
-        pid = procs[pid].ppid
-    mine.add(os.getpid())
-    heads = [p.pid for p in procs.values() if p.ppid == 1 and p.pid not in mine and kill._inside(p.cwd, root)
-             and not kill.SUPERVISOR.search(p.command)]
-    children: dict[int, list[int]] = {}
-    for p in procs.values():
-        children.setdefault(p.ppid, []).append(p.pid)
-    found, stack = [], list(heads)
-    while stack:
-        pid = stack.pop()
-        if pid not in found and pid not in mine:
-            found.append(pid)
-            stack.extend(children.get(pid, []))
-    if not found:
-        return
-    log(f"{root.name}: ending {len(found)} process(es) its run left in its folder outside the run's group: "
-        + "; ".join(procs[p].command[:80] for p in found if p in procs))
-    for sig in (signal.SIGTERM, signal.SIGKILL):
-        for pid in found:
-            try:
-                os.kill(pid, sig)
-            except (ProcessLookupError, PermissionError):
-                pass
-        deadline = time.monotonic() + gate.STOP_GRACE_S
-        while sig == signal.SIGTERM and time.monotonic() < deadline and any(_pid_alive(p) for p in found):
-            time.sleep(0.05)
 
 
 def _finish(proc: subprocess.Popen, root: Path) -> None:

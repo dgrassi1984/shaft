@@ -210,38 +210,6 @@ def make_control(name: str) -> Path:
     return dest
 
 
-def _end_strays(folder: Path) -> list[int]:
-    """SIGKILL every process of this user working inside `folder` (an exam's folder), with what it started: one the
-    exam started in a session of its own has left its process group (killed in _exam), not its folder. Read from the
-    process table with working folders (kill.processes)."""
-    from . import kill
-    try:
-        procs = kill.processes()
-    except (RuntimeError, OSError) as e:
-        log(f"battery: could not list the processes left in {folder}: {e}")
-        return []
-    top = str(Path(folder).resolve())
-    children: dict[int, list[int]] = {}
-    for p in procs.values():
-        children.setdefault(p.ppid, []).append(p.pid)
-    stack = [p.pid for p in procs.values() if p.cwd == top or p.cwd.startswith(top + "/")]
-    out: list[int] = []
-    while stack:
-        pid = stack.pop()
-        if pid in out or pid == os.getpid():
-            continue
-        out.append(pid)
-        stack.extend(children.get(pid, []))
-    for pid in out:
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
-    if out:
-        log(f"battery: {len(out)} process(es) an exam left running in {folder} killed: {sorted(out)}")
-    return out
-
-
 class ExamBroker(Broker):
     """The broker of an exam in the instance's copy: its run works in the copy, while its history (`history`) and
     the names of its keys are read in the real folder, as they were when exams ran there — the copy has neither .git
@@ -303,7 +271,7 @@ def _exam(label: str, root: Path, broker: Broker, task: dict, until: float | Non
                 except UnsafePath as e:   # the exam put a link there: it does not get the request
                     log(f"{label}: could not pass the request to yield on to its exam: {e}")
             time.sleep(1)
-    finally:   # every way out: what it started in its process group goes with it (strays outside it: _end_strays)
+    finally:   # every way out: what it started in its process group goes with it (strays outside it: kill.end_left_in)
         try:
             os.killpg(proc.pid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError):
@@ -673,7 +641,8 @@ def _one(name: str, item: dict, arm: str, real: Path, e: dict, until: float | No
         return _one_in(name, item, arm, root, real, label, e, until, interrupt, grader)
     finally:
         if root is not None:
-            _end_strays(root)
+            from . import kill
+            kill.end_left_in(root)
             shutil.rmtree(root.parent, ignore_errors=True)   # its holder: never used again
 
 

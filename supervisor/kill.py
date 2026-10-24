@@ -153,6 +153,52 @@ def _alive(pid: int) -> bool:
         return True
 
 
+STRAY_GRACE_S = 2   # how long a stray has to exit on SIGTERM before SIGKILL
+
+
+def end_left_in(folder: Path) -> list[int]:
+    """End what a finished run or exam left working in `folder`, outside its process group: a process whose parent is
+    gone (re-parented to launchd, pid 1) — one started in a session of its own (setsid) once its starter ended —
+    whose working folder is inside `folder`, with everything below it; SIGTERM, then SIGKILL after STRAY_GRACE_S.
+    Never this process or its ancestors, nor a supervisor process. A process whose parent is alive is not a stray:
+    the operator's own shells in an instance's folder keep theirs. One that also left the folder (chdir) is not
+    found; the sandbox is the boundary then. Used by runner._end_run (an instance's folder) and battery (an exam's
+    copy), one behaviour for both. Returns the pids it signalled; [] when the process table cannot be read (logged:
+    FAILED)."""
+    import time
+    top = Path(folder).resolve()
+    try:
+        procs = processes()
+    except (RuntimeError, OSError) as e:
+        log(f"FAILED to list the processes left in {top}: {e}")
+        return []
+    mine, pid = set(), os.getpid()
+    while pid in procs and pid not in mine:
+        mine.add(pid)
+        pid = procs[pid].ppid
+    mine.add(os.getpid())
+    children: dict[int, list[int]] = {}
+    for p in procs.values():
+        children.setdefault(p.ppid, []).append(p.pid)
+    stack = [p.pid for p in procs.values() if p.ppid == 1 and _inside(p.cwd, top) and not SUPERVISOR.search(p.command)]
+    found: list[int] = []
+    while stack:
+        pid = stack.pop()
+        if pid not in found and pid not in mine:
+            found.append(pid)
+            stack.extend(children.get(pid, []))
+    if not found:
+        return []
+    log(f"{top}: ending {len(found)} process(es) left running there outside their run's process group: "
+        + "; ".join(f"{p} {procs[p].command[:60]}" for p in found if p in procs))
+    _signal(found, signal.SIGTERM)
+    deadline = time.monotonic() + STRAY_GRACE_S
+    while time.monotonic() < deadline and any(_alive(p) for p in found):
+        time.sleep(0.05)
+    _signal([p for p in found if _alive(p)], signal.SIGKILL)
+    return found
+
+
 def running(name: str) -> list[str]:
     """What still holds or works for the instance: its run (lock), replies waiting for it, a terminal conversation,
     its own processes, a battery, a trial replay. Empty when it is free."""

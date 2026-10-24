@@ -206,6 +206,78 @@ class ApprovedCodeTest(RunTransactionCase):
         self.assertIn("MERGE_HEAD", self.logs())
 
 
+class WithNoFollowTest(RunTransactionCase):
+    """The approved-code record (s1-lifecycle) on top of s1-fileio's bounded snapshots and exam copies."""
+
+    REFUSED = 75
+
+    def record(self) -> str:
+        return (self.project / ".supervisor" / "baselines" / "kant.json").read_text()
+
+    def test_a_tree_too_big_to_check_is_put_back_and_records_nothing(self):
+        self.assertEqual(self.cycle(), 0)
+        recorded = self.record()
+        script = ("import pathlib\npathlib.Path('plugins/text_stats/main.py').write_text(" + repr(UNGATED) + ")\n"
+                  "bulk = pathlib.Path('plugins/bulk')\nbulk.mkdir()\n"
+                  "[(bulk / f'f{i}.py').write_text('x') for i in range(40)]\n")
+        with mock.patch.object(core, "TREE_MAX_FILES", 25):
+            self.assertEqual(self.cycle(script), 0)
+        self.assertEqual(self.gated, [], "a tree too big to snapshot was gated on a partial view")
+        self.assertEqual(self.plugin(), COMMITTED)              # the files the run began with: back
+        self.assertEqual(self.record(), recorded, "a failed gate recorded a baseline")
+        shutil.rmtree(self.root / "plugins" / "bulk")           # the operator trims it
+        self.assertEqual(self.cycle(), 0)
+        self.assertEqual(self.gated, [])
+        self.assertEqual(self.plugin(), COMMITTED)
+
+    def test_a_tree_too_big_to_compare_refuses_the_run(self):
+        with mock.patch.object(core, "TREE_MAX_FILES", 2):
+            self.assertEqual(self.cycle("import pathlib\npathlib.Path('.tmp/ran').write_text('1')\n"),
+                             self.REFUSED)
+        self.assertFalse((self.root / ".tmp" / "ran").exists())
+        self.assertIn("too big", self.logs())
+
+    def test_no_approved_code_is_recorded_or_checked_for_a_copy(self):
+        from supervisor import baseline
+        copy = self.project / "copy-of-kant"
+        shutil.copytree(self.root, copy, symlinks=True)
+        with mock.patch.object(core, "SUP_DIR", self.project / ".supervisor"), \
+                mock.patch.object(core, "INSTANCES", self.project / "instances"):
+            with self.assertRaises(baseline.BaselineError):
+                baseline.write("kant", copy, {})
+            with self.assertRaises(baseline.BaselineError):
+                baseline.unapproved("kant", copy, {})
+        self.assertFalse((self.project / ".supervisor" / "baselines" / "kant.json").exists())
+
+
+class StrayProcessTest(unittest.TestCase):
+    """One stray killer (kill.end_left_in) for an instance's folder and an exam's copy."""
+
+    def test_an_orphan_in_the_folder_ends_and_a_process_with_a_live_parent_is_spared(self):
+        from supervisor import kill
+        folder = Path(tempfile.mkdtemp(prefix="shaft-strays-")).resolve()
+        self.addCleanup(shutil.rmtree, folder, True)
+        shell = subprocess.Popen(["/bin/sleep", "30"], cwd=folder)        # the operator's shell there: its parent lives
+        self.addCleanup(shell.kill)
+        starter = subprocess.run([sys.executable, "-c", "import subprocess, sys; print(subprocess.Popen("
+                                  "['/bin/sleep', '30'], start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, "
+                                  "stderr=subprocess.DEVNULL).pid)"],
+                                 cwd=folder, capture_output=True, text=True)
+        orphan = int(starter.stdout)                                       # its starter is gone: parent is launchd
+        self.addCleanup(lambda: subprocess.run(["kill", "-9", str(orphan)], capture_output=True))
+        time.sleep(0.3)
+        with mock.patch.object(kill, "log"):
+            ended = kill.end_left_in(folder)
+        self.assertIn(orphan, ended)
+        self.assertNotIn(shell.pid, ended)
+        self.assertIsNone(shell.poll(), "a process whose parent is alive was killed")
+        for _ in range(50):
+            if subprocess.run(["kill", "-0", str(orphan)], capture_output=True).returncode:
+                break
+            time.sleep(0.05)
+        self.assertNotEqual(subprocess.run(["kill", "-0", str(orphan)], capture_output=True).returncode, 0)
+
+
 class RunOutlivesItselfTest(RunTransactionCase):
     """B9: a run had no process group of its own and only its direct child was ever killed (on a timeout): a process
     the agent started went on writing the instance's code after settlement had judged it."""

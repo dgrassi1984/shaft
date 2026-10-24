@@ -664,13 +664,13 @@ def _write_secrets(root: Path, store: dict) -> None:
             f.write(json.dumps(store, indent=1).encode())
             f.flush()
             os.fsync(f.fileno())
-        dfd = open_beneath(root, [SECRETS_DIR], os.O_RDONLY | os.O_DIRECTORY)
+        dfd = dir_beneath(root, [SECRETS_DIR])
         os.rename(tmp, "secrets.json", src_dir_fd=dfd, dst_dir_fd=dfd)   # atomic; os.replace takes no dir_fd here
         os.fsync(dfd)
     except BaseException:
         try:
             if dfd is None:
-                dfd = open_beneath(root, [SECRETS_DIR], os.O_RDONLY | os.O_DIRECTORY)
+                dfd = dir_beneath(root, [SECRETS_DIR])
             os.unlink(tmp, dir_fd=dfd)
         except OSError:
             pass
