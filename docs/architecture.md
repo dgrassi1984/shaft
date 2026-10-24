@@ -65,6 +65,19 @@ judge's time if later), oldest first, even for older cycles; a tie in the same s
 Minute-only timestamps mean `:00`; `T` and space separators are accepted. Use the returned continuation's
 `since` to read the next page. Without `since`, verdicts remain newest first.
 
+The broker operational envelope has the same eight keys in live runs and replays: `calls_used`,
+`calls_max`, `cloud`, `coder`, `trials`, `probation`, `next_sleep`, `next_wake`. Replays reconstruct
+the instance's spend and trial starts strictly before the cycle start on that date, probation cycles
+judged before it, and the next scheduled sleep and wake. They carry no replay flag. Closed probation
+entries cannot be reconstructed; see [trial fidelity gaps](plans/PLAN-trials.md#8-known-fidelity-gaps-equal-for-both-arms-so-the-comparison-stays-fair).
+
+With `since` and `format="json"`, `record` returns the same text plus the shown verdicts, unsampled
+episode timestamps (`left_out`), and `next_since`. Verdicts from the last two seconds remain for a later
+fetch. The cursor is the last shown verdict's review time, even on the final page; it is null for an empty
+page. Without `since`, the original text output is unchanged. Judgments from 2026-10-24 onward that lack
+`confidence_of` inherit it from their live episode when present; earlier judgments stay v1.
+
+
 The **capability battery** is a fixed yardstick: held-out tasks the instances never see (coding with hidden
 tests, research against a frozen key, recall of their own older journal entries, self-knowledge checked
 against the supervisor's record), graded effectiveness first. Each instance is compared with a *control*:

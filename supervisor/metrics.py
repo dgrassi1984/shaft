@@ -129,6 +129,8 @@ def backfill_schema(missing: list[str]) -> dict:
 
 SCORE = {"yes": 1.0, "partial": 0.5, "no": 0.0}
 CONFIDENCE_V2 = "criterion_met=yes"
+# Deployment boundary: earlier judgments retain the original confidence question.
+CONFIDENCE_BACKFILL_DATE = "2026-10-24"
 EVIDENCE_HOURS = 72           # messages and conversations before a cycle that may hold its goal's origin
 EVIDENCE_CHARS = 8000
 PRIOR_GOALS = 30
@@ -213,6 +215,14 @@ def judgments(name: str, sup: Path | None = None) -> list[dict]:
     sup = sup or SUP_DIR
     p = sup / "judgments" / f"{name}.jsonl"
     rows = [json.loads(l) for l in p.read_text().splitlines() if l.strip()] if p.exists() else []
+    missing = [r for r in rows if "confidence_of" not in r
+               and r.get("judged_at", "") >= CONFIDENCE_BACKFILL_DATE]
+    if missing:
+        intents = {ep["ts"]: ep.get("intent") or {} for ep in live_episodes(name)}
+        for r in missing:
+            intent = intents.get(r["episode_ts"], {})
+            if "confidence_of" in intent:
+                r["confidence_of"] = intent["confidence_of"]
     sp = sup / "judgments" / f"{name}-second.jsonl"
     if rows and sp.exists():
         seconds = {}
@@ -1167,14 +1177,18 @@ def _probation_after(entry: dict, js: list[dict], tools: dict[str, set[str]]) ->
     return later, used, model, after
 
 
-def probation_status(name: str) -> list[dict]:
+def probation_status(name: str, as_of: datetime | None = None) -> list[dict]:
     """The open probation windows, for the operational envelope (REVIEW-autonomy A5): cycles counted as _verdict
     counts them."""
     p = _probation_path(name)
     entries = json.loads(p.read_text()) if p.exists() else []
+    if as_of is not None:
+        entries = [e for e in entries if datetime.fromisoformat(e["since"]) < as_of]
     if not entries:
         return []
     js, tools = judgments(name), _tools_by_cycle(name)
+    if as_of is not None:
+        js = [j for j in js if datetime.fromisoformat(j["judged_at"]) < as_of]
     return [{"commit": e["commit"][:8], "files": [f for f in e["files"]
              if not Path(f).is_absolute() and ".." not in Path(f).parts],
              "cycles_used": min(len(_probation_after(e, js, tools)[3]), PROBATION_CYCLES),   # _verdict scores no more

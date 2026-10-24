@@ -202,6 +202,22 @@ def next_sleep(now: datetime | None = None) -> str | None:
     return f"{at:%Y-%m-%d %H:%M}"
 
 
+def replay_next_sleep(now: datetime) -> str | None:
+    """Next scheduled sleep strictly after the replay start, without today's scheduler state."""
+    if not (AGENTS / f"{SERVICES['scheduler']['label']}.plist").exists():
+        return None
+    at = now.replace(hour=SLEEP_AT[0], minute=SLEEP_AT[1], second=0, microsecond=0)
+    if at <= now:
+        at += timedelta(days=1)
+    return f"{at:%Y-%m-%d %H:%M}"
+
+
+def replay_next_wake(name: str, now: datetime) -> str:
+    """A replay starts a cycle now; its next wake is one interval later."""
+    interval = wake_interval(name)
+    return f"{now + interval:%H:%M}" if interval is not None else "never"
+
+
 def decide_wakes(now: datetime, st: dict, names: list[str], interval_of, awake_of) -> tuple[list[str], dict[str, str]]:
     """(instances to wake now, {instance: why its due wake is skipped}). Pure: the scheduler's rule."""
     start, skip = [], {}

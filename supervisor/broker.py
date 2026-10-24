@@ -22,7 +22,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 from html.parser import HTMLParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -105,13 +105,18 @@ def judgments_text(rows: list[dict], limit: int = 20, cycle: str = "", before: s
     return _judgments_text(rows, limit, cycle, before, budget, left_out)
 
 
-def _judgments_text(rows, limit, cycle, before, budget, left_out, since="") -> str:
+def _judgments_text(rows, limit, cycle, before, budget, left_out, since="", shown=None) -> str:
     if cycle:
         want = cycle.strip().replace("T", " ")[:16]
         hit = [r for r in rows if _when(r.get("episode_ts")) == want]
         if not hit and any(_when(ts) == want for ts in left_out):
             return (f"the cycle at {want} was not judged: the main judge grades one live run in {judge.JUDGE_EVERY}, "
                     "drawn after the run, and this one was left out. That is not a failure; it has no verdict.")
+        if hit and shown is not None:
+            shown.append(hit[-1])
+        if hit and since:
+            return (judgment_text(hit[-1]) + "\n\n(1 new verdict, oldest first. Next: "
+                    f"record(kind='judgments', since='{_reviewed_at(hit[-1])}').)")
         return judgment_text(hit[-1]) if hit else (f"no judged cycle at {want}; the latest: "
                                                    + ", ".join(_when(r.get("episode_ts")) for r in rows[-5:][::-1]))
     if before:
@@ -149,6 +154,11 @@ def _judgments_text(rows, limit, cycle, before, budget, left_out, since="") -> s
                     f"record(kind='judgments', since='{_reviewed_at(rows[len(picked) - 1])}').)")
         else:
             tail = ""
+    if since and len(picked) == len(rows):
+        tail = (f"\n\n({len(picked)} new verdict{'' if len(picked) == 1 else 's'}, oldest first. Next: "
+                f"record(kind='judgments', since='{_reviewed_at(rows[len(picked) - 1])}').)")
+    if shown is not None:
+        shown.extend(rows[:len(picked)])
     return "\n\n".join(picked) + tail
 
 
@@ -244,7 +254,9 @@ SPECS = {
                                                     "('2026-10-13 17:42')"},
          "before": {"type": "string", "description": "judgments: only cycles before this time (to page back)"},
          "since": {"type": "string", "description": "judgments only: verdicts judged after this time, e.g. the time "
-                   "of my last review; oldest first. YYYY-MM-DD HH:MM[:SS] (T accepted); missing seconds mean :00"}},
+                   "of my last review; oldest first. YYYY-MM-DD HH:MM[:SS] (T accepted); missing seconds mean :00"},
+         "format": {"type": "string", "enum": ["text", "json"], "description":
+                    "judgments with since: text (default) or JSON with verdicts and next_since"}},
         ["kind"]),
     "decide": _spec(
         "decide",
@@ -1128,6 +1140,9 @@ class Broker:
     def envelope(self) -> dict:
         """Operational limits, without spending a tool call or exposing host configuration. The calls are live; the
         allowances, probation and schedule are recomputed at most every ENVELOPE_TTL_S."""
+        return self._operational_envelope()
+
+    def _operational_envelope(self, as_of: datetime | None = None) -> dict:
         cached = getattr(self, "_envelope", None)
         if cached and time.monotonic() - cached[0] < self.ENVELOPE_TTL_S:
             return {**cached[1], "calls_used": self.calls, "calls_max": self.max_calls}
@@ -1144,25 +1159,33 @@ class Broker:
                     pass
                 return None
 
+        until = {"until": as_of} if as_of else {}
+        unavailable = self.unavailable if as_of is None else {}
+        usage_name = self.name if as_of else self.usage_name
+
         def trials():
-            usage = trial.usage_today(self.name)
+            usage = trial.usage_today(self.name, **until)
             return {"started": usage["started"], "per_day": trial.TRIALS_PER_DAY,
                     "spent_usd": float(usage["usd"]), "cap_usd": float(trial.DAILY_USD)}
 
         env = {"calls_used": self.calls, "calls_max": self.max_calls,
-                "cloud": field("cloud", lambda: {"spent_usd": float(cloudllm.spent_today(self.usage_name)),
+                "cloud": field("cloud", lambda: {"spent_usd": float(cloudllm.spent_today(usage_name, **until)),
                                                  "cap_usd": float(cloudllm.daily_cap(self.name))}),
-                "coder": None if "delegate_coding" in self.disabled or "delegate_coding" in self.unavailable else
-                    field("coder", lambda: {"spent_usd": float(coder.spent_today(self.name)),
+                "coder": None if "delegate_coding" in self.disabled or "delegate_coding" in unavailable else
+                    field("coder", lambda: {"spent_usd": float(coder.spent_today(self.name, **until)),
                                             "cap_usd": float(coder.DAILY_USD)}),
-                "trials": None if "trial" in self.disabled or "trial" in self.unavailable else field("trials", trials),
-                "probation": field("probation", lambda: metrics.probation_status(self.name)),
-                "next_sleep": field("next_sleep", autonomy.next_sleep),
-                "next_wake": field("next_wake", lambda: autonomy.next_wake(self.name)), "replay": False}
+                "trials": None if "trial" in self.disabled or "trial" in unavailable else field("trials", trials),
+                "probation": field("probation", lambda: metrics.probation_status(
+                    self.name, **({"as_of": as_of} if as_of else {}))),
+                "next_sleep": field("next_sleep", lambda: autonomy.replay_next_sleep(as_of)
+                                    if as_of else autonomy.next_sleep()),
+                "next_wake": field("next_wake", lambda: autonomy.replay_next_wake(self.name, as_of)
+                                   if as_of else autonomy.next_wake(self.name))}
         self._envelope = (time.monotonic(), env)
         return env
 
-    def _record(self, kind: str, limit: int = 20, cycle: str = "", before: str = "", since: str = "") -> str:
+    def _record(self, kind: str, limit: int = 20, cycle: str = "", before: str = "", since: str = "",
+                format: str = "text") -> str:
         from .core import SUP_DIR
         limit = max(1, min(int(limit), 200))
         # A trial replay sees the record as it stood when the replayed cycle started, never what came after.
@@ -1183,17 +1206,28 @@ class Broker:
                     since = datetime.fromisoformat(since).strftime("%Y-%m-%d %H:%M:%S")
                 except ValueError:
                     raise ValueError("since must be a valid YYYY-MM-DD HH:MM[:SS] timestamp") from None
-            rows = [r for r in judgments(self.name, SUP_DIR) if known(_judged_at(r))]
+            settled = cut or (datetime.now() - timedelta(seconds=2)).strftime("%Y-%m-%d %H:%M:%S")
+            rows = [dict(r) for r in judgments(self.name, SUP_DIR) if known(_judged_at(r))]
             left_out = {r["episode_ts"] for r in unsampled_rows(self.name, SUP_DIR)
-                        if known(str(r.get("decided_at", "")).replace("T", " "))}
+                        if known(str(r.get("decided_at", "")).replace("T", " "))
+                        and (not since or since < str(r.get("decided_at", "")).replace("T", " ") < settled)}
             for r in rows:   # a replay sees a second verdict only if it existed then
                 if isinstance(r.get("second"), dict) and not known(str(r["second"].get("judged_at", "")).replace("T", " ")):
                     del r["second"]
             if since:
-                rows = [r for r in rows if _reviewed_at(r) > since]
+                rows = [r for r in rows if since < _reviewed_at(r) < settled]
             # Returned whole, never cut like the other kinds below: the sleep reads it through broker.call, and a
             # cut would drop verdicts its marker then counts as read (the budget keeps a page short anyway).
-            return _judgments_text(rows, limit, cycle, before, JUDGMENTS_BUDGET, left_out, since)
+            shown = []
+            text = _judgments_text(rows, limit, cycle, before, JUDGMENTS_BUDGET, left_out, since, shown)
+            if since and format == "json":
+                return json.dumps({"text": text, "verdicts": [
+                    {**{key: r.get(key) for key in ("episode_ts", "judged_at", "criterion_met", "claim_supported",
+                                                   "failure_mode", "difficulty")},
+                     "reviewed_at": _reviewed_at(r),
+                     "second_criterion_met": (r.get("second") or {}).get("criterion_met")} for r in shown],
+                    "left_out": sorted(left_out), "next_since": _reviewed_at(shown[-1]) if shown else None})
+            return text
         elif kind == "runs":
             mine = f"] {self.name}: "
             text = "\n".join(_tail_lines(SUP_DIR / "supervisor.log", 20000,
@@ -1667,7 +1701,8 @@ class ReplayBroker(Broker):
     refusal traced as a "network" call; its `run` and plugins read the instance's real Python environment,
     read-only. `run` acts on the replay's own copy of the instance, `history` ends at the replayed
     cycle's starting commit and its mind as of that start (its `save_as` writes into the copy), `record` at the time
-    it started. The coder and trials are not available. Cloud-model
+    it started. The envelope reconstructs the instance's allowances and schedule at that start, with the same
+    keys as live. The coder and trials are not available. Cloud-model
     spend is counted under `billed`, not under the instance's own daily allowance. A self-hosted model server that
     cannot be reached fails the run instead of falling back: a trial never takes the local model unasked."""
 
@@ -1685,9 +1720,8 @@ class ReplayBroker(Broker):
         self._tags = threading.local()
 
     def envelope(self) -> dict:
-        """A replay must never read today's allowances or schedule."""
-        return {"calls_used": self.calls, "calls_max": self.max_calls, "cloud": None, "coder": None,
-                "trials": None, "probation": [], "next_sleep": None, "next_wake": None, "replay": True}
+        """The instance's envelope at the replayed cycle's start, with this run's call count."""
+        return self._operational_envelope(self.as_of)
 
     def _make_egress(self):
         from .core import SUP_DIR

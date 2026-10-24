@@ -10,7 +10,7 @@ import unittest
 import urllib.error
 import urllib.request
 from contextlib import ExitStack
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -30,6 +30,9 @@ class A2Test(unittest.TestCase):
     def setUp(self):
         self.b = object.__new__(broker.Broker)
         self.b.name, self.b.as_of = "x", None
+        clock = mock.patch.object(broker, "datetime", wraps=datetime)
+        clock.start().now.return_value = datetime(2026, 10, 25)
+        self.addCleanup(clock.stop)
         self.rows = [judgment("before", "2026-10-24T09:59:59"),
                      judgment("equal", "2026-10-24 10:00"),
                      judgment("old cycle newly judged", "2026-10-24T10:00:30"),
@@ -43,7 +46,8 @@ class A2Test(unittest.TestCase):
     def test_judged_at_since_and_replay_cut(self):
         self.b.as_of = datetime(2026, 10, 24, 10, 2)
         text = self.b._record("judgments", since="2026-10-24T10:00")
-        self.assertEqual(text, "\n\n".join(broker.judgment_text(r) for r in self.rows[2:4]))
+        self.assertEqual(text, "\n\n".join(broker.judgment_text(r) for r in self.rows[2:4]) + "\n\n"
+                         "(2 new verdicts, oldest first. Next: record(kind='judgments', since='2026-10-24 10:01:00').)")
         self.assertIn("since", broker.SPECS["record"]["function"]["parameters"]["properties"])
 
     def test_limit_continuation_then_exactly_remaining(self):
@@ -51,7 +55,8 @@ class A2Test(unittest.TestCase):
         tail = "(2 of 3 new verdicts, oldest first. The rest: record(kind='judgments', since='2026-10-24 10:01:00').)"
         self.assertEqual(text, "\n\n".join(broker.judgment_text(r) for r in self.rows[2:4]) + "\n\n" + tail)
         cursor = re.search(r"record\(kind='judgments', since='([^']+)'\)", text)[1]
-        self.assertEqual(self.b._record("judgments", since=cursor), broker.judgment_text(self.rows[4]))
+        self.assertEqual(self.b._record("judgments", since=cursor), broker.judgment_text(self.rows[4]) + "\n\n"
+                         "(1 new verdict, oldest first. Next: record(kind='judgments', since='2026-10-24 10:02:00').)")
 
     def test_budget_continuation_and_judgment_order(self):
         self.rows[2:5] = [self.rows[4], self.rows[2], self.rows[3]]
@@ -60,7 +65,8 @@ class A2Test(unittest.TestCase):
         self.assertEqual(text, broker.judgment_text(self.rows[3]) + "\n\n"
                          "(1 of 3 new verdicts, oldest first. The rest: record(kind='judgments', since='2026-10-24 10:00:30').)")
         self.assertEqual(self.b._record("judgments", since="2026-10-24 10:00:30"),
-                         "\n\n".join(broker.judgment_text(r) for r in (self.rows[4], self.rows[2])))
+                         "\n\n".join(broker.judgment_text(r) for r in (self.rows[4], self.rows[2])) + "\n\n"
+                         "(2 new verdicts, oldest first. Next: record(kind='judgments', since='2026-10-24 10:02:00').)")
 
     def test_a_tie_is_never_split_across_the_continuation(self):
         # Found by Codex while writing these tests: two verdicts judged in the same second, cut between them, and
@@ -100,9 +106,11 @@ class A2Test(unittest.TestCase):
 
     def test_since_combines_with_before_and_cycle(self):
         self.assertEqual(self.b._record("judgments", since="2026-10-24 10:00", before="2026-10-02 10:00"),
-                         broker.judgment_text(self.rows[2]))
+                         broker.judgment_text(self.rows[2]) + "\n\n"
+                         "(1 new verdict, oldest first. Next: record(kind='judgments', since='2026-10-24 10:00:30').)")
         self.assertEqual(self.b._record("judgments", since="2026-10-24 10:00", cycle="2026-10-02 10:00"),
-                         broker.judgment_text(self.rows[3]))
+                         broker.judgment_text(self.rows[3]) + "\n\n"
+                         "(1 new verdict, oldest first. Next: record(kind='judgments', since='2026-10-24 10:01:00').)")
 
     def test_invalid_since_and_ignored_for_other_kinds(self):
         for value in ("yesterday", "2026-02-30 10:00", "2026-10-24", "2026-10-24 1:00", 42):
@@ -110,6 +118,62 @@ class A2Test(unittest.TestCase):
                 self.b._record("judgments", since=value)
         with mock.patch.object(trial, "describe_all", return_value="trials"):
             self.assertEqual(self.b._record("trials", since="invalid"), "trials")
+
+    def test_first_fetch_json_pages_all_25_verdicts(self):
+        self.rows[:] = [judgment(str(i), f"2026-10-24T10:{i:02d}:00", f"episode-{i}") for i in range(25)]
+        cursor, seen = "1970-01-01 00:00:00", []
+        for count in (20, 5, 0):
+            page = json.loads(self.b._record("judgments", since=cursor, format="json"))
+            self.assertEqual(page["text"], self.b._record("judgments", since=cursor))
+            self.assertEqual(len(page["verdicts"]), count)
+            self.assertEqual(set(page), {"text", "verdicts", "left_out", "next_since"})
+            for verdict in page["verdicts"]:
+                self.assertEqual(set(verdict), {"episode_ts", "judged_at", "reviewed_at", "criterion_met",
+                                               "claim_supported", "failure_mode", "difficulty", "second_criterion_met"})
+                row = next(r for r in self.rows if r["episode_ts"] == verdict["episode_ts"])
+                self.assertIn(broker.judgment_text(row), page["text"])
+            seen.extend(v["episode_ts"] for v in page["verdicts"])
+            cursor = page["next_since"]
+        self.assertIsNone(cursor)
+        self.assertEqual(seen, [f"episode-{i}" for i in range(25)])
+
+    def test_json_second_opinion_and_tied_page_match_text(self):
+        self.rows[:] = [judgment("one", "2026-10-24T10:00:00", "one", failure_mode="unsupported",
+                                second={"judge": "j2", "criterion_met": "no", "judged_at": "2026-10-24T10:01:00"}),
+                        judgment("two", "2026-10-24T10:01:00", "two")]
+        page = json.loads(self.b._record("judgments", since="1970-01-01 00:00:00", format="json", limit=1))
+        self.assertEqual(page["verdicts"], [
+            {"episode_ts": "one", "judged_at": "2026-10-24T10:00:00", "reviewed_at": "2026-10-24 10:01:00",
+             "criterion_met": "partial", "claim_supported": True, "failure_mode": "unsupported", "difficulty": 2,
+             "second_criterion_met": "no"},
+            {"episode_ts": "two", "judged_at": "2026-10-24T10:01:00", "reviewed_at": "2026-10-24 10:01:00",
+             "criterion_met": "partial", "claim_supported": True, "failure_mode": None, "difficulty": 2,
+             "second_criterion_met": None}])
+        self.assertEqual(page["text"], self.b._record("judgments", since="1970-01-01 00:00:00", limit=1))
+        self.assertEqual(page["next_since"], "2026-10-24 10:01:00")
+
+    def test_settled_window_and_left_out(self):
+        self.rows[:] = [judgment("settled", "2026-10-24T10:00:07", "old"),
+                        judgment("writing", "2026-10-24T10:00:08", "new")]
+        omitted = [{"episode_ts": label, "decided_at": stamp} for label, stamp in
+                   (("before", "2026-10-24T09:59:59"), ("left", "2026-10-24T10:00:07"),
+                    ("writing", "2026-10-24T10:00:08"), ("future", "2026-10-24T11:00:00"))]
+        with mock.patch.object(broker, "datetime", wraps=datetime) as clock, \
+                mock.patch.object(metrics, "unsampled_rows", return_value=omitted):
+            clock.now.return_value = datetime(2026, 10, 24, 10, 0, 10)
+            page = json.loads(self.b._record("judgments", since="2026-10-24 10:00", format="json"))
+            self.assertEqual([v["episode_ts"] for v in page["verdicts"]], ["old"])
+            self.assertEqual(page["next_since"], "2026-10-24 10:00:07")
+            self.assertEqual(page["left_out"], ["left"])
+            clock.now.return_value = datetime(2026, 10, 24, 10, 0, 11)
+            later = json.loads(self.b._record("judgments", since=page["next_since"], format="json"))
+            self.assertEqual([v["episode_ts"] for v in later["verdicts"]], ["new"])
+            self.assertEqual(later["left_out"], ["writing"])
+            self.b.as_of = datetime(2026, 10, 24, 10, 0, 8)
+            clock.now.return_value = self.b.as_of
+            replay = json.loads(self.b._record("judgments", since="2026-10-24 10:00", format="json"))
+            self.assertEqual(replay, page)
+
 
 
 class A4Test(unittest.TestCase):
@@ -212,7 +276,7 @@ class A5Test(unittest.TestCase):
         self.expected = {"calls_used": 7, "calls_max": 60, "cloud": {"spent_usd": 1.25, "cap_usd": 10.0},
                          "coder": {"spent_usd": 2.0, "cap_usd": 12.0},
                          "trials": {"started": 2, "per_day": 4, "spent_usd": 3.0, "cap_usd": 15.0},
-                         "probation": [], "next_sleep": "2026-10-25 04:00", "next_wake": "14:00", "replay": False}
+                         "probation": [], "next_sleep": "2026-10-25 04:00", "next_wake": "14:00"}
 
     def test_live_envelope_allowances_and_no_secrets(self):
         result = self.b.envelope()
@@ -271,18 +335,25 @@ class A5Test(unittest.TestCase):
         self.assertIsNone(self.b.envelope()["trials"])
         self.assertIsNone(self.b.envelope()["coder"])
 
-    def test_replay_does_not_read_live_allowances(self):
+    def test_replay_reconstructs_allowances(self):
+        at = datetime(2026, 10, 20)
         replay = broker.ReplayBroker("x", self.project, {}, self.project / "replay.log",
                                      state_root=self.project / "copy", start_commit="a" * 40,
-                                     as_of=datetime(2026, 10, 20), cache={}, cache_lock=threading.Lock(),
+                                     as_of=at, cache={}, cache_lock=threading.Lock(),
                                      billed="trial-x", tools_log=self.project / "tools.log")
         replay.calls = 3
-        self.assertEqual(replay.envelope(), {"calls_used": 3, "calls_max": 60, "cloud": None, "coder": None,
-                                            "trials": None, "probation": [], "next_sleep": None,
-                                            "next_wake": None, "replay": True})
-        for helper in (cloudllm.spent_today, coder.spent_today, trial.usage_today, metrics.probation_status,
-                       autonomy.next_sleep, autonomy.next_wake):
-            helper.assert_not_called()
+        replay.unavailable = {"delegate_coding": "replay", "trial": "replay"}
+        with mock.patch.object(autonomy, "replay_next_sleep", return_value="2026-10-25 04:00"), \
+                mock.patch.object(autonomy, "replay_next_wake", return_value="14:00"):
+            self.assertEqual(replay.envelope(), {**self.expected, "calls_used": 3})
+        for helper in (cloudllm.spent_today, coder.spent_today, trial.usage_today):
+            helper.assert_called_once_with("x", until=at)
+        metrics.probation_status.assert_called_once_with("x", as_of=at)
+        replay.disabled = {"delegate_coding", "trial"}
+        with mock.patch.object(autonomy, "replay_next_sleep"), mock.patch.object(autonomy, "replay_next_wake"):
+            result = replay.envelope()
+        self.assertIsNone(result["coder"])
+        self.assertIsNone(result["trials"])
 
     def test_each_helper_failure_is_confined_to_its_field(self):
         for module, helper, field in ((cloudllm, "daily_cap", "cloud"), (coder, "spent_today", "coder"),
@@ -337,6 +408,149 @@ class A5Test(unittest.TestCase):
             self.assertEqual(self.real_next_sleep(datetime(2026, 10, 24, 8)), "due")
             state.return_value = {"sleep": "2026-10-24T04:00:00"}
             self.assertEqual(self.real_next_sleep(datetime(2026, 10, 24, 8)), "2026-10-25 04:00")
+
+
+class ReplayLedgerTest(unittest.TestCase):
+    def test_envelope_matches_live_as_of_synthetic_ledgers(self):
+        at = datetime(2026, 10, 20, 4)
+        with tempfile.TemporaryDirectory() as tmp, ExitStack() as stack:
+            root = Path(tmp)
+            ledger = root / "usage.jsonl"
+            records = [{"instance": who, "ts": stamp, "usd": usd, "by": by} for who, stamp, usd, by in
+                       (("x", "2026-10-20T03:00:00", 1.25, "instance"),
+                        ("x", "2026-10-20T04:00:00", 20, "instance"),
+                        ("x", "2026-10-20T05:00:00", 30, "instance"),
+                        ("x", "2026-10-19T03:00:00", 40, "instance"),
+                        ("trial-x", "2026-10-20T03:00:00", 50, "instance"))]
+            ledger.write_text("".join(json.dumps(r) + "\n" for r in records))
+            trials = [{"created": r["ts"], "by": r["by"]} for r in records if r["instance"] == "x"]
+            trials.append({"created": "2026-10-20T02:00:00", "by": "operator"})
+            probation = root / "probation.json"
+            entries = [{"commit": "abcdefgh123", "files": ["shaft/live.py"], "since": "2026-10-20T02:00:00",
+                        "judged_before": 0}]
+            probation.write_text(json.dumps(entries + [{**entries[0], "since": at.isoformat()}]))
+            rows = [judgment("before", "2026-10-20T03:00:00", "old"),
+                    judgment("at", at.isoformat(), "new")]
+            for module, attr, value in ((cloudllm, "USAGE", ledger), (coder, "USAGE", ledger),
+                                        (trial, "LEDGER", ledger), (autonomy, "AGENTS", root),
+                                        (autonomy, "SLEEP_AT", (4, 0)), (coder, "DAILY_USD", 12),
+                                        (trial, "DAILY_USD", 15), (trial, "TRIALS_PER_DAY", 4)):
+                stack.enter_context(mock.patch.object(module, attr, value))
+            for module, attr, value in ((trial, "all_trials", trials), (metrics, "_probation_path", probation),
+                                        (metrics, "judgments", rows), (metrics, "_tools_by_cycle", {}),
+                                        (cloudllm, "daily_cap", 10), (autonomy, "wake_interval", timedelta(hours=1))):
+                stack.enter_context(mock.patch.object(module, attr, return_value=value))
+            stack.enter_context(mock.patch.object(metrics, "_used", return_value=True))
+            (root / "com.shaft.scheduler.plist").touch()
+            replay = object.__new__(broker.ReplayBroker)
+            replay.name, replay.usage_name, replay.as_of = "x", "trial-x", at
+            replay.calls, replay.max_calls, replay.disabled = 3, 60, set()
+            replay.unavailable = {"trial": "replay", "delegate_coding": "replay"}
+            expected = {"calls_used": 3, "calls_max": 60, "cloud": {"spent_usd": 1.25, "cap_usd": 10.0},
+                        "coder": {"spent_usd": 1.25, "cap_usd": 12.0},
+                        "trials": {"started": 1, "per_day": 4, "spent_usd": 1.25, "cap_usd": 15.0},
+                        "probation": [{"commit": "abcdefgh", "files": ["shaft/live.py"],
+                                       "cycles_used": 1, "cycles_needed": metrics.PROBATION_CYCLES}],
+                        "next_sleep": "2026-10-21 04:00", "next_wake": "05:00"}
+            historical = replay.envelope()
+            self.assertEqual(historical, expected)
+            # Live at that instant sees only the prefix of each ledger and the then-open probation entry.
+            ledger.write_text(json.dumps(records[0]) + "\n")
+            trials[:] = trials[:1]
+            rows[:] = rows[:1]
+            probation.write_text(json.dumps(entries))
+            live = object.__new__(broker.Broker)
+            live.name = live.usage_name = "x"
+            live.calls, live.max_calls, live.as_of = 3, 60, None
+            live.disabled, live.unavailable = set(), {}
+            for module in (cloudllm, coder):
+                date = stack.enter_context(mock.patch.object(module, "date"))
+                date.today.return_value = at.date()
+            clock = stack.enter_context(mock.patch.object(trial, "datetime", wraps=datetime))
+            clock.now.return_value = at
+            clock = stack.enter_context(mock.patch.object(autonomy, "datetime", wraps=datetime))
+            clock.now.return_value = at
+            stack.enter_context(mock.patch.object(autonomy, "_state", return_value={
+                "sleep": at.isoformat(), "wakes": {"x": at.isoformat()}}))
+            self.assertEqual(live.envelope(), historical)
+            self.assertEqual(set(historical), set(expected))
+            self.assertNotIn("replay", json.dumps(historical))
+            self.assertEqual(autonomy.replay_next_sleep(at - timedelta(seconds=1)), "2026-10-20 04:00")
+            with mock.patch.object(autonomy, "wake_interval", return_value=None):
+                self.assertEqual(autonomy.replay_next_wake("x", at), "never")
+            (root / "com.shaft.scheduler.plist").unlink()
+            self.assertIsNone(autonomy.replay_next_sleep(at))
+
+
+class ConfidenceBackfillTest(unittest.TestCase):
+    def test_backfill_date_missing_key_and_single_episode_read(self):
+        rows = [judgment("old", "2026-10-23T23:59:59", "old"),
+                judgment("boundary", "2026-10-24T00:00:00", "new"),
+                judgment("explicit", "2026-10-24T00:00:01", "explicit", confidence_of=None),
+                judgment("missing episode", "2026-10-24T00:00:02", "missing")]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "judgments").mkdir()
+            path = root / "judgments" / "x.jsonl"
+            original = "".join(json.dumps(r) + "\n" for r in rows)
+            path.write_text(original)
+            episodes = [{"ts": r["episode_ts"], "intent": {"confidence_of": metrics.CONFIDENCE_V2}} for r in rows[:3]]
+            with mock.patch.object(metrics, "live_episodes", return_value=episodes) as read:
+                result = metrics.judgments("x", root)
+                read.assert_called_once_with("x")
+            self.assertNotIn("confidence_of", result[0])
+            self.assertEqual(result[1]["confidence_of"], metrics.CONFIDENCE_V2)
+            self.assertIsNone(result[2]["confidence_of"])
+            self.assertNotIn("confidence_of", result[3])
+            self.assertEqual(path.read_text(), original)
+            path.write_text(json.dumps(rows[0]) + "\n" + json.dumps(rows[2]))
+            with mock.patch.object(metrics, "live_episodes") as read:
+                metrics.judgments("x", root)
+                read.assert_not_called()
+
+
+class OldTemplateCompatibilityTest(unittest.TestCase):
+    def test_old_http_client_never_requests_envelope(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.object(core, "disabled_tools", return_value=set()), \
+                mock.patch.object(broker.Broker, "_shared_folder", return_value=None), \
+                mock.patch.object(broker.Broker, "envelope", side_effect=AssertionError("unused")) as envelope:
+            root = Path(tmp)
+            b = broker.Broker("x", root, {}, root / "tools.log", root=root, share=False)
+            url = b.start()
+            try:
+                request = urllib.request.Request(url + "/tools", headers={"X-Shaft-Token": b.token})
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    self.assertEqual(json.load(response), {"tools": b.tool_specs()})
+                self.assertEqual(b.calls, 0)
+                self.assertFalse(b.log_path.exists())
+                envelope.assert_not_called()
+            finally:
+                b.stop()
+
+    def test_old_episode_and_judgment_stay_v1_even_after_boundary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "judgments").mkdir()
+            rows = [judgment("old", "2026-10-23T23:00:00", "old"),
+                    judgment("new", "2026-10-24T00:00:00", "new")]
+            (root / "judgments" / "x.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+            with mock.patch.object(metrics, "live_episodes", return_value=[
+                    {"ts": "old", "intent": {"confidence": 50}}, {"ts": "new", "intent": {"confidence": 50}}]):
+                loaded = metrics.judgments("x", root)
+            self.assertEqual(loaded, rows)
+            calibration = metrics.calibration(loaded)
+            self.assertEqual(calibration["v1"]["n"], 2)
+            self.assertEqual(calibration["v1"]["brier"], 0.0)
+            self.assertEqual(calibration["v2"]["n"], 0)
+            b = object.__new__(broker.Broker)
+            b.name, b.as_of = "x", None
+            with mock.patch.object(metrics, "judgments", return_value=loaded), \
+                    mock.patch.object(metrics, "unsampled_rows", return_value=[]), \
+                    mock.patch.object(broker.Broker, "envelope", side_effect=AssertionError("unused")) as envelope:
+                self.assertEqual(b._record("judgments"), "\n\n".join(broker.judgment_text(r) for r in rows[::-1]))
+                envelope.assert_not_called()
+
 
 
 class A8Test(unittest.TestCase):

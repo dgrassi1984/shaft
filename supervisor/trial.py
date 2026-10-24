@@ -143,17 +143,19 @@ def _ledger(row: dict) -> None:
         f.write(json.dumps({"ts": datetime.now().isoformat(timespec="seconds"), **row}) + "\n")
 
 
-def usage_today(name: str) -> dict:
+def usage_today(name: str, until: datetime | None = None) -> dict:
     """What the instance's trials spent today: dollars, local-model runs, trials started (operator trials excluded)."""
-    today = datetime.now().date().isoformat()
+    today = (until or datetime.now()).date().isoformat()
     usd, local = 0.0, 0
     if LEDGER.exists():
         for line in LEDGER.read_text().splitlines():
             r = json.loads(line)
-            if r.get("instance") == name and r["ts"].startswith(today) and r.get("by") != "operator":
+            if r.get("instance") == name and r["ts"].startswith(today) and r.get("by") != "operator" \
+                    and (until is None or datetime.fromisoformat(r["ts"]) < until):
                 usd += r.get("usd") or 0.0
                 local += 1 if r.get("kind") == "arm" and r.get("model") == "local" else 0
-    started = sum(1 for t in all_trials(name) if t["created"].startswith(today) and t["by"] == "instance")
+    started = sum(1 for t in all_trials(name) if t["created"].startswith(today) and t["by"] == "instance"
+                  and (until is None or datetime.fromisoformat(t["created"]) < until))
     return {"usd": usd, "local_units": local, "started": started}
 
 

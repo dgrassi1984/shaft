@@ -15,6 +15,9 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "template"))
 from shaft import agent, broker, config, live, memory, prompts, recovery, sleep, talk
+if not hasattr(live, "CONFIDENCE_OF"):
+    raise unittest.SkipTest("template/ predates REVIEW-autonomy A1–A8 (dgrassi1984/shaft#83): merge it into template first")
+
 from shaft.llm import Client, LLMError
 from shaft.state import State
 from shaft.tools import Toolbox, _spec
