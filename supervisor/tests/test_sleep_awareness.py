@@ -69,6 +69,7 @@ class FailedRunTest(unittest.TestCase):
         broker = mock.Mock(handoffs=[], config_writes=[], counts={})
         with mock.patch.object(runner, "_launch", return_value=(broker, cmd, {})), \
              mock.patch.object(runner, "_snapshot", return_value={}), \
+             mock.patch.object(runner, "_reconcile"), \
              mock.patch.object(runner, "_settle", return_value=True), \
              mock.patch.object(runner, "commit_state", return_value=True), \
              mock.patch.object(runner, "log"), \

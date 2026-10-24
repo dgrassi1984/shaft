@@ -227,6 +227,7 @@ def serve(poll_s: int = 30) -> int:
     if (note := startup_note()):
         log(note)
     children: dict[str, tuple[subprocess.Popen, float]] = {}
+    stop_children_on_signal(children)
     while True:
         for job, (proc, started) in list(children.items()):
             if proc.poll() is not None:
@@ -258,6 +259,35 @@ def serve(poll_s: int = 30) -> int:
                 if trial.has_work():
                     children["trials"] = (_start(["trial", "work"]), time.monotonic())
         time.sleep(poll_s)
+
+
+CHILD_STOP_S = 15   # how long the scheduler's children get to stop, inside launchd's 20 s before it kills them
+
+
+def stop_children_on_signal(children: dict) -> None:
+    """SIGTERM or SIGHUP to the scheduler (launchd stopping it) is passed to each child first — a wake or sleep ends
+    its run's processes and notes the run as stopped, a battery restores the instance's files — and the scheduler goes
+    once they have (or after CHILD_STOP_S), as the signal intended. A child's agent leads its own process group now,
+    which launchd's stop of the scheduler's group no longer reaches (Codex on e77d5e5)."""
+    def on_signal(signum, frame):
+        for s in (signal.SIGTERM, signal.SIGHUP):
+            signal.signal(s, signal.SIG_IGN)
+        live = [(job, proc) for job, (proc, _) in children.items() if proc.poll() is None]
+        log(f"scheduler: stopping (signal {signum}); stopping {', '.join(j for j, _ in live) or 'no child'} first")
+        for _, proc in live:
+            proc.send_signal(signal.SIGTERM)
+        deadline = time.monotonic() + CHILD_STOP_S
+        for job, proc in live:
+            try:
+                proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                log(f"scheduler: {job} did not stop within {CHILD_STOP_S}s: killed")
+                proc.kill()
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+    for s in (signal.SIGTERM, signal.SIGHUP):
+        if signal.getsignal(s) is not signal.SIG_IGN:
+            signal.signal(s, on_signal)
 
 
 def battery_jobs(children: dict, now: datetime, sleeping_due: bool, names: list[str], due, awake_of) \

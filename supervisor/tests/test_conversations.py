@@ -48,6 +48,7 @@ class OpenConversationTest(unittest.TestCase):
              mock.patch.object(runner, "_popen", return_value=fake_proc), \
              mock.patch.object(runner.gate, "stop_group"), \
              mock.patch.object(runner, "_snapshot", return_value={}), \
+             mock.patch.object(runner, "_reconcile"), \
              mock.patch.object(runner, "_settle", return_value=True) as settle, \
              mock.patch("supervisor.core.instance_names", return_value=["shaft"]):   # the fake has no process group
             runner.run_conversation("shaft", "talk", [], "t123", driver)
@@ -76,7 +77,8 @@ class OpenConversationTest(unittest.TestCase):
 
         before = signal.getsignal(signal.SIGINT)
         turn = runner.Turn("shaft", self.sup, "talk")
-        with mock.patch.object(runner, "_snapshot", return_value={}), mock.patch.object(runner, "_settle", settle):
+        with mock.patch.object(runner, "_snapshot", return_value={}), mock.patch.object(runner, "_reconcile"), \
+                mock.patch.object(runner, "_settle", settle):
             turn.begin()
             turn.end()
         self.assertEqual(done, [True])

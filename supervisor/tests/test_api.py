@@ -102,6 +102,35 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(fake_run_agent.request["messages"][-1]["content"], "what is teal?")
         self.assertTrue(fake_run_agent.request["talk_id"].startswith("api-"))
 
+    def test_a_request_sent_again_with_its_id_is_answered_without_running_again(self):
+        """Codex on e77d5e5: Telegram replays an update after a restart, and its request ran a second reply. With
+        X-Shaft-Request-Id the API answers a request it has answered already from that answer."""
+        import tempfile
+        from pathlib import Path
+        p = mock.patch.object(api, "ANSWERED", Path(tempfile.mkdtemp(prefix="shaft-api-ans-")) / "answered.json",
+                              create=True)
+        p.start()
+        self.addCleanup(p.stop)
+        api.Handler.answered = None
+        runs = []
+
+        def counting(*a, **k):
+            runs.append(1)
+            return fake_run_agent(*a, **k)
+
+        def ask(rid):
+            body = {"model": "shaft", "messages": [{"role": "user", "content": "what is teal?"}]}
+            headers = {"Content-Type": "application/json", "Authorization": f"Bearer {KEY}",
+                       "Tailscale-User-Login": ME, "X-Shaft-Request-Id": rid}
+            r = urllib.request.Request(self.base + "/chat/completions", data=json.dumps(body).encode(), headers=headers)
+            return json.load(urllib.request.urlopen(r, timeout=10))
+        with mock.patch.object(api, "run_agent", counting):
+            first, again = ask("telegram-shaft-7"), ask("telegram-shaft-7")
+            other = ask("telegram-shaft-8")
+        self.assertEqual(len(runs), 2, "the replayed request ran again")
+        self.assertEqual(again["choices"][0]["message"]["content"], first["choices"][0]["message"]["content"])
+        self.assertEqual(other["choices"][0]["message"]["content"], "Teal is blue-green.")
+
     NARRATED = [{"type": "ready", "name": "wren"}, {"type": "status", "phase": "waiting for the model"},
                 {"type": "content", "text": "Let me check my notes "}, {"type": "content", "text": "on teal first."},
                 {"type": "usage", "prompt_tokens": 9, "completion_tokens": 3},
@@ -364,15 +393,52 @@ class LongReplyTest(unittest.TestCase):
         talk_id = self.conversations.talk_id("wren", self.MESSAGES)
         first = self.live.begin("wren", talk_id)
         self.live.started(first)
-        self.assertTrue(self.live.interject(talk_id, "for the running reply"))
+        self.assertTrue(self.live.interject(talk_id, "one"))
         second = self.live.begin("wren", talk_id)                   # waits for the instance while the first replies
-        self.assertEqual(self.lines(talk_id), ["for the running reply"], "the second request deleted them")
-        self.assertTrue(self.live.interject(talk_id, "for the next reply"))   # the newest request takes them
-        self.live.started(second)                                   # the run lock passed on before the first's end
-        self.live.end(first)
-        self.assertEqual(self.lines(talk_id), ["for the next reply"], "the first request's end deleted them")
+        self.assertEqual(self.lines(talk_id), ["one"], "the second request deleted them")
+        self.assertTrue(self.live.interject(talk_id, "two"))         # the reply running now hears it
+        self.assertEqual(self.lines(talk_id), ["one", "two"])
+        self.live.started(second)          # the run lock passed on: the first's agent is gone, its client resends
+        self.assertTrue(self.live.interject(talk_id, "three"))
+        self.live.end(first)                                        # its request ends after the second started
+        self.assertEqual(self.lines(talk_id), ["three"], "the first request's end deleted them")
         self.live.end(second)
         self.assertEqual(self.lines(talk_id), [])
+
+    def test_a_cancelled_newer_request_leaves_the_running_reply_registered(self):
+        """Codex on e77d5e5: A replies; B, a retry in the same talk, waits and its client hangs up. end(B) removed the
+        registration (B was the newest) and the file while A still ran: running() was empty, the janitor could
+        close A's conversation, and A's interjections were gone."""
+        talk_id = self.conversations.talk_id("wren", self.MESSAGES)
+        first = self.live.begin("wren", talk_id)
+        self.live.started(first)
+        self.assertTrue(self.live.interject(talk_id, "one"))
+        second = self.live.begin("wren", talk_id)
+        self.live.end(second)                                       # cancelled while it waited
+        self.assertEqual(self.live.running(), {talk_id})
+        self.assertEqual(self.lines(talk_id), ["one"])
+        self.assertTrue(self.live.interject(talk_id, "two"))
+        self.assertEqual(self.lines(talk_id), ["one", "two"])
+        self.talk()["last"] -= api.IDLE_MINUTES * 60 + 5
+        self.conversations.write_up_idle(self.live.running)
+        self.assertFalse(self.talk()["written"], "written up under the reply still running")
+        self.live.end(first)
+        self.assertEqual((self.live.running(), self.lines(talk_id)), (set(), []))
+
+    def test_messages_sent_before_any_agent_starts_reach_the_one_that_does(self):
+        talk_id = self.conversations.talk_id("wren", self.MESSAGES)
+        first, second = self.live.begin("wren", talk_id), self.live.begin("wren", talk_id)
+        self.assertTrue(self.live.interject(talk_id, "x"))
+        self.live.end(first)                                        # cancelled before it started: "x" is not lost
+        self.assertTrue(self.live.interject(talk_id, "y"))
+        self.live.started(second)
+        self.assertEqual(self.lines(talk_id), ["x", "y"])
+        self.live.end(second)
+        older, newer = self.live.begin("wren", talk_id), self.live.begin("wren", talk_id)   # twins, equal as dicts
+        self.live.end(newer)                                        # the newer one cancelled, not the older
+        self.live.started(older)
+        self.live.end(older)
+        self.assertEqual(self.live.running(), set(), "the older request was the one removed")
 
 
 INBOX_KEY = "sk-shaft-inbox-test"

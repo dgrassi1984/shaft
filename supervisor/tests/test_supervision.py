@@ -136,6 +136,59 @@ class DnsRebindingTest(unittest.TestCase):
         self.assertEqual(seen, {"address": ("93.184.216.34", 443), "sni": "rebind.example"})
         self.assertEqual(self.answers["n"], 1, "the name was resolved again after the check")
 
+    def test_a_redirect_to_a_name_that_rebinds_reaches_nothing_and_a_public_one_is_followed(self):
+        """Codex on e77d5e5: a behavioural redirect test. hop.example answers public (93.184.216.34, which this test's
+        network carries to a local server playing the public site) and redirects: to rebind.example, which answers
+        public for the check and 127.0.0.1 for the connection; or to a page of its own."""
+        import socket
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        test, hosts = self, []
+
+        class Hop(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                hosts.append(self.headers.get("Host"))
+                if self.path == "/final":
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/plain")
+                    self.end_headers()
+                    self.wfile.write(b"the public page")
+                    return
+                self.send_response(302)
+                self.send_header("Location", f"http://rebind.example:{test.port}/secret" if self.path == "/start"
+                                 else f"http://hop.example:{hop.server_address[1]}/final")
+                self.end_headers()
+
+        hop = ThreadingHTTPServer(("127.0.0.1", 0), Hop)
+        threading.Thread(target=hop.serve_forever, daemon=True).start()
+        self.addCleanup(hop.server_close)
+        self.addCleanup(hop.shutdown)
+        lookup, connect = socket.getaddrinfo, socket.create_connection
+
+        def resolve(host, port, *a, **k):
+            if host == "hop.example":
+                return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
+            return lookup(host, port, *a, **k)
+
+        def carry(address, *a, **k):                          # the "public" site is the local hop server
+            public = address[0] in ("93.184.216.34", "hop.example")   # (by name too: unpinned code connects by name)
+            return connect(("127.0.0.1", address[1]) if public else address, *a, **k)
+        with mock.patch.object(socket, "getaddrinfo", side_effect=resolve), \
+                mock.patch.object(socket, "create_connection", side_effect=carry):
+            for tool in ("fetch_page", "http_request"):
+                self.answers["n"] = 0
+                out = self.b.call(tool, {"url": f"http://hop.example:{hop.server_address[1]}/start"})
+                self.assertFalse(out["ok"], (tool, out))
+                self.assertIn("BlockedAddress", out["error"])
+            self.assertEqual(self.reached, [], "a redirect reached a service on localhost")
+            out = self.b.call("fetch_page", {"url": f"http://hop.example:{hop.server_address[1]}/go"})
+        self.assertTrue(out["ok"], out)
+        self.assertIn("the public page", out["result"])
+        self.assertEqual(set(hosts), {f"hop.example:{hop.server_address[1]}"})   # the name, not the address
+
     def test_redirects_and_keyed_requests_use_the_pinned_connections(self):
         for opener in (broker._opener, broker._opener_no_redirects):
             kinds = {type(h) for h in opener.handlers}

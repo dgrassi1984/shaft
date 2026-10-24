@@ -1,7 +1,8 @@
 """OpenAI-compatible API for the instances — chat with them from any client on your tailnet.
 
   GET  /v1/models              each instance is a "model" (shaft, wren, …)
-  POST /v1/chat/completions    stream or not; the instance answers as itself, with its tools
+  POST /v1/chat/completions    stream or not; the instance answers as itself, with its tools; X-Shaft-Request-Id
+                               (non-streamed): asked again, the same answer, not run again (Answered)
   POST /v1/chat/interject      a message for the conversation whose reply is still running: the instance reads it at
                                its next step and its reply covers it (202), or 409 when no reply is running
   POST /v1/chat/end            the conversation is over: write-up requested (202), 404 if none is open, 409 while it replies
@@ -53,7 +54,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .core import (API_TALKS as TALKS, IDLE_MINUTES, SUP_DIR, UnsafePath, contained, instance_names, instance_root, knob,
                    log, port, safe_write, secrets_env, whole)
-from .runner import Reply, busy_with, request_yield, run_agent, spawn_recover
+from .runner import REFUSED, Reply, busy_with, request_yield, run_agent, spawn_recover, stop_runs_on_signal
 
 PORT, _ = knob(
     "SHAFT_API_PORT", "8781", port, "the API's local port (OpenAI-compatible; the web UI and Telegram chat through it)",
@@ -164,21 +165,66 @@ class Conversations:
             spawn_recover(model)
 
 
+ANSWERED = SUP_DIR / "api-answered.json"
+ANSWERED_KEPT = 500
+
+
+class Answered:
+    """The answers given to requests that carried an idempotency key (X-Shaft-Request-Id), newest ANSWERED_KEPT kept:
+    the same key again is answered from here, never run again. Telegram sends its update id: an update replayed after
+    the service restarted (telegram.py keeps it pending until it is answered) ran its whole reply a second time
+    (Codex on e77d5e5). Only whole, non-streamed answers are kept; a request cut off before its answer runs again."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+
+    def _read(self) -> dict:
+        try:
+            got = json.loads(ANSWERED.read_text())
+            return got if isinstance(got, dict) else {}
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError) as e:     # loud: a request asked again now runs again
+            log(f"api: {ANSWERED} unreadable ({type(e).__name__}: {e}) — FAILED to recognise requests asked again")
+            return {}
+
+    @staticmethod
+    def _key(model: str, request_id: str) -> str:
+        return f"{model}:{request_id}"
+
+    def get(self, model: str, request_id: str) -> dict | None:
+        with self.lock:
+            return (self._read().get(self._key(model, request_id)) or {}).get("answer")
+
+    def put(self, model: str, request_id: str, answer: dict) -> None:
+        with self.lock:
+            done = self._read()
+            done[self._key(model, request_id)] = {"ts": time.time(), "answer": answer}
+            keep = dict(sorted(done.items(), key=lambda kv: kv[1].get("ts", 0))[-ANSWERED_KEPT:])
+            ANSWERED.parent.mkdir(exist_ok=True)
+            tmp = ANSWERED.with_name(f".{ANSWERED.name}.{os.getpid()}.{threading.get_ident()}")
+            tmp.write_text(json.dumps(keep))
+            os.replace(tmp, ANSWERED)
+
+
 class Live:
     """Replies running now, by talk id, and the messages sent to them while they run. Until the agent process starts
     (it may wait for another conversation) they are held here; then each goes to its .tmp/interject-<talk id>.jsonl,
     one JSON line, which the agent reads at the start of each step.
 
-    The file is the talk's, and two requests in one talk may overlap (the second waits for the instance while the first
-    replies; a client retries after hanging up). Only the newest request receives messages, and the file is removed
-    only where no other reply can be reading it: when no reply of the talk is registered (a crashed run's leftovers),
-    when a reply's agent starts (the run lock: no other agent of the instance runs then), and when the newest reply
-    ends. Each begin and end unlinked it, so one request deleted the messages another one's agent had not read yet
-    (B19, review of 2026-10-24)."""
+    The file is the talk's, and requests in one talk may overlap: a retry after the client hung up waits for the
+    instance while the first still replies, and is cancelled in turn. Every outstanding request of a talk is kept
+    (`replies[talk_id]["requests"]`, oldest first). A message goes to the newest request whose agent has started — the
+    one running, the run lock lets no other agent of the instance run — or, while none has, is held for the first that
+    starts. The talk stays registered, and its file stays, until no request of it is outstanding; a starting agent
+    clears what an earlier agent of the talk left unheard (that reply's client sends it again). Before this, each
+    request owned the talk alone: begin and end unlinked the shared file (B19, review of 2026-10-24), and a cancelled
+    newer request then dropped the registration of the older one still replying, so the janitor could close its
+    conversation under it (Codex on e77d5e5)."""
 
     def __init__(self):
         self.lock = threading.Lock()
-        self.replies: dict[str, dict] = {}
+        self.replies: dict[str, dict] = {}       # talk id -> {"requests": [entry, ...], "held": [text, ...]}
 
     @staticmethod
     def _rel(talk_id: str) -> str:
@@ -192,16 +238,17 @@ class Live:
             log(f"api: {e}")
 
     def running(self) -> set[str]:
-        """The talk ids with a reply registered: waiting for the instance or running."""
+        """The talk ids with a request outstanding: waiting for the instance or running."""
         with self.lock:
             return set(self.replies)
 
     def begin(self, model: str, talk_id: str) -> dict:
-        entry = {"model": model, "talk_id": talk_id, "held": [], "started": False}
+        entry = {"model": model, "talk_id": talk_id, "started": False}
         with self.lock:
-            if talk_id not in self.replies:             # no reply of this talk to read it: a crashed run's leftovers
+            if talk_id not in self.replies:             # no request of this talk to read it: a crashed run's leftovers
                 self._drop(model, talk_id)
-            self.replies[talk_id] = entry               # a second request in the same talk: the newest takes them
+                self.replies[talk_id] = {"requests": [], "held": []}
+            self.replies[talk_id]["requests"].append(entry)
         return entry
 
     def _write(self, entry: dict, text: str) -> None:
@@ -210,27 +257,32 @@ class Live:
 
     def started(self, entry: dict) -> None:
         with self.lock:
-            # Its agent is the only one of the instance running: what an earlier reply of the talk left is not for it
-            # (that reply's client sends again whatever its reply did not hear).
-            self._drop(entry["model"], entry["talk_id"])
-            for text in entry["held"]:
+            talk = self.replies[entry["talk_id"]]
+            self._drop(entry["model"], entry["talk_id"])   # an earlier agent's, unheard: its client sends it again
+            entry["started"] = True
+            held, talk["held"] = talk["held"], []
+            for text in held:
                 self._write(entry, text)
-            entry["held"], entry["started"] = [], True
 
     def interject(self, talk_id: str, text: str) -> bool:
         with self.lock:
-            entry = self.replies.get(talk_id)
-            if entry is None:
+            talk = self.replies.get(talk_id)
+            if talk is None:
                 return False
-            if entry["started"]:
-                self._write(entry, text)
+            running = [e for e in talk["requests"] if e["started"]]
+            if running:
+                self._write(running[-1], text)
             else:
-                entry["held"].append(text)
+                talk["held"].append(text)
             return True
 
     def end(self, entry: dict) -> None:
         with self.lock:
-            if self.replies.get(entry["talk_id"]) is entry:     # a newer request of the talk owns the file otherwise
+            talk = self.replies.get(entry["talk_id"])
+            if talk is None or not any(e is entry for e in talk["requests"]):
+                return
+            talk["requests"] = [e for e in talk["requests"] if e is not entry]   # by identity: twins compare equal
+            if not talk["requests"]:                    # the last of the talk: nobody can read the file any more
                 del self.replies[entry["talk_id"]]
                 self._drop(entry["model"], entry["talk_id"])
 
@@ -262,6 +314,7 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "shaft-api/1"
     conversations: Conversations
     live: Live
+    answered: Answered | None = None
 
     def log_message(self, fmt, *args):
         log("api " + (fmt % args))
@@ -386,7 +439,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(400, "messages must end with a user message")
         if route == "/v1/chat/interject":
             return self._interject(model, messages, cid)
-        self._chat(model, messages, bool(body.get("stream")), self.headers.get("User-Agent", "an app"), cid, channel)
+        rid = self.headers.get("X-Shaft-Request-Id") or None
+        if rid is not None and not CONVERSATION_ID.match(rid):
+            return self._error(400, "X-Shaft-Request-Id is 1-64 letters, digits, - or _")
+        self._chat(model, messages, bool(body.get("stream")), self.headers.get("User-Agent", "an app"), cid, channel,
+                   rid)
 
     def _end(self, model: str, messages: list[dict], cid: str | None) -> None:
         """POST /v1/chat/end: the conversation is over. The write-up is scheduled now (202) and finishes in the
@@ -430,9 +487,15 @@ class Handler(BaseHTTPRequestHandler):
             return True
 
     def _chat(self, model: str, messages: list[dict], stream: bool, app: str, cid: str | None = None,
-              channel: str = "api") -> None:
+              channel: str = "api", rid: str | None = None) -> None:
         events: queue.Queue = queue.Queue()
         procs: list = []
+        if rid and not stream:
+            if Handler.answered is None:
+                Handler.answered = Answered()
+            if (done := Handler.answered.get(model, rid)) is not None:
+                log(f"api: {model}: request {rid} was answered already — the same answer, not run again")
+                return self._json(200, done)
         talk_id = self.conversations.talk_id(model, messages, cid, channel)
         live = self.live.begin(model, talk_id)
         request = {"messages": [*(m for m in messages if m.get("role") == "system"),
@@ -478,7 +541,10 @@ class Handler(BaseHTTPRequestHandler):
                 if cancelled.is_set():
                     return
                 code = run_agent(model, "api", ["answer"], interactive=True, driver=driver)
-                if not answered.is_set():   # the agent ended without a reply: say why, never an empty answer
+                if code == REFUSED:
+                    events.put({"type": "error", "message": f"the supervisor refused to start {model}'s run: its "
+                                "code could not be checked (the reason is in the panel's alerts and supervisor.log)"})
+                elif not answered.is_set():   # the agent ended without a reply: say why, never an empty answer
                     err = (procs[0].stderr.read() if procs and procs[0].stderr else "")[-800:].strip()
                     events.put({"type": "error", "message": f"{model} stopped without answering (exit {code})"
                                                            + (f": {err}" if err else "")})
@@ -575,12 +641,17 @@ class Handler(BaseHTTPRequestHandler):
             elif error and not content:
                 self._error(502, error, "server_error")
             else:
-                self._json(200, {"id": cid, "object": "chat.completion", "created": int(time.time()), "model": model,
-                                 "choices": [{"index": 0, "finish_reason": "stop", "message": {
-                                     "role": "assistant", "content": "".join(content),
-                                     "reasoning_content": "".join(notes)}}],
-                                 "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-                                 "interjections_heard": heard})
+                answer = {"id": cid, "object": "chat.completion", "created": int(time.time()), "model": model,
+                          "choices": [{"index": 0, "finish_reason": "stop", "message": {
+                              "role": "assistant", "content": "".join(content), "reasoning_content": "".join(notes)}}],
+                          "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                          "interjections_heard": heard}
+                if rid:
+                    try:
+                        Handler.answered.put(model, rid, answer)   # made in the check above
+                    except OSError as e:
+                        log(f"api: {model}: request {rid}'s answer FAILED to be kept ({e}); asked again, it runs again")
+                self._json(200, answer)
         except (BrokenPipeError, ConnectionResetError):
             cancelled.set()
             if procs and procs[0].poll() is None:      # the client left: stop the reply
@@ -601,6 +672,7 @@ def serve() -> int:
     record_service("api", {"port": PORT, "idle_minutes": IDLE_MINUTES})
     Handler.conversations = Conversations()
     Handler.live = Live()
+    stop_runs_on_signal()                        # stopped (launchd), it ends its replies' agents first
     server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     server.daemon_threads = True
 

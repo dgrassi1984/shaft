@@ -27,6 +27,12 @@ COMMITTED = "def run(**args):\n    return 'stats'\n"
 UNGATED = "def run(**args):\n    return 'edited by a run that died before it was checked'\n"
 # A run that changes nothing, and one whose agent leaves a process behind that writes the code once the run is over.
 QUIET = "pass"
+ESCAPES_ITS_GROUP = r"""
+import subprocess, sys
+subprocess.Popen([sys.executable, "-c", "import pathlib, time; time.sleep(1.5); "
+                  "pathlib.Path('plugins/late.py').write_text('written after the gate')"],
+                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+"""
 LEAVES_A_WRITER = r"""
 import subprocess, sys
 subprocess.Popen([sys.executable, "-c", "import pathlib, time; time.sleep(1.5); "
@@ -59,7 +65,8 @@ class RunTransactionCase(unittest.TestCase):
         """Fails while the plugin holds the edit nobody checked; records what it judged."""
         text = (root / "plugins" / "text_stats" / "main.py").read_text()
         self.gated.append(text)
-        return ("died before" not in text, "FAIL: test_text_stats (tests.test_text_stats.T.test_text_stats)")
+        bad = any("died before" in f.read_text() for f in (root / "plugins").rglob("*.py"))
+        return (not bad, "FAIL: test_text_stats (tests.test_text_stats.T.test_text_stats)")
 
     def cycle(self, script: str = QUIET) -> int:
         """One live cycle through the supervisor's own entry point; its agent is `script`."""
@@ -73,9 +80,12 @@ class RunTransactionCase(unittest.TestCase):
              mock.patch.object(runner, "instance_root", return_value=self.root), \
              mock.patch.object(runner, "_launch", return_value=(b, cmd, env)), \
              mock.patch.object(gate, "run_tests", side_effect=self.fake_gate), \
-             mock.patch.object(runner, "log"), mock.patch("supervisor.metrics.after_cycle"), \
+             mock.patch.object(runner, "log") as self.logged, mock.patch("supervisor.metrics.after_cycle"), \
              mock.patch("supervisor.metrics.start_probation"):
             return runner.run_agent("kant", "live", ["live"], False)
+
+    def logs(self) -> str:
+        return "\n".join(str(c.args[0]) for c in self.logged.call_args_list)
 
     def plugin(self) -> str:
         return (self.root / "plugins" / "text_stats" / "main.py").read_text()
@@ -101,6 +111,10 @@ class UnsettledCodeTest(RunTransactionCase):
         journal = (self.root / "memory" / "journal.md").read_text()
         self.assertIn("unchecked code from an earlier run", journal)
         self.assertIn("were reverted because the tests failed", journal)
+        kept, = (self.project / ".supervisor" / "rejected").glob("kant-*")   # Codex on e77d5e5: nothing is lost
+        self.assertEqual((kept / "plugins" / "text_stats" / "main.py").read_text(), UNGATED)
+        self.assertIn(str(kept), journal)
+        self.assertIn(str(kept), self.logs())
 
     def test_code_a_dead_run_left_is_kept_and_committed_when_it_passes(self):
         good = "def run(**args):\n    return 'better stats'\n"
@@ -118,6 +132,80 @@ class UnsettledCodeTest(RunTransactionCase):
         self.assertNotIn("unchecked code", (self.root / "memory" / "journal.md").read_text())
 
 
+class ApprovedCodeTest(RunTransactionCase):
+    """Codex on e77d5e5: _reconcile compared the code with git, which does not show ignored files, while the gate's
+    snapshot takes them; it failed open when git could not be read; and it gated (and could undo) a merge in
+    progress. The approved code is now recorded where the instance cannot write it, and anything unclear refuses
+    the run."""
+
+    STASH = "plugins/stash/main.py"
+    REFUSED = 75                                              # runner.REFUSED
+
+    def setUp(self):
+        super().setUp()
+        (self.root / ".gitignore").write_text((self.root / ".gitignore").read_text() + "plugins/stash/\n")
+        git(self.root, "commit", "-qam", "kant: its own ignore")
+
+    def stash(self, text: str) -> Path:
+        f = self.root / self.STASH
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(text)
+        return f
+
+    def test_an_ignored_file_a_dead_run_left_is_gated(self):
+        self.assertEqual(self.cycle(), 0)                     # a settled run: its approved code is recorded
+        f = self.stash(UNGATED)                               # then a run writes an ignored plugin and dies
+        self.assertEqual(self.cycle(), 0)
+        self.assertEqual(len(self.gated), 1, "an ignored file left by a dead run was accepted ungated")
+        self.assertFalse(f.exists())
+        kept, = (self.project / ".supervisor" / "rejected").glob("kant-*")
+        self.assertEqual((kept / self.STASH).read_text(), UNGATED)
+
+    def test_an_ignored_file_the_gate_passed_is_not_gated_again(self):
+        script = f"import pathlib\npathlib.Path({self.STASH!r}).parent.mkdir(parents=True, exist_ok=True)\n" \
+                 f"pathlib.Path({self.STASH!r}).write_text('def run(**a):\\n    return 1\\n')\n"
+        self.assertEqual(self.cycle(script), 0)               # made by a run, gated, kept (git cannot hold it)
+        self.assertEqual(len(self.gated), 1)
+        self.assertEqual(self.cycle(), 0)
+        self.assertEqual(len(self.gated), 1, "approved code gated again at every run")
+        self.assertTrue((self.root / self.STASH).exists())
+
+    def test_a_run_whose_code_cannot_be_told_is_refused(self):
+        self.assertEqual(self.cycle(), 0)
+        record = self.project / ".supervisor" / "baselines" / "kant.json"
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text('{"root": "torn')
+        script = "import pathlib\npathlib.Path('.tmp/ran').write_text('1')\n"
+        self.assertEqual(self.cycle(script), self.REFUSED)
+        self.assertFalse((self.root / ".tmp" / "ran").exists(), "the agent ran on code nobody could check")
+        self.assertIn("run refused", self.logs())             # the panel's alerts show "refused" log lines
+
+    def test_git_that_cannot_be_read_refuses_the_run(self):
+        (self.root / "plugins" / "text_stats" / "main.py").write_text(UNGATED)
+        real = core.git_wt
+
+        def broken(root, *args, **k):
+            if "status" in args or "ls-tree" in args:
+                raise subprocess.CalledProcessError(128, "git", stderr=b"fatal: index file corrupt")
+            return real(root, *args, **k)
+        with mock.patch.object(runner, "git_wt", side_effect=broken), \
+                mock.patch.object(core, "git_wt", side_effect=broken):
+            code = self.cycle("import pathlib\npathlib.Path('.tmp/ran').write_text('1')\n")
+        self.assertEqual(code, self.REFUSED, "it failed open: the run started on unchecked code")
+        self.assertFalse((self.root / ".tmp" / "ran").exists())
+        self.assertIn("index file corrupt", self.logs())
+
+    def test_a_merge_in_progress_is_never_reconciled(self):
+        (self.root / "plugins" / "text_stats" / "main.py").write_text(UNGATED)   # the operator, mid-merge
+        merge_head = Path(git(self.root, "rev-parse", "--absolute-git-dir").strip()) / "MERGE_HEAD"
+        merge_head.write_text(git(self.root, "rev-parse", "HEAD"))
+        self.addCleanup(merge_head.unlink, missing_ok=True)
+        self.assertEqual(self.cycle(), self.REFUSED)
+        self.assertEqual(self.plugin(), UNGATED, "the merge's work was gated and undone")
+        self.assertEqual(self.gated, [])
+        self.assertIn("MERGE_HEAD", self.logs())
+
+
 class RunOutlivesItselfTest(RunTransactionCase):
     """B9: a run had no process group of its own and only its direct child was ever killed (on a timeout): a process
     the agent started went on writing the instance's code after settlement had judged it."""
@@ -127,6 +215,67 @@ class RunOutlivesItselfTest(RunTransactionCase):
         time.sleep(2.5)                                       # past the moment the leftover would write
         self.assertFalse((self.root / "plugins" / "late.py").exists(), "a leftover wrote the code after the gate")
         self.assertEqual(self.code_status(), "")
+
+    def test_a_process_that_left_the_group_with_setsid_cannot_write_the_code_after_the_gate(self):
+        """Codex on e77d5e5: a child in a session of its own escapes the run's process group."""
+        self.assertEqual(self.cycle(ESCAPES_ITS_GROUP), 0)
+        time.sleep(2.5)
+        self.assertFalse((self.root / "plugins" / "late.py").exists(), "a setsid child wrote the code after the gate")
+
+    def test_a_stopped_conversation_client_ends_its_agent_first(self):
+        """Codex on e77d5e5: the terminal client (and the API, driving runs from threads) had no SIGTERM handling:
+        stopped, it left its agent running with the instance's lock gone."""
+        alive_at_signal, agent = [], []
+
+        def driver(proc, turn):
+            agent.append(proc.pid)
+            time.sleep(0.5)
+            os.kill(os.getpid(), signal.SIGTERM)                # the client is stopped mid-conversation
+            time.sleep(0.5)
+
+        def handler(signum, frame):                             # what the signal goes on to do (here: record)
+            try:
+                os.killpg(agent[0], 0)
+                alive_at_signal.append(True)
+            except (ProcessLookupError, PermissionError):      # EPERM: only a zombie launchd has yet to reap
+                alive_at_signal.append(False)
+        before = signal.signal(signal.SIGTERM, handler)
+        self.addCleanup(signal.signal, signal.SIGTERM, before)
+        script = "import subprocess, time\nsubprocess.Popen(['sleep', '30'])\ntime.sleep(30)\n"
+        sup = self.project / ".supervisor"
+        b = broker.Broker("kant", self.project, {}, sup / "broker.log")
+        with mock.patch.object(runner, "SUP_DIR", sup), mock.patch.object(core, "SUP_DIR", sup), \
+             mock.patch.object(runner, "API_TALKS", sup / "api.json"), \
+             mock.patch.object(runner, "PROJECT", self.project), mock.patch.object(core, "PROJECT", self.project), \
+             mock.patch.object(core, "INSTANCES", self.project / "instances"), \
+             mock.patch.object(runner, "instance_root", return_value=self.root), \
+             mock.patch.object(runner, "_launch", return_value=(b, [sys.executable, "-c", script], {})), \
+             mock.patch.object(runner, "log"):
+            runner.run_conversation("kant", "talk", [], "t1", driver)
+        self.assertEqual(alive_at_signal, [False], "the signal did its work with the agent still running")
+
+    def test_a_stopped_api_service_ends_the_agents_of_its_replies_first(self):
+        alive_at_signal = []
+        proc = runner._popen(["sh", "-c", "sleep 30 & sleep 30"], self.root, {"PATH": "/bin:/usr/bin"})
+        self.addCleanup(runner._end_run, proc, self.root)
+
+        def handler(signum, frame):
+            try:
+                os.killpg(proc.pid, 0)
+                alive_at_signal.append(True)
+            except (ProcessLookupError, PermissionError):      # EPERM: only a zombie launchd has yet to reap
+                alive_at_signal.append(False)
+        before = signal.signal(signal.SIGTERM, handler)
+        self.addCleanup(signal.signal, signal.SIGTERM, before)
+        self.addCleanup(signal.signal, signal.SIGHUP, signal.getsignal(signal.SIGHUP))
+        with mock.patch.object(runner, "log"):
+            runner.stop_runs_on_signal()                        # what api.serve does first
+            os.kill(os.getpid(), signal.SIGTERM)
+            for _ in range(100):
+                if alive_at_signal:
+                    break
+                time.sleep(0.05)
+        self.assertEqual(alive_at_signal, [False])
 
     def test_a_stopped_supervisor_ends_the_run_and_leaves_its_changes_to_the_next_run(self):
         """SIGTERM to the supervisor (launchd stopping it) ends the run's group before it goes, and the edit the run

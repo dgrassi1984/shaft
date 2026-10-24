@@ -93,9 +93,20 @@
   gate's own (it never lets a change through unjudged). Each run is settled whatever happens to it: the agent
   and everything it started run in a process group of their own, ended (SIGTERM, then SIGKILL) before the gate
   looks, on every way out — a normal end, a failure, a timeout, Ctrl-C or the supervisor being stopped; the same
-  holds for each `run` command, so nothing it puts in the background outlives it. And before any run, code
-  that differs from the instance's last commit (an earlier run that ended before it was checked) is gated first,
-  against that commit: kept and committed, or put back, with a note in its journal. An edit of yours to
+  holds for each `run` command, so nothing it puts in the background outlives it. A process that left the group
+  (`setsid`) is found by its working folder: once its parent is gone, anything still working in the instance's
+  folder is ended too (your own shells there keep their parent and are spared). One that also left the folder is
+  not found; the sandbox is the boundary then (it can write only the instance's folder, and what it writes there
+  later is caught as below). Stopping a service that starts runs (the API, the scheduler, a terminal
+  conversation) ends its runs' processes first. **Approved code**: after every settlement the supervisor records
+  the code it approved (`.supervisor/baselines/<name>.json`: the last commit, plus what the gate passed that git
+  does not hold — an ignored or untracked file in a code path), where the instance cannot write. Before any run,
+  whatever is not the approved code (an earlier run that ended before it was checked, a file edited from outside)
+  is gated first: kept, or put back as approved, the rejected files copied to `.supervisor/rejected/<name>-<time>/`
+  and named in the instance's journal and the log. A merge, rebase, cherry-pick or revert in progress in the
+  instance's worktree, or code that cannot be compared, refuses the run instead ("run refused" in
+  `.supervisor/supervisor.log`, an alert on the panel): finish or abort the merge and the next run checks it. Until an
+  instance's first settlement under this scheme, its last commit is the approved code. An edit of yours to
   `config.env` is never reverted or credited to the
   instance: it is committed on its own ("config.env changed from outside the instance"); so is an edit of yours to
   `drive.md` ("drive.md changed by the operator"), with a note in the instance's journal that its drive changed.
