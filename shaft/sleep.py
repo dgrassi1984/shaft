@@ -23,7 +23,7 @@ def _since(state: State) -> str:
         return state.read(path).strip()
     for entry in reversed(state.journal_entries()):
         title = entry.splitlines()[0].lstrip("# ").strip()
-        if title.partition(" — ")[2].startswith("Sleep"):
+        if title.partition(" — ")[2] == "Sleep":   # a finished one: an unfinished sleep read no verdicts
             try:
                 return datetime.strptime(title[:16], "%Y-%m-%d %H:%M").strftime("%Y-%m-%d %H:%M:%S")
             except ValueError:
