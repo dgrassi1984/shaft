@@ -44,6 +44,11 @@ def _verdicts(raw: str) -> dict:
     return data
 
 
+# The writes a sleep must not make from an open conversation, and the file each one changes ("": all new text).
+GUARDED = {"remember": "", "write_digest": "", "rewrite_facts": "memory/facts.md",
+           "update_personality": "self/personality.md", "update_self_model": "self/self.md"}
+
+
 def _shingles(text: str) -> set[tuple[str, ...]]:
     words = re.findall(r"\w+", text.lower())
     return {tuple(words[i:i + 8]) for i in range(len(words) - 7)}
@@ -77,15 +82,23 @@ def run(cfg, state: State, client: Client) -> str:
         refusal = ""
         if name == "history" and args.get("save_as"):
             refusal = "ERROR: history is read-only during sleep; save_as writes a file"
-        guarded = name in {"remember", "rewrite_facts", "write_digest", "update_personality", "update_self_model"}
+        target = GUARDED.get(name, "")
+        guarded = name in GUARDED
         if name in ("write_file", "append_file") and isinstance(args.get("path"), str):
             try:
                 path = (toolbox.root / args["path"]).resolve()
             except (OSError, ValueError, RuntimeError):
                 return real_run(name, raw_args)
             guarded = any(toolbox.root / folder in path.parents for folder in ("memory", "self"))
-        if guarded and any(shingles & _shingles(value) for key, value in args.items()
-                           if key != "path" and isinstance(value, str)):
+            target = args["path"]
+        # Only what this write adds: rewrite_facts resubmits every fact it keeps, and an old one may share words
+        # with a conversation going on now (Grok's review).
+        try:
+            held = set(state.read(toolbox.root / target).splitlines()) if target else set()
+        except OSError:   # a folder, or unreadable: everything counts as new
+            held = set()
+        if guarded and any(shingles & _shingles("\n".join(l for l in value.splitlines() if l not in held))
+                           for key, value in args.items() if key != "path" and isinstance(value, str)):
             refusal = ("ERROR: open-conversation transcripts are awareness only during sleep; "
                        "consolidate them in a later sleep after they are written up")
         if refusal:
@@ -121,11 +134,8 @@ def run(cfg, state: State, client: Client) -> str:
         state.append_journal("Sleep (unfinished)", summary)
         state.append_episode({"kind": "sleep", "ended_by": outcome.ended_by, "tools": toolbox.log})
         raise LLMError(summary)
-    entry = outcome.reply.content.strip()
-    entry += "\n\n*Consolidation actions:* " + ("; ".join(changes) or "none")
-    state.append_journal("Sleep", entry)
-    state.append_episode({"kind": "sleep", "ended_by": outcome.ended_by, "tools": toolbox.log,
-                          "content": outcome.reply.content})
+    # Before the journal entry: a finished sleep without a marker would otherwise be the next one's starting point,
+    # skipping what it did not read. A failed read keeps where it started, so the next sleep asks again.
     if fetched is not None:
         known = {(row["episode_ts"], row.get("reviewed_at")) for row in memory.verdict_rows(state.root)}
         received = clock.now().isoformat(timespec="seconds")
@@ -137,8 +147,13 @@ def run(cfg, state: State, client: Client) -> str:
                 if key not in known:
                     f.write(json.dumps(row, ensure_ascii=False) + "\n")
                     known.add(key)
-        (state.root / VERDICTS_REVIEWED).write_text(
-            (fetched["next_since"] if fetched["next_since"] is not None else since) + "\n")
+    (state.root / VERDICTS_REVIEWED).write_text(
+        (fetched["next_since"] if fetched and fetched["next_since"] is not None else since) + "\n")
+    entry = outcome.reply.content.strip()
+    entry += "\n\n*Consolidation actions:* " + ("; ".join(changes) or "none")
+    state.append_journal("Sleep", entry)
+    state.append_episode({"kind": "sleep", "ended_by": outcome.ended_by, "tools": toolbox.log,
+                          "content": outcome.reply.content})
     return entry
 
 
