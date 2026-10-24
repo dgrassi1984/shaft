@@ -201,7 +201,10 @@
           node.querySelectorAll("details[data-key]").forEach(d => {
             if (details.has(d.dataset.key)) d.open = details.get(d.dataset.key);
           });
-          const scrolls = new Map([...cur.querySelectorAll("[data-scroll-key]")].map(d => [d.dataset.scrollKey, d.scrollTop]));
+          // Where each scrolling part was, and whether at its end: one at the end follows what is added (a reply's
+          // activity), one scrolled up stays where its reader left it
+          const scrolls = new Map([...cur.querySelectorAll("[data-scroll-key]")].map(d => [d.dataset.scrollKey,
+            { top: d.scrollTop, end: d.scrollTop + d.clientHeight >= d.scrollHeight - 4 }]));
           // Restore after insertion: detached elements have no scrollable layout.
           node._scrolls = scrolls;
           const clocks = new Map([...cur.querySelectorAll(".elapsed[data-since]")].map(d => [d.dataset.since, d.textContent]));
@@ -219,7 +222,8 @@
       kept.add(node);
       if (node._scrolls) {
         node.querySelectorAll("[data-scroll-key]").forEach(d => {
-          if (node._scrolls.has(d.dataset.scrollKey)) d.scrollTop = node._scrolls.get(d.dataset.scrollKey);
+          const was = node._scrolls.get(d.dataset.scrollKey);
+          if (was) d.scrollTop = was.end ? d.scrollHeight : was.top;
         });
         delete node._scrolls;
       }
@@ -254,7 +258,10 @@
       const ctl = new AbortController();
       const limit = setTimeout(() => ctl.abort(), POLL_LIMIT_MS);
       try {
-        const headers = el.dataset.etag && el.dataset.etagUrl === url ? { "If-None-Match": el.dataset.etag } : {};
+        // The feed's poll says when the page sent it: one that arrives after the page said it went away is not
+        // watching (web_chat.watching)
+        const headers = { ...(el.dataset.etag && el.dataset.etagUrl === url ? { "If-None-Match": el.dataset.etag } : {}),
+                          ...(el.dataset.follow ? { "X-Shaft-At": String(Date.now()) } : {}) };
         const r = await fetch(url, { credentials: "same-origin", cache: "no-store", signal: ctl.signal, headers });
         if (pairAgain(r)) return;
         checkVersion(r);
@@ -305,6 +312,8 @@
               if (target) target.focus({ preventScroll: true });
             }
             if (atBottom && follower) toBottom(follower);
+            // A poll inside the feed (the reply's activity) that says the reply ended: the feed brings the answer now
+            if (follower && follower !== el && follower._tick && el.querySelector("[data-ended]")) follower._tick();
             const newBelow = !!box && [...el.querySelectorAll(".turn[data-k]")].some(n =>
               !oldKeys.has(n.dataset.k) && n.getBoundingClientRect().top >= box.getBoundingClientRect().bottom);
             el.dispatchEvent(new CustomEvent("shaft:swapped", { bubbles: true, detail: { newBelow } }));
@@ -530,6 +539,8 @@
           shown.remove();
         }
       }
+      // what it holds now is what is saved (a data-reset form goes back to its defaults below instead)
+      if (r.ok && form.dataset.guard !== undefined && !form.dataset.reset) markSaved(form);
       if (r.ok && form.dataset.keep) dropKept(form);   // saved: the copy kept in this browser goes
       if (r.ok && form.dataset.reset) {
         const later = box && box.value !== typed ? box.value : null;   // typed while it was sending: kept
@@ -719,6 +730,16 @@
     return f.value !== f.defaultValue;
   }
   const guardDirty = (form) => [...form.querySelectorAll("input, textarea, select")].some(fieldDirty);
+  // A save that went through: the form's values are its saved ones. A saved row usually replaces the form; when none
+  // came back (or for a form that is not a row), the old values still read as unsaved: leaving warned, and the next
+  // input kept the "draft" again (Grok review of 8735c62). A data-reset form (Add a key) clears itself instead.
+  function markSaved(form) {
+    for (const f of form.querySelectorAll("input, textarea, select")) {
+      if (f.type === "checkbox" || f.type === "radio") f.defaultChecked = f.checked;
+      else if (f.tagName === "SELECT") [...f.options].forEach(o => { o.defaultSelected = o.selected; });
+      else if (f.type !== "file") f.defaultValue = f.value;
+    }
+  }
   window.addEventListener("beforeunload", (ev) => {
     if (![...document.querySelectorAll("form[data-guard]")].some(guardDirty)) return;
     document.querySelectorAll("form[data-keep]").forEach(keepText);
@@ -1146,14 +1167,15 @@
   function seenSet(v) {
     try { localStorage.setItem("shaft.seen", JSON.stringify(v)); } catch (e) { /* private window: no marks kept */ }
   }
-  // Seen: a reply, or a message it sent you (data-sent-at), whose start is inside the feed's visible box. Rendered was
+  // Seen: a reply, or a message it sent you (data-sent-at), whose start is inside the feed's visible box — or that
+  // fills the box, longer than the screen. Rendered was
   // not enough: a reply below the fold was marked seen, and a message it sent never was (W8, review 2026-10-24).
   function onScreen(n) {
     if (!n.getClientRects().length) return false;   // not rendered (a hidden panel)
     const r = n.getBoundingClientRect();
     const box = n.closest && n.closest("[data-scroll]");
     const b = box ? box.getBoundingClientRect() : { top: 0, bottom: window.innerHeight };
-    return r.top < b.bottom && r.bottom > b.top;
+    return (r.top >= b.top && r.top < b.bottom) || (r.top <= b.top && r.bottom >= b.bottom);   // its start, or it fills it
   }
   function seenFeed() {
     if (document.visibilityState !== "visible") return;
@@ -1215,35 +1237,52 @@
   }
   const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)))
     .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  let renewed = false;                       // once a page: a renewal SHAFT refuses is not asked for on every refresh
+  // A renewal is tried again until it gets through: `refused` only stops one SHAFT turned down from being asked for
+  // on every refresh of this page. One begun and not finished (the old subscription dropped for a new key, then
+  // subscribe() failed) is remembered (shaft.push.renew): the next visit subscribes instead of reading "off".
+  let renewing = false, refused = false;
+  const store = (k, v) => { try { if (v) localStorage.setItem(k, v); else localStorage.removeItem(k); } catch (e) { /* none */ } };
+  const stored = (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+  async function renew(reg, sub, key, again) {
+    if (renewing || refused) return "incomplete";
+    renewing = true;
+    try {
+      if (again) {
+        store("shaft.push.renew", "1");
+        if (sub) await sub.unsubscribe();
+        sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(key) });
+      }
+      const r = await fetch("/push/subscribe", { method: "POST", credentials: "same-origin",
+        body: JSON.stringify(sub), headers: { "X-CSRF-Token": csrf(), "Content-Type": "application/json" } });
+      if (!r.ok) { refused = true; return "incomplete"; }
+      store("shaft.push.renew", "");
+      return "on";
+    } finally {
+      renewing = false;
+    }
+  }
   async function pushState() {
     if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
       return ios() && !standalone() ? "home" : "none";
     }
     if (Notification.permission === "denied") return "blocked";
     const reg = await navigator.serviceWorker.ready;
-    let sub = await reg.pushManager.getSubscription();
-    if (!sub) return "off";
+    const sub = await reg.pushManager.getSubscription();
+    const halfway = !!stored("shaft.push.renew") && !stored("shaft.push.off") && Notification.permission === "granted";
+    if (!sub && !halfway) return "off";
     try {                                    // a later visit: SHAFT may have dropped this device since
       const r = await fetch("/push/status", { credentials: "same-origin", cache: "no-store" });
       if (!r.ok) return "incomplete";
       const held = await r.json();
+      if (!sub) return held.key ? await renew(reg, null, held.key, true) : "incomplete";
       // W5 (review 2026-10-24): SHAFT dropped it (a push service refused it), holds another endpoint (the browser
       // rotated it), or it was made for another key: subscribed again, with the key pushes are signed with now.
       const theirs = sub.options && sub.options.applicationServerKey;
       const keyChanged = held.stale || (!!held.key && !!theirs && b64url(theirs) !== held.key);
-      let off = false;                       // turned off here: a browser subscription left behind is not renewed
-      try { off = !!localStorage.getItem("shaft.push.off"); } catch (e) { /* no storage */ }
-      if (Notification.permission === "granted" && !renewed && !off && held.key
+      const off = !!stored("shaft.push.off");   // turned off here: a browser subscription left behind is not renewed
+      if (Notification.permission === "granted" && !off && held.key
           && (!held.subscribed || held.endpoint !== sub.endpoint || keyChanged)) {
-        renewed = true;
-        if (keyChanged) {
-          await sub.unsubscribe();
-          sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(held.key) });
-        }
-        const again = await fetch("/push/subscribe", { method: "POST", credentials: "same-origin",
-          body: JSON.stringify(sub), headers: { "X-CSRF-Token": csrf(), "Content-Type": "application/json" } });
-        return again.ok ? "on" : "incomplete";
+        return await renew(reg, sub, held.key, keyChanged);
       }
       return held.subscribed && held.endpoint === sub.endpoint && !keyChanged ? "on" : "incomplete";
     } catch (e) {
@@ -1279,14 +1318,15 @@
       if (b.dataset.state === "on") {
         // the browser drops it only after SHAFT has: a failed unsubscribe must not read as off
         if (await post("/push/unsubscribe", "{}")) {
-          try { localStorage.setItem("shaft.push.off", "1"); } catch (e) { /* no storage */ }
+          store("shaft.push.off", "1");
+          store("shaft.push.renew", "");
           sub = await reg.pushManager.getSubscription();
           if (sub) await sub.unsubscribe();
           sub = null;
         }
       } else {
         if (await Notification.requestPermission() !== "granted") { notifyButton(); return; }
-        try { localStorage.removeItem("shaft.push.off"); } catch (e) { /* no storage */ }
+        store("shaft.push.off", "");
         sub = await reg.pushManager.getSubscription();   // incomplete: send the one the browser already has
         if (!sub) {
           const r = await fetch("/push/key", { credentials: "same-origin" });
@@ -1310,12 +1350,15 @@
     if (ev.target.classList && (ev.target.classList.contains("rail") || ev.target.classList.contains("feed"))) unreadState();
   });
   document.addEventListener("visibilitychange", unreadState);
-  // Hidden (the phone locked, the app went to the background, another tab): SHAFT is told at once, so a reply that ends
-  // in the next seconds is pushed to this device and not taken as seen on screen here (W9, review 2026-10-24).
-  function away() {
+  // Hidden (the phone locked, the app went to the background, another tab) or left (pagehide, visible or not): SHAFT
+  // is told at once, so a reply that ends in the next seconds is pushed to this device and not taken as seen on screen
+  // here (W9, review 2026-10-24). Stamped, like the feed's polls, so one sent before it cannot undo it. A GET with
+  // keepalive, not sendBeacon: a beacon is a POST, and a POST needs the page's token in a header it cannot carry.
+  function away(ev) {
     const feed = document.querySelector(".feed[data-follow][data-poll]");
-    if (!feed || document.visibilityState !== "hidden" || /[?&]id=/.test(feed.dataset.poll)) return;
-    const url = feed.dataset.poll + (feed.dataset.poll.includes("?") ? "&" : "?") + "away=1";
+    if (!feed || /[?&]id=/.test(feed.dataset.poll)) return;
+    if (ev && ev.type === "visibilitychange" && document.visibilityState !== "hidden") return;
+    const url = feed.dataset.poll + (feed.dataset.poll.includes("?") ? "&" : "?") + `away=1&at=${Date.now()}`;
     try { fetch(url, { credentials: "same-origin", cache: "no-store", keepalive: true }).catch(() => {}); }
     catch (e) { /* the page is going: nothing to do */ }
   }
@@ -1731,8 +1774,13 @@
     root.setProperty("--vvh", `${Math.round(vv.height)}px`);
     // What the keyboard leaves visible, for the sheets fixed over the page (the documents, a comment): their bottom —
     // Save, Cancel — was under the keyboard (W3, review 2026-10-24). iOS may also pan the visible part (offsetTop).
-    root.setProperty("--vvtop", `${Math.max(0, Math.round(vv.offsetTop))}px`);
-    root.setProperty("--vvbottom", `${Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop))}px`);
+    // Within a few px of the whole window and not panned: no keyboard — iOS can leave visualViewport a little off after
+    // it closes, and the sheets kept a sliver of inset (Grok review of 8735c62). Never below 0.
+    const whole = Math.abs(window.innerHeight - vv.height) <= 4 && Math.abs(vv.offsetTop) < 1;
+    const top = whole ? 0 : Math.max(0, Math.round(vv.offsetTop));
+    const bottom = whole ? 0 : Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+    root.setProperty("--vvtop", `${top}px`);
+    root.setProperty("--vvbottom", `${bottom}px`);
     const box = document.querySelector("form.composer textarea");
     if (box) grow(box);
     document.body.classList.toggle("kbd", keyboardUp());

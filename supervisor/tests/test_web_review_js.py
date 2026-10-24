@@ -74,6 +74,23 @@ const grow = () => {}, keyboardUp = () => true;
 fitViewport(); console.log(JSON.stringify(props));
 """)
         self.assertEqual(json.loads(out), {"--vvh": "500px", "--vvtop": "40px", "--vvbottom": "260px"})
+
+    def test_the_insets_clear_when_the_keyboard_is_gone(self):
+        """Grok review of 8735c62 (S3): iOS can leave visualViewport a few px off after the keyboard closes; the sheets
+        then kept a sliver of inset. Within a few px of the whole window, and not panned, there is none; never below 0."""
+        out = node(PRELUDE + r"""
+const props = {}, window = { innerHeight: 800, scrollY: 0, visualViewport: { height: 797, offsetTop: 0.4 }, scrollTo() {} };
+const document = { documentElement: { style: { setProperty: (k, v) => { props[k] = v; } } }, querySelector: () => null,
+  body: { classList: { toggle() {}, contains: () => false } } };
+const grow = () => {}, keyboardUp = () => false;
+""" + function("fitViewport") + r"""
+fitViewport(); const closed = { ...props };
+Object.assign(window.visualViewport, { height: 820, offsetTop: -12 }); fitViewport();
+console.log(JSON.stringify([closed, props]));
+""")
+        closed, overshoot = json.loads(out)
+        self.assertEqual((closed["--vvtop"], closed["--vvbottom"]), ("0px", "0px"))
+        self.assertEqual((overshoot["--vvtop"], overshoot["--vvbottom"]), ("0px", "0px"))
         for rule in re.findall(r"\.chatgrid\.(?:showdocs|docfullscreen) > aside\.docs \{[^}]*position: fixed[^}]*\}", CSS):
             self.assertIn("inset: var(--vvtop, 0px) 0 var(--vvbottom, 0px)", rule)
         self.assertEqual(len(re.findall(r"inset: var\(--vvtop, 0px\) 0 var\(--vvbottom, 0px\)", CSS)), 3)
@@ -114,15 +131,57 @@ dirty = true; showDocs(false); assert.deepEqual(closed, [false], "with changes: 
 
 
 @unittest.skipUnless(NODE, "node is not installed")
+class OnScreenTest(unittest.TestCase):
+    def test_seen_means_its_start_is_in_view_or_it_fills_the_view(self):
+        """Grok review of 8735c62 (S3): onScreen() took a 1 px peek for seen, unlike its comment. Seen: the item's top
+        is inside the feed's visible box, or the item fills the box (a reply longer than the screen)."""
+        out = node(PRELUDE + r"""
+const window = { innerHeight: 800 };
+const box = { getBoundingClientRect: () => ({ top: 100, bottom: 500 }) };
+const item = (top, bottom) => ({ getClientRects: () => [1], closest: () => box,
+  getBoundingClientRect: () => ({ top, bottom }) });
+""" + function("onScreen") + r"""
+console.log(JSON.stringify([[120, 300], [499, 900], [-50, 101], [480, 501], [50, 600], [500, 700], [0, 99]]
+  .map(([t, b]) => onScreen(item(t, b)))));
+""")
+        self.assertEqual(json.loads(out), [True, True, False, True, True, False, False])
+
+
+@unittest.skipUnless(NODE, "node is not installed")
+class AwayTest(unittest.TestCase):
+    def test_leaving_the_page_says_so_and_says_when(self):
+        """Grok review of 8735c62 (S2): away() returned unless the page was hidden, so pagehide (closing the tab,
+        navigating away while visible) sent nothing; and with no time on it, a poll sent before it but arriving after
+        marked the device watching again. It goes on pagehide too, stamped, and the feed's polls are stamped."""
+        out = node(PRELUDE + r"""
+const sent = [];
+let state = "visible";
+const document = { get visibilityState() { return state; },
+  querySelector: q => q === ".feed[data-follow][data-poll]" ? { dataset: { poll: "/fragment/chat/wren" } } : null };
+const Date = { now: () => 1234 };
+const fetch = (u, o) => { sent.push([u, !!o.keepalive]); return Promise.resolve(); };
+""" + function("away") + r"""
+away({ type: "visibilitychange" });                 // still visible: not away
+away({ type: "pagehide" });                         // leaving, though visible
+state = "hidden"; away({ type: "visibilitychange" });
+console.log(JSON.stringify(sent));
+""")
+        self.assertEqual(json.loads(out), [["/fragment/chat/wren?away=1&at=1234", True]] * 2)
+        self.assertIn('...(el.dataset.follow ? { "X-Shaft-At": String(Date.now()) } : {})', JS)
+
+
+@unittest.skipUnless(NODE, "node is not installed")
 class ServiceWorkerTest(unittest.TestCase):
     HARNESS = PRELUDE + r"""
 const handlers = {}, opened = [], posted = [];
 const self = { location: { origin: "https://shaft.test" }, addEventListener: (k, fn) => { handlers[k] = fn; },
   registration: { pushManager: { subscribe: async () => ({ endpoint: "https://web.push.apple.com/new" }) } },
   clients: { matchAll: async () => clients, openWindow: async u => { opened.push(u); return null; } } };
-let clients = [];
+let clients = [], tokenStatus = 200;
 const fetch = async (u, o = {}) => { posted.push([u, o.method || "GET", (o.headers || {})["X-CSRF-Token"] || "", o.body || ""]);
-  return { ok: true, json: async () => u === "/push/token" ? { csrf: "tok" } : { key: "AQID" } }; };
+  const status = u === "/push/token" ? tokenStatus : 200;
+  return { ok: status === 200, status, json: async () => { if (status !== 200) throw new SyntaxError("not JSON");
+    return u === "/push/token" ? { csrf: "tok" } : { key: "AQID" }; } }; };
 vm.runInNewContext(process.argv[1], { self, fetch, caches: {}, URL, atob: s => Buffer.from(s, "base64").toString("binary"),
   Uint8Array, console });
 async function click(url) { let wait; handlers.notificationclick({ notification: { close() {}, data: { url } },
@@ -161,23 +220,53 @@ async function click(url) { let wait; handlers.notificationclick({ notification:
 })().catch(e => { console.error(e); process.exitCode = 1; });
 """, web_pages.service_worker())
 
+    def test_a_renewal_without_a_token_posts_nothing_and_says_why(self):
+        """Grok review of 8735c62 (S3): the worker read /push/token's body as JSON whatever its status (an unpaired
+        device's 403 page) and never looked at the subscribe answer. A refusal now stops it, by name."""
+        node(self.HARNESS + r"""
+(async () => {
+  tokenStatus = 403; let wait;
+  handlers.pushsubscriptionchange({ newSubscription: { endpoint: "https://web.push.apple.com/rotated" },
+    waitUntil: p => { wait = p; } });
+  await assert.rejects(wait, /token: HTTP 403/);
+  assert.deepEqual(posted.map(p => p[0]), ["/push/token"]);
+})().catch(e => { console.error(e); process.exitCode = 1; });
+""", web_pages.service_worker())
+        self.assertIn("bugs.webkit.org/show_bug.cgi?id=294421", web_pages.service_worker())
+
+    def test_a_focus_that_fails_opens_a_window(self):
+        """Grok review of 8735c62 (S3): focus() can reject (the window is closing, or the browser refuses): nothing
+        opened."""
+        node(self.HARNESS + r"""
+(async () => {
+  clients = [{ url: "https://shaft.test/i/wren/chat", focus: () => Promise.reject(new Error("not allowed")) }];
+  await click("/i/wren/chat");
+  assert.deepEqual(opened, ["https://shaft.test/i/wren/chat"]);
+})().catch(e => { console.error(e); process.exitCode = 1; });
+""", web_pages.service_worker())
+
 
 @unittest.skipUnless(NODE, "node is not installed")
 class RenewSubscriptionTest(unittest.TestCase):
     HARNESS = PRELUDE + r"""
 const mode = process.argv[2], handlers = {}, queries = {}, els = [], posts = [];
+const storage = new Map(JSON.parse(process.argv[3] || "[]"));
 const button = { dataset: {}, hidden: false, disabled: false, textContent: "" };
 queries['meta[name="csrf"]'] = { content: "tok" }; queries["[data-notify]"] = button;
-const box = { sub: { endpoint: "https://web.push.apple.com/mine", options: { applicationServerKey: new Uint8Array([1, 2, 3]).buffer },
+const box = { sub: mode === "after-throw" ? null : { endpoint: "https://web.push.apple.com/mine",
+  options: { applicationServerKey: new Uint8Array([1, 2, 3]).buffer },
   async unsubscribe() { box.unsubscribed = true; box.sub = null; } } };
 const document = { readyState: "loading", body: { appendChild() {}, classList: { contains: () => false, toggle() {} } },
   addEventListener(k, fn) { (handlers[k] ||= []).push(fn); }, querySelector: q => queries[q] || null, querySelectorAll: () => [],
   getElementById: id => els.find(e => e.id === id) || null,
   createElement() { const el = { id: "", setAttribute() {}, appendChild() {} }; els.push(el); return el; } };
 const pushManager = { async getSubscription() { return box.sub; },
-  async subscribe(o) { box.key = [...o.applicationServerKey]; box.sub = { endpoint: "https://web.push.apple.com/new" }; return box.sub; } };
+  async subscribe(o) { if (mode === "throws") throw new Error("push service unreachable");
+    box.key = [...o.applicationServerKey]; box.sub = { endpoint: "https://web.push.apple.com/new" }; return box.sub; } };
 const held = { rotated: { subscribed: true, endpoint: "https://web.push.apple.com/old", key: "AQID", stale: false },
   rekeyed: { subscribed: true, endpoint: "https://web.push.apple.com/mine", key: "BAUG", stale: true },
+  throws: { subscribed: true, endpoint: "https://web.push.apple.com/mine", key: "BAUG", stale: true },
+  "after-throw": { subscribed: false, endpoint: "", key: "BAUG", stale: false },
   dropped: { subscribed: false, endpoint: "", key: "AQID", stale: false } }[mode];
 async function fetch(url, o = {}) {
   if (url === "/push/status") return { ok: true, json: async () => held };
@@ -188,24 +277,25 @@ const Notification = { permission: "granted" };
 vm.runInNewContext(fs.readFileSync(process.argv[1], "utf8"), { document, Notification, fetch, URL,
   atob: s => Buffer.from(s, "base64").toString("binary"), btoa: s => Buffer.from(s, "binary").toString("base64"),
   setTimeout() { return 0; }, clearTimeout() {}, setInterval() { return 0; },
-  localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+  localStorage: { getItem: k => storage.get(k) ?? null, setItem: (k, v) => storage.set(k, String(v)), removeItem: k => storage.delete(k) },
   navigator: { serviceWorker: { ready: Promise.resolve({ pushManager }), register: () => Promise.resolve() } },
   window: { addEventListener() {}, PushManager: function () {}, Notification, matchMedia: () => ({ matches: false }) } });
 (async () => {
   for (const fn of handlers.DOMContentLoaded) fn();
   for (let i = 0; i < 60; i++) await new Promise(r => setImmediate(r));
-  console.log(JSON.stringify({ state: button.dataset.state, posts, unsubscribed: !!box.unsubscribed, key: box.key || null }));
+  console.log(JSON.stringify({ state: button.dataset.state, posts, unsubscribed: !!box.unsubscribed, key: box.key || null,
+    storage: [...storage] }));
 })().catch(e => { console.error(e); process.exitCode = 1; });
 """
 
-    def run_mode(self, mode):
-        return json.loads(node(self.HARNESS, str(STATIC / "web.js"), mode))
+    def run_mode(self, mode, storage=()):
+        return json.loads(node(self.HARNESS, str(STATIC / "web.js"), mode, json.dumps(list(storage))))
 
     def test_w5_a_visit_gives_shaft_the_subscription_it_lost_or_never_had(self):
         """W5: the button read "on" while SHAFT held a dead endpoint (the browser rotated it) or none at all (a push
         service refused it): every push failed. A visit now hands SHAFT the browser's subscription again."""
         self.assertEqual(self.run_mode("rotated"), {"state": "on", "posts": ["https://web.push.apple.com/mine"],
-                                                    "unsubscribed": False, "key": None})
+                                                    "unsubscribed": False, "key": None, "storage": []})
         self.assertEqual(self.run_mode("dropped")["posts"], ["https://web.push.apple.com/mine"])
 
     def test_w5_a_subscription_made_for_another_key_is_made_again(self):
@@ -213,7 +303,18 @@ vm.runInNewContext(fs.readFileSync(process.argv[1], "utf8"), { document, Notific
         with the key now (fingerprint() was computed and never used)."""
         out = self.run_mode("rekeyed")
         self.assertEqual(out, {"state": "on", "posts": ["https://web.push.apple.com/new"], "unsubscribed": True,
-                               "key": [4, 5, 6]})
+                               "key": [4, 5, 6], "storage": []})
+
+    def test_a_renewal_that_failed_half_way_is_finished_on_the_next_visit(self):
+        """Grok review of 8735c62 (S2): renewing for a new key unsubscribes first; when subscribe() then threw, the page
+        marked it renewed and the next visit found no browser subscription and showed "off" for good. It says
+        incomplete, remembers the renewal, and the next visit subscribes and hands SHAFT the new one."""
+        out = self.run_mode("throws")
+        self.assertEqual((out["state"], out["posts"], out["unsubscribed"]), ("incomplete", [], True))
+        self.assertIn(["shaft.push.renew", "1"], out["storage"])
+        again = self.run_mode("after-throw", out["storage"])
+        self.assertEqual((again["state"], again["posts"], again["key"], again["storage"]),
+                         ("on", ["https://web.push.apple.com/new"], [4, 5, 6], []))
 
 
 @unittest.skipUnless(NODE, "node is not installed")
@@ -287,16 +388,20 @@ class LeaveWarningJsTest(unittest.TestCase):
 const storage = new Map(JSON.parse(process.argv[2])), handlers = {}, win = {};
 const note = { textContent: "" }, sha = { type: "hidden", value: "s2", defaultValue: "s2" };
 const box = { tagName: "TEXTAREA", type: "textarea", value: "be useful", defaultValue: "be useful" };
-const form = { dataset: { keep: "drive.wren", guard: "" },
-  querySelector: q => ({ textarea: box, "input[name=sha]": sha, "[data-keep-note]": note })[q] || null,
-  querySelectorAll: q => q === "input, textarea, select" ? [sha, box] : [] };
+const form = { dataset: { keep: "drive.wren", guard: "", post: "/action/drive-set" }, isConnected: true,
+  querySelector: q => ({ textarea: box, "textarea[name=text]": box, "input[name=sha]": sha, "[data-keep-note]": note })[q] || null,
+  querySelectorAll: q => q === "input, textarea, select" ? [sha, box] : [], closest: () => null };
 box.closest = q => q === "form[data-keep]" ? form : null;
 const document = { readyState: "loading", visibilityState: "visible", body: { appendChild() {}, classList: { toggle() {}, contains: () => false } },
   documentElement: { style: { setProperty() {} } },
   addEventListener(k, fn) { (handlers[k] ||= []).push(fn); }, querySelector: () => null,
   querySelectorAll: q => ["form[data-guard]", "form[data-keep]"].includes(q) ? [form] : [],
   getElementById: () => null, createElement: () => ({ setAttribute() {} }) };
-vm.runInNewContext(fs.readFileSync(process.argv[1], "utf8"), { document, URL, navigator: {},
+const answers = [];
+vm.runInNewContext(fs.readFileSync(process.argv[1], "utf8"), { document, URL, navigator: {}, URLSearchParams,
+  AbortController, Event, FormData: class { *[Symbol.iterator]() {} },
+  DOMParser: class { parseFromString(t) { return { body: { textContent: t, childNodes: [] } }; } },
+  fetch: async () => answers.shift(),
   window: { addEventListener(k, fn) { (win[k] ||= []).push(fn); }, innerHeight: 800, getSelection: () => null },
   localStorage: { getItem: k => storage.get(k) ?? null, setItem: (k, v) => storage.set(k, v), removeItem: k => storage.delete(k) },
   setTimeout() {}, clearTimeout() {}, setInterval() {} });
@@ -321,6 +426,21 @@ console.log(JSON.stringify({ text: box.value, note: note.textContent, sha: sha.v
         self.assertEqual(json.loads(out), {"text": "mine", "sha": "s2", "dirty": True,
                                            "note": "Unsaved edit restored — begun on an older version: check the diff "
                                                    "before Apply"})
+
+    def test_a_saved_edit_no_longer_reads_as_unsaved(self):
+        """Grok review of 8735c62 (S2): after a successful save that did not replace the form (no saved row came back),
+        the fields still differed from what the page was drawn with: leaving warned, and the next input kept the
+        "draft" again. A save that went through makes the form's values its saved ones."""
+        out = node(self.HARNESS + r"""
+box.value = "saved now"; for (const f of handlers.input) f({ target: box });
+answers.push({ ok: true, status: 200, headers: { get: () => null }, text: async () => "<p>drive.md saved</p>" });
+(async () => {
+  for (const f of handlers.submit) await f({ target: { closest: q => q === "form[data-post]" ? form : null },
+                                            preventDefault() {}, submitter: null });
+  console.log(JSON.stringify({ dirty: unload(), kept: storage.has("shaft.draft.drive.wren"), base: box.defaultValue }));
+})();
+""", str(STATIC / "web.js"), "[]")
+        self.assertEqual(json.loads(out), {"dirty": False, "kept": False, "base": "saved now"})
 
 
 @unittest.skipUnless(NODE, "node is not installed")

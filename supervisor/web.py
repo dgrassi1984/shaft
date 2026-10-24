@@ -601,13 +601,14 @@ def _get(req: Request, csrf: str) -> Response | None:
             return None
         from . import web_chat
         if qs.get("away"):                          # its page went hidden on this device: push to it again (W9)
-            web_chat.unwatch(m[1], req.device)
+            web_chat.unwatch(m[1], req.device, _page_ms(qs.get("at")))
             return Response(204, b"")
         chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.shown(m[1])
         if chat and chat.get("instance") != m[1]:
             return None
         if not qs.get("id"):
-            web_chat.watching(m[1], req.device)     # its page is open and visible here: no push to this device
+            # its page is open and visible here: no push to this device (unless this poll left before its away)
+            web_chat.watching(m[1], req.device, _page_ms(req.headers.get("x-shaft-at")))
         return _html(200, v.chat_feed(m[1], chat, _sent_during(m[1], chat, bool(qs.get("id"))),
                                       archived=bool(qs.get("id"))))
     if m := re.match(r"^/fragment/chat/([A-Za-z0-9_-]+)/live$", path):
@@ -691,6 +692,14 @@ def _get(req: Request, csrf: str) -> Response | None:
             return _html(200, live)
         return _html(200, v.services_page(live, sel, panel.SERVICE_LOGS[sel], panel.log_tail(sel, 40), names, csrf))
     return None
+
+
+def _page_ms(value: str | None) -> float | None:
+    """A time the page stamped on a request (Date.now(), its own clock), or None."""
+    try:
+        return float(value) if value else None
+    except ValueError:
+        return None
 
 
 def _save_doc(name: str, login: str, form: dict) -> Response:

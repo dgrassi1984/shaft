@@ -104,8 +104,21 @@ def inline(text: str, links: bool = True, kept: list[str] | None = None) -> str:
 
 
 def plain(text: str) -> str:
-    """One line of Markdown as the page shows its text: what an anchor quoting the rendered document must match."""
-    return html.unescape(re.sub(r"<[^>]*>", "", inline(clean(str(text)).replace(OPEN, "").replace(CLOSE, ""))))
+    """One line of Markdown as the page shows its text: what an anchor quoting the rendered document must match. The
+    line's block syntax goes as the page drops it (a quote's >, a heading's #, a list marker; a task box is its ☐ or
+    ☑; a table row's cells are tab-separated, as comments.js walks a table), then its inline Markdown."""
+    line = clean(str(text)).replace(OPEN, "").replace(CLOSE, "").strip()
+    while _QUOTE.match(line):
+        line = _QUOTE.sub("", line, count=1).strip()
+    if (m := _HEAD.match(line)) and m[2] is not None:
+        line = m[2]
+    elif (m := _ITEM.match(line)) and m[4].strip():
+        line = m[4]
+        if t := _TASK.match(line):
+            line = ("☑ " if t[1] != " " else "☐ ") + line[t.end():]
+    elif line.startswith("|") or line.endswith("|"):
+        return "\t".join(plain(cell) for cell in _cells(line))
+    return html.unescape(re.sub(r"<[^>]*>", "", inline(line)))
 
 
 def _code_text(s: str) -> str:

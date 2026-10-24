@@ -247,6 +247,37 @@ class WhenTest(unittest.TestCase):
             self.assertEqual(web_chat.watchers("thelos"), set())
 
 
+class RenewRaceTest(PushTest):
+    def test_a_failed_wake_of_the_old_endpoint_never_drops_the_renewed_one(self):
+        """Grok review of 8735c62 (S2): notify() snapshots the endpoint, _wake retries it for 2 minutes; meanwhile the
+        page renews the subscription. A 404/410/401/403 for the OLD endpoint then deleted the NEW record. It is dropped
+        only if the endpoint SHAFT holds is still the one that failed."""
+        old, new = APPLE + "-old", APPLE + "-new"
+        webpush.subscribe("phone", {"endpoint": old})
+        webpush.subscribe("phone", {"endpoint": new})                        # renewed while the old wake retries
+        for code in (404, 410, 401, 403):
+            gone = urllib.error.HTTPError(old, code, "x", {}, None)
+            gone.read = lambda *a: b""
+            with mock.patch("urllib.request.urlopen", side_effect=gone):
+                said = webpush._send_one("phone", old)
+            self.assertNotIn("removed", said, code)
+            self.assertEqual(webpush.subscriptions()["phone"]["endpoint"], new, code)
+        gone = urllib.error.HTTPError(new, 410, "Gone", {}, None)
+        with mock.patch("urllib.request.urlopen", side_effect=gone):
+            self.assertEqual(webpush._send_one("phone", new), "410: gone, removed")
+        self.assertEqual(webpush.subscriptions(), {})
+
+    def test_a_subscription_recorded_before_keys_were_recorded_is_not_stale(self):
+        """Grok review of 8735c62 (S2): every subscription stored before this change has no key, so all of them read
+        as stale and every device renewed at once on the first visit. Unknown is not stale; the page still compares
+        the browser's own key."""
+        webpush.subscribe("phone", {"endpoint": APPLE})
+        subs = webpush.subscriptions()
+        del subs["phone"]["key"]
+        webpush._save(subs)
+        self.assertIs(webpush.status("phone")["stale"], False)
+
+
 class PairedOnlyTest(PushTest):
     def pair(self, *devices):
         (self.sup / "web").mkdir(parents=True, exist_ok=True)
@@ -298,7 +329,7 @@ class PairedOnlyTest(PushTest):
         refused = urllib.error.HTTPError(APPLE, 403, "Forbidden", {}, None)
         refused.read = lambda *a: b'{"reason":"BadJwtToken"}'
         with mock.patch("urllib.request.urlopen", side_effect=refused):
-            self.assertTrue(webpush._send_one("phone", APPLE).startswith("403: refused, removed"))
+            self.assertRegex(webpush._send_one("phone", APPLE), r'^403: refused \(\{"reason":"BadJwtToken"\}\), removed$')
         self.assertEqual(webpush.subscriptions(), {})
         self.assertEqual(webpush.status("phone")["subscribed"], False)
 

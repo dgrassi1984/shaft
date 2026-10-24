@@ -692,12 +692,15 @@ def _chat_attachments(cid: str, k: int, atts: list[dict]) -> Html:
     return h('<div class="atts">{o}</div>', o=join(out)) if out else Html("")
 
 
-def _activity(lines_: list[str], key: str, open_: bool = False) -> Html:
-    """What it did during a reply, collapsible; `key` keeps it open or shut across the feed's refreshes."""
+def _activity(lines_: list[str], key: str, open_: bool = False, item: str = "", ended: bool = False) -> Html:
+    """What it did during a reply, collapsible; `key` keeps it open or shut across the feed's refreshes. `item`: its
+    data-k, when it is an item of a keyed poll itself (live_activity): unkeyed, morph replaced it whole each second
+    and its log jumped back to the top."""
     if not lines_:
         return Html("")
-    return h('<details class="activity" data-key="{k}"{o}><summary>what it did ({n})</summary><div data-scroll-key="{k}">{l}</div></details>',
-             k=key, o=Html(" open") if open_ else "", n=len(lines_), l=join(h("<p>{x}</p>", x=x) for x in lines_))
+    return h('<details class="activity"{i}{e} data-key="{k}"{o}><summary>what it did ({n})</summary><div data-scroll-key="{k}">{l}</div></details>',
+             i=h(' data-k="{i}"', i=item) if item else "", e=Html(" data-ended") if ended else "", k=key, o=Html(" open") if open_ else "", n=len(lines_),
+             l=join(h("<p>{x}</p>", x=x) for x in lines_))
 
 
 def _my_text(text: str) -> Html:
@@ -1065,11 +1068,18 @@ def _mid_attr(mid: str | None) -> Html:
 
 
 def live_activity(chat: dict | None) -> Html:
-    """What the reply running now has done so far (/fragment/chat/<name>/live, inside the feed's live turn); nothing
-    once it ended (the feed then brings the answer)."""
-    if not chat or chat.get("state") != "replying":
+    """What the reply running now has done so far (/fragment/chat/<name>/live, inside the feed's live turn). Once it
+    ended, what the finished reply did, marked data-ended: the page asks the feed for the answer at once, and the
+    activity does not blank meanwhile (it did, for up to 1.5 s: Grok review of 8735c62)."""
+    if not chat:
         return Html("")
-    return _activity((chat.get("reply") or {}).get("activity", []), "live", open_=True)
+    if chat.get("state") == "replying":
+        return _activity((chat.get("reply") or {}).get("activity", []), "live", open_=True, item="act")
+    last = next((t for t in reversed(chat.get("turns") or []) if t["role"] == "assistant"), None)
+    if not last:
+        return Html("")
+    return _activity(last.get("activity") or [], "live", open_=True, item="act", ended=True) \
+        or Html('<span data-k="end" data-ended hidden></span>')
 
 
 def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = False) -> Html:

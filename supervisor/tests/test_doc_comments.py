@@ -428,6 +428,12 @@ class AnchorTextTest(CommentsTest):
         comments.parse_answer("wren", answer, [])
         self.assertEqual(self.thread()["anchor"]["exact"], "Run every step of make all")
 
+    def test_an_opened_thread_on_a_list_item_anchors_on_its_text(self):
+        """Grok review of 8735c62 (S3): block syntax stayed in the anchor (a quoted list item kept its "- ")."""
+        self.doc("- Run **every** step\n- then check")
+        comments.parse_answer("wren", '### comment on notes/docs/plan.md: "- Run **every** step"\nWhy?', [])
+        self.assertEqual(self.thread()["anchor"]["exact"], "Run every step")
+
     def test_w10_an_anchor_cut_inside_a_character_is_refused_not_a_crash(self):
         """A lone half of a surrogate pair (a selection's 32-character context cut inside an emoji) could not be
         written: the comment failed with a 500. It is refused by name."""

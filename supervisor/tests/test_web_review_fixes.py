@@ -93,6 +93,24 @@ class LiveActivityTest(ChatRoutesTest):
         self.assertEqual(second[0]["sha"], docs.sha(b"two!"))
 
 
+class DigestCacheTest(ChatRoutesTest):
+    def test_the_hash_cache_holds_only_the_documents_there_now(self):
+        """Grok review of 8735c62 (S3): the documents' hash cache grew for ever and kept deleted paths. It holds only
+        what each listing found."""
+        root = self.sup / "inst"
+        (root / "notes/docs/sub").mkdir(parents=True)
+        for name in ("a.md", "b.md", "sub/c.md"):
+            (root / "notes/docs" / name).write_text(name)
+        with mock.patch.object(docs, "instance_root", return_value=root):
+            docs.listing("wren")
+            mine = lambda: sorted(k for k in docs._digests if k.startswith(str(root)))
+            self.assertEqual(len(mine()), 3)
+            (root / "notes/docs/b.md").unlink()
+            (root / "notes/docs/sub/c.md").unlink()
+            docs.listing("wren")
+            self.assertEqual(mine(), [str(root / "notes/docs/a.md")])
+
+
 class SendingCopyTest(ChatRoutesTest):
     def test_w7_turns_carry_the_message_id_the_sending_copy_waits_for(self):
         """W7: the "sending…" copy goes when the feed brings its turn; with no id to match, one whose turn came in a
@@ -154,6 +172,22 @@ class WatchingTest(ChatRoutesTest):
         self.assertEqual(web_chat.watchers("wren"), {web.device_from_cookie(laptop)[0]})
         self.get("/fragment/chat/wren?id=web-0123456789abcdef", cookie=phone)    # an earlier chat's page: not watching
         self.assertEqual(web_chat.watchers("wren"), {web.device_from_cookie(laptop)[0]})
+
+
+class AwayOrderTest(ChatRoutesTest):
+    def test_a_poll_sent_before_the_page_went_away_does_not_mark_it_watching_again(self):
+        """Grok review of 8735c62 (S2): a feed poll already on its way when the page went hidden reached the server
+        after ?away=1 and marked the device watching again for 6 s: a reply ending then was not pushed. Each poll and
+        the away say when the page sent them (X-Shaft-At, &at=); a poll sent before the latest away is not watching."""
+        self.replying([])
+        dev = web.device_from_cookie(self.cookie)[0]
+        self.assertEqual(self.get("/fragment/chat/wren", headers={"x-shaft-at": "1000"}).status, 200)
+        self.assertEqual(web_chat.watchers("wren"), {dev})
+        self.assertEqual(self.get("/fragment/chat/wren?away=1&at=2000").status, 204)
+        self.assertEqual(self.get("/fragment/chat/wren", headers={"x-shaft-at": "1500"}).status, 200)   # late
+        self.assertEqual(web_chat.watchers("wren"), set())
+        self.get("/fragment/chat/wren", headers={"x-shaft-at": "2500"})                               # back
+        self.assertEqual(web_chat.watchers("wren"), {dev})
 
 
 class PushRoutesTest(ChatRoutesTest):

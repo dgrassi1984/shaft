@@ -81,12 +81,13 @@ _digests: dict[str, tuple[tuple, str]] = {}      # file -> ((inode, mtime_ns, si
 def listing(name: str) -> list[dict]:
     """Every document, the last changed first: path (inside notes/docs/), bytes, mtime, sha. A document's sha is read
     again only when its inode, mtime or size changed: the documents panel asks for this every 1.5 s, and it hashed
-    every document each time (W12, review 2026-10-24)."""
+    every document each time (W12, review 2026-10-24). The cache holds only what this listing found below this
+    instance's folder: a deleted document's entry goes with it."""
     try:
         base = _path(name, "x.md").parent
     except Refused:
         return []
-    out = []
+    out, found = [], set()
     for p in base.rglob("*.md") if base.is_dir() else []:
         rel = p.relative_to(base).as_posix()
         try:
@@ -102,9 +103,13 @@ def listing(name: str) -> list[dict]:
                 digest = (sha(read_beneath(instance_root(name), Path(DIR, rel).parts)) if st.st_size <= MAX_BYTES
                           else "too-big")
                 _digests[str(p)] = (stamp, digest)
+            found.add(str(p))
         except (Refused, OSError, UnsafePath):
             continue
         out.append({"path": rel, "bytes": st.st_size, "mtime": st.st_mtime, "sha": digest})
+    below = str(base) + os.sep
+    for key in [k for k in list(_digests) if k.startswith(below) and k not in found]:
+        _digests.pop(key, None)
     return sorted(out, key=lambda d: d["mtime"], reverse=True)
 
 

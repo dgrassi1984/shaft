@@ -178,13 +178,20 @@ def status(device: str) -> dict:
     except PushError as e:
         return {"subscribed": bool(sub), "endpoint": sub.get("endpoint", ""), "key": "", "stale": False,
                 "error": str(e)}
+    # No key recorded (a subscription from before keys were): unknown, not stale — else every device renewed at once
+    # after the update. The page still compares its browser's own applicationServerKey with `key`.
     return {"subscribed": bool(sub), "endpoint": sub.get("endpoint", ""), "key": key,
-            "stale": bool(sub) and sub.get("key") != now}
+            "stale": bool(sub.get("key")) and sub["key"] != now}
 
 
-def unsubscribe(device: str) -> bool:
+def unsubscribe(device: str, endpoint: str | None = None) -> bool:
+    """Drop this device's subscription and what waits for it. With `endpoint`: only if that is still the one SHAFT
+    holds — a wake retrying an old endpoint for two minutes must not drop the subscription the page renewed meanwhile
+    (Grok review of 8735c62)."""
     with _lock:
         subs = subscriptions()
+        if endpoint is not None and (subs.get(device) or {}).get("endpoint") != endpoint:
+            return False
         gone = subs.pop(device, None) is not None
         if gone:
             _save(subs)
@@ -251,12 +258,13 @@ def _send_one(device: str, endpoint: str) -> str:
         with urllib.request.urlopen(req, timeout=15) as r:
             return f"{r.status}"
     except urllib.error.HTTPError as e:
-        if e.code in (404, 410):                    # the browser dropped it: so do we
-            unsubscribe(device)
-            return f"{e.code}: gone, removed"
-        if e.code in (401, 403):                    # made for a key we no longer sign with: dead too (W5). Dropped,
-            unsubscribe(device)                     # the button says "incomplete" and the page subscribes again
-            return f"{e.code}: refused, removed ({e.read()[:200].decode(errors='replace')})"
+        if e.code in (404, 410, 401, 403):
+            # 404/410: the browser dropped it, so do we. 401/403: made for a key we no longer sign with, dead too (W5):
+            # the page subscribes again. Either way only that endpoint: one renewed since is the device's now.
+            why = "gone" if e.code in (404, 410) else f"refused ({e.read()[:200].decode(errors='replace')})"
+            if unsubscribe(device, endpoint):
+                return f"{e.code}: {why}, removed"
+            return f"{e.code}: {why}, an old endpoint (the device has renewed it): stopped"
         return f"{e.code}: {e.read()[:200].decode(errors='replace')}"
     except (OSError, urllib.error.URLError) as e:
         return f"not sent: {e}"
@@ -311,7 +319,7 @@ def _wake(subs: dict, why: str) -> None:
             except PushError as e:
                 said = f"not sent: {e}"
             log(f"web: push to device {device} ({why}): {said}")
-            if said.startswith("2") or "removed" in said:     # sent, or the subscription is dead and dropped
+            if said.startswith("2") or "removed" in said or "stopped" in said:   # sent, or dead (dropped or replaced)
                 return
     for device, s in subs.items():                # one thread each: a device's retries never hold up another's
         threading.Thread(target=run, args=(device, s["endpoint"]), daemon=True, name="webpush").start()

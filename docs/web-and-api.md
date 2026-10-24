@@ -129,7 +129,9 @@ and [chat design](plans/PLAN-webui-chat.md).
   images loading keep the feed at the bottom if you have not scrolled up. After Save, focus returns to Edit
   and survives the document refresh.
 - While a reply runs, its activity is refreshed on its own (`/fragment/chat/<name>/live`); the rest of the chat is
-  answered "not modified" until something else changes, rather than sent again whole every 1.5 seconds. Rendered
+  answered "not modified" until something else changes, rather than sent again whole every 1.5 seconds. The activity
+  log keeps your place if you scrolled up in it and follows its end if you are there; when the reply ends it stays
+  until the answer replaces it, which is fetched at once. Rendered
   Markdown and the documents' hashes are kept until their text or file changes.
 - The chat header refreshes every 1.5 seconds: state, model, today's spend, actions, busy state icon, Clear and
   Earlier chats. When the instance is busy and not writing a reply, an icon next to its name (⏳ in a cycle or
@@ -256,10 +258,12 @@ next refresh or action opens the pairing page. Your chat draft stays in this bro
   `/push/status` on each visit): a refused registration leaves it off and says why. When SHAFT dropped it (a push
   service refused it: 401, 403, 404, 410), holds another endpoint (the browser renewed it) or it was made for another
   key, the visit hands SHAFT the browser's subscription again, made anew for another key; if that is refused the
-  button shows **Notifications incomplete — retry**. The service worker also hands SHAFT a subscription the browser
-  renews by itself (`pushsubscriptionchange`). Unpairing a browser drops its subscription, and only paired browsers
+  button shows **Notifications incomplete — retry**, and a renewal cut short is finished on the next visit. A push
+  service's refusal of an endpoint the device has since renewed drops nothing. The service worker also hands SHAFT a
+  subscription the browser renews by itself (`pushsubscriptionchange`; Safari does not send it, so on an iPhone the
+  visit's check is the one that counts). Unpairing a browser drops its subscription, and only paired browsers
   are pushed. A device that has the chat on screen gets no push for it; the others still do, and a page going to the
-  background (the phone locked) says so at once.
+  background (the phone locked) or closing says so at once; a refresh sent before that cannot undo it.
 - **Typing:** on a phone, Return makes a new line and Send sends; with a hardware keyboard Return sends. Fields, including the Drive editor, use at least 16 px text.
   The reply's activity, a document's overwritten-lines disclosure, and each judge model have 44 px touch targets.
   Field borders have at least 3:1 contrast against the page and panel backgrounds in both themes.

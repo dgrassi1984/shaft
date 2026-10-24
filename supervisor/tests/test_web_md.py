@@ -244,6 +244,18 @@ class PlaceholdersInLinksTest(unittest.TestCase):
                          '<p><a href="https://a.example" rel="noopener noreferrer" target="_blank"><code>api</code>'
                          '</a></p>')
 
+    def test_plain_strips_the_block_syntax_of_a_line_too(self):
+        """Grok review of 8735c62 (S3): plain() rendered inline Markdown only, so an instance quoting a list item, a
+        heading, a quote or a table row kept "- ", "## ", "> " or pipes and never matched the rendered document."""
+        cases = {"- [ ] **ship** it": "☐ ship it", "* [x] done": "☑ done", "1. first `step`": "first step",
+                 "## The *plan*": "The plan", "> > quoted **twice**": "quoted twice",
+                 "| a | **b** | c |": "a\tb\tc", "  - nested": "nested", "plain text": "plain text"}
+        for line, shown in cases.items():
+            self.assertEqual(web_md.plain(line), shown, line)
+        for line, shown in cases.items():                                    # what the page's text holds
+            out = re.sub(r"<[^>]*>", "", md(line))
+            self.assertIn(shown.split("\t")[0], __import__("html").unescape(out), line)
+
     def test_plain_is_the_text_the_page_shows(self):
         self.assertEqual(web_md.plain("the **bold** `x < y` and [a link](https://a.example) <b>"),
                          "the bold x < y and a link <b>")

@@ -137,16 +137,23 @@ def open_chat(name: str) -> dict | None:
 # page does not refresh it). A reply that ends while a device looks at it needs no notification on that device — only
 # on that one: a desktop tab left open silenced every push to the phone (W9, review 2026-10-24). A page that goes
 # hidden (the phone locks, the app goes to the background) says so (?away=1), so the next 6 s are not silent either.
+# Both say when the page sent them, on its own clock (`at`, ms): a poll sent before the latest away but arriving after
+# it does not make the device watching again (Grok review of 8735c62).
 WATCH_S = 6.0
 _watched: dict[tuple[str, str], float] = {}
+_away: dict[tuple[str, str], float] = {}
 
 
-def watching(name: str, device: str) -> None:
+def watching(name: str, device: str, at: float | None = None) -> None:
+    if at is not None and at <= _away.get((name, device), float("-inf")):
+        return
     _watched[(name, device)] = time.monotonic()
 
 
-def unwatch(name: str, device: str) -> None:
+def unwatch(name: str, device: str, at: float | None = None) -> None:
     _watched.pop((name, device), None)
+    if at is not None:
+        _away[(name, device)] = max(at, _away.get((name, device), float("-inf")))
 
 
 def watchers(name: str) -> set[str]:

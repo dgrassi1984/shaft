@@ -191,6 +191,46 @@ await p._tick();
 assert.notEqual(p.children[0], selected); assert.equal(p.dataset.last, 'new');
 ''')
 
+    def test_the_live_activity_keeps_its_place_and_follows_its_end(self):
+        """Grok review of 8735c62 (S2): the reply's activity, polled on its own, came back without a data-k, so morph
+        replaced it whole each second and its log jumped to the top. Keyed, it keeps a reader who scrolled up where
+        they are, and one at the end follows the new lines."""
+        from supervisor import web_views
+        chat = {"state": "replying", "reply": {"activity": ["one", "two"]}}
+        html = str(web_views.live_activity(chat))
+        self.assertRegex(html, r'^<details class="activity" data-k="[^"]+" data-key="live"')
+        self.run_js(r'''
+const p = panel(); p.dataset.keyed = '1';
+function act(version, top, height) { const n = new Node('act', 'activity', version);
+  const box = part('scroll', {scrollKey: 'live'}); box.scrollTop = top; box.clientHeight = 100; box.scrollHeight = height;
+  n.parts = [box]; return [n, box]; }
+const [first, up] = act('v1', 50, 400); first._src = first.outerHTML; p.appendChild(first);
+let [next, box] = act('v2', 0, 420); parsed = [next]; morph(p, 'v2');
+assert.equal(p.children[0], next); assert.equal(box.scrollTop, 50, 'scrolled up: stays');
+box.scrollTop = 320; let [last, end] = act('v3', 0, 460); parsed = [last]; morph(p, 'v3');
+assert.equal(end.scrollTop, 460, 'at the end: follows');
+''')
+
+    def test_the_end_of_a_reply_keeps_its_activity_and_brings_the_answer_at_once(self):
+        """Grok review of 8735c62 (S3): once the reply ended, /live answered nothing while the feed still showed the
+        live turn: its activity blanked for up to 1.5 s. It answers the finished reply's activity, marked ended, and
+        that asks the feed for the answer at once."""
+        from supervisor import web_views
+        chat = {"state": "idle", "turns": [{"role": "user", "content": "q"},
+                                            {"role": "assistant", "content": "a", "activity": ["one", "two"]}]}
+        html = str(web_views.live_activity(chat))
+        self.assertIn("<p>two</p>", html)
+        self.assertIn("data-ended", html)
+        self.assertEqual(str(web_views.live_activity({"state": "idle", "turns": []})), "")
+        self.run_js(r'''
+const feed = panel(); let asked = 0; feed._tick = () => { asked++; };
+const live = panel(); live.feed = feed; let ended = false;
+live.rebuild = () => { live.parts = ended ? [part('ended', {ended: ''})] : []; };
+live.querySelector = s => s === '[data-ended]' ? live.parts.find(n => n.kind === 'ended') || null : null;
+poll(live); response.body = 'running'; await live._tick(); assert.equal(asked, 0);
+ended = true; response.body = 'ended'; await live._tick(); assert.equal(asked, 1);
+''')
+
     def test_issue_27_manage_collapse_and_link_focus_survive(self):
         """Reverting #27's rendered Manage key reopens the collapsed menu during a rail refresh."""
         rail = str(web_pages.rail(["wren"]))
