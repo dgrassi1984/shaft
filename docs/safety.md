@@ -122,7 +122,11 @@
   staged on the branch. Trial replays read the mind as of the replayed cycle's start from the store.
 - **Budgets**: one run per instance at a time; a cycle is stopped after
   `SHAFT_CYCLE_TIMEOUT_S` (2400 s), a sleep after `SHAFT_SLEEP_TIMEOUT_S` (5400 s). Runs know
-  their deadline and wrap up with a report before it; a stopped run leaves a journal note.
+  their deadline and wrap up with a report before it; a stopped run leaves a journal note. A cycle and a sleep
+  also see their *operational envelope* before they hit a limit: calls left this run, minutes left, today's
+  cloud, coder and trial allowances, any probation window (cycles used / needed) and the next sleep — computed by
+  the supervisor (the broker's `GET /envelope`, not a tool and not counted), shown in the first prompt and, calls
+  and minutes, after every step. It carries no keys and no host paths.
 - **Your conversation comes first**: `shaft talk` asks other instances' running cycles to wrap
   up at their next turn when they use the same local model server (an instance on a cloud model shares
   nothing and is left alone, in either direction). An instance's running cycle is paused only while a reply

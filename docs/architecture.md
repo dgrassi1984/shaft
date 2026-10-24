@@ -40,7 +40,9 @@ shaft-docs/   the supervisor's copy of README.md and docs/*.md (not docs/plans/)
 self/         self.md (self-model), personality.md (core/surface, every trait cites the journal),
               goals.md, stats.md (written by the supervisor: achieved difficulty, where its goals
               came from, judged success, calibration, battery scores)
-memory/       journal.md (append-only), facts.md, people/, messages/, episodes/*.jsonl
+memory/       journal.md (append-only), facts.md, people/, messages/, episodes/*.jsonl,
+              verdicts-reviewed.md (when its last finished sleep read the judge's verdicts: the next
+              sleep is shown those judged since)
 inbox/        messages waiting for it (from you or other instances)
 notes/        its own work
 ```
