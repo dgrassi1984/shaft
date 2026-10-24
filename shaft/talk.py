@@ -75,7 +75,7 @@ def archive_read_inbox(state: State, entries: list[dict]) -> None:
         except OSError:
             continue
         reached = 0
-        for start, end in sorted(spans):
+        for start, end, _ in sorted(slice(start, end).indices(size) for start, end in spans):
             if start > reached:
                 break
             reached = max(reached, end)

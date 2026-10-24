@@ -47,15 +47,32 @@ def orphan_talks(state: State, include_open: bool = False) -> list[tuple[str, li
 def unwritten_context(state: State, operator: str, max_chars: int = 6000, exclude: str = "") -> str:
     """Transcripts of conversations still missing their journal entry (also ones going on elsewhere right
     now), newest last — so a conversation that starts before they are written up still remembers them."""
-    parts = []
+    return unwritten_transcripts(state, operator, max_chars, exclude)[0]
+
+
+def unwritten_transcripts(state: State, operator: str, max_chars: int = 6000,
+                          exclude: str = "") -> tuple[str, list[str]]:
+    """The displayed transcript and its turn texts, clipped at exactly the same boundary."""
+    text, spans = "", []
     for _, turns in [o for o in orphan_talks(state, include_open=True) if o[0] != exclude][-3:]:
-        lines = [f"{t.get('speaker') or operator if t['role'] == 'user' else 'me'}: {t['content']}" for t in turns]
-        parts.append(f"### Conversation {turns[0]['ts'][:16].replace('T', ' ')} (no journal entry yet)\n" + "\n".join(lines))
-    text = "\n\n".join(parts)
-    if len(text) <= max_chars:
-        return text
-    cut = text[-max_chars:]
-    return "[... earlier lines cut ...]\n" + cut[cut.find("\n") + 1:] if "\n" in cut else cut
+        if text:
+            text += "\n\n"
+        text += f"### Conversation {turns[0]['ts'][:16].replace('T', ' ')} (no journal entry yet)\n"
+        for i, turn in enumerate(turns):
+            if i:
+                text += "\n"
+            text += f"{turn.get('speaker') or operator if turn['role'] == 'user' else 'me'}: "
+            start = len(text)
+            text += turn["content"]
+            if turn["role"] in ("user", "assistant"):
+                spans.append((start, len(text)))
+    start, prefix = 0, ""
+    if len(text) > max_chars:
+        start = len(text) - max_chars
+        newline = text.find("\n", start)
+        if newline >= 0:
+            start, prefix = newline + 1, "[... earlier lines cut ...]\n"
+    return prefix + text[start:], [text[max(start, a):b] for a, b in spans if b > start]
 
 
 def run(cfg, state: State, client: Client) -> int:

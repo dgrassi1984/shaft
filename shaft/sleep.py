@@ -3,54 +3,104 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 
-from . import agent, broker, prompts, recovery
+from . import agent, broker, clock, memory, prompts, recovery
 from .llm import Client, LLMError
 from .state import State
 from .tools import Toolbox, for_log
 
 # When my last finished sleep read the judge's verdicts: the next one asks only for those judged since (A2).
 VERDICTS_REVIEWED = "memory/verdicts-reviewed.md"
-# With `since`, the record lists verdicts oldest first and, when it cuts, says where to go on from: the marker goes
-# there, not to now — or a night with more verdicts than fit would skip the rest for good.
-MORE_SINCE = re.compile(r"record\(kind='judgments', since='([^']+)'\)")
+
+
+def _since(state: State) -> str:
+    """Where this sleep's verdicts start: the marker; for my first sleep with it, my last sleep (what came since);
+    for a first sleep ever, the beginning. Starting at the beginning on an instance with hundreds of verdicts would
+    spend weeks of sleeps, 20 a night, on stale ones (REVIEW-autonomy A2)."""
+    path = state.root / VERDICTS_REVIEWED
+    if path.exists():
+        return state.read(path).strip()
+    for entry in reversed(state.journal_entries()):
+        title = entry.splitlines()[0].lstrip("# ").strip()
+        if title.partition(" — ")[2].startswith("Sleep"):
+            try:
+                return datetime.strptime(title[:16], "%Y-%m-%d %H:%M").strftime("%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                continue
+    return "1970-01-01 00:00:00"
+
+
+def _verdicts(raw: str) -> dict:
+    data = json.loads(raw)
+    if (not isinstance(data, dict) or not isinstance(data.get("text"), str)
+            or not isinstance(data.get("verdicts"), list) or not isinstance(data.get("left_out"), list)
+            or "next_since" not in data
+            or data["next_since"] is not None and not isinstance(data["next_since"], str)
+            or any(not isinstance(row, dict) or not isinstance(row.get("episode_ts"), str)
+                   or not isinstance(row.get("reviewed_at"), str) for row in data["verdicts"])
+            or any(not isinstance(ts, str) for ts in data["left_out"])):
+        raise ValueError("invalid judgments response")
+    return data
+
+
+def _shingles(text: str) -> set[tuple[str, ...]]:
+    words = re.findall(r"\w+", text.lower())
+    return {tuple(words[i:i + 8]) for i in range(len(words) - 7)}
 
 
 def run(cfg, state: State, client: Client) -> str:
-    marker = state.read(state.root / VERDICTS_REVIEWED).strip()
+    since = _since(state)
     fetched = None
     verdicts = "The supervisor's record could not be read: no broker available."
     if broker.available():
-        fetched = prompts.now().strftime("%Y-%m-%d %H:%M:%S")
         try:
-            verdicts = broker.call("record", kind="judgments", limit=20, **({"since": marker} if marker else {}))
-        except broker.BrokerError as e:
+            fetched = _verdicts(broker.call("record", kind="judgments", limit=20, since=since, format="json"))
+            verdicts = fetched["text"]
+        except (broker.BrokerError, ValueError, TypeError) as e:
             verdicts = f"The supervisor's record could not be read: {' '.join(str(e).split())}"
-            fetched = None
+    unwritten, turns = recovery.unwritten_transcripts(
+        state, cfg.OPERATOR_NAME, max_chars=recovery.AUTONOMOUS_CONTEXT_CHARS)
+    shingles = set().union(*(_shingles(text) for text in turns))
     toolbox = Toolbox(state.root)
     toolbox.remote = {name: spec for name, spec in toolbox.remote.items() if name in ("record", "history")}
     toolbox.plugins = {}
     real_run = toolbox.run
 
     def gated_run(name: str, raw_args: str) -> str:
-        if name == "history":
+        try:
+            args = json.loads(raw_args or "{}")
+        except ValueError:
+            return real_run(name, raw_args)
+        if not isinstance(args, dict):
+            return real_run(name, raw_args)
+        refusal = ""
+        if name == "history" and args.get("save_as"):
+            refusal = "ERROR: history is read-only during sleep; save_as writes a file"
+        guarded = name in {"remember", "rewrite_facts", "write_digest", "update_personality", "update_self_model"}
+        if name in ("write_file", "append_file") and isinstance(args.get("path"), str):
             try:
-                args = json.loads(raw_args or "{}")
-            except ValueError:
+                path = (toolbox.root / args["path"]).resolve()
+            except (OSError, ValueError, RuntimeError):
                 return real_run(name, raw_args)
-            if isinstance(args, dict) and args.get("save_as"):
-                refusal = "ERROR: history is read-only during sleep; save_as writes a file"
-                toolbox.log.append({"tool": name, "args": for_log(raw_args), "result": refusal})
-                return refusal
+            guarded = any(toolbox.root / folder in path.parents for folder in ("memory", "self"))
+        if guarded and any(shingles & _shingles(value) for key, value in args.items()
+                           if key != "path" and isinstance(value, str)):
+            refusal = ("ERROR: open-conversation transcripts are awareness only during sleep; "
+                       "consolidate them in a later sleep after they are written up")
+        if refusal:
+            toolbox.log.append({"tool": name, "args": for_log(raw_args), "result": refusal})
+            return refusal
         return real_run(name, raw_args)
     toolbox.run = gated_run
 
     operator_file = cfg.OPERATOR_NAME.lower().replace(" ", "-")
     system = prompts.system_prompt(state, cfg, prompts.SLEEP_MODE, toolbox.describe())
-    unwritten = recovery.unwritten_context(state, cfg.OPERATOR_NAME, max_chars=recovery.AUTONOMOUS_CONTEXT_CHARS)
     if unwritten:
         system += ("\n\n## Recent conversations I have not written up yet (transcripts)\n\n"
-                   "These may still be going on; they will be written up when they end.\n\n" + unwritten)
+                   "These conversations are still going on. Awareness only: do not consolidate them with remember, "
+                   "rewrite_facts, write_digest, update_personality, update_self_model or memory/people writes. "
+                   "A later sleep will consolidate them after they are written up.\n\n" + unwritten)
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": prompts.SLEEP.format(operator=cfg.OPERATOR_NAME, operator_file=operator_file)
@@ -77,8 +127,18 @@ def run(cfg, state: State, client: Client) -> str:
     state.append_episode({"kind": "sleep", "ended_by": outcome.ended_by, "tools": toolbox.log,
                           "content": outcome.reply.content})
     if fetched is not None:
-        more = MORE_SINCE.search(verdicts)
-        (state.root / VERDICTS_REVIEWED).write_text((more.group(1) if more else fetched) + "\n")
+        known = {(row["episode_ts"], row.get("reviewed_at")) for row in memory.verdict_rows(state.root)}
+        received = clock.now().isoformat(timespec="seconds")
+        rows = [{**row, "received_at": received} for row in fetched["verdicts"]]
+        rows += [{"episode_ts": ts, "left_out": True} for ts in fetched["left_out"]]
+        with (state.root / memory.VERDICTS).open("a") as f:
+            for row in rows:
+                key = (row["episode_ts"], row.get("reviewed_at"))
+                if key not in known:
+                    f.write(json.dumps(row, ensure_ascii=False) + "\n")
+                    known.add(key)
+        (state.root / VERDICTS_REVIEWED).write_text(
+            (fetched["next_since"] if fetched["next_since"] is not None else since) + "\n")
     return entry
 
 

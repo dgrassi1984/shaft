@@ -7,9 +7,8 @@ predict my own success (calibration) and have a judge check my claim.
 from __future__ import annotations
 
 import shutil
-from datetime import datetime
 
-from . import agent, broker, images, memory, pausing, prompts, recovery
+from . import agent, broker, clock, images, memory, pausing, prompts, recovery
 from .agent import Control
 from .llm import Client
 from .state import State
@@ -62,7 +61,7 @@ def run(cfg, state: State, client: Client) -> str:
         record["intent"] = {"goal": args["goal"], "success_criterion": args["success_criterion"],
                             "confidence": conf, "confidence_of": CONFIDENCE_OF,
                             "origin": origin, "origin_ref": ref,
-                            "at": datetime.now().isoformat(timespec="seconds")}
+                            "at": clock.now().isoformat(timespec="seconds")}
         return "intent recorded — now act"
 
     def finish(args: dict) -> str:   # allowed without an intent: a report beats silence (judged 'no')

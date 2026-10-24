@@ -13,7 +13,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from . import broker, images, memory, personality, selfedit
+from . import broker, clock, images, memory, personality, selfedit
 
 MAX_RESULT_CHARS = 6000
 # My tool log is what the judge grades my cycles from: it keeps what I saw. It was once cut at 2,000
@@ -284,7 +284,7 @@ class Toolbox:
         if not facts.exists():
             facts.write_text("# Facts I have learned\n\n")
         with facts.open("a") as f:
-            f.write(f"- [{datetime.now():%Y-%m-%d %H:%M}] {fact.strip()}\n")
+            f.write(f"- [{clock.now():%Y-%m-%d %H:%M}] {fact.strip()}\n")
         return "remembered"
 
     def _t_rewrite_facts(self, facts: str) -> str:
@@ -301,7 +301,7 @@ class Toolbox:
         dropped = [l for l in old if l not in set(lines)]
         if dropped:
             with (self.root / "memory" / "facts-archive.md").open("a") as f:
-                f.write(f"\n## Dropped in consolidation, {datetime.now():%Y-%m-%d %H:%M}\n\n" + "\n".join(dropped) + "\n")
+                f.write(f"\n## Dropped in consolidation, {clock.now():%Y-%m-%d %H:%M}\n\n" + "\n".join(dropped) + "\n")
         path.write_text("# Facts I have learned\n\n" + text + "\n")
         return f"facts consolidated: {len(old)} -> {len(lines)} ({len(dropped)} archived in memory/facts-archive.md)"
 
@@ -312,7 +312,7 @@ class Toolbox:
         if len(text) > DIGEST_MAX_CHARS:
             return f"ERROR: {len(text)} characters; a digest is at most {DIGEST_MAX_CHARS}"
         with (self.root / "memory" / "digests.md").open("a") as f:
-            f.write(f"\n## {datetime.now():%Y-%m-%d %H:%M} — digest\n\n{text}\n")
+            f.write(f"\n## {clock.now():%Y-%m-%d %H:%M} — digest\n\n{text}\n")
         return "digest written"
 
     def _t_update_self_model(self, text: str) -> str:

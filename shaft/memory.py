@@ -21,6 +21,8 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
+VERDICTS = "memory/verdicts.jsonl"   # the judge's verdicts, as my sleeps received them
+
 WORD = re.compile(r"[a-zA-ZÀ-ÿ0-9]{2,}")
 STOP = set("the and for that this with you are was have not but from they his her she him its our "
            "what when who will would there their about which into can all one had has were been "
@@ -55,6 +57,21 @@ def _chunks(text: str) -> list[str]:
     return [c.strip() for c in out if c.strip()]
 
 
+def verdict_rows(root: Path) -> list[dict]:
+    """The judge's verdicts my sleeps received from the supervisor's record (memory/verdicts.jsonl, appended by
+    sleep.py): joined to my cycles by their time, so a recalled cycle carries the judge's word, not mine (A3)."""
+    path = root / VERDICTS
+    rows = []
+    for line in path.read_text().splitlines() if path.exists() else []:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and isinstance(row.get("episode_ts"), str):
+            rows.append(row)
+    return rows
+
+
 def corpus(root: Path) -> list[tuple[str, str]]:
     docs: list[tuple[str, str]] = []
     journal = root / "memory" / "journal.md"
@@ -80,6 +97,7 @@ def corpus(root: Path) -> list[tuple[str, str]]:
         for path in sorted(base.rglob("*.md")) if base.is_dir() else []:
             for chunk in _chunks(path.read_text(errors="replace")):
                 docs.append((path.relative_to(root).as_posix(), chunk))
+    verdicts = {row["episode_ts"]: row for row in verdict_rows(root)}
     episodes = root / "memory" / "episodes"
     for path in sorted(episodes.glob("*.jsonl")) if episodes.is_dir() else []:
         for line in path.read_text().splitlines():
@@ -92,10 +110,21 @@ def corpus(root: Path) -> list[tuple[str, str]]:
                 docs.append((f"conversation {rec.get('ts', '')} ({who})", rec["content"][:CHUNK * 2]))
             elif rec.get("kind") == "live":
                 # Never re-index finish.what_happened or finish.learned: my prose can repeat confabulation.
-                intent, finish = rec.get("intent") or {}, rec.get("finish") or {}
+                intent = rec.get("intent") or {}
+                verdict = verdicts.get(rec.get("ts"))
+                judged = "Not judged yet"
+                if verdict:
+                    if verdict.get("left_out"):
+                        judged = "Not judged: left out by the judge's sampling"
+                    else:
+                        judged = (f"Judge: criterion met {verdict.get('criterion_met')}; "
+                                  f"claim supported {verdict.get('claim_supported')}; "
+                                  f"failure: {verdict.get('failure_mode')}")
+                        if verdict.get("second_criterion_met") is not None:
+                            judged += f"; second judge: {verdict['second_criterion_met']}"
                 lines = [f"Goal: {str(intent.get('goal', ''))[:400]}",
                          f"Success criterion: {str(intent.get('success_criterion', ''))[:400]}",
-                         f"Criterion met (my own claim): {finish.get('criterion_met', 'not reported')}",
+                         judged,
                          f"Ended by: {rec.get('ended_by', '')}; steps: {rec.get('steps', '')}"]
                 for entry in rec.get("tools", []):
                     result = str(entry.get("result", ""))
