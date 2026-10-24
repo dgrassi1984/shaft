@@ -52,7 +52,10 @@ def unwritten_context(state: State, operator: str, max_chars: int = 6000, exclud
         lines = [f"{t.get('speaker') or operator if t['role'] == 'user' else 'me'}: {t['content']}" for t in turns]
         parts.append(f"### Conversation {turns[0]['ts'][:16].replace('T', ' ')} (no journal entry yet)\n" + "\n".join(lines))
     text = "\n\n".join(parts)
-    return text[-max_chars:] if text else ""
+    if len(text) <= max_chars:
+        return text
+    cut = text[-max_chars:]
+    return "[... earlier lines cut ...]\n" + cut[cut.find("\n") + 1:] if "\n" in cut else cut
 
 
 def run(cfg, state: State, client: Client) -> int:

@@ -11,6 +11,9 @@ from .tools import Toolbox, for_log
 
 # When my last finished sleep read the judge's verdicts: the next one asks only for those judged since (A2).
 VERDICTS_REVIEWED = "memory/verdicts-reviewed.md"
+# With `since`, the record lists verdicts oldest first and, when it cuts, says where to go on from: the marker goes
+# there, not to now — or a night with more verdicts than fit would skip the rest for good.
+MORE_SINCE = re.compile(r"record\(kind='judgments', since='([^']+)'\)")
 
 
 def run(cfg, state: State, client: Client) -> str:
@@ -74,7 +77,8 @@ def run(cfg, state: State, client: Client) -> str:
     state.append_episode({"kind": "sleep", "ended_by": outcome.ended_by, "tools": toolbox.log,
                           "content": outcome.reply.content})
     if fetched is not None:
-        (state.root / VERDICTS_REVIEWED).write_text(fetched + "\n")
+        more = MORE_SINCE.search(verdicts)
+        (state.root / VERDICTS_REVIEWED).write_text((more.group(1) if more else fetched) + "\n")
     return entry
 
 

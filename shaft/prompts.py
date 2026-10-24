@@ -16,9 +16,11 @@ def now() -> datetime:
     """The time as my prompts state it. A trial replay sets SHAFT_NOW to its cycle's start (PLAN-trials F3): it then
     runs from there, while the supervisor's record is cut at that moment too."""
     try:
-        return datetime.fromisoformat(os.environ.get("SHAFT_NOW", "")) + timedelta(seconds=time.monotonic() - STARTED)
+        at = datetime.fromisoformat(os.environ.get("SHAFT_NOW", ""))
     except ValueError:
         return datetime.now()
+    at = at.astimezone().replace(tzinfo=None) if at.tzinfo else at   # naive local, as the journal's times are
+    return at + timedelta(seconds=time.monotonic() - STARTED)
 
 
 def envelope_text(env: dict | None, left_s: float | None) -> str:
@@ -37,16 +39,23 @@ def envelope_text(env: dict | None, left_s: float | None) -> str:
         lines.append("This is a replay; daily allowances are not shown.")
     else:
         for key, label in (("cloud", "Cloud model"), ("coder", "Coder")):
-            if env.get(key) is not None:
-                budget = env[key]
+            budget = env.get(key)
+            try:
                 lines.append(f"{label} today: ${budget['spent_usd']:.2f} of ${budget['cap_usd']:.2f}.")
-        if env.get("trials") is not None:
-            trials = env["trials"]
+            except (KeyError, TypeError, ValueError):   # null (not mine this run) or not as expected
+                pass
+        trials = env.get("trials")
+        try:
             lines.append(f"Trials today: {trials['started']} of {trials['per_day']} started, "
                          f"${trials['spent_usd']:.2f} of ${trials['cap_usd']:.2f}.")
+        except (KeyError, TypeError, ValueError):
+            pass
     for change in env.get("probation") or []:
-        lines.append(f"On probation: change {change['commit'][:8]} ({', '.join(change['files'])}): "
-                     f"{change['cycles_used']} of {change['cycles_needed']} judged cycles that used it.")
+        try:
+            lines.append(f"On probation: change {str(change['commit'])[:8]} ({', '.join(map(str, change['files']))}): "
+                         f"{change['cycles_used']} of {change['cycles_needed']} judged cycles that used it.")
+        except (KeyError, TypeError):
+            pass
     if env.get("next_sleep") is not None:
         lines.append(f"Next sleep: {env['next_sleep']}.")
     if env.get("next_wake") is not None:

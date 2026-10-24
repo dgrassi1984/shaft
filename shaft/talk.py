@@ -23,7 +23,7 @@ from . import agent, images, memory, prompts, recovery
 from .llm import Client, LLMError
 from .live import archive_inbox
 from .state import State
-from .tools import Toolbox
+from .tools import MAX_RESULT_CHARS, Toolbox
 from .ui import Status
 
 DIM, RED, CYAN, RESET = "\033[2m", "\033[31m", "\033[36m", "\033[0m"
@@ -54,18 +54,33 @@ def _brief(args: str, n: int) -> str:
 def archive_read_inbox(state: State, entries: list[dict]) -> None:
     """Inbox messages I read in a reply are handled there: archived like a cycle's (live.archive_inbox), or
     the next cycle showed them again as new (REVIEW-autonomy A6). Archived on reading, not by a tool I must
-    remember to call; a reply that was discarded handled nothing."""
-    names = []
+    remember to call; a reply that was discarded handled nothing, and a message read only in part (read_file shows
+    MAX_RESULT_CHARS from its offset) is not handled either."""
+    seen: dict[str, list[tuple[int, int]]] = {}
     for entry in entries:
         result = str(entry.get("result", ""))
         if entry.get("tool") != "read_file" or result.startswith("ERROR") or result == agent.NOT_RUN:
             continue
         try:
-            path = json.loads(entry.get("args") or "{}").get("path", "")
-        except (ValueError, AttributeError):
+            args = json.loads(entry.get("args") or "{}")
+            path, offset = args.get("path", ""), int(args.get("offset") or 0)
+        except (ValueError, TypeError, AttributeError):
             continue
         if isinstance(path, str) and re.fullmatch(r"inbox/[^/]+\.md", path):
-            names.append(path.removeprefix("inbox/"))
+            seen.setdefault(path.removeprefix("inbox/"), []).append((offset, offset + MAX_RESULT_CHARS))
+    names = []
+    for name, spans in seen.items():
+        try:
+            size = len((state.root / "inbox" / name).read_text(errors="replace"))
+        except OSError:
+            continue
+        reached = 0
+        for start, end in sorted(spans):
+            if start > reached:
+                break
+            reached = max(reached, end)
+        if reached >= size:
+            names.append(name)
     if names:
         archive_inbox(state, names)
 
