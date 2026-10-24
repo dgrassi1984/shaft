@@ -216,9 +216,9 @@ def judgments(name: str, sup: Path | None = None) -> list[dict]:
     p = sup / "judgments" / f"{name}.jsonl"
     rows = [json.loads(l) for l in p.read_text().splitlines() if l.strip()] if p.exists() else []
     missing = [r for r in rows if "confidence_of" not in r
-               and r.get("judged_at", "") >= CONFIDENCE_BACKFILL_DATE]
-    if missing:
-        intents = {ep["ts"]: ep.get("intent") or {} for ep in live_episodes(name)}
+               and r.get("judged_at", "") >= CONFIDENCE_BACKFILL_DATE] if sup == SUP_DIR else []
+    if missing:   # the instance's own episodes are the live ones: only for the supervisor's own record
+        intents = _confidence_questions(name)
         for r in missing:
             intent = intents.get(r["episode_ts"], {})
             if "confidence_of" in intent:
@@ -234,6 +234,20 @@ def judgments(name: str, sup: Path | None = None) -> list[dict]:
             if j["episode_ts"] in seconds and "second" not in j:
                 j["second"] = seconds[j["episode_ts"]]
     return rows
+
+
+_QUESTIONS: dict[str, tuple] = {}
+
+
+def _confidence_questions(name: str) -> dict[str, dict]:
+    """Each live episode's intent by its time, re-read only when an episode file changed: rows the supervisor judged
+    before it copied confidence_of stay without it in the file, and judgments() is read every step (the envelope's
+    probation) — it must not re-read every episode each time (Grok's review)."""
+    files = sorted((INSTANCES / name / "memory" / "episodes").glob("*.jsonl"))
+    key = tuple((f.name, f.stat().st_size) for f in files)
+    if _QUESTIONS.get(name, (None,))[0] != key:
+        _QUESTIONS[name] = (key, {ep["ts"]: ep.get("intent") or {} for ep in live_episodes(name)})
+    return _QUESTIONS[name][1]
 
 
 def live_episodes(name: str) -> list[dict]:

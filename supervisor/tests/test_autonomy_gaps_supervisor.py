@@ -483,6 +483,12 @@ class ReplayLedgerTest(unittest.TestCase):
 
 
 class ConfidenceBackfillTest(unittest.TestCase):
+    """A4 (REVIEW-autonomy-2026-10-24, Codex's review): the template may be deployed before the supervisor."""
+
+    def setUp(self):
+        metrics._QUESTIONS.clear()
+        self.addCleanup(metrics._QUESTIONS.clear)
+
     def test_backfill_date_missing_key_and_single_episode_read(self):
         rows = [judgment("old", "2026-10-23T23:59:59", "old"),
                 judgment("boundary", "2026-10-24T00:00:00", "new"),
@@ -495,6 +501,9 @@ class ConfidenceBackfillTest(unittest.TestCase):
             original = "".join(json.dumps(r) + "\n" for r in rows)
             path.write_text(original)
             episodes = [{"ts": r["episode_ts"], "intent": {"confidence_of": metrics.CONFIDENCE_V2}} for r in rows[:3]]
+            sup = mock.patch.object(metrics, "SUP_DIR", root)
+            sup.start()
+            self.addCleanup(sup.stop)
             with mock.patch.object(metrics, "live_episodes", return_value=episodes) as read:
                 result = metrics.judgments("x", root)
                 read.assert_called_once_with("x")
@@ -503,9 +512,23 @@ class ConfidenceBackfillTest(unittest.TestCase):
             self.assertIsNone(result[2]["confidence_of"])
             self.assertNotIn("confidence_of", result[3])
             self.assertEqual(path.read_text(), original)
+            with mock.patch.object(metrics, "live_episodes") as read:   # Grok's review: not re-read every call
+                self.assertEqual(metrics.judgments("x", root)[1]["confidence_of"], metrics.CONFIDENCE_V2)
+                read.assert_not_called()
             path.write_text(json.dumps(rows[0]) + "\n" + json.dumps(rows[2]))
+            metrics._QUESTIONS.clear()
             with mock.patch.object(metrics, "live_episodes") as read:
                 metrics.judgments("x", root)
+                read.assert_not_called()
+
+    def test_no_backfill_from_live_episodes_for_another_record(self):
+        # Grok's review: a record in another directory must not take the live instance's intents.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "judgments").mkdir()
+            (root / "judgments" / "x.jsonl").write_text(json.dumps(judgment("g", "2026-10-24T01:00:00", "e")) + "\n")
+            with mock.patch.object(metrics, "live_episodes") as read:
+                self.assertNotIn("confidence_of", metrics.judgments("x", root)[0])
                 read.assert_not_called()
 
 
@@ -535,7 +558,8 @@ class OldTemplateCompatibilityTest(unittest.TestCase):
             rows = [judgment("old", "2026-10-23T23:00:00", "old"),
                     judgment("new", "2026-10-24T00:00:00", "new")]
             (root / "judgments" / "x.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
-            with mock.patch.object(metrics, "live_episodes", return_value=[
+            metrics._QUESTIONS.clear()
+            with mock.patch.object(metrics, "SUP_DIR", root), mock.patch.object(metrics, "live_episodes", return_value=[
                     {"ts": "old", "intent": {"confidence": 50}}, {"ts": "new", "intent": {"confidence": 50}}]):
                 loaded = metrics.judgments("x", root)
             self.assertEqual(loaded, rows)

@@ -130,6 +130,21 @@ class SleepOpenTalkGuardTest(InstanceFixture, unittest.TestCase):
         self.assertFalse((self.root / "memory/people/the-operator.md").exists())
         self.assertIn("Awareness only", fake.requests[0]["messages"][0]["content"])
 
+    def test_consolidating_facts_may_keep_an_old_fact_that_overlaps(self):
+        # Grok's review of round 2: rewrite_facts resubmits every fact it keeps; an old one sharing eight words with
+        # an open conversation refused the whole consolidation. Only the lines a write adds are checked.
+        old = "- [2026-09-01 10:00] The orchard survey waits until the ground is dry enough to walk"
+        (self.root / "memory/facts.md").write_text("# Facts I have learned\n\n" + old + "\n")
+        self.state.append_episode({"kind": "talk", "talk_id": "open", "role": "user",
+                                   "content": "Remember the orchard survey waits until the ground is dry enough to walk"})
+        self.state.append_episode({"kind": "talk", "talk_id": "open", "role": "assistant", "content": "Yes."})
+        merged = old + "\n- [2026-09-02 10:00] Bees swarm in May"
+        fake, client = self.model([{"tool_calls": [("rewrite_facts", {"facts": merged})]}, {"content": "Done."}])
+        with mock.patch.dict(os.environ, {"SHAFT_OPEN_TALKS": "open"}):
+            sleep.run(self.cfg, self.state, client)
+        self.assertTrue(self.state.last_episode()["tools"][0]["result"].startswith("facts consolidated"))
+        self.assertIn("Bees swarm", (self.root / "memory/facts.md").read_text())
+
 
 class SleepRecordTest(InstanceFixture, unittest.TestCase):
     """A2 (REVIEW-autonomy-2026-10-24): sleep lacks read-only access to judged outcomes."""
@@ -187,12 +202,17 @@ class SleepRecordTest(InstanceFixture, unittest.TestCase):
                                                                 since=initial or "1970-01-01 00:00:00", format="json"))
                     self.assertIn("VERDICT: reviewed orchard", fake.requests[0]["messages"][1]["content"])
 
-    def test_bad_record_answer_leaves_marker_and_verdicts_alone(self):
-        self.fake_broker(lambda name, **args: "not json")
-        fake, client = self.model([{"content": "Reviewed."}])
-        sleep.run(self.cfg, self.state, client)
-        self.assertIn("could not be read", fake.requests[0]["messages"][1]["content"])
-        self.assertFalse((self.root / sleep.VERDICTS_REVIEWED).exists())
+    def test_a_finished_sleep_that_could_not_read_the_record_keeps_its_start(self):
+        # Grok's review of round 2: it wrote no marker, so the next sleep started from this sleep's journal entry
+        # and never asked for the verdicts in between. It now keeps the since it used, and stores nothing else.
+        self.state.append_journal("Sleep", "Rested.", when=datetime(2026, 10, 1, 3, 0))
+        calls = self.fake_broker(lambda name, **args: "not json")
+        for _ in range(2):
+            fake, client = self.model([{"content": "Reviewed."}])
+            sleep.run(self.cfg, self.state, client)
+            self.assertIn("could not be read", fake.requests[0]["messages"][1]["content"])
+        self.assertEqual([c.kwargs["since"] for c in calls.call_args_list], ["2026-10-01 03:00:00"] * 2)
+        self.assertEqual((self.root / sleep.VERDICTS_REVIEWED).read_text(), "2026-10-01 03:00:00\n")
         self.assertFalse((self.root / memory.VERDICTS).exists())
 
 
