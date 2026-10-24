@@ -462,7 +462,9 @@
         }
       }
       if (r.ok && form.dataset.after === "doc-saved") docSaved(form, r.headers.get("X-Doc"), typed, now);
-      if (r.ok && form.dataset.after === "doc-deleted") docsList();
+      if (r.ok && form.dataset.after === "doc-deleted") {   // back to the folder it was in
+        docsList(form.querySelector("input[name=path]").value.split("/").slice(0, -1).join("/"));
+      }
       if (r.ok && form.dataset.after === "comment-saved") refreshDocs();
       if (r.ok && mid && mid.value === sentMid) mid.value = "";               // sent: the next message gets an id of its own
       if (r.ok && shown) shown.dataset.done = "1";   // goes when the feed brings the turn as the server saved it
@@ -1137,13 +1139,15 @@
   // The documents panel (docs/plans/PLAN-webui-chat §3): a card in a reply or a name in its list opens that document in the
   // panel, which then refreshes it as the instance writes it; the address keeps ?doc= so a reload shows the same one.
   // What the panel polls for: one document (?doc=), or the list (?list=1: without it the server opens what this chat
-  // last changed, so ← Documents would bounce straight back to it), or a text file the instance sent (?att=).
-  function docsPoll(panel, doc, thread = "", att = "") {
+  // last changed, so ← Documents would bounce straight back to it) of a folder (?dir=, none for notes/docs/ itself), or a
+  // text file the instance sent (?att=).
+  function docsPoll(panel, doc, thread = "", att = "", dir = "") {
     const poll = new URL(panel.dataset.poll, location.href);
-    for (const k of ["doc", "thread", "list", "att"]) poll.searchParams.delete(k);
+    for (const k of ["doc", "thread", "list", "att", "dir"]) poll.searchParams.delete(k);
     if (att) poll.searchParams.set("att", att);
     else poll.searchParams.set(doc ? "doc" : "list", doc || "1");
     if (doc && thread) poll.searchParams.set("thread", thread);
+    if (!doc && !att && dir) poll.searchParams.set("dir", dir);
     panel.dataset.poll = poll.pathname + poll.search;
   }
   function docDirty(view) {
@@ -1216,16 +1220,18 @@
     form.appendChild(prompt);
     prompt.lastElementChild.focus();
   }
-  function docsList() {
+  function docsList(dir = "") {
     const panel = document.getElementById("docs");
     if (!panel) return;
     const view = panel.querySelector(".docview.editing");
     if (view) editing(view, false);                 // polling resumes only after the editor lets go
-    docsPoll(panel, "");
+    docsPoll(panel, "", "", "", dir);
     const u = new URL(location.href);
     u.searchParams.delete("doc");
     u.searchParams.delete("thread");
     u.searchParams.delete("att");
+    if (dir) u.searchParams.set("dir", dir);
+    else u.searchParams.delete("dir");
     history.replaceState(null, "", u);
     refreshDocs();
   }
@@ -1239,7 +1245,15 @@
       if (view.querySelector("form.docedit").dataset.busy) return;
       clearDocDraft(view.querySelector("form.docedit"));
     }
-    docsList();
+    docsList(b.dataset.dir || "");                  // the open document's folder, or the folder above this one
+  });
+  // A folder in the list, or a step of its path above it, lists that folder.
+  document.addEventListener("click", (ev) => {
+    const a = ev.target.closest && ev.target.closest("[data-open-dir]");
+    if (!a || !document.getElementById("docs") || ev.metaKey || ev.ctrlKey) return;
+    ev.preventDefault();
+    showDocs(true, a);
+    docsList(a.dataset.openDir);
   });
   document.addEventListener("click", (ev) => {
     const a = ev.target.closest && ev.target.closest("[data-open-doc]");
@@ -1254,6 +1268,7 @@
       docsPoll(panel, doc, a.dataset.openThread);
       const u = new URL(location.href);
       u.searchParams.delete("att");
+      u.searchParams.delete("dir");                 // its folder is in its path
       u.searchParams.set("doc", doc);
       if (a.dataset.openThread) u.searchParams.set("thread", a.dataset.openThread);
       else u.searchParams.delete("thread");
@@ -1276,6 +1291,7 @@
       const u = new URL(location.href);
       u.searchParams.delete("doc");
       u.searchParams.delete("thread");
+      u.searchParams.delete("dir");
       u.searchParams.set("att", att);
       history.replaceState(null, "", u);
       showDocs(true, a);
@@ -1325,6 +1341,14 @@
     }
     if (panel && doc) {
       docsPoll(panel, doc);
+      if (!view) {                                  // a new document: the address opens it, not the folder it is in
+        const field = document.activeElement;       // its name, still focused, held the panel (busyIn): it never
+        if (field && form.contains(field)) field.blur();   // showed the new document until you clicked elsewhere
+        const u = new URL(location.href);
+        u.searchParams.delete("dir");
+        u.searchParams.set("doc", doc);
+        history.replaceState(null, "", u);
+      }
     }
     if (panel && panel._tick) panel._tick();
   }
@@ -1527,7 +1551,7 @@
     if (grid) {
       document.body.classList.add("chatapp");
       const asked = new URL(location.href).searchParams;
-      if (asked.get("doc") || asked.get("att")) showDocs(true);
+      if (asked.get("doc") || asked.get("att") || asked.get("dir")) showDocs(true);
       else {
         try { if (localStorage.getItem("shaft.docs.closed")) grid.classList.add("hidedocs"); } catch (e) { /* none */ }
         syncSheets();

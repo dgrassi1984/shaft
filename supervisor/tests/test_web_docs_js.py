@@ -89,17 +89,60 @@ const click = async (selector, button) => {
     querySelector: () => view, _tick() { ticks++; } };
   elements.docs = panel;
   queries["#docs .docview.editing"] = view;
-  await click("[data-back-docs]", {});
+  await click("[data-back-docs]", { dataset: {} });
   assert.equal(asked, "Drop your changes?");
   assert.equal(ticks, 0);
   assert.equal(replaced, "");
   allow = true;
-  await click("[data-back-docs]", {});
+  await click("[data-back-docs]", { dataset: {} });
   assert.equal(ticks, 1);
   assert.equal(panel.dataset.poll, "/fragment/docs/wren?id=archive&list=1");   // not bounced back to it
   assert.equal(replaced, "https://shaft.test/i/wren/chat?id=archive");
   assert.equal(panel.dataset.etag, undefined);
   assert.equal(form.hidden, true);
+})().catch(e => { console.error(e); process.exitCode = 1; });
+"""
+        result = subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_folders_open_go_up_and_a_document_goes_back_to_its_folder(self):
+        """Subfolder navigation: a folder (or a step of its path) lists it, ?dir= keeps the place on reload, ← goes to
+        the folder above or the open document's own folder, and opening a document drops ?dir= (its path says it)."""
+        script = r"""
+const fs = require("node:fs"), vm = require("node:vm"), assert = require("node:assert/strict");
+const handlers = {};
+let replaced = "", prevented = 0, ticks = 0;
+const panel = { dataset: { poll: "/fragment/docs/wren?list=1" }, querySelector: () => null, _tick() { ticks++; } };
+const document = { readyState: "loading", addEventListener(k, fn) { (handlers[k] ||= []).push(fn); },
+  querySelector: () => null, querySelectorAll: () => [], getElementById: id => id === "docs" ? panel : null };
+const location = { href: "https://shaft.test/i/wren/chat" };
+vm.runInNewContext(fs.readFileSync(process.argv[1], "utf8"), { document, URL, setInterval() {}, setTimeout() {},
+  location, navigator: {}, history: { replaceState(a, b, u) { replaced = location.href = String(u); } },
+  window: { addEventListener() {}, confirm: () => true } });
+const click = async (selector, el, extra = {}) => {
+  const target = { closest: q => q === selector ? el : null };
+  for (const fn of handlers.click) await fn({ target, preventDefault() { prevented++; }, ...extra });
+};
+(async () => {
+  await click("[data-open-dir]", { dataset: { openDir: "ucg/sub" } });
+  assert.equal(panel.dataset.poll, "/fragment/docs/wren?list=1&dir=ucg%2Fsub");
+  assert.equal(replaced, "https://shaft.test/i/wren/chat?dir=ucg%2Fsub");
+  assert.equal(prevented, 1);
+  await click("[data-back-docs]", { dataset: { dir: "ucg" } });               // ← up one level
+  assert.equal(panel.dataset.poll, "/fragment/docs/wren?list=1&dir=ucg");
+  assert.equal(replaced, "https://shaft.test/i/wren/chat?dir=ucg");
+  await click("[data-open-doc]", { dataset: { openDoc: "ucg/a.md" } });
+  assert.equal(panel.dataset.poll, "/fragment/docs/wren?doc=ucg%2Fa.md");
+  assert.equal(replaced, "https://shaft.test/i/wren/chat?doc=ucg%2Fa.md");     // no stale ?dir=
+  await click("[data-back-docs]", { dataset: { dir: "ucg" } });               // ← from the document: its folder
+  assert.equal(panel.dataset.poll, "/fragment/docs/wren?list=1&dir=ucg");
+  await click("[data-open-dir]", { dataset: { openDir: "" } });               // Documents: the top, no ?dir=
+  assert.equal(panel.dataset.poll, "/fragment/docs/wren?list=1");
+  assert.equal(replaced, "https://shaft.test/i/wren/chat");
+  const before = prevented;
+  await click("[data-open-dir]", { dataset: { openDir: "ucg" } }, { metaKey: true });   // ⌘-click: a new tab
+  assert.equal(prevented, before);
+  assert.equal(panel.dataset.poll, "/fragment/docs/wren?list=1");
 })().catch(e => { console.error(e); process.exitCode = 1; });
 """
         result = subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=10)
@@ -159,6 +202,20 @@ function unload(){let prevented=false;if(win.beforeunload) win.beforeunload({pre
 """
         result = subprocess.run([NODE, '-e', script, str(JS)], capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_a_new_document_opens_once_created(self):
+        """Found in the click-through: Create left focus in the name field, and a refresh never replaces a panel with a
+        field being typed in (busyIn), so the new document showed only after a click elsewhere. And the address left
+        ?dir= behind: a reload went back to the folder instead of the document."""
+        self.run_editor(r"""
+const name={blur(){document.activeElement=null;this.blurred=true;}};
+form.closest=()=>null; form.contains=el=>el===name; document.activeElement=name;
+url=context.location.href='https://shaft.test/i/wren/chat?dir=ucg';
+pending=submit(); await answer();
+assert.equal(name.blurred,true);
+assert.equal(url,'https://shaft.test/i/wren/chat?doc=p.md');
+assert.equal(panel.dataset.poll,'/fragment/docs/wren?doc=p.md');
+""")
 
     def test_issue_22_typing_during_save(self):
         """Reverting #22 closes the editor and loses text typed during Save."""

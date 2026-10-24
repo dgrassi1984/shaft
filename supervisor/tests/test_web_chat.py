@@ -602,7 +602,7 @@ class DocsPanelTest(ChatRoutesTest):
         (self.docs / "other.md").write_text("x")
         body = self.req("/fragment/docs/wren?doc=plan.md", cookie=self.cookie).body.decode()
         self.assertNotIn('class="doclist"', body)
-        self.assertIn('data-back-docs aria-label="Back to the documents"', body)
+        self.assertIn('data-back-docs data-dir="" aria-label="Back to the documents"', body)
         self.assertIn('<div class="docview" data-doc="plan.md"', body)
         self.assertIn("<b>step</b>", body)
         self.assertNotIn("<script>alert", body)
@@ -628,6 +628,64 @@ class DocsPanelTest(ChatRoutesTest):
         self.assertNotIn("data-back-docs", listed)
         self.assertIn('class="dim docsize">8 bytes</span>', listed)
         self.assertIn('<span class="mark" title="changed in this chat">●</span> plan.md', listed)
+
+    def test_subfolders_are_listed_as_folders_and_dir_lists_one(self):
+        """Before subfolders were navigable the list was flat: thelos's 11 documents in 4 folders showed as one list of
+        ucg/…, riunioni/… paths mixed by date. A folder is now one entry, its documents one tap inside it."""
+        (self.docs / "ucg" / "sub").mkdir(parents=True)
+        (self.docs / "ucg" / "a.md").write_text("a")
+        (self.docs / "ucg" / "sub" / "deep.md").write_text("deep")
+        (self.docs / "top.md").write_text("top")
+        top = self.req("/fragment/docs/wren?list=1", cookie=self.cookie).body.decode()
+        self.assertIn('<a href="?dir=ucg" data-open-dir="ucg" class="folder"><span>📁 ucg</span>'
+                      '<span class="dim docsize">2 documents ›</span></a>', top)
+        self.assertIn('data-open-doc="top.md"', top)
+        self.assertNotIn('data-open-doc="ucg/a.md"', top)              # inside its folder, not in the top list
+        inside = self.req("/fragment/docs/wren?list=1&dir=ucg", cookie=self.cookie).body.decode()
+        self.assertIn('data-back-docs data-dir="" aria-label="Up to the documents"', inside)
+        self.assertIn('<span class="crumbs"><a href="?dir=" data-open-dir="">Documents</a> / <b>ucg</b></span>', inside)
+        self.assertIn('<a href="?doc=ucg%2Fa.md" data-open-doc="ucg/a.md"><span>a.md</span>', inside)
+        self.assertIn('data-open-dir="ucg/sub" class="folder"><span>📁 sub</span>', inside)
+        self.assertNotIn('data-open-doc="top.md"', inside)
+        self.assertIn('<input type="hidden" name="dir" value="ucg">', inside)   # New document goes in this folder
+        deep = self.req("/fragment/docs/wren?dir=ucg%2Fsub", cookie=self.cookie).body.decode()   # ?dir= alone lists
+        self.assertIn('<a href="?dir=ucg" data-open-dir="ucg">ucg</a> / <b>sub</b>', deep)
+        self.assertIn('data-back-docs data-dir="ucg" aria-label="Up to ucg/"', deep)
+        opened = self.req("/fragment/docs/wren?doc=ucg%2Fsub%2Fdeep.md", cookie=self.cookie).body.decode()
+        self.assertIn('data-back-docs data-dir="ucg/sub" aria-label="Back to ucg/sub/">← sub</button>', opened)
+
+    def test_a_folder_rolls_up_its_documents_marks_and_comments(self):
+        (self.docs / "ucg").mkdir()
+        (self.docs / "ucg" / "a.md").write_text("a")
+        self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
+                        {"role": "assistant", "content": "done", "ts": "2026-10-19T12:00:05",
+                         "docs": [{"path": "ucg/a.md", "created": True}]}])
+        from supervisor import doc_comments
+        with mock.patch.object(doc_comments, "open_counts", lambda n: {"ucg/a.md": 3}):
+            top = self.req("/fragment/docs/wren?list=1", cookie=self.cookie).body.decode()
+        self.assertIn('<span class="mark" title="changed in this chat">●</span> 📁 ucg '
+                      '<span class="ccount" title="open comments">💬 3</span>', top)
+
+    def test_a_bad_or_gone_folder_says_so(self):
+        (self.docs / "top.md").write_text("top")
+        self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
+                        {"role": "assistant", "content": "done", "ts": "2026-10-19T12:00:05",
+                         "docs": [{"path": "top.md", "created": True}]}])
+        bad = self.req("/fragment/docs/wren?dir=..%2Fsecrets", cookie=self.cookie)
+        self.assertEqual(bad.status, 200)
+        self.assertIn('class="bad"', bad.body.decode())
+        self.assertIn('data-open-doc="top.md"', bad.body.decode())     # the top list with why, not this chat's doc
+        self.assertNotIn('class="docview"', bad.body.decode())
+        gone = self.req("/fragment/docs/wren?list=1&dir=old", cookie=self.cookie).body.decode()
+        self.assertIn("No documents in old/ (any more).", gone)
+        self.assertIn("data-back-docs", gone)                          # a way back up, and the drawer stays shown
+
+    def test_a_page_with_dir_polls_that_folder(self):
+        (self.docs / "ucg").mkdir()
+        (self.docs / "ucg" / "a.md").write_text("a")
+        page = self.req("/i/wren/chat?dir=ucg", cookie=self.cookie).body.decode()
+        self.assertIn('data-poll="/fragment/docs/wren?list=1&amp;dir=ucg"', page)
+        self.assertIn('data-open-doc="ucg/a.md"', page)
 
     def test_with_nothing_changed_in_this_chat_it_lists(self):
         (self.docs / "plan.md").write_text("the plan")
@@ -874,6 +932,18 @@ class DocSaveRouteTest(DocsPanelTest):
         self.assertEqual((r.status, r.headers.get("X-Doc")), (200, "ideas.md"))
         self.assertTrue((self.docs / "ideas.md").is_file())
         self.assertEqual(self.post(path="ideas", text="", sha="none").status, 409)     # exists already
+
+    def test_a_new_document_in_the_folder_shown_and_in_a_new_subfolder(self):
+        r = self.post(path="plan", text="", sha="none", dir="ucg")
+        self.assertEqual((r.status, r.headers.get("X-Doc")), (200, "ucg/plan.md"))
+        self.assertTrue((self.docs / "ucg" / "plan.md").is_file())
+        r = self.post(path="q4/goals", text="", sha="none", dir="ucg")
+        self.assertEqual((r.status, r.headers.get("X-Doc")), (200, "ucg/q4/goals.md"))
+        self.assertTrue((self.docs / "ucg" / "q4" / "goals.md").is_file())
+        r = self.post(path="x", text="", sha="none", dir="../out")
+        self.assertEqual(r.status, 409)
+        self.assertIn("a folder under notes/docs/", r.body.decode())
+        self.assertFalse((self.docs.parent / "out").exists())
 
     def test_a_later_write_that_dropped_his_lines_is_said_with_his_version(self):
         from supervisor import docs

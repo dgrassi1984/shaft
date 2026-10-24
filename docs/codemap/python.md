@@ -25,7 +25,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/dashboard.py` | — | `clean`, `event_tone`, `activity`, `instance_state`, `services`, `events`, `snapshot` |
 | `supervisor/delete.py` | `Refused`, `Edit`, `Found` | `own_files`, `shared_edits`, `find`, `archive`, `delete` |
 | `supervisor/doc_comments.py` | `Refused` | `add_thread`, `reply`, `delivered`, `edit`, `delete`, `mark_sent`, `set_state`, `take_notices`, `put_back_notices`, `threads`, `waiting`, `open_counts`, `get_post`, `block`, `parse_answer`, `copy_text`, `sync_copy` |
-| `supervisor/docs.py` | `Refused` | `sha`, `read`, `listing`, `snapshot`, `changed`, `write`, `remove`, `command` |
+| `supervisor/docs.py` | `Refused` | `folder`, `sha`, `read`, `listing`, `snapshot`, `changed`, `write`, `remove`, `command` |
 | `supervisor/egress.py` | `Refused`, `Egress` | `log_path`, `public_address`, `recent`, `describe`, `summary` |
 | `supervisor/embed_server.py` | `Embedder` | `make_handler`, `main` |
 | `supervisor/evolution.py` | — | `drift`, `distinct`, `breed` |
