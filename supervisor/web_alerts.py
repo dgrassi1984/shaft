@@ -37,7 +37,8 @@ def _write_cursor(offset: int) -> None:
 def event(m: dict) -> dict:
     """What the notification shows: who, whether it asks, its first line; it opens the instance's chat."""
     name = m["from"]
-    first = next((l.strip() for l in m["text"].splitlines() if l.strip()), "") or "(a file)"
+    from .web_md import first_line
+    first = first_line(m["text"]) or "(a file)"                       # the text, not its Markdown
     return {"title": f"{name} {'asks' if m.get('kind') == 'question' else 'says'}", "body": first[:160],
             "url": f"/i/{name}/chat", "tag": f"{name}-{m['file']}"}   # its own: a second never replaces it
 

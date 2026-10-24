@@ -124,9 +124,11 @@ class DocumentsCloseTest(unittest.TestCase):
         css = self.desktop()
         self.assertIn(".chatgrid.hidedocs > aside.docs { display: none; }", css)
         self.assertIn(".chatgrid.hidedocs { grid-template-columns: minmax(0, 1fr); }", css)
-        # same specificity as the rule holding it open: it must come after it to win
-        self.assertGreater(css.index(".chatgrid.hidedocs {"),
-                           css.index(".chatgrid:has([data-back-docs]), .chatgrid:has(.doclist a)"))
+        # Not "after it, same specificity": a :has() takes its argument's specificity, so :has(.doclist a) outranked
+        # .hidedocs wherever it stood (the closed drawer's list kept the chat at half width, 2026-10-25). The rule
+        # holding it open leaves a closed drawer out.
+        self.assertIn(".chatgrid:not(.hidedocs):has([data-back-docs]), .chatgrid:not(.hidedocs):has(.doclist a) {", css)
+        self.assertNotIn(".chatgrid:has([data-back-docs]), .chatgrid:has(.doclist a)", css)
 
     def test_the_close_button_shows_beside_the_chat(self):
         hidden = re.search(r"^([^{\n]*)\{ display: none; \}", self.desktop().split(".navbtn.news")[0].split("PLAN-pwa P2:")[1],
