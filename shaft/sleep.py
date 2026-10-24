@@ -136,6 +136,7 @@ def run(cfg, state: State, client: Client) -> str:
         raise LLMError(summary)
     # Before the journal entry: a finished sleep without a marker would otherwise be the next one's starting point,
     # skipping what it did not read. A failed read keeps where it started, so the next sleep asks again.
+    (state.root / "memory").mkdir(parents=True, exist_ok=True)   # a first sleep writes here before its journal does
     if fetched is not None:
         known = {(row["episode_ts"], row.get("reviewed_at")) for row in memory.verdict_rows(state.root)}
         received = clock.now().isoformat(timespec="seconds")
