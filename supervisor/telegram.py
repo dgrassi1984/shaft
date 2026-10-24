@@ -39,7 +39,7 @@ API_BASE, _ = knob(   # tests point it at a fake
     "SHAFT_TELEGRAM_API", "https://api.telegram.org", str, "the Telegram Bot API endpoint", group="Ports and paths",
     services=("telegram",), web=False)
 POLL_S = 30                      # long-poll timeout
-STATE = "telegram.json"          # pairing, update offsets, the outbound cursor, which bot message was which question
+STATE = "telegram.json"          # pairing, update offsets, updates not handled yet, the outbound cursor, questions
 PAIR_MINUTES = 10
 MAX_TEXT = 4000                  # Telegram's limit is 4,096 characters per message, after formatting
 CHUNK = 3000                     # Markdown per message, before formatting (tags and escapes add some)
@@ -559,11 +559,17 @@ def handle_update(name: str, token: str, chat: Chat, upd: dict) -> None:
 
 def poll(name: str, token: str, stop: threading.Event) -> None:
     chat = Chat(name, token)
+    for upd in sorted(_pending(load(), name).values(), key=lambda u: u["update_id"]):
+        log(f"telegram: {name}: update {upd['update_id']} was taken but not handled before the service stopped — "
+            "handling it now")
+        _dispatch(name, token, chat, upd)
     while not stop.is_set():
         if name not in instance_names():   # deleted while the service runs (shaft delete): its bot answers no more
             log(f"telegram: {name} no longer exists — its bot stops")
+            update(lambda s: (s.get("pending") or {}).pop(name, None))
             return
-        offset = (load().get("offsets") or {}).get(name, 0)
+        st = load()
+        offset = (st.get("offsets") or {}).get(name, 0)
         try:
             updates = call(token, "getUpdates", http_timeout=POLL_S + 15, offset=offset, timeout=POLL_S,
                            allowed_updates=["message"])
@@ -574,8 +580,42 @@ def poll(name: str, token: str, stop: threading.Event) -> None:
         if name not in instance_names():
             continue   # left at the top of the loop, without recording an offset for a deleted instance
         for upd in updates or []:
-            update(lambda s: s.setdefault("offsets", {}).__setitem__(name, upd["update_id"] + 1))
-            threading.Thread(target=_safe, args=(handle_update, name, token, chat, upd), daemon=True).start()
+            if upd["update_id"] < offset or str(upd["update_id"]) in _pending(st, name):
+                continue                             # had already: never handled twice
+            _take(name, upd)
+            _dispatch(name, token, chat, upd)
+
+
+# An update is taken (the offset that tells Telegram not to send it again moves past it) in the same state write that
+# keeps it as pending, and it stays pending until its handler has finished. The offset was saved before a daemon thread
+# handled the message, so a restart in between lost it (B11, review of 2026-10-24); now a restart handles it then.
+# Handlers stay one thread per update: a message sent while a reply runs must join that reply (Chat.handle).
+def _pending(st: dict, name: str) -> dict[str, dict]:
+    return (st.get("pending") or {}).get(name) or {}
+
+
+def _take(name: str, upd: dict) -> None:
+    def fn(s: dict) -> None:
+        s.setdefault("pending", {}).setdefault(name, {})[str(upd["update_id"])] = upd
+        s.setdefault("offsets", {})[name] = upd["update_id"] + 1
+    update(fn)
+
+
+def _done(name: str, update_id: int) -> None:
+    def fn(s: dict) -> None:
+        mine = (s.get("pending") or {}).get(name)
+        if mine is not None:
+            mine.pop(str(update_id), None)
+            if not mine:
+                s["pending"].pop(name)
+    update(fn)
+
+
+def _dispatch(name: str, token: str, chat: Chat, upd: dict) -> None:
+    def handle() -> None:
+        _safe(handle_update, name, token, chat, upd)
+        _done(name, upd["update_id"])   # handled, or failed and logged: either way not again (a crash never gets here)
+    threading.Thread(target=handle, daemon=True).start()
 
 
 def _safe(fn, *args) -> None:

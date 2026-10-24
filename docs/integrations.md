@@ -25,7 +25,9 @@ files an instance attaches to a message for you arrive after its text (pictures 
 starts a new conversation (not while a reply is running), `/wake` starts a cycle, `/status` says what it is doing. A message an
 instance sends you (`send_message` to the operator) arrives from its bot when it is routed to Telegram (see
 [Where an instance reaches you](#where-an-instance-reaches-you-shaft-channel)). The service long-polls Telegram; no port,
-webhook or Funnel. Full text both ways: bot chats are not end-to-end encrypted, so Telegram's servers see them
+webhook or Funnel. A message it has taken is kept in `.supervisor/telegram.json` until it is handled, so one that
+arrives as the service stops is answered when it starts again (rarely, a message being answered at that moment is
+answered twice). Full text both ways: bot chats are not end-to-end encrypted, so Telegram's servers see them
 .
 
 Source: [Telegram transport and pairing](../supervisor/telegram.py).

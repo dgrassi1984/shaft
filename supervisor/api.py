@@ -12,7 +12,8 @@ Each request is a normal sandboxed run (broker, run lock, gate, commit). The cli
 is the dialogue; the instance's own identity and memory come first. A conversation (same instance,
 same first user message — or, if the client sends X-Shaft-Conversation, that name: the web UI does) keeps one id, and
 the channel the client names in X-Shaft-Channel (web, telegram; `api` when absent) — where a message the instance sends
-the operator while it is open alerts them (channel.py); after IDLE_MINUTES (SHAFT_IDLE_MINUTES) without a message it is closed and a journal write-up is
+the operator while it is open alerts them (channel.py); after IDLE_MINUTES (SHAFT_IDLE_MINUTES) without a message
+(counted from when its last reply ended, never while one runs) it is closed and a journal write-up is
 scheduled (the entry is written in the background, not before the 202). Tool activity and status are sent as `reasoning_content`, which "thinking"-aware clients
 show and others ignore.
 
@@ -50,8 +51,8 @@ import uuid
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from .core import (API_TALKS as TALKS, IDLE_MINUTES, SUP_DIR, UnsafePath, instance_names, instance_root, knob, log,
-                   port, safe_write, secrets_env, whole)
+from .core import (API_TALKS as TALKS, IDLE_MINUTES, SUP_DIR, UnsafePath, contained, instance_names, instance_root, knob,
+                   log, port, safe_write, secrets_env, whole)
 from .runner import Reply, busy_with, request_yield, run_agent, spawn_recover
 
 PORT, _ = knob(
@@ -134,14 +135,27 @@ class Conversations:
             self._save()
             return t["talk_id"]
 
-    def write_up_idle(self) -> None:
+    def replied(self, talk_id: str) -> None:
+        """A reply in this conversation has just ended: its quiet time starts now, not when the request came in."""
+        with self.lock:
+            for t in self.talks.values():
+                if t["talk_id"] == talk_id:
+                    t["ended"] = time.time()
+                    self._save()
+
+    def write_up_idle(self, replying=lambda: set()) -> None:
+        """Close and write up the conversations quiet for IDLE_MINUTES, counted from when the last reply ended — never
+        one with a reply still running (`replying()`: their talk ids, asked under this lock, so a reply cannot end
+        unseen in between). Idle time was counted from the request alone, so a reply longer than SHAFT_IDLE_MINUTES
+        had its conversation written up under it, and the next message opened a new one (B12, review of 2026-10-24)."""
         with self.lock:
             names = set(instance_names())
             gone = [k for k, t in self.talks.items() if t.get("model") not in names]
             for k in gone:   # its instance was deleted (shaft delete): nothing to write up, nothing to keep
                 log(f"api: conversation {self.talks.pop(k)['talk_id']} dropped — its instance no longer exists")
-            due = [t for t in self.talks.values()
-                   if not t.get("written") and time.time() - t.get("last", 0) > IDLE_MINUTES * 60]
+            running = replying()
+            due = [t for t in self.talks.values() if not t.get("written") and t["talk_id"] not in running
+                   and time.time() - max(t.get("last", 0), t.get("ended", 0)) > IDLE_MINUTES * 60]
             for t in due:
                 t["written"] = True
             if due or gone:
@@ -153,7 +167,14 @@ class Conversations:
 class Live:
     """Replies running now, by talk id, and the messages sent to them while they run. Until the agent process starts
     (it may wait for another conversation) they are held here; then each goes to its .tmp/interject-<talk id>.jsonl,
-    one JSON line, which the agent reads at the start of each step."""
+    one JSON line, which the agent reads at the start of each step.
+
+    The file is the talk's, and two requests in one talk may overlap (the second waits for the instance while the first
+    replies; a client retries after hanging up). Only the newest request receives messages, and the file is removed
+    only where no other reply can be reading it: when no reply of the talk is registered (a crashed run's leftovers),
+    when a reply's agent starts (the run lock: no other agent of the instance runs then), and when the newest reply
+    ends. Each begin and end unlinked it, so one request deleted the messages another one's agent had not read yet
+    (B19, review of 2026-10-24)."""
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -163,11 +184,24 @@ class Live:
     def _rel(talk_id: str) -> str:
         return f".tmp/interject-{talk_id}.jsonl"
 
+    def _drop(self, model: str, talk_id: str) -> None:
+        """Remove the talk's file — never through a link the instance put in the way (logged instead)."""
+        try:
+            contained(instance_root(model), ".tmp", f"interject-{talk_id}.jsonl").unlink(missing_ok=True)
+        except UnsafePath as e:
+            log(f"api: {e}")
+
+    def running(self) -> set[str]:
+        """The talk ids with a reply registered: waiting for the instance or running."""
+        with self.lock:
+            return set(self.replies)
+
     def begin(self, model: str, talk_id: str) -> dict:
         entry = {"model": model, "talk_id": talk_id, "held": [], "started": False}
         with self.lock:
+            if talk_id not in self.replies:             # no reply of this talk to read it: a crashed run's leftovers
+                self._drop(model, talk_id)
             self.replies[talk_id] = entry               # a second request in the same talk: the newest takes them
-            (instance_root(model) / self._rel(talk_id)).unlink(missing_ok=True)   # a crashed run's leftovers
         return entry
 
     def _write(self, entry: dict, text: str) -> None:
@@ -176,6 +210,9 @@ class Live:
 
     def started(self, entry: dict) -> None:
         with self.lock:
+            # Its agent is the only one of the instance running: what an earlier reply of the talk left is not for it
+            # (that reply's client sends again whatever its reply did not hear).
+            self._drop(entry["model"], entry["talk_id"])
             for text in entry["held"]:
                 self._write(entry, text)
             entry["held"], entry["started"] = [], True
@@ -193,9 +230,9 @@ class Live:
 
     def end(self, entry: dict) -> None:
         with self.lock:
-            if self.replies.get(entry["talk_id"]) is entry:
+            if self.replies.get(entry["talk_id"]) is entry:     # a newer request of the talk owns the file otherwise
                 del self.replies[entry["talk_id"]]
-            (instance_root(entry["model"]) / self._rel(entry["talk_id"])).unlink(missing_ok=True)
+                self._drop(entry["model"], entry["talk_id"])
 
 
 def _chunk(cid: str, model: str, delta: dict, finish: str | None = None, **extra) -> bytes:
@@ -449,6 +486,10 @@ class Handler(BaseHTTPRequestHandler):
                 events.put({"type": "error", "message": f"{type(e).__name__}: {e}"})
             finally:
                 try:
+                    self.conversations.replied(talk_id)   # while still registered: running or just ended, never between
+                except OSError as e:
+                    log(f"api: {e}")
+                try:
                     self.live.end(live)         # before "done": a message after this is the client's next request
                 except (OSError, UnsafePath) as e:
                     log(f"api: {e}")
@@ -567,7 +608,7 @@ def serve() -> int:
         while True:
             time.sleep(60)
             try:
-                Handler.conversations.write_up_idle()
+                Handler.conversations.write_up_idle(Handler.live.running)
             except Exception as e:
                 log(f"api janitor: {e}")
 

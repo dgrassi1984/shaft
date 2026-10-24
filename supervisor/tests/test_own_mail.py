@@ -52,7 +52,7 @@ class FakeTokens:
 
 
 class FakeGmail:
-    """The Gmail API on localhost (check_public is patched off): records what reached it, answers 401 on demand."""
+    """The Gmail API on localhost (resolve_public patched to allow it): records what reached it, 401 on demand."""
 
     def __init__(self):
         self.seen: list[dict] = []
@@ -100,7 +100,7 @@ class OwnMailCase(unittest.TestCase):
         self.addCleanup(self.gmail.close)
         for p in (mock.patch.object(core, "SUP_DIR", self.project / ".supervisor"),
                   mock.patch.object(google, "urlopen", self.tokens),
-                  mock.patch.object(broker_mod, "check_public", lambda url: None)):   # the fake Gmail is local
+                  mock.patch.object(broker_mod, "resolve_public", lambda host, port: ["127.0.0.1"])):   # local fake
             p.start()
             self.addCleanup(p.stop)
         # The operator's own Google account, as `shaft google login home operator@example.com` keeps it.

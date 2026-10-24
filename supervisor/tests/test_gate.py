@@ -184,6 +184,28 @@ class CommittedTreeTest(FakeProjectCase):
         self.assertFalse((second / "notes.txt").exists())
 
 
+class GateErrorFailsClosedTest(FakeProjectCase):
+    """B8 (review 2026-10-24): run_tests caught only StageTimedOut. Any other error of the gate's own — sandbox-exec
+    missing, a link the instance put where .tmp should be — propagated out of runner._settle: the change was neither
+    tested nor reverted, and the next run took it as its baseline."""
+
+    def test_a_link_where_tmp_should_be_fails_the_gate(self):
+        (self.inst / ".tmp").symlink_to(self.tmp, target_is_directory=True)
+        with mock.patch("supervisor.core.log") as log:
+            ok, out = self.gate()
+        self.assertFalse(ok)
+        self.assertIn("UnsafePath", out)
+        self.assertIn("counted as failed", "\n".join(c.args[0] for c in log.call_args_list))
+
+    def test_a_stage_that_cannot_start_fails_the_gate(self):
+        with mock.patch.object(gate, "_stage", side_effect=FileNotFoundError("/usr/bin/sandbox-exec")), \
+                mock.patch("supervisor.core.log"):
+            ok, out = self.gate()
+        self.assertFalse(ok)
+        self.assertIn("FileNotFoundError: /usr/bin/sandbox-exec", out)
+        self.assertIn("full log: ", out)
+
+
 HANGS = ("import sys, time, unittest\n\nclass T(unittest.TestCase):\n    def test_hangs(self):\n"
          "        sys.stderr.write('test_hangs started\\n'); sys.stderr.flush(); time.sleep(120)\n")
 

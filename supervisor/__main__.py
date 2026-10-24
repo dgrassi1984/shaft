@@ -446,7 +446,11 @@ def cmd_secret(args) -> int:
     from .core import delete_secret, describe_key, read_secrets, store_secret
     root = instance_root(args.name)
     if args.action == "list":
-        store = read_secrets(root)
+        try:
+            store = read_secrets(root, strict=True)       # an unreadable store is said, not shown as "no keys"
+        except ValueError as e:
+            print(e, file=sys.stderr)
+            return 1
         for k, e in sorted(store.items()):
             print(describe_key(k, e))
         if not store:
@@ -456,7 +460,11 @@ def cmd_secret(args) -> int:
         print("which key? e.g. shaft secret wren set github --hosts api.github.com", file=sys.stderr)
         return 2
     if args.action == "delete":
-        found = delete_secret(root, args.key)
+        try:
+            found = delete_secret(root, args.key)
+        except ValueError as e:                           # KeyStoreUnreadable: nothing was changed
+            print(e, file=sys.stderr)
+            return 1
         print(f"deleted {args.name}'s key {args.key}" if found else f"{args.name} has no key {args.key}")
         return 0 if found else 1
     if args.action == "google":

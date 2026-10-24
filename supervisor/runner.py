@@ -1,9 +1,10 @@
 """One sandboxed run of an instance, and everything the supervisor enforces around it.
 
-Before: take the instance's run lock, snapshot its code, journal and core personality,
-start a broker. After: stop the broker, restore the journal if it was rewritten
-(append-only), restore the core personality if it changed too soon, run the test gate
-on code changes (revert on failure), commit the instance's state to its branch.
+Before: take the instance's run lock, settle code an earlier run left unsettled (_reconcile),
+snapshot its code, journal and core personality, start a broker. After: end the run's whole
+process group, stop the broker, restore the journal if it was rewritten (append-only), restore
+the core personality if it changed too soon, run the test gate on code changes (revert on
+failure), commit the instance's state to its branch.
 
 A terminal conversation is different: its process stays up while it waits for the operator,
 so it holds the lock (and is checked and committed) one reply at a time — an open but quiet
@@ -371,6 +372,7 @@ def _pause(name: str, root: Path, kind: str, proc, held: _Held, run: dict, broke
         time.sleep(1)
     held.acquire(wait=True)
     # The conversation's changes are not mine.
+    _reconcile(name, root)
     run["before"], run["seen"], run["cseen"] = _snapshot(root), len(broker.handoffs), len(broker.config_writes)
     paused = time.monotonic() - t0
     if run.get("deadline"):
@@ -385,6 +387,61 @@ def _snapshot(root: Path) -> dict:
     journal, pers = root / "memory" / "journal.md", root / "self" / "personality.md"
     return {"code": gate.snapshot(root), "journal": journal.read_text() if journal.exists() else "",
             "personality": pers.read_text() if pers.exists() else "", "core": _core(root)}
+
+
+def _uncommitted_code(root: Path) -> dict[str, bytes | None]:
+    """The code (gate.CODE_PATHS) that differs from the instance's last commit, as git sees it: {path: its committed
+    bytes, or None where the commit has no such file}. Left out: what the gate never snapshots (__pycache__,
+    .DS_Store) and a path committed as anything but a plain file. Read through git_wt (the worktree's own .git is
+    the instance's to forge), in bytes: a file name that is not UTF-8 must not hide a change."""
+    def run(*args: str) -> list[str]:
+        out = git_wt(root, "--no-optional-locks", *args, text=False).stdout
+        return [os.fsdecode(e) for e in out.split(b"\0") if e]
+    dirty = sorted({e[3:] for e in run("status", "--porcelain", "-z", "--untracked-files=all", "--no-renames", "--",
+                                       *gate.CODE_PATHS)})
+    dirty = [p for p in dirty if "__pycache__" not in Path(p).parts and Path(p).name != ".DS_Store"]
+    if not dirty:
+        return {}
+    committed = {}
+    for entry in run("ls-tree", "-r", "-z", "HEAD", "--", *gate.CODE_PATHS):
+        meta, _, path = entry.partition("\t")
+        committed[path] = meta.split()                     # mode, type, object
+    out: dict[str, bytes | None] = {}
+    for path in dirty:
+        if path not in committed:
+            out[path] = None
+        elif committed[path][0] in ("100644", "100755"):
+            out[path] = git_wt(root, "cat-file", "blob", committed[path][2], text=False).stdout
+    return out
+
+
+def _reconcile(name: str, root: Path) -> None:
+    """Settle code an earlier run left unsettled, before a new run takes its baseline: a run that died before
+    _settle (the supervisor killed, the Mac shut down, an exception) left its edits on disk, and the next run's
+    snapshot took them as its starting point, so they were never gated (B8, review of 2026-10-24). Whatever code
+    differs from the last commit is checked now as that run's would have been — against the commit: kept and
+    committed if the tests pass, restored to the commit if they fail, a note in the journal either way. config.env and
+    drive.md are not code (the operator's: _commit_outside_config, _commit_outside_drive). After a run that settled,
+    the code is the commit and this is one `git status`."""
+    try:
+        committed = _uncommitted_code(root)
+    except (subprocess.CalledProcessError, OSError, ValueError, UnsafePath, SystemExit) as e:   # exit: no worktree
+        why = (getattr(e, "stderr", None) or b"").decode(errors="replace").strip() or f"{type(e).__name__}: {e}"
+        log(f"{name}: could not compare its code with its last commit — NOT checked before this run: {why}")
+        return
+    now = gate.snapshot(root)
+    base = {p: b for p, b in now.items() if p not in committed}
+    base.update({p: b for p, b in committed.items() if b is not None})
+    touched = gate.changed(base, now)
+    if not touched:
+        return
+    log(f"{name}: code differs from its last commit before a run (an earlier run ended unsettled): gating {touched}")
+    journal_note(root, "Supervisor: unchecked code from an earlier run",
+                 "When this run started, my code differed from my last commit in " + ", ".join(touched) + ": an "
+                 "earlier run ended before the supervisor could check it (or it was edited from outside). It was "
+                 "checked now, as every run's changes are: kept and committed if the tests pass, put back as last "
+                 "committed if they fail.")
+    _settle(name, root, "interrupted", {**_snapshot(root), "code": base}, [])
 
 
 def _launch(name: str, root: Path, kind: str, agent_args: list[str], budget: int | None):
@@ -516,18 +573,88 @@ def _popen(cmd, root: Path, env: dict) -> subprocess.Popen:
 
 
 def _finish(proc: subprocess.Popen) -> None:
+    """A driven agent's end: up to 15 s to finish on its own (its journal entry, its last reply), then its whole
+    process group is ended — and on a normal end too, whatever it left running (gate.stop_group, B9)."""
     if proc.poll() is None:
         try:
             proc.wait(timeout=15)
         except subprocess.TimeoutExpired:
-            proc.terminate()
-            proc.wait(timeout=10)
+            pass
+    gate.stop_group(proc)
+
+
+def _start(cmd, root: Path, env: dict, capture: bool, interactive: bool) -> subprocess.Popen:
+    """An undriven run's agent, leading a process group of its own, so that it and everything it starts end together
+    (gate.stop_group). An autonomous run gets its own session too; a terminal conversation stays in the terminal's
+    session and is handed the terminal (_give_terminal), so Ctrl-C and what is typed still reach it."""
+    group = {"process_group": 0} if interactive else {"start_new_session": True}
+    return subprocess.Popen(cmd, cwd=root, env=env, stderr=subprocess.PIPE, text=True,
+                            stdout=subprocess.PIPE if capture else None, **group)
+
+
+def _give_terminal(proc: subprocess.Popen):
+    """Make the agent's group the terminal's foreground group, as the supervisor's own group was while they shared it;
+    returns how to take it back, or None (no terminal in the foreground, or not the main thread)."""
+    import threading
+    if threading.current_thread() is not threading.main_thread():
+        return None
+    try:
+        fd = sys.stdin.fileno()
+        if not os.isatty(fd) or os.tcgetpgrp(fd) != os.getpgrp():
+            return None
+    except (OSError, ValueError):
+        return None
+    old = signal.signal(signal.SIGTTOU, signal.SIG_IGN)   # a background group's tcsetpgrp would stop it otherwise
+    try:
+        os.tcsetpgrp(fd, proc.pid)
+        os.killpg(proc.pid, signal.SIGCONT)               # stopped on SIGTTIN, had it read before it had the terminal
+    except OSError:
+        signal.signal(signal.SIGTTOU, old)
+        return None
+
+    def take_back() -> None:
+        try:
+            os.tcsetpgrp(fd, os.getpgrp())
+        except OSError:
+            pass
+        finally:
+            signal.signal(signal.SIGTTOU, old)
+    return take_back
+
+
+class _Stopped(Exception):
+    def __init__(self, signum: int):
+        super().__init__(signum)
+        self.signum = signum
+
+
+STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP)
+
+
+def _trap_stop(saved: dict) -> None:
+    """SIGTERM or SIGHUP to the supervisor during an undriven run (launchd stopping a service, a closed terminal)
+    raises _Stopped in the main thread, so the run's process group is ended before the supervisor goes: the agent
+    leads its own group now, and those signals used to reach it only because it shared the supervisor's. `saved`
+    gets each handler replaced, before it is, to be put back. Nothing off the main thread."""
+    import threading
+    if threading.current_thread() is not threading.main_thread():
+        return
+
+    def on_stop(signum, frame):
+        for s in STOP_SIGNALS:                            # one is enough: nothing interrupts the cleanup
+            signal.signal(s, signal.SIG_IGN)
+        raise _Stopped(signum)
+    for s in STOP_SIGNALS:
+        if signal.getsignal(s) is not signal.SIG_IGN:     # ignored stays so: `nohup shaft live` outlives its terminal
+            saved[s] = signal.getsignal(s)
+            signal.signal(s, on_stop)
 
 
 def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: bool,
          output: list[str] | None = None, driver=None, held: _Held | None = None) -> int:
     log(f"{name}: start {kind} {describe_knobs()}")
     _clean_tmp(root)
+    _reconcile(name, root)
     run = {"before": _snapshot(root), "seen": 0, "cseen": 0}
     budget = None if interactive else (SLEEP_TIMEOUT_S if kind == "sleep" else CYCLE_TIMEOUT_S)
     broker, cmd, env = _launch(name, root, kind, agent_args, budget)
@@ -535,9 +662,13 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
     # In a conversation Ctrl-C belongs to the agent (it ends the talk and writes its journal
     # entry). If the supervisor took it too, subprocess.run would kill the agent mid-entry.
     old_sigint = signal.signal(signal.SIGINT, signal.SIG_IGN) if interactive and not driver else None
+    old_stop: dict = {}
+    stopped = 0
     err_tail: list[str] = []
     out_all: list[str] = []
     try:
+        if not driver:
+            _trap_stop(old_stop)
         if driver:
             proc = _popen(cmd, root, env)
             try:
@@ -546,14 +677,15 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
                 _finish(proc)
             code = proc.returncode
         else:
-            proc = subprocess.Popen(cmd, cwd=root, env=env, stderr=subprocess.PIPE, text=True,
-                                    stdout=subprocess.PIPE if output is not None else None)
-            readers = [_tee(proc.stderr, sys.stderr, err_tail)]   # still shown live; the tail explains a failure
-            if output is not None:
-                readers.append(_tee(proc.stdout, None, out_all))
-            pausable = held is not None and kind in PAUSABLE and not interactive
-            ends = time.monotonic() + budget if budget else None
+            proc = _start(cmd, root, env, output is not None, interactive)
+            take_back, readers = None, []
             try:
+                take_back = _give_terminal(proc) if interactive else None
+                readers.append(_tee(proc.stderr, sys.stderr, err_tail))   # shown live; the tail explains a failure
+                if output is not None:
+                    readers.append(_tee(proc.stdout, None, out_all))
+                pausable = held is not None and kind in PAUSABLE and not interactive
+                ends = time.monotonic() + budget if budget else None
                 while True:
                     try:
                         code = proc.wait(timeout=2)
@@ -565,11 +697,10 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
                     if pausable and replying(name):
                         paused = _pause(name, root, kind, proc, held, run, broker)
                         ends = ends + paused if ends is not None else None
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
-                raise
             finally:
+                if take_back:
+                    take_back()
+                gate.stop_group(proc)   # nothing the run started outlives it, however it ended (B9): settled next
                 for r in readers:
                     r.join(timeout=5)
             if output is not None:
@@ -582,10 +713,23 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
         code = 124
     except KeyboardInterrupt:
         code = 130
+    except _Stopped as e:
+        stopped, code = e.signum, 128 + e.signum
     finally:
         if old_sigint is not None:
             signal.signal(signal.SIGINT, old_sigint)
+        for s, handler in old_stop.items():
+            signal.signal(s, handler)
         broker.stop()
+    if stopped:
+        # The supervisor itself is being stopped: no gate now (launchd would kill it halfway). The run's group is
+        # gone; what it changed is settled when the instance next runs (_reconcile). Then the signal does what it
+        # was sent to do.
+        log(f"{name}: {kind} stopped with the supervisor (signal {stopped}); its changes are settled at its next run")
+        journal_note(root, "Supervisor: run stopped", f"My {kind} run was stopped with the supervisor (signal "
+                     f"{stopped}) before I finished it. What I changed is checked when I next run.")
+        os.kill(os.getpid(), stopped)
+        return code
     log(f"{name}: end {kind} exit={code} broker_calls={broker.counts or {}}")
     (root / ".tmp" / "yield").unlink(missing_ok=True)
     _clean_tmp(root)
@@ -762,6 +906,7 @@ class Turn:
             stack.close()                        # interrupted while waiting: no reply wants the instance any more
             raise
         self.held = stack
+        _reconcile(self.name, self.root)
         self.before = _snapshot(self.root)
         self.handoffs_seen = len(self.broker.handoffs) if self.broker else 0
         self.config_seen = len(self.broker.config_writes) if self.broker else 0
@@ -820,8 +965,8 @@ def run_conversation(name: str, kind: str, agent_args: list[str], talk_id: str, 
             try:
                 driver(proc, turn)
             finally:
+                _finish(proc)   # its process group gone before the last reply is checked (B9)
                 turn.end()
-                _finish(proc)
             code = proc.returncode
         except KeyboardInterrupt:
             code = 130

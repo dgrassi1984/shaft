@@ -159,6 +159,53 @@ class TelegramTest(unittest.TestCase):
         self.upd(_msg(ME, "fresh", mid=14))
         self.assertEqual(len(self.asked[3][1]), 1)
 
+    def test_a_message_taken_just_before_a_restart_is_still_answered(self):
+        """B11 (review 2026-10-24): poll saved the next offset, then a daemon thread handled the message. A restart in
+        between (the service updated, the Mac rebooted) lost it: Telegram never sent it again and nothing kept it."""
+        self.pair()
+        real_call, real_handle, held = telegram.call, telegram.Chat.handle, threading.Event()
+        self.addCleanup(held.set)
+        first = []
+
+        def handle(chat, msg):
+            if not first:                                  # the service stops while this one is being handled
+                first.append(msg)
+                held.wait(30)
+                return
+            return real_handle(chat, msg)
+
+        def service(updates):
+            stop = threading.Event()
+
+            def call(token, method, *a, **k):
+                if method == "getUpdates":
+                    stop.set()
+                    return updates
+                return real_call(token, method, *a, **k)
+            return stop, call
+
+        def settle():
+            for _ in range(200):
+                if not (telegram.load().get("pending") or {}).get("wren"):
+                    return
+                time.sleep(0.02)
+        with mock.patch.object(telegram.Chat, "handle", handle):
+            stop, call = service([_msg(ME, "are you there?", mid=7)])
+            with mock.patch.object(telegram, "call", call):
+                telegram.poll("wren", TOK["wren"], stop)
+                for _ in range(200):
+                    if first:
+                        break
+                    time.sleep(0.02)
+            self.assertEqual(telegram.load()["offsets"]["wren"], 8)        # taken: Telegram will not send it again
+            for _ in range(2):                                            # the restarted service, then another one
+                stop, call = service([])
+                with mock.patch.object(telegram, "call", call):
+                    telegram.poll("wren", TOK["wren"], stop)
+                    settle()
+        self.assertEqual([h[1][-1]["content"] for h in self.asked], ["are you there?"])   # answered, and only once
+        self.assertEqual(telegram.load().get("pending") or {}, {})
+
     def test_api_failure_is_said_not_swallowed(self):
         self.pair()
         with mock.patch.object(telegram, "ask_api", side_effect=telegram.TelegramError("the API is not reachable")):

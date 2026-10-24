@@ -6,7 +6,9 @@ results determine whether they survive. A judge's score is evidence about a run,
 not proof that the agent's account is correct.
 
 The broker gives each run a token and a limited set of tools. The gate tests code
-changes before keeping them. Cloud judges grade autonomous work from recorded tool
+changes before keeping them; a run that ended before it was settled has its changes gated
+at the instance's next run, against its last commit, and a run's processes (it leads its own
+process group) are all gone before the gate looks. Cloud judges grade autonomous work from recorded tool
 activity, and probation can revert a kept change after later outcomes deteriorate.
 Sources: [run lifecycle](../supervisor/runner.py),
 [gate](../supervisor/gate.py), [judging](../supervisor/metrics.py),

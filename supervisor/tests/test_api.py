@@ -313,6 +313,68 @@ class InterjectTest(unittest.TestCase):
         self.assertEqual(self.seen_file, [])
 
 
+class LongReplyTest(unittest.TestCase):
+    """B12 and B19 (review 2026-10-24): the idle write-up counted from the request alone, and two requests in one talk
+    deleted each other's interjections."""
+
+    MESSAGES = [{"role": "user", "content": "run the long job"}]
+
+    def setUp(self):
+        import shutil
+        import tempfile
+        from pathlib import Path
+        tmp = Path(tempfile.mkdtemp(prefix="shaft-api-long-")).resolve()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        (tmp / "wren" / ".tmp").mkdir(parents=True)
+        self.recovered = []
+        for p in (mock.patch.object(api, "TALKS", tmp / "api_talks.json"),
+                  mock.patch.object(api, "instance_names", return_value=["wren"]),
+                  mock.patch.object(api, "instance_root", lambda n: tmp / n),
+                  mock.patch.object(api, "spawn_recover", self.recovered.append),
+                  mock.patch.object(api, "log", lambda *_: None)):
+            p.start()
+            self.addCleanup(p.stop)
+        self.file = tmp / "wren" / ".tmp"
+        self.conversations, self.live = api.Conversations(), api.Live()
+
+    def talk(self) -> dict:
+        return next(iter(self.conversations.talks.values()))
+
+    def test_a_reply_longer_than_the_idle_time_is_not_written_up_under_it(self):
+        talk_id = self.conversations.talk_id("wren", self.MESSAGES)
+        entry = self.live.begin("wren", talk_id)
+        self.talk()["last"] -= api.IDLE_MINUTES * 60 + 5             # the request came in longer ago than that
+        self.conversations.write_up_idle(self.live.running)
+        self.assertFalse(self.talk()["written"], "written up while its reply was still running")
+        self.conversations.replied(talk_id)                         # the reply ends now (work()'s finally)
+        self.live.end(entry)
+        self.conversations.write_up_idle(self.live.running)
+        self.assertFalse(self.talk()["written"], "the quiet time must start when the reply ended")
+        self.assertEqual(self.recovered, [])
+        self.talk()["ended"] -= api.IDLE_MINUTES * 60 + 5            # then quiet for SHAFT_IDLE_MINUTES: written up
+        self.conversations.write_up_idle(self.live.running)
+        self.assertTrue(self.talk()["written"])
+        self.assertEqual(self.recovered, ["wren"])
+
+    def lines(self, talk_id: str) -> list[str]:
+        f = self.file / f"interject-{talk_id}.jsonl"
+        return [json.loads(l)["text"] for l in f.read_text().splitlines()] if f.exists() else []
+
+    def test_overlapping_requests_in_one_talk_keep_each_others_messages(self):
+        talk_id = self.conversations.talk_id("wren", self.MESSAGES)
+        first = self.live.begin("wren", talk_id)
+        self.live.started(first)
+        self.assertTrue(self.live.interject(talk_id, "for the running reply"))
+        second = self.live.begin("wren", talk_id)                   # waits for the instance while the first replies
+        self.assertEqual(self.lines(talk_id), ["for the running reply"], "the second request deleted them")
+        self.assertTrue(self.live.interject(talk_id, "for the next reply"))   # the newest request takes them
+        self.live.started(second)                                   # the run lock passed on before the first's end
+        self.live.end(first)
+        self.assertEqual(self.lines(talk_id), ["for the next reply"], "the first request's end deleted them")
+        self.live.end(second)
+        self.assertEqual(self.lines(talk_id), [])
+
+
 INBOX_KEY = "sk-shaft-inbox-test"
 
 

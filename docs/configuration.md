@@ -129,7 +129,10 @@ a concurrent edit. Instances use `set_config`; direct writes are sandbox-denied.
 Sources: [opconfig.py](../supervisor/opconfig.py),
 [sandbox.py](../supervisor/sandbox.py).
 
-The template loader uses environment > nonempty config value > built-in default.
+The template loader uses environment > nonempty config value > built-in default. Under SHAFT the
+environment holds none of these: the sandbox passes on only `PATH`, `HOME`, `USER`, `LANG`, `TERM`,
+`COLUMNS`, `LINES`, `TZ` and `LC_*` (`sandbox.ENV_ALLOW`), so an `LLM_*` variable exported in your shell or
+launchd never reaches an instance; `config.env` is what sets them (a trial names its own model).
 An empty `OPERATOR_NAME` resolves to `the operator`; setting your name is recommended,
 not required. `LLM_BASE_URL` and `LLM_MODEL` are required. Leave `LLM_API_KEY` empty:
 cloud credentials belong to the broker. Config is versioned with instance code.
