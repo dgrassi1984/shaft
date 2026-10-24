@@ -39,7 +39,7 @@ API_BASE, _ = knob(   # tests point it at a fake
     "SHAFT_TELEGRAM_API", "https://api.telegram.org", str, "the Telegram Bot API endpoint", group="Ports and paths",
     services=("telegram",), web=False)
 POLL_S = 30                      # long-poll timeout
-STATE = "telegram.json"          # pairing, update offsets, the outbound cursor, which bot message was which question
+STATE = "telegram.json"          # pairing, update offsets, updates not handled yet, the outbound cursor, questions
 PAIR_MINUTES = 10
 MAX_TEXT = 4000                  # Telegram's limit is 4,096 characters per message, after formatting
 CHUNK = 3000                     # Markdown per message, before formatting (tags and escapes add some)
@@ -348,12 +348,15 @@ class Chat:
         self.last = 0.0
         self.mu = threading.Lock()                   # the history and the in-flight list; never held for a reply
         self.inflight: list[str] | None = None       # while a reply runs (one at a time): messages sent to it, in order
+        self.inflight_ids: list[int | None] = []     # their updates: done once a reply heard or answered them (_ack)
 
     def reset_if_idle(self) -> None:
         if self.history and time.time() - self.last > IDLE_MINUTES * 60:
             self.history = []                        # the API has written that conversation up: a new one starts
 
-    def handle(self, msg: dict) -> None:
+    def handle(self, msg: dict, update_id: int | None = None) -> bool:
+        """Answer one message. True when it joined the reply already running: that reply's thread marks its update
+        done once the message is heard or answered (_ack) — until then it stays pending, so a restart answers it."""
         chat_id = msg["chat"]["id"]
         text = (msg.get("text") or msg.get("caption") or "").strip()
         files = incoming_files(msg)
@@ -405,43 +408,64 @@ class Chat:
         with self.mu:
             if self.inflight is not None:            # a reply is running: this message joins it (docs/plans/PLAN-interject.md)
                 self.inflight.append(text)
+                self.inflight_ids.append(update_id)
                 try:                                 # under mu: it can never reach two replies
                     if not interject_api(self.name, [self.history[0], {"role": "user", "content": text}]):
                         log(f"telegram: {self.name}'s reply had ended; the message is answered next")
                 except TelegramError as e:
                     log(f"telegram: could not add a message to {self.name}'s reply ({e}); it is answered next")
-                return
+                return True
             self.reset_if_idle()
             self.history.append({"role": "user", "content": text})
             self.last = time.time()
-            self.inflight = []
+            self.inflight, self.inflight_ids = [], []
         try:
-            self._converse(chat_id, msg["message_id"])
+            self._converse(chat_id, msg["message_id"], update_id)
         except BaseException:
             with self.mu:                            # still ours: a new message would have joined it
-                self.inflight = None
+                left, self.inflight, self.inflight_ids = self.inflight_ids, None, []
+            if any(i is not None for i in left):
+                log(f"telegram: {self.name}: the reply failed; {len(left)} message(s) sent meanwhile are dropped")
+            self._ack(left)
             raise
+        return False
 
-    def _converse(self, chat_id: int, message_id: int) -> None:
+    def _ack(self, update_ids) -> None:
+        for update_id in update_ids:
+            if update_id is not None:
+                _done(self.name, update_id)
+
+    def _request_id(self, update_id: int | None) -> str:
+        """The API's idempotency key for the reply to this update: a replay after a restart is answered from the
+        reply the API already gave (api.Answered), never run twice."""
+        return f"telegram-{self.name}-{update_id}" if update_id is not None else ""
+
+    def _converse(self, chat_id: int, message_id: int, update_id: int | None = None) -> None:
         """Reply to the history's last message, and to every message sent meanwhile: those the reply heard go before
         it in the history; the others (too late for it, or an instance whose code does not read them yet) get one
-        reply straight after. Only this thread changes the history while the reply runs."""
+        reply straight after. Only this thread changes the history while the reply runs. Each update is done once
+        it is durably answered: a heard one when the reply that heard it has come back, the others once their own
+        reply is sent; each request carries the id of the first update it answers, so a replay is not run twice."""
         stop = threading.Event()
         threading.Thread(target=self._typing, args=(chat_id, stop), daemon=True).start()
+        batch = [update_id]                          # the updates the next reply answers
         try:
             while True:
                 try:
-                    reply, heard = ask_api(self.name, list(self.history))
+                    reply, heard = ask_api(self.name, list(self.history), request_id=self._request_id(batch[0]))
                 except TelegramError as e:
                     with self.mu:
                         self.history.pop()
-                        lost, self.inflight = len(self.inflight or []), None
+                        lost, lost_ids = len(self.inflight or []), self.inflight_ids
+                        self.inflight, self.inflight_ids = None, []
                     send(self.token, chat_id, f"(no answer: {e}"
                          + (f" — nor to the {lost} message(s) you sent meanwhile" if lost else "") + ")",
                          message_id)
+                    self._ack(batch + lost_ids)      # said: not answered again after a restart
                     return
                 with self.mu:
-                    got, heard = self.inflight or [], min(heard, len(self.inflight or []))
+                    got, ids = self.inflight or [], self.inflight_ids
+                    heard = min(heard, len(got))
                     self.history += [{"role": "user", "content": t} for t in got[:heard]]
                     self.history.append({"role": "assistant", "content": reply})
                     self.last = time.time()
@@ -449,9 +473,16 @@ class Chat:
                     if rest:
                         self.history.append({"role": "user", "content": "\n\n".join(rest)})
                     self.inflight = [] if rest else None   # decided with the list: nothing falls between
+                    self.inflight_ids = []
+                self._ack(ids[:heard])               # in a reply that came back: a replay of `batch` brings it again
                 send(self.token, chat_id, reply)
+                self._ack(batch)
                 if not rest:
                     return
+                batch = ids[heard:]
+        except BaseException:
+            self._ack(batch)                         # failed and logged (_safe), as any failed update
+            raise
         finally:
             stop.set()
 
@@ -478,7 +509,7 @@ class Chat:
             stop.wait(4.5)
 
 
-def _api(route: str, name: str, messages: list[dict], timeout: float) -> dict:
+def _api(route: str, name: str, messages: list[dict], timeout: float, request_id: str = "") -> dict:
     """POST to SHAFT's own API as the paired operator; its error message is raised as a TelegramError."""
     from . import api
     env = secrets_env()
@@ -489,7 +520,8 @@ def _api(route: str, name: str, messages: list[dict], timeout: float) -> dict:
                                  data=json.dumps({"model": name, "messages": messages}).encode(),
                                  headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}",
                                           "Tailscale-User-Login": logins[0], "X-Shaft-Channel": "telegram",
-                                          "User-Agent": "Telegram"})
+                                          "User-Agent": "Telegram",
+                                          **({"X-Shaft-Request-Id": request_id} if request_id else {})})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.load(r)
@@ -504,10 +536,11 @@ def _api(route: str, name: str, messages: list[dict], timeout: float) -> dict:
         raise TelegramError(f"the API is not reachable ({e}); is it on? shaft api status") from None
 
 
-def ask_api(name: str, history: list[dict]) -> tuple[str, int]:
+def ask_api(name: str, history: list[dict], request_id: str = "") -> tuple[str, int]:
     """One reply through SHAFT's own API: a sandboxed run, pausing a running cycle only while it replies.
-    Returns the reply and how many messages sent to it meanwhile (interject_api) it heard, oldest first."""
-    data = _api("completions", name, history, 3600)
+    Returns the reply and how many messages sent to it meanwhile (interject_api) it heard, oldest first.
+    `request_id`: the API's idempotency key (X-Shaft-Request-Id): asked again, the API gives the same answer."""
+    data = _api("completions", name, history, 3600, request_id)
     reply = (data["choices"][0]["message"].get("content") or "").strip() or "(empty answer)"
     return reply, int(data.get("interjections_heard") or 0)
 
@@ -554,16 +587,22 @@ def handle_update(name: str, token: str, chat: Chat, upd: dict) -> None:
     if user.get("id") != owner:
         log(f"telegram: {name}'s bot ignored user {user.get('id')} ({user.get('username', '')}): not the paired account")
         return
-    chat.handle(msg)
+    return chat.handle(msg, upd.get("update_id"))
 
 
 def poll(name: str, token: str, stop: threading.Event) -> None:
     chat = Chat(name, token)
+    for upd in sorted(_pending(load(), name).values(), key=lambda u: u["update_id"]):
+        log(f"telegram: {name}: update {upd['update_id']} was taken but not handled before the service stopped — "
+            "handling it now")
+        _dispatch(name, token, chat, upd)
     while not stop.is_set():
         if name not in instance_names():   # deleted while the service runs (shaft delete): its bot answers no more
             log(f"telegram: {name} no longer exists — its bot stops")
+            update(lambda s: (s.get("pending") or {}).pop(name, None))
             return
-        offset = (load().get("offsets") or {}).get(name, 0)
+        st = load()
+        offset = (st.get("offsets") or {}).get(name, 0)
         try:
             updates = call(token, "getUpdates", http_timeout=POLL_S + 15, offset=offset, timeout=POLL_S,
                            allowed_updates=["message"])
@@ -574,13 +613,47 @@ def poll(name: str, token: str, stop: threading.Event) -> None:
         if name not in instance_names():
             continue   # left at the top of the loop, without recording an offset for a deleted instance
         for upd in updates or []:
-            update(lambda s: s.setdefault("offsets", {}).__setitem__(name, upd["update_id"] + 1))
-            threading.Thread(target=_safe, args=(handle_update, name, token, chat, upd), daemon=True).start()
+            if upd["update_id"] < offset or str(upd["update_id"]) in _pending(st, name):
+                continue                             # had already: never handled twice
+            _take(name, upd)
+            _dispatch(name, token, chat, upd)
 
 
-def _safe(fn, *args) -> None:
+# An update is taken (the offset that tells Telegram not to send it again moves past it) in the same state write that
+# keeps it as pending, and it stays pending until its handler has finished. The offset was saved before a daemon thread
+# handled the message, so a restart in between lost it (B11, review of 2026-10-24); now a restart handles it then.
+# Handlers stay one thread per update: a message sent while a reply runs must join that reply (Chat.handle).
+def _pending(st: dict, name: str) -> dict[str, dict]:
+    return (st.get("pending") or {}).get(name) or {}
+
+
+def _take(name: str, upd: dict) -> None:
+    def fn(s: dict) -> None:
+        s.setdefault("pending", {}).setdefault(name, {})[str(upd["update_id"])] = upd
+        s.setdefault("offsets", {})[name] = upd["update_id"] + 1
+    update(fn)
+
+
+def _done(name: str, update_id: int) -> None:
+    def fn(s: dict) -> None:
+        mine = (s.get("pending") or {}).get(name)
+        if mine is not None:
+            mine.pop(str(update_id), None)
+            if not mine:
+                s["pending"].pop(name)
+    update(fn)
+
+
+def _dispatch(name: str, token: str, chat: Chat, upd: dict) -> None:
+    def handle() -> None:
+        if _safe(handle_update, name, token, chat, upd) is not True:   # True: it joined a running reply, done by it
+            _done(name, upd["update_id"])   # handled, or failed and logged: either way not again (no crash got here)
+    threading.Thread(target=handle, daemon=True).start()
+
+
+def _safe(fn, *args):
     try:
-        fn(*args)
+        return fn(*args)
     except Exception as e:                       # one bad update must not stop the bot; say what went wrong
         log(f"telegram: {type(e).__name__}: {e}")
 

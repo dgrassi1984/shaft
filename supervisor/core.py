@@ -519,12 +519,56 @@ SECRETS_DIR = "secrets"
 SECRET_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,40}$")
 
 
-def read_secrets(root: Path) -> dict[str, dict]:
+class KeyStoreUnreadable(ValueError):
+    """The key store is there but is not a JSON object of keys: nothing may be written over it."""
+
+
+def read_secrets(root: Path, strict: bool = False) -> dict[str, dict]:
+    """The instance's keys ({} when it has none). A store that is there but cannot be read is logged loudly and reads
+    as {} for a use of a key — or raises KeyStoreUnreadable when `strict` (every change: store, delete). Until
+    2026-10-24 it read as {} for changes too, so the next `shaft secret set` replaced every key with one (B10)."""
     path = contained(root, SECRETS_DIR, "secrets.json")
-    try:
-        return json.loads(path.read_text()) if path.is_file() else {}
-    except (OSError, ValueError):
+    if not os.path.lexists(path):
         return {}
+    try:
+        store = json.loads(read_beneath(root, [SECRETS_DIR, "secrets.json"]))
+        if not isinstance(store, dict) or not all(isinstance(e, dict) for e in store.values()):
+            raise ValueError("not a JSON object of keys")
+        return store
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError, UnsafePath) as e:
+        why = f"{path} cannot be read as a key store ({type(e).__name__}: {e})"
+        log(f"KEY STORE UNREADABLE: {why}; its keys are not used until it is repaired by hand")
+        if strict:
+            raise KeyStoreUnreadable(f"{why}; nothing was changed — repair or remove the file by hand") from None
+        return {}
+
+
+@contextlib.contextmanager
+def _secrets_lock(root: Path):
+    """One change to an instance's key store at a time, across processes (the broker's secret_set and secret_delete,
+    `shaft secret`): each reads the store, changes one key and writes it back, and two at once lost one of them."""
+    import fcntl
+    locks = SUP_DIR / "locks"
+    locks.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha1(str(Path(root).resolve()).encode()).hexdigest()[:16]
+    with (locks / f"secrets-{digest}.lock").open("a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def _change_secrets(root: Path, change) -> dict:
+    """Read, change (`change(store)` edits it in place and returns False for "nothing to write") and write the store,
+    under its lock; never over a store that cannot be read."""
+    with _secrets_lock(root):
+        store = read_secrets(root, strict=True)
+        if change(store) is not False:
+            _write_secrets(root, store)
+        return store
 
 
 def store_secret(root: Path, key: str, value: str, hosts: list[str], header: str = "Authorization",
@@ -534,10 +578,9 @@ def store_secret(root: Path, key: str, value: str, hosts: list[str], header: str
     hosts = sorted({h.strip().lower() for h in hosts if h.strip()})
     if not value.strip() or not hosts:
         raise ValueError("a key needs a value and at least one host it may be sent to")
-    store = read_secrets(root)
-    store[key] = {"value": value.strip(), "hosts": hosts, "header": header, "scheme": scheme,
-                  "created": datetime.now().isoformat(timespec="seconds")}
-    _write_secrets(root, store)
+    entry = {"value": value.strip(), "hosts": hosts, "header": header, "scheme": scheme,
+             "created": datetime.now().isoformat(timespec="seconds")}
+    _change_secrets(root, lambda store: store.__setitem__(key, entry))
 
 
 def store_google_key(root: Path, key: str, data: dict) -> None:
@@ -550,12 +593,11 @@ def store_google_key(root: Path, key: str, data: dict) -> None:
     missing = [f for f in ("client", "address", "refresh_token", "scope") if not str(data.get(f) or "").strip()]
     if data.get("kind") != "google" or missing or not hosts:
         raise ValueError(f"a Google key needs kind google, hosts and {', '.join(missing) or 'its login'}")
-    store = read_secrets(root)
-    store[key] = {"kind": "google", "client": data["client"], "address": data["address"],
-                  "refresh_token": data["refresh_token"], "scope": data["scope"], "hosts": hosts,
-                  "header": "Authorization", "scheme": "Bearer",
-                  "created": data.get("created") or datetime.now().isoformat(timespec="seconds")}
-    _write_secrets(root, store)
+    entry = {"kind": "google", "client": data["client"], "address": data["address"],
+             "refresh_token": data["refresh_token"], "scope": data["scope"], "hosts": hosts,
+             "header": "Authorization", "scheme": "Bearer",
+             "created": data.get("created") or datetime.now().isoformat(timespec="seconds")}
+    _change_secrets(root, lambda store: store.__setitem__(key, entry))
 
 
 def is_google_key(entry: dict | None) -> bool:
@@ -575,20 +617,45 @@ def describe_key(key: str, entry: dict) -> str:
 
 
 def delete_secret(root: Path, key: str) -> bool:
-    store = read_secrets(root)
-    found = store.pop(key, None) is not None
-    if found:
-        _write_secrets(root, store)
+    found = False
+
+    def drop(store: dict) -> bool:
+        nonlocal found
+        found = store.pop(key, None) is not None
+        return found                                 # False: not there, nothing to write
+    _change_secrets(root, drop)
     return found
 
 
 def _write_secrets(root: Path, store: dict) -> None:
+    """The whole store or none of it: written to a new 0600 file beside it, flushed to disk, then renamed over it —
+    never truncated and rewritten in place, where a crash halfway left a store that read as empty (B10). Every
+    component is opened without following a link (open_beneath), the rename too (it replaces a link, never its
+    target). Called under _secrets_lock."""
     safe_mkdir(root, SECRETS_DIR)
-    path = contained(root, SECRETS_DIR, "secrets.json")
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(json.dumps(store, indent=1))
-    os.chmod(path, 0o600)
+    tmp = f".secrets.json.{os.getpid()}.{os.urandom(4).hex()}"
+    fd = open_beneath(root, [SECRETS_DIR, tmp], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    dfd = None
+    try:
+        with os.fdopen(fd, "wb") as f:
+            os.fchmod(f.fileno(), 0o600)
+            f.write(json.dumps(store, indent=1).encode())
+            f.flush()
+            os.fsync(f.fileno())
+        dfd = open_beneath(root, [SECRETS_DIR], os.O_RDONLY | os.O_DIRECTORY)
+        os.rename(tmp, "secrets.json", src_dir_fd=dfd, dst_dir_fd=dfd)   # atomic; os.replace takes no dir_fd here
+        os.fsync(dfd)
+    except BaseException:
+        try:
+            if dfd is None:
+                dfd = open_beneath(root, [SECRETS_DIR], os.O_RDONLY | os.O_DIRECTORY)
+            os.unlink(tmp, dir_fd=dfd)
+        except OSError:
+            pass
+        raise
+    finally:
+        if dfd is not None:
+            os.close(dfd)
 
 
 def set_tool(name: str, tool: str, on: bool) -> set[str]:

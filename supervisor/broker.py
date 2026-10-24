@@ -9,6 +9,7 @@ logs every call (.supervisor/broker.log).
 from __future__ import annotations
 
 import hashlib
+import http.client
 import ipaddress
 import json
 import re
@@ -406,28 +407,88 @@ class BlockedAddress(Exception):
     pass
 
 
+def resolve_public(host: str, port: int) -> list[str]:
+    """The addresses host:port resolves to, in the resolver's order — BlockedAddress unless every one is public."""
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as e:
+        raise BlockedAddress(f"cannot resolve {host}: {e}") from e
+    if not infos:
+        raise BlockedAddress(f"cannot resolve {host}")
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0].split("%")[0])
+        if not ip.is_global:
+            raise BlockedAddress(f"{host} resolves to non-public address {ip}")
+    return list(dict.fromkeys(info[4][0] for info in infos))
+
+
 def check_public(url: str) -> None:
-    """Refuse anything but http(s) to public addresses (no localhost, LAN, link-local, metadata)."""
+    """Refuse anything but http(s) to public addresses (no localhost, LAN, link-local, metadata) — early, before a
+    request is prepared. It is not what keeps the request public: the connection resolves the name again and
+    connects only to an address it checked itself (_PinnedHTTP)."""
     parts = urllib.parse.urlsplit(url)
     if parts.scheme not in ("http", "https") or not parts.hostname:
         raise BlockedAddress(f"only http(s) URLs with a host are allowed: {url!r}")
-    try:
-        infos = socket.getaddrinfo(parts.hostname, parts.port or (443 if parts.scheme == "https" else 80))
-    except socket.gaierror as e:
-        raise BlockedAddress(f"cannot resolve {parts.hostname}: {e}") from e
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if not ip.is_global:
-            raise BlockedAddress(f"{parts.hostname} resolves to non-public address {ip}")
+    resolve_public(parts.hostname, parts.port or (443 if parts.scheme == "https" else 80))
+
+
+def _connect_public(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None, **_):
+    """socket.create_connection for the broker's requests: the name is resolved once, here, every address checked,
+    and the socket connected to one of those very addresses. check_public's own lookup was thrown away and urlopen
+    resolved the name again, so a name answering public for the check and 127.0.0.1 for the connection reached the
+    operator's own services (DNS rebinding, B4 in the review of 2026-10-24)."""
+    host, port = address
+    error: OSError | None = None
+    for ip in resolve_public(host, port):
+        try:
+            return socket.create_connection((ip, port), timeout, source_address)
+        except OSError as e:
+            error = e
+    raise error or OSError(f"cannot connect to {host}:{port}")
+
+
+class _PinnedHTTP(http.client.HTTPConnection):
+    """An HTTP connection to a checked public address. Only the socket is changed: the Host header still names the
+    URL's host."""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self._create_connection = _connect_public
+
+
+class _PinnedHTTPS(http.client.HTTPSConnection):
+    """The same over TLS: HTTPSConnection.connect wraps the pinned socket with server_hostname = the URL's host, so SNI
+    and the certificate check are for the name asked for, never the address."""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self._create_connection = _connect_public
+
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_PinnedHTTP, req)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(_PinnedHTTPS, req, context=self._context)
+
+
+def _public_opener(redirects: urllib.request.HTTPRedirectHandler) -> urllib.request.OpenerDirector:
+    """Every request an instance aims (fetch_page, http_request, the redirects they follow): pinned connections and no
+    proxy from the environment (the check is made on the address actually connected to, never a proxy's)."""
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}), _PinnedHTTPHandler(), _PinnedHTTPSHandler(),
+                                       redirects)
 
 
 class _CheckedRedirects(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        check_public(newurl)
+        check_public(newurl)   # a clear refusal of a non-http(s) or private target; its connection is pinned too
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-_opener = urllib.request.build_opener(_CheckedRedirects())
+_opener = _public_opener(_CheckedRedirects())
 
 
 class _NoRedirects(urllib.request.HTTPRedirectHandler):
@@ -435,7 +496,7 @@ class _NoRedirects(urllib.request.HTTPRedirectHandler):
         return None
 
 
-_opener_no_redirects = urllib.request.build_opener(_NoRedirects())
+_opener_no_redirects = _public_opener(_NoRedirects())
 
 
 class _Text(HTMLParser):
@@ -972,6 +1033,8 @@ class Broker:
             out, err = proc.communicate()
             status = f"killed after {timeout_s} s timeout"
         finally:
+            from .gate import stop_group
+            stop_group(proc)   # and on every other way out: nothing it put in the background outlives it (B9)
             os.unlink(prof)
         half = RUN_OUTPUT_CHARS // 2
         def cap(t):

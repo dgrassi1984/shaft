@@ -61,6 +61,143 @@ class BrokerTest(unittest.TestCase):
         self.assertEqual(results, [True] * 3 + [False])
 
 
+class DnsRebindingTest(unittest.TestCase):
+    """B4 (review 2026-10-24): check_public resolved the name and threw the answer away; urlopen resolved it again. A
+    name answering public for the check and 127.0.0.1 for the connection reached the operator's own services."""
+
+    def setUp(self):
+        import socket
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        self.reached = []
+        test = self
+
+        class Local(BaseHTTPRequestHandler):           # one of the operator's services, on this Mac
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                test.reached.append((self.path, self.headers.get("Host")))
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.end_headers()
+                self.wfile.write(b"the operator's private data")
+
+        self.local = ThreadingHTTPServer(("127.0.0.1", 0), Local)
+        threading.Thread(target=self.local.serve_forever, daemon=True).start()
+        self.addCleanup(self.local.server_close)
+        self.addCleanup(self.local.shutdown)
+        self.port = self.local.server_address[1]
+        self.project = Path(tempfile.mkdtemp(prefix="shaft-rebind-")).resolve()
+        self.addCleanup(shutil.rmtree, self.project, True)
+        (self.project / "instances" / "a").mkdir(parents=True)
+        self.b = broker.Broker("a", self.project, {}, self.project / "broker.log")
+        real, answers = socket.getaddrinfo, {"n": 0}
+
+        def rebinding(host, port, *a, **k):            # public for the first lookup, localhost for every later one
+            if host != "rebind.example":
+                return real(host, port, *a, **k)
+            answers["n"] += 1
+            ip = "93.184.216.34" if answers["n"] == 1 else "127.0.0.1"
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port))]
+        p = mock.patch.object(socket, "getaddrinfo", side_effect=rebinding)
+        p.start()
+        self.addCleanup(p.stop)
+        self.answers = answers
+
+    def test_a_name_that_rebinds_to_localhost_after_the_check_reaches_nothing(self):
+        for tool in ("fetch_page", "http_request"):
+            self.answers["n"] = 0
+            out = self.b.call(tool, {"url": f"http://rebind.example:{self.port}/secret"})
+            self.assertFalse(out["ok"], (tool, out))
+            self.assertIn("BlockedAddress", out["error"])
+            self.assertIn("127.0.0.1", out["error"])
+        self.assertEqual(self.reached, [], "the request reached a service on localhost")
+
+    def test_https_connects_to_the_checked_address_with_the_name_for_sni(self):
+        import socket
+        seen = {}
+
+        class Context:                                  # stands in for the TLS context: records the name it verifies
+            def wrap_socket(self, sock, server_hostname=None):
+                seen["sni"] = server_hostname
+                return sock
+
+        class Sock:
+            def setsockopt(self, *a):
+                pass
+
+        def connect(address, *a, **k):
+            seen["address"] = address
+            return Sock()
+        conn = broker._PinnedHTTPS("rebind.example", 443, context=Context())
+        with mock.patch.object(socket, "create_connection", side_effect=connect):
+            conn.connect()
+        self.assertEqual(seen, {"address": ("93.184.216.34", 443), "sni": "rebind.example"})
+        self.assertEqual(self.answers["n"], 1, "the name was resolved again after the check")
+
+    def test_a_redirect_to_a_name_that_rebinds_reaches_nothing_and_a_public_one_is_followed(self):
+        """Codex on e77d5e5: a behavioural redirect test. hop.example answers public (93.184.216.34, which this test's
+        network carries to a local server playing the public site) and redirects: to rebind.example, which answers
+        public for the check and 127.0.0.1 for the connection; or to a page of its own."""
+        import socket
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        test, hosts = self, []
+
+        class Hop(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                hosts.append(self.headers.get("Host"))
+                if self.path == "/final":
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/plain")
+                    self.end_headers()
+                    self.wfile.write(b"the public page")
+                    return
+                self.send_response(302)
+                self.send_header("Location", f"http://rebind.example:{test.port}/secret" if self.path == "/start"
+                                 else f"http://hop.example:{hop.server_address[1]}/final")
+                self.end_headers()
+
+        hop = ThreadingHTTPServer(("127.0.0.1", 0), Hop)
+        threading.Thread(target=hop.serve_forever, daemon=True).start()
+        self.addCleanup(hop.server_close)
+        self.addCleanup(hop.shutdown)
+        lookup, connect = socket.getaddrinfo, socket.create_connection
+
+        def resolve(host, port, *a, **k):
+            if host == "hop.example":
+                return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
+            return lookup(host, port, *a, **k)
+
+        def carry(address, *a, **k):                          # the "public" site is the local hop server
+            public = address[0] in ("93.184.216.34", "hop.example")   # (by name too: unpinned code connects by name)
+            return connect(("127.0.0.1", address[1]) if public else address, *a, **k)
+        with mock.patch.object(socket, "getaddrinfo", side_effect=resolve), \
+                mock.patch.object(socket, "create_connection", side_effect=carry):
+            for tool in ("fetch_page", "http_request"):
+                self.answers["n"] = 0
+                out = self.b.call(tool, {"url": f"http://hop.example:{hop.server_address[1]}/start"})
+                self.assertFalse(out["ok"], (tool, out))
+                self.assertIn("BlockedAddress", out["error"])
+            self.assertEqual(self.reached, [], "a redirect reached a service on localhost")
+            out = self.b.call("fetch_page", {"url": f"http://hop.example:{hop.server_address[1]}/go"})
+        self.assertTrue(out["ok"], out)
+        self.assertIn("the public page", out["result"])
+        self.assertEqual(set(hosts), {f"hop.example:{hop.server_address[1]}"})   # the name, not the address
+
+    def test_redirects_and_keyed_requests_use_the_pinned_connections(self):
+        for opener in (broker._opener, broker._opener_no_redirects):
+            kinds = {type(h) for h in opener.handlers}
+            self.assertIn(broker._PinnedHTTPHandler, kinds)
+            self.assertIn(broker._PinnedHTTPSHandler, kinds)
+            self.assertFalse(kinds & {urllib.request.HTTPHandler, urllib.request.HTTPSHandler,
+                                      urllib.request.ProxyHandler}, "an unpinned or proxied way out")
+
+
 class EnforcementTest(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix="shaft-enf-")).resolve()
@@ -193,6 +330,21 @@ class RunToolTest(unittest.TestCase):
     def test_runaway_is_killed(self):
         r = self.run_cmd("sleep 30 & sleep 30", timeout_s=1)
         self.assertIn("killed after 1 s", r)
+
+
+class AgentEnvironmentTest(unittest.TestCase):
+    def test_no_inherited_llm_variable_reaches_instance_code(self):
+        """B5 (review 2026-10-24): ENV_ALLOW_PREFIXES held "LLM_", so an LLM_API_KEY the shell or launchd exported
+        reached the agent, its plugins and its tests. Only the names the supervisor passes on purpose get through."""
+        from supervisor import sandbox
+        env = sandbox.agent_env({"PATH": "/usr/bin", "LC_ALL": "en_US.UTF-8", "LLM_API_KEY": "sk-leaked-canary",
+                                 "LLM_BASE_URL": "http://10.0.0.1/v1", "LLM_MODEL": "inherited"},
+                                LLM_MODEL="the-trial-arm")
+        self.assertNotIn("LLM_API_KEY", env)
+        self.assertNotIn("LLM_BASE_URL", env)
+        self.assertNotIn("sk-leaked-canary", json.dumps(env))
+        self.assertEqual(env["LLM_MODEL"], "the-trial-arm")        # given by name (trial.py): still passed
+        self.assertEqual(env["LC_ALL"], "en_US.UTF-8")
 
 
 class SymlinkEscapeTest(unittest.TestCase):

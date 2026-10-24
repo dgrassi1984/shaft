@@ -102,6 +102,35 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(fake_run_agent.request["messages"][-1]["content"], "what is teal?")
         self.assertTrue(fake_run_agent.request["talk_id"].startswith("api-"))
 
+    def test_a_request_sent_again_with_its_id_is_answered_without_running_again(self):
+        """Codex on e77d5e5: Telegram replays an update after a restart, and its request ran a second reply. With
+        X-Shaft-Request-Id the API answers a request it has answered already from that answer."""
+        import tempfile
+        from pathlib import Path
+        p = mock.patch.object(api, "ANSWERED", Path(tempfile.mkdtemp(prefix="shaft-api-ans-")) / "answered.json",
+                              create=True)
+        p.start()
+        self.addCleanup(p.stop)
+        api.Handler.answered = None
+        runs = []
+
+        def counting(*a, **k):
+            runs.append(1)
+            return fake_run_agent(*a, **k)
+
+        def ask(rid):
+            body = {"model": "shaft", "messages": [{"role": "user", "content": "what is teal?"}]}
+            headers = {"Content-Type": "application/json", "Authorization": f"Bearer {KEY}",
+                       "Tailscale-User-Login": ME, "X-Shaft-Request-Id": rid}
+            r = urllib.request.Request(self.base + "/chat/completions", data=json.dumps(body).encode(), headers=headers)
+            return json.load(urllib.request.urlopen(r, timeout=10))
+        with mock.patch.object(api, "run_agent", counting):
+            first, again = ask("telegram-shaft-7"), ask("telegram-shaft-7")
+            other = ask("telegram-shaft-8")
+        self.assertEqual(len(runs), 2, "the replayed request ran again")
+        self.assertEqual(again["choices"][0]["message"]["content"], first["choices"][0]["message"]["content"])
+        self.assertEqual(other["choices"][0]["message"]["content"], "Teal is blue-green.")
+
     NARRATED = [{"type": "ready", "name": "wren"}, {"type": "status", "phase": "waiting for the model"},
                 {"type": "content", "text": "Let me check my notes "}, {"type": "content", "text": "on teal first."},
                 {"type": "usage", "prompt_tokens": 9, "completion_tokens": 3},
@@ -311,6 +340,105 @@ class InterjectTest(unittest.TestCase):
         stale.write_text(json.dumps({"text": "from a reply that crashed"}) + "\n")
         json.load(self.req("/chat/completions", body))
         self.assertEqual(self.seen_file, [])
+
+
+class LongReplyTest(unittest.TestCase):
+    """B12 and B19 (review 2026-10-24): the idle write-up counted from the request alone, and two requests in one talk
+    deleted each other's interjections."""
+
+    MESSAGES = [{"role": "user", "content": "run the long job"}]
+
+    def setUp(self):
+        import shutil
+        import tempfile
+        from pathlib import Path
+        tmp = Path(tempfile.mkdtemp(prefix="shaft-api-long-")).resolve()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        (tmp / "wren" / ".tmp").mkdir(parents=True)
+        self.recovered = []
+        for p in (mock.patch.object(api, "TALKS", tmp / "api_talks.json"),
+                  mock.patch.object(api, "instance_names", return_value=["wren"]),
+                  mock.patch.object(api, "instance_root", lambda n: tmp / n),
+                  mock.patch.object(api, "spawn_recover", self.recovered.append),
+                  mock.patch.object(api, "log", lambda *_: None)):
+            p.start()
+            self.addCleanup(p.stop)
+        self.file = tmp / "wren" / ".tmp"
+        self.conversations, self.live = api.Conversations(), api.Live()
+
+    def talk(self) -> dict:
+        return next(iter(self.conversations.talks.values()))
+
+    def test_a_reply_longer_than_the_idle_time_is_not_written_up_under_it(self):
+        talk_id = self.conversations.talk_id("wren", self.MESSAGES)
+        entry = self.live.begin("wren", talk_id)
+        self.talk()["last"] -= api.IDLE_MINUTES * 60 + 5             # the request came in longer ago than that
+        self.conversations.write_up_idle(self.live.running)
+        self.assertFalse(self.talk()["written"], "written up while its reply was still running")
+        self.conversations.replied(talk_id)                         # the reply ends now (work()'s finally)
+        self.live.end(entry)
+        self.conversations.write_up_idle(self.live.running)
+        self.assertFalse(self.talk()["written"], "the quiet time must start when the reply ended")
+        self.assertEqual(self.recovered, [])
+        self.talk()["ended"] -= api.IDLE_MINUTES * 60 + 5            # then quiet for SHAFT_IDLE_MINUTES: written up
+        self.conversations.write_up_idle(self.live.running)
+        self.assertTrue(self.talk()["written"])
+        self.assertEqual(self.recovered, ["wren"])
+
+    def lines(self, talk_id: str) -> list[str]:
+        f = self.file / f"interject-{talk_id}.jsonl"
+        return [json.loads(l)["text"] for l in f.read_text().splitlines()] if f.exists() else []
+
+    def test_overlapping_requests_in_one_talk_keep_each_others_messages(self):
+        talk_id = self.conversations.talk_id("wren", self.MESSAGES)
+        first = self.live.begin("wren", talk_id)
+        self.live.started(first)
+        self.assertTrue(self.live.interject(talk_id, "one"))
+        second = self.live.begin("wren", talk_id)                   # waits for the instance while the first replies
+        self.assertEqual(self.lines(talk_id), ["one"], "the second request deleted them")
+        self.assertTrue(self.live.interject(talk_id, "two"))         # the reply running now hears it
+        self.assertEqual(self.lines(talk_id), ["one", "two"])
+        self.live.started(second)          # the run lock passed on: the first's agent is gone, its client resends
+        self.assertTrue(self.live.interject(talk_id, "three"))
+        self.live.end(first)                                        # its request ends after the second started
+        self.assertEqual(self.lines(talk_id), ["three"], "the first request's end deleted them")
+        self.live.end(second)
+        self.assertEqual(self.lines(talk_id), [])
+
+    def test_a_cancelled_newer_request_leaves_the_running_reply_registered(self):
+        """Codex on e77d5e5: A replies; B, a retry in the same talk, waits and its client hangs up. end(B) removed the
+        registration (B was the newest) and the file while A still ran: running() was empty, the janitor could
+        close A's conversation, and A's interjections were gone."""
+        talk_id = self.conversations.talk_id("wren", self.MESSAGES)
+        first = self.live.begin("wren", talk_id)
+        self.live.started(first)
+        self.assertTrue(self.live.interject(talk_id, "one"))
+        second = self.live.begin("wren", talk_id)
+        self.live.end(second)                                       # cancelled while it waited
+        self.assertEqual(self.live.running(), {talk_id})
+        self.assertEqual(self.lines(talk_id), ["one"])
+        self.assertTrue(self.live.interject(talk_id, "two"))
+        self.assertEqual(self.lines(talk_id), ["one", "two"])
+        self.talk()["last"] -= api.IDLE_MINUTES * 60 + 5
+        self.conversations.write_up_idle(self.live.running)
+        self.assertFalse(self.talk()["written"], "written up under the reply still running")
+        self.live.end(first)
+        self.assertEqual((self.live.running(), self.lines(talk_id)), (set(), []))
+
+    def test_messages_sent_before_any_agent_starts_reach_the_one_that_does(self):
+        talk_id = self.conversations.talk_id("wren", self.MESSAGES)
+        first, second = self.live.begin("wren", talk_id), self.live.begin("wren", talk_id)
+        self.assertTrue(self.live.interject(talk_id, "x"))
+        self.live.end(first)                                        # cancelled before it started: "x" is not lost
+        self.assertTrue(self.live.interject(talk_id, "y"))
+        self.live.started(second)
+        self.assertEqual(self.lines(talk_id), ["x", "y"])
+        self.live.end(second)
+        older, newer = self.live.begin("wren", talk_id), self.live.begin("wren", talk_id)   # twins, equal as dicts
+        self.live.end(newer)                                        # the newer one cancelled, not the older
+        self.live.started(older)
+        self.live.end(older)
+        self.assertEqual(self.live.running(), set(), "the older request was the one removed")
 
 
 INBOX_KEY = "sk-shaft-inbox-test"

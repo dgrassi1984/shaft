@@ -221,9 +221,11 @@ def _command_profile(root: Path, home: Path, writable: str, shared: Path | None,
 
 
 # Environment variables an instance may inherit. Everything else — API keys,
-# tokens, the operator's shell secrets — is dropped.
+# tokens, the operator's shell secrets — is dropped. No LLM_* until 2026-10-24: the prefix passed LLM_API_KEY (and
+# any other LLM_ variable the shell or launchd exported) to instance code. The agent reads its LLM_* settings from its
+# config.env; an override the supervisor means (a trial's LLM_MODEL) is given by name, as `extra`.
 ENV_ALLOW = ("PATH", "HOME", "USER", "LANG", "TERM", "COLUMNS", "LINES", "TZ")
-ENV_ALLOW_PREFIXES = ("LC_", "LLM_")
+ENV_ALLOW_PREFIXES = ("LC_",)
 
 
 def agent_env(environ: dict[str, str], **extra: str) -> dict[str, str]:

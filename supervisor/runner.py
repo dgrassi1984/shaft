@@ -1,9 +1,10 @@
 """One sandboxed run of an instance, and everything the supervisor enforces around it.
 
-Before: take the instance's run lock, snapshot its code, journal and core personality,
-start a broker. After: stop the broker, restore the journal if it was rewritten
-(append-only), restore the core personality if it changed too soon, run the test gate
-on code changes (revert on failure), commit the instance's state to its branch.
+Before: take the instance's run lock, settle code an earlier run left unsettled (_reconcile),
+snapshot its code, journal and core personality, start a broker. After: end the run's whole
+process group, stop the broker, restore the journal if it was rewritten (append-only), restore
+the core personality if it changed too soon, run the test gate on code changes (revert on
+failure), commit the instance's state to its branch.
 
 A terminal conversation is different: its process stays up while it waits for the operator,
 so it holds the lock (and is checked and committed) one reply at a time — an open but quiet
@@ -20,6 +21,7 @@ import re
 import signal
 import subprocess
 import sys
+import threading
 import time
 from contextlib import ExitStack, contextmanager
 from datetime import datetime, timedelta
@@ -271,6 +273,8 @@ def run_agent(name: str, kind: str, agent_args: list[str], interactive: bool, wa
     held.acquire(wait_lock)
     try:
         return _run(name, root, kind, agent_args, interactive, output, driver, held=held)
+    except RunRefused as e:
+        return _refused(name, e)
     finally:
         held.release()
         if kind == "live":
@@ -371,6 +375,7 @@ def _pause(name: str, root: Path, kind: str, proc, held: _Held, run: dict, broke
         time.sleep(1)
     held.acquire(wait=True)
     # The conversation's changes are not mine.
+    _reconcile(name, root)
     run["before"], run["seen"], run["cseen"] = _snapshot(root), len(broker.handoffs), len(broker.config_writes)
     paused = time.monotonic() - t0
     if run.get("deadline"):
@@ -385,6 +390,97 @@ def _snapshot(root: Path) -> dict:
     journal, pers = root / "memory" / "journal.md", root / "self" / "personality.md"
     return {"code": gate.snapshot(root), "journal": journal.read_text() if journal.exists() else "",
             "personality": pers.read_text() if pers.exists() else "", "core": _core(root)}
+
+
+def _uncommitted_code(root: Path) -> dict[str, bytes | None]:
+    """The code (gate.CODE_PATHS) that differs from the instance's last commit, as git sees it: {path: its committed
+    bytes, or None where the commit has no such file}. Left out: what the gate never snapshots (__pycache__,
+    .DS_Store) and a path committed as anything but a plain file. Read through git_wt (the worktree's own .git is
+    the instance's to forge), in bytes: a file name that is not UTF-8 must not hide a change."""
+    def run(*args: str) -> list[str]:
+        out = git_wt(root, "--no-optional-locks", *args, text=False).stdout
+        return [os.fsdecode(e) for e in out.split(b"\0") if e]
+    dirty = sorted({e[3:] for e in run("status", "--porcelain", "-z", "--untracked-files=all", "--no-renames", "--",
+                                       *gate.CODE_PATHS)})
+    dirty = [p for p in dirty if "__pycache__" not in Path(p).parts and Path(p).name != ".DS_Store"]
+    if not dirty:
+        return {}
+    committed = {}
+    for entry in run("ls-tree", "-r", "-z", "HEAD", "--", *gate.CODE_PATHS):
+        meta, _, path = entry.partition("\t")
+        committed[path] = meta.split()                     # mode, type, object
+    out: dict[str, bytes | None] = {}
+    for path in dirty:
+        if path not in committed:
+            out[path] = None
+        elif committed[path][0] in ("100644", "100755"):
+            out[path] = git_wt(root, "cat-file", "blob", committed[path][2], text=False).stdout
+    return out
+
+
+class RunRefused(Exception):
+    """A run must not start: its code cannot be checked against the approved code. Logged as "run refused" (an alert
+    on the panel) and given back as exit REFUSED."""
+
+
+REFUSED = 75   # EX_TEMPFAIL: the run did not start; nothing was changed
+IN_PROGRESS = ("MERGE_HEAD", "rebase-apply", "rebase-merge", "CHERRY_PICK_HEAD", "REVERT_HEAD")
+
+
+def _in_progress(root: Path) -> str | None:
+    """A merge, rebase, cherry-pick or revert under way in the instance's worktree (the operator's, by hand): its
+    state files in the worktree's git dir, located through git_wt — never through the worktree's own .git."""
+    paths = git_wt(root, "rev-parse", *[a for n in IN_PROGRESS for a in ("--git-path", n)]).stdout.splitlines()
+    if len(paths) != len(IN_PROGRESS) or not all(os.path.isabs(p) for p in paths):
+        raise RunRefused(f"cannot tell whether a merge is in progress in {root}: git said {paths!r}")
+    return next((n for n, p in zip(IN_PROGRESS, paths) if os.path.lexists(p)), None)
+
+
+def _reconcile(name: str, root: Path) -> None:
+    """Settle code an earlier run left unsettled, before a new run takes its baseline: a run that died before
+    _settle (the supervisor killed, the Mac shut down, an exception) left its edits on disk, and the next run's
+    snapshot took them as its starting point, so they were never gated (B8, review of 2026-10-24). Whatever code
+    is not the approved code (baseline.py: the last commit, plus what the gate passed that git does not hold —
+    ignored and untracked files included, which `git status` never showed: Codex on e77d5e5) is checked now as that
+    run's would have been: kept if the tests pass; put back as approved if they fail, the rejected bytes kept in
+    .supervisor/rejected/ first. Before an instance's first record, git's view is the approved code. config.env and
+    drive.md are not code (the operator's: _commit_outside_config, _commit_outside_drive). Nothing is guessed:
+    a merge or rebase in progress (the operator's work), or code that cannot be compared, refuses the run
+    (RunRefused) — it failed open until Codex's review."""
+    from . import baseline
+    try:
+        if (what := _in_progress(root)):
+            raise RunRefused(f"a git {what} is in progress in its worktree; finish or abort it "
+                             f"(git -C {root} status) and the next run checks the code")
+        now = gate.snapshot(root)
+        restore = baseline.unapproved(name, root, now)
+        if restore is None:                                    # no record yet: the first run after the upgrade
+            restore = _uncommitted_code(root)
+    except RunRefused:
+        raise
+    except (baseline.BaselineError, subprocess.CalledProcessError, OSError, ValueError, UnsafePath, SystemExit) as e:
+        why = (getattr(e, "stderr", None) or b"").decode(errors="replace").strip() or f"{type(e).__name__}: {e}"
+        raise RunRefused(f"its code could not be compared with its approved code: {why}") from None
+    base = {p: b for p, b in now.items() if p not in restore}
+    base.update({p: b for p, b in restore.items() if b is not None})
+    touched = gate.changed(base, now)
+    if not touched:
+        return
+    log(f"{name}: code is not the approved code before a run (an earlier run ended unsettled): gating {touched}")
+    journal_note(root, "Supervisor: unchecked code from an earlier run",
+                 "When this run started, my code was not the code the supervisor last approved, in "
+                 + ", ".join(touched) + ": an earlier run ended before the supervisor could check it (or it was "
+                 "edited from outside). It was checked now, as every run's changes are: kept if the tests pass, put "
+                 "back as last approved if they fail (the rejected files are kept for the operator).")
+    rejected = SUP_DIR / "rejected" / f"{name}-{datetime.now():%Y%m%d-%H%M%S-%f}"
+    _settle(name, root, "interrupted", {**_snapshot(root), "code": base}, [], rejected_to=rejected)
+
+
+def _refused(name: str, e: RunRefused) -> int:
+    """Say it where the operator looks: the supervisor log (the panel shows its "refused" lines as alerts), stderr."""
+    log(f"{name}: run refused — {e}")
+    print(f"{name}: run refused — {e}", file=sys.stderr)
+    return REFUSED
 
 
 def _launch(name: str, root: Path, kind: str, agent_args: list[str], budget: int | None):
@@ -492,8 +588,6 @@ def _sees_images(root: Path) -> bool:
 def _tee(stream, echo, keep: list[str]):
     """Copy a child's stream to `echo` (if any) as it arrives, keeping the last ~4 KB in `keep`
     (all of it when nothing is echoed: that is a captured output)."""
-    import threading
-
     def pump():
         for chunk in iter(lambda: stream.read(512), ""):
             if echo:
@@ -511,23 +605,194 @@ def _tee(stream, echo, keep: list[str]):
 
 def _popen(cmd, root: Path, env: dict) -> subprocess.Popen:
     # Own process group: the terminal's Ctrl-C reaches the client, which decides what it means.
-    return subprocess.Popen(cmd, cwd=root, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, text=True, bufsize=1, start_new_session=True)
+    return _track(subprocess.Popen(cmd, cwd=root, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE, text=True, bufsize=1, start_new_session=True), root)
 
 
-def _finish(proc: subprocess.Popen) -> None:
+# Every run's agent this process leads, by pid (its process group's id), with its instance's folder: what a service
+# that starts runs ends before it goes (stop_runs_on_signal).
+_LIVE: dict[int, tuple[subprocess.Popen, Path]] = {}
+_LIVE_LOCK = threading.Lock()
+
+
+def _track(proc: subprocess.Popen, root: Path) -> subprocess.Popen:
+    with _LIVE_LOCK:
+        _LIVE[proc.pid] = (proc, Path(root))
+    return proc
+
+
+def _end_run(proc: subprocess.Popen, root: Path) -> None:
+    """Nothing a run started outlives it, before anything of it is settled (B9): its whole process group, then any
+    process left in the instance's folder that slipped out of the group (_end_strays)."""
+    try:
+        gate.stop_group(proc)
+        _end_strays(root)
+    finally:
+        with _LIVE_LOCK:
+            _LIVE.pop(proc.pid, None)
+
+
+def end_all_runs() -> None:
+    with _LIVE_LOCK:
+        live = list(_LIVE.values())
+    for proc, root in live:
+        _end_run(proc, root)
+
+
+def _end_strays(root: Path) -> None:
+    """End what an agent or a `run` command started in a session of its own (setsid), out of its run's process group:
+    a process whose parent is gone (re-parented to launchd, pid 1) and whose working folder is in the instance's
+    folder, with everything below it, never this process or its ancestors (Codex on e77d5e5). The parent rule spares
+    the operator's own shells there. One that also left the folder (chdir) is not found: the sandbox is the boundary
+    then — it may write only the instance's folder, and what it writes there after this is gated at the next run
+    (_reconcile against the approved code)."""
+    from . import kill
+    root = Path(root).resolve()
+    try:
+        procs = kill.processes()
+    except Exception as e:
+        log(f"{root.name}: FAILED to look for processes left in its folder after its run: {type(e).__name__}: {e}")
+        return
+    mine, pid = set(), os.getpid()
+    while pid in procs and pid not in mine:
+        mine.add(pid)
+        pid = procs[pid].ppid
+    mine.add(os.getpid())
+    heads = [p.pid for p in procs.values() if p.ppid == 1 and p.pid not in mine and kill._inside(p.cwd, root)
+             and not kill.SUPERVISOR.search(p.command)]
+    children: dict[int, list[int]] = {}
+    for p in procs.values():
+        children.setdefault(p.ppid, []).append(p.pid)
+    found, stack = [], list(heads)
+    while stack:
+        pid = stack.pop()
+        if pid not in found and pid not in mine:
+            found.append(pid)
+            stack.extend(children.get(pid, []))
+    if not found:
+        return
+    log(f"{root.name}: ending {len(found)} process(es) its run left in its folder outside the run's group: "
+        + "; ".join(procs[p].command[:80] for p in found if p in procs))
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        for pid in found:
+            try:
+                os.kill(pid, sig)
+            except (ProcessLookupError, PermissionError):
+                pass
+        deadline = time.monotonic() + gate.STOP_GRACE_S
+        while sig == signal.SIGTERM and time.monotonic() < deadline and any(_pid_alive(p) for p in found):
+            time.sleep(0.05)
+
+
+def _finish(proc: subprocess.Popen, root: Path) -> None:
+    """A driven agent's end: up to 15 s to finish on its own (its journal entry, its last reply), then its whole
+    process group is ended — and on a normal end too, whatever it left running (_end_run, B9)."""
     if proc.poll() is None:
         try:
             proc.wait(timeout=15)
         except subprocess.TimeoutExpired:
-            proc.terminate()
-            proc.wait(timeout=10)
+            pass
+    _end_run(proc, root)
+
+
+def _start(cmd, root: Path, env: dict, capture: bool, interactive: bool) -> subprocess.Popen:
+    """An undriven run's agent, leading a process group of its own, so that it and everything it starts end together
+    (gate.stop_group). An autonomous run gets its own session too; a terminal conversation stays in the terminal's
+    session and is handed the terminal (_give_terminal), so Ctrl-C and what is typed still reach it."""
+    group = {"process_group": 0} if interactive else {"start_new_session": True}
+    return _track(subprocess.Popen(cmd, cwd=root, env=env, stderr=subprocess.PIPE, text=True,
+                                   stdout=subprocess.PIPE if capture else None, **group), root)
+
+
+def _give_terminal(proc: subprocess.Popen):
+    """Make the agent's group the terminal's foreground group, as the supervisor's own group was while they shared it;
+    returns how to take it back, or None (no terminal in the foreground, or not the main thread)."""
+    if threading.current_thread() is not threading.main_thread():
+        return None
+    try:
+        fd = sys.stdin.fileno()
+        if not os.isatty(fd) or os.tcgetpgrp(fd) != os.getpgrp():
+            return None
+    except (OSError, ValueError):
+        return None
+    old = signal.signal(signal.SIGTTOU, signal.SIG_IGN)   # a background group's tcsetpgrp would stop it otherwise
+    try:
+        os.tcsetpgrp(fd, proc.pid)
+        os.killpg(proc.pid, signal.SIGCONT)               # stopped on SIGTTIN, had it read before it had the terminal
+    except OSError:
+        signal.signal(signal.SIGTTOU, old)
+        return None
+
+    def take_back() -> None:
+        try:
+            os.tcsetpgrp(fd, os.getpgrp())
+        except OSError:
+            pass
+        finally:
+            signal.signal(signal.SIGTTOU, old)
+    return take_back
+
+
+class _Stopped(Exception):
+    def __init__(self, signum: int):
+        super().__init__(signum)
+        self.signum = signum
+
+
+STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP)
+
+
+def _trap_stop(saved: dict) -> None:
+    """SIGTERM or SIGHUP to the supervisor during an undriven run (launchd stopping a service, a closed terminal)
+    raises _Stopped in the main thread, so the run's process group is ended before the supervisor goes: the agent
+    leads its own group now, and those signals used to reach it only because it shared the supervisor's. `saved`
+    gets each handler replaced, before it is, to be put back. Nothing off the main thread."""
+    if threading.current_thread() is not threading.main_thread():
+        return
+
+    def on_stop(signum, frame):
+        for s in STOP_SIGNALS:                            # one is enough: nothing interrupts the cleanup
+            signal.signal(s, signal.SIG_IGN)
+        raise _Stopped(signum)
+    for s in STOP_SIGNALS:
+        if signal.getsignal(s) is not signal.SIG_IGN:     # ignored stays so: `nohup shaft live` outlives its terminal
+            saved[s] = signal.getsignal(s)
+            signal.signal(s, on_stop)
+
+
+def _trap_runs(saved: dict) -> None:
+    """SIGTERM or SIGHUP to a process whose runs are driven from threads (the API service) or that keeps a
+    conversation's agent between replies (the terminal client): every run's processes are ended first (end_all_runs),
+    then the signal does what it was sent to do. Before, stopping the API service left its agents running with their
+    locks gone (Codex on e77d5e5). What those runs changed is settled at their instance's next run (_reconcile).
+    `saved` gets the handlers replaced, to be put back; nothing off the main thread."""
+    if threading.current_thread() is not threading.main_thread():
+        return
+
+    def on_signal(signum, frame):
+        for s in STOP_SIGNALS:
+            signal.signal(s, signal.SIG_IGN)
+        log(f"stopping (signal {signum}): ending the processes of {len(_LIVE)} run(s) first")
+        end_all_runs()
+        for s in STOP_SIGNALS:
+            signal.signal(s, saved.get(s, signal.SIG_DFL))
+        os.kill(os.getpid(), signum)
+    for s in STOP_SIGNALS:
+        if signal.getsignal(s) is not signal.SIG_IGN:
+            saved[s] = signal.getsignal(s)
+            signal.signal(s, on_signal)
+
+
+def stop_runs_on_signal() -> None:
+    """For the main thread of a service that starts runs in its own process (the API): see _trap_runs."""
+    _trap_runs({})
 
 
 def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: bool,
          output: list[str] | None = None, driver=None, held: _Held | None = None) -> int:
     log(f"{name}: start {kind} {describe_knobs()}")
     _clean_tmp(root)
+    _reconcile(name, root)
     run = {"before": _snapshot(root), "seen": 0, "cseen": 0}
     budget = None if interactive else (SLEEP_TIMEOUT_S if kind == "sleep" else CYCLE_TIMEOUT_S)
     broker, cmd, env = _launch(name, root, kind, agent_args, budget)
@@ -535,25 +800,30 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
     # In a conversation Ctrl-C belongs to the agent (it ends the talk and writes its journal
     # entry). If the supervisor took it too, subprocess.run would kill the agent mid-entry.
     old_sigint = signal.signal(signal.SIGINT, signal.SIG_IGN) if interactive and not driver else None
+    old_stop: dict = {}
+    stopped, refused = 0, None
     err_tail: list[str] = []
     out_all: list[str] = []
     try:
+        if not driver:
+            _trap_stop(old_stop)
         if driver:
             proc = _popen(cmd, root, env)
             try:
                 driver(proc)
             finally:
-                _finish(proc)
+                _finish(proc, root)
             code = proc.returncode
         else:
-            proc = subprocess.Popen(cmd, cwd=root, env=env, stderr=subprocess.PIPE, text=True,
-                                    stdout=subprocess.PIPE if output is not None else None)
-            readers = [_tee(proc.stderr, sys.stderr, err_tail)]   # still shown live; the tail explains a failure
-            if output is not None:
-                readers.append(_tee(proc.stdout, None, out_all))
-            pausable = held is not None and kind in PAUSABLE and not interactive
-            ends = time.monotonic() + budget if budget else None
+            proc = _start(cmd, root, env, output is not None, interactive)
+            take_back, readers = None, []
             try:
+                take_back = _give_terminal(proc) if interactive else None
+                readers.append(_tee(proc.stderr, sys.stderr, err_tail))   # shown live; the tail explains a failure
+                if output is not None:
+                    readers.append(_tee(proc.stdout, None, out_all))
+                pausable = held is not None and kind in PAUSABLE and not interactive
+                ends = time.monotonic() + budget if budget else None
                 while True:
                     try:
                         code = proc.wait(timeout=2)
@@ -565,11 +835,10 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
                     if pausable and replying(name):
                         paused = _pause(name, root, kind, proc, held, run, broker)
                         ends = ends + paused if ends is not None else None
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
-                raise
             finally:
+                if take_back:
+                    take_back()
+                _end_run(proc, root)   # nothing the run started outlives it, however it ended (B9): settled next
                 for r in readers:
                     r.join(timeout=5)
             if output is not None:
@@ -582,10 +851,27 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
         code = 124
     except KeyboardInterrupt:
         code = 130
+    except _Stopped as e:
+        stopped, code = e.signum, 128 + e.signum
+    except RunRefused as e:                     # on resuming after a pause: stopped where it was, nothing settled
+        refused = e
     finally:
         if old_sigint is not None:
             signal.signal(signal.SIGINT, old_sigint)
+        for s, handler in old_stop.items():
+            signal.signal(s, handler)
         broker.stop()
+    if refused:
+        return _refused(name, refused)
+    if stopped:
+        # The supervisor itself is being stopped: no gate now (launchd would kill it halfway). The run's group is
+        # gone; what it changed is settled when the instance next runs (_reconcile). Then the signal does what it
+        # was sent to do.
+        log(f"{name}: {kind} stopped with the supervisor (signal {stopped}); its changes are settled at its next run")
+        journal_note(root, "Supervisor: run stopped", f"My {kind} run was stopped with the supervisor (signal "
+                     f"{stopped}) before I finished it. What I changed is checked when I next run.")
+        os.kill(os.getpid(), stopped)
+        return code
     log(f"{name}: end {kind} exit={code} broker_calls={broker.counts or {}}")
     (root / ".tmp" / "yield").unlink(missing_ok=True)
     _clean_tmp(root)
@@ -606,7 +892,7 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
 
 
 def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict],
-            config_writes: list[dict] = ()) -> bool:
+            config_writes: list[dict] = (), rejected_to: Path | None = None) -> bool:
     """Everything enforced after the instance acted: append-only journal, core-personality pace, the
     test gate on code and on the config.env lines it set (revert on failure), the commit, probation and
     the personality check. Returns False if the commit failed."""
@@ -615,25 +901,31 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
             log(f"{name}: {note}")
             journal_note(root, "Supervisor", note)
 
-    touched = gate.changed(before["code"], gate.snapshot(root))
+    after = gate.snapshot(root)
+    touched = gate.changed(before["code"], after)
     configured = sorted({w["key"] for w in config_writes})
     kept: list[str] = []
+    approved = after                                  # what the gate judged: the code the next run starts from
     if touched or configured:
         ok, test_log = gate.run_tests(root, HOME)
         if ok:
             kept = touched + (["config.env"] if configured else [])
             log(f"{name}: code change passed tests: {touched} config: {configured}")
         else:
+            approved = before["code"]
+            saved = _keep_rejected(name, rejected_to, after, touched) if rejected_to else ""
             gate.restore(root, before["code"], touched)
             back = gate.revert_config(root, list(config_writes))
             undone = touched + ([f"config.env ({', '.join(back)})"] if back else [])
             names = gate.failing_tests(test_log)
             kept_at = next((l[len("full log: "):] for l in test_log.splitlines() if l.startswith("full log: ")), "")
             log(f"{name}: code change FAILED tests, reverted: {touched} config: {back}"
-                + (f"; failing: {'; '.join(names)}" if names else "") + (f"; full log {kept_at}" if kept_at else ""))
+                + (f"; failing: {'; '.join(names)}" if names else "") + (f"; full log {kept_at}" if kept_at else "")
+                + (f"; the rejected files are kept in {saved}" if saved else ""))
             if undone:
                 journal_note(root, "Supervisor: code change reverted",
                              "My changes to " + ", ".join(undone) + " were reverted because the tests failed."
+                             + (f" The rejected files are kept in {saved}." if saved else "")
                              + ("\n\nFailing tests:\n" + "\n".join(f"- {n}" for n in names) if names else "")
                              + "\n\nLast lines of the test output:\n\n```\n" + test_log[-1500:] + "\n```")
     _commit_outside_config(name, root, list(config_writes) if "config.env" in kept else [])
@@ -648,7 +940,9 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
         (SUP_DIR / "code_changes").mkdir(parents=True, exist_ok=True)
         with (SUP_DIR / "code_changes" / f"{name}.jsonl").open("a") as f:
             f.write(json.dumps(record) + "\n")
-    if not commit_state(name, kind, kept, note=note):
+    committed = commit_state(name, kind, kept, note=note)
+    _record_approved(name, root, approved)
+    if not committed:
         return False
     from . import metrics   # judged outcomes, calibration stats, probation of self-changes
     if kept:
@@ -671,6 +965,31 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
         except Exception as e:   # measurement never breaks a run
             log(f"{name}: personality check failed: {type(e).__name__}: {e}")
     return True
+
+
+def _keep_rejected(name: str, folder: Path, code: dict[str, bytes], paths: list[str]) -> str:
+    """Copy the bytes the gate is about to put back into `folder` (the supervisor's; the instance never reads it):
+    code that was not a run's own may be the operator's. Returns the folder, or "" if nothing was there to keep."""
+    there = [p for p in paths if p in code]
+    try:
+        for p in there:
+            target = folder / p
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(code[p])
+    except OSError as e:                     # not kept: then not put back either, so nothing is lost
+        raise RunRefused(f"the code the gate rejected could not be kept in {folder} ({e}); it was not put back: "
+                         f"{', '.join(there)}") from None
+    return str(folder) if there else ""
+
+
+def _record_approved(name: str, root: Path, code: dict[str, bytes]) -> None:
+    """The settled code as the instance's approved code (baseline.py), for the next run's _reconcile."""
+    from . import baseline
+    try:
+        baseline.write(name, root, code)
+    except (Exception, SystemExit) as e:   # the next run gates what differs from the older record: logged, not fatal
+        log(f"{name}: FAILED to record its approved code ({type(e).__name__}: {e}); the next run checks against "
+            "the record before")
 
 
 def _commit_outside_config(name: str, root: Path, writes: list[dict]) -> None:
@@ -761,6 +1080,12 @@ class Turn:
         except BaseException:
             stack.close()                        # interrupted while waiting: no reply wants the instance any more
             raise
+        try:
+            _reconcile(self.name, self.root)
+        except RunRefused as e:
+            stack.close()
+            _refused(self.name, e)
+            raise
         self.held = stack
         self.before = _snapshot(self.root)
         self.handoffs_seen = len(self.broker.handoffs) if self.broker else 0
@@ -772,7 +1097,6 @@ class Turn:
         # The checks must finish: a Ctrl-C during the gate's tests (the talk client only intercepts it while a
         # reply streams) aborted them halfway — no revert, no commit, and an instance's broken plugin stayed
         # in its folder, blocking its updates (2026-10-13). So Ctrl-C is ignored until they are done.
-        import threading
         main = threading.current_thread() is threading.main_thread()
         old = signal.signal(signal.SIGINT, signal.SIG_IGN) if main else None
         try:
@@ -805,27 +1129,39 @@ def run_conversation(name: str, kind: str, agent_args: list[str], talk_id: str, 
         print(f"{PROJECT} is not a git repository; the supervisor needs one to record changes.", file=sys.stderr)
         return 2
     root = instance_root(name)
-    with Presence(name, talk_id, kind):
-        turn = Turn(name, root, kind)
-        turn.begin()
-        log(f"{name}: start {kind} {talk_id} {describe_knobs()}")
+    saved: dict = {}
+    try:
+        _trap_runs(saved)
+        with Presence(name, talk_id, kind):
+            return _conversation(name, root, kind, agent_args, talk_id, driver)
+    except RunRefused:                           # Turn.begin said why
+        return REFUSED
+    finally:
+        for s, handler in saved.items():
+            signal.signal(s, handler)
+
+
+def _conversation(name: str, root: Path, kind: str, agent_args: list[str], talk_id: str, driver) -> int:
+    turn = Turn(name, root, kind)
+    turn.begin()
+    log(f"{name}: start {kind} {talk_id} {describe_knobs()}")
+    try:
+        broker, cmd, env = _launch(name, root, kind, agent_args, None)
+    except BaseException:
+        turn.held.close()
+        raise
+    turn.broker = broker
+    try:
+        proc = _popen(cmd, root, env)
         try:
-            broker, cmd, env = _launch(name, root, kind, agent_args, None)
-        except BaseException:
-            turn.held.close()
-            raise
-        turn.broker = broker
-        try:
-            proc = _popen(cmd, root, env)
-            try:
-                driver(proc, turn)
-            finally:
-                turn.end()
-                _finish(proc)
-            code = proc.returncode
-        except KeyboardInterrupt:
-            code = 130
+            driver(proc, turn)
         finally:
-            broker.stop()
+            _finish(proc, root)   # its processes gone before the last reply is checked (B9)
+            turn.end()
+        code = proc.returncode
+    except KeyboardInterrupt:
+        code = 130
+    finally:
+        broker.stop()
     log(f"{name}: end {kind} {talk_id} exit={code} broker_calls={broker.counts or {}}")
     return code

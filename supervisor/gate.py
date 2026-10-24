@@ -176,6 +176,33 @@ def _end_group(p: subprocess.Popen) -> None:
         time.sleep(0.02)
 
 
+def stop_group(p: subprocess.Popen, grace_s: float = STOP_GRACE_S) -> None:
+    """End the process group `p` leads, on any way out of a run or a command — finished, failed, timed out,
+    interrupted: SIGTERM to all of it (and SIGCONT, so a stopped member gets it too), up to `grace_s` for it to empty,
+    then SIGKILL until nothing is left (_end_group). Only the direct child was killed, and only on a timeout, so a
+    process the agent or a `run` command had started in the background went on writing the instance's code after the
+    gate had judged it (B9, review of 2026-10-24). Returns once the group is empty (or only holds a member no signal
+    of ours can reach); `p` is reaped. A process that starts its own session (setsid) leaves the group and is not
+    reached."""
+    import signal
+    import time
+    try:
+        os.killpg(p.pid, signal.SIGTERM)
+        os.killpg(p.pid, signal.SIGCONT)
+    except (ProcessLookupError, PermissionError):
+        p.poll()
+        return
+    deadline = time.monotonic() + grace_s
+    while time.monotonic() < deadline:
+        p.poll()                                  # the leader, reaped once it exits: a zombie still counts as a member
+        try:
+            os.killpg(p.pid, 0)
+        except (ProcessLookupError, PermissionError):
+            return
+        time.sleep(0.02)
+    _end_group(p)
+
+
 def _stage(stage: str, argv: list[str], timeout_s: int, **kw) -> subprocess.CompletedProcess:
     """One stage, in its own process group, all of which ends with it. A timeout gets SIGTERM, then SIGKILL after
     STOP_GRACE_S, and raises StageTimedOut with the tail of what the stage printed. On a normal exit whatever it left
@@ -216,15 +243,14 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = 900,
     """Supervisor invariants against this instance's code (trusted test code, run from the last commit — never from
     what another session is editing; it sandboxes the agent itself), then its plugins' check and its own tests inside
     its sandbox, on its own Python environment (supervisor/pyenv.py). `env_root`: where that environment lives when
-    `instance_root` is a scratch copy (coder hand-off, trial gate) — read-only from the copy. A stage that times out
-    fails the gate, named in the output and the supervisor log: raised instead, it left the change on disk
-    unsettled, neither kept nor reverted, and the next run took it as its baseline — ungated. Nothing left in a stage's
-    process group outlives it (_stage), so no leftover there writes the instance's code after the caller's revert."""
+    `instance_root` is a scratch copy (coder hand-off, trial gate) — read-only from the copy. A stage that times out,
+    and any error of the gate's own, fails the gate, named in the output and the supervisor log: raised instead, it
+    left the change on disk unsettled, neither kept nor reverted, and the next run took it as its baseline — ungated.
+    Nothing left in a stage's process group outlives it (_stage), so no leftover there writes the instance's code after
+    the caller's revert."""
     from . import pyenv
     from .core import PYTHON, log, safe_mkdir
     env_root = Path(env_root or instance_root)
-    py = pyenv.python(env_root)
-    tmp = safe_mkdir(instance_root, ".tmp")
     outputs, ok = [], True
     full: list[str] = []   # the supervisor stage uncut, kept in a file when the gate fails (keep_log)
 
@@ -232,11 +258,14 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = 900,
         tree, label = committed_tree()
     except Exception as e:   # fail closed: a change kept unsettled would pass ungated as the next run's baseline
         return False, f"== supervisor invariants ==\nno committed copy of the supervisor to test with: {e!r}"
-    fd, prof_name = tempfile.mkstemp(prefix="shaft-tests-", suffix=".sb")   # outside the instance
-    prof = Path(prof_name)
-    with os.fdopen(fd, "w") as f:
-        f.write(sandbox.profile(instance_root, home, [], env_root=env_root))
+    prof = None
     try:
+        py = pyenv.python(env_root)
+        tmp = safe_mkdir(instance_root, ".tmp")       # UnsafePath when the instance made .tmp a link: a failed gate
+        fd, prof_name = tempfile.mkstemp(prefix="shaft-tests-", suffix=".sb")   # outside the instance
+        prof = Path(prof_name)
+        with os.fdopen(fd, "w") as f:
+            f.write(sandbox.profile(instance_root, home, [], env_root=env_root))
         sup_env = {**os.environ, "SHAFT_UNDER_TEST": str(instance_root)}
         sup = _stage(f"supervisor invariants ({label})",
                      [PYTHON, "-E", "-s", "-m", "unittest", "discover", "-s", "supervisor/tests", "-t", "."],
@@ -261,10 +290,22 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = 900,
         outputs.append(f"== {t.stage} ==\n" + (t.tail + "\n" if t.tail else "")
                        + f"{t}; the checks after it did not run")
         ok = False
+    except Exception as e:
+        # Fail closed, like a timeout: any failure of the gate's own machinery (no sandbox-exec, a link where .tmp
+        # should be, a full disk) is a failed gate. Only StageTimedOut was caught, so anything else left settlement
+        # halfway — the change neither tested nor reverted, the next run's baseline (B8, review of 2026-10-24).
+        log(f"gate: {instance_root}: the gate itself failed, counted as failed: {type(e).__name__}: {e}")
+        outputs.append(f"== gate error ==\n{type(e).__name__}: {e}\n(the gate could not run its checks: counted as "
+                       "failed, the checks after it did not run)")
+        ok = False
     finally:
-        prof.unlink(missing_ok=True)
+        if prof is not None:
+            prof.unlink(missing_ok=True)
     if not ok:
-        outputs.append(f"full log: {keep_log(instance_root, full + outputs[1:])}")
+        try:
+            outputs.append(f"full log: {keep_log(instance_root, full + outputs[len(full):])}")
+        except OSError as e:
+            outputs.append(f"(the full log could not be kept: {e})")
     return ok, "\n".join(outputs)
 
 

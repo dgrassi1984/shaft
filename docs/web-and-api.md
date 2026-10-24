@@ -29,11 +29,16 @@ activity arrives as `reasoning_content`. A conversation keeps one id while its f
 same (or, with an `X-Shaft-Conversation: <name>` header, while it keeps that name), keeps the channel its client names
 with `X-Shaft-Channel: web|telegram` (the web UI and the Telegram service send it; `api` without it), and is written
 up into the journal
-after `SHAFT_IDLE_MINUTES` without a message. `POST /v1/chat/end` requests that write-up now;
+after `SHAFT_IDLE_MINUTES` without a message, counted from when its last reply ended (never while a reply is
+still running). `POST /v1/chat/end` requests that write-up now;
 its 202 response confirms the request, not a completed journal entry. `POST /v1/chat/interject`
 (same body as a chat request) adds the last message to the reply still running in that conversation: the instance
 reads it at its next step and its answer covers it; the reply's JSON says how many it heard
 (`interjections_heard`), and 409 means no reply is running there ([PLAN-interject.md](plans/PLAN-interject.md)).
+A non-streamed chat request may carry `X-Shaft-Request-Id: <id>` (1-64 letters, digits, - or _): asked again with the
+same id, the API gives the answer it gave, without running the reply again (`.supervisor/api-answered.json`, the
+newest 500 kept). Telegram sends each message's update id, so a message answered just before the service restarted is
+not answered twice.
 
 **Inbox doorbell**: `POST /v1/inbox/<instance>` drops a message in the instance's
 inbox, read at its next wake; for a script on this Mac, a phone shortcut, CI on the tailnet. It takes its own

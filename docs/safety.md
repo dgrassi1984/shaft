@@ -6,7 +6,9 @@
   `/private/tmp`, `/Users/Shared`, and `/Volumes`. Narrow temporary-file exceptions
   let `sips` convert images. It connects only to allowed model ports
   (`SHAFT_LLM_PORTS`, default 8780), the embedding service, its broker, and its
-  egress proxy. Its environment excludes inherited secrets.
+  egress proxy. Its environment is an allow-list (`sandbox.ENV_ALLOW`: `PATH`, `HOME`, `USER`, `LANG`, `TERM`,
+  `COLUMNS`, `LINES`, `TZ`, `LC_*`) plus what the supervisor sets by name; every other inherited variable,
+  `LLM_API_KEY` and any other key or token included, is dropped.
 - **Internet** ([PLAN-python-env.md](plans/PLAN-python-env.md)): the sandbox cannot filter by address, so the
   instance's way out is a proxy the supervisor runs for each run (`supervisor/egress.py`; `HTTPS_PROXY` /
   `HTTP_PROXY` are set, and uv, pip, curl, git and Python's HTTP libraries follow them). It connects only to
@@ -34,7 +36,9 @@
   [PLAN-calendar.md](plans/PLAN-calendar.md)): `calendar_events`, `calendar_event`, offered only when granted. Every call
   names a granted calendar; the credential and the grant stay with the supervisor.
 - **Broker**: privileged tools and credentials, including web search (ScrapeBadger), page fetching
-  (public addresses only, re-checked on every redirect), messages between instances and to
+  (public addresses only, re-checked on every redirect; `fetch_page` and `http_request` connect to the very
+  address they checked, with TLS still verifying the name asked for, so a name that answers public for the
+  check and private for the connection reaches nothing), messages between instances and to
   you (no daily limit unless `SHAFT_OPERATOR_PER_DAY`; a macOS notification, and a push on the web UI or Telegram,
   whichever reaches you for that instance: integrations.md), with
   files attached from the sender's folder (up to 10, 20 MB each, 50 MB in all; never `secrets/`, `.git/`, `logs/` or
@@ -48,7 +52,8 @@
   `plugins/`, `skills/`, `tests/`, `shaft/`, `.tmp/`, `.venv/`, `.uv/`, `.browser/`, `.python-version` and
   `requirements.txt`, the internet only through the egress proxy, reads only its own folder (and the shared
   Chromium);
-  60 s default time limit (the whole process group is killed), 1 GiB file-size limit (a file past it ends the
+  60 s default time limit (the whole process group is killed; at the end of every command, whatever it left
+  running too), 1 GiB file-size limit (a file past it ends the
   command with SIGXFSZ, and `run` says so), output capped,
   40 commands per run. So an instance can build and test its own tools and plugins. **`history`**: its
   own git log and diffs, each entry tagged `[code]` (its branch) or `[mind]` (its mind store); git cannot
@@ -67,7 +72,10 @@
   keys** (`secret_set` / `secret_list` / `secret_delete`, or `shaft secret <name> set <key> --hosts …` from
   your terminal): kept in its folder under `secrets/` but handled only by the supervisor; the broker adds a
   key to requests to the hosts it is bound to, never through a redirect, and masks it in responses; the
-  instance's own process, plugins, `run` and the coder cannot read the file, git never sees it. A **Google key**
+  instance's own process, plugins, `run` and the coder cannot read the file, git never sees it. A change is made
+  under a lock and written whole (a new 0600 file renamed over the old one); a store that cannot be read is never
+  written over — the change is refused, naming the file and the error, and the keys go unused until you repair it
+  (`KEY STORE UNREADABLE` in `.supervisor/supervisor.log`). A **Google key**
   (`shaft secret <name> google`, the instance's own Google account) is refreshed by the supervisor per run.
   **`set_config`**: the instance's only way to change its `config.env`, one value at a time; each change is
   recorded, so the gate can tell its lines from yours; you may edit the file at any time, even mid-run.
@@ -81,7 +89,25 @@
   set, and tells the instance why. The supervisor's own tests run from its last commit (and the template's), in a
   clean copy under `.supervisor/gate-tests/`, never from the checkout: an edit someone is still making there cannot
   decide a verdict. The plugin check and the instance's own tests run in its sandbox with no network at
-  all, like `run` without its proxy. A check that runs past its time counts as failed. An edit of yours to `config.env` is never reverted or credited to the
+  all, like `run` without its proxy. A check that runs past its time counts as failed, and so does any error of the
+  gate's own (it never lets a change through unjudged). Each run is settled whatever happens to it: the agent
+  and everything it started run in a process group of their own, ended (SIGTERM, then SIGKILL) before the gate
+  looks, on every way out — a normal end, a failure, a timeout, Ctrl-C or the supervisor being stopped; the same
+  holds for each `run` command, so nothing it puts in the background outlives it. A process that left the group
+  (`setsid`) is found by its working folder: once its parent is gone, anything still working in the instance's
+  folder is ended too (your own shells there keep their parent and are spared). One that also left the folder is
+  not found; the sandbox is the boundary then (it can write only the instance's folder, and what it writes there
+  later is caught as below). Stopping a service that starts runs (the API, the scheduler, a terminal
+  conversation) ends its runs' processes first. **Approved code**: after every settlement the supervisor records
+  the code it approved (`.supervisor/baselines/<name>.json`: the last commit, plus what the gate passed that git
+  does not hold — an ignored or untracked file in a code path), where the instance cannot write. Before any run,
+  whatever is not the approved code (an earlier run that ended before it was checked, a file edited from outside)
+  is gated first: kept, or put back as approved, the rejected files copied to `.supervisor/rejected/<name>-<time>/`
+  and named in the instance's journal and the log. A merge, rebase, cherry-pick or revert in progress in the
+  instance's worktree, or code that cannot be compared, refuses the run instead ("run refused" in
+  `.supervisor/supervisor.log`, an alert on the panel): finish or abort the merge and the next run checks it. Until an
+  instance's first settlement under this scheme, its last commit is the approved code. An edit of yours to
+  `config.env` is never reverted or credited to the
   instance: it is committed on its own ("config.env changed from outside the instance"); so is an edit of yours to
   `drive.md` ("drive.md changed by the operator"), with a note in the instance's journal that its drive changed.
 - **Trials** (`trial` tool, [PLAN-trials.md](plans/PLAN-trials.md)): an instance can test a change to its own
