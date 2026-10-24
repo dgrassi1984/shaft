@@ -493,7 +493,7 @@ class Handler(BaseHTTPRequestHandler):
                 Handler.answered = Answered()
             if (done := Handler.answered.get(model, rid)) is not None:
                 log(f"api: {model}: request {rid} was answered already — the same answer, not run again")
-                return self._json(200, done)
+                return self._json(200, {**done, "replayed": True})   # its client tells a kept answer from a new one
         talk_id = self.conversations.talk_id(model, messages, cid, channel)
         live = self.live.begin(model, talk_id)
         request = {"messages": [*(m for m in messages if m.get("role") == "system"),

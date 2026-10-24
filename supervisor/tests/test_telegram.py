@@ -223,6 +223,8 @@ class TelegramTest(unittest.TestCase):
                 return "answer A", 1 if heard else 0
             if len(asks) == 2 and not heard:                     # B's follow-up: the service stops during it
                 stuck.wait(30)
+            if heard:                                            # restarted: the API's kept answer for A
+                return "answer A", 1, True
             return f"answer {len(asks)}", 0
 
         def interject(name, messages):
@@ -288,6 +290,138 @@ class TelegramTest(unittest.TestCase):
         self.assertEqual(at_restart, ["31"])                     # A was answered; B was not yet
         self.assertEqual([rid for _, rid in asks], ["telegram-wren-30", "telegram-wren-31", "telegram-wren-31"])
         self.assertEqual(asks[-1][0], "and skip Friday")
+
+    def services(self, first: list, ask, send=None, interject=None, until=lambda: True):
+        """A first service that takes `first` (update batches, or callables giving one) and stops once until() holds,
+        then a restarted one; returns what was pending at the restart."""
+        real_call = telegram.call
+
+        def service(batches):
+            stop = threading.Event()
+
+            def call(token, method, *a, **k):
+                if method != "getUpdates":
+                    return real_call(token, method, *a, **k)
+                if not batches:
+                    stop.set()
+                    return []
+                batch = batches.pop(0)
+                return batch() if callable(batch) else batch
+            return stop, call
+
+        def pending():
+            return sorted((telegram.load().get("pending") or {}).get("wren") or {})
+        patches = [mock.patch.object(telegram, "ask_api", ask)]
+        if send:
+            patches.append(mock.patch.object(telegram, "send", send))
+        if interject:
+            patches.append(mock.patch.object(telegram, "interject_api", interject))
+        for p in patches:
+            p.start()
+        try:
+            stop, call = service(list(first))
+            with mock.patch.object(telegram, "call", call):
+                telegram.poll("wren", TOK["wren"], stop)
+                for _ in range(200):
+                    if until():
+                        break
+                    time.sleep(0.02)
+            at_restart = pending()
+            stop, call = service([])
+            with mock.patch.object(telegram, "call", call):
+                telegram.poll("wren", TOK["wren"], stop)
+                for _ in range(200):
+                    if not pending():
+                        break
+                    time.sleep(0.02)
+        finally:
+            for p in patches:
+                p.stop()
+        self.assertEqual(pending(), [])
+        return at_restart
+
+    def test_an_answer_telegram_would_not_take_is_delivered_after_a_restart(self):
+        """Codex, final review of the integration: the API answered, sendMessage failed (503), and both _converse and
+        _dispatch marked the update done: the answer was never delivered. Now it stays pending, and the restarted
+        service delivers the API's kept answer (same request id) without running the reply again."""
+        self.pair()
+        real_send, asks, failed = telegram.send, [], []
+
+        def ask(name, history, request_id=""):
+            asks.append(request_id)
+            return "answer A", 0, len(asks) > 1                  # the second time: the API's kept answer
+
+        def send(token, chat_id, text, reply_to=None):
+            if text == "answer A" and len(asks) == 1:
+                failed.append(text)
+                err = telegram.TelegramError("sendMessage: HTTP 503 Service Unavailable")
+                err.code = 503
+                raise err
+            return real_send(token, chat_id, text, reply_to)
+        with mock.patch.object(telegram, "SEND_RETRY_S", (0, 0), create=True):
+            at_restart = self.services([[_msg(ME, "check my calendar", mid=30)]], ask, send=send,
+                                       until=lambda: len(failed) >= 3)
+        self.assertEqual(at_restart, ["30"], "an answer never delivered was marked done")
+        self.assertEqual(asks, ["telegram-wren-30", "telegram-wren-30"])
+        self.assertIn("answer A", [p["text"] for _, p in self.api.sent(TOK["wren"])])
+
+    def test_a_chat_telegram_refuses_for_good_is_logged_and_done(self):
+        self.pair()
+        logged = []
+
+        def send(token, chat_id, text, reply_to=None):
+            err = telegram.TelegramError("sendMessage: HTTP 400 Bad Request: chat not found")
+            err.code = 400
+            raise err
+        with mock.patch.object(telegram, "log", logged.append), mock.patch.object(telegram, "SEND_RETRY_S", (0,), create=True):
+            at_restart = self.services([[_msg(ME, "hi", mid=30)]], lambda n, h, request_id="": ("answer", 0),
+                                       send=send, until=lambda: any("FAILED" in l for l in logged))
+        self.assertEqual(at_restart, [])                          # permanent: done, not retried forever
+        self.assertTrue(any("FAILED" in l and "chat not found" in l for l in logged), logged)
+
+    def test_a_kept_answer_that_heard_an_interjection_does_not_run_it_again(self):
+        """Codex, final review of the integration: the kept answer says how many interjections it heard, but which
+        ones was taken from memory at the moment: after a restart B was not there, and ran again on its own. The
+        updates each request heard are kept with it in the pending state."""
+        self.pair()
+        asking, joined, stuck, asks = threading.Event(), threading.Event(), threading.Event(), []
+        self.addCleanup(stuck.set)
+
+        def ask(name, history, request_id=""):
+            asks.append((history[-1]["content"], request_id))
+            if len(asks) == 1:                                   # A's reply: B joins, then the service stops
+                asking.set()
+                stuck.wait(30)
+                raise SystemExit                                 # that service is gone: its thread does nothing more
+            return "answer A", 1, True                           # restarted: the API's kept answer heard B
+
+        def interject(name, messages):
+            joined.set()
+            return True
+
+        def b_once_a_is_replying():
+            asking.wait(10)
+            return [_msg(ME, "and skip Friday", mid=31)]
+        real_handle = telegram.Chat.handle
+
+        restarted = threading.Event()
+
+        def handle(chat, msg, update_id=None):                   # B comes back after A's kept answer did
+            if update_id == 31 and restarted.is_set():
+                time.sleep(0.5)
+            return real_handle(chat, msg, update_id)
+
+        def stop_first():
+            if joined.is_set():
+                time.sleep(0.2)
+                restarted.set()
+                return True
+            return False
+        with mock.patch.object(telegram.Chat, "handle", handle):
+            at_restart = self.services([[_msg(ME, "check my calendar", mid=30)], b_once_a_is_replying], ask,
+                                       interject=interject, until=stop_first)
+        self.assertEqual(at_restart, ["30", "31"])
+        self.assertEqual(asks[1:], [("check my calendar", "telegram-wren-30")], "B ran again after the restart")
 
     def test_api_failure_is_said_not_swallowed(self):
         self.pair()

@@ -25,10 +25,13 @@ files an instance attaches to a message for you arrive after its text (pictures 
 starts a new conversation (not while a reply is running), `/wake` starts a cycle, `/status` says what it is doing. A message an
 instance sends you (`send_message` to the operator) arrives from its bot when it is routed to Telegram (see
 [Where an instance reaches you](#where-an-instance-reaches-you-shaft-channel)). The service long-polls Telegram; no port,
-webhook or Funnel. A message it has taken is kept in `.supervisor/telegram.json` until it is answered — one sent while a
-reply runs, until that reply has heard it or its own reply is sent — so one that arrives as the service stops is
+webhook or Funnel. A message it has taken is kept in `.supervisor/telegram.json` until its answer is delivered — one sent
+while a reply runs, until that reply has heard it or its own reply is sent — so one that arrives as the service stops is
 answered when it starts again; a message whose reply had already come back is answered from the API's record of
-it, not run again (`X-Shaft-Request-Id`, [web-and-api.md](web-and-api.md)). Full text both ways: bot chats are not end-to-end encrypted, so Telegram's servers see them
+it, not run again (`X-Shaft-Request-Id`, [web-and-api.md](web-and-api.md)), and so are the messages that reply heard.
+An answer Telegram will not take now (a network error, 429, 5xx) is sent again after 2 s, 10 s, 1 min and 5 min, then
+kept for the next start; one it refuses for good (400 chat not found, 403 the bot was blocked) is logged as FAILED
+and not tried again. Full text both ways: bot chats are not end-to-end encrypted, so Telegram's servers see them
 .
 
 Source: [Telegram transport and pairing](../supervisor/telegram.py).
