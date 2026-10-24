@@ -549,7 +549,9 @@ def transcript_page(name: str, e: dict, tx_lines: list[tuple[str, str]], thinkin
 
 # -- messages (TUI tab 7) --------------------------------------------------------------------------------------------
 def _first_line(text: str) -> str:
-    return next((l for l in text.splitlines() if l.strip()), "").strip()
+    """A message's first line as its page shows it: the text, not its Markdown."""
+    from .web_md import first_line
+    return first_line(text)
 
 
 def messages_page(ms: list[dict], who: str, people: list[str], names: list[str], csrf: str) -> Html:

@@ -192,12 +192,18 @@ def template_merges(name: str) -> list[str]:
         if "merge template" in l], ttl=30)
 
 
+def journal_heading(entry: str) -> str:
+    """A journal entry's first line, as text: its heading without the #, **, ` of its Markdown."""
+    from .web_md import plain
+    return plain(entry.splitlines()[0]) if entry.strip() else ""
+
+
 def instance_detail(name: str) -> dict:
     from . import messages, metrics
     root = instance_root(name)
     cfg = instance_config(name)
     stats = safe_read(root, "self/stats.md", "", errors="replace")   # in the instance's folder: never via a link
-    heads = [e.splitlines()[0].lstrip("# ").strip() for e in journal_entries(root)[-10:]][::-1]
+    heads = [journal_heading(e) for e in journal_entries(root)[-10:]][::-1]
     probation = []
     try:
         probation = json.loads((SUP_DIR / "probation" / f"{name}.json").read_text())
@@ -521,7 +527,9 @@ def transcript_summary(e: dict) -> str:
         goal = " ".join(((r.get("intent") or {}).get("goal") or "(no intent declared)").split())
         met = (r.get("finish") or {}).get("criterion_met")
         return f"{met or '·':<7} {tools} tools{f', {steps} steps' if steps else ''} · {end} · {goal}"
-    return f"{tools} tools · {end} · " + " ".join((r.get("content") or "").split())
+    from .web_md import plain           # a reflection's or sleep's answer, as text: not its Markdown
+    return f"{tools} tools · {end} · " + " ".join(" ".join(plain(l).split()) for l in (r.get("content") or "").splitlines()
+                                                  if l.strip())
 
 
 def _block(out: list, label: str, value, style: str = "") -> None:

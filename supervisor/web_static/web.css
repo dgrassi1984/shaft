@@ -323,7 +323,10 @@ details.menu { position: relative; }
 main:has(> .chatgrid) { display: flex; flex-direction: column; height: 100vh; padding-bottom: .4rem;
                             container: chat-area / inline-size; }
 .chatgrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: .8rem; flex: 1 1 auto; min-height: 0; }
-.chatgrid:has([data-back-docs]), .chatgrid:has(.doclist a) { grid-template-columns: minmax(20rem, 1fr) minmax(18rem, 1fr); }
+/* :not(.hidedocs): a :has() takes its argument's specificity, so .chatgrid:has(.doclist a) outranked .chatgrid.hidedocs
+   below, and a closed drawer showing its list kept the chat at half width. Closed wins, whatever the drawer holds. */
+.chatgrid:not(.hidedocs):has([data-back-docs]), .chatgrid:not(.hidedocs):has(.doclist a) {
+  grid-template-columns: minmax(20rem, 1fr) minmax(18rem, 1fr); }
 .chatgrid:not(:has(.doclist a)):not(:has([data-back-docs])):not(.showdocs) > aside.docs { display: none; }  /* none: all chat */
 .chatgrid.showdocs { grid-template-columns: minmax(20rem, 1fr) minmax(18rem, 1fr); }
 /* closed by the operator (📄 or ✕): all chat again, whatever documents there are */

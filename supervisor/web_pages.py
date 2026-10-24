@@ -381,7 +381,9 @@ def _when(m: dict) -> str:
 
 
 def _first_line(text: str) -> str:
-    return next((l for l in text.splitlines() if l.strip()), "").strip()
+    """A message's first line as its page shows it: the text, not its Markdown."""
+    from .web_md import first_line
+    return first_line(text)
 
 
 def message_line(m: dict) -> Html:

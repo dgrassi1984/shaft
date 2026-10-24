@@ -121,6 +121,20 @@ def plain(text: str) -> str:
     return html.unescape(re.sub(r"<[^>]*>", "", inline(line)))
 
 
+def first_line(text: str, quotes: bool = True) -> str:
+    """The first line of a text as the page shows it (plain): a line of a list, a rail entry, a push. A fence's
+    marker, a rule and a table's separator row are not text; `quotes=False` skips quoted lines too (the operator's
+    quote of what they answer is not their message)."""
+    for line in str(text).splitlines():
+        if not line.strip() or _FENCE.match(line) or _HR.match(line) or _TABLE_SEP.match(line) and "-" in line:
+            continue
+        if not quotes and _QUOTE.match(line):
+            continue
+        if shown := plain(line).strip():
+            return shown
+    return ""
+
+
 def _code_text(s: str) -> str:
     s = s.replace("\n", " ")
     return s[1:-1] if len(s) > 2 and s[0] == " " and s[-1] == " " and s.strip() else s

@@ -62,7 +62,7 @@ curl -s https://<mac>.<tailnet>.ts.net:8443/v1/inbox/example -H "Authorization: 
 and [chat design](plans/PLAN-webui-chat.md).
 
 - `/` opens the chat with the instance you last talked to. The left rail lists every instance's chat (its state, its
-  last line, a mark when it answered while you were elsewhere; the tab title counts them), then **Manage**: Overview
+  last line, as text rather than its Markdown, a mark when it answered while you were elsewhere; the tab title counts them), then **Manage**: Overview
   (`/overview`, with the alert count; its alerts show five at a time, each with **Dismiss**, plus **Dismiss these
   alerts**, and when more are open **Show all N alerts** — it stays open across refreshes — and **Dismiss all N**.
   With no instances it says **No instances yet**, that they are created from the terminal with `shaft new <name>`,
