@@ -171,7 +171,8 @@ def shared_edits(name: str) -> list[Edit]:
         return taken or None
 
     def telegram_state(data):
-        taken = _all(_pop("bots", name), _pop("offsets", name), _pop("pending", name), _pop("requests", name))(data) or []
+        taken = _all(_pop("bots", name), _pop("offsets", name), _pop("pending", name), _pop("requests", name), _pop("failures", name),
+                     _pop("quarantined", name))(data) or []
         qs = data.get("questions") or {}
         gone = {k: qs.pop(k) for k in [k for k in qs if k.split(":")[0] == name]}
         return taken + ([{"questions": gone}] if gone else []) or None
