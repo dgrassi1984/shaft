@@ -242,6 +242,8 @@ class StatsTest(unittest.TestCase):
         brier = ((0.9 - 0) ** 2 + (0.9 - 1) ** 2 + (0.2 - 0) ** 2) / 3
         self.assertIn(f"{brier:.2f}", text)
         self.assertIn("overconfident", text)
+        self.assertIn("Calibration v1, older question 'probability of success'", text)   # A4: labelled, own lines
+        self.assertIn("not pooled with v2", text)
 
 
 class CloudTranslationTest(unittest.TestCase):

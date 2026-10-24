@@ -83,12 +83,13 @@ class CoderError(Exception):
     pass
 
 
-def spent_today(instance: str) -> float:
+def spent_today(instance: str, until: datetime | None = None) -> float:
     if not USAGE.exists():
         return 0.0
-    today = date.today().isoformat()
+    today = (until.date() if until else date.today()).isoformat()
     return sum(r.get("usd") or 0 for r in map(json.loads, USAGE.read_text().splitlines())
-               if r["instance"] == instance and r["ts"].startswith(today))
+               if r["instance"] == instance and r["ts"].startswith(today)
+               and (until is None or datetime.fromisoformat(r["ts"]) < until))
 
 
 def _hidden(rel: str) -> bool:

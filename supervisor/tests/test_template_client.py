@@ -318,13 +318,14 @@ class FileToolsTest(unittest.TestCase):
         self.assertTrue(call("write_file", path="notes/fresh.md", content="x\n").startswith("wrote"))
 
     def test_code_and_skills_are_still_rewritten_in_one_call(self):
-        # Instances build their own plugins by rewriting main.py whole: only notes/ and memory/ are guarded.
+        # Instances build their own plugins by rewriting main.py whole: only notes/, memory/ and self/ (goals.md,
+        # REVIEW-autonomy A7 — test_autonomy_gaps_template.GoalsGuardTest) are guarded.
         import json as _json
         from shaft.tools import Toolbox
         root = Path(tempfile.mkdtemp(prefix="shaft-tools-"))
         t = Toolbox(root)
         call = lambda name, **a: t.run(name, _json.dumps(a))   # noqa: E731
-        for path in ("plugins/p/main.py", "skills/s.md", "tests/test_p.py", "self/goals.md"):
+        for path in ("plugins/p/main.py", "skills/s.md", "tests/test_p.py", "shaft/x.py"):
             call("write_file", path=path, content="v1\nold line\n")
             out = call("write_file", path=path, content="v2\n")
             self.assertTrue(out.startswith("wrote"), (path, out))

@@ -126,14 +126,15 @@ def prompt_size(r: dict) -> int:
                                        "cache_write_1h_tokens"))
 
 
-def spent_today(instance: str) -> float:
+def spent_today(instance: str, until: datetime | None = None) -> float:
     if not USAGE.exists():
         return 0.0
-    today = date.today().isoformat()
+    today = (until.date() if until else date.today()).isoformat()
     total = 0.0
     for line in USAGE.read_text().splitlines():
         r = json.loads(line)
-        if r["instance"] == instance and r["ts"].startswith(today):
+        if (r["instance"] == instance and r["ts"].startswith(today)
+                and (until is None or datetime.fromisoformat(r["ts"]) < until)):
             total += r.get("usd") or 0.0
     return total
 

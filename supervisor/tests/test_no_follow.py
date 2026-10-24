@@ -115,6 +115,29 @@ class JudgesReadNoLinkTest(Case):
               "intent": {"origin_ref": "Core"}}
         self.assertNotIn(SECRET, metrics._provenance_evidence("evil", ep))
 
+    def test_the_confidence_backfill_lists_and_stats_no_link(self):
+        """#84's _confidence_questions globbed memory/episodes and stat'ed each file (stat follows a link) for its
+        cache key; on the integrated tree the listing and the stat go through the folder's descriptor."""
+        import json as _json
+        from supervisor import metrics
+        metrics._QUESTIONS.clear()
+        outside = self.outside / "episodes.jsonl"
+        outside.write_text(_json.dumps({"kind": "live", "ts": "2026-10-24T09:00:00",
+                                        "intent": {"confidence_of": SECRET}}) + "\n")
+        (self.root / "memory" / "episodes" / "2026-10-24.jsonl").symlink_to(outside)
+        (self.root / "memory" / "episodes" / "2026-10-23.jsonl").write_text(_json.dumps(
+            {"kind": "live", "ts": "2026-10-23T09:00:00", "intent": {"confidence_of": "mine"}}) + "\n")
+        with mock.patch("os.stat", wraps=os.stat) as st:
+            got = metrics._confidence_questions("evil")
+        self.assertEqual(got, {"2026-10-23T09:00:00": {"confidence_of": "mine"}})
+        self.assertEqual([k[0] for k in metrics._episode_files_key("evil")], ["2026-10-23.jsonl"])
+        self.assertTrue(all(c.kwargs.get("follow_symlinks") is False for c in st.call_args_list
+                            if c.args and str(c.args[0]).endswith(".jsonl")), "an episode file was stat'ed through a link")
+        shutil.rmtree(self.root / "memory" / "episodes")
+        (self.root / "memory" / "episodes").symlink_to(self.outside, target_is_directory=True)
+        metrics._QUESTIONS.clear()
+        self.assertEqual(metrics._confidence_questions("evil"), {})
+
     def test_goals_that_open_with_a_section_heading_do_not_break_the_evidence(self):
         # Found writing the test above: re.split on the headings left an empty first section, and its
         # splitlines()[0] raised IndexError whenever the cycle declared an origin — no provenance judged at all.
