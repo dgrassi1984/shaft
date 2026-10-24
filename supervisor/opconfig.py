@@ -23,8 +23,8 @@ import re
 from datetime import date
 from pathlib import Path
 
-from .core import (TEMPLATE, config_lock, config_set_line, config_values, config_with, instance_config,
-                   instance_root, log, safe_write)
+from .core import (TEMPLATE, UnsafePath, config_lock, config_set_line, config_values, config_with, instance_config,
+                   instance_root, log, safe_read, safe_read_bytes, safe_write)
 
 # A key that holds a secret by its name: *_KEY, *_TOKEN, or SECRET/PASSWORD anywhere — not MAX_TOKENS_STEP or
 # LLM_CONTEXT_TOKENS, which a first, looser pattern hid as secrets (live, 2026-10-19).
@@ -98,8 +98,8 @@ def effort_choices(root: Path) -> tuple[str, ...] | None:
     """The reasoning efforts the instance's own code accepts (its shaft/config.py CHOICES), read as text: the
     supervisor never imports agent code."""
     try:
-        text = (root / "shaft" / "config.py").read_text()
-    except OSError:
+        text = safe_read(root, "shaft/config.py")   # the instance writes it: never read through a link
+    except (OSError, UnsafePath, ValueError):
         return None
     m = re.search(r"^CHOICES\s*=\s*(\{.*\})\s*$", text, re.M)
     try:
@@ -114,7 +114,7 @@ def fields(name: str) -> list[dict]:
     """Every key the instance's config.env sets, then every key the template documents that it does not, with its
     value, its help and what values it takes."""
     root = instance_root(name)
-    text = (root / "config.env").read_text() if (root / "config.env").is_file() else ""
+    text = safe_read(root, "config.env", "")
     tmpl = _template_text()
     values, defaults = config_values(text), config_values(tmpl)
     helps, tmpl_helps = _comments(text), _comments(tmpl)
@@ -177,7 +177,7 @@ def set_values(name: str, changes: dict[str, str | None], expect: dict[str, str 
             raise Refused(str(e)) from None
     path = root / "config.env"
     with config_lock(path):
-        text = path.read_text() if path.is_file() else ""
+        text = safe_read(root, "config.env", "")
         now = config_values(text)
         for key, saw in (expect or {}).items():
             if now.get(key) != saw:
@@ -230,10 +230,10 @@ def _commit(name: str, root: Path, what: str) -> bool | str:
 
 def drive(name: str) -> tuple[str | None, str]:
     """(drive.md's text or None, its sha256 — "none" when there is no file)."""
-    path = instance_root(name) / "drive.md"
-    if path.is_symlink() or not path.is_file():
+    try:
+        data = safe_read_bytes(instance_root(name), "drive.md")   # never through a link
+    except (OSError, UnsafePath):
         return None, "none"
-    data = path.read_bytes()
     return data.decode(errors="replace"), hashlib.sha256(data).hexdigest()
 
 

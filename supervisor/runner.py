@@ -30,9 +30,9 @@ from pathlib import Path
 from . import gate, localmodel, sandbox
 from .broker import Broker
 from .core import (API_TALKS, BROKER_MAX_CALLS, DOCS_COPY, EMBED_PORT, CORE_MIN_HOURS, CYCLE_TIMEOUT_S, HOME, INSTANCES,
-                   LLM_PORTS, PROJECT, PYTHON, SLEEP_TIMEOUT_S, SUP_DIR, UnsafePath,
-                   commit_state, describe_knobs, git_wt, instance_config, instance_root, journal_note, log, safe_mkdir,
-                   safe_write, safe_write_bytes, secrets_env)
+                   LLM_PORTS, PROJECT, PYTHON, SLEEP_TIMEOUT_S, SUP_DIR, TreeTooBig, UnsafePath,
+                   commit_state, describe_knobs, git_wt, instance_config, instance_root, journal_note, list_beneath,
+                   log, safe_mkdir, safe_read, safe_write, safe_write_bytes, secrets_env, set_aside, unlink_beneath)
 
 CORE_RE = re.compile(r"^## Core\n(.*?)(?=^## |\Z)", re.M | re.S)
 
@@ -213,11 +213,24 @@ def is_busy(name: str) -> bool:
 def _core(root: Path) -> str:
     """The core personality's traits (bullet lines) from every `## Core` block — captions and placeholders
     don't count. All blocks, not the first: a second Core block (wren, 2026-10-13) held a core change the
-    pace rule had refused, out of the rule's sight."""
-    p = root / "self" / "personality.md"
-    blocks = CORE_RE.findall(p.read_text()) if p.exists() else []
-    return "\n".join(l.strip() for block in blocks for l in block.splitlines()
+    pace rule had refused, out of the rule's sight. A personality that is a link reads as none (_personality)."""
+    return _core_of(_personality(root))
+
+
+def _core_of(text: str) -> str:
+    return "\n".join(l.strip() for block in CORE_RE.findall(text) for l in block.splitlines()
                      if l.lstrip().startswith(("- ", "* ")))
+
+
+# The mind files the supervisor checks after every run, read without following a link anywhere (core.safe_read): what
+# they hold is copied back into the instance's folder (a restored journal or core, journal.rejected-*.md) and the
+# personality goes to a judge, so a link planted in their place would hand either any file the supervisor can read
+# (Codex review B1, 2026-10-24). A link reads as no file.
+JOURNAL, PERSONALITY = "memory/journal.md", "self/personality.md"
+
+
+def _personality(root: Path) -> str:
+    return safe_read(root, PERSONALITY, "", errors="replace")
 
 
 def _core_is_empty(text: str) -> bool:
@@ -225,14 +238,28 @@ def _core_is_empty(text: str) -> bool:
 
 
 def enforce_journal(root: Path, before: str) -> str | None:
-    """The journal is append-only. Returns a note if it had to be repaired."""
-    path = root / "memory" / "journal.md"
-    after = path.read_text() if path.exists() else ""
-    if after.startswith(before):
-        return None
-    rejected = f"memory/journal.rejected-{datetime.now():%Y%m%d-%H%M%S}.md"
-    safe_write(root, rejected, after)
-    safe_write(root, "memory/journal.md", before)
+    """The journal is append-only. Returns a note if it had to be repaired. A journal swapped for a link (or a folder,
+    a pipe) is never read: it is moved aside as it is and the journal restored — reading through it copied the file it
+    pointed to into the instance's journal.rejected-*.md (Codex review B1, 2026-10-24)."""
+    stamp = f"{datetime.now():%Y%m%d-%H%M%S}"
+    try:
+        try:
+            after = safe_read(root, JOURNAL, errors="replace")
+        except FileNotFoundError:
+            after = ""
+        except UnsafePath:
+            moved = set_aside(root, JOURNAL, f"journal.rejected-{stamp}")
+            safe_write(root, JOURNAL, before)
+            return (f"My journal was replaced during this run by something that is not a file (a link, a folder), "
+                    f"so the supervisor restored it without reading what was there, and moved that, unread, to "
+                    f"{moved}.")
+        if after.startswith(before):
+            return None
+        rejected = f"memory/journal.rejected-{stamp}.md"
+        safe_write(root, rejected, after)
+        safe_write(root, JOURNAL, before)
+    except (OSError, UnsafePath) as e:   # memory/ itself is a link: nothing in it is read or written
+        return f"My journal could not be checked or restored ({type(e).__name__}: {e}): the supervisor follows no link."
     return (f"My journal was rewritten instead of appended to during this run, so the supervisor "
             f"restored it. The rewritten version is kept in {rejected}.")
 
@@ -245,12 +272,15 @@ def enforce_core(name: str, root: Path, before: str) -> str | None:
     stamp = SUP_DIR / f"core-changed-{name}"
     last = datetime.fromisoformat(stamp.read_text().strip()) if stamp.exists() else None
     if last and not _core_is_empty(before) and datetime.now() - last < timedelta(hours=CORE_MIN_HOURS):
-        p = root / "self" / "personality.md"
         caption = "*(values and temperament — change rarely)*"
-        restored = CORE_RE.sub(lambda _: f"## Core\n{caption}\n\n{before}\n\n", p.read_text(), count=1)
+        restored = CORE_RE.sub(lambda _: f"## Core\n{caption}\n\n{before}\n\n", _personality(root), count=1)
         first = CORE_RE.search(restored)
         tail = CORE_RE.sub("", restored[first.end():]) if first else ""   # no second Core block survives
-        safe_write(root, "self/personality.md", (restored[:first.end()] + tail if first else restored).rstrip() + "\n")
+        try:
+            safe_write(root, PERSONALITY, (restored[:first.end()] + tail if first else restored).rstrip() + "\n")
+        except UnsafePath as e:
+            return (f"My core personality changed too soon, but it could not be restored ({e}): the supervisor "
+                    "follows no link.")
         wait = last + timedelta(hours=CORE_MIN_HOURS)
         return (f"I changed my core personality only {(datetime.now() - last).total_seconds() / 3600:.0f} h "
                 f"after the last core change; the core may change at most every {CORE_MIN_HOURS} h, so the "
@@ -318,17 +348,16 @@ def _clean_tmp(root: Path) -> None:
     """Remove pause/deadline files and the activity file of runs that are gone — never a live run's: the
     conversation's write-up once deleted a paused cycle's pause file and resumed it while the instance was
     still the conversation's (2026-10-13)."""
-    tmp = root / ".tmp"
-    for path in tmp.iterdir() if tmp.is_dir() else []:
-        m = CONTROL.match(path.name)
+    for entry in list_beneath(root, ".tmp"):   # nothing reached through a link is listed, read or removed
+        m = CONTROL.match(entry)
         if m and not _pid_alive(int(m.group(2))):
-            path.unlink(missing_ok=True)
-    act = tmp / "activity.json"
+            unlink_beneath(root, f".tmp/{entry}")
     try:
-        if act.exists() and not _pid_alive(int(json.loads(act.read_text()).get("pid", 0))):
-            act.unlink(missing_ok=True)
-    except (OSError, ValueError):
-        act.unlink(missing_ok=True)
+        act = safe_read(root, ".tmp/activity.json", "")
+        if act and not _pid_alive(int(json.loads(act).get("pid", 0))):
+            unlink_beneath(root, ".tmp/activity.json")
+    except (OSError, ValueError, AttributeError):
+        unlink_beneath(root, ".tmp/activity.json")
 
 
 def _pid_alive(pid: int) -> bool:
@@ -365,7 +394,7 @@ def _pause(name: str, root: Path, kind: str, proc, held: _Held, run: dict, broke
     ack = root / ".tmp" / f"paused-{pid}"
     while not ack.exists():
         if proc.poll() is not None:   # it ended on its own meanwhile
-            (root / ".tmp" / f"pause-{pid}").unlink(missing_ok=True)
+            unlink_beneath(root, f".tmp/pause-{pid}")
             return 0.0
         time.sleep(0.25)
     log(f"{name}: {kind} paused — a reply to the operator needs the instance")
@@ -381,15 +410,20 @@ def _pause(name: str, root: Path, kind: str, proc, held: _Held, run: dict, broke
     if run.get("deadline"):
         run["deadline"] += paused
         safe_write(root, f".tmp/deadline-{pid}", f"{run['deadline']:.0f}")   # the paused time is not taken from it
-    (root / ".tmp" / f"pause-{pid}").unlink(missing_ok=True)
+    unlink_beneath(root, f".tmp/pause-{pid}")
     log(f"{name}: {kind} resumed after {paused:.0f}s")
     return paused
 
 
 def _snapshot(root: Path) -> dict:
-    journal, pers = root / "memory" / "journal.md", root / "self" / "personality.md"
-    return {"code": gate.snapshot(root), "journal": journal.read_text() if journal.exists() else "",
-            "personality": pers.read_text() if pers.exists() else "", "core": _core(root)}
+    pers = _personality(root)
+    try:
+        code = gate.snapshot(root)
+    except TreeTooBig as e:   # never an empty snapshot: the run's code is then not checked, and not kept (_settle)
+        log(f"{root.name}: code snapshot NOT taken: {e}")
+        code = None
+    return {"code": code, "journal": safe_read(root, JOURNAL, "", errors="replace"), "personality": pers,
+            "core": _core_of(pers)}
 
 
 def _uncommitted_code(root: Path) -> dict[str, bytes | None]:
@@ -458,6 +492,9 @@ def _reconcile(name: str, root: Path) -> None:
             restore = _uncommitted_code(root)
     except RunRefused:
         raise
+    except TreeTooBig as e:                                    # never an empty or partial answer (core.Budget)
+        raise RunRefused(f"its code is too big to check against its approved code ({e}; the bounds are "
+                         "SHAFT_SNAPSHOT_MAX_MB, SHAFT_TREE_MAX_FILES, SHAFT_TREE_MAX_DEPTH)") from None
     except (baseline.BaselineError, subprocess.CalledProcessError, OSError, ValueError, UnsafePath, SystemExit) as e:
         why = (getattr(e, "stderr", None) or b"").decode(errors="replace").strip() or f"{type(e).__name__}: {e}"
         raise RunRefused(f"its code could not be compared with its approved code: {why}") from None
@@ -579,8 +616,8 @@ def _sees_images(root: Path) -> bool:
     from . import vision
     from .core import config_values
     try:
-        model = config_values((root / "config.env").read_text()).get("LLM_MODEL")
-    except OSError:
+        model = config_values(safe_read(root, "config.env")).get("LLM_MODEL")
+    except (OSError, UnsafePath, ValueError):
         return False
     return vision.sees_images_or_no(model)
 
@@ -873,7 +910,7 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
         os.kill(os.getpid(), stopped)
         return code
     log(f"{name}: end {kind} exit={code} broker_calls={broker.counts or {}}")
-    (root / ".tmp" / "yield").unlink(missing_ok=True)
+    unlink_beneath(root, ".tmp/yield")
     _clean_tmp(root)
     if code < 0 and not interactive:
         journal_note(root, "Supervisor: run stopped", f"My {kind} run was stopped from outside (signal {-code}) "
@@ -901,18 +938,27 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
             log(f"{name}: {note}")
             journal_note(root, "Supervisor", note)
 
-    after = gate.snapshot(root)
-    touched = gate.changed(before["code"], after)
-    configured = sorted({w["key"] for w in config_writes})
+    try:
+        after = gate.snapshot(root) if before["code"] is not None else None
+        too_big = None if after is not None else "it was already too big when the run began"
+    except TreeTooBig as e:
+        after, too_big = None, str(e)
+    touched = gate.changed(before["code"], after) if after is not None else []
+    configured = sorted({w["key"] for w in config_writes}) if after is not None else []
     kept: list[str] = []
-    approved = after                                  # what the gate judged: the code the next run starts from
-    if touched or configured:
+    approved = after          # what the gate judged: the next run's approved code; None: no record (a failed gate)
+    if too_big:
+        approved = None
+        if rejected_to:       # code not a run's own, which cannot be copied aside: left as it is, not put back
+            raise RunRefused(f"its code is too big to check ({too_big}); nothing was put back")
+        _too_big_to_check(name, root, before["code"], config_writes, too_big)
+    elif touched or configured:
         ok, test_log = gate.run_tests(root, HOME)
         if ok:
             kept = touched + (["config.env"] if configured else [])
             log(f"{name}: code change passed tests: {touched} config: {configured}")
         else:
-            approved = before["code"]
+            approved = None   # a failed gate records nothing: the record before it is what was put back
             saved = _keep_rejected(name, rejected_to, after, touched) if rejected_to else ""
             gate.restore(root, before["code"], touched)
             back = gate.revert_config(root, list(config_writes))
@@ -941,7 +987,8 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
         with (SUP_DIR / "code_changes" / f"{name}.jsonl").open("a") as f:
             f.write(json.dumps(record) + "\n")
     committed = commit_state(name, kind, kept, note=note)
-    _record_approved(name, root, approved)
+    if approved is not None:
+        _record_approved(name, root, approved)
     if not committed:
         return False
     from . import metrics   # judged outcomes, calibration stats, probation of self-changes
@@ -957,8 +1004,8 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
                              f"I adopted the change I trialled in {tried['id']} although the trial found it worse "
                              f"(lost {tried['L']}, won {tried['W']}, tied {tried['T']} replayed cycles). It is on "
                              f"probation and will be reverted on any drop in my judged success.")
-    pers_path = root / "self" / "personality.md"
-    if pers_path.exists() and pers_path.read_text() != before["personality"] and judge_ok():
+    pers = _personality(root)
+    if pers and pers != before["personality"] and judge_ok():
         try:
             metrics.check_personality(name)
             metrics.write_stats(name)
@@ -992,15 +1039,32 @@ def _record_approved(name: str, root: Path, code: dict[str, bytes]) -> None:
             "the record before")
 
 
+def _too_big_to_check(name: str, root: Path, before: dict | None, config_writes, why: str) -> None:
+    """The gate fails closed when the code is too big to snapshot (core.Budget): no change of the run is checked, so
+    none is kept — the files it began with go back, its set_config lines are undone, and the instance is told. What
+    it added stays on disk, uncommitted, until its code is small enough to check again."""
+    if before:
+        gate.restore(root, before, sorted(before))
+    back = gate.revert_config(root, list(config_writes))
+    log(f"{name}: code too big to check, nothing of this run's code kept: {why}")
+    journal_note(root, "Supervisor: code change not checked",
+                 f"My code (shaft/, tests/, plugins/, …) is too big for the gate to check ({why}; the bounds are "
+                 "SHAFT_SNAPSHOT_MAX_MB, SHAFT_TREE_MAX_FILES and SHAFT_TREE_MAX_DEPTH), so none of this run's code "
+                 "changes was checked or kept: the files it began with are back"
+                 + (f", and my config.env lines ({', '.join(back)}) are undone" if back else "")
+                 + ". Anything new stays uncommitted until my code is small enough to check.")
+
+
 def _commit_outside_config(name: str, root: Path, writes: list[dict]) -> None:
     """config.env as changed from outside the instance — by the operator, who may edit it at any time, even
     mid-run — committed on its own, before the run's commit: never presented as the instance's change, and
     never undone with one of its changes on probation. `writes` are the instance's lines still in the file."""
     from .core import config_values
-    path = root / "config.env"
-    if path.is_symlink() or not path.is_file():
+    try:
+        text = safe_read(root, "config.env")
+    except (OSError, UnsafePath):
         return
-    outside, _ = gate.config_without(path.read_text(), writes)
+    outside, _ = gate.config_without(text, writes)
     head = git_wt(root, "show", "HEAD:config.env", check=False)
     if head.returncode == 0 and head.stdout == outside:
         return
@@ -1030,6 +1094,7 @@ def _commit_outside_drive(name: str, root: Path) -> None:
     path = root / "drive.md"
     if path.is_symlink() or path.is_dir():
         return
+    drive = lambda: safe_read(root, "drive.md", "", errors="replace").strip()   # noqa: E731 — never through a link
     if not git_wt(root, "status", "--porcelain", "--untracked-files=all", "--", "drive.md").stdout.strip():
         return
     try:
@@ -1041,14 +1106,14 @@ def _commit_outside_drive(name: str, root: Path) -> None:
         git_wt(root, "-c", "user.name=SHAFT supervisor", "-c", "user.email=supervisor@shaft.localhost", "commit",
                "-q", "-m", f"{name}: drive.md changed by the operator\n\nNot the instance's change (its sandbox cannot "
                "write drive.md). " + ("Removed: the default drive applies." if gone else "Its drive is now:\n\n"
-                                      + path.read_text().strip()), "--", "drive.md")
+                                      + drive()), "--", "drive.md")
     except subprocess.CalledProcessError as e:
         log(f"{name}: could not commit drive.md changed from outside: {(e.stderr or e.stdout or '').strip()}")
         return
     journal_note(root, "My drive was changed by the operator",
                  ("The operator removed my drive.md: I am back to the drive every SHAFT instance starts with."
                   if gone else "The operator set what I am for (drive.md, in my system prompt from now on):\n\n"
-                  + path.read_text().strip())
+                  + drive())
                  + "\n\nWhat my self-model and goals say about my purpose may now be out of date.")
     log(f"{name}: committed drive.md changed by the operator")
 

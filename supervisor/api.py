@@ -52,8 +52,8 @@ import uuid
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from .core import (API_TALKS as TALKS, IDLE_MINUTES, SUP_DIR, UnsafePath, contained, instance_names, instance_root, knob,
-                   log, port, safe_write, secrets_env, whole)
+from .core import (API_TALKS as TALKS, IDLE_MINUTES, SUP_DIR, UnsafePath, instance_names, instance_root, knob, log,
+                   port, safe_write, secrets_env, unlink_beneath, whole)
 from .runner import REFUSED, Reply, busy_with, request_yield, run_agent, spawn_recover, stop_runs_on_signal
 
 PORT, _ = knob(
@@ -231,11 +231,9 @@ class Live:
         return f".tmp/interject-{talk_id}.jsonl"
 
     def _drop(self, model: str, talk_id: str) -> None:
-        """Remove the talk's file — never through a link the instance put in the way (logged instead)."""
-        try:
-            contained(instance_root(model), ".tmp", f"interject-{talk_id}.jsonl").unlink(missing_ok=True)
-        except UnsafePath as e:
-            log(f"api: {e}")
+        """Remove the talk's file through its folder's descriptor: a link itself, never what it points to, and nothing
+        in a folder reached through a link (unlink_beneath)."""
+        unlink_beneath(instance_root(model), self._rel(talk_id))
 
     def running(self) -> set[str]:
         """The talk ids with a request outstanding: waiting for the instance or running."""

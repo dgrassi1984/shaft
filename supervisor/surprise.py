@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import metrics
-from .core import INSTANCES, SUP_DIR
+from .core import INSTANCES, SUP_DIR, list_beneath, safe_read
 
 BASELINE = SUP_DIR / "evals" / "surprise-baseline.json"
 
@@ -83,10 +83,12 @@ def kind_of(tool: str, f: str, detail: str) -> str:
 
 
 def episodes(name: str, root: Path | None = None) -> list[dict]:
-    base = (root or INSTANCES / name) / "memory" / "episodes"
+    root = root or INSTANCES / name
     out = []
-    for p in sorted(base.glob("*.jsonl")) if base.is_dir() else []:
-        for line in p.read_text().splitlines():
+    for fname in list_beneath(root, "memory/episodes"):   # no link followed: what they hold reaches the panel
+        if not fname.endswith(".jsonl"):
+            continue
+        for line in safe_read(root, f"memory/episodes/{fname}", "", errors="replace").splitlines():
             try:
                 out.append(json.loads(line))
             except ValueError:
@@ -123,9 +125,8 @@ def recurrence(evts: list[dict]) -> dict:
 
 
 def _usage(name: str, root: Path | None = None) -> list[dict]:
-    p = (root or INSTANCES / name) / "logs" / "llm_usage.jsonl"
     rows = []
-    for line in p.read_text().splitlines() if p.exists() else []:
+    for line in safe_read(root or INSTANCES / name, "logs/llm_usage.jsonl", "", errors="replace").splitlines():
         try:
             rows.append(json.loads(line))
         except ValueError:

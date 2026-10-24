@@ -12,8 +12,9 @@ or a reply, a job's plugin, a broker `run` command — with everything below the
 holder's death. The parent rule keeps the operator's own shells in that folder safe. A terminal conversation's client is
 stopped last, once its reply has settled. Spared:
 the gate checking a finished run (its test runner and plugin check, while no agent of that holder is alive: killing
-them would fail the gate and revert the code), and a battery's exams — the battery process itself gets SIGTERM, its
-designed stop (it cuts the exam and restores the instance's files, battery.py).
+them would fail the gate and revert the code), and a battery's exams — they run in a copy of the instance, not in its
+folder; the battery process itself gets SIGTERM, its designed stop (it cuts the exam, kills what the exam left running
+in the copy, and deletes the copy, battery.py).
 """
 from __future__ import annotations
 

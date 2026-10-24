@@ -366,9 +366,10 @@ class SymlinkEscapeTest(unittest.TestCase):
     def test_journal_note_does_not_follow_a_symlinked_journal(self):
         from supervisor import core
         (self.root / "memory" / "journal.md").symlink_to(self.victim)
-        with self.assertRaises(core.UnsafePath):
+        with mock.patch.object(core, "log") as log:   # logged, not raised: a run's settlement goes on (B1, 2026-10-24)
             core.journal_note(self.root, "x", "y")
         self.assertEqual(self.victim.read_text(), "untouched\n")
+        self.assertIn("NOT written", log.call_args.args[0])
 
     def test_message_delivery_does_not_follow_a_symlinked_inbox(self):
         (self.root / "inbox").symlink_to(self.tmp, target_is_directory=True)

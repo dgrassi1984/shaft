@@ -22,7 +22,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import judge
-from .core import INSTANCES, SUP_DIR, config_values, git_wt, journal_note, knob, positive_int, log, safe_write
+from .core import (INSTANCES, SUP_DIR, UnsafePath, config_values, git_wt, journal_note, knob, list_beneath, positive_int,
+                   log, safe_read, safe_write)
 
 PROBATION_CYCLES, _ = knob(
     "SHAFT_PROBATION_CYCLES", "6", positive_int, "judged cycles a kept self-change stays on probation (reverted on a "
@@ -205,17 +206,29 @@ def judgments(name: str, sup: Path | None = None) -> list[dict]:
     return rows
 
 
-def live_episodes(name: str) -> list[dict]:
-    out = []
-    for p in sorted((INSTANCES / name / "memory" / "episodes").glob("*.jsonl")):
-        for line in p.read_text().splitlines():
+def _instance_text(name: str, rel: str) -> str:
+    """A file in the instance's folder, as text: what the judges read is read without following a link anywhere
+    (core.safe_read) — a link the instance planted would hand a cloud model any file the supervisor can read. A link,
+    a folder or a missing file reads as ""."""
+    return safe_read(INSTANCES / name, rel, "", errors="replace")
+
+
+def _episode_records(name: str):
+    """Every record of the instance's episode logs (memory/episodes/*.jsonl), oldest file first."""
+    for fname in list_beneath(INSTANCES / name, "memory/episodes"):
+        if not fname.endswith(".jsonl"):
+            continue
+        for line in _instance_text(name, f"memory/episodes/{fname}").splitlines():
             try:
                 rec = json.loads(line)
             except ValueError:
                 continue
-            if rec.get("kind") == "live":
-                out.append(rec)
-    return out
+            if isinstance(rec, dict):
+                yield rec
+
+
+def live_episodes(name: str) -> list[dict]:
+    return [rec for rec in _episode_records(name) if rec.get("kind") == "live"]
 
 
 # Tools that write a file, and where: by argument, or a fixed file. Appending tools put the new text at the end.
@@ -263,7 +276,7 @@ def _added_at(text: str, added: list[str]) -> int | None:
 def _written_files(name: str, ep: dict) -> str:
     """Current content of files the cycle wrote — the tool log may cut an argument, a file isn't cut. For a file
     the cycle only appended to, where its addition starts is marked, so the judge can tell new text from old."""
-    root = (INSTANCES / name).resolve()
+    root = INSTANCES / name
     paths: dict[str, bool] = {}           # path -> was it (only) appended to
     added: dict[str, list[str]] = {}      # path -> the texts this cycle appended to it
     for t in ep.get("tools", []):
@@ -279,9 +292,11 @@ def _written_files(name: str, ep: dict) -> str:
                 added.setdefault(rel, []).append(_arg(t["args"], APPENDED_ARG[t["tool"]]))
     parts = []
     for rel, appended in paths.items():
-        p = (root / rel).resolve()
-        if root in p.parents and p.is_file():
-            text = p.read_text(errors="replace")
+        try:   # never through a link, nor outside the folder (core.safe_read refuses "..", "/" and every link)
+            text = safe_read(root, rel, errors="replace")
+        except (OSError, UnsafePath):
+            text = None
+        if text is not None:
             at = _added_at(text, added.get(rel, [])) if appended else None
             if at is None:
                 if len(text) <= FILE_CHARS:
@@ -318,21 +333,19 @@ def _message_time(fname: str) -> datetime | None:
 def _provenance_evidence(name: str, ep: dict) -> str:
     """Where this cycle's goal may have come from, as the supervisor can see it: the messages the cycle read,
     other messages and the conversations of the EVIDENCE_HOURS before it, and the goals.md item it cites."""
-    root = INSTANCES / name
     at = _ts(ep.get("ts", "")) or datetime.now()
     since = at - timedelta(hours=EVIDENCE_HOURS)
-    msgs = root / "memory" / "messages"
     parts, read = [], set(ep.get("inbox") or [])
     for fname in sorted(read):
-        for where in (msgs / fname, root / "inbox" / fname):
-            if where.is_file():
-                parts.append(f"### Read in this cycle: {fname}\n{where.read_text(errors='replace')[:2500]}")
+        for where in ("memory/messages", "inbox"):
+            if (text := _instance_text(name, f"{where}/{fname}")):
+                parts.append(f"### Read in this cycle: {fname}\n{text[:2500]}")
                 break
     earlier = []
-    for p in sorted(msgs.glob("*.md")) if msgs.is_dir() else []:
-        t = _message_time(p.name)
-        if p.name not in read and t and since <= t <= at:
-            earlier.append(f"- {p.name}: {' '.join(p.read_text(errors='replace').split())[:300]}")
+    for fname in list_beneath(INSTANCES / name, "memory/messages"):
+        t = _message_time(fname)
+        if fname.endswith(".md") and fname not in read and t and since <= t <= at:
+            earlier.append(f"- {fname}: {' '.join(_instance_text(name, f'memory/messages/{fname}').split())[:300]}")
     if earlier:
         parts.append("### Earlier messages (last 72 h)\n" + "\n".join(earlier[-15:]))
     talk = []
@@ -343,11 +356,9 @@ def _provenance_evidence(name: str, ep: dict) -> str:
             talk.append(f"- {rec['ts'][:16]} {who}: {' '.join(str(rec.get('content', '')).split())[:300]}")
     if talk:
         parts.append("### What was said to the agent in conversations (last 72 h)\n" + "\n".join(talk[-20:]))
-    goals = root / "self" / "goals.md"
     ref = str((ep.get("intent") or {}).get("origin_ref") or "")
-    if goals.is_file():
-        text = goals.read_text(errors="replace")
-        sections = re.split(r"(?m)^(?=#{2,3} )", text)
+    if (text := _instance_text(name, "self/goals.md")):
+        sections = [x for x in re.split(r"(?m)^(?=#{2,3} )", text) if x.strip()]   # "" before a leading heading
         heads = [s.splitlines()[0] for s in sections if s.startswith("#")]
         cited = [s for s in sections if ref and any(w in s.splitlines()[0] for w in re.findall(r"[\w.-]{2,}", ref))]
         body = ("\n".join(heads) + ("\n\n" + "\n".join(c[:1500] for c in cited[:2]) if cited else ""))
@@ -359,16 +370,7 @@ def _provenance_evidence(name: str, ep: dict) -> str:
 
 
 def _episodes(name: str, kind: str) -> list[dict]:
-    out = []
-    for p in sorted((INSTANCES / name / "memory" / "episodes").glob("*.jsonl")):
-        for line in p.read_text().splitlines():
-            try:
-                rec = json.loads(line)
-            except ValueError:
-                continue
-            if rec.get("kind") == kind:
-                out.append(rec)
-    return out
+    return [rec for rec in _episode_records(name) if rec.get("kind") == kind]
 
 
 def _prior_goals(js: list[dict], before: str) -> str:
@@ -389,14 +391,13 @@ def cycle_model(name: str, ep: dict) -> str | None:
     """The model a cycle ran on, from the instance's own LLM call log (logs/llm_usage.jsonl): the most used
     model among its 'live' calls between the declared intent and the episode. Comparisons stay within one
     model — wren ran on Bonsai, then Haiku, then MiMo within its first day."""
-    path = INSTANCES / name / "logs" / "llm_usage.jsonl"
     end = _ts(ep.get("ts", ""))
     start = _ts(((ep.get("intent") or {}).get("at")) or "") or (end - timedelta(minutes=45) if end else None)
-    if not end or not start or not path.exists():
+    if not end or not start:
         return None
     start -= timedelta(minutes=2)       # the calls before declare_intent belong to the cycle too
     counts: dict[str, int] = {}
-    for line in path.read_text(errors="replace").splitlines():
+    for line in _instance_text(name, "logs/llm_usage.jsonl").splitlines():
         try:
             rec = json.loads(line)
         except ValueError:
@@ -410,10 +411,7 @@ def cycle_model(name: str, ep: dict) -> str | None:
 def own_models(name: str, ep: dict | None = None) -> list[str]:
     """The models an instance thinks with — the one its cycle ran on and the one configured now: the judge rotation
     never grades it with either (no self-preference)."""
-    try:
-        configured = config_values((INSTANCES / name / "config.env").read_text()).get("LLM_MODEL")
-    except OSError:
-        configured = None
+    configured = config_values(_instance_text(name, "config.env")).get("LLM_MODEL")
     return [m for m in ((cycle_model(name, ep) if ep else None), configured) if m]
 
 
@@ -718,15 +716,14 @@ CITE_RE = re.compile(r"\[(\d{4}-\d{2}-\d{2})(?: (\d{2}:\d{2}))?\]")
 def check_personality(name: str) -> None:
     """Does each trait's cited journal entry actually support it? (The instance's own check only
     verifies that the entry exists — wren pointed that out about itself.)"""
-    root = INSTANCES / name
-    pers, journal = root / "self" / "personality.md", root / "memory" / "journal.md"
-    if not pers.exists() or not journal.exists():
+    pers, journal = _instance_text(name, "self/personality.md"), _instance_text(name, "memory/journal.md")
+    if not pers or not journal:
         return
-    traits = [t for t in TRAIT_RE.findall(pers.read_text()) if CITE_RE.search(t)]
+    traits = [t for t in TRAIT_RE.findall(pers) if CITE_RE.search(t)]
     if not traits:
         return
     entries = {}
-    for block in journal.read_text().split("\n---\n"):
+    for block in journal.split("\n---\n"):
         block = block.strip()
         m = re.match(r"## (\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})", block)
         if m:
@@ -1173,7 +1170,7 @@ def restore_change(name: str, entry: dict) -> str | None:
     log, the journal, self/) and conflicts with every later run. The restored code must pass the test gate,
     and is committed by the supervisor. Returns None on success, else why nothing was changed."""
     from . import gate
-    from .core import HOME, UnsafePath, contained
+    from .core import HOME, safe_read_bytes
     root, commit, files = INSTANCES / name, entry["commit"], list(entry["files"])
     not_code = [f for f in files if not Path(f).parts or Path(f).parts[0] not in gate.CODE_PATHS
                 or ".." in Path(f).parts]
@@ -1183,11 +1180,14 @@ def restore_change(name: str, entry: dict) -> str | None:
         r = git_wt(root, "rev-parse", "--verify", "--quiet", rev + "^{commit}", check=False)
         if r.returncode != 0:
             return f"commit {rev} not found on instance/{name}"
-    try:
-        now = {rel: (t.read_bytes() if (t := contained(root, *Path(rel).parts)).is_file() else None)
-               for rel in files}
-    except UnsafePath as e:
-        return f"unsafe path: {e}"
+    now = {}
+    for rel in files:
+        try:
+            now[rel] = safe_read_bytes(root, rel)   # no link followed
+        except FileNotFoundError:
+            now[rel] = None
+        except UnsafePath as e:
+            return f"unsafe path: {e}"
     moved = [rel for rel in files if now[rel] != _blob(root, commit, rel)]
     if moved:
         return (f"{', '.join(moved)} changed again after {commit[:8]}; restoring would also undo that later "

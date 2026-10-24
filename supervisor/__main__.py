@@ -26,7 +26,7 @@ from pathlib import Path
 from . import autonomy, evolution, finetune, gate, messages, metrics, mind, runner, surprise, version
 from .core import (DEFAULT_INSTANCE, HOME, INSTANCES, MIND_PATHS, add_all_but_mind, NAME_RE, PROJECT, SUP_DIR, TEMPLATE, commit_state,
                    git, git_wt, instance_config, instance_names, instance_root, journal_entries, journal_note, log, paused,
-                   safe_mkdir, safe_write)
+                   safe_mkdir, safe_read, safe_write)
 from .runner import (Busy, busy_with, is_busy, model_server, request_yield, run_agent, run_lock, sharing_model,
                      spawn_recover)
 
@@ -292,8 +292,7 @@ def cmd_status(names: list[str]) -> int:
     for name in names:
         root = INSTANCES / name
         calls = errors = tokens = 0
-        usage = root / "logs" / "llm_usage.jsonl"
-        for line in usage.read_text().splitlines() if usage.exists() else []:
+        for line in safe_read(root, "logs/llm_usage.jsonl", "", errors="replace").splitlines():   # never via a link
             rec = json.loads(line)
             if rec["ts"].startswith(today):
                 calls, errors = calls + 1, errors + bool(rec.get("error"))

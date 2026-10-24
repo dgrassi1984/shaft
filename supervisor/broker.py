@@ -119,6 +119,21 @@ def judgments_text(rows: list[dict], limit: int = 20, cycle: str = "", before: s
     return "\n\n".join(picked) + tail
 
 
+# What of its folder an instance can never send anywhere (attachments, describe_image): its keys, git and logs.
+NOT_SENT = ("secrets", ".git", "logs")
+
+
+def _in_folder(root: Path, rel: str) -> Path | None:
+    """`rel` (relative, or absolute inside root) as a plain path below root, or None if it leads out of it."""
+    p = Path(rel)
+    if p.is_absolute():
+        try:
+            p = p.relative_to(root)
+        except ValueError:
+            return None
+    return p if p.parts and ".." not in p.parts else None
+
+
 def _tail_lines(path: Path, limit: int, keep=None) -> list[str]:
     try:
         lines = [l for l in path.read_text(errors="replace").splitlines() if l.strip()]
@@ -871,24 +886,28 @@ class Broker:
         paths = [paths] if isinstance(paths, str) else paths
         if not isinstance(paths, list) or len(paths) > messages.ATTACH_MAX_FILES:
             raise ValueError(f"attachments: a list of at most {messages.ATTACH_MAX_FILES} paths in your folder")
+        from .core import UnsafePath, reserved, safe_read_bytes
         out, total = [], 0
         for rel in paths:
             rel = str(rel).strip()
-            real = (self.root / rel).resolve()
-            if real == self.root or self.root not in real.parents:
+            p = _in_folder(self.root, rel)
+            if not p:
                 raise ValueError(f"{rel}: attachments must be files in your folder")
-            if real.relative_to(self.root).parts[0] in ("secrets", ".git", "logs"):
-                raise ValueError(f"{rel}: files in {real.relative_to(self.root).parts[0]}/ cannot be attached")
-            if not real.is_file():
-                raise ValueError(f"{rel}: no such file in your folder")
-            size = real.stat().st_size
-            if size > messages.ATTACH_MAX_BYTES:
-                raise ValueError(f"{rel}: {messages.size_text(size)}, more than "
-                                 f"{messages.size_text(messages.ATTACH_MAX_BYTES)} per file")
-            total += size
+            if reserved(self.root, p.as_posix(), NOT_SENT):   # by the folder itself: `Secrets/` is secrets/
+                raise ValueError(f"{rel}: files in {p.parts[0]}/ cannot be attached")
+            try:   # the file leaves the folder: read through descriptors, a link anywhere on the way refused
+                data = safe_read_bytes(self.root, p.as_posix(), limit=messages.ATTACH_MAX_BYTES)
+            except FileNotFoundError:
+                raise ValueError(f"{rel}: no such file in your folder") from None
+            except UnsafePath:   # a link, a folder, a pipe
+                raise ValueError(f"{rel}: attachments must be files in your folder, not links"
+                                 if os.path.islink(self.root / p) else f"{rel}: no such file in your folder") from None
+            except ValueError:
+                raise ValueError(f"{rel}: more than {messages.size_text(messages.ATTACH_MAX_BYTES)} per file") from None
+            total += len(data)
             if total > messages.ATTACH_MAX_TOTAL:
                 raise ValueError(f"attachments: more than {messages.size_text(messages.ATTACH_MAX_TOTAL)} in all")
-            out.append((real.name, real.read_bytes()))
+            out.append((p.name, data))
         return out
 
     def _store(self, root: Path, rel_dir: str, files: list[tuple[str, bytes]]) -> list[dict]:
@@ -1308,17 +1327,21 @@ class Broker:
 
     def _body_file(self, rel: str) -> bytes:
         """The bytes of a file in its folder, sent as an http_request body (`body_file`)."""
-        from .core import contained
+        from .core import UnsafePath, contained, safe_read_bytes
         if rel.startswith(("-", "/", ":")) or ".." in Path(rel).parts:
             raise ValueError("body_file must be a path relative to your folder")
-        path = contained(self._root(), *Path(rel).parts)   # refuses a link anywhere on the way
+        path = contained(self._root(), *Path(rel).parts)   # the clear refusal for a link anywhere on the way
         if not path.is_file():
             raise ValueError(f"body_file: {rel} is not a file in your folder")
         size = path.stat().st_size
         if size > MAX_BODY_FILE_BYTES:
             raise ValueError(f"body_file: {rel} is {size} bytes, over the {MAX_BODY_FILE_BYTES} limit")
-        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as f:   # not swapped for a link since
-            return f.read()
+        try:   # and none swapped in since: every component opened without following a link (it is sent out)
+            return safe_read_bytes(self._root(), rel, limit=MAX_BODY_FILE_BYTES)
+        except (OSError, UnsafePath):
+            raise ValueError(f"body_file: {rel} is not a file in your folder") from None
+        except ValueError:
+            raise ValueError(f"body_file: {rel} is over the {MAX_BODY_FILE_BYTES} limit") from None
 
     def _save_answer(self, rel: str, status: int, rh, raw: bytes, secret) -> str:
         """`save_to`: the answer's body written whole to a new file, or nothing written. Only a 2xx answer is saved:
@@ -1366,12 +1389,13 @@ class Broker:
         """The instance's only way to change its config.env (its sandbox cannot write the file). Each change is
         recorded, so the gate knows exactly which lines are the instance's: the operator edits the same file,
         even mid-run, and the gate once reverted their model switch as the instance's (kant, 2026-10-13)."""
-        from .core import config_line, config_lock, config_set_line, config_values, config_with, contained, safe_write
+        from .core import (config_line, config_lock, config_set_line, config_values, config_with, contained, safe_read,
+                           safe_write)
         key, value = str(key).strip(), str(value)
         new = config_set_line(key, value)
         path = contained(self._root(), "config.env")
         with config_lock(path):                      # the operator may be writing it too (shaft config, the web UI)
-            text = path.read_text() if path.is_file() else ""
+            text = safe_read(self._root(), "config.env", "")
             old = config_line(text, key)
             safe_write(self._root(), "config.env", config_with(text, key, new))
         self.config_writes.append({"key": key, "old": old, "new": new})
@@ -1432,10 +1456,10 @@ class Broker:
         return alias, tid, on, msgs
 
     def _operator(self) -> str:
-        from .core import config_values
+        from .core import UnsafePath, config_values, safe_read
         try:
-            text = (self.project / "instances" / self.name / "config.env").read_text()
-        except OSError:
+            text = safe_read(self.project / "instances" / self.name, "config.env")
+        except (OSError, UnsafePath, ValueError):
             return "the operator"
         return config_values(text).get("OPERATOR_NAME") or "the operator"
 
@@ -1575,21 +1599,31 @@ class Broker:
 
     # -- images (docs/plans/PLAN-vision.md) ----------------------------------------------------------------------------------------
     def _image_file(self, path: str) -> tuple[str, bytes]:
-        """(shown path, bytes) of an image in the instance's folder, or in shared/. Never its keys, git or logs; a
-        link that leads out of the folder is refused like a path that does."""
+        """(shown path, bytes) of an image in the instance's folder, or in shared/. Never its keys, git or logs. In its
+        own folder no link is followed anywhere on the way (the image may go to a cloud model); in the operator's
+        shared folder a link that leads out of it is refused like a path that does."""
+        from .core import UnsafePath, reserved, safe_read_bytes
         from .messages import size_text
         rel = str(path or "").strip().removeprefix("./")
         if rel == "shared" or rel.startswith("shared/"):
             if not self.shared:
                 raise ValueError("you have no shared folder")
             base, rest = Path(self.shared).resolve(), rel.removeprefix("shared").lstrip("/")
-        else:
-            base, rest = self._root().resolve(), rel
+        else:   # its own folder, which it writes: read through descriptors, a link anywhere on the way refused
+            p = _in_folder(self._root(), rel)
+            if not p or os.path.islink(self._root() / p):
+                raise ValueError(f"{rel or '(empty path)'}: give the path of an image file in your folder")
+            if reserved(self._root(), p.as_posix(), NOT_SENT):
+                raise ValueError(f"{rel}: files in {p.parts[0]}/ cannot be read")
+            try:
+                return rel, safe_read_bytes(self._root(), p.as_posix(), limit=IMAGE_FILE_MAX)
+            except (OSError, UnsafePath):
+                raise ValueError(f"{rel}: no such file") from None
+            except ValueError:
+                raise ValueError(f"{rel}: more than {size_text(IMAGE_FILE_MAX)}") from None
         real = (base / rest).resolve()
-        if not rest or real == base or base not in real.parents:
+        if not rest or real == base or base not in real.parents:   # the operator's folder: his links, inside it
             raise ValueError(f"{rel or '(empty path)'}: give the path of an image file in your folder")
-        if base == self._root().resolve() and real.relative_to(base).parts[0] in ("secrets", ".git", "logs"):
-            raise ValueError(f"{rel}: files in {real.relative_to(base).parts[0]}/ cannot be read")
         if not real.is_file():
             raise ValueError(f"{rel}: no such file")
         if real.stat().st_size > IMAGE_FILE_MAX:

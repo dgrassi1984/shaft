@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import judge
-from .core import PROJECT, SUP_DIR, instance_root, knob, model_name, log
+from .core import PROJECT, SUP_DIR, instance_root, knob, list_beneath, model_name, log, safe_read
 from .evolution import PROBES
 from . import metrics
 
@@ -44,9 +44,11 @@ def backend() -> str:
 
 
 def _episodes(root: Path) -> list[dict]:
+    """Every episode record, read without following a link (core.safe_read): what it holds is trained into the
+    instance's own model."""
     out = []
-    for p in sorted((root / "memory" / "episodes").glob("*.jsonl")):
-        for line in p.read_text().splitlines():
+    for fname in (n for n in list_beneath(root, "memory/episodes") if n.endswith(".jsonl")):
+        for line in safe_read(root, f"memory/episodes/{fname}", "", errors="replace").splitlines():
             try:
                 out.append(json.loads(line))
             except ValueError:
@@ -55,8 +57,8 @@ def _episodes(root: Path) -> list[dict]:
 
 
 def _identity(root: Path) -> str:
-    parts = [p.read_text().strip() for p in (root / "self" / "self.md", root / "self" / "personality.md")
-             if p.exists()]
+    parts = [t.strip() for rel in ("self/self.md", "self/personality.md")
+             if (t := safe_read(root, rel, "", errors="replace"))]
     return "\n\n".join(parts)[:6000]
 
 

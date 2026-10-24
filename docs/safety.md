@@ -42,7 +42,7 @@
   you (no daily limit unless `SHAFT_OPERATOR_PER_DAY`; a macOS notification, and a push on the web UI or Telegram,
   whichever reaches you for that instance: integrations.md), with
   files attached from the sender's folder (up to 10, 20 MB each, 50 MB in all; never `secrets/`, `.git/`, `logs/` or
-  anything a link leads to outside the folder); another instance finds them in its `attachments/` (not
+  a file reached through a link); another instance finds them in its `attachments/` (not
   committed), the operator's copy is in `.supervisor/operator-inbox/attachments/`; and **`delegate_coding`**: an
   Opus-class model (`SHAFT_CODER_MODEL`, default `claude-opus-5-5`) reads the instance's code
   read-only and writes the change; the supervisor tests it on a scratch copy and applies it only if
@@ -81,8 +81,30 @@
   recorded, so the gate can tell its lines from yours; you may edit the file at any time, even mid-run.
   Per-run token, call budget
   (`SHAFT_BROKER_MAX_CALLS`, default 60), everything logged in `.supervisor/broker.log`.
+- **No link followed in an instance's folder**: the supervisor runs outside the sandbox, and an instance can put a
+  link anywhere in its own folder. So every file the supervisor reads there — to check it, copy it, show it to you
+  or send it to a judge, the coder or a vision model — and every file it writes, appends to or removes there is
+  opened one folder at a time through descriptors, none followed if it is a link (`supervisor/core.py`:
+  `open_beneath`, `safe_read`, `safe_write`, `walk_beneath`, `copy_beneath`); a pipe in a file's place is refused,
+  never waited on. Two link policies:
+  - **What goes out** (an attachment, an image for `describe_image`, a file the coder reads, a judge's evidence):
+    a link anywhere on the way is refused, even one that stays inside the folder. To that reader a link is no file.
+  - **A copy** (a battery exam's, a gate's scratch copy): a link that stays inside the copy — relative, its `..`
+    first and no more of them than its folder is deep — is copied as the link it is, so the copy runs the code the
+    instance runs; any other link is left out. The supervisor reads no link while copying; the copy's folders are
+    made and its files created through descriptors (`O_EXCL`, `O_NOFOLLOW`), so a folder of the copy swapped for a
+    link is refused, never written through.
+
+  Its keys, git and logs (`secrets/`, `.git`, `logs/`) are never sent out by any spelling: the volume is
+  case-insensitive (`Secrets/` is `secrets/`), so the supervisor compares the folder itself (device and inode) and
+  the name case-folded. The sandbox's own deny on `secrets/` holds for every spelling (checked: `cat Secrets/…` from
+  inside the sandbox is refused). Reads are bounded: one file at `SHAFT_FILE_READ_MAX_MB`, the gate's code snapshot
+  at `SHAFT_SNAPSHOT_MAX_MB`, a copy at `SHAFT_COPY_MAX_GB`, any walk at `SHAFT_TREE_MAX_FILES` files and folders and
+  `SHAFT_TREE_MAX_DEPTH` deep. Past a bound the read fails, never returns part: code too big to snapshot fails the
+  gate closed (nothing of the run's code is kept, the files it began with go back, a journal note says why).
 - **Append-only journal**: if a run rewrote history instead of appending, the journal is
-  restored and the rewrite kept aside.
+  restored and the rewrite kept aside. A journal replaced by a link (or anything that is not a file) is moved aside
+  unread and the journal restored.
 - **Slow core**: the core personality may change at most every `SHAFT_CORE_MIN_HOURS` (72).
 - **Test gate**: if a run changed the instance's code, plugins or (through `set_config`) config, the
   invariant tests and plugin checks run; failure restores the old code and the config lines the instance

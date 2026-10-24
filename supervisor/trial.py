@@ -39,8 +39,9 @@ from math import comb
 from pathlib import Path
 
 from . import gate, localmodel, mind
-from .core import (CYCLE_TIMEOUT_S, DOCS_COPY, HOME, LLM_PORTS, MIND_PATHS, PROJECT, SUP_DIR, UnsafePath, cloud_model, contained,
-                   dollars, hours, knob, log, positive_int, safe_write, secrets_env, whole)
+from .core import (CYCLE_TIMEOUT_S, DOCS_COPY, HOME, LLM_PORTS, MIND_PATHS, PROJECT, SUP_DIR, TreeTooBig, UnsafePath,
+                   cloud_model, contained, copy_beneath, dollars, hours, knob, list_beneath, log, positive_int,
+                   read_tree, reserved, safe_read, safe_read_bytes, safe_write, secrets_env, whole)
 
 TRIALS_PER_DAY, TRIALS_PER_DAY_SRC = knob(
     "SHAFT_TRIALS_PER_DAY", "2", whole, "trials an instance may ask for per day (the operator's are not counted)",
@@ -204,10 +205,18 @@ def model_of(code: dict[str, bytes]) -> dict:
 
 
 # -- which past cycles, and the state each began from -----------------------------------------------------
+def _episode_files(root: Path):
+    """The lines of each memory/episodes/*.jsonl in `root` (the instance's folder, or a replay's copy, which the
+    replayed code writes), oldest file first, read without following a link (core.safe_read): they go to judges."""
+    for fname in list_beneath(root, "memory/episodes"):
+        if fname.endswith(".jsonl"):
+            yield safe_read(root, f"memory/episodes/{fname}", "", errors="replace").splitlines()
+
+
 def live_episodes(root: Path) -> list[dict]:
     eps = []
-    for path in sorted((root / "memory" / "episodes").glob("*.jsonl")):
-        for line in path.read_text(errors="replace").splitlines():
+    for lines in _episode_files(root):
+        for line in lines:
             try:
                 ep = json.loads(line)
             except ValueError:
@@ -306,9 +315,11 @@ def reconstruct(project: Path, name: str, state: dict, code: dict[str, bytes | N
     for rel in ("logs", ".tmp"):
         shutil.rmtree(dest / rel, ignore_errors=True)
     (dest / ".tmp").mkdir()
-    index = project / "instances" / name / ".tmp" / "memory-index.json"   # a cache keyed by chunk hash
-    if index.is_file() and not index.is_symlink():
-        shutil.copyfile(index, dest / ".tmp" / "memory-index.json")
+    try:   # a cache keyed by chunk hash
+        (dest / ".tmp" / "memory-index.json").write_bytes(
+            safe_read_bytes(project / "instances" / name, ".tmp/memory-index.json"))
+    except (OSError, UnsafePath):
+        pass
     return dest
 
 
@@ -329,28 +340,25 @@ def copy_attachments(src: Path, dest: Path, before: datetime) -> int:
     nowhere (not in git, not in the mind store), and a replay must see the photo the original cycle could look at
     (docs/plans/PLAN-vision.md). Later ones are left out, as later mail is. Regular files only: a link is never followed."""
     copied = 0
-    base = src / "attachments"
-    for batch in sorted(base.glob("*/*")) if base.is_dir() and not base.is_symlink() else []:
-        try:
-            stamp = datetime.strptime(batch.name[:15], "%Y%m%d-%H%M%S")
-        except ValueError:
-            continue
-        if batch.is_symlink() or not batch.is_dir() or stamp >= before:
-            continue
-        inside = batch.resolve()
-        for f in batch.rglob("*"):
-            if f.is_file() and not f.is_symlink() and inside in f.resolve().parents:   # nothing reached through a link
-                target = contained(dest, *f.relative_to(src).parts)
-                contained(dest, *f.relative_to(src).parent.parts).mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(f, target)
-                copied += 1
+    for who in list_beneath(src, "attachments"):
+        for batch in list_beneath(src, f"attachments/{who}"):
+            try:
+                stamp = datetime.strptime(batch[:15], "%Y%m%d-%H%M%S")
+            except ValueError:
+                continue
+            if stamp >= before:
+                continue
+            try:   # through descriptors: nothing reached through a link is copied (core.copy_beneath)
+                copied += copy_beneath(src, dest / "attachments" / who / batch, rel=f"attachments/{who}/{batch}")
+            except (FileNotFoundError, FileExistsError, UnsafePath):
+                continue
     return copied
 
 
 def _talk_ids(root: Path) -> list[str]:
     ids = set()
-    for path in (root / "memory" / "episodes").glob("*.jsonl"):
-        for line in path.read_text(errors="replace").splitlines():
+    for lines in _episode_files(root):
+        for line in lines:
             try:
                 rec = json.loads(line)
             except ValueError:
@@ -361,15 +369,13 @@ def _talk_ids(root: Path) -> list[str]:
 
 
 def _files_now(root: Path) -> dict[str, bytes]:
-    out = {}
-    for p in root.rglob("*"):
-        rel = p.relative_to(root)
-        if p.is_symlink() or not p.is_file() or rel.parts[0] in NOT_STATE or "__pycache__" in rel.parts:
-            continue
-        if rel.parts[:2] == ("memory", "episodes"):
-            continue
-        out[rel.as_posix()] = p.read_bytes()
-    return out
+    """The replay's files, for its diff (which a judge reads): read through descriptors (core.read_tree), so a link
+    the replayed code planted in its copy is never read through."""
+    def skip(rel: str) -> bool:
+        parts = rel.split("/")
+        folded = [p.casefold() for p in parts]
+        return folded[0] in NOT_STATE or "__pycache__" in folded or folded[:2] == ["memory", "episodes"]
+    return read_tree(root, skip=skip)
 
 
 def file_diff(before: dict[str, bytes], after: dict[str, bytes], limit: int = 16000) -> str:
@@ -464,8 +470,7 @@ def _replay(project, name, state, code, tmp, *, model, cache, cache_lock, billed
 
 
 def _episode_lines(root: Path) -> set[str]:
-    return {line for p in (root / "memory" / "episodes").glob("*.jsonl")
-            for line in p.read_text(errors="replace").splitlines()}
+    return {line for lines in _episode_files(root) for line in lines}
 
 
 def _new_episodes(root: Path, seen: set[str]) -> list[dict]:
@@ -480,8 +485,7 @@ def _new_episodes(root: Path, seen: set[str]) -> list[dict]:
 
 def _llm_usage(root: Path) -> dict:
     tot = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "model_seconds": 0.0, "errors": 0}
-    path = root / "logs" / "llm_usage.jsonl"
-    for line in path.read_text(errors="replace").splitlines() if path.exists() else []:
+    for line in safe_read(root, "logs/llm_usage.jsonl", "", errors="replace").splitlines():   # the replay wrote it
         try:
             r = json.loads(line)
         except ValueError:
@@ -770,13 +774,15 @@ def request(name: str, files: list, hypothesis: str, episodes: list, n: int, ext
             change[rel] = None
             continue
         src = str(f.get("from") or "")
+        if not src or "secrets" in {p.casefold() for p in Path(src).parts} or reserved(root, src, ("secrets",)):
+            raise TrialError(f"{f['path']!r}: 'from' must name a file in your folder holding the new version")
         try:
-            path = contained(root, *Path(src).parts) if src else None
+            contained(root, *Path(src).parts)            # the clear refusal for a path outside, or a link already there
+            change[rel] = safe_read_bytes(root, src)     # and none swapped in since: opened through descriptors
         except UnsafePath as e:
             raise TrialError(f"{src!r}: {e}") from None
-        if not path or not path.is_file() or "secrets" in Path(src).parts:
-            raise TrialError(f"{f['path']!r}: 'from' must name a file in your folder holding the new version")
-        change[rel] = path.read_bytes()
+        except OSError:
+            raise TrialError(f"{f['path']!r}: 'from' must name a file in your folder holding the new version") from None
     t = create(name, change, hypothesis, episodes=[str(e) for e in episodes], n=n, project=project)
     k = len(t["states"])
     where = ("a cloud model, beside your schedule — usually within the hour" if not t["llm"]["local"] else
@@ -812,11 +818,14 @@ def _extend(name: str, tid: str, root: Path, project: Path) -> str:
 # -- the worker: tests, replays, judgments, verdicts ----------------------------------------------------------
 def gate_check(project: Path, name: str, t: dict) -> tuple[bool, str]:
     """The proposed code must pass the same test gate as any self-change before any replay is spent on it."""
-    from .coder import HIDDEN
+    from .coder import _hidden
     tmp = Path(tempfile.mkdtemp(prefix="shaft-trial-gate-")).resolve()
     scratch = tmp / name
     try:
-        shutil.copytree(project / "instances" / name, scratch, symlinks=True, ignore=shutil.ignore_patterns(*HIDDEN))
+        try:   # inside links as links, nothing read through one
+            copy_beneath(project / "instances" / name, scratch, _hidden, links=True)
+        except TreeTooBig as e:   # fails closed: too big to check is not checked
+            return False, f"the instance's folder is too big to copy for the gate: {e}"
         for rel in CODE:
             p = scratch / rel
             if p.is_dir() and not p.is_symlink():
@@ -834,8 +843,8 @@ def gate_check(project: Path, name: str, t: dict) -> tuple[bool, str]:
 
 def _config(project: Path, name: str) -> dict[str, str]:
     try:
-        return _env((project / "instances" / name / "config.env").read_text())
-    except OSError:
+        return _env(safe_read(project / "instances" / name, "config.env"))
+    except (OSError, UnsafePath, ValueError):
         return {}
 
 
@@ -1268,13 +1277,20 @@ def _edit(old: bytes | None, new: bytes | None) -> tuple:
     return tuple(sorted(removed)), tuple(sorted(added)), new is None
 
 
+def _bytes_or_none(root: Path, rel: str) -> bytes | None:
+    """A plain file's bytes, read without following a link; None for anything else."""
+    try:
+        return safe_read_bytes(root, rel)
+    except (OSError, UnsafePath):
+        return None
+
+
 def match(name: str, root: Path, kept: list[str], before: dict[str, bytes]) -> dict | None:
     """The finished trial whose change is the one the instance kept: the same files, each with the same lines
     removed and added — matched on the edit, not on whole files, because the rest of a file may have moved on
     between the trial and the adoption (wren adopted its trialled sentence on top of a template merge that had
     landed in the same file meanwhile, 2026-10-13)."""
-    now = {rel: ((root / rel).read_bytes() if (root / rel).is_file() and not (root / rel).is_symlink() else None)
-           for rel in kept}
+    now = {rel: _bytes_or_none(root, rel) for rel in kept}
     kept_edit = {rel: _edit(before.get(rel), now[rel]) for rel in kept}
     for t in reversed(all_trials(name)):
         if t["status"] != "done" or t["by"] != "instance" or {f["path"] for f in t["files"]} != set(kept):

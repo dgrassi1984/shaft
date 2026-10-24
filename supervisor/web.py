@@ -971,15 +971,20 @@ def activity(name: str) -> dict:
     from datetime import date
     from . import browser, egress, jobs, mind, pyenv
     from .core import instance_root
+    from .core import list_beneath, safe_read
     root = instance_root(name)
     plugins = []
-    for manifest in sorted((root / "plugins").glob("*/plugin.json")) if (root / "plugins").is_dir() else []:
+    for plugin in list_beneath(root, "plugins"):   # read without following a link: shown on the operator's page
         try:
-            spec = json.loads(manifest.read_text(errors="replace"))
-        except (OSError, ValueError) as e:
+            text = safe_read(root, f"plugins/{plugin}/plugin.json", errors="replace")
+        except (OSError, UnsafePath):
+            continue
+        try:
+            spec = json.loads(text)
+        except ValueError as e:
             spec = {"description": f"(plugin.json does not parse: {e})"}
         spec = spec if isinstance(spec, dict) else {}
-        plugins.append({"name": manifest.parent.name, "description": str(spec.get("description", ""))[:300],
+        plugins.append({"name": plugin, "description": str(spec.get("description", ""))[:300],
                         "scheduled": "schedule" in spec})
     log_path = egress.log_path(name)
     return {"egress": egress.describe(egress.recent(log_path, 50)),
@@ -995,14 +1000,15 @@ def _message(file: str) -> dict | None:
 
 def _instance_files(name: str, tab: str, qs: dict, names: list[str], csrf: str) -> Response:
     """Browse or open below an instance with the attachment reader's no-follow descriptor walk."""
-    from .core import instance_root, open_beneath
+    from .core import instance_root, open_beneath, reserved
     from . import web_views as v
     raw = qs.get("path", "")
     rel = Path(raw)
-    if (rel.is_absolute() or ".." in rel.parts or "\0" in raw
-            or FILE_EXCLUSIONS.intersection(p.casefold() for p in rel.parts)):
-        return Response(403, b"This path is not available in Files.", {"Content-Type": "text/plain; charset=utf-8"})
     root = instance_root(name)
+    if (rel.is_absolute() or ".." in rel.parts or "\0" in raw
+            or FILE_EXCLUSIONS.intersection(p.casefold() for p in rel.parts)
+            or reserved(root, rel.as_posix(), FILE_EXCLUSIONS)):   # by the folder itself, whatever its spelling
+        return Response(403, b"This path is not available in Files.", {"Content-Type": "text/plain; charset=utf-8"})
     try:
         if tab == "file":
             # Nonblocking prevents a named pipe from hanging before the regular-file check.
@@ -1121,9 +1127,10 @@ def _attachment_texts(m: dict) -> dict:
         path = attachment_path(a)
         if path is None:
             continue
-        try:
-            out[k] = path.read_bytes()[:TEXT_MAX].decode("utf-8")
-        except (OSError, UnicodeDecodeError):
+        try:   # opened with no link followed, as the preview reads it: nothing swapped in after attachment_path
+            root, rest = _attachment_root(path)
+            out[k] = read_beneath(root, rest.parts, TEXT_MAX).decode("utf-8")
+        except (OSError, UnsafePath, ValueError):
             continue
     return out
 
