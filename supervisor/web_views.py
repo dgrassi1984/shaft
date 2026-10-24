@@ -24,6 +24,7 @@ ICONS = {name: h('<svg width="14" height="14" viewBox="0 0 24 24" fill="none" st
              "expand": '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
              "collapse": '<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/>',
          }.items()}
+_DOT = Html('<span class="mark" title="changed in this chat">●</span> ')
 # The documents drawer's full-screen toggle: both glyphs, CSS shows the one aria-pressed calls for (web.js flips it).
 FULLSCREEN = h('<button type="button" class="small icon" data-fullscreen-doc aria-pressed="false" title="Full screen" '
                'aria-label="Full screen">{on}{off}</button>', on=ICONS["expand"], off=ICONS["collapse"])
@@ -825,42 +826,76 @@ def threads_list(name: str, doc: str, sha: str, threads: list[dict], active: str
 
 def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None, sha: str, marked: set[str],
                problem: str = "", saved: dict | None = None, threads: list[dict] | None = None,
-               counts: dict | None = None, thread: str = "", archived: bool = False) -> Html:
-    """The documents panel beside the chat (/fragment/docs/<name>): the list or the open one rendered."""
+               counts: dict | None = None, thread: str = "", archived: bool = False, folder: str = "") -> Html:
+    """The documents panel beside the chat (/fragment/docs/<name>): the list of one folder (`folder`, "" for notes/docs/
+    itself: its subfolders, then its documents) or the open one rendered, whose ← goes back to its folder."""
     from . import actions
     from .docs import DIR
     from .web_actions import post_attrs
+    if open_path:
+        folder = open_path.rpartition("/")[0]
+    prefix = folder + "/" if folder else ""
+    subs: dict[str, dict] = {}                     # the listing is the last changed first: so is each folder, by its latest
     items = []
     for d in listing:
+        if not d["path"].startswith(prefix):
+            continue
+        rest = d["path"][len(prefix):]
         n = 0 if counts is None else counts.get(d["path"]) or 0
-        items.append(h('<a href="?doc={u}" data-open-doc="{p}"><span>{dot}{p}{ccount}</span>'
+        if "/" in rest:
+            s = subs.setdefault(rest.partition("/")[0], {"docs": 0, "marked": False, "comments": 0})
+            s["docs"] += 1
+            s["marked"] |= d["path"] in marked
+            s["comments"] += n
+            continue
+        items.append(h('<a href="?doc={u}" data-open-doc="{p}"><span>{dot}{f}{ccount}</span>'
                        '<span class="dim docsize">{b} bytes</span></a>',
-                       u=q(d["path"]), p=d["path"], b=d["bytes"],
-                       dot=Html('<span class="mark" title="changed in this chat">●</span> ')
-                       if d["path"] in marked else Html(""),
+                       u=q(d["path"]), p=d["path"], f=rest, b=d["bytes"], dot=_DOT if d["path"] in marked else "",
                        ccount=h(' <span class="ccount" title="open comments">💬 {n}</span>', n=n) if n > 0 else ""))
+    folders = [h('<a href="?dir={u}" data-open-dir="{p}" class="folder"><span>{dot}📁 {f}{ccount}</span>'
+                 '<span class="dim docsize">{k} document{s} ›</span></a>',
+                 u=q(prefix + f), p=prefix + f, f=f, k=s["docs"], s="" if s["docs"] == 1 else "s",
+                 dot=_DOT if s["marked"] else "",
+                 ccount=h(' <span class="ccount" title="open comments">💬 {n}</span>', n=s["comments"])
+                 if s["comments"] else "") for f, s in subs.items()]
+    inside = h(' in {f}/', f=folder) if folder else ""
     new = h('<details class="newdoc" data-key="newdoc"><summary>New document</summary><form data-post="/docs/{n}/save" '
-            'data-after="doc-saved"{a}><input type="hidden" name="sha" value="none"><label>Document name '
-            '<input name="path" required placeholder="name, e.g. plan" pattern="[A-Za-z0-9][A-Za-z0-9 _.\\-]*" '
-            'maxlength="80"></label>'
+            'data-after="doc-saved"{a}><input type="hidden" name="sha" value="none">'
+            '<input type="hidden" name="dir" value="{dir}"><label>Document name{inside} '
+            '<input name="path" required placeholder="plan, or folder/plan" '
+            'pattern="[A-Za-z0-9][A-Za-z0-9 _.\\-]*(/[A-Za-z0-9][A-Za-z0-9 _.\\-]*)*" maxlength="80"></label>'
             '<textarea name="text" hidden></textarea><button type="submit" class="small">Create</button></form></details>',
-            n=q(name), a=post_attrs("Documents", actions.RUN_NOW_S))
-    back = Html('<button type="button" class="small" data-back-docs aria-label="Back to the documents">← Documents</button>')
+            n=q(name), dir=folder, inside=inside, a=post_attrs("Documents", actions.RUN_NOW_S))
+    parent, _, here = folder.rpartition("/")
+    if open_path:
+        title = h('<button type="button" class="small" data-back-docs data-dir="{f}" aria-label="Back to {to}">← {w}'
+                  '</button> <span class="dim">{dir}/</span>', f=folder, w=here or "Documents",
+                  to=f"{folder}/" if folder else "the documents", dir=DIR)
+    elif folder:                                   # Documents / a / b: each one above is a link up
+        steps = folder.split("/")
+        crumbs = [h('<a href="?dir=" data-open-dir="">Documents</a>')] + [
+            h('<a href="?dir={u}" data-open-dir="{p}">{s}</a>', u=q("/".join(steps[:k + 1])), p="/".join(steps[:k + 1]),
+              s=s) for k, s in enumerate(steps[:-1])] + [h('<b>{s}</b>', s=here)]
+        title = h('<button type="button" class="small" data-back-docs data-dir="{p}" aria-label="Up to {w}">←</button> '
+                  '<span class="crumbs">{c}</span>', p=parent, w=f"{parent}/" if parent else "the documents",
+                  c=join([crumbs[0]] + [h(' / {c}', c=c) for c in crumbs[1:]]))
+    else:
+        title = h('<b>Documents</b> <span class="dim">{dir}/</span>', dir=DIR)
+    entries = folders + items
+    empty = (h('<p class="dim">No documents in {f}/ (any more).</p>', f=folder) if folder else
+             h('<p class="dim">No current files.</p>') if archived else
+             h('<p class="dim">none yet: ask {n} for one, it appears here as it writes it.</p>', n=name))
     expand = FULLSCREEN if open_path and text is not None and not problem else Html("")
-    head = h('<div class="docshead">{title} <span class="dim">{dir}/</span>{new}{expand}<button type="button" '
+    head = h('<div class="docshead">{title}{new}{expand}<button type="button" '
              'class="small closedocs" data-close-docs aria-label="Close the documents">✕</button></div>{list}',
-             title=back if open_path else Html("<b>Documents</b>"), dir=DIR, expand=expand,
-             new="" if open_path or archived else new,
-             list="" if open_path else h('<div class="doclist">{i}</div>', i=join(items) if items else
-                                          h('<p class="dim">No current files.</p>') if archived else
-                                          h('<p class="dim">none yet: ask {n} for one, it appears here as it writes it.</p>',
-                                            n=name)))
+             title=title, expand=expand, new="" if open_path or archived else new,
+             list="" if open_path else h('<div class="doclist">{i}</div>', i=join(entries) if entries else empty))
     download = (download_icon(f"/i/{q(name)}/file?path={q(DIR + '/' + open_path)}")
                 if open_path and text is not None and not problem else Html(""))
     if archived:
         notice = h('<p>Current files — not as they were in this chat</p><p><a href="/i/{n}/chat{query}">'
                    'Open in the current chat to edit or comment</a></p>', n=q(name),
-                   query=f"?doc={q(open_path)}" if open_path else "")
+                   query=f"?doc={q(open_path)}" if open_path else f"?dir={q(folder)}" if folder else "")
         view = (h('<p class="bad">{p}</p>', p=problem) if problem else
                 h('<div class="docview" data-read-only="1"><div class="doctitle"><b>{p}</b>{d}</div>'
                   '<div class="docmd">{md}</div></div>', p=open_path, d=download, md=markdown(text)) if text is not None else
@@ -1115,8 +1150,9 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
 
 def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], live: dict, names: list[str],
               csrf: str, read_only: bool = False, panel: Html = Html(""), doc: str = "", att: str = "",
-              later: str = "") -> Html:
+              later: str = "", folder: str = "") -> Html:
     """`att` (<message file>/<index>): the panel shows that text attachment, not a document (attachment_panel).
+    `folder` (?dir=): with no document open, the panel lists that folder of notes/docs/.
     `later`: when its next cycle is (autonomy.next_cycle), the Next cycle button's title."""
     from . import messages
     feed_url = f"/fragment/chat/{q(name)}" + (f"?id={q(chat['id'])}" if read_only and chat else "")
@@ -1149,7 +1185,8 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
                          '↓ New below</button>', u=feed_url, f=chat_feed(name, chat, sent, archived=read_only)), composer,
                  Html('<div class="dropzone" data-dropzone hidden>Drop to attach</div>') if not read_only else Html("")])
     aside = h('<aside class="docs" id="docs" data-poll="/fragment/docs/{n}?{d}{archive}" data-every="1500" data-lazy="1">{p}</aside>',
-              n=q(name), d=f"att={q(att)}" if att else f"doc={q(doc)}", p=panel,
+              n=q(name), d=f"att={q(att)}" if att else f"list=1&dir={q(folder)}" if folder and not doc else
+              f"doc={q(doc)}", p=panel,
               archive=f"&id={q(chat['id'])}" if read_only and chat else "")
     return chat_frame(name, chat_header(name, live, chat, past, read_only),
                       h('<div class="chatgrid"><div class="chatpage">{b}</div>{a}</div>', b=body, a=aside),

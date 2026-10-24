@@ -604,7 +604,7 @@ def _get(req: Request, csrf: str) -> Response | None:
         return _html(200, _docs_panel(m[1], chat, qs.get("doc", ""), qs.get("thread", ""),
                                       listing_only=qs.get("list") == "1",
                                       archived=bool(qs.get("id")) and bool(chat) and chat.get("state") == "ended",
-                                      att=qs.get("att", ""))[1])
+                                      att=qs.get("att", ""), folder=qs.get("dir", ""))[1])
     if m := re.match(r"^/chatfiles/(web-[a-f0-9]+)/(\d+)/(\d+)$", path):
         return _chat_file(m[1], int(m[2]), int(m[3]))
     if path in ("/trials", "/fragment/trials"):
@@ -671,6 +671,12 @@ def _save_doc(name: str, login: str, form: dict) -> Response:
     path = form.get("path", "").strip()
     if path and not path.endswith(".md"):
         path += ".md"
+    try:                                          # New document in a folder: it names the file inside that folder
+        folder = docs.folder(form.get("dir", ""))
+    except docs.Refused as e:
+        return _html(409, web_pages.h("<p>refused: {e}</p>", e=str(e)))
+    if folder and path:
+        path = f"{folder}/{path}"
     text, sha = form.get("text", "").replace("\r\n", "\n"), form.get("sha", "")
 
     def refused(last: str) -> Response:
@@ -780,15 +786,21 @@ def _comment(name: str, login: str, action: str | None, form: dict) -> Response:
 
 
 def _docs_panel(name: str, chat: dict | None, doc: str, thread: str = "", listing_only: bool = False,
-                archived: bool = False, att: str = ""):
+                archived: bool = False, att: str = "", folder: str = ""):
     """(the open document, the panel): the one asked for, else the last this chat changed (what it is writing shows as it
     writes it), else the list; listing_only (← Documents, ?list=1): the list, whatever this chat changed. With its
     comment threads (docs/plans/PLAN-comments.md), which are in the fragment so a comment alone changes its ETag.
-    att (?att=<message file>/<index>): a text file the instance sent you instead, read-only (_attachment_preview)."""
+    att (?att=<message file>/<index>): a text file the instance sent you instead, read-only (_attachment_preview).
+    folder (?dir=, a subfolder of notes/docs/): the list shows that folder; asking for one is asking for the list."""
     from . import doc_comments, docs, web_views as v
     if att:
         return "", v.attachment_panel(name, *_attachment_preview(name, att))
     marked = v.in_chat(chat)
+    problem, listing_only = "", listing_only or bool(folder)
+    try:
+        folder = docs.folder(folder)
+    except docs.Refused as e:                     # a hand-made ?dir=: the top folder, saying why
+        folder, problem = "", str(e)
     try:
         listing = docs.listing(name)
     except (Exception, SystemExit) as e:          # the documents never take the chat down with them: say what failed
@@ -796,7 +808,7 @@ def _docs_panel(name: str, chat: dict | None, doc: str, thread: str = "", listin
         return doc, v.docs_panel(name, [], doc, None, "none", marked, f"documents not readable: {e}", archived=archived)
     if not doc and not listing_only:
         doc = next((d["path"] for d in listing if d["path"] in marked), "")
-    text, sha, problem = None, "none", ""
+    text, sha = None, "none"
     if doc:
         try:
             text, sha = docs.read(name, doc)
@@ -810,7 +822,7 @@ def _docs_panel(name: str, chat: dict | None, doc: str, thread: str = "", listin
         threads, counts = [], {}
     return doc, v.docs_panel(name, listing, doc, text, sha, marked, problem,
                              ((chat or {}).get("saved_docs") or {}).get(doc), threads=threads, counts=counts,
-                             thread=thread, archived=archived)
+                             thread=thread, archived=archived, folder=folder)
 
 
 LAST_CHAT = "shaft_last"                                     # the instance whose chat / opens
@@ -879,10 +891,10 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str) -
         past = [c for c in web_chat.chats(name) if c.get("state") == "ended"]
         read_only = bool(qs.get("id")) and bool(chat) and chat.get("state") == "ended"
         doc, panel = _docs_panel(name, chat, qs.get("doc", ""), qs.get("thread", ""), archived=read_only,
-                                 att=qs.get("att", ""))
+                                 att=qs.get("att", ""), folder=qs.get("dir", ""))
         return _html(200, v.chat_page(name, chat, _sent_during(name, chat, bool(qs.get("id"))), past, _live(name), names, csrf,
                                       read_only=read_only,
-                                      panel=panel, doc=doc, att=qs.get("att", ""),
+                                      panel=panel, doc=doc, att=qs.get("att", ""), folder=qs.get("dir", ""),
                                       later="" if read_only else _next_cycle(name)),
                      {"Set-Cookie": f"{LAST_CHAT}={name}; Path=/; Max-Age={COOKIE_DAYS * 86400}; Secure; SameSite=Strict"})
     if tab in ("config", "drive", "access"):

@@ -149,8 +149,11 @@ and [chat design](plans/PLAN-webui-chat.md).
   Activity and Services. Interjected requests need inspection rather than a one-message retry.
 - **Documents**: a Markdown file an instance writes under its `notes/docs/` shows beside the chat, live, as it writes
   it; a reply's documents are cards under it. The drawer shows a vertical list with sizes, changed marks and comment
-  counts, or one open document (by default the one this chat last changed). **← Documents** returns to the list
-  and asks before dropping unsaved edits. When the chat area is too narrow for both columns, Documents opens as
+  counts, or one open document (by default the one this chat last changed). Subfolders of `notes/docs/` are entries
+  of their own (📁, with how many documents they hold and their marks and comments added up), most recently changed
+  first, then the documents at that level: a folder opens its list (`?dir=`, so a reload stays there), the path at
+  the top (Documents / ucg / sub) and **←** go back up. **← <folder>** (or **← Documents**) returns from a document
+  to its folder's list and asks before dropping unsaved edits; deleting one returns there too. When the chat area is too narrow for both columns, Documents opens as
   a sheet over the chat. Close it with ✕ or Escape; loading a `?doc=` address or clicking a document card, list
   entry or chip opens the panel again.
   **Download** saves the open document's current file from disk, including in earlier chats. Unsaved edits are
@@ -169,7 +172,8 @@ and [chat design](plans/PLAN-webui-chat.md).
   Cancel or explicitly discarding edits removes the draft. Saving clears the saved draft and keeps any
   newer typing. Reloading or leaving warns while the editor has unsaved changes.
   Edit one in the panel, in the field labeled Markdown of that file, or start one: Documents, then New document.
-  The name field is labeled Document name.
+  The name field is labeled Document name (Document name in ucg/ inside a folder): the document goes in the folder
+  shown, and a name like `q4/plan` makes the subfolder too (four levels at most). Once created it opens.
   Save is refused if it wrote the file meanwhile (you see what changed and keep your text), and it hears of your
   change as a diff; with your next message, or at once if it is replying. If a later write of its drops lines you
   wrote, the panel says so and offers your version back. The first message of each web chat tells the instance

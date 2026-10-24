@@ -34,6 +34,17 @@ def _rel(path: str) -> str:
     return p
 
 
+def folder(path: str) -> str:
+    """A folder inside notes/docs/ ("" is notes/docs/ itself), checked as _rel checks a document's: a document in it
+    still fits the four levels."""
+    p = str(path).strip().strip("/")
+    p = "" if p == DIR else p.removeprefix(DIR + "/")
+    parts = p.split("/") if p else []
+    if not all(NAME.match(x) and x not in (".", "..") for x in parts) or len(parts) > 3:
+        raise Refused(f"{path!r}: a folder under {DIR}/ is named with letters, digits, space, . _ -, at most 3 deep")
+    return p
+
+
 def _path(name: str, rel: str, create: bool = False) -> Path:
     root = instance_root(name)
     try:
