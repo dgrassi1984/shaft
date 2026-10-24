@@ -231,14 +231,76 @@ class RoutesTest(WebTest):
 
 
 class WhenTest(unittest.TestCase):
-    def test_a_reply_watched_on_screen_sends_no_push(self):
+    def test_a_chat_on_screen_is_watched_by_that_device_only_and_until_it_goes_away(self):
+        """W9 (review 2026-10-24): watched was one flag per instance, so a desktop tab silenced the phone's pushes, and
+        a phone that locked stayed "watching" for WATCH_S more. Per device now, and ?away=1 ends it at once."""
         from supervisor import web_chat
         web_chat._watched.clear()
-        self.assertFalse(web_chat.watched("thelos"))
-        web_chat.watching("thelos")
-        self.assertTrue(web_chat.watched("thelos"))
+        self.assertEqual(web_chat.watchers("thelos"), set())
+        web_chat.watching("thelos", "laptop")
+        self.assertEqual(web_chat.watchers("thelos"), {"laptop"})
+        self.assertEqual(web_chat.watchers("wren"), set())                    # another instance's chat
+        web_chat.watching("thelos", "phone")
+        web_chat.unwatch("thelos", "phone")                                  # the phone locked
+        self.assertEqual(web_chat.watchers("thelos"), {"laptop"})
         with mock.patch.object(web_chat.time, "monotonic", return_value=time.monotonic() + web_chat.WATCH_S + 1):
-            self.assertFalse(web_chat.watched("thelos"))
+            self.assertEqual(web_chat.watchers("thelos"), set())
+
+
+class PairedOnlyTest(PushTest):
+    def pair(self, *devices):
+        (self.sup / "web").mkdir(parents=True, exist_ok=True)
+        (self.sup / "web" / "devices.json").write_text(json.dumps({d: {"name": d} for d in devices}))
+
+    def test_w1_an_unpaired_device_is_never_pushed_and_loses_its_subscription(self):
+        """W1 (review 2026-10-24): unpairing deleted the device but not its push subscription, so a revoked phone kept
+        getting a lock-screen push and a badge for every reply. notify() pushes only to paired devices, and drops the
+        subscription of one that is not."""
+        self.pair("phone")
+        for d in ("phone", "revoked"):
+            webpush.subscribe(d, {"endpoint": APPLE})
+        with mock.patch.object(webpush, "_wake") as wake:
+            self.assertEqual(webpush.notify({"title": "a", "body": "", "url": "/", "tag": "a"}), ["phone"])
+        self.assertEqual(set(wake.call_args[0][0]), {"phone"})
+        self.assertEqual(set(webpush.subscriptions()), {"phone"})
+        self.assertNotIn("revoked", webpush._queue())
+
+    def test_w1_a_devices_file_that_cannot_be_read_drops_nobody(self):
+        webpush.subscribe("phone", {"endpoint": APPLE})                      # no devices.json at all
+        with mock.patch.object(webpush, "_wake"):
+            self.assertEqual(webpush.notify({"title": "a", "body": "", "url": "/", "tag": "a"}), ["phone"])
+        self.assertEqual(set(webpush.subscriptions()), {"phone"})
+
+    def test_w9_a_device_with_the_chat_on_screen_is_skipped(self):
+        self.pair("phone", "laptop")
+        for d in ("phone", "laptop"):
+            webpush.subscribe(d, {"endpoint": APPLE})
+        with mock.patch.object(webpush, "_wake") as wake:
+            self.assertEqual(webpush.notify({"title": "a", "body": "", "url": "/", "tag": "a"}, skip={"laptop"}),
+                             ["phone"])
+            self.assertEqual(set(wake.call_args[0][0]), {"phone"})
+            self.assertEqual(webpush.notify({"title": "b", "body": "", "url": "/", "tag": "b"},
+                                            skip={"laptop", "phone"}), [])
+        self.assertEqual(webpush.take("laptop"), [webpush.NOTHING])          # nothing queued for the one looking
+
+    def test_w5_a_refused_subscription_is_dropped_and_status_says_which_key(self):
+        """W5 (review 2026-10-24): fingerprint() was never used and a 401/403 left the subscription in place, so after
+        the key changed every push failed while the button still said on. A refusal drops it; status names the
+        endpoint, the key now, and whether the subscription was made for another key."""
+        webpush.subscribe("phone", {"endpoint": APPLE})
+        state = webpush.status("phone")
+        self.assertEqual((state["subscribed"], state["endpoint"], state["stale"]), (True, APPLE, False))
+        self.assertEqual(state["key"], webpush.public_key())
+        subs = webpush.subscriptions()
+        subs["phone"]["key"] = "an-older-key"
+        webpush._save(subs)
+        self.assertIs(webpush.status("phone")["stale"], True)
+        refused = urllib.error.HTTPError(APPLE, 403, "Forbidden", {}, None)
+        refused.read = lambda *a: b'{"reason":"BadJwtToken"}'
+        with mock.patch("urllib.request.urlopen", side_effect=refused):
+            self.assertTrue(webpush._send_one("phone", APPLE).startswith("403: refused, removed"))
+        self.assertEqual(webpush.subscriptions(), {})
+        self.assertEqual(webpush.status("phone")["subscribed"], False)
 
 
 if __name__ == "__main__":

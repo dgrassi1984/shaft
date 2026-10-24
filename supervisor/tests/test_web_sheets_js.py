@@ -110,13 +110,25 @@ await click(docbtn);
 const comment=new Element('comment',body); comment.id='comment-box';
 const input=control('commentinput',comment); input.focus();
 await event('shaft:swapped',{target:header}); assert.equal(document.activeElement,input);
-assert.equal(comment.closest('[inert]'),null); assert.equal(docs.getAttribute('aria-owns'),'comment-box comment-sel');
+assert.equal(comment.closest('[inert]'),null); assert.equal(docs.getAttribute('aria-owns'),'comment-box comment-sel quote-reply');
 await key('Tab'); assert.equal(document.activeElement,docclose);
 await key('Tab',true); assert.equal(document.activeElement,input);
 await key('Escape'); clear();
 const card=control('card',chat); card.dataset.openDoc='plan.md';
 card.focus(); await click(card); assert.equal(document.activeElement,docclose);
 await key('Escape'); clear(); assert.equal(document.activeElement,card);
+""")
+
+    def test_w2_reply_on_a_document_selection_works_over_the_sheet(self):
+        """W2 (review 2026-10-24), found clicking through it at phone width: the documents sheet made every other child
+        of body inert, ↩ Reply (#quote-reply, made on the first selection, before the sheet opened) with them — the
+        button showed on a document's selection and a tap did nothing. It is the sheet's own, as 💬 Comment is."""
+        self.run_sheet(r"""
+const reply=control('reply',body); reply.id='quote-reply';
+await click(docbtn); modal(docs,'Documents');
+assert.equal(reply.closest('[inert]'),null);
+for(const el of [header,chat,nav]) assert.equal(el.hasAttribute('inert'),true,el.name);
+await key('Escape'); clear();
 """)
 
     def test_issue_6_chats_focus_and_all_closing_paths(self):

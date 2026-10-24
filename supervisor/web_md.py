@@ -44,7 +44,10 @@ def render(text: str) -> Html:
 _CODE = re.compile(r"(`+)(.+?)(?<!`)\1(?!`)", re.S)
 _ESCAPE = re.compile(r"\\([!-/:-@\[-`{-~])")
 _AUTOLINK = re.compile(r"<((?:https?://|mailto:)[^\s<>]+)>")
-_LINK = re.compile(r"(!?)\[((?:[^\[\]]|\[[^\[\]]*\])*)\]\(\s*<?([^\s()<>]*(?:\([^\s()<>]*\)[^\s()<>]*)*)>?"
+# The destination never holds a placeholder (a code span or an autolink cut out before): it would expand inside
+# href="…" and break out of the attribute (W16, review 2026-10-24). _BARE excludes them the same way.
+_URL = r"[^\s()<>" + OPEN + CLOSE + r"]"
+_LINK = re.compile(r"(!?)\[((?:[^\[\]]|\[[^\[\]]*\])*)\]\(\s*<?(" + _URL + r"*(?:\(" + _URL + r"*\)" + _URL + r"*)*)>?"
                    r"(?:\s+(?:\"[^\"]*\"|'[^']*'))?\s*\)")
 _BARE = re.compile(r"(?<![\w/@=\"'])(https?://[^\s<>" + OPEN + CLOSE + r"]+)")
 _STRONG = (re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*"), re.compile(r"(?<![\w_])__(?=\S)(.+?)(?<=\S)__(?![\w_])"))
@@ -58,8 +61,10 @@ def _anchor(url: str, inner: str) -> str:
     return f'<a href="{esc(url)}" rel="noopener noreferrer" target="_blank">{inner}</a>'
 
 
-def inline(text: str, links: bool = True) -> str:
-    kept: list[str] = []
+def inline(text: str, links: bool = True, kept: list[str] | None = None) -> str:
+    """`kept`: the pieces already cut out, when this is a link's label inside inline(): a code span in the label is
+    a placeholder of the outer call's (a list of its own raised IndexError: the whole page failed)."""
+    kept = [] if kept is None else kept
 
     def keep(fragment: str) -> str:
         kept.append(fragment)
@@ -72,9 +77,9 @@ def inline(text: str, links: bool = True) -> str:
 
         def link(m: re.Match) -> str:
             image, label, url = m[1], m[2], m[3]
-            shown = inline(label, links=False) if label.strip() else esc(url)
+            shown = inline(label, links=False, kept=kept) if label.strip() else esc(url)
             if image:
-                shown = "🖼 " + (inline(label, links=False) if label.strip() else "image")
+                shown = "🖼 " + (inline(label, links=False, kept=kept) if label.strip() else "image")
             if not url.lower().startswith(SCHEMES):        # javascript:, data:, a path: the text only, never a link
                 return keep(shown)
             return keep(_anchor(url, shown))
@@ -96,6 +101,11 @@ def inline(text: str, links: bool = True) -> str:
     while _PLACE.search(s):                               # a kept piece may hold another (a link's label)
         s = _PLACE.sub(lambda m: kept[int(m[1])], s)
     return s
+
+
+def plain(text: str) -> str:
+    """One line of Markdown as the page shows its text: what an anchor quoting the rendered document must match."""
+    return html.unescape(re.sub(r"<[^>]*>", "", inline(clean(str(text)).replace(OPEN, "").replace(CLOSE, ""))))
 
 
 def _code_text(s: str) -> str:

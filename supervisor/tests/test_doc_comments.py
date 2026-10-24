@@ -418,5 +418,25 @@ class CommentsTest(unittest.TestCase):
         self.assertEqual(list(self.outside.iterdir()), [])
 
 
+
+class AnchorTextTest(CommentsTest):
+    def test_w10_a_thread_the_instance_opens_anchors_on_the_text_as_shown(self):
+        """W10 (review 2026-10-24): the instance quotes its own Markdown; the page matches anchors against the rendered
+        text, so a quote with **bold** or `code` never matched and the thread showed as detached."""
+        self.doc("Run **every** step of `make all` first")
+        answer = '### comment on notes/docs/plan.md: "Run **every** step of `make all`"\nWhy this order?'
+        comments.parse_answer("wren", answer, [])
+        self.assertEqual(self.thread()["anchor"]["exact"], "Run every step of make all")
+
+    def test_w10_an_anchor_cut_inside_a_character_is_refused_not_a_crash(self):
+        """A lone half of a surrogate pair (a selection's 32-character context cut inside an emoji) could not be
+        written: the comment failed with a 500. It is refused by name."""
+        self.doc("x")
+        with self.assertRaisesRegex(comments.Refused, "prefix cuts a character in half"):
+            comments.add_thread("wren", self.pid(), "plan.md", {"exact": "x", "prefix": "\udc00a", "suffix": "",
+                                                                 "start": 3}, "old-sha", "Question")
+        self.assertEqual(comments.threads("wren"), [])
+
+
 if __name__ == "__main__":
     unittest.main()

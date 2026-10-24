@@ -58,6 +58,10 @@ def _anchor(anchor: dict | None) -> None:
         value = anchor.get(key)
         if not isinstance(value, str) or len(value) > limit or (key == "exact" and not value):
             raise Refused(f"anchor {key} must be {'non-empty and ' if key == 'exact' else ''}at most {limit} characters")
+        try:                                      # half of a surrogate pair (a cut inside an emoji) is not text: it
+            value.encode("utf-8")                 # could not be stored, and the comment failed with a 500 (W10)
+        except UnicodeEncodeError:
+            raise Refused(f"anchor {key} cuts a character in half") from None
     if type(anchor.get("start")) is not int or anchor["start"] < 0:
         raise Refused("anchor start must be a non-negative integer")
 
@@ -347,6 +351,7 @@ def parse_answer(name: str, answer: str, sent_ids: list, started_by: str | None 
     sent_ids are only the threads this reply heard: only they receive unsectioned references or qualify for
     the started_by whole-answer fallback. The caller admits only normally completed replies.
     """
+    from . import web_md
     result = {"answered": [], "opened": [], "unsectioned": []}
     sent = {i["id"] if isinstance(i, dict) else i for i in sent_ids}
     with _store(name, True) as store:
@@ -363,7 +368,9 @@ def parse_answer(name: str, answer: str, sent_ids: list, started_by: str | None 
             source = f"{chat_turn_ref}:{index}"
             if any(t.get("source") == source for t in store["threads"].values()):
                 continue
-            anchor = {"exact": opened[2], "prefix": "", "suffix": "", "start": 0}
+            # The quote is the instance's Markdown; the page matches the anchor against the rendered text, so a quote
+            # with **bold** or `code` in it never matched and showed as detached (W10, review 2026-10-24).
+            anchor = {"exact": web_md.plain(opened[2]).strip(), "prefix": "", "suffix": "", "start": 0}
             try:
                 doc = _rel(opened[1])
                 _anchor(anchor)

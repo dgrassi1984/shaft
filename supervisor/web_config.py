@@ -104,7 +104,7 @@ def _field_form(name: str, f: dict) -> Html:
         control = h('<input name="value" value="{v}" {num} maxlength="500" aria-label="{k} value">', v=f["value"],
                     k=f["key"], num=Html('inputmode="numeric" pattern="[0-9]+"') if f["numeric"] else "")
     extra = (Html(" It also sets LLM_BASE_URL to match.") if f["key"] == "LLM_MODEL" else "")
-    save = h('<form class="cfg" data-post="/action/config-set" data-confirm="Set {k} for {n}? Only that line of its '
+    save = h('<form class="cfg" data-post="/action/config-set" data-guard data-confirm="Set {k} for {n}? Only that line of its '
              'config.env changes; it takes effect from its next run.{x}"{a}>{hidden}{control}<button type="submit" '
              'class="small">Save</button></form>', k=f["key"], n=name, x=extra, hidden=hidden, control=control,
              a=post_attrs("Config", actions.RUN_NOW_S))
@@ -126,7 +126,7 @@ def config_page(name: str, fs: list[dict], history: list[str]) -> Html:
     rows = [config_row(name, f) for f in fs]
     table = h('<div class="tablewrap"><table class="config"><thead><tr><th>key</th><th>now</th><th>change</th>'
               '<th>what it is</th></tr></thead><tbody id="config-rows">{r}</tbody></table></div>', r=join(rows))
-    add = h('<form class="cfg add" data-post="/action/config-set" data-add-row="#config-rows" data-reset="1" '
+    add = h('<form class="cfg add" data-post="/action/config-set" data-add-row="#config-rows" data-reset="1" data-guard '
             'data-confirm="Add this key to {n}\'s '
             'config.env?"{a}><input type="hidden" name="name" value="{n}"><input name="key" placeholder="NEW_KEY" '
             'pattern="[A-Z][A-Z0-9_]*" required aria-label="key"><input name="value" placeholder="value" '
@@ -153,10 +153,13 @@ def drive_diff(old: str | None, new: str) -> str:
 def drive_page(name: str, text: str | None, sha: str, rendered: Html) -> Html:
     current = (rendered if text is not None else
                h('<p class="dim">No drive.md: {n} has the drive every SHAFT instance starts with.</p>', n=name))
-    edit = h('<form class="drive" data-post="/action/drive-set" data-diff="/preview/drive/{n}"{a}>'
+    # data-guard: leaving with an edit not saved asks first; data-keep: the text is kept in this browser until it is
+    # saved, so a reload or an iOS back-swipe does not lose a long edit (W14, review 2026-10-24)
+    edit = h('<form class="drive" data-post="/action/drive-set" data-diff="/preview/drive/{n}" data-guard '
+             'data-keep="drive.{n}"{a}>'
              '<input type="hidden" name="name" value="{n}"><input type="hidden" name="sha" value="{sha}">'
              '<label>drive.md for {n}<textarea name="text" rows="14" maxlength="{max}" '
-             'aria-label="drive.md for {n}">{t}</textarea></label>'
+             'aria-label="drive.md for {n}">{t}</textarea></label><p class="dim" data-keep-note role="status"></p>'
              '<div class="actions" data-diff-ask><button type="submit">Show the diff and save</button></div>'
              '<div class="diffstep" data-diff-step hidden><pre class="diff" data-diff-out></pre>'
              '<p class="dim">Apply replaces {n}\'s drive.md. It reads it from its next run, and its journal says its '

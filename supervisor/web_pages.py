@@ -215,15 +215,44 @@ self.addEventListener("push", (ev) => {
   })());
 });
 
-self.addEventListener("notificationclick", (ev) => {     // open the chat that replied, in the app if it is open
+// Open the chat that replied, in the app if it is open. A window already on that chat is only brought forward: going
+// to it again reloaded it and dropped the files attached in its composer. navigate() refuses a window this worker
+// does not control (it rejected, and nothing opened): then a new window opens (review 2026-10-24, W6).
+self.addEventListener("notificationclick", (ev) => {
   ev.notification.close();
-  const url = (ev.notification.data || {}).url || "/";
-  ev.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
+  const url = new URL((ev.notification.data || {}).url || "/", self.location.origin);
+  ev.waitUntil((async () => {
+    const list = (await self.clients.matchAll({ type: "window", includeUncontrolled: true })).filter((c) => "focus" in c);
+    const there = list.find((c) => new URL(c.url).pathname === url.pathname);
+    if (there) return there.focus();
     for (const c of list) {
-      if ("focus" in c) return (c.navigate ? c.navigate(url) : Promise.resolve()).then(() => c.focus());
+      if (!c.navigate) continue;
+      try {
+        const went = await c.navigate(url.href);
+        if (went) return went.focus();
+      } catch (e) { /* not controlled by this worker: try the next, then a new window */ }
     }
-    return self.clients.openWindow(url);
-  }));
+    return self.clients.openWindow(url.href);
+  })());
+});
+
+// The browser renewed this device's subscription by itself (its push service rotated it): SHAFT is given the new one,
+// or every push would go to the endpoint that died (review 2026-10-24, W5). The page also checks on each visit.
+self.addEventListener("pushsubscriptionchange", (ev) => {
+  ev.waitUntil((async () => {
+    let sub = ev.newSubscription;
+    if (!sub) {
+      const r = await fetch("/push/key", { credentials: "same-origin", cache: "no-store" });
+      const { key } = await r.json();
+      const raw = atob(key.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((key.length + 3) % 4));
+      sub = await self.registration.pushManager.subscribe({ userVisibleOnly: true,
+        applicationServerKey: Uint8Array.from(raw, (c) => c.charCodeAt(0)) });
+    }
+    const t = await fetch("/push/token", { credentials: "same-origin", cache: "no-store" });
+    const { csrf } = await t.json();
+    await fetch("/push/subscribe", { method: "POST", credentials: "same-origin", body: JSON.stringify(sub),
+      headers: { "X-CSRF-Token": csrf, "Content-Type": "application/json" } });
+  })());
 });
 """
 

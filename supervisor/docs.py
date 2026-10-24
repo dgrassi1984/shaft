@@ -75,8 +75,13 @@ def read(name: str, path: str) -> tuple[str | None, str]:
     return data.decode(errors="replace"), sha(data)
 
 
+_digests: dict[str, tuple[tuple, str]] = {}      # file -> ((inode, mtime_ns, size), sha): read again only when it changes
+
+
 def listing(name: str) -> list[dict]:
-    """Every document, the last changed first: path (inside notes/docs/), bytes, mtime, sha."""
+    """Every document, the last changed first: path (inside notes/docs/), bytes, mtime, sha. A document's sha is read
+    again only when its inode, mtime or size changed: the documents panel asks for this every 1.5 s, and it hashed
+    every document each time (W12, review 2026-10-24)."""
     try:
         base = _path(name, "x.md").parent
     except Refused:
@@ -90,8 +95,13 @@ def listing(name: str) -> list[dict]:
                                                          if str(x) != "."):
                 continue
             st = p.stat()
-            digest = (sha(read_beneath(instance_root(name), Path(DIR, rel).parts)) if st.st_size <= MAX_BYTES
-                      else "too-big")
+            stamp, hit = (st.st_ino, st.st_mtime_ns, st.st_size), _digests.get(str(p))
+            if hit and hit[0] == stamp:
+                digest = hit[1]
+            else:
+                digest = (sha(read_beneath(instance_root(name), Path(DIR, rel).parts)) if st.st_size <= MAX_BYTES
+                          else "too-big")
+                _digests[str(p)] = (stamp, digest)
         except (Refused, OSError, UnsafePath):
             continue
         out.append({"path": rel, "bytes": st.st_size, "mtime": st.st_mtime, "sha": digest})

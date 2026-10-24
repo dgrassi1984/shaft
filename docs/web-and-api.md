@@ -80,15 +80,19 @@ and [chat design](plans/PLAN-webui-chat.md).
   If cleanup fails or a browser API is missing, it still reloads and shows which step failed.
   Only that notice is stored in sessionStorage, then removed after it is shown. If the browser blocks
   sessionStorage, the notice cannot survive reload.
-- Unread marks clear when the current chat's reply is rendered in a visible tab. Config, Journal, earlier chats,
-  and a failed feed refresh do not consume a new reply. Marks are shared across tabs in the same browser.
+- Unread marks clear when the current chat's reply, or a message the instance sent you, is on screen in the feed of a
+  visible tab (scrolled into view, not only rendered: one below the fold stays unread until you scroll to it). A
+  message it sends you marks its chat unread in the rail too. Config, Journal, earlier chats, and a failed feed refresh
+  do not consume a new reply. Marks are shared across tabs in the same browser.
   Opening an instance's chat starts at the first reply, or message it sent you, that this browser has not seen,
   at the top of the feed, with **↓ New below** to jump to the end; with nothing unread, or no mark yet in this
   browser, it opens on the latest. Earlier chats always open at the end.
 - The chat: files and images both ways (drop them anywhere on the page, paste or pick; each is a chip you can take
-  out), the reply's activity and clock live, interject, Stop, End. Select text in a message and **↩ Reply** quotes
-  it in your message. Each message with text has Copy and Reply icons for its whole Markdown source, including
-  your own messages. Code blocks and documents have Copy icons too. Tabbing to a Copy button shows it,
+  out), the reply's activity and clock live, interject, Stop, End. Select text in a message or a document and
+  **↩ Reply** quotes it in your message; from the documents sheet or full screen, the sheet closes first so the composer
+  shows. Text left selected in the chat does not stop it refreshing: the selected message waits until you let go. Each message with text has Copy and Reply icons for its whole Markdown source, including
+  your own messages. Code blocks and documents have Copy icons too (a code block's stays at its corner while the
+  code scrolls sideways). Tabbing to a Copy button shows it,
   with its focus ring. Your draft survives a reload; `/` writes,
   Alt-↑/↓ changes chat; opt-in desktop notifications (⋯ menu) for a reply that lands while the tab is hidden.
   Enter sends. Alt-Enter and Shift-Enter insert a new line. Cmd-Enter, or Ctrl-Enter off macOS, queues a message
@@ -110,8 +114,10 @@ and [chat design](plans/PLAN-webui-chat.md).
   Both require the same CSRF token as other web posts.
   Quotes are saved as drafts too. Picking files again adds them to the current attachments. Files added during
   a send stay in the composer. Leaving with attachments asks for confirmation because files cannot survive a reload.
-  An unchanged retry keeps its message ID, including after reload. A reload drops the saved draft if that ID is
-  already in the rendered chat. Editing text or changing attachments starts a new message ID.
+  An unchanged retry keeps its message ID, including after reload. A reload, or the next chat refresh, drops the saved
+  draft if that ID is already in the chat. A restored attempt that had files says to attach them again (files cannot
+  survive a reload). Editing text or changing attachments starts a new message ID. The "sending…" copy of a message
+  goes as soon as the chat shows the message itself.
   Chat days are separated by date, using the supervisor’s local time. Today’s messages show only HH:MM;
   hover over a time for its full date and time.
   Markdown task lists use full-width items with a checkbox before the text. On phones, stacked Markdown
@@ -122,6 +128,9 @@ and [chat design](plans/PLAN-webui-chat.md).
   Refreshes keep Manage open or closed, link focus, and activity scroll. Chat thumbnails reserve space;
   images loading keep the feed at the bottom if you have not scrolled up. After Save, focus returns to Edit
   and survives the document refresh.
+- While a reply runs, its activity is refreshed on its own (`/fragment/chat/<name>/live`); the rest of the chat is
+  answered "not modified" until something else changes, rather than sent again whole every 1.5 seconds. Rendered
+  Markdown and the documents' hashes are kept until their text or file changes.
 - The chat header refreshes every 1.5 seconds: state, model, today's spend, actions, busy state icon, Clear and
   Earlier chats. When the instance is busy and not writing a reply, an icon next to its name (⏳ in a cycle or
   working, 💤 sleeping, ⏸ paused by you, 💬 in a conversation, • other states) opens the busy notice on hover, tap
@@ -203,7 +212,9 @@ and [chat design](plans/PLAN-webui-chat.md).
   what was sent.
 - Each instance's other pages sit behind the chat's ⋯ menu: **Summary**, **Config** (`config.env`, a field per key;
   each value is named for its key),
-  **Drive** (`drive.md` for that instance: the diff is shown in full, then Apply saves it and Back keeps your text),
+  **Drive** (`drive.md` for that instance: the diff is shown in full, then Apply saves it and Back keeps your text; an
+  unsaved edit is kept in this browser and restored after a reload, and leaving asks first, as it does for an
+  unsaved Config or Settings value),
   **Files** (`/i/<name>/files?path=notes/` lists one folder, folders first, with sizes and modified times.
   Breadcrumbs and Up return to parent folders. The count includes all visible entries; pages show at most 200.
   Folder and page addresses support reload, bookmarks and Back. Every file has Download; text files also have
@@ -242,8 +253,13 @@ next refresh or action opens the pairing page. Your chat draft stays in this bro
   nothing: the app fetches the text over the tailnet, each push its own (queued per device in
   `.supervisor/web/push-queue.json`). Pushes are signed with a key made by `/usr/bin/openssl`, kept in
   `.supervisor/web/`. The button says **Notifications on** only when SHAFT holds this device's subscription (it asks
-  `/push/status` on each visit): a refused registration leaves it off and says why, and a device SHAFT dropped shows
-  **Notifications incomplete — retry**.
+  `/push/status` on each visit): a refused registration leaves it off and says why. When SHAFT dropped it (a push
+  service refused it: 401, 403, 404, 410), holds another endpoint (the browser renewed it) or it was made for another
+  key, the visit hands SHAFT the browser's subscription again, made anew for another key; if that is refused the
+  button shows **Notifications incomplete — retry**. The service worker also hands SHAFT a subscription the browser
+  renews by itself (`pushsubscriptionchange`). Unpairing a browser drops its subscription, and only paired browsers
+  are pushed. A device that has the chat on screen gets no push for it; the others still do, and a page going to the
+  background (the phone locked) says so at once.
 - **Typing:** on a phone, Return makes a new line and Send sends; with a hardware keyboard Return sends. Fields, including the Drive editor, use at least 16 px text.
   The reply's activity, a document's overwritten-lines disclosure, and each judge model have 44 px touch targets.
   Field borders have at least 3:1 contrast against the page and panel backgrounds in both themes.
@@ -251,7 +267,7 @@ next refresh or action opens the pairing page. Your chat draft stays in this bro
   actions. Chats and Documents sheets move focus inside and keep Tab there. The covered page is inactive.
   Close with ✕ or Escape to return focus to the opener. Choosing a Chats link also closes that sheet.
   Resizing restores normal interaction when a sheet becomes a side panel. Messages and network notices
-  appear above the sheets. Sheets and the ⋯ menu leave room for the notch in landscape.
+  appear above the sheets. The documents sheet and the comment box stay above the on-screen keyboard. Sheets and the ⋯ menu leave room for the notch in landscape.
 - **Offline:** when SHAFT cannot be reached, the app says so and retries. Opening a page also shows the cached
   offline page if the proxy returns 502, 503 or 504; **Try again** returns to the app.
 

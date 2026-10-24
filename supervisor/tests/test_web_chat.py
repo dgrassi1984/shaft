@@ -400,7 +400,8 @@ class ChatRoutesTest(WebTest):
         chat["reply"] = {"started": "2026-10-19T12:00:01", "activity": ["waiting: wren is in a cycle"], "answer": ""}
         web_chat.save(chat)
         body = self.req("/fragment/chat/wren", cookie=self.cookie).body.decode()
-        self.assertIn("waiting: wren is in a cycle", body)
+        self.assertIn('data-poll="/fragment/chat/wren/live"', body)             # W12: its activity, polled on its own
+        self.assertIn("waiting: wren is in a cycle", self.req("/fragment/chat/wren/live", cookie=self.cookie).body.decode())
         self.assertIn('data-post="/action/chat-stop"', body)
 
     def test_chat_files_follow_the_attachment_rules(self):
@@ -1256,12 +1257,15 @@ class PushWhenTest(ChatTest):
             chat, _ = web_chat.send("wren", ME, "hello", [])
             self.wait_idle(chat["id"])
             time.sleep(0.2)
-        (event,), _ = notify.call_args                           # what this push shows: this reply (issue #23)
+        (event,), kw = notify.call_args                          # what this push shows: this reply (issue #23)
         self.assertEqual((event["title"], event["url"]), ("wren replied", "/i/wren/chat"))
+        self.assertEqual(kw, {"skip": set()})
         notify.assert_called_once()
-        web_chat.watching("wren")                                # its page is open and refreshing
+        web_chat.watching("wren", "laptop")                      # its page is open and refreshing there
         with mock.patch("supervisor.webpush.notify") as notify:
             web_chat.send("wren", ME, "again", [])
             self.wait_idle(chat["id"])
             time.sleep(0.2)
-        notify.assert_not_called()
+        # W9 (review 2026-10-24): only the device looking is skipped — the laptop's tab silenced the phone too
+        notify.assert_called_once()
+        self.assertEqual(notify.call_args.kwargs, {"skip": {"laptop"}})

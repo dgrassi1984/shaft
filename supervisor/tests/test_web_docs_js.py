@@ -73,7 +73,7 @@ const click = async (selector, button) => {
   assert.equal(box.selectionStart, 35);
   assert.equal(box.selectionEnd, 35);
   assert.ok(box.focused && box.input);
-  const copy = { closest: q => q === "pre" ? null : message };
+  const copy = { closest: q => q === "pre" || q === ".prewrap" ? null : message };   // a message's, not a code block's
   await click("[data-copy]", copy);
   assert.equal(copied, "**hello**\nsecond line");
   assert.match(copy.innerHTML, /m5 12 4 4L19 6/);

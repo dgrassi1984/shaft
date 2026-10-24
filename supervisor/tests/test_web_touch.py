@@ -42,8 +42,7 @@ class TouchTest(unittest.TestCase):
         self.assertRegex(coarse, r"\.chip \.unpick \{[^}]*min-width: 44px; min-height: 44px")
 
     def test_nothing_waits_for_a_hover(self):
-        self.assertRegex(block("(hover: none)"), r"\.icon, \.turn\.it pre > \.copy, \.docview pre > \.copy "
-                                                 r"\{ opacity: 1; \}")
+        self.assertRegex(block("(hover: none)"), r"\.icon, \.prewrap > \.copy \{ opacity: 1; \}")
 
     def test_the_phone_layout_holds_sideways(self):
         """A phone held sideways is wider than 720 px: it got the desktop's three columns."""
@@ -73,7 +72,7 @@ class PhoneLayoutTest(unittest.TestCase):
     def test_the_page_is_as_tall_as_the_keyboard_leaves(self):
         phone = block(self.PHONE)
         self.assertIn("body:has(.chatgrid) { height: var(--vvh, 100dvh); overflow: hidden; }", phone)
-        self.assertIn('style.setProperty("--vvh", `${Math.round(vv.height)}px`)', JS)
+        self.assertIn('root.setProperty("--vvh", `${Math.round(vv.height)}px`)', JS)
         self.assertIn('window.visualViewport.addEventListener("resize", fitViewport)', JS)
         self.assertNotIn("100dvh - 19rem", CSS)                    # the guess the feed was sized by
 
@@ -89,7 +88,8 @@ class PhoneLayoutTest(unittest.TestCase):
 
     def test_issue_24_notices_above_sheets_and_landscape_insets(self):
         """Reverting #24 hides feedback below sheets and puts sheet/menu content under the landscape notch."""
-        sheet_layers = [int(z) for z in re.findall(r'position: fixed; inset: 0; z-index: (\d+)', CSS)]
+        sheet_layers = [int(z) for z in re.findall(r'position: fixed; inset: (?:0|var\(--vvtop, 0px\) 0 var\(--vvbottom, 0px\));\s*'
+                                                  r'z-index: (\d+)', CSS)]
         self.assertTrue(sheet_layers)
         self.assertEqual(set(sheet_layers), {55, 60})
         for selector in ("#toast", "#netnote"):
@@ -162,9 +162,10 @@ class NetworkClientTest(unittest.TestCase):
     def test_a_failure_backs_off_is_said_once_and_ends_when_the_network_returns(self):
         self.assertIn("later(Math.min(every * slow * 2 ** Math.min(fails, 4), 15000 * slow));", JS)
         self.assertIn('netNote(navigator.onLine === false ? "Offline', JS)
-        self.assertIn('window.addEventListener("online", () => { fails = 0; tick(); });', JS)
+        self.assertIn("const onOnline = () => { fails = 0; tick(); };", JS)
+        self.assertIn('window.addEventListener("online", onOnline);', JS)
         self.assertIn("if (r.status >= 502 && r.status <= 504) {", JS)     # Tailscale's 503: unreachable, said once
-        self.assertIn('window.addEventListener("pageshow", () => tick());', JS)
+        self.assertIn('window.addEventListener("pageshow", onShow);', JS)
 
     def test_a_send_carries_its_id_and_is_checked_before_uploading(self):
         self.assertIn("if (mid && !mid.value) mid.value = crypto.randomUUID", JS)
@@ -172,9 +173,9 @@ class NetworkClientTest(unittest.TestCase):
         self.assertIn("const tooBig = filesRefused(form);", JS)
 
     def test_the_feed_is_updated_item_by_item(self):
-        self.assertIn("if (el.dataset.keyed) morph(el, body);", JS)
+        self.assertIn("const whole = el.dataset.keyed ? morph(el, body) !== false", JS)
         self.assertIn("const cur = keyed.get(n.dataset.k);", JS)          # #27: one keyed map per reconcile
-        self.assertIn("if (!cur || cur._src !== src) {", JS)              # an unchanged item is left alone
+        self.assertIn("else if (!cur || cur._src !== src) {", JS)         # an unchanged item is left alone
 
 
 class AccessibilityTest(unittest.TestCase):
@@ -235,4 +236,5 @@ class CommentsTouchTest(unittest.TestCase):
         for selector in ('#quote-reply', '#comment-sel', '#comment-box button', '#comment-box .comment-send'):
             self.assertRegex(coarse, re.escape(selector) + r'[^{}]*\{[^}]*min-width: 44px; min-height: 44px')
         self.assertIn('#comment-box textarea { font-size: 16px; }', coarse)
-        self.assertRegex(block(PhoneLayoutTest.PHONE), r'#comment-box \{ left: 0; right: 0; bottom: 0; width: 100%;')
+        self.assertRegex(block(PhoneLayoutTest.PHONE),
+                         r'#comment-box \{ left: 0; right: 0; bottom: var\(--vvbottom, 0px\); width: 100%;')

@@ -129,7 +129,7 @@ def _change(f: dict) -> Html:
     saw = {"key": f["name"], "saw": f["in_file"] or "", "saw_set": "1" if f["in_file"] is not None else "0"}
     hidden = join(h('<input type="hidden" name="{k}" value="{v}">', k=k, v=v) for k, v in saw.items())
     where = ", ".join(s for s in f["services"] if s != "runs")
-    save = h('<form class="cfg" data-post="/action/settings-set" data-confirm="Save {k}? It goes '
+    save = h('<form class="cfg" data-post="/action/settings-set" data-guard data-confirm="Save {k}? It goes '
              'in settings.env. Runs read it when they start{w}."{a}>{hidden}{control}<button type="submit" class="small">'
              'Save</button></form>', k=f["name"], hidden=hidden, control=_control(f),
              w=f"; running services that hold it ({where}) take it when they restart" if where else "",

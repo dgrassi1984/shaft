@@ -220,5 +220,34 @@ class MarkdownHeadingScaleTest(unittest.TestCase):
         self.assertRegex(css, r"\.turn, \.md,[^{]*\{[^}]*overflow-wrap: anywhere")
 
 
+
+class PlaceholdersInLinksTest(unittest.TestCase):
+    """W16 (review 2026-10-24): _LINK's destination did not exclude the placeholders a code span or an autolink leaves,
+    so their HTML was expanded inside href="…" and broke out of the attribute (the CSP stopped any script)."""
+
+    def test_w16_a_code_span_in_a_destination_stays_out_of_the_href(self):
+        out = md('[x](https://a.example/`q" onclick="x`)')
+        for href in re.findall(r'href="([^"]*)"', out):
+            self.assertNotIn("<", href)
+        self.assertNotIn('href="https://a.example/<code>', out)
+        self.assertIn("<code>q&quot; onclick=&quot;x</code>", out)            # still shown, as text
+
+    def test_w16_an_autolink_in_a_destination_stays_out_of_the_href(self):
+        out = md("[x](https://a.example/<https://b.example>)")
+        self.assertEqual(re.findall(r'href="([^"]*)"', out), ["https://a.example/", "https://b.example"])
+        self.assertEqual(out.count("<a "), out.count("</a>"))               # no anchor inside an attribute
+
+    def test_a_code_span_in_a_link_label_renders_instead_of_failing_the_page(self):
+        """Found while fixing W16: the label was rendered with a placeholder list of its own, so `code` in a label
+        raised IndexError and the whole chat or document failed to render."""
+        self.assertEqual(md("[`api`](https://a.example)"),
+                         '<p><a href="https://a.example" rel="noopener noreferrer" target="_blank"><code>api</code>'
+                         '</a></p>')
+
+    def test_plain_is_the_text_the_page_shows(self):
+        self.assertEqual(web_md.plain("the **bold** `x < y` and [a link](https://a.example) <b>"),
+                         "the bold x < y and a link <b>")
+
+
 if __name__ == "__main__":
     unittest.main()

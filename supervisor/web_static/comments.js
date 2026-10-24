@@ -77,7 +77,24 @@
     }
     return tied ? { ambiguous: true } : { start: best, end: best + exact.length };
   }
-  window.shaftComments = { walk, locate };
+  // An anchor on text[start, end): its exact text (at most 2000), and up to 32 around it. Offsets are UTF-16, so a
+  // cut can fall inside a character an emoji is two of: half of one is not text — the anchor could not be stored
+  // (W10, review 2026-10-24). Each cut moves to the character's edge, inward, within the limits.
+  const splits = (s, at) => at > 0 && at < s.length && s.charCodeAt(at - 1) >= 0xD800 && s.charCodeAt(at - 1) <= 0xDBFF
+    && s.charCodeAt(at) >= 0xDC00 && s.charCodeAt(at) <= 0xDFFF;
+  function anchorOf(text, start, end) {
+    const raw = text.slice(start, end);
+    start += raw.length - raw.trimStart().length;
+    let exact = raw.trim(), stop = Math.min(exact.length, 2000);
+    if (splits(exact, stop)) stop -= 1;
+    exact = exact.slice(0, stop).trimEnd();
+    if (!exact) return null;
+    let from = Math.max(0, start - 32), to = Math.min(text.length, start + exact.length + 32);
+    if (splits(text, from)) from += 1;
+    if (splits(text, to)) to -= 1;
+    return { exact, prefix: text.slice(from, start), suffix: text.slice(start + exact.length, to), start };
+  }
+  window.shaftComments = { walk, locate, anchorOf };
   // The text helpers also load in Node without a browser DOM.
   if (typeof document === "undefined") return;
 
@@ -362,15 +379,11 @@
     const q = selection();
     if (!q || !q.view) return;
     const { text, map } = walk(q.md);
-    let start = map.offsetAt(q.range.startContainer, q.range.startOffset);
+    const start = map.offsetAt(q.range.startContainer, q.range.startOffset);
     const end = map.offsetAt(q.range.endContainer, q.range.endOffset);
     if (start === undefined || end === undefined) return;
-    const raw = text.slice(start, end);
-    start += raw.length - raw.trimStart().length;
-    const exact = raw.trim().slice(0, 2000).trimEnd();
-    if (!exact) return;
-    open(q.view, "new", { anchor: { exact, prefix: text.slice(Math.max(0, start - 32), start),
-      suffix: text.slice(start + exact.length, start + exact.length + 32), start } });
+    const anchor = anchorOf(text, start, end);
+    if (anchor) open(q.view, "new", { anchor });
   }
   button.addEventListener("mousedown", ev => { ev.preventDefault(); selected(); });
   button.addEventListener("touchend", ev => { ev.preventDefault(); selected(); });

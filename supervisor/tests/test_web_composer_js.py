@@ -15,7 +15,7 @@ class ComposerJsTest(unittest.TestCase):
         script = r"""
 const fs=require('node:fs'), vm=require('node:vm'), assert=require('node:assert/strict');
 const storage=new Map(); let serial=0;
-function page(mids=[], touch=false) {
+function page(mids=[], touch=false, feed=[]) {     // feed: the message ids of the turns the feed shows (data-mid)
   const handlers={}, win={}, elements={}, viewportHandlers={}, viewport={height:900,addEventListener(k,fn){viewportHandlers[k]=fn;}}; let resolve, reject, payload;
   const node=()=>({dataset:{},style:{},children:[],setAttribute(){},querySelectorAll:()=>[],
     appendChild(n){this.children.push(n);},append(...ns){this.children.push(...ns);},remove(){},
@@ -35,7 +35,8 @@ function page(mids=[], touch=false) {
   const document={readyState:'loading',visibilityState:'hidden',body:node(),documentElement:{style:{setProperty(){}}},
     addEventListener(k,fn){(handlers[k]||=[]).push(fn);},dispatchEvent(){},
     querySelector:q=>q==='form.composer textarea'?box:['form[data-files]','form[data-draft]'].includes(q)?form:null,
-    querySelectorAll:()=>[],getElementById:id=>elements[id]||null,
+    querySelectorAll:q=>q==='.feed [data-mid]'?feed.map(m=>({dataset:{mid:m},classList:{contains:()=>false}})):[],
+    getElementById:id=>elements[id]||null,
     createElement(){const n=node();Object.defineProperty(n,'id',{set(id){elements[id]=n;}});return n;}};
   const context={document,URL,URLSearchParams,Event,AbortController,navigator:{},
     crypto:{randomUUID:()=>`m-${++serial}`},location:{href:'https://shaft.test/i/wren/chat'},
@@ -63,7 +64,9 @@ function page(mids=[], touch=false) {
     async quote(){await emit('selectionchange');await emit('scroll',{});elements['quote-reply'].click();},
     send:(queued=false)=>emit('submit',{closest:()=>form},{submitter:queued?queueButton:sendButton}),
     answer:()=>resolve({ok:true,status:200,headers:{get:()=>null},text:async()=> 'sent'}),fail:()=>reject(new Error('lost')),
-    unload(){const ev={preventDefault(){this.prevented=true;}};for(const fn of win.beforeunload||[])fn(ev);return !!ev.prevented;}};
+    unload(){const ev={preventDefault(){this.prevented=true;}};for(const fn of win.beforeunload||[])fn(ev);return !!ev.prevented;},
+    feed, swapped:()=>emit('shaft:swapped',{dataset:{follow:'1'},querySelectorAll:()=>[],querySelector:()=>null,closest:()=>null}),
+    toast:()=>(elements.toast||{}).textContent||''};
 }
 const A={name:'a.txt',size:1,type:'text/plain'},B={name:'b.txt',size:1,type:'text/plain'};
 (async()=>{
@@ -112,6 +115,40 @@ p.fail();await sending;sending=p.send();await Promise.resolve();assert.equal(p.p
 const q=page();await q.load();assert.equal(q.box.value,'hello');assert.equal(q.mid.value,id);
 const r=page([id]);await r.load();assert.equal(r.box.value,'');assert.equal(r.mid.value,'');
 assert.equal(storage.get('shaft.draft.wren'),undefined);
+""")
+
+    def test_w11_a_sent_message_leaves_no_retry_behind(self):
+        """W11 (review 2026-10-24) said sent() left shaft.pending.<instance> behind. It did, but the reset after a send
+        cleared it anyway (setFiles -> composerChanged), so this passed before too: it guards that sent() now clears
+        it itself, whatever the reset does."""
+        self.run_composer("""
+const p=page();await p.type('hello');const sending=p.send();await Promise.resolve();
+assert.ok(storage.get('shaft.pending.wren'));p.answer();await sending;
+assert.equal(storage.get('shaft.pending.wren'),undefined);assert.equal(storage.get('shaft.draft.wren'),undefined);
+""")
+
+    def test_w11_a_lost_send_the_feed_shows_is_let_go(self):
+        """W11: data-sent-mids is drawn once with the page and the poll never refreshes it, so a send whose answer was
+        lost but which landed stayed in the composer (and came back after a reload). The feed's turns (data-mid) say."""
+        self.run_composer("""
+const p=page([],false,[]);await p.type('hello');let sending=p.send();await Promise.resolve();const id=p.payload().mid;
+p.fail();await sending;assert.equal(p.box.value,'hello');assert.equal(p.mid.value,id);
+const q=page([],false,[id]);await q.load();assert.equal(q.box.value,'');assert.equal(q.mid.value,'');
+assert.equal(storage.get('shaft.pending.wren'),undefined);
+storage.clear();const r=page([],false,[]);await r.type('again');sending=r.send();await Promise.resolve();
+const rid=r.payload().mid;r.fail();await sending;
+await r.swapped();assert.equal(r.box.value,'again');assert.equal(r.mid.value,rid);   // not in the feed yet: kept
+r.feed.push(rid);await r.swapped();                                 // the next refresh brings its turn
+assert.equal(r.box.value,'');assert.equal(r.mid.value,'');assert.equal(storage.get('shaft.pending.wren'),undefined);
+""")
+
+    def test_w11_a_reload_says_the_files_of_an_unsent_attempt_are_gone(self):
+        """W11: an attempt with files, restored after a reload, would be sent again without them, unsaid."""
+        self.run_composer("""
+const p=page();await p.type('see these');await p.pick(A,B);const sending=p.send();await Promise.resolve();p.fail();await sending;
+assert.deepEqual(JSON.parse(storage.get('shaft.pending.wren')).files,['a.txt','b.txt']);
+const q=page();await q.load();assert.equal(q.box.value,'see these');
+assert.match(q.toast(),/its files could not be kept: attach a[.]txt, b[.]txt again/);
 """)
 
     def test_issue_21_edits_during_send_survive_reload(self):
