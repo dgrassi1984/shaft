@@ -55,6 +55,13 @@ def _judged_at(row: dict) -> str:
     return stamp + ":00" if len(stamp) == 16 else stamp[:19]
 
 
+def _reviewed_at(row: dict) -> str:
+    """When the verdict last gained something to read: the main judge's time, or the second judge's if later (it
+    runs detached, minutes after) — so `since` shows a cycle again once its second opinion arrives."""
+    second = row.get("second")
+    return max(_judged_at(row), _judged_at(second) if isinstance(second, dict) else "")
+
+
 def judgment_text(j: dict) -> str:
     """One verdict with every field the judge gave — the reasons behind each rating, not just the grades."""
     out = [f"### {_when(j.get('episode_ts'))} — {j.get('goal', '')}",
@@ -110,7 +117,7 @@ def _judgments_text(rows, limit, cycle, before, budget, left_out, since="") -> s
     if before:
         cut = before.strip().replace("T", " ")[:16]
         rows = [r for r in rows if _when(r.get("episode_ts")) < cut]
-    rows = sorted(rows, key=_judged_at) if since else rows[::-1]
+    rows = sorted(rows, key=_reviewed_at) if since else rows[::-1]
     picked, used = [], 0
     for r in rows[:max(1, min(int(limit), 200))]:
         t = judgment_text(r)
@@ -127,19 +134,19 @@ def _judgments_text(rows, limit, cycle, before, budget, left_out, since="") -> s
     if since and more:
         # The rest go on strictly after the last one shown, so verdicts judged in the same second are never split
         # across that cut (the second would be skipped for good): drop the tie back, or show all of it.
-        n, stamp = len(picked), _judged_at(rows[len(picked) - 1])
-        if _judged_at(rows[n]) == stamp:
+        n, stamp = len(picked), _reviewed_at(rows[len(picked) - 1])
+        if _reviewed_at(rows[n]) == stamp:
             k = n
-            while k and _judged_at(rows[k - 1]) == stamp:
+            while k and _reviewed_at(rows[k - 1]) == stamp:
                 k -= 1
             if k:
                 picked = picked[:k]
-            while not k and n < len(rows) and _judged_at(rows[n]) == stamp:
+            while not k and n < len(rows) and _reviewed_at(rows[n]) == stamp:
                 picked.append(judgment_text(rows[n]))
                 n += 1
         if len(picked) < len(rows):
             tail = (f"\n\n({len(picked)} of {len(rows)} new verdicts, oldest first. The rest: "
-                    f"record(kind='judgments', since='{_judged_at(rows[len(picked) - 1])}').)")
+                    f"record(kind='judgments', since='{_reviewed_at(rows[len(picked) - 1])}').)")
         else:
             tail = ""
     return "\n\n".join(picked) + tail
@@ -1116,8 +1123,14 @@ class Broker:
         mind.require(self.name, self.project)
         return "HEAD", mind.head(self.name, self.project)
 
+    ENVELOPE_TTL_S = 60   # the template asks every step; the ledgers it reads (cloud usage: megabytes) change slowly
+
     def envelope(self) -> dict:
-        """Operational limits, without spending a tool call or exposing host configuration."""
+        """Operational limits, without spending a tool call or exposing host configuration. The calls are live; the
+        allowances, probation and schedule are recomputed at most every ENVELOPE_TTL_S."""
+        cached = getattr(self, "_envelope", None)
+        if cached and time.monotonic() - cached[0] < self.ENVELOPE_TTL_S:
+            return {**cached[1], "calls_used": self.calls, "calls_max": self.max_calls}
         from . import autonomy, cloudllm, coder, metrics, trial
         from .core import log
 
@@ -1136,7 +1149,7 @@ class Broker:
             return {"started": usage["started"], "per_day": trial.TRIALS_PER_DAY,
                     "spent_usd": float(usage["usd"]), "cap_usd": float(trial.DAILY_USD)}
 
-        return {"calls_used": self.calls, "calls_max": self.max_calls,
+        env = {"calls_used": self.calls, "calls_max": self.max_calls,
                 "cloud": field("cloud", lambda: {"spent_usd": float(cloudllm.spent_today(self.usage_name)),
                                                  "cap_usd": float(cloudllm.daily_cap(self.name))}),
                 "coder": None if "delegate_coding" in self.disabled or "delegate_coding" in self.unavailable else
@@ -1146,6 +1159,8 @@ class Broker:
                 "probation": field("probation", lambda: metrics.probation_status(self.name)),
                 "next_sleep": field("next_sleep", autonomy.next_sleep),
                 "next_wake": field("next_wake", lambda: autonomy.next_wake(self.name)), "replay": False}
+        self._envelope = (time.monotonic(), env)
+        return env
 
     def _record(self, kind: str, limit: int = 20, cycle: str = "", before: str = "", since: str = "") -> str:
         from .core import SUP_DIR
@@ -1169,13 +1184,15 @@ class Broker:
                 except ValueError:
                     raise ValueError("since must be a valid YYYY-MM-DD HH:MM[:SS] timestamp") from None
             rows = [r for r in judgments(self.name, SUP_DIR) if known(_judged_at(r))]
-            if since:
-                rows = [r for r in rows if _judged_at(r) > since]
             left_out = {r["episode_ts"] for r in unsampled_rows(self.name, SUP_DIR)
                         if known(str(r.get("decided_at", "")).replace("T", " "))}
             for r in rows:   # a replay sees a second verdict only if it existed then
                 if isinstance(r.get("second"), dict) and not known(str(r["second"].get("judged_at", "")).replace("T", " ")):
                     del r["second"]
+            if since:
+                rows = [r for r in rows if _reviewed_at(r) > since]
+            # Returned whole, never cut like the other kinds below: the sleep reads it through broker.call, and a
+            # cut would drop verdicts its marker then counts as read (the budget keeps a page short anyway).
             return _judgments_text(rows, limit, cycle, before, JUDGMENTS_BUDGET, left_out, since)
         elif kind == "runs":
             mine = f"] {self.name}: "

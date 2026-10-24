@@ -1168,6 +1168,8 @@ def _probation_after(entry: dict, js: list[dict], tools: dict[str, set[str]]) ->
 
 
 def probation_status(name: str) -> list[dict]:
+    """The open probation windows, for the operational envelope (REVIEW-autonomy A5): cycles counted as _verdict
+    counts them."""
     p = _probation_path(name)
     entries = json.loads(p.read_text()) if p.exists() else []
     if not entries:
@@ -1175,7 +1177,8 @@ def probation_status(name: str) -> list[dict]:
     js, tools = judgments(name), _tools_by_cycle(name)
     return [{"commit": e["commit"][:8], "files": [f for f in e["files"]
              if not Path(f).is_absolute() and ".." not in Path(f).parts],
-             "cycles_used": len(_probation_after(e, js, tools)[3]), "cycles_needed": PROBATION_CYCLES}
+             "cycles_used": min(len(_probation_after(e, js, tools)[3]), PROBATION_CYCLES),   # _verdict scores no more
+             "cycles_needed": PROBATION_CYCLES}
             for e in entries]
 
 

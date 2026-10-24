@@ -82,6 +82,16 @@ class A2Test(unittest.TestCase):
         self.assertIn(broker.judgment_text(self.rows[1]), first)
         self.assertIn("since='2026-10-24 10:05:00'", first)
 
+    def test_a_late_second_opinion_comes_back(self):
+        # Grok's review: the second judge runs detached, minutes later; since filtered on the main verdict's time,
+        # so a second opinion arriving after the sleep had read the cycle was never shown.
+        self.rows[:] = [judgment("seen", "2026-10-24T09:00:00",
+                                 second={"judge": "j2", "criterion_met": "no", "judged_at": "2026-10-24T10:30:00"})]
+        self.assertIn("Second judge", self.b._record("judgments", since="2026-10-24 10:00"))
+        self.assertEqual(self.b._record("judgments", since="2026-10-24 10:30:00"), "(nothing recorded yet)")
+        self.b.as_of = datetime(2026, 10, 24, 10, 15)   # a replay before the second opinion existed sees neither
+        self.assertEqual(self.b._record("judgments", since="2026-10-24 10:00"), "(nothing recorded yet)")
+
     def test_no_since_keeps_newest_first_and_original_continuation(self):
         self.assertEqual(self.b._record("judgments", limit=2),
                          "\n\n".join(broker.judgment_text(r) for r in self.rows[:2:-1]) + "\n\n"
@@ -192,7 +202,8 @@ class A5Test(unittest.TestCase):
                       mock.patch.object(trial, "TRIALS_PER_DAY", 4), mock.patch.object(trial, "DAILY_USD", 15.0),
                       mock.patch.object(metrics, "probation_status", return_value=[]),
                       mock.patch.object(autonomy, "next_sleep", return_value="2026-10-25 04:00"),
-                      mock.patch.object(autonomy, "next_wake", return_value="14:00")):
+                      mock.patch.object(autonomy, "next_wake", return_value="14:00"),
+                      mock.patch.object(broker.Broker, "ENVELOPE_TTL_S", 0)):   # each call recomputes, but in the cache test
             patch.start()
             self.addCleanup(patch.stop)
         self.b = broker.Broker("x", self.project, {"FAKE_KEY": "private-secret-value"}, self.project / "tools.log",
@@ -216,6 +227,17 @@ class A5Test(unittest.TestCase):
         self.assertNotIn("envelope", broker.SPECS)
         self.assertEqual(self.b.calls, 7)
         self.assertFalse(self.b.log_path.exists())
+
+    def test_ledgers_are_read_once_a_minute_while_calls_stay_live(self):
+        # Grok's review: the template asks every step, and each ask re-read the cloud ledger (megabytes) and, with
+        # a probation open, every episode.
+        with mock.patch.object(broker.Broker, "ENVELOPE_TTL_S", 60):
+            first = self.b.envelope()
+            self.b.calls = 9
+            second = self.b.envelope()
+        self.assertEqual(second, {**first, "calls_used": 9})
+        cloudllm.spent_today.assert_called_once()
+        trial.usage_today.assert_called_once()
 
     def test_http_envelope_token_and_no_call_or_tool_log(self):
         url = self.b.start()
@@ -301,6 +323,9 @@ class A5Test(unittest.TestCase):
             entry["files"] += [str(self.project / "host.py"), "../outside.py"]
             path.write_text(json.dumps([entry]))
             self.assertEqual(self.real_probation_status("x")[0]["files"], ["plugins/watch/main.py"])
+            rows += [judgment(f"h{i}", "2026-10-24T11:00:00", f"2026-10-24T11:{i:02d}:00") for i in range(4)]
+            tools.update({r["episode_ts"]: {"watch"} for r in rows})   # a window still open past its size
+            self.assertEqual(self.real_probation_status("x")[0]["cycles_used"], 3)
 
     def test_next_sleep_off_due_and_next_day(self):
         with mock.patch.object(autonomy, "AGENTS", self.project), mock.patch.object(autonomy, "SLEEP_AT", (4, 0)), \
