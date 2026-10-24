@@ -21,6 +21,7 @@ import uuid
 
 from . import agent, images, memory, prompts, recovery
 from .llm import Client, LLMError
+from .live import archive_inbox
 from .state import State
 from .tools import Toolbox
 from .ui import Status
@@ -48,6 +49,25 @@ def since_last_talk(state: State, operator: str) -> str:
 
 def _brief(args: str, n: int) -> str:
     return re.sub(r"\s+", " ", args)[:n]
+
+
+def archive_read_inbox(state: State, entries: list[dict]) -> None:
+    """Inbox messages I read in a reply are handled there: archived like a cycle's (live.archive_inbox), or
+    the next cycle showed them again as new (REVIEW-autonomy A6). Archived on reading, not by a tool I must
+    remember to call; a reply that was discarded handled nothing."""
+    names = []
+    for entry in entries:
+        result = str(entry.get("result", ""))
+        if entry.get("tool") != "read_file" or result.startswith("ERROR") or result == agent.NOT_RUN:
+            continue
+        try:
+            path = json.loads(entry.get("args") or "{}").get("path", "")
+        except (ValueError, AttributeError):
+            continue
+        if isinstance(path, str) and re.fullmatch(r"inbox/[^/]+\.md", path):
+            names.append(path.removeprefix("inbox/"))
+    if names:
+        archive_inbox(state, names)
 
 
 # -- views ---------------------------------------------------------------------------
@@ -253,6 +273,7 @@ def run(cfg, state: State, client: Client, show_thinking: bool = False, input_fn
         reply = _respond(client, cfg, toolbox, turn, view)
         if reply is None:
             continue  # that turn never happened
+        archive_read_inbox(state, toolbox.log[log_start:])
         history = turn[1:]  # keep tool calls and results in the conversation
         state.append_episode({"kind": "talk", "talk_id": talk_id, "role": "assistant",
                               "content": reply.content, "reasoning": reply.reasoning,
@@ -337,6 +358,7 @@ def answer(cfg, state: State, client: Client, request: dict) -> None:
     log_start = len(toolbox.log)
     reply = _respond(client, cfg, toolbox, turn, view, Interjections(cfg, state, talk_id, app, view))
     if reply is not None:
+        archive_read_inbox(state, toolbox.log[log_start:])
         state.append_episode({"kind": "talk", "talk_id": talk_id, "role": "assistant", "content": reply.content,
                               "reasoning": reply.reasoning, "tools": toolbox.log[log_start:], "usage": reply.usage,
                               "via": app})

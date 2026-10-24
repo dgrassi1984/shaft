@@ -3,10 +3,56 @@ from __future__ import annotations
 
 import os
 import re
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import personality
+
+STARTED = time.monotonic()
+
+
+def now() -> datetime:
+    """The time as my prompts state it. A trial replay sets SHAFT_NOW to its cycle's start (PLAN-trials F3): it then
+    runs from there, while the supervisor's record is cut at that moment too."""
+    try:
+        return datetime.fromisoformat(os.environ.get("SHAFT_NOW", "")) + timedelta(seconds=time.monotonic() - STARTED)
+    except ValueError:
+        return datetime.now()
+
+
+def envelope_text(env: dict | None, left_s: float | None) -> str:
+    """My limits, before I hit them: a refusal used to be the first I heard of a budget (A5)."""
+    lines = []
+    if env is None:
+        lines.append("The supervisor gave no envelope.")
+    else:
+        used, cap = env["calls_used"], env["calls_max"]
+        lines.append(f"Supervisor calls this run: {used} of {cap} used ({max(0, cap - used)} left).")
+    if left_s is not None:
+        lines.append(f"Time left this run: about {max(0, left_s) / 60:.0f} minutes.")
+    if env is None:
+        return "\n".join(lines)
+    if env.get("replay"):
+        lines.append("This is a replay; daily allowances are not shown.")
+    else:
+        for key, label in (("cloud", "Cloud model"), ("coder", "Coder")):
+            if env.get(key) is not None:
+                budget = env[key]
+                lines.append(f"{label} today: ${budget['spent_usd']:.2f} of ${budget['cap_usd']:.2f}.")
+        if env.get("trials") is not None:
+            trials = env["trials"]
+            lines.append(f"Trials today: {trials['started']} of {trials['per_day']} started, "
+                         f"${trials['spent_usd']:.2f} of ${trials['cap_usd']:.2f}.")
+    for change in env.get("probation") or []:
+        lines.append(f"On probation: change {change['commit'][:8]} ({', '.join(change['files'])}): "
+                     f"{change['cycles_used']} of {change['cycles_needed']} judged cycles that used it.")
+    if env.get("next_sleep") is not None:
+        lines.append(f"Next sleep: {env['next_sleep']}.")
+    if env.get("next_wake") is not None:
+        lines.append(f"Next scheduled wake: {env['next_wake']}.")
+    return "\n".join(lines)
+
 
 IDENTITY = """\
 You are {name}, an autonomous agent (a SHAFT instance) living on {operator}'s Mac. \
@@ -162,7 +208,8 @@ to {steps} model turns.
 1. FIRST call declare_intent: pick ONE goal — from your current improvement plan or \
 self/goals.md (both in your context), or from a message above. \
 State a success criterion someone else could check from your tool results, and your \
-honest confidence (0-100) that you will meet it. Say where the goal came from (origin: \
+honest confidence (0-100) that you will fully meet it (criterion_met yes; partial counts as not met). \
+Say where the goal came from (origin: \
 yourself, the operator, or another instance) and cite the message, conversation or goals.md \
 item. The judge also rates how hard the goal was and checks its origin; your stats show \
 both. Other tools are refused until you do.
@@ -184,8 +231,9 @@ read at a glance or repeat each other, rewrite_facts: merge, drop what is supers
 (write the whole file; keep what is still true).
 3. update_personality: revise the surface layer from evidence. Change the core layer \
 only if several experiences point the same way — cite them.
-4. update self/goals.md if your goals changed.
-5. update_self_model only if your self-description no longer matches your journal.
+4. update self/goals.md if your goals changed; pass replace=true when deliberately dropping goals.
+5. update_self_model only if your self-description no longer matches your journal and the supervisor's \
+record (the verdicts above; record(kind=...) and history for more).
 6. write_digest: a short summary of what happened since your last sleep and what it means — what your \
 future self needs once these journal entries are no longer in view.
 
@@ -278,7 +326,7 @@ def system_prompt(state, cfg, mode_note: str, tools: str | None = None) -> str:
         journal=journal or "(empty)",
         shown=shown,
         total=total,
-        now=f"{datetime.now():%A %Y-%m-%d %H:%M}",
+        now=f"{now():%A %Y-%m-%d %H:%M}",
         sleep=last_sleep(state, journal),
         improvement=improvement_plan(state),
     )
@@ -295,7 +343,7 @@ def last_sleep(state, shown_journal: str = "") -> str:
             "sleep" in what.lower() or "My sleep run" in entry))   # "sleep failed", "no sleep tonight", stopped
         if about_sleep:
             try:
-                ago = datetime.now() - datetime.strptime(title[:16], "%Y-%m-%d %H:%M")
+                ago = now() - datetime.strptime(title[:16], "%Y-%m-%d %H:%M")
                 when = f"{title[:16]} ({ago.total_seconds() / 3600:.0f} h ago)"
             except ValueError:
                 when = title[:16]

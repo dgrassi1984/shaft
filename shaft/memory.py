@@ -90,6 +90,19 @@ def corpus(root: Path) -> list[tuple[str, str]]:
             if rec.get("kind") == "talk" and rec.get("content"):
                 who = (rec.get("speaker") or "the operator") if rec.get("role") == "user" else "me"
                 docs.append((f"conversation {rec.get('ts', '')} ({who})", rec["content"][:CHUNK * 2]))
+            elif rec.get("kind") == "live":
+                # Never re-index finish.what_happened or finish.learned: my prose can repeat confabulation.
+                intent, finish = rec.get("intent") or {}, rec.get("finish") or {}
+                lines = [f"Goal: {str(intent.get('goal', ''))[:400]}",
+                         f"Success criterion: {str(intent.get('success_criterion', ''))[:400]}",
+                         f"Criterion met (my own claim): {finish.get('criterion_met', 'not reported')}",
+                         f"Ended by: {rec.get('ended_by', '')}; steps: {rec.get('steps', '')}"]
+                for entry in rec.get("tools", []):
+                    result = str(entry.get("result", ""))
+                    # agent.NOT_RUN, kept literal to avoid importing the agent through its toolbox.
+                    if result.startswith("ERROR") or result == "(repeat: not run)":
+                        lines.append(f"Flagged/refused call {entry.get('tool', '?')}: {result[:160]}")
+                docs.append((f"cycle {rec.get('ts', '')}", "\n".join(lines)[:CHUNK * 2]))
     return docs
 
 

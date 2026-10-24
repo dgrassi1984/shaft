@@ -17,6 +17,7 @@ from .state import State
 from .ui import Status
 
 MAX_TRANSCRIPT_CHARS = 24000
+AUTONOMOUS_CONTEXT_CHARS = 4000   # the tail a cycle or a sleep sees of conversations not written up (A1)
 
 
 def open_talks() -> set[str]:

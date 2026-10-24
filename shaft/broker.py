@@ -45,6 +45,17 @@ def tools() -> list[dict]:
     return _request("/tools")["tools"]
 
 
+def envelope() -> dict | None:
+    """What I may still spend: calls left this run, today's allowances, probation, next sleep (GET /envelope; not a
+    tool, so asking costs no call). None without a supervisor that serves it."""
+    if not available():
+        return None
+    try:
+        return _request("/envelope", timeout=5)["envelope"]
+    except (BrokerError, KeyError, ValueError):
+        return None
+
+
 SLOW_TOOLS = {"delegate_coding": 1800}   # a coding handoff runs a model loop and the test gate: minutes
 
 
