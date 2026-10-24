@@ -48,6 +48,25 @@ class Link:
         return f"Link({self.target!r})"
 
 
+class Invalid:
+    """Something standing where code belongs that is neither a plain file of one name nor a folder: a file with more
+    than one name (a hard link: writing it changes its other names too), a pipe, a socket, a device. Recorded so the
+    gate sees it — read_tree passed a pipe over without a trace — and refused like a Link (Codex on f82df7e)."""
+    __slots__ = ("why",)
+
+    def __init__(self, why: str):
+        self.why = why
+
+    def __eq__(self, other) -> bool:
+        return isinstance(other, Invalid) and other.why == self.why
+
+    def __hash__(self) -> int:
+        return hash(("invalid", self.why))
+
+    def __repr__(self) -> str:
+        return f"Invalid({self.why!r})"
+
+
 class RestoreFailed(Exception):
     """A path could not be put back: nothing may run on the code that is left (runner refuses the run)."""
 
@@ -55,6 +74,17 @@ class RestoreFailed(Exception):
 def links(code: dict) -> list[str]:
     """The paths of a snapshot that are links."""
     return sorted(p for p, v in code.items() if isinstance(v, Link))
+
+
+def refused(code: dict) -> list[str]:
+    """The paths of a snapshot that can never be kept: links and Invalid entries."""
+    return sorted(p for p, v in code.items() if isinstance(v, (Link, Invalid)))
+
+
+def _kind(fmt: int) -> str:
+    import stat
+    return {stat.S_IFIFO: "a pipe", stat.S_IFSOCK: "a socket", stat.S_IFCHR: "a device",
+            stat.S_IFBLK: "a device"}.get(fmt, "not a plain file")
 
 
 def snapshot(instance_root: Path) -> dict[str, bytes | Link]:
@@ -78,18 +108,23 @@ def snapshot(instance_root: Path) -> dict[str, bytes | Link]:
             if stat.S_ISLNK(mode):
                 files[name] = Link(os.readlink(name, dir_fd=top))
             elif stat.S_ISDIR(mode):
-                for rel, f in walk_beneath(instance_root, name, skip, links=True, budget=budget):
+                for rel, f in walk_beneath(instance_root, name, skip, links=True, budget=budget, others=True):
                     if isinstance(f, str):
                         files[f"{name}/{rel}"] = Link(f)
+                    elif isinstance(f, int):
+                        files[f"{name}/{rel}"] = Invalid(_kind(f))
                     elif f is not None:
-                        files[f"{name}/{rel}"] = f.read()
+                        names = os.fstat(f.fileno()).st_nlink
+                        files[f"{name}/{rel}"] = Invalid(f"a file with {names} names") if names > 1 else f.read()
             elif stat.S_ISREG(mode):
+                names = os.stat(name, dir_fd=top, follow_symlinks=False).st_nlink
                 try:
-                    files[name] = read_beneath(instance_root, [name])
+                    files[name] = Invalid(f"a file with {names} names") if names > 1 else \
+                        read_beneath(instance_root, [name])
                 except TooBig as e:
                     raise TreeTooBig(f"{instance_root}/{name}: {e}") from None
             else:
-                raise UnsafePath(f"{instance_root}/{name} is neither a file, a folder nor a link")
+                files[name] = Invalid(_kind(stat.S_IFMT(mode)))
     finally:
         os.close(top)
     return files
@@ -120,25 +155,54 @@ def _clear_links_above(instance_root: Path, rel: str) -> None:
             os.close(fd)
 
 
+def _write_fresh(instance_root: Path, rel: str, data: bytes) -> None:
+    """root/rel as a new file holding `data`: written to a temporary name beside it (O_EXCL, no link followed) and
+    renamed over what stands there, through the folder's descriptor — a link, a pipe or one name of a hard-linked
+    file is replaced, never written through. Writing in place (O_TRUNC) changed every other name of the file (Codex
+    on f82df7e). The mode of a plain file it replaces is kept (an executable script)."""
+    import stat
+    from .core import dir_beneath
+    parts = Path(rel).parts
+    fd = dir_beneath(instance_root, parts[:-1], make=True)
+    tmp = f".shaft-restore-{os.getpid()}-{os.urandom(4).hex()}"
+    try:
+        try:
+            st = os.stat(parts[-1], dir_fd=fd, follow_symlinks=False)
+            mode = stat.S_IMODE(st.st_mode) if stat.S_ISREG(st.st_mode) else 0o644
+            if stat.S_ISDIR(st.st_mode):
+                raise RestoreFailed(f"{rel}: a folder stands where the file belongs")
+        except FileNotFoundError:
+            mode = 0o644
+        out = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=fd)
+        try:
+            with os.fdopen(out, "wb") as f:
+                f.write(data)
+                os.fchmod(f.fileno(), mode)
+            os.rename(tmp, parts[-1], src_dir_fd=fd, dst_dir_fd=fd)
+        except BaseException:
+            try:
+                os.unlink(tmp, dir_fd=fd)
+            except OSError:
+                pass
+            raise
+    finally:
+        os.close(fd)
+
+
 def restore(instance_root: Path, before: dict, paths: list[str]) -> None:
     """Each path back as it was, written or removed through descriptors, no link followed: a link standing where an
     approved folder or file belongs is removed (the link, never its target) and the folder made again. RestoreFailed
     when a path cannot be put back — it was left as it was, silently, until Codex's final review."""
-    from .core import UnsafePath, safe_write_bytes, unlink_beneath
+    from .core import UnsafePath, unlink_beneath
     for rel in sorted(paths, key=lambda r: (r.count("/"), r)):   # a linked folder goes before what was below it
         try:
             _clear_links_above(instance_root, rel)
             if rel not in before:
                 unlink_beneath(instance_root, rel)
                 continue
-            if isinstance(before[rel], Link):
-                raise RestoreFailed(f"{rel}: a link is never put back as code")
-            try:
-                safe_write_bytes(instance_root, rel, before[rel])     # in place: its mode (an executable) is kept
-            except UnsafePath:
-                if not unlink_beneath(instance_root, rel):            # a link put in its place goes, never its target
-                    raise
-                safe_write_bytes(instance_root, rel, before[rel])
+            if not isinstance(before[rel], bytes):
+                raise RestoreFailed(f"{rel}: {before[rel]!r} is never put back as code")
+            _write_fresh(instance_root, rel, before[rel])
         except RestoreFailed:
             raise
         except (OSError, UnsafePath) as e:
@@ -161,7 +225,8 @@ def _entry(instance_root: Path, rel: str):
     except (OSError, UnsafePath):
         return _UNREADABLE
     try:
-        mode = os.stat(parts[-1], dir_fd=fd, follow_symlinks=False).st_mode
+        st = os.stat(parts[-1], dir_fd=fd, follow_symlinks=False)
+        mode = st.st_mode
         if stat.S_ISLNK(mode):
             return Link(os.readlink(parts[-1], dir_fd=fd))
     except FileNotFoundError:
@@ -170,6 +235,10 @@ def _entry(instance_root: Path, rel: str):
         os.close(fd)
     if stat.S_ISDIR(mode):
         return None
+    if not stat.S_ISREG(mode):
+        return Invalid(_kind(stat.S_IFMT(mode)))
+    if st.st_nlink > 1:
+        return Invalid(f"a file with {st.st_nlink} names")
     try:
         return read_beneath(instance_root, parts)
     except (OSError, UnsafePath, ValueError):

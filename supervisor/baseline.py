@@ -95,8 +95,8 @@ def read(name: str, root: Path) -> dict | None:
 def write(name: str, root: Path, code: dict[str, bytes]) -> None:
     """Record `code` (a gate.snapshot the supervisor has just approved) as the instance's approved code."""
     _own_folder(name, root)
-    if (linked := gate.links(code)):
-        raise BaselineError(f"links are never approved code: {', '.join(linked)}")
+    if (linked := gate.refused(code)):
+        raise BaselineError(f"links, hard links and pipes are never approved code: {', '.join(linked)}")
     head = committed(root)
     approved: dict[str, dict] = {}
     for path in sorted(set(code) | {p for p, e in head.items() if e[0] in ("100644", "100755")}):

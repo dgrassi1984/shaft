@@ -490,7 +490,8 @@ def _reconcile(name: str, root: Path) -> None:
         restore = baseline.unapproved(name, root, now)
         if restore is None:                                    # no record yet: the first run after the upgrade
             restore = _uncommitted_code(root)
-        restore.update({p: None for p in gate.links(now)})     # a link is never approved code: it goes
+        for p in gate.refused(now):                            # never approved code: a link, a hard link, a pipe
+            restore.setdefault(p, None)                        # the approved file it stands in for comes back
     except RunRefused:
         raise
     except TreeTooBig as e:                                    # never an empty or partial answer (core.Budget)
@@ -901,7 +902,7 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
     except TreeTooBig as e:
         after, too_big = None, str(e)
     touched = gate.changed(before["code"], after) if after is not None else []
-    linked = gate.links(after) if after is not None else []
+    linked = gate.refused(after) if after is not None else []
     touched = sorted(set(touched) | set(linked))      # a link in a code path is a change whatever it was before
     configured = sorted({w["key"] for w in config_writes}) if after is not None else []
     kept: list[str] = []
@@ -912,9 +913,11 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
             raise RunRefused(f"its code is too big to check ({too_big}); nothing was put back")
         _too_big_to_check(name, root, before["code"], config_writes, too_big)
     elif touched or configured:
-        if linked:   # fail closed, untested: code paths hold no links (gate.Link)
-            ok, test_log = False, ("== links ==\nA link where code belongs is never kept, whatever it points to: "
-                                   + ", ".join(f"{p} -> {after[p].target}" for p in linked))
+        if linked:   # fail closed, untested: code paths hold no links, hard links or pipes (gate.Link, gate.Invalid)
+            ok, test_log = False, ("== links ==\nA link, a hard link or a pipe where code belongs is never kept, "
+                                   "whatever it points to: " + ", ".join(
+                                       f"{p} -> {after[p].target}" if isinstance(after[p], gate.Link)
+                                       else f"{p}: {after[p].why}" for p in linked))
         else:
             ok, test_log = gate.run_tests(root, HOME)
         if ok:
@@ -987,6 +990,8 @@ def _keep_rejected(name: str, folder: Path, code: dict[str, bytes], paths: list[
             target.parent.mkdir(parents=True, exist_ok=True)
             if isinstance(code[p], gate.Link):   # a link: what it pointed to, as text, never the link
                 target.with_name(target.name + ".link").write_text(code[p].target + "\n")
+            elif isinstance(code[p], gate.Invalid):
+                target.with_name(target.name + ".invalid").write_text(code[p].why + "\n")
             else:
                 target.write_bytes(code[p])
     except OSError as e:                     # not kept: then not put back either, so nothing is lost

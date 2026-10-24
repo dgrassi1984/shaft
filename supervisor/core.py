@@ -922,11 +922,12 @@ class _Capped:
 
 
 def walk_beneath(root: Path, rel: str = "", skip=lambda rel: False, links: bool = False, budget: Budget | None = None,
-                 check=None):
+                 check=None, others: bool = False):
     """What is below the folder root/rel, opened through descriptors and nothing followed: (path, None) for a folder
     (before what is in it), (path, file) for a plain file, open to read until the next item, and with `links`
     (path, its target) for a link — the link itself, never what it points to. A pipe or a socket, and a link without
-    `links`, are passed over. skip(path) leaves out a path and everything below it; check(), if given, runs before
+    `links`, are passed over — with `others`, (path, its file type, an int: stat.S_IFMT) for anything else, so a
+    reader that must not miss one (the gate) sees it. skip(path) leaves out a path and everything below it; check(), if given, runs before
     each entry (a deadline, an interrupt). Paths are relative to root/rel. One folder is open at a time, listed
     whole and then closed — no recursion holding a descriptor per level — and the walk stays inside `budget`
     (files and folders, bytes read from its files, depth), else TreeTooBig. How the unsandboxed supervisor reads a
@@ -935,10 +936,10 @@ def walk_beneath(root: Path, rel: str = "", skip=lambda rel: False, links: bool 
     budget = budget or Budget()
     base = [str(p) for p in Path(rel).parts]
     os.close(dir_beneath(root, base))
-    return _walk(root, base, skip, links, budget, check)
+    return _walk(root, base, skip, links, budget, check, others)
 
 
-def _walk(root: Path, base: list[str], skip, links: bool, budget: Budget, check):
+def _walk(root: Path, base: list[str], skip, links: bool, budget: Budget, check, others: bool = False):
     import errno
     import stat
     stack = [()]
@@ -960,6 +961,8 @@ def _walk(root: Path, base: list[str], skip, links: bool, budget: Budget, check)
                 try:
                     mode = os.stat(entry, dir_fd=fd, follow_symlinks=False).st_mode
                     if not (stat.S_ISDIR(mode) or stat.S_ISREG(mode) or (stat.S_ISLNK(mode) and links)):
+                        if others and not stat.S_ISLNK(mode):
+                            yield path, stat.S_IFMT(mode)
                         continue
                     budget.files -= 1
                     if budget.files < 0:

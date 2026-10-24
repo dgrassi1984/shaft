@@ -95,11 +95,13 @@
     made and its files created through descriptors (`O_EXCL`, `O_NOFOLLOW`), so a folder of the copy swapped for a
     link is refused, never written through.
   - **Code** (`shaft/`, `tests/`, `plugins/`, `.python-version`, `requirements.txt`, as the gate sees them): a link
-    is an entry of the gate's snapshot (its target, never what it points to), so one added, removed or retargeted is
-    a change, and a change with a link anywhere in a code path fails the gate untested, whatever it points to (the
-    template has none). The gate's restore takes away a link standing where an approved folder or file belongs (the
-    link itself) and makes the folder again through descriptors; every path it put back is read again, and if any
-    is not as approved the run is refused ("run refused", an alert on the panel), so nothing runs on it.
+    is an entry of the gate's snapshot (its target, never what it points to), and so is anything else that is not a
+    plain file of one name — a file with more than one name (a hard link), a pipe, a socket, a device. One added,
+    removed or changed is a change, and a change with any of them in a code path fails the gate untested (the
+    template has none). The gate's restore puts back each file as a new file renamed over whatever stands there — a
+    link, a pipe, one name of a hard-linked file — never writing through it, makes a folder replaced by a link again
+    through descriptors, and puts an approved file back where a link stood; every path it put back is read again, and
+    if any is not as approved the run is refused ("run refused", an alert on the panel), so nothing runs on it.
 
   Its keys, git and logs (`secrets/`, `.git`, `logs/`) are never sent out by any spelling: the volume is
   case-insensitive (`Secrets/` is `secrets/`), so the supervisor compares the folder itself (device and inode) and
@@ -127,7 +129,15 @@
   folder nobody else works in, is swept harder: every process working in it, everything below each, and each one's
   ancestors while they share its session or process group (a parent that left the copy while its child stayed). One
   that left the instance's folder is not found; the sandbox is the boundary then (it can write only the instance's folder, and what it writes there
-  later is caught as below). Stopping a service that starts runs (the API, the scheduler, a terminal
+  later is caught as below). **Still open** (residual risk): the instance's working tree stays writable between a
+  check and its use. A change written after the start-of-run check (and its read-back) and before the agent starts
+  runs unchecked in that run; one written to a kept file after the gate's snapshot and before the commit is
+  committed, and a committed file counts as approved code from then on. Closing this means launching and committing
+  from an immutable copy of the approved code, a redesign not done yet. What limits it: only a process the
+  instance already has running can write there — the sandbox writes nothing outside its folder, and a run's own
+  processes are ended before the gate looks, so it takes one that escaped them (above), or something of yours; a
+  change to any other file is caught at the next run's start, which gates whatever differs from the recorded
+  approved code; and every check reads through descriptors, never through a link. Stopping a service that starts runs (the API, the scheduler, a terminal
   conversation) ends its runs' processes first. **Approved code**: after every settlement the supervisor records
   the code it approved (`.supervisor/baselines/<name>.json`: the last commit, plus what the gate passed that git
   does not hold — an ignored or untracked file in a code path), where the instance cannot write. Before any run,
