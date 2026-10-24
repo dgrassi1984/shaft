@@ -55,7 +55,7 @@ class FieldNamesTest(unittest.TestCase):
 class StylesTest(unittest.TestCase):
     def test_issue_25_copy_focus_visibility(self):
         """Reverting either focus selector leaves that code Copy button hidden when Tab reaches it."""
-        for parent in ('.turn.it pre', '.docview pre'):
+        for parent in ('.prewrap',):                  # W18: the button sits on the code block's wrapper, beside it
             with self.subTest(parent=parent):
                 # Same ancestor specificity as the hiding rule, plus :focus-visible.
                 rules = declarations(parent + ' > .copy:focus-visible')

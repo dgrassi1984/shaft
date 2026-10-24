@@ -29,12 +29,13 @@ let stored = input.seen === null ? null : JSON.stringify({wren: input.seen});
 const classes = (...initial) => { const s = new Set(initial);
   return { contains: k => s.has(k), add: k => s.add(k), remove: k => s.delete(k), toggle(k, on) { on ? s.add(k) : s.delete(k); } }; };
 // Each feed item is 100px tall, in document order; the scroll box shows 150px of it.
-const box = { scrollTop: 0, clientHeight: 150, scrollHeight: 0, getBoundingClientRect: () => ({ top: 0 }) };
+const box = { scrollTop: 0, clientHeight: input.height || 150, scrollHeight: 0,
+  getBoundingClientRect() { return { top: 0, bottom: this.clientHeight }; } };
 const items = [...input.html.matchAll(/<(?:div|p) class="[^"]*"([^>]*)>/g)].map(m =>
   Object.fromEntries([...m[1].matchAll(/data-([\w-]+)="([^"]*)"/g)].map(a => [a[1], a[2]]))).filter(a => a.k)
   .map((a, i) => ({ key: a.k, dataset: { seenInst: a["seen-inst"], seenReply: a["seen-reply"], sentAt: a["sent-at"] },
-                    top: i * 100, getClientRects: () => [1],
-                    getBoundingClientRect() { return { top: this.top - box.scrollTop }; } }));
+                    top: i * 100, getClientRects: () => [1], closest: q => q === "[data-scroll]" ? box : null,
+                    getBoundingClientRect() { return { top: this.top - box.scrollTop, bottom: this.top + 100 - box.scrollTop }; } }));
 box.scrollHeight = items.length * 100;
 const feed = { dataset: { poll: "/fragment/chat/wren", every: "1500", follow: "1" }, isConnected: true,
   classList: classes("feed"), children: [], getClientRects: () => [1], closest: q => q === "[data-scroll]" ? box : null,
@@ -47,6 +48,7 @@ const document = { readyState: "loading", visibilityState: "visible", title: "wr
   addEventListener(k, f) { (handlers[k] ||= []).push(f); },
   querySelector: q => q === "[data-newbelow]" ? newbelow : null,
   querySelectorAll: q => q === "[data-poll]" || q === "[data-follow]" ? [feed] :
+    q === ".feed [data-seen-reply], .feed [data-sent-at]" ? items.filter(n => n.dataset.seenReply || n.dataset.sentAt) :
     q === ".feed [data-seen-reply]" ? items.filter(n => n.dataset.seenReply) : [],
   getElementById: () => ({ setAttribute() {}, remove() {} }) };
 vm.runInNewContext(fs.readFileSync(process.argv[1], "utf8"), { document, navigator: {},
@@ -64,15 +66,21 @@ if (input.seen !== null && !input.archived) assert.equal(JSON.parse(stored).wren
 
 @unittest.skipUnless(NODE, "node is not installed")
 class OpenAtFirstUnreadTest(unittest.TestCase):
-    def opens(self, seen, expect, archived=False, after=LATEST):
+    def opens(self, seen, expect, archived=False, after=LATEST, height=150):
         result = subprocess.run([NODE, "-e", HARNESS, str(JS), json.dumps({
-            "html": feed(archived), "seen": seen, "expect": expect, "archived": archived, "after": after})],
+            "html": feed(archived), "seen": seen, "expect": expect, "archived": archived, "after": after,
+            "height": height})],
             capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_opens_at_the_first_message_not_seen_here(self):
         """Reverting this opens every chat at the bottom, past the message the instance sent after the seen reply."""
         self.opens(SEEN, f"sm9.md")
+
+    def test_w8_only_what_is_on_screen_is_seen_and_a_message_it_sent_counts(self):
+        """W8: seenFeed() marked every rendered reply seen — one below the fold too — and never a message the instance
+        sent (data-sent-at). Opened at its message, with the newest reply below the fold: only the message is seen."""
+        self.opens(SEEN, "sm9.md", after=SENT, height=100)
 
     def test_opens_at_the_newest_reply_when_only_it_is_unread(self):
         self.opens("2026-10-21T10:10:00", "a2")

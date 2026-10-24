@@ -273,7 +273,9 @@ label.pick:focus-within { outline: 2px solid var(--accent); outline-offset: 2px;
 #comment-sel { position: fixed; z-index: 60; font-size: .8rem; padding: .2rem .55rem; border-radius: 6px;
                box-shadow: 0 2px 8px rgba(0, 0, 0, .25); }
 #comment-sel[hidden], #quote-reply[hidden] { display: none; }
-#comment-box { position: fixed; z-index: 61; right: 1rem; bottom: 1rem; width: min(28rem, calc(100vw - 2rem));
+/* --vvbottom: what the on-screen keyboard covers (web.js fitViewport); the box stays above it */
+#comment-box { position: fixed; z-index: 61; right: 1rem; bottom: calc(1rem + var(--vvbottom, 0px));
+               width: min(28rem, calc(100vw - 2rem));
                box-sizing: border-box; max-height: calc(var(--vvh, 100dvh) - 2rem); overflow-y: auto;
                display: grid; gap: .6rem; padding: 1rem; border: 1px solid var(--line); border-radius: 10px;
                background: var(--panel); color: var(--text); box-shadow: 0 4px 24px rgba(0, 0, 0, .3); }
@@ -293,7 +295,7 @@ label.pick:focus-within { outline: 2px solid var(--accent); outline-offset: 2px;
   #comment-box textarea { font-size: 16px; }
 }
 @media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
-  #comment-box { left: 0; right: 0; bottom: 0; width: 100%; border-radius: 12px 12px 0 0;
+  #comment-box { left: 0; right: 0; bottom: var(--vvbottom, 0px); width: 100%; border-radius: 12px 12px 0 0;
                  padding-bottom: calc(1rem + env(safe-area-inset-bottom)); }
 }
 
@@ -363,9 +365,10 @@ a.icon.small:hover { border-color: var(--accent); }
 .turn .who { display: flow-root; }           /* its icons stay in the header, not in the message's text */
 .turn .who .icon { float: right; margin-left: .5rem; }
 .turn:hover .who .icon { opacity: 1; }
-.turn.it pre { position: relative; }
-.turn.it pre > .copy { position: absolute; top: .2rem; right: .2rem; opacity: 0; }
-.turn.it pre:hover > .copy, .turn.it pre > .copy:focus-visible { opacity: 1; }
+/* A code block's Copy sits on its wrapper, not in the block: the block scrolls sideways, and took the button with it */
+.prewrap { position: relative; }
+.prewrap > .copy { position: absolute; top: .2rem; right: .2rem; opacity: 0; }
+.prewrap:hover > .copy, .prewrap > .copy:focus-visible { opacity: 1; }
 .turn.sending { opacity: .6; }
 @media (max-width: 720px), (pointer: coarse) and (max-height: 520px) { .keys { display: none; } }
 /* The chat uses the whole width when the documents are closed (#71): each message keeps its own readable width
@@ -389,14 +392,10 @@ aside.docs { min-height: 0; overflow-y: auto; background: var(--panel); border: 
 .doctitle .docdelete { margin: 0; padding: 0; }
 .docshead .closedocs { margin-left: auto; }
 .doctitle .copy { margin-left: auto; }
-.docview pre { position: relative; }
-.docview pre > .copy { position: absolute; top: .2rem; right: .2rem; opacity: 0; }
-.docview pre:hover > .copy, .docview pre > .copy:focus-visible { opacity: 1; }
-.turn.it pre > .copy:focus-visible, .docview pre > .copy:focus-visible {
-  outline: 2px solid var(--accent); outline-offset: 2px; }
+.prewrap > .copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 @media (pointer: coarse) {
   .icon { min-width: 32px; min-height: 32px; }
-  .icon, .turn.it pre > .copy, .docview pre > .copy { opacity: 1; }
+  .icon, .prewrap > .copy { opacity: 1; }
 }
 .doccards { display: flex; flex-wrap: wrap; gap: .3rem; margin-top: .4rem; }
 .doccard { font-size: .85rem; border: 1px solid var(--line); border-radius: 6px; padding: .2rem .5rem; background: var(--bg); }
@@ -443,7 +442,7 @@ form.clearbtn { display: inline; margin: 0; }
 .doctitle b { flex: 1 1 auto; }
 @media (hover: none) {
   /* No hover on a phone: what showed on hover is always there. */
-  .icon, .turn.it pre > .copy, .docview pre > .copy { opacity: 1; }
+  .icon, .prewrap > .copy { opacity: 1; }
   .keys { display: none; }                          /* "Enter sends" is not true where Return makes a new line */
 }
 @media (pointer: coarse) {
@@ -502,7 +501,8 @@ a.button { display: inline-block; padding: .45rem .9rem; border: 1px solid var(-
 
 /* docs/plans/PLAN-pwa P2: on a phone the chat is the whole screen — the header, the conversation, the composer. The rail is a
    sheet behind ☰, the documents a sheet over the chat, and the page is as tall as the keyboard leaves visible
-   (--vvh, set from visualViewport by web.js), so the composer sits right above the keyboard. */
+   (--vvh, set from visualViewport by web.js), so the composer sits right above the keyboard. A sheet fixed over the page
+   covers only that visible part too (--vvtop, --vvbottom): with inset 0 its Save and Cancel were under the keyboard. */
 .navbtn, .menufacts, .closenav { display: none; }    /* ✕ closes the documents beside the chat too */
 .navbtn { font-size: 1.1rem; padding: .1rem .5rem; position: relative; }
 .navbtn.news::after { content: ""; position: absolute; top: .3rem; right: .3rem; width: .5rem; height: .5rem;
@@ -539,7 +539,8 @@ a.button { display: inline-block; padding: .45rem .9rem; border: 1px solid var(-
   .chatpage > .chat { flex: 1 1 auto; min-height: 0; max-height: none; margin-bottom: .3rem; }
   .chatpage > form.composer { position: static; padding: 0; background: none; }
   .chatgrid > aside.docs { display: none; }
-  .chatgrid.showdocs > aside.docs { display: block; position: fixed; inset: 0; z-index: 55; border: 0; border-radius: 0;
+  .chatgrid.showdocs > aside.docs { display: block; position: fixed; inset: var(--vvtop, 0px) 0 var(--vvbottom, 0px);
+      z-index: 55; border: 0; border-radius: 0;
       padding: calc(env(safe-area-inset-top) + .6rem) max(1rem, env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 1rem)
                max(1rem, env(safe-area-inset-left)); overflow-y: auto; }
   .closedocs { margin-left: auto; }
@@ -551,7 +552,8 @@ a.button { display: inline-block; padding: .45rem .9rem; border: 1px solid var(-
 @container chat-area (max-width: 38.8rem) {
   .chatgrid { display: flex; flex-direction: column; }
   .chatgrid > aside.docs { display: none; }
-  .chatgrid.showdocs > aside.docs { display: block; position: fixed; inset: 0; z-index: 55; border: 0; border-radius: 0;
+  .chatgrid.showdocs > aside.docs { display: block; position: fixed; inset: var(--vvtop, 0px) 0 var(--vvbottom, 0px);
+      z-index: 55; border: 0; border-radius: 0;
       padding: calc(env(safe-area-inset-top) + .6rem) max(1rem, env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 1rem)
                max(1rem, env(safe-area-inset-left)); overflow-y: auto; }
 }
@@ -600,7 +602,7 @@ details.threads form.act { display: inline; margin: 0; }
 
 /* Expand the existing pane so editor contents, selection and drafts survive. */
 .chatgrid.docfullscreen > aside.docs {
-  display: block; position: fixed; inset: 0; z-index: 55; border: 0; border-radius: 0;
+  display: block; position: fixed; inset: var(--vvtop, 0px) 0 var(--vvbottom, 0px); z-index: 55; border: 0; border-radius: 0;
   padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right))
            max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
 }

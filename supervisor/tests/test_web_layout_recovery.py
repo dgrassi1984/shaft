@@ -130,7 +130,7 @@ const source = fs.readFileSync(process.argv[1], "utf8");
     context.window.__shaftWeb = false;
     vm.runInNewContext(injected, context);
     const el = { dataset: { poll: "/fragment/rail" }, isConnected: true, getClientRects: () => [1],
-      querySelector: () => null, contains: () => false, classList: { add() {}, remove() {} },
+      querySelector: () => null, querySelectorAll: () => [], contains: () => false, classList: { add() {}, remove() {} },
       previousElementSibling: { classList: { contains: () => true } } };
     context.window.getSelection = () => null;
     context.window.testPoll(el);

@@ -564,4 +564,5 @@ class StylesTest(TestCase):
         phone = css[css.index("@media (max-width: 720px)"):]
         # on a phone the chat is one column (a flex column), and the documents a sheet over it (docs/plans/PLAN-pwa P2)
         self.assertRegex(phone, r"\.chatgrid \{ display: flex; flex-direction: column;")
-        self.assertRegex(phone, r"\.chatgrid\.showdocs > aside\.docs \{ display: block; position: fixed; inset: 0;")
+        self.assertRegex(phone, r"\.chatgrid\.showdocs > aside\.docs \{ display: block; position: fixed; "
+                                r"inset: var\(--vvtop, 0px\) 0 var\(--vvbottom, 0px\);")

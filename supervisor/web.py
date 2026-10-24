@@ -180,13 +180,17 @@ def devices() -> dict:
 
 
 def unpair(device: str | None = None) -> int:
-    """Revoke one paired browser (by id or name), or all with None. Returns how many were revoked."""
+    """Revoke one paired browser (by id or name), or all with None. Returns how many were revoked. Its push
+    subscription goes with it: a revoked phone kept getting a lock-screen push and a badge for every reply (W1)."""
+    from . import webpush
     with _lock:
         ds = _read("devices.json")
         gone = [k for k, v in ds.items() if device is None or device in (k, v.get("name"))]
         for k in gone:
             del ds[k]
         _write("devices.json", ds)
+    for k in gone:
+        webpush.unsubscribe(k)
     if gone:
         log(f"web: unpaired {', '.join(gone)}")
     return len(gone)
@@ -240,6 +244,7 @@ class Request:
     path: str = ""
     query: dict = field(default_factory=dict)
     set_cookies: list = field(default_factory=list)     # cookies to send with whatever the route answers
+    device: str = ""                # the paired browser's id, once _route has checked its cookie
 
     def __post_init__(self):
         split = urllib.parse.urlsplit(self.target)
@@ -300,13 +305,17 @@ def _static(name: str, versioned: bool = False) -> Response:
     return Response(200, path.read_bytes(), {"Content-Type": ctype, "Cache-Control": cache})
 
 
-def respond(req: Request) -> Response:
-    r = _route(req)
+def _secured(r: Response) -> Response:
     r.headers.update({"Content-Security-Policy": CSP, "X-Content-Type-Options": "nosniff",
                       "Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY",
                       # a page open since before an update compares this with its own scripts' version
                       "X-Shaft-Static": web_pages.STATIC_VERSION})
     r.headers.setdefault("Cache-Control", "no-store")
+    return r
+
+
+def respond(req: Request) -> Response:
+    r = _secured(_route(req))
     if req.method == "GET" and r.status == 200 and req.path.startswith("/fragment/"):
         # A refresh that changed nothing costs a header, not the whole feed again (docs/plans/PLAN-pwa P3: ~100 a minute)
         tag = '"' + hashlib.sha1(r.body).hexdigest()[:20] + '"'
@@ -348,6 +357,7 @@ def _route(req: Request) -> Response:
         # A Home Screen app has cookies of its own and no address bar: it pairs by pasting the link here.
         return _html(403, web_pages.unpaired_page(), {"X-Shaft-Pair": "required"})
     dev, secret = paired
+    req.device = dev
     if _renew_due(dev):                             # the cookie's 400 days start again: a used app never lapses
         req.set_cookies.append(_device_cookie(dev, secret))
     if req.method == "POST":
@@ -366,9 +376,17 @@ def _route(req: Request) -> Response:
             return _refused("This request did not come from this page.")
         return Response(200, json.dumps({"events": webpush.take(dev)}).encode(),
                         {"Content-Type": "application/json", "Cache-Control": "no-store"})
-    if req.path == "/push/status":                  # #23: "on" is SHAFT holding this device, not only the browser
-        from . import webpush
-        return Response(200, json.dumps({"subscribed": webpush.holds(dev)}).encode(),
+    if req.path == "/push/status":                  # #23: "on" is SHAFT holding this device, not only the browser —
+        from . import webpush                       # with the endpoint and key it holds, which the page compares (W5)
+        return Response(200, json.dumps(webpush.status(dev)).encode(),
+                        {"Content-Type": "application/json", "Cache-Control": "no-store"})
+    if req.path == "/push/token":
+        # The service worker's pushsubscriptionchange hands SHAFT the browser's renewed subscription (W5): a POST like
+        # any other, so it needs the token, and it has no page to read it from. Every page carries it already; this
+        # gives it to a same-origin request only, as /push/latest does.
+        if req.headers.get("sec-fetch-site") != "same-origin":
+            return _refused("This request did not come from this page.")
+        return Response(200, json.dumps({"csrf": csrf_token(secret)}).encode(),
                         {"Content-Type": "application/json", "Cache-Control": "no-store"})
     try:
         r = _get(req, csrf_token(secret))
@@ -556,8 +574,10 @@ def _get(req: Request, csrf: str) -> Response | None:
     if path == "/fragment/overview":
         return _html(200, web_pages.overview(overview()))
     if path == "/fragment/rail":
-        from . import web_chat
-        return _html(200, web_pages.rail(names, qs.get("c", ""), overview(), {n: web_chat.summary(n) for n in names}))
+        from . import messages, web_chat
+        history = messages.history()
+        return _html(200, web_pages.rail(names, qs.get("c", ""), overview(),
+                                         {n: web_chat.summary(n, history) for n in names}))
     if m := re.match(r"^/fragment/i/([A-Za-z0-9_-]+)/live$", path):
         if m[1] not in names:
             return None
@@ -580,13 +600,25 @@ def _get(req: Request, csrf: str) -> Response | None:
         if m[1] not in names:
             return None
         from . import web_chat
+        if qs.get("away"):                          # its page went hidden on this device: push to it again (W9)
+            web_chat.unwatch(m[1], req.device, _page_ms(qs.get("at")))
+            return Response(204, b"")
         chat = web_chat.load(qs["id"]) if qs.get("id") else web_chat.shown(m[1])
         if chat and chat.get("instance") != m[1]:
             return None
         if not qs.get("id"):
-            web_chat.watching(m[1])                 # its page is open and visible: a reply needs no push
+            # its page is open and visible here: no push to this device (unless this poll left before its away)
+            web_chat.watching(m[1], req.device, _page_ms(req.headers.get("x-shaft-at")))
         return _html(200, v.chat_feed(m[1], chat, _sent_during(m[1], chat, bool(qs.get("id"))),
                                       archived=bool(qs.get("id"))))
+    if m := re.match(r"^/fragment/chat/([A-Za-z0-9_-]+)/live$", path):
+        # The running reply's activity, polled on its own (W12): it changes every second, and inside the feed it
+        # changed the feed's ETag on every poll — the whole conversation rendered and sent again each 1.5 s.
+        if m[1] not in names:
+            return None
+        from . import web_chat
+        chat = web_chat.shown(m[1])
+        return _html(200, v.live_activity(chat if chat and chat.get("instance") == m[1] else None))
     if path == "/push/key":
         from . import webpush
         try:
@@ -660,6 +692,14 @@ def _get(req: Request, csrf: str) -> Response | None:
             return _html(200, live)
         return _html(200, v.services_page(live, sel, panel.SERVICE_LOGS[sel], panel.log_tail(sel, 40), names, csrf))
     return None
+
+
+def _page_ms(value: str | None) -> float | None:
+    """A time the page stamped on a request (Date.now(), its own clock), or None."""
+    try:
+        return float(value) if value else None
+    except ValueError:
+        return None
 
 
 def _save_doc(name: str, login: str, form: dict) -> Response:
@@ -1214,10 +1254,14 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         limit = ATTACH_MAX_TOTAL + 1_000_000 if self.path.startswith("/chat/") else 1_000_000   # files go with a chat
         if length > limit:
-            self.send_error(413, f"at most {limit} bytes")
-            return
-        body = self.rfile.read(length) if length else b""
-        r = respond(Request(method, self.path, dict(self.headers.items()), body))
+            # Plain text, as a refusal the page shows: send_error's own HTML page landed whole in the document view
+            # (W15, review 2026-10-24). The body is never read, so the connection closes after it.
+            r = _secured(Response(413, f"Too large: at most {limit // 1_000_000} MB can be sent at once.".encode(),
+                                  {"Content-Type": "text/plain; charset=utf-8", "Connection": "close"}))
+            self.close_connection = True
+        else:
+            body = self.rfile.read(length) if length else b""
+            r = respond(Request(method, self.path, dict(self.headers.items()), body))
         self.send_response(r.status)
         for k, v in r.headers.items():
             for one in v if isinstance(v, list) else [v]:

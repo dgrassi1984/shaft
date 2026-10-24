@@ -55,7 +55,11 @@ const calls = [];
 async function fetch(url) {
   calls.push(String(url));
   if (url === "/push/key") return { ok: true, json: async () => ({ key: "AQID" }) };
-  if (url === "/push/status") return { ok: true, json: async () => ({ subscribed: held }) };
+  // what SHAFT holds (W5): the endpoint it has for this device, and the key pushes are signed with
+  if (url === "/push/status") {
+    return { ok: true, json: async () => ({ subscribed: held, endpoint: held ? "https://web.push.apple.com/test" : "",
+                                            key: "AQID", stale: false }) };
+  }
   if (url === "/push/subscribe") {
     return { ok: false, status: 409, text: async () => "<p>refused: not a known push service</p>" };
   }

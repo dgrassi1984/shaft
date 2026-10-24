@@ -215,15 +215,52 @@ self.addEventListener("push", (ev) => {
   })());
 });
 
-self.addEventListener("notificationclick", (ev) => {     // open the chat that replied, in the app if it is open
+// Open the chat that replied, in the app if it is open. A window already on that chat is only brought forward: going
+// to it again reloaded it and dropped the files attached in its composer. navigate() refuses a window this worker
+// does not control, and focus() can refuse too: then the next window, or a new one (review 2026-10-24, W6).
+self.addEventListener("notificationclick", (ev) => {
   ev.notification.close();
-  const url = (ev.notification.data || {}).url || "/";
-  ev.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
-    for (const c of list) {
-      if ("focus" in c) return (c.navigate ? c.navigate(url) : Promise.resolve()).then(() => c.focus());
+  const url = new URL((ev.notification.data || {}).url || "/", self.location.origin);
+  ev.waitUntil((async () => {
+    const list = (await self.clients.matchAll({ type: "window", includeUncontrolled: true })).filter((c) => "focus" in c);
+    const there = list.find((c) => new URL(c.url).pathname === url.pathname);
+    if (there) {
+      try { return await there.focus(); } catch (e) { /* refused: open it instead */ }
+      return self.clients.openWindow(url.href);
     }
-    return self.clients.openWindow(url);
-  }));
+    for (const c of list) {
+      if (!c.navigate) continue;
+      try {
+        const went = await c.navigate(url.href);
+        if (went) return await went.focus();
+      } catch (e) { /* not controlled by this worker, or refused: try the next, then a new window */ }
+    }
+    return self.clients.openWindow(url.href);
+  })());
+});
+
+// The browser renewed this device's subscription by itself (its push service rotated it): SHAFT is given the new one,
+// or every push would go to the endpoint that died (review 2026-10-24, W5). WebKit does not fire this event
+// (https://bugs.webkit.org/show_bug.cgi?id=294421): on an iPhone the page's own check on each visit (web.js
+// pushState) is the one that renews. A refused step throws, so the failure is the worker's, not a silent nothing.
+self.addEventListener("pushsubscriptionchange", (ev) => {
+  ev.waitUntil((async () => {
+    let sub = ev.newSubscription;
+    if (!sub) {
+      const r = await fetch("/push/key", { credentials: "same-origin", cache: "no-store" });
+      if (!r.ok) throw new Error(`push key: HTTP ${r.status}`);
+      const { key } = await r.json();
+      const raw = atob(key.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((key.length + 3) % 4));
+      sub = await self.registration.pushManager.subscribe({ userVisibleOnly: true,
+        applicationServerKey: Uint8Array.from(raw, (c) => c.charCodeAt(0)) });
+    }
+    const t = await fetch("/push/token", { credentials: "same-origin", cache: "no-store" });
+    if (!t.ok) throw new Error(`push token: HTTP ${t.status}`);
+    const { csrf } = await t.json();
+    const s = await fetch("/push/subscribe", { method: "POST", credentials: "same-origin", body: JSON.stringify(sub),
+      headers: { "X-CSRF-Token": csrf, "Content-Type": "application/json" } });
+    if (!s.ok) throw new Error(`push subscribe: HTTP ${s.status}`);
+  })());
 });
 """
 
