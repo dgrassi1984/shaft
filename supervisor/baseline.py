@@ -62,8 +62,8 @@ def _oid(data: bytes, like: str) -> str:
     return h.hexdigest()
 
 
-def _is_committed(data: bytes | None, entry: tuple[str, str] | None) -> bool:
-    return (data is not None and entry is not None and entry[0] in ("100644", "100755")
+def _is_committed(data, entry: tuple[str, str] | None) -> bool:
+    return (isinstance(data, bytes) and entry is not None and entry[0] in ("100644", "100755")
             and _oid(data, entry[1]) == entry[1])
 
 
@@ -95,6 +95,8 @@ def read(name: str, root: Path) -> dict | None:
 def write(name: str, root: Path, code: dict[str, bytes]) -> None:
     """Record `code` (a gate.snapshot the supervisor has just approved) as the instance's approved code."""
     _own_folder(name, root)
+    if (linked := gate.links(code)):
+        raise BaselineError(f"links are never approved code: {', '.join(linked)}")
     head = committed(root)
     approved: dict[str, dict] = {}
     for path in sorted(set(code) | {p for p, e in head.items() if e[0] in ("100644", "100755")}):
@@ -145,7 +147,7 @@ def unapproved(name: str, root: Path, now: dict[str, bytes]) -> dict[str, bytes 
             mine = None                                         # approved against a commit since replaced
         if mine is not None:
             want = mine.get("sha256")
-            if (want is None and data is None) or (want and data is not None
+            if (want is None and data is None) or (want and isinstance(data, bytes)
                                                     and hashlib.sha256(data).hexdigest() == want):
                 continue
             if want is None:

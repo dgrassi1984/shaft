@@ -26,48 +26,160 @@ CODE_PATHS = ("shaft", "tests", "plugins", ".python-version", "requirements.txt"
 PROJECT = Path(__file__).resolve().parent.parent
 
 
-def snapshot(instance_root: Path) -> dict[str, bytes]:
-    """The code files' bytes, listed and read through descriptors (core.read_tree, read_beneath): never through a
+class Link:
+    """A link standing where code belongs, as a snapshot records it: its target, never what it points to. Code paths
+    hold no links — the template has none, and nothing an instance writes needs one — so a link there fails the gate
+    whatever its target (runner._settle) and is never approved, kept or committed; restore takes it away. A snapshot
+    passed over a link (read_tree and read_beneath refuse one, and the refusal was swallowed): `shaft/` swapped for a
+    link to another folder of the instance vanished from the snapshot, the gate never saw it, and `python -m shaft`
+    ran the linked package (Codex, final review of the integration)."""
+    __slots__ = ("target",)
+
+    def __init__(self, target: str):
+        self.target = target
+
+    def __eq__(self, other) -> bool:
+        return isinstance(other, Link) and other.target == self.target
+
+    def __hash__(self) -> int:
+        return hash(("link", self.target))
+
+    def __repr__(self) -> str:
+        return f"Link({self.target!r})"
+
+
+class RestoreFailed(Exception):
+    """A path could not be put back: nothing may run on the code that is left (runner refuses the run)."""
+
+
+def links(code: dict) -> list[str]:
+    """The paths of a snapshot that are links."""
+    return sorted(p for p, v in code.items() if isinstance(v, Link))
+
+
+def snapshot(instance_root: Path) -> dict[str, bytes | Link]:
+    """The code files' bytes, listed and read through descriptors (core.walk_beneath, read_beneath): never through a
     link the instance planted, even one swapped in after a check — a failed change is restored from this, so a file
-    read through a link would be written back into the instance's folder. TreeTooBig past the bounds (core.Budget,
-    SHAFT_FILE_READ_MAX_MB for a single file): never a part of the code taken for all of it."""
-    from .core import Budget, TooBig, TreeTooBig, UnsafePath, read_beneath, read_tree
-    files: dict[str, bytes] = {}
+    read through a link would be written back into the instance's folder. A link at or under a code path is an entry
+    of its own (Link: its target), so a link added, removed or retargeted is a change. TreeTooBig past the bounds
+    (core.Budget, SHAFT_FILE_READ_MAX_MB for a single file): never a part of the code taken for all of it."""
+    import stat
+    from .core import Budget, TooBig, TreeTooBig, UnsafePath, dir_beneath, read_beneath, walk_beneath
+    files: dict[str, bytes | Link] = {}
     budget = Budget()   # one for all the code paths: SHAFT_SNAPSHOT_MAX_MB in all; past it TreeTooBig, never a part
     skip = lambda rel: "__pycache__" in rel.split("/") or rel.split("/")[-1] == ".DS_Store"   # noqa: E731 — Finder's
-    for name in CODE_PATHS:
-        try:
-            files.update({f"{name}/{rel}": data for rel, data in read_tree(instance_root, name, skip, budget).items()})
-        except (OSError, UnsafePath):   # not a folder: a file, a link, or nothing
+    top = dir_beneath(instance_root)
+    try:
+        for name in CODE_PATHS:
             try:
-                files[name] = read_beneath(instance_root, [name])
-            except TooBig as e:
-                raise TreeTooBig(f"{instance_root}/{name}: {e}") from None
-            except (OSError, UnsafePath):
-                pass
+                mode = os.stat(name, dir_fd=top, follow_symlinks=False).st_mode
+            except FileNotFoundError:
+                continue
+            if stat.S_ISLNK(mode):
+                files[name] = Link(os.readlink(name, dir_fd=top))
+            elif stat.S_ISDIR(mode):
+                for rel, f in walk_beneath(instance_root, name, skip, links=True, budget=budget):
+                    if isinstance(f, str):
+                        files[f"{name}/{rel}"] = Link(f)
+                    elif f is not None:
+                        files[f"{name}/{rel}"] = f.read()
+            elif stat.S_ISREG(mode):
+                try:
+                    files[name] = read_beneath(instance_root, [name])
+                except TooBig as e:
+                    raise TreeTooBig(f"{instance_root}/{name}: {e}") from None
+            else:
+                raise UnsafePath(f"{instance_root}/{name} is neither a file, a folder nor a link")
+    finally:
+        os.close(top)
     return files
 
 
-def changed(before: dict[str, bytes], after: dict[str, bytes]) -> list[str]:
+def changed(before: dict, after: dict) -> list[str]:
     return sorted(p for p in before.keys() | after.keys() if before.get(p) != after.get(p))
 
 
-def restore(instance_root: Path, before: dict[str, bytes], paths: list[str]) -> None:
-    """Each path back as it was, written or removed through descriptors (no link followed); one that cannot be
-    reached without a link is left as it is."""
-    from .core import UnsafePath, safe_write_bytes, unlink_beneath
-    for rel in paths:
-        if rel not in before:
-            unlink_beneath(instance_root, rel)
-            continue
+def _clear_links_above(instance_root: Path, rel: str) -> None:
+    """Remove every link standing on the way to root/rel — the link itself, never its target — from the top down,
+    through each folder's descriptor: an approved folder replaced by a link is then made again, not written through."""
+    import stat
+    from .core import dir_beneath
+    parts = Path(rel).parts
+    for i in range(1, len(parts)):
+        fd = dir_beneath(instance_root, parts[:i - 1])
         try:
-            safe_write_bytes(instance_root, rel, before[rel])     # in place: its mode (an executable script) is kept
-        except UnsafePath:
-            try:
-                if unlink_beneath(instance_root, rel):           # a link put in its place goes, never its target
-                    safe_write_bytes(instance_root, rel, before[rel])
-            except UnsafePath:
+            mode = os.stat(parts[i - 1], dir_fd=fd, follow_symlinks=False).st_mode
+            if stat.S_ISLNK(mode):
+                os.unlink(parts[i - 1], dir_fd=fd)
+                return                                   # nothing below it is there any more
+            if not stat.S_ISDIR(mode):
+                return
+        except FileNotFoundError:
+            return
+        finally:
+            os.close(fd)
+
+
+def restore(instance_root: Path, before: dict, paths: list[str]) -> None:
+    """Each path back as it was, written or removed through descriptors, no link followed: a link standing where an
+    approved folder or file belongs is removed (the link, never its target) and the folder made again. RestoreFailed
+    when a path cannot be put back — it was left as it was, silently, until Codex's final review."""
+    from .core import UnsafePath, safe_write_bytes, unlink_beneath
+    for rel in sorted(paths, key=lambda r: (r.count("/"), r)):   # a linked folder goes before what was below it
+        try:
+            _clear_links_above(instance_root, rel)
+            if rel not in before:
+                unlink_beneath(instance_root, rel)
                 continue
+            if isinstance(before[rel], Link):
+                raise RestoreFailed(f"{rel}: a link is never put back as code")
+            try:
+                safe_write_bytes(instance_root, rel, before[rel])     # in place: its mode (an executable) is kept
+            except UnsafePath:
+                if not unlink_beneath(instance_root, rel):            # a link put in its place goes, never its target
+                    raise
+                safe_write_bytes(instance_root, rel, before[rel])
+        except RestoreFailed:
+            raise
+        except (OSError, UnsafePath) as e:
+            raise RestoreFailed(f"{instance_root}/{rel} could not be put back: {type(e).__name__}: {e}") from None
+
+
+_UNREADABLE = object()
+
+
+def _entry(instance_root: Path, rel: str):
+    """What stands at root/rel now, as a snapshot would record it: bytes, a Link, or None (nothing, or a folder — no
+    file of that name); _UNREADABLE when it cannot be reached without following a link or read."""
+    import stat
+    from .core import UnsafePath, dir_beneath, read_beneath
+    parts = Path(rel).parts
+    try:
+        fd = dir_beneath(instance_root, parts[:-1])
+    except FileNotFoundError:
+        return None
+    except (OSError, UnsafePath):
+        return _UNREADABLE
+    try:
+        mode = os.stat(parts[-1], dir_fd=fd, follow_symlinks=False).st_mode
+        if stat.S_ISLNK(mode):
+            return Link(os.readlink(parts[-1], dir_fd=fd))
+    except FileNotFoundError:
+        return None
+    finally:
+        os.close(fd)
+    if stat.S_ISDIR(mode):
+        return None
+    try:
+        return read_beneath(instance_root, parts)
+    except (OSError, UnsafePath, ValueError):
+        return _UNREADABLE
+
+
+def unrestored(instance_root: Path, approved: dict, paths: list[str]) -> list[str]:
+    """Of `paths`, those not back as `approved` after a restore, read afresh path by path (no link followed): the
+    check runner makes before anything may run on the code again."""
+    return [p for p in paths if _entry(instance_root, p) != approved.get(p)]
 
 
 def config_without(text: str, writes: list[dict]) -> tuple[str, list[str]]:

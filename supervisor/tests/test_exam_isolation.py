@@ -20,9 +20,21 @@ FAKE_EXAM = '''import json, os, subprocess, sys
 root = os.environ["SHAFT_ROOT"]
 sys.stdin.read()
 mode = open(os.path.join(root, "mode.txt")).read().strip()
-p = subprocess.Popen(["/bin/sleep", "300"], cwd=root, start_new_session=(mode == "session"),
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-print(json.dumps({"answer": str(p.pid), "tools": [], "steps": 1, "ended_by": "submit"}))
+if mode == "chain":   # a parent in a session of its own that leaves the copy, its child still working in it
+    chain = ("import os, subprocess, time\\n"
+             "c = subprocess.Popen(['/bin/sleep', '300'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\\n"
+             "open('chain.pid', 'w').write(str(c.pid))\\nos.chdir('/')\\ntime.sleep(300)\\n")
+    p = subprocess.Popen([sys.executable, "-c", chain], cwd=root, start_new_session=True,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    while not os.path.exists(os.path.join(root, "chain.pid")):
+        pass
+    import time; time.sleep(0.3)
+    answer = f"{p.pid},{open(os.path.join(root, 'chain.pid')).read()}"
+else:
+    p = subprocess.Popen(["/bin/sleep", "300"], cwd=root, start_new_session=(mode == "session"),
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    answer = str(p.pid)
+print(json.dumps({"answer": answer, "tools": [], "steps": 1, "ended_by": "submit"}))
 '''
 
 
@@ -137,6 +149,8 @@ class NoProcessOutlivesItsItemTest(Case):
             row = battery._one("x", item, "instance", self.root, {"version": "v1"}, None, lambda: None, "g")
         self.assertLess(time.monotonic() - t0, 60)                 # never waits for what the exam left running
         self.assertEqual(row["status"], "scored", row)
+        if mode == "chain":
+            return row["answer"]
         pid = int(row["answer"])
         self.addCleanup(lambda: alive(pid) and os.kill(pid, signal.SIGKILL))
         return pid
@@ -153,6 +167,15 @@ class NoProcessOutlivesItsItemTest(Case):
 
     def test_a_child_in_its_own_session_working_in_the_copy_is_killed(self):
         self.assertTrue(self.gone(self.run_item("session")))
+
+    def test_a_chain_whose_parent_left_the_copy_is_killed_whole(self):
+        """Codex, final review of the integration: kill.end_left_in's orphan rule missed a parent in a session of its
+        own that chdir'ed out of the copy (not in the folder) while its child stayed in it (its parent alive)."""
+        parent, child = (int(p) for p in self.run_item("chain").split(","))
+        for pid in (parent, child):
+            self.addCleanup(lambda pid=pid: alive(pid) and os.kill(pid, signal.SIGKILL))
+        self.assertTrue(self.gone(child), "the child working in the copy outlived its item")
+        self.assertTrue(self.gone(parent), "its parent, out of the copy, outlived the item")
 
 
 if __name__ == "__main__":

@@ -642,7 +642,7 @@ def _one(name: str, item: dict, arm: str, real: Path, e: dict, until: float | No
     finally:
         if root is not None:
             from . import kill
-            kill.end_left_in(root)
+            kill.end_left_in(root, orphans_only=False)   # its own random folder: nobody else works there
             shutil.rmtree(root.parent, ignore_errors=True)   # its holder: never used again
 
 

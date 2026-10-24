@@ -94,6 +94,12 @@
     instance runs; any other link is left out. The supervisor reads no link while copying; the copy's folders are
     made and its files created through descriptors (`O_EXCL`, `O_NOFOLLOW`), so a folder of the copy swapped for a
     link is refused, never written through.
+  - **Code** (`shaft/`, `tests/`, `plugins/`, `.python-version`, `requirements.txt`, as the gate sees them): a link
+    is an entry of the gate's snapshot (its target, never what it points to), so one added, removed or retargeted is
+    a change, and a change with a link anywhere in a code path fails the gate untested, whatever it points to (the
+    template has none). The gate's restore takes away a link standing where an approved folder or file belongs (the
+    link itself) and makes the folder again through descriptors; every path it put back is read again, and if any
+    is not as approved the run is refused ("run refused", an alert on the panel), so nothing runs on it.
 
   Its keys, git and logs (`secrets/`, `.git`, `logs/`) are never sent out by any spelling: the volume is
   case-insensitive (`Secrets/` is `secrets/`), so the supervisor compares the folder itself (device and inode) and
@@ -117,8 +123,10 @@
   looks, on every way out — a normal end, a failure, a timeout, Ctrl-C or the supervisor being stopped; the same
   holds for each `run` command, so nothing it puts in the background outlives it. A process that left the group
   (`setsid`) is found by its working folder: once its parent is gone, anything still working in the instance's
-  folder is ended too (your own shells there keep their parent and are spared). One that also left the folder is
-  not found; the sandbox is the boundary then (it can write only the instance's folder, and what it writes there
+  folder is ended too (your own shells there keep their parent and are spared). A battery exam's copy, a random
+  folder nobody else works in, is swept harder: every process working in it, everything below each, and each one's
+  ancestors while they share its session or process group (a parent that left the copy while its child stayed). One
+  that left the instance's folder is not found; the sandbox is the boundary then (it can write only the instance's folder, and what it writes there
   later is caught as below). Stopping a service that starts runs (the API, the scheduler, a terminal
   conversation) ends its runs' processes first. **Approved code**: after every settlement the supervisor records
   the code it approved (`.supervisor/baselines/<name>.json`: the last commit, plus what the gate passed that git

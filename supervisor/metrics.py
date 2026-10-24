@@ -1294,7 +1294,10 @@ def restore_change(name: str, entry: dict) -> str | None:
                 "change")
     before = {rel: b for rel in files if (b := _blob(root, commit + "^", rel)) is not None}
     current = {rel: b for rel, b in now.items() if b is not None}
-    gate.restore(root, before, files)
+    try:
+        gate.restore(root, before, files)
+    except gate.RestoreFailed as e:   # kept on probation; what is left differs from the approved code: gated next run
+        return f"the restore could not be completed: {e}"
     ok, out = gate.run_tests(root, HOME)
     if not ok:
         gate.restore(root, current, files)

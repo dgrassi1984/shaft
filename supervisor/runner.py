@@ -490,6 +490,7 @@ def _reconcile(name: str, root: Path) -> None:
         restore = baseline.unapproved(name, root, now)
         if restore is None:                                    # no record yet: the first run after the upgrade
             restore = _uncommitted_code(root)
+        restore.update({p: None for p in gate.links(now)})     # a link is never approved code: it goes
     except RunRefused:
         raise
     except TreeTooBig as e:                                    # never an empty or partial answer (core.Budget)
@@ -900,6 +901,8 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
     except TreeTooBig as e:
         after, too_big = None, str(e)
     touched = gate.changed(before["code"], after) if after is not None else []
+    linked = gate.links(after) if after is not None else []
+    touched = sorted(set(touched) | set(linked))      # a link in a code path is a change whatever it was before
     configured = sorted({w["key"] for w in config_writes}) if after is not None else []
     kept: list[str] = []
     approved = after          # what the gate judged: the next run's approved code; None: no record (a failed gate)
@@ -909,14 +912,18 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
             raise RunRefused(f"its code is too big to check ({too_big}); nothing was put back")
         _too_big_to_check(name, root, before["code"], config_writes, too_big)
     elif touched or configured:
-        ok, test_log = gate.run_tests(root, HOME)
+        if linked:   # fail closed, untested: code paths hold no links (gate.Link)
+            ok, test_log = False, ("== links ==\nA link where code belongs is never kept, whatever it points to: "
+                                   + ", ".join(f"{p} -> {after[p].target}" for p in linked))
+        else:
+            ok, test_log = gate.run_tests(root, HOME)
         if ok:
             kept = touched + (["config.env"] if configured else [])
             log(f"{name}: code change passed tests: {touched} config: {configured}")
         else:
             approved = None   # a failed gate records nothing: the record before it is what was put back
             saved = _keep_rejected(name, rejected_to, after, touched) if rejected_to else ""
-            gate.restore(root, before["code"], touched)
+            _put_back(name, root, before["code"], touched)
             back = gate.revert_config(root, list(config_writes))
             undone = touched + ([f"config.env ({', '.join(back)})"] if back else [])
             names = gate.failing_tests(test_log)
@@ -978,11 +985,27 @@ def _keep_rejected(name: str, folder: Path, code: dict[str, bytes], paths: list[
         for p in there:
             target = folder / p
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(code[p])
+            if isinstance(code[p], gate.Link):   # a link: what it pointed to, as text, never the link
+                target.with_name(target.name + ".link").write_text(code[p].target + "\n")
+            else:
+                target.write_bytes(code[p])
     except OSError as e:                     # not kept: then not put back either, so nothing is lost
         raise RunRefused(f"the code the gate rejected could not be kept in {folder} ({e}); it was not put back: "
                          f"{', '.join(there)}") from None
     return str(folder) if there else ""
+
+
+def _put_back(name: str, root: Path, approved: dict, paths: list[str]) -> None:
+    """gate.restore, then a fresh read of every path it put back: nothing runs on code that is not the approved code
+    (RunRefused, logged as "run refused": an alert on the panel). Codex's final review: restore gave up silently on
+    a folder replaced by a link, nothing checked, and the next run launched what the link pointed to."""
+    try:
+        gate.restore(root, approved, paths)
+        bad = gate.unrestored(root, approved, paths)
+    except gate.RestoreFailed as e:
+        raise RunRefused(f"its code could not be put back as approved: {e}") from None
+    if bad:
+        raise RunRefused(f"its code is not back as approved after a restore: {', '.join(bad)}")
 
 
 def _record_approved(name: str, root: Path, code: dict[str, bytes]) -> None:
@@ -1000,7 +1023,7 @@ def _too_big_to_check(name: str, root: Path, before: dict | None, config_writes,
     none is kept — the files it began with go back, its set_config lines are undone, and the instance is told. What
     it added stays on disk, uncommitted, until its code is small enough to check again."""
     if before:
-        gate.restore(root, before, sorted(before))
+        _put_back(name, root, before, sorted(before))
     back = gate.revert_config(root, list(config_writes))
     log(f"{name}: code too big to check, nothing of this run's code kept: {why}")
     journal_note(root, "Supervisor: code change not checked",

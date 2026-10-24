@@ -281,7 +281,10 @@ class HelpersTest(Case):
         (self.root / "plugins" / "p" / "leak.py").symlink_to(self.secret)
         (self.root / "tests").symlink_to(self.outside, target_is_directory=True)
         snap = gate.snapshot(self.root)
-        self.assertEqual(snap, {"plugins/p/main.py": b"x = 1\n"})
+        # Nothing read through a link; each link an entry of its own, so the gate sees it (Codex, final review)
+        self.assertEqual(snap, {"plugins/p/main.py": b"x = 1\n", "plugins/p/leak.py": gate.Link(str(self.secret)),
+                                "tests": gate.Link(str(self.outside))})
+        self.assertEqual(gate.links(snap), ["plugins/p/leak.py", "tests"])
 
 
 if __name__ == "__main__":

@@ -250,6 +250,47 @@ class WithNoFollowTest(RunTransactionCase):
         self.assertFalse((self.project / ".supervisor" / "baselines" / "kant.json").exists())
 
 
+class LinkedCodeTest(RunTransactionCase):
+    """Codex's final review of the integration: gate.snapshot passed over a code folder replaced by a link (read_tree
+    and read_beneath raised UnsafePath, swallowed), restore could not get past the linked parent (swallowed too), and
+    nothing checked the result: `python -m shaft` then ran the linked package, never gated."""
+
+    REFUSED = 75
+    SWAP = ("import os, pathlib, shutil\npathlib.Path('plugins/evil').mkdir()\n"
+            "pathlib.Path('plugins/evil/__init__.py').write_text('EVIL = 1\\n')\n"
+            "shutil.rmtree('shaft')\nos.symlink('plugins/evil', 'shaft')\n")
+    CHECK = "import os, pathlib\npathlib.Path('.tmp/ran').write_text(str(os.path.islink('shaft')))\n"
+
+    def assert_put_back(self):
+        self.assertFalse((self.root / "shaft").is_symlink(), "the linked package stayed in shaft/'s place")
+        self.assertEqual((self.root / "shaft" / "__init__.py").read_text(), "")
+        self.assertFalse((self.root / "plugins" / "evil" / "__init__.py").exists())
+        self.assertNotIn("120000", git(self.root, "ls-tree", "HEAD", "shaft"), "a link was committed as code")
+
+    def test_shaft_swapped_for_a_link_in_a_run_is_a_failed_gate_and_put_back(self):
+        self.assertEqual(self.cycle(self.SWAP), 0)
+        self.assert_put_back()
+        self.assertIn("link", (self.root / "memory" / "journal.md").read_text())
+        self.assertEqual(self.cycle(self.CHECK), 0)
+        self.assertEqual((self.root / ".tmp" / "ran").read_text(), "False", "the next run launched the linked code")
+
+    def test_shaft_swapped_for_a_link_by_a_run_that_died_is_put_back_before_the_next_launch(self):
+        (self.root / "plugins" / "evil").mkdir()
+        (self.root / "plugins" / "evil" / "__init__.py").write_text("EVIL = 1\n")
+        shutil.rmtree(self.root / "shaft")
+        os.symlink("plugins/evil", self.root / "shaft")
+        self.assertEqual(self.cycle(self.CHECK), 0)
+        self.assertEqual((self.root / ".tmp" / "ran").read_text(), "False", "the run launched the linked code")
+        self.assert_put_back()
+
+    def test_a_restore_that_does_not_complete_refuses_the_run(self):
+        (self.root / "plugins" / "text_stats" / "main.py").write_text(UNGATED)   # left by a run that died
+        with mock.patch.object(gate, "restore"):                                # it gives up without a word
+            self.assertEqual(self.cycle(self.CHECK), self.REFUSED)
+        self.assertFalse((self.root / ".tmp" / "ran").exists(), "a run launched on code that was not put back")
+        self.assertIn("run refused", self.logs())
+
+
 class StrayProcessTest(unittest.TestCase):
     """One stray killer (kill.end_left_in) for an instance's folder and an exam's copy."""
 

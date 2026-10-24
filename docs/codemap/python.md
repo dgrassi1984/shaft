@@ -31,7 +31,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/embed_server.py` | `Embedder` | `make_handler`, `main` |
 | `supervisor/evolution.py` | — | `drift`, `distinct`, `breed` |
 | `supervisor/finetune.py` | — | `backend`, `build_dataset`, `cmd_dataset`, `overfit`, `evaluate`, `cmd_evaluate`, `cmd_finetune` |
-| `supervisor/gate.py` | `StageTimedOut` | `snapshot`, `changed`, `restore`, `config_without`, `revert_config`, `committed_tree`, `stop_group`, `run_tests`, `failing_tests`, `keep_log`, `run_instance_tests` |
+| `supervisor/gate.py` | `Link`, `RestoreFailed`, `StageTimedOut` | `links`, `snapshot`, `changed`, `restore`, `unrestored`, `config_without`, `revert_config`, `committed_tree`, `stop_group`, `run_tests`, `failing_tests`, `keep_log`, `run_instance_tests` |
 | `supervisor/google.py` | `AccountError`, `ApiError`, `Account` | `accounts_dir`, `old_accounts_dir`, `unmigrated`, `account`, `accounts`, `scopes`, `scope_text`, `login_command`, `migrate`, `client_keys`, `refresh`, `operator_addresses`, `login`, `instance_key_login`, `consent` |
 | `supervisor/jobs.py` | — | `entry`, `jobs_off`, `set_jobs_off`, `uncommitted`, `declared`, `report_problems`, `interval`, `due`, `run`, `request_wake`, `take_wake`, `pending_wakes`, `tick`, `describe` |
 | `supervisor/judge.py` | `JudgeError` | `same_model`, `pick`, `rotation`, `available`, `ask`, `second_available`, `ask_second` |
@@ -53,7 +53,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/talk_input.py` | `Draft` | `enter_sequences`, `other_modified_keys` |
 | `supervisor/talk_stats.py` | `Stats` | — |
 | `supervisor/talk_ui.py` | `Client` | `main` |
-| `supervisor/telegram.py` | `TelegramError`, `Chat` | `load`, `save`, `update`, `token_key`, `tokens`, `call`, `send`, `send_file`, `download`, `incoming_files`, `split_markdown`, `to_html`, `new_pairing_code`, `try_pair`, `paired_id`, `reachable`, `remember_bot`, `ask_api`, `interject_api`, `answer_question`, `handle_update`, `poll`, `forward_new`, `serve`, `command` |
+| `supervisor/telegram.py` | `TelegramError`, `Chat` | `load`, `save`, `update`, `token_key`, `tokens`, `permanent`, `call`, `send`, `send_file`, `download`, `incoming_files`, `split_markdown`, `to_html`, `new_pairing_code`, `try_pair`, `paired_id`, `reachable`, `remember_bot`, `ask_api`, `interject_api`, `answer_question`, `handle_update`, `poll`, `forward_new`, `serve`, `command` |
 | `supervisor/tests/fakellm.py` | `FakeLLM` | — |
 | `supervisor/tests/mindfix.py` | — | `commit_at`, `store_state` |
 | `supervisor/tests/test_api.py` | `KeepingStringIO`, `FakeProc`, `ApiTest`, `InterjectTest`, `LongReplyTest`, `InboxDoorbellTest`, `ConversationIdTest`, `StreamHeardTest` | `fake_run_agent` |
@@ -110,7 +110,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_prompt_cache.py` | `PricingTest`, `InstanceLoopTest`, `CoderTest` | — |
 | `supervisor/tests/test_pyenv.py` | `ChoiceTest`, `SandboxTest`, `GateTest`, `TemplateTest` | `make_venv` |
 | `supervisor/tests/test_recap.py` | `RecapCase`, `Context`, `Ask`, `Store`, `Costs`, `Panel` | — |
-| `supervisor/tests/test_run_transaction.py` | `RunTransactionCase`, `UnsettledCodeTest`, `ApprovedCodeTest`, `WithNoFollowTest`, `StrayProcessTest`, `RunOutlivesItselfTest`, `TerminalConversationTest`, `RunCommandOutlivesItselfTest` | `git` |
+| `supervisor/tests/test_run_transaction.py` | `RunTransactionCase`, `UnsettledCodeTest`, `ApprovedCodeTest`, `WithNoFollowTest`, `LinkedCodeTest`, `StrayProcessTest`, `RunOutlivesItselfTest`, `TerminalConversationTest`, `RunCommandOutlivesItselfTest` | `git` |
 | `supervisor/tests/test_sandbox_temp.py` | `UserFolderTest` | `tiny_pdf` |
 | `supervisor/tests/test_selfhosted.py` | `HostedServerTest`, `FallbackTest`, `RoutingTest` | `closed_port` |
 | `supervisor/tests/test_settings.py` | `FileCase`, `PrecedenceTest`, `SetTest`, `NotLiveTest`, `RegistryTest`, `DocumentedValuesTest` | — |
