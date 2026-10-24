@@ -51,7 +51,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .core import (API_TALKS as TALKS, IDLE_MINUTES, SUP_DIR, UnsafePath, instance_names, instance_root, knob, log,
-                   port, safe_write, secrets_env, whole)
+                   port, safe_write, secrets_env, unlink_beneath, whole)
 from .runner import Reply, busy_with, request_yield, run_agent, spawn_recover
 
 PORT, _ = knob(
@@ -167,7 +167,7 @@ class Live:
         entry = {"model": model, "talk_id": talk_id, "held": [], "started": False}
         with self.lock:
             self.replies[talk_id] = entry               # a second request in the same talk: the newest takes them
-            (instance_root(model) / self._rel(talk_id)).unlink(missing_ok=True)   # a crashed run's leftovers
+            unlink_beneath(instance_root(model), self._rel(talk_id))   # a crashed run's leftovers (no link followed)
         return entry
 
     def _write(self, entry: dict, text: str) -> None:
@@ -195,7 +195,7 @@ class Live:
         with self.lock:
             if self.replies.get(entry["talk_id"]) is entry:
                 del self.replies[entry["talk_id"]]
-            (instance_root(entry["model"]) / self._rel(entry["talk_id"])).unlink(missing_ok=True)
+            unlink_beneath(instance_root(entry["model"]), self._rel(entry["talk_id"]))
 
 
 def _chunk(cid: str, model: str, delta: dict, finish: str | None = None, **extra) -> bytes:

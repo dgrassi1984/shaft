@@ -38,7 +38,7 @@
   you (no daily limit unless `SHAFT_OPERATOR_PER_DAY`; a macOS notification, and a push on the web UI or Telegram,
   whichever reaches you for that instance: integrations.md), with
   files attached from the sender's folder (up to 10, 20 MB each, 50 MB in all; never `secrets/`, `.git/`, `logs/` or
-  anything a link leads to outside the folder); another instance finds them in its `attachments/` (not
+  a file reached through a link); another instance finds them in its `attachments/` (not
   committed), the operator's copy is in `.supervisor/operator-inbox/attachments/`; and **`delegate_coding`**: an
   Opus-class model (`SHAFT_CODER_MODEL`, default `claude-opus-5-5`) reads the instance's code
   read-only and writes the change; the supervisor tests it on a scratch copy and applies it only if
@@ -73,8 +73,15 @@
   recorded, so the gate can tell its lines from yours; you may edit the file at any time, even mid-run.
   Per-run token, call budget
   (`SHAFT_BROKER_MAX_CALLS`, default 60), everything logged in `.supervisor/broker.log`.
+- **No link followed in an instance's folder**: the supervisor runs outside the sandbox, and an instance can put a
+  link anywhere in its own folder. So every file the supervisor reads there — to check it, copy it, show it to you
+  or send it to a judge, the coder or a vision model — and every file it writes, appends to or removes there is
+  opened one folder at a time through descriptors, none followed if it is a link (`supervisor/core.py`:
+  `open_beneath`, `safe_read`, `safe_write`, `walk_beneath`, `copy_beneath`); a pipe in a file's place is refused,
+  never waited on. To a reader a link is no file.
 - **Append-only journal**: if a run rewrote history instead of appending, the journal is
-  restored and the rewrite kept aside.
+  restored and the rewrite kept aside. A journal replaced by a link (or anything that is not a file) is moved aside
+  unread and the journal restored.
 - **Slow core**: the core personality may change at most every `SHAFT_CORE_MIN_HOURS` (72).
 - **Test gate**: if a run changed the instance's code, plugins or (through `set_config`) config, the
   invariant tests and plugin checks run; failure restores the old code and the config lines the instance

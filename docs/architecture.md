@@ -61,8 +61,12 @@ against the supervisor's record), graded effectiveness first. Each instance is c
 the template on the same model with an empty mind. It runs only at night, 01:00 until 10 minutes before
 the sleep, every `SHAFT_BATTERY_EVERY_DAYS` (5) nights, for every instance not turned off with
 `shaft battery off <name>`. it stops when the window closes or a conversation
-starts, and restores the instance's files after every item. Items live in `.supervisor/battery/items/v1/`
-(never in git: an instance could read the repo with its GitHub key), backed up to
+starts. Each item runs in a copy of the instance's folder (`.supervisor/battery/exam/<name>/`: its code, plugins,
+skills, mind and config, copied without following a link; never `.git`, `secrets/`, its browser profile or mail),
+deleted after the item (as is the control, made afresh for each item), so the real folder is never written — a
+message delivered meanwhile stays in its inbox,
+and a battery killed mid-item leaves at most a stale copy, which the next run removes. Items live in
+`.supervisor/battery/items/v1/` (never in git: an instance could read the repo with its GitHub key), backed up to
 `~/Library/Application Support/SHAFT/battery-backup/`; every result carries the item set's sha256, model
 and judge, and results from different eras are never compared. Results: `.supervisor/battery/results/`,
 `.supervisor/evals/battery-*.json`, and a section of `self/stats.md`.

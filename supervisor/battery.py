@@ -16,10 +16,10 @@ Held out: items live in .supervisor/battery/items/<version>/ (gitignored, never 
 a GitHub token, so anything in git is readable to it) and are backed up to
 ~/Library/Application Support/SHAFT/battery-backup/. Every result stores the item set's sha256.
 
-Isolation, whatever the instance's own `exam` code does: its files (tracked and untracked, not ignored)
-are snapshotted before each item and restored after; the broker logs to its own file (so `record`
-never shows battery calls), cannot send messages or delegate coding, and bills cloud spend as
-<name>-battery. A conversation interrupts the battery at once; so does the end of the night window.
+Isolation, whatever the instance's own `exam` code does: each item runs in a copy of the instance's folder
+(make_exam_copy), never in the folder itself, and the copy is deleted after the item; the broker logs to its
+own file (so `record` never shows battery calls), cannot send messages or delegate coding, and bills cloud
+spend as <name>-battery. A conversation interrupts the battery at once; so does the end of the night window.
 """
 from __future__ import annotations
 
@@ -37,8 +37,9 @@ from pathlib import Path
 
 from . import judge, localmodel, metrics, sandbox
 from .broker import CALENDAR_TOOLS, MAIL_TOOLS, Broker
-from .core import (BROKER_MAX_CALLS, EMBED_PORT, HOME, INSTANCES, LLM_PORTS, PROJECT, PYTHON, SUP_DIR, config_values,
-                   git_wt, instance_config, instance_root, knob, positive_int, whole, model_name, log, secrets_env)
+from .core import (BROKER_MAX_CALLS, EMBED_PORT, HOME, INSTANCES, LLM_PORTS, PROJECT, PYTHON, SECRETS_DIR, SUP_DIR,
+                   UnsafePath, config_values, copy_beneath, instance_config, instance_root, knob, positive_int, whole,
+                   model_name, log, safe_mkdir, safe_read, safe_read_bytes, safe_write, secrets_env, unlink_beneath)
 
 VERSION, _ = knob(
     "SHAFT_BATTERY_VERSION", "v1", model_name, "the battery item set in use (.supervisor/battery/items/<version>)",
@@ -138,56 +139,40 @@ def backup() -> Path:
     return dst
 
 
-# -- the instance's files: snapshot and restore ----------------------------------------
-def _files(root: Path) -> list[str]:
-    """Every file an exam could change: what git lists (code, skills, untracked files not ignored) and, listed
-    from disk, every file under the mind paths — they are not in the project's git (supervisor/mind.py) and the
-    instance's .gitignore hides them, so git alone would leave an exam's memory edits in the real folder."""
-    from .core import DOCS_COPY, MIND_PATHS
-    out = git_wt(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard").stdout
-    found = {f for f in out.split("\0") if f and Path(f).parts[0] != DOCS_COPY}   # the supervisor's copy
-    for top in MIND_PATHS:   # links are left alone: never followed, and an instance's own link is never removed
-        if (root / top).is_symlink():
-            continue
-        for dirpath, _, filenames in os.walk(root / top):
-            found.update((Path(dirpath) / f).relative_to(root).as_posix() for f in filenames
-                         if not (Path(dirpath) / f).is_symlink())
-    return sorted(found)
+# -- the folders an exam runs in: a copy of the instance, a control -----------------------
+# Left out of an instance's copy: .git (the copy is no worktree, so nothing an exam does reaches its branch; its
+# history is read in the real one, ExamBroker), its keys (secrets/: the broker reads them in the real folder, the
+# sandbox never), its Python environment (.venv/, .uv/: linked, read in place and read-only, as in a trial replay),
+# its browser profile (the sessions of its own accounts), the operator's mail it downloaded (an exam gets no mail),
+# its jobs' caches, logs and run files (.tmp/, but for its memory index: a cache keyed by chunk hash).
+EXAM_SKIP = (".git", SECRETS_DIR, ".venv", ".uv", ".browser", "mail", ".jobs", "logs", ".tmp")
+EXAM_KEEP = (".tmp", ".tmp/memory-index.json")
 
 
-def snapshot(root: Path) -> dict[str, bytes]:
-    snap = {}
-    for rel in _files(root):
-        p = root / rel
-        if p.is_file() and not p.is_symlink():
-            snap[rel] = p.read_bytes()
-    return snap
+def exam_dir(name: str) -> Path:
+    return base() / "exam" / name
 
 
-def restore(root: Path, before: dict[str, bytes]) -> list[str]:
-    """Put every file back as it was; remove files the item created. Returns what was undone."""
-    undone = []
-    for rel in _files(root):
-        p = root / rel
-        if rel not in before:
-            if p.is_file() or p.is_symlink():
-                p.unlink()
-                undone.append(f"+{rel}")
-        elif p.is_file() and p.read_bytes() != before[rel]:
-            p.unlink()
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_bytes(before[rel])
-            undone.append(f"~{rel}")
-    for rel, data in before.items():
-        p = root / rel
-        if not p.exists():
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_bytes(data)
-            undone.append(f"-{rel}")
-    return undone
+def make_exam_copy(name: str, root: Path) -> Path:
+    """The instance's folder for one exam: its code, plugins, skills, mind, config and docs as they are now, copied
+    without following any link (core.copy_beneath). The exam never runs in the real folder, so nothing it does is
+    left there and nothing there is undone. Until 2026-10-24 it did, between a snapshot held in memory and a restore
+    that followed links planted in the folder (Codex review B3), deleted every file the snapshot lacked — a message
+    delivered to inbox/ mid-exam included (B6) — and never ran when the battery was killed mid-item, which left the
+    exam's edits in the instance (B7). The copy is deleted after its item; one left by a run that died is replaced
+    here, and removed when the next run starts."""
+    from .trial import link_env
+    dest = exam_dir(name)
+    shutil.rmtree(dest, ignore_errors=True)
+
+    def skip(rel: str) -> bool:
+        parts = rel.split("/")
+        return "__pycache__" in parts or (parts[0] in EXAM_SKIP and rel not in EXAM_KEEP)
+    copy_beneath(root, dest, skip)
+    link_env(dest, root)
+    return dest
 
 
-# -- a control: the template on the same model, with an empty mind ----------------------
 def make_control(name: str) -> Path:
     dest = base() / "control" / name
     shutil.rmtree(dest, ignore_errors=True)
@@ -195,21 +180,40 @@ def make_control(name: str) -> Path:
     archive = subprocess.run(["git", "-C", str(PROJECT), "archive", "--format=tar", CONTROL_REF],
                              capture_output=True, check=True)
     subprocess.run(["tar", "-x", "-C", str(dest)], input=archive.stdout, check=True)
-    shutil.copy2(INSTANCES / name / "config.env", dest / "config.env")   # same model and settings
+    (dest / "config.env").write_bytes(safe_read_bytes(INSTANCES / name, "config.env"))   # same model and settings
     for d in ("self", "memory", "notes", "inbox"):
         (dest / d).mkdir(exist_ok=True)
     return dest
 
 
+class ExamBroker(Broker):
+    """The broker of an exam in the instance's copy: its run works in the copy, while its history (`history`) and
+    the names of its keys are read in the real folder, as they were when exams ran there — the copy has neither .git
+    nor secrets/. Writing a key is off in exams (EXAM_OFF), and the battery's proxy refuses every request."""
+
+    def __init__(self, *args, real: Path, **kw):
+        super().__init__(*args, **kw)
+        self.real = Path(real).resolve()
+
+    def _git_root(self) -> Path:
+        return self.real
+
+    def _keys_root(self) -> Path:
+        return self.real
+
+
 # -- one exam --------------------------------------------------------------------------
-def _exam(label: str, root: Path, broker: Broker, task: dict, until: float | None, interrupt) -> dict:
-    """Run the agent's `exam` command on one task in its sandbox. Raises Interrupted."""
-    if localmodel.is_service(config_values((root / "config.env").read_text()).get("LLM_BASE_URL", "")):
+def _exam(label: str, root: Path, broker: Broker, task: dict, until: float | None, interrupt,
+          real: Path | None = None) -> dict:
+    """Run the agent's `exam` command on one task in its sandbox, in `root` (a copy of the instance `real`, or a
+    control). Raises Interrupted. A request to yield the model made to the instance (.tmp/yield, runner.request_yield)
+    is passed on to the copy, where the exam's code looks for it."""
+    if localmodel.is_service(config_values(safe_read(root, "config.env", "")).get("LLM_BASE_URL", "")):
         localmodel.ensure(f"{label}'s exam")   # it runs only while used (localmodel.py)
     prof = base() / f"{label}.sb"
     prof.write_text(sandbox.profile(root, HOME, LLM_PORTS + [EMBED_PORT, broker.port, broker.egress.port],
                                     env_root=broker.env_root))   # its own Python environment, read-only
-    (root / ".tmp").mkdir(exist_ok=True)
+    safe_mkdir(root, ".tmp")
     deadline = time.time() + ITEM_TIMEOUT_S
     if until:
         deadline = min(deadline, until)
@@ -232,12 +236,19 @@ def _exam(label: str, root: Path, broker: Broker, task: dict, until: float | Non
     for r in readers:
         r.start()
     try:
+        yielded = False
         while proc.poll() is None:
             why = interrupt()
             if why or time.time() > deadline + 30:
                 os.killpg(proc.pid, signal.SIGKILL)
                 proc.wait()
                 raise Interrupted(why or f"item timed out ({ITEM_TIMEOUT_S}s or the window's end)")
+            if real and not yielded and (real / ".tmp" / "yield").exists():
+                yielded = True
+                try:
+                    safe_write(root, ".tmp/yield", datetime.now().isoformat(timespec="seconds"))
+                except UnsafePath as e:   # the exam put a link there: it does not get the request
+                    log(f"{label}: could not pass the request to yield on to its exam: {e}")
             time.sleep(1)
     finally:
         for r in readers:
@@ -285,14 +296,18 @@ def _tool_log(res: dict, chars: int = 12000) -> str:
     return text if len(text) <= chars else text[:chars] + "\n[... cut]"
 
 
-def run_hidden_tests(item: dict, scratch: Path) -> dict:
-    """The item's hidden tests against what the exam left in its scratch folder, in a no-network sandbox
-    outside the instance. Returns {passed, total, output}."""
+def run_hidden_tests(item: dict, root: Path, scratch: str) -> dict:
+    """The item's hidden tests against what the exam left in its scratch folder (root/scratch), in a no-network
+    sandbox outside the instance. Returns {passed, total, output}. The scratch folder is copied without following
+    a link (core.copy_beneath): the exam wrote it, and a file reached through a link would hand the tests — and their
+    output, which the judge reads — any file the supervisor can read."""
     with tempfile.TemporaryDirectory(prefix="shaft-battery-") as tmp:
         work = Path(tmp) / "work"
-        if scratch.is_dir():
-            shutil.copytree(scratch, work, ignore=shutil.ignore_patterns("__pycache__", ".*"))
-        else:
+        skip = lambda rel: any(p == "__pycache__" or p.startswith(".") for p in rel.split("/"))   # noqa: E731
+        try:
+            copy_beneath(root, work, skip, rel=scratch)
+        except (FileNotFoundError, UnsafePath):   # no scratch folder, or one reached through a link
+            shutil.rmtree(work, ignore_errors=True)
             work.mkdir()
         hidden = Path(item["dir"]) / "hidden"
         for p in sorted(hidden.glob("*.py")):
@@ -400,10 +415,8 @@ RECALL_SCHEMA = {
 def recall_candidates(name: str, now: datetime | None = None) -> list[tuple[str, str]]:
     """(stamp, text) of journal entries old enough and already out of the instance's context window."""
     now = now or datetime.now()
-    journal = INSTANCES / name / "memory" / "journal.md"
-    if not journal.exists():
-        return []
-    entries = [b.strip() for b in journal.read_text().split("\n---\n") if b.strip().startswith("## ")]
+    text = safe_read(INSTANCES / name, "memory/journal.md", "", errors="replace")   # sent to a judge: never via a link
+    entries = [b.strip() for b in text.split("\n---\n") if b.strip().startswith("## ")]
     window = int(instance_config(name).get("CONTEXT_JOURNAL_CHARS") or 16000)
     shown, used = set(), 0
     for e in reversed(entries):        # what recent_journal shows the instance (newest that fit)
@@ -535,22 +548,21 @@ def run(name: str, until: float | None = None, only: list[str] | None = None, co
         return 0
     started = datetime.now().isoformat(timespec="seconds")
     summary = {"name": name, "started": started, **e, "items": []}
-    ctrl_root = None
     scored = 0
     interrupt = _interrupt_check(name, until)
+    for left in (exam_dir(name), base() / "control" / name):   # a run that died left its folders behind
+        shutil.rmtree(left, ignore_errors=True)
     try:
-        if (control or control_only) and any(it["category"] in CONTROLLED for it in items):
-            ctrl_root = make_control(name)
         for item in items:
-            arms = ([] if control_only else [("instance", root)]) + \
-                ([("control", ctrl_root)] if ctrl_root and item["category"] in CONTROLLED else [])
+            arms = ([] if control_only else ["instance"]) + \
+                (["control"] if (control or control_only) and item["category"] in CONTROLLED else [])
             # One grader for both arms of an item, so instance and control are compared under the same judge.
             grader = judge.pick(exclude=[instance_config(name).get("LLM_MODEL")])
-            for arm, arm_root in arms:
+            for arm in arms:
                 why = interrupt()
                 if why:
                     raise Interrupted(why)
-                row = _one(name, item, arm, arm_root, e, until, interrupt, grader)
+                row = _one(name, item, arm, root, e, until, interrupt, grader)
                 summary["items"].append({k: row.get(k) for k in ("item", "arm", "status", "score")})
                 scored += row["status"] == "scored"
     except Interrupted as stop:
@@ -559,9 +571,7 @@ def run(name: str, until: float | None = None, only: list[str] | None = None, co
     finally:
         held.release()   # a no-op when control_only never took it
         if not control_only:
-            (root / ".tmp" / "yield").unlink(missing_ok=True)   # a conversation's request to us, not to the next cycle
-        if ctrl_root:
-            shutil.rmtree(ctrl_root, ignore_errors=True)
+            unlink_beneath(root, ".tmp/yield")   # a conversation's request to us, not to the next cycle
         summary["ended"] = datetime.now().isoformat(timespec="seconds")
         out = SUP_DIR / "evals" / f"battery-{name}{'-control' if control_only else ''}-{datetime.now():%Y%m%d-%H%M%S}.json"
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -574,39 +584,42 @@ def run(name: str, until: float | None = None, only: list[str] | None = None, co
     return scored
 
 
-def _one(name: str, item: dict, arm: str, root: Path, e: dict, until: float | None, interrupt,
+def _one(name: str, item: dict, arm: str, real: Path, e: dict, until: float | None, interrupt,
          grader: str | None = None) -> dict:
+    """One item for one arm, in a folder made for it and deleted after it: a copy of the instance (`real`, never
+    written), or a fresh control."""
     label = name if arm == "instance" else f"{name}-control"
+    root = make_exam_copy(name, real) if arm == "instance" else make_control(name)
+    try:
+        return _one_in(name, item, arm, root, real, label, e, until, interrupt, grader)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def _one_in(name: str, item: dict, arm: str, root: Path, real: Path, label: str, e: dict, until: float | None,
+            interrupt, grader: str | None) -> dict:
     scratch_rel = f".tmp/battery/{item['id'].replace('/', '-')}"
-    scratch = root / scratch_rel
-    shutil.rmtree(scratch, ignore_errors=True)
     if item.get("dir") and (Path(item["dir"]) / "fixture").is_dir():
-        shutil.copytree(Path(item["dir"]) / "fixture", scratch)
+        shutil.copytree(Path(item["dir"]) / "fixture", root / scratch_rel)   # a new folder: nothing has run in it yet
     task = {"item": item["id"], "prompt": item["prompt"], "max_steps": item.get("max_steps", 12), "scratch": scratch_rel}
-    broker = Broker(label, PROJECT, secrets_env(), base() / "broker.log", max_calls=BROKER_MAX_CALLS,
-                    root=root, usage_name=f"{label}-battery", network=False)   # exams stay offline, as they always were
+    kw = dict(max_calls=BROKER_MAX_CALLS, root=root, usage_name=f"{label}-battery", network=False)   # offline, as ever
+    broker = (ExamBroker(label, PROJECT, secrets_env(), base() / "broker.log", real=real, **kw) if arm == "instance"
+              else Broker(label, PROJECT, secrets_env(), base() / "broker.log", **kw))
     broker.disabled |= EXAM_OFF
     broker.url = broker.start()
-    before = snapshot(root) if arm == "instance" else None
     row = {"item": item["id"], "category": item["category"], "arm": arm, "at": datetime.now().isoformat(timespec="seconds"),
            **e}
     t0 = time.monotonic()
     res: dict = {}
     try:
-        res = _exam(label, root, broker, task, until, interrupt)
-        tests = run_hidden_tests(item, scratch) if item["category"] == "coding" else None
+        res = _exam(label, root, broker, task, until, interrupt, real=real if arm == "instance" else None)
+        tests = run_hidden_tests(item, root, scratch_rel) if item["category"] == "coding" else None
     except Interrupted as stop:
         row.update(status="interrupted", why=str(stop))
         _append(name, row)
         raise
     finally:
         broker.stop()
-        if before is not None:
-            undone = restore(root, before)
-            if undone:
-                log(f"{name}: battery item {item['id']} wrote {', '.join(undone[:12])} — undone")
-                row["undone"] = undone
-        shutil.rmtree(scratch, ignore_errors=True)
     row.update(seconds=round(time.monotonic() - t0), steps=res.get("steps"), ended_by=res.get("ended_by"),
                submitted=res.get("submitted"), answer=(res.get("answer") or "")[:4000],
                broker_calls=broker.counts)

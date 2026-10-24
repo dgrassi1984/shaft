@@ -20,8 +20,8 @@ from datetime import date, datetime
 from pathlib import Path
 
 from . import cloudllm
-from .core import (HOME, NETWORK_ERRORS, SUP_DIR, UnsafePath, claude_model, contained, dollars, knob, safe_write,
-                   secrets_env)
+from .core import (HOME, NETWORK_ERRORS, SUP_DIR, UnsafePath, claude_model, contained, copy_beneath, dollars, knob,
+                   safe_read, safe_write, secrets_env, walk_beneath)
 
 
 
@@ -91,24 +91,32 @@ def spent_today(instance: str) -> float:
                if r["instance"] == instance and r["ts"].startswith(today))
 
 
-def _safe(root: Path, rel: str) -> Path:
-    p = (root / rel).resolve()
-    if p != root and root not in p.parents:
+def _safe(root: Path, rel: str) -> str:
+    """`rel` as a plain path inside the agent's folder and outside HIDDEN. What the coder reads goes to its cloud
+    model, so the read itself follows no link anywhere (core.safe_read, walk_beneath): a link the instance planted,
+    even one swapped in after this check, is refused, never read through."""
+    p = Path(rel)
+    if p.is_absolute():
+        try:
+            p = p.relative_to(root)
+        except ValueError:
+            raise CoderError(f"{rel!r} is outside the agent's folder") from None
+    if ".." in p.parts:
         raise CoderError(f"{rel!r} is outside the agent's folder")
-    if set(p.relative_to(root).parts) & set(HIDDEN):
+    if set(p.parts) & set(HIDDEN):
         raise CoderError(f"{rel!r} is not readable")
-    return p
+    return p.as_posix() if p.parts else ""
 
 
 def _read_only_tool(root: Path, name: str, args: dict) -> str:
     try:
         if name == "read_file":
-            return _safe(root, args["path"]).read_text(errors="replace")[:60000]
+            return safe_read(root, _safe(root, args["path"]), errors="replace")[:60000]
         base = _safe(root, args.get("path") or ".")
-        rows = [p.relative_to(root).as_posix() for p in sorted(base.rglob("*"))
-                if p.is_file() and not set(p.relative_to(root).parts) & set(HIDDEN)]
+        hidden = lambda rel: bool(set(rel.split("/")) & set(HIDDEN))   # noqa: E731
+        rows = [f"{base}/{rel}" if base else rel for rel, f in walk_beneath(root, base, hidden) if f is not None]
         return "\n".join(rows[:500]) or "(empty)"
-    except (CoderError, OSError, KeyError) as e:
+    except (CoderError, OSError, KeyError, UnsafePath) as e:
         return f"ERROR: {e}"
 
 
@@ -197,8 +205,8 @@ def test_in_scratch(root: Path, files: list[dict]) -> tuple[bool, str]:
     tmp = Path(tempfile.mkdtemp(prefix="shaft-handoff-")).resolve()
     scratch = tmp / root.name
     try:
-        shutil.copytree(root, scratch, symlinks=True,   # copy links as links: never pull in what they point to
-                        ignore=shutil.ignore_patterns(*HIDDEN))
+        copy_beneath(root, scratch, links=True,   # links as links: never pull in what they point to
+                     skip=lambda rel: bool(set(rel.split("/")) & set(HIDDEN)))
         for f in files:
             safe_write(scratch, f["path"], f["content"])
         return gate.run_tests(scratch, HOME, env_root=root)

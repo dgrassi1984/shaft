@@ -31,8 +31,8 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .core import (HOME, INSTANCES, PYTHON, SUP_DIR, _tool_settings, _update_tool_settings, instance_root,
-                   knob, positive_int, log, safe_mkdir, safe_write)
+from .core import (HOME, INSTANCES, PYTHON, SUP_DIR, UnsafePath, _tool_settings, _update_tool_settings, instance_root,
+                   knob, list_beneath, positive_int, log, safe_mkdir, safe_read, safe_write)
 
 MIN_MINUTES, _ = knob(
     "SHAFT_JOB_MIN_MINUTES", "5", positive_int, "the shortest interval an instance's own job (a plugin on a timer) may "
@@ -150,14 +150,17 @@ def declared(name: str, root: Path | None = None) -> tuple[list[dict], list[str]
     changing = uncommitted(root)
     if changing is None:
         return [], []
-    for manifest in sorted((root / "plugins").glob("*/plugin.json")) if (root / "plugins").is_dir() else []:
-        plugin = manifest.parent.name
+    for plugin in list_beneath(root, "plugins"):   # read without following a link (core.safe_read)
         if plugin in changing:
             continue
         try:
-            spec = json.loads(manifest.read_text())
-        except (OSError, ValueError) as e:
-            if '"schedule"' in manifest.read_text(errors="replace"):
+            text = safe_read(root, f"plugins/{plugin}/plugin.json", errors="replace")
+        except (OSError, UnsafePath):
+            continue
+        try:
+            spec = json.loads(text)
+        except ValueError as e:
+            if '"schedule"' in text:
                 problems.append(f"plugins/{plugin}/plugin.json does not parse ({e}), so its schedule is not run")
             continue
         sched = spec.get("schedule") if isinstance(spec, dict) else None
@@ -167,7 +170,7 @@ def declared(name: str, root: Path | None = None) -> tuple[list[dict], list[str]
         if why:
             problems.append(f"plugins/{plugin}: schedule not run — {why}")
             continue
-        if not (manifest.parent / "main.py").is_file():
+        if not (root / "plugins" / plugin / "main.py").is_file():
             problems.append(f"plugins/{plugin}: schedule not run — no main.py")
             continue
         jobs.append({"plugin": plugin, "every_minutes": int(sched["every_minutes"]), "args": sched.get("args") or {},
@@ -181,10 +184,7 @@ def declared(name: str, root: Path | None = None) -> tuple[list[dict], list[str]
 
 
 def _manifest_text(name: str, plugin: str) -> str:
-    try:
-        return (instance_root(name) / "plugins" / plugin / "plugin.json").read_text(errors="replace")
-    except OSError:
-        return ""
+    return safe_read(instance_root(name), f"plugins/{plugin}/plugin.json", "", errors="replace")
 
 
 def _invalid(sched) -> str:

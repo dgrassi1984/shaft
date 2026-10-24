@@ -27,15 +27,20 @@ PROJECT = Path(__file__).resolve().parent.parent
 
 
 def snapshot(instance_root: Path) -> dict[str, bytes]:
+    """The code files' bytes, listed and read through descriptors (core.read_tree, read_beneath): never through a
+    link the instance planted, even one swapped in after a check — a failed change is restored from this, so a file
+    read through a link would be written back into the instance's folder."""
+    from .core import UnsafePath, read_beneath, read_tree
     files: dict[str, bytes] = {}
+    skip = lambda rel: "__pycache__" in rel.split("/") or rel.split("/")[-1] == ".DS_Store"   # noqa: E731 — Finder's
     for name in CODE_PATHS:
-        base = instance_root / name
-        paths = [base] if base.is_file() else base.rglob("*") if base.is_dir() else []
-        for path in paths:
-            if path.is_symlink() or any(p.is_symlink() for p in path.parents if instance_root in p.parents):
-                continue   # never read through links the instance planted
-            if path.is_file() and "__pycache__" not in path.parts and path.name != ".DS_Store":   # Finder's
-                files[str(path.relative_to(instance_root))] = path.read_bytes()
+        try:
+            files.update({f"{name}/{rel}": data for rel, data in read_tree(instance_root, name, skip).items()})
+        except (OSError, UnsafePath):   # not a folder: a file, a link, or nothing
+            try:
+                files[name] = read_beneath(instance_root, [name])
+            except (OSError, UnsafePath):
+                pass
     return files
 
 
@@ -44,17 +49,21 @@ def changed(before: dict[str, bytes], after: dict[str, bytes]) -> list[str]:
 
 
 def restore(instance_root: Path, before: dict[str, bytes], paths: list[str]) -> None:
-    from .core import UnsafePath, contained
+    """Each path back as it was, written or removed through descriptors (no link followed); one that cannot be
+    reached without a link is left as it is."""
+    from .core import UnsafePath, safe_write_bytes, unlink_beneath
     for rel in paths:
-        try:
-            target = contained(instance_root, *Path(rel).parts)
-        except UnsafePath:
+        if rel not in before:
+            unlink_beneath(instance_root, rel)
             continue
-        if rel in before:
-            contained(instance_root, *Path(rel).parent.parts).mkdir(parents=True, exist_ok=True)
-            target.write_bytes(before[rel])
-        elif target.exists():
-            target.unlink()
+        try:
+            safe_write_bytes(instance_root, rel, before[rel])     # in place: its mode (an executable script) is kept
+        except UnsafePath:
+            try:
+                if unlink_beneath(instance_root, rel):           # a link put in its place goes, never its target
+                    safe_write_bytes(instance_root, rel, before[rel])
+            except UnsafePath:
+                continue
 
 
 def config_without(text: str, writes: list[dict]) -> tuple[str, list[str]]:
@@ -71,12 +80,12 @@ def config_without(text: str, writes: list[dict]) -> tuple[str, list[str]]:
 
 def revert_config(instance_root: Path, writes: list[dict]) -> list[str]:
     """Undo the instance's set_config writes in its config.env, keeping every other line. Returns the keys."""
-    from .core import config_lock, contained, safe_write
+    from .core import config_lock, contained, safe_read, safe_write
     if not writes:
         return []
     path = contained(instance_root, "config.env")
     with config_lock(path):                          # not over an operator's write landing at the same moment
-        text, back = config_without(path.read_text() if path.is_file() else "", writes)
+        text, back = config_without(safe_read(instance_root, "config.env", ""), writes)
         if back:
             safe_write(instance_root, "config.env", text)
     return back

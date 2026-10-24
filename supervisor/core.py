@@ -34,7 +34,8 @@ MIND_PATHS = ("self", "memory", "notes", "inbox")
 # ships one), not memory (docs/plans/PLAN-mind-out-of-git.md D2).
 SKILL_PATHS = ("skills",)
 # The supervisor's copy of SHAFT's own docs in each instance folder (runner.stage_docs), read-only to the instance:
-# refreshed at every start from the project, so never staged on its branch nor snapshotted around an exam.
+# refreshed at every start from the project, so never staged on its branch (an exam's copy of the instance holds it
+# as it is).
 DOCS_COPY = "shaft-docs"
 DEFAULT_INSTANCE = "shaft"
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
@@ -332,10 +333,10 @@ def paused(name: str) -> bool:
 
 
 def instance_config(name: str) -> dict[str, str]:
-    """An instance's config.env (KEY="value"  # comment), read as text — never executed."""
+    """An instance's config.env (KEY="value"  # comment), read as text — never executed, never through a link."""
     try:
-        return config_values((instance_root(name) / "config.env").read_text())
-    except OSError:
+        return config_values(safe_read(instance_root(name), "config.env"))
+    except (OSError, UnsafePath, ValueError):
         return {}
 
 
@@ -520,9 +521,8 @@ SECRET_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,40}$")
 
 
 def read_secrets(root: Path) -> dict[str, dict]:
-    path = contained(root, SECRETS_DIR, "secrets.json")
     try:
-        return json.loads(path.read_text()) if path.is_file() else {}
+        return json.loads(safe_read(root, f"{SECRETS_DIR}/secrets.json"))   # UnsafePath for a link, as before
     except (OSError, ValueError):
         return {}
 
@@ -598,10 +598,8 @@ def set_tool(name: str, tool: str, on: bool) -> set[str]:
 
 
 def journal_entries(root: Path) -> list[str]:
-    journal = root / "memory" / "journal.md"
-    if not journal.exists():
-        return []
-    return [b.strip() for b in journal.read_text().split("\n---\n") if b.strip().startswith("## ")]
+    text = safe_read(root, "memory/journal.md", "")
+    return [b.strip() for b in text.split("\n---\n") if b.strip().startswith("## ")]
 
 
 class UnsafePath(Exception):
@@ -613,7 +611,8 @@ def contained(root: Path, *parts: str) -> Path:
 
     Instances can create symlinks in their own folder; following one would let an instance aim a
     supervisor write anywhere on the Mac. So no component may be a symlink, and the result must
-    resolve inside the folder."""
+    resolve inside the folder. A check, not a guarantee: the instance can swap a link in after it, so a
+    read or write goes through the descriptor helpers below (open_beneath), which leave no between."""
     root = Path(root)
     if root.is_symlink():
         raise UnsafePath(f"{root} is a symlink")
@@ -625,15 +624,6 @@ def contained(root: Path, *parts: str) -> Path:
             raise UnsafePath(f"{probe} is a symlink; the supervisor does not follow links inside instances")
     if path.resolve() != root.resolve() and root.resolve() not in path.resolve().parents:
         raise UnsafePath(f"{path} resolves outside {root}")
-    return path
-
-
-def safe_write(root: Path, rel: str, text: str, append: bool = False) -> Path:
-    path = contained(root, *Path(rel).parts)
-    contained(root, *Path(rel).parent.parts).mkdir(parents=True, exist_ok=True)
-    contained(root, *Path(rel).parts)            # re-check after creating parents
-    with path.open("a" if append else "w") as f:
-        f.write(text)
     return path
 
 
@@ -670,17 +660,208 @@ def open_beneath(root: Path, parts, flags: int, mode: int = 0o644, make_dirs: bo
         os.close(fd)
 
 
+def dir_beneath(root: Path, parts=(), make: bool = False) -> int:
+    """A descriptor for the folder root/parts (root itself when parts is empty), opened like open_beneath: no
+    component followed if it is a link. `make`: each missing folder is created first, through its parent's
+    descriptor."""
+    parts = [str(p) for p in parts]
+    if make and parts:
+        parent = dir_beneath(root, parts[:-1], make=True)
+        try:
+            os.mkdir(parts[-1], 0o755, dir_fd=parent)
+        except FileExistsError:
+            pass
+        finally:
+            os.close(parent)
+    if parts:
+        return open_beneath(root, parts, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        return os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as e:
+        raise UnsafePath(f"{root}: {e.strerror}") from None
+
+
+def _open_file_beneath(root: Path, parts, flags: int, mode: int = 0o644, make_dirs: bool = False) -> int:
+    """open_beneath for a plain file. Non-blocking, then checked: a pipe planted in its place would hang the
+    supervisor on a read nobody writes or a write nobody reads, so a pipe, a device or a folder is refused."""
+    import errno
+    import stat
+    try:
+        fd = open_beneath(root, parts, flags | os.O_NONBLOCK, mode, make_dirs)
+    except OSError as e:
+        if e.errno == errno.ENXIO:   # a pipe with no reader, opened to write
+            raise UnsafePath(f"{root}/{'/'.join(map(str, parts))} is not a plain file") from None
+        raise
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise UnsafePath(f"{root}/{'/'.join(map(str, parts))} is not a plain file")
+    return fd
+
+
 def read_beneath(root: Path, parts, limit: int | None = None) -> bytes:
     """A regular file's bytes, opened with open_beneath (no link followed anywhere); ValueError if bigger than limit."""
-    import stat
-    fd = open_beneath(root, parts, os.O_RDONLY)
-    with os.fdopen(fd, "rb") as f:
-        st = os.fstat(f.fileno())
-        if not stat.S_ISREG(st.st_mode):
-            raise UnsafePath(f"{root}/{'/'.join(map(str, parts))} is not a plain file")
-        if limit is not None and st.st_size > limit:
-            raise ValueError(f"{st.st_size} bytes, more than {limit}")
+    with os.fdopen(_open_file_beneath(root, parts, os.O_RDONLY), "rb") as f:
+        size = os.fstat(f.fileno()).st_size
+        if limit is not None and size > limit:
+            raise ValueError(f"{size} bytes, more than {limit}")
         return f.read()
+
+
+def safe_read_bytes(root: Path, rel: str, default: bytes | None = None, limit: int | None = None) -> bytes:
+    """The bytes of the plain file root/rel, read with read_beneath: no component followed if it is a link. How the
+    unsandboxed supervisor reads anything in an instance folder that it copies, shows or sends on: the instance can
+    plant a link anywhere in its folder, and reading through one hands it — or a judge's cloud model, or the
+    operator's pages — any file the supervisor can read (Codex review B1, 2026-10-24: a journal swapped for a link was
+    copied into the instance's own journal.rejected-*.md). `default`, when given, stands for a file that is missing
+    or is not a plain file reached without a link: to its reader a link is no file at all. Without it: OSError
+    (FileNotFoundError) or UnsafePath."""
+    try:
+        return read_beneath(root, Path(rel).parts, limit)
+    except (FileNotFoundError, UnsafePath):
+        if default is None:
+            raise
+        return default
+
+
+def safe_read(root: Path, rel: str, default: str | None = None, errors: str = "strict") -> str:
+    """safe_read_bytes as UTF-8 text."""
+    try:
+        return read_beneath(root, Path(rel).parts).decode("utf-8", errors)
+    except (FileNotFoundError, UnsafePath):
+        if default is None:
+            raise
+        return default
+
+
+def list_beneath(root: Path, rel: str = "") -> list[str]:
+    """The names in the folder root/rel, opened like open_beneath: [] if it is missing or reached through a link
+    (never the listing of the folder a link points to). An entry may itself be a link: safe_read refuses one."""
+    try:
+        fd = dir_beneath(root, Path(rel).parts)
+    except (FileNotFoundError, UnsafePath):
+        return []
+    try:
+        return sorted(os.listdir(fd))
+    finally:
+        os.close(fd)
+
+
+def set_aside(root: Path, rel: str, name: str) -> str:
+    """Rename root/rel to `name` in the same folder, through the folder's descriptor: the entry itself is moved — a
+    link, never what it points to — and nothing is read. Returns the new path, relative to root."""
+    parts = Path(rel).parts
+    fd = dir_beneath(root, parts[:-1])
+    try:
+        os.rename(parts[-1], name, src_dir_fd=fd, dst_dir_fd=fd)
+    finally:
+        os.close(fd)
+    return str(Path(*parts[:-1], name))
+
+
+def unlink_beneath(root: Path, rel: str) -> bool:
+    """Remove root/rel — a link itself, never what it points to — through its folder's descriptor. False if it is
+    not there, is a folder, or its folder is reached through a link (nothing in that folder is touched)."""
+    import stat
+    parts = Path(rel).parts
+    try:
+        fd = dir_beneath(root, parts[:-1])
+    except (FileNotFoundError, UnsafePath):
+        return False
+    try:
+        if stat.S_ISDIR(os.stat(parts[-1], dir_fd=fd, follow_symlinks=False).st_mode):
+            return False
+        os.unlink(parts[-1], dir_fd=fd)
+        return True
+    except FileNotFoundError:
+        return False
+    finally:
+        os.close(fd)
+
+
+def walk_beneath(root: Path, rel: str = "", skip=lambda rel: False, links: bool = False):
+    """What is below the folder root/rel, opened through descriptors and nothing followed: (path, None) for a folder
+    (before what is in it), (path, file) for a plain file, open to read until the next item, and with `links`
+    (path, its target) for a link — the link itself, never what it points to. A pipe or a socket, and a link without
+    `links`, are passed over. skip(path) leaves out a path and everything below it. Paths are relative to root/rel.
+    How the unsandboxed supervisor reads a whole folder an instance writes: an exam's copy, a trial's diff, the gate's
+    snapshot. FileNotFoundError, or UnsafePath when root/rel is not a folder reached without a link."""
+    import errno
+    import stat
+
+    def walk(dfd: int, at: str):
+        for entry in sorted(os.listdir(dfd)):
+            path = f"{at}/{entry}" if at else entry
+            if skip(path):
+                continue
+            try:
+                mode = os.stat(entry, dir_fd=dfd, follow_symlinks=False).st_mode
+                if stat.S_ISDIR(mode):
+                    sub = os.open(entry, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dfd)
+                    try:
+                        yield path, None
+                        yield from walk(sub, path)
+                    finally:
+                        os.close(sub)
+                elif stat.S_ISREG(mode):
+                    ffd = os.open(entry, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dfd)
+                    with os.fdopen(ffd, "rb") as f:
+                        if stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                            yield path, f
+                elif stat.S_ISLNK(mode) and links:
+                    yield path, os.readlink(entry, dir_fd=dfd)
+            except (FileNotFoundError, NotADirectoryError):
+                continue   # removed, or swapped for something else, since it was listed: passed over
+            except OSError as e:
+                if e.errno != errno.ELOOP:   # swapped for a link since it was listed: passed over
+                    raise
+
+    fd = dir_beneath(root, Path(rel).parts)
+    try:
+        yield from walk(fd, "")
+    finally:
+        os.close(fd)
+
+
+def read_tree(root: Path, rel: str = "", skip=lambda rel: False) -> dict[str, bytes]:
+    """{path: bytes} of every plain file below root/rel (walk_beneath: nothing followed)."""
+    return {path: f.read() for path, f in walk_beneath(root, rel, skip) if f is not None}
+
+
+def copy_beneath(root: Path, dest: Path, skip=lambda rel: False, rel: str = "", links: bool = False) -> int:
+    """The folders and plain files below root/rel copied to the new folder dest (mode and times kept), through
+    walk_beneath: nothing followed, so no file a link points to is ever copied — with `links`, a link is copied as
+    the link it is (a sandboxed reader resolves it, and is refused outside its folder). Returns the files copied."""
+    import shutil
+    import stat
+    os.close(dir_beneath(root, Path(rel).parts))   # FileNotFoundError or UnsafePath before dest is made
+    dest = Path(dest)
+    dest.mkdir(parents=True)
+    n = 0
+    for path, item in walk_beneath(root, rel, skip, links):
+        if item is None:
+            (dest / path).mkdir()
+        elif isinstance(item, str):
+            os.symlink(item, dest / path)
+        else:
+            st = os.fstat(item.fileno())
+            with open(dest / path, "xb") as out:
+                shutil.copyfileobj(item, out)
+                os.fchmod(out.fileno(), stat.S_IMODE(st.st_mode))
+                os.utime(out.fileno(), ns=(st.st_atime_ns, st.st_mtime_ns))
+            n += 1
+    return n
+
+
+def safe_write(root: Path, rel: str, text: str, append: bool = False) -> Path:
+    """Text written, or appended, to root/rel through descriptors (open_beneath), as safe_write_bytes does: a
+    check of the path followed by an open by name let an instance swap a link in between and aim the write — an
+    inbox delivery, a journal note — anywhere (Codex review B2, 2026-10-24)."""
+    path = contained(root, *Path(rel).parts)       # the clear refusal for a link already there
+    Path(root).mkdir(parents=True, exist_ok=True)  # the folder itself is the supervisor's choice
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if append else os.O_TRUNC)
+    with os.fdopen(_open_file_beneath(root, Path(rel).parts, flags, make_dirs=True), "a" if append else "w") as f:
+        f.write(text)
+    return path
 
 
 def safe_write_bytes(root: Path, rel: str, data: bytes, exclusive: bool = False) -> Path:
@@ -689,22 +870,26 @@ def safe_write_bytes(root: Path, rel: str, data: bytes, exclusive: bool = False)
     path = contained(root, *Path(rel).parts)       # the clear refusal for a link already there
     Path(root).mkdir(parents=True, exist_ok=True)  # the folder itself is the supervisor's choice (an inbox, an instance)
     flags = os.O_WRONLY | os.O_CREAT | (os.O_EXCL if exclusive else os.O_TRUNC)   # exclusive: FileExistsError
-    fd = open_beneath(root, Path(rel).parts, flags, 0o644, make_dirs=True)
-    with os.fdopen(fd, "wb") as f:
+    with os.fdopen(_open_file_beneath(root, Path(rel).parts, flags, make_dirs=True), "wb") as f:
         f.write(data)
     return path
 
 
 def safe_mkdir(root: Path, rel: str) -> Path:
     path = contained(root, *Path(rel).parts)
-    path.mkdir(parents=True, exist_ok=True)
-    return contained(root, *Path(rel).parts)
+    Path(root).mkdir(parents=True, exist_ok=True)
+    os.close(dir_beneath(root, Path(rel).parts, make=True))   # each folder made through its parent's descriptor
+    return path
 
 
 def journal_note(root: Path, title: str, body: str) -> None:
-    """Supervisor's own minimal journal append (deliberately not the agent's code)."""
-    safe_write(root, "memory/journal.md",
-               f"\n---\n## {datetime.now():%Y-%m-%d %H:%M} — {title}\n\n{body.strip()}\n", append=True)
+    """Supervisor's own minimal journal append (deliberately not the agent's code). A journal the instance swapped
+    for a link (or whose folder it did) gets no note — never one written through the link — and the log says so."""
+    try:
+        safe_write(root, "memory/journal.md",
+                   f"\n---\n## {datetime.now():%Y-%m-%d %H:%M} — {title}\n\n{body.strip()}\n", append=True)
+    except UnsafePath as e:
+        log(f"{Path(root).name}: journal note {title!r} NOT written: {e}")
 
 
 def not_mind() -> list[str]:
