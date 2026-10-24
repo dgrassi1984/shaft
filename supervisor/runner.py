@@ -28,7 +28,7 @@ from pathlib import Path
 from . import gate, localmodel, sandbox
 from .broker import Broker
 from .core import (API_TALKS, BROKER_MAX_CALLS, DOCS_COPY, EMBED_PORT, CORE_MIN_HOURS, CYCLE_TIMEOUT_S, HOME, INSTANCES,
-                   LLM_PORTS, PROJECT, PYTHON, SLEEP_TIMEOUT_S, SUP_DIR, UnsafePath,
+                   LLM_PORTS, PROJECT, PYTHON, SLEEP_TIMEOUT_S, SUP_DIR, TreeTooBig, UnsafePath,
                    commit_state, describe_knobs, git_wt, instance_config, instance_root, journal_note, list_beneath,
                    log, safe_mkdir, safe_read, safe_write, safe_write_bytes, secrets_env, set_aside, unlink_beneath)
 
@@ -412,8 +412,13 @@ def _pause(name: str, root: Path, kind: str, proc, held: _Held, run: dict, broke
 
 def _snapshot(root: Path) -> dict:
     pers = _personality(root)
-    return {"code": gate.snapshot(root), "journal": safe_read(root, JOURNAL, "", errors="replace"),
-            "personality": pers, "core": _core_of(pers)}
+    try:
+        code = gate.snapshot(root)
+    except TreeTooBig as e:   # never an empty snapshot: the run's code is then not checked, and not kept (_settle)
+        log(f"{root.name}: code snapshot NOT taken: {e}")
+        code = None
+    return {"code": code, "journal": safe_read(root, JOURNAL, "", errors="replace"), "personality": pers,
+            "core": _core_of(pers)}
 
 
 def _launch(name: str, root: Path, kind: str, agent_args: list[str], budget: int | None):
@@ -644,10 +649,17 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
             log(f"{name}: {note}")
             journal_note(root, "Supervisor", note)
 
-    touched = gate.changed(before["code"], gate.snapshot(root))
-    configured = sorted({w["key"] for w in config_writes})
+    try:
+        after = gate.snapshot(root) if before["code"] is not None else None
+        too_big = None if after is not None else "it was already too big when the run began"
+    except TreeTooBig as e:
+        after, too_big = None, str(e)
+    touched = gate.changed(before["code"], after) if after is not None else []
+    configured = sorted({w["key"] for w in config_writes}) if after is not None else []
     kept: list[str] = []
-    if touched or configured:
+    if too_big:
+        _too_big_to_check(name, root, before["code"], config_writes, too_big)
+    elif touched or configured:
         ok, test_log = gate.run_tests(root, HOME)
         if ok:
             kept = touched + (["config.env"] if configured else [])
@@ -700,6 +712,22 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
         except Exception as e:   # measurement never breaks a run
             log(f"{name}: personality check failed: {type(e).__name__}: {e}")
     return True
+
+
+def _too_big_to_check(name: str, root: Path, before: dict | None, config_writes, why: str) -> None:
+    """The gate fails closed when the code is too big to snapshot (core.Budget): no change of the run is checked, so
+    none is kept — the files it began with go back, its set_config lines are undone, and the instance is told. What
+    it added stays on disk, uncommitted, until its code is small enough to check again."""
+    if before:
+        gate.restore(root, before, sorted(before))
+    back = gate.revert_config(root, list(config_writes))
+    log(f"{name}: code too big to check, nothing of this run's code kept: {why}")
+    journal_note(root, "Supervisor: code change not checked",
+                 f"My code (shaft/, tests/, plugins/, …) is too big for the gate to check ({why}; the bounds are "
+                 "SHAFT_SNAPSHOT_MAX_MB, SHAFT_TREE_MAX_FILES and SHAFT_TREE_MAX_DEPTH), so none of this run's code "
+                 "changes was checked or kept: the files it began with are back"
+                 + (f", and my config.env lines ({', '.join(back)}) are undone" if back else "")
+                 + ". Anything new stays uncommitted until my code is small enough to check.")
 
 
 def _commit_outside_config(name: str, root: Path, writes: list[dict]) -> None:

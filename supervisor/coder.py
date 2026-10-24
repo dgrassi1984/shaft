@@ -20,8 +20,8 @@ from datetime import date, datetime
 from pathlib import Path
 
 from . import cloudllm
-from .core import (HOME, NETWORK_ERRORS, SUP_DIR, UnsafePath, claude_model, contained, copy_beneath, dollars, knob,
-                   safe_read, safe_write, secrets_env, walk_beneath)
+from .core import (HOME, NETWORK_ERRORS, SUP_DIR, TreeTooBig, UnsafePath, claude_model, contained, copy_beneath,
+                   dollars, knob, reserved, safe_read, safe_write, secrets_env, walk_beneath)
 
 
 
@@ -91,6 +91,11 @@ def spent_today(instance: str) -> float:
                if r["instance"] == instance and r["ts"].startswith(today))
 
 
+def _hidden(rel: str) -> bool:
+    """A path with a HIDDEN folder anywhere on it, by any spelling the case-insensitive volume takes as the same."""
+    return bool({p.casefold() for p in rel.split("/")} & {h.casefold() for h in HIDDEN})
+
+
 def _safe(root: Path, rel: str) -> str:
     """`rel` as a plain path inside the agent's folder and outside HIDDEN. What the coder reads goes to its cloud
     model, so the read itself follows no link anywhere (core.safe_read, walk_beneath): a link the instance planted,
@@ -103,7 +108,7 @@ def _safe(root: Path, rel: str) -> str:
             raise CoderError(f"{rel!r} is outside the agent's folder") from None
     if ".." in p.parts:
         raise CoderError(f"{rel!r} is outside the agent's folder")
-    if set(p.parts) & set(HIDDEN):
+    if _hidden(p.as_posix()) or reserved(root, p.as_posix(), HIDDEN):   # any spelling: `Secrets/` is secrets/
         raise CoderError(f"{rel!r} is not readable")
     return p.as_posix() if p.parts else ""
 
@@ -113,8 +118,8 @@ def _read_only_tool(root: Path, name: str, args: dict) -> str:
         if name == "read_file":
             return safe_read(root, _safe(root, args["path"]), errors="replace")[:60000]
         base = _safe(root, args.get("path") or ".")
-        hidden = lambda rel: bool(set(rel.split("/")) & set(HIDDEN))   # noqa: E731
-        rows = [f"{base}/{rel}" if base else rel for rel, f in walk_beneath(root, base, hidden) if f is not None]
+        skip = (lambda rel: _hidden(f"{base}/{rel}")) if base else _hidden
+        rows = [f"{base}/{rel}" if base else rel for rel, f in walk_beneath(root, base, skip) if f is not None]
         return "\n".join(rows[:500]) or "(empty)"
     except (CoderError, OSError, KeyError, UnsafePath) as e:
         return f"ERROR: {e}"
@@ -205,8 +210,10 @@ def test_in_scratch(root: Path, files: list[dict]) -> tuple[bool, str]:
     tmp = Path(tempfile.mkdtemp(prefix="shaft-handoff-")).resolve()
     scratch = tmp / root.name
     try:
-        copy_beneath(root, scratch, links=True,   # links as links: never pull in what they point to
-                     skip=lambda rel: bool(set(rel.split("/")) & set(HIDDEN)))
+        try:
+            copy_beneath(root, scratch, _hidden, links=True)   # inside links as links; nothing read through one
+        except TreeTooBig as e:                                # fails closed: too big to check is not checked
+            return False, f"the instance's folder is too big to copy for the gate: {e}"
         for f in files:
             safe_write(scratch, f["path"], f["content"])
         return gate.run_tests(scratch, HOME, env_root=root)

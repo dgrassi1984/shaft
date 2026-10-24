@@ -242,10 +242,12 @@ class HelpersTest(Case):
         (self.root / "plugins" / "leak.py").symlink_to(self.secret)
         (self.root / "plugins" / "dir").symlink_to(self.outside, target_is_directory=True)
         self.assertEqual(core.read_tree(self.root, "plugins"), {"p/main.py": b"x = 1\n"})
+        (self.root / "plugins" / "p" / "same.py").symlink_to("main.py")
         dest = self.base / "copy"
         self.assertEqual(core.copy_beneath(self.root, dest, rel="plugins", links=True), 1)
-        self.assertEqual(os.readlink(dest / "leak.py"), str(self.secret))   # a link copied as a link, unread
-        self.assertTrue((dest / "dir").is_symlink())
+        self.assertEqual(os.readlink(dest / "p" / "same.py"), "main.py")   # a link that stays inside: as a link
+        self.assertFalse(os.path.lexists(dest / "leak.py"))                 # one that leads out: left out, unread
+        self.assertFalse(os.path.lexists(dest / "dir"))
         with self.assertRaises(core.UnsafePath):
             core.read_tree(self.root, "plugins/dir")
 
@@ -261,3 +263,93 @@ class HelpersTest(Case):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReservedSpellingTest(Case):
+    """Codex review of 151088d: the volume is case-insensitive (`Secrets/` opens `secrets/`), and the reserved
+    folders were compared by their exact name."""
+
+    def setUp(self):
+        super().setUp()
+        (self.root / "secrets").mkdir()
+        (self.root / "secrets" / "secrets.json").write_text(SECRET)
+
+    def test_attachments_refuse_a_reserved_folder_by_any_spelling(self):
+        from supervisor import broker
+        b = broker.Broker("evil", self.base, {}, self.base / "b.log")
+        for rel in ("Secrets/secrets.json", "SECRETS/secrets.json", "./Secrets/secrets.json"):
+            with self.subTest(rel=rel), self.assertRaises(ValueError) as ctx:
+                b._read_attachments([rel])
+            self.assertIn("cannot be attached", str(ctx.exception))
+
+    def test_describe_image_refuses_a_reserved_folder_by_any_spelling(self):
+        from supervisor import broker
+        b = broker.Broker("evil", self.base, {}, self.base / "b.log")
+        with self.assertRaises(ValueError) as ctx:
+            b._image_file("Secrets/secrets.json")
+        self.assertIn("cannot be read", str(ctx.exception))
+
+    def test_the_coder_refuses_a_reserved_folder_by_any_spelling(self):
+        from supervisor import coder
+        for rel in ("Secrets/secrets.json", "SECRETS/secrets.json"):
+            out = coder._read_only_tool(self.root, "read_file", {"path": rel})
+            self.assertTrue(out.startswith("ERROR"), out)
+            self.assertNotIn(SECRET, out)
+        self.assertNotIn("secrets", coder._read_only_tool(self.root, "list_files", {"path": "."}).casefold())
+
+    def test_reserved_is_decided_by_the_folder_itself(self):
+        for rel in ("secrets/x", "Secrets/x", "SECRETS", "./sEcReTs/secrets.json"):
+            self.assertTrue(core.reserved(self.root, rel, ("secrets",)), rel)
+        self.assertFalse(core.reserved(self.root, "notes/secrets", ("secrets",)))
+        self.assertFalse(core.reserved(self.root, "notes/x", ("secrets",)))
+
+
+class BoundedReadTest(Case):
+    def test_a_read_never_returns_more_than_its_limit_whatever_its_size_said(self):
+        # Codex: read_beneath checked st_size, then read the whole file — a file grown after the check, or one whose
+        # size was misreported, came back whole.
+        (self.root / "notes" / "big.bin").write_bytes(b"x" * 1000)
+        real = os.fstat
+
+        class Small:
+            def __init__(self, st):
+                self.st_mode, self.st_size = st.st_mode, 5
+
+        with mock.patch.object(core.os, "fstat", lambda fd: Small(real(fd))):
+            with self.assertRaises(ValueError):
+                core.read_beneath(self.root, ["notes", "big.bin"], 10)
+
+    def test_a_tree_past_its_budget_fails_explicitly(self):
+        # Codex: read_tree and the copy had no bound on bytes, files or depth.
+        for i in range(30):
+            (self.root / "notes" / f"{i}.md").write_text("x" * 100)
+        deep = self.root / "notes"
+        for i in range(60):
+            deep = deep / f"d{i}"
+        deep.mkdir(parents=True)
+        for i, bound in enumerate(({"files": 10}, {"total": 1000}, {"depth": 20})):
+            with self.subTest(bound=bound), self.assertRaises(core.TreeTooBig):
+                core.read_tree(self.root, "notes", budget=core.Budget(**bound))
+            with self.subTest(bound=bound), self.assertRaises(core.TreeTooBig):
+                core.copy_beneath(self.root, self.base / f"copy-{i}", rel="notes", budget=core.Budget(**bound))
+        self.assertEqual(len(core.read_tree(self.root, "notes")), 30)          # inside the bounds: all of it
+
+    def test_the_gate_fails_closed_when_the_code_is_too_big_to_check(self):
+        # A snapshot cut short must never read as "no code": the gate fails, the code goes back, nothing is kept.
+        (self.root / "plugins").mkdir()
+        (self.root / "plugins" / "p.py").write_text("P = 1\n")
+        before = runner._snapshot(self.root)
+        (self.root / "plugins" / "p.py").write_text("P = 2\n")
+        for i in range(20):
+            (self.root / "plugins" / f"n{i}.py").write_text("N = 1\n")
+        kept = []
+        sup = self.base / "sup"
+        with mock.patch.object(core, "TREE_MAX_FILES", 5), mock.patch.object(runner, "SUP_DIR", sup), \
+             mock.patch.object(runner, "commit_state", lambda n, k, files, **kw: kept.append(files) or True), \
+             mock.patch.object(runner.gate, "run_tests", side_effect=AssertionError("a gate ran on a partial snapshot")), \
+             mock.patch.object(runner, "_commit_outside_config"), mock.patch.object(runner, "_commit_outside_drive"), \
+             mock.patch.object(runner, "log"), mock.patch.object(core, "log"):
+            runner._settle("evil", self.root, "live", before, [])
+        self.assertEqual(kept, [[]])
+        self.assertEqual((self.root / "plugins" / "p.py").read_text(), "P = 1\n")
+        self.assertIn("too big", (self.root / "memory" / "journal.md").read_text())

@@ -78,7 +78,22 @@
   or send it to a judge, the coder or a vision model — and every file it writes, appends to or removes there is
   opened one folder at a time through descriptors, none followed if it is a link (`supervisor/core.py`:
   `open_beneath`, `safe_read`, `safe_write`, `walk_beneath`, `copy_beneath`); a pipe in a file's place is refused,
-  never waited on. To a reader a link is no file.
+  never waited on. Two link policies:
+  - **What goes out** (an attachment, an image for `describe_image`, a file the coder reads, a judge's evidence):
+    a link anywhere on the way is refused, even one that stays inside the folder. To that reader a link is no file.
+  - **A copy** (a battery exam's, a gate's scratch copy): a link that stays inside the copy — relative, its `..`
+    first and no more of them than its folder is deep — is copied as the link it is, so the copy runs the code the
+    instance runs; any other link is left out. The supervisor reads no link while copying; the copy's folders are
+    made and its files created through descriptors (`O_EXCL`, `O_NOFOLLOW`), so a folder of the copy swapped for a
+    link is refused, never written through.
+
+  Its keys, git and logs (`secrets/`, `.git`, `logs/`) are never sent out by any spelling: the volume is
+  case-insensitive (`Secrets/` is `secrets/`), so the supervisor compares the folder itself (device and inode) and
+  the name case-folded. The sandbox's own deny on `secrets/` holds for every spelling (checked: `cat Secrets/…` from
+  inside the sandbox is refused). Reads are bounded: one file at `SHAFT_FILE_READ_MAX_MB`, the gate's code snapshot
+  at `SHAFT_SNAPSHOT_MAX_MB`, a copy at `SHAFT_COPY_MAX_GB`, any walk at `SHAFT_TREE_MAX_FILES` files and folders and
+  `SHAFT_TREE_MAX_DEPTH` deep. Past a bound the read fails, never returns part: code too big to snapshot fails the
+  gate closed (nothing of the run's code is kept, the files it began with go back, a journal note says why).
 - **Append-only journal**: if a run rewrote history instead of appending, the journal is
   restored and the rewrite kept aside. A journal replaced by a link (or anything that is not a file) is moved aside
   unread and the journal restored.

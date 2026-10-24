@@ -29,16 +29,20 @@ PROJECT = Path(__file__).resolve().parent.parent
 def snapshot(instance_root: Path) -> dict[str, bytes]:
     """The code files' bytes, listed and read through descriptors (core.read_tree, read_beneath): never through a
     link the instance planted, even one swapped in after a check — a failed change is restored from this, so a file
-    read through a link would be written back into the instance's folder."""
-    from .core import UnsafePath, read_beneath, read_tree
+    read through a link would be written back into the instance's folder. TreeTooBig past the bounds (core.Budget,
+    SHAFT_FILE_READ_MAX_MB for a single file): never a part of the code taken for all of it."""
+    from .core import Budget, TooBig, TreeTooBig, UnsafePath, read_beneath, read_tree
     files: dict[str, bytes] = {}
+    budget = Budget()   # one for all the code paths: SHAFT_SNAPSHOT_MAX_MB in all; past it TreeTooBig, never a part
     skip = lambda rel: "__pycache__" in rel.split("/") or rel.split("/")[-1] == ".DS_Store"   # noqa: E731 — Finder's
     for name in CODE_PATHS:
         try:
-            files.update({f"{name}/{rel}": data for rel, data in read_tree(instance_root, name, skip).items()})
+            files.update({f"{name}/{rel}": data for rel, data in read_tree(instance_root, name, skip, budget).items()})
         except (OSError, UnsafePath):   # not a folder: a file, a link, or nothing
             try:
                 files[name] = read_beneath(instance_root, [name])
+            except TooBig as e:
+                raise TreeTooBig(f"{instance_root}/{name}: {e}") from None
             except (OSError, UnsafePath):
                 pass
     return files

@@ -39,9 +39,9 @@ from math import comb
 from pathlib import Path
 
 from . import gate, localmodel, mind
-from .core import (CYCLE_TIMEOUT_S, DOCS_COPY, HOME, LLM_PORTS, MIND_PATHS, PROJECT, SUP_DIR, UnsafePath, cloud_model, contained,
-                   copy_beneath, dollars, hours, knob, list_beneath, log, positive_int, read_tree, safe_read,
-                   safe_read_bytes, safe_write, secrets_env, whole)
+from .core import (CYCLE_TIMEOUT_S, DOCS_COPY, HOME, LLM_PORTS, MIND_PATHS, PROJECT, SUP_DIR, TreeTooBig, UnsafePath,
+                   cloud_model, contained, copy_beneath, dollars, hours, knob, list_beneath, log, positive_int,
+                   read_tree, reserved, safe_read, safe_read_bytes, safe_write, secrets_env, whole)
 
 TRIALS_PER_DAY, TRIALS_PER_DAY_SRC = knob(
     "SHAFT_TRIALS_PER_DAY", "2", whole, "trials an instance may ask for per day (the operator's are not counted)",
@@ -373,7 +373,8 @@ def _files_now(root: Path) -> dict[str, bytes]:
     the replayed code planted in its copy is never read through."""
     def skip(rel: str) -> bool:
         parts = rel.split("/")
-        return parts[0] in NOT_STATE or "__pycache__" in parts or parts[:2] == ["memory", "episodes"]
+        folded = [p.casefold() for p in parts]
+        return folded[0] in NOT_STATE or "__pycache__" in folded or folded[:2] == ["memory", "episodes"]
     return read_tree(root, skip=skip)
 
 
@@ -773,7 +774,7 @@ def request(name: str, files: list, hypothesis: str, episodes: list, n: int, ext
             change[rel] = None
             continue
         src = str(f.get("from") or "")
-        if not src or "secrets" in Path(src).parts:
+        if not src or "secrets" in {p.casefold() for p in Path(src).parts} or reserved(root, src, ("secrets",)):
             raise TrialError(f"{f['path']!r}: 'from' must name a file in your folder holding the new version")
         try:
             contained(root, *Path(src).parts)            # the clear refusal for a path outside, or a link already there
@@ -817,12 +818,14 @@ def _extend(name: str, tid: str, root: Path, project: Path) -> str:
 # -- the worker: tests, replays, judgments, verdicts ----------------------------------------------------------
 def gate_check(project: Path, name: str, t: dict) -> tuple[bool, str]:
     """The proposed code must pass the same test gate as any self-change before any replay is spent on it."""
-    from .coder import HIDDEN
+    from .coder import _hidden
     tmp = Path(tempfile.mkdtemp(prefix="shaft-trial-gate-")).resolve()
     scratch = tmp / name
     try:
-        copy_beneath(project / "instances" / name, scratch, links=True,   # links as links, nothing read through one
-                     skip=lambda rel: bool(set(rel.split("/")) & set(HIDDEN)))
+        try:   # inside links as links, nothing read through one
+            copy_beneath(project / "instances" / name, scratch, _hidden, links=True)
+        except TreeTooBig as e:   # fails closed: too big to check is not checked
+            return False, f"the instance's folder is too big to copy for the gate: {e}"
         for rel in CODE:
             p = scratch / rel
             if p.is_dir() and not p.is_symlink():

@@ -38,8 +38,9 @@ from pathlib import Path
 from . import judge, localmodel, metrics, sandbox
 from .broker import CALENDAR_TOOLS, MAIL_TOOLS, Broker
 from .core import (BROKER_MAX_CALLS, EMBED_PORT, HOME, INSTANCES, LLM_PORTS, PROJECT, PYTHON, SECRETS_DIR, SUP_DIR,
-                   UnsafePath, config_values, copy_beneath, instance_config, instance_root, knob, positive_int, whole,
-                   model_name, log, safe_mkdir, safe_read, safe_read_bytes, safe_write, secrets_env, unlink_beneath)
+                   TreeTooBig, UnsafePath, config_values, copy_beneath, dir_beneath, instance_config, instance_root,
+                   knob, positive_int, whole, model_name, log, safe_mkdir, safe_read, safe_read_bytes, safe_write,
+                   secrets_env, unlink_beneath)
 
 VERSION, _ = knob(
     "SHAFT_BATTERY_VERSION", "v1", model_name, "the battery item set in use (.supervisor/battery/items/<version>)",
@@ -64,6 +65,9 @@ CONTROLLED = ("coding", "research")          # a fresh mind cannot know an insta
 EXAM_OFF = {"send_message", "list_instances", "delegate_coding", "secret_set", "secret_delete",
             "decide",   # added 2026-10-14: exams keep the tools they were calibrated with
             "describe_image",   # docs/plans/PLAN-vision: exams keep the tools they were calibrated with
+            # Keyed by the instance's name, not its folder, so it acts on the live instance whatever copy the exam runs
+            # in: it queues a trial of it, spends its daily trial allowance and delivers the verdict to its real inbox.
+            "trial",
             *MAIL_TOOLS, *CALENDAR_TOOLS}   # the operator's mail and calendars never reach an exam (its broker has
                                             # none either: root= is set)
 BACKUP = HOME / "Library" / "Application Support" / "SHAFT" / "battery-backup"
@@ -153,30 +157,50 @@ def exam_dir(name: str) -> Path:
     return base() / "exam" / name
 
 
-def make_exam_copy(name: str, root: Path) -> Path:
-    """The instance's folder for one exam: its code, plugins, skills, mind, config and docs as they are now, copied
-    without following any link (core.copy_beneath). The exam never runs in the real folder, so nothing it does is
-    left there and nothing there is undone. Until 2026-10-24 it did, between a snapshot held in memory and a restore
-    that followed links planted in the folder (Codex review B3), deleted every file the snapshot lacked — a message
-    delivered to inbox/ mid-exam included (B6) — and never ran when the battery was killed mid-item, which left the
-    exam's edits in the instance (B7). The copy is deleted after its item; one left by a run that died is replaced
-    here, and removed when the next run starts."""
-    from .trial import link_env
-    dest = exam_dir(name)
-    shutil.rmtree(dest, ignore_errors=True)
+def _holder(parent: Path) -> Path:
+    """A new folder for one item's folder, named at random and never used again: what an exam left running — its
+    sandbox writes only the copy it ran in — cannot know or wait for the next one."""
+    parent.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix="item-", dir=parent))
+
+
+def make_exam_copy(name: str, root: Path, check=None) -> Path:
+    """The instance's folder for one exam, <holder>/<name> (its code reads its name from its folder): its code,
+    plugins, skills, mind, config and docs as they are now, copied through descriptors without following any link
+    (core.copy_beneath; a link that stays inside is copied as a link, so the exam runs the code the instance runs),
+    inside SHAFT_COPY_MAX_GB and the tree bounds, `check` (the item's deadline and interrupts) run as it goes. The
+    exam never runs in the real folder, so nothing it does is left there and nothing there is undone. Until
+    2026-10-24 it did, between a snapshot held in memory and a restore that followed links planted in the folder
+    (Codex review B3), deleted every file the snapshot lacked — a message delivered to inbox/ mid-exam included
+    (B6) — and never ran when the battery was killed mid-item, which left the exam's edits in the instance (B7). A
+    copy that fails half-made is removed here; one finished is removed after its item (_one), and one left by a run
+    that died by the next run."""
+    from .pyenv import ENV_DIRS
+    holder = _holder(exam_dir(name))
+    dest = holder / name
 
     def skip(rel: str) -> bool:
-        parts = rel.split("/")
-        return "__pycache__" in parts or (parts[0] in EXAM_SKIP and rel not in EXAM_KEEP)
-    copy_beneath(root, dest, skip)
-    link_env(dest, root)
+        parts = [p.casefold() for p in rel.split("/")]   # the volume is case-insensitive: `Secrets/` is secrets/
+        return "__pycache__" in parts or (parts[0] in EXAM_SKIP and "/".join(parts) not in EXAM_KEEP)
+    try:
+        copy_beneath(root, dest, skip, links=True, check=check)
+        fd = dir_beneath(dest)
+        try:   # its Python environment, read in place, read-only (the sandbox's env_root)
+            for d in ENV_DIRS:
+                if (Path(root) / d).is_dir():
+                    os.symlink(str(Path(root).resolve() / d), d, dir_fd=fd)
+        finally:
+            os.close(fd)
+    except BaseException:
+        shutil.rmtree(holder, ignore_errors=True)
+        raise
     return dest
 
 
 def make_control(name: str) -> Path:
-    dest = base() / "control" / name
-    shutil.rmtree(dest, ignore_errors=True)
-    dest.mkdir(parents=True)
+    """A fresh control for one item, <holder>/<name>: the template on the instance's model, with an empty mind."""
+    dest = _holder(base() / "control" / name) / name
+    dest.mkdir()
     archive = subprocess.run(["git", "-C", str(PROJECT), "archive", "--format=tar", CONTROL_REF],
                              capture_output=True, check=True)
     subprocess.run(["tar", "-x", "-C", str(dest)], input=archive.stdout, check=True)
@@ -184,6 +208,38 @@ def make_control(name: str) -> Path:
     for d in ("self", "memory", "notes", "inbox"):
         (dest / d).mkdir(exist_ok=True)
     return dest
+
+
+def _end_strays(folder: Path) -> list[int]:
+    """SIGKILL every process of this user working inside `folder` (an exam's folder), with what it started: one the
+    exam started in a session of its own has left its process group (killed in _exam), not its folder. Read from the
+    process table with working folders (kill.processes)."""
+    from . import kill
+    try:
+        procs = kill.processes()
+    except (RuntimeError, OSError) as e:
+        log(f"battery: could not list the processes left in {folder}: {e}")
+        return []
+    top = str(Path(folder).resolve())
+    children: dict[int, list[int]] = {}
+    for p in procs.values():
+        children.setdefault(p.ppid, []).append(p.pid)
+    stack = [p.pid for p in procs.values() if p.cwd == top or p.cwd.startswith(top + "/")]
+    out: list[int] = []
+    while stack:
+        pid = stack.pop()
+        if pid in out or pid == os.getpid():
+            continue
+        out.append(pid)
+        stack.extend(children.get(pid, []))
+    for pid in out:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    if out:
+        log(f"battery: {len(out)} process(es) an exam left running in {folder} killed: {sorted(out)}")
+    return out
 
 
 class ExamBroker(Broker):
@@ -224,24 +280,21 @@ def _exam(label: str, root: Path, broker: Broker, task: dict, until: float | Non
                             SHAFT_SCHEDULE="the supervisor is running its capability battery (no schedule now).",
                             **broker.sandbox_env())
     cmd = sandbox.wrap(prof, [PYTHON, "-E", "-s", "-m", "shaft", "exam"])
-    proc = subprocess.Popen(cmd, cwd=root, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, text=True, start_new_session=True)
-    proc.stdin.write(json.dumps(task))
-    proc.stdin.close()
-    out_chunks: list[str] = []
-    err_chunks: list[str] = []
-    import threading
-    readers = [threading.Thread(target=lambda: out_chunks.append(proc.stdout.read()), daemon=True),
-               threading.Thread(target=lambda: err_chunks.append(proc.stderr.read()), daemon=True)]
-    for r in readers:
-        r.start()
+    # Its output goes to files, not pipes: a process the exam leaves running would hold a pipe open, and the item
+    # with it, until it chose to end.
+    out_f, err_f = tempfile.TemporaryFile(), tempfile.TemporaryFile()
+    proc = subprocess.Popen(cmd, cwd=root, env=env, stdin=subprocess.PIPE, stdout=out_f, stderr=err_f,
+                            start_new_session=True)
     try:
+        try:
+            proc.stdin.write(json.dumps(task).encode())
+            proc.stdin.close()
+        except OSError:   # it ended without reading its task: its output says why
+            pass
         yielded = False
         while proc.poll() is None:
             why = interrupt()
             if why or time.time() > deadline + 30:
-                os.killpg(proc.pid, signal.SIGKILL)
-                proc.wait()
                 raise Interrupted(why or f"item timed out ({ITEM_TIMEOUT_S}s or the window's end)")
             if real and not yielded and (real / ".tmp" / "yield").exists():
                 yielded = True
@@ -250,12 +303,13 @@ def _exam(label: str, root: Path, broker: Broker, task: dict, until: float | Non
                 except UnsafePath as e:   # the exam put a link there: it does not get the request
                     log(f"{label}: could not pass the request to yield on to its exam: {e}")
             time.sleep(1)
-    finally:
-        for r in readers:
-            r.join(timeout=5)
-        proc.stdout.close()
-        proc.stderr.close()
-    out, err = "".join(out_chunks).strip(), "".join(err_chunks).strip()
+    finally:   # every way out: what it started in its process group goes with it (strays outside it: _end_strays)
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        proc.wait()
+        out, err = _tail(out_f), _tail(err_f)
     last = out.splitlines()[-1] if out else ""
     try:
         res = json.loads(last)
@@ -264,6 +318,16 @@ def _exam(label: str, root: Path, broker: Broker, task: dict, until: float | Non
                 "error": f"exit {proc.returncode}: {(err or out)[-800:]}"}
     res["exit"] = proc.returncode
     return res
+
+
+OUTPUT_MAX = 64 * 2**20   # what is kept of an exam's output: its result is its last line
+
+
+def _tail(f) -> str:
+    with f:
+        size = f.seek(0, 2)
+        f.seek(max(0, size - OUTPUT_MAX))
+        return f.read().decode(errors="replace").strip()
 
 
 # -- scoring -----------------------------------------------------------------------------
@@ -306,7 +370,7 @@ def run_hidden_tests(item: dict, root: Path, scratch: str) -> dict:
         skip = lambda rel: any(p == "__pycache__" or p.startswith(".") for p in rel.split("/"))   # noqa: E731
         try:
             copy_beneath(root, work, skip, rel=scratch)
-        except (FileNotFoundError, UnsafePath):   # no scratch folder, or one reached through a link
+        except (FileNotFoundError, UnsafePath, TreeTooBig):   # none, reached through a link, or too big: none pass
             shutil.rmtree(work, ignore_errors=True)
             work.mkdir()
         hidden = Path(item["dir"]) / "hidden"
@@ -550,8 +614,7 @@ def run(name: str, until: float | None = None, only: list[str] | None = None, co
     summary = {"name": name, "started": started, **e, "items": []}
     scored = 0
     interrupt = _interrupt_check(name, until)
-    for left in (exam_dir(name), base() / "control" / name):   # a run that died left its folders behind
-        shutil.rmtree(left, ignore_errors=True)
+    _clean_left(name, control_only)
     try:
         for item in items:
             arms = ([] if control_only else ["instance"]) + \
@@ -589,11 +652,50 @@ def _one(name: str, item: dict, arm: str, real: Path, e: dict, until: float | No
     """One item for one arm, in a folder made for it and deleted after it: a copy of the instance (`real`, never
     written), or a fresh control."""
     label = name if arm == "instance" else f"{name}-control"
-    root = make_exam_copy(name, real) if arm == "instance" else make_control(name)
+    deadline = min(time.time() + ITEM_TIMEOUT_S, until or float("inf"))
+
+    def check():
+        if (why := interrupt()) or time.time() > deadline:
+            raise Interrupted(why or f"item timed out ({ITEM_TIMEOUT_S}s or the window's end) making its folder")
+    root = None
     try:
+        try:
+            root = make_exam_copy(name, real, check=check) if arm == "instance" else make_control(name)
+        except Interrupted as stop:
+            _append(name, {**_row(item, arm, e), "status": "interrupted", "why": str(stop)})
+            raise
+        except TreeTooBig as err:   # never a partial copy: the item is not run, and says why
+            row = {**_row(item, arm, e), "status": "error",
+                   "error": f"its folder is too big to copy for an exam: {err}"}
+            _append(name, row)
+            log(f"{name}: battery item {item['id']} ({arm}) not run: {row['error']}")
+            return row
         return _one_in(name, item, arm, root, real, label, e, until, interrupt, grader)
     finally:
-        shutil.rmtree(root, ignore_errors=True)
+        if root is not None:
+            _end_strays(root)
+            shutil.rmtree(root.parent, ignore_errors=True)   # its holder: never used again
+
+
+def _row(item: dict, arm: str, e: dict) -> dict:
+    return {"item": item["id"], "category": item["category"], "arm": arm,
+            "at": datetime.now().isoformat(timespec="seconds"), **e}
+
+
+def _clean_left(name: str, control_only: bool) -> None:
+    """Remove what a run that died left behind. Exam copies are made only under the instance's run lock, so they
+    go when this run holds it or nobody does; a control may be a running control check's (which takes no lock), so
+    one goes only once it is older than any item can run."""
+    from .runner import is_busy
+    if not control_only or not is_busy(name):
+        shutil.rmtree(exam_dir(name), ignore_errors=True)
+    controls = base() / "control" / name
+    for left in controls.iterdir() if controls.is_dir() else []:
+        try:
+            if time.time() - left.stat().st_mtime > ITEM_TIMEOUT_S + 600:
+                shutil.rmtree(left, ignore_errors=True)
+        except OSError:
+            pass
 
 
 def _one_in(name: str, item: dict, arm: str, root: Path, real: Path, label: str, e: dict, until: float | None,
@@ -607,8 +709,7 @@ def _one_in(name: str, item: dict, arm: str, root: Path, real: Path, label: str,
               else Broker(label, PROJECT, secrets_env(), base() / "broker.log", **kw))
     broker.disabled |= EXAM_OFF
     broker.url = broker.start()
-    row = {"item": item["id"], "category": item["category"], "arm": arm, "at": datetime.now().isoformat(timespec="seconds"),
-           **e}
+    row = _row(item, arm, e)
     t0 = time.monotonic()
     res: dict = {}
     try:

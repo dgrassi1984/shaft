@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -510,7 +512,7 @@ class BatteryExamCopyTest(unittest.TestCase):
 
     def test_the_copy_holds_the_instance_but_not_its_keys_git_or_mail(self):
         copy = battery.make_exam_copy("b", self.root)
-        self.assertEqual(copy, self.sup / "battery" / "exam" / "b")
+        self.assertEqual((copy.parent.parent, copy.name), (self.sup / "battery" / "exam" / "b", "b"))
         got = tree(copy)
         for rel in ("memory/journal.md", "notes/keep.md", "notes/uncommitted.md", "plugins/p.py", "skills/s.md",
                     "self/self.md", "inbox/20261024-x-from-operator.md", "config.env", ".tmp/memory-index.json"):
@@ -535,11 +537,13 @@ class BatteryExamCopyTest(unittest.TestCase):
         self.assertNotIn(b"THE OPERATOR'S FILE", b"".join(v for v in got.values() if isinstance(v, bytes)))
         self.assertEqual(tree(self.outside), before)
 
-    def test_a_stale_copy_is_replaced(self):
-        stale = self.sup / "battery" / "exam" / "b"
+    def test_a_stale_copy_is_never_reused(self):
+        stale = self.sup / "battery" / "exam" / "b" / "item-dead" / "b"
         (stale / "notes").mkdir(parents=True)
         (stale / "notes" / "from-a-dead-run.md").write_text("exam edit")
-        self.assertNotIn("notes/from-a-dead-run.md", tree(battery.make_exam_copy("b", self.root)))
+        copy = battery.make_exam_copy("b", self.root)
+        self.assertNotEqual(copy, stale)
+        self.assertNotIn("notes/from-a-dead-run.md", tree(copy))
 
 
 class HiddenTestsTest(unittest.TestCase):
@@ -754,8 +758,9 @@ class BatteryEndToEndTest(unittest.TestCase):
         real_make = battery.make_control
 
         def make_control(name):
-            dest = battery.base() / "control" / name
-            dest.mkdir(parents=True)
+            (battery.base() / "control" / name).mkdir(parents=True, exist_ok=True)
+            dest = Path(tempfile.mkdtemp(prefix="item-", dir=battery.base() / "control" / name)) / name
+            dest.mkdir()
             subprocess.run(["tar", "-xf", str(archive), "-C", str(dest)], check=True)
             shutil.copy2(self.root / "config.env", dest / "config.env")
             for d in ("self", "memory", "notes", "inbox"):
@@ -808,8 +813,8 @@ class BatteryEndToEndTest(unittest.TestCase):
         self.assertEqual({k: v for k, v in after.items() if k not in ("self/stats.md", "shaft-docs")
                           and not k.startswith(("shaft-docs/", ".tmp"))}, before)   # nothing kept
         self.assertFalse((self.root / ".tmp" / "battery").exists())
-        self.assertFalse((self.sup / "battery" / "control" / "e").exists())        # control removed
-        self.assertFalse((self.sup / "battery" / "exam" / "e").exists())           # the instance's copy removed
+        for left in (self.sup / "battery" / "control" / "e", self.sup / "battery" / "exam" / "e"):
+            self.assertEqual(list(left.iterdir()) if left.exists() else [], [], left)   # control and copy removed
         self.assertNotIn("write_add", (self.sup / "battery" / "broker.log").read_text() if
                          (self.sup / "battery" / "broker.log").exists() else "")
         self.assertIn("Hidden tests: 1/1 passed", self.graded[0])
@@ -869,11 +874,42 @@ class BatteryEndToEndTest(unittest.TestCase):
         self.assertTrue(all("write" not in l and ("file-read-metadata" in l or ".venv" in l) for l in real), real)
 
     def test_a_copy_left_by_a_run_that_died_is_removed_by_the_next(self):
-        stale = self.sup / "battery" / "exam" / "e"
+        stale = self.sup / "battery" / "exam" / "e" / "item-dead" / "e"
         (stale / "notes").mkdir(parents=True)
         (stale / "notes" / "exam-edit.md").write_text("left by a killed run")
         self.assertEqual(battery.run("e", control_only=True), 1)
         self.assertFalse(stale.exists())
+
+    def test_b7_a_battery_killed_mid_exam_leaves_the_instance_untouched(self):
+        # Codex review B7, the real thing: the battery process SIGKILLed while its exam runs — no `finally` runs.
+        before = tree(self.root)
+        ready = self.project / "exam-started"
+        real_exam = battery._exam
+
+        def hang(label, root, *a, **k):
+            if label == "e":
+                (root / "notes").mkdir(exist_ok=True)
+                (root / "notes" / "exam-edit.md").write_text("written mid-exam")
+                ready.write_text(str(root))
+                time.sleep(120)
+            return real_exam(label, root, *a, **k)
+        pid = os.fork()
+        if pid == 0:   # the battery process
+            try:
+                with mock.patch.object(battery, "_exam", hang):
+                    battery.run("e")
+            finally:
+                os._exit(0)
+        deadline = time.time() + 60
+        while not ready.exists() and time.time() < deadline:
+            time.sleep(0.1)
+        os.kill(pid, signal.SIGKILL)
+        os.waitpid(pid, 0)
+        copy = Path(ready.read_text())
+        self.assertEqual((copy / "notes" / "exam-edit.md").read_text(), "written mid-exam")   # it left its copy ...
+        self.assertEqual(tree(self.root), before)                                            # ... the instance as it was
+        self.assertEqual(battery.run("e", control_only=True), 1)
+        self.assertFalse(copy.exists())                                                      # the next run removed it
 
 
 if __name__ == "__main__":

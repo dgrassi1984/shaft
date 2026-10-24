@@ -118,6 +118,10 @@ def judgments_text(rows: list[dict], limit: int = 20, cycle: str = "", before: s
     return "\n\n".join(picked) + tail
 
 
+# What of its folder an instance can never send anywhere (attachments, describe_image): its keys, git and logs.
+NOT_SENT = ("secrets", ".git", "logs")
+
+
 def _in_folder(root: Path, rel: str) -> Path | None:
     """`rel` (relative, or absolute inside root) as a plain path below root, or None if it leads out of it."""
     p = Path(rel)
@@ -821,14 +825,14 @@ class Broker:
         paths = [paths] if isinstance(paths, str) else paths
         if not isinstance(paths, list) or len(paths) > messages.ATTACH_MAX_FILES:
             raise ValueError(f"attachments: a list of at most {messages.ATTACH_MAX_FILES} paths in your folder")
-        from .core import UnsafePath, safe_read_bytes
+        from .core import UnsafePath, reserved, safe_read_bytes
         out, total = [], 0
         for rel in paths:
             rel = str(rel).strip()
             p = _in_folder(self.root, rel)
             if not p:
                 raise ValueError(f"{rel}: attachments must be files in your folder")
-            if p.parts[0] in ("secrets", ".git", "logs"):
+            if reserved(self.root, p.as_posix(), NOT_SENT):   # by the folder itself: `Secrets/` is secrets/
                 raise ValueError(f"{rel}: files in {p.parts[0]}/ cannot be attached")
             try:   # the file leaves the folder: read through descriptors, a link anywhere on the way refused
                 data = safe_read_bytes(self.root, p.as_posix(), limit=messages.ATTACH_MAX_BYTES)
@@ -1535,7 +1539,7 @@ class Broker:
         """(shown path, bytes) of an image in the instance's folder, or in shared/. Never its keys, git or logs. In its
         own folder no link is followed anywhere on the way (the image may go to a cloud model); in the operator's
         shared folder a link that leads out of it is refused like a path that does."""
-        from .core import UnsafePath, safe_read_bytes
+        from .core import UnsafePath, reserved, safe_read_bytes
         from .messages import size_text
         rel = str(path or "").strip().removeprefix("./")
         if rel == "shared" or rel.startswith("shared/"):
@@ -1546,7 +1550,7 @@ class Broker:
             p = _in_folder(self._root(), rel)
             if not p or os.path.islink(self._root() / p):
                 raise ValueError(f"{rel or '(empty path)'}: give the path of an image file in your folder")
-            if p.parts[0] in ("secrets", ".git", "logs"):
+            if reserved(self._root(), p.as_posix(), NOT_SENT):
                 raise ValueError(f"{rel}: files in {p.parts[0]}/ cannot be read")
             try:
                 return rel, safe_read_bytes(self._root(), p.as_posix(), limit=IMAGE_FILE_MAX)
