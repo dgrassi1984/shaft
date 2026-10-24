@@ -50,6 +50,11 @@ def _when(ts: str) -> str:
     return (ts or "?")[:16].replace("T", " ")
 
 
+def _judged_at(row: dict) -> str:
+    stamp = str(row.get("judged_at", "")).replace("T", " ")
+    return stamp + ":00" if len(stamp) == 16 else stamp[:19]
+
+
 def judgment_text(j: dict) -> str:
     """One verdict with every field the judge gave — the reasons behind each rating, not just the grades."""
     out = [f"### {_when(j.get('episode_ts'))} — {j.get('goal', '')}",
@@ -90,6 +95,10 @@ def judgments_text(rows: list[dict], limit: int = 20, cycle: str = "", before: s
     """Whole verdicts, newest first, as many as fit in `budget` — never one cut in half (wren, 2026-10-13: "I
     only see fragments"). `cycle` gives one in full; `before` pages back. `left_out`: the runs the main judge
     did not sample (metrics.unsampled), which have no verdict and are not failures."""
+    return _judgments_text(rows, limit, cycle, before, budget, left_out)
+
+
+def _judgments_text(rows, limit, cycle, before, budget, left_out, since="") -> str:
     if cycle:
         want = cycle.strip().replace("T", " ")[:16]
         hit = [r for r in rows if _when(r.get("episode_ts")) == want]
@@ -101,7 +110,7 @@ def judgments_text(rows: list[dict], limit: int = 20, cycle: str = "", before: s
     if before:
         cut = before.strip().replace("T", " ")[:16]
         rows = [r for r in rows if _when(r.get("episode_ts")) < cut]
-    rows = rows[::-1]
+    rows = sorted(rows, key=_judged_at) if since else rows[::-1]
     picked, used = [], 0
     for r in rows[:max(1, min(int(limit), 200))]:
         t = judgment_text(r)
@@ -115,6 +124,24 @@ def judgments_text(rows: list[dict], limit: int = 20, cycle: str = "", before: s
     tail = (f"\n\n({len(picked)} of {len(rows)} verdicts, newest first. Older: record(kind='judgments', "
             f"before='{_when(rows[len(picked) - 1].get('episode_ts'))}'). One in full: record(kind='judgments', "
             f"cycle='YYYY-MM-DD HH:MM').)" if more else "")
+    if since and more:
+        # The rest go on strictly after the last one shown, so verdicts judged in the same second are never split
+        # across that cut (the second would be skipped for good): drop the tie back, or show all of it.
+        n, stamp = len(picked), _judged_at(rows[len(picked) - 1])
+        if _judged_at(rows[n]) == stamp:
+            k = n
+            while k and _judged_at(rows[k - 1]) == stamp:
+                k -= 1
+            if k:
+                picked = picked[:k]
+            while not k and n < len(rows) and _judged_at(rows[n]) == stamp:
+                picked.append(judgment_text(rows[n]))
+                n += 1
+        if len(picked) < len(rows):
+            tail = (f"\n\n({len(picked)} of {len(rows)} new verdicts, oldest first. The rest: "
+                    f"record(kind='judgments', since='{_judged_at(rows[len(picked) - 1])}').)")
+        else:
+            tail = ""
     return "\n\n".join(picked) + tail
 
 
@@ -208,7 +235,9 @@ SPECS = {
          "limit": {"type": "integer", "description": "entries, default 20, max 200"},
          "cycle": {"type": "string", "description": "judgments: one cycle's verdict in full, by its time "
                                                     "('2026-10-13 17:42')"},
-         "before": {"type": "string", "description": "judgments: only cycles before this time (to page back)"}},
+         "before": {"type": "string", "description": "judgments: only cycles before this time (to page back)"},
+         "since": {"type": "string", "description": "judgments only: verdicts judged after this time, e.g. the time "
+                   "of my last review; oldest first. YYYY-MM-DD HH:MM[:SS] (T accepted); missing seconds mean :00"}},
         ["kind"]),
     "decide": _spec(
         "decide",
@@ -566,6 +595,8 @@ class Broker:
                     return
                 if self.path == "/tools":
                     return self._reply(200, {"tools": broker.tool_specs()})
+                if self.path == "/envelope":
+                    return self._reply(200, {"ok": True, "envelope": broker.envelope()})
                 self._reply(404, {"ok": False, "error": "not found"})
 
             def do_POST(self):
@@ -1085,7 +1116,38 @@ class Broker:
         mind.require(self.name, self.project)
         return "HEAD", mind.head(self.name, self.project)
 
-    def _record(self, kind: str, limit: int = 20, cycle: str = "", before: str = "") -> str:
+    def envelope(self) -> dict:
+        """Operational limits, without spending a tool call or exposing host configuration."""
+        from . import autonomy, cloudllm, coder, metrics, trial
+        from .core import log
+
+        def field(label, compute):
+            try:
+                return compute()
+            except Exception as e:
+                try:
+                    log(f"{self.name}: envelope {label} unavailable ({type(e).__name__})")
+                except OSError:   # a failed state disk must not also take down the envelope
+                    pass
+                return None
+
+        def trials():
+            usage = trial.usage_today(self.name)
+            return {"started": usage["started"], "per_day": trial.TRIALS_PER_DAY,
+                    "spent_usd": float(usage["usd"]), "cap_usd": float(trial.DAILY_USD)}
+
+        return {"calls_used": self.calls, "calls_max": self.max_calls,
+                "cloud": field("cloud", lambda: {"spent_usd": float(cloudllm.spent_today(self.usage_name)),
+                                                 "cap_usd": float(cloudllm.daily_cap(self.name))}),
+                "coder": None if "delegate_coding" in self.disabled or "delegate_coding" in self.unavailable else
+                    field("coder", lambda: {"spent_usd": float(coder.spent_today(self.name)),
+                                            "cap_usd": float(coder.DAILY_USD)}),
+                "trials": None if "trial" in self.disabled or "trial" in self.unavailable else field("trials", trials),
+                "probation": field("probation", lambda: metrics.probation_status(self.name)),
+                "next_sleep": field("next_sleep", autonomy.next_sleep),
+                "next_wake": field("next_wake", lambda: autonomy.next_wake(self.name)), "replay": False}
+
+    def _record(self, kind: str, limit: int = 20, cycle: str = "", before: str = "", since: str = "") -> str:
         from .core import SUP_DIR
         limit = max(1, min(int(limit), 200))
         # A trial replay sees the record as it stood when the replayed cycle started, never what came after.
@@ -1098,13 +1160,23 @@ class Broker:
             return [r for r in rows if known(str(r.get(field, "")).replace("T", " "))][-limit:]
         if kind == "judgments":
             from .metrics import judgments, unsampled_rows
-            rows = [r for r in judgments(self.name, SUP_DIR) if known(str(r.get("judged_at", "")).replace("T", " "))]
+            if since:
+                # A minute means its start: 10:00:30 is strictly after 10:00, not equal to it.
+                if not isinstance(since, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2})?", since):
+                    raise ValueError("since must be YYYY-MM-DD HH:MM or YYYY-MM-DD HH:MM:SS (T accepted)")
+                try:
+                    since = datetime.fromisoformat(since).strftime("%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    raise ValueError("since must be a valid YYYY-MM-DD HH:MM[:SS] timestamp") from None
+            rows = [r for r in judgments(self.name, SUP_DIR) if known(_judged_at(r))]
+            if since:
+                rows = [r for r in rows if _judged_at(r) > since]
             left_out = {r["episode_ts"] for r in unsampled_rows(self.name, SUP_DIR)
                         if known(str(r.get("decided_at", "")).replace("T", " "))}
             for r in rows:   # a replay sees a second verdict only if it existed then
                 if isinstance(r.get("second"), dict) and not known(str(r["second"].get("judged_at", "")).replace("T", " ")):
                     del r["second"]
-            return judgments_text(rows, limit, cycle, before, left_out=left_out)
+            return _judgments_text(rows, limit, cycle, before, JUDGMENTS_BUDGET, left_out, since)
         elif kind == "runs":
             mine = f"] {self.name}: "
             text = "\n".join(_tail_lines(SUP_DIR / "supervisor.log", 20000,
@@ -1594,6 +1666,11 @@ class ReplayBroker(Broker):
         self.trace: list[dict] = []          # every tool call, as the supervisor saw it
         self.operator_sent = 0
         self._tags = threading.local()
+
+    def envelope(self) -> dict:
+        """A replay must never read today's allowances or schedule."""
+        return {"calls_used": self.calls, "calls_max": self.max_calls, "cloud": None, "coder": None,
+                "trials": None, "probation": [], "next_sleep": None, "next_wake": None, "replay": True}
 
     def _make_egress(self):
         from .core import SUP_DIR

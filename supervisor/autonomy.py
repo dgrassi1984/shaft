@@ -189,6 +189,19 @@ def sleep_due(now: datetime, st: dict) -> bool:
     return now >= sleep_from and (last_sleep is None or last_sleep < sleep_from)
 
 
+def next_sleep(now: datetime | None = None) -> str | None:
+    """Next nightly sleep, or None when the scheduler is not installed; missed sleeps are due now."""
+    if not (AGENTS / f"{SERVICES['scheduler']['label']}.plist").exists():
+        return None
+    now = now or datetime.now()
+    if sleep_due(now, _state()):
+        return "due"
+    at = now.replace(hour=SLEEP_AT[0], minute=SLEEP_AT[1], second=0, microsecond=0)
+    if at <= now:
+        at += timedelta(days=1)
+    return f"{at:%Y-%m-%d %H:%M}"
+
+
 def decide_wakes(now: datetime, st: dict, names: list[str], interval_of, awake_of) -> tuple[list[str], dict[str, str]]:
     """(instances to wake now, {instance: why its due wake is skipped}). Pure: the scheduler's rule."""
     start, skip = [], {}

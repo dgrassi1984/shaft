@@ -418,6 +418,7 @@ def _replay(project, name, state, code, tmp, *, model, cache, cache_lock, billed
                           max_calls=BROKER_MAX_CALLS)
     broker.start()
     extra = {"SHAFT_DEADLINE": f"{time.time() + CYCLE_TIMEOUT_S - 60:.0f}", "SHAFT_SCHEDULE": describe_schedule(name, _config(project, name)),
+             "SHAFT_NOW": state["t0"],
              "SHAFT_OPEN_TALKS": ",".join(_talk_ids(dest))}   # no write-ups of old conversations, in either run
     ports = list(LLM_PORTS)
     if model == "local":

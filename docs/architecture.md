@@ -55,6 +55,13 @@ and conversations the supervisor collects, checked against what the instance dec
 before and after a self-change. Cycles judged before the ratings existed are rated with
 `shaft judge backfill` (verdicts unchanged).
 
+Calibration v2 measures P(criterion met = yes), identified by `confidence_of="criterion_met=yes"`.
+Its Brier score uses yes=1 and partial/no=0. Older v1 confidence asked for "probability of success" and
+uses yes=1/partial=0.5/no=0. Stats, reviews and surprise baselines keep their scores and counts separate.
+`record(kind='judgments', since=...)` reviews verdicts by `judged_at`, oldest first, even for older cycles.
+Minute-only timestamps mean `:00`; `T` and space separators are accepted. Use the returned continuation's
+`since` to read the next page. Without `since`, verdicts remain newest first.
+
 The **capability battery** is a fixed yardstick: held-out tasks the instances never see (coding with hidden
 tests, research against a frozen key, recall of their own older journal entries, self-knowledge checked
 against the supervisor's record), graded effectiveness first. Each instance is compared with a *control*:

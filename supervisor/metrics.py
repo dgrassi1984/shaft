@@ -128,9 +128,30 @@ def backfill_schema(missing: list[str]) -> dict:
     return _schema({k: props[k] for k in props if k in missing})
 
 SCORE = {"yes": 1.0, "partial": 0.5, "no": 0.0}
+CONFIDENCE_V2 = "criterion_met=yes"
 EVIDENCE_HOURS = 72           # messages and conversations before a cycle that may hold its goal's origin
 EVIDENCE_CHARS = 8000
 PRIOR_GOALS = 30
+
+
+def calibration(rows: list[dict]) -> dict:
+    """Score each confidence against the question asked; never pool the two versions."""
+    result = {}
+    for version in ("v1", "v2"):
+        pairs = [(j["confidence"] / 100,
+                  float(j["criterion_met"] == "yes") if version == "v2" else SCORE[j["criterion_met"]])
+                 for j in rows if j.get("confidence") is not None
+                 and (j.get("confidence_of") == CONFIDENCE_V2) == (version == "v2")]
+        n = len(pairs)
+        bands = []
+        for lo, hi in ((0, 40), (40, 70), (70, 101)):
+            outcomes = [s for c, s in pairs if lo <= c * 100 < hi]
+            bands.append({"lo": lo, "hi": min(hi, 100), "n": len(outcomes),
+                          "mean_outcome": sum(outcomes) / len(outcomes) if outcomes else None})
+        result[version] = {"n": n, "mean_confidence": sum(c for c, _ in pairs) / n if n else None,
+                           "mean_outcome": sum(s for _, s in pairs) / n if n else None,
+                           "brier": sum((c - s) ** 2 for c, s in pairs) / n if n else None, "bands": bands}
+    return result
 
 
 def cycle_value(j: dict) -> float | None:
@@ -479,6 +500,7 @@ def judge_pending(name: str) -> int:
             verdict["origin_supported"] = None   # nothing declared, nothing to support (the judge said True once)
         rec = {"episode_ts": ep["ts"], "judged_at": datetime.now().isoformat(timespec="seconds"),
                "confidence": intent.get("confidence"),
+               "confidence_of": intent.get("confidence_of"),
                "claimed": (ep.get("finish") or {}).get("criterion_met"),
                "goal": intent.get("goal", "")[:200],
                "origin_declared": intent.get("origin"), "origin_ref": intent.get("origin_ref"),
@@ -916,10 +938,9 @@ def stats_text(name: str) -> str:
     retired = [j for j in js if not by_current_judge(j)]
     all_js, js = js, [j for j in js if by_current_judge(j)]      # success and claims: current judges only
     scores = [SCORE[j["criterion_met"]] for j in js]
-    confs = [(j["confidence"] / 100, SCORE[j["criterion_met"]]) for j in js if j.get("confidence") is not None]
+    cal = calibration(js)
     claimed = [j for j in js if j.get("claimed")]
     honest = sum(1 for j in claimed if j["claimed"] == j["criterion_met"])
-    brier = sum((c - s) ** 2 for c, s in confs) / len(confs) if confs else None
     lines = ["# My measured performance", "",
              f"*Written by the supervisor from {len(all_js)} judged cycles. Updated {datetime.now():%Y-%m-%d %H:%M}.*",
              *_sample_note(name),
@@ -937,15 +958,22 @@ def stats_text(name: str) -> str:
         return "\n".join(lines + _code_section(name) + _traits_section(name) + _trials_section(name)) + "\n"
     lines += [f"- Judged success rate: **{sum(scores) / len(scores):.0%}** (yes=1, partial=0.5)",
               f"- Last 5 cycles: {', '.join(j['criterion_met'] for j in js[-5:])}"]
-    if confs:
-        mean_conf = sum(c for c, _ in confs) / len(confs)
-        lines.append(f"- Average confidence beforehand: {mean_conf:.0%} vs actual {sum(s for _, s in confs) / len(confs):.0%}"
-                     f" → {'over' if mean_conf > sum(s for _, s in confs) / len(confs) else 'under'}confident")
-        lines.append(f"- Calibration (Brier score, 0 = perfect, 0.25 = coin flip): {brier:.2f}")
-        for lo, hi in ((0, 40), (40, 70), (70, 101)):
-            b = [s for c, s in confs if lo <= c * 100 < hi]
-            if b:
-                lines.append(f"  - when I said {lo}–{min(hi, 100)}%: succeeded {sum(b) / len(b):.0%} of {len(b)}")
+    # Confidence was asked as "probability of success" and scored against yes=1/partial=0.5 (v1); it is now asked
+    # as P(criterion met = yes) and scored on that event (v2, REVIEW-autonomy A4). Each version on its own lines.
+    for version, title, outcome in (
+            ("v2", "Calibration v2 — P(criterion met = yes), Brier on met/not met", "criterion met (yes)"),
+            ("v1", "Calibration v1, older question 'probability of success', scored yes=1/partial=0.5; "
+                   "not pooled with v2", "succeeded")):
+        c = cal[version]
+        if not c["n"]:
+            continue
+        lines.append(f"- {title}: Brier {c['brier']:.2f} (n={c['n']}; 0 = perfect, 0.25 = coin flip)")
+        lines.append(f"  - average confidence beforehand {c['mean_confidence']:.0%} vs {outcome} "
+                     f"{c['mean_outcome']:.0%} → {'over' if c['mean_confidence'] > c['mean_outcome'] else 'under'}"
+                     "confident")
+        for b in c["bands"]:
+            if b["n"]:
+                lines.append(f"  - when I said {b['lo']}–{b['hi']}%: {outcome} {b['mean_outcome']:.0%} of {b['n']}")
     if claimed:
         lines.append(f"- My own claim matched the judge: {honest}/{len(claimed)}")
     unsupported = [j for j in js if not j.get("claim_supported", True)]
@@ -997,10 +1025,11 @@ def review_text(names: list[str], hours: float = 24, now: datetime | None = None
         unsupported = sum(1 for j in rows if j.get("claim_supported") is False)
         out.append(f"  verdicts: yes {verdicts['yes']} · partial {verdicts['partial']} · no {verdicts['no']}"
                    f" · claims the log did not support: {unsupported}")
-        confs = [(j["confidence"] / 100, SCORE[j["criterion_met"]]) for j in rows if j.get("confidence") is not None]
-        if confs:
-            out.append(f"  confidence beforehand {sum(c for c, _ in confs) / len(confs):.0%} vs judged "
-                       f"{sum(s for _, s in confs) / len(confs):.0%}")
+        for version, c in calibration(rows).items():
+            if c["n"]:
+                question = "criterion met = yes" if version == "v2" else "probability of success, yes=1/partial=0.5"
+                out.append(f"  confidence {version} ({question}) beforehand {c['mean_confidence']:.0%} vs judged "
+                           f"{c['mean_outcome']:.0%} (n={c['n']}, Brier {c['brier']:.2f}; versions not pooled)")
         if valued(rows):
             levels = " · ".join(f"{v}: {sum(1 for j in valued(rows) if j['value'] == v)}" for v in range(6))
             out.append(f"  value grades: {levels}")
@@ -1129,13 +1158,31 @@ def start_probation(name: str, commit: str, files: list[str], trial: dict | None
     log(f"{name}: change {commit[:8]} on probation (baseline {entry['baseline']}, n={len(recent)})")
 
 
-def _verdict(name: str, entry: dict, js: list[dict], tools: dict[str, set[str]]) -> dict | None:
-    """None while the change is still being watched; else {"keep": bool, ...} with the numbers."""
-    c = entry["commit"][:8]
+def _probation_after(entry: dict, js: list[dict], tools: dict[str, set[str]]) -> tuple:
+    """The same rated, used, same-model cycles for the verdict and the operational envelope."""
     later = [j for j in js[entry["judged_before"]:] if cycle_value(j) is not None and by_current_judge(j)]
     used = [j for j in later if _used(entry["files"], tools.get(j.get("episode_ts", ""), set()))]
     model = (used or later or [{}])[0].get("model")      # before and after on the same model only
     after = _values([j for j in used if j.get("model") == model])
+    return later, used, model, after
+
+
+def probation_status(name: str) -> list[dict]:
+    p = _probation_path(name)
+    entries = json.loads(p.read_text()) if p.exists() else []
+    if not entries:
+        return []
+    js, tools = judgments(name), _tools_by_cycle(name)
+    return [{"commit": e["commit"][:8], "files": [f for f in e["files"]
+             if not Path(f).is_absolute() and ".." not in Path(f).parts],
+             "cycles_used": len(_probation_after(e, js, tools)[3]), "cycles_needed": PROBATION_CYCLES}
+            for e in entries]
+
+
+def _verdict(name: str, entry: dict, js: list[dict], tools: dict[str, set[str]]) -> dict | None:
+    """None while the change is still being watched; else {"keep": bool, ...} with the numbers."""
+    c = entry["commit"][:8]
+    later, used, model, after = _probation_after(entry, js, tools)
     if len(after) < PROBATION_CYCLES:
         if len(later) >= PROBATION_EXPIRY * PROBATION_CYCLES:
             log(f"{name}: probation {c}: used in {len(used)} of {len(later)} rated cycles since — kept, "
