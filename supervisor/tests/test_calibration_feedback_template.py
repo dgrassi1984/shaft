@@ -123,6 +123,28 @@ class BaseRateModuleTest(unittest.TestCase):
     def test_file_name_matches_supervisor(self):
         self.assertEqual(base_rate.FILE, metrics.CALIBRATION_FILE)
 
+    def test_round_trip_with_the_supervisor_writer(self):
+        # Final fix F6 (O5): the template's reader on what metrics.base_rates really writes — the edges, the last
+        # band's hi of 100 and the question are a contract between two programs that never import each other.
+        judge = metrics.judge.JUDGE_MODELS[0]
+        rows = [{"episode_ts": f"2026-10-25T10:{i:02d}:00", "judge": judge, "confidence": c, "confidence_of": q,
+                 "criterion_met": met}
+                for i, (c, q, met) in enumerate([(0, metrics.CONFIDENCE_V2, "no"), (39, metrics.CONFIDENCE_V3, "yes"),
+                                                 (40, metrics.CONFIDENCE_V2, "yes"), (69, None, "partial"),
+                                                 (70, metrics.CONFIDENCE_V3, "no"), (100, metrics.CONFIDENCE_V2, "yes"),
+                                                 (100, None, "yes")])]
+        with tempfile.TemporaryDirectory(prefix="shaft-roundtrip-") as tmp:
+            (Path(tmp) / "self").mkdir()
+            (Path(tmp) / base_rate.FILE).write_text(json.dumps(metrics.base_rates(rows), indent=2) + "\n")
+            loaded, error = base_rate.load(Path(tmp))
+        self.assertIsNone(error)
+        first, middle, last = loaded["bands"]
+        self.assertEqual(base_rate.band_for(loaded, 0), first)
+        self.assertEqual(base_rate.band_for(loaded, 40), middle)
+        self.assertEqual(base_rate.band_for(loaded, 100), last)
+        self.assertEqual((last["hi"], last["met"], last["n"], last["older_n"]), (100, 1, 2, 1))
+        self.assertEqual(base_rate.QUESTION, metrics.CONFIDENCE_V2)
+
 
 class ConfirmStepTest(Fixture, unittest.TestCase):
     def test_no_limit_survives_a_shown_rate(self):
