@@ -82,6 +82,17 @@ def judgment_text(j: dict) -> str:
                    f"{j.get('origin_supported')})" + (f" — {j['origin_evidence']}" if j.get("origin_evidence") else ""))
     if j.get("model"):
         out.append(f"My model in that cycle: {j['model']}")
+    if "expectations" in j:
+        expectations = j["expectations"]
+        out.append("Expectations: " + ", ".join(
+            f"{sum(e['verdict'] == v for e in expectations)} {v}" for v in ("held", "contradicted", "uninformative")))
+        out.extend(f"- Contradicted: {e['statement']}" for e in expectations if e["verdict"] == "contradicted")
+    if "unreported_surprises" in j:
+        out.append("Surprises I did not report (judge): " + ("; ".join(j["unreported_surprises"]) or "none"))
+    if "reported_surprises_supported" in j:
+        out.append(f"My reported surprises matched the log: {j['reported_surprises_supported']}")
+    if "followup_useful" in j:
+        out.append(f"Follow-up of a surprise reduced its uncertainty: {j['followup_useful']}")
     s = j.get("second")
     if isinstance(s, dict) and s.get("error"):
         out.append(f"Second judge ({s.get('judge')}): no verdict ({s['error'][:160]})")
@@ -1306,6 +1317,7 @@ class Broker:
                 return json.dumps({"text": text, "verdicts": [
                     {**{key: r.get(key) for key in ("episode_ts", "judged_at", "criterion_met", "claim_supported",
                                                    "failure_mode", "difficulty")},
+                     "followup_useful": r.get("followup_useful"),
                      "reviewed_at": _reviewed_at(r),
                      "second_criterion_met": (r.get("second") or {}).get("criterion_met")} for r in shown],
                     "left_out": sorted(left_out), "next_since": _reviewed_at(shown[-1]) if shown else None})
@@ -1328,7 +1340,8 @@ class Broker:
                                                  before=self.as_of.isoformat(timespec="seconds") if self.as_of else None))
         elif kind == "jobs":
             from . import jobs
-            text = jobs.describe(self.name, limit) if not self.as_of else "(a replay does not see the job record)"
+            # A replay sees the record as it stood when its cycle began, in a live answer's shape (never "a replay")
+            text = jobs.describe(self.name, limit, as_of=self.as_of, root=self.root if self.as_of else None)
         else:
             raise ValueError("kind must be judgments, runs, tools, code_changes, trials, egress or jobs")
         text = text or "(nothing recorded yet)"

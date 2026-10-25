@@ -142,12 +142,13 @@ def uncommitted(root: Path) -> set[str] | None:
     return out
 
 
-def declared(name: str, root: Path | None = None) -> tuple[list[dict], list[str]]:
+def declared(name: str, root: Path | None = None, committed: bool = False) -> tuple[list[dict], list[str]]:
     """(jobs, problems): every committed plugin whose manifest has a valid `schedule` (at most MAX_JOBS, by name),
-    and why each other committed schedule is not run. A plugin with uncommitted changes is neither: it waits."""
+    and why each other committed schedule is not run. A plugin with uncommitted changes is neither: it waits.
+    `committed`: `root` is a commit's tree (a trial replay's copy, no git of its own), so every plugin in it is."""
     root = Path(root or instance_root(name))
     jobs, problems = [], []
-    changing = uncommitted(root)
+    changing = set() if committed else uncommitted(root)
     if changing is None:
         return [], []
     for plugin in list_beneath(root, "plugins"):   # read without following a link (core.safe_read)
@@ -292,8 +293,10 @@ def run(name: str, plugin: str) -> int:
         prof.unlink(missing_ok=True)
     seconds = round(time.monotonic() - started, 1)
     ok = code == 0 and not timed_out
+    # done and hash: when its outcome became known, and under which schedule — what a trial replay needs to show the
+    # record exactly as it stood at a moment (describe(as_of=…)); ts stays the start, as shown
     row = {"ts": stamp.isoformat(timespec="seconds"), "plugin": plugin, "seconds": seconds,
-           "exit": None if timed_out else code, "timed_out": timed_out, "calls": broker.calls}
+           "exit": None if timed_out else code, "timed_out": timed_out, "calls": broker.calls, "hash": job["hash"]}
     if ok:
         message, wake, note = _outcome(out, job)
         row.update(out_chars=len(out), delivered=bool(message), wake=wake)
@@ -313,6 +316,7 @@ def run(name: str, plugin: str) -> int:
             _deliver(name, "scheduler", f"My scheduled job {plugin} failed {fails} times in a row; it now runs every "
                                         f"{int(nxt.total_seconds() // 60)} minutes until it succeeds or I change "
                                         f"its schedule. Last error:\n\n```\n{error[-1500:]}\n```")
+    row["done"] = datetime.now().isoformat(timespec="seconds")   # its delivery and state are written: now it is known
     _log_row(name, row)
     log(f"{name}: job {plugin} {'ok' if ok else 'FAILED'} in {seconds}s"
         + (f", delivered {row.get('out_chars', 0)} chars" if row.get("delivered") else "")
@@ -418,32 +422,86 @@ def tick(children: dict, now: datetime, start, names: list[str], awake_of) -> No
 
 
 # -- what the operator and the instance see --------------------------------------------------------------------------------
-def describe(name: str, limit: int = 20) -> str:
+def _parsed(lines: list[str]) -> list[dict]:
+    """Run-log rows, skipping a line that is not a dated row (a torn write must not break the record)."""
+    rows = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and isinstance(row.get("ts"), str) and isinstance(row.get("plugin"), str):
+            rows.append(row)
+    return rows
+
+
+def _known(row: dict) -> str:
+    """When a run's outcome became known: logged (done) since 2026-10-25, else its start plus its duration."""
+    if isinstance(row.get("done"), str):
+        return row["done"]
     try:
-        jobs, problems = declared(name)
+        return (datetime.fromisoformat(row["ts"]) + timedelta(seconds=float(row.get("seconds") or 0))
+                ).isoformat(timespec="seconds")
+    except (TypeError, ValueError, OverflowError):   # a corrupt duration: known from its start
+        return row["ts"]
+
+
+def _rows(name: str, limit: int, before: datetime | None = None) -> list[dict]:
+    """The job run log, oldest first: its last `limit` rows, or (`before`) every run whose outcome was known by then."""
+    path = _dir() / f"{name}.jsonl"
+    lines = path.read_text().splitlines() if path.is_file() else []
+    if before is None:
+        return _parsed(lines[-limit:])
+    cut = before.isoformat(timespec="seconds")
+    return [r for r in _parsed(lines) if _known(r) < cut]
+
+
+def _entry_then(rows: list[dict], plugin: str, job_hash: str) -> dict:
+    """A job's state as its runs in `rows` left it — what entry() held at that moment (the state file keeps only now):
+    the same transitions as run(), a failure count restarting when the schedule changed. Rows logged before
+    2026-10-25 carry no schedule hash: they count as the schedule declared then."""
+    e = {"last_ok": None, "fails": 0, "hash": None, "last_error": None}
+    for r in rows:
+        if r.get("plugin") != plugin or r.get("skipped"):
+            continue
+        h = r.get("hash") or job_hash
+        if r.get("exit") == 0 and not r.get("timed_out"):
+            e.update(last_ok=r["ts"], fails=0, hash=h, last_error=None)
+        else:
+            e.update(fails=(e["fails"] if e["hash"] == h else 0) + 1, hash=h, last_error=r.get("error"))
+    return e
+
+
+def describe(name: str, limit: int = 20, as_of: datetime | None = None, root: Path | None = None) -> str:
+    """The jobs an instance declared, their state and recent runs. `as_of` and `root` (a trial replay): the record as
+    it stood when the replayed cycle began — its declared jobs from the replay's copy, their state and runs from the
+    run log before then — in the same shape as a live answer, so nothing in it says it is a replay."""
+    root = Path(root or instance_root(name))
+    try:
+        jobs, problems = declared(name, root, committed=as_of is not None)
     except OSError:
         return f"{name}: no folder"
+    rows = _rows(name, limit, as_of)
     lines = [f"{name}: jobs {'OFF (shaft jobs ' + name + ' on)' if jobs_off(name) else 'on'}"]
     for j in jobs:
-        e = entry(name, j["plugin"])
+        e = entry(name, j["plugin"]) if as_of is None else _entry_then(rows, j["plugin"], j["hash"])
         state = (f"last ok {e['last_ok']}" if e.get("last_ok") else "not run yet")
         if e.get("fails") and e.get("hash") == j["hash"]:
             state += f" · {e['fails']} failure(s) in a row, now every {int(interval(j, e).total_seconds() // 60)} min"
         lines.append(f"  {j['plugin']}: every {j['every_minutes']} min{' · can wake' if j['can_wake'] else ''} · {state}"
                      + (f"\n    last error: {e['last_error'][:200]}" if e.get("last_error") else ""))
     lines += [f"  not run: {p}" for p in problems]
-    changing = uncommitted(instance_root(name)) or set()
-    lines += [f"  {p}: being changed (not committed yet) — runs once its cycle commits it"
-              for p in sorted(changing) if '"schedule"' in _manifest_text(name, p)]
+    if as_of is None:   # what is changing or waiting now: a replay's moment has passed, and neither is recorded
+        changing = uncommitted(root) or set()
+        lines += [f"  {p}: being changed (not committed yet) — runs once its cycle commits it"
+                  for p in sorted(changing) if '"schedule"' in _manifest_text(name, p)]
     if not jobs and not problems:
         lines.append("  (no plugin has a schedule)")
-    if (req := pending_wakes().get(name)):
+    if as_of is None and (req := pending_wakes().get(name)):
         lines.append(f"  wake asked by {', '.join(req['by'])} since {req['since']} (starts once it is idle)")
-    path = _dir() / f"{name}.jsonl"
-    rows = path.read_text().splitlines()[-limit:] if path.is_file() else []
     if rows:
         lines.append("  recent runs:")
-        for r in map(json.loads, rows):
+        for r in rows[-limit:]:
             what = (f"skipped ({r['skipped']})" if r.get("skipped") else
                     f"{'ok' if r.get('exit') == 0 else 'FAILED'} {r.get('seconds')}s"
                     + (f", delivered {r.get('out_chars')} chars" if r.get("delivered") else "")

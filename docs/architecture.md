@@ -80,6 +80,20 @@ fetch. The cursor is the last shown verdict's review time, even on the final pag
 page. Without `since`, the original text output is unchanged. Judgments from 2026-10-24 onward that lack
 `confidence_of` inherit it from their live episode when present; earlier judgments stay v1.
 
+**Surprises** ([PLAN-surprise](plans/PLAN-surprise.md)). A live cycle states 1–3 falsifiable `predictions` in
+`declare_intent` and reports `surprises` ({expected, observed, so_what}) and `resolves` ({id, how}) in `finish_cycle`.
+The agent tags each tool-log entry whose result has a known failure shape (`flag`) and, in live cycles, shows the model
+an `[unexpected …]` note when its predictions did not anticipate it. The open surprises are folded from the episodes
+(nothing stored; ids `s<MMDD>-<HHMM>-<n>`; at most 8 shown, 7-day expiry, one follow-up unless judged useful, depth-2
+hidden) and shown in every prompt; one live cycle in `CURIOSITY_EVERY_CYCLES` is drawn to take its goal from them
+(`origin_ref: surprise:<id>`), never while an operator message waits, seeded by the cycle's start so a trial replay
+draws the same. The sleep goes through every surprise since the last one (a fact citing its id, `close_surprise`, or
+left open with a reason). The judge adds `expectations`, `unreported_surprises`, `reported_surprises_supported` and
+`followup_useful`, which never change `criterion_met`; `supervisor/surprise.py` keeps its own copy of the rule and
+the fold (shared test fixtures keep the two in step), writes `.supervisor/surprises/<name>.json` and the stats.md
+section "My expectations vs what happened", counts each sleep's dispositions, and renders the pre-registered
+acceptance window (`shaft surprise-report`). Nothing rewards being surprised, or not being surprised.
+
 
 The **capability battery** is a fixed yardstick: held-out tasks the instances never see (coding with hidden
 tests, research against a frozen key, recall of their own older journal entries, self-knowledge checked

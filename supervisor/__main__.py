@@ -975,6 +975,18 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("surprise", help="unexpected tool results, their recurrence, live cost (docs/plans/PLAN-surprise baseline)")
     p.add_argument("names", nargs="*")
     p.add_argument("--freeze", action="store_true", help="also write the baseline the surprise loop is judged against")
+    p = sub.add_parser("surprise-rejudge", help="re-judge the cycles before the surprise loop with its judge fields, "
+                       "into judgments/<name>-surprise-baseline.jsonl (paid; --dry-run counts and prices it first)")
+    p.add_argument("names", nargs="+")
+    p.add_argument("--dry-run", action="store_true", help="count the cycles and estimate the cost; no judge call")
+    p.add_argument("--limit", type=int, default=None, help="at most this many cycles per instance")
+    p.add_argument("--report", action="store_true", help="only print the comparison with the stored verdicts")
+    p = sub.add_parser("surprise-report", help="the surprise loop's acceptance window: P1-P5 against the frozen "
+                       "baseline, and how each sleep handled the surprises (docs/plans/PLAN-surprise.md §4)")
+    p.add_argument("names", nargs="*")
+    p.add_argument("--since", required=True, help="when the window began (M3 live): YYYY-MM-DD or YYYY-MM-DDTHH:MM")
+    p.add_argument("--until", default="", help="when it ends (default: now)")
+    p.add_argument("--min-cycles", type=int, default=30, help="judged cycles the window needs (§4.1: shaft 30)")
     p = sub.add_parser("inbox", help="messages instances sent you")
     p.add_argument("--clear", action="store_true", help="archive notes (questions stay until answered)")
     p = sub.add_parser("reply", help="answer an instance's open question (or message it)")
@@ -1270,6 +1282,29 @@ def main(argv: list[str]) -> int:
         for name in args.names:
             instance_root(name)
         return surprise.command(args.names or instance_names(), args.freeze)
+    if args.cmd == "surprise-rejudge":
+        for name in args.names:
+            instance_root(name)
+            if not args.report:
+                r = metrics.surprise_baseline(name, args.limit, dry_run=args.dry_run)
+                print(f"{name}: {r['todo']} cycle(s) to re-judge, {r['done']} done; about ${r['estimated_usd']:.2f} "
+                      f"(${r['per_judgment_usd']:.3f} each: {r['basis']})")
+            if args.report or not args.dry_run:
+                print(metrics.surprise_baseline_report(name))
+        return 0
+    if args.cmd == "surprise-report":
+        names = args.names or instance_names()
+        for name in names:
+            instance_root(name)
+        try:
+            since = datetime.fromisoformat(args.since)
+            until = datetime.fromisoformat(args.until) if args.until else None
+        except ValueError as e:
+            raise SystemExit(f"--since/--until: {e}")
+        code = surprise.m5_command(names, since, until, min_cycles=args.min_cycles)
+        for name in names:
+            print(surprise.disposition_text(name) + "\n")
+        return code
     if args.cmd == "inbox":
         return messages.clear_notes() if args.clear else messages.show_inbox()
     if args.cmd == "reply":

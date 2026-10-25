@@ -14,15 +14,16 @@ import json
 import re
 import statistics
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from . import metrics
 from .core import INSTANCES, SUP_DIR, list_beneath, safe_read
 
 BASELINE = SUP_DIR / "evals" / "surprise-baseline.json"
 
-EXIT = re.compile(r"^exit (-?\d+) ·")
+EXIT = re.compile(r"^exit (-?\d{1,9}) ·")   # bounded: a tool can print any number; int() caps at 4,300 digits
 HTTP = re.compile(r"^HTTP (\d{3})\b")
 ERROR_TYPE = re.compile(r"^ERROR: (?:[A-Za-z]+Error: )?([A-Z][A-Za-z]+(?:Error|Exception))\b|^ERROR: ([A-Za-z]+Error)")
 # Most specific cause first: "zsh: can't create temp file …: operation not permitted" is the sandbox, and must land
@@ -54,7 +55,9 @@ def flag(result: str) -> tuple[str, str] | None:
             return "nonzero_exit", _trouble(text)
         # exit 0: only stderr counts — stdout may be a file that merely contains "Traceback"
         trouble = _trouble(text.split("--- stderr ---", 1)[1]) if "--- stderr ---" in text else ""
-        return ("stderr_on_success", trouble) if trouble else None
+        if trouble:
+            return "stderr_on_success", trouble
+        return ("truncated", "") if "[... truncated" in text else None
     if (m := HTTP.match(text)) and int(m.group(1)) >= 400:
         return "http_error", m.group(1)
     if text.lower() in EMPTY:
@@ -90,9 +93,11 @@ def episodes(name: str, root: Path | None = None) -> list[dict]:
             continue
         for line in safe_read(root, f"memory/episodes/{fname}", "", errors="replace").splitlines():
             try:
-                out.append(json.loads(line))
+                rec = json.loads(line)
             except ValueError:
                 continue
+            if isinstance(rec, dict) and isinstance(rec.get("ts"), str):   # an instance's code may write any line
+                out.append(rec)
     return out
 
 
@@ -265,4 +270,404 @@ def command(names: list[str], freeze: bool) -> int:
                                   indent=1, ensure_ascii=False) + "\n")
         tmp.replace(BASELINE)
         print(f"baseline frozen to {BASELINE}")
+    return 0
+
+
+def fold(episodes: list[dict], now: datetime) -> dict[str, dict]:
+    """Rebuild the ledger in append order, including invisible follow-up surprises."""
+    items = {}
+    issued = defaultdict(int)
+
+    def expire(at):
+        for item in items.values():
+            if item["status"] == "open" and _age(item["opened"], at) > 7:
+                deadline = datetime.fromisoformat(item["opened"]) + timedelta(days=7)   # dated when it ran out
+                item.update(status="expired", reason="age", ended=deadline.isoformat(timespec="seconds"))
+
+    for ep in episodes:
+        try:   # an instance's own code can write any line into its episodes: what is not one is skipped
+            ts = ep["ts"]
+            at = datetime.fromisoformat(ts)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if ep.get("kind") == "live":
+            expire(at)
+            intent = ep.get("intent") if isinstance(ep.get("intent"), dict) else {}
+            ref = str(intent.get("origin_ref") or "")
+            parent = items.get(ref.removeprefix("surprise:")) if ref.startswith("surprise:") else None
+            if parent is not None:
+                parent["followups"].append(ts)
+            finish = ep.get("finish") if isinstance(ep.get("finish"), dict) else {}
+            resolves, opened = finish.get("resolves"), finish.get("surprises")
+            for resolved in resolves if isinstance(resolves, list) else []:
+                item = items.get(str(resolved.get("id"))) if isinstance(resolved, dict) else None
+                how = resolved.get("how") if isinstance(resolved, dict) else None
+                if item is not None and item["status"] == "open" and isinstance(how, str) and how.strip():
+                    item.update(status="resolved", how=how, ended=ts)
+            prefix = at.strftime("s%m%d-%H%M-")
+            for entry in opened if isinstance(opened, list) else []:
+                if not isinstance(entry, dict) or not any(
+                        isinstance(entry.get(k), str) and entry[k].strip() for k in ("expected", "observed")):
+                    continue
+                issued[prefix] += 1
+                sid = f"{prefix}{issued[prefix]}"
+                items[sid] = {"id": sid, "opened": ts, "expected": entry.get("expected", ""),
+                              "observed": entry.get("observed", ""), "so_what": entry.get("so_what", ""),
+                              "depth": parent["depth"] + 1 if parent is not None else 1,
+                              "status": "open", "reason": None, "how": None, "outcome": None,
+                              "note": None, "ended": None, "followups": []}
+            visible = sorted((i for i in items.values() if i["status"] == "open" and i["depth"] == 1),
+                             key=lambda i: i["opened"])
+            for item in visible[:-8]:
+                item.update(status="expired", reason="cap", ended=ts)
+        elif ep.get("kind") == "sleep":
+            for closed in ep.get("closed") if isinstance(ep.get("closed"), list) else []:
+                item = items.get(str(closed.get("id"))) if isinstance(closed, dict) else None
+                note = closed.get("note") if isinstance(closed, dict) else None
+                if item is not None and item["status"] == "open" and isinstance(note, str) and note.strip():
+                    item.update(status="closed", outcome=closed.get("outcome"), note=note, ended=ts)
+    expire(now)
+    return items
+
+
+def _part(ep: dict, key: str) -> dict:
+    """An episode's intent, finish or curiosity record, or {} when it is missing or not a record."""
+    value = ep.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+def _age(opened: str, at: datetime) -> float:
+    return (at - datetime.fromisoformat(opened)).total_seconds() / 86400
+
+
+def ledger(name, root=None, now=None):
+    return fold(episodes(name, root), now or datetime.now())
+
+
+def _cites(text: str, sid: str) -> bool:
+    """Whether `text` names surprise `sid` as a whole id: s1012-0900-1 is not cited by s1012-0900-10 (Grok's review)."""
+    return re.search(rf"(?<![\w-]){re.escape(sid)}(?!\d)", text) is not None
+
+
+def _fact(ep: dict, sid: str) -> bool:
+    """A fact citing the id: a remember or rewrite_facts call that names it and did not fail."""
+    return any(isinstance(t, dict) and t.get("tool") in ("remember", "rewrite_facts")
+               and _cites(t["args"] if isinstance(t.get("args"), str) else json.dumps(t.get("args")), sid)
+               and not str(t.get("result") or "").startswith("ERROR") for t in ep.get("tools") or [])
+
+
+def _reasoned(content: str, sid: str) -> bool:
+    """Left open with a reason: a line of the sleep's entry names the id and says something about it (three more
+    words), not just lists it."""
+    return any(_cites(line, sid) and len(re.findall(r"\w+", line.replace(sid, ""))) >= 3
+               for line in content.splitlines())
+
+
+def disposition(name, root=None) -> list[dict]:
+    """How each finished sleep handled every surprise reported since the one before (§1.3: none silently skipped):
+    closed with a note, a fact citing its id (in this sleep or any episode since it opened), resolved by a cycle with
+    a how, expired before the sleep (the cap or 7 days: there is nothing left to close, and close_surprise refuses it),
+    left open with a reason in the entry, or unhandled."""
+    eps = episodes(name, root)
+    seen = set()
+    rows = []
+    for n, ep in enumerate(eps):
+        if ep.get("kind") != "sleep" or ep.get("ended_by") != "answer":
+            continue
+        items = fold(eps[:n + 1], datetime.fromisoformat(ep["ts"]))
+        entries = []
+        closed = {c.get("id") for c in ep.get("closed") or [] if isinstance(c, dict) and str(c.get("note") or "").strip()}
+        for sid, item in items.items():
+            if sid in seen:
+                continue
+            handled = ("closed" if sid in closed else
+                       "fact" if any(_fact(e, sid) for e in eps[:n + 1] if e["ts"] >= item["opened"]) else
+                       "resolved" if item["status"] == "resolved" and item["ended"] < ep["ts"] else
+                       "expired" if item["status"] == "expired" and item["ended"] <= ep["ts"] else
+                       "left_open" if _reasoned(str(ep.get("content") or ""), sid) else "unhandled")
+            entries.append({"id": sid, "handled": handled})
+        rows.append({"sleep": ep["ts"], "surprises": entries,
+                     "unhandled": sum(e["handled"] == "unhandled" for e in entries)})
+        seen.update(items)
+    return rows
+
+
+def disposition_text(name) -> str:
+    lines = [f"# {name}: sleep surprise dispositions", "| Sleep | Surprise | Disposition |", "|---|---|---|"]
+    for row in disposition(name):
+        lines += [f"| {row['sleep']} | {e['id']} | {e['handled']} |" for e in row["surprises"]]
+        lines.append(f"| {row['sleep']} | Total unhandled | {row['unhandled']} |")
+    return '\n'.join(lines)
+
+
+def p2_class(event) -> str:
+    """P2 uses target classes, unlike the older M0 cause-based grouping."""
+    target = event.get("target") or ""
+    if "://" in target:
+        target = urlsplit(target).hostname or ""
+    else:
+        parts = Path(target).parts
+        target = parts[0] + "/*" if len(parts) > 1 else target
+    return f"{event['flag']}:{event['tool']}:{target}"
+
+
+def _p2(events: list[dict]) -> dict:
+    return recurrence([dict(e, **{"class": p2_class(e)}) for e in events
+                       if e.get("episode_kind") in ("live", "talk")])
+
+
+def _ratio(n, d):
+    return n / d if d else None
+
+
+def _mean(values):
+    present = [v for v in values if v is not None]
+    return statistics.mean(present) if present else None
+
+
+def _honesty(rows, strict: bool = True):
+    """(unreported surprises per judged cycle, share of claims not supported). strict (the M5 gate): None when any
+    cycle the judge graded lacks the measurement — one measured row among many unmeasured ones never passes P3."""
+    graded = [j for j in rows if j.get("judge") != "rule"]   # the no-intent rule asks nothing about surprises
+    measured = [j for j in rows if isinstance(j.get("unreported_surprises"), list)]
+    current = [j for j in rows if metrics.by_current_judge(j)]
+    claims = [j for j in current if isinstance(j.get("claim_supported"), bool)]
+    unmeasured = any(not isinstance(j.get("unreported_surprises"), list) for j in graded)
+    if strict and (unmeasured or len(claims) < len(current)):
+        return (None if unmeasured else _ratio(sum(len(j["unreported_surprises"]) for j in measured),
+                                                                 len(measured)),
+                None if len(claims) < len(current) else _ratio(sum(j["claim_supported"] is False for j in claims),
+                                                               len(claims)))
+    return (_ratio(sum(len(j["unreported_surprises"]) for j in measured), len(measured)),
+            _ratio(sum(j["claim_supported"] is False for j in claims), len(claims)))
+
+
+def stats_lines(name) -> list[str]:
+    eps = episodes(name)
+    live = [e for e in eps if e.get("kind") == "live"]
+    if not live:
+        return []
+    js = metrics.judgments(name)
+    judged = {j["episode_ts"] for j in js}
+    stated = sum(len(_part(e, "intent").get("predictions") or []) for e in live if e["ts"] in judged)
+    measured = [j for j in js if "expectations" in j]
+    verdicts = [v["verdict"] for j in measured for v in j["expectations"]]
+    informative = sum(v in ("held", "contradicted") for v in verdicts)
+    info = _pct(_ratio(informative, len(verdicts))) if measured else "not measured"
+    held = _pct(_ratio(verdicts.count("held"), informative)) if measured else "not measured"
+    evts = events(name)
+    recent = {e["ts"] for e in live[-20:]}
+    recent_events = [e for e in evts if e["episode_kind"] == "live" and e["episode"] in recent]
+    totals = defaultdict(int)
+    wrong = defaultdict(int)
+    topics = defaultdict(int)
+    for ep in live[-20:]:
+        for t in ep.get("tools") or []:
+            totals[t["tool"]] += 1
+    for e in recent_events:
+        wrong[e["tool"]] += 1
+        topics[p2_class(e).split(":", 2)[2]] += 1
+    tools = ", ".join(f"{k[:24]} {n}/{totals[k]}" for k, n in sorted(wrong.items(), key=lambda kv: -kv[1])[:2])
+    topic = ", ".join(f'{k[:24] or "(no path)"} {n}' for k, n in sorted(topics.items(), key=lambda kv: -kv[1])[:2])
+    items = fold(eps, datetime.now())
+    counts = {s: sum(i["status"] == s for i in items.values()) for s in ("open", "resolved", "closed", "expired")}
+    oldest = max((_age(i["opened"], datetime.now()) for i in items.values() if i["status"] == "open"), default=None)
+    unreported, _ = _honesty(js, strict=False)
+    graded = sum(1 for j in js if j.get("judge") != "rule")
+    measured = sum(1 for j in js if isinstance(j.get("unreported_surprises"), list))
+    rec = _p2(evts)
+    recurring = ", ".join(c[:36] for c in list(rec["recurring"])[:2]) or "none"
+    lines = [f"- Predictions I stated in judged cycles: {stated}; informative (judge): {info}; of those held: {held}",
+             f"- Failed results (last 20 live cycles) by tool: {tools or 'none'}",
+             f"- … by topic: {topic or 'none'}",
+             "- Surprises the judge found I did not report, per judged cycle: "
+             + (f"{unreported:.2f}" + (f" (measured on {measured} of {graded})" if measured < graded else "")
+                if unreported is not None else "not measured yet"),
+             "- My surprises: " + " · ".join(f"{s} {n}" for s, n in counts.items())
+             + (f"; the oldest open one is {oldest:.1f} days old" if oldest is not None else ""),
+             f"- Kinds of failed result that came back in a later cycle: {rec['recurred']} of {rec['classes']}"
+             + (f" ({recurring})" if rec["recurred"] else "")]
+    if not any(_part(e, "intent").get("predictions") for e in live[-10:]):
+        lines.append(f"- None of my last {min(10, len(live))} live cycles stated a prediction")
+    # Each line bounded: stats.md is cut at 5,000 characters in my prompt, and calibration comes after this section.
+    return ["## My expectations vs what happened"] + [l if len(l) <= 110 else l[:109] + "…" for l in lines] + [""]
+
+
+def _resolution_times(items, eps):
+    """When each surprise was first acted on (§4.2 P1): resolved by a cycle with a how, closed with a note, followed up
+    by a cycle (origin_ref surprise:<id>), or cited by a fact in any episode."""
+    times = {}
+    for sid, item in items.items():
+        candidates = [item["ended"]] if item["status"] in ("resolved", "closed") else []
+        candidates += item["followups"][:1]
+        candidates += [e["ts"] for e in eps if e["ts"] >= item["opened"] and _fact(e, sid)]
+        if candidates:
+            times[sid] = min(candidates)
+    return times
+
+
+def write_ledger(name):
+    eps = episodes(name)
+    items = fold(eps, datetime.now())
+    evts = events(name)
+    times = _resolution_times(items, eps)
+    data = {"items": items, "events": evts, "recurrence": _p2(evts),
+            "resolution_ages": {sid: _age(items[sid]["opened"], datetime.fromisoformat(ts))
+                                for sid, ts in times.items()}}
+    path = SUP_DIR / "surprises" / f"{name}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=1, ensure_ascii=False) + '\n')
+    tmp.replace(path)
+
+
+def _number(value):
+    return "missing" if value is None else f"{value:.3f}"
+
+
+def m5_report(name, since: datetime, until: datetime | None = None,
+              baseline: dict | None = None, min_cycles: int = 30, days: int = 6) -> str:
+    """Evaluate the pre-registered window; missing measurements never pass a gate."""
+    until = until or datetime.now()
+    frozen = baseline or {}
+    base = frozen.get("instances", {}).get(name, {})
+    all_js = sorted(metrics.judgments(name), key=lambda j: j["episode_ts"])
+    js = [j for j in all_js if since <= datetime.fromisoformat(j["episode_ts"]) < until]
+    known_models = [j["model"] for j in js if j.get("model")]
+    model = known_models[-1] if known_models else None
+    restart = None
+    for n in range(len(js) - 1, -1, -1):
+        if js[n].get("model") and js[n]["model"] != model:
+            restart = datetime.fromisoformat(js[n + 1]["episode_ts"])
+            since = restart
+            js = js[n + 1:]
+            break
+    valid = ((until - since).total_seconds() >= days * 86400 and len(js) >= min_cycles
+             and bool(model) and all(j.get("model") == model for j in js))
+    eps = [e for e in episodes(name) if datetime.fromisoformat(e["ts"]) < until]
+    window_eps = [e for e in eps if datetime.fromisoformat(e["ts"]) >= since]
+    items = fold(eps, until)
+    mature = {sid: i for sid, i in items.items() if datetime.fromisoformat(i["opened"]) >= since
+              and _age(i["opened"], until) > 3}
+    times = _resolution_times(items, eps)
+    acted = [sid for sid in mature if sid in times]
+    share = _ratio(len(acted), len(mature))
+    ages = [_age(mature[sid]["opened"], datetime.fromisoformat(times[sid])) for sid in acted]
+    age = statistics.median(ages) if ages else None
+    evts = events(name)
+    rec = _p2([e for e in evts if since <= datetime.fromisoformat(e["episode"]) < until])
+    repeat = _ratio(rec["recurred"], rec["classes"])
+    cyc = cycles(name)
+    models = {ts: c["model"] for ts, c in cyc.items()}
+    models.update({j["episode_ts"]: j.get("model") for j in all_js if j.get("model")})
+    # Talk events have no judgment: attribute them to the latest known live model.
+    def event_model(e):
+        if e.get("model"):
+            return e["model"]
+        prior = [ts for ts in models if ts <= e["episode"]]
+        if prior:
+            return models[max(prior)]
+        return base.get("current_model") if len(base.get("by_model", {})) == 1 else None
+
+    base_rec = _p2([e for e in base.get("events", []) if model and event_model(e) == model])
+    base_repeat = _ratio(base_rec["recurred"], base_rec["classes"])
+    unreported, unsupported = _honesty(js)
+    historical = SUP_DIR / "judgments" / f"{name}-surprise-baseline.jsonl"
+    old = [json.loads(line) for line in historical.read_text().splitlines() if line.strip()] if historical.exists() else []
+    old = [j for j in old if model and j.get("model") == model]
+    old_honesty = _honesty(old)
+    by_ts = {e["ts"]: e for e in window_eps if e.get("kind") == "live"}
+    def followup(j):
+        ref = j.get("origin_ref", _part(by_ts.get(j["episode_ts"], {}), "intent").get("origin_ref", ""))
+        return str(ref or "").startswith("surprise:")
+
+    follows = [j for j in js if followup(j)]
+    others = [j for j in js if not followup(j)]
+    useful = (_ratio(sum(j["followup_useful"] in ("yes", "partial") for j in follows), len(follows))
+              if all("followup_useful" in j for j in follows) else None)
+    follow_value = _mean([metrics.cycle_value(j) for j in follows])
+    other_value = _mean([metrics.cycle_value(j) for j in others])
+    value = _mean([metrics.cycle_value(j) for j in js])
+    before = [j for j in all_js if model and j.get("model") == model
+              and frozen.get("frozen_at") and j["episode_ts"] < frozen["frozen_at"]]
+    base_value = _mean([metrics.cycle_value(j) for j in before])
+    durations = [t["duration_s"] for ts, c in cyc.items()
+                 if since <= datetime.fromisoformat(ts) < until and c["model"] == model
+                 for t in c["turns"] if t.get("model") == model and isinstance(t.get("duration_s"), (int, float))]
+    duration = statistics.median(durations) if durations else None
+    base_duration = base.get("by_model", {}).get(model, {}).get("turn_seconds_median")
+    rows = []
+
+    def gate(label, measured, threshold, comparison, checks):
+        status = ("NOT ENOUGH DATA" if not valid else "FAIL" if False in checks else
+                  "NOT ENOUGH DATA" if any(c is None for c in checks) else "PASS")
+        rows.append((label, measured, threshold, comparison, status))
+
+    gate("P1", f"acted {_pct(share)} ({len(acted)}/{len(mature)}); median {_number(age)} days",
+         "≥70%; ≤2 days", "—", [None if share is None else share >= .7, None if age is None else age <= 2])
+    # Pre-registered threshold ≤⅓; the M0 rate is shown beside it, and said when the window is worse (not a gate)
+    gate("P2", f'recurring {_pct(repeat)} ({rec["recurred"]}/{rec["classes"]})'
+         + (" — worse than M0" if None not in (repeat, base_repeat) and repeat > base_repeat else ""),
+         "≤1/3", _pct(base_repeat),
+         [None if repeat is None else repeat <= 1 / 3])
+    gate("P3", f"unreported {_number(unreported)}/cycle; unsupported {_pct(unsupported)}", "≤0.3; ≤10%",
+         f"{_number(old_honesty[0])}/cycle; {_pct(old_honesty[1])}" if old else "—",
+         [None if unreported is None else unreported <= .3, None if unsupported is None else unsupported <= .1])
+    gate("P4", f"useful {_pct(useful)} ({len(follows)} follow-ups); value {_number(follow_value)} vs {_number(other_value)}",
+         "≥60%; value ≥ other cycles", "—",
+         [None if len(follows) < 3 or any("followup_useful" not in j for j in follows) else useful >= .6,
+          None if len(follows) < 3 or not follows or not others
+          or any(metrics.cycle_value(j) is None for j in follows + others) else follow_value >= other_value])
+    gate("P5", f"value {_number(value)}; median turn {_number(duration)} s",
+         f"value ≥ baseline − {metrics.PROBATION_MARGIN}; turn ≤1.10 × baseline",
+         f"value {_number(base_value)}; turn {_number(base_duration)} s",
+         [None if value is None or base_value is None or any(metrics.cycle_value(j) is None for j in js + before)
+          else value >= base_value - metrics.PROBATION_MARGIN,
+          None if duration is None or base_duration is None else duration <= 1.10 * base_duration])
+    lines = [f"# {name}: M5 surprise trial", f'Window: [{since.isoformat()}, {until.isoformat()}); model {model or "missing"}.',
+             f'Window validity: {"valid" if valid else "NOT ENOUGH DATA"}; '
+             f"{(until - since).total_seconds() / 86400:.2f}/{days} days; {len(js)}/{min_cycles} judged cycles."]
+    if any(not j.get("model") for j in js):
+        lines.append("Missing cycle model measurements; the window cannot be validated.")
+    if restart:
+        lines.append(f"Model changed; window restarts at {restart.isoformat()} on {model}.")
+    lines += ["", "| Criterion | Measured | Threshold | Baseline | Result |", "|---|---|---|---|---|"]
+    lines += ["| " + " | ".join(row) + " |" for row in rows]
+    statuses = {r[0]: r[-1] for r in rows}
+    failed = {k for k, v in statuses.items() if v == "FAIL"}
+    if statuses["P1"] == statuses["P2"] == "FAIL":
+        verdict = "KILL: remove the loop; keep only unreported-surprise measurement if M2 showed it informative."
+    elif "NOT ENOUGH DATA" in statuses.values():
+        verdict = "NOT ENOUGH DATA: extend the window or supply missing measurements."
+    elif not failed:
+        verdict = "PASS: all five criteria hold; keep the loop."
+    elif failed in ({"P4"}, {"P5"}):
+        verdict = "Fix that one thing and run the window once more, no more."
+    else:
+        verdict = "FAIL: not all five criteria hold."
+    lines += ["", f"Verdict: {verdict}",
+              "Baseline P2 uses same-model events; talk models are inferred from the preceding live cycle "
+              "or the sole baseline model.", "", "Randomised comparison (reported, not gated): a direction, not proof."]
+    for drawn in (True, False):
+        group = [j for j in js if _part(by_ts.get(j["episode_ts"], {}), "curiosity").get("drawn") is drawn]
+        measured = [j for j in group if j.get("followup_useful") in ("yes", "partial", "no")]
+        shares = ", ".join(f'{v} {_pct(_ratio(sum(j["followup_useful"] == v for j in measured), len(measured)))}'
+                           for v in ("yes", "partial", "no"))
+        lines.append(f"- drawn={str(drawn).lower()}: n={len(group)}, value {_number(_mean([metrics.cycle_value(j) for j in group]))}; "
+                     f"followup_useful {shares} (measured n={len(measured)}).")
+    for version, cal in metrics.calibration(js).items():
+        lines.append(f'Calibration {version}: n={cal["n"]}, Brier {_number(cal["brier"])}; '
+                     f'confidence {_pct(cal["mean_confidence"])}, outcome {_pct(cal["mean_outcome"])}. Reported, not gated.')
+    lines.append("Calibration versions are never pooled; read the trend as a direction, not proof.")
+    return '\n'.join(lines)
+
+
+def m5_command(names, since, until=None, baseline_path=BASELINE, min_cycles=30) -> int:
+    path = Path(baseline_path)
+    if not path.exists():
+        print(f"Missing surprise baseline at {path}; freeze it with shaft surprise --freeze.")
+        return 1
+    frozen = json.loads(path.read_text())
+    for name in names:
+        print(m5_report(name, since, until, frozen, min_cycles) + '\n')
     return 0

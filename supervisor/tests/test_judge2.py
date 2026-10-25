@@ -16,7 +16,9 @@ VERDICT = {"criterion_met": "partial", "claim_supported": True, "criterion_quali
            "failure_mode": "exit code not shown", "reasoning": "Step 5 piped the test through tail.",
            "origin": "self", "origin_supported": True, "origin_evidence": "its own G1",
            "difficulty": 2, "difficulty_reason": "a few known steps", "novelty": 2,
-           "value": 2, "value_for": "own_capability", "value_reason": "a fixed parser it uses again"}
+           "value": 2, "value_for": "own_capability", "value_reason": "a fixed parser it uses again",
+           "expectations": [], "unreported_surprises": [], "reported_surprises_supported": True,
+           "followup_useful": "na"}
 
 
 def _judgment(ts, reasoning="r" * 600, second=None, met="yes"):
