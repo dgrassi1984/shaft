@@ -1255,9 +1255,8 @@ def write_stats(name: str) -> None:
     caller does after (check_probation, the second judge's next case, the battery's record) is skipped."""
     if not (INSTANCES / name / "shaft").is_dir():   # deleted: writing would recreate a half folder (shaft delete)
         return
-    for rel, text in (("self/stats.md", lambda: stats_text(name)),
-                      (CALIBRATION_FILE, lambda: json.dumps(base_rates(judgments(name)), indent=2) + "\n")):
-        content = text()
+    for rel, content in (("self/stats.md", stats_text(name)),
+                         (CALIBRATION_FILE, json.dumps(base_rates(judgments(name)), indent=2) + "\n")):
         try:
             safe_write(INSTANCES / name, rel, content)
         except (UnsafePath, OSError) as e:
