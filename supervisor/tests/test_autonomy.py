@@ -57,6 +57,18 @@ class WakeTest(unittest.TestCase):
             self.assertTrue(autonomy.updating("z", {"update z": None}))
             self.assertFalse(autonomy.updating("z", {}))
 
+    def test_an_update_that_died_before_taking_the_lock_is_dropped_not_retried(self):
+        # Regression (Codex on 784982a): an update child that failed before the lock (e.g. instance_root refusing a
+        # folder without .git) left its marker, so the scheduler retried it every tick and held the wakes back.
+        queued = {"x": "2026-10-25T12:45:00"}
+        with mock.patch.object(autonomy, "update_queued", queued.get), mock.patch.object(autonomy, "log"), \
+                mock.patch.object(autonomy, "set_update_queued", lambda n, on: queued.pop(n)) as _:
+            autonomy.update_ended("x", 0)          # it found the instance busy and re-queued itself: kept
+            self.assertIn("x", queued)
+            autonomy.update_ended("x", 1)          # died before running: dropped
+            self.assertNotIn("x", queued)
+            autonomy.update_ended("x", 1)          # ran and failed (dequeued itself already): nothing to do
+
     def test_never_woken_is_due_and_zero_means_never(self):
         start, _ = decide_wakes(D("2026-10-13T12:00:00"), {}, ["new", "off"],
                                 {"new": H2, "off": None}.get, lambda n: "")

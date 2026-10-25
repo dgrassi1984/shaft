@@ -50,7 +50,7 @@ def own_files(name: str) -> list[Path]:
     n, s = re.escape(name), SUP_DIR
     ts = r"\d{8}-\d{6}"
     exact = [s / f"{name}.sb", s / f"core-changed-{name}", s / f"manual-wake-{name}.log", s / f"talk-history-{name}",
-             s / f"update-{name}.log", s / f"backfill-value-{name}.log",
+             s / f"update-{name}.log", s / f"update-queued-{name}", s / f"backfill-value-{name}.log",
              s / "locks" / f"recap-{name}.lock", s / "conversations" / name, s / "replying" / name,
              s / "judgments" / f"{name}.jsonl", s / "judgments" / f"{name}-second.jsonl",
              s / "judgments" / f"{name}-unsampled.jsonl",

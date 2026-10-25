@@ -467,6 +467,20 @@ class QueuedUpdateTest(UpdateCase):
         self.assertIn("template: surprises", (self.root / "memory" / "journal.md").read_text())
         self.assertIsNone(core.update_queued("x"))
 
+    def test_status_shows_a_queued_update_and_still_works_without_one(self):
+        # Regression (Codex on 784982a): the flag's text was built before the filter, so `shaft status` raised
+        # TypeError on every instance without a queued update.
+        import contextlib
+        import io
+        from supervisor import core
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(self.cli.cmd_status(["x"]), 0)
+        self.assertNotIn("update queued", out.getvalue())
+        core.set_update_queued("x", True)
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.cli.cmd_status(["x"])
+        self.assertIn("update queued since", out.getvalue())
+
     def test_a_queued_update_that_fails_the_gate_is_not_retried_in_a_loop(self):
         from unittest import mock
         from supervisor import core

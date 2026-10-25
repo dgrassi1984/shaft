@@ -328,7 +328,7 @@ def cmd_status(names: list[str]) -> int:
         tools_off = disabled_tools(name)
         queued = update_queued(name)
         flags = [f for f, on in (("paused", paused(name)), ("busy", is_busy(name)),
-                                 (f"update queued since {queued[11:16]}", queued),
+                                 (f"update queued since {(queued or '')[11:16]}", queued),
                                  (f"{len(convs)} conversation(s) open", convs)) if on]
         print(f"\n■ {name}{' (' + ', '.join(flags) + ')' if flags else ''}  ·  branch instance/{name}")
         print(f"  journal     {len(entries)} entries · self-model last changed {last_self}")

@@ -21,7 +21,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import localmodel
-from .core import PROJECT, PYTHON, SUP_DIR, instance_config, instance_names, log, paused, update_queued
+from .core import (PROJECT, PYTHON, SUP_DIR, instance_config, instance_names, log, paused, set_update_queued,
+                   update_queued)
 from .runner import Busy, is_busy, run_agent
 
 AGENTS = Path.home() / "Library" / "LaunchAgents"
@@ -249,6 +250,15 @@ def updating(name: str, children: dict) -> bool:
     return f"update {name}" in children or update_queued(name) is not None
 
 
+def update_ended(name: str, returncode: int) -> None:
+    """A queued update dequeues itself once it holds the lock, and re-queues itself when it finds the instance busy
+    (exit 0). One that failed before either is dropped, not retried every tick while it holds the wakes back."""
+    if returncode != 0 and update_queued(name) is not None:
+        set_update_queued(name, False)
+        log(f"scheduler: {name}'s queued update failed before it could run (exit {returncode}); dropped — "
+            f"run `shaft update {name}` to see why")
+
+
 def _awake(name: str) -> str:
     """Why the instance counts as awake right now ('' if it does not). An open conversation waiting for the
     operator does not: a cycle starts, and pauses only while a reply is being written."""
@@ -280,6 +290,8 @@ def serve(poll_s: int = 30) -> int:
                     + (f" — {err}" if proc.returncode and err else ""))
                 if job == "sleep" and proc.returncode not in (0, 3):   # 3: some paused; a crash must not loop
                     record("sleep")
+                if job.startswith("update "):
+                    update_ended(job.removeprefix("update "), proc.returncode)
                 del children[job]
         # Before the pause check, as `shaft update` itself runs while paused.
         for name in update_jobs(children, instance_names(), _awake):
