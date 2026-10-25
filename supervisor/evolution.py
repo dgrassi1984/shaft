@@ -357,11 +357,21 @@ def _build_child(a: str, b: str, child: str, choices: list[dict], summary: str) 
         picks = "\n".join(f"- `{c['path']}` from {c['take']}: {c['reason']}" for c in choices) or "- (none differed)"
         journal_note(root, "Born", f"I was born from {a} and {b}: my code, prompts, plugins and skills are a "
                                    f"recombination of theirs; my mind starts empty.\n\nWhy these genes: {summary}\n\n{picks}")
+        gated = gate.snapshot(root)
         ok, test_log = gate.run_tests(root, HOME)
         if ok:
             message = f"{child}: born from {a} × {b}\n\n{summary}\n\n{picks}"
-            add_all_but_mind(root)
-            git_wt(root, "commit", "-q", "-m", message)
+            # The child's code as the gate checked it, never the working tree read again: its own tests ran in
+            # that folder and could have written it. The rest (config, skills, drive) as it stands.
+            from .core import _commit_gated, changed_vs_head
+            changed = changed_vs_head(root)
+            code = sorted({p for p in changed if Path(p).parts[0] in gate.CODE_PATHS} | set(gated))
+            merge = git_wt(root, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).stdout.strip()
+            _commit_gated(child, root, None, message, [p for p in changed if p not in code], code, gated,
+                          parents=(merge,) if merge else (), from_index=True)
+            git_wt(root, "merge", "--quit", check=False)   # committed above: no merge in progress any more
+            if (drift := gate.unrestored(root, gated, code)):
+                raise RuntimeError(f"{', '.join(drift)} changed after the gate checked {child}'s code")
             mind.init(child)
             mind.commit(child, message, root)
             return True, test_log

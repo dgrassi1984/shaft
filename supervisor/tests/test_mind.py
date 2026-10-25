@@ -299,6 +299,7 @@ class ReadersTest(unittest.TestCase):
         self.assertTrue(born, log)
         kid = self.project / "instances" / "d"
         self.assertEqual(git(kid, "ls-tree", "-r", "--name-only", "HEAD", "--", *MIND_PATHS), "")
+        self.assertEqual(len(git(kid, "log", "-1", "--format=%P").split()), 2, "the birth lost a parent")
         self.assertIn("born from a and c", mind.show("d", "mind", "memory/journal.md"))
         self.assertNotIn("PARENT'S MEMORY", mind.show("d", "mind", "memory/journal.md"))
 

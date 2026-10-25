@@ -19,6 +19,7 @@ import os
 import random
 import re
 import secrets
+import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -1260,10 +1261,6 @@ def _blob(root: Path, rev: str, rel: str) -> bytes | None:
     return r.stdout if r.returncode == 0 else None
 
 
-def _one_line(r) -> str:
-    return " ".join((r.stderr or r.stdout or "").split())[:200] or f"exit {r.returncode}"
-
-
 def restore_change(name: str, entry: dict) -> str | None:
     """Undo one self-change by restoring exactly its recorded files to their content at the change's parent
     commit — never `git revert` of the run commit, which also holds the run's memory (the append-only episode
@@ -1305,13 +1302,29 @@ def restore_change(name: str, entry: dict) -> str | None:
         return f"the tests fail with the earlier version ({last[0].strip()[:200]})"
     msg = (f"{name}: supervisor restored {len(files)} file(s) to before {commit[:8]} (failed probation)\n\n"
            + "\n".join(f"- {f}" for f in files))
-    add = git_wt(root, "add", "-A", "--", *files, check=False)
-    done = add if add.returncode else git_wt(root, *SUPERVISOR_GIT, "commit", "-q", "-m", msg, "--", *files,
-                                              check=False)
-    if done.returncode != 0:
+    from . import baseline
+    from .core import _commit_gated
+    try:   # exactly the bytes restored and tested, never the working tree read again (`git add`: a write while the
+        _commit_gated(name, root, None, msg, [], files, before,   # tests ran was committed, and so approved)
+                      who=("SHAFT supervisor", "supervisor@shaft.localhost"))
+    except subprocess.CalledProcessError as e:
         gate.restore(root, current, files)
-        git_wt(root, "reset", "-q", "--", *files, check=False)
-        return f"git could not commit the restore: {_one_line(done)}"
+        return f"git could not commit the restore: {(e.stderr or b'').decode(errors='replace').strip()[:300]}"
+    if (drift := gate.unrestored(root, before, files)):
+        log(f"{name}: FAILED check: {', '.join(drift)} written after the probation's restore was tested — committed "
+            "as tested and put back")
+        journal_note(root, "Supervisor: code written after the gate",
+                     "While the probation's restore was tested, " + ", ".join(drift) + " changed on disk (something "
+                     "still running wrote it). What was committed is what was tested, and the file is put back to it.")
+        try:
+            gate.restore(root, before, drift)
+        except gate.RestoreFailed as e:
+            log(f"{name}: FAILED to put back {', '.join(drift)} after the probation's restore: {e} — the next run "
+                "gates it")
+    try:
+        baseline.update(name, root, before, files)
+    except (baseline.BaselineError, OSError, subprocess.CalledProcessError, SystemExit) as e:
+        log(f"{name}: FAILED to record the approved code after the probation's restore ({e})")
     return None
 
 
