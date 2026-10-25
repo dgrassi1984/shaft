@@ -46,7 +46,8 @@ class SurpriseJudgeTest(unittest.TestCase):
 
     def stored(self, episodes):
         rows = [{"episode_ts": ep["ts"], "judged_at": ep["ts"], "judge": "judge-test", "model": "own-model",
-                 "goal": "fix parser", "confidence": 70, "claimed": "yes", **VERDICT} for ep in episodes]
+                 "goal": "fix parser", "confidence": 70, "claimed": "yes",
+                 **{k: v for k, v in VERDICT.items() if k not in SURPRISE}} for ep in episodes]   # judged before M2
         self.sup.joinpath("judgments").mkdir(parents=True, exist_ok=True)
         path = self.sup / "judgments/m.jsonl"
         path.write_text("".join(json.dumps(r) + "\n" for r in rows))
@@ -124,7 +125,8 @@ class SurpriseJudgeTest(unittest.TestCase):
         self.pick.assert_not_called()
         self.assertFalse((self.sup / "judgments/m-surprise-baseline.jsonl").exists())
         self.assertEqual(metrics.surprise_baseline("m")["done"], 1)
-        self.pick.assert_called_once_with(exclude=["own-model"])
+        self.pick.assert_not_called()   # the stored verdict's judge, never a fresh draw
+        self.assertEqual(self.ask.call_args.kwargs["model"], "judge-test")
         self.assertEqual(path.read_bytes(), before)
         result = metrics._surprise_baseline_rows("m")
         self.assertEqual(result[0]["episode_ts"], old["ts"])
@@ -153,8 +155,59 @@ class SurpriseJudgeTest(unittest.TestCase):
         # newest first: a --limit sample is the recent, same-model baseline, not the first day's cycles
         self.assertEqual(metrics._surprise_baseline_rows("m")[0]["episode_ts"], "2026-10-13T10:00:00")
         self.ask.side_effect = lambda *a, **k: copy.deepcopy(VERDICT)
-        self.assertEqual(metrics.surprise_baseline("m", limit=1)["done"], 1)
+        self.assertEqual(metrics.surprise_baseline("m", limit=1)["todo"], 0)   # the newest cycle: already judged
+        self.assertEqual(metrics.surprise_baseline("m", limit=2)["done"], 1)
         self.assertEqual(metrics.surprise_baseline("m")["done"], 1)
+
+    def test_baseline_reuses_the_stored_judge_and_sets_cross_judge_rows_aside(self):
+        # Regression (2026-10-25): the re-judge drew a fresh judge from the rotation, so the M2 agreement compared two
+        # different models on most cycles (shaft 50/60, wren 54/60: FAIL) and measured judge swaps, not the new fields.
+        old, mid, new = self.episode(), self.episode("2026-10-13T09:00:00"), self.episode("2026-10-13T10:00:00")
+        path, rows = self.stored([old, mid, new])
+        rows[0]["judge"], rows[1]["judge"], rows[2]["judge"] = "glm", "deepseek", "mimo"
+        path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        base = self.sup / "judgments/m-surprise-baseline.jsonl"
+        base.write_text(json.dumps({**VERDICT, "episode_ts": new["ts"], "judge": "glm", "criterion_met": "partial"})
+                        + "\n" + json.dumps({**VERDICT, "episode_ts": mid["ts"], "judge": "deepseek"}) + "\n")
+        report = metrics.surprise_baseline_report("m")
+        self.assertIn("judged by glm, the stored verdict by mimo: not compared", report)
+        self.assertIn("agreement (same judge as the stored verdict): 1/1", report)
+        self.assertIn("not measured", report)   # a cross-judge row never counts as a disagreement, nor as a pass
+        dry = metrics.surprise_baseline("m", dry_run=True)
+        self.assertEqual((dry["todo"], dry["cross_judge"]), (2, 1))
+        self.assertEqual(metrics.surprise_baseline("m")["done"], 2)
+        self.pick.assert_not_called()
+        self.assertEqual([c.kwargs["model"] for c in self.ask.call_args_list], ["mimo", "glm"])   # newest first
+        kept = metrics._surprise_baseline_rows("m")
+        self.assertEqual(sorted((r["episode_ts"], r["judge"]) for r in kept),
+                         [(old["ts"], "glm"), (mid["ts"], "deepseek"), (new["ts"], "mimo")])   # one row per cycle
+        aside = (self.sup / "judgments/m-surprise-baseline-cross-judge.jsonl").read_text().splitlines()
+        self.assertEqual([json.loads(l)["judge"] for l in aside], ["glm"])
+        report = metrics.surprise_baseline_report("m")
+        self.assertIn("agreement (same judge as the stored verdict): 3/3", report)
+        self.assertIn("PASS", report)
+
+    def test_baseline_leaves_out_a_cycle_without_a_usable_stored_judge(self):
+        a, b = self.episode(), self.episode("2026-10-13T10:00:00")
+        path, rows = self.stored([a, b])
+        del rows[0]["judge"]
+        rows[1]["judge"] = "openrouter/own-model"   # the instance runs on it now: never its own judge
+        path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        result = metrics.surprise_baseline("m")
+        self.assertEqual((result["todo"], result["done"], result["no_stored_judge"]), (0, 0, 2))
+        self.ask.assert_not_called()
+        self.pick.assert_not_called()
+
+    def test_a_cycle_already_judged_with_the_fields_is_not_rejudged(self):
+        # Regression (2026-10-25): the live judge asked for the surprise fields from 11:31, hours before the instances'
+        # update brought predictions; those cycles have no predictions yet nothing old to compare, and they pushed
+        # the oldest baseline cycles out of the newest-N window.
+        old, new = self.episode(), self.episode("2026-10-13T10:00:00")
+        path, rows = self.stored([old, new])
+        rows[1].update(SURPRISE)
+        path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        self.assertEqual(metrics.surprise_baseline("m", limit=1)["done"], 1)
+        self.assertEqual([r["episode_ts"] for r in metrics._surprise_baseline_rows("m")], [old["ts"]])
 
     def test_bad_baseline_is_not_written(self):
         self.stored([self.episode()])
@@ -185,17 +238,18 @@ class SurpriseJudgeTest(unittest.TestCase):
                                               "unreported_surprises": ["The heredoc failed."]}
         metrics.surprise_baseline("m")
         text = metrics.surprise_baseline_report("m")
-        for part in ("Re-judged: 1", "agreement: 0/1", "FAIL", "stored yes, new partial", "x" * 200,
+        for part in ("Re-judged: 1", "stored verdict): 0/1", "FAIL", "stored yes, new partial", "x" * 200,
                      "Expectations: 1 held, 0 contradicted, 0 uninformative", "per cycle: 1.00",
                      ep["ts"] + ": The heredoc failed."):
             self.assertIn(part, text)
         self.assertNotIn("x" * 201, text)
-        with mock.patch.object(metrics, "_surprise_baseline_rows", return_value=[{**VERDICT, "episode_ts": ep["ts"]}]):
+        same = [{**VERDICT, "episode_ts": ep["ts"], "judge": "judge-test"}]
+        with mock.patch.object(metrics, "_surprise_baseline_rows", return_value=same):
             self.assertIn("PASS", metrics.surprise_baseline_report("m"))
 
     def test_report_acceptance_boundary_and_empty_measurement(self):
         self.assertIn("not measured", metrics.surprise_baseline_report("m"))
-        rows = [{**VERDICT, "episode_ts": str(i)} for i in range(15)]
+        rows = [{**VERDICT, "episode_ts": str(i), "judge": "judge-test"} for i in range(15)]
         new = [dict(r) for r in rows]
         new[0]["criterion_met"] = "no"
         with mock.patch.object(metrics, "judgments", return_value=rows), \
@@ -206,7 +260,7 @@ class SurpriseJudgeTest(unittest.TestCase):
 
     def test_record_text_json_and_old_rows(self):
         _, rows = self.stored([self.episode()])
-        row = {**rows[0], "expectations": [{"statement": "pass", "verdict": "contradicted", "evidence": "fail"}],
+        row = {**rows[0], **SURPRISE, "expectations": [{"statement": "pass", "verdict": "contradicted", "evidence": "fail"}],
                "unreported_surprises": ["heredoc failed"], "followup_useful": "partial"}
         text = broker.judgment_text(row)
         for part in ("Expectations: 0 held, 1 contradicted, 0 uninformative", "Contradicted: pass",

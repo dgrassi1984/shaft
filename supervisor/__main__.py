@@ -998,7 +998,8 @@ def main(argv: list[str]) -> int:
                        "into judgments/<name>-surprise-baseline.jsonl (paid; --dry-run counts and prices it first)")
     p.add_argument("names", nargs="+")
     p.add_argument("--dry-run", action="store_true", help="count the cycles and estimate the cost; no judge call")
-    p.add_argument("--limit", type=int, default=None, help="at most this many cycles per instance")
+    p.add_argument("--limit", type=int, default=None, help="the newest this many cycles per instance (a re-run judges only "
+                   "what they still lack)")
     p.add_argument("--report", action="store_true", help="only print the comparison with the stored verdicts")
     p = sub.add_parser("surprise-report", help="the surprise loop's acceptance window: P1-P5 against the frozen "
                        "baseline, and how each sleep handled the surprises (docs/plans/PLAN-surprise.md §4)")
@@ -1307,7 +1308,9 @@ def main(argv: list[str]) -> int:
             if not args.report:
                 r = metrics.surprise_baseline(name, args.limit, dry_run=args.dry_run)
                 print(f"{name}: {r['todo']} cycle(s) to re-judge, {r['done']} done; about ${r['estimated_usd']:.2f} "
-                      f"(${r['per_judgment_usd']:.3f} each: {r['basis']})")
+                      f"(${r['per_judgment_usd']:.3f} each: {r['basis']}); each by its stored verdict's judge; "
+                      f"{r['cross_judge']} earlier re-judge(s) by another judge set aside, "
+                      f"{r['no_stored_judge']} cycle(s) left out with no usable stored judge")
             if args.report or not args.dry_run:
                 print(metrics.surprise_baseline_report(name))
         return 0
