@@ -21,7 +21,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import localmodel
-from .core import PROJECT, PYTHON, SUP_DIR, instance_config, instance_names, log, paused
+from .core import (PROJECT, PYTHON, SUP_DIR, instance_config, instance_names, log, paused, set_update_queued,
+                   update_queued)
 from .runner import Busy, is_busy, run_agent
 
 AGENTS = Path.home() / "Library" / "LaunchAgents"
@@ -189,9 +190,13 @@ def sleep_due(now: datetime, st: dict) -> bool:
     return now >= sleep_from and (last_sleep is None or last_sleep < sleep_from)
 
 
+def scheduler_installed() -> bool:
+    return (AGENTS / f"{SERVICES['scheduler']['label']}.plist").exists()
+
+
 def next_sleep(now: datetime | None = None) -> str | None:
     """Next nightly sleep, or None when the scheduler is not installed; missed sleeps are due now."""
-    if not (AGENTS / f"{SERVICES['scheduler']['label']}.plist").exists():
+    if not scheduler_installed():
         return None
     now = now or datetime.now()
     if sleep_due(now, _state()):
@@ -234,6 +239,26 @@ def decide_wakes(now: datetime, st: dict, names: list[str], interval_of, awake_o
     return start, skip
 
 
+def update_jobs(children: dict, names: list[str], awake_of) -> list[str]:
+    """Instances whose queued `shaft update` to start now: queued, not updating or waking already, and idle."""
+    return [n for n in names if update_queued(n) and f"update {n}" not in children
+            and f"wake {n}" not in children and not awake_of(n)]
+
+
+def updating(name: str, children: dict) -> bool:
+    """A queued or running update holds the instance's wakes back: its next cycle runs the new code."""
+    return f"update {name}" in children or update_queued(name) is not None
+
+
+def update_ended(name: str, returncode: int) -> None:
+    """A queued update dequeues itself once it holds the lock, and re-queues itself when it finds the instance busy
+    (exit 0). One that failed before either is dropped, not retried every tick while it holds the wakes back."""
+    if returncode != 0 and update_queued(name) is not None:
+        set_update_queued(name, False)
+        log(f"scheduler: {name}'s queued update failed before it could run (exit {returncode}); dropped — "
+            f"run `shaft update {name}` to see why")
+
+
 def _awake(name: str) -> str:
     """Why the instance counts as awake right now ('' if it does not). An open conversation waiting for the
     operator does not: a cycle starts, and pauses only while a reply is being written."""
@@ -265,13 +290,19 @@ def serve(poll_s: int = 30) -> int:
                     + (f" — {err}" if proc.returncode and err else ""))
                 if job == "sleep" and proc.returncode not in (0, 3):   # 3: some paused; a crash must not loop
                     record("sleep")
+                if job.startswith("update "):
+                    update_ended(job.removeprefix("update "), proc.returncode)
                 del children[job]
+        # Before the pause check, as `shaft update` itself runs while paused.
+        for name in update_jobs(children, instance_names(), _awake):
+            children[f"update {name}"] = (_start(["update", name]), time.monotonic())
         if not (SUP_DIR / "paused").exists():
             st, now = _state(), datetime.now()
             _batteries(children, now, sleep_due(now, st))
             if sleep_due(now, st) and "sleep" not in children:
                 children["sleep"] = (_start(["sleep", "--all"]), time.monotonic())
-            names = [n for n in instance_names() if not paused(n)]
+            names = [n for n in instance_names() if not paused(n) and not updating(n, children)]   # not skipped:
+            # a wake due during an update starts right after it
             start, skip = decide_wakes(now, st, names, wake_interval,
                                        lambda n: "waking already" if f"wake {n}" in children else _awake(n))
             for name, why in skip.items():
@@ -282,7 +313,8 @@ def serve(poll_s: int = 30) -> int:
                 children[f"wake {name}"] = (_start(["wake", name]), time.monotonic())
             from . import jobs   # the instances' own plugins on their timers, and the wakes those jobs asked for
             jobs.tick(children, now, _start, instance_names(),
-                      lambda n: "waking already" if f"wake {n}" in children else _awake(n))
+                      lambda n: "waking already" if f"wake {n}" in children else
+                      "being updated" if updating(n, children) else _awake(n))
             if "trials" not in children:   # trials of proposed changes; on the local model only in its idle time
                 from . import trial
                 if trial.has_work():

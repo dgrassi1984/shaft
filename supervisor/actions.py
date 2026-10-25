@@ -135,8 +135,8 @@ def update_question(name: str) -> tuple[str, str]:
     behind = version.instance(name).get("template_behind")
     if not behind:
         return "", f"{name} is already on the current template"
-    return (f"merge {behind} template commit(s) into {name}? (refused while it is busy or has uncommitted edits; "
-            "rolled back if the test gate fails)"), ""
+    return (f"merge {behind} template commit(s) into {name}? (queued while it is busy, run once it is idle; refused "
+            "on uncommitted edits; rolled back if the test gate fails)"), ""
 
 
 SLEEP_QUESTION = "start a sleep (consolidation) for {name} now? It runs up to 90 minutes on its model."

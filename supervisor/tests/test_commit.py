@@ -426,6 +426,74 @@ class UpdateNoteTest(UpdateCase):
         self.assertEqual(self.notes(), 0)
 
 
+class QueuedUpdateTest(UpdateCase):
+    """Regression (2026-10-25): `shaft update` on a busy instance was refused ("update it when it is idle"), and
+    each retry lost the race to the next cycle, which starts as soon as the last one ends — wren, shaft and thelos
+    all refused the M1 update in turn. A busy instance's update is now queued, and the scheduler runs it once idle."""
+
+    def busy(self):
+        from supervisor import runner
+        return runner.run_lock("x", wait=False, kind="live")
+
+    def test_a_busy_instance_queues_its_update_instead_of_refusing(self):
+        from unittest import mock
+        from supervisor import core
+        self.template_change("template: surprises")
+        head = git(self.root, "rev-parse", "HEAD")
+        with mock.patch.object(self.cli.autonomy, "scheduler_installed", return_value=True), self.busy():
+            code, out = self.update()
+        self.assertEqual(code, 0, out)
+        self.assertIn("update queued", out)
+        self.assertNotIn("update it when it is idle", out)
+        self.assertIsNotNone(core.update_queued("x"))
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), head)   # nothing merged while it ran
+
+    def test_without_the_scheduler_nothing_would_run_it_so_it_is_refused(self):
+        from unittest import mock
+        from supervisor import core
+        with mock.patch.object(self.cli.autonomy, "scheduler_installed", return_value=False), self.busy():
+            code, out = self.update()
+        self.assertEqual(code, 3, out)
+        self.assertIn("update it when it is idle", out)
+        self.assertIsNone(core.update_queued("x"))
+
+    def test_the_queued_update_runs_once_idle_and_is_then_dequeued(self):
+        from supervisor import core
+        self.template_change("template: surprises")
+        core.set_update_queued("x", True)
+        code, out = self.update()
+        self.assertEqual(code, 0, out)
+        self.assertIn("updated from template", out)
+        self.assertIn("template: surprises", (self.root / "memory" / "journal.md").read_text())
+        self.assertIsNone(core.update_queued("x"))
+
+    def test_status_shows_a_queued_update_and_still_works_without_one(self):
+        # Regression (Codex on 784982a): the flag's text was built before the filter, so `shaft status` raised
+        # TypeError on every instance without a queued update.
+        import contextlib
+        import io
+        from supervisor import core
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(self.cli.cmd_status(["x"]), 0)
+        self.assertNotIn("update queued", out.getvalue())
+        core.set_update_queued("x", True)
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            self.cli.cmd_status(["x"])
+        self.assertIn("update queued since", out.getvalue())
+
+    def test_a_queued_update_that_fails_the_gate_is_not_retried_in_a_loop(self):
+        from unittest import mock
+        from supervisor import core
+        self.template_change("template: broken change")
+        core.set_update_queued("x", True)
+        self.gate.stop()
+        with mock.patch.object(self.cli.gate, "run_tests", return_value=(False, "boom")):
+            code, out = self.update()
+        self.gate.start()
+        self.assertEqual(code, 1, out)
+        self.assertIsNone(core.update_queued("x"))
+
+
 class UpdateKeepsUncommittedWorkTest(UpdateCase):
     """Regression (2026-10-13): a merged template that failed the gate was rolled back with `reset --hard`,
     which also threw away every uncommitted edit in the instance's worktree — wren and kant both had an

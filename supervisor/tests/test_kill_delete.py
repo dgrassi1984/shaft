@@ -288,6 +288,7 @@ class DeleteTest(unittest.TestCase):
         rows of both in the shared files."""
         s = self.sup
         files = ["kdx.sb", "core-changed-kdx", "manual-wake-kdx.log", "talk-history-kdx", "locks/recap-kdx.lock",
+                 "update-queued-kdx",   # a queued update must not reach a new instance of the same name
                  "conversations/kdx/old.talk", "judgments/kdx.jsonl", "judgments/kdx-second.jsonl",
                  "judgments/kdx-unsampled.jsonl",
                  "judgments/kdx-traits.json", "judgments/second-cases/kdx@2026-10-20T10-00-00.json",
