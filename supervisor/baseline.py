@@ -95,8 +95,8 @@ def read(name: str, root: Path) -> dict | None:
 def write(name: str, root: Path, code: dict[str, bytes]) -> None:
     """Record `code` (a gate.snapshot the supervisor has just approved) as the instance's approved code."""
     _own_folder(name, root)
-    if (linked := gate.links(code)):
-        raise BaselineError(f"links are never approved code: {', '.join(linked)}")
+    if (linked := gate.refused(code)):
+        raise BaselineError(f"links, hard links and pipes are never approved code: {', '.join(linked)}")
     head = committed(root)
     approved: dict[str, dict] = {}
     for path in sorted(set(code) | {p for p, e in head.items() if e[0] in ("100644", "100755")}):
@@ -168,3 +168,30 @@ def unapproved(name: str, root: Path, now: dict[str, bytes]) -> dict[str, bytes 
             except Exception as e:                              # anything: refused, never guessed
                 raise BaselineError(f"cannot read the committed {path} of {name}: {e}") from None
     return out
+
+
+def update(name: str, root: Path, code: dict, paths: list[str]) -> None:
+    """After the supervisor committed `paths` with the bytes in `code` (the probation's restore, a bred child): they
+    are approved as committed, so the record keeps no older approval for them — and one for a path whose bytes git
+    does not hold (ignored). Nothing to do before the instance's first record."""
+    _own_folder(name, root)
+    record = read(name, root)
+    if record is None:
+        return
+    head = committed(root)
+    approved = {p: e for p, e in record["approved"].items() if p not in paths}
+    store = _files(name)
+    store.mkdir(parents=True, exist_ok=True)
+    for path in paths:
+        data = code.get(path)
+        if _is_committed(data, head.get(path)) or (data is None and path not in head):
+            continue
+        sha = hashlib.sha256(data).hexdigest() if isinstance(data, bytes) else None
+        if sha and not (store / sha).exists():
+            (store / sha).write_bytes(data)
+        approved[path] = {"sha256": sha, "committed": head[path][1] if path in head else None}
+    out = record_path(name)
+    tmp = out.with_name(f".{out.name}.{os.getpid()}")
+    tmp.write_text(json.dumps({**record, "ts": datetime.now().isoformat(timespec="seconds"), "approved": approved},
+                              indent=1))
+    os.replace(tmp, out)

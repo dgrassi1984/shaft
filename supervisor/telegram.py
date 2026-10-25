@@ -483,20 +483,33 @@ class Chat:
         replay marks done exactly the ones its kept answer heard. Returns False when an answer is still to deliver."""
         stop = threading.Event()
         threading.Thread(target=self._typing, args=(chat_id, stop), daemon=True).start()
-        batch = [update_id]                          # the updates the next reply answers
+        batch, mine = [update_id], set()           # the updates the next reply answers; the requests made here
         try:
             while True:
-                record = _request(self.name, batch[0]) if batch[0] is not None else None
-                if record:                           # a replay after a restart: as it was before
+                key = batch[0]
+                record = _request(self.name, key) if key is not None else None
+                if record and key not in mine:       # a replay after a restart: the request as it was, all of it
                     batch = record["batch"]
-                elif batch[0] is not None:
-                    _record_request(self.name, batch)
+                    if record.get("payload"):
+                        with self.mu:
+                            self.history = [dict(m) for m in record["payload"]]
+                with self.mu:                        # sent while the last answer was being delivered: in this one
+                    extra, extra_ids = self.inflight or [], self.inflight_ids
+                    if extra and key in mine:
+                        self.history[-1] = {"role": "user", "content": "\n\n".join(
+                            [self.history[-1]["content"], *extra])}
+                        batch = batch + [i for i in extra_ids if i is not None]
+                        self.inflight, self.inflight_ids = [], []
+                    payload = [dict(m) for m in self.history]
+                    self.key = key
+                if key is not None:
+                    _record_request(self.name, batch, payload)   # the exact request: a replay sends the same
+                    mine.add(key)
+                record = _request(self.name, key) if key is not None else None
                 before = list(record["joined"]) if record else []   # joined before this ask: only a kept answer heard
                 waiting = set(map(int, _pending(load(), self.name)))   # of those, the ones not done yet
-                with self.mu:
-                    self.key = batch[0]
                 try:
-                    got_back = ask_api(self.name, list(self.history), request_id=self._request_id(batch[0]))
+                    got_back = ask_api(self.name, list(self.history), request_id=self._request_id(key))
                     reply, heard, replayed = got_back[0], got_back[1], len(got_back) > 2 and bool(got_back[2])
                 except TelegramError as e:
                     with self.mu:
@@ -508,18 +521,18 @@ class Chat:
                                          message_id)
                     if said:                         # said: not answered again after a restart
                         self._ack(batch + lost_ids + before)
-                        _drop_request(self.name, batch[0])
+                        _drop_request(self.name, key)
                     return said
                 with self.mu:
                     got, ids = self.inflight or [], self.inflight_ids
                     if replayed:                     # the kept answer heard those that joined before the restart
-                        late = [i for i in before[heard:] if i in waiting]
+                        late = [i for i in before[heard:] if i in waiting and i not in ids]
                         heard_ids, rest_ids = before[:heard], late + ids
                         rest = [_text_of(self.name, i) for i in late] + got
                         heard_texts = [_text_of(self.name, i) for i in before[:heard]]
                     else:
                         heard = min(heard, len(got))
-                        late = [i for i in before if i in waiting]   # joined a run that never came back
+                        late = [i for i in before if i in waiting and i not in ids]   # joined a run never back
                         heard_ids, rest_ids = ids[:heard], late + ids[heard:]
                         rest = [_text_of(self.name, i) for i in late] + got[heard:]
                         heard_texts = got[:heard]
@@ -529,19 +542,24 @@ class Chat:
                     if rest:
                         self.history.append({"role": "user", "content": "\n\n".join(rest)})
                     self.inflight = [] if rest else None   # decided with the list: nothing falls between
-                    self.inflight_ids, self.key = [], None
+                    self.inflight_ids = []
+                    follow = [i for i in rest_ids if i is not None]
+                    self.key = follow[0] if follow else None   # sent during the delivery: kept with the follow-up
                 self._ack(heard_ids)                 # in a reply that came back: a replay of `batch` brings it again
-                if rest_ids:
-                    _record_request(self.name, rest_ids)   # before the batch it follows is done: nothing between
+                if follow:                           # before the batch it follows is done: nothing between
+                    _record_request(self.name, follow, [dict(m) for m in self.history])
+                    mine.add(follow[0])
                 if not self._deliver(chat_id, reply):
                     return False                     # pending, with its request: the next start delivers it
                 self._ack(batch)
-                _drop_request(self.name, batch[0])
+                _drop_request(self.name, key)
                 if not rest:
                     return True
                 batch = rest_ids
         finally:
             stop.set()
+            with self.mu:                            # however it ends, it owns the conversation no more
+                self.inflight, self.inflight_ids, self.key = None, [], None
 
     def receive(self, files: list[tuple[str, str]]) -> str:
         """Save the operator's files in the instance's attachments/ folder; returns the lines that tell it where."""
@@ -650,6 +668,7 @@ def handle_update(name: str, token: str, chat: Chat, upd: dict) -> None:
 
 def poll(name: str, token: str, stop: threading.Event) -> None:
     chat = Chat(name, token)
+    _quarantine(name)
     st = load()
     waiting = _pending(st, name)
     for key in [k for k in _requests(st, name) if k not in waiting]:   # delivered just before the stop: over
@@ -665,7 +684,7 @@ def poll(name: str, token: str, stop: threading.Event) -> None:
     while not stop.is_set():
         if name not in instance_names():   # deleted while the service runs (shaft delete): its bot answers no more
             log(f"telegram: {name} no longer exists — its bot stops")
-            update(lambda s: ((s.get("pending") or {}).pop(name, None), (s.get("requests") or {}).pop(name, None)))
+            update(lambda s: [(s.get(k) or {}).pop(name, None) for k in ("pending", "requests", "failures")])
             return
         st = load()
         offset = (st.get("offsets") or {}).get(name, 0)
@@ -721,11 +740,21 @@ def _request(name: str, key: int) -> dict | None:
     return _requests(load(), name).get(str(key))
 
 
-def _record_request(name: str, batch: list) -> None:
+def _record_request(name: str, batch: list, payload: list[dict] | None = None) -> None:
+    """Keep (or update) the request answering `batch`: its updates, and the exact messages sent for it (`payload`:
+    the conversation, the combined messages and their attachment lines), so a replay after a restart sends the same
+    request — a follow-up for [B, C] was rebuilt from B's update alone (Codex on de2191f). What joined it is kept."""
     ids = [u for u in batch if u is not None]
-    if ids:
-        update(lambda s: s.setdefault("requests", {}).setdefault(name, {}).setdefault(
-            str(ids[0]), {"batch": ids, "joined": []}))
+    if not ids:
+        return
+
+    def fn(s: dict) -> None:
+        r = s.setdefault("requests", {}).setdefault(name, {}).setdefault(str(ids[0]), {"batch": ids, "joined": []})
+        r["batch"] = ids
+        r["joined"] = [u for u in r["joined"] if u not in ids]   # merged into it: now part of what it answers
+        if payload is not None:
+            r["payload"] = payload
+    update(fn)
 
 
 def _record_join(name: str, key: int, update_id: int) -> None:
@@ -754,6 +783,40 @@ def _text_of(name: str, update_id: int) -> str:
 
 
 FAILED = object()
+QUARANTINE_AFTER = 3   # failed starts after which an update is set aside, not handled again
+
+
+def _failed(name: str, update_id: int) -> None:
+    def fn(s: dict) -> None:
+        mine = s.setdefault("failures", {}).setdefault(name, {})
+        mine[str(update_id)] = mine.get(str(update_id), 0) + 1
+    update(fn)
+
+
+def _quarantine(name: str) -> None:
+    """At start, before anything is handled again: an update whose handler failed QUARANTINE_AFTER times (one try per
+    start) is moved to telegram.json's "quarantined", logged as FAILED (an alert on the panel), and never retried —
+    it was retried at every start, forever (Codex on de2191f). Its request, if it was one, goes too, so the messages
+    that joined it are answered on their own."""
+    gone = []
+
+    def fn(s: dict) -> None:
+        counts = (s.get("failures") or {}).get(name) or {}
+        mine = (s.get("pending") or {}).get(name) or {}
+        for uid, n in list(counts.items()):
+            if n >= QUARANTINE_AFTER and uid in mine:
+                s.setdefault("quarantined", {}).setdefault(name, {})[uid] = {
+                    "update": mine.pop(uid), "failures": n, "at": datetime.now().isoformat(timespec="seconds")}
+                (s.get("requests") or {}).get(name, {}).pop(uid, None)
+                gone.append((uid, n))
+            if uid not in mine:
+                counts.pop(uid)
+        if not mine:
+            (s.get("pending") or {}).pop(name, None)
+    update(fn)
+    for uid, n in gone:
+        log(f"telegram: {name}: update {uid} FAILED {n} times, one start each: quarantined, not handled again "
+            "(kept in .supervisor/telegram.json, \"quarantined\")")
 
 
 def _dispatch(name: str, token: str, chat: Chat, upd: dict) -> None:
@@ -761,7 +824,9 @@ def _dispatch(name: str, token: str, chat: Chat, upd: dict) -> None:
         got = _safe(handle_update, name, token, chat, upd)
         if got is None:                  # answered (or nothing to answer): done
             _done(name, upd["update_id"])
-        # "joined": the reply it joined marks it done; "pending" or FAILED (logged): the next start answers it
+        elif got is FAILED:              # the next start tries it again, up to QUARANTINE_AFTER times
+            _failed(name, upd["update_id"])
+        # "joined": the reply it joined marks it done; "pending": the next start delivers it
     threading.Thread(target=handle, daemon=True).start()
 
 

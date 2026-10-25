@@ -196,9 +196,9 @@ def end_left_in(folder: Path, orphans_only: bool = True) -> list[int]:
                 at = up
     found: list[int] = []
     stack = list(heads)
-    while stack:
+    while stack:                         # down from each: the same exclusions, and nothing below an excluded one
         pid = stack.pop()
-        if pid not in found and pid not in mine:
+        if pid not in found and pid in procs and not spared(procs[pid]):
             found.append(pid)
             stack.extend(children.get(pid, []))
     if not found:

@@ -404,8 +404,9 @@ def _pause(name: str, root: Path, kind: str, proc, held: _Held, run: dict, broke
         time.sleep(1)
     held.acquire(wait=True)
     # The conversation's changes are not mine.
-    _reconcile(name, root)
-    run["before"], run["seen"], run["cseen"] = _snapshot(root), len(broker.handoffs), len(broker.config_writes)
+    approved = _reconcile(name, root)
+    run["before"] = _snapshot(root, approved)
+    run["seen"], run["cseen"] = len(broker.handoffs), len(broker.config_writes)
     paused = time.monotonic() - t0
     if run.get("deadline"):
         run["deadline"] += paused
@@ -415,13 +416,19 @@ def _pause(name: str, root: Path, kind: str, proc, held: _Held, run: dict, broke
     return paused
 
 
-def _snapshot(root: Path) -> dict:
+_READ = object()
+
+
+def _snapshot(root: Path, code=_READ) -> dict:
+    """What a run starts from. `code`: the code _reconcile verified as approved, taken as the baseline as it is — read
+    again here, a write landing between that check and this read became the run's baseline, never gated."""
     pers = _personality(root)
-    try:
-        code = gate.snapshot(root)
-    except TreeTooBig as e:   # never an empty snapshot: the run's code is then not checked, and not kept (_settle)
-        log(f"{root.name}: code snapshot NOT taken: {e}")
-        code = None
+    if code is _READ:
+        try:
+            code = gate.snapshot(root)
+        except TreeTooBig as e:   # never an empty snapshot: the run's code is then not checked, nor kept (_settle)
+            log(f"{root.name}: code snapshot NOT taken: {e}")
+            code = None
     return {"code": code, "journal": safe_read(root, JOURNAL, "", errors="replace"), "personality": pers,
             "core": _core_of(pers)}
 
@@ -470,7 +477,7 @@ def _in_progress(root: Path) -> str | None:
     return next((n for n, p in zip(IN_PROGRESS, paths) if os.path.lexists(p)), None)
 
 
-def _reconcile(name: str, root: Path) -> None:
+def _reconcile(name: str, root: Path) -> dict:
     """Settle code an earlier run left unsettled, before a new run takes its baseline: a run that died before
     _settle (the supervisor killed, the Mac shut down, an exception) left its edits on disk, and the next run's
     snapshot took them as its starting point, so they were never gated (B8, review of 2026-10-24). Whatever code
@@ -480,30 +487,38 @@ def _reconcile(name: str, root: Path) -> None:
     .supervisor/rejected/ first. Before an instance's first record, git's view is the approved code. config.env and
     drive.md are not code (the operator's: _commit_outside_config, _commit_outside_drive). Nothing is guessed:
     a merge or rebase in progress (the operator's work), or code that cannot be compared, refuses the run
-    (RunRefused) — it failed open until Codex's review."""
+    (RunRefused) — it failed open until Codex's review. Returns the code it verified as approved: the caller's run
+    starts from exactly that (_snapshot), so a write landing after this check is the run's change, and gated."""
     from . import baseline
-    try:
-        if (what := _in_progress(root)):
-            raise RunRefused(f"a git {what} is in progress in its worktree; finish or abort it "
-                             f"(git -C {root} status) and the next run checks the code")
-        now = gate.snapshot(root)
-        restore = baseline.unapproved(name, root, now)
-        if restore is None:                                    # no record yet: the first run after the upgrade
-            restore = _uncommitted_code(root)
-        restore.update({p: None for p in gate.links(now)})     # a link is never approved code: it goes
-    except RunRefused:
-        raise
-    except TreeTooBig as e:                                    # never an empty or partial answer (core.Budget)
-        raise RunRefused(f"its code is too big to check against its approved code ({e}; the bounds are "
-                         "SHAFT_SNAPSHOT_MAX_MB, SHAFT_TREE_MAX_FILES, SHAFT_TREE_MAX_DEPTH)") from None
-    except (baseline.BaselineError, subprocess.CalledProcessError, OSError, ValueError, UnsafePath, SystemExit) as e:
-        why = (getattr(e, "stderr", None) or b"").decode(errors="replace").strip() or f"{type(e).__name__}: {e}"
-        raise RunRefused(f"its code could not be compared with its approved code: {why}") from None
-    base = {p: b for p, b in now.items() if p not in restore}
-    base.update({p: b for p, b in restore.items() if b is not None})
+
+    def unapproved() -> tuple[dict, dict]:
+        try:
+            if (what := _in_progress(root)):
+                raise RunRefused(f"a git {what} is in progress in its worktree; finish or abort it "
+                                 f"(git -C {root} status) and the next run checks the code")
+            now = gate.snapshot(root)
+            restore = baseline.unapproved(name, root, now)
+            if restore is None:                                # no record yet: the first run after the upgrade
+                restore = _uncommitted_code(root)
+            for p in gate.refused(now):                        # never approved code: a link, a hard link, a pipe
+                restore.setdefault(p, None)                    # the approved file it stands in for comes back
+        except RunRefused:
+            raise
+        except TreeTooBig as e:                                # never an empty or partial answer (core.Budget)
+            raise RunRefused(f"its code is too big to check against its approved code ({e}; the bounds are "
+                             "SHAFT_SNAPSHOT_MAX_MB, SHAFT_TREE_MAX_FILES, SHAFT_TREE_MAX_DEPTH)") from None
+        except (baseline.BaselineError, subprocess.CalledProcessError, OSError, ValueError, UnsafePath,
+                SystemExit) as e:
+            why = (getattr(e, "stderr", None) or b"").decode(errors="replace").strip() or f"{type(e).__name__}: {e}"
+            raise RunRefused(f"its code could not be compared with its approved code: {why}") from None
+        base = {p: b for p, b in now.items() if p not in restore}
+        base.update({p: b for p, b in restore.items() if b is not None})
+        return now, base
+
+    now, base = unapproved()
     touched = gate.changed(base, now)
     if not touched:
-        return
+        return now
     log(f"{name}: code is not the approved code before a run (an earlier run ended unsettled): gating {touched}")
     journal_note(root, "Supervisor: unchecked code from an earlier run",
                  "When this run started, my code was not the code the supervisor last approved, in "
@@ -511,7 +526,11 @@ def _reconcile(name: str, root: Path) -> None:
                  "edited from outside). It was checked now, as every run's changes are: kept if the tests pass, put "
                  "back as last approved if they fail (the rejected files are kept for the operator).")
     rejected = SUP_DIR / "rejected" / f"{name}-{datetime.now():%Y%m%d-%H%M%S-%f}"
-    _settle(name, root, "interrupted", {**_snapshot(root), "code": base}, [], rejected_to=rejected)
+    _settle(name, root, "interrupted", _snapshot(root, base), [], rejected_to=rejected)
+    now, base = unapproved()                                   # settled: the code is now the approved code, or
+    if (left := gate.changed(base, now)):                      # something is writing it as it is checked
+        raise RunRefused(f"its code is still not the approved code after it was settled: {', '.join(left)}")
+    return now
 
 
 def _refused(name: str, e: RunRefused) -> int:
@@ -786,8 +805,7 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
          output: list[str] | None = None, driver=None, held: _Held | None = None) -> int:
     log(f"{name}: start {kind} {describe_knobs()}")
     _clean_tmp(root)
-    _reconcile(name, root)
-    run = {"before": _snapshot(root), "seen": 0, "cseen": 0}
+    run = {"before": _snapshot(root, _reconcile(name, root)), "seen": 0, "cseen": 0}
     budget = None if interactive else (SLEEP_TIMEOUT_S if kind == "sleep" else CYCLE_TIMEOUT_S)
     broker, cmd, env = _launch(name, root, kind, agent_args, budget)
     run["deadline"] = float(env["SHAFT_DEADLINE"]) if env.get("SHAFT_DEADLINE") else None
@@ -901,7 +919,7 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
     except TreeTooBig as e:
         after, too_big = None, str(e)
     touched = gate.changed(before["code"], after) if after is not None else []
-    linked = gate.links(after) if after is not None else []
+    linked = gate.refused(after) if after is not None else []
     touched = sorted(set(touched) | set(linked))      # a link in a code path is a change whatever it was before
     configured = sorted({w["key"] for w in config_writes}) if after is not None else []
     kept: list[str] = []
@@ -912,9 +930,11 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
             raise RunRefused(f"its code is too big to check ({too_big}); nothing was put back")
         _too_big_to_check(name, root, before["code"], config_writes, too_big)
     elif touched or configured:
-        if linked:   # fail closed, untested: code paths hold no links (gate.Link)
-            ok, test_log = False, ("== links ==\nA link where code belongs is never kept, whatever it points to: "
-                                   + ", ".join(f"{p} -> {after[p].target}" for p in linked))
+        if linked:   # fail closed, untested: code paths hold no links, hard links or pipes (gate.Link, gate.Invalid)
+            ok, test_log = False, ("== links ==\nA link, a hard link or a pipe where code belongs is never kept, "
+                                   "whatever it points to: " + ", ".join(
+                                       f"{p} -> {after[p].target}" if isinstance(after[p], gate.Link)
+                                       else f"{p}: {after[p].why}" for p in linked))
         else:
             ok, test_log = gate.run_tests(root, HOME)
         if ok:
@@ -949,7 +969,8 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
         (SUP_DIR / "code_changes").mkdir(parents=True, exist_ok=True)
         with (SUP_DIR / "code_changes" / f"{name}.jsonl").open("a") as f:
             f.write(json.dumps(record) + "\n")
-    committed = commit_state(name, kind, kept, note=note)
+    committed = commit_state(name, kind, kept, note=note, gated=after)
+    _check_kept(name, root, after, kept)
     if approved is not None:
         _record_approved(name, root, approved)
     if not committed:
@@ -987,6 +1008,8 @@ def _keep_rejected(name: str, folder: Path, code: dict[str, bytes], paths: list[
             target.parent.mkdir(parents=True, exist_ok=True)
             if isinstance(code[p], gate.Link):   # a link: what it pointed to, as text, never the link
                 target.with_name(target.name + ".link").write_text(code[p].target + "\n")
+            elif isinstance(code[p], gate.Invalid):
+                target.with_name(target.name + ".invalid").write_text(code[p].why + "\n")
             else:
                 target.write_bytes(code[p])
     except OSError as e:                     # not kept: then not put back either, so nothing is lost
@@ -1006,6 +1029,24 @@ def _put_back(name: str, root: Path, approved: dict, paths: list[str]) -> None:
         raise RunRefused(f"its code could not be put back as approved: {e}") from None
     if bad:
         raise RunRefused(f"its code is not back as approved after a restore: {', '.join(bad)}")
+
+
+def _check_kept(name: str, root: Path, gated: dict | None, kept: list[str]) -> None:
+    """The kept code as the gate checked it, on disk too: a file written after the gate's snapshot (by a process that
+    escaped the run) was committed as gated (commit_state) and is put back as gated here, loudly; nothing runs on
+    what was slipped in (_put_back refuses the run if it cannot be put back)."""
+    if not gated:
+        return
+    code = [p for p in kept if Path(p).parts[0] in gate.CODE_PATHS]
+    drift = gate.unrestored(root, gated, code)
+    if not drift:
+        return
+    log(f"{name}: FAILED check: {', '.join(drift)} written after the gate checked them — committed and put back as "
+        "gated")
+    journal_note(root, "Supervisor: code written after the gate",
+                 "After the gate checked my code, " + ", ".join(drift) + " changed on disk (something still running "
+                 "wrote it). What was committed is what the gate checked, and the file is put back to that.")
+    _put_back(name, root, gated, drift)
 
 
 def _record_approved(name: str, root: Path, code: dict[str, bytes]) -> None:
@@ -1125,13 +1166,13 @@ class Turn:
             stack.close()                        # interrupted while waiting: no reply wants the instance any more
             raise
         try:
-            _reconcile(self.name, self.root)
+            approved = _reconcile(self.name, self.root)
         except RunRefused as e:
             stack.close()
             _refused(self.name, e)
             raise
         self.held = stack
-        self.before = _snapshot(self.root)
+        self.before = _snapshot(self.root, approved)
         self.handoffs_seen = len(self.broker.handoffs) if self.broker else 0
         self.config_seen = len(self.broker.config_writes) if self.broker else 0
 

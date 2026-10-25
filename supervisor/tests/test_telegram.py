@@ -223,6 +223,7 @@ class TelegramTest(unittest.TestCase):
                 return "answer A", 1 if heard else 0
             if len(asks) == 2 and not heard:                     # B's follow-up: the service stops during it
                 stuck.wait(30)
+                raise SystemExit                                 # that service is gone: its thread does nothing more
             if heard:                                            # restarted: the API's kept answer for A
                 return "answer A", 1, True
             return f"answer {len(asks)}", 0
@@ -235,6 +236,7 @@ class TelegramTest(unittest.TestCase):
             if heard and text == "answer A" and not getattr(send, "once", False):
                 send.once = True                                 # the service stops while A's answer is sent
                 stuck.wait(30)
+                raise SystemExit                                 # that service is gone: its thread does nothing more
             return real_send(token, chat_id, text, reply_to)
 
         def service(batches):
@@ -422,6 +424,109 @@ class TelegramTest(unittest.TestCase):
                                        interject=interject, until=stop_first)
         self.assertEqual(at_restart, ["30", "31"])
         self.assertEqual(asks[1:], [("check my calendar", "telegram-wren-30")], "B ran again after the restart")
+
+    def failing_send(self, fail_times: int, during=None):
+        """telegram.send failing (503) the first `fail_times` times it sends an answer; `during()` runs at the first."""
+        real_send, failures = telegram.send, []
+
+        def send(token, chat_id, text, reply_to=None):
+            if text.startswith("answer") and len(failures) < fail_times:
+                failures.append(text)
+                if during and len(failures) == 1:
+                    during()
+                err = telegram.TelegramError("sendMessage: HTTP 503 Service Unavailable")
+                err.code = 503
+                raise err
+            return real_send(token, chat_id, text, reply_to)
+        return send
+
+    def test_a_reply_that_could_not_be_delivered_lets_the_next_message_start_a_new_one(self):
+        """Codex on de2191f: when delivery gave up, _converse returned with inflight=[] (a follow-up was due) and never
+        cleared it, so every later message joined a worker that no longer existed."""
+        first = self._slow_reply(heard=0)
+        self.upd(_msg(ME, "and skip Friday", mid=41))              # too late for it: a follow-up is due
+        with mock.patch.object(telegram, "send", self.failing_send(99)), \
+                mock.patch.object(telegram, "SEND_RETRY_S", (0,)):
+            self.release.set()
+            first.join(10)
+        self.assertIsNone(self.chat.inflight, "a worker that gave up still owns the conversation")
+        self.upd(_msg(ME, "are you there?", mid=42))
+        self.assertEqual(self.asked[-1][1][-1]["content"], "are you there?", "it joined a worker that was gone")
+
+    def test_a_message_sent_while_an_answer_is_retried_joins_the_follow_up(self):
+        """Codex on de2191f: one sent while the answer was being sent again was not queued for the follow-up."""
+        first = self._slow_reply(heard=0)
+        self.upd(_msg(ME, "and skip Friday", mid=41))
+        during = lambda: self.upd(_msg(ME, "and Monday", mid=42))   # noqa: E731
+        with mock.patch.object(telegram, "send", self.failing_send(1, during)), \
+                mock.patch.object(telegram, "SEND_RETRY_S", (0,)):
+            self.release.set()
+            first.join(10)
+        self.assertEqual(len(self.asked), 2, "a second follow-up instead of one for both")
+        self.assertEqual(self.asked[1][1][-1]["content"], "and skip Friday\n\nand Monday")
+        self.assertEqual(telegram.load().get("pending") or {}, {})
+
+    def test_a_follow_up_replayed_after_a_restart_sends_all_of_its_messages(self):
+        """Codex on de2191f: after a restart a follow-up for [B, C] was rebuilt from B's update alone, and both were
+        marked done. The request's payload is kept with its record."""
+        self.pair()
+        asking, joined, stuck, asks = threading.Event(), threading.Event(), threading.Event(), []
+        self.addCleanup(stuck.set)
+
+        def ask(name, history, request_id=""):
+            asks.append((history[-1]["content"], request_id))
+            if len(asks) == 1:
+                asking.set()
+                joined.wait(10)
+                return "answer A", 0
+            if len(asks) == 2:                                   # the follow-up: the service stops during it
+                stuck.wait(30)
+                raise SystemExit
+            return "answer BC", 0
+
+        seen = []
+
+        def interject(name, messages):
+            seen.append(messages[-1]["content"])
+            if len(seen) == 2:
+                joined.set()
+            return False                                         # too late: a follow-up answers them
+
+        def b_and_c():
+            asking.wait(10)
+            return [_msg(ME, "and skip Friday", mid=31), _msg(ME, "and Monday", mid=32)]
+        at_restart = self.services([[_msg(ME, "check my calendar", mid=30)], b_and_c], ask, interject=interject,
+                                   until=lambda: len(asks) >= 2)
+        self.assertEqual(at_restart, ["31", "32"])
+        self.assertEqual(asks[2], ("and skip Friday\n\nand Monday", "telegram-wren-31"), "the replay lost C")
+
+    def test_an_update_whose_handler_keeps_failing_is_quarantined_after_three_starts(self):
+        """Codex on de2191f: a handler that kept failing was retried at every start, forever."""
+        self.pair()
+        logged, tries = [], []
+
+        def handle(chat, msg, update_id=None):
+            tries.append(update_id)
+            raise RuntimeError("this message breaks the handler")
+        real_call = telegram.call
+        with mock.patch.object(telegram.Chat, "handle", handle), mock.patch.object(telegram, "log", logged.append):
+            for start in range(5):
+                stop, batches = threading.Event(), [[_msg(ME, "boom", mid=77)]] if start == 0 else []
+
+                def call(token, method, *a, batches=batches, stop=stop, **k):
+                    if method != "getUpdates":
+                        return real_call(token, method, *a, **k)
+                    if not batches:
+                        stop.set()
+                        return []
+                    return batches.pop(0)
+                with mock.patch.object(telegram, "call", call):
+                    telegram.poll("wren", TOK["wren"], stop)
+                    time.sleep(0.3)
+        self.assertEqual(tries, [77, 77, 77], "retried at every start")
+        self.assertEqual(telegram.load().get("pending") or {}, {})
+        self.assertIn("77", (telegram.load().get("quarantined") or {}).get("wren") or {})
+        self.assertTrue(any("FAILED" in l and "77" in l and "quarantine" in l for l in logged), logged)
 
     def test_api_failure_is_said_not_swallowed(self):
         self.pair()

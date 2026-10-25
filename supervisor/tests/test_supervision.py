@@ -477,10 +477,14 @@ class ProbationTest(unittest.TestCase):
         wt = lambda root, *a, **k: core.git_wt(root, *a, **{**k, "project": self.project})  # noqa: E731
         stack = ExitStack()
         for target, attr, value in ((metrics, "INSTANCES", self.project / "instances"), (metrics, "SUP_DIR", self.sup),
-                                    (metrics, "git_wt", wt),
-                                    (gate, "run_tests", lambda *a, **k: (self.tests_pass, "Ran 3 tests\nFAILED"))):
+                                    (metrics, "git_wt", wt), (core, "PROJECT", self.project),
+                                    (core, "INSTANCES", self.project / "instances"), (core, "SUP_DIR", self.sup),
+                                    (gate, "run_tests", lambda *a, **k: self.gate_run())):
             stack.enter_context(mock.patch.object(target, attr, value))
         return stack
+
+    def gate_run(self):
+        return self.tests_pass, "Ran 3 tests\nFAILED"
 
     def start(self, files=None):
         with self.patched(), mock.patch.object(metrics, "judgments", return_value=list(self.judged)):
@@ -549,6 +553,28 @@ class ProbationTest(unittest.TestCase):
         self.check()
         self.assertEqual((self.root / "shaft" / "prompts.py").read_text(), "GOOD = True\n")
         self.assertTrue((self.root / "plugins" / "weather" / "main.py").exists(), "an unlisted file was restored")
+
+    def test_a_file_rewritten_while_the_restore_is_tested_is_committed_as_tested_and_put_back(self):
+        """The coordinator on 2306a15: restore_change committed its restored files with `git add` from the working
+        tree, after its tests: a write while they ran was committed, and committed code is approved code."""
+        self.write("shaft/prompts.py", "GOOD = False\n")
+        self.episode("the talk that changed prompts")
+        self.commit("p: talk 2")
+        self.change = self.git(self.root, "rev-parse", "HEAD").strip()
+        self.start(["shaft/prompts.py"])
+        self.later_cycles(["no"] * metrics.PROBATION_CYCLES, tools=())
+
+        def tamper():
+            (self.root / "shaft" / "prompts.py").write_text("GOOD = 'slipped in'\n")
+            return True, "Ran 3 tests\nOK"
+        self.gate_run = tamper
+        with mock.patch.object(metrics, "log") as logged:
+            self.check()
+        self.assertEqual(self.git(self.root, "show", "HEAD:shaft/prompts.py"), "GOOD = True\n",
+                         "the commit took the working tree, not what was tested")
+        self.assertEqual((self.root / "shaft" / "prompts.py").read_text(), "GOOD = True\n")
+        self.assertIn("written after", (self.root / "memory" / "journal.md").read_text())
+        self.assertTrue(any("FAILED" in str(c.args[0]) for c in logged.call_args_list))
 
     def test_a_failed_restore_keeps_the_entry(self):
         # Bug 2026-10-13: after the failed revert the entry was dropped from probation, silently.

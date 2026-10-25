@@ -250,6 +250,35 @@ class WithNoFollowTest(RunTransactionCase):
         self.assertFalse((self.project / ".supervisor" / "baselines" / "kant.json").exists())
 
 
+class StrayDescendantsTest(unittest.TestCase):
+    """Codex on f82df7e: end_left_in walked down from a stray without the exclusions it applied to the strays
+    themselves, so a supervisor process below one was ended."""
+
+    def test_a_supervisor_process_below_a_stray_is_spared_and_ends_the_walk(self):
+        from supervisor import kill
+        folder = Path(tempfile.mkdtemp(prefix="shaft-strays-sup-")).resolve()
+        self.addCleanup(shutil.rmtree, folder, True)
+        (folder / "sup.sh").write_text(f"exec {sys.executable} -c 'import time; time.sleep(30)' -m supervisor\n")
+        starter = subprocess.run([sys.executable, "-c", "import subprocess, sys; print(subprocess.Popen("
+                                  "['/bin/sh', '-c', 'sh sup.sh & echo $! > sup.pid; sleep 30'], "
+                                  "start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, "
+                                  "stderr=subprocess.DEVNULL).pid)"], cwd=folder, capture_output=True, text=True)
+        stray = int(starter.stdout)
+        for _ in range(50):
+            if (folder / "sup.pid").exists() and (folder / "sup.pid").read_text().strip():
+                break
+            time.sleep(0.05)
+        sup = int((folder / "sup.pid").read_text())
+        for pid in (stray, sup):
+            self.addCleanup(lambda pid=pid: subprocess.run(["kill", "-9", str(pid)], capture_output=True))
+        time.sleep(0.3)
+        with mock.patch.object(kill, "log"):
+            ended = kill.end_left_in(folder)
+        self.assertIn(stray, ended)
+        self.assertNotIn(sup, ended, "a supervisor process below a stray was ended")
+        self.assertEqual(subprocess.run(["kill", "-0", str(sup)], capture_output=True).returncode, 0)
+
+
 class LinkedCodeTest(RunTransactionCase):
     """Codex's final review of the integration: gate.snapshot passed over a code folder replaced by a link (read_tree
     and read_beneath raised UnsafePath, swallowed), restore could not get past the linked parent (swallowed too), and
@@ -289,6 +318,130 @@ class LinkedCodeTest(RunTransactionCase):
             self.assertEqual(self.cycle(self.CHECK), self.REFUSED)
         self.assertFalse((self.root / ".tmp" / "ran").exists(), "a run launched on code that was not put back")
         self.assertIn("run refused", self.logs())
+
+
+class ApprovedFileLinkedTest(RunTransactionCase):
+    """Codex on f82df7e: reconcile set the value to put back to None for every link it found, so an approved file
+    replaced by a link was deleted instead of restored, and the check after the restore accepted it missing."""
+
+    FILES = {"shaft/__main__.py": "print('the agent')\n", ".python-version": "3.12\n",
+             "requirements.txt": "requests==2.32.3\n"}
+
+    def setUp(self):
+        super().setUp()
+        for rel, text in self.FILES.items():
+            (self.root / rel).write_text(text)
+        (self.root / "notes").mkdir(exist_ok=True)
+        (self.root / "notes" / "decoy.txt").write_text("not code\n")
+        git(self.root, "add", "-A", "--", *self.FILES)
+        git(self.root, "commit", "-qm", "kant: more code")
+
+    def check(self, rel: str):
+        (self.root / rel).unlink()
+        os.symlink(os.path.relpath(self.root / "notes" / "decoy.txt", (self.root / rel).parent), self.root / rel)
+        self.assertEqual(self.cycle(), 0)                   # a run that died left it: reconciled, then the run
+        self.assertFalse((self.root / rel).is_symlink())
+        self.assertEqual((self.root / rel).read_text(), self.FILES[rel], f"{rel} was deleted, not put back")
+
+    def test_shaft_main_replaced_by_a_link_is_put_back(self):
+        self.check("shaft/__main__.py")
+
+    def test_python_version_replaced_by_a_link_is_put_back(self):
+        self.check(".python-version")
+
+    def test_requirements_replaced_by_a_link_is_put_back(self):
+        self.check("requirements.txt")
+
+
+class HardLinkAndPipeTest(RunTransactionCase):
+    """Codex on f82df7e: the snapshot took a code file of any link count and passed a pipe over without a trace, and
+    restore wrote in place (O_TRUNC), which changed every other name of a hard-linked file."""
+
+    def test_a_code_file_hard_linked_to_another_file_fails_the_gate_and_the_other_name_is_untouched(self):
+        script = ("import os, pathlib\npathlib.Path('notes').mkdir(exist_ok=True)\n"
+                  "pathlib.Path('notes/mine.txt').write_text('my notes\\n')\n"
+                  "os.unlink('plugins/text_stats/main.py')\nos.link('notes/mine.txt', 'plugins/text_stats/main.py')\n")
+        self.assertEqual(self.cycle(script), 0)
+        self.assertEqual(self.gated, [], "a hard-linked code file was taken as code and gated")
+        self.assertEqual(self.plugin(), COMMITTED)
+        self.assertEqual(os.stat(self.root / "plugins" / "text_stats" / "main.py").st_nlink, 1)
+        self.assertEqual((self.root / "notes" / "mine.txt").read_text(), "my notes\n", "restore wrote through it")
+
+    def test_a_pipe_in_a_code_folder_fails_the_gate_and_goes(self):
+        self.assertEqual(self.cycle("import os\nos.mkfifo('plugins/text_stats/pipe')\n"), 0)
+        self.assertFalse(os.path.lexists(self.root / "plugins" / "text_stats" / "pipe"), "the pipe was never seen")
+        self.assertIn("pipe", (self.root / "memory" / "journal.md").read_text())
+
+    def test_restore_never_writes_through_another_name_of_the_file(self):
+        f, other = self.root / "plugins" / "text_stats" / "main.py", self.root / "notes-other.txt"
+        other.write_text("someone else's\n")
+        f.unlink()
+        os.link(other, f)
+        gate.restore(self.root, {"plugins/text_stats/main.py": COMMITTED.encode()}, ["plugins/text_stats/main.py"])
+        self.assertEqual(f.read_text(), COMMITTED)
+        self.assertEqual(other.read_text(), "someone else's\n")
+
+
+class CommitTheGatedBytesTest(RunTransactionCase):
+    """The coordinator on 8c84f11: commit_state staged kept code with `git add`, from the working tree, so a write to a
+    kept file after the gate's snapshot (by a process that escaped the run) was committed, and committed code counts
+    as approved from then on. The commit now holds exactly the bytes the gate checked."""
+
+    GOOD = "def run(**args):\n    return 'better stats'\n"
+    TAMPERED = "def run(**args):\n    return 'slipped in after the gate'\n"
+
+    def test_a_file_rewritten_after_the_gate_is_committed_as_gated_and_put_back(self):
+        f = self.root / "plugins" / "text_stats" / "main.py"
+
+        def gate_then_tamper(root, home):
+            result = self.fake_gate(root, home)
+            f.write_text(self.TAMPERED)                       # after the snapshot, before the commit
+            return result
+        script = f"import pathlib\npathlib.Path('plugins/text_stats/main.py').write_text({self.GOOD!r})\n"
+        with mock.patch.object(gate, "run_tests", side_effect=gate_then_tamper):
+            self.assertEqual(self.cycle_with(script), 0)
+        self.assertEqual(self.gated, [self.GOOD])
+        self.assertEqual(git(self.root, "show", "HEAD:plugins/text_stats/main.py"), self.GOOD,
+                         "the commit took the working tree, not what the gate checked")
+        self.assertEqual(f.read_text(), self.GOOD, "the working copy was not put back")
+        self.assertIn("after the gate", (self.root / "memory" / "journal.md").read_text())
+        self.assertIn("after the gate", self.logs())
+        self.gated.clear()
+        self.assertEqual(self.cycle(), 0)                      # the record holds the gated bytes: nothing to gate
+        self.assertEqual(self.gated, [])
+        self.assertEqual(f.read_text(), self.GOOD)
+
+    def test_a_write_between_the_start_check_and_the_runs_baseline_is_gated_by_the_run(self):
+        """A write landing after reconcile's read-back and before the run took its own baseline became part of that
+        baseline: never gated, then recorded as approved by the run's settlement. The run's baseline is now the code
+        reconcile verified."""
+        f = self.root / "plugins" / "text_stats" / "main.py"
+        real = runner._snapshot
+
+        def write_first(root, *a, **k):
+            if "ran" not in self.__dict__:
+                self.ran = True
+                f.write_text(UNGATED)                           # slipped in between the check and the baseline
+            return real(root, *a, **k)
+        with mock.patch.object(runner, "_snapshot", side_effect=write_first):
+            self.assertEqual(self.cycle(), 0)
+        self.assertEqual(self.gated, [UNGATED], "a write before the run's baseline was never gated")
+        self.assertEqual(f.read_text(), COMMITTED)
+
+    def cycle_with(self, script):
+        """cycle(), but gate.run_tests stays as the test patched it."""
+        sup = self.project / ".supervisor"
+        b = broker.Broker("kant", self.project, {}, sup / "broker.log")
+        cmd, env = [sys.executable, "-c", script], {"SHAFT_DEADLINE": f"{time.time() + 600:.0f}"}
+        with mock.patch.object(runner, "SUP_DIR", sup), mock.patch.object(core, "SUP_DIR", sup), \
+             mock.patch.object(runner, "API_TALKS", sup / "api.json"), \
+             mock.patch.object(runner, "PROJECT", self.project), mock.patch.object(core, "PROJECT", self.project), \
+             mock.patch.object(core, "INSTANCES", self.project / "instances"), \
+             mock.patch.object(runner, "instance_root", return_value=self.root), \
+             mock.patch.object(runner, "_launch", return_value=(b, cmd, env)), \
+             mock.patch.object(runner, "log") as self.logged, mock.patch("supervisor.metrics.after_cycle"), \
+             mock.patch("supervisor.metrics.start_probation"):
+            return runner.run_agent("kant", "live", ["live"], False)
 
 
 class StrayProcessTest(unittest.TestCase):

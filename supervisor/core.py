@@ -303,7 +303,7 @@ def git(*args: str, check: bool = True) -> subprocess.CompletedProcess:
 
 
 def git_wt(root: Path, *args: str, check: bool = True, project: Path | None = None,
-           input: str | None = None, text: bool = True) -> subprocess.CompletedProcess:
+           input: str | bytes | None = None, text: bool = True, env: dict | None = None) -> subprocess.CompletedProcess:
     """Run git in an instance worktree without trusting anything inside it.
 
     The worktree's `.git` file is writable by the instance, which could point it at
@@ -314,7 +314,8 @@ def git_wt(root: Path, *args: str, check: bool = True, project: Path | None = No
     return subprocess.run(
         ["git", f"--git-dir={admin}", f"--work-tree={root}", "-c", "core.hooksPath=/dev/null",
          "-c", "core.fsmonitor=false", *args],
-        cwd=root, capture_output=True, text=text, check=check, input=input)
+        cwd=root, capture_output=True, text=text, check=check, input=input,
+        env={**os.environ, **env} if env else None)
 
 
 def _git_common_dir(project: Path) -> Path:
@@ -922,11 +923,12 @@ class _Capped:
 
 
 def walk_beneath(root: Path, rel: str = "", skip=lambda rel: False, links: bool = False, budget: Budget | None = None,
-                 check=None):
+                 check=None, others: bool = False):
     """What is below the folder root/rel, opened through descriptors and nothing followed: (path, None) for a folder
     (before what is in it), (path, file) for a plain file, open to read until the next item, and with `links`
     (path, its target) for a link — the link itself, never what it points to. A pipe or a socket, and a link without
-    `links`, are passed over. skip(path) leaves out a path and everything below it; check(), if given, runs before
+    `links`, are passed over — with `others`, (path, its file type, an int: stat.S_IFMT) for anything else, so a
+    reader that must not miss one (the gate) sees it. skip(path) leaves out a path and everything below it; check(), if given, runs before
     each entry (a deadline, an interrupt). Paths are relative to root/rel. One folder is open at a time, listed
     whole and then closed — no recursion holding a descriptor per level — and the walk stays inside `budget`
     (files and folders, bytes read from its files, depth), else TreeTooBig. How the unsandboxed supervisor reads a
@@ -935,10 +937,10 @@ def walk_beneath(root: Path, rel: str = "", skip=lambda rel: False, links: bool 
     budget = budget or Budget()
     base = [str(p) for p in Path(rel).parts]
     os.close(dir_beneath(root, base))
-    return _walk(root, base, skip, links, budget, check)
+    return _walk(root, base, skip, links, budget, check, others)
 
 
-def _walk(root: Path, base: list[str], skip, links: bool, budget: Budget, check):
+def _walk(root: Path, base: list[str], skip, links: bool, budget: Budget, check, others: bool = False):
     import errno
     import stat
     stack = [()]
@@ -960,6 +962,8 @@ def _walk(root: Path, base: list[str], skip, links: bool, budget: Budget, check)
                 try:
                     mode = os.stat(entry, dir_fd=fd, follow_symlinks=False).st_mode
                     if not (stat.S_ISDIR(mode) or stat.S_ISREG(mode) or (stat.S_ISLNK(mode) and links)):
+                        if others and not stat.S_ISLNK(mode):
+                            yield path, stat.S_IFMT(mode)
                         continue
                     budget.files -= 1
                     if budget.files < 0:
@@ -1133,8 +1137,90 @@ def add_all_but_mind(root: Path, project: Path | None = None) -> None:
                project=project)
 
 
+def _commit_gated(name: str, root: Path, project: Path | None, msg: str, others: list[str], code: list[str],
+                  gated: dict, who: tuple[str, str] | None = None, parents: tuple[str, ...] = (),
+                  from_index: bool = False) -> list[str]:
+    """Commit `code` paths with exactly the bytes in `gated` (what the gate checked; a path missing there is deleted)
+    and `others` as the working tree has them, on top of HEAD, through a separate index: the bytes go into the
+    object store (hash-object -w) and the index (update-index --cacheinfo, --force-remove), and nothing is read
+    from the working tree for code. `git add` read it at the moment of the commit, so a write after the gate's
+    snapshot was what got committed, and committed code is approved code (the coordinator on 8c84f11). `who`: the
+    author (name, email), the instance's own by default; `parents`: more parents after HEAD (a merge); `from_index`:
+    start from the worktree's index as staged (a merge being built), not from HEAD. Returns the
+    paths the commit changed; the real index is brought to it for them."""
+    import stat
+    import tempfile
+    fd, index = tempfile.mkstemp(prefix="shaft-index-")
+    os.close(fd)
+    os.unlink(index)                                    # git makes it
+    env = {"GIT_INDEX_FILE": index}
+
+    def wt(*a, **k):
+        return git_wt(root, *a, project=project, **k)
+    try:
+        head = wt("rev-parse", "--verify", "-q", "HEAD", check=False).stdout.strip()
+        if from_index:
+            import shutil
+            shutil.copyfile(wt("rev-parse", "--path-format=absolute", "--git-path", "index").stdout.strip(), index)
+        elif head:
+            wt("read-tree", head, env=env)
+        else:
+            wt("read-tree", "--empty", env=env)
+        if others:
+            wt("add", "-A", "--", *others, env=env)
+        modes = {}
+        if head and code:
+            for entry in wt("ls-tree", "-z", head, "--", *code).stdout.split("\0"):
+                meta, _, path = entry.partition("\t")
+                if path:
+                    modes[path] = meta.split()[0]
+        for path in code:
+            data = gated.get(path)
+            if isinstance(data, bytes):
+                oid = wt("hash-object", "-w", "--stdin", input=data, text=False).stdout.decode().strip()
+                mode = modes.get(path)
+                if mode not in ("100644", "100755"):
+                    try:
+                        mode = "100755" if os.lstat(root / path).st_mode & stat.S_IXUSR else "100644"
+                    except OSError:
+                        mode = "100644"
+                wt("update-index", "--add", "--cacheinfo", f"{mode},{oid},{path}", env=env)
+            else:
+                wt("update-index", "--force-remove", "--", path, env=env)
+        tree = wt("write-tree", env=env).stdout.strip()
+    finally:
+        try:
+            os.unlink(index)
+        except FileNotFoundError:
+            pass
+    if head and not parents and tree == wt("rev-parse", f"{head}^{{tree}}").stdout.strip():
+        return []
+    author, email = who or (f"SHAFT/{name}", f"{name}@shaft.localhost")
+    commit = wt("-c", f"user.name={author}", "-c", f"user.email={email}", "commit-tree", tree,
+                *(["-p", head] if head else []), *[a for p in parents for a in ("-p", p)], "-m", msg).stdout.strip()
+    wt("update-ref", "-m", msg.splitlines()[0], "HEAD", commit, *([head] if head else []))
+    changed = [p for p in wt("diff-tree", "-r", "--name-only", "-z", "--no-commit-id", "--root", *([head] if head
+                                                                                                    else []),
+                             commit).stdout.split("\0") if p]
+    if changed:
+        wt("reset", "-q", "--", *changed, check=False)   # the real index: these paths as just committed
+    return changed
+
+
+def changed_vs_head(root: Path, project: Path | None = None) -> list[str]:
+    """Every path whose content differs from the worktree's HEAD — tracked (staged or not) and untracked, not
+    ignored — but the mind paths and the supervisor's copy of the docs (DOCS_COPY)."""
+    def names(*a):
+        return [os.fsdecode(e) for e in git_wt(root, *a, project=project, text=False).stdout.split(b"\0") if e]
+    head = git_wt(root, "rev-parse", "--verify", "-q", "HEAD", project=project, check=False).stdout.strip()
+    paths = set(names("ls-files", "-z", "--others", "--exclude-standard"))
+    if head:
+        paths |= set(names("diff", "--name-only", "-z", "--no-renames", head))
+    return sorted(p for p in paths if Path(p).parts[0] not in (*MIND_PATHS, DOCS_COPY))
+
+
 def commit_state(name: str, kind: str, kept_code: list[str], root: Path | None = None,
-                 project: Path | None = None, note: str = "") -> bool:
+                 project: Path | None = None, note: str = "", gated: dict | None = None) -> bool:
     """Commit the instance's mind to its mind store, then its skills and the code changes that passed the gate
     to its branch — the same message on both sides. A mind path is never staged on the branch, whatever its
     .gitignore says.
@@ -1142,6 +1228,8 @@ def commit_state(name: str, kind: str, kept_code: list[str], root: Path | None =
     Only files git actually staged are named in the branch commit: an empty directory (skills/ on a young
     instance) is unknown to git and would fail as a pathspec. Returns False — after logging git's own error —
     if either commit failed; the mind is committed first, so a failure there leaves the branch untouched too.
+    `gated` (the gate's snapshot): kept code paths are committed with those bytes, never the working tree's
+    (_commit_gated).
     """
     from . import mind
     root = root or INSTANCES / name
@@ -1156,15 +1244,19 @@ def commit_state(name: str, kind: str, kept_code: list[str], root: Path | None =
         if note:
             msg += "\n\n" + note
         minded = mind.commit(name, msg, root, project)
-        paths = [p for p in SKILL_PATHS if (root / p).exists()] + kept_code
+        from .gate import CODE_PATHS
+        code = [p for p in kept_code if Path(p).parts[0] in CODE_PATHS] if gated is not None else []
+        paths = [p for p in SKILL_PATHS if (root / p).exists()] + [p for p in kept_code if p not in code]
         staged = []
-        if paths:
+        if gated is not None:                    # committed by _commit_gated itself: never `commit -- paths`, which
+            staged = _commit_gated(name, root, project, msg, paths, code, gated)   # re-reads the working tree
+        elif paths:
             wt("add", "-A", "--", *paths)
             staged = wt("diff", "--cached", "--name-only", "-z", "--", *paths).stdout.split("\0")
             staged = [p for p in staged if p and Path(p).parts[0] not in MIND_PATHS]
-        if staged:
-            wt("-c", f"user.name=SHAFT/{name}", "-c", f"user.email={name}@shaft.localhost",
-               "commit", "-q", "-m", msg, "--", *staged)
+            if staged:
+                wt("-c", f"user.name=SHAFT/{name}", "-c", f"user.email={name}@shaft.localhost",
+                   "commit", "-q", "-m", msg, "--", *staged)
     except (subprocess.CalledProcessError, mind.MindError) as e:
         detail = (getattr(e, "stderr", None) or getattr(e, "stdout", None) or str(e)).strip()
         log(f"{name}: COMMIT FAILED after {kind}: {detail}")
