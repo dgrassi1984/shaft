@@ -132,6 +132,9 @@ def backfill_schema(missing: list[str]) -> dict:
 
 SCORE = {"yes": 1.0, "partial": 0.5, "no": 0.0}
 CONFIDENCE_V2 = "criterion_met=yes"
+CONFIDENCE_V3 = "criterion_met=yes;base_rate_shown"   # v2's question, re-asked after showing the instance its base rate
+VERSION_OF = {None: "v1", CONFIDENCE_V2: "v2", CONFIDENCE_V3: "v3"}   # confidence_of -> version; anything else is excluded
+BANDS = ((0, 40), (40, 70), (70, 101))
 # Deployment boundary: earlier judgments retain the original confidence question.
 CONFIDENCE_BACKFILL_DATE = "2026-10-24"
 EVIDENCE_HOURS = 72           # messages and conversations before a cycle that may hold its goal's origin
@@ -140,23 +143,54 @@ PRIOR_GOALS = 30
 
 
 def calibration(rows: list[dict]) -> dict:
-    """Score each confidence against the question asked; never pool the two versions."""
+    """Score each confidence against the question asked; never pool the versions. v1 is scored yes=1/partial=0.5,
+    v2 and v3 binary on criterion_met == "yes". v3_first scores the v3 rows that kept the confidence declared
+    before the base rate was shown (`confidence_first`), against the same outcomes. A row whose question is none
+    of VERSION_OF's is counted in "excluded" and in no version, so a new question never lands in v1."""
+    scored = {"v1": [], "v2": [], "v3": [], "v3_first": []}
+    excluded = 0
+    for j in rows:
+        if j.get("confidence") is None:
+            continue
+        version = VERSION_OF.get(j.get("confidence_of"))
+        if version is None:
+            excluded += 1
+            continue
+        met = float(j["criterion_met"] == "yes")
+        outcome = SCORE[j["criterion_met"]] if version == "v1" else met
+        scored[version].append((j["confidence"] / 100, outcome))
+        if version == "v3" and j.get("confidence_first") is not None:
+            scored["v3_first"].append((j["confidence_first"] / 100, outcome))
     result = {}
-    for version in ("v1", "v2"):
-        pairs = [(j["confidence"] / 100,
-                  float(j["criterion_met"] == "yes") if version == "v2" else SCORE[j["criterion_met"]])
-                 for j in rows if j.get("confidence") is not None
-                 and (j.get("confidence_of") == CONFIDENCE_V2) == (version == "v2")]
+    for version, pairs in scored.items():
         n = len(pairs)
         bands = []
-        for lo, hi in ((0, 40), (40, 70), (70, 101)):
+        for lo, hi in BANDS:
             outcomes = [s for c, s in pairs if lo <= c * 100 < hi]
             bands.append({"lo": lo, "hi": min(hi, 100), "n": len(outcomes),
                           "mean_outcome": sum(outcomes) / len(outcomes) if outcomes else None})
         result[version] = {"n": n, "mean_confidence": sum(c for c, _ in pairs) / n if n else None,
                            "mean_outcome": sum(s for _, s in pairs) / n if n else None,
                            "brier": sum((c - s) ** 2 for c, s in pairs) / n if n else None, "bands": bands}
+    result["excluded"] = excluded
     return result
+
+
+def paired_v3(rows: list[dict]) -> dict:
+    """The same v3 cycles scored twice: the confidence declared before the base rate was shown, and the final one.
+    closer/further count cycles whose final confidence has the smaller/larger squared error against the binary
+    outcome; changed counts cycles where the two differ; mean_change is final minus first, in points."""
+    pairs = [(j["confidence_first"], j["confidence"], float(j["criterion_met"] == "yes")) for j in rows
+             if VERSION_OF.get(j.get("confidence_of")) == "v3" and j.get("confidence") is not None
+             and j.get("confidence_first") is not None]
+    n = len(pairs)
+    first = [(f / 100 - o) ** 2 for f, _, o in pairs]
+    final = [(c / 100 - o) ** 2 for _, c, o in pairs]
+    return {"n": n, "brier_first": sum(first) / n if n else None, "brier_final": sum(final) / n if n else None,
+            "changed": sum(1 for f, c, _ in pairs if c != f),
+            "mean_change": sum(c - f for f, c, _ in pairs) / n if n else None,
+            "closer": sum(1 for e1, e2 in zip(first, final) if e2 < e1),
+            "further": sum(1 for e1, e2 in zip(first, final) if e2 > e1)}
 
 
 def cycle_value(j: dict) -> float | None:
@@ -1069,7 +1103,9 @@ def review_text(names: list[str], hours: float = 24, now: datetime | None = None
         unsupported = sum(1 for j in rows if j.get("claim_supported") is False)
         out.append(f"  verdicts: yes {verdicts['yes']} · partial {verdicts['partial']} · no {verdicts['no']}"
                    f" · claims the log did not support: {unsupported}")
-        for version, c in calibration(rows).items():
+        cal = calibration(rows)
+        for version in ("v1", "v2"):      # v3 gets its own lines in the review's calibration section
+            c = cal[version]
             if c["n"]:
                 question = "criterion met = yes" if version == "v2" else "probability of success, yes=1/partial=0.5"
                 out.append(f"  confidence {version} ({question}) beforehand {c['mean_confidence']:.0%} vs judged "
