@@ -361,6 +361,7 @@ class Chat:
         self.inflight: list[str] | None = None       # while a reply runs (one at a time): messages sent to it, in order
         self.inflight_ids: list[int | None] = []     # their updates: done once a reply heard or answered them (_ack)
         self.key: int | None = None                  # the update whose request is running (its request id)
+        self.owner: object | None = None             # the worker that owns inflight and key: only it clears them
 
     def reset_if_idle(self) -> None:
         if self.history and time.time() - self.last > IDLE_MINUTES * 60:
@@ -434,11 +435,14 @@ class Chat:
             self.history.append({"role": "user", "content": text})
             self.last = time.time()
             self.inflight, self.inflight_ids = [], []
+            token = self.owner = object()
         try:
-            delivered = self._converse(chat_id, msg["message_id"], update_id)
+            delivered = self._converse(chat_id, msg["message_id"], update_id, token)
         except BaseException:
-            with self.mu:                            # still ours: a new message would have joined it
-                left, self.inflight, self.inflight_ids, self.key = self.inflight_ids, None, [], None
+            with self.mu:                            # still ours (not a newer worker's): a message would have joined it
+                left = []
+                if self.owner is token:
+                    left, self.inflight, self.inflight_ids, self.key, self.owner = self.inflight_ids, None, [], None, None
             if any(i is not None for i in left):     # pending still: the next start answers them
                 log(f"telegram: {self.name}: the reply FAILED; {len(left)} message(s) sent meanwhile are kept for "
                     "the next start")
@@ -472,7 +476,7 @@ class Chat:
         log(f"telegram: {self.name}: FAILED to deliver an answer ({why}); kept for the next start")
         return False
 
-    def _converse(self, chat_id: int, message_id: int, update_id: int | None = None) -> bool:
+    def _converse(self, chat_id: int, message_id: int, update_id: int | None = None, token: object = None) -> bool:
         """Reply to the history's last message, and to every message sent meanwhile: those the reply heard go before
         it in the history; the others (too late for it, or an instance whose code does not read them yet) get one
         reply straight after. Only this thread changes the history while the reply runs. Each update is done only once
@@ -515,7 +519,7 @@ class Chat:
                     with self.mu:
                         self.history.pop()
                         lost, lost_ids = len(self.inflight or []), self.inflight_ids
-                        self.inflight, self.inflight_ids, self.key = None, [], None
+                        self.inflight, self.inflight_ids, self.key, self.owner = None, [], None, None
                     said = self._deliver(chat_id, f"(no answer: {e}" + (f" — nor to the {lost} message(s) you sent "
                                                                           f"meanwhile" if lost else "") + ")",
                                          message_id)
@@ -543,6 +547,8 @@ class Chat:
                         self.history.append({"role": "user", "content": "\n\n".join(rest)})
                     self.inflight = [] if rest else None   # decided with the list: nothing falls between
                     self.inflight_ids = []
+                    if not rest:
+                        self.owner = None            # let go: a message now starts a new worker
                     follow = [i for i in rest_ids if i is not None]
                     self.key = follow[0] if follow else None   # sent during the delivery: kept with the follow-up
                 self._ack(heard_ids)                 # in a reply that came back: a replay of `batch` brings it again
@@ -558,8 +564,9 @@ class Chat:
                 batch = rest_ids
         finally:
             stop.set()
-            with self.mu:                            # however it ends, it owns the conversation no more
-                self.inflight, self.inflight_ids, self.key = None, [], None
+            with self.mu:                            # however it ends, it owns the conversation no more — if it still
+                if self.owner is token:              # does: a newer worker's state is the newer worker's (Codex on
+                    self.inflight, self.inflight_ids, self.key, self.owner = None, [], None, None   # 8c84f11)
 
     def receive(self, files: list[tuple[str, str]]) -> str:
         """Save the operator's files in the instance's attachments/ folder; returns the lines that tell it where."""

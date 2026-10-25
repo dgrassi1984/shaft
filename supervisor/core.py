@@ -1137,6 +1137,13 @@ def add_all_but_mind(root: Path, project: Path | None = None) -> None:
                project=project)
 
 
+def err_text(e: BaseException) -> str:
+    """A failed command's stderr as text, whether it ran in text mode (str) or not (bytes): calling .decode() on a
+    str raised AttributeError in place of the reason (Codex on 9bd175e)."""
+    err = getattr(e, "stderr", None) or ""
+    return (err.decode(errors="replace") if isinstance(err, bytes) else str(err)).strip()
+
+
 def _commit_gated(name: str, root: Path, project: Path | None, msg: str, others: list[str], code: list[str],
                   gated: dict, who: tuple[str, str] | None = None, parents: tuple[str, ...] = (),
                   from_index: bool = False) -> list[str]:
@@ -1168,12 +1175,13 @@ def _commit_gated(name: str, root: Path, project: Path | None, msg: str, others:
             wt("read-tree", "--empty", env=env)
         if others:
             wt("add", "-A", "--", *others, env=env)
-        modes = {}
-        if head and code:
-            for entry in wt("ls-tree", "-z", head, "--", *code).stdout.split("\0"):
-                meta, _, path = entry.partition("\t")
-                if path:
-                    modes[path] = meta.split()[0]
+        modes = {}   # each file's mode as staged (a birth: the parent it was taken from), else as committed
+        listing = (wt("ls-files", "-s", "-z", "--", *code, env=env) if from_index
+                   else wt("ls-tree", "-z", head, "--", *code) if head else None) if code else None
+        for entry in (listing.stdout.split("\0") if listing else []):
+            meta, _, path = entry.partition("\t")
+            if path:
+                modes[path] = meta.split()[0]
         for path in code:
             data = gated.get(path)
             if isinstance(data, bytes):
@@ -1202,8 +1210,22 @@ def _commit_gated(name: str, root: Path, project: Path | None, msg: str, others:
     changed = [p for p in wt("diff-tree", "-r", "--name-only", "-z", "--no-commit-id", "--root", *([head] if head
                                                                                                     else []),
                              commit).stdout.split("\0") if p]
+    def entries(listing: str, field: int) -> dict[str, str]:   # the object id: "mode oid stage" or "mode type oid"
+        out = {}
+        for entry in listing.split("\0"):
+            meta, _, path = entry.partition("\t")
+            if path:
+                out[path] = meta.split()[field]
+        return out
     if changed:
-        wt("reset", "-q", "--", *changed, check=False)   # the real index: these paths as just committed
+        staged = entries(wt("ls-files", "-s", "-z", "--", *changed).stdout, 1)
+        was = entries(wt("ls-tree", "-r", "-z", head, "--", *changed).stdout, 2) if head else {}
+        now = entries(wt("ls-tree", "-r", "-z", commit, "--", *changed).stdout, 2)
+        theirs = [p for p in changed if p in staged and staged[p] not in (was.get(p), now.get(p))]
+        if theirs:   # staged by someone else (the operator): their index entry stays; the commit holds the gated bytes
+            log(f"{name}: {', '.join(theirs)} staged by someone else — left staged as they were; committed as checked")
+        if (ours := [p for p in changed if p not in theirs]):
+            wt("reset", "-q", "--", *ours, check=False)   # the real index: these paths as just committed
     return changed
 
 

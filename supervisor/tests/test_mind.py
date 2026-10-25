@@ -303,6 +303,25 @@ class ReadersTest(unittest.TestCase):
         self.assertIn("born from a and c", mind.show("d", "mind", "memory/journal.md"))
         self.assertNotIn("PARENT'S MEMORY", mind.show("d", "mind", "memory/journal.md"))
 
+    def test_a_birth_keeps_the_mode_of_the_parent_a_file_is_taken_from(self):
+        """Codex on 9bd175e: _commit_gated took an existing file's mode from HEAD (parent a), so a script taken from
+        parent b was committed with a's mode. The mode now comes from the index the birth staged."""
+        for name, mode in (("a", 0o644), ("c", 0o755)):
+            root = self.new(name)
+            (root / "plugins").mkdir(exist_ok=True)
+            (root / "plugins" / "run.sh").write_text(f"echo {name}\n")
+            os.chmod(root / "plugins" / "run.sh", mode)
+            git(root, "add", "plugins/run.sh")
+            git(root, "commit", "-q", "-m", f"{name}: a script")
+        with mock.patch.object(evolution.gate, "run_tests", return_value=(True, "ok")), \
+                mock.patch.object(evolution, "journal_note", core.journal_note):
+            born, log = evolution._build_child("a", "c", "d", [{"path": "plugins/run.sh", "take": "b", "reason": ""}],
+                                               "the script from c")
+        self.assertTrue(born, log)
+        kid = self.project / "instances" / "d"
+        self.assertEqual(git(kid, "show", "HEAD:plugins/run.sh"), "echo c\n")
+        self.assertTrue(git(kid, "ls-tree", "HEAD", "plugins/run.sh").startswith("100755"), "c's mode was lost")
+
     def parent_with_knowledge(self) -> Path:
         """A parent that has lived a little: a people file and facts about its operator, a self it wrote."""
         root = self.new("wren")

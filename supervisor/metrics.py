@@ -1309,7 +1309,8 @@ def restore_change(name: str, entry: dict) -> str | None:
                       who=("SHAFT supervisor", "supervisor@shaft.localhost"))
     except subprocess.CalledProcessError as e:
         gate.restore(root, current, files)
-        return f"git could not commit the restore: {(e.stderr or b'').decode(errors='replace').strip()[:300]}"
+        from .core import err_text
+        return f"git could not commit the restore: {err_text(e)[:300]}"
     if (drift := gate.unrestored(root, before, files)):
         log(f"{name}: FAILED check: {', '.join(drift)} written after the probation's restore was tested — committed "
             "as tested and put back")

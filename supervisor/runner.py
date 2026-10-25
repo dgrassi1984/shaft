@@ -29,7 +29,7 @@ from pathlib import Path
 
 from . import gate, localmodel, sandbox
 from .broker import Broker
-from .core import (API_TALKS, BROKER_MAX_CALLS, DOCS_COPY, EMBED_PORT, CORE_MIN_HOURS, CYCLE_TIMEOUT_S, HOME, INSTANCES,
+from .core import (API_TALKS, BROKER_MAX_CALLS, err_text, DOCS_COPY, EMBED_PORT, CORE_MIN_HOURS, CYCLE_TIMEOUT_S, HOME, INSTANCES,
                    LLM_PORTS, PROJECT, PYTHON, SLEEP_TIMEOUT_S, SUP_DIR, TreeTooBig, UnsafePath,
                    commit_state, describe_knobs, git_wt, instance_config, instance_root, journal_note, list_beneath,
                    log, safe_mkdir, safe_read, safe_write, safe_write_bytes, secrets_env, set_aside, unlink_beneath)
@@ -509,7 +509,7 @@ def _reconcile(name: str, root: Path) -> dict:
                              "SHAFT_SNAPSHOT_MAX_MB, SHAFT_TREE_MAX_FILES, SHAFT_TREE_MAX_DEPTH)") from None
         except (baseline.BaselineError, subprocess.CalledProcessError, OSError, ValueError, UnsafePath,
                 SystemExit) as e:
-            why = (getattr(e, "stderr", None) or b"").decode(errors="replace").strip() or f"{type(e).__name__}: {e}"
+            why = err_text(e) or f"{type(e).__name__}: {e}"
             raise RunRefused(f"its code could not be compared with its approved code: {why}") from None
         base = {p: b for p, b in now.items() if p not in restore}
         base.update({p: b for p, b in restore.items() if b is not None})

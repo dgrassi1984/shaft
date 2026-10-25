@@ -428,6 +428,30 @@ class CommitTheGatedBytesTest(RunTransactionCase):
         self.assertEqual(self.gated, [UNGATED], "a write before the run's baseline was never gated")
         self.assertEqual(f.read_text(), COMMITTED)
 
+    def test_a_staged_change_of_the_operators_survives_the_commit(self):
+        """Codex on 9bd175e: _commit_gated reset the real index for every committed path, so a change the operator
+        had staged there was dropped. An index entry that is neither the last commit nor the gated bytes is left."""
+        b, c = self.root / "plugins" / "b.py", self.root / "plugins" / "text_stats" / "main.py"
+        b.write_text("B = 'gated'\n")
+        c.write_text(self.GOOD)
+        gated = {"plugins/b.py": b.read_bytes(), "plugins/text_stats/main.py": c.read_bytes()}
+        b.write_text("B = 'the operator staged this'\n")
+        git(self.root, "add", "plugins/b.py")                      # staged B; C only in the working tree
+        staged = git(self.root, "ls-files", "-s", "plugins/b.py").split()[1]
+        with mock.patch.object(core, "PROJECT", self.project), mock.patch.object(core, "log") as logged:
+            core._commit_gated("kant", self.root, None, "kant: test", [], sorted(gated), gated)
+        self.assertEqual(git(self.root, "show", "HEAD:plugins/b.py"), "B = 'gated'\n")
+        self.assertEqual(git(self.root, "ls-files", "-s", "plugins/b.py").split()[1], staged, "the staged B was lost")
+        self.assertEqual(git(self.root, "ls-files", "-s", "plugins/text_stats/main.py").split()[1],
+                         git(self.root, "rev-parse", "HEAD:plugins/text_stats/main.py").strip())
+        self.assertTrue(any("plugins/b.py" in str(c_.args[0]) for c_ in logged.call_args_list))
+
+    def test_git_failing_with_text_says_why_the_run_is_refused(self):
+        err = subprocess.CalledProcessError(128, "git", stderr="fatal: bad object HEAD")
+        with mock.patch.object(runner, "_in_progress", side_effect=err):
+            self.assertEqual(self.cycle(), 75)
+        self.assertIn("bad object HEAD", self.logs())
+
     def cycle_with(self, script):
         """cycle(), but gate.run_tests stays as the test patched it."""
         sup = self.project / ".supervisor"

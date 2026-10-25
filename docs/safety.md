@@ -132,14 +132,15 @@
   later is caught as below). A kept change is committed with exactly the bytes the gate checked — written into
   git's object store and a separate index, never read again from the working tree — and if the file on disk differs
   from them by then, it is put back to them (logged as FAILED, with a journal note); the approved-code record is
-  made from the same bytes. **Still open** (residual risk): the launch race. The working tree stays writable, so a
-  change written after the start-of-run check (and its read-back) and before the agent imports its code runs
-  unchecked in that run. Closing it means launching from an immutable copy of the approved code, a redesign not done
-  yet. What limits it: only a process the instance already has running can write there — the sandbox writes nothing
+  made from the same bytes. **Still open** (residual risk): two races, because the working tree stays writable while
+  it is used. Between the start-of-run check (and its read-back) and the agent importing its code, a change runs
+  unchecked in that run. Between the gate's snapshot and its tests loading the code, a writer can swap a file so that
+  the tests pass on code other than the snapshot, which is then committed as checked. Closing both means testing and
+  launching from a protected snapshot, not the working tree, a redesign not done yet. What limits them: only a process the instance already has running can write there — the sandbox writes nothing
   outside its folder, and a run's own processes are ended before the gate looks, so it takes one that escaped them
-  (above), or something of yours; the run's own settlement then gates that change like any other, and the next run's
-  start gates whatever differs from the recorded approved code; and every check reads through descriptors, never
-  through a link. Stopping a service that starts runs (the API, the scheduler, a terminal
+  (above), or something of yours; a change slipped in before the launch is that run's own change, gated at its
+  settlement, and a file swapped back after the tests is put back to the snapshot's bytes (what is committed); and
+  every check reads through descriptors, never through a link. Stopping a service that starts runs (the API, the scheduler, a terminal
   conversation) ends its runs' processes first. **Approved code**: after every settlement the supervisor records
   the code it approved (`.supervisor/baselines/<name>.json`: the last commit, plus what the gate passed that git
   does not hold — an ignored or untracked file in a code path), where the instance cannot write. Before any run,
