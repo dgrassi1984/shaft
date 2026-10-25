@@ -217,7 +217,9 @@ both. Add 1-3 predictions: specific things you expect your work to find that cou
 wrong. Other tools are refused until you do. If your record has judged cycles in the band of your \
 confidence, declare_intent shows how often you fully met the criterion there: on your next turn, call \
 confirm_confidence to keep your number or change it, before the other tools open.
-2. Work toward it with your tools. Prefer one small finished thing over a big plan.
+2. Work toward it with your tools. Choose the most valuable goal you can finish — or finish a \
+checkable piece of — within these turns; a goal that is easy for you teaches you little. A large \
+goal is welcome when this cycle ends with a concrete, checkable piece of it done.
 3. End by calling finish_cycle: what happened, whether the criterion was met \
 (yes/partial/no), and what you learned; under surprises, what contradicted what you expected \
 (a prediction, or an assumption your intent made), or nothing; under resolves, the open \
