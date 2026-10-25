@@ -26,7 +26,7 @@ from pathlib import Path
 from . import autonomy, evolution, finetune, gate, messages, metrics, mind, runner, surprise, version
 from .core import (DEFAULT_INSTANCE, HOME, INSTANCES, MIND_PATHS, add_all_but_mind, NAME_RE, PROJECT, SUP_DIR, TEMPLATE, commit_state,
                    git, git_wt, instance_config, instance_names, instance_root, journal_entries, journal_note, log, paused,
-                   safe_mkdir, safe_read, safe_write)
+                   safe_mkdir, safe_read, safe_write, set_update_queued, update_queued)
 from .runner import (Busy, busy_with, is_busy, model_server, request_yield, run_agent, run_lock, sharing_model,
                      spawn_recover)
 
@@ -205,17 +205,22 @@ def cmd_update(names: list[str]) -> int:
     config.env while updates ran, 2026-10-13, and the old `reset --hard` would have discarded it).
     An operator's config.env edit is first committed on its own, as a run would (between runs every
     config.env change is the operator's); anything else uncommitted stops the update for the operator.
-    Untracked files are safe: the merge refuses to overwrite one and the rollback never touches one."""
+    Untracked files are safe: the merge refuses to overwrite one and the rollback never touches one.
+
+    A busy instance's update is queued, not refused: the scheduler runs it the moment the instance is idle,
+    before its next wake (autonomy.update_jobs). Retrying by hand lost the race to the next cycle, which starts
+    as soon as the last one ends (2026-10-25). Every outcome is also logged, since a queued run has no terminal."""
     worst = 0
     for name in names:
         root = instance_root(name)
         try:
             with run_lock(name, wait=False, kind="update"):
+                set_update_queued(name, False)   # it runs now, whatever comes of it: never retried in a loop
                 runner._commit_outside_config(name, root, [])
                 runner._commit_outside_drive(name, root)
                 dirty = git_wt(root, "status", "--porcelain", "--untracked-files=no").stdout.rstrip()
                 if dirty:
-                    print(f"{name}: uncommitted changes in its worktree, not updated — commit or discard them "
+                    _said(f"{name}: uncommitted changes in its worktree, not updated — commit or discard them "
                           f"first (git -C {root} diff):\n{dirty}")
                     worst = max(worst, 1)
                     continue
@@ -225,7 +230,7 @@ def cmd_update(names: list[str]) -> int:
                            check=False)
                 if r.returncode != 0 and not _resolve_config_conflict(root):
                     git_wt(root, "merge", "--abort", check=False)
-                    print(f"{name}: merge conflict with template, nothing changed:\n{(r.stdout + r.stderr)[-800:]}")
+                    _said(f"{name}: merge conflict with template, nothing changed:\n{(r.stdout + r.stderr)[-800:]}")
                     worst = 1
                     continue
                 if r.returncode != 0:
@@ -241,22 +246,34 @@ def cmd_update(names: list[str]) -> int:
                     # that something changed while the gate ran.
                     undo = git_wt(root, "reset", "-q", "--keep", before, check=False)
                     if undo.returncode != 0:
-                        print(f"{name}: merged template failed the gate and could not roll back — a merged file "
+                        _said(f"{name}: merged template failed the gate and could not roll back — a merged file "
                               f"changed while the gate ran, so it is still at the merge "
                               f"({git_wt(root, 'rev-parse', '--short', 'HEAD').stdout.strip()}); undo it with "
                               f"`git -C {root} reset --keep {before[:12]}` once the change is saved.\n"
                               f"git said: {undo.stderr.strip()}\n{test_log[-800:]}")
                     else:
-                        print(f"{name}: merged template failed the gate; rolled back:\n{test_log[-800:]}")
+                        _said(f"{name}: merged template failed the gate; rolled back:\n{test_log[-800:]}")
                     worst = 1
                     continue
                 _note_update(name, root, before)
                 log(f"{name}: updated from template")
                 print(f"{name}: updated from template ({git_wt(root, 'rev-parse', '--short', 'HEAD').stdout.strip()})")
         except Busy:
-            print(f"{name} is busy ({busy_with(name)}); update it when it is idle.")
-            worst = max(worst, 3)
+            if not autonomy.scheduler_installed():
+                print(f"{name} is busy ({busy_with(name)}); update it when it is idle.")
+                worst = max(worst, 3)
+                continue
+            set_update_queued(name, True)
+            log(f"{name}: update queued — busy ({busy_with(name)})")
+            print(f"{name} is busy ({busy_with(name)}): update queued. The scheduler runs it as soon as {name} is "
+                  f"idle, before its next wake; the outcome is in the supervisor log and `shaft status`.")
     return worst
+
+
+def _said(text: str) -> None:
+    """An update's outcome, on the terminal and (its first line) in the supervisor log."""
+    print(text)
+    log(text.splitlines()[0])
 
 
 def cmd_setup() -> int:
@@ -309,7 +326,9 @@ def cmd_status(names: list[str]) -> int:
         convs = runner.open_conversations(name)
         from .core import disabled_tools
         tools_off = disabled_tools(name)
+        queued = update_queued(name)
         flags = [f for f, on in (("paused", paused(name)), ("busy", is_busy(name)),
+                                 (f"update queued since {queued[11:16]}", queued),
                                  (f"{len(convs)} conversation(s) open", convs)) if on]
         print(f"\n■ {name}{' (' + ', '.join(flags) + ')' if flags else ''}  ·  branch instance/{name}")
         print(f"  journal     {len(entries)} entries · self-model last changed {last_self}")

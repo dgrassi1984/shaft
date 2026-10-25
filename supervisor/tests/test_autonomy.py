@@ -46,6 +46,17 @@ class WakeTest(unittest.TestCase):
         self.assertEqual(start, [])
         self.assertEqual(skip, {"shaft": "talk since 11:40"})
 
+    def test_a_queued_update_starts_once_idle_and_holds_back_the_wake(self):
+        # Regression (2026-10-25): an update was refused while busy and lost every retry to the next cycle.
+        queued = {"x": "2026-10-25T12:45:00", "y": "2026-10-25T12:45:00"}
+        with mock.patch.object(autonomy, "update_queued", queued.get):
+            self.assertEqual(autonomy.update_jobs({}, ["x", "y", "z"], {"y": "live since 12:39"}.get), ["x"])
+            self.assertEqual(autonomy.update_jobs({"update x": None}, ["x"], lambda n: ""), [])   # running
+            self.assertEqual(autonomy.update_jobs({"wake x": None}, ["x"], lambda n: ""), [])     # waking
+            self.assertTrue(autonomy.updating("y", {}))
+            self.assertTrue(autonomy.updating("z", {"update z": None}))
+            self.assertFalse(autonomy.updating("z", {}))
+
     def test_never_woken_is_due_and_zero_means_never(self):
         start, _ = decide_wakes(D("2026-10-13T12:00:00"), {}, ["new", "off"],
                                 {"new": H2, "off": None}.get, lambda n: "")

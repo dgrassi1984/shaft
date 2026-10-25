@@ -355,6 +355,24 @@ def paused(name: str) -> bool:
     return (SUP_DIR / "paused").exists() or (SUP_DIR / f"paused-{name}").exists()
 
 
+def update_queued(name: str) -> str | None:
+    """When a `shaft update` that found the instance busy was queued, else None. The scheduler runs it once the
+    instance is idle, before any wake (autonomy.serve)."""
+    try:
+        return (SUP_DIR / f"update-queued-{name}").read_text().strip() or "?"
+    except OSError:
+        return None
+
+
+def set_update_queued(name: str, on: bool) -> None:
+    flag = SUP_DIR / f"update-queued-{name}"
+    if not on:
+        flag.unlink(missing_ok=True)
+    elif not flag.exists():   # the first request's time: a retry does not move it
+        SUP_DIR.mkdir(exist_ok=True)
+        flag.write_text(datetime.now().isoformat(timespec="seconds"))
+
+
 def instance_config(name: str) -> dict[str, str]:
     """An instance's config.env (KEY="value"  # comment), read as text — never executed, never through a link."""
     try:

@@ -54,7 +54,8 @@ shaft inbox [--clear]           # questions and notes instances sent you (you al
 shaft reply <name> "…"          # answer its open question
 shaft send <name> "…"           # message it
 
-shaft update [name|--all]       # merge template fixes into instances; only when idle, gate-tested
+shaft update [name|--all]       # merge template fixes into instances, gate-tested; a busy one is queued and
+                                # updated by the scheduler as soon as it is idle, before its next wake
 shaft new <name> [--from <i>]   # new instance from the template, or forked from <i> (genes, not memories)
 shaft new <name> --from <i> --seed   # …also knowing what <i> knows about you: its people file and facts.md,
                                 # marked as <i>'s beliefs in <i>'s voice; never its self, journal or episodes
