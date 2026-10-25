@@ -1,7 +1,7 @@
 """Surprise measurement (docs/plans/PLAN-surprise M0): the rule flags, recurrence and the per-model baseline.
 
 The result strings are copied from real episodes (2026-10-12/13). The template's in-the-moment rule (M1) must
-flag these same strings the same way: SHARED_FIXTURES is the contract between the two copies.
+flag these same strings the same way: surprise_fixtures.py is the contract between the two copies.
 """
 from __future__ import annotations
 
@@ -13,35 +13,9 @@ from pathlib import Path
 from unittest import mock
 
 from supervisor import metrics, surprise
+from supervisor.tests.surprise_fixtures import FLAG_FIXTURES
 
-SHARED_FIXTURES = [
-    # (result, expected (flag, detail) or None)
-    ("ERROR: PermissionError: self/self.md: use update_self_model", ("error", "PermissionError")),
-    ("ERROR: PermissionError: memory/journal.md: the journal is append-only; it is written at the end of each cycle",
-     ("error", "PermissionError")),
-    ("ERROR: TypeError: call() got multiple values for argument 'name'", ("error", "TypeError")),
-    ("ERROR: BrokerError: ValueError: commit must be a commit id (hex) from the log", ("error", "ValueError")),
-    ("ERROR: this trait cites no journal entry: '- I ground my planning in reading'", ("error", "")),
-    # wren 08:58: the heredoc never applied, the test then passed on unchanged code — exit 0 hides it
-    ("exit 0 · 0.1 s\n--- stdout ---\nexit=0\n\n--- stderr ---\nzsh:1: can't create temp file for here document: "
-     "operation not permitted\ntest_add_due_done_cycle ... ok", ("stderr_on_success", "not permitted")),
-    ("exit 0 · 0.1 s --- stdout --- === ps -ax (count) === 0 --- stderr --- zsh:1: operation not permitted: ps",
-     ("stderr_on_success", "not permitted")),
-    ("exit 1 · 0.0 s --- stdout --- ls: /Users/example/Development/shaft/instances/: Operation not permitted --- ",
-     ("nonzero_exit", "not permitted")),
-    ("exit 1 · 0.0 s --- stdout --- --- stderr --- Traceback (most recent call last):", ("nonzero_exit", "traceback")),
-    # exit 0 with "Traceback" in stdout only: a file that contains the word, not a failure
-    ("exit 0 · 0.0 s --- stdout --- Traceback handling lives in llm.py", None),
-    ("exit 0 · 0.2 s --- stdout --- ok   task_queue ok", None),
-    ("(empty)", ("empty", "")),
-    ("nothing relevant found", ("empty", "")),
-    ("(repeat: not run)", ("refused", "")),
-    ("HTTP 404 Content-Type: application/json", ("http_error", "404")),
-    ("HTTP 200 Content-Length: 19538 Content-Type: application/json", None),
-    ("text\n[... truncated, 9000 chars total]", ("truncated", "")),
-    ("wrote 3581 chars to notes/ai-misalignment-trend.md", None),
-    ("delivered to wren", None),
-]
+SHARED_FIXTURES = FLAG_FIXTURES   # the contract, in surprise_fixtures.py
 
 
 class FlagTest(unittest.TestCase):
