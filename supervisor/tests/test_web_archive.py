@@ -23,7 +23,8 @@ class ArchiveTest(WebTest):
                       mock.patch.object(web_chat, "load", side_effect=lambda cid: next(
                           (c for c in self.records if c["id"] == cid), None)),
                       mock.patch("supervisor.web._sent_during", return_value=[]),
-                      mock.patch("supervisor.docs.listing", return_value=[{"path": "a b.md", "bytes": 10}]),
+                      mock.patch("supervisor.docs.listing", return_value=[{"path": "a b.md", "bytes": 10, "mtime": 1761400000.0,
+                                                                         "sha": "ab"}]),
                       mock.patch("supervisor.docs.read", return_value=("Current replacement text", "sha")),
                       mock.patch("supervisor.doc_comments.threads", return_value=[]),
                       mock.patch("supervisor.doc_comments.open_counts", return_value={})]:

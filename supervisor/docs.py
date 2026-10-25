@@ -55,6 +55,11 @@ def _path(name: str, rel: str, create: bool = False) -> Path:
         raise Refused(f"{DIR}/{rel}: {e}") from None
 
 
+def _kb(n: int) -> str:
+    """A size in a refusal, rounded up: a document 1 byte over the limit never reads as the limit itself."""
+    return f"{-(-n // 1024)} KB"
+
+
 def sha(data: bytes | None) -> str:
     return hashlib.sha256(data).hexdigest() if data is not None else "none"
 
@@ -68,8 +73,8 @@ def read(name: str, path: str) -> tuple[str | None, str]:
     try:                                          # opened with no link followed: nothing swapped in after the check
         data = read_beneath(instance_root(name), Path(DIR, rel).parts, MAX_BYTES)
     except ValueError:
-        raise Refused(f"{DIR}/{rel} is {p.stat().st_size} bytes: too big to show or edit here (at most {MAX_BYTES})") \
-            from None
+        raise Refused(f"{DIR}/{rel} is {_kb(p.stat().st_size)}: too big to show or edit here (at most "
+                      f"{_kb(MAX_BYTES)})") from None
     except (UnsafePath, FileNotFoundError):
         return None, "none"
     return data.decode(errors="replace"), sha(data)
@@ -128,7 +133,7 @@ def write(name: str, path: str, text: str, expect_sha: str) -> dict:
     rel = _rel(path)
     data = text.replace("\r\n", "\n").encode()
     if len(data) > MAX_BYTES:
-        raise Refused(f"{DIR}/{rel} would be {len(data)} bytes: at most {MAX_BYTES}")
+        raise Refused(f"{DIR}/{rel} would be {_kb(len(data))}: at most {_kb(MAX_BYTES)}")
     p = _path(name, rel, create=True)
     with config_lock(p):
         old, now = read(name, rel)

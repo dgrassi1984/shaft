@@ -134,7 +134,7 @@ class DocumentsCloseTest(unittest.TestCase):
         hidden = re.search(r"^([^{\n]*)\{ display: none; \}", self.desktop().split(".navbtn.news")[0].split("PLAN-pwa P2:")[1],
                            re.M)
         self.assertNotIn("closedocs", hidden.group(1))
-        self.assertIn("data-close-docs", str(web_views.docs_panel("wren", [{"path": "plan.md", "bytes": 3}], "", None,
+        self.assertIn("data-close-docs", str(web_views.docs_panel("wren", [{"path": "plan.md", "bytes": 3, "mtime": 0.0, "sha": "x"}], "", None,
                                                                     "none", set())))
 
     def test_documents_and_close_really_close(self):

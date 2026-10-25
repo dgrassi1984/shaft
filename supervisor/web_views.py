@@ -41,6 +41,61 @@ def q(value: str) -> str:
     return urllib.parse.quote(str(value), safe="")
 
 
+def size_label(n: int) -> str:
+    """Bytes as a file manager shows them: 512 B, 1 KB, 1.5 KB, 12 KB, 3.2 MB (1 KB = 1024 bytes, as FILE_MAX's MB)."""
+    if n < 1024:
+        return f"{n} B"
+    v = float(n)
+    for unit in ("KB", "MB", "GB", "TB"):
+        v /= 1024
+        shown = f"{v:.1f}" if round(v, 1) < 10 else f"{v:.0f}"
+        if float(shown) < 1024 or unit == "TB":      # 1023.97 KB is 1 MB, never "1024 KB"
+            return f"{shown.removesuffix('.0')} {unit}"
+    raise AssertionError("unreachable")
+
+
+def when_label(ts: float, now: float | None = None) -> Html:
+    """A modification time, as short as it can be in a narrow list: 14:32 today, 24 Oct 14:32 this year, else 2025-03-01;
+    the full time on hover. Absolute, so a list polled every 1.5 s changes only when a file does (or the day turns)."""
+    t, today = time.localtime(ts), time.localtime(now if now is not None else time.time())
+    short = (time.strftime("%H:%M", t) if t[:3] == today[:3] else
+             f"{t.tm_mday} {time.strftime('%b %H:%M', t)}" if t.tm_year == today.tm_year else
+             time.strftime("%Y-%m-%d", t))
+    return h('<time class="dim docdate" datetime="{iso}" title="{full}">{s}</time>',
+             iso=time.strftime("%Y-%m-%dT%H:%M:%S%z", t), full=time.strftime("%Y-%m-%d %H:%M:%S", t), s=short)
+
+
+# The documents list's orders: ?sort= or the shaft_docsort cookie names one; each column's first click is its natural
+# direction (newest, A→Z, largest), the next click on it reverses it.
+DOC_SORTS = {"modified": ("mtime", True), "modified-asc": ("mtime", False), "name": ("name", False),
+             "name-desc": ("name", True), "size": ("bytes", True), "size-asc": ("bytes", False)}
+DOC_SORT_DEFAULT = "modified"
+_DOC_COLUMNS = [("name", "Name", "name", "name-desc", Html("")), ("bytes", "Size", "size", "size-asc", Html(" docsize")),
+                ("mtime", "Modified", "modified", "modified-asc", Html(" docdate"))]
+
+
+def doc_sort(value: str | None) -> str:
+    return value if value in DOC_SORTS else DOC_SORT_DEFAULT
+
+
+def _sort_bar(sort: str, folder: str, chat_id: str = "") -> Html:
+    """The list's column heads: Name, Size, Modified; the one it is sorted by is marked, with its direction. Each is a
+    link that works without the script too: it asks for the list (list=1: without it the page opens what this chat
+    last changed), in this folder, of this archived chat (id)."""
+    keep = (f"&dir={q(folder)}" if folder else "") + (f"&id={q(chat_id)}" if chat_id else "")
+    key, reverse = DOC_SORTS[sort]
+    heads = []
+    for k, label, first, second, cls in _DOC_COLUMNS:
+        on = k == key
+        to = (second if sort == first else first) if on else first
+        arrow = ("↓" if reverse else "↑") if on else ""
+        heads.append(h('<a href="?list=1&amp;sort={t}{d}" data-sort-docs="{t}" data-focus="sort-{k}" class="{c}"{cur} '
+                       'title="Sort by {l}{again}">{l}{a}</a>', t=to, k=k, d=keep, c=Html(("on" if on else "") + str(cls)),
+                       cur=Html(' aria-current="true"') if on else "", l=label, a=f" {arrow}" if arrow else "",
+                       again=", reversed" if on else ""))
+    return h('<div class="docsort" role="group" aria-label="Sort the documents">{h}</div>', h=join(heads))
+
+
 def frame(title: str, body: Html, names: list[str], csrf: str, current: str = "") -> Html:
     return page(title, body, nav(names, current), csrf)
 
@@ -72,7 +127,7 @@ def files_page(name: str, parts: tuple, entries: list[dict], total: int, page_nu
             label = entry["name"]
             url = f"/i/{q(name)}/file?path={q(path)}"
             controls = join([link(url, "Download"), " · ", link(url + "&open=1", "Open")]) if entry["text"] else link(url, "Download")
-        rows.append([label, f'{entry["bytes"]} bytes',
+        rows.append([label, "—" if entry["directory"] else size_label(entry["bytes"]),
                      time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(entry["mtime"])), controls])
     paging = []
     if page_number > 1:
@@ -846,38 +901,57 @@ def threads_list(name: str, doc: str, sha: str, threads: list[dict], active: str
 
 def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None, sha: str, marked: set[str],
                problem: str = "", saved: dict | None = None, threads: list[dict] | None = None,
-               counts: dict | None = None, thread: str = "", archived: bool = False, folder: str = "") -> Html:
+               counts: dict | None = None, thread: str = "", archived: bool = False, folder: str = "",
+               sort: str = DOC_SORT_DEFAULT, chat_id: str = "") -> Html:
     """The documents panel beside the chat (/fragment/docs/<name>): the list of one folder (`folder`, "" for notes/docs/
-    itself: its subfolders, then its documents) or the open one rendered, whose ← goes back to its folder."""
+    itself: its subfolders, then its documents, each in the `sort` order of DOC_SORTS) or the open one rendered, whose ←
+    goes back to its folder. A folder's size is all its documents', its time its latest document's."""
     from . import actions
-    from .docs import DIR
+    from .docs import DIR, MAX_BYTES
     from .web_actions import post_attrs
     if open_path:
         folder = open_path.rpartition("/")[0]
     prefix = folder + "/" if folder else ""
-    subs: dict[str, dict] = {}                     # the listing is the last changed first: so is each folder, by its latest
-    items = []
+    subs: dict[str, dict] = {}
+    here_docs = []
     for d in listing:
         if not d["path"].startswith(prefix):
             continue
         rest = d["path"][len(prefix):]
         n = 0 if counts is None else counts.get(d["path"]) or 0
         if "/" in rest:
-            s = subs.setdefault(rest.partition("/")[0], {"docs": 0, "marked": False, "comments": 0})
+            s = subs.setdefault(rest.partition("/")[0], {"docs": 0, "marked": False, "comments": 0, "bytes": 0, "mtime": 0.0})
             s["docs"] += 1
             s["marked"] |= d["path"] in marked
             s["comments"] += n
+            s["bytes"] += d["bytes"]
+            s["mtime"] = max(s["mtime"], d["mtime"])
             continue
-        items.append(h('<a href="?doc={u}" data-open-doc="{p}"><span>{dot}{f}{ccount}</span>'
-                       '<span class="dim docsize">{b} bytes</span></a>',
-                       u=q(d["path"]), p=d["path"], f=rest, b=d["bytes"], dot=_DOT if d["path"] in marked else "",
-                       ccount=h(' <span class="ccount" title="open comments">💬 {n}</span>', n=n) if n > 0 else ""))
-    folders = [h('<a href="?dir={u}" data-open-dir="{p}" class="folder"><span>{dot}📁 {f}{ccount}</span>'
-                 '<span class="dim docsize">{k} document{s} ›</span></a>',
+        here_docs.append((rest, d, n))
+    key, reverse = DOC_SORTS[doc_sort(sort)]
+    # By name first, then by the key: sorted() is stable (reversed too), so equal sizes or times stay A→Z.
+    by = (lambda name, row: name.casefold()) if key == "name" else (lambda name, row: row[key])
+    here_docs = sorted(sorted(here_docs, key=lambda x: x[0].casefold()), key=lambda x: by(x[0], x[1]), reverse=reverse)
+    folder_rows = sorted(sorted(subs.items(), key=lambda x: x[0].casefold()), key=lambda x: by(x[0], x[1]),
+                         reverse=reverse)
+    items = []
+    for rest, d, n in here_docs:
+        big = d["sha"] == "too-big"
+        items.append(h('<a href="?doc={u}" data-open-doc="{p}"><span>{dot}{f}{ccount}{big}</span>'
+                       '<span class="dim docsize" title="{b} bytes">{size}</span>{when}</a>',
+                       u=q(d["path"]), p=d["path"], f=rest, b=f"{d['bytes']:,}", size=size_label(d["bytes"]),
+                       when=when_label(d["mtime"]), dot=_DOT if d["path"] in marked else "",
+                       ccount=h(' <span class="ccount" title="open comments">💬 {n}</span>', n=n) if n > 0 else "",
+                       big=h(' <span class="bad toobig" title="over {m}: it cannot be shown or edited here, only downloaded">'
+                             'too big to show</span>', m=size_label(MAX_BYTES)) if big else ""))
+    folders = [h('<a href="?dir={u}" data-open-dir="{p}" class="folder"><span>{dot}📁 {f} '
+                 '<span class="dim">· {k} document{s}</span>{ccount}</span>'
+                 '<span class="dim docsize" title="{b} bytes in all">{size}</span>{when}</a>',
                  u=q(prefix + f), p=prefix + f, f=f, k=s["docs"], s="" if s["docs"] == 1 else "s",
+                 b=f"{s['bytes']:,}", size=size_label(s["bytes"]), when=when_label(s["mtime"]),
                  dot=_DOT if s["marked"] else "",
                  ccount=h(' <span class="ccount" title="open comments">💬 {n}</span>', n=s["comments"])
-                 if s["comments"] else "") for f, s in subs.items()]
+                 if s["comments"] else "") for f, s in folder_rows]
     inside = h(' in {f}/', f=folder) if folder else ""
     new = h('<details class="newdoc" data-key="newdoc"><summary>New document</summary><form data-post="/docs/{n}/save" '
             'data-after="doc-saved"{a}><input type="hidden" name="sha" value="none">'
@@ -909,20 +983,25 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
     head = h('<div class="docshead">{title}{new}{expand}<button type="button" '
              'class="small closedocs" data-close-docs aria-label="Close the documents">✕</button></div>{list}',
              title=title, expand=expand, new="" if open_path or archived else new,
-             list="" if open_path else h('<div class="doclist">{i}</div>', i=join(entries) if entries else empty))
+             list="" if open_path else h('{s}<div class="doclist">{i}</div>', i=join(entries) if entries else empty,
+                                                    s=_sort_bar(doc_sort(sort), folder, chat_id) if len(entries) > 1 else ""))
     download = (download_icon(f"/i/{q(name)}/file?path={q(DIR + '/' + open_path)}")
                 if open_path and text is not None and not problem else Html(""))
+    too_big = open_path and problem and any(d["path"] == open_path and d["sha"] == "too-big" for d in listing)
+    refusal = h('<p class="bad">{p}</p>{d}', p=problem, d=h('<p>{i} <a href="/i/{n}/file?path={u}">Download {f}</a></p>',
+                i=ICONS["download"], n=q(name), u=q(DIR + "/" + open_path), f=open_path.rpartition("/")[2])
+                if too_big else "")
     if archived:
         notice = h('<p>Current files — not as they were in this chat</p><p><a href="/i/{n}/chat{query}">'
                    'Open in the current chat to edit or comment</a></p>', n=q(name),
                    query=f"?doc={q(open_path)}" if open_path else f"?dir={q(folder)}" if folder else "")
-        view = (h('<p class="bad">{p}</p>', p=problem) if problem else
+        view = (refusal if problem else
                 h('<div class="docview" data-read-only="1"><div class="doctitle"><b>{p}</b>{d}</div>'
                   '<div class="docmd">{md}</div></div>', p=open_path, d=download, md=markdown(text)) if text is not None else
                 h('<p class="dim">{p} is not there (any more).</p>', p=open_path) if open_path else Html(""))
         return join([notice, head, view])
     if problem:
-        view = h('<p class="bad">{p}</p>', p=problem)
+        view = refusal
     elif open_path and text is not None:
         if saved:
             saved = {**saved, "name": name, "path": open_path}
@@ -1196,7 +1275,7 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
 
 def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], live: dict, names: list[str],
               csrf: str, read_only: bool = False, panel: Html = Html(""), doc: str = "", att: str = "",
-              later: str = "", folder: str = "") -> Html:
+              later: str = "", folder: str = "", sort: str = "", listing_only: bool = False) -> Html:
     """`att` (<message file>/<index>): the panel shows that text attachment, not a document (attachment_panel).
     `folder` (?dir=): with no document open, the panel lists that folder of notes/docs/.
     `later`: when its next cycle is (autonomy.next_cycle), the Next cycle button's title."""
@@ -1231,9 +1310,9 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
                          '↓ New below</button>', u=feed_url, f=chat_feed(name, chat, sent, archived=read_only)), composer,
                  Html('<div class="dropzone" data-dropzone hidden>Drop to attach</div>') if not read_only else Html("")])
     aside = h('<aside class="docs" id="docs" data-poll="/fragment/docs/{n}?{d}{archive}" data-every="1500" data-lazy="1">{p}</aside>',
-              n=q(name), d=f"att={q(att)}" if att else f"list=1&dir={q(folder)}" if folder and not doc else
+              n=q(name), d=f"att={q(att)}" if att else f"list=1&dir={q(folder)}" if (folder or listing_only) and not doc else
               f"doc={q(doc)}", p=panel,
-              archive=f"&id={q(chat['id'])}" if read_only and chat else "")
+              archive=(f"&id={q(chat['id'])}" if read_only and chat else "") + (f"&sort={sort}" if sort else ""))
     return chat_frame(name, chat_header(name, live, chat, past, read_only),
                       h('<div class="chatgrid"><div class="chatpage">{b}</div>{a}</div>', b=body, a=aside),
                       names, csrf, f"/fragment/chat/{q(name)}/header"
