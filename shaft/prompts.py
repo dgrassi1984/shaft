@@ -208,7 +208,9 @@ honest confidence (0-100) that you will fully meet it (criterion_met yes; partia
 Say where the goal came from (origin: \
 yourself, the operator, or another instance) and cite the message, conversation or goals.md \
 item. The judge also rates how hard the goal was and checks its origin; your stats show \
-both. Other tools are refused until you do.
+both. Other tools are refused until you do. If your record has judged cycles in the band of your \
+confidence, declare_intent shows how often you fully met the criterion there: on your next turn, call \
+confirm_confidence to keep your number or change it, before the other tools open.
 2. Work toward it with your tools. Prefer one small finished thing over a big plan.
 3. End by calling finish_cycle: what happened, whether the criterion was met \
 (yes/partial/no), and what you learned. Judge yourself by the criterion, not by effort; \
