@@ -34,7 +34,8 @@ MIND_PATHS = ("self", "memory", "notes", "inbox")
 # ships one), not memory (docs/plans/PLAN-mind-out-of-git.md D2).
 SKILL_PATHS = ("skills",)
 # The supervisor's copy of SHAFT's own docs in each instance folder (runner.stage_docs), read-only to the instance:
-# refreshed at every start from the project, so never staged on its branch nor snapshotted around an exam.
+# refreshed at every start from the project, so never staged on its branch (an exam's copy of the instance holds it
+# as it is).
 DOCS_COPY = "shaft-docs"
 DEFAULT_INSTANCE = "shaft"
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
@@ -248,6 +249,28 @@ IDLE_MINUTES, IDLE_SRC = knob(
     "before it is closed and written up into the journal", group="Runs and conversations",
     services=("runs", "api", "telegram"))
 API_TALKS = SUP_DIR / "api_talks.json"
+# What the unsandboxed supervisor reads out of an instance's folder, which the instance fills as it likes: one file, and
+# one walk of a folder tree (the gate's code snapshot, read into memory; a battery exam's copy, written to disk). Past
+# a bound the read fails, explicitly — never an empty or partial answer (the gate then fails closed) — rather than
+# taking the Mac's memory, disk or file descriptors (Codex review of 151088d, 2026-10-24).
+FILE_READ_MAX_MB, _ = knob(
+    "SHAFT_FILE_READ_MAX_MB", "512", positive_int, "megabytes the supervisor reads from one file in an instance's "
+    "folder (a bigger one is refused)", group="Runs and conversations",
+    services=("runs", "api", "web", "scheduler", "telegram"))
+SNAPSHOT_MAX_MB, _ = knob(
+    "SHAFT_SNAPSHOT_MAX_MB", "512", positive_int, "megabytes of an instance's code the gate reads to check a change "
+    "(more, and the change is not kept)", group="Runs and conversations", services=("runs", "api"))
+COPY_MAX_GB, _ = knob(
+    "SHAFT_COPY_MAX_GB", "8", gigabytes, "gigabytes the supervisor copies of an instance's folder for a battery exam "
+    "or a gate's scratch copy (more, and the exam or the check fails)", group="Runs and conversations",
+    services=("runs", "api", "scheduler"))
+TREE_MAX_FILES, _ = knob(
+    "SHAFT_TREE_MAX_FILES", "200000", positive_int, "files and folders the supervisor reads or copies in one walk of "
+    "an instance's folder (the gate's code snapshot, a battery exam's copy)", group="Runs and conversations",
+    services=("runs", "api"))
+TREE_MAX_DEPTH, _ = knob(
+    "SHAFT_TREE_MAX_DEPTH", "64", positive_int, "folders deep the supervisor walks in an instance's folder (the gate's "
+    "code snapshot, a battery exam's copy)", group="Runs and conversations", services=("runs", "api"))
 
 
 def describe_knobs() -> str:
@@ -280,7 +303,7 @@ def git(*args: str, check: bool = True) -> subprocess.CompletedProcess:
 
 
 def git_wt(root: Path, *args: str, check: bool = True, project: Path | None = None,
-           input: str | None = None, text: bool = True) -> subprocess.CompletedProcess:
+           input: str | bytes | None = None, text: bool = True, env: dict | None = None) -> subprocess.CompletedProcess:
     """Run git in an instance worktree without trusting anything inside it.
 
     The worktree's `.git` file is writable by the instance, which could point it at
@@ -291,7 +314,8 @@ def git_wt(root: Path, *args: str, check: bool = True, project: Path | None = No
     return subprocess.run(
         ["git", f"--git-dir={admin}", f"--work-tree={root}", "-c", "core.hooksPath=/dev/null",
          "-c", "core.fsmonitor=false", *args],
-        cwd=root, capture_output=True, text=text, check=check, input=input)
+        cwd=root, capture_output=True, text=text, check=check, input=input,
+        env={**os.environ, **env} if env else None)
 
 
 def _git_common_dir(project: Path) -> Path:
@@ -332,10 +356,10 @@ def paused(name: str) -> bool:
 
 
 def instance_config(name: str) -> dict[str, str]:
-    """An instance's config.env (KEY="value"  # comment), read as text — never executed."""
+    """An instance's config.env (KEY="value"  # comment), read as text — never executed, never through a link."""
     try:
-        return config_values((instance_root(name) / "config.env").read_text())
-    except OSError:
+        return config_values(safe_read(instance_root(name), "config.env"))
+    except (OSError, UnsafePath, ValueError):
         return {}
 
 
@@ -519,12 +543,55 @@ SECRETS_DIR = "secrets"
 SECRET_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,40}$")
 
 
-def read_secrets(root: Path) -> dict[str, dict]:
-    path = contained(root, SECRETS_DIR, "secrets.json")
+class KeyStoreUnreadable(ValueError):
+    """The key store is there but is not a JSON object of keys: nothing may be written over it."""
+
+
+def read_secrets(root: Path, strict: bool = False) -> dict[str, dict]:
+    """The instance's keys ({} when it has none), read without following a link anywhere (read_beneath). A store that
+    is there but cannot be read — not JSON, a link, a pipe, too big — is logged loudly and reads as {} for a use of a
+    key, or raises KeyStoreUnreadable when `strict` (every change: store, delete). Until 2026-10-24 it read as {} for
+    changes too, so the next `shaft secret set` replaced every key with one (B10)."""
+    path = Path(root) / SECRETS_DIR / "secrets.json"
     try:
-        return json.loads(path.read_text()) if path.is_file() else {}
-    except (OSError, ValueError):
+        store = json.loads(read_beneath(root, [SECRETS_DIR, "secrets.json"]))
+        if not isinstance(store, dict) or not all(isinstance(e, dict) for e in store.values()):
+            raise ValueError("not a JSON object of keys")
+        return store
+    except FileNotFoundError:
         return {}
+    except (OSError, ValueError, UnsafePath) as e:   # TooBig is a ValueError
+        why = f"{path} cannot be read as a key store ({type(e).__name__}: {e})"
+        log(f"KEY STORE UNREADABLE: {why}; its keys are not used until it is repaired by hand")
+        if strict:
+            raise KeyStoreUnreadable(f"{why}; nothing was changed — repair or remove the file by hand") from None
+        return {}
+
+
+@contextlib.contextmanager
+def _secrets_lock(root: Path):
+    """One change to an instance's key store at a time, across processes (the broker's secret_set and secret_delete,
+    `shaft secret`): each reads the store, changes one key and writes it back, and two at once lost one of them."""
+    import fcntl
+    locks = SUP_DIR / "locks"
+    locks.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha1(str(Path(root).resolve()).encode()).hexdigest()[:16]
+    with (locks / f"secrets-{digest}.lock").open("a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def _change_secrets(root: Path, change) -> dict:
+    """Read, change (`change(store)` edits it in place and returns False for "nothing to write") and write the store,
+    under its lock; never over a store that cannot be read."""
+    with _secrets_lock(root):
+        store = read_secrets(root, strict=True)
+        if change(store) is not False:
+            _write_secrets(root, store)
+        return store
 
 
 def store_secret(root: Path, key: str, value: str, hosts: list[str], header: str = "Authorization",
@@ -534,10 +601,9 @@ def store_secret(root: Path, key: str, value: str, hosts: list[str], header: str
     hosts = sorted({h.strip().lower() for h in hosts if h.strip()})
     if not value.strip() or not hosts:
         raise ValueError("a key needs a value and at least one host it may be sent to")
-    store = read_secrets(root)
-    store[key] = {"value": value.strip(), "hosts": hosts, "header": header, "scheme": scheme,
-                  "created": datetime.now().isoformat(timespec="seconds")}
-    _write_secrets(root, store)
+    entry = {"value": value.strip(), "hosts": hosts, "header": header, "scheme": scheme,
+             "created": datetime.now().isoformat(timespec="seconds")}
+    _change_secrets(root, lambda store: store.__setitem__(key, entry))
 
 
 def store_google_key(root: Path, key: str, data: dict) -> None:
@@ -550,12 +616,11 @@ def store_google_key(root: Path, key: str, data: dict) -> None:
     missing = [f for f in ("client", "address", "refresh_token", "scope") if not str(data.get(f) or "").strip()]
     if data.get("kind") != "google" or missing or not hosts:
         raise ValueError(f"a Google key needs kind google, hosts and {', '.join(missing) or 'its login'}")
-    store = read_secrets(root)
-    store[key] = {"kind": "google", "client": data["client"], "address": data["address"],
-                  "refresh_token": data["refresh_token"], "scope": data["scope"], "hosts": hosts,
-                  "header": "Authorization", "scheme": "Bearer",
-                  "created": data.get("created") or datetime.now().isoformat(timespec="seconds")}
-    _write_secrets(root, store)
+    entry = {"kind": "google", "client": data["client"], "address": data["address"],
+             "refresh_token": data["refresh_token"], "scope": data["scope"], "hosts": hosts,
+             "header": "Authorization", "scheme": "Bearer",
+             "created": data.get("created") or datetime.now().isoformat(timespec="seconds")}
+    _change_secrets(root, lambda store: store.__setitem__(key, entry))
 
 
 def is_google_key(entry: dict | None) -> bool:
@@ -575,20 +640,45 @@ def describe_key(key: str, entry: dict) -> str:
 
 
 def delete_secret(root: Path, key: str) -> bool:
-    store = read_secrets(root)
-    found = store.pop(key, None) is not None
-    if found:
-        _write_secrets(root, store)
+    found = False
+
+    def drop(store: dict) -> bool:
+        nonlocal found
+        found = store.pop(key, None) is not None
+        return found                                 # False: not there, nothing to write
+    _change_secrets(root, drop)
     return found
 
 
 def _write_secrets(root: Path, store: dict) -> None:
+    """The whole store or none of it: written to a new 0600 file beside it, flushed to disk, then renamed over it —
+    never truncated and rewritten in place, where a crash halfway left a store that read as empty (B10). Every
+    component is opened without following a link (open_beneath), the rename too (it replaces a link, never its
+    target). Called under _secrets_lock."""
     safe_mkdir(root, SECRETS_DIR)
-    path = contained(root, SECRETS_DIR, "secrets.json")
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(json.dumps(store, indent=1))
-    os.chmod(path, 0o600)
+    tmp = f".secrets.json.{os.getpid()}.{os.urandom(4).hex()}"
+    fd = open_beneath(root, [SECRETS_DIR, tmp], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    dfd = None
+    try:
+        with os.fdopen(fd, "wb") as f:
+            os.fchmod(f.fileno(), 0o600)
+            f.write(json.dumps(store, indent=1).encode())
+            f.flush()
+            os.fsync(f.fileno())
+        dfd = dir_beneath(root, [SECRETS_DIR])
+        os.rename(tmp, "secrets.json", src_dir_fd=dfd, dst_dir_fd=dfd)   # atomic; os.replace takes no dir_fd here
+        os.fsync(dfd)
+    except BaseException:
+        try:
+            if dfd is None:
+                dfd = dir_beneath(root, [SECRETS_DIR])
+            os.unlink(tmp, dir_fd=dfd)
+        except OSError:
+            pass
+        raise
+    finally:
+        if dfd is not None:
+            os.close(dfd)
 
 
 def set_tool(name: str, tool: str, on: bool) -> set[str]:
@@ -598,14 +688,35 @@ def set_tool(name: str, tool: str, on: bool) -> set[str]:
 
 
 def journal_entries(root: Path) -> list[str]:
-    journal = root / "memory" / "journal.md"
-    if not journal.exists():
-        return []
-    return [b.strip() for b in journal.read_text().split("\n---\n") if b.strip().startswith("## ")]
+    text = safe_read(root, "memory/journal.md", "")
+    return [b.strip() for b in text.split("\n---\n") if b.strip().startswith("## ")]
 
 
 class UnsafePath(Exception):
     pass
+
+
+class TooBig(ValueError):
+    """A file in an instance's folder bigger than the read allows."""
+
+
+class TreeTooBig(Exception):
+    """A walk of an instance's folder past its Budget: never taken for an empty or a complete answer."""
+
+
+@dataclasses.dataclass
+class Budget:
+    """What walks of an instance's folder may take (walk_beneath): files and folders, bytes read in all, folder
+    depth. A field left None is its knob's value when the budget is made. Walks given the same budget share it: each
+    takes what it uses from `files` and `total`."""
+    files: int | None = None
+    total: int | None = None
+    depth: int | None = None
+
+    def __post_init__(self):
+        self.files = TREE_MAX_FILES if self.files is None else self.files
+        self.total = SNAPSHOT_MAX_MB * 2**20 if self.total is None else self.total
+        self.depth = TREE_MAX_DEPTH if self.depth is None else self.depth
 
 
 def contained(root: Path, *parts: str) -> Path:
@@ -613,7 +724,8 @@ def contained(root: Path, *parts: str) -> Path:
 
     Instances can create symlinks in their own folder; following one would let an instance aim a
     supervisor write anywhere on the Mac. So no component may be a symlink, and the result must
-    resolve inside the folder."""
+    resolve inside the folder. A check, not a guarantee: the instance can swap a link in after it, so a
+    read or write goes through the descriptor helpers below (open_beneath), which leave no between."""
     root = Path(root)
     if root.is_symlink():
         raise UnsafePath(f"{root} is a symlink")
@@ -625,15 +737,6 @@ def contained(root: Path, *parts: str) -> Path:
             raise UnsafePath(f"{probe} is a symlink; the supervisor does not follow links inside instances")
     if path.resolve() != root.resolve() and root.resolve() not in path.resolve().parents:
         raise UnsafePath(f"{path} resolves outside {root}")
-    return path
-
-
-def safe_write(root: Path, rel: str, text: str, append: bool = False) -> Path:
-    path = contained(root, *Path(rel).parts)
-    contained(root, *Path(rel).parent.parts).mkdir(parents=True, exist_ok=True)
-    contained(root, *Path(rel).parts)            # re-check after creating parents
-    with path.open("a" if append else "w") as f:
-        f.write(text)
     return path
 
 
@@ -670,17 +773,323 @@ def open_beneath(root: Path, parts, flags: int, mode: int = 0o644, make_dirs: bo
         os.close(fd)
 
 
-def read_beneath(root: Path, parts, limit: int | None = None) -> bytes:
-    """A regular file's bytes, opened with open_beneath (no link followed anywhere); ValueError if bigger than limit."""
+def dir_beneath(root: Path, parts=(), make: bool = False) -> int:
+    """A descriptor for the folder root/parts (root itself when parts is empty), opened like open_beneath: no
+    component followed if it is a link. `make`: each missing folder is created first, through its parent's
+    descriptor."""
+    parts = [str(p) for p in parts]
+    if make and parts:
+        parent = dir_beneath(root, parts[:-1], make=True)
+        try:
+            os.mkdir(parts[-1], 0o755, dir_fd=parent)
+        except FileExistsError:
+            pass
+        finally:
+            os.close(parent)
+    if parts:
+        return open_beneath(root, parts, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        return os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as e:
+        raise UnsafePath(f"{root}: {e.strerror}") from None
+
+
+def _open_file_beneath(root: Path, parts, flags: int, mode: int = 0o644, make_dirs: bool = False) -> int:
+    """open_beneath for a plain file. Non-blocking, then checked: a pipe planted in its place would hang the
+    supervisor on a read nobody writes or a write nobody reads, so a pipe, a device or a folder is refused."""
+    import errno
     import stat
-    fd = open_beneath(root, parts, os.O_RDONLY)
-    with os.fdopen(fd, "rb") as f:
-        st = os.fstat(f.fileno())
-        if not stat.S_ISREG(st.st_mode):
-            raise UnsafePath(f"{root}/{'/'.join(map(str, parts))} is not a plain file")
-        if limit is not None and st.st_size > limit:
-            raise ValueError(f"{st.st_size} bytes, more than {limit}")
-        return f.read()
+    try:
+        fd = open_beneath(root, parts, flags | os.O_NONBLOCK, mode, make_dirs)
+    except OSError as e:
+        if e.errno == errno.ENXIO:   # a pipe with no reader, opened to write
+            raise UnsafePath(f"{root}/{'/'.join(map(str, parts))} is not a plain file") from None
+        raise
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise UnsafePath(f"{root}/{'/'.join(map(str, parts))} is not a plain file")
+    return fd
+
+
+def read_beneath(root: Path, parts, limit: int | None = None) -> bytes:
+    """A regular file's bytes, opened with open_beneath (no link followed anywhere); TooBig (a ValueError) past
+    `limit` bytes, SHAFT_FILE_READ_MAX_MB when it is None. At most limit + 1 bytes are ever read: the size the file
+    had when it was opened says nothing of what it holds by the time it is read."""
+    limit = FILE_READ_MAX_MB * 2**20 if limit is None else limit
+    with os.fdopen(_open_file_beneath(root, parts, os.O_RDONLY), "rb") as f:
+        size = os.fstat(f.fileno()).st_size
+        data = _read_upto(f, limit + 1) if size <= limit else b""
+        if size > limit or len(data) > limit:
+            raise TooBig(f"{max(size, len(data))} bytes, more than {limit}")
+        return data
+
+
+def _read_upto(f, n: int) -> bytes:
+    """At most n bytes of f, in chunks: f.read(n) would set aside all n bytes first, however small the file."""
+    chunks, got = [], 0
+    while got < n and (chunk := f.read(min(2**20, n - got))):
+        chunks.append(chunk)
+        got += len(chunk)
+    return b"".join(chunks)
+
+
+def safe_read_bytes(root: Path, rel: str, default: bytes | None = None, limit: int | None = None) -> bytes:
+    """The bytes of the plain file root/rel, read with read_beneath: no component followed if it is a link. How the
+    unsandboxed supervisor reads anything in an instance folder that it copies, shows or sends on: the instance can
+    plant a link anywhere in its folder, and reading through one hands it — or a judge's cloud model, or the
+    operator's pages — any file the supervisor can read (Codex review B1, 2026-10-24: a journal swapped for a link was
+    copied into the instance's own journal.rejected-*.md). `default`, when given, stands for a file that is missing
+    or is not a plain file reached without a link (or is past the limit): to its reader a link is no file at all.
+    Without it: OSError (FileNotFoundError), UnsafePath or TooBig."""
+    try:
+        return read_beneath(root, Path(rel).parts, limit)
+    except (FileNotFoundError, UnsafePath, TooBig):
+        if default is None:
+            raise
+        return default
+
+
+def safe_read(root: Path, rel: str, default: str | None = None, errors: str = "strict") -> str:
+    """safe_read_bytes as UTF-8 text."""
+    try:
+        return read_beneath(root, Path(rel).parts).decode("utf-8", errors)
+    except (FileNotFoundError, UnsafePath, TooBig):
+        if default is None:
+            raise
+        return default
+
+
+def list_beneath(root: Path, rel: str = "") -> list[str]:
+    """The names in the folder root/rel, opened like open_beneath: [] if it is missing or reached through a link
+    (never the listing of the folder a link points to). An entry may itself be a link: safe_read refuses one."""
+    try:
+        fd = dir_beneath(root, Path(rel).parts)
+    except (FileNotFoundError, UnsafePath):
+        return []
+    try:
+        return sorted(os.listdir(fd))
+    finally:
+        os.close(fd)
+
+
+def set_aside(root: Path, rel: str, name: str) -> str:
+    """Rename root/rel to `name` in the same folder, through the folder's descriptor: the entry itself is moved — a
+    link, never what it points to — and nothing is read. Returns the new path, relative to root."""
+    parts = Path(rel).parts
+    fd = dir_beneath(root, parts[:-1])
+    try:
+        os.rename(parts[-1], name, src_dir_fd=fd, dst_dir_fd=fd)
+    finally:
+        os.close(fd)
+    return str(Path(*parts[:-1], name))
+
+
+def unlink_beneath(root: Path, rel: str) -> bool:
+    """Remove root/rel — a link itself, never what it points to — through its folder's descriptor. False if it is
+    not there, is a folder, or its folder is reached through a link (nothing in that folder is touched)."""
+    import stat
+    parts = Path(rel).parts
+    try:
+        fd = dir_beneath(root, parts[:-1])
+    except (FileNotFoundError, UnsafePath):
+        return False
+    try:
+        if stat.S_ISDIR(os.stat(parts[-1], dir_fd=fd, follow_symlinks=False).st_mode):
+            return False
+        os.unlink(parts[-1], dir_fd=fd)
+        return True
+    except FileNotFoundError:
+        return False
+    finally:
+        os.close(fd)
+
+
+class _Capped:
+    """A file of a walk, readable up to what is left of the walk's byte budget (one byte more is a TreeTooBig)."""
+
+    def __init__(self, f, left: int, what: str):
+        self.f, self.left, self.used, self.what = f, left, 0, what
+
+    def read(self, n: int = -1) -> bytes:
+        room = self.left - self.used + 1
+        data = _read_upto(self.f, room) if n is None or n < 0 else self.f.read(min(n, room))
+        self.used += len(data)
+        if self.used > self.left:
+            raise TreeTooBig(f"{self.what}: past what is left of the walk's byte budget ({self.left} bytes)")
+        return data
+
+    def fileno(self) -> int:
+        return self.f.fileno()
+
+
+def walk_beneath(root: Path, rel: str = "", skip=lambda rel: False, links: bool = False, budget: Budget | None = None,
+                 check=None, others: bool = False):
+    """What is below the folder root/rel, opened through descriptors and nothing followed: (path, None) for a folder
+    (before what is in it), (path, file) for a plain file, open to read until the next item, and with `links`
+    (path, its target) for a link — the link itself, never what it points to. A pipe or a socket, and a link without
+    `links`, are passed over — with `others`, (path, its file type, an int: stat.S_IFMT) for anything else, so a
+    reader that must not miss one (the gate) sees it. skip(path) leaves out a path and everything below it; check(), if given, runs before
+    each entry (a deadline, an interrupt). Paths are relative to root/rel. One folder is open at a time, listed
+    whole and then closed — no recursion holding a descriptor per level — and the walk stays inside `budget`
+    (files and folders, bytes read from its files, depth), else TreeTooBig. How the unsandboxed supervisor reads a
+    whole folder an instance writes: an exam's copy, a trial's diff, the gate's snapshot. FileNotFoundError, or
+    UnsafePath when root/rel is not a folder reached without a link, is raised here, before anything is walked."""
+    budget = budget or Budget()
+    base = [str(p) for p in Path(rel).parts]
+    os.close(dir_beneath(root, base))
+    return _walk(root, base, skip, links, budget, check, others)
+
+
+def _walk(root: Path, base: list[str], skip, links: bool, budget: Budget, check, others: bool = False):
+    import errno
+    import stat
+    stack = [()]
+    while stack:
+        at = stack.pop()
+        try:
+            fd = dir_beneath(root, [*base, *at])
+        except (FileNotFoundError, UnsafePath):
+            if not at:
+                raise
+            continue   # removed, or swapped for a link, since it was listed: passed over
+        try:
+            for entry in sorted(os.listdir(fd)):
+                path = "/".join([*at, entry])
+                if skip(path):
+                    continue
+                if check:
+                    check()
+                try:
+                    mode = os.stat(entry, dir_fd=fd, follow_symlinks=False).st_mode
+                    if not (stat.S_ISDIR(mode) or stat.S_ISREG(mode) or (stat.S_ISLNK(mode) and links)):
+                        if others and not stat.S_ISLNK(mode):
+                            yield path, stat.S_IFMT(mode)
+                        continue
+                    budget.files -= 1
+                    if budget.files < 0:
+                        raise TreeTooBig(f"{root}: more files and folders than the walk may take")
+                    if stat.S_ISDIR(mode):
+                        if len(at) + 1 > budget.depth:
+                            raise TreeTooBig(f"{root}/{path}: more than {budget.depth} folders deep")
+                        yield path, None
+                        stack.append((*at, entry))
+                    elif stat.S_ISREG(mode):
+                        ffd = os.open(entry, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+                        with os.fdopen(ffd, "rb") as f:
+                            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                                continue
+                            capped = _Capped(f, budget.total, f"{root}/{path}")
+                            yield path, capped
+                            budget.total -= capped.used
+                    else:
+                        yield path, os.readlink(entry, dir_fd=fd)
+                except (FileNotFoundError, NotADirectoryError):
+                    continue   # removed, or swapped for something else, since it was listed: passed over
+                except OSError as e:
+                    if e.errno != errno.ELOOP:   # swapped for a link since it was listed: passed over
+                        raise
+        finally:
+            os.close(fd)
+
+
+def read_tree(root: Path, rel: str = "", skip=lambda rel: False, budget: Budget | None = None) -> dict[str, bytes]:
+    """{path: bytes} of every plain file below root/rel (walk_beneath: nothing followed, inside the budget)."""
+    return {path: f.read() for path, f in walk_beneath(root, rel, skip, budget=budget) if f is not None}
+
+
+def reserved(root: Path, rel: str, names) -> bool:
+    """Whether root/rel is one of root's top-level `names` (secrets/, .git, logs/ …) or below one — decided by what
+    it is, not how it is spelt: the volume is case-insensitive (`Secrets/secrets.json` opens `secrets/secrets.json`) and
+    folds Unicode, so the first component is compared case-folded, and by device and inode with each reserved entry
+    there (lstat: no link followed)."""
+    parts = Path(rel).parts
+    if not parts:
+        return False
+    if parts[0].casefold() in {n.casefold() for n in names}:
+        return True
+    try:
+        st = os.lstat(Path(root) / parts[0])
+    except OSError:
+        return False
+    for n in names:
+        try:
+            r = os.lstat(Path(root) / n)
+        except OSError:
+            continue
+        if (r.st_dev, r.st_ino) == (st.st_dev, st.st_ino):
+            return True
+    return False
+
+
+def link_stays_inside(path: str, target: str) -> bool:
+    """Whether a link at `path` (relative to the top of a copy) to `target` resolves inside the copy whatever links lie
+    on its way: relative, its ".." all first and no more of them than the link's own folder is deep — the copy's
+    folders are real ones, so leading ".." climb exactly that far — and then only names, each a real folder of the
+    copy or a link kept by this same rule. A ".." after a name could climb from wherever a link there points."""
+    if not target or target.startswith("/"):
+        return False
+    parts = [p for p in target.split("/") if p not in ("", ".")]
+    up = 0
+    while up < len(parts) and parts[up] == "..":
+        up += 1
+    return ".." not in parts[up:] and up <= path.count("/")
+
+
+def copy_beneath(root: Path, dest: Path, skip=lambda rel: False, rel: str = "", links: bool = False,
+                 budget: Budget | None = None, check=None) -> int:
+    """The folders and plain files below root/rel copied to the new folder dest (mode and times kept), read through
+    walk_beneath (nothing followed, inside the budget: SHAFT_COPY_MAX_GB in all by default) and written through
+    descriptors too: each folder of the copy is made and reopened through its parent's descriptor, each file created
+    with O_EXCL and O_NOFOLLOW, so a folder of the copy swapped for a link while it is filled (a process the copied
+    code left running) is refused, never written through. With `links`, a link that stays inside the copy
+    (link_stays_inside) is copied as the link it is; any other link is left out. No link is ever read through.
+    Returns the files copied; a failure leaves the partial copy for the caller to remove."""
+    import shutil
+    import stat
+    budget = budget or Budget(total=int(COPY_MAX_GB * 2**30))
+    walked = walk_beneath(root, rel, skip, links, budget, check)   # FileNotFoundError or UnsafePath before dest is made
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    os.mkdir(dest, 0o755)                                          # new: FileExistsError for a folder already there
+    n, at, fd = 0, None, None
+    try:
+        for path, item in walked:
+            parts = path.split("/")
+            if tuple(parts[:-1]) != at:
+                if fd is not None:
+                    os.close(fd)
+                fd = None
+                fd, at = dir_beneath(dest, parts[:-1]), tuple(parts[:-1])
+            if item is None:
+                os.mkdir(parts[-1], 0o755, dir_fd=fd)
+            elif isinstance(item, str):
+                if link_stays_inside(path, item):
+                    os.symlink(item, parts[-1], dir_fd=fd)
+            else:
+                st = os.fstat(item.fileno())
+                out = os.open(parts[-1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                              stat.S_IMODE(st.st_mode) | 0o200, dir_fd=fd)
+                with os.fdopen(out, "wb") as o:
+                    shutil.copyfileobj(item, o)
+                    os.fchmod(o.fileno(), stat.S_IMODE(st.st_mode))
+                    os.utime(o.fileno(), ns=(st.st_atime_ns, st.st_mtime_ns))
+                n += 1
+    finally:
+        if fd is not None:
+            os.close(fd)
+    return n
+
+
+def safe_write(root: Path, rel: str, text: str, append: bool = False) -> Path:
+    """Text written, or appended, to root/rel through descriptors (open_beneath), as safe_write_bytes does: a
+    check of the path followed by an open by name let an instance swap a link in between and aim the write — an
+    inbox delivery, a journal note — anywhere (Codex review B2, 2026-10-24)."""
+    path = contained(root, *Path(rel).parts)       # the clear refusal for a link already there
+    Path(root).mkdir(parents=True, exist_ok=True)  # the folder itself is the supervisor's choice
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_APPEND if append else os.O_TRUNC)
+    with os.fdopen(_open_file_beneath(root, Path(rel).parts, flags, make_dirs=True), "a" if append else "w") as f:
+        f.write(text)
+    return path
 
 
 def safe_write_bytes(root: Path, rel: str, data: bytes, exclusive: bool = False) -> Path:
@@ -689,22 +1098,26 @@ def safe_write_bytes(root: Path, rel: str, data: bytes, exclusive: bool = False)
     path = contained(root, *Path(rel).parts)       # the clear refusal for a link already there
     Path(root).mkdir(parents=True, exist_ok=True)  # the folder itself is the supervisor's choice (an inbox, an instance)
     flags = os.O_WRONLY | os.O_CREAT | (os.O_EXCL if exclusive else os.O_TRUNC)   # exclusive: FileExistsError
-    fd = open_beneath(root, Path(rel).parts, flags, 0o644, make_dirs=True)
-    with os.fdopen(fd, "wb") as f:
+    with os.fdopen(_open_file_beneath(root, Path(rel).parts, flags, make_dirs=True), "wb") as f:
         f.write(data)
     return path
 
 
 def safe_mkdir(root: Path, rel: str) -> Path:
     path = contained(root, *Path(rel).parts)
-    path.mkdir(parents=True, exist_ok=True)
-    return contained(root, *Path(rel).parts)
+    Path(root).mkdir(parents=True, exist_ok=True)
+    os.close(dir_beneath(root, Path(rel).parts, make=True))   # each folder made through its parent's descriptor
+    return path
 
 
 def journal_note(root: Path, title: str, body: str) -> None:
-    """Supervisor's own minimal journal append (deliberately not the agent's code)."""
-    safe_write(root, "memory/journal.md",
-               f"\n---\n## {datetime.now():%Y-%m-%d %H:%M} — {title}\n\n{body.strip()}\n", append=True)
+    """Supervisor's own minimal journal append (deliberately not the agent's code). A journal the instance swapped
+    for a link (or whose folder it did) gets no note — never one written through the link — and the log says so."""
+    try:
+        safe_write(root, "memory/journal.md",
+                   f"\n---\n## {datetime.now():%Y-%m-%d %H:%M} — {title}\n\n{body.strip()}\n", append=True)
+    except UnsafePath as e:
+        log(f"{Path(root).name}: journal note {title!r} NOT written: {e}")
 
 
 def not_mind() -> list[str]:
@@ -724,8 +1137,112 @@ def add_all_but_mind(root: Path, project: Path | None = None) -> None:
                project=project)
 
 
+def err_text(e: BaseException) -> str:
+    """A failed command's stderr as text, whether it ran in text mode (str) or not (bytes): calling .decode() on a
+    str raised AttributeError in place of the reason (Codex on 9bd175e)."""
+    err = getattr(e, "stderr", None) or ""
+    return (err.decode(errors="replace") if isinstance(err, bytes) else str(err)).strip()
+
+
+def _commit_gated(name: str, root: Path, project: Path | None, msg: str, others: list[str], code: list[str],
+                  gated: dict, who: tuple[str, str] | None = None, parents: tuple[str, ...] = (),
+                  from_index: bool = False) -> list[str]:
+    """Commit `code` paths with exactly the bytes in `gated` (what the gate checked; a path missing there is deleted)
+    and `others` as the working tree has them, on top of HEAD, through a separate index: the bytes go into the
+    object store (hash-object -w) and the index (update-index --cacheinfo, --force-remove), and nothing is read
+    from the working tree for code. `git add` read it at the moment of the commit, so a write after the gate's
+    snapshot was what got committed, and committed code is approved code (the coordinator on 8c84f11). `who`: the
+    author (name, email), the instance's own by default; `parents`: more parents after HEAD (a merge); `from_index`:
+    start from the worktree's index as staged (a merge being built), not from HEAD. Returns the
+    paths the commit changed; the real index is brought to it for them."""
+    import stat
+    import tempfile
+    fd, index = tempfile.mkstemp(prefix="shaft-index-")
+    os.close(fd)
+    os.unlink(index)                                    # git makes it
+    env = {"GIT_INDEX_FILE": index}
+
+    def wt(*a, **k):
+        return git_wt(root, *a, project=project, **k)
+    try:
+        head = wt("rev-parse", "--verify", "-q", "HEAD", check=False).stdout.strip()
+        if from_index:
+            import shutil
+            shutil.copyfile(wt("rev-parse", "--path-format=absolute", "--git-path", "index").stdout.strip(), index)
+        elif head:
+            wt("read-tree", head, env=env)
+        else:
+            wt("read-tree", "--empty", env=env)
+        if others:
+            wt("add", "-A", "--", *others, env=env)
+        modes = {}   # each file's mode as staged (a birth: the parent it was taken from), else as committed
+        listing = (wt("ls-files", "-s", "-z", "--", *code, env=env) if from_index
+                   else wt("ls-tree", "-z", head, "--", *code) if head else None) if code else None
+        for entry in (listing.stdout.split("\0") if listing else []):
+            meta, _, path = entry.partition("\t")
+            if path:
+                modes[path] = meta.split()[0]
+        for path in code:
+            data = gated.get(path)
+            if isinstance(data, bytes):
+                oid = wt("hash-object", "-w", "--stdin", input=data, text=False).stdout.decode().strip()
+                mode = modes.get(path)
+                if mode not in ("100644", "100755"):
+                    try:
+                        mode = "100755" if os.lstat(root / path).st_mode & stat.S_IXUSR else "100644"
+                    except OSError:
+                        mode = "100644"
+                wt("update-index", "--add", "--cacheinfo", f"{mode},{oid},{path}", env=env)
+            else:
+                wt("update-index", "--force-remove", "--", path, env=env)
+        tree = wt("write-tree", env=env).stdout.strip()
+    finally:
+        try:
+            os.unlink(index)
+        except FileNotFoundError:
+            pass
+    if head and not parents and tree == wt("rev-parse", f"{head}^{{tree}}").stdout.strip():
+        return []
+    author, email = who or (f"SHAFT/{name}", f"{name}@shaft.localhost")
+    commit = wt("-c", f"user.name={author}", "-c", f"user.email={email}", "commit-tree", tree,
+                *(["-p", head] if head else []), *[a for p in parents for a in ("-p", p)], "-m", msg).stdout.strip()
+    wt("update-ref", "-m", msg.splitlines()[0], "HEAD", commit, *([head] if head else []))
+    changed = [p for p in wt("diff-tree", "-r", "--name-only", "-z", "--no-commit-id", "--root", *([head] if head
+                                                                                                    else []),
+                             commit).stdout.split("\0") if p]
+    def entries(listing: str, field: int) -> dict[str, str]:   # the object id: "mode oid stage" or "mode type oid"
+        out = {}
+        for entry in listing.split("\0"):
+            meta, _, path = entry.partition("\t")
+            if path:
+                out[path] = meta.split()[field]
+        return out
+    if changed:
+        staged = entries(wt("ls-files", "-s", "-z", "--", *changed).stdout, 1)
+        was = entries(wt("ls-tree", "-r", "-z", head, "--", *changed).stdout, 2) if head else {}
+        now = entries(wt("ls-tree", "-r", "-z", commit, "--", *changed).stdout, 2)
+        theirs = [p for p in changed if p in staged and staged[p] not in (was.get(p), now.get(p))]
+        if theirs:   # staged by someone else (the operator): their index entry stays; the commit holds the gated bytes
+            log(f"{name}: {', '.join(theirs)} staged by someone else — left staged as they were; committed as checked")
+        if (ours := [p for p in changed if p not in theirs]):
+            wt("reset", "-q", "--", *ours, check=False)   # the real index: these paths as just committed
+    return changed
+
+
+def changed_vs_head(root: Path, project: Path | None = None) -> list[str]:
+    """Every path whose content differs from the worktree's HEAD — tracked (staged or not) and untracked, not
+    ignored — but the mind paths and the supervisor's copy of the docs (DOCS_COPY)."""
+    def names(*a):
+        return [os.fsdecode(e) for e in git_wt(root, *a, project=project, text=False).stdout.split(b"\0") if e]
+    head = git_wt(root, "rev-parse", "--verify", "-q", "HEAD", project=project, check=False).stdout.strip()
+    paths = set(names("ls-files", "-z", "--others", "--exclude-standard"))
+    if head:
+        paths |= set(names("diff", "--name-only", "-z", "--no-renames", head))
+    return sorted(p for p in paths if Path(p).parts[0] not in (*MIND_PATHS, DOCS_COPY))
+
+
 def commit_state(name: str, kind: str, kept_code: list[str], root: Path | None = None,
-                 project: Path | None = None, note: str = "") -> bool:
+                 project: Path | None = None, note: str = "", gated: dict | None = None) -> bool:
     """Commit the instance's mind to its mind store, then its skills and the code changes that passed the gate
     to its branch — the same message on both sides. A mind path is never staged on the branch, whatever its
     .gitignore says.
@@ -733,6 +1250,8 @@ def commit_state(name: str, kind: str, kept_code: list[str], root: Path | None =
     Only files git actually staged are named in the branch commit: an empty directory (skills/ on a young
     instance) is unknown to git and would fail as a pathspec. Returns False — after logging git's own error —
     if either commit failed; the mind is committed first, so a failure there leaves the branch untouched too.
+    `gated` (the gate's snapshot): kept code paths are committed with those bytes, never the working tree's
+    (_commit_gated).
     """
     from . import mind
     root = root or INSTANCES / name
@@ -747,15 +1266,19 @@ def commit_state(name: str, kind: str, kept_code: list[str], root: Path | None =
         if note:
             msg += "\n\n" + note
         minded = mind.commit(name, msg, root, project)
-        paths = [p for p in SKILL_PATHS if (root / p).exists()] + kept_code
+        from .gate import CODE_PATHS
+        code = [p for p in kept_code if Path(p).parts[0] in CODE_PATHS] if gated is not None else []
+        paths = [p for p in SKILL_PATHS if (root / p).exists()] + [p for p in kept_code if p not in code]
         staged = []
-        if paths:
+        if gated is not None:                    # committed by _commit_gated itself: never `commit -- paths`, which
+            staged = _commit_gated(name, root, project, msg, paths, code, gated)   # re-reads the working tree
+        elif paths:
             wt("add", "-A", "--", *paths)
             staged = wt("diff", "--cached", "--name-only", "-z", "--", *paths).stdout.split("\0")
             staged = [p for p in staged if p and Path(p).parts[0] not in MIND_PATHS]
-        if staged:
-            wt("-c", f"user.name=SHAFT/{name}", "-c", f"user.email={name}@shaft.localhost",
-               "commit", "-q", "-m", msg, "--", *staged)
+            if staged:
+                wt("-c", f"user.name=SHAFT/{name}", "-c", f"user.email={name}@shaft.localhost",
+                   "commit", "-q", "-m", msg, "--", *staged)
     except (subprocess.CalledProcessError, mind.MindError) as e:
         detail = (getattr(e, "stderr", None) or getattr(e, "stdout", None) or str(e)).strip()
         log(f"{name}: COMMIT FAILED after {kind}: {detail}")

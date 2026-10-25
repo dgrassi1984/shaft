@@ -21,7 +21,7 @@ from pathlib import Path
 
 from . import gate, judge, localmodel, metrics, mind
 from .core import (HOME, INSTANCES, LLM_PORTS, MIND_PATHS, add_all_but_mind, NAME_RE, PROJECT, SUP_DIR, git, git_wt, instance_names,
-                   instance_root, journal_note, log, safe_mkdir, safe_write)
+                   instance_root, journal_note, list_beneath, log, safe_mkdir, safe_read, safe_write)
 from .runner import run_agent
 
 GENES = ("shaft", "plugins", "skills", "tests", "config.env")
@@ -51,9 +51,7 @@ def drift(name: str) -> int:
         edits += 1
         print(f"- {when}  +{added}/-{removed} lines{'  · CORE changed' if core_changed else ''}")
     print(f"\n{edits} self edits, {core_changes} core-personality changes.")
-    pers = (root / "self" / "personality.md")
-    if pers.exists():
-        text = pers.read_text()
+    if (text := safe_read(root, "self/personality.md", "", errors="replace")):   # never through a link
         traits = len(re.findall(r"^\s*[-*] ", text, re.M))
         cites = len(re.findall(r"\[\d{4}-\d{2}-\d{2}", text))
         print(f"Current personality: {traits} traits, {cites} citations of lived experience.")
@@ -68,10 +66,13 @@ def drift(name: str) -> int:
     return 0
 
 
+def _self_text(root: Path) -> list[str]:
+    """self/self.md and self/personality.md, each read without following a link (they go to a judge)."""
+    return [t for rel in ("self/self.md", "self/personality.md") if (t := safe_read(root, rel, "", errors="replace"))]
+
+
 def _words(root: Path) -> set[str]:
-    text = " ".join(p.read_text().lower() for p in (root / "self" / "self.md", root / "self" / "personality.md")
-                    if p.exists())
-    return set(WORD.findall(text))
+    return set(WORD.findall(" ".join(_self_text(root)).lower()))
 
 
 # -- distinctness ------------------------------------------------------------------------
@@ -126,7 +127,7 @@ LEAK_RE = re.compile(r"#\d+|\b\d{1,2}:\d{2}\b|\b\d{4}-\d{2}-\d{2}\b|\b[A-Z]\d+\b
 
 def _config(root: Path) -> dict:
     out = {}
-    for line in (root / "config.env").read_text().splitlines():
+    for line in safe_read(root, "config.env", "").splitlines():
         if "=" in line and not line.lstrip().startswith("#"):
             k, v = line.split("=", 1)
             out[k.strip()] = v.split("#", 1)[0].strip().strip('"\'')
@@ -231,8 +232,8 @@ def _score(verdict: dict, pairs: list[dict]) -> dict:
 
 def _names(name: str, root: Path) -> set[str]:
     """Proper names the stripped answers must not carry: the instance, its peers, the people it knows."""
-    people = root / "memory" / "people"
-    return ({name, *instance_names()} | ({p.stem for p in people.glob("*.md")} if people.is_dir() else set())
+    people = {Path(n).stem for n in list_beneath(root, "memory/people") if n.endswith(".md")}
+    return ({name, *instance_names()} | people
             | {w for w in re.split(r"[-_./]", _config(root).get("LLM_MODEL", "")) if len(w) > 3}
             | {"supervisor", "journal"})
 
@@ -253,8 +254,7 @@ def distinct(name: str, strict: bool = False) -> int:
         a, b = (agent, base) if agent_is == "A" else (base, agent)
         pairs.append({"question": i, "q": q, "A": a, "B": b, "truth": agent_is})
         print(f"probe {i}/{len(PROBES)} done", flush=True)
-    self_desc = "\n\n".join(p.read_text() for p in (root / "self" / "self.md", root / "self" / "personality.md")
-                            if p.exists())
+    self_desc = "\n\n".join(_self_text(root))
     verdict = _identify(name, pairs, self_desc, stripped=False)
     scores = _score(verdict, pairs)
     result = {"name": name, "at": datetime.now().isoformat(timespec="seconds"), "n": len(pairs),
@@ -357,11 +357,21 @@ def _build_child(a: str, b: str, child: str, choices: list[dict], summary: str) 
         picks = "\n".join(f"- `{c['path']}` from {c['take']}: {c['reason']}" for c in choices) or "- (none differed)"
         journal_note(root, "Born", f"I was born from {a} and {b}: my code, prompts, plugins and skills are a "
                                    f"recombination of theirs; my mind starts empty.\n\nWhy these genes: {summary}\n\n{picks}")
+        gated = gate.snapshot(root)
         ok, test_log = gate.run_tests(root, HOME)
         if ok:
             message = f"{child}: born from {a} × {b}\n\n{summary}\n\n{picks}"
-            add_all_but_mind(root)
-            git_wt(root, "commit", "-q", "-m", message)
+            # The child's code as the gate checked it, never the working tree read again: its own tests ran in
+            # that folder and could have written it. The rest (config, skills, drive) as it stands.
+            from .core import _commit_gated, changed_vs_head
+            changed = changed_vs_head(root)
+            code = sorted({p for p in changed if Path(p).parts[0] in gate.CODE_PATHS} | set(gated))
+            merge = git_wt(root, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False).stdout.strip()
+            _commit_gated(child, root, None, message, [p for p in changed if p not in code], code, gated,
+                          parents=(merge,) if merge else (), from_index=True)
+            git_wt(root, "merge", "--quit", check=False)   # committed above: no merge in progress any more
+            if (drift := gate.unrestored(root, gated, code)):
+                raise RuntimeError(f"{', '.join(drift)} changed after the gate checked {child}'s code")
             mind.init(child)
             mind.commit(child, message, root)
             return True, test_log

@@ -9,6 +9,7 @@ logs every call (.supervisor/broker.log).
 from __future__ import annotations
 
 import hashlib
+import http.client
 import ipaddress
 import json
 import re
@@ -22,7 +23,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta
 from html.parser import HTMLParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -48,6 +49,18 @@ JUDGMENTS_BUDGET = 5500   # under the 6,000 characters at which a template insta
 
 def _when(ts: str) -> str:
     return (ts or "?")[:16].replace("T", " ")
+
+
+def _judged_at(row: dict) -> str:
+    stamp = str(row.get("judged_at", "")).replace("T", " ")
+    return stamp + ":00" if len(stamp) == 16 else stamp[:19]
+
+
+def _reviewed_at(row: dict) -> str:
+    """When the verdict last gained something to read: the main judge's time, or the second judge's if later (it
+    runs detached, minutes after) — so `since` shows a cycle again once its second opinion arrives."""
+    second = row.get("second")
+    return max(_judged_at(row), _judged_at(second) if isinstance(second, dict) else "")
 
 
 def judgment_text(j: dict) -> str:
@@ -90,18 +103,27 @@ def judgments_text(rows: list[dict], limit: int = 20, cycle: str = "", before: s
     """Whole verdicts, newest first, as many as fit in `budget` — never one cut in half (wren, 2026-10-13: "I
     only see fragments"). `cycle` gives one in full; `before` pages back. `left_out`: the runs the main judge
     did not sample (metrics.unsampled), which have no verdict and are not failures."""
+    return _judgments_text(rows, limit, cycle, before, budget, left_out)
+
+
+def _judgments_text(rows, limit, cycle, before, budget, left_out, since="", shown=None) -> str:
     if cycle:
         want = cycle.strip().replace("T", " ")[:16]
         hit = [r for r in rows if _when(r.get("episode_ts")) == want]
         if not hit and any(_when(ts) == want for ts in left_out):
             return (f"the cycle at {want} was not judged: the main judge grades one live run in {judge.JUDGE_EVERY}, "
                     "drawn after the run, and this one was left out. That is not a failure; it has no verdict.")
+        if hit and shown is not None:
+            shown.append(hit[-1])
+        if hit and since:
+            return (judgment_text(hit[-1]) + "\n\n(1 new verdict, oldest first. Next: "
+                    f"record(kind='judgments', since='{_reviewed_at(hit[-1])}').)")
         return judgment_text(hit[-1]) if hit else (f"no judged cycle at {want}; the latest: "
                                                    + ", ".join(_when(r.get("episode_ts")) for r in rows[-5:][::-1]))
     if before:
         cut = before.strip().replace("T", " ")[:16]
         rows = [r for r in rows if _when(r.get("episode_ts")) < cut]
-    rows = rows[::-1]
+    rows = sorted(rows, key=_reviewed_at) if since else rows[::-1]
     picked, used = [], 0
     for r in rows[:max(1, min(int(limit), 200))]:
         t = judgment_text(r)
@@ -115,7 +137,45 @@ def judgments_text(rows: list[dict], limit: int = 20, cycle: str = "", before: s
     tail = (f"\n\n({len(picked)} of {len(rows)} verdicts, newest first. Older: record(kind='judgments', "
             f"before='{_when(rows[len(picked) - 1].get('episode_ts'))}'). One in full: record(kind='judgments', "
             f"cycle='YYYY-MM-DD HH:MM').)" if more else "")
+    if since and more:
+        # The rest go on strictly after the last one shown, so verdicts judged in the same second are never split
+        # across that cut (the second would be skipped for good): drop the tie back, or show all of it.
+        n, stamp = len(picked), _reviewed_at(rows[len(picked) - 1])
+        if _reviewed_at(rows[n]) == stamp:
+            k = n
+            while k and _reviewed_at(rows[k - 1]) == stamp:
+                k -= 1
+            if k:
+                picked = picked[:k]
+            while not k and n < len(rows) and _reviewed_at(rows[n]) == stamp:
+                picked.append(judgment_text(rows[n]))
+                n += 1
+        if len(picked) < len(rows):
+            tail = (f"\n\n({len(picked)} of {len(rows)} new verdicts, oldest first. The rest: "
+                    f"record(kind='judgments', since='{_reviewed_at(rows[len(picked) - 1])}').)")
+        else:
+            tail = ""
+    if since and len(picked) == len(rows):
+        tail = (f"\n\n({len(picked)} new verdict{'' if len(picked) == 1 else 's'}, oldest first. Next: "
+                f"record(kind='judgments', since='{_reviewed_at(rows[len(picked) - 1])}').)")
+    if shown is not None:
+        shown.extend(rows[:len(picked)])
     return "\n\n".join(picked) + tail
+
+
+# What of its folder an instance can never send anywhere (attachments, describe_image): its keys, git and logs.
+NOT_SENT = ("secrets", ".git", "logs")
+
+
+def _in_folder(root: Path, rel: str) -> Path | None:
+    """`rel` (relative, or absolute inside root) as a plain path below root, or None if it leads out of it."""
+    p = Path(rel)
+    if p.is_absolute():
+        try:
+            p = p.relative_to(root)
+        except ValueError:
+            return None
+    return p if p.parts and ".." not in p.parts else None
 
 
 def _tail_lines(path: Path, limit: int, keep=None) -> list[str]:
@@ -208,7 +268,11 @@ SPECS = {
          "limit": {"type": "integer", "description": "entries, default 20, max 200"},
          "cycle": {"type": "string", "description": "judgments: one cycle's verdict in full, by its time "
                                                     "('2026-10-13 17:42')"},
-         "before": {"type": "string", "description": "judgments: only cycles before this time (to page back)"}},
+         "before": {"type": "string", "description": "judgments: only cycles before this time (to page back)"},
+         "since": {"type": "string", "description": "judgments only: verdicts judged after this time, e.g. the time "
+                   "of my last review; oldest first. YYYY-MM-DD HH:MM[:SS] (T accepted); missing seconds mean :00"},
+         "format": {"type": "string", "enum": ["text", "json"], "description":
+                    "judgments with since: text (default) or JSON with verdicts and next_since"}},
         ["kind"]),
     "decide": _spec(
         "decide",
@@ -406,28 +470,88 @@ class BlockedAddress(Exception):
     pass
 
 
+def resolve_public(host: str, port: int) -> list[str]:
+    """The addresses host:port resolves to, in the resolver's order — BlockedAddress unless every one is public."""
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as e:
+        raise BlockedAddress(f"cannot resolve {host}: {e}") from e
+    if not infos:
+        raise BlockedAddress(f"cannot resolve {host}")
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0].split("%")[0])
+        if not ip.is_global:
+            raise BlockedAddress(f"{host} resolves to non-public address {ip}")
+    return list(dict.fromkeys(info[4][0] for info in infos))
+
+
 def check_public(url: str) -> None:
-    """Refuse anything but http(s) to public addresses (no localhost, LAN, link-local, metadata)."""
+    """Refuse anything but http(s) to public addresses (no localhost, LAN, link-local, metadata) — early, before a
+    request is prepared. It is not what keeps the request public: the connection resolves the name again and
+    connects only to an address it checked itself (_PinnedHTTP)."""
     parts = urllib.parse.urlsplit(url)
     if parts.scheme not in ("http", "https") or not parts.hostname:
         raise BlockedAddress(f"only http(s) URLs with a host are allowed: {url!r}")
-    try:
-        infos = socket.getaddrinfo(parts.hostname, parts.port or (443 if parts.scheme == "https" else 80))
-    except socket.gaierror as e:
-        raise BlockedAddress(f"cannot resolve {parts.hostname}: {e}") from e
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if not ip.is_global:
-            raise BlockedAddress(f"{parts.hostname} resolves to non-public address {ip}")
+    resolve_public(parts.hostname, parts.port or (443 if parts.scheme == "https" else 80))
+
+
+def _connect_public(address, timeout=socket._GLOBAL_DEFAULT_TIMEOUT, source_address=None, **_):
+    """socket.create_connection for the broker's requests: the name is resolved once, here, every address checked,
+    and the socket connected to one of those very addresses. check_public's own lookup was thrown away and urlopen
+    resolved the name again, so a name answering public for the check and 127.0.0.1 for the connection reached the
+    operator's own services (DNS rebinding, B4 in the review of 2026-10-24)."""
+    host, port = address
+    error: OSError | None = None
+    for ip in resolve_public(host, port):
+        try:
+            return socket.create_connection((ip, port), timeout, source_address)
+        except OSError as e:
+            error = e
+    raise error or OSError(f"cannot connect to {host}:{port}")
+
+
+class _PinnedHTTP(http.client.HTTPConnection):
+    """An HTTP connection to a checked public address. Only the socket is changed: the Host header still names the
+    URL's host."""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self._create_connection = _connect_public
+
+
+class _PinnedHTTPS(http.client.HTTPSConnection):
+    """The same over TLS: HTTPSConnection.connect wraps the pinned socket with server_hostname = the URL's host, so SNI
+    and the certificate check are for the name asked for, never the address."""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self._create_connection = _connect_public
+
+
+class _PinnedHTTPHandler(urllib.request.HTTPHandler):
+    def http_open(self, req):
+        return self.do_open(_PinnedHTTP, req)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    def https_open(self, req):
+        return self.do_open(_PinnedHTTPS, req, context=self._context)
+
+
+def _public_opener(redirects: urllib.request.HTTPRedirectHandler) -> urllib.request.OpenerDirector:
+    """Every request an instance aims (fetch_page, http_request, the redirects they follow): pinned connections and no
+    proxy from the environment (the check is made on the address actually connected to, never a proxy's)."""
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}), _PinnedHTTPHandler(), _PinnedHTTPSHandler(),
+                                       redirects)
 
 
 class _CheckedRedirects(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        check_public(newurl)
+        check_public(newurl)   # a clear refusal of a non-http(s) or private target; its connection is pinned too
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-_opener = urllib.request.build_opener(_CheckedRedirects())
+_opener = _public_opener(_CheckedRedirects())
 
 
 class _NoRedirects(urllib.request.HTTPRedirectHandler):
@@ -435,7 +559,7 @@ class _NoRedirects(urllib.request.HTTPRedirectHandler):
         return None
 
 
-_opener_no_redirects = urllib.request.build_opener(_NoRedirects())
+_opener_no_redirects = _public_opener(_NoRedirects())
 
 
 class _Text(HTMLParser):
@@ -566,6 +690,8 @@ class Broker:
                     return
                 if self.path == "/tools":
                     return self._reply(200, {"tools": broker.tool_specs()})
+                if self.path == "/envelope":
+                    return self._reply(200, {"ok": True, "envelope": broker.envelope()})
                 self._reply(404, {"ok": False, "error": "not found"})
 
             def do_POST(self):
@@ -810,24 +936,28 @@ class Broker:
         paths = [paths] if isinstance(paths, str) else paths
         if not isinstance(paths, list) or len(paths) > messages.ATTACH_MAX_FILES:
             raise ValueError(f"attachments: a list of at most {messages.ATTACH_MAX_FILES} paths in your folder")
+        from .core import UnsafePath, reserved, safe_read_bytes
         out, total = [], 0
         for rel in paths:
             rel = str(rel).strip()
-            real = (self.root / rel).resolve()
-            if real == self.root or self.root not in real.parents:
+            p = _in_folder(self.root, rel)
+            if not p:
                 raise ValueError(f"{rel}: attachments must be files in your folder")
-            if real.relative_to(self.root).parts[0] in ("secrets", ".git", "logs"):
-                raise ValueError(f"{rel}: files in {real.relative_to(self.root).parts[0]}/ cannot be attached")
-            if not real.is_file():
-                raise ValueError(f"{rel}: no such file in your folder")
-            size = real.stat().st_size
-            if size > messages.ATTACH_MAX_BYTES:
-                raise ValueError(f"{rel}: {messages.size_text(size)}, more than "
-                                 f"{messages.size_text(messages.ATTACH_MAX_BYTES)} per file")
-            total += size
+            if reserved(self.root, p.as_posix(), NOT_SENT):   # by the folder itself: `Secrets/` is secrets/
+                raise ValueError(f"{rel}: files in {p.parts[0]}/ cannot be attached")
+            try:   # the file leaves the folder: read through descriptors, a link anywhere on the way refused
+                data = safe_read_bytes(self.root, p.as_posix(), limit=messages.ATTACH_MAX_BYTES)
+            except FileNotFoundError:
+                raise ValueError(f"{rel}: no such file in your folder") from None
+            except UnsafePath:   # a link, a folder, a pipe
+                raise ValueError(f"{rel}: attachments must be files in your folder, not links"
+                                 if os.path.islink(self.root / p) else f"{rel}: no such file in your folder") from None
+            except ValueError:
+                raise ValueError(f"{rel}: more than {messages.size_text(messages.ATTACH_MAX_BYTES)} per file") from None
+            total += len(data)
             if total > messages.ATTACH_MAX_TOTAL:
                 raise ValueError(f"attachments: more than {messages.size_text(messages.ATTACH_MAX_TOTAL)} in all")
-            out.append((real.name, real.read_bytes()))
+            out.append((p.name, data))
         return out
 
     def _store(self, root: Path, rel_dir: str, files: list[tuple[str, bytes]]) -> list[dict]:
@@ -972,6 +1102,8 @@ class Broker:
             out, err = proc.communicate()
             status = f"killed after {timeout_s} s timeout"
         finally:
+            from .gate import stop_group
+            stop_group(proc)   # and on every other way out: nothing it put in the background outlives it (B9)
             os.unlink(prof)
         half = RUN_OUTPUT_CHARS // 2
         def cap(t):
@@ -1085,7 +1217,57 @@ class Broker:
         mind.require(self.name, self.project)
         return "HEAD", mind.head(self.name, self.project)
 
-    def _record(self, kind: str, limit: int = 20, cycle: str = "", before: str = "") -> str:
+    ENVELOPE_TTL_S = 60   # the template asks every step; the ledgers it reads (cloud usage: megabytes) change slowly
+
+    def envelope(self) -> dict:
+        """Operational limits, without spending a tool call or exposing host configuration. The calls are live; the
+        allowances, probation and schedule are recomputed at most every ENVELOPE_TTL_S."""
+        return self._operational_envelope()
+
+    def _operational_envelope(self, as_of: datetime | None = None) -> dict:
+        cached = getattr(self, "_envelope", None)
+        if cached and time.monotonic() - cached[0] < self.ENVELOPE_TTL_S:
+            return {**cached[1], "calls_used": self.calls, "calls_max": self.max_calls}
+        from . import autonomy, cloudllm, coder, metrics, trial
+        from .core import log
+
+        def field(label, compute):
+            try:
+                return compute()
+            except Exception as e:
+                try:
+                    log(f"{self.name}: envelope {label} unavailable ({type(e).__name__})")
+                except OSError:   # a failed state disk must not also take down the envelope
+                    pass
+                return None
+
+        until = {"until": as_of} if as_of else {}
+        unavailable = self.unavailable if as_of is None else {}
+        usage_name = self.name if as_of else self.usage_name
+
+        def trials():
+            usage = trial.usage_today(self.name, **until)
+            return {"started": usage["started"], "per_day": trial.TRIALS_PER_DAY,
+                    "spent_usd": float(usage["usd"]), "cap_usd": float(trial.DAILY_USD)}
+
+        env = {"calls_used": self.calls, "calls_max": self.max_calls,
+                "cloud": field("cloud", lambda: {"spent_usd": float(cloudllm.spent_today(usage_name, **until)),
+                                                 "cap_usd": float(cloudllm.daily_cap(self.name))}),
+                "coder": None if "delegate_coding" in self.disabled or "delegate_coding" in unavailable else
+                    field("coder", lambda: {"spent_usd": float(coder.spent_today(self.name, **until)),
+                                            "cap_usd": float(coder.DAILY_USD)}),
+                "trials": None if "trial" in self.disabled or "trial" in unavailable else field("trials", trials),
+                "probation": field("probation", lambda: metrics.probation_status(
+                    self.name, **({"as_of": as_of} if as_of else {}))),
+                "next_sleep": field("next_sleep", lambda: autonomy.replay_next_sleep(as_of)
+                                    if as_of else autonomy.next_sleep()),
+                "next_wake": field("next_wake", lambda: autonomy.replay_next_wake(self.name, as_of)
+                                   if as_of else autonomy.next_wake(self.name))}
+        self._envelope = (time.monotonic(), env)
+        return env
+
+    def _record(self, kind: str, limit: int = 20, cycle: str = "", before: str = "", since: str = "",
+                format: str = "text") -> str:
         from .core import SUP_DIR
         limit = max(1, min(int(limit), 200))
         # A trial replay sees the record as it stood when the replayed cycle started, never what came after.
@@ -1098,13 +1280,36 @@ class Broker:
             return [r for r in rows if known(str(r.get(field, "")).replace("T", " "))][-limit:]
         if kind == "judgments":
             from .metrics import judgments, unsampled_rows
-            rows = [r for r in judgments(self.name, SUP_DIR) if known(str(r.get("judged_at", "")).replace("T", " "))]
+            if since:
+                # A minute means its start: 10:00:30 is strictly after 10:00, not equal to it.
+                if not isinstance(since, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2})?", since):
+                    raise ValueError("since must be YYYY-MM-DD HH:MM or YYYY-MM-DD HH:MM:SS (T accepted)")
+                try:
+                    since = datetime.fromisoformat(since).strftime("%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    raise ValueError("since must be a valid YYYY-MM-DD HH:MM[:SS] timestamp") from None
+            settled = cut or (datetime.now() - timedelta(seconds=2)).strftime("%Y-%m-%d %H:%M:%S")
+            rows = [dict(r) for r in judgments(self.name, SUP_DIR) if known(_judged_at(r))]
             left_out = {r["episode_ts"] for r in unsampled_rows(self.name, SUP_DIR)
-                        if known(str(r.get("decided_at", "")).replace("T", " "))}
+                        if known(str(r.get("decided_at", "")).replace("T", " "))
+                        and (not since or since < str(r.get("decided_at", "")).replace("T", " ") < settled)}
             for r in rows:   # a replay sees a second verdict only if it existed then
                 if isinstance(r.get("second"), dict) and not known(str(r["second"].get("judged_at", "")).replace("T", " ")):
                     del r["second"]
-            return judgments_text(rows, limit, cycle, before, left_out=left_out)
+            if since:
+                rows = [r for r in rows if since < _reviewed_at(r) < settled]
+            # Returned whole, never cut like the other kinds below: the sleep reads it through broker.call, and a
+            # cut would drop verdicts its marker then counts as read (the budget keeps a page short anyway).
+            shown = []
+            text = _judgments_text(rows, limit, cycle, before, JUDGMENTS_BUDGET, left_out, since, shown)
+            if since and format == "json":
+                return json.dumps({"text": text, "verdicts": [
+                    {**{key: r.get(key) for key in ("episode_ts", "judged_at", "criterion_met", "claim_supported",
+                                                   "failure_mode", "difficulty")},
+                     "reviewed_at": _reviewed_at(r),
+                     "second_criterion_met": (r.get("second") or {}).get("criterion_met")} for r in shown],
+                    "left_out": sorted(left_out), "next_since": _reviewed_at(shown[-1]) if shown else None})
+            return text
         elif kind == "runs":
             mine = f"] {self.name}: "
             text = "\n".join(_tail_lines(SUP_DIR / "supervisor.log", 20000,
@@ -1245,17 +1450,21 @@ class Broker:
 
     def _body_file(self, rel: str) -> bytes:
         """The bytes of a file in its folder, sent as an http_request body (`body_file`)."""
-        from .core import contained
+        from .core import UnsafePath, contained, safe_read_bytes
         if rel.startswith(("-", "/", ":")) or ".." in Path(rel).parts:
             raise ValueError("body_file must be a path relative to your folder")
-        path = contained(self._root(), *Path(rel).parts)   # refuses a link anywhere on the way
+        path = contained(self._root(), *Path(rel).parts)   # the clear refusal for a link anywhere on the way
         if not path.is_file():
             raise ValueError(f"body_file: {rel} is not a file in your folder")
         size = path.stat().st_size
         if size > MAX_BODY_FILE_BYTES:
             raise ValueError(f"body_file: {rel} is {size} bytes, over the {MAX_BODY_FILE_BYTES} limit")
-        with os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW), "rb") as f:   # not swapped for a link since
-            return f.read()
+        try:   # and none swapped in since: every component opened without following a link (it is sent out)
+            return safe_read_bytes(self._root(), rel, limit=MAX_BODY_FILE_BYTES)
+        except (OSError, UnsafePath):
+            raise ValueError(f"body_file: {rel} is not a file in your folder") from None
+        except ValueError:
+            raise ValueError(f"body_file: {rel} is over the {MAX_BODY_FILE_BYTES} limit") from None
 
     def _save_answer(self, rel: str, status: int, rh, raw: bytes, secret) -> str:
         """`save_to`: the answer's body written whole to a new file, or nothing written. Only a 2xx answer is saved:
@@ -1303,12 +1512,13 @@ class Broker:
         """The instance's only way to change its config.env (its sandbox cannot write the file). Each change is
         recorded, so the gate knows exactly which lines are the instance's: the operator edits the same file,
         even mid-run, and the gate once reverted their model switch as the instance's (kant, 2026-10-13)."""
-        from .core import config_line, config_lock, config_set_line, config_values, config_with, contained, safe_write
+        from .core import (config_line, config_lock, config_set_line, config_values, config_with, contained, safe_read,
+                           safe_write)
         key, value = str(key).strip(), str(value)
         new = config_set_line(key, value)
         path = contained(self._root(), "config.env")
         with config_lock(path):                      # the operator may be writing it too (shaft config, the web UI)
-            text = path.read_text() if path.is_file() else ""
+            text = safe_read(self._root(), "config.env", "")
             old = config_line(text, key)
             safe_write(self._root(), "config.env", config_with(text, key, new))
         self.config_writes.append({"key": key, "old": old, "new": new})
@@ -1369,10 +1579,10 @@ class Broker:
         return alias, tid, on, msgs
 
     def _operator(self) -> str:
-        from .core import config_values
+        from .core import UnsafePath, config_values, safe_read
         try:
-            text = (self.project / "instances" / self.name / "config.env").read_text()
-        except OSError:
+            text = safe_read(self.project / "instances" / self.name, "config.env")
+        except (OSError, UnsafePath, ValueError):
             return "the operator"
         return config_values(text).get("OPERATOR_NAME") or "the operator"
 
@@ -1512,21 +1722,31 @@ class Broker:
 
     # -- images (docs/plans/PLAN-vision.md) ----------------------------------------------------------------------------------------
     def _image_file(self, path: str) -> tuple[str, bytes]:
-        """(shown path, bytes) of an image in the instance's folder, or in shared/. Never its keys, git or logs; a
-        link that leads out of the folder is refused like a path that does."""
+        """(shown path, bytes) of an image in the instance's folder, or in shared/. Never its keys, git or logs. In its
+        own folder no link is followed anywhere on the way (the image may go to a cloud model); in the operator's
+        shared folder a link that leads out of it is refused like a path that does."""
+        from .core import UnsafePath, reserved, safe_read_bytes
         from .messages import size_text
         rel = str(path or "").strip().removeprefix("./")
         if rel == "shared" or rel.startswith("shared/"):
             if not self.shared:
                 raise ValueError("you have no shared folder")
             base, rest = Path(self.shared).resolve(), rel.removeprefix("shared").lstrip("/")
-        else:
-            base, rest = self._root().resolve(), rel
+        else:   # its own folder, which it writes: read through descriptors, a link anywhere on the way refused
+            p = _in_folder(self._root(), rel)
+            if not p or os.path.islink(self._root() / p):
+                raise ValueError(f"{rel or '(empty path)'}: give the path of an image file in your folder")
+            if reserved(self._root(), p.as_posix(), NOT_SENT):
+                raise ValueError(f"{rel}: files in {p.parts[0]}/ cannot be read")
+            try:
+                return rel, safe_read_bytes(self._root(), p.as_posix(), limit=IMAGE_FILE_MAX)
+            except (OSError, UnsafePath):
+                raise ValueError(f"{rel}: no such file") from None
+            except ValueError:
+                raise ValueError(f"{rel}: more than {size_text(IMAGE_FILE_MAX)}") from None
         real = (base / rest).resolve()
-        if not rest or real == base or base not in real.parents:
+        if not rest or real == base or base not in real.parents:   # the operator's folder: his links, inside it
             raise ValueError(f"{rel or '(empty path)'}: give the path of an image file in your folder")
-        if base == self._root().resolve() and real.relative_to(base).parts[0] in ("secrets", ".git", "logs"):
-            raise ValueError(f"{rel}: files in {real.relative_to(base).parts[0]}/ cannot be read")
         if not real.is_file():
             raise ValueError(f"{rel}: no such file")
         if real.stat().st_size > IMAGE_FILE_MAX:
@@ -1578,7 +1798,8 @@ class ReplayBroker(Broker):
     refusal traced as a "network" call; its `run` and plugins read the instance's real Python environment,
     read-only. `run` acts on the replay's own copy of the instance, `history` ends at the replayed
     cycle's starting commit and its mind as of that start (its `save_as` writes into the copy), `record` at the time
-    it started. The coder and trials are not available. Cloud-model
+    it started. The envelope reconstructs the instance's allowances and schedule at that start, with the same
+    keys as live. The coder and trials are not available. Cloud-model
     spend is counted under `billed`, not under the instance's own daily allowance. A self-hosted model server that
     cannot be reached fails the run instead of falling back: a trial never takes the local model unasked."""
 
@@ -1594,6 +1815,10 @@ class ReplayBroker(Broker):
         self.trace: list[dict] = []          # every tool call, as the supervisor saw it
         self.operator_sent = 0
         self._tags = threading.local()
+
+    def envelope(self) -> dict:
+        """The instance's envelope at the replayed cycle's start, with this run's call count."""
+        return self._operational_envelope(self.as_of)
 
     def _make_egress(self):
         from .core import SUP_DIR

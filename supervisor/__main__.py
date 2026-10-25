@@ -26,7 +26,7 @@ from pathlib import Path
 from . import autonomy, evolution, finetune, gate, messages, metrics, mind, runner, surprise, version
 from .core import (DEFAULT_INSTANCE, HOME, INSTANCES, MIND_PATHS, add_all_but_mind, NAME_RE, PROJECT, SUP_DIR, TEMPLATE, commit_state,
                    git, git_wt, instance_config, instance_names, instance_root, journal_entries, journal_note, log, paused,
-                   safe_mkdir, safe_write)
+                   safe_mkdir, safe_read, safe_write)
 from .runner import (Busy, busy_with, is_busy, model_server, request_yield, run_agent, run_lock, sharing_model,
                      spawn_recover)
 
@@ -292,8 +292,7 @@ def cmd_status(names: list[str]) -> int:
     for name in names:
         root = INSTANCES / name
         calls = errors = tokens = 0
-        usage = root / "logs" / "llm_usage.jsonl"
-        for line in usage.read_text().splitlines() if usage.exists() else []:
+        for line in safe_read(root, "logs/llm_usage.jsonl", "", errors="replace").splitlines():   # never via a link
             rec = json.loads(line)
             if rec["ts"].startswith(today):
                 calls, errors = calls + 1, errors + bool(rec.get("error"))
@@ -446,7 +445,11 @@ def cmd_secret(args) -> int:
     from .core import delete_secret, describe_key, read_secrets, store_secret
     root = instance_root(args.name)
     if args.action == "list":
-        store = read_secrets(root)
+        try:
+            store = read_secrets(root, strict=True)       # an unreadable store is said, not shown as "no keys"
+        except ValueError as e:
+            print(e, file=sys.stderr)
+            return 1
         for k, e in sorted(store.items()):
             print(describe_key(k, e))
         if not store:
@@ -456,7 +459,11 @@ def cmd_secret(args) -> int:
         print("which key? e.g. shaft secret wren set github --hosts api.github.com", file=sys.stderr)
         return 2
     if args.action == "delete":
-        found = delete_secret(root, args.key)
+        try:
+            found = delete_secret(root, args.key)
+        except ValueError as e:                           # KeyStoreUnreadable: nothing was changed
+            print(e, file=sys.stderr)
+            return 1
         print(f"deleted {args.name}'s key {args.key}" if found else f"{args.name} has no key {args.key}")
         return 0 if found else 1
     if args.action == "google":

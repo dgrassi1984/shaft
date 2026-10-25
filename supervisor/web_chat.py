@@ -31,6 +31,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .core import SUP_DIR, UnsafePath, log
+from .web_md import first_line
 
 SAVE_EVERY_S = 1.0                 # how often a streaming reply's activity is written for the page to read
 MAX_TEXT = 20000                   # a message, at most
@@ -133,39 +134,66 @@ def open_chat(name: str) -> dict | None:
     return next((c for c in chats(name) if c.get("state") != "ended"), None)
 
 
-# A chat being looked at: its feed is refreshed every 1.5 s while its page is visible (a hidden page does not
-# refresh it). A reply that ends while someone looks at it needs no notification.
+# A chat being looked at, per paired device: its feed is refreshed every 1.5 s while its page is visible (a hidden
+# page does not refresh it). A reply that ends while a device looks at it needs no notification on that device — only
+# on that one: a desktop tab left open silenced every push to the phone (W9, review 2026-10-24). A page that goes
+# hidden (the phone locks, the app goes to the background) says so (?away=1), so the next 6 s are not silent either.
+# Both say when the page sent them, on its own clock (`at`, ms): a poll sent before the latest away but arriving after
+# it does not make the device watching again (Grok review of 8735c62).
 WATCH_S = 6.0
-_watched: dict[str, float] = {}
+_watched: dict[tuple[str, str], float] = {}
+_away: dict[tuple[str, str], float] = {}
 
 
-def watching(name: str) -> None:
-    _watched[name] = time.monotonic()
+def watching(name: str, device: str, at: float | None = None) -> None:
+    if at is not None and at <= _away.get((name, device), float("-inf")):
+        return
+    _watched[(name, device)] = time.monotonic()
 
 
-def watched(name: str) -> bool:
-    return time.monotonic() - _watched.get(name, -1e9) < WATCH_S
+def unwatch(name: str, device: str, at: float | None = None) -> None:
+    _watched.pop((name, device), None)
+    if at is not None:
+        _away[(name, device)] = max(at, _away.get((name, device), float("-inf")))
+
+
+def watchers(name: str) -> set[str]:
+    """The devices that have this instance's chat on screen now."""
+    now = time.monotonic()
+    return {d for (n, d), at in list(_watched.items()) if n == name and now - at < WATCH_S}
 
 
 def reply_event(chat: dict) -> dict:
     """What the push for this chat's reply shows: its first line."""
     name = chat["instance"]
     t = next((t for t in reversed(chat.get("turns") or []) if t["role"] == "assistant"), {})
-    first = next((l.strip() for l in (t.get("content") or "").splitlines() if l.strip()), "") or (t.get("note") or "")
+    first = first_line(t.get("content") or "") or (t.get("note") or "")          # the text, not its Markdown
     return {"title": f"{name} replied", "body": first[:160], "url": f"/i/{name}/chat", "tag": name}
 
 
-def summary(name: str) -> dict:
-    """For the rail: the newest chat's last line, when the instance last answered in it, and whether it is replying."""
+def summary(name: str, history: list[dict] = ()) -> dict:
+    """For the rail: the newest chat's last line, when the instance last answered in it or sent the operator a message
+    (`history`: messages.history(); its send_message cards show in the chat over the span web._sent_during gives, and
+    one never lit the rail: W8, review 2026-10-24), and whether it is replying."""
     c = next(iter(chats(name)), None)
+    since = (c.get("cleared") or c["created"]) if c else ""
+    sent = next((m for m in reversed(history) if m["from"] == name and m["to"] == "operator" and m["ts"] >= since
+                 and (since or not m.get("read"))), None)
+    sent_line = first_line((sent or {}).get("text", ""))
     if not c or c.get("cleared"):
-        return {}
+        return {"line": sent_line[:80], "last": sent["ts"]} if sent else {}
     turns = c.get("turns") or []
     last = next((t for t in reversed(turns) if t["role"] == "assistant"), None)
     text = (turns[-1].get("shown", turns[-1].get("content")) or "") if turns else ""
     who = "you: " if turns and turns[-1]["role"] == "user" else ""
-    first = next((l.strip() for l in text.splitlines() if l.strip() and not l.lstrip().startswith(">")), "")
-    return {"line": (who + first)[:80], "last": last["ts"] if last else "", "replying": c.get("state") == "replying"}
+    # The instance's reply as the page shows it, not its Markdown (the rail read "Finished the **smoke** reply.");
+    # the operator's own text as they wrote it, as the chat shows it, without the lines they quoted
+    first = (next((l.strip() for l in text.splitlines() if l.strip() and not l.lstrip().startswith(">")), "") if who
+             else first_line(text, quotes=False))
+    if sent and sent["ts"] >= (turns[-1]["ts"] if turns else ""):
+        who, first = "", sent_line
+    return {"line": (who + first)[:80], "last": max(last["ts"] if last else "", sent["ts"] if sent else ""),
+            "replying": c.get("state") == "replying"}
 
 
 def shown(name: str) -> dict | None:
@@ -470,9 +498,9 @@ def _finish(relay: Relay, answer: str, activity: list, error: str | None, heard:
             log(f"web: could not attach {cid}'s comments: {type(e).__name__}: {e}")
     if _relays.get(cid) is relay:                  # never a newer relay of the same chat
         del _relays[cid]
-    if not unheard and not queued and not relay.stopped and not watched(chat["instance"]):
-        from . import webpush                       # nobody is looking: the phone is told (docs/plans/PLAN-pwa P4)
-        webpush.notify(reply_event(chat))
+    if not unheard and not queued and not relay.stopped:
+        from . import webpush                       # each device not looking is told (docs/plans/PLAN-pwa P4)
+        webpush.notify(reply_event(chat), skip=watchers(chat["instance"]))
     log(f"web: chat {cid} with {chat['instance']}: reply {'stopped' if relay.stopped else 'failed' if error else 'done'}"
         + (f" ({unheard} interjection(s) answered next)" if unheard else ""))
     if unheard or queued:

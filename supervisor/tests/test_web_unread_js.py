@@ -38,8 +38,10 @@ const panel = {dataset: {poll: "/fragment/chat/wren", every: "1500"}, isConnecte
     this.html = html;
     replies = [...html.matchAll(/<div class="turn it"([^>]*)>/g)].flatMap(m => {
       const attrs = Object.fromEntries([...m[1].matchAll(/data-([\w-]+)="([^"]*)"/g)].map(a => [a[1], a[2]]));
+      // on screen: inside the feed's scroll box (W8: rendered below the fold is not seen)
       return attrs["seen-reply"] ? [{dataset: {seenInst: attrs["seen-inst"], seenReply: attrs["seen-reply"]},
-        getClientRects: () => [1]}] : [];
+        getClientRects: () => [1], getBoundingClientRect: () => ({top: 10, bottom: 60}),
+        closest: q => q === "[data-scroll]" ? {getBoundingClientRect: () => ({top: 0, bottom: 600})} : null}] : [];
     });
   }, dispatchEvent(e) { emit(e.type, {target: this}); },
 };
@@ -51,7 +53,7 @@ const document = {readyState: "loading", visibilityState: "visible", title: "Con
   body: {scrollHeight: 0, classList: classes(), appendChild() {}},
   addEventListener(k, f) { (handlers[k] ||= []).push(f); },
   querySelector: q => q === "nav .rail" ? rail : null,
-  querySelectorAll: q => q === ".feed [data-seen-reply]" ? replies :
+  querySelectorAll: q => q === ".feed [data-seen-reply], .feed [data-sent-at]" ? replies :
     q === "[data-toggle-nav]" ? [button] : q === "[data-poll]" ? [panel] : [],
   getElementById: () => ({setAttribute() {}, remove() {}}),
 };

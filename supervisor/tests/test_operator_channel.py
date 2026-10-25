@@ -118,7 +118,11 @@ class WebAlertsTest(Sandbox):
         super().setUp()
         web_chat._watched.clear()
         self.pushed = []
-        p = mock.patch.object(webpush, "notify", self.pushed.append)
+
+        def notify(event, skip=frozenset()):              # webpush.notify: the devices it woke
+            self.pushed.append(event)
+            return ["phone"]
+        self.fake_notify = p = mock.patch.object(webpush, "notify", notify)
         p.start()
         self.addCleanup(p.stop)
 
@@ -157,12 +161,30 @@ class WebAlertsTest(Sandbox):
             f.write(', "alert_why": "x"}\n')
         self.assertEqual(web_alerts.forward_new(), 1)
 
-    def test_none_while_its_chat_is_on_screen(self):
+    def test_none_to_the_device_whose_chat_is_on_screen_only_to_the_others(self):
+        """W9 (review 2026-10-24): what was looked at was global per instance, so a desktop tab left open on wren's chat
+        silenced every push of wren's messages to the phone. Only the device looking at it is skipped."""
+        (self.sup / "web").mkdir(parents=True, exist_ok=True)
+        (self.sup / "web" / "devices.json").write_text(json.dumps({"laptop": {}, "phone": {}}))
+        for device in ("laptop", "phone"):
+            webpush.subscribe(device, {"endpoint": "https://web.push.apple.com/x-" + device})
+        self.fake_notify.stop()                          # the real notify, with its wakes caught
+        p = mock.patch.object(webpush, "_wake")
+        p.start()
+        self.addCleanup(p.stop)
         web_alerts.forward_new()
-        web_chat.watching("wren")
-        self.message("wren", "seen on screen", alert=("web", "x"))
+        web_chat.watching("wren", "laptop")
+        self.message("wren", "seen on the laptop", alert=("web", "x"))
+        self.assertEqual(web_alerts.forward_new(), 1)
+        woke = webpush._wake.call_args[0][0]
+        self.assertEqual(set(woke), {"phone"})                                  # the phone is told; the laptop is not
+        self.assertEqual([e["body"] for e in webpush.take("phone")], ["seen on the laptop"])
+        self.assertEqual(webpush.take("laptop"), [webpush.NOTHING])
+        web_chat.watching("wren", "phone")                                       # both looking: nobody is woken
+        webpush._wake.reset_mock()
+        self.message("wren", "seen on both", alert=("web", "x"))
         self.assertEqual(web_alerts.forward_new(), 0)
-        self.assertEqual(self.pushed, [])
+        webpush._wake.assert_not_called()
 
 
 class TalksFileTest(unittest.TestCase):

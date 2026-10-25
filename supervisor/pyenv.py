@@ -76,12 +76,13 @@ def rebuild_command(root: Path) -> str:
 
 def describe(env_root: Path) -> str:
     """One line for the operator's panel: which Python the instance's plugins and tests run on."""
-    cfg = Path(env_root) / ".venv" / "pyvenv.cfg"
+    from .core import UnsafePath, safe_read
     if not (Path(env_root) / ".venv").exists():
         return "system Python (no .venv yet)"
-    try:
-        fields = {k.strip(): v.strip() for k, v in (l.split("=", 1) for l in cfg.read_text().splitlines() if "=" in l)}
-    except OSError:
+    try:   # the instance writes .venv/: never read through a link
+        cfg = safe_read(env_root, ".venv/pyvenv.cfg", errors="replace")
+    except (OSError, UnsafePath):
         return ".venv (BROKEN: no pyvenv.cfg)"
+    fields = {k.strip(): v.strip() for k, v in (l.split("=", 1) for l in cfg.splitlines() if "=" in l)}
     version = fields.get("version_info") or fields.get("version") or "?"
     return f".venv · Python {version}" + ("" if venv_python(env_root).exists() else " (BROKEN: interpreter missing)")

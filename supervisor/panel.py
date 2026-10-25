@@ -19,7 +19,7 @@ from pathlib import Path
 
 from . import browser, egress, pyenv
 from .core import (SUP_DIR, calendar_grants, disabled_tools, dollars, git, instance_config, instance_names,
-                   instance_root, journal_entries, knob, mail_grants, paused, shared_folder)
+                   instance_root, journal_entries, knob, list_beneath, mail_grants, paused, safe_read, shared_folder)
 from . import selfhosted
 
 # The judge has no cap (the operator): only an alert. $10 sat under the Sonnet judge's $12-25 a day and fired daily;
@@ -192,12 +192,18 @@ def template_merges(name: str) -> list[str]:
         if "merge template" in l], ttl=30)
 
 
+def journal_heading(entry: str) -> str:
+    """A journal entry's first line, as text: its heading without the #, **, ` of its Markdown."""
+    from .web_md import plain
+    return plain(entry.splitlines()[0]) if entry.strip() else ""
+
+
 def instance_detail(name: str) -> dict:
     from . import messages, metrics
     root = instance_root(name)
     cfg = instance_config(name)
-    stats = root / "self" / "stats.md"
-    heads = [e.splitlines()[0].lstrip("# ").strip() for e in journal_entries(root)[-10:]][::-1]
+    stats = safe_read(root, "self/stats.md", "", errors="replace")   # in the instance's folder: never via a link
+    heads = [journal_heading(e) for e in journal_entries(root)[-10:]][::-1]
     probation = []
     try:
         probation = json.loads((SUP_DIR / "probation" / f"{name}.json").read_text())
@@ -216,7 +222,7 @@ def instance_detail(name: str) -> dict:
             "python": pyenv.describe(root),
             "browser": browser.describe(root),
             "internet": egress.summary(egress.recent(egress.log_path(name), 2000), date.today().isoformat()),
-            "stats": stats.read_text(errors="replace") if stats.exists() else "(no stats yet)",
+            "stats": stats or "(no stats yet)",
             "journal": heads, "probation": probation, "questions": questions,
             "changes": changes(name), "merges": template_merges(name)[:5], "traits": traits(name),
             "judged": len(metrics.judgments(name))}
@@ -305,9 +311,7 @@ def evals(name: str | None = None) -> list[dict]:
 def surprise_summary(name: str) -> dict:
     """Unexpected tool results per episode kind (supervisor/surprise.py), re-computed when episodes change."""
     from . import surprise
-    eps = instance_root(name) / "memory" / "episodes"
-    files = sorted(eps.glob("*.jsonl")) if eps.is_dir() else []
-    return cached(f"surprise:{name}", files, lambda: surprise.baseline(name))
+    return cached(f"surprise:{name}", _episode_files(name), lambda: surprise.baseline(name))
 
 
 # -- services ------------------------------------------------------------------------------------------------------
@@ -462,7 +466,14 @@ TRANSCRIPT_CUT = 8000        # a tool result longer than this is cut in the view
 
 
 def _episode_files(name: str) -> list[Path]:
-    return sorted((instance_root(name) / "memory" / "episodes").glob("*.jsonl"))
+    """The instance's episode logs, listed without following a link; read them with _episode_text."""
+    root = instance_root(name)
+    return [root / "memory" / "episodes" / n for n in list_beneath(root, "memory/episodes") if n.endswith(".jsonl")]
+
+
+def _episode_text(path: Path) -> str:
+    """An episode log as text, read without following a link anywhere (core.safe_read): "" for a link."""
+    return safe_read(path.parent.parent.parent, f"memory/episodes/{path.name}", "", errors="replace")
 
 
 def transcripts(name: str) -> list[dict]:
@@ -474,10 +485,7 @@ def transcripts(name: str) -> list[dict]:
     def read():
         out, talks = [], {}
         for f in files:
-            try:
-                lines = f.read_text(errors="replace").splitlines()
-            except OSError:
-                continue
+            lines = _episode_text(f).splitlines()
             for n, line in enumerate(lines, 1):
                 try:
                     r = json.loads(line)
@@ -519,7 +527,9 @@ def transcript_summary(e: dict) -> str:
         goal = " ".join(((r.get("intent") or {}).get("goal") or "(no intent declared)").split())
         met = (r.get("finish") or {}).get("criterion_met")
         return f"{met or '·':<7} {tools} tools{f', {steps} steps' if steps else ''} · {end} · {goal}"
-    return f"{tools} tools · {end} · " + " ".join((r.get("content") or "").split())
+    from .web_md import plain           # a reflection's or sleep's answer, as text: not its Markdown
+    return f"{tools} tools · {end} · " + " ".join(" ".join(plain(l).split()) for l in (r.get("content") or "").splitlines()
+                                                  if l.strip())
 
 
 def _block(out: list, label: str, value, style: str = "") -> None:

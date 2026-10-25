@@ -189,6 +189,35 @@ def sleep_due(now: datetime, st: dict) -> bool:
     return now >= sleep_from and (last_sleep is None or last_sleep < sleep_from)
 
 
+def next_sleep(now: datetime | None = None) -> str | None:
+    """Next nightly sleep, or None when the scheduler is not installed; missed sleeps are due now."""
+    if not (AGENTS / f"{SERVICES['scheduler']['label']}.plist").exists():
+        return None
+    now = now or datetime.now()
+    if sleep_due(now, _state()):
+        return "due"
+    at = now.replace(hour=SLEEP_AT[0], minute=SLEEP_AT[1], second=0, microsecond=0)
+    if at <= now:
+        at += timedelta(days=1)
+    return f"{at:%Y-%m-%d %H:%M}"
+
+
+def replay_next_sleep(now: datetime) -> str | None:
+    """Next scheduled sleep strictly after the replay start, without today's scheduler state."""
+    if not (AGENTS / f"{SERVICES['scheduler']['label']}.plist").exists():
+        return None
+    at = now.replace(hour=SLEEP_AT[0], minute=SLEEP_AT[1], second=0, microsecond=0)
+    if at <= now:
+        at += timedelta(days=1)
+    return f"{at:%Y-%m-%d %H:%M}"
+
+
+def replay_next_wake(name: str, now: datetime) -> str:
+    """A replay starts a cycle now; its next wake is one interval later."""
+    interval = wake_interval(name)
+    return f"{now + interval:%H:%M}" if interval is not None else "never"
+
+
 def decide_wakes(now: datetime, st: dict, names: list[str], interval_of, awake_of) -> tuple[list[str], dict[str, str]]:
     """(instances to wake now, {instance: why its due wake is skipped}). Pure: the scheduler's rule."""
     start, skip = [], {}
@@ -227,6 +256,7 @@ def serve(poll_s: int = 30) -> int:
     if (note := startup_note()):
         log(note)
     children: dict[str, tuple[subprocess.Popen, float]] = {}
+    stop_children_on_signal(children)
     while True:
         for job, (proc, started) in list(children.items()):
             if proc.poll() is not None:
@@ -258,6 +288,35 @@ def serve(poll_s: int = 30) -> int:
                 if trial.has_work():
                     children["trials"] = (_start(["trial", "work"]), time.monotonic())
         time.sleep(poll_s)
+
+
+CHILD_STOP_S = 15   # how long the scheduler's children get to stop, inside launchd's 20 s before it kills them
+
+
+def stop_children_on_signal(children: dict) -> None:
+    """SIGTERM or SIGHUP to the scheduler (launchd stopping it) is passed to each child first — a wake or sleep ends
+    its run's processes and notes the run as stopped, a battery restores the instance's files — and the scheduler goes
+    once they have (or after CHILD_STOP_S), as the signal intended. A child's agent leads its own process group now,
+    which launchd's stop of the scheduler's group no longer reaches (Codex on e77d5e5)."""
+    def on_signal(signum, frame):
+        for s in (signal.SIGTERM, signal.SIGHUP):
+            signal.signal(s, signal.SIG_IGN)
+        live = [(job, proc) for job, (proc, _) in children.items() if proc.poll() is None]
+        log(f"scheduler: stopping (signal {signum}); stopping {', '.join(j for j, _ in live) or 'no child'} first")
+        for _, proc in live:
+            proc.send_signal(signal.SIGTERM)
+        deadline = time.monotonic() + CHILD_STOP_S
+        for job, proc in live:
+            try:
+                proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                log(f"scheduler: {job} did not stop within {CHILD_STOP_S}s: killed")
+                proc.kill()
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+    for s in (signal.SIGTERM, signal.SIGHUP):
+        if signal.getsignal(s) is not signal.SIG_IGN:
+            signal.signal(s, on_signal)
 
 
 def battery_jobs(children: dict, now: datetime, sleeping_due: bool, names: list[str], due, awake_of) \

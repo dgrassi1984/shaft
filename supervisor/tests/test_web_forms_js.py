@@ -109,6 +109,22 @@ class FormJsTest(unittest.TestCase):
         script = HARNESS.replace("//CASE//", body)
         return subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=20)
 
+    def test_w17_cancelling_a_queued_message_never_says_it_is_safe_to_repeat(self):
+        """W17: the queued message's Cancel carries the message's id (input[name=mid]), so a lost answer took it for a
+        chat send: "sending it again is safe", for an action that may have happened. Only the composer's send is."""
+        result = self.run_js(r"""
+sandbox.fetch = async () => { const e = new Error("The operation was aborted"); e.name = "AbortError"; throw e; };
+(async () => {
+  const cancel = formOf({ mid: true, check: "the chat (is it still queued?)", post: "/chat/wren/unqueue" });
+  cancel.midInput.value = "q-1";
+  await submit(cancel);
+  assert.match(toasts.at(-1), /it may still have happened — check the chat \(is it still queued\?\)/);
+  assert.doesNotMatch(toasts.at(-1), /safe/);
+  assert.equal(cancel.midInput.value, "q-1");                        // its id is the queued message's, kept
+})().catch(e => { console.error(e); process.exitCode = 1; });
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_issue_20_a_lost_answer_is_safe_to_repeat_only_for_a_chat_send(self):
         """#20: every form used to say "sending it again is safe" or "Not sent" when the answer was lost. That is true
         only for a chat send, which carries input[name=mid]. Reverting lostAnswer to the one message fails this:

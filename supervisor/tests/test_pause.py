@@ -138,7 +138,8 @@ class SupervisorSideTest(unittest.TestCase):
         result, during = {}, {}
         with mock.patch.object(runner, "SUP_DIR", sup), mock.patch.object(runner, "API_TALKS", sup / "api.json"), \
              mock.patch.object(runner, "_launch", return_value=(broker, cmd, env)), \
-             mock.patch.object(runner, "_snapshot", side_effect=lambda r: {"t": time.monotonic()}), \
+             mock.patch.object(runner, "_snapshot", side_effect=lambda r, *a: {"t": time.monotonic()}), \
+             mock.patch.object(runner, "_reconcile"), \
              mock.patch.object(runner, "_settle", side_effect=lambda *a, **k: settles.append(a[3]) or True), \
              mock.patch.object(runner, "commit_state", return_value=True), \
              mock.patch.object(runner, "log"), mock.patch.object(runner, "instance_root", return_value=root), \

@@ -13,7 +13,7 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
-from .core import INSTANCES, PROJECT, SUP_DIR, instance_root, log, safe_write, safe_write_bytes
+from .core import INSTANCES, PROJECT, SUP_DIR, instance_root, list_beneath, log, safe_write, safe_write_bytes
 
 OPERATOR_INBOX = SUP_DIR / "operator-inbox"
 LOG_NAME = "messages.jsonl"
@@ -118,8 +118,9 @@ _cache: dict = {"key": None, "rows": []}
 
 def _unread(to: str) -> set[str]:
     """File names still waiting in the recipient's inbox (it moves them out once it has read them)."""
-    inbox = OPERATOR_INBOX if to == "operator" else INSTANCES / to / "inbox"
-    return {p.name for p in inbox.glob("*.md")} if inbox.is_dir() else set()
+    if to == "operator":
+        return {p.name for p in OPERATOR_INBOX.glob("*.md")} if OPERATOR_INBOX.is_dir() else set()
+    return {n for n in list_beneath(INSTANCES / to, "inbox") if n.endswith(".md")}   # never the listing of a link
 
 
 def history() -> list[dict]:

@@ -44,7 +44,10 @@ def render(text: str) -> Html:
 _CODE = re.compile(r"(`+)(.+?)(?<!`)\1(?!`)", re.S)
 _ESCAPE = re.compile(r"\\([!-/:-@\[-`{-~])")
 _AUTOLINK = re.compile(r"<((?:https?://|mailto:)[^\s<>]+)>")
-_LINK = re.compile(r"(!?)\[((?:[^\[\]]|\[[^\[\]]*\])*)\]\(\s*<?([^\s()<>]*(?:\([^\s()<>]*\)[^\s()<>]*)*)>?"
+# The destination never holds a placeholder (a code span or an autolink cut out before): it would expand inside
+# href="…" and break out of the attribute (W16, review 2026-10-24). _BARE excludes them the same way.
+_URL = r"[^\s()<>" + OPEN + CLOSE + r"]"
+_LINK = re.compile(r"(!?)\[((?:[^\[\]]|\[[^\[\]]*\])*)\]\(\s*<?(" + _URL + r"*(?:\(" + _URL + r"*\)" + _URL + r"*)*)>?"
                    r"(?:\s+(?:\"[^\"]*\"|'[^']*'))?\s*\)")
 _BARE = re.compile(r"(?<![\w/@=\"'])(https?://[^\s<>" + OPEN + CLOSE + r"]+)")
 _STRONG = (re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*"), re.compile(r"(?<![\w_])__(?=\S)(.+?)(?<=\S)__(?![\w_])"))
@@ -58,8 +61,10 @@ def _anchor(url: str, inner: str) -> str:
     return f'<a href="{esc(url)}" rel="noopener noreferrer" target="_blank">{inner}</a>'
 
 
-def inline(text: str, links: bool = True) -> str:
-    kept: list[str] = []
+def inline(text: str, links: bool = True, kept: list[str] | None = None) -> str:
+    """`kept`: the pieces already cut out, when this is a link's label inside inline(): a code span in the label is
+    a placeholder of the outer call's (a list of its own raised IndexError: the whole page failed)."""
+    kept = [] if kept is None else kept
 
     def keep(fragment: str) -> str:
         kept.append(fragment)
@@ -72,9 +77,9 @@ def inline(text: str, links: bool = True) -> str:
 
         def link(m: re.Match) -> str:
             image, label, url = m[1], m[2], m[3]
-            shown = inline(label, links=False) if label.strip() else esc(url)
+            shown = inline(label, links=False, kept=kept) if label.strip() else esc(url)
             if image:
-                shown = "🖼 " + (inline(label, links=False) if label.strip() else "image")
+                shown = "🖼 " + (inline(label, links=False, kept=kept) if label.strip() else "image")
             if not url.lower().startswith(SCHEMES):        # javascript:, data:, a path: the text only, never a link
                 return keep(shown)
             return keep(_anchor(url, shown))
@@ -96,6 +101,38 @@ def inline(text: str, links: bool = True) -> str:
     while _PLACE.search(s):                               # a kept piece may hold another (a link's label)
         s = _PLACE.sub(lambda m: kept[int(m[1])], s)
     return s
+
+
+def plain(text: str) -> str:
+    """One line of Markdown as the page shows its text: what an anchor quoting the rendered document must match. The
+    line's block syntax goes as the page drops it (a quote's >, a heading's #, a list marker; a task box is its ☐ or
+    ☑; a table row's cells are tab-separated, as comments.js walks a table), then its inline Markdown."""
+    line = clean(str(text)).replace(OPEN, "").replace(CLOSE, "").strip()
+    while _QUOTE.match(line):
+        line = _QUOTE.sub("", line, count=1).strip()
+    if (m := _HEAD.match(line)) and m[2] is not None:
+        line = m[2]
+    elif (m := _ITEM.match(line)) and m[4].strip():
+        line = m[4]
+        if t := _TASK.match(line):
+            line = ("☑ " if t[1] != " " else "☐ ") + line[t.end():]
+    elif line.startswith("|") or line.endswith("|"):
+        return "\t".join(plain(cell) for cell in _cells(line))
+    return html.unescape(re.sub(r"<[^>]*>", "", inline(line)))
+
+
+def first_line(text: str, quotes: bool = True) -> str:
+    """The first line of a text as the page shows it (plain): a line of a list, a rail entry, a push. A fence's
+    marker, a rule and a table's separator row are not text; `quotes=False` skips quoted lines too (the operator's
+    quote of what they answer is not their message)."""
+    for line in str(text).splitlines():
+        if not line.strip() or _FENCE.match(line) or _HR.match(line) or _TABLE_SEP.match(line) and "-" in line:
+            continue
+        if not quotes and _QUOTE.match(line):
+            continue
+        if shown := plain(line).strip():
+            return shown
+    return ""
 
 
 def _code_text(s: str) -> str:

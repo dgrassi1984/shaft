@@ -6,7 +6,9 @@
   `/private/tmp`, `/Users/Shared`, and `/Volumes`. Narrow temporary-file exceptions
   let `sips` convert images. It connects only to allowed model ports
   (`SHAFT_LLM_PORTS`, default 8780), the embedding service, its broker, and its
-  egress proxy. Its environment excludes inherited secrets.
+  egress proxy. Its environment is an allow-list (`sandbox.ENV_ALLOW`: `PATH`, `HOME`, `USER`, `LANG`, `TERM`,
+  `COLUMNS`, `LINES`, `TZ`, `LC_*`) plus what the supervisor sets by name; every other inherited variable,
+  `LLM_API_KEY` and any other key or token included, is dropped.
 - **Internet** ([PLAN-python-env.md](plans/PLAN-python-env.md)): the sandbox cannot filter by address, so the
   instance's way out is a proxy the supervisor runs for each run (`supervisor/egress.py`; `HTTPS_PROXY` /
   `HTTP_PROXY` are set, and uv, pip, curl, git and Python's HTTP libraries follow them). It connects only to
@@ -34,11 +36,13 @@
   [PLAN-calendar.md](plans/PLAN-calendar.md)): `calendar_events`, `calendar_event`, offered only when granted. Every call
   names a granted calendar; the credential and the grant stay with the supervisor.
 - **Broker**: privileged tools and credentials, including web search (ScrapeBadger), page fetching
-  (public addresses only, re-checked on every redirect), messages between instances and to
+  (public addresses only, re-checked on every redirect; `fetch_page` and `http_request` connect to the very
+  address they checked, with TLS still verifying the name asked for, so a name that answers public for the
+  check and private for the connection reaches nothing), messages between instances and to
   you (no daily limit unless `SHAFT_OPERATOR_PER_DAY`; a macOS notification, and a push on the web UI or Telegram,
   whichever reaches you for that instance: integrations.md), with
   files attached from the sender's folder (up to 10, 20 MB each, 50 MB in all; never `secrets/`, `.git/`, `logs/` or
-  anything a link leads to outside the folder); another instance finds them in its `attachments/` (not
+  a file reached through a link); another instance finds them in its `attachments/` (not
   committed), the operator's copy is in `.supervisor/operator-inbox/attachments/`; and **`delegate_coding`**: an
   Opus-class model (`SHAFT_CODER_MODEL`, default `claude-opus-5-5`) reads the instance's code
   read-only and writes the change; the supervisor tests it on a scratch copy and applies it only if
@@ -48,7 +52,8 @@
   `plugins/`, `skills/`, `tests/`, `shaft/`, `.tmp/`, `.venv/`, `.uv/`, `.browser/`, `.python-version` and
   `requirements.txt`, the internet only through the egress proxy, reads only its own folder (and the shared
   Chromium);
-  60 s default time limit (the whole process group is killed), 1 GiB file-size limit (a file past it ends the
+  60 s default time limit (the whole process group is killed; at the end of every command, whatever it left
+  running too), 1 GiB file-size limit (a file past it ends the
   command with SIGXFSZ, and `run` says so), output capped,
   40 commands per run. So an instance can build and test its own tools and plugins. **`history`**: its
   own git log and diffs, each entry tagged `[code]` (its branch) or `[mind]` (its mind store); git cannot
@@ -67,21 +72,85 @@
   keys** (`secret_set` / `secret_list` / `secret_delete`, or `shaft secret <name> set <key> --hosts …` from
   your terminal): kept in its folder under `secrets/` but handled only by the supervisor; the broker adds a
   key to requests to the hosts it is bound to, never through a redirect, and masks it in responses; the
-  instance's own process, plugins, `run` and the coder cannot read the file, git never sees it. A **Google key**
+  instance's own process, plugins, `run` and the coder cannot read the file, git never sees it. A change is made
+  under a lock and written whole (a new 0600 file renamed over the old one); a store that cannot be read is never
+  written over — the change is refused, naming the file and the error, and the keys go unused until you repair it
+  (`KEY STORE UNREADABLE` in `.supervisor/supervisor.log`). A **Google key**
   (`shaft secret <name> google`, the instance's own Google account) is refreshed by the supervisor per run.
   **`set_config`**: the instance's only way to change its `config.env`, one value at a time; each change is
   recorded, so the gate can tell its lines from yours; you may edit the file at any time, even mid-run.
   Per-run token, call budget
   (`SHAFT_BROKER_MAX_CALLS`, default 60), everything logged in `.supervisor/broker.log`.
+- **No link followed in an instance's folder**: the supervisor runs outside the sandbox, and an instance can put a
+  link anywhere in its own folder. So every file the supervisor reads there — to check it, copy it, show it to you
+  or send it to a judge, the coder or a vision model — and every file it writes, appends to or removes there is
+  opened one folder at a time through descriptors, none followed if it is a link (`supervisor/core.py`:
+  `open_beneath`, `safe_read`, `safe_write`, `walk_beneath`, `copy_beneath`); a pipe in a file's place is refused,
+  never waited on. Two link policies:
+  - **What goes out** (an attachment, an image for `describe_image`, a file the coder reads, a judge's evidence):
+    a link anywhere on the way is refused, even one that stays inside the folder. To that reader a link is no file.
+  - **A copy** (a battery exam's, a gate's scratch copy): a link that stays inside the copy — relative, its `..`
+    first and no more of them than its folder is deep — is copied as the link it is, so the copy runs the code the
+    instance runs; any other link is left out. The supervisor reads no link while copying; the copy's folders are
+    made and its files created through descriptors (`O_EXCL`, `O_NOFOLLOW`), so a folder of the copy swapped for a
+    link is refused, never written through.
+  - **Code** (`shaft/`, `tests/`, `plugins/`, `.python-version`, `requirements.txt`, as the gate sees them): a link
+    is an entry of the gate's snapshot (its target, never what it points to), and so is anything else that is not a
+    plain file of one name — a file with more than one name (a hard link), a pipe, a socket, a device. One added,
+    removed or changed is a change, and a change with any of them in a code path fails the gate untested (the
+    template has none). The gate's restore puts back each file as a new file renamed over whatever stands there — a
+    link, a pipe, one name of a hard-linked file — never writing through it, makes a folder replaced by a link again
+    through descriptors, and puts an approved file back where a link stood; every path it put back is read again, and
+    if any is not as approved the run is refused ("run refused", an alert on the panel), so nothing runs on it.
+
+  Its keys, git and logs (`secrets/`, `.git`, `logs/`) are never sent out by any spelling: the volume is
+  case-insensitive (`Secrets/` is `secrets/`), so the supervisor compares the folder itself (device and inode) and
+  the name case-folded. The sandbox's own deny on `secrets/` holds for every spelling (checked: `cat Secrets/…` from
+  inside the sandbox is refused). Reads are bounded: one file at `SHAFT_FILE_READ_MAX_MB`, the gate's code snapshot
+  at `SHAFT_SNAPSHOT_MAX_MB`, a copy at `SHAFT_COPY_MAX_GB`, any walk at `SHAFT_TREE_MAX_FILES` files and folders and
+  `SHAFT_TREE_MAX_DEPTH` deep. Past a bound the read fails, never returns part: code too big to snapshot fails the
+  gate closed (nothing of the run's code is kept, the files it began with go back, a journal note says why).
 - **Append-only journal**: if a run rewrote history instead of appending, the journal is
-  restored and the rewrite kept aside.
+  restored and the rewrite kept aside. A journal replaced by a link (or anything that is not a file) is moved aside
+  unread and the journal restored.
 - **Slow core**: the core personality may change at most every `SHAFT_CORE_MIN_HOURS` (72).
 - **Test gate**: if a run changed the instance's code, plugins or (through `set_config`) config, the
   invariant tests and plugin checks run; failure restores the old code and the config lines the instance
   set, and tells the instance why. The supervisor's own tests run from its last commit (and the template's), in a
   clean copy under `.supervisor/gate-tests/`, never from the checkout: an edit someone is still making there cannot
   decide a verdict. The plugin check and the instance's own tests run in its sandbox with no network at
-  all, like `run` without its proxy. A check that runs past its time counts as failed. An edit of yours to `config.env` is never reverted or credited to the
+  all, like `run` without its proxy. A check that runs past its time counts as failed, and so does any error of the
+  gate's own (it never lets a change through unjudged). Each run is settled whatever happens to it: the agent
+  and everything it started run in a process group of their own, ended (SIGTERM, then SIGKILL) before the gate
+  looks, on every way out — a normal end, a failure, a timeout, Ctrl-C or the supervisor being stopped; the same
+  holds for each `run` command, so nothing it puts in the background outlives it. A process that left the group
+  (`setsid`) is found by its working folder: once its parent is gone, anything still working in the instance's
+  folder is ended too (your own shells there keep their parent and are spared). A battery exam's copy, a random
+  folder nobody else works in, is swept harder: every process working in it, everything below each, and each one's
+  ancestors while they share its session or process group (a parent that left the copy while its child stayed). One
+  that left the instance's folder is not found; the sandbox is the boundary then (it can write only the instance's folder, and what it writes there
+  later is caught as below). A kept change is committed with exactly the bytes the gate checked — written into
+  git's object store and a separate index, never read again from the working tree — and if the file on disk differs
+  from them by then, it is put back to them (logged as FAILED, with a journal note); the approved-code record is
+  made from the same bytes. **Still open** (residual risk): two races, because the working tree stays writable while
+  it is used. Between the start-of-run check (and its read-back) and the agent importing its code, a change runs
+  unchecked in that run. Between the gate's snapshot and its tests loading the code, a writer can swap a file so that
+  the tests pass on code other than the snapshot, which is then committed as checked. Closing both means testing and
+  launching from a protected snapshot, not the working tree, a redesign not done yet. What limits them: only a process the instance already has running can write there — the sandbox writes nothing
+  outside its folder, and a run's own processes are ended before the gate looks, so it takes one that escaped them
+  (above), or something of yours; a change slipped in before the launch is that run's own change, gated at its
+  settlement, and a file swapped back after the tests is put back to the snapshot's bytes (what is committed); and
+  every check reads through descriptors, never through a link. Stopping a service that starts runs (the API, the scheduler, a terminal
+  conversation) ends its runs' processes first. **Approved code**: after every settlement the supervisor records
+  the code it approved (`.supervisor/baselines/<name>.json`: the last commit, plus what the gate passed that git
+  does not hold — an ignored or untracked file in a code path), where the instance cannot write. Before any run,
+  whatever is not the approved code (an earlier run that ended before it was checked, a file edited from outside)
+  is gated first: kept, or put back as approved, the rejected files copied to `.supervisor/rejected/<name>-<time>/`
+  and named in the instance's journal and the log. A merge, rebase, cherry-pick or revert in progress in the
+  instance's worktree, or code that cannot be compared, refuses the run instead ("run refused" in
+  `.supervisor/supervisor.log`, an alert on the panel): finish or abort the merge and the next run checks it. Until an
+  instance's first settlement under this scheme, its last commit is the approved code. An edit of yours to
+  `config.env` is never reverted or credited to the
   instance: it is committed on its own ("config.env changed from outside the instance"); so is an edit of yours to
   `drive.md` ("drive.md changed by the operator"), with a note in the instance's journal that its drive changed.
 - **Trials** (`trial` tool, [PLAN-trials.md](plans/PLAN-trials.md)): an instance can test a change to its own
@@ -122,7 +191,14 @@
   staged on the branch. Trial replays read the mind as of the replayed cycle's start from the store.
 - **Budgets**: one run per instance at a time; a cycle is stopped after
   `SHAFT_CYCLE_TIMEOUT_S` (2400 s), a sleep after `SHAFT_SLEEP_TIMEOUT_S` (5400 s). Runs know
-  their deadline and wrap up with a report before it; a stopped run leaves a journal note.
+  their deadline and wrap up with a report before it; a stopped run leaves a journal note. A cycle and a sleep
+  also see their *operational envelope* before they hit a limit: calls left this run, minutes left, today's
+  cloud, coder and trial allowances, any probation window (cycles used / needed) and the next sleep — computed by
+  the supervisor (the broker's `GET /envelope`, not a tool and not counted), shown in the first prompt and, calls
+  and minutes, after every step. It carries no keys and no host paths. Replays use the same eight keys
+  (`calls_used`, `calls_max`, `cloud`, `coder`, `trials`, `probation`, `next_sleep`, `next_wake`), with no replay
+  flag. Spend, trial starts and probation counts stop before the replayed cycle's start; the schedule is computed
+  from that start. [Closed probation entries cannot be reconstructed](plans/PLAN-trials.md#8-known-fidelity-gaps-equal-for-both-arms-so-the-comparison-stays-fair).
 - **Your conversation comes first**: `shaft talk` asks other instances' running cycles to wrap
   up at their next turn when they use the same local model server (an instance on a cloud model shares
   nothing and is left alone, in either direction). An instance's running cycle is paused only while a reply

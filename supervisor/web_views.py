@@ -5,6 +5,7 @@ web_pages'; nothing here writes anything.
 """
 from __future__ import annotations
 
+import functools
 import json
 import re
 import time
@@ -216,7 +217,19 @@ def inline(text: str) -> Html:
     return Html(md_inline(str(text)))
 
 
+CACHED_MD = 64 * 1024                                 # texts up to this are rendered once (_rendered)
+
+
 def markdown(text: str) -> Html:
+    from .web_md import render
+    text = str(text)
+    return _rendered(text) if len(text) <= CACHED_MD else render(text)
+
+
+@functools.lru_cache(maxsize=256)
+def _rendered(text: str) -> Html:
+    """A text rendered once: the chat feed renders every turn on each refresh, the same Markdown each time (W12,
+    review 2026-10-24). At most 256 of them, each at most CACHED_MD: 16 MB."""
     from .web_md import render
     return render(text)
 
@@ -536,7 +549,9 @@ def transcript_page(name: str, e: dict, tx_lines: list[tuple[str, str]], thinkin
 
 # -- messages (TUI tab 7) --------------------------------------------------------------------------------------------
 def _first_line(text: str) -> str:
-    return next((l for l in text.splitlines() if l.strip()), "").strip()
+    """A message's first line as its page shows it: the text, not its Markdown."""
+    from .web_md import first_line
+    return first_line(text)
 
 
 def messages_page(ms: list[dict], who: str, people: list[str], names: list[str], csrf: str) -> Html:
@@ -679,12 +694,15 @@ def _chat_attachments(cid: str, k: int, atts: list[dict]) -> Html:
     return h('<div class="atts">{o}</div>', o=join(out)) if out else Html("")
 
 
-def _activity(lines_: list[str], key: str, open_: bool = False) -> Html:
-    """What it did during a reply, collapsible; `key` keeps it open or shut across the feed's refreshes."""
+def _activity(lines_: list[str], key: str, open_: bool = False, item: str = "", ended: bool = False) -> Html:
+    """What it did during a reply, collapsible; `key` keeps it open or shut across the feed's refreshes. `item`: its
+    data-k, when it is an item of a keyed poll itself (live_activity): unkeyed, morph replaced it whole each second
+    and its log jumped back to the top."""
     if not lines_:
         return Html("")
-    return h('<details class="activity" data-key="{k}"{o}><summary>what it did ({n})</summary><div data-scroll-key="{k}">{l}</div></details>',
-             k=key, o=Html(" open") if open_ else "", n=len(lines_), l=join(h("<p>{x}</p>", x=x) for x in lines_))
+    return h('<details class="activity"{i}{e} data-key="{k}"{o}><summary>what it did ({n})</summary><div data-scroll-key="{k}">{l}</div></details>',
+             i=h(' data-k="{i}"', i=item) if item else "", e=Html(" data-ended") if ended else "", k=key, o=Html(" open") if open_ else "", n=len(lines_),
+             l=join(h("<p>{x}</p>", x=x) for x in lines_))
 
 
 def _my_text(text: str) -> Html:
@@ -1008,11 +1026,12 @@ def _later_card(m: dict) -> Html:
     atts = join(h('<a href="/files/{f}/{j}" target="_blank">📎 {n}</a>', f=q(m["file"]), j=j, n=a["name"])
                 for j, a in enumerate(m.get("attachments") or []))
     state = "read" if m.get("read") else "waiting"
-    return h('<div class="turn me later" data-k="b{f}" data-raw="{raw}"><div class="who">you <span class="dim">{ts}</span> '
+    return h('<div class="turn me later" data-k="b{f}" data-raw="{raw}"{mid}><div class="who">you <span class="dim">{ts}</span> '
              '<a href="/messages/{f}" class="laterchip {state}" title="Not answered now: it reads this in its next '
              'cycle">⏾ next cycle · {state}</a>{chips}<button type="button" class="copy small icon" data-copy '
              'title="copy the message as Markdown" aria-label="Copy the message">{copy}</button></div>{text}'
              '<div class="atts">{a}</div></div>', f=q(m["file"]), raw=shown, ts=_turn_time(m["ts"]), state=state,
+             mid=_mid_attr(m.get("mid")),
              chips=_comment_chips(m.get("comments")), copy=ICONS["copy"],
              text=_my_text(shown) if shown else Html(""), a=atts)
 
@@ -1046,9 +1065,28 @@ def _sent_cards(name: str, sent: list[dict], archived: bool = False) -> list[Htm
     return cards
 
 
+def _mid_attr(mid: str | None) -> Html:
+    return h(' data-mid="{m}"', m=mid) if mid else Html("")
+
+
+def live_activity(chat: dict | None) -> Html:
+    """What the reply running now has done so far (/fragment/chat/<name>/live, inside the feed's live turn). Once it
+    ended, what the finished reply did, marked data-ended: the page asks the feed for the answer at once, and the
+    activity does not blank meanwhile (it did, for up to 1.5 s: Grok review of 8735c62)."""
+    if not chat:
+        return Html("")
+    if chat.get("state") == "replying":
+        return _activity((chat.get("reply") or {}).get("activity", []), "live", open_=True, item="act")
+    last = next((t for t in reversed(chat.get("turns") or []) if t["role"] == "assistant"), None)
+    if not last:
+        return Html("")
+    return _activity(last.get("activity") or [], "live", open_=True, item="act", ended=True) \
+        or Html('<span data-k="end" data-ended hidden></span>')
+
+
 def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = False) -> Html:
     """The conversation as it stands: each turn, the files it sent you meanwhile, and the reply running now."""
-    from .web_actions import button
+    from .web_actions import button, post_attrs
     if not chat:
         return join([*_sent_cards(name, sent, archived),
                      h('<p class="dim" data-k="empty">No chat open with {n}. Write below to start one.</p>', n=name)])
@@ -1070,9 +1108,11 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
                 tag = join([tag, _comment_chips(t["comments"])])
             # A comment-only turn's shown text is empty: the chips are the turn, not an empty bubble.
             shown = t.get("shown", t["content"])
-            items.append((t["ts"], h('<div class="turn me" data-k="u{k}" data-raw="{raw}"><div class="who">you '
+            # data-mid: the page's id for the message, so the "sending" copy it shows goes once this one is here (W7)
+            items.append((t["ts"], h('<div class="turn me" data-k="u{k}" data-raw="{raw}"{mid}><div class="who">you '
                                      '<span class="dim">{ts}</span>{tag}{controls}</div>'
                                      '{text}{atts}</div>', k=k, ts=_turn_time(t["ts"]), tag=tag, raw=shown, controls=controls,
+                                     mid=_mid_attr(t.get("mid")),
                                      text=_my_text(shown) if shown else Html(""),
                                      atts=_chat_attachments(chat["id"], k, t.get("attachments")))))
         else:
@@ -1118,22 +1158,26 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
     if chat["state"] == "replying":
         r = chat.get("reply") or {}
         day_separator(r.get("started", ""))
+        # Its activity is polled on its own (/fragment/chat/<name>/live, live_activity): this shell stays the same
+        # for the whole reply, so the feed's refresh is a 304 while it runs (W12, review 2026-10-24).
+        live = (h('<div class="liveact" data-poll="/fragment/chat/{n}/live" data-every="1500" data-keyed="1" '
+                  'data-now="1"></div>', n=q(name)) if not archived else _activity(r.get("activity", []), "live", open_=True))
         feed.append(h('<div class="turn it live" data-k="live"><div class="who">{n} <span class="dim">replying since {s}'
                       '<span class="elapsed" data-since="{iso}"></span></span></div>'
                       '{act}{partial}<div class="actions">{stop}</div></div>', n=name, s=_turn_time(r.get("started", "")),
-                      iso=r.get("started", ""),
-                      act=_activity(r.get("activity", []), "live", open_=True),
+                      iso=r.get("started", ""), act=live,
                       partial=h('<p class="dim">the answer appears when it is ready</p>'),
                       stop=button("chat-stop", "Stop the reply",
                                   "stop this reply? Only the reply stops. The conversation stays open.",
                                   {"cid": chat["id"]}, cls="small")))
     for t in chat.get("queued", []):
         cancel = Html("") if archived else h(
-            '<form data-post="/chat/{n}/unqueue"><input type="hidden" name="mid" value="{mid}">'
-            '<button type="submit" class="small">Cancel</button></form>', n=name, mid=t["mid"])
-        feed.append(h('<div class="turn me" data-k="queue-{mid}"><div class="who">you '
+            '<form class="act" data-post="/chat/{n}/unqueue"{a}><input type="hidden" name="mid" value="{mid}">'
+            '<button type="submit" class="act small">Cancel</button></form>', n=q(name), mid=t["mid"],
+            a=post_attrs("the chat (is it still queued?)"))
+        feed.append(h('<div class="turn me" data-k="queue-{mid}"{dm}><div class="who">you '
                       '<span class="dim">queued — sent when this reply ends</span></div>{text}{atts}{cancel}</div>',
-                      mid=t["mid"], text=_my_text(t["shown"]), cancel=cancel,
+                      mid=t["mid"], dm=_mid_attr(t["mid"]), text=_my_text(t["shown"]), cancel=cancel,
                       atts=join(h('<p class="dim">📎 {n}</p>', n=a["name"]) for a in t.get("attachments", []))))
     if chat.get("pending_edits") and not archived:
         feed.append(h('<p class="pending-edits" data-k="pend">✎ Your changes to {p} go to {n} with your next message.</p>',

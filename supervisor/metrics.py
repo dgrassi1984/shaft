@@ -15,14 +15,17 @@ import hashlib
 import itertools
 import json
 import math
+import os
 import random
 import re
 import secrets
+import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import judge
-from .core import INSTANCES, SUP_DIR, config_values, git_wt, journal_note, knob, positive_int, log, safe_write
+from .core import (INSTANCES, SUP_DIR, UnsafePath, config_values, dir_beneath, git_wt, journal_note, knob, list_beneath,
+                   positive_int, log, safe_read, safe_write)
 
 PROBATION_CYCLES, _ = knob(
     "SHAFT_PROBATION_CYCLES", "6", positive_int, "judged cycles a kept self-change stays on probation (reverted on a "
@@ -128,9 +131,32 @@ def backfill_schema(missing: list[str]) -> dict:
     return _schema({k: props[k] for k in props if k in missing})
 
 SCORE = {"yes": 1.0, "partial": 0.5, "no": 0.0}
+CONFIDENCE_V2 = "criterion_met=yes"
+# Deployment boundary: earlier judgments retain the original confidence question.
+CONFIDENCE_BACKFILL_DATE = "2026-10-24"
 EVIDENCE_HOURS = 72           # messages and conversations before a cycle that may hold its goal's origin
 EVIDENCE_CHARS = 8000
 PRIOR_GOALS = 30
+
+
+def calibration(rows: list[dict]) -> dict:
+    """Score each confidence against the question asked; never pool the two versions."""
+    result = {}
+    for version in ("v1", "v2"):
+        pairs = [(j["confidence"] / 100,
+                  float(j["criterion_met"] == "yes") if version == "v2" else SCORE[j["criterion_met"]])
+                 for j in rows if j.get("confidence") is not None
+                 and (j.get("confidence_of") == CONFIDENCE_V2) == (version == "v2")]
+        n = len(pairs)
+        bands = []
+        for lo, hi in ((0, 40), (40, 70), (70, 101)):
+            outcomes = [s for c, s in pairs if lo <= c * 100 < hi]
+            bands.append({"lo": lo, "hi": min(hi, 100), "n": len(outcomes),
+                          "mean_outcome": sum(outcomes) / len(outcomes) if outcomes else None})
+        result[version] = {"n": n, "mean_confidence": sum(c for c, _ in pairs) / n if n else None,
+                           "mean_outcome": sum(s for _, s in pairs) / n if n else None,
+                           "brier": sum((c - s) ** 2 for c, s in pairs) / n if n else None, "bands": bands}
+    return result
 
 
 def cycle_value(j: dict) -> float | None:
@@ -192,6 +218,14 @@ def judgments(name: str, sup: Path | None = None) -> list[dict]:
     sup = sup or SUP_DIR
     p = sup / "judgments" / f"{name}.jsonl"
     rows = [json.loads(l) for l in p.read_text().splitlines() if l.strip()] if p.exists() else []
+    missing = [r for r in rows if "confidence_of" not in r
+               and r.get("judged_at", "") >= CONFIDENCE_BACKFILL_DATE] if sup == SUP_DIR else []
+    if missing:   # the instance's own episodes are the live ones: only for the supervisor's own record
+        intents = _confidence_questions(name)
+        for r in missing:
+            intent = intents.get(r["episode_ts"], {})
+            if "confidence_of" in intent:
+                r["confidence_of"] = intent["confidence_of"]
     sp = sup / "judgments" / f"{name}-second.jsonl"
     if rows and sp.exists():
         seconds = {}
@@ -205,17 +239,64 @@ def judgments(name: str, sup: Path | None = None) -> list[dict]:
     return rows
 
 
-def live_episodes(name: str) -> list[dict]:
-    out = []
-    for p in sorted((INSTANCES / name / "memory" / "episodes").glob("*.jsonl")):
-        for line in p.read_text().splitlines():
+_QUESTIONS: dict[str, tuple] = {}
+
+
+def _episode_files_key(name: str) -> tuple:
+    """(name, size, mtime) of each episode log (memory/episodes/*.jsonl), stat'ed through the folder's descriptor with
+    no link followed (core.dir_beneath): a link there is never stat'ed through, nor counted. () if the folder is
+    missing or reached through a link."""
+    import stat
+    try:
+        fd = dir_beneath(INSTANCES / name, ["memory", "episodes"])
+    except (FileNotFoundError, UnsafePath):
+        return ()
+    try:
+        out = []
+        for fname in sorted(os.listdir(fd)):
+            if fname.endswith(".jsonl"):
+                st = os.stat(fname, dir_fd=fd, follow_symlinks=False)
+                if stat.S_ISREG(st.st_mode):
+                    out.append((fname, st.st_size, st.st_mtime_ns))
+        return tuple(out)
+    finally:
+        os.close(fd)
+
+
+def _confidence_questions(name: str) -> dict[str, dict]:
+    """Each live episode's intent by its time, re-read only when an episode file changed: rows the supervisor judged
+    before it copied confidence_of stay without it in the file, and judgments() is read every step (the envelope's
+    probation) — it must not re-read every episode each time (Grok's review). Listed, stat'ed and read without
+    following a link (_episode_files_key, live_episodes)."""
+    key = _episode_files_key(name)
+    if _QUESTIONS.get(name, (None,))[0] != key:
+        _QUESTIONS[name] = (key, {ep["ts"]: ep.get("intent") or {} for ep in live_episodes(name)})
+    return _QUESTIONS[name][1]
+
+
+def _instance_text(name: str, rel: str) -> str:
+    """A file in the instance's folder, as text: what the judges read is read without following a link anywhere
+    (core.safe_read) — a link the instance planted would hand a cloud model any file the supervisor can read. A link,
+    a folder or a missing file reads as ""."""
+    return safe_read(INSTANCES / name, rel, "", errors="replace")
+
+
+def _episode_records(name: str):
+    """Every record of the instance's episode logs (memory/episodes/*.jsonl), oldest file first."""
+    for fname in list_beneath(INSTANCES / name, "memory/episodes"):
+        if not fname.endswith(".jsonl"):
+            continue
+        for line in _instance_text(name, f"memory/episodes/{fname}").splitlines():
             try:
                 rec = json.loads(line)
             except ValueError:
                 continue
-            if rec.get("kind") == "live":
-                out.append(rec)
-    return out
+            if isinstance(rec, dict):
+                yield rec
+
+
+def live_episodes(name: str) -> list[dict]:
+    return [rec for rec in _episode_records(name) if rec.get("kind") == "live"]
 
 
 # Tools that write a file, and where: by argument, or a fixed file. Appending tools put the new text at the end.
@@ -263,7 +344,7 @@ def _added_at(text: str, added: list[str]) -> int | None:
 def _written_files(name: str, ep: dict) -> str:
     """Current content of files the cycle wrote — the tool log may cut an argument, a file isn't cut. For a file
     the cycle only appended to, where its addition starts is marked, so the judge can tell new text from old."""
-    root = (INSTANCES / name).resolve()
+    root = INSTANCES / name
     paths: dict[str, bool] = {}           # path -> was it (only) appended to
     added: dict[str, list[str]] = {}      # path -> the texts this cycle appended to it
     for t in ep.get("tools", []):
@@ -279,9 +360,11 @@ def _written_files(name: str, ep: dict) -> str:
                 added.setdefault(rel, []).append(_arg(t["args"], APPENDED_ARG[t["tool"]]))
     parts = []
     for rel, appended in paths.items():
-        p = (root / rel).resolve()
-        if root in p.parents and p.is_file():
-            text = p.read_text(errors="replace")
+        try:   # never through a link, nor outside the folder (core.safe_read refuses "..", "/" and every link)
+            text = safe_read(root, rel, errors="replace")
+        except (OSError, UnsafePath):
+            text = None
+        if text is not None:
             at = _added_at(text, added.get(rel, [])) if appended else None
             if at is None:
                 if len(text) <= FILE_CHARS:
@@ -318,21 +401,19 @@ def _message_time(fname: str) -> datetime | None:
 def _provenance_evidence(name: str, ep: dict) -> str:
     """Where this cycle's goal may have come from, as the supervisor can see it: the messages the cycle read,
     other messages and the conversations of the EVIDENCE_HOURS before it, and the goals.md item it cites."""
-    root = INSTANCES / name
     at = _ts(ep.get("ts", "")) or datetime.now()
     since = at - timedelta(hours=EVIDENCE_HOURS)
-    msgs = root / "memory" / "messages"
     parts, read = [], set(ep.get("inbox") or [])
     for fname in sorted(read):
-        for where in (msgs / fname, root / "inbox" / fname):
-            if where.is_file():
-                parts.append(f"### Read in this cycle: {fname}\n{where.read_text(errors='replace')[:2500]}")
+        for where in ("memory/messages", "inbox"):
+            if (text := _instance_text(name, f"{where}/{fname}")):
+                parts.append(f"### Read in this cycle: {fname}\n{text[:2500]}")
                 break
     earlier = []
-    for p in sorted(msgs.glob("*.md")) if msgs.is_dir() else []:
-        t = _message_time(p.name)
-        if p.name not in read and t and since <= t <= at:
-            earlier.append(f"- {p.name}: {' '.join(p.read_text(errors='replace').split())[:300]}")
+    for fname in list_beneath(INSTANCES / name, "memory/messages"):
+        t = _message_time(fname)
+        if fname.endswith(".md") and fname not in read and t and since <= t <= at:
+            earlier.append(f"- {fname}: {' '.join(_instance_text(name, f'memory/messages/{fname}').split())[:300]}")
     if earlier:
         parts.append("### Earlier messages (last 72 h)\n" + "\n".join(earlier[-15:]))
     talk = []
@@ -343,11 +424,9 @@ def _provenance_evidence(name: str, ep: dict) -> str:
             talk.append(f"- {rec['ts'][:16]} {who}: {' '.join(str(rec.get('content', '')).split())[:300]}")
     if talk:
         parts.append("### What was said to the agent in conversations (last 72 h)\n" + "\n".join(talk[-20:]))
-    goals = root / "self" / "goals.md"
     ref = str((ep.get("intent") or {}).get("origin_ref") or "")
-    if goals.is_file():
-        text = goals.read_text(errors="replace")
-        sections = re.split(r"(?m)^(?=#{2,3} )", text)
+    if (text := _instance_text(name, "self/goals.md")):
+        sections = [x for x in re.split(r"(?m)^(?=#{2,3} )", text) if x.strip()]   # "" before a leading heading
         heads = [s.splitlines()[0] for s in sections if s.startswith("#")]
         cited = [s for s in sections if ref and any(w in s.splitlines()[0] for w in re.findall(r"[\w.-]{2,}", ref))]
         body = ("\n".join(heads) + ("\n\n" + "\n".join(c[:1500] for c in cited[:2]) if cited else ""))
@@ -359,16 +438,7 @@ def _provenance_evidence(name: str, ep: dict) -> str:
 
 
 def _episodes(name: str, kind: str) -> list[dict]:
-    out = []
-    for p in sorted((INSTANCES / name / "memory" / "episodes").glob("*.jsonl")):
-        for line in p.read_text().splitlines():
-            try:
-                rec = json.loads(line)
-            except ValueError:
-                continue
-            if rec.get("kind") == kind:
-                out.append(rec)
-    return out
+    return [rec for rec in _episode_records(name) if rec.get("kind") == kind]
 
 
 def _prior_goals(js: list[dict], before: str) -> str:
@@ -389,14 +459,13 @@ def cycle_model(name: str, ep: dict) -> str | None:
     """The model a cycle ran on, from the instance's own LLM call log (logs/llm_usage.jsonl): the most used
     model among its 'live' calls between the declared intent and the episode. Comparisons stay within one
     model — wren ran on Bonsai, then Haiku, then MiMo within its first day."""
-    path = INSTANCES / name / "logs" / "llm_usage.jsonl"
     end = _ts(ep.get("ts", ""))
     start = _ts(((ep.get("intent") or {}).get("at")) or "") or (end - timedelta(minutes=45) if end else None)
-    if not end or not start or not path.exists():
+    if not end or not start:
         return None
     start -= timedelta(minutes=2)       # the calls before declare_intent belong to the cycle too
     counts: dict[str, int] = {}
-    for line in path.read_text(errors="replace").splitlines():
+    for line in _instance_text(name, "logs/llm_usage.jsonl").splitlines():
         try:
             rec = json.loads(line)
         except ValueError:
@@ -410,10 +479,7 @@ def cycle_model(name: str, ep: dict) -> str | None:
 def own_models(name: str, ep: dict | None = None) -> list[str]:
     """The models an instance thinks with — the one its cycle ran on and the one configured now: the judge rotation
     never grades it with either (no self-preference)."""
-    try:
-        configured = config_values((INSTANCES / name / "config.env").read_text()).get("LLM_MODEL")
-    except OSError:
-        configured = None
+    configured = config_values(_instance_text(name, "config.env")).get("LLM_MODEL")
     return [m for m in ((cycle_model(name, ep) if ep else None), configured) if m]
 
 
@@ -479,6 +545,7 @@ def judge_pending(name: str) -> int:
             verdict["origin_supported"] = None   # nothing declared, nothing to support (the judge said True once)
         rec = {"episode_ts": ep["ts"], "judged_at": datetime.now().isoformat(timespec="seconds"),
                "confidence": intent.get("confidence"),
+               "confidence_of": intent.get("confidence_of"),
                "claimed": (ep.get("finish") or {}).get("criterion_met"),
                "goal": intent.get("goal", "")[:200],
                "origin_declared": intent.get("origin"), "origin_ref": intent.get("origin_ref"),
@@ -718,15 +785,14 @@ CITE_RE = re.compile(r"\[(\d{4}-\d{2}-\d{2})(?: (\d{2}:\d{2}))?\]")
 def check_personality(name: str) -> None:
     """Does each trait's cited journal entry actually support it? (The instance's own check only
     verifies that the entry exists — wren pointed that out about itself.)"""
-    root = INSTANCES / name
-    pers, journal = root / "self" / "personality.md", root / "memory" / "journal.md"
-    if not pers.exists() or not journal.exists():
+    pers, journal = _instance_text(name, "self/personality.md"), _instance_text(name, "memory/journal.md")
+    if not pers or not journal:
         return
-    traits = [t for t in TRAIT_RE.findall(pers.read_text()) if CITE_RE.search(t)]
+    traits = [t for t in TRAIT_RE.findall(pers) if CITE_RE.search(t)]
     if not traits:
         return
     entries = {}
-    for block in journal.read_text().split("\n---\n"):
+    for block in journal.split("\n---\n"):
         block = block.strip()
         m = re.match(r"## (\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})", block)
         if m:
@@ -916,10 +982,9 @@ def stats_text(name: str) -> str:
     retired = [j for j in js if not by_current_judge(j)]
     all_js, js = js, [j for j in js if by_current_judge(j)]      # success and claims: current judges only
     scores = [SCORE[j["criterion_met"]] for j in js]
-    confs = [(j["confidence"] / 100, SCORE[j["criterion_met"]]) for j in js if j.get("confidence") is not None]
+    cal = calibration(js)
     claimed = [j for j in js if j.get("claimed")]
     honest = sum(1 for j in claimed if j["claimed"] == j["criterion_met"])
-    brier = sum((c - s) ** 2 for c, s in confs) / len(confs) if confs else None
     lines = ["# My measured performance", "",
              f"*Written by the supervisor from {len(all_js)} judged cycles. Updated {datetime.now():%Y-%m-%d %H:%M}.*",
              *_sample_note(name),
@@ -937,15 +1002,22 @@ def stats_text(name: str) -> str:
         return "\n".join(lines + _code_section(name) + _traits_section(name) + _trials_section(name)) + "\n"
     lines += [f"- Judged success rate: **{sum(scores) / len(scores):.0%}** (yes=1, partial=0.5)",
               f"- Last 5 cycles: {', '.join(j['criterion_met'] for j in js[-5:])}"]
-    if confs:
-        mean_conf = sum(c for c, _ in confs) / len(confs)
-        lines.append(f"- Average confidence beforehand: {mean_conf:.0%} vs actual {sum(s for _, s in confs) / len(confs):.0%}"
-                     f" → {'over' if mean_conf > sum(s for _, s in confs) / len(confs) else 'under'}confident")
-        lines.append(f"- Calibration (Brier score, 0 = perfect, 0.25 = coin flip): {brier:.2f}")
-        for lo, hi in ((0, 40), (40, 70), (70, 101)):
-            b = [s for c, s in confs if lo <= c * 100 < hi]
-            if b:
-                lines.append(f"  - when I said {lo}–{min(hi, 100)}%: succeeded {sum(b) / len(b):.0%} of {len(b)}")
+    # Confidence was asked as "probability of success" and scored against yes=1/partial=0.5 (v1); it is now asked
+    # as P(criterion met = yes) and scored on that event (v2, REVIEW-autonomy A4). Each version on its own lines.
+    for version, title, outcome in (
+            ("v2", "Calibration v2 — P(criterion met = yes), Brier on met/not met", "criterion met (yes)"),
+            ("v1", "Calibration v1, older question 'probability of success', scored yes=1/partial=0.5; "
+                   "not pooled with v2", "succeeded")):
+        c = cal[version]
+        if not c["n"]:
+            continue
+        lines.append(f"- {title}: Brier {c['brier']:.2f} (n={c['n']}; 0 = perfect, 0.25 = coin flip)")
+        lines.append(f"  - average confidence beforehand {c['mean_confidence']:.0%} vs {outcome} "
+                     f"{c['mean_outcome']:.0%} → {'over' if c['mean_confidence'] > c['mean_outcome'] else 'under'}"
+                     "confident")
+        for b in c["bands"]:
+            if b["n"]:
+                lines.append(f"  - when I said {b['lo']}–{b['hi']}%: {outcome} {b['mean_outcome']:.0%} of {b['n']}")
     if claimed:
         lines.append(f"- My own claim matched the judge: {honest}/{len(claimed)}")
     unsupported = [j for j in js if not j.get("claim_supported", True)]
@@ -997,10 +1069,11 @@ def review_text(names: list[str], hours: float = 24, now: datetime | None = None
         unsupported = sum(1 for j in rows if j.get("claim_supported") is False)
         out.append(f"  verdicts: yes {verdicts['yes']} · partial {verdicts['partial']} · no {verdicts['no']}"
                    f" · claims the log did not support: {unsupported}")
-        confs = [(j["confidence"] / 100, SCORE[j["criterion_met"]]) for j in rows if j.get("confidence") is not None]
-        if confs:
-            out.append(f"  confidence beforehand {sum(c for c, _ in confs) / len(confs):.0%} vs judged "
-                       f"{sum(s for _, s in confs) / len(confs):.0%}")
+        for version, c in calibration(rows).items():
+            if c["n"]:
+                question = "criterion met = yes" if version == "v2" else "probability of success, yes=1/partial=0.5"
+                out.append(f"  confidence {version} ({question}) beforehand {c['mean_confidence']:.0%} vs judged "
+                           f"{c['mean_outcome']:.0%} (n={c['n']}, Brier {c['brier']:.2f}; versions not pooled)")
         if valued(rows):
             levels = " · ".join(f"{v}: {sum(1 for j in valued(rows) if j['value'] == v)}" for v in range(6))
             out.append(f"  value grades: {levels}")
@@ -1129,13 +1202,38 @@ def start_probation(name: str, commit: str, files: list[str], trial: dict | None
     log(f"{name}: change {commit[:8]} on probation (baseline {entry['baseline']}, n={len(recent)})")
 
 
-def _verdict(name: str, entry: dict, js: list[dict], tools: dict[str, set[str]]) -> dict | None:
-    """None while the change is still being watched; else {"keep": bool, ...} with the numbers."""
-    c = entry["commit"][:8]
+def _probation_after(entry: dict, js: list[dict], tools: dict[str, set[str]]) -> tuple:
+    """The same rated, used, same-model cycles for the verdict and the operational envelope."""
     later = [j for j in js[entry["judged_before"]:] if cycle_value(j) is not None and by_current_judge(j)]
     used = [j for j in later if _used(entry["files"], tools.get(j.get("episode_ts", ""), set()))]
     model = (used or later or [{}])[0].get("model")      # before and after on the same model only
     after = _values([j for j in used if j.get("model") == model])
+    return later, used, model, after
+
+
+def probation_status(name: str, as_of: datetime | None = None) -> list[dict]:
+    """The open probation windows, for the operational envelope (REVIEW-autonomy A5): cycles counted as _verdict
+    counts them."""
+    p = _probation_path(name)
+    entries = json.loads(p.read_text()) if p.exists() else []
+    if as_of is not None:
+        entries = [e for e in entries if datetime.fromisoformat(e["since"]) < as_of]
+    if not entries:
+        return []
+    js, tools = judgments(name), _tools_by_cycle(name)
+    if as_of is not None:
+        js = [j for j in js if datetime.fromisoformat(j["judged_at"]) < as_of]
+    return [{"commit": e["commit"][:8], "files": [f for f in e["files"]
+             if not Path(f).is_absolute() and ".." not in Path(f).parts],
+             "cycles_used": min(len(_probation_after(e, js, tools)[3]), PROBATION_CYCLES),   # _verdict scores no more
+             "cycles_needed": PROBATION_CYCLES}
+            for e in entries]
+
+
+def _verdict(name: str, entry: dict, js: list[dict], tools: dict[str, set[str]]) -> dict | None:
+    """None while the change is still being watched; else {"keep": bool, ...} with the numbers."""
+    c = entry["commit"][:8]
+    later, used, model, after = _probation_after(entry, js, tools)
     if len(after) < PROBATION_CYCLES:
         if len(later) >= PROBATION_EXPIRY * PROBATION_CYCLES:
             log(f"{name}: probation {c}: used in {len(used)} of {len(later)} rated cycles since — kept, "
@@ -1163,17 +1261,13 @@ def _blob(root: Path, rev: str, rel: str) -> bytes | None:
     return r.stdout if r.returncode == 0 else None
 
 
-def _one_line(r) -> str:
-    return " ".join((r.stderr or r.stdout or "").split())[:200] or f"exit {r.returncode}"
-
-
 def restore_change(name: str, entry: dict) -> str | None:
     """Undo one self-change by restoring exactly its recorded files to their content at the change's parent
     commit — never `git revert` of the run commit, which also holds the run's memory (the append-only episode
     log, the journal, self/) and conflicts with every later run. The restored code must pass the test gate,
     and is committed by the supervisor. Returns None on success, else why nothing was changed."""
     from . import gate
-    from .core import HOME, UnsafePath, contained
+    from .core import HOME, safe_read_bytes
     root, commit, files = INSTANCES / name, entry["commit"], list(entry["files"])
     not_code = [f for f in files if not Path(f).parts or Path(f).parts[0] not in gate.CODE_PATHS
                 or ".." in Path(f).parts]
@@ -1183,18 +1277,24 @@ def restore_change(name: str, entry: dict) -> str | None:
         r = git_wt(root, "rev-parse", "--verify", "--quiet", rev + "^{commit}", check=False)
         if r.returncode != 0:
             return f"commit {rev} not found on instance/{name}"
-    try:
-        now = {rel: (t.read_bytes() if (t := contained(root, *Path(rel).parts)).is_file() else None)
-               for rel in files}
-    except UnsafePath as e:
-        return f"unsafe path: {e}"
+    now = {}
+    for rel in files:
+        try:
+            now[rel] = safe_read_bytes(root, rel)   # no link followed
+        except FileNotFoundError:
+            now[rel] = None
+        except UnsafePath as e:
+            return f"unsafe path: {e}"
     moved = [rel for rel in files if now[rel] != _blob(root, commit, rel)]
     if moved:
         return (f"{', '.join(moved)} changed again after {commit[:8]}; restoring would also undo that later "
                 "change")
     before = {rel: b for rel in files if (b := _blob(root, commit + "^", rel)) is not None}
     current = {rel: b for rel, b in now.items() if b is not None}
-    gate.restore(root, before, files)
+    try:
+        gate.restore(root, before, files)
+    except gate.RestoreFailed as e:   # kept on probation; what is left differs from the approved code: gated next run
+        return f"the restore could not be completed: {e}"
     ok, out = gate.run_tests(root, HOME)
     if not ok:
         gate.restore(root, current, files)
@@ -1202,13 +1302,30 @@ def restore_change(name: str, entry: dict) -> str | None:
         return f"the tests fail with the earlier version ({last[0].strip()[:200]})"
     msg = (f"{name}: supervisor restored {len(files)} file(s) to before {commit[:8]} (failed probation)\n\n"
            + "\n".join(f"- {f}" for f in files))
-    add = git_wt(root, "add", "-A", "--", *files, check=False)
-    done = add if add.returncode else git_wt(root, *SUPERVISOR_GIT, "commit", "-q", "-m", msg, "--", *files,
-                                              check=False)
-    if done.returncode != 0:
+    from . import baseline
+    from .core import _commit_gated
+    try:   # exactly the bytes restored and tested, never the working tree read again (`git add`: a write while the
+        _commit_gated(name, root, None, msg, [], files, before,   # tests ran was committed, and so approved)
+                      who=("SHAFT supervisor", "supervisor@shaft.localhost"))
+    except subprocess.CalledProcessError as e:
         gate.restore(root, current, files)
-        git_wt(root, "reset", "-q", "--", *files, check=False)
-        return f"git could not commit the restore: {_one_line(done)}"
+        from .core import err_text
+        return f"git could not commit the restore: {err_text(e)[:300]}"
+    if (drift := gate.unrestored(root, before, files)):
+        log(f"{name}: FAILED check: {', '.join(drift)} written after the probation's restore was tested — committed "
+            "as tested and put back")
+        journal_note(root, "Supervisor: code written after the gate",
+                     "While the probation's restore was tested, " + ", ".join(drift) + " changed on disk (something "
+                     "still running wrote it). What was committed is what was tested, and the file is put back to it.")
+        try:
+            gate.restore(root, before, drift)
+        except gate.RestoreFailed as e:
+            log(f"{name}: FAILED to put back {', '.join(drift)} after the probation's restore: {e} — the next run "
+                "gates it")
+    try:
+        baseline.update(name, root, before, files)
+    except (baseline.BaselineError, OSError, subprocess.CalledProcessError, SystemExit) as e:
+        log(f"{name}: FAILED to record the approved code after the probation's restore ({e})")
     return None
 
 

@@ -5,8 +5,10 @@
 //                            the operator types that word instead of clicking OK), data-after="home" goes to / after; data-reset
 //                            clears it once sent, data-diff="/preview/…" shows the diff with Apply and Back (nothing
 //                            is saved until Apply); data-timeout is seconds to wait, from the server's own limit;
-//                            data-check names the page a lost answer tells you to look at. A form with input[name=mid]
-//                            can be sent again. The reply is a toast and the polled parts refresh
+//                            data-check names the page a lost answer tells you to look at. The composer (its
+//                            input[name=mid]) can be sent again; data-guard asks before leaving with an unsaved edit,
+//                            data-keep keeps its text in this browser until it is saved. The reply is a toast and
+//                            the polled parts refresh
 //   data-row                 a saved form replaces only its nearest row with the server's new value and token
 // Listeners are delegated from the document, so content swapped in by a poll needs no re-binding.
 (() => {
@@ -45,7 +47,8 @@
   function announce(text) {                       // for VoiceOver only (visually hidden): a reply that arrived
     const box = region("announce", "status");
     box.textContent = "";
-    setTimeout(() => { box.textContent = text; }, 50);
+    clearTimeout(box._t);                         // two at once: the newer one is read, not whichever timer ran last
+    box._t = setTimeout(() => { box.textContent = text; }, 50);
   }
 
   function toast(text, bad) {
@@ -136,12 +139,20 @@
     else window.scrollTo(0, document.body.scrollHeight);
   }
 
-  // What a refresh must not replace: text being selected (to quote it), a document being edited (Save's check says
-  // if it changed), a field being typed in (a new document's name).
+  // What a refresh must not replace: text being selected (to quote it) — except in a keyed feed, whose morph leaves the
+  // message holding the selection as it is (a selection left in the chat stopped its refresh for good) —, a document
+  // being edited (Save's check says if it changed), a field being typed in (a new document's name).
+  // An editor counts while it is on screen or holds unsaved text: one left open, unchanged, in a closed documents
+  // sheet stopped the panel's refresh for the rest of the visit (no new-document badge, nothing opened on its own).
   function busyIn(el) {
-    if (selectingIn(el) || el.querySelector(".editing")) return true;
+    if (selectingIn(el) && !el.dataset.keyed) return true;
+    if ([...el.querySelectorAll(".editing")].some(v => v.getClientRects().length || editDirty(v))) return true;
     const typing = document.activeElement;
     return !!(typing && el.contains(typing) && typing.matches("input, textarea"));
+  }
+  function editDirty(view) {
+    const box = view.querySelector("form.docedit textarea"), raw = view.querySelector("textarea.raw");
+    return !!box && !!raw && box.value !== raw.value;
   }
 
   // The network (docs/plans/PLAN-pwa P3). A refresh sends the version it has (If-None-Match) and an unchanged one costs a 304;
@@ -162,20 +173,27 @@
   }
 
   // Replace a keyed feed's items one by one (data-k): what did not change stays in place, with its scroll, its open
-  // strips and anything the page added to it (copy buttons); a turn being sent stays until its own turn arrives.
+  // strips and anything the page added to it (copy buttons); a turn being sent stays until its own turn arrives —
+  // the one with its message id (data-mid): one whose turn came in a refresh before its send returned stayed beside
+  // it, "sending…", for good. An item holding the selection is not replaced: false then, and the caller asks again.
   function morph(el, html) {
     const next = new DOMParser().parseFromString(`<!doctype html><body>${html}`, "text/html").body;
     const children = [...el.children];
-    const sending = new Set(children.filter(c => c.classList.contains("sending") && !c.dataset.done));
+    const arrived = new Set([...next.children].map(n => n.dataset.mid).filter(Boolean));
+    const sending = new Set(children.filter(c => c.classList.contains("sending") && !c.dataset.done
+      && !arrived.has(c.dataset.mid)));
     const keyed = new Map(children.filter(c => !c.classList.contains("sending") && c.dataset.k)
       .map(c => [c.dataset.k, c]));
+    const held = new Set(children.filter(c => selectingIn(c)));
     const kept = new Set();
+    let complete = true;
     let cursor = el.firstElementChild;
     [...next.children].forEach(n => {
       const cur = keyed.get(n.dataset.k);
       const src = n.outerHTML;
       let node = cur;
-      if (!cur || cur._src !== src) {
+      if (cur && cur._src !== src && held.has(cur)) complete = false;   // selected: left as it is until it lets go
+      else if (!cur || cur._src !== src) {
         node = document.importNode(n, true);
         node._src = src;
         if (cur) {
@@ -183,7 +201,10 @@
           node.querySelectorAll("details[data-key]").forEach(d => {
             if (details.has(d.dataset.key)) d.open = details.get(d.dataset.key);
           });
-          const scrolls = new Map([...cur.querySelectorAll("[data-scroll-key]")].map(d => [d.dataset.scrollKey, d.scrollTop]));
+          // Where each scrolling part was, and whether at its end: one at the end follows what is added (a reply's
+          // activity), one scrolled up stays where its reader left it
+          const scrolls = new Map([...cur.querySelectorAll("[data-scroll-key]")].map(d => [d.dataset.scrollKey,
+            { top: d.scrollTop, end: d.scrollTop + d.clientHeight >= d.scrollHeight - 4 }]));
           // Restore after insertion: detached elements have no scrollable layout.
           node._scrolls = scrolls;
           const clocks = new Map([...cur.querySelectorAll(".elapsed[data-since]")].map(d => [d.dataset.since, d.textContent]));
@@ -201,13 +222,19 @@
       kept.add(node);
       if (node._scrolls) {
         node.querySelectorAll("[data-scroll-key]").forEach(d => {
-          if (node._scrolls.has(d.dataset.scrollKey)) d.scrollTop = node._scrolls.get(d.dataset.scrollKey);
+          const was = node._scrolls.get(d.dataset.scrollKey);
+          if (was) d.scrollTop = was.end ? d.scrollHeight : was.top;
         });
         delete node._scrolls;
       }
     });
-    children.forEach(c => { if (!kept.has(c) && !sending.has(c)) c.remove(); });
+    children.forEach(c => {
+      if (kept.has(c) || sending.has(c)) return;
+      if (held.has(c)) { complete = false; return; }  // gone from the chat, but selected: it goes once let go
+      c.remove();
+    });
     sending.forEach(c => el.appendChild(c));          // kept last, until the server's turn replaces it
+    return complete;
   }
 
   function poll(el) {
@@ -220,7 +247,7 @@
     const later = (ms) => { clearTimeout(timer); timer = setTimeout(tick, ms); };
     async function tick() {
       const url = el.dataset.poll;                  // read each time: the documents panel changes what it shows
-      if (!el.isConnected) return;
+      if (!el.isConnected) { unbind(); return; }    // a poll inside one that replaced it (a reply's activity)
       if (running) { again = true; return; }
       const hidden = document.visibilityState !== "visible";
       // Slower, not stopped: a hidden tab (the rail keeps the unread marks and the badge), a panel not on screen
@@ -231,7 +258,10 @@
       const ctl = new AbortController();
       const limit = setTimeout(() => ctl.abort(), POLL_LIMIT_MS);
       try {
-        const headers = el.dataset.etag && el.dataset.etagUrl === url ? { "If-None-Match": el.dataset.etag } : {};
+        // The feed's poll says when the page sent it: one that arrives after the page said it went away is not
+        // watching (web_chat.watching)
+        const headers = { ...(el.dataset.etag && el.dataset.etagUrl === url ? { "If-None-Match": el.dataset.etag } : {}),
+                          ...(el.dataset.follow ? { "X-Shaft-At": String(Date.now()) } : {}) };
         const r = await fetch(url, { credentials: "same-origin", cache: "no-store", signal: ctl.signal, headers });
         if (pairAgain(r)) return;
         checkVersion(r);
@@ -264,10 +294,13 @@
               ? box.scrollTop + box.clientHeight >= box.scrollHeight - 40
               : window.innerHeight + window.scrollY >= document.body.scrollHeight - 40;
             const oldKeys = new Set([...el.querySelectorAll(".turn[data-k]")].map(n => n.dataset.k));
-            if (el.dataset.follow) el._atBottom = atBottom;
-            if (el.dataset.keyed) morph(el, body);
-            else el.innerHTML = body;
-            el.dataset.last = body;
+            // The feed this follows to its end: its own, or the one it sits in (the running reply's activity)
+            const follower = el.dataset.follow ? el : el.closest && el.closest("[data-follow]");
+            if (follower) follower._atBottom = atBottom;
+            const whole = el.dataset.keyed ? morph(el, body) !== false : (el.innerHTML = body, true);
+            if (whole) el.dataset.last = body;
+            else { delete el.dataset.last; delete el.dataset.etag; }   // a selected item kept: the next one brings it
+            el.querySelectorAll("[data-poll]").forEach(inner => { if (!inner._tick) poll(inner); });
             el.querySelectorAll("details[data-key]").forEach(d => {
               if (open.has(d.dataset.key)) d.open = true;
               if (hover.has(d.dataset.key)) d._hover = true;
@@ -278,7 +311,9 @@
                 || el.querySelector('details[data-key] summary');
               if (target) target.focus({ preventScroll: true });
             }
-            if (atBottom && el.dataset.follow) toBottom(el);
+            if (atBottom && follower) toBottom(follower);
+            // A poll inside the feed (the reply's activity) that says the reply ended: the feed brings the answer now
+            if (follower && follower !== el && follower._tick && el.querySelector("[data-ended]")) follower._tick();
             const newBelow = !!box && [...el.querySelectorAll(".turn[data-k]")].some(n =>
               !oldKeys.has(n.dataset.k) && n.getBoundingClientRect().top >= box.getBoundingClientRect().bottom);
             el.dispatchEvent(new CustomEvent("shaft:swapped", { bubbles: true, detail: { newBelow } }));
@@ -310,10 +345,22 @@
     }
     el._tick = tick;
     later(el.dataset.now ? 0 : every);                 // a first render without live data (the rail): fill it now
-    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") tick(); });
-    window.addEventListener("pageshow", () => tick());   // back from the cache or the app switcher
-    window.addEventListener("online", () => { fails = 0; tick(); });
-    document.addEventListener("shaft:refresh", () => { if (running) again = true; else later(300); });
+    const onVisible = () => { if (document.visibilityState === "visible") tick(); };
+    const onShow = () => tick();                       // back from the cache or the app switcher
+    const onOnline = () => { fails = 0; tick(); };
+    const onRefresh = () => { if (running) again = true; else later(300); };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("pageshow", onShow);
+    window.addEventListener("online", onOnline);
+    document.addEventListener("shaft:refresh", onRefresh);
+    function unbind() {                                // gone from the page: nothing of it stays behind
+      clearTimeout(timer);
+      if (!document.removeEventListener) return;
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("pageshow", onShow);
+      window.removeEventListener("online", onOnline);
+      document.removeEventListener("shaft:refresh", onRefresh);
+    }
   }
 
 
@@ -325,10 +372,12 @@
     return form.dataset.multipart ? 180000 : 30000;
   }
 
-  // A lost answer. Only a chat send carries an id (input[name=mid]) the server will not apply twice. Every other
-  // action may have happened: say so, and where to look, and never that it was not sent.
+  // A lost answer. Only a chat send (the composer) carries an id the server will not apply twice. Every other action
+  // may have happened — Cancel on a queued message carries its id too, and still may have —: say so, and where to
+  // look, and never that it was not sent.
+  const chatSend = (form) => /^\/chat\/[^/]+\/send$/.test(form.dataset.post || "");
   function lostAnswer(form, err, waitMs) {
-    if (form.querySelector("input[name=mid]")) {
+    if (chatSend(form) && form.querySelector("input[name=mid]")) {
       return err.name === "AbortError" ? "No answer: sending it again is safe (it is not sent twice)"
         : `Not sent: ${err.message} — sending it again is safe`;
     }
@@ -337,6 +386,23 @@
       return `No answer within ${Math.round(waitMs / 1000)}s: it may still have happened — check ${where} before trying again`;
     }
     return `No answer (${err.message}): it may still have happened — check ${where} before trying again`;
+  }
+
+  // What a refusal box shows: this server's own refusal fragment, as it wrote it (escaped) — or, for a whole page (a
+  // 403's notice page, the proxy's error) or plain text (413), only its words: a whole page landed inside the
+  // document view, its navigation and all (W15, review 2026-10-24).
+  function refusalNodes(r, body) {
+    const html = (r.headers.get("Content-Type") || "text/html").toLowerCase().startsWith("text/html");
+    if (html && !/^\s*<!doctype|<html[\s>]/i.test(body)) {
+      return [...new DOMParser().parseFromString(body, "text/html").body.childNodes];
+    }
+    const doc = html ? new DOMParser().parseFromString(body, "text/html") : null;
+    const notice = doc && doc.querySelector ? doc.querySelector("section.notice") : null;
+    const words = (notice ? [...notice.querySelectorAll("h1, p")].map(n => n.textContent).join(" — ")
+      : doc ? doc.body.textContent : body).replace(/\s+/g, " ").replace(/ — Back to app$/, "").trim();
+    const p = document.createElement("p");
+    p.textContent = words.slice(0, 600) || `HTTP ${r.status}`;
+    return [p];
   }
 
   function showDiff(form, text) {
@@ -409,7 +475,7 @@
     form.dataset.busy = "1";
     const box = form.querySelector("textarea[name=text]");
     const typed = box ? box.value : null;            // what this send carries
-    const mid = form.querySelector("input[name=mid]");
+    const mid = chatSend(form) ? form.querySelector("input[name=mid]") : null;
     if (mid && !mid.value) mid.value = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
     const sentMid = mid ? mid.value : "";
     const payload = new FormData(form);
@@ -419,10 +485,12 @@
     if (form.dataset.draft && mid) {
       try {
         localStorage.setItem(draftKey(form), typed);
-        localStorage.setItem(pendingKey(form), JSON.stringify({ mid: sentMid, text: typed }));
+        // files: their names — a reload cannot keep the files themselves, so it says to attach them again
+        localStorage.setItem(pendingKey(form), JSON.stringify({ mid: sentMid, text: typed,
+                                                                files: sentFiles.map(f => f.name) }));
       } catch (e) { /* no storage: retry still works in this page */ }
     }
-    const shown = form.dataset.draft ? pending(form) : null;
+    const shown = form.dataset.draft ? pending(form, sentMid) : null;
     const multipart = !!form.dataset.multipart;          // files go with it: the browser sets the boundary
     const row = form.closest("[data-row]");
     const waitMs = waitMsFor(form);
@@ -441,9 +509,7 @@
       toast(textOf(body) || (r.ok ? "done" : `HTTP ${r.status}`), !r.ok);
       const refusal = form.querySelector("[data-refusal]") || (form.dataset.after === "doc-deleted"
                       ? form.closest(".docview").querySelector("[data-delete-refusal]") : null);
-      if (refusal) {                                  // all of it, as this server wrote it (escaped): what changed
-        refusal.replaceChildren(...(r.ok ? [] : new DOMParser().parseFromString(body, "text/html").body.childNodes));
-      }
+      if (refusal) refusal.replaceChildren(...(r.ok ? [] : refusalNodes(r, body)));
       const now = r.headers.get("X-Doc-Sha");         // refused as stale: Save again replaces it, knowingly
       if (!r.ok && now && form.querySelector("input[name=sha]")) form.querySelector("input[name=sha]").value = now;
       if (r.ok && r.headers.get("X-Row") === "1") {
@@ -467,7 +533,15 @@
       }
       if (r.ok && form.dataset.after === "comment-saved") refreshDocs();
       if (r.ok && mid && mid.value === sentMid) mid.value = "";               // sent: the next message gets an id of its own
-      if (r.ok && shown) shown.dataset.done = "1";   // goes when the feed brings the turn as the server saved it
+      if (r.ok && shown) {                            // goes when the feed brings the turn as the server saved it —
+        shown.dataset.done = "1";                     // now, if a refresh brought it while this was on its way
+        if ([...document.querySelectorAll(".feed [data-mid]")].some(n => n !== shown && n.dataset.mid === sentMid)) {
+          shown.remove();
+        }
+      }
+      // what it holds now is what is saved (a data-reset form goes back to its defaults below instead)
+      if (r.ok && form.dataset.guard !== undefined && !form.dataset.reset) markSaved(form);
+      if (r.ok && form.dataset.keep) dropKept(form);   // saved: the copy kept in this browser goes
       if (r.ok && form.dataset.reset) {
         const later = box && box.value !== typed ? box.value : null;   // typed while it was sending: kept
         if (form.dataset.draft) {
@@ -646,9 +720,62 @@
     ev.preventDefault();
     ev.returnValue = "";
   });
+  // An edit of a page's own value (drive.md, a Config or Settings value): leaving with it unsaved asks first, and a
+  // form with data-keep keeps its text in this browser until it is saved — an iOS back-swipe lost a long drive.md
+  // edit (W14, review 2026-10-24). Unsaved is unlike what the page was drawn with (or the saved row it got since).
+  function fieldDirty(f) {
+    if (f.type === "hidden" || f.type === "file" || f.type === "submit" || f.disabled) return false;
+    if (f.type === "checkbox" || f.type === "radio") return f.checked !== f.defaultChecked;
+    if (f.tagName === "SELECT") return [...f.options].some(o => o.selected !== o.defaultSelected);
+    return f.value !== f.defaultValue;
+  }
+  const guardDirty = (form) => [...form.querySelectorAll("input, textarea, select")].some(fieldDirty);
+  // A save that went through: the form's values are its saved ones. A saved row usually replaces the form; when none
+  // came back (or for a form that is not a row), the old values still read as unsaved: leaving warned, and the next
+  // input kept the "draft" again (Grok review of 8735c62). A data-reset form (Add a key) clears itself instead.
+  function markSaved(form) {
+    for (const f of form.querySelectorAll("input, textarea, select")) {
+      if (f.type === "checkbox" || f.type === "radio") f.defaultChecked = f.checked;
+      else if (f.tagName === "SELECT") [...f.options].forEach(o => { o.defaultSelected = o.selected; });
+      else if (f.type !== "file") f.defaultValue = f.value;
+    }
+  }
+  window.addEventListener("beforeunload", (ev) => {
+    if (![...document.querySelectorAll("form[data-guard]")].some(guardDirty)) return;
+    document.querySelectorAll("form[data-keep]").forEach(keepText);
+    ev.preventDefault();
+    ev.returnValue = "";
+  });
+  const keptKey = (form) => `shaft.draft.${form.dataset.keep}`;
+  function keepText(form) {
+    const box = form.querySelector("textarea");
+    try {
+      if (box.value === box.defaultValue) localStorage.removeItem(keptKey(form));
+      else localStorage.setItem(keptKey(form), JSON.stringify({ text: box.value,
+        sha: form._keptSha || (form.querySelector("input[name=sha]") || {}).value || "" }));
+    } catch (e) { /* no storage: the leave warning still asks */ }
+  }
+  function dropKept(form) {
+    try { localStorage.removeItem(keptKey(form)); } catch (e) { /* none */ }
+  }
+  function restoreKept(form) {
+    const box = form.querySelector("textarea"), sha = form.querySelector("input[name=sha]");
+    let kept = null;
+    try { kept = JSON.parse(localStorage.getItem(keptKey(form)) || "null"); } catch (e) { /* none kept */ }
+    if (!box || !kept || typeof kept.text !== "string" || kept.text === box.value) return;
+    box.value = kept.text;
+    form._keptSha = typeof kept.sha === "string" ? kept.sha : "";
+    // The page's sha stays: Apply is checked against what is there now, and its diff, shown first, says what changes
+    const older = sha && form._keptSha && form._keptSha !== sha.value;
+    const note = form.querySelector("[data-keep-note]");
+    if (note) note.textContent = older ? "Unsaved edit restored — begun on an older version: check the diff before Apply"
+      : "Unsaved edit restored";
+  }
   document.addEventListener("input", (ev) => {
     const reviewing = ev.target.closest && ev.target.closest("form[data-diff]");
     if (reviewing && ev.target.name === "text") hideDiff(reviewing);   // the shown diff is no longer this text
+    const keeping = ev.target.closest && ev.target.closest("form[data-keep]");
+    if (keeping && ev.target.tagName === "TEXTAREA") keepText(keeping);
     const docform = ev.target.closest && ev.target.closest("form.docedit");
     if (docform) { grow(ev.target, 0.7); keepDocDraft(docform); return; }
     const midf = ev.target.closest && ev.target.closest("form[data-files]");
@@ -658,6 +785,12 @@
     grow(ev.target);
     try { localStorage.setItem(draftKey(form), ev.target.value); } catch (e) { /* no storage: no draft kept */ }
   });
+  // An attempt whose answer was lost: delivered if the chat has its id — the ids the page was drawn with
+  // (data-sent-mids), or a turn the feed brought since (data-mid: the page's list is never refreshed by the poll).
+  function delivered(form, mid) {
+    return JSON.parse(form.dataset.sentMids || "[]").includes(mid)
+      || [...document.querySelectorAll(".feed [data-mid]")].some(n => !n.classList.contains("sending") && n.dataset.mid === mid);
+  }
   function restoreDraft() {
     const form = document.querySelector("form[data-draft]");
     if (!form) return;
@@ -666,30 +799,53 @@
       if (!box.value) box.value = localStorage.getItem(draftKey(form)) || "";
       const attempt = JSON.parse(localStorage.getItem(pendingKey(form)) || "null");
       if (attempt && attempt.text === box.value && typeof attempt.mid === "string") {
-        const delivered = JSON.parse(form.dataset.sentMids || "[]").includes(attempt.mid);
-        if (delivered) {
+        if (delivered(form, attempt.mid)) {
           box.value = "";
           localStorage.removeItem(draftKey(form));
           localStorage.removeItem(pendingKey(form));
-        } else form.querySelector("input[name=mid]").value = attempt.mid;
+        } else {
+          form.querySelector("input[name=mid]").value = attempt.mid;
+          const files = Array.isArray(attempt.files) ? attempt.files.filter(f => typeof f === "string") : [];
+          // Files cannot outlive a reload: sent again as it stands, it would go without them, unsaid
+          if (files.length) toast(`Not sent yet, and its files could not be kept: attach ${files.join(", ")} again`, true);
+        }
       }
     } catch (e) { /* no usable saved attempt */ }
     grow(box);
   }
-  function sent(form) {
-    try { localStorage.removeItem(draftKey(form)); } catch (e) { /* none */ }
+  // The feed brought the turn of an attempt still in the composer (its answer was lost, it landed after all): the
+  // composer lets it go, as a successful send does, unless it was changed since.
+  function reconcileSent() {
+    const form = document.querySelector("form[data-draft]");
+    const mid = form && form.querySelector("input[name=mid]");
+    if (!mid || !mid.value || form.dataset.busy || !delivered(form, mid.value)) return;
+    const box = form.querySelector("textarea");
+    let attempt = null;
+    try { attempt = JSON.parse(localStorage.getItem(pendingKey(form)) || "null"); } catch (e) { /* none */ }
+    if (attempt && attempt.mid === mid.value && attempt.text !== box.value) return;   // edited since: a new message
+    box.value = "";
+    if (form.querySelector("input[type=file]").files.length) setFiles(form, []);   // they went with it
+    mid.value = "";
+    sent(form);
+  }
+  function sent(form) {                          // the attempt went: neither its draft nor its retry id is kept
+    try {
+      localStorage.removeItem(draftKey(form));
+      localStorage.removeItem(pendingKey(form));
+    } catch (e) { /* none */ }
     grow(form.querySelector("textarea"));
   }
 
   // What you send shows in the feed at once, marked "sending", until the feed's next refresh replaces it with the
   // chat as the server saved it; if it fails, it goes and your text and files stay in the composer.
-  function pending(form) {
+  function pending(form, mid) {
     const feed = document.querySelector(".feed[data-follow]");
     const text = (form.querySelector("textarea") || {}).value || "";
     const files = [...(form.querySelector("input[type=file]") || { files: [] }).files].map(f => f.name);
     if (!feed || (!text.trim() && !files.length)) return null;
     const turn = document.createElement("div");
     turn.className = "turn me sending";
+    if (mid) turn.dataset.mid = mid;                 // the server's turn carries the same: then this one goes
     const who = document.createElement("div");
     who.className = "who";
     who.textContent = "you · sending…";
@@ -823,16 +979,18 @@
   document.addEventListener("click", (ev) => {
     const b = ev.target.closest && ev.target.closest("[data-copy]");
     if (!b) return;
-    const pre = b.closest("pre");
+    const pre = b.closest(".prewrap") ? b.closest(".prewrap").querySelector("pre") : b.closest("pre");
     copyText(pre ? pre.querySelector("code, span.code")?.textContent ?? pre.textContent
                  : (b.closest("[data-raw]") || {}).dataset?.raw || "", b);
   });
-  function decorate(root) {                    // a copy button on each code block of an answer
+  // A copy button on each code block of an answer or a document: beside the block, in a wrapper, not inside it — the
+  // block scrolls sideways, and a button inside scrolled away with its first lines (W18, review 2026-10-24).
+  function decorate(root) {
     root.querySelectorAll(".turn.it pre, .docview pre").forEach(pre => {
-      if (pre.querySelector("[data-copy]")) return;
-      const code = document.createElement("span");
-      code.className = "code";
-      while (pre.firstChild) code.appendChild(pre.firstChild);
+      if (pre.parentElement && pre.parentElement.classList.contains("prewrap")) return;
+      const wrap = document.createElement("div");
+      wrap.className = "prewrap";
+      pre.parentNode.insertBefore(wrap, pre);
       const b = document.createElement("button");
       b.type = "button";
       b.className = "copy small icon";
@@ -840,7 +998,7 @@
       b.title = "Copy the code";
       b.setAttribute("aria-label", "Copy the code");
       b.innerHTML = icons.copy;
-      pre.append(code, b);
+      wrap.append(pre, b);
     });
   }
 
@@ -860,6 +1018,7 @@
     if (feed.querySelectorAll) decorate(feed);
     if (!feed.dataset || !feed.dataset.follow) return;
     syncQueue(feed);
+    reconcileSent();
     const box = feed.closest("[data-scroll]");
     const nb = document.querySelector("[data-newbelow]");
     if (box && nb && ev.detail?.newBelow && !feed._atBottom) nb.hidden = false;
@@ -950,6 +1109,13 @@
     const q = quotable();
     quoteButton().hidden = true;
     if (!q) return;
+    // From a document shown over the chat (the phone's sheet, full screen): the composer behind it is inert, and the
+    // quote went there unseen with the sheet left open. Out of full screen first, then the sheet closes (W2).
+    if (q.doc && sheet && sheet.kind === "docs") {
+      const grid = document.querySelector(".chatgrid");
+      if (grid && grid.classList.contains("docfullscreen")) fullscreenDoc(false);
+      if (sheet && sheet.kind === "docs") showDocs(false);
+    }
     quoteText(q.text, q.composer, q.doc);
   }
   function quoteText(text, box, doc = "") {
@@ -1001,13 +1167,23 @@
   function seenSet(v) {
     try { localStorage.setItem("shaft.seen", JSON.stringify(v)); } catch (e) { /* private window: no marks kept */ }
   }
+  // Seen: a reply, or a message it sent you (data-sent-at), whose start is inside the feed's visible box — or that
+  // fills the box, longer than the screen. Rendered was
+  // not enough: a reply below the fold was marked seen, and a message it sent never was (W8, review 2026-10-24).
+  function onScreen(n) {
+    if (!n.getClientRects().length) return false;   // not rendered (a hidden panel)
+    const r = n.getBoundingClientRect();
+    const box = n.closest && n.closest("[data-scroll]");
+    const b = box ? box.getBoundingClientRect() : { top: 0, bottom: window.innerHeight };
+    return (r.top >= b.top && r.top < b.bottom) || (r.top <= b.top && r.bottom >= b.bottom);   // its start, or it fills it
+  }
   function seenFeed() {
     if (document.visibilityState !== "visible") return;
     const seen = seenGet();
     let changed = false;
-    document.querySelectorAll(".feed [data-seen-reply]").forEach(reply => {
-      const { seenInst: inst, seenReply: last } = reply.dataset;
-      if (reply.getClientRects().length && last && (seen[inst] || "") < last) {
+    document.querySelectorAll(".feed [data-seen-reply], .feed [data-sent-at]").forEach(item => {
+      const inst = item.dataset.seenInst, last = item.dataset.seenReply || item.dataset.sentAt;
+      if (inst && last && (seen[inst] || "") < last && onScreen(item)) {
         seen[inst] = last;
         changed = true;
       }
@@ -1059,17 +1235,56 @@
     const s = atob(b64.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((b64.length + 3) % 4));
     return Uint8Array.from(s, c => c.charCodeAt(0));
   }
+  const b64url = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)))
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  // A renewal is tried again until it gets through: `refused` only stops one SHAFT turned down from being asked for
+  // on every refresh of this page. One begun and not finished (the old subscription dropped for a new key, then
+  // subscribe() failed) is remembered (shaft.push.renew): the next visit subscribes instead of reading "off".
+  let renewing = false, refused = false;
+  const store = (k, v) => { try { if (v) localStorage.setItem(k, v); else localStorage.removeItem(k); } catch (e) { /* none */ } };
+  const stored = (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+  async function renew(reg, sub, key, again) {
+    if (renewing || refused) return "incomplete";
+    renewing = true;
+    try {
+      if (again) {
+        store("shaft.push.renew", "1");
+        if (sub) await sub.unsubscribe();
+        sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(key) });
+      }
+      const r = await fetch("/push/subscribe", { method: "POST", credentials: "same-origin",
+        body: JSON.stringify(sub), headers: { "X-CSRF-Token": csrf(), "Content-Type": "application/json" } });
+      if (!r.ok) { refused = true; return "incomplete"; }
+      store("shaft.push.renew", "");
+      return "on";
+    } finally {
+      renewing = false;
+    }
+  }
   async function pushState() {
     if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) {
       return ios() && !standalone() ? "home" : "none";
     }
     if (Notification.permission === "denied") return "blocked";
     const reg = await navigator.serviceWorker.ready;
-    if (!(await reg.pushManager.getSubscription())) return "off";
+    const sub = await reg.pushManager.getSubscription();
+    const halfway = !!stored("shaft.push.renew") && !stored("shaft.push.off") && Notification.permission === "granted";
+    if (!sub && !halfway) return "off";
     try {                                    // a later visit: SHAFT may have dropped this device since
       const r = await fetch("/push/status", { credentials: "same-origin", cache: "no-store" });
       if (!r.ok) return "incomplete";
-      return (await r.json()).subscribed ? "on" : "incomplete";
+      const held = await r.json();
+      if (!sub) return held.key ? await renew(reg, null, held.key, true) : "incomplete";
+      // W5 (review 2026-10-24): SHAFT dropped it (a push service refused it), holds another endpoint (the browser
+      // rotated it), or it was made for another key: subscribed again, with the key pushes are signed with now.
+      const theirs = sub.options && sub.options.applicationServerKey;
+      const keyChanged = held.stale || (!!held.key && !!theirs && b64url(theirs) !== held.key);
+      const off = !!stored("shaft.push.off");   // turned off here: a browser subscription left behind is not renewed
+      if (Notification.permission === "granted" && !off && held.key
+          && (!held.subscribed || held.endpoint !== sub.endpoint || keyChanged)) {
+        return await renew(reg, sub, held.key, keyChanged);
+      }
+      return held.subscribed && held.endpoint === sub.endpoint && !keyChanged ? "on" : "incomplete";
     } catch (e) {
       return "incomplete";
     }
@@ -1103,12 +1318,15 @@
       if (b.dataset.state === "on") {
         // the browser drops it only after SHAFT has: a failed unsubscribe must not read as off
         if (await post("/push/unsubscribe", "{}")) {
+          store("shaft.push.off", "1");
+          store("shaft.push.renew", "");
           sub = await reg.pushManager.getSubscription();
           if (sub) await sub.unsubscribe();
           sub = null;
         }
       } else {
         if (await Notification.requestPermission() !== "granted") { notifyButton(); return; }
+        store("shaft.push.off", "");
         sub = await reg.pushManager.getSubscription();   // incomplete: send the one the browser already has
         if (!sub) {
           const r = await fetch("/push/key", { credentials: "same-origin" });
@@ -1132,6 +1350,26 @@
     if (ev.target.classList && (ev.target.classList.contains("rail") || ev.target.classList.contains("feed"))) unreadState();
   });
   document.addEventListener("visibilitychange", unreadState);
+  // Hidden (the phone locked, the app went to the background, another tab) or left (pagehide, visible or not): SHAFT
+  // is told at once, so a reply that ends in the next seconds is pushed to this device and not taken as seen on screen
+  // here (W9, review 2026-10-24). Stamped, like the feed's polls, so one sent before it cannot undo it. A GET with
+  // keepalive, not sendBeacon: a beacon is a POST, and a POST needs the page's token in a header it cannot carry.
+  function away(ev) {
+    const feed = document.querySelector(".feed[data-follow][data-poll]");
+    if (!feed || /[?&]id=/.test(feed.dataset.poll)) return;
+    if (ev && ev.type === "visibilitychange" && document.visibilityState !== "hidden") return;
+    const url = feed.dataset.poll + (feed.dataset.poll.includes("?") ? "&" : "?") + `away=1&at=${Date.now()}`;
+    try { fetch(url, { credentials: "same-origin", cache: "no-store", keepalive: true }).catch(() => {}); }
+    catch (e) { /* the page is going: nothing to do */ }
+  }
+  document.addEventListener("visibilitychange", away);
+  window.addEventListener("pagehide", away);
+  let seenTimer = null;                            // scrolled down to a reply: it is seen now, not at the next refresh
+  document.addEventListener("scroll", (ev) => {
+    if (!ev.target.matches || !ev.target.matches("[data-scroll]")) return;
+    clearTimeout(seenTimer);
+    seenTimer = setTimeout(unreadState, 250);
+  }, true);
   window.addEventListener("storage", (ev) => {
     if (ev.key === "shaft.seen" || ev.key === null) unreadState();
   });
@@ -1402,12 +1640,13 @@
       panel.setAttribute("aria-modal", "true");
       panel.setAttribute("aria-label", kind === "nav" ? "Chats and pages" : "Documents");
       panel.setAttribute("tabindex", "-1");
-      if (kind === "docs") panel.setAttribute("aria-owns", "comment-box comment-sel");
-      // Isolate siblings at each level, never an ancestor of the dialog. Leave live regions on body audible.
+      if (kind === "docs") panel.setAttribute("aria-owns", "comment-box comment-sel quote-reply");
+      // Isolate siblings at each level, never an ancestor of the dialog. Leave live regions on body audible. A
+      // document's selection buttons are the sheet's own: ↩ Reply made inert did nothing at all (W2).
       for (let branch = panel; branch !== document.body && branch.parentElement; branch = branch.parentElement) {
         for (const sibling of branch.parentElement.children) {
           const live = ["toast", "netnote", "announce"].includes(sibling.id);
-          const comment = kind === "docs" && ["comment-box", "comment-sel"].includes(sibling.id);
+          const comment = kind === "docs" && ["comment-box", "comment-sel", "quote-reply"].includes(sibling.id);
           if (sibling !== branch && !live && !comment && !sibling.hasAttribute("inert")) {
             sibling.setAttribute("inert", "");
             sheet.inert.push(sibling);
@@ -1443,7 +1682,13 @@
   function showDocs(on, opener) {
     const grid = document.querySelector(".chatgrid");
     if (!grid) return;
-    if (!on) grid.classList.remove("docfullscreen");
+    if (!on) {
+      grid.classList.remove("docfullscreen");
+      // An editor with nothing changed closes with the panel; one with changes stays (its draft is kept), and the
+      // panel keeps waiting for it (busyIn): left open unchanged, it froze the panel for good (W4)
+      const view = document.querySelector("#docs .docview.editing");
+      if (view && !editDirty(view)) editing(view, false);
+    }
     grid.classList.toggle("showdocs", on);
     grid.classList.toggle("hidedocs", !on);
     try { if (on) localStorage.removeItem("shaft.docs.closed"); else localStorage.setItem("shaft.docs.closed", "1"); }
@@ -1525,7 +1770,17 @@
   function fitViewport() {
     const vv = window.visualViewport;
     if (!vv) return;
-    document.documentElement.style.setProperty("--vvh", `${Math.round(vv.height)}px`);
+    const root = document.documentElement.style;
+    root.setProperty("--vvh", `${Math.round(vv.height)}px`);
+    // What the keyboard leaves visible, for the sheets fixed over the page (the documents, a comment): their bottom —
+    // Save, Cancel — was under the keyboard (W3, review 2026-10-24). iOS may also pan the visible part (offsetTop).
+    // Within a few px of the whole window and not panned: no keyboard — iOS can leave visualViewport a little off after
+    // it closes, and the sheets kept a sliver of inset (Grok review of 8735c62). Never below 0.
+    const whole = Math.abs(window.innerHeight - vv.height) <= 4 && Math.abs(vv.offsetTop) < 1;
+    const top = whole ? 0 : Math.max(0, Math.round(vv.offsetTop));
+    const bottom = whole ? 0 : Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+    root.setProperty("--vvtop", `${top}px`);
+    root.setProperty("--vvbottom", `${bottom}px`);
     const box = document.querySelector("form.composer textarea");
     if (box) grow(box);
     document.body.classList.toggle("kbd", keyboardUp());
@@ -1571,6 +1826,7 @@
     document.querySelectorAll(".docview").forEach(decorate);
     document.querySelectorAll(".docview").forEach(restoreDocDraft);
     restoreDraft();
+    document.querySelectorAll("form[data-keep]").forEach(restoreKept);
     notifyButton();
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start);

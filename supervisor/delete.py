@@ -59,10 +59,12 @@ def own_files(name: str) -> list[Path]:
              s / "egress" / f"{name}-control-offline.jsonl", s / "trials" / f"egress-{name}.jsonl", s / "trials" / name,
              s / "jobs" / f"{name}.jsonl", s / "battery" / f"off-{name}", s / "battery" / "results" / f"{name}.jsonl",
              s / "battery" / f"{name}.sb", s / "battery" / f"{name}-control.sb", s / "battery" / "control" / name,
-             s / "web" / "comments" / f"{name}.json", s / "tools" / f"{name}.json"]
+             s / "battery" / "exam" / name, s / "web" / "comments" / f"{name}.json", s / "tools" / f"{name}.json",
+             s / "baselines" / f"{name}.json", s / "baselines" / f"{name}.files"]
     found = [p for p in exact if p.exists() or p.is_symlink()]
     found += _matching(s / "judgments" / "second-cases", rf"{n}@.+")
     found += _matching(s / "gate-logs", rf"{n}-{ts}-\d+\.log")
+    found += _matching(s / "rejected", rf"{n}-{ts}-\d+")
     found += _matching(s / "battery", rf"control-{n}(-.*)?\.log")
     found += _matching(s / "evals", rf"(battery-{n}(-control)?|distinct-{n})-{ts}\.json")
     found += _matching(s / "datasets", rf"{n}-{ts}") + _matching(s / "adapters", rf"{n}-{ts}")
@@ -169,7 +171,8 @@ def shared_edits(name: str) -> list[Edit]:
         return taken or None
 
     def telegram_state(data):
-        taken = _all(_pop("bots", name), _pop("offsets", name))(data) or []
+        taken = _all(_pop("bots", name), _pop("offsets", name), _pop("pending", name), _pop("requests", name), _pop("failures", name),
+                     _pop("quarantined", name))(data) or []
         qs = data.get("questions") or {}
         gone = {k: qs.pop(k) for k in [k for k in qs if k.split(":")[0] == name]}
         return taken + ([{"questions": gone}] if gone else []) or None
@@ -182,7 +185,14 @@ def shared_edits(name: str) -> list[Edit]:
             data.remove(i)
         return gone or None
 
+    def answered(data):                                  # the API's kept answers (api.Answered), keyed "<name>:<id>"
+        if not isinstance(data, dict):
+            return None
+        gone = {k: data.pop(k) for k in [k for k in data if k.split(":")[0] == name]}
+        return [gone] if gone else None
+
     edits = [Edit(s / "jobs" / "state.json", _json(jobs_state), jobs._editing_lock),
+             Edit(s / "api-answered.json", _json(answered)),
              Edit(s / "schedule.json", _json(_pop("wakes", name))),
              Edit(s / "battery" / "schedule.json", _json(_pop(name))),
              Edit(s / "recaps.json", _json(_pop(name))),

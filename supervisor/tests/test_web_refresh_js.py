@@ -57,6 +57,7 @@ class Node {
     if (s === '[data-scroll-key]') return this.parts.filter(n => n.dataset.scrollKey);
     if (s === '.elapsed[data-since]') return this.parts.filter(n => n.dataset.since);
     if (s === 'button, a[href], summary') return this.parts.filter(n => n.kind === 'control');
+    if (s === '[data-poll]') return this.parts.filter(n => n.dataset.poll);
     return [];
   }
   querySelector(s) { return this.querySelectorAll(s)[0] || null; }
@@ -147,6 +148,87 @@ assert.equal(next.parts[2].textContent, ' · 2:34');
 const big = panel(); for (let i = 0; i < 1000; i++) {const t = turn('a' + i, 'same'); t._src = t.outerHTML; big.appendChild(t);}
 parsed = big.nodes.map(n => turn(n.dataset.k, 'same')); childReads = 0; morph(big, 'unchanged');
 assert.ok(childReads < 10, `child-list scans: ${childReads}`);
+''')
+
+    def test_w7_a_sending_copy_goes_once_its_turn_is_in_the_feed(self):
+        """W7: a poll that landed between the server saving the turn and the send returning brought the turn while the
+        copy was not "done" yet: kept, then every later refresh was a 304 — a "sending…" duplicate for good."""
+        self.run_js(r'''
+const p = panel(), mine = turn('u0', 'hi'), copy = new Node(null, 'turn me sending');
+copy.dataset.mid = 'm-1'; mine._src = mine.outerHTML; p.appendChild(mine); p.appendChild(copy);
+const other = new Node(null, 'turn me sending'); other.dataset.mid = 'm-2'; p.appendChild(other);
+const saved = turn('u1', 'hello'); saved.dataset.mid = 'm-1';
+parsed = [turn('u0', 'hi'), saved]; morph(p, 'with its turn');
+assert.deepEqual(p.children.map(n => n.dataset.k || n.dataset.mid), ['u0', 'u1', 'm-2']);   // its own copy only
+''')
+
+    def test_w12_a_poll_inside_a_refreshed_part_starts_polling(self):
+        """W12: the running reply's activity is a poll of its own inside the feed's live turn; one that arrives in a
+        refresh (a new reply began) has to start, and one gone from the page has to stop."""
+        self.run_js(r'''
+const p = panel(); let inner;
+p.rebuild = () => { inner = part('poll', {poll: '/fragment/chat/wren/live', every: '1500'}); inner.isConnected = true;
+  p.parts = [inner]; };
+poll(p); await p._tick();
+assert.equal(typeof inner._tick, 'function', 'the poll that came with the refresh runs');
+inner.isConnected = false; await inner._tick();               // gone with the next refresh: stops, quietly
+''')
+
+    def test_w13_a_selection_in_the_feed_no_longer_stops_its_refresh(self):
+        """W13: text left selected in the feed made busyIn() true, and the feed stopped refreshing for good, though the
+        keyed morph can leave the selected message as it is and refresh the rest."""
+        self.run_js(r'''
+const p = panel(); p.dataset.keyed = '1';
+const selected = turn('a1', 'old'), text = part('text', {}); selected.parts = [text]; p.appendChild(selected);
+window.getSelection = () => ({isCollapsed: false, rangeCount: 1, getRangeAt: () => ({commonAncestorContainer: text})});
+poll(p); response.body = 'new'; parsed = [turn('a1', 'changed'), turn('a2', 'new')];
+await p._tick();
+assert.equal(p.children[0], selected, 'the selected message stays as it is');
+assert.equal(p.children[1].dataset.k, 'a2', 'the rest is refreshed');
+assert.equal(p.dataset.last, undefined, 'and the next refresh brings it, once the selection lets go');
+window.getSelection = () => null; parsed = [turn('a1', 'changed'), turn('a2', 'new')];
+await p._tick();
+assert.notEqual(p.children[0], selected); assert.equal(p.dataset.last, 'new');
+''')
+
+    def test_the_live_activity_keeps_its_place_and_follows_its_end(self):
+        """Grok review of 8735c62 (S2): the reply's activity, polled on its own, came back without a data-k, so morph
+        replaced it whole each second and its log jumped to the top. Keyed, it keeps a reader who scrolled up where
+        they are, and one at the end follows the new lines."""
+        from supervisor import web_views
+        chat = {"state": "replying", "reply": {"activity": ["one", "two"]}}
+        html = str(web_views.live_activity(chat))
+        self.assertRegex(html, r'^<details class="activity" data-k="[^"]+" data-key="live"')
+        self.run_js(r'''
+const p = panel(); p.dataset.keyed = '1';
+function act(version, top, height) { const n = new Node('act', 'activity', version);
+  const box = part('scroll', {scrollKey: 'live'}); box.scrollTop = top; box.clientHeight = 100; box.scrollHeight = height;
+  n.parts = [box]; return [n, box]; }
+const [first, up] = act('v1', 50, 400); first._src = first.outerHTML; p.appendChild(first);
+let [next, box] = act('v2', 0, 420); parsed = [next]; morph(p, 'v2');
+assert.equal(p.children[0], next); assert.equal(box.scrollTop, 50, 'scrolled up: stays');
+box.scrollTop = 320; let [last, end] = act('v3', 0, 460); parsed = [last]; morph(p, 'v3');
+assert.equal(end.scrollTop, 460, 'at the end: follows');
+''')
+
+    def test_the_end_of_a_reply_keeps_its_activity_and_brings_the_answer_at_once(self):
+        """Grok review of 8735c62 (S3): once the reply ended, /live answered nothing while the feed still showed the
+        live turn: its activity blanked for up to 1.5 s. It answers the finished reply's activity, marked ended, and
+        that asks the feed for the answer at once."""
+        from supervisor import web_views
+        chat = {"state": "idle", "turns": [{"role": "user", "content": "q"},
+                                            {"role": "assistant", "content": "a", "activity": ["one", "two"]}]}
+        html = str(web_views.live_activity(chat))
+        self.assertIn("<p>two</p>", html)
+        self.assertIn("data-ended", html)
+        self.assertEqual(str(web_views.live_activity({"state": "idle", "turns": []})), "")
+        self.run_js(r'''
+const feed = panel(); let asked = 0; feed._tick = () => { asked++; };
+const live = panel(); live.feed = feed; let ended = false;
+live.rebuild = () => { live.parts = ended ? [part('ended', {ended: ''})] : []; };
+live.querySelector = s => s === '[data-ended]' ? live.parts.find(n => n.kind === 'ended') || null : null;
+poll(live); response.body = 'running'; await live._tick(); assert.equal(asked, 0);
+ended = true; response.body = 'ended'; await live._tick(); assert.equal(asked, 1);
 ''')
 
     def test_issue_27_manage_collapse_and_link_focus_survive(self):

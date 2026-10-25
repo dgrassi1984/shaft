@@ -6,7 +6,10 @@ results determine whether they survive. A judge's score is evidence about a run,
 not proof that the agent's account is correct.
 
 The broker gives each run a token and a limited set of tools. The gate tests code
-changes before keeping them. Cloud judges grade autonomous work from recorded tool
+changes before keeping them; the code it approved is recorded outside the instance's reach
+([baseline](../supervisor/baseline.py)), anything else found at the next run's start is gated
+then, and a run's processes (it leads its own process group) are all gone before the gate
+looks. Cloud judges grade autonomous work from recorded tool
 activity, and probation can revert a kept change after later outcomes deteriorate.
 Sources: [run lifecycle](../supervisor/runner.py),
 [gate](../supervisor/gate.py), [judging](../supervisor/metrics.py),
@@ -40,7 +43,9 @@ shaft-docs/   the supervisor's copy of README.md and docs/*.md (not docs/plans/)
 self/         self.md (self-model), personality.md (core/surface, every trait cites the journal),
               goals.md, stats.md (written by the supervisor: achieved difficulty, where its goals
               came from, judged success, calibration, battery scores)
-memory/       journal.md (append-only), facts.md, people/, messages/, episodes/*.jsonl
+memory/       journal.md (append-only), facts.md, people/, messages/, episodes/*.jsonl,
+              verdicts-reviewed.md (when its last finished sleep read the judge's verdicts: the next
+              sleep is shown those judged since)
 inbox/        messages waiting for it (from you or other instances)
 notes/        its own work
 ```
@@ -55,14 +60,41 @@ and conversations the supervisor collects, checked against what the instance dec
 before and after a self-change. Cycles judged before the ratings existed are rated with
 `shaft judge backfill` (verdicts unchanged).
 
+Calibration v2 measures P(criterion met = yes), identified by `confidence_of="criterion_met=yes"`.
+Its Brier score uses yes=1 and partial/no=0. Older v1 confidence asked for "probability of success" and
+uses yes=1/partial=0.5/no=0. Stats, reviews and surprise baselines keep their scores and counts separate.
+`record(kind='judgments', since=...)` reviews verdicts by when they were judged (`judged_at`, or the second
+judge's time if later), oldest first, even for older cycles; a tie in the same second is never split across pages.
+Minute-only timestamps mean `:00`; `T` and space separators are accepted. Use the returned continuation's
+`since` to read the next page. Without `since`, verdicts remain newest first.
+
+The broker operational envelope has the same eight keys in live runs and replays: `calls_used`,
+`calls_max`, `cloud`, `coder`, `trials`, `probation`, `next_sleep`, `next_wake`. Replays reconstruct
+the instance's spend and trial starts strictly before the cycle start on that date, probation cycles
+judged before it, and the next scheduled sleep and wake. They carry no replay flag. Closed probation
+entries cannot be reconstructed; see [trial fidelity gaps](plans/PLAN-trials.md#8-known-fidelity-gaps-equal-for-both-arms-so-the-comparison-stays-fair).
+
+With `since` and `format="json"`, `record` returns the same text plus the shown verdicts, unsampled
+episode timestamps (`left_out`), and `next_since`. Verdicts from the last two seconds remain for a later
+fetch. The cursor is the last shown verdict's review time, even on the final page; it is null for an empty
+page. Without `since`, the original text output is unchanged. Judgments from 2026-10-24 onward that lack
+`confidence_of` inherit it from their live episode when present; earlier judgments stay v1.
+
+
 The **capability battery** is a fixed yardstick: held-out tasks the instances never see (coding with hidden
 tests, research against a frozen key, recall of their own older journal entries, self-knowledge checked
 against the supervisor's record), graded effectiveness first. Each instance is compared with a *control*:
 the template on the same model with an empty mind. It runs only at night, 01:00 until 10 minutes before
 the sleep, every `SHAFT_BATTERY_EVERY_DAYS` (5) nights, for every instance not turned off with
 `shaft battery off <name>`. it stops when the window closes or a conversation
-starts, and restores the instance's files after every item. Items live in `.supervisor/battery/items/v1/`
-(never in git: an instance could read the repo with its GitHub key), backed up to
+starts. Each item runs in a copy of the instance's folder, in a folder made for it and never used again
+(`.supervisor/battery/exam/<name>/item-*/<name>/`: its code, plugins, skills, mind and config, copied without
+following a link, links that stay inside kept as links; never `.git`, `secrets/`, its browser profile or mail).
+Exams never get `trial`, which acts on the live instance. When an item ends, the exam's process group and any
+process still working in its folder are killed, and the folder is deleted (as is the control, made afresh for
+each item), so the real folder is never written — a message delivered meanwhile stays in its inbox, and a battery
+killed mid-item leaves at most a stale copy, which the next run removes. Items live in
+`.supervisor/battery/items/v1/` (never in git: an instance could read the repo with its GitHub key), backed up to
 `~/Library/Application Support/SHAFT/battery-backup/`; every result carries the item set's sha256, model
 and judge, and results from different eras are never compared. Results: `.supervisor/battery/results/`,
 `.supervisor/evals/battery-*.json`, and a section of `self/stats.md`.

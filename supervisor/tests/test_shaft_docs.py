@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from supervisor import battery, core, runner, sandbox
+from supervisor import core, runner, sandbox
 from supervisor.tests import test_commit
 
 PROJECT = Path(__file__).resolve().parents[2]
@@ -184,11 +184,6 @@ class DocsNeverCommittedTest(test_commit.UpdateCase):
         files = trial._files_now(self.root)
         self.assertIn("plugins/p.py", files)
         self.assertFalse([p for p in files if p.startswith("shaft-docs")], sorted(files))
-
-    def test_the_battery_snapshot_leaves_it_out(self):
-        files = battery._files(self.root)
-        self.assertIn("plugins/p.py", files)
-        self.assertFalse([p for p in files if p.startswith("shaft-docs")], files)
 
 
 if __name__ == "__main__":

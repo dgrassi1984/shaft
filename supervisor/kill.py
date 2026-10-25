@@ -12,8 +12,9 @@ or a reply, a job's plugin, a broker `run` command — with everything below the
 holder's death. The parent rule keeps the operator's own shells in that folder safe. A terminal conversation's client is
 stopped last, once its reply has settled. Spared:
 the gate checking a finished run (its test runner and plugin check, while no agent of that holder is alive: killing
-them would fail the gate and revert the code), and a battery's exams — the battery process itself gets SIGTERM, its
-designed stop (it cuts the exam and restores the instance's files, battery.py).
+them would fail the gate and revert the code), and a battery's exams — they run in a copy of the instance, not in its
+folder; the battery process itself gets SIGTERM, its designed stop (it cuts the exam, kills what the exam left running
+in the copy, and deletes the copy, battery.py).
 """
 from __future__ import annotations
 
@@ -150,6 +151,74 @@ def _alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True
+
+
+STRAY_GRACE_S = 2   # how long a stray has to exit on SIGTERM before SIGKILL
+
+
+def end_left_in(folder: Path, orphans_only: bool = True) -> list[int]:
+    """End what a finished run or exam left working in `folder`, outside its process group; SIGTERM, then SIGKILL
+    after STRAY_GRACE_S. Never this process or its ancestors, nor a supervisor process. Returns the pids it signalled;
+    [] when the process table cannot be read (logged: FAILED). One helper, two folders:
+
+    - `orphans_only` (an instance's folder, runner._end_run): a process whose parent is gone (re-parented to
+      launchd, pid 1) — started in a session of its own (setsid) once its starter ended — whose working folder is
+      inside `folder`, with everything below it. A process whose parent is alive is not a stray: the operator's own
+      shells there keep theirs. One that also left the folder (chdir) is not found; the sandbox is the boundary.
+    - not (an exam's copy, battery: a random folder, never reused, where nobody works): every process working inside
+      it, everything below each, and each one's ancestors while they share its session or process group — a parent
+      in a session of its own that chdir'ed out of the copy while its child stayed in it was missed by the orphan
+      rule (Codex, final review of the integration)."""
+    import time
+    top = Path(folder).resolve()
+    try:
+        procs = processes()
+    except (RuntimeError, OSError) as e:
+        log(f"FAILED to list the processes left in {top}: {e}")
+        return []
+    mine, pid = set(), os.getpid()
+    while pid in procs and pid not in mine:
+        mine.add(pid)
+        pid = procs[pid].ppid
+    mine.add(os.getpid())
+    children: dict[int, list[int]] = {}
+    for p in procs.values():
+        children.setdefault(p.ppid, []).append(p.pid)
+    spared = lambda p: p.pid in mine or p.pid == 1 or bool(SUPERVISOR.search(p.command))   # noqa: E731
+    inside = [p.pid for p in procs.values() if _inside(p.cwd, top) and not spared(p)
+              and (not orphans_only or p.ppid == 1)]
+    heads = list(inside)
+    if not orphans_only:
+        for pid in inside:
+            at = procs[pid]
+            while (up := procs.get(at.ppid)) is not None and not spared(up) and _same_session(up.pid, at.pid):
+                heads.append(up.pid)
+                at = up
+    found: list[int] = []
+    stack = list(heads)
+    while stack:                         # down from each: the same exclusions, and nothing below an excluded one
+        pid = stack.pop()
+        if pid not in found and pid in procs and not spared(procs[pid]):
+            found.append(pid)
+            stack.extend(children.get(pid, []))
+    if not found:
+        return []
+    log(f"{top}: ending {len(found)} process(es) left running there outside their run's process group: "
+        + "; ".join(f"{p} {procs[p].command[:60]}" for p in found if p in procs))
+    _signal(found, signal.SIGTERM)
+    deadline = time.monotonic() + STRAY_GRACE_S
+    while time.monotonic() < deadline and any(_alive(p) for p in found):
+        time.sleep(0.05)
+    _signal([p for p in found if _alive(p)], signal.SIGKILL)
+    return found
+
+
+def _same_session(a: int, b: int) -> bool:
+    """Whether two processes share a session or a process group (False for one that is gone)."""
+    try:
+        return os.getsid(a) == os.getsid(b) or os.getpgid(a) == os.getpgid(b)
+    except (ProcessLookupError, PermissionError):
+        return False
 
 
 def running(name: str) -> list[str]:

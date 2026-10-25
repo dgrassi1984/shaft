@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -458,8 +460,23 @@ class ChanceOfDropTest(unittest.TestCase):
         self.assertLess(p, 0.001)
 
 
-class BatteryIsolationTest(unittest.TestCase):
-    """An exam must leave nothing in the instance: the supervisor undoes every write, whatever its code did."""
+def tree(root: Path) -> dict[str, bytes | str]:
+    """Every entry under root, as the test sees it: a file's bytes, a link's target. What "untouched" is checked by."""
+    out: dict[str, bytes | str] = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        for n in dirnames + filenames:
+            p = Path(dirpath) / n
+            rel = p.relative_to(root).as_posix()
+            if p.is_symlink():
+                out[rel] = f"-> {os.readlink(p)}"
+            elif p.is_file():
+                out[rel] = p.read_bytes()
+    return out
+
+
+class BatteryExamCopyTest(unittest.TestCase):
+    """An exam runs in a copy of the instance's folder, made without following a link, and deleted after its item; the
+    real folder is never written (Codex review B3, B6, B7, 2026-10-24)."""
 
     def setUp(self):
         self.project = Path(tempfile.mkdtemp(prefix="shaft-bat-")).resolve()
@@ -469,63 +486,64 @@ class BatteryIsolationTest(unittest.TestCase):
         git(self.project, "commit", "-q", "--allow-empty", "-m", "main")
         self.root = self.project / "instances" / "b"
         git(self.project, "worktree", "add", "-q", "--orphan", "-b", "instance/b", str(self.root))
-        (self.root / ".gitignore").write_text(".tmp/\nlogs/\n" + IGNORE_MIND)   # the mind is not in git
-        (self.root / "memory").mkdir()
-        (self.root / "memory" / "journal.md").write_text("# j\n\n---\n## old entry\n")
-        (self.root / "notes").mkdir()
-        (self.root / "notes" / "keep.md").write_text("keep")
-        (self.root / "plugins").mkdir()
-        (self.root / "plugins" / "p.py").write_text("P = 1\n")
+        (self.root / ".gitignore").write_text(".tmp/\nlogs/\nsecrets/\n.venv/\nmail/\n.browser/\n" + IGNORE_MIND)
+        files = {"memory/journal.md": "# j\n\n---\n## old entry\n", "notes/keep.md": "keep", "plugins/p.py": "P = 1\n",
+                 "skills/s.md": "a skill", "self/self.md": "me", "inbox/20261024-x-from-operator.md": "unread",
+                 "config.env": 'LLM_MODEL="m"\n', "secrets/secrets.json": '{"k": {"value": "SECRET-KEY"}}',
+                 ".venv/bin/python": "py", ".browser/Cookies": "SESSION", "mail/a/1/x.pdf": "MAIL",
+                 ".tmp/memory-index.json": "{}", ".tmp/activity.json": "{}", "logs/llm_usage.jsonl": "{}\n",
+                 "plugins/__pycache__/p.cpython-312.pyc": "pyc"}
+        for rel, text in files.items():
+            (self.root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.root / rel).write_text(text)
         git(self.root, "add", "-A")
         git(self.root, "commit", "-q", "-m", "state")
         (self.root / "notes" / "uncommitted.md").write_text("an earlier run's untracked note")
-        from supervisor import core
-        self.wt = mock.patch.object(battery, "git_wt",
-                                    lambda root, *a, **k: core.git_wt(root, *a, **{**k, "project": self.project}))
-        self.wt.start()
+        self.outside = self.project / "outside"
+        self.outside.mkdir()
+        (self.outside / "secret.txt").write_text("THE OPERATOR'S FILE")
+        self.sup = self.project / "sup"
+        self.patch = mock.patch.object(battery, "SUP_DIR", self.sup)
+        self.patch.start()
 
     def tearDown(self):
-        self.wt.stop()
+        self.patch.stop()
         shutil.rmtree(self.project, ignore_errors=True)
 
-    def test_a_planted_journal_write_and_new_files_are_undone(self):
-        before = battery.snapshot(self.root)
-        with (self.root / "memory" / "journal.md").open("a") as f:
-            f.write("\n---\n## the battery task was: write add()\n")
-        (self.root / "notes" / "keep.md").unlink()
-        (self.root / "notes" / "leak.md").write_text("leaked task")
-        (self.root / ".tmp").mkdir()
-        (self.root / ".tmp" / "scratch.py").write_text("ignored scratch")
-        undone = battery.restore(self.root, before)
-        self.assertEqual((self.root / "memory" / "journal.md").read_text(), "# j\n\n---\n## old entry\n")
-        self.assertEqual((self.root / "notes" / "keep.md").read_text(), "keep")
-        self.assertFalse((self.root / "notes" / "leak.md").exists())
-        self.assertEqual((self.root / "notes" / "uncommitted.md").read_text(), "an earlier run's untracked note")
-        self.assertEqual(sorted(undone), ["+notes/leak.md", "-notes/keep.md", "~memory/journal.md"])
+    def test_the_copy_holds_the_instance_but_not_its_keys_git_or_mail(self):
+        copy = battery.make_exam_copy("b", self.root)
+        self.assertEqual((copy.parent.parent, copy.name), (self.sup / "battery" / "exam" / "b", "b"))
+        got = tree(copy)
+        for rel in ("memory/journal.md", "notes/keep.md", "notes/uncommitted.md", "plugins/p.py", "skills/s.md",
+                    "self/self.md", "inbox/20261024-x-from-operator.md", "config.env", ".tmp/memory-index.json"):
+            self.assertEqual(got.get(rel), (self.root / rel).read_bytes(), rel)
+        for top in (".git", "secrets", ".browser", "mail", "logs", ".tmp/activity.json", "plugins/__pycache__"):
+            self.assertFalse([k for k in got if k == top or k.startswith(top + "/")], top)
+        self.assertEqual(got[".venv"], f"-> {self.root / '.venv'}")      # its environment: linked, read in place
+        self.assertNotIn(b"SECRET-KEY", b"".join(v for v in got.values() if isinstance(v, bytes)))
 
-    def test_battery_restores_mind_edits(self):
-        # Found while planning docs/plans/PLAN-mind-out-of-git: the files to restore were listed by git alone, so once the
-        # mind is ignored an exam in the instance's real folder would have kept its memory edits for good.
-        self.assertEqual(subprocess.run(["git", "-C", str(self.root), "ls-files", "memory", "self", "notes"],
-                                        capture_output=True, text=True).stdout, "")     # really not in git
-        (self.root / "self").mkdir()
-        (self.root / "self" / "self.md").write_text("me\n")
-        (self.root / "memory" / "episodes").mkdir()
-        (self.root / "memory" / "link.md").symlink_to("journal.md")                  # the instance's own link
-        before = battery.snapshot(self.root)
-        with (self.root / "memory" / "journal.md").open("a") as f:
-            f.write("\n---\n## the battery task was: write add()\n")
-        (self.root / "memory" / "episodes" / "2026-10-15.jsonl").write_text('{"kind": "exam"}\n')
-        (self.root / "self" / "self.md").unlink()
-        (self.root / "plugins" / "p.py").write_text("P = 2\n")
-        undone = battery.restore(self.root, before)
-        self.assertEqual((self.root / "memory" / "journal.md").read_text(), "# j\n\n---\n## old entry\n")
-        self.assertFalse((self.root / "memory" / "episodes" / "2026-10-15.jsonl").exists())
-        self.assertEqual((self.root / "self" / "self.md").read_text(), "me\n")
-        self.assertEqual((self.root / "plugins" / "p.py").read_text(), "P = 1\n")
-        self.assertTrue((self.root / "memory" / "link.md").is_symlink())               # left alone
-        self.assertEqual(sorted(undone), ["+memory/episodes/2026-10-15.jsonl", "-self/self.md",
-                                          "~memory/journal.md", "~plugins/p.py"])
+    def test_b3_a_link_planted_in_the_instance_is_copied_as_nothing(self):
+        # Codex review B3: restore() read and wrote git-listed paths with plain is_file/read_bytes/write_bytes, so a
+        # tracked folder swapped for a link sent the supervisor's reads and writes outside the instance.
+        shutil.rmtree(self.root / "plugins")
+        (self.root / "plugins").symlink_to(self.outside, target_is_directory=True)
+        (self.root / "notes" / "leak.md").symlink_to(self.outside / "secret.txt")
+        os.mkfifo(self.root / "notes" / "pipe")                             # would hang a plain read
+        before = tree(self.outside)
+        got = tree(battery.make_exam_copy("b", self.root))
+        self.assertNotIn("plugins", got)
+        self.assertNotIn("notes/leak.md", got)
+        self.assertNotIn("notes/pipe", got)
+        self.assertNotIn(b"THE OPERATOR'S FILE", b"".join(v for v in got.values() if isinstance(v, bytes)))
+        self.assertEqual(tree(self.outside), before)
+
+    def test_a_stale_copy_is_never_reused(self):
+        stale = self.sup / "battery" / "exam" / "b" / "item-dead" / "b"
+        (stale / "notes").mkdir(parents=True)
+        (stale / "notes" / "from-a-dead-run.md").write_text("exam edit")
+        copy = battery.make_exam_copy("b", self.root)
+        self.assertNotEqual(copy, stale)
+        self.assertNotIn("notes/from-a-dead-run.md", tree(copy))
 
 
 class HiddenTestsTest(unittest.TestCase):
@@ -545,7 +563,19 @@ class HiddenTestsTest(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def run_tests(self):
-        return battery.run_hidden_tests({"dir": str(self.item), "hidden_tests": 2}, self.scratch)
+        return battery.run_hidden_tests({"dir": str(self.item), "hidden_tests": 2}, self.tmp, "scratch")
+
+    def test_a_link_in_the_scratch_folder_is_never_followed(self):
+        # The exam writes its scratch folder: a file there reached through a link would hand the hidden tests — and
+        # through their output the judge — any file the supervisor can read (found with Codex review B1, 2026-10-24).
+        (self.tmp / "secret.txt").write_text("THE OPERATOR'S FILE")
+        (self.scratch / "data.txt").symlink_to(self.tmp / "secret.txt")
+        (self.scratch / "solution.py").write_text(
+            "import pathlib\nprint(pathlib.Path('data.txt').read_text() if pathlib.Path('data.txt').exists() else 'none')\n"
+            "def add(a, b):\n    return a + b\n")
+        r = self.run_tests()
+        self.assertEqual(r["passed"], 2, r["output"])
+        self.assertNotIn("THE OPERATOR'S FILE", r["output"])
 
     def test_a_correct_solution_passes_every_hidden_test(self):
         (self.scratch / "solution.py").write_text("def add(a, b):\n    return a + b\n")
@@ -684,11 +714,11 @@ TEMPLATE_CODE = Path(__file__).resolve().parents[2] / "template" / "shaft"
 
 @unittest.skipUnless((TEMPLATE_CODE / "exam.py").exists(), "needs the template's exam mode")
 class BatteryEndToEndTest(unittest.TestCase):
-    """One item through the real path: sandboxed `shaft exam` for the instance and its control (fake model),
-    hidden tests, grading (stubbed judge), results, the instance's files restored, stats.md."""
+    """One item through the real path: sandboxed `shaft exam` for the instance (in a copy of its folder) and its
+    control (fake model), hidden tests, grading (stubbed judge), results, the instance's folder untouched, stats.md."""
 
     def setUp(self):
-        from supervisor import core, runner
+        from supervisor import runner
         from supervisor.tests.fakellm import FakeLLM
         self.project = Path(tempfile.mkdtemp(prefix="shaft-e2e-")).resolve()
         git = lambda cwd, *a: subprocess.run(["git", "-C", str(cwd), "-c", "user.name=t", "-c", "user.email=t@t", *a],
@@ -728,8 +758,9 @@ class BatteryEndToEndTest(unittest.TestCase):
         real_make = battery.make_control
 
         def make_control(name):
-            dest = battery.base() / "control" / name
-            dest.mkdir(parents=True)
+            (battery.base() / "control" / name).mkdir(parents=True, exist_ok=True)
+            dest = Path(tempfile.mkdtemp(prefix="item-", dir=battery.base() / "control" / name)) / name
+            dest.mkdir()
             subprocess.run(["tar", "-xf", str(archive), "-C", str(dest)], check=True)
             shutil.copy2(self.root / "config.env", dest / "config.env")
             for d in ("self", "memory", "notes", "inbox"):
@@ -743,7 +774,6 @@ class BatteryEndToEndTest(unittest.TestCase):
             self.graded.append(case)
             self.graders.append(kw.get("model"))
             return {"correct": "yes", "effectiveness": 9, "unsupported_claims": 0, "reasoning": "fine"}
-        wt = lambda root, *a, **k: core.git_wt(root, *a, **{**k, "project": self.project})  # noqa: E731
         self.patches = [
             mock.patch.object(battery, "SUP_DIR", self.sup), mock.patch.object(metrics, "SUP_DIR", self.sup),
             mock.patch.object(runner, "SUP_DIR", self.sup), mock.patch.object(metrics, "INSTANCES", self.project / "instances"),
@@ -751,7 +781,7 @@ class BatteryEndToEndTest(unittest.TestCase):
             mock.patch.object(battery, "instance_root", lambda n: self.root),
             mock.patch.object(battery, "instance_config", lambda n: {"LLM_MODEL": "fake"}),
             mock.patch.object(battery, "LLM_PORTS", [self.fake.port]), mock.patch.object(battery, "secrets_env", dict),
-            mock.patch.object(battery, "git_wt", wt), mock.patch.object(battery, "make_control", make_control),
+            mock.patch.object(battery, "make_control", make_control),
             mock.patch.object(battery, "log"), mock.patch.object(metrics, "log"),
             mock.patch.object(judge, "ask", ask), mock.patch.object(judge, "JUDGE_MODELS", ["judge-test"]),
             mock.patch("supervisor.autonomy.describe_schedule", return_value="test"),
@@ -767,7 +797,7 @@ class BatteryEndToEndTest(unittest.TestCase):
         shutil.rmtree(self.project, ignore_errors=True)
 
     def test_one_item_for_the_instance_and_its_control(self):
-        before = battery.snapshot(self.root)
+        before = tree(self.root)
         self.assertEqual(battery.run("e"), 2)
         rows = battery.results("e")
         inst, ctrl = [r for r in rows if r["arm"] == "instance"][0], [r for r in rows if r["arm"] == "control"][0]
@@ -778,11 +808,13 @@ class BatteryEndToEndTest(unittest.TestCase):
         self.assertEqual(inst["grader"], ctrl["grader"])
         self.assertEqual(self.graders, [inst["grader"]] * 2)
         self.assertEqual(inst["judge"], judge.rotation())
-        after = battery.snapshot(self.root)
+        after = tree(self.root)
         self.assertIn("self/stats.md", after)                                     # the supervisor's own write
-        self.assertEqual({k: v for k, v in after.items() if k != "self/stats.md"}, before)   # nothing kept
-        self.assertFalse((self.root / ".tmp" / "battery" / "coding-add").exists())
-        self.assertFalse((self.sup / "battery" / "control" / "e").exists())        # control removed
+        self.assertEqual({k: v for k, v in after.items() if k not in ("self/stats.md", "shaft-docs")
+                          and not k.startswith(("shaft-docs/", ".tmp"))}, before)   # nothing kept
+        self.assertFalse((self.root / ".tmp" / "battery").exists())
+        for left in (self.sup / "battery" / "control" / "e", self.sup / "battery" / "exam" / "e"):
+            self.assertEqual(list(left.iterdir()) if left.exists() else [], [], left)   # control and copy removed
         self.assertNotIn("write_add", (self.sup / "battery" / "broker.log").read_text() if
                          (self.sup / "battery" / "broker.log").exists() else "")
         self.assertIn("Hidden tests: 1/1 passed", self.graded[0])
@@ -792,11 +824,92 @@ class BatteryEndToEndTest(unittest.TestCase):
         self.assertEqual(len(list((self.sup / "evals").glob("battery-e-*.json"))), 1)
 
     def test_control_only_leaves_the_instance_alone(self):
-        before = battery.snapshot(self.root)
+        before = tree(self.root)
         self.assertEqual(battery.run("e", control_only=True), 1)
         self.assertEqual([r["arm"] for r in battery.results("e")], ["control"])
-        self.assertEqual(battery.snapshot(self.root), before)                      # not even stats.md
+        self.assertEqual(tree(self.root), before)                                  # not even stats.md
         self.assertFalse((self.sup / "battery" / "schedule.json").exists())        # not the scheduled run
+
+    def run_watching_the_exam(self):
+        """battery.run("e"), with a look at the instance's real folder while its exam is still running — where a
+        SIGKILL or a power cut would leave it — and a message delivered to its inbox meanwhile."""
+        seen = {}
+        real_exam = battery._exam
+
+        def exam(label, root, *a, **k):
+            if label == "e":
+                (self.root / "inbox").mkdir(exist_ok=True)
+                (self.root / "inbox" / "20261024-013000-from-operator.md").write_text("Delivered mid-exam\n")
+            out = real_exam(label, root, *a, **k)
+            if label == "e":
+                seen.update(root=root, profile=(self.sup / "battery" / "e.sb").read_text(),
+                            solution=(root / ".tmp/battery/coding-add/solution.py").is_file(),
+                            real_solution=(self.root / ".tmp/battery/coding-add/solution.py").exists())
+            return out
+        with mock.patch.object(battery, "_exam", exam):
+            self.assertEqual(battery.run("e"), 2)
+        return seen
+
+    def test_b7_the_exam_never_writes_the_real_folder_even_before_it_ends(self):
+        # Codex review B7: the exam ran in the instance's folder and the pre-exam state lived only in memory, restored
+        # in a `finally` — a SIGKILL or power loss mid-exam left the exam's edits in the instance for good.
+        seen = self.run_watching_the_exam()
+        self.assertTrue(seen["solution"])                       # the exam did write its solution ...
+        self.assertFalse(seen["real_solution"])                 # ... in its copy, never in the instance
+        self.assertNotEqual(Path(seen["root"]).resolve(), self.root.resolve())
+        self.assertNotIn(self.root.resolve(), Path(seen["root"]).resolve().parents)
+
+    def test_b6_a_message_delivered_mid_exam_stays_in_the_inbox(self):
+        # Codex review B6: restore() deleted every file the pre-exam snapshot lacked, and inbox/ is a mind path, so a
+        # message delivered during an exam was deleted before the instance ever read it.
+        self.run_watching_the_exam()
+        self.assertEqual((self.root / "inbox" / "20261024-013000-from-operator.md").read_text(), "Delivered mid-exam\n")
+
+    def test_the_exam_sandbox_writes_only_its_copy_and_reads_no_keys(self):
+        seen = self.run_watching_the_exam()
+        copy = Path(seen["root"]).resolve()
+        self.assertIn(f'(allow file-write* (subpath "{copy}")', seen["profile"])
+        self.assertIn(f'(deny file-read* file-write* (subpath "{copy / "secrets"}"))', seen["profile"])
+        real = [l for l in seen["profile"].splitlines() if str(self.root.resolve()) in l]   # at most its environment
+        self.assertTrue(all("write" not in l and ("file-read-metadata" in l or ".venv" in l) for l in real), real)
+
+    def test_a_copy_left_by_a_run_that_died_is_removed_by_the_next(self):
+        stale = self.sup / "battery" / "exam" / "e" / "item-dead" / "e"
+        (stale / "notes").mkdir(parents=True)
+        (stale / "notes" / "exam-edit.md").write_text("left by a killed run")
+        self.assertEqual(battery.run("e", control_only=True), 1)
+        self.assertFalse(stale.exists())
+
+    def test_b7_a_battery_killed_mid_exam_leaves_the_instance_untouched(self):
+        # Codex review B7, the real thing: the battery process SIGKILLed while its exam runs — no `finally` runs.
+        before = tree(self.root)
+        ready = self.project / "exam-started"
+        real_exam = battery._exam
+
+        def hang(label, root, *a, **k):
+            if label == "e":
+                (root / "notes").mkdir(exist_ok=True)
+                (root / "notes" / "exam-edit.md").write_text("written mid-exam")
+                ready.write_text(str(root))
+                time.sleep(120)
+            return real_exam(label, root, *a, **k)
+        pid = os.fork()
+        if pid == 0:   # the battery process
+            try:
+                with mock.patch.object(battery, "_exam", hang):
+                    battery.run("e")
+            finally:
+                os._exit(0)
+        deadline = time.time() + 60
+        while not ready.exists() and time.time() < deadline:
+            time.sleep(0.1)
+        os.kill(pid, signal.SIGKILL)
+        os.waitpid(pid, 0)
+        copy = Path(ready.read_text())
+        self.assertEqual((copy / "notes" / "exam-edit.md").read_text(), "written mid-exam")   # it left its copy ...
+        self.assertEqual(tree(self.root), before)                                            # ... the instance as it was
+        self.assertEqual(battery.run("e", control_only=True), 1)
+        self.assertFalse(copy.exists())                                                      # the next run removed it
 
 
 if __name__ == "__main__":

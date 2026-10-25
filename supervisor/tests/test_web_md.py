@@ -220,5 +220,46 @@ class MarkdownHeadingScaleTest(unittest.TestCase):
         self.assertRegex(css, r"\.turn, \.md,[^{]*\{[^}]*overflow-wrap: anywhere")
 
 
+
+class PlaceholdersInLinksTest(unittest.TestCase):
+    """W16 (review 2026-10-24): _LINK's destination did not exclude the placeholders a code span or an autolink leaves,
+    so their HTML was expanded inside href="…" and broke out of the attribute (the CSP stopped any script)."""
+
+    def test_w16_a_code_span_in_a_destination_stays_out_of_the_href(self):
+        out = md('[x](https://a.example/`q" onclick="x`)')
+        for href in re.findall(r'href="([^"]*)"', out):
+            self.assertNotIn("<", href)
+        self.assertNotIn('href="https://a.example/<code>', out)
+        self.assertIn("<code>q&quot; onclick=&quot;x</code>", out)            # still shown, as text
+
+    def test_w16_an_autolink_in_a_destination_stays_out_of_the_href(self):
+        out = md("[x](https://a.example/<https://b.example>)")
+        self.assertEqual(re.findall(r'href="([^"]*)"', out), ["https://a.example/", "https://b.example"])
+        self.assertEqual(out.count("<a "), out.count("</a>"))               # no anchor inside an attribute
+
+    def test_a_code_span_in_a_link_label_renders_instead_of_failing_the_page(self):
+        """Found while fixing W16: the label was rendered with a placeholder list of its own, so `code` in a label
+        raised IndexError and the whole chat or document failed to render."""
+        self.assertEqual(md("[`api`](https://a.example)"),
+                         '<p><a href="https://a.example" rel="noopener noreferrer" target="_blank"><code>api</code>'
+                         '</a></p>')
+
+    def test_plain_strips_the_block_syntax_of_a_line_too(self):
+        """Grok review of 8735c62 (S3): plain() rendered inline Markdown only, so an instance quoting a list item, a
+        heading, a quote or a table row kept "- ", "## ", "> " or pipes and never matched the rendered document."""
+        cases = {"- [ ] **ship** it": "☐ ship it", "* [x] done": "☑ done", "1. first `step`": "first step",
+                 "## The *plan*": "The plan", "> > quoted **twice**": "quoted twice",
+                 "| a | **b** | c |": "a\tb\tc", "  - nested": "nested", "plain text": "plain text"}
+        for line, shown in cases.items():
+            self.assertEqual(web_md.plain(line), shown, line)
+        for line, shown in cases.items():                                    # what the page's text holds
+            out = re.sub(r"<[^>]*>", "", md(line))
+            self.assertIn(shown.split("\t")[0], __import__("html").unescape(out), line)
+
+    def test_plain_is_the_text_the_page_shows(self):
+        self.assertEqual(web_md.plain("the **bold** `x < y` and [a link](https://a.example) <b>"),
+                         "the bold x < y and a link <b>")
+
+
 if __name__ == "__main__":
     unittest.main()

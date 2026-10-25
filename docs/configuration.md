@@ -83,6 +83,11 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_EMBED_PORT` | `8782` | the embedding service's port (memory search), which every run may reach | [core.py](../supervisor/core.py) |
 | `SHAFT_BROKER_MAX_CALLS` | `60` | supervisor tool calls (broker) one run may make | [core.py](../supervisor/core.py) |
 | `SHAFT_IDLE_MINUTES` | `30` | minutes a conversation (terminal, web, Telegram, API) may stay quiet before it is closed and written up into the journal | [core.py](../supervisor/core.py) |
+| `SHAFT_FILE_READ_MAX_MB` | `512` | megabytes the supervisor reads from one file in an instance's folder (a bigger one is refused) | [core.py](../supervisor/core.py) |
+| `SHAFT_SNAPSHOT_MAX_MB` | `512` | megabytes of an instance's code the gate reads to check a change (more, and the change is not kept) | [core.py](../supervisor/core.py) |
+| `SHAFT_COPY_MAX_GB` | `8` | gigabytes the supervisor copies of an instance's folder for a battery exam or a gate's scratch copy (more, and the exam or the check fails) | [core.py](../supervisor/core.py) |
+| `SHAFT_TREE_MAX_FILES` | `200000` | files and folders the supervisor reads or copies in one walk of an instance's folder (the gate's code snapshot, a battery exam's copy) | [core.py](../supervisor/core.py) |
+| `SHAFT_TREE_MAX_DEPTH` | `64` | folders deep the supervisor walks in an instance's folder (the gate's code snapshot, a battery exam's copy) | [core.py](../supervisor/core.py) |
 | `SHAFT_FT_PYTHON` | `str(PROJECT / ".venv-ft" / "bin" / "python")` | the interpreter fine-tuning runs with | [finetune.py](../supervisor/finetune.py) |
 | `SHAFT_FT_BASE_MODEL` | `mlx-community/Qwen3.8-27B-4bit` | the base model fine-tuning starts from when it does not train Bonsai itself | [finetune.py](../supervisor/finetune.py) |
 | `SHAFT_BONSAI_PYTHON` | `str(PROJECT / ".venv-bonsai" / "bin" / "python")` | the interpreter Bonsai LoRA training runs with | [finetune.py](../supervisor/finetune.py) |
@@ -129,7 +134,10 @@ a concurrent edit. Instances use `set_config`; direct writes are sandbox-denied.
 Sources: [opconfig.py](../supervisor/opconfig.py),
 [sandbox.py](../supervisor/sandbox.py).
 
-The template loader uses environment > nonempty config value > built-in default.
+The template loader uses environment > nonempty config value > built-in default. Under SHAFT the
+environment holds none of these: the sandbox passes on only `PATH`, `HOME`, `USER`, `LANG`, `TERM`,
+`COLUMNS`, `LINES`, `TZ` and `LC_*` (`sandbox.ENV_ALLOW`), so an `LLM_*` variable exported in your shell or
+launchd never reaches an instance; `config.env` is what sets them (a trial names its own model).
 An empty `OPERATOR_NAME` resolves to `the operator`; setting your name is recommended,
 not required. `LLM_BASE_URL` and `LLM_MODEL` are required. Leave `LLM_API_KEY` empty:
 cloud credentials belong to the broker. Config is versioned with instance code.

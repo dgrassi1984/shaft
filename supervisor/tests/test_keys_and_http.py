@@ -67,7 +67,7 @@ class KeysAndHttpTest(unittest.TestCase):
         self.root = self.project / "instances" / "wren"
         self.root.mkdir(parents=True)
         for p in (mock.patch.object(core, "SUP_DIR", self.project / ".supervisor"),
-                  mock.patch.object(broker_mod, "check_public", lambda url: None)):   # the fake API is on localhost
+                  mock.patch.object(broker_mod, "resolve_public", lambda host, port: ["127.0.0.1"])):   # a local fake API
             p.start()
             self.addCleanup(p.stop)
         self.api = FakeAPI()
@@ -130,6 +130,67 @@ class KeysAndHttpTest(unittest.TestCase):
         out = self.call("secret_set", name="github", value=TOKEN, hosts=["api.github.com"])
         self.assertFalse(out["ok"])
         self.assertFalse((self.project / "elsewhere.json").exists())
+
+
+class KeyStoreDurabilityTest(unittest.TestCase):
+    """B10 (review 2026-10-24): read_secrets read an unparseable store as {}, _write_secrets truncated the file and
+    wrote it in place, and store/delete were unlocked read-modify-writes: a torn write, then any `shaft secret set`,
+    left one key out of all of them."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="shaft-keys-")).resolve()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.root = self.tmp / "wren"
+        self.root.mkdir()
+        for p in (mock.patch.object(core, "SUP_DIR", self.tmp / ".supervisor"), mock.patch.object(core, "log")):
+            p.start()
+            self.addCleanup(p.stop)
+        core.store_secret(self.root, "github", TOKEN, ["api.github.com"])
+        self.store = self.root / "secrets" / "secrets.json"
+
+    def test_an_unreadable_store_is_never_written_over(self):
+        torn = self.store.read_text()[:25]                    # what a crash mid-write used to leave
+        self.store.write_text(torn)
+        with self.assertRaises(ValueError) as ctx:            # core.KeyStoreUnreadable
+            core.store_secret(self.root, "mail", "other-value", ["api.example.com"])
+        self.assertEqual(type(ctx.exception).__name__, "KeyStoreUnreadable")
+        self.assertIn(str(self.store), str(ctx.exception))
+        self.assertIn("JSONDecodeError", str(ctx.exception))
+        with self.assertRaises(ValueError):
+            core.delete_secret(self.root, "github")
+        self.assertEqual(self.store.read_text(), torn)        # nothing written over it
+        self.assertEqual(core.read_secrets(self.root), {})    # a use of a key: tolerant, but logged loudly
+        self.assertIn("KEY STORE UNREADABLE", core.log.call_args.args[0])
+
+    def test_a_crash_while_writing_leaves_the_old_store_whole(self):
+        real = json.dumps
+
+        def power_cut(obj, *a, **k):
+            if "mail" in obj:
+                raise OSError("power cut")
+            return real(obj, *a, **k)
+        with mock.patch.object(core.json, "dumps", side_effect=power_cut), self.assertRaises(OSError):
+            core.store_secret(self.root, "mail", "other-value", ["api.example.com"])
+        self.assertEqual(sorted(core.read_secrets(self.root)), ["github"])
+        self.assertEqual(sorted(p.name for p in self.store.parent.iterdir()), ["secrets.json"])   # no temp file left
+        core.store_secret(self.root, "mail", "other-value", ["api.example.com"])
+        self.assertEqual(stat.S_IMODE(os.stat(self.store).st_mode), 0o600)
+
+    def test_two_changes_at_once_both_survive(self):
+        real = core.read_secrets
+
+        def slow(root, *a, **k):                               # both read before either writes, without the lock
+            got = real(root, *a, **k)
+            threading.Event().wait(0.3)
+            return got
+        with mock.patch.object(core, "read_secrets", side_effect=slow):
+            ts = [threading.Thread(target=core.store_secret, args=(self.root, k, "v-" + k, ["h.example.com"]))
+                  for k in ("one", "two")]
+            for t in ts:
+                t.start()
+            for t in ts:
+                t.join()
+        self.assertEqual(sorted(core.read_secrets(self.root)), ["github", "one", "two"])
 
 
 class ThroughTheInstancesClientTest(unittest.TestCase):

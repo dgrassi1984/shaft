@@ -14,7 +14,8 @@ from datetime import date, datetime
 from pathlib import Path
 
 from . import messages
-from .core import SUP_DIR, disabled_tools, instance_config, instance_names, instance_root, paused
+from .core import (SUP_DIR, disabled_tools, instance_config, instance_names, instance_root, list_beneath, paused,
+                   safe_read)
 
 SERVICES = ("model", "embed", "api", "scheduler", "telegram", "web")
 NOISE = ('api "GET', 'api "POST', "background journal write-up started")   # feed lines that say nothing new
@@ -48,9 +49,11 @@ def _alive(pid: int) -> bool:
 
 def activity(root: Path) -> dict:
     """The instance's own live status (.tmp/activity.json), if the process that wrote it is still running."""
-    try:
-        a = json.loads((root / ".tmp" / "activity.json").read_text())
-    except (OSError, ValueError):
+    try:   # the instance writes it: never read through a link (core.safe_read)
+        a = json.loads(safe_read(root, ".tmp/activity.json", "{}", errors="replace"))
+    except ValueError:
+        return {}
+    if not isinstance(a, dict):
         return {}
     return a if _alive(int(a.get("pid", 0))) else {}
 
@@ -59,10 +62,7 @@ def _today_usage(root: Path) -> tuple[int, int]:
     """(model calls, completion tokens) today, from the instance's own usage log."""
     calls = tokens = 0
     today = date.today().isoformat()
-    try:
-        lines = (root / "logs" / "llm_usage.jsonl").read_text().splitlines()
-    except OSError:
-        return 0, 0
+    lines = safe_read(root, "logs/llm_usage.jsonl", "", errors="replace").splitlines()
     for line in reversed(lines):
         try:
             r = json.loads(line)
@@ -113,7 +113,7 @@ def instance_state(name: str, now: float | None = None) -> dict:
     busy = busy_with(name) or ""
     convs = open_conversations(name)
     act = activity(root)
-    is_paused = any((root / ".tmp").glob("paused-*")) if (root / ".tmp").is_dir() else False
+    is_paused = any(n.startswith("paused-") for n in list_beneath(root, ".tmp"))
     if paused(name):
         state = "paused by you"
     elif is_paused:

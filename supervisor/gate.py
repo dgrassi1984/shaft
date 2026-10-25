@@ -26,35 +26,229 @@ CODE_PATHS = ("shaft", "tests", "plugins", ".python-version", "requirements.txt"
 PROJECT = Path(__file__).resolve().parent.parent
 
 
-def snapshot(instance_root: Path) -> dict[str, bytes]:
-    files: dict[str, bytes] = {}
-    for name in CODE_PATHS:
-        base = instance_root / name
-        paths = [base] if base.is_file() else base.rglob("*") if base.is_dir() else []
-        for path in paths:
-            if path.is_symlink() or any(p.is_symlink() for p in path.parents if instance_root in p.parents):
-                continue   # never read through links the instance planted
-            if path.is_file() and "__pycache__" not in path.parts and path.name != ".DS_Store":   # Finder's
-                files[str(path.relative_to(instance_root))] = path.read_bytes()
+class Link:
+    """A link standing where code belongs, as a snapshot records it: its target, never what it points to. Code paths
+    hold no links — the template has none, and nothing an instance writes needs one — so a link there fails the gate
+    whatever its target (runner._settle) and is never approved, kept or committed; restore takes it away. A snapshot
+    passed over a link (read_tree and read_beneath refuse one, and the refusal was swallowed): `shaft/` swapped for a
+    link to another folder of the instance vanished from the snapshot, the gate never saw it, and `python -m shaft`
+    ran the linked package (Codex, final review of the integration)."""
+    __slots__ = ("target",)
+
+    def __init__(self, target: str):
+        self.target = target
+
+    def __eq__(self, other) -> bool:
+        return isinstance(other, Link) and other.target == self.target
+
+    def __hash__(self) -> int:
+        return hash(("link", self.target))
+
+    def __repr__(self) -> str:
+        return f"Link({self.target!r})"
+
+
+class Invalid:
+    """Something standing where code belongs that is neither a plain file of one name nor a folder: a file with more
+    than one name (a hard link: writing it changes its other names too), a pipe, a socket, a device. Recorded so the
+    gate sees it — read_tree passed a pipe over without a trace — and refused like a Link (Codex on f82df7e)."""
+    __slots__ = ("why",)
+
+    def __init__(self, why: str):
+        self.why = why
+
+    def __eq__(self, other) -> bool:
+        return isinstance(other, Invalid) and other.why == self.why
+
+    def __hash__(self) -> int:
+        return hash(("invalid", self.why))
+
+    def __repr__(self) -> str:
+        return f"Invalid({self.why!r})"
+
+
+class RestoreFailed(Exception):
+    """A path could not be put back: nothing may run on the code that is left (runner refuses the run)."""
+
+
+def links(code: dict) -> list[str]:
+    """The paths of a snapshot that are links."""
+    return sorted(p for p, v in code.items() if isinstance(v, Link))
+
+
+def refused(code: dict) -> list[str]:
+    """The paths of a snapshot that can never be kept: links and Invalid entries."""
+    return sorted(p for p, v in code.items() if isinstance(v, (Link, Invalid)))
+
+
+def _kind(fmt: int) -> str:
+    import stat
+    return {stat.S_IFIFO: "a pipe", stat.S_IFSOCK: "a socket", stat.S_IFCHR: "a device",
+            stat.S_IFBLK: "a device"}.get(fmt, "not a plain file")
+
+
+def snapshot(instance_root: Path) -> dict[str, bytes | Link]:
+    """The code files' bytes, listed and read through descriptors (core.walk_beneath, read_beneath): never through a
+    link the instance planted, even one swapped in after a check — a failed change is restored from this, so a file
+    read through a link would be written back into the instance's folder. A link at or under a code path is an entry
+    of its own (Link: its target), so a link added, removed or retargeted is a change. TreeTooBig past the bounds
+    (core.Budget, SHAFT_FILE_READ_MAX_MB for a single file): never a part of the code taken for all of it."""
+    import stat
+    from .core import Budget, TooBig, TreeTooBig, UnsafePath, dir_beneath, read_beneath, walk_beneath
+    files: dict[str, bytes | Link] = {}
+    budget = Budget()   # one for all the code paths: SHAFT_SNAPSHOT_MAX_MB in all; past it TreeTooBig, never a part
+    skip = lambda rel: "__pycache__" in rel.split("/") or rel.split("/")[-1] == ".DS_Store"   # noqa: E731 — Finder's
+    top = dir_beneath(instance_root)
+    try:
+        for name in CODE_PATHS:
+            try:
+                mode = os.stat(name, dir_fd=top, follow_symlinks=False).st_mode
+            except FileNotFoundError:
+                continue
+            if stat.S_ISLNK(mode):
+                files[name] = Link(os.readlink(name, dir_fd=top))
+            elif stat.S_ISDIR(mode):
+                for rel, f in walk_beneath(instance_root, name, skip, links=True, budget=budget, others=True):
+                    if isinstance(f, str):
+                        files[f"{name}/{rel}"] = Link(f)
+                    elif isinstance(f, int):
+                        files[f"{name}/{rel}"] = Invalid(_kind(f))
+                    elif f is not None:
+                        names = os.fstat(f.fileno()).st_nlink
+                        files[f"{name}/{rel}"] = Invalid(f"a file with {names} names") if names > 1 else f.read()
+            elif stat.S_ISREG(mode):
+                names = os.stat(name, dir_fd=top, follow_symlinks=False).st_nlink
+                try:
+                    files[name] = Invalid(f"a file with {names} names") if names > 1 else \
+                        read_beneath(instance_root, [name])
+                except TooBig as e:
+                    raise TreeTooBig(f"{instance_root}/{name}: {e}") from None
+            else:
+                files[name] = Invalid(_kind(stat.S_IFMT(mode)))
+    finally:
+        os.close(top)
     return files
 
 
-def changed(before: dict[str, bytes], after: dict[str, bytes]) -> list[str]:
+def changed(before: dict, after: dict) -> list[str]:
     return sorted(p for p in before.keys() | after.keys() if before.get(p) != after.get(p))
 
 
-def restore(instance_root: Path, before: dict[str, bytes], paths: list[str]) -> None:
-    from .core import UnsafePath, contained
-    for rel in paths:
+def _clear_links_above(instance_root: Path, rel: str) -> None:
+    """Remove every link standing on the way to root/rel — the link itself, never its target — from the top down,
+    through each folder's descriptor: an approved folder replaced by a link is then made again, not written through."""
+    import stat
+    from .core import dir_beneath
+    parts = Path(rel).parts
+    for i in range(1, len(parts)):
+        fd = dir_beneath(instance_root, parts[:i - 1])
         try:
-            target = contained(instance_root, *Path(rel).parts)
-        except UnsafePath:
-            continue
-        if rel in before:
-            contained(instance_root, *Path(rel).parent.parts).mkdir(parents=True, exist_ok=True)
-            target.write_bytes(before[rel])
-        elif target.exists():
-            target.unlink()
+            mode = os.stat(parts[i - 1], dir_fd=fd, follow_symlinks=False).st_mode
+            if stat.S_ISLNK(mode):
+                os.unlink(parts[i - 1], dir_fd=fd)
+                return                                   # nothing below it is there any more
+            if not stat.S_ISDIR(mode):
+                return
+        except FileNotFoundError:
+            return
+        finally:
+            os.close(fd)
+
+
+def _write_fresh(instance_root: Path, rel: str, data: bytes) -> None:
+    """root/rel as a new file holding `data`: written to a temporary name beside it (O_EXCL, no link followed) and
+    renamed over what stands there, through the folder's descriptor — a link, a pipe or one name of a hard-linked
+    file is replaced, never written through. Writing in place (O_TRUNC) changed every other name of the file (Codex
+    on f82df7e). The mode of a plain file it replaces is kept (an executable script)."""
+    import stat
+    from .core import dir_beneath
+    parts = Path(rel).parts
+    fd = dir_beneath(instance_root, parts[:-1], make=True)
+    tmp = f".shaft-restore-{os.getpid()}-{os.urandom(4).hex()}"
+    try:
+        try:
+            st = os.stat(parts[-1], dir_fd=fd, follow_symlinks=False)
+            mode = stat.S_IMODE(st.st_mode) if stat.S_ISREG(st.st_mode) else 0o644
+            if stat.S_ISDIR(st.st_mode):
+                raise RestoreFailed(f"{rel}: a folder stands where the file belongs")
+        except FileNotFoundError:
+            mode = 0o644
+        out = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=fd)
+        try:
+            with os.fdopen(out, "wb") as f:
+                f.write(data)
+                os.fchmod(f.fileno(), mode)
+            os.rename(tmp, parts[-1], src_dir_fd=fd, dst_dir_fd=fd)
+        except BaseException:
+            try:
+                os.unlink(tmp, dir_fd=fd)
+            except OSError:
+                pass
+            raise
+    finally:
+        os.close(fd)
+
+
+def restore(instance_root: Path, before: dict, paths: list[str]) -> None:
+    """Each path back as it was, written or removed through descriptors, no link followed: a link standing where an
+    approved folder or file belongs is removed (the link, never its target) and the folder made again. RestoreFailed
+    when a path cannot be put back — it was left as it was, silently, until Codex's final review."""
+    from .core import UnsafePath, unlink_beneath
+    for rel in sorted(paths, key=lambda r: (r.count("/"), r)):   # a linked folder goes before what was below it
+        try:
+            _clear_links_above(instance_root, rel)
+            if rel not in before:
+                unlink_beneath(instance_root, rel)
+                continue
+            if not isinstance(before[rel], bytes):
+                raise RestoreFailed(f"{rel}: {before[rel]!r} is never put back as code")
+            _write_fresh(instance_root, rel, before[rel])
+        except RestoreFailed:
+            raise
+        except (OSError, UnsafePath) as e:
+            raise RestoreFailed(f"{instance_root}/{rel} could not be put back: {type(e).__name__}: {e}") from None
+
+
+_UNREADABLE = object()
+
+
+def _entry(instance_root: Path, rel: str):
+    """What stands at root/rel now, as a snapshot would record it: bytes, a Link, or None (nothing, or a folder — no
+    file of that name); _UNREADABLE when it cannot be reached without following a link or read."""
+    import stat
+    from .core import UnsafePath, dir_beneath, read_beneath
+    parts = Path(rel).parts
+    try:
+        fd = dir_beneath(instance_root, parts[:-1])
+    except FileNotFoundError:
+        return None
+    except (OSError, UnsafePath):
+        return _UNREADABLE
+    try:
+        st = os.stat(parts[-1], dir_fd=fd, follow_symlinks=False)
+        mode = st.st_mode
+        if stat.S_ISLNK(mode):
+            return Link(os.readlink(parts[-1], dir_fd=fd))
+    except FileNotFoundError:
+        return None
+    finally:
+        os.close(fd)
+    if stat.S_ISDIR(mode):
+        return None
+    if not stat.S_ISREG(mode):
+        return Invalid(_kind(stat.S_IFMT(mode)))
+    if st.st_nlink > 1:
+        return Invalid(f"a file with {st.st_nlink} names")
+    try:
+        return read_beneath(instance_root, parts)
+    except (OSError, UnsafePath, ValueError):
+        return _UNREADABLE
+
+
+def unrestored(instance_root: Path, approved: dict, paths: list[str]) -> list[str]:
+    """Of `paths`, those not back as `approved` after a restore, read afresh path by path (no link followed): the
+    check runner makes before anything may run on the code again."""
+    return [p for p in paths if _entry(instance_root, p) != approved.get(p)]
 
 
 def config_without(text: str, writes: list[dict]) -> tuple[str, list[str]]:
@@ -71,12 +265,12 @@ def config_without(text: str, writes: list[dict]) -> tuple[str, list[str]]:
 
 def revert_config(instance_root: Path, writes: list[dict]) -> list[str]:
     """Undo the instance's set_config writes in its config.env, keeping every other line. Returns the keys."""
-    from .core import config_lock, contained, safe_write
+    from .core import config_lock, contained, safe_read, safe_write
     if not writes:
         return []
     path = contained(instance_root, "config.env")
     with config_lock(path):                          # not over an operator's write landing at the same moment
-        text, back = config_without(path.read_text() if path.is_file() else "", writes)
+        text, back = config_without(safe_read(instance_root, "config.env", ""), writes)
         if back:
             safe_write(instance_root, "config.env", text)
     return back
@@ -176,6 +370,33 @@ def _end_group(p: subprocess.Popen) -> None:
         time.sleep(0.02)
 
 
+def stop_group(p: subprocess.Popen, grace_s: float = STOP_GRACE_S) -> None:
+    """End the process group `p` leads, on any way out of a run or a command — finished, failed, timed out,
+    interrupted: SIGTERM to all of it (and SIGCONT, so a stopped member gets it too), up to `grace_s` for it to empty,
+    then SIGKILL until nothing is left (_end_group). Only the direct child was killed, and only on a timeout, so a
+    process the agent or a `run` command had started in the background went on writing the instance's code after the
+    gate had judged it (B9, review of 2026-10-24). Returns once the group is empty (or only holds a member no signal
+    of ours can reach); `p` is reaped. A process that starts its own session (setsid) leaves the group and is not
+    reached."""
+    import signal
+    import time
+    try:
+        os.killpg(p.pid, signal.SIGTERM)
+        os.killpg(p.pid, signal.SIGCONT)
+    except (ProcessLookupError, PermissionError):
+        p.poll()
+        return
+    deadline = time.monotonic() + grace_s
+    while time.monotonic() < deadline:
+        p.poll()                                  # the leader, reaped once it exits: a zombie still counts as a member
+        try:
+            os.killpg(p.pid, 0)
+        except (ProcessLookupError, PermissionError):
+            return
+        time.sleep(0.02)
+    _end_group(p)
+
+
 def _stage(stage: str, argv: list[str], timeout_s: int, **kw) -> subprocess.CompletedProcess:
     """One stage, in its own process group, all of which ends with it. A timeout gets SIGTERM, then SIGKILL after
     STOP_GRACE_S, and raises StageTimedOut with the tail of what the stage printed. On a normal exit whatever it left
@@ -216,15 +437,14 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = 900,
     """Supervisor invariants against this instance's code (trusted test code, run from the last commit — never from
     what another session is editing; it sandboxes the agent itself), then its plugins' check and its own tests inside
     its sandbox, on its own Python environment (supervisor/pyenv.py). `env_root`: where that environment lives when
-    `instance_root` is a scratch copy (coder hand-off, trial gate) — read-only from the copy. A stage that times out
-    fails the gate, named in the output and the supervisor log: raised instead, it left the change on disk
-    unsettled, neither kept nor reverted, and the next run took it as its baseline — ungated. Nothing left in a stage's
-    process group outlives it (_stage), so no leftover there writes the instance's code after the caller's revert."""
+    `instance_root` is a scratch copy (coder hand-off, trial gate) — read-only from the copy. A stage that times out,
+    and any error of the gate's own, fails the gate, named in the output and the supervisor log: raised instead, it
+    left the change on disk unsettled, neither kept nor reverted, and the next run took it as its baseline — ungated.
+    Nothing left in a stage's process group outlives it (_stage), so no leftover there writes the instance's code after
+    the caller's revert."""
     from . import pyenv
     from .core import PYTHON, log, safe_mkdir
     env_root = Path(env_root or instance_root)
-    py = pyenv.python(env_root)
-    tmp = safe_mkdir(instance_root, ".tmp")
     outputs, ok = [], True
     full: list[str] = []   # the supervisor stage uncut, kept in a file when the gate fails (keep_log)
 
@@ -232,11 +452,14 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = 900,
         tree, label = committed_tree()
     except Exception as e:   # fail closed: a change kept unsettled would pass ungated as the next run's baseline
         return False, f"== supervisor invariants ==\nno committed copy of the supervisor to test with: {e!r}"
-    fd, prof_name = tempfile.mkstemp(prefix="shaft-tests-", suffix=".sb")   # outside the instance
-    prof = Path(prof_name)
-    with os.fdopen(fd, "w") as f:
-        f.write(sandbox.profile(instance_root, home, [], env_root=env_root))
+    prof = None
     try:
+        py = pyenv.python(env_root)
+        tmp = safe_mkdir(instance_root, ".tmp")       # UnsafePath when the instance made .tmp a link: a failed gate
+        fd, prof_name = tempfile.mkstemp(prefix="shaft-tests-", suffix=".sb")   # outside the instance
+        prof = Path(prof_name)
+        with os.fdopen(fd, "w") as f:
+            f.write(sandbox.profile(instance_root, home, [], env_root=env_root))
         sup_env = {**os.environ, "SHAFT_UNDER_TEST": str(instance_root)}
         sup = _stage(f"supervisor invariants ({label})",
                      [PYTHON, "-E", "-s", "-m", "unittest", "discover", "-s", "supervisor/tests", "-t", "."],
@@ -261,10 +484,22 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = 900,
         outputs.append(f"== {t.stage} ==\n" + (t.tail + "\n" if t.tail else "")
                        + f"{t}; the checks after it did not run")
         ok = False
+    except Exception as e:
+        # Fail closed, like a timeout: any failure of the gate's own machinery (no sandbox-exec, a link where .tmp
+        # should be, a full disk) is a failed gate. Only StageTimedOut was caught, so anything else left settlement
+        # halfway — the change neither tested nor reverted, the next run's baseline (B8, review of 2026-10-24).
+        log(f"gate: {instance_root}: the gate itself failed, counted as failed: {type(e).__name__}: {e}")
+        outputs.append(f"== gate error ==\n{type(e).__name__}: {e}\n(the gate could not run its checks: counted as "
+                       "failed, the checks after it did not run)")
+        ok = False
     finally:
-        prof.unlink(missing_ok=True)
+        if prof is not None:
+            prof.unlink(missing_ok=True)
     if not ok:
-        outputs.append(f"full log: {keep_log(instance_root, full + outputs[1:])}")
+        try:
+            outputs.append(f"full log: {keep_log(instance_root, full + outputs[len(full):])}")
+        except OSError as e:
+            outputs.append(f"(the full log could not be kept: {e})")
     return ok, "\n".join(outputs)
 
 

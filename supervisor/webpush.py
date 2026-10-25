@@ -17,7 +17,9 @@ What goes out, and how:
     /usr/bin/openssl (LibreSSL, on every Mac) and kept in .supervisor/web/vapid.pem (0600); signing also runs openssl.
     This is the one place SHAFT's stdlib-only rule calls a system binary.
   - Subscriptions are per paired device (.supervisor/web/push.json), only to the known push services' hosts; one a
-    push service says is gone (404, 410) is dropped.
+    push service says is gone (404, 410) or refuses (401, 403: made with a key this server no longer signs with) is
+    dropped, and so is a device's when it is unpaired. Each records the key it was made for (fingerprint): /push/status
+    hands the page its endpoint and the key now, and the page subscribes again when either differs.
 """
 from __future__ import annotations
 
@@ -149,9 +151,13 @@ def subscribe(device: str, sub: dict) -> None:
     endpoint = str(sub.get("endpoint") or "")
     if not allowed_endpoint(endpoint):
         raise PushError(f"not a known push service: {urllib.parse.urlsplit(endpoint).hostname or endpoint[:60]!r}")
+    try:
+        key = fingerprint()
+    except PushError:                             # no key to name: the next status asks for a fresh subscription
+        key = ""
     with _lock:
         subs = subscriptions()
-        subs[device] = {"endpoint": endpoint, "since": time.strftime("%Y-%m-%dT%H:%M:%S")}
+        subs[device] = {"endpoint": endpoint, "since": time.strftime("%Y-%m-%dT%H:%M:%S"), "key": key}
         _save(subs)
     log(f"web: device {device} subscribed to reply notifications ({urllib.parse.urlsplit(endpoint).hostname})")
 
@@ -161,9 +167,31 @@ def holds(device: str) -> bool:
     return device in subscriptions()
 
 
-def unsubscribe(device: str) -> bool:
+def status(device: str) -> dict:
+    """What /push/status tells the page: whether SHAFT holds this device, the endpoint it holds, the key pushes are
+    signed with now, and whether the subscription was made for another key (`stale`). The page compares them with its
+    browser's subscription and subscribes again on a difference: after the key changed, or the browser rotated its
+    endpoint, every push failed while the button still said on (W5, review 2026-10-24)."""
+    sub = subscriptions().get(device) or {}
+    try:
+        key, now = public_key(), fingerprint()
+    except PushError as e:
+        return {"subscribed": bool(sub), "endpoint": sub.get("endpoint", ""), "key": "", "stale": False,
+                "error": str(e)}
+    # No key recorded (a subscription from before keys were): unknown, not stale — else every device renewed at once
+    # after the update. The page still compares its browser's own applicationServerKey with `key`.
+    return {"subscribed": bool(sub), "endpoint": sub.get("endpoint", ""), "key": key,
+            "stale": bool(sub.get("key")) and sub["key"] != now}
+
+
+def unsubscribe(device: str, endpoint: str | None = None) -> bool:
+    """Drop this device's subscription and what waits for it. With `endpoint`: only if that is still the one SHAFT
+    holds — a wake retrying an old endpoint for two minutes must not drop the subscription the page renewed meanwhile
+    (Grok review of 8735c62)."""
     with _lock:
         subs = subscriptions()
+        if endpoint is not None and (subs.get(device) or {}).get("endpoint") != endpoint:
+            return False
         gone = subs.pop(device, None) is not None
         if gone:
             _save(subs)
@@ -230,20 +258,41 @@ def _send_one(device: str, endpoint: str) -> str:
         with urllib.request.urlopen(req, timeout=15) as r:
             return f"{r.status}"
     except urllib.error.HTTPError as e:
-        if e.code in (404, 410):                    # the browser dropped it: so do we
-            unsubscribe(device)
-            return f"{e.code}: gone, removed"
+        if e.code in (404, 410, 401, 403):
+            # 404/410: the browser dropped it, so do we. 401/403: made for a key we no longer sign with, dead too (W5):
+            # the page subscribes again. Either way only that endpoint: one renewed since is the device's now.
+            why = "gone" if e.code in (404, 410) else f"refused ({e.read()[:200].decode(errors='replace')})"
+            if unsubscribe(device, endpoint):
+                return f"{e.code}: {why}, removed"
+            return f"{e.code}: {why}, an old endpoint (the device has renewed it): stopped"
         return f"{e.code}: {e.read()[:200].decode(errors='replace')}"
     except (OSError, urllib.error.URLError) as e:
         return f"not sent: {e}"
 
 
-def notify(event: dict) -> None:
-    """Queue `event` ({title, body, url, tag}: what the notification shows) for every subscribed device and wake each
-    (in a thread: a reply's end never waits on a push service)."""
-    subs = subscriptions()
+def _paired() -> set[str] | None:
+    """The paired browsers' ids (web.py's devices.json, read at call time like every file here); None when it cannot
+    be read — then nothing is dropped for it: a read that failed must never unsubscribe every phone."""
+    try:
+        data = json.loads((_dir() / "devices.json").read_text())
+    except (OSError, ValueError) as e:
+        log(f"web: cannot read the paired devices ({type(e).__name__}: {e}): pushing to every subscription")
+        return None
+    return set(data) if isinstance(data, dict) else None
+
+
+def notify(event: dict, skip=frozenset()) -> list[str]:
+    """Queue `event` ({title, body, url, tag}: what the notification shows) for every subscribed device that is still
+    paired and not in `skip` (the devices that have the chat on screen: web_chat.watchers), and wake each (in a thread:
+    a reply's end never waits on a push service). A subscription of a device no longer paired is dropped: a revoked
+    phone kept getting a push for every reply (W1, review 2026-10-24). Returns the devices it woke."""
+    subs, paired = subscriptions(), _paired()
+    for device in [d for d in subs if paired is not None and d not in paired]:
+        unsubscribe(device)
+        log(f"web: dropped the push subscription of device {device}: it is no longer paired")
+    subs = {d: s for d, s in subs.items() if (paired is None or d in paired) and d not in skip}
     if not subs:
-        return
+        return []
     why = event["title"]
     with _lock:
         queue = _queue()
@@ -253,6 +302,7 @@ def notify(event: dict) -> None:
             queue[device] = mine
         _save_queue(queue)
     _wake(subs, why)
+    return sorted(subs)
 
 
 RETRY_S = (20, 120)                           # a wake that failed is tried again after these
@@ -269,12 +319,12 @@ def _wake(subs: dict, why: str) -> None:
             except PushError as e:
                 said = f"not sent: {e}"
             log(f"web: push to device {device} ({why}): {said}")
-            if said.startswith("2") or "gone" in said:
+            if said.startswith("2") or "removed" in said or "stopped" in said:   # sent, or dead (dropped or replaced)
                 return
     for device, s in subs.items():                # one thread each: a device's retries never hold up another's
         threading.Thread(target=run, args=(device, s["endpoint"]), daemon=True, name="webpush").start()
 
 
 def fingerprint() -> str:
-    """A short id of the key, for the page: a subscription made with another key is renewed."""
+    """A short id of the key, kept with each subscription: one made with another key is renewed (status)."""
     return hashlib.sha256(public_key().encode()).hexdigest()[:12]
