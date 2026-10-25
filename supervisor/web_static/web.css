@@ -386,6 +386,16 @@ aside.docs { min-height: 0; overflow-y: auto; background: var(--panel); border: 
 .doclist a { display: flex; align-items: center; justify-content: space-between; gap: .6rem; padding: .6rem .2rem;
              border-bottom: 1px solid var(--line); color: var(--text); overflow-wrap: anywhere; }
 .docsize { flex-shrink: 0; font-size: .75rem; }
+/* Name | Size | Modified: the column heads above share the rows' widths, so each lines up with its values */
+.doclist a > span:first-child, .docsort > a:first-child { flex: 1 1 auto; min-width: 0; }
+.doclist .docsize, .docsort .docsize { width: 4.6em; text-align: right; }
+.docdate { flex-shrink: 0; width: 7.6em; text-align: right; font-size: .75rem; white-space: nowrap; }
+.docsort { display: flex; align-items: baseline; gap: .6rem; padding: 0 .2rem .2rem; font-size: .75rem;
+           border-bottom: 1px solid var(--line); }
+.docsort a { flex-shrink: 0; color: var(--dim); text-decoration: none; white-space: nowrap; }
+.docsort a.on { color: var(--text); font-weight: 600; }
+.docsort a:hover { color: var(--accent); }
+.doclist .toobig { font-size: .7rem; }
 .doclist .mark { color: var(--accent); font-size: .7rem; }
 .docshead .crumbs { min-width: 0; overflow-wrap: anywhere; }
 .docview { border-top: 1px solid var(--line); padding-top: .4rem; }
@@ -455,8 +465,9 @@ form.clearbtn { display: inline; margin: 0; }
   /* Fingers: 44 pt targets (Apple's guideline). */
   button, button.small, button.act, a.icon.small, details.menu > summary, label.pick, .newdoc > summary {
     min-height: 44px; min-width: 44px; padding-top: .45rem; padding-bottom: .45rem; }
-  .doclist a, .doccard, .menupages a, .editchip, .tabs a {
+  .doclist a, .doccard, .menupages a, .editchip, .tabs a, .docsort a {
     min-height: 44px; display: inline-flex; align-items: center; }
+  .docsort a.docsize, .docsort a.docdate { justify-content: flex-end; }   /* flex: text-align no longer places it */
   /* The rail keeps its own layout: on an iPad it is a sidebar list (a chat is its name over its last line, Manage one
      link per row); inline-flex here turned each chat into one jammed row and ran the links sideways (#69). The
      phone's chip bar sets its own display in the max-width block. */

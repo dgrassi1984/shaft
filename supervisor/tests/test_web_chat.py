@@ -627,7 +627,7 @@ class DocsPanelTest(ChatRoutesTest):
         self.assertIn('class="doclist"', listed)
         self.assertNotIn('class="docview"', listed)
         self.assertNotIn("data-back-docs", listed)
-        self.assertIn('class="dim docsize">8 bytes</span>', listed)
+        self.assertIn('class="dim docsize" title="8 bytes">8 B</span>', listed)
         self.assertIn('<span class="mark" title="changed in this chat">●</span> plan.md', listed)
 
     def test_subfolders_are_listed_as_folders_and_dir_lists_one(self):
@@ -638,15 +638,16 @@ class DocsPanelTest(ChatRoutesTest):
         (self.docs / "ucg" / "sub" / "deep.md").write_text("deep")
         (self.docs / "top.md").write_text("top")
         top = self.req("/fragment/docs/wren?list=1", cookie=self.cookie).body.decode()
-        self.assertIn('<a href="?dir=ucg" data-open-dir="ucg" class="folder"><span>📁 ucg</span>'
-                      '<span class="dim docsize">2 documents ›</span></a>', top)
+        self.assertIn('<a href="?dir=ucg" data-open-dir="ucg" class="folder"><span>📁 ucg '
+                      '<span class="dim">· 2 documents</span></span>'
+                      '<span class="dim docsize" title="5 bytes in all">5 B</span><time class="dim docdate"', top)
         self.assertIn('data-open-doc="top.md"', top)
         self.assertNotIn('data-open-doc="ucg/a.md"', top)              # inside its folder, not in the top list
         inside = self.req("/fragment/docs/wren?list=1&dir=ucg", cookie=self.cookie).body.decode()
         self.assertIn('data-back-docs data-dir="" aria-label="Up to the documents"', inside)
         self.assertIn('<span class="crumbs"><a href="?dir=" data-open-dir="">Documents</a> / <b>ucg</b></span>', inside)
         self.assertIn('<a href="?doc=ucg%2Fa.md" data-open-doc="ucg/a.md"><span>a.md</span>', inside)
-        self.assertIn('data-open-dir="ucg/sub" class="folder"><span>📁 sub</span>', inside)
+        self.assertIn('data-open-dir="ucg/sub" class="folder"><span>📁 sub <span class="dim">· 1 document</span></span>', inside)
         self.assertNotIn('data-open-doc="top.md"', inside)
         self.assertIn('<input type="hidden" name="dir" value="ucg">', inside)   # New document goes in this folder
         deep = self.req("/fragment/docs/wren?dir=ucg%2Fsub", cookie=self.cookie).body.decode()   # ?dir= alone lists
@@ -664,8 +665,8 @@ class DocsPanelTest(ChatRoutesTest):
         from supervisor import doc_comments
         with mock.patch.object(doc_comments, "open_counts", lambda n: {"ucg/a.md": 3}):
             top = self.req("/fragment/docs/wren?list=1", cookie=self.cookie).body.decode()
-        self.assertIn('<span class="mark" title="changed in this chat">●</span> 📁 ucg '
-                      '<span class="ccount" title="open comments">💬 3</span>', top)
+        self.assertIn('<span class="mark" title="changed in this chat">●</span> 📁 ucg <span class="dim">· 1 document</span>'
+                      ' <span class="ccount" title="open comments">💬 3</span>', top)
 
     def test_a_bad_or_gone_folder_says_so(self):
         (self.docs / "top.md").write_text("top")

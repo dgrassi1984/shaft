@@ -164,10 +164,15 @@ and [chat design](plans/PLAN-webui-chat.md).
   known model HTTP 5xx failure with API evidence that no tools ran. Older records and uncertain outcomes link to
   Activity and Services. Interjected requests need inspection rather than a one-message retry.
 - **Documents**: a Markdown file an instance writes under its `notes/docs/` shows beside the chat, live, as it writes
-  it; a reply's documents are cards under it. The drawer shows a vertical list with sizes, changed marks and comment
-  counts, or one open document (by default the one this chat last changed). Subfolders of `notes/docs/` are entries
-  of their own (📁, with how many documents they hold and their marks and comments added up), most recently changed
-  first, then the documents at that level: a folder opens its list (`?dir=`, so a reload stays there), the path at
+  it; a reply's documents are cards under it. The drawer shows a vertical list with each entry's size (1.5 KB, exact
+  bytes on hover), modified time (14:32 today, 4 Mar 14:32 this year, a date before), changed marks and comment
+  counts, or one open document (by default the one this chat last changed). The **Name**, **Size** and **Modified**
+  heads sort the list (newest first by default; a head's first click is A→Z, largest or newest, the next reverses
+  it); the order is this browser's, kept in a cookie, so a reload, another chat or another tab lists them the same
+  way. A document over 256 KB says **too big to show**; opening it offers its download. Subfolders of `notes/docs/`
+  are entries of their own (📁, with how many documents they hold, their total size, their latest change, and their
+  marks and comments added up), listed first in the same order, then the documents at that level: a folder opens its
+  list (`?dir=`, so a reload stays there), the path at
   the top (Documents / ucg / sub) and **←** go back up. **← <folder>** (or **← Documents**) returns from a document
   to its folder's list and asks before dropping unsaved edits; deleting one returns there too. When the chat area is too narrow for both columns, Documents opens as
   a sheet over the chat. Close it with ✕ or Escape; loading a `?doc=` address or clicking a document card, list
@@ -222,7 +227,7 @@ and [chat design](plans/PLAN-webui-chat.md).
   **Drive** (`drive.md` for that instance: the diff is shown in full, then Apply saves it and Back keeps your text; an
   unsaved edit is kept in this browser and restored after a reload, and leaving asks first, as it does for an
   unsaved Config or Settings value),
-  **Files** (`/i/<name>/files?path=notes/` lists one folder, folders first, with sizes and modified times.
+  **Files** (`/i/<name>/files?path=notes/` lists one folder, folders first, with sizes (1.5 KB; a folder shows —) and modified times.
   Breadcrumbs and Up return to parent folders. The count includes all visible entries; pages show at most 200.
   Folder and page addresses support reload, bookmarks and Back. Every file has Download; text files also have
   Open, served as plain text with the same security policy. `/i/<name>/file?path=notes/example.md` downloads

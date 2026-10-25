@@ -9,7 +9,8 @@ import unittest
 from supervisor.web_views import chat_feed, docs_panel, threads_list
 
 HOSTILE = '"><script>x</script>'
-LISTING = [{"path": "plan.md", "bytes": 12}, {"path": "notes.md", "bytes": 4}]
+LISTING = [{"path": "plan.md", "bytes": 12, "mtime": 1761400000.0, "sha": "abc"},
+           {"path": "notes.md", "bytes": 4, "mtime": 1761300000.0, "sha": "def"}]
 TS = "2026-10-20T15:04:03"
 _DEFAULT_ANCHOR = object()
 
@@ -36,7 +37,8 @@ def panel(**kw) -> str:
 
 class CommentViewsTest(unittest.TestCase):
     def test_defaults_are_byte_identical(self):
-        listing = [{"path": "plan.md", "bytes": 12}, {"path": "a b.md", "bytes": 1}]
+        listing = [{"path": "plan.md", "bytes": 12, "mtime": 1761400000.0, "sha": "abc"},
+                   {"path": "a b.md", "bytes": 1, "mtime": 1761300000.0, "sha": "def"}]
         marked = {"plan.md"}
         bare = docs_panel("ada", listing, "plan.md", "Hello\n", "abc", marked)
         explicit = docs_panel("ada", listing, "plan.md", "Hello\n", "abc", marked, problem="", saved=None,
@@ -56,9 +58,9 @@ class CommentViewsTest(unittest.TestCase):
         html_out = panel(open_path="", text=None, counts={"plan.md": 3, "notes.md": 0})
         self.assertIn('data-open-doc="plan.md"><span>plan.md '
                       '<span class="ccount" title="open comments">💬 3</span></span>'
-                      '<span class="dim docsize">12 bytes</span></a>', html_out)
+                      '<span class="dim docsize" title="12 bytes">12 B</span><time class="dim docdate"', html_out)
         self.assertIn('data-open-doc="notes.md"><span>notes.md</span>'
-                      '<span class="dim docsize">4 bytes</span></a>', html_out)
+                      '<span class="dim docsize" title="4 bytes">4 B</span><time class="dim docdate"', html_out)
         html_out = panel(counts={"plan.md": 3, "notes.md": 0})
         self.assertIn('data-threads="[]"', html_out)
         self.assertIn('data-comment-doc aria-label="Comment on the whole document"', html_out)

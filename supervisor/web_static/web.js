@@ -1485,6 +1485,21 @@
     }
     docsList(b.dataset.dir || "");                  // the open document's folder, or the folder above this one
   });
+  // A column head above the list sorts it. The order is this browser's (a cookie the server reads, so a reload, another
+  // chat or another tab lists them the same way): a ?sort= left by a link followed without the script would outrank it.
+  document.addEventListener("click", (ev) => {
+    const a = ev.target.closest && ev.target.closest("[data-sort-docs]");
+    const panel = document.getElementById("docs");
+    if (!a || !panel || ev.metaKey || ev.ctrlKey) return;
+    ev.preventDefault();
+    document.cookie = `shaft_docsort=${a.dataset.sortDocs}; Path=/; Max-Age=${400 * 86400}; Secure; SameSite=Strict`;
+    const poll = new URL(panel.dataset.poll, location.href);
+    poll.searchParams.delete("sort");
+    panel.dataset.poll = poll.pathname + poll.search;
+    const u = new URL(location.href);
+    if (u.searchParams.has("sort")) { u.searchParams.delete("sort"); history.replaceState(null, "", u); }
+    refreshDocs();
+  });
   // A folder in the list, or a step of its path above it, lists that folder.
   document.addEventListener("click", (ev) => {
     const a = ev.target.closest && ev.target.closest("[data-open-dir]");

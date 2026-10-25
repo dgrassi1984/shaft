@@ -83,7 +83,8 @@ class FilesTest(WebTest):
         self.assertIn("202 entries", text)
         self.assertEqual(text.count('>Download</a>'), 199)
         self.assertLess(text.index('>z-folder/</a>'), text.index('>f000.txt'))
-        self.assertIn("3 bytes", text)
+        self.assertIn(">3 B<", text)                  # shorthand, not "3 bytes"
+        self.assertIn(">—<", text)                    # a folder has no size of its own to show, not its inode's 4096
         self.assertRegex(text, r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}")
         self.assertIn('/i/wren/files?path=notes%2F&page=2', text)
         self.assertIn('>Up</a>', text)

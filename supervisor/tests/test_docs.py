@@ -73,10 +73,11 @@ class DocsTest(unittest.TestCase):
         self.assertEqual([d["path"] for d in docs.listing("wren")], ["real.md"])   # links are not documents
 
     def test_a_document_too_big_is_refused_to_write_and_to_show(self):
-        with self.assertRaisesRegex(docs.Refused, "at most"):
+        # In KB, rounded up (it said "262145 bytes ... (at most 262144)", unreadable in the panel)
+        with self.assertRaisesRegex(docs.Refused, "would be 257 KB: at most 256 KB$"):
             docs.write("wren", "big.md", "x" * (docs.MAX_BYTES + 1), "none")
         self.doc("huge.md", "x" * (docs.MAX_BYTES + 1))
-        with self.assertRaisesRegex(docs.Refused, "too big"):
+        with self.assertRaisesRegex(docs.Refused, r"is 257 KB: too big to show or edit here \(at most 256 KB\)$"):
             docs.read("wren", "huge.md")
         self.assertEqual(docs.listing("wren")[0]["sha"], "too-big")              # listed, never hashed each refresh
 
