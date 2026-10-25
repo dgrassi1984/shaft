@@ -42,7 +42,8 @@ shaft-docs/   the supervisor's copy of README.md and docs/*.md (not docs/plans/)
               never writes it, and it is never committed
 self/         self.md (self-model), personality.md (core/surface, every trait cites the journal),
               goals.md, stats.md (written by the supervisor: achieved difficulty, where its goals
-              came from, judged success, calibration, battery scores)
+              came from, judged success, calibration, battery scores), calibration.json (written by
+              the supervisor: the base rates declare_intent shows)
 memory/       journal.md (append-only), facts.md, people/, messages/, episodes/*.jsonl,
               verdicts-reviewed.md (when its last finished sleep read the judge's verdicts: the next
               sleep is shown those judged since)
@@ -67,13 +68,24 @@ Calibration v3 asks v2's question again after showing the instance its own base 
 `confidence_of="criterion_met=yes;base_rate_shown"`. A v3 judgment keeps both numbers: `confidence` (final) and
 `confidence_first` (declared before the base rate was shown), plus `base_rate_shown`, the band that was shown. Both are
 scored on the same outcome, and `self/stats.md` adds a paired line: Brier before and after on the same cycles, how
-often the number changed, and whether the change moved it closer to the outcome. A confidence asked under a question
-the supervisor does not know is never scored as v1: it is counted as left out, and `stats.md` says how many.
+often the number changed, and whether the change moved it closer to the outcome. A cycle is v3 only once
+`confirm_confidence` is accepted on a later turn: a declare never confirmed (on the wrap-up turn, or finished in the same
+reply) never read the rate, so it stays v2 and keeps `base_rate_shown` only for audit. A base rate file the cycle
+could not read is recorded as `base_rate_error`, and `shaft review` counts those cycles. A confidence asked under a
+question the supervisor does not know is never scored as v1: it is counted as left out, and `stats.md`, `shaft review`
+and the surprise baseline say how many.
+The judges never see the base-rate step: the case they grade drops `confidence_first`, `base_rate_shown` and
+`base_rate_error` from the intent (a v3 intent reads as v2's question), shows the declare result as
+`intent recorded — now act`, and leaves out the `confirm_confidence` calls and the calls refused until it. The
+verdict is the outcome both numbers are scored against, so a judge pulled toward the base rate would bias the test.
 The supervisor writes the base rates beside `stats.md`, in `self/calibration.json`: per confidence band
 (`BANDS`, 0–40, 40–70, 70–100) how often the criterion was met (`met` of `n`, v2 and v3 cycles) and, apart, the same
-for v1 cycles (`older_met` of `older_n`), counting only verdicts by judges in today's rotation. The instance reads
-it at the declare step and may edit it, so no score is ever read back from it. The views show a cycle's confidence
-as `90 → 60` where the base rate moved it.
+for v1 cycles (`older_met` of `older_n`), counting only verdicts by judges in today's rotation; `stats.md` shows the
+same figures, one line per band with data. The live cycle reads it when it starts and shows the band at
+declare_intent; the supervisor overwrites it after each judged live cycle and never reads it back, so an edit by the
+instance changes no score. A folder or a link the instance puts at either file is refused and logged; the rest of
+the after-cycle work, probation included, still runs. The views show a cycle's confidence as `90 → 60` where the
+base rate moved it.
 `record(kind='judgments', since=...)` reviews verdicts by when they were judged (`judged_at`, or the second
 judge's time if later), oldest first, even for older cycles; a tie in the same second is never split across pages.
 Minute-only timestamps mean `:00`; `T` and space separators are accepted. Use the returned continuation's
@@ -89,7 +101,9 @@ With `since` and `format="json"`, `record` returns the same text plus the shown 
 episode timestamps (`left_out`), and `next_since`. Verdicts from the last two seconds remain for a later
 fetch. The cursor is the last shown verdict's review time, even on the final page; it is null for an empty
 page. Without `since`, the original text output is unchanged. Judgments from 2026-10-24 onward that lack
-`confidence_of` inherit it from their live episode when present; earlier judgments stay v1.
+`confidence_of` inherit it from their live episode when present; earlier judgments stay v1. A v3 judgment without
+`confidence_first` (the supervisor before v3 wrote only `confidence_of`) takes `confidence_first`, `base_rate_shown`
+and `base_rate_error` from its episode the same way; a value the judgment has is never overwritten.
 
 
 The **capability battery** is a fixed yardstick: held-out tasks the instances never see (coding with hidden

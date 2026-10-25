@@ -194,7 +194,7 @@ class A4Test(unittest.TestCase):
         self.assertIn("Calibration v2 — P(criterion met = yes), Brier on met/not met: Brier 0.25 (n=2", text)
         self.assertIn("when I said 40–70%: criterion met (yes) 50% of 2", text)
         self.assertIn("Calibration v1, older question 'probability of success', scored yes=1/partial=0.5; "
-                      "not pooled with v2: Brier 0.00 (n=1", text)
+                      "not pooled with v2 or v3: Brier 0.00 (n=1", text)   # final fix F8
         self.assertIn("average confidence beforehand 50% vs succeeded 50%", text)   # v1 keeps its detail lines
         cal = metrics.calibration(self.rows)
         self.assertEqual((cal["v1"]["brier"], cal["v2"]["brier"]), (0.0, 0.25))

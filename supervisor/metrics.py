@@ -1128,7 +1128,7 @@ def stats_text(name: str) -> str:
              "criterion met (yes)"),
             ("v2", "Calibration v2 — P(criterion met = yes), Brier on met/not met", "criterion met (yes)"),
             ("v1", "Calibration v1, older question 'probability of success', scored yes=1/partial=0.5; "
-                   "not pooled with v2", "succeeded")):
+                   "not pooled with v2 or v3", "succeeded")):
         c = cal[version]
         if not c["n"]:
             continue

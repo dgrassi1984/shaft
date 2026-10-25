@@ -193,6 +193,11 @@ class DeclareStepTest(unittest.TestCase):
         self.assertNotIn("when I said 0–40%: criterion", text)          # a band without data has no line
         self.assertNotIn("Base rates declare_intent shows me", self.stats([judged(None, "yes")]))
 
+    def test_v1_title_says_it_is_pooled_with_neither(self):
+        # Final fix F8: the v1 title said "not pooled with v2" after v3 existed.
+        text = self.stats([judged(50, "yes")])
+        self.assertIn("scored yes=1/partial=0.5; not pooled with v2 or v3: Brier", text)
+
     def test_stats_text_shows_the_excluded_count_only_above_zero(self):
         line = "- Confidences left out of calibration: 2 (asked under a question this supervisor does not know)"
         text = self.stats([judged(50, "yes", "something-new"), judged(50, "no", "another"), judged(50, "yes")])
