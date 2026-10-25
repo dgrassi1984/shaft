@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "template"))
-from shaft import config, live
+from shaft import agent, config, live
 try:
     from shaft import base_rate
 except ImportError:
@@ -22,6 +22,7 @@ except ImportError:
 
 from shaft.llm import Client
 from shaft.state import State
+from shaft.tools import Toolbox, _spec
 from supervisor import metrics
 from supervisor.tests.fakellm import FakeLLM
 
@@ -162,8 +163,9 @@ class ConfirmStepTest(Fixture, unittest.TestCase):
     def test_wrap_up_without_confirm_keeps_first(self):
         # Review focus 2: declared on the wrap-up turn, where no later turn exists; finish is still accepted.
         self.write_rates(WITH_DATA)
-        fake, episode = self.cycle([*([read(i)] for i in range(STEPS)), [declare(85), FINISH]])
-        self.assertEqual(len(fake.requests), STEPS + 1)
+        fake, episode = self.cycle([*([read(i)] for i in range(STEPS - 1)), [declare(85), FINISH]])
+        self.assertEqual(len(fake.requests), STEPS)
+        self.assertTrue(fake.requests[-1]["messages"][-1]["content"].startswith("[supervisor] You have one turn"))
         self.assertEqual(episode["ended_by"], "control")
         self.assertEqual(episode["finish"]["criterion_met"], "partial")
         intent = episode["intent"]
@@ -255,15 +257,59 @@ class ExtraStepTest(Fixture, unittest.TestCase):
                 self.assertEqual(len(fake.requests), expected)
                 self.assertEqual(episode["intent"]["confidence_of"] == live.CONFIDENCE_OF_SHOWN, name == "shown")
 
-    @unittest.expectedFailure
     def test_no_extra_step_when_the_declared_band_is_empty(self):
-        # KNOWN GAP (task-3-report, concern 1): agent.run takes max_steps before the declare, so the extra step is
-        # granted whenever the file has a band with data. A declare in an empty band then runs as v2 with one more
-        # step than v2. The plan wants no extra turn there; this flips to an unexpected success once it holds.
+        # Regression (task-3 concern 1): the step was granted up front whenever the file had a band with data, so a
+        # declare in an empty band ran as v2 with one step more than v2.
         self.write_rates(WITH_DATA)
         fake, episode = self.cycle(self.never_finishing([[declare(20)]]))
         self.assertEqual(episode["intent"]["confidence_of"], "criterion_met=yes")
         self.assertEqual(len(fake.requests), STEPS)
+
+
+
+class AgentStepLimitTest(unittest.TestCase):
+    """agent.run reads its limit at the top of each turn, so live can grant the confirm turn after the declare."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(prefix="shaft-steps-")
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.enterContext(mock.patch.dict(os.environ, {"SHAFT_ROOT": str(self.root)}, clear=True))
+
+    def drive(self, max_steps, replies, controls=None):
+        fake = FakeLLM([{"tool_calls": list(r)} for r in replies])
+        self.addCleanup(fake.close)
+        client = Client(fake.url, "m", "", 30, self.root / "usage.jsonl")
+        stop = {"stop": agent.Control(_spec("stop", "stop", {}), lambda a: "stopped", stops=True)}
+        outcome = agent.run(client, [{"role": "user", "content": "go"}], Toolbox(self.root), max_tokens=100,
+                            purpose="live", max_steps=max_steps, controls={**stop, **(controls or {})},
+                            wrap_up="Wrap up.")
+        return fake, outcome
+
+    @staticmethod
+    def wrap_up_at(fake):
+        return [i + 1 for i, r in enumerate(fake.requests)
+                if r["messages"][-1]["role"] == "user" and r["messages"][-1]["content"].startswith("[supervisor]")]
+
+    def test_int_limit_unchanged(self):
+        fake, outcome = self.drive(3, [[read(i)] for i in range(10)])
+        self.assertEqual((len(fake.requests), outcome.ended_by, outcome.steps), (3, "steps", 3))
+        self.assertEqual(self.wrap_up_at(fake), [3])
+        self.assertEqual([t["function"]["name"] for t in fake.requests[2]["tools"]], ["stop"])   # controls only
+        self.assertIn("(step 1 of 3)", fake.requests[1]["messages"][-1]["content"])
+
+    def test_no_limit_unchanged(self):
+        fake, outcome = self.drive(0, [*([read(i)] for i in range(5)), [("stop", {})]])
+        self.assertEqual((len(fake.requests), outcome.ended_by, self.wrap_up_at(fake)), (6, "control", []))
+
+    def test_callable_raised_mid_run_grants_exactly_one_turn(self):
+        limit = [3]
+        raise_limit = agent.Control(_spec("raise_limit", "raise", {}), lambda a: limit.__setitem__(0, 4) or "raised")
+        fake, outcome = self.drive(lambda: limit[0], [[read(0)], [("raise_limit", {})], *([read(i)] for i in range(1, 10))],
+                                   controls={"raise_limit": raise_limit})
+        self.assertEqual((len(fake.requests), outcome.ended_by, outcome.steps), (4, "steps", 4))
+        self.assertEqual(self.wrap_up_at(fake), [4])   # the wrap-up lands on the new last step, not on step 3
+        self.assertIn("(step 3 of 4)", fake.requests[3]["messages"][-2]["content"])   # [-1] is the wrap-up
 
 
 if __name__ == "__main__":
