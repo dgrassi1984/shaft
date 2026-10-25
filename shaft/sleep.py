@@ -5,10 +5,10 @@ import json
 import re
 from datetime import datetime
 
-from . import agent, broker, clock, memory, prompts, recovery
+from . import agent, broker, clock, memory, prompts, recovery, surprises
 from .llm import Client, LLMError
 from .state import State
-from .tools import Toolbox, for_log
+from .tools import Toolbox, _spec, for_log
 
 # When my last finished sleep read the judge's verdicts: the next one asks only for those judged since (A2).
 VERDICTS_REVIEWED = "memory/verdicts-reviewed.md"
@@ -44,6 +44,36 @@ def _verdicts(raw: str) -> dict:
     return data
 
 
+S = {"type": "string"}
+CLOSE_SURPRISE = _spec(
+    "close_surprise", "Close one of my open surprises (in my sleep) when it needs no cycle of its own: say what became "
+    "of it. To keep what it taught me, remember a fact citing its id instead (or as well).",
+    {"id": {"type": "string", "description": "the surprise's id, e.g. s1013-0653-1"},
+     "outcome": {"type": "string", "enum": list(surprises.OUTCOMES)},
+     "note": {"type": "string", "description": "why: one sentence"}})
+
+
+def _last_sleep(state: State) -> str:
+    """When my last finished sleep ended (its episode's ts), or '' before my first: the surprises since then are mine
+    to go through."""
+    finished = [ep.get("ts", "") for ep in surprises.episodes(state.root)
+                if ep.get("kind") == "sleep" and ep.get("ended_by") == "answer"]
+    return max(finished, default="")
+
+
+def surprises_text(items: list[dict]) -> str:
+    rows = []
+    for it in items:
+        status = {"open": "open", "resolved": f"resolved by a cycle: {it['how']}",
+                  "closed": f"closed ({it['outcome']})",
+                  "expired": f"expired ({it['reason']}): nothing to do — a fact citing it if it taught me something"
+                  }[it["status"]]
+        rows.append(f"- {it['id']} [{status}{', depth 2: not shown in my queue' if it['depth'] > 1 else ''}]: "
+                    f"expected {it['expected'] or '?'} — observed {it['observed'] or '?'}"
+                    + (f" — so what: {it['so_what']}" if it["so_what"] else ""))
+    return "\n".join(rows) or "(none)"
+
+
 # The writes a sleep must not make from an open conversation, and the file each one changes ("": all new text).
 GUARDED = {"remember": "", "write_digest": "", "rewrite_facts": "memory/facts.md",
            "update_personality": "self/personality.md", "update_self_model": "self/self.md"}
@@ -70,7 +100,29 @@ def run(cfg, state: State, client: Client) -> str:
     toolbox = Toolbox(state.root)
     toolbox.remote = {name: spec for name, spec in toolbox.remote.items() if name in ("record", "history")}
     toolbox.plugins = {}
+    toolbox.extra = [CLOSE_SURPRISE]
     real_run = toolbox.run
+    closed: list[dict] = []
+
+    def close(args: dict) -> str:
+        sid = str(args.get("id") or "").strip().removeprefix("surprise:")
+        outcome, note = str(args.get("outcome") or "").strip(), " ".join(str(args.get("note") or "").split())
+        items = surprises.all_items(state.root)
+        for c in closed:   # closed earlier in this sleep: its episode is written at the end
+            items[c["id"]]["status"] = "closed"
+        if outcome not in surprises.OUTCOMES:
+            return f"ERROR: outcome must be one of {', '.join(surprises.OUTCOMES)}"
+        if not note:
+            return "ERROR: say in note why it is closed"
+        if sid not in items:
+            listed = ", ".join(i for i, it in items.items() if it["status"] == "open") or "none open"
+            return f"ERROR: I have no surprise {sid!r} (open: {listed})"
+        if items[sid]["status"] != "open":
+            return (f"ERROR: {sid} is already {items[sid]['status']}"
+                    + (": it needs nothing (remember a fact citing it if it taught me something)"
+                       if items[sid]["status"] == "expired" else ""))
+        closed.append({"id": sid, "outcome": outcome, "note": note[:surprises.FIELD_CHARS]})
+        return f"closed {sid} ({outcome})"
 
     def gated_run(name: str, raw_args: str) -> str:
         try:
@@ -79,6 +131,10 @@ def run(cfg, state: State, client: Client) -> str:
             return real_run(name, raw_args)
         if not isinstance(args, dict):
             return real_run(name, raw_args)
+        if name == "close_surprise":
+            result = close(args)
+            toolbox.log.append({"tool": name, "args": for_log(raw_args), "result": result})
+            return result
         refusal = ""
         if name == "history" and args.get("save_as"):
             refusal = "ERROR: history is read-only during sleep; save_as writes a file"
@@ -118,6 +174,8 @@ def run(cfg, state: State, client: Client) -> str:
         {"role": "system", "content": system},
         {"role": "user", "content": prompts.SLEEP.format(operator=cfg.OPERATOR_NAME, operator_file=operator_file)
          + "\n\n## Verdicts the supervisor's judge gave since my last sleep\n\n" + (verdicts.strip() or "(none new)")
+         + "\n\n## Surprises since my last sleep (step 7)\n\n"
+         + surprises_text(surprises.since(state.root, _last_sleep(state)))
          + "\n\n## My operational envelope (from the supervisor, at the start of this cycle)\n\n"
          + prompts.envelope_text(broker.envelope(), agent.time_left())},
     ]
@@ -132,7 +190,7 @@ def run(cfg, state: State, client: Client) -> str:
         summary = (f"{why} before writing my sleep entry. "
                    f"Tools that succeeded: {'; '.join(changes) or 'none'}.")
         state.append_journal("Sleep (unfinished)", summary)
-        state.append_episode({"kind": "sleep", "ended_by": outcome.ended_by, "tools": toolbox.log})
+        state.append_episode({"kind": "sleep", "ended_by": outcome.ended_by, "tools": toolbox.log, "closed": closed})
         raise LLMError(summary)
     # Before the journal entry: a finished sleep without a marker would otherwise be the next one's starting point,
     # skipping what it did not read. A failed read keeps where it started, so the next sleep asks again.
@@ -154,7 +212,7 @@ def run(cfg, state: State, client: Client) -> str:
     entry += "\n\n*Consolidation actions:* " + ("; ".join(changes) or "none")
     state.append_journal("Sleep", entry)
     state.append_episode({"kind": "sleep", "ended_by": outcome.ended_by, "tools": toolbox.log,
-                          "content": outcome.reply.content})
+                          "content": outcome.reply.content, "closed": closed})
     return entry
 
 

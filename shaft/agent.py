@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from . import broker, images, pausing
+from . import broker, images, pausing, surprises
 from .llm import Client, Reply
 from .tools import Toolbox, for_log
 
@@ -90,6 +90,16 @@ def call_ledger(entries: list[dict], step: int, max_steps: int, purpose: str, *,
             f"File writes: {'; '.join(writes) if writes else 'none'}.{tail}")
 
 
+def _tag(entry: dict) -> tuple[str, str] | None:
+    """Mark a tool-log entry whose result has a known failure shape (surprises.flag); returns the flag."""
+    hit = surprises.flag(str(entry.get("result", "")))
+    if hit:
+        entry["flag"] = hit[0]
+        if hit[1]:
+            entry["flag_detail"] = hit[1]
+    return hit
+
+
 def _canonical(arguments: str) -> str:
     try:
         return json.dumps(json.loads(arguments or "{}"), sort_keys=True)
@@ -121,7 +131,8 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
         on_tool: Callable[[str, str, str], None] | None = None,
         on_tool_start: Callable[[str, str], None] | None = None,
         wrap_up: str | None = None, ledger: bool = True,
-        interjections: Callable[[], list[dict]] | None = None) -> Outcome:
+        interjections: Callable[[], list[dict]] | None = None,
+        expected: Callable[[], list[str] | None] | None = None) -> Outcome:
     """Run until the model answers without calling tools, a stopping control is called,
     or max_steps model turns have been used (max_steps <= 0: no limit — conversations, where
     the operator stops a reply with Ctrl-C). `call` defaults to client.complete; pass a streaming
@@ -136,7 +147,11 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
     the model: the tool log, which the judge and metrics read, keeps the results as the tools returned them.
 
     `interjections` (conversations): messages the operator sent while I am still replying. Each step starts by adding
-    the new ones after my last tool result, so the next model call already has them (PLAN-interject.md)."""
+    the new ones after my last tool result, so the next model call already has them (PLAN-interject.md).
+
+    Every tool-log entry whose result has a known failure shape is tagged with the rule's `flag`. `expected` (live
+    cycles): my stated predictions, or None before I state any; a flagged result they did not anticipate ends with a
+    one-line `[unexpected: …]` note, for the model only (PLAN-surprise §1.2)."""
     controls = controls or {}
     tools = toolbox.specs() + [c.spec for c in controls.values()]
     final_tools = [c.spec for c in controls.values()] or None
@@ -198,6 +213,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
                     return Outcome(reply, "repeating", step, toolbox.log)
                 messages.append({"role": "tool", "tool_call_id": c["id"], "content": REPEATED.format(name=c["name"])})
                 toolbox.log.append({"tool": c["name"], "args": for_log(c["arguments"]), "result": NOT_RUN})
+                _tag(toolbox.log[-1])
                 continue
             last_call, repeats = call_key, 0
             pausing.activity(keep=True, phase="tool", tool=c["name"], args=" ".join(c["arguments"].split())[:160])
@@ -211,8 +227,13 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
                     result = f"ERROR: bad arguments for {c['name']}: {e}"
                 stop = stop or (controls[c["name"]].stops and not result.startswith("ERROR"))
                 toolbox.log.append({"tool": c["name"], "args": for_log(c["arguments"]), "result": for_log(result)})
+                _tag(toolbox.log[-1])
             else:
                 result = toolbox.run(c["name"], c["arguments"])
+                hit = _tag(toolbox.log[-1])
+                predictions = expected() if expected and hit else None
+                if predictions is not None:
+                    result += surprises.note(hit, predictions)
             if on_tool:
                 on_tool(c["name"], c["arguments"], result)
             messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})

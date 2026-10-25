@@ -32,6 +32,7 @@ FIELDS: dict[str, tuple[type, object]] = {
     "MAX_STEPS_SLEEP": (int, 30),
     "MAX_STEPS_TALK": (int, 0),        # 0 = no limit (conversations)
     "CONTEXT_JOURNAL_CHARS": (int, 16000),
+    "CURIOSITY_EVERY_CYCLES": (int, 5),   # one live cycle in this many, on average, takes its goal from my surprises; 0 = never
     "OPERATOR_NAME": (str, "the operator"),
 }
 
