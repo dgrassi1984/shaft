@@ -217,27 +217,55 @@ class DeclareStepTest(unittest.TestCase):
         self.assertEqual(row["base_rate_shown"], SHOWN)
         self.assertEqual(row["confidence_of"], metrics.CONFIDENCE_V3)
 
-    def test_backfill_copies_first_from_episode(self):
-        # Bug guard: the backfill copied confidence_of only, so a v3 row judged before the supervisor learned
-        # the field scored as v3 final but never paired.
-        row = {"episode_ts": "2026-10-25T10:00:00", "judged_at": "2026-10-25T10:05:00", "goal": "g",
-               "confidence": 60, "criterion_met": "partial"}
-        ep = {"ts": row["episode_ts"], "intent": {"confidence_of": metrics.CONFIDENCE_V3, "confidence": 60,
-                                                  "confidence_first": 90, "base_rate_shown": SHOWN}}
+    def backfilled(self, row, intent):
+        """judgments() over a file holding `row`, with `intent` as its live episode's."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "judgments").mkdir()
             path = root / "judgments" / "x.jsonl"
             path.write_text(json.dumps(row) + "\n")
-            with mock.patch.object(metrics, "SUP_DIR", root), mock.patch.object(metrics, "live_episodes",
-                                                                                 return_value=[ep]):
+            with mock.patch.object(metrics, "SUP_DIR", root), mock.patch.object(
+                    metrics, "live_episodes", return_value=[{"ts": row["episode_ts"], "intent": intent}]):
                 got = metrics.judgments("x", root)[0]
                 other = metrics.judgments("x", Path(tmp) / "elsewhere")
-            self.assertEqual((got["confidence_of"], got["confidence_first"]), (metrics.CONFIDENCE_V3, 90))
-            self.assertEqual(got["base_rate_shown"], SHOWN)
-            self.assertEqual(metrics.paired_v3([got])["n"], 1)
             self.assertEqual(other, [])
-            self.assertNotIn("confidence_first", json.loads(path.read_text()))   # the file itself is never rewritten
+            self.assertEqual(json.loads(path.read_text()), row)   # the file itself is never rewritten
+        return got
+
+    # The row the supervisor on main writes for a v3 cycle (rec in judge_pending at 7fc1722): confidence_of always
+    # set, no confidence_first, base_rate_shown or base_rate_error.
+    MAIN_ROW = {"episode_ts": "2026-10-25T10:00:00", "judged_at": "2026-10-25T10:05:00", "confidence": 60,
+                "confidence_of": metrics.CONFIDENCE_V3, "claimed": "partial", "goal": "g", "origin_declared": "self",
+                "origin_ref": "", "model": "m", **VERDICT, "judge": judge.JUDGE_MODELS[0]}
+
+    def test_backfill_copies_first_from_episode(self):
+        # Bug guard: the backfill copied confidence_of only, so a v3 row judged before the supervisor learned
+        # the field scored as v3 final but never paired. Final fix F3: the fixture is the row main really writes —
+        # it carries confidence_of, which the backfill took as "nothing to fill".
+        got = self.backfilled(self.MAIN_ROW, {"confidence_of": metrics.CONFIDENCE_V3, "confidence": 60,
+                                              "confidence_first": 90, "base_rate_shown": SHOWN})
+        self.assertEqual((got["confidence_of"], got["confidence_first"]), (metrics.CONFIDENCE_V3, 90))
+        self.assertEqual(got["base_rate_shown"], SHOWN)
+        self.assertEqual(metrics.paired_v3([got])["n"], 1)
+
+    def test_backfill_fills_a_v3_row_without_first_and_never_overwrites(self):
+        # Final fix F3: also a row with confidence_first None; a value the row has is kept, base_rate_error copied.
+        row = {**self.MAIN_ROW, "confidence_first": None, "base_rate_shown": {**SHOWN, "n": 5}}
+        got = self.backfilled(row, {"confidence_of": metrics.CONFIDENCE_V3, "confidence": 60, "confidence_first": 90,
+                                    "base_rate_shown": SHOWN, "base_rate_error": "e"})
+        self.assertEqual(got["confidence_first"], 90)
+        self.assertEqual(got["base_rate_shown"], {**SHOWN, "n": 5})
+        self.assertEqual(got["base_rate_error"], "e")
+        self.assertEqual(metrics.paired_v3([got])["n"], 1)
+
+    def test_backfill_still_fills_rows_without_a_question(self):
+        # The older shape (no confidence_of at all) is still filled from the episode, and a v2 row is left alone.
+        old = {k: v for k, v in self.MAIN_ROW.items() if k != "confidence_of"}
+        got = self.backfilled(old, {"confidence_of": metrics.CONFIDENCE_V3, "confidence": 60, "confidence_first": 90})
+        self.assertEqual((got["confidence_of"], got["confidence_first"]), (metrics.CONFIDENCE_V3, 90))
+        v2 = {**self.MAIN_ROW, "confidence_of": metrics.CONFIDENCE_V2}
+        self.assertNotIn("confidence_first", self.backfilled(v2, {"confidence_of": metrics.CONFIDENCE_V2,
+                                                                  "confidence_first": 90}))
 
     def test_scoring_never_reads_calibration_json(self):
         # The instance can edit its own self/calibration.json: nothing that scores may read it back.
@@ -269,6 +297,90 @@ class DeclareStepTest(unittest.TestCase):
         self.assertIn("| Brier v3 (n) |", text)
         self.assertIn("| 0.36 (1) |", text)
         self.assertIn("Brier v3: P(criterion met = yes) after the base rate was shown", text)
+
+
+def case_before_f1(ep: dict, files: str = "", provenance: str = "", prior: str = "") -> str:
+    """metrics._case as it was before the judges were blinded to the base rate (final fix F1), kept verbatim: a v1
+    or v2 case must stay byte-identical to it, so the verdicts the judges were calibrated on keep their input."""
+    tools = "\n\n".join(f"### {i}. {t['tool']}({metrics._logged(t.get('args', ''))})\n→ {metrics._logged(t.get('result', ''))}"
+                        for i, t in enumerate(ep.get("tools", []), 1))
+    return (f"## Declared before acting\n{json.dumps(ep.get('intent'), indent=1, ensure_ascii=False)}\n\n"
+            f"## Claimed afterwards\n{json.dumps(ep.get('finish'), indent=1, ensure_ascii=False)}\n\n"
+            f"## Ended by\n{ep.get('ended_by')} after {ep.get('steps')} turns\n\n## Tool log\n{tools or '(no tool calls)'}"
+            + (f"\n\n## Files written in this cycle, as they are now (later cycles may have changed them)\n{files}"
+               if files else "")
+            + (f"\n\n## Where the goal may have come from (collected by the supervisor)\n{provenance}"
+               if provenance else "")
+            + (f"\n\n## The agent's earlier judged goals (newest last)\n{prior}" if prior else "")
+            + (metrics.IMAGES_NOTE if any(t.get("tool") in metrics.IMAGE_TOOLS for t in ep.get("tools", [])) else ""))
+
+
+SHOWN_RESULT = ("intent recorded. Before acting, look at your record: when you said 70–100%, the criterion was fully "
+                "met in 160 of 442 judged cycles (36%). Call confirm_confidence with your final probability (0-100) "
+                "that the criterion will be fully met — keep 85 or change it. Your other tools stay closed until you do.")
+GATED = ("ERROR: call confirm_confidence first — keep or change your confidence now that you have seen your record")
+TREATMENT_MARKS = ("base_rate_shown", "confidence_first", "base_rate_error", "fully met in", "confirm_confidence")
+
+
+def live_episode(intent: dict, declare_result: str = "intent recorded — now act", extra_tools=()) -> dict:
+    """A live episode as the template writes it (live.py: intent, finish, ended_by, steps, tools)."""
+    declare = {"tool": "declare_intent", "result": declare_result,
+               "args": json.dumps({"goal": "g", "success_criterion": "c", "confidence": 85, "origin": "self"})}
+    return {"ts": "2026-10-25T10:00:00", "kind": "live", "intent": intent,
+            "finish": {"what_happened": "w", "criterion_met": "partial", "learned": "l"},
+            "ended_by": "control", "steps": 5,
+            "tools": [declare, *extra_tools,
+                      {"tool": "read_file", "args": '{"path": "notes/a.md"}', "result": "text"},
+                      {"tool": "view_image", "args": '{"path": "a.png"}', "result": "seen"},
+                      {"tool": "finish_cycle", "args": "{}", "result": "cycle finished"}]}
+
+
+INTENT = {"goal": "g", "success_criterion": "c", "confidence": 85, "origin": "self", "origin_ref": "",
+          "at": "2026-10-25T09:50:00"}
+
+
+class JudgesBlindToTheBaseRateTest(unittest.TestCase):
+    """Final fix F1: the verdict is the outcome both numbers are scored against, so a judge that reads the base rate
+    (or the confirm step) is pulled toward it and biases the paired test. The case shows none of it."""
+
+    def test_v3_case_hides_the_treatment(self):
+        ep = live_episode({**INTENT, "confidence": 65, "confidence_of": metrics.CONFIDENCE_V3, "confidence_first": 85,
+                           "base_rate_shown": {"lo": 70, "hi": 100, "met": 160, "n": 442, "older_met": 0, "older_n": 0}},
+                          SHOWN_RESULT,
+                          [{"tool": "read_file", "args": '{"path": "notes/b.md"}', "result": GATED},
+                           {"tool": "confirm_confidence", "args": '{"confidence": 65}',
+                            "result": "confidence 65% recorded — now act"}])
+        case = metrics._case(ep, "files", "provenance", "prior")
+        for mark in TREATMENT_MARKS:
+            self.assertNotIn(mark, case)
+        self.assertIn("### 1. declare_intent(", case)
+        self.assertIn("→ intent recorded — now act\n\n### 2. read_file(", case)    # the refused read is left out too
+        self.assertIn('"confidence": 65', case)                                   # the final number, as before
+        self.assertIn('"confidence_of": "criterion_met=yes"', case)               # v3 reads as the question it asks
+        self.assertEqual(ep["intent"]["confidence_first"], 85)                    # the episode itself is untouched
+        self.assertEqual(len(ep["tools"]), 6)
+
+    def test_unconfirmed_shown_and_unreadable_file_hidden_too(self):
+        # A declare never confirmed is v2 (F2) but its result still showed the rate; base_rate_error is the step's own.
+        shown = live_episode({**INTENT, "confidence_of": metrics.CONFIDENCE_V2,
+                              "base_rate_shown": {"lo": 70, "hi": 100, "met": 160, "n": 442, "older_met": 0,
+                                                  "older_n": 0}}, SHOWN_RESULT)
+        broken = live_episode({**INTENT, "confidence_of": metrics.CONFIDENCE_V2,
+                               "base_rate_error": "self/calibration.json: Expecting value"})
+        for ep in (shown, broken):
+            case = metrics._case(ep)
+            for mark in TREATMENT_MARKS:
+                self.assertNotIn(mark, case)
+            self.assertEqual(case, metrics._case(live_episode({**INTENT, "confidence_of": metrics.CONFIDENCE_V2})))
+
+    def test_v1_and_v2_cases_byte_identical(self):
+        old_declare = "intent recorded"   # whatever an older template answered stays as it was
+        for ep in (live_episode(dict(INTENT)), live_episode(dict(INTENT), old_declare),
+                   live_episode({**INTENT, "confidence_of": metrics.CONFIDENCE_V2}),
+                   {"ts": "t", "intent": None, "finish": None, "ended_by": "steps", "steps": 3, "tools": []},
+                   {"tools": [{"tool": "read_file", "args": "{}", "result": "x" * metrics.LEGACY_LOG_CAP}]}):
+            for extra in (("", "", ""), ("files", "provenance", "prior")):
+                self.assertEqual(metrics._case(ep, *extra), case_before_f1(ep, *extra))
 
 
 class ConfidenceShownTest(unittest.TestCase):

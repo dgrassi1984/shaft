@@ -138,6 +138,7 @@ BANDS = ((0, 40), (40, 70), (70, 101))
 QUESTION_LABEL = {"v1": "probability of success, yes=1/partial=0.5", "v2": "criterion met = yes",
                   "v3": "criterion met = yes, base rate shown"}   # what each version asked, for the lines that report it
 CALIBRATION_FILE = "self/calibration.json"   # the base rates the declare step shows the instance (base_rates)
+V3_FIELDS = ("confidence_first", "base_rate_shown", "base_rate_error")   # what the declare step adds to an intent
 # Deployment boundary: earlier judgments retain the original confidence question.
 CONFIDENCE_BACKFILL_DATE = "2026-10-24"
 EVIDENCE_HOURS = 72           # messages and conversations before a cycle that may hold its goal's origin
@@ -282,14 +283,17 @@ def judgments(name: str, sup: Path | None = None) -> list[dict]:
     sup = sup or SUP_DIR
     p = sup / "judgments" / f"{name}.jsonl"
     rows = [json.loads(l) for l in p.read_text().splitlines() if l.strip()] if p.exists() else []
-    missing = [r for r in rows if "confidence_of" not in r
-               and r.get("judged_at", "") >= CONFIDENCE_BACKFILL_DATE] if sup == SUP_DIR else []
+    # A row judged before the supervisor copied a field takes it from its episode: confidence_of (rows from before
+    # A4), and the v3 fields on a v3 row — the supervisor on main writes confidence_of but none of them.
+    missing = [r for r in rows if r.get("judged_at", "") >= CONFIDENCE_BACKFILL_DATE and (
+        "confidence_of" not in r or (r["confidence_of"] == CONFIDENCE_V3 and r.get("confidence_first") is None))
+               ] if sup == SUP_DIR else []
     if missing:   # the instance's own episodes are the live ones: only for the supervisor's own record
         intents = _confidence_questions(name)
         for r in missing:
             intent = intents.get(r["episode_ts"], {})
-            for key in ("confidence_of", "confidence_first", "base_rate_shown"):
-                if key in intent:
+            for key in ("confidence_of", *V3_FIELDS):
+                if r.get(key) is None and key in intent:   # a value the row has is never overwritten
                     r[key] = intent[key]
     sp = sup / "judgments" / f"{name}-second.jsonl"
     if rows and sp.exists():
@@ -815,7 +819,37 @@ def _merge_ratings(name: str, rated: dict[str, dict]) -> None:
     tmp.replace(path)
 
 
+# The declare step's base rate (PLAN-calibration-feedback) is the treatment of the paired v3 test, and the verdict is
+# the outcome both numbers are scored against: a judge that read the rate would be pulled toward it. So no judge sees
+# it — not in the intent, not in the declare result, not in the confirm step or the refusals it caused.
+TREATMENT_TOOLS = ("confirm_confidence",)
+NEUTRAL_DECLARE = "intent recorded — now act"   # what live's declare_intent answers when it shows no base rate
+CONFIRM_FIRST = "ERROR: call confirm_confidence first"   # live's refusal of every other tool until the confirm
+
+
+def _blind(ep: dict) -> dict:
+    """The episode as the judges see it: the base-rate step taken out, so a v3 case reads like a v2 one (its question
+    is v2's). An episode without the step comes back unchanged, so a v1 or v2 case stays byte-identical."""
+    intent, tools = ep.get("intent"), ep.get("tools", [])
+    step = isinstance(intent, dict) and any(k in intent for k in V3_FIELDS)   # a rate shown, or the file unreadable
+    if not step and not any(t.get("tool") in TREATMENT_TOOLS for t in tools):
+        return ep
+    if isinstance(intent, dict):
+        intent = {k: v for k, v in intent.items() if k not in V3_FIELDS}
+        if intent.get("confidence_of") == CONFIDENCE_V3:   # its label names the step; the question is v2's
+            intent["confidence_of"] = CONFIDENCE_V2
+    kept = []
+    for t in tools:
+        if t.get("tool") in TREATMENT_TOOLS or str(t.get("result", "")).startswith(CONFIRM_FIRST):
+            continue      # the confirm step, and the calls it refused (they never ran)
+        if step and t.get("tool") == "declare_intent" and not str(t.get("result", "")).startswith("ERROR"):
+            t = {**t, "result": NEUTRAL_DECLARE}
+        kept.append(t)
+    return {**ep, "intent": intent, "tools": kept}
+
+
 def _case(ep: dict, files: str = "", provenance: str = "", prior: str = "") -> str:
+    ep = _blind(ep)
     tools = "\n\n".join(f"### {i}. {t['tool']}({_logged(t.get('args', ''))})\n→ {_logged(t.get('result', ''))}"
                         for i, t in enumerate(ep.get("tools", []), 1))
     return (f"## Declared before acting\n{json.dumps(ep.get('intent'), indent=1, ensure_ascii=False)}\n\n"
