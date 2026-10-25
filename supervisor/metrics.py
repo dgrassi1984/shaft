@@ -821,6 +821,30 @@ def _surprise_baseline_rows(name: str) -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
 
 
+def _same_judge(row: dict, stored: dict | None) -> bool:
+    """A re-judge measures the new fields only when the model that gave the stored verdict gives the new one: the
+    rotation draws its judge at random, and two models disagreeing on `criterion_met` is not the fields moving it."""
+    return stored is not None and judge.same_model(row.get("judge"), stored.get("judge"))
+
+
+def _drop_cross_judge(name: str, stored: dict[str, dict]) -> int:
+    """Move re-judged rows given by another model than the stored verdict's (written before the re-judge reused it,
+    2026-10-25) to a file of their own, so each cycle keeps one row and M5's historical honesty counts it once."""
+    rows = _surprise_baseline_rows(name)
+    keep = [r for r in rows if _same_judge(r, stored.get(r["episode_ts"]))]
+    moved = [r for r in rows if r not in keep]
+    if moved:
+        folder = SUP_DIR / "judgments"
+        with (folder / f"{name}-surprise-baseline-cross-judge.jsonl").open("a") as f:
+            f.writelines(json.dumps(r, ensure_ascii=False) + "\n" for r in moved)
+        tmp = folder / f"{name}-surprise-baseline.jsonl.tmp"
+        tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in keep))
+        tmp.replace(folder / f"{name}-surprise-baseline.jsonl")
+        log(f"{name}: surprise baseline: {len(moved)} row(s) judged by another model than the stored verdict's "
+            f"moved to {name}-surprise-baseline-cross-judge.jsonl, to be re-judged by the same model")
+    return len(moved)
+
+
 SURPRISE_TOKENS = 400   # PLAN-surprise §1.6: the judge's extra output for the surprise fields
 
 
@@ -851,29 +875,43 @@ def _judgment_cost() -> tuple[float, str]:
 def surprise_baseline(name: str, limit: int | None = None, dry_run: bool = False) -> dict:
     """Re-judge the cycles from before the predictions existed (PLAN-surprise M2), into a file of their own, saving each
     paid answer before asking for the next. Newest first: with thousands of past cycles (about $0.04 each), `limit`
-    takes the most recent ones — the same-model baseline the M5 window is compared with — not the first day's."""
+    is the newest that many cycles — the same-model baseline the M5 window is compared with — not the first day's; a
+    re-run judges only what that window still lacks. Each cycle is re-judged by the model that gave its stored verdict
+    (a random draw from the rotation made the M2 agreement measure judge swaps, 2026-10-25); a cycle whose judge is
+    unrecorded, or is now one of the instance's own models, is left out and counted; one whose stored verdict already
+    has the surprise fields (the live judge asked for them before the instance's update brought predictions) has no
+    old verdict to compare and is not a candidate."""
     js = judgments(name)
+    stored = {j["episode_ts"]: j for j in js}
     episodes = {ep["ts"]: ep for ep in live_episodes(name)}
-    seen = {r["episode_ts"] for r in _surprise_baseline_rows(name)}
-    todo = []
-    for row in reversed(js):
-        ts = row["episode_ts"]
-        ep = episodes.get(ts)
-        if row.get("judge") != "rule" and ep is not None and ts not in seen and "predictions" not in (ep.get("intent") or {}):
-            todo.append(ep)
-            seen.add(ts)
-    todo = todo[:limit]
+    rows = _surprise_baseline_rows(name)
+    cross = [r for r in rows if not _same_judge(r, stored.get(r["episode_ts"]))]
+    seen = {r["episode_ts"] for r in rows if r not in cross}
+    window = [row for row in reversed(js) if row.get("judge") != "rule" and row["episode_ts"] in episodes
+              and not any(k in row for k in SURPRISES)   # judged with the fields already: nothing to compare
+              and "predictions" not in (episodes[row["episode_ts"]].get("intent") or {})][:limit]
+    todo, no_judge = [], 0
+    for row in window:
+        ep = episodes[row["episode_ts"]]
+        if row["episode_ts"] in seen:
+            continue
+        seen.add(row["episode_ts"])
+        if not row.get("judge") or any(judge.same_model(row["judge"], m) for m in own_models(name, ep)):
+            no_judge += 1
+            continue
+        todo.append(ep)
     cost, basis = _judgment_cost()
     result = {"todo": len(todo), "done": 0, "estimated_usd": len(todo) * cost,
-              "per_judgment_usd": cost, "basis": basis}
+              "per_judgment_usd": cost, "basis": basis, "cross_judge": len(cross), "no_stored_judge": no_judge}
     if dry_run:
         return result
+    _drop_cross_judge(name, stored)
     path = SUP_DIR / "judgments" / f"{name}-surprise-baseline.jsonl"
     for ep in todo:
         try:
             case = _case(ep, _written_files(name, ep), _provenance_evidence(name, ep), _prior_goals(js, ep["ts"]),
                          followed=_followed_surprise(name, ep))
-            by = judge.pick(exclude=own_models(name, ep))
+            by = stored[ep["ts"]]["judge"]
             verdict = judge.ask(JUDGE_SYSTEM, case, JUDGE_SCHEMA, purpose=f"surprise baseline {name}", model=by)
             _check_ratings(verdict)
         except judge.JudgeError as e:
@@ -891,18 +929,21 @@ def surprise_baseline(name: str, limit: int | None = None, dry_run: bool = False
 def surprise_baseline_report(name: str) -> str:
     rows = _surprise_baseline_rows(name)
     stored = {j["episode_ts"]: j for j in judgments(name)}
-    both = [r for r in rows if r["episode_ts"] in stored]
+    both = [r for r in rows if _same_judge(r, stored.get(r["episode_ts"]))]
     disagreements = [r for r in both if r["criterion_met"] != stored[r["episode_ts"]]["criterion_met"]]
     n = len(rows)
     acceptance = ("not measured" if not n or len(both) != n else
                   "PASS" if len(disagreements) * 15 <= n else "FAIL")
     lines = [f"Surprise baseline: {name}", f"Re-judged: {n}",
-             f"criterion_met agreement: {len(both) - len(disagreements)}/{len(both)}",
+             f"criterion_met agreement (same judge as the stored verdict): {len(both) - len(disagreements)}/{len(both)}",
              f"M2 acceptance (all but at most 1 in 15): {acceptance}"]
     for row in rows:
         ts = row["episode_ts"]
         if ts not in stored:
             lines.append(f"{ts}: stored verdict missing")
+        elif row not in both:
+            lines.append(f"{ts}: judged by {row.get('judge')}, the stored verdict by {stored[ts].get('judge')}: "
+                         f"not compared (re-run surprise-rejudge)")
         elif row in disagreements:
             lines.append(f"{ts}: stored {stored[ts]['criterion_met']}, new {row['criterion_met']}: {row['reasoning'][:200]}")
     expectations = [e for r in rows for e in r["expectations"]]

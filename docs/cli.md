@@ -114,7 +114,7 @@ shaft secret <name> set <key> --hosts <host>  # prompt for a host-bound key
 shaft secret <name> google <key> <address> --client <client> [--scope drive]
 shaft judge second [names]        # process sampled second opinions
 shaft surprise [names] [--freeze] # unexpected results and baseline
-shaft surprise-rejudge <names> [--dry-run] [--limit N] [--report]  # re-judge pre-M1 cycles (paid)
+shaft surprise-rejudge <names> [--dry-run] [--limit N] [--report]  # re-judge the newest N pre-M1 cycles, each by its stored judge (paid)
 shaft surprise-report [names] --since <M3 live> [--until T] [--min-cycles 30]  # P1-P5 and sleep dispositions
 shaft embed on|off|status          # optional memory-search service
 shaft review [names] --hours 24    # recent activity report
