@@ -53,7 +53,7 @@ def assistant_turns(messages: list[dict]) -> int:
 
 
 def run(cfg, state: State, client: Client) -> str:
-    record: dict = {"intent": None, "finish": None, "confirm": None}
+    record: dict = {"intent": None, "finish": None, "confirm": None}   # confirm: set only when a base rate was shown
     rates, rate_error = base_rate.load(state.root)
 
     def declare(args: dict) -> str:
@@ -123,8 +123,7 @@ def run(cfg, state: State, client: Client) -> str:
             {"what_happened": S, "criterion_met": {"type": "string", "enum": ["yes", "partial", "no"]},
              "learned": S}), finish, stops=True),
     }
-    shows_rates = base_rate.has_data(rates)
-    if shows_rates:   # offered only when declare_intent can show a base rate: otherwise the cycle is v2 as before
+    if base_rate.has_data(rates):   # offered only when declare_intent can show a base rate: otherwise v2 as before
         controls["confirm_confidence"] = Control(_spec(
             "confirm_confidence", "After declare_intent showed your base rate: keep or change your confidence, "
             "once, before acting.",
@@ -164,9 +163,8 @@ def run(cfg, state: State, client: Client) -> str:
             + memory.recall(state.root, about, shown=system), state.root, listed_in=inbox_text(inbox))},
     ]
     outcome = agent.run(client, messages, toolbox, max_tokens=cfg.MAX_TOKENS_STEP, purpose="live",
-                        # one more step for the confirm turn, so it takes none from the work. agent.run takes the
-                        # limit before the declare, so it is granted whenever some band could be shown.
-                        max_steps=cfg.MAX_STEPS_LIVE + (1 if shows_rates else 0), controls=controls,
+                        # one more step for the confirm turn once a base rate is shown, so it takes none from the work
+                        max_steps=lambda: cfg.MAX_STEPS_LIVE + (1 if record["confirm"] else 0), controls=controls,
                         wrap_up="Stop working now and call finish_cycle with an honest report "
                                 "(criterion_met: partial or no if you did not get there).")
 

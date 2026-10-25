@@ -116,7 +116,7 @@ def time_left() -> float | None:
 
 
 def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: int, purpose: str,
-        max_steps: int, controls: dict[str, Control] | None = None,
+        max_steps: int | Callable[[], int], controls: dict[str, Control] | None = None,
         call: Callable[..., Reply] | None = None,
         on_tool: Callable[[str, str, str], None] | None = None,
         on_tool_start: Callable[[str, str], None] | None = None,
@@ -124,8 +124,9 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
         interjections: Callable[[], list[dict]] | None = None) -> Outcome:
     """Run until the model answers without calling tools, a stopping control is called,
     or max_steps model turns have been used (max_steps <= 0: no limit — conversations, where
-    the operator stops a reply with Ctrl-C). `call` defaults to client.complete; pass a streaming
-    wrapper for conversations.
+    the operator stops a reply with Ctrl-C). `max_steps` may be a callable, read at the top of each turn: a live
+    cycle grants its confirm turn only once declare_intent has shown a base rate. `call` defaults to
+    client.complete; pass a streaming wrapper for conversations.
 
     On the last turn — or when the supervisor's deadline is near — the model is told to
     wrap up (`wrap_up`) and only the controls stay available, so a cycle ends with a
@@ -145,7 +146,10 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
     step = 0
     last_call, repeats = None, 0   # the previous tool call, and how many times in a row it came back unchanged
     first_logged = len(toolbox.log)   # a conversation's toolbox outlives one reply: the ledger counts this run's
-    while max_steps <= 0 or step < max_steps:
+    while True:
+        limit = max_steps() if callable(max_steps) else max_steps
+        if 0 < limit <= step:
+            break
         if pausing.requested():   # the operator opened a conversation: wait, then go on where I was
             pausing.activity(keep=True, phase="paused")
             pausing.wait_while_paused()
@@ -154,7 +158,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
         step += 1
         left = time_left()
         yielding = step > 1 and yield_requested()
-        last = step == max_steps or yielding or (left is not None and left < WRAP_UP_RESERVE_S)
+        last = step == limit or yielding or (left is not None and left < WRAP_UP_RESERVE_S)
         mark = len(messages)
         images.keep_newest(messages)   # only the newest images are resent (PLAN-vision.md)
         pausing.activity(keep=True, phase="thinking", step=step, purpose=purpose, tool=None, args=None)
@@ -219,7 +223,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
         if stop:
             return Outcome(reply, "control", step, toolbox.log)
         if ledger:
-            messages[-1]["content"] += "\n\n" + call_ledger(toolbox.log[first_logged:], step, max_steps, purpose,
+            messages[-1]["content"] += "\n\n" + call_ledger(toolbox.log[first_logged:], step, limit, purpose,
                                                          envelope=broker.envelope(), left_s=time_left())
         if toolbox.shown:   # what view_image showed: after the tool results, as a tool result cannot carry an image
             messages.append(images.image_message(toolbox.shown))
