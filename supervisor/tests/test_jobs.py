@@ -385,6 +385,7 @@ class ReplayRecordTest(JobCase):
         # Codex's review: one malformed line, a null row or a row without ts crashed the record.
         self.plugin("watch", "def run(): return ''", {"every_minutes": 15})
         rows = ["{torn\n", "null\n", json.dumps({"plugin": "watch", "exit": 0}) + "\n",
+                json.dumps({"ts": "2026-10-20T08:00:00", "plugin": "watch", "seconds": 1e309, "exit": 1}) + "\n",
                 {"ts": "2026-10-20T09:00:00", "plugin": "watch", "seconds": 1, "exit": 0}]
         self.assertIn("last ok 2026-10-20T09:00:00", self.replay_text(rows))
         self.assertIn("2026-10-20T09:00:00 watch: ok 1s", jobs.describe("wren", limit=2))   # live: tail, then parse

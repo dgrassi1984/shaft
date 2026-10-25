@@ -296,8 +296,7 @@ def run(name: str, plugin: str) -> int:
     # done and hash: when its outcome became known, and under which schedule — what a trial replay needs to show the
     # record exactly as it stood at a moment (describe(as_of=…)); ts stays the start, as shown
     row = {"ts": stamp.isoformat(timespec="seconds"), "plugin": plugin, "seconds": seconds,
-           "exit": None if timed_out else code, "timed_out": timed_out, "calls": broker.calls,
-           "done": datetime.now().isoformat(timespec="seconds"), "hash": job["hash"]}
+           "exit": None if timed_out else code, "timed_out": timed_out, "calls": broker.calls, "hash": job["hash"]}
     if ok:
         message, wake, note = _outcome(out, job)
         row.update(out_chars=len(out), delivered=bool(message), wake=wake)
@@ -317,6 +316,7 @@ def run(name: str, plugin: str) -> int:
             _deliver(name, "scheduler", f"My scheduled job {plugin} failed {fails} times in a row; it now runs every "
                                         f"{int(nxt.total_seconds() // 60)} minutes until it succeeds or I change "
                                         f"its schedule. Last error:\n\n```\n{error[-1500:]}\n```")
+    row["done"] = datetime.now().isoformat(timespec="seconds")   # its delivery and state are written: now it is known
     _log_row(name, row)
     log(f"{name}: job {plugin} {'ok' if ok else 'FAILED'} in {seconds}s"
         + (f", delivered {row.get('out_chars', 0)} chars" if row.get("delivered") else "")
@@ -442,7 +442,7 @@ def _known(row: dict) -> str:
     try:
         return (datetime.fromisoformat(row["ts"]) + timedelta(seconds=float(row.get("seconds") or 0))
                 ).isoformat(timespec="seconds")
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):   # a corrupt duration: known from its start
         return row["ts"]
 
 
