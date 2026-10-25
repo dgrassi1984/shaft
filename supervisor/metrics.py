@@ -1073,6 +1073,24 @@ def _sample_note(name: str) -> list[str]:
             + f"{left} of my runs were left out: they have no verdict, and are not counted as failures.*"]
 
 
+def _base_rate_lines(rows: list[dict]) -> list[str]:
+    """The numbers declare_intent shows, one line per band with data, from base_rates() itself — the same figures as
+    self/calibration.json (the calibration lines above score the confidences; these are what the record says)."""
+    bands = [b for b in base_rates(rows)["bands"] if b["n"] or b["older_n"]]
+    if not bands:
+        return []
+    out = ["- Base rates declare_intent shows me (self/calibration.json, judges in today's rotation):"]
+    for b in bands:
+        older = f"{b['older_met']} of {b['older_n']}"
+        if b["n"]:
+            shown = f"criterion fully met {b['met']} of {b['n']}" + (f"; under the older question {older}"
+                                                                     if b["older_n"] else "")
+        else:   # as the declare copy: with no cycle under today's question, no "0 of 0" clause
+            shown = f"under the older question, criterion fully met {older}"
+        out.append(f"  - base rate shown at declare, when I said {b['lo']}–{b['hi']}%: {shown}")
+    return out
+
+
 def stats_text(name: str) -> str:
     js = judgments(name)
     if not js:
@@ -1129,6 +1147,7 @@ def stats_text(name: str) -> str:
     if cal["excluded"]:
         lines.append(f"- Confidences left out of calibration: {cal['excluded']} "
                      "(asked under a question this supervisor does not know)")
+    lines += _base_rate_lines(all_js)
     if claimed:
         lines.append(f"- My own claim matched the judge: {honest}/{len(claimed)}")
     unsupported = [j for j in js if not j.get("claim_supported", True)]

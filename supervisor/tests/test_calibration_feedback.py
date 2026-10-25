@@ -177,6 +177,22 @@ class DeclareStepTest(unittest.TestCase):
         self.assertIn("Calibration v3", text)
         self.assertNotIn("Base rate shown when I declared", text)
 
+    def test_stats_text_shows_the_base_rates_declare_shows(self):
+        # Final fix F7 (O7): stats.md showed the calibration bands, never the numbers declare_intent shows (current
+        # judges, v2 and v3 pooled as one question, v1 apart). Built from base_rates() itself, so the two never differ.
+        rows = [judged(80, "yes", metrics.CONFIDENCE_V3, confidence_first=80), judged(75, "no", metrics.CONFIDENCE_V2),
+                judged(90, "yes"), judged(50, "yes"), judged(50, "no"),
+                judged(85, "yes", metrics.CONFIDENCE_V2, by="retired-model")]
+        text = self.stats(rows)
+        head = "- Base rates declare_intent shows me (self/calibration.json, judges in today's rotation):"
+        self.assertIn(head + "\n"
+                      "  - base rate shown at declare, when I said 40–70%: under the older question, criterion fully "
+                      "met 1 of 2\n"
+                      "  - base rate shown at declare, when I said 70–100%: criterion fully met 1 of 2; under the "
+                      "older question 1 of 1\n", text)
+        self.assertNotIn("when I said 0–40%: criterion", text)          # a band without data has no line
+        self.assertNotIn("Base rates declare_intent shows me", self.stats([judged(None, "yes")]))
+
     def test_stats_text_shows_the_excluded_count_only_above_zero(self):
         line = "- Confidences left out of calibration: 2 (asked under a question this supervisor does not know)"
         text = self.stats([judged(50, "yes", "something-new"), judged(50, "no", "another"), judged(50, "yes")])
