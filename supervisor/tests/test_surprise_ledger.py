@@ -219,7 +219,9 @@ class LedgerTest(unittest.TestCase):
                 ep["tools"] = [{"tool": "write_file", "args": json.dumps({"path": f"topic{n}/x"}), "result": "ERROR: no"}]
             eps.append(ep)
             js.append(dict(prior, episode_ts=ts, unreported_surprises=[], followup_useful="yes" if n in (1, 2, 3) else "na",
-                           confidence=80, confidence_of="criterion_met=yes" if n % 2 else "legacy"))
+                           # a v1 row carries no question (None), as the supervisor writes it; an unknown string is
+                           # excluded from calibration, never scored as v1 (PLAN-calibration-feedback)
+                           confidence=80, confidence_of="criterion_met=yes" if n % 2 else None))
             usage.append({"ts": ts, "purpose": "live", "model": "m", "duration_s": 10})
         base = {"frozen_at": self.since.isoformat(), "instances": {"x": {
             "current_model": "m", "by_model": {"m": {"turn_seconds_median": 10}},
@@ -275,7 +277,21 @@ class LedgerTest(unittest.TestCase):
         self.assertIn("drawn=false: n=27", text)
         self.assertIn("Calibration v1: n=15", text)
         self.assertIn("Calibration v2: n=15", text)
+        self.assertNotIn("Calibration v3", text)          # no declare step ran: no v3 line
+        self.assertNotIn("left out", text)
         self.assertIn("a direction, not proof", text)
+
+    def test_m5_reports_v3_and_excluded_without_crashing(self):
+        # calibration() also returns the excluded count, an int: m5_report iterated .items() and raised TypeError
+        # ('int' object is not subscriptable) on every report once that key existed (PLAN-calibration-feedback).
+        eps, js, usage, base = self.trial()
+        js[1] = dict(js[1], confidence_of=metrics.CONFIDENCE_V3, confidence=60, confidence_first=90)
+        js[2] = dict(js[2], confidence_of="a question from the future")
+        text = self.render((eps, js, usage, base))
+        self.assertIn("Calibration v3: n=1", text)
+        self.assertIn("Calibration v3_first: n=1", text)
+        self.assertIn("Calibration: 1 confidence(s) left out", text)
+        self.assertIn("Calibration v1: n=14", text)       # the unknown question is not pooled into v1
 
     def test_m5_each_gate_fails(self):
         for p in ("P1", "P2", "P3", "P4", "P5"):

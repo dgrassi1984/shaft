@@ -346,7 +346,9 @@ def judge_page(name: str, js: list[dict], tr: dict | None, names: list[str], csr
 
 
 def judge_detail_page(name: str, j: dict, names: list[str], csrf: str) -> Html:
-    pairs = [(label, str(j.get(k))) for label, k in JUDGE_KEYS if j.get(k) not in (None, "")]
+    from . import metrics
+    shown = {**j, "confidence": metrics.confidence_shown(j)}      # "90 → 60" where the base rate moved it
+    pairs = [(label, str(shown.get(k))) for label, k in JUDGE_KEYS if shown.get(k) not in (None, "")]
     if j.get("achieved") is not None:
         pairs.append(("achieved", f"{j['achieved']:.1f} / 5"))
     texts = join(h('<h3>{l}</h3><p class="wrap">{t}</p>', l=label, t=str(j[k])) for label, k in JUDGE_TEXTS if j.get(k))

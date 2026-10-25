@@ -168,12 +168,14 @@ def cycles(name: str, root: Path | None = None) -> dict[str, dict]:
 
 def _judged(js: list[dict]) -> dict:
     cal = metrics.calibration(js)
-    v1, v2 = cal["v1"], cal["v2"]
+    v1, v2, v3 = cal["v1"], cal["v2"], cal["v3"]
     return {"n": len(js),
             "success": round(sum(metrics.SCORE[j["criterion_met"]] for j in js) / len(js), 3) if js else None,
             "confidence_mean": round(v1["mean_confidence"], 3) if v1["n"] else None,
             "brier": round(v1["brier"], 3) if v1["n"] else None,
             "brier_v2": round(v2["brier"], 3) if v2["n"] else None, "n_v2": v2["n"],
+            "brier_v3": round(v3["brier"], 3) if v3["n"] else None, "n_v3": v3["n"],
+            "excluded": cal["excluded"],   # asked under a question no version scores: counted, never pooled into one
             "claims_unsupported": sum(1 for j in js if not j.get("claim_supported", True))}
 
 
@@ -214,6 +216,12 @@ def baseline(name: str, root: Path | None = None) -> dict:
     }
 
 
+def _left_out(judged: dict) -> str:
+    """' (2 left out)' beside a judged count when some confidences were asked under a question no version scores; a
+    baseline frozen before the count existed has none."""
+    return f" ({judged['excluded']} left out)" if judged.get("excluded") else ""
+
+
 def _pct(x) -> str:
     return "—" if x is None else f"{x:.0%}"
 
@@ -233,23 +241,29 @@ def report(b: dict) -> str:
     lines += ["", "| Class | Count |", "|---|---:|"] + [f"| `{c}` | {n} |" for c, n in b["flagged_by_class"].items()]
     lines += ["", f"Live cycles by model (current: {b['current_model']}); medians; success yes=1, partial=0.5:", "",
               "| Model | Cycles | Turn s | Turn prompt tok | Turn compl. tok | Cycle s | Cycle compl. tok | Steps "
-              "| Judged | Success | Confidence v1 | Brier v1 | Brier v2 (n) | Unsupported |",
-              "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
+              "| Judged | Success | Confidence v1 | Brier v1 | Brier v2 (n) | Brier v3 (n) | Unsupported |",
+              "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for model, m in b["by_model"].items():
         jm = m["judged"]
         lines.append(f"| {model} ({m['first']} → {m['last']}) | {m['cycles']} | {m['turn_seconds_median']} "
                      f"| {m['turn_prompt_tokens_median']} | {m['turn_completion_tokens_median']} "
                      f"| {m['cycle_seconds_median']} | {m['cycle_completion_tokens_median']} "
-                     f"| {m['steps_per_cycle_median']} | {jm['n']} | {_pct(jm['success'])} "
+                     f"| {m['steps_per_cycle_median']} | {jm['n']}{_left_out(jm)} | {_pct(jm['success'])} "
                      f"| {_pct(jm['confidence_mean'])} | {jm['brier'] if jm['brier'] is not None else '—'} "
                      f"| {jm.get('brier_v2') if jm.get('brier_v2') is not None else '—'} ({jm.get('n_v2', 0)}) "
+                     f"| {jm.get('brier_v3') if jm.get('brier_v3') is not None else '—'} ({jm.get('n_v3', 0)}) "
                      f"| {jm['claims_unsupported']} |")
     j = b["judged_all_models"]
     lines += ["", "Brier v1: older 'probability of success', yes=1/partial=0.5. "
-                  "Brier v2: P(criterion met = yes), binary met/not met. Versions are not pooled.",
+                  "Brier v2: P(criterion met = yes), binary met/not met. "
+                  "Brier v3: P(criterion met = yes) after the base rate was shown, scored on the final confidence. "
+                  "Versions are not pooled.",
               f"All models together: {j['n']} judged, success {_pct(j['success'])}, confidence v1 "
                   f"{_pct(j['confidence_mean'])}, Brier v1 {j['brier']}, Brier v2 {j.get('brier_v2')} "
-                  f"(n={j.get('n_v2', 0)}), unsupported claims {j['claims_unsupported']}.",
+                  f"(n={j.get('n_v2', 0)}), Brier v3 {j.get('brier_v3')} (n={j.get('n_v3', 0)}), "
+                  f"unsupported claims {j['claims_unsupported']}."
+                  + (f" {j['excluded']} confidence(s) left out of calibration (asked under a question this supervisor "
+                     "does not know)." if j.get("excluded") else ""),
 "", "| When | Episode | Tool | Flag | Target / excerpt |", "|---|---|---|---|---|"]
     lines += [f"| {e['episode'][:16]} | {e['episode_kind']} #{e['call']} | {e['tool']} | {e['flag']}"
               f"{' (' + e['detail'] + ')' if e['detail'] else ''} | {e['target'] or e['excerpt'][:70]} |"
@@ -655,9 +669,15 @@ def m5_report(name, since: datetime, until: datetime | None = None,
                            for v in ("yes", "partial", "no"))
         lines.append(f"- drawn={str(drawn).lower()}: n={len(group)}, value {_number(_mean([metrics.cycle_value(j) for j in group]))}; "
                      f"followup_useful {shares} (measured n={len(measured)}).")
-    for version, cal in metrics.calibration(js).items():
-        lines.append(f'Calibration {version}: n={cal["n"]}, Brier {_number(cal["brier"])}; '
-                     f'confidence {_pct(cal["mean_confidence"])}, outcome {_pct(cal["mean_outcome"])}. Reported, not gated.')
+    cals = metrics.calibration(js)   # its versions by name: it also carries the excluded count, an int
+    for version in ("v1", "v2", "v3", "v3_first"):
+        cal = cals[version]
+        if version in ("v1", "v2") or cal["n"]:   # v3 only once the declare step has run (PLAN-calibration-feedback)
+            lines.append(f'Calibration {version}: n={cal["n"]}, Brier {_number(cal["brier"])}; '
+                         f'confidence {_pct(cal["mean_confidence"])}, outcome {_pct(cal["mean_outcome"])}. Reported, not gated.')
+    if cals["excluded"]:
+        lines.append(f'Calibration: {cals["excluded"]} confidence(s) left out, asked under a question this supervisor '
+                     'does not know.')
     lines.append("Calibration versions are never pooled; read the trend as a direction, not proof.")
     return '\n'.join(lines)
 

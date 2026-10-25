@@ -812,7 +812,9 @@ class BatteryEndToEndTest(unittest.TestCase):
         self.assertEqual(inst["judge"], judge.rotation())
         after = tree(self.root)
         self.assertIn("self/stats.md", after)                                     # the supervisor's own write
-        self.assertEqual({k: v for k, v in after.items() if k not in ("self/stats.md", "shaft-docs")
+        self.assertIn("self/calibration.json", after)                             # ... and the base rates beside it
+        own = ("self/stats.md", "self/calibration.json", "shaft-docs")
+        self.assertEqual({k: v for k, v in after.items() if k not in own
                           and not k.startswith(("shaft-docs/", ".tmp"))}, before)   # nothing kept
         self.assertFalse((self.root / ".tmp" / "battery").exists())
         for left in (self.sup / "battery" / "control" / "e", self.sup / "battery" / "exam" / "e"):
