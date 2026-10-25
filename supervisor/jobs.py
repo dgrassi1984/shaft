@@ -293,8 +293,11 @@ def run(name: str, plugin: str) -> int:
         prof.unlink(missing_ok=True)
     seconds = round(time.monotonic() - started, 1)
     ok = code == 0 and not timed_out
+    # done and hash: when its outcome became known, and under which schedule — what a trial replay needs to show the
+    # record exactly as it stood at a moment (describe(as_of=…)); ts stays the start, as shown
     row = {"ts": stamp.isoformat(timespec="seconds"), "plugin": plugin, "seconds": seconds,
-           "exit": None if timed_out else code, "timed_out": timed_out, "calls": broker.calls}
+           "exit": None if timed_out else code, "timed_out": timed_out, "calls": broker.calls,
+           "done": datetime.now().isoformat(timespec="seconds"), "hash": job["hash"]}
     if ok:
         message, wake, note = _outcome(out, job)
         row.update(out_chars=len(out), delivered=bool(message), wake=wake)
@@ -419,20 +422,54 @@ def tick(children: dict, now: datetime, start, names: list[str], awake_of) -> No
 
 
 # -- what the operator and the instance see --------------------------------------------------------------------------------
-def _rows(name: str, before: datetime | None = None) -> list[dict]:
-    """The job run log, oldest first; with `before`, only the runs logged before then."""
+def _parsed(lines: list[str]) -> list[dict]:
+    """Run-log rows, skipping a line that is not a dated row (a torn write must not break the record)."""
+    rows = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and isinstance(row.get("ts"), str) and isinstance(row.get("plugin"), str):
+            rows.append(row)
+    return rows
+
+
+def _known(row: dict) -> str:
+    """When a run's outcome became known: logged (done) since 2026-10-25, else its start plus its duration."""
+    if isinstance(row.get("done"), str):
+        return row["done"]
+    try:
+        return (datetime.fromisoformat(row["ts"]) + timedelta(seconds=float(row.get("seconds") or 0))
+                ).isoformat(timespec="seconds")
+    except (TypeError, ValueError):
+        return row["ts"]
+
+
+def _rows(name: str, limit: int, before: datetime | None = None) -> list[dict]:
+    """The job run log, oldest first: its last `limit` rows, or (`before`) every run whose outcome was known by then."""
     path = _dir() / f"{name}.jsonl"
-    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.is_file() else []
-    return [r for r in rows if before is None or r.get("ts", "") < before.isoformat(timespec="seconds")]
+    lines = path.read_text().splitlines() if path.is_file() else []
+    if before is None:
+        return _parsed(lines[-limit:])
+    cut = before.isoformat(timespec="seconds")
+    return [r for r in _parsed(lines) if _known(r) < cut]
 
 
 def _entry_then(rows: list[dict], plugin: str, job_hash: str) -> dict:
-    """A job's state as its runs in `rows` left it: what entry() held at that moment (the state file keeps only now)."""
-    runs = [r for r in rows if r.get("plugin") == plugin and not r.get("skipped")]
-    ok = [r for r in runs if r.get("exit") == 0 and not r.get("timed_out")]
-    failed = runs[runs.index(ok[-1]) + 1:] if ok else runs
-    return {"last_ok": ok[-1]["ts"] if ok else None, "fails": len(failed), "hash": job_hash,
-            "last_error": failed[-1].get("error") if failed else None}
+    """A job's state as its runs in `rows` left it — what entry() held at that moment (the state file keeps only now):
+    the same transitions as run(), a failure count restarting when the schedule changed. Rows logged before
+    2026-10-25 carry no schedule hash: they count as the schedule declared then."""
+    e = {"last_ok": None, "fails": 0, "hash": None, "last_error": None}
+    for r in rows:
+        if r.get("plugin") != plugin or r.get("skipped"):
+            continue
+        h = r.get("hash") or job_hash
+        if r.get("exit") == 0 and not r.get("timed_out"):
+            e.update(last_ok=r["ts"], fails=0, hash=h, last_error=None)
+        else:
+            e.update(fails=(e["fails"] if e["hash"] == h else 0) + 1, hash=h, last_error=r.get("error"))
+    return e
 
 
 def describe(name: str, limit: int = 20, as_of: datetime | None = None, root: Path | None = None) -> str:
@@ -444,7 +481,7 @@ def describe(name: str, limit: int = 20, as_of: datetime | None = None, root: Pa
         jobs, problems = declared(name, root, committed=as_of is not None)
     except OSError:
         return f"{name}: no folder"
-    rows = _rows(name, as_of)
+    rows = _rows(name, limit, as_of)
     lines = [f"{name}: jobs {'OFF (shaft jobs ' + name + ' on)' if jobs_off(name) else 'on'}"]
     for j in jobs:
         e = entry(name, j["plugin"]) if as_of is None else _entry_then(rows, j["plugin"], j["hash"])

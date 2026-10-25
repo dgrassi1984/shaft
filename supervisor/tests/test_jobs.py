@@ -345,3 +345,53 @@ class ReplayRecordTest(JobCase):
         self.assertEqual(live.splitlines()[0], text.splitlines()[0])
         self.assertIn("  watch: every 15 min · ", live)          # (its state comes from the state file, not written here)
         self.assertIn("2026-10-20T12:00:00 watch: ok 1.5s", live)
+
+    def replay_text(self, rows, at=datetime(2026, 10, 20, 11)):
+        import threading
+        from supervisor import broker
+        (self.sup / "jobs").mkdir(parents=True, exist_ok=True)
+        (self.sup / "jobs" / "wren.jsonl").write_text("".join(r if isinstance(r, str) else json.dumps(r) + "\n"
+                                                              for r in rows))
+        copy = self.project / "copy"
+        shutil.rmtree(copy, ignore_errors=True)
+        shutil.copytree(self.root / "plugins", copy / "plugins")
+        return broker.ReplayBroker("wren", self.project, {}, self.project / "replay.log", state_root=copy,
+                                   start_commit="a" * 40, as_of=at, cache={}, cache_lock=threading.Lock(),
+                                   billed="trial-wren", tools_log=self.project / "tools.log")._record("jobs")
+
+    def test_a_run_still_going_at_the_cycle_start_is_not_shown(self):
+        # Codex's review: rows carry their start; a run that started at 10:59 and ended at 11:01 had no outcome yet.
+        self.plugin("watch", "def run(): return ''", {"every_minutes": 15})
+        for row in ({"ts": "2026-10-20T10:59:30", "plugin": "watch", "seconds": 90, "exit": 1, "error": "late"},
+                    {"ts": "2026-10-20T10:59:30", "plugin": "watch", "seconds": 1, "exit": 1, "error": "late",
+                     "done": "2026-10-20T11:00:30"}):
+            with self.subTest(row=row):
+                text = self.replay_text([row])
+                self.assertNotIn("late", text)
+                self.assertIn("watch: every 15 min · not run yet", text)
+
+    def test_a_schedule_change_restarts_the_failure_count_as_live(self):
+        # Codex's review: three failures under schedule A were reported under the newly declared schedule B.
+        self.plugin("watch", "def run(): return ''", {"every_minutes": 15})
+        new = jobs.declared("wren")[0][0]["hash"]
+        old = [{"ts": f"2026-10-20T0{h}:00:00", "plugin": "watch", "seconds": 1, "exit": 1, "error": f"e{h}",
+                "hash": "a" * 16} for h in (7, 8, 9)]
+        self.assertNotIn("failure(s) in a row", self.replay_text(old))          # B has not failed yet
+        once = old + [{"ts": "2026-10-20T10:00:00", "plugin": "watch", "seconds": 1, "exit": 1, "error": "b1",
+                       "hash": new}]
+        self.assertIn("· 1 failure(s) in a row", self.replay_text(once))
+
+    def test_a_torn_or_undated_log_line_is_skipped(self):
+        # Codex's review: one malformed line, a null row or a row without ts crashed the record.
+        self.plugin("watch", "def run(): return ''", {"every_minutes": 15})
+        rows = ["{torn\n", "null\n", json.dumps({"plugin": "watch", "exit": 0}) + "\n",
+                {"ts": "2026-10-20T09:00:00", "plugin": "watch", "seconds": 1, "exit": 0}]
+        self.assertIn("last ok 2026-10-20T09:00:00", self.replay_text(rows))
+        self.assertIn("2026-10-20T09:00:00 watch: ok 1s", jobs.describe("wren", limit=2))   # live: tail, then parse
+
+    def test_a_run_logs_when_its_outcome_was_known_and_its_schedule(self):
+        self.plugin("watch", "def run(): return ''", {"every_minutes": 15})
+        jobs.run("wren", "watch")
+        row = self.rows()[-1]
+        self.assertGreaterEqual(row["done"], row["ts"])
+        self.assertEqual(row["hash"], jobs.declared("wren")[0][0]["hash"])
