@@ -129,15 +129,17 @@
   folder nobody else works in, is swept harder: every process working in it, everything below each, and each one's
   ancestors while they share its session or process group (a parent that left the copy while its child stayed). One
   that left the instance's folder is not found; the sandbox is the boundary then (it can write only the instance's folder, and what it writes there
-  later is caught as below). **Still open** (residual risk): the instance's working tree stays writable between a
-  check and its use. A change written after the start-of-run check (and its read-back) and before the agent starts
-  runs unchecked in that run; one written to a kept file after the gate's snapshot and before the commit is
-  committed, and a committed file counts as approved code from then on. Closing this means launching and committing
-  from an immutable copy of the approved code, a redesign not done yet. What limits it: only a process the
-  instance already has running can write there — the sandbox writes nothing outside its folder, and a run's own
-  processes are ended before the gate looks, so it takes one that escaped them (above), or something of yours; a
-  change to any other file is caught at the next run's start, which gates whatever differs from the recorded
-  approved code; and every check reads through descriptors, never through a link. Stopping a service that starts runs (the API, the scheduler, a terminal
+  later is caught as below). A kept change is committed with exactly the bytes the gate checked — written into
+  git's object store and a separate index, never read again from the working tree — and if the file on disk differs
+  from them by then, it is put back to them (logged as FAILED, with a journal note); the approved-code record is
+  made from the same bytes. **Still open** (residual risk): the launch race. The working tree stays writable, so a
+  change written after the start-of-run check (and its read-back) and before the agent imports its code runs
+  unchecked in that run. Closing it means launching from an immutable copy of the approved code, a redesign not done
+  yet. What limits it: only a process the instance already has running can write there — the sandbox writes nothing
+  outside its folder, and a run's own processes are ended before the gate looks, so it takes one that escaped them
+  (above), or something of yours; the run's own settlement then gates that change like any other, and the next run's
+  start gates whatever differs from the recorded approved code; and every check reads through descriptors, never
+  through a link. Stopping a service that starts runs (the API, the scheduler, a terminal
   conversation) ends its runs' processes first. **Approved code**: after every settlement the supervisor records
   the code it approved (`.supervisor/baselines/<name>.json`: the last commit, plus what the gate passed that git
   does not hold — an ignored or untracked file in a code path), where the instance cannot write. Before any run,

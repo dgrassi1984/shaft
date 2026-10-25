@@ -382,6 +382,68 @@ class HardLinkAndPipeTest(RunTransactionCase):
         self.assertEqual(other.read_text(), "someone else's\n")
 
 
+class CommitTheGatedBytesTest(RunTransactionCase):
+    """The coordinator on 8c84f11: commit_state staged kept code with `git add`, from the working tree, so a write to a
+    kept file after the gate's snapshot (by a process that escaped the run) was committed, and committed code counts
+    as approved from then on. The commit now holds exactly the bytes the gate checked."""
+
+    GOOD = "def run(**args):\n    return 'better stats'\n"
+    TAMPERED = "def run(**args):\n    return 'slipped in after the gate'\n"
+
+    def test_a_file_rewritten_after_the_gate_is_committed_as_gated_and_put_back(self):
+        f = self.root / "plugins" / "text_stats" / "main.py"
+
+        def gate_then_tamper(root, home):
+            result = self.fake_gate(root, home)
+            f.write_text(self.TAMPERED)                       # after the snapshot, before the commit
+            return result
+        script = f"import pathlib\npathlib.Path('plugins/text_stats/main.py').write_text({self.GOOD!r})\n"
+        with mock.patch.object(gate, "run_tests", side_effect=gate_then_tamper):
+            self.assertEqual(self.cycle_with(script), 0)
+        self.assertEqual(self.gated, [self.GOOD])
+        self.assertEqual(git(self.root, "show", "HEAD:plugins/text_stats/main.py"), self.GOOD,
+                         "the commit took the working tree, not what the gate checked")
+        self.assertEqual(f.read_text(), self.GOOD, "the working copy was not put back")
+        self.assertIn("after the gate", (self.root / "memory" / "journal.md").read_text())
+        self.assertIn("after the gate", self.logs())
+        self.gated.clear()
+        self.assertEqual(self.cycle(), 0)                      # the record holds the gated bytes: nothing to gate
+        self.assertEqual(self.gated, [])
+        self.assertEqual(f.read_text(), self.GOOD)
+
+    def test_a_write_between_the_start_check_and_the_runs_baseline_is_gated_by_the_run(self):
+        """A write landing after reconcile's read-back and before the run took its own baseline became part of that
+        baseline: never gated, then recorded as approved by the run's settlement. The run's baseline is now the code
+        reconcile verified."""
+        f = self.root / "plugins" / "text_stats" / "main.py"
+        real = runner._snapshot
+
+        def write_first(root, *a, **k):
+            if "ran" not in self.__dict__:
+                self.ran = True
+                f.write_text(UNGATED)                           # slipped in between the check and the baseline
+            return real(root, *a, **k)
+        with mock.patch.object(runner, "_snapshot", side_effect=write_first):
+            self.assertEqual(self.cycle(), 0)
+        self.assertEqual(self.gated, [UNGATED], "a write before the run's baseline was never gated")
+        self.assertEqual(f.read_text(), COMMITTED)
+
+    def cycle_with(self, script):
+        """cycle(), but gate.run_tests stays as the test patched it."""
+        sup = self.project / ".supervisor"
+        b = broker.Broker("kant", self.project, {}, sup / "broker.log")
+        cmd, env = [sys.executable, "-c", script], {"SHAFT_DEADLINE": f"{time.time() + 600:.0f}"}
+        with mock.patch.object(runner, "SUP_DIR", sup), mock.patch.object(core, "SUP_DIR", sup), \
+             mock.patch.object(runner, "API_TALKS", sup / "api.json"), \
+             mock.patch.object(runner, "PROJECT", self.project), mock.patch.object(core, "PROJECT", self.project), \
+             mock.patch.object(core, "INSTANCES", self.project / "instances"), \
+             mock.patch.object(runner, "instance_root", return_value=self.root), \
+             mock.patch.object(runner, "_launch", return_value=(b, cmd, env)), \
+             mock.patch.object(runner, "log") as self.logged, mock.patch("supervisor.metrics.after_cycle"), \
+             mock.patch("supervisor.metrics.start_probation"):
+            return runner.run_agent("kant", "live", ["live"], False)
+
+
 class StrayProcessTest(unittest.TestCase):
     """One stray killer (kill.end_left_in) for an instance's folder and an exam's copy."""
 

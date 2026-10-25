@@ -110,7 +110,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_prompt_cache.py` | `PricingTest`, `InstanceLoopTest`, `CoderTest` | — |
 | `supervisor/tests/test_pyenv.py` | `ChoiceTest`, `SandboxTest`, `GateTest`, `TemplateTest` | `make_venv` |
 | `supervisor/tests/test_recap.py` | `RecapCase`, `Context`, `Ask`, `Store`, `Costs`, `Panel` | — |
-| `supervisor/tests/test_run_transaction.py` | `RunTransactionCase`, `UnsettledCodeTest`, `ApprovedCodeTest`, `WithNoFollowTest`, `StrayDescendantsTest`, `LinkedCodeTest`, `ApprovedFileLinkedTest`, `HardLinkAndPipeTest`, `StrayProcessTest`, `RunOutlivesItselfTest`, `TerminalConversationTest`, `RunCommandOutlivesItselfTest` | `git` |
+| `supervisor/tests/test_run_transaction.py` | `RunTransactionCase`, `UnsettledCodeTest`, `ApprovedCodeTest`, `WithNoFollowTest`, `StrayDescendantsTest`, `LinkedCodeTest`, `ApprovedFileLinkedTest`, `HardLinkAndPipeTest`, `CommitTheGatedBytesTest`, `StrayProcessTest`, `RunOutlivesItselfTest`, `TerminalConversationTest`, `RunCommandOutlivesItselfTest` | `git` |
 | `supervisor/tests/test_sandbox_temp.py` | `UserFolderTest` | `tiny_pdf` |
 | `supervisor/tests/test_selfhosted.py` | `HostedServerTest`, `FallbackTest`, `RoutingTest` | `closed_port` |
 | `supervisor/tests/test_settings.py` | `FileCase`, `PrecedenceTest`, `SetTest`, `NotLiveTest`, `RegistryTest`, `DocumentedValuesTest` | — |
