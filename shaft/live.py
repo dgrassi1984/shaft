@@ -2,13 +2,15 @@
 
 The intent (goal, success criterion, confidence) is declared *before* acting, and
 the outcome after; both are recorded so the supervisor can measure how well I
-predict my own success (calibration) and have a judge check my claim.
+predict my own success (calibration) and have a judge check my claim. When my record has judged cycles in
+the band of the confidence I declare, I see that base rate and confirm or change the number once before
+acting (base_rate.py); a confirmed intent keeps both numbers (v3), one never confirmed stays v2.
 """
 from __future__ import annotations
 
 import shutil
 
-from . import agent, broker, clock, images, memory, pausing, prompts, recovery, surprises
+from . import agent, base_rate, broker, clock, images, memory, pausing, prompts, recovery, surprises
 from .agent import Control
 from .llm import Client
 from .state import State
@@ -19,6 +21,11 @@ ORIGINS = ("self", "operator", "instance")
 # What my confidence is a probability of. It was asked as "success" but scored against yes=1/partial=0.5; the
 # supervisor now scores it against criterion_met == yes, and only for intents that carry this (A4).
 CONFIDENCE_OF = "criterion_met=yes"
+# The same question, asked again after declare_intent showed me my base rate for the band (PLAN-calibration-feedback):
+# set by an accepted confirm_confidence, and scored by the supervisor as its own version (v3), the first and the final
+# number on the same cycles.
+CONFIDENCE_OF_SHOWN = "criterion_met=yes;base_rate_shown"
+
 MAX_PREDICTIONS = 3
 
 
@@ -63,8 +70,13 @@ def inbox_text(messages: list[tuple[str, str]]) -> str:
             f"they will be archived in memory/messages/ after this cycle.\n\n{body}")
 
 
+def assistant_turns(messages: list[dict]) -> int:
+    return sum(1 for m in messages if m["role"] == "assistant")
+
+
 def run(cfg, state: State, client: Client) -> str:
-    record: dict = {"intent": None, "finish": None}
+    record: dict = {"intent": None, "finish": None, "confirm": None}   # confirm: set only when a base rate was shown
+    rates, rate_error = base_rate.load(state.root)
     started = clock.started()   # the draw's seed and the queue it draws from: the same in every replay of this cycle
 
     def declare(args: dict) -> str:
@@ -90,7 +102,35 @@ def run(cfg, state: State, client: Client) -> str:
                             "origin": origin, "origin_ref": ref,
                             "predictions": predictions(args.get("predictions")),
                             "at": clock.now().isoformat(timespec="seconds")}
-        return "intent recorded — now act"
+        if rate_error:
+            record["intent"]["base_rate_error"] = rate_error
+        band = base_rate.band_for(rates, conf) if rates else None
+        if not band:
+            return "intent recorded — now act"
+        # what was offered, for audit; the question stays v2 until a confirm shows the rate was read (confirm)
+        record["intent"]["base_rate_shown"] = band
+        # a confirm is accepted only from a later reply: one written beside this declare never saw the rate
+        record["confirm"] = {"declared_at": assistant_turns(messages), "done": False}
+        return "intent recorded. " + base_rate.describe(band, conf)
+
+    def confirm(args: dict) -> str:
+        pending = record["confirm"]
+        if not pending:
+            return "ERROR: nothing to confirm — declare_intent showed no base rate this cycle"
+        if pending["done"]:
+            return "ERROR: confidence already confirmed for this cycle"
+        if assistant_turns(messages) == pending["declared_at"]:
+            return ("ERROR: confirm_confidence in the same reply as declare_intent — read your record in its "
+                    "result first, then call confirm_confidence on your next turn")
+        conf = int(args.get("confidence", -1))
+        if not 0 <= conf <= 100:
+            return "ERROR: confidence must be 0-100"
+        pending["done"] = True
+        # v3 only now: a declare never confirmed (on the wrap-up turn, or finished in its own reply) never read the
+        # rate, so it stays v2 — labelled treated, it would dilute the effect the paired score measures
+        intent = record["intent"]
+        intent.update(confidence_first=intent["confidence"], confidence=conf, confidence_of=CONFIDENCE_OF_SHOWN)
+        return f"confidence {conf}% recorded — now act"
 
     def finish(args: dict) -> str:   # allowed without an intent: a report beats silence (judged 'no')
         met = str(args.get("criterion_met", "")).lower()
@@ -129,12 +169,25 @@ def run(cfg, state: State, client: Client) -> str:
                           "items": {"type": "object", "properties": {"id": S, "how": S}, "required": ["id", "how"]}}},
             ["what_happened", "criterion_met", "learned"]), finish, stops=True),
     }
+    if base_rate.has_data(rates):   # offered only when declare_intent can show a base rate: otherwise v2 as before
+        controls["confirm_confidence"] = Control(_spec(
+            "confirm_confidence", "After declare_intent showed your base rate: keep or change your confidence, "
+            "once, before acting.",
+            {"confidence": {"type": "integer", "description": "0-100, your final probability that the criterion "
+                            "will be fully met (criterion_met yes; partial counts as not met)"}},
+            ["confidence"]), confirm, repeatable=True)   # the same number is refused in the declare's reply,
+            # accepted on the next: the repeat guard must not block that retry
     toolbox = Toolbox(state.root)
     real_run = toolbox.run
 
-    def gated_run(name: str, raw_args: str) -> str:   # no acting before the intent is declared
+    def gated_run(name: str, raw_args: str) -> str:   # no acting before the intent is declared (and confirmed)
+        refusal = None
         if not record["intent"]:
             refusal = "ERROR: call declare_intent first — state your goal, criterion and confidence"
+        elif record["confirm"] and not record["confirm"]["done"]:
+            refusal = ("ERROR: call confirm_confidence first — keep or change your confidence now that you have "
+                       "seen your record")
+        if refusal:
             toolbox.log.append({"tool": name, "args": for_log(raw_args), "result": refusal})
             return refusal
         return real_run(name, raw_args)
@@ -159,8 +212,13 @@ def run(cfg, state: State, client: Client) -> str:
             + prompts.envelope_text(broker.envelope(), agent.time_left())
             + memory.recall(state.root, about, shown=system), state.root, listed_in=inbox_text(inbox))},
     ]
+
+    def max_steps() -> int:   # a shown base rate adds a step for the confirm turn, so it takes none from the work
+        unlimited = cfg.MAX_STEPS_LIVE <= 0
+        return cfg.MAX_STEPS_LIVE + (1 if record["confirm"] and not unlimited else 0)
+
     outcome = agent.run(client, messages, toolbox, max_tokens=cfg.MAX_TOKENS_STEP, purpose="live",
-                        max_steps=cfg.MAX_STEPS_LIVE, controls=controls,
+                        max_steps=max_steps, controls=controls,
                         expected=lambda: record["intent"]["predictions"] if record["intent"] else None,
                         wrap_up="Stop working now and call finish_cycle with an honest report "
                                 "(criterion_met: partial or no if you did not get there).")
@@ -173,8 +231,10 @@ def run(cfg, state: State, client: Client) -> str:
         title = "Autonomous cycle (unfinished)"
     lines = []
     if intent:
+        first, final = intent.get("confidence_first", intent["confidence"]), intent["confidence"]
+        confidence = f"{first}%" + (f" → {final}% after my base rate" if first != final else "")
         lines += [f"**Goal:** {intent['goal']}", f"**Success criterion:** {intent['success_criterion']}",
-                  f"**Confidence beforehand:** {intent['confidence']}%"]
+                  f"**Confidence beforehand:** {confidence}"]
         if intent["predictions"]:
             lines.append("**Predictions:** " + "; ".join(intent["predictions"]))
     else:
