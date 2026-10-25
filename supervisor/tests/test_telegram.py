@@ -440,6 +440,42 @@ class TelegramTest(unittest.TestCase):
             return real_send(token, chat_id, text, reply_to)
         return send
 
+    def test_an_older_worker_finishing_leaves_the_newer_ones_conversation_alone(self):
+        """Codex on 8c84f11: A's worker let go of the conversation before delivering its answer, B started a new one
+        meanwhile, and A's cleanup then wiped B's state, so C, sent while B replied, did not join it."""
+        self.pair()
+        b_asking, release_b, joined = threading.Event(), threading.Event(), []
+        self.addCleanup(release_b.set)
+
+        def ask(name, history, request_id=""):
+            self.asked.append((name, [dict(h) for h in history]))
+            if history[-1]["content"] == "and B":
+                b_asking.set()
+                release_b.wait(10)
+                return f"answer {len(self.asked)}", len(joined)   # B's reply heard C
+            return f"answer {len(self.asked)}", 0
+
+        real_send, b = telegram.send, []
+
+        def send(token, chat_id, text, reply_to=None):
+            if text == "answer 1" and not b:               # A's answer is being delivered: B arrives
+                b.append(threading.Thread(target=self.upd, args=(_msg(ME, "and B", mid=51),)))
+                b[0].start()
+                b_asking.wait(10)
+            return real_send(token, chat_id, text, reply_to)
+
+        def interject(name, messages):
+            joined.append(messages[-1]["content"])
+            return True
+        with mock.patch.object(telegram, "ask_api", ask), mock.patch.object(telegram, "send", send), \
+                mock.patch.object(telegram, "interject_api", interject):
+            self.upd(_msg(ME, "A", mid=50))                    # A's worker: answered, delivered, gone
+            self.upd(_msg(ME, "and C", mid=52))                # while B replies
+            release_b.set()
+            b[0].join(10)
+        self.assertEqual(joined, ["and C"], "C did not join B's running reply")
+        self.assertEqual([h[1][-1]["content"] for h in self.asked], ["A", "and B"])
+
     def test_a_reply_that_could_not_be_delivered_lets_the_next_message_start_a_new_one(self):
         """Codex on de2191f: when delivery gave up, _converse returned with inflight=[] (a follow-up was due) and never
         cleared it, so every later message joined a worker that no longer existed."""

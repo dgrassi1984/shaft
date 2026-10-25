@@ -576,6 +576,23 @@ class ProbationTest(unittest.TestCase):
         self.assertIn("written after", (self.root / "memory" / "journal.md").read_text())
         self.assertTrue(any("FAILED" in str(c.args[0]) for c in logged.call_args_list))
 
+    def test_a_commit_that_git_refuses_is_said_not_raised(self):
+        """Codex on 9bd175e: `.decode()` on a CalledProcessError's stderr, a str from git_wt's text mode, raised
+        AttributeError instead of saying why the restore was not committed."""
+        self.write("shaft/prompts.py", "GOOD = False\n")
+        self.episode("the talk that changed prompts")
+        self.commit("p: talk 2")
+        self.change = self.git(self.root, "rev-parse", "HEAD").strip()
+        self.start(["shaft/prompts.py"])
+        self.later_cycles(["no"] * metrics.PROBATION_CYCLES, tools=())
+        from supervisor import core
+        refuse = self.sp.CalledProcessError(128, "git", stderr="fatal: unable to write new index file")
+        with mock.patch.object(core, "_commit_gated", side_effect=refuse), mock.patch.object(metrics, "log"):
+            self.check()
+        [entry] = self.open_entries()
+        self.assertIn("unable to write new index file", entry["restore_failed"])
+        self.assertEqual((self.root / "shaft" / "prompts.py").read_text(), "GOOD = False\n")   # put back
+
     def test_a_failed_restore_keeps_the_entry(self):
         # Bug 2026-10-13: after the failed revert the entry was dropped from probation, silently.
         self.start()
