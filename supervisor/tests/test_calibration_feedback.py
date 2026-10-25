@@ -299,6 +299,81 @@ class DeclareStepTest(unittest.TestCase):
         self.assertIn("Brier v3: P(criterion met = yes) after the base rate was shown", text)
 
 
+class RefusedWriteTest(unittest.TestCase):
+    """Final fix F4: the instance owns self/, so it can put a folder or a link where stats.md or calibration.json
+    goes. safe_write refuses that write; it must never take the rest of after_cycle with it — check_probation, the
+    revert of a self-change that made things worse, is a safety path the instance must not be able to switch off."""
+
+    FILES = ("self/stats.md", metrics.CALIBRATION_FILE)
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(prefix="shaft-refused-")
+        self.addCleanup(tmp.cleanup)
+        self.instances = Path(tmp.name) / "instances"
+        self.outside = Path(tmp.name) / "outside.txt"
+        (self.instances / "x" / "shaft").mkdir(parents=True)
+        (self.instances / "x" / "self").mkdir()
+        self.logged: list[str] = []
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(mock.patch.object(metrics, "INSTANCES", self.instances))
+        stack.enter_context(mock.patch.object(metrics, "log", side_effect=self.logged.append))
+        stack.enter_context(mock.patch.object(metrics, "judgments", return_value=[judged(80, "yes")]))
+        for name in ("_sample_note", "_battery_section", "_code_section", "_traits_section", "_trials_section"):
+            stack.enter_context(mock.patch.object(metrics, name, return_value=[]))
+        stack.enter_context(mock.patch.object(metrics, "judge_pending", return_value=0))
+        self.probation = stack.enter_context(mock.patch.object(metrics, "check_probation"))
+
+    def clear(self):
+        for rel in self.FILES:
+            path = self.instances / "x" / rel
+            if path.is_symlink() or path.is_file():
+                path.unlink()
+            elif path.is_dir():
+                path.rmdir()
+
+    def plant(self, rel, kind):
+        path = self.instances / "x" / rel
+        if kind == "folder":
+            path.mkdir()
+        else:
+            self.outside.write_text("not the supervisor's")
+            path.symlink_to(self.outside)
+
+    def test_a_refused_write_never_skips_probation(self):
+        for rel in self.FILES:
+            for kind in ("folder", "link"):
+                with self.subTest(rel=rel, kind=kind):
+                    other = next(f for f in self.FILES if f != rel)
+                    self.clear()
+                    self.plant(rel, kind)
+                    self.probation.reset_mock()
+                    self.logged.clear()
+                    metrics.after_cycle("x")
+                    self.probation.assert_called_once_with("x")
+                    self.assertTrue(any(l.startswith(f"x: could not write {rel}: ") for l in self.logged), self.logged)
+                    self.assertTrue((self.instances / "x" / other).is_file())      # the other file is still written
+                    self.assertFalse(any("after_cycle failed" in l for l in self.logged), self.logged)
+                    if kind == "link":
+                        self.assertEqual(self.outside.read_text(), "not the supervisor's")   # never written through
+
+    def test_write_stats_never_raises_for_a_refused_write(self):
+        # second_pending and the battery's finally call write_stats bare: a raise there skipped the rest of each.
+        self.plant("self/stats.md", "folder")
+        self.plant(metrics.CALIBRATION_FILE, "link")
+        metrics.write_stats("x")
+        self.assertEqual(len([l for l in self.logged if "could not write" in l]), 2, self.logged)
+
+    def test_each_step_of_after_cycle_runs_whatever_the_one_before_did(self):
+        with mock.patch.object(metrics, "judge_pending", side_effect=RuntimeError("judge broke")), \
+                mock.patch.object(metrics, "write_stats", side_effect=RuntimeError("stats broke")) as stats:
+            metrics.after_cycle("x")
+        stats.assert_called_once_with("x")
+        self.probation.assert_called_once_with("x")
+        self.assertEqual(len([l for l in self.logged if "after_cycle" in l]), 2, self.logged)
+        self.assertTrue(any("judge broke" in l for l in self.logged) and any("stats broke" in l for l in self.logged))
+
+
 def case_before_f1(ep: dict, files: str = "", provenance: str = "", prior: str = "") -> str:
     """metrics._case as it was before the judges were blinded to the base rate (final fix F1), kept verbatim: a v1
     or v2 case must stay byte-identical to it, so the verdicts the judges were calibrated on keep their input."""

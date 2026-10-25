@@ -1226,10 +1226,18 @@ def review_text(names: list[str], hours: float = 24, now: datetime | None = None
 
 
 def write_stats(name: str) -> None:
+    """self/stats.md and self/calibration.json. The instance owns self/: a folder or a link it put at either path makes
+    safe_write refuse that write, which is logged and never raised — the other file is still written, and nothing the
+    caller does after (check_probation, the second judge's next case, the battery's record) is skipped."""
     if not (INSTANCES / name / "shaft").is_dir():   # deleted: writing would recreate a half folder (shaft delete)
         return
-    safe_write(INSTANCES / name, "self/stats.md", stats_text(name))
-    safe_write(INSTANCES / name, CALIBRATION_FILE, json.dumps(base_rates(judgments(name)), indent=2) + "\n")
+    for rel, text in (("self/stats.md", lambda: stats_text(name)),
+                      (CALIBRATION_FILE, lambda: json.dumps(base_rates(judgments(name)), indent=2) + "\n")):
+        content = text()
+        try:
+            safe_write(INSTANCES / name, rel, content)
+        except (UnsafePath, OSError) as e:
+            log(f"{name}: could not write {rel}: {type(e).__name__}: {e}")
 
 
 # -- probation of self-modifications --------------------------------------------
@@ -1492,11 +1500,15 @@ def check_probation(name: str) -> None:
 
 
 def after_cycle(name: str) -> None:
-    try:
-        n = judge_pending(name)
-        write_stats(name)
-        check_probation(name)
-        if n:
-            log(f"{name}: judged {n} cycle(s); stats updated")
-    except Exception as e:  # measurement must never break the schedule
-        log(f"{name}: after_cycle failed: {type(e).__name__}: {e}")
+    """Judge, write the stats, check probation — each in its own try: measurement must never break the schedule, and a
+    failure in one step (a judge down, a file the instance planted) must never skip the next. check_probation reverts
+    a self-change that made things worse; nothing the instance can do to its folder may switch it off."""
+    done = {}
+    for label, step in (("judge_pending", judge_pending), ("write_stats", write_stats),
+                        ("check_probation", check_probation)):
+        try:
+            done[label] = step(name)
+        except Exception as e:
+            log(f"{name}: after_cycle failed in {label}: {type(e).__name__}: {e}")
+    if done.get("judge_pending"):
+        log(f"{name}: judged {done['judge_pending']} cycle(s)" + ("; stats updated" if "write_stats" in done else ""))
