@@ -16,7 +16,7 @@ from rich.console import Group
 from rich.table import Table
 from rich.text import Text
 
-from . import actions, dashboard, panel
+from . import actions, dashboard, metrics, panel
 
 TABS = [("1", "overview"), ("2", "instance"), ("3", "judge"), ("4", "trials"), ("5", "benchmarks"),
         ("6", "changes"), ("7", "messages"), ("8", "costs"), ("9", "services"), ("0", "transcripts")]
@@ -248,7 +248,8 @@ def judge_detail(j: dict, width: int) -> list[str]:
             ("origin (judged)", "origin"), ("origin supported", "origin_supported"), ("difficulty", "difficulty"),
             ("novelty", "novelty"), ("value", "value"), ("value for", "value_for"), ("value graded by", "value_judge")]
     out = [f"cycle {j.get('episode_ts', '')}", ""] + wrap(f"Goal: {j.get('goal', '')}", width) + [""]
-    out += [f"{label:<17}{j.get(k)}" for label, k in keys if j.get(k) not in (None, "")]
+    shown = {**j, "confidence": metrics.confidence_shown(j)}      # "90 → 60" where the base rate moved it
+    out += [f"{label:<17}{shown.get(k)}" for label, k in keys if shown.get(k) not in (None, "")]
     if j.get("achieved") is not None:
         out.append(f"{'achieved':<17}{j['achieved']:.1f} / 5")
     for label, k in (("Reasoning", "reasoning"), ("Why this difficulty", "difficulty_reason"), ("Why this value", "value_reason"),

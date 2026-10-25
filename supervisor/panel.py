@@ -577,7 +577,9 @@ def transcript_lines(name: str, e: dict, thinking: bool = False) -> list[tuple[s
     r = e["record"]
     out.append((f"ended by {r.get('ended_by') or '?'} · {r.get('steps') or '?'} steps · "
                 f"{len(r.get('tools') or [])} tool calls", "dim"))
+    from . import metrics
     intent = r.get("intent") or {}
+    intent = {**intent, "confidence": metrics.confidence_shown(intent)}   # "90 → 60" where the base rate moved it
     for label, key in (("Goal", "goal"), ("Success criterion", "success_criterion"), ("Confidence", "confidence"),
                        ("Origin", "origin"), ("Origin reference", "origin_ref")):
         _block(out, label, intent.get(key))

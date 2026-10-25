@@ -135,6 +135,9 @@ CONFIDENCE_V2 = "criterion_met=yes"
 CONFIDENCE_V3 = "criterion_met=yes;base_rate_shown"   # v2's question, re-asked after showing the instance its base rate
 VERSION_OF = {None: "v1", CONFIDENCE_V2: "v2", CONFIDENCE_V3: "v3"}   # confidence_of -> version; anything else is excluded
 BANDS = ((0, 40), (40, 70), (70, 101))
+QUESTION_LABEL = {"v1": "probability of success, yes=1/partial=0.5", "v2": "criterion met = yes",
+                  "v3": "criterion met = yes, base rate shown"}   # what each version asked, for the lines that report it
+CALIBRATION_FILE = "self/calibration.json"   # the base rates the declare step shows the instance (base_rates)
 # Deployment boundary: earlier judgments retain the original confidence question.
 CONFIDENCE_BACKFILL_DATE = "2026-10-24"
 EVIDENCE_HOURS = 72           # messages and conversations before a cycle that may hold its goal's origin
@@ -191,6 +194,33 @@ def paired_v3(rows: list[dict]) -> dict:
             "mean_change": sum(c - f for f, c, _ in pairs) / n if n else None,
             "closer": sum(1 for e1, e2 in zip(first, final) if e2 < e1),
             "further": sum(1 for e1, e2 in zip(first, final) if e2 > e1)}
+
+
+def base_rates(rows: list[dict]) -> dict:
+    """What the declare step shows the instance: per confidence band, how often the criterion was met. Only verdicts
+    by judges in today's rotation count (by_current_judge), like every other success figure. `met`/`n` count the
+    cycles asked the v2/v3 question (the same one: criterion met = yes); `older_met`/`older_n` count v1 cycles, which
+    were asked "probability of success" and are kept apart. A cycle asked a question this supervisor does not know
+    counts in neither. The instance can edit its copy of the file: nothing here or in the scores reads it back."""
+    bands = [{"lo": lo, "hi": min(hi, 100), "met": 0, "n": 0, "older_met": 0, "older_n": 0} for lo, hi in BANDS]
+    for j in rows:
+        version = VERSION_OF.get(j.get("confidence_of"))
+        if j.get("confidence") is None or version is None or not by_current_judge(j):
+            continue
+        band = next((b for b, (lo, hi) in zip(bands, BANDS) if lo <= j["confidence"] < hi), None)
+        if band is None:      # a confidence outside 0-100 is in no band, as in calibration()
+            continue
+        prefix = "older_" if version == "v1" else ""
+        band[prefix + "n"] += 1
+        band[prefix + "met"] += int(j["criterion_met"] == "yes")
+    return {"written": datetime.now().isoformat(timespec="seconds"), "question": CONFIDENCE_V2, "bands": bands}
+
+
+def confidence_shown(rec: dict) -> int | str | None:
+    """A cycle's confidence as the views show it: "90 → 60" where seeing the base rate moved it (confidence_first
+    is what it declared before), the plain number otherwise. `rec` is a judgment row or an episode's intent."""
+    first, final = rec.get("confidence_first"), rec.get("confidence")
+    return f"{first} → {final}" if first is not None and final is not None and first != final else final
 
 
 def cycle_value(j: dict) -> float | None:
@@ -258,8 +288,9 @@ def judgments(name: str, sup: Path | None = None) -> list[dict]:
         intents = _confidence_questions(name)
         for r in missing:
             intent = intents.get(r["episode_ts"], {})
-            if "confidence_of" in intent:
-                r["confidence_of"] = intent["confidence_of"]
+            for key in ("confidence_of", "confidence_first", "base_rate_shown"):
+                if key in intent:
+                    r[key] = intent[key]
     sp = sup / "judgments" / f"{name}-second.jsonl"
     if rows and sp.exists():
         seconds = {}
@@ -580,6 +611,7 @@ def judge_pending(name: str) -> int:
         rec = {"episode_ts": ep["ts"], "judged_at": datetime.now().isoformat(timespec="seconds"),
                "confidence": intent.get("confidence"),
                "confidence_of": intent.get("confidence_of"),
+               "confidence_first": intent.get("confidence_first"), "base_rate_shown": intent.get("base_rate_shown"),
                "claimed": (ep.get("finish") or {}).get("criterion_met"),
                "goal": intent.get("goal", "")[:200],
                "origin_declared": intent.get("origin"), "origin_ref": intent.get("origin_ref"),
@@ -1037,8 +1069,11 @@ def stats_text(name: str) -> str:
     lines += [f"- Judged success rate: **{sum(scores) / len(scores):.0%}** (yes=1, partial=0.5)",
               f"- Last 5 cycles: {', '.join(j['criterion_met'] for j in js[-5:])}"]
     # Confidence was asked as "probability of success" and scored against yes=1/partial=0.5 (v1); it is now asked
-    # as P(criterion met = yes) and scored on that event (v2, REVIEW-autonomy A4). Each version on its own lines.
+    # as P(criterion met = yes) and scored on that event (v2, REVIEW-autonomy A4), and v3 asks it again after
+    # showing the instance its base rate. Each version on its own lines.
     for version, title, outcome in (
+            ("v3", "Calibration v3 — P(criterion met = yes) after seeing my base rate, Brier on met/not met",
+             "criterion met (yes)"),
             ("v2", "Calibration v2 — P(criterion met = yes), Brier on met/not met", "criterion met (yes)"),
             ("v1", "Calibration v1, older question 'probability of success', scored yes=1/partial=0.5; "
                    "not pooled with v2", "succeeded")):
@@ -1052,6 +1087,14 @@ def stats_text(name: str) -> str:
         for b in c["bands"]:
             if b["n"]:
                 lines.append(f"  - when I said {b['lo']}–{b['hi']}%: {outcome} {b['mean_outcome']:.0%} of {b['n']}")
+        if version == "v3" and (p := paired_v3(js))["n"]:
+            lines.append(f"- Base rate shown when I declared (v3): Brier before I saw it {p['brier_first']:.2f}, "
+                         f"after {p['brier_final']:.2f} on the same {p['n']} cycles; I changed my number in "
+                         f"{p['changed']} of {p['n']} (mean change {p['mean_change']:+.0f} points; closer to the "
+                         f"outcome {p['closer']}, further {p['further']})")
+    if cal["excluded"]:
+        lines.append(f"- Confidences left out of calibration: {cal['excluded']} "
+                     "(asked under a question this supervisor does not know)")
     if claimed:
         lines.append(f"- My own claim matched the judge: {honest}/{len(claimed)}")
     unsupported = [j for j in js if not j.get("claim_supported", True)]
@@ -1104,12 +1147,14 @@ def review_text(names: list[str], hours: float = 24, now: datetime | None = None
         out.append(f"  verdicts: yes {verdicts['yes']} · partial {verdicts['partial']} · no {verdicts['no']}"
                    f" · claims the log did not support: {unsupported}")
         cal = calibration(rows)
-        for version in ("v1", "v2"):      # v3 gets its own lines in the review's calibration section
+        for version, question in QUESTION_LABEL.items():
             c = cal[version]
             if c["n"]:
-                question = "criterion met = yes" if version == "v2" else "probability of success, yes=1/partial=0.5"
                 out.append(f"  confidence {version} ({question}) beforehand {c['mean_confidence']:.0%} vs judged "
                            f"{c['mean_outcome']:.0%} (n={c['n']}, Brier {c['brier']:.2f}; versions not pooled)")
+        if (paired := paired_v3(rows))["n"]:
+            out.append(f"  base rate shown (v3): Brier before the base rate {paired['brier_first']:.2f}, after "
+                       f"{paired['brier_final']:.2f} on the same {paired['n']} cycles")
         if valued(rows):
             levels = " · ".join(f"{v}: {sum(1 for j in valued(rows) if j['value'] == v)}" for v in range(6))
             out.append(f"  value grades: {levels}")
@@ -1150,6 +1195,7 @@ def write_stats(name: str) -> None:
     if not (INSTANCES / name / "shaft").is_dir():   # deleted: writing would recreate a half folder (shaft delete)
         return
     safe_write(INSTANCES / name, "self/stats.md", stats_text(name))
+    safe_write(INSTANCES / name, CALIBRATION_FILE, json.dumps(base_rates(judgments(name)), indent=2) + "\n")
 
 
 # -- probation of self-modifications --------------------------------------------

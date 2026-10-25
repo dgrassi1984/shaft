@@ -63,6 +63,17 @@ before and after a self-change. Cycles judged before the ratings existed are rat
 Calibration v2 measures P(criterion met = yes), identified by `confidence_of="criterion_met=yes"`.
 Its Brier score uses yes=1 and partial/no=0. Older v1 confidence asked for "probability of success" and
 uses yes=1/partial=0.5/no=0. Stats, reviews and surprise baselines keep their scores and counts separate.
+Calibration v3 asks v2's question again after showing the instance its own base rate, and is identified by
+`confidence_of="criterion_met=yes;base_rate_shown"`. A v3 judgment keeps both numbers: `confidence` (final) and
+`confidence_first` (declared before the base rate was shown), plus `base_rate_shown`, the band that was shown. Both are
+scored on the same outcome, and `self/stats.md` adds a paired line: Brier before and after on the same cycles, how
+often the number changed, and whether the change moved it closer to the outcome. A confidence asked under a question
+the supervisor does not know is never scored as v1: it is counted as left out, and `stats.md` says how many.
+The supervisor writes the base rates beside `stats.md`, in `self/calibration.json`: per confidence band
+(`BANDS`, 0–40, 40–70, 70–100) how often the criterion was met (`met` of `n`, v2 and v3 cycles) and, apart, the same
+for v1 cycles (`older_met` of `older_n`), counting only verdicts by judges in today's rotation. The instance reads
+it at the declare step and may edit it, so no score is ever read back from it. The views show a cycle's confidence
+as `90 → 60` where the base rate moved it.
 `record(kind='judgments', since=...)` reviews verdicts by when they were judged (`judged_at`, or the second
 judge's time if later), oldest first, even for older cycles; a tie in the same second is never split across pages.
 Minute-only timestamps mean `:00`; `T` and space separators are accepted. Use the returned continuation's
