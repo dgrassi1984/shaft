@@ -1263,6 +1263,11 @@ def write_stats(name: str) -> None:
     if not (INSTANCES / name / "shaft").is_dir():   # deleted: writing would recreate a half folder (shaft delete)
         return
     safe_write(INSTANCES / name, "self/stats.md", stats_text(name))
+    try:   # the supervisor's own copy of the surprise ledger (docs/plans/PLAN-surprise.md §2)
+        from . import surprise
+        surprise.write_ledger(name)
+    except Exception as e:   # measurement never breaks a run
+        log(f"{name}: surprise ledger failed: {type(e).__name__}: {e}")
 
 
 # -- probation of self-modifications --------------------------------------------
