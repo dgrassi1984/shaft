@@ -4,7 +4,7 @@ The intent (goal, success criterion, confidence) is declared *before* acting, an
 the outcome after; both are recorded so the supervisor can measure how well I
 predict my own success (calibration) and have a judge check my claim. When my record has judged cycles in
 the band of the confidence I declare, I see that base rate and confirm or change the number once before
-acting (base_rate.py); the intent keeps both numbers.
+acting (base_rate.py); a confirmed intent keeps both numbers (v3), one never confirmed stays v2.
 """
 from __future__ import annotations
 
@@ -22,7 +22,8 @@ ORIGINS = ("self", "operator", "instance")
 # supervisor now scores it against criterion_met == yes, and only for intents that carry this (A4).
 CONFIDENCE_OF = "criterion_met=yes"
 # The same question, asked again after declare_intent showed me my base rate for the band (PLAN-calibration-feedback):
-# the supervisor scores it as its own version (v3), the first and the final number on the same cycles.
+# set by an accepted confirm_confidence, and scored by the supervisor as its own version (v3), the first and the final
+# number on the same cycles.
 CONFIDENCE_OF_SHOWN = "criterion_met=yes;base_rate_shown"
 
 
@@ -77,7 +78,8 @@ def run(cfg, state: State, client: Client) -> str:
         band = base_rate.band_for(rates, conf) if rates else None
         if not band:
             return "intent recorded — now act"
-        record["intent"].update(confidence_of=CONFIDENCE_OF_SHOWN, confidence_first=conf, base_rate_shown=band)
+        # what was offered, for audit; the question stays v2 until a confirm shows the rate was read (confirm)
+        record["intent"]["base_rate_shown"] = band
         # a confirm is accepted only from a later reply: one written beside this declare never saw the rate
         record["confirm"] = {"declared_at": assistant_turns(messages), "done": False}
         return "intent recorded. " + base_rate.describe(band, conf)
@@ -95,7 +97,10 @@ def run(cfg, state: State, client: Client) -> str:
         if not 0 <= conf <= 100:
             return "ERROR: confidence must be 0-100"
         pending["done"] = True
-        record["intent"]["confidence"] = conf
+        # v3 only now: a declare never confirmed (on the wrap-up turn, or finished in its own reply) never read the
+        # rate, so it stays v2 — labelled treated, it would dilute the effect the paired score measures
+        intent = record["intent"]
+        intent.update(confidence_first=intent["confidence"], confidence=conf, confidence_of=CONFIDENCE_OF_SHOWN)
         return f"confidence {conf}% recorded — now act"
 
     def finish(args: dict) -> str:   # allowed without an intent: a report beats silence (judged 'no')
