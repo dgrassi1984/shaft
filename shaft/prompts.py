@@ -6,7 +6,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from . import clock, personality
+from . import clock, personality, surprises
 
 
 def now() -> datetime:
@@ -134,6 +134,10 @@ CONTEXT = """\
 
 {improvement}
 
+## Open surprises (my curiosity queue: what contradicted what I expected, oldest first)
+
+{surprises}
+
 ## My measured performance (self/stats.md, written by the supervisor)
 
 {stats}
@@ -202,16 +206,20 @@ to {steps} model turns.
 {inbox}
 
 1. FIRST call declare_intent: pick ONE goal — from your current improvement plan or \
-self/goals.md (both in your context), or from a message above. \
+self/goals.md (both in your context), from a message above, or an open surprise: the one whose \
+answer would most change what you do (origin self, origin_ref surprise:<id>). \
 State a success criterion someone else could check from your tool results, and your \
 honest confidence (0-100) that you will fully meet it (criterion_met yes; partial counts as not met). \
 Say where the goal came from (origin: \
 yourself, the operator, or another instance) and cite the message, conversation or goals.md \
 item. The judge also rates how hard the goal was and checks its origin; your stats show \
-both. Other tools are refused until you do.
+both. Add 1-3 predictions: specific things you expect your work to find that could turn out \
+wrong. Other tools are refused until you do.
 2. Work toward it with your tools. Prefer one small finished thing over a big plan.
 3. End by calling finish_cycle: what happened, whether the criterion was met \
-(yes/partial/no), and what you learned. Judge yourself by the criterion, not by effort; \
+(yes/partial/no), and what you learned; under surprises, what contradicted what you expected \
+(a prediction, or an assumption your intent made), or nothing; under resolves, the open \
+surprises this cycle answered. Judge yourself by the criterion, not by effort; \
 a supervisor-side judge checks a sample of your cycles against the tool log, and you cannot \
 tell which, so report this one as if it is checked."""
 
@@ -231,7 +239,11 @@ only if several experiences point the same way — cite them.
 5. update_self_model only if your self-description no longer matches your journal and the supervisor's \
 record (the verdicts above; record(kind=...) and history for more).
 6. write_digest: a short summary of what happened since your last sleep and what it means — what your \
-future self needs once these journal entries are no longer in view.
+future self needs once these journal entries are no longer in view — and what surprised you.
+7. Go through the surprises since your last sleep (listed below). For each, do one: remember the corrected \
+belief as a fact citing its id ("… (from surprise s1013-0653-1)"); close_surprise(id, outcome, note) when it \
+needs no cycle; or leave it open as a question worth a cycle, and say why in your entry. Skip none. An expired \
+one needs nothing — a fact citing it only if it taught you something.
 
 Then answer (without calling a tool) with your sleep journal entry: what you \
 consolidated, what you changed about yourself and why, and under "How I will improve" \
@@ -250,6 +262,8 @@ API_MODE = (
 
 REFLECT_MODE = "Right now you are running a reflection cycle on your own; nobody is present."
 LIVE_MODE = "Right now you are running an autonomous cycle; nobody is present."
+CURIOSITY = ("\n\nThis is a curiosity cycle: pick your goal from your open surprises (in your context, under "
+             "\"Open surprises\") — the one whose answer would most change what you do.")
 SLEEP_MODE = "Right now you are in your sleep (consolidation) cycle; nobody is present."
 RECOVERY_MODE = ("Right now you are writing the journal entry for a conversation you had with {operator} "
                  "from {started} to {ended}; its transcript follows.")
@@ -325,6 +339,7 @@ def system_prompt(state, cfg, mode_note: str, tools: str | None = None) -> str:
         now=f"{now():%A %Y-%m-%d %H:%M}",
         sleep=last_sleep(state, journal),
         improvement=improvement_plan(state),
+        surprises=surprises.block(root),
     )
     return f"{identity}\n\n{context}"
 

@@ -4,6 +4,7 @@ import time
 from datetime import datetime, timedelta
 
 STARTED = time.monotonic()
+STARTED_AT = datetime.now()
 
 
 def now() -> datetime:
@@ -16,3 +17,12 @@ def now() -> datetime:
     at = at.astimezone().replace(tzinfo=None) if at.tzinfo else at   # naive local, as the journal's times are
     return at + timedelta(seconds=time.monotonic() - STARTED)
 
+
+def started() -> datetime:
+    """When this run started, as my prompts date it, fixed for the whole run: a replay's SHAFT_NOW exactly (both arms of
+    a trial replay see the same moment, however long each takes to get going), else the moment I was started."""
+    try:
+        at = datetime.fromisoformat(os.environ.get("SHAFT_NOW", ""))
+    except ValueError:
+        return STARTED_AT
+    return at.astimezone().replace(tzinfo=None) if at.tzinfo else at
