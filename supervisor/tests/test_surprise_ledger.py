@@ -11,7 +11,7 @@ from unittest import mock
 
 from supervisor import metrics, surprise
 from supervisor.tests.surprise_fixtures import (
-    FOLD_EPISODES, FOLD_EXPECTED, FOLD_QUEUE, FOLD_NOW, FOLD_LATER_NOW, _live, _s,
+    FOLD_CONTENT, FOLD_ENDED, FOLD_EPISODES, FOLD_EXPECTED, FOLD_QUEUE, FOLD_NOW, FOLD_LATER_NOW, _live, _s,
 )
 
 
@@ -48,7 +48,9 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual(items["s1010-0900-1"]["followups"], ["2026-10-11T10:00:00"])
         self.assertEqual(items["s1010-0900-2"]["outcome"], "not_worth_pursuing")
         self.assertEqual(items["s1010-0900-2"]["note"], "a one-off")
-        self.assertEqual(items["s1001-0800-1"]["ended"], "2026-10-10T09:00:05")
+        self.assertEqual({sid: i["ended"] for sid, i in items.items()}, FOLD_ENDED)
+        for sid, content in FOLD_CONTENT.items():
+            self.assertEqual((items[sid]["expected"], items[sid]["observed"], items[sid]["so_what"]), content)
         self.assertEqual(FOLD_EPISODES, original)
         later = surprise.fold(FOLD_EPISODES, datetime.fromisoformat(FOLD_LATER_NOW))
         self.assertFalse(any(i["status"] == "open" for i in later.values()))

@@ -150,6 +150,8 @@ class SurpriseJudgeTest(unittest.TestCase):
         self.ask.side_effect = [VERDICT, judge.JudgeError("failed")]
         self.assertEqual(metrics.surprise_baseline("m")["done"], 1)
         self.assertEqual(len(metrics._surprise_baseline_rows("m")), 1)
+        # newest first: a --limit sample is the recent, same-model baseline, not the first day's cycles
+        self.assertEqual(metrics._surprise_baseline_rows("m")[0]["episode_ts"], "2026-10-13T10:00:00")
         self.ask.side_effect = lambda *a, **k: copy.deepcopy(VERDICT)
         self.assertEqual(metrics.surprise_baseline("m", limit=1)["done"], 1)
         self.assertEqual(metrics.surprise_baseline("m")["done"], 1)

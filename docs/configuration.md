@@ -167,11 +167,14 @@ reviewed ref was `refs/heads/publish-prep-template`.
 | `MAX_STEPS_SLEEP` | `30` | `30` |
 | `MAX_STEPS_TALK` | `0` | `0` |
 | `CONTEXT_JOURNAL_CHARS` | `16000` | `16000` |
+| `CURIOSITY_EVERY_CYCLES` | `5` | `5` |
 | `OPERATOR_NAME` | `'the operator'` | empty |
 
 `LLM_PRESENCE_PENALTY` uses tenths (15 means 1.5). `MAX_STEPS_TALK=0` removes the
 conversation step limit. `WAKE_INTERVAL_MINUTES=0` disables periodic wakes; positive
-values are bounded by the operator's wake floor (default 10 minutes).
+values are bounded by the operator's wake floor (default 10 minutes). `CURIOSITY_EVERY_CYCLES=5` makes one live
+cycle in five, on average, a curiosity cycle while the instance has open surprises and no operator message waits
+(0 = never; [PLAN-surprise](plans/PLAN-surprise.md)).
 Sources: template `shaft/config.py:17`, [autonomy.py](../supervisor/autonomy.py).
 
 Cloud routing uses `LLM_BASE_URL="broker"` and a model in `SHAFT_CLOUD_MODELS`.

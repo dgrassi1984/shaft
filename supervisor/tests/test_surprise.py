@@ -83,6 +83,9 @@ class RuleAndFoldContractTest(unittest.TestCase):
     def test_fold_matches_the_shared_fixtures(self):
         items = surprises.fold(fx.FOLD_EPISODES, datetime.fromisoformat(fx.FOLD_NOW))
         self.assertEqual({i: (it["status"], it["depth"], it["reason"]) for i, it in items.items()}, fx.FOLD_EXPECTED)
+        self.assertEqual({i: it["ended"] for i, it in items.items()}, fx.FOLD_ENDED)
+        for sid, content in fx.FOLD_CONTENT.items():
+            self.assertEqual((items[sid]["expected"], items[sid]["observed"], items[sid]["so_what"]), content)
         with tempfile.TemporaryDirectory() as tmp:   # the queue: open, visible, oldest first
             self.assertEqual([it["id"] for it in surprises.queue(Path(tmp), items=items)], fx.FOLD_QUEUE)
         later = surprises.fold(fx.FOLD_EPISODES, datetime.fromisoformat(fx.FOLD_LATER_NOW))
@@ -165,6 +168,31 @@ class PredictionLoopTest(Fixture, unittest.TestCase):
         flags = [t.get("flag") for t in self.state.last_episode()["tools"]]
         self.assertEqual(flags.count("error"), 2)                 # both still flagged in the log
 
+    def test_a_prediction_of_success_never_hides_the_failure(self):
+        # Codex's review: "the tests pass without errors" once counted as anticipating an error (it says "error").
+        for prediction, hit in (("the tests pass without errors", ("error", "")),
+                                ("the command returns exit 0", ("nonzero_exit", "")),
+                                ("the HTTP request succeeds", ("http_error", "500")),
+                                ("it will not fail", ("error", "")), ("the list is not empty", ("empty", ""))):
+            with self.subTest(prediction=prediction):
+                self.assertIn("[unexpected", surprises.note(hit, [prediction]))
+        for prediction, hit in (("the plain write fails: it is protected", ("error", "PermissionError")),
+                                ("the watch finds no new primary source", ("empty", "")),
+                                ("the server answers 503 until it is restarted", ("http_error", "503")),
+                                ("the read is cut short", ("truncated", ""))):
+            with self.subTest(prediction=prediction):
+                self.assertEqual(surprises.note(hit, [prediction]), "")
+
+    def test_a_malformed_result_never_kills_the_cycle(self):
+        # A tool may print anything; the rule runs outside the toolbox's exception boundary (Codex's review).
+        plugin = self.root / "plugins" / "shout"
+        plugin.mkdir(parents=True)
+        (plugin / "plugin.json").write_text(json.dumps({"name": "shout", "description": "d", "parameters": {}}))
+        (plugin / "main.py").write_text("def run(**a):\n    return 'exit ' + '9' * 5000 + ' · 0.1 s'\n")
+        self.live([{"tool_calls": [("declare_intent", DECLARE)]}, {"tool_calls": [("shout", {})]},
+                   {"tool_calls": [("finish_cycle", FINISH)]}])
+        self.assertEqual(self.state.last_episode()["finish"]["criterion_met"], "partial")
+
     def test_no_prediction_still_gets_the_note(self):
         fake = self.live([{"tool_calls": [("declare_intent", DECLARE)]},
                           {"tool_calls": [("list_files", {"path": "notes"})]},
@@ -187,6 +215,18 @@ class PredictionLoopTest(Fixture, unittest.TestCase):
         self.assertIn("s1012-0900-5", text)                       # 1-4 expired at the cap: oldest first after that
         self.assertNotIn("s1012-0900-4 ", text)
 
+    def test_long_expectations_never_push_out_what_was_observed(self):
+        # Codex's review: eight 300-character expectations once filled the block before any "observed" was shown.
+        self.state.append_episode({"ts": "2026-10-12T09:00:00", "kind": "live", "intent": dict(DECLARE, predictions=[]),
+                                   "finish": dict(FINISH, resolves=[], surprises=[
+                                       {"expected": "E" * 300, "observed": f"OBSERVED{i} " + "o" * 200,
+                                        "so_what": "S" * 300} for i in range(8)]), "tools": []})
+        text = surprises.block(self.root, now=datetime(2026, 10, 13, 9))
+        self.assertLessEqual(len(text), surprises.QUEUE_CHARS)
+        for i in range(8):
+            self.assertIn(f"OBSERVED{i}", text)
+        self.assertIn("so what: S", text)
+
     def test_resolves_close_the_loop(self):
         self.seed(1, ts="2026-10-12T09:00:00")
         self.live([{"tool_calls": [("declare_intent", dict(DECLARE, origin_ref="surprise:s1012-0900-1"))]},
@@ -205,8 +245,8 @@ class PredictionLoopTest(Fixture, unittest.TestCase):
                    {"tool_calls": [("finish_cycle", FINISH)]}]
         self.live(replies)
         results = [t["result"] for t in self.state.last_episode()["tools"] if t["tool"] == "declare_intent"]
-        self.assertTrue(results[0].startswith("ERROR: origin_ref 'surprise:s0101-0000-9' names no surprise of mine "
-                                              "(open: s1012-0900-1)"))
+        self.assertEqual(results[0], "ERROR: origin_ref 'surprise:s0101-0000-9': no surprise of mine has that id "
+                                     "(open in my queue: s1012-0900-1)")
         self.assertTrue(results[1].startswith("ERROR: a goal taken from one of my surprises has origin self"))
         self.assertEqual(results[2], "intent recorded — now act")
 
@@ -232,6 +272,22 @@ class QueueGuardTest(Fixture, unittest.TestCase):
         self.assertEqual(self.follow_up("no"), [])
         self.assertEqual(self.follow_up("partial"), ["s1012-0900-1"])
         self.assertEqual(self.follow_up("yes"), ["s1012-0900-1"])
+
+    def test_a_goal_cannot_name_a_surprise_the_queue_hides(self):
+        # Codex's review: the guards held only for what the queue showed; an id recalled from memory got through.
+        self.follow_up("no")
+        self.state.append_episode({"ts": "2026-10-12T11:00:00", "kind": "sleep", "ended_by": "answer", "tools": [],
+                                   "closed": [{"id": "s1012-1000-1", "outcome": "duplicate", "note": "n"}]})
+        self.seed(1, ts="2026-10-12T12:00:00")
+        for sid, why in (("s1012-0900-1", "already had its follow-up cycle"), ("s1012-1000-1", "that surprise is closed")):
+            self.assertIn(why, surprises.ineligible(self.root, sid))
+        self.assertEqual(surprises.ineligible(self.root, "s1012-1200-1"), "")
+        self.follow_up("yes")
+        self.assertIn("opened by a follow-up", surprises.ineligible(self.root, "s1012-1000-1"))
+        self.live([{"tool_calls": [("declare_intent", dict(DECLARE, origin_ref="surprise:s1012-1000-1"))]},
+                   {"tool_calls": [("finish_cycle", FINISH)]}])
+        declared = next(t for t in self.state.last_episode()["tools"] if t["tool"] == "declare_intent")
+        self.assertIn("is not pursued further", declared["result"])
 
     def test_a_surprise_from_a_follow_up_is_kept_but_hidden(self):
         self.follow_up("yes")
@@ -288,6 +344,19 @@ class CuriosityDrawTest(Fixture, unittest.TestCase):
                 self.live([{"content": "ok"}], every=2)
             draws.add(self.state.last_episode()["curiosity"]["drawn"])
         self.assertEqual(len(draws), 1)
+
+    def test_both_arms_of_a_replay_draw_alike_across_a_minute_boundary(self):
+        # Codex's review: the seed read the advancing clock, so an arm that got going a second later, at 08:13, drew
+        # with another seed than one still at 08:12:59. It reads the run's fixed start now.
+        self.seed(1)
+        seeds = []
+        with mock.patch.object(surprises, "draw", side_effect=lambda e, q, i, seed: seeds.append(seed) or
+                               {"drawn": False, "skipped_for": None}), \
+                mock.patch.dict(os.environ, {"SHAFT_NOW": "2026-10-13T08:12:59"}):
+            for elapsed in (0, 5):
+                with mock.patch("time.monotonic", return_value=live.clock.STARTED + elapsed):
+                    self.live([{"content": "ok"}])
+        self.assertEqual(seeds, ["wren|2026-10-13T08:12"] * 2)
 
     def test_nothing_in_a_live_cycle_says_replay(self):
         self.seed(1)

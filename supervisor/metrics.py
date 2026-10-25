@@ -772,12 +772,14 @@ def _judgment_cost() -> tuple[float, str]:
 
 
 def surprise_baseline(name: str, limit: int | None = None, dry_run: bool = False) -> dict:
-    """Re-judge the pre-prediction cycles separately, saving each paid answer before asking for the next."""
+    """Re-judge the cycles from before the predictions existed (PLAN-surprise M2), into a file of their own, saving each
+    paid answer before asking for the next. Newest first: with thousands of past cycles (about $0.04 each), `limit`
+    takes the most recent ones — the same-model baseline the M5 window is compared with — not the first day's."""
     js = judgments(name)
     episodes = {ep["ts"]: ep for ep in live_episodes(name)}
     seen = {r["episode_ts"] for r in _surprise_baseline_rows(name)}
     todo = []
-    for row in js:
+    for row in reversed(js):
         ts = row["episode_ts"]
         ep = episodes.get(ts)
         if row.get("judge") != "rule" and ep is not None and ts not in seen and "predictions" not in (ep.get("intent") or {}):

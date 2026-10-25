@@ -32,6 +32,10 @@ FLAG_FIXTURES = [
     ("HTTP 404 Content-Type: application/json", ("http_error", "404")),
     ("HTTP 200 Content-Length: 19538 Content-Type: application/json", None),
     ("text\n[... truncated, 9000 chars total]", ("truncated", "")),
+    # a successful command whose output the toolbox cut short: the agent did not see all of it (Codex's review)
+    ("exit 0 · 0.1 s\n--- stdout ---\nline\n[... truncated, 9000 chars total]", ("truncated", "")),
+    # any number a tool prints: int() refuses more than 4,300 digits, and the rule must never raise (Codex's review)
+    ("exit " + "9" * 5000 + " · 0.1 s", None),
     ("wrote 3581 chars to notes/ai-misalignment-trend.md", None),
     ("delivered to wren", None),
 ]
@@ -58,7 +62,8 @@ def _s(expected, observed, so_what=""):
 # Malformed entries are skipped and issue no id; a resolve or close of an unknown or no longer open id does nothing.
 FOLD_EPISODES = [
     _live("2026-10-01T08:00:00", [_s("the page lists 3 sources", "it lists 5")]),            # expires by age
-    _live("2026-10-10T09:00:05", [_s("A", "B", "C"), "not a dict", {}, _s("D", "E")]),       # -1, -2 (2 skipped)
+    _live("2026-10-10T09:00:05", [_s("A", "B", "C"), "not a dict", {}, {"expected": 7, "observed": False},
+                                  _s("D", "E")]),                                            # -1, -2 (3 skipped)
     _live("2026-10-11T10:00:00", [_s("F", "G")],
           [{"id": "s1010-0900-1", "how": "found X"}, {"id": "s9999-0000-1", "how": "unknown"}],
           origin_ref="surprise:s1010-0900-1"),                                                # resolves -1; opens depth 2
@@ -79,6 +84,12 @@ FOLD_EXPECTED = {
     "s1012-0900-2": ("expired", 1, "cap"),
     **{f"s1012-0900-{i}": ("open", 1, None) for i in range(3, 11)},
 }
+# When each ended (None while open): an age expiry is dated at its deadline, opened + 7 days
+FOLD_ENDED = {"s1001-0800-1": "2026-10-08T08:00:00", "s1010-0900-1": "2026-10-11T10:00:00",
+              "s1010-0900-2": "2026-10-12T03:00:00", "s1011-1000-1": None, "s1012-0900-1": "2026-10-12T09:00:00",
+              "s1012-0900-2": "2026-10-12T09:00:40", **{f"s1012-0900-{i}": None for i in range(3, 11)}}
+# Which content each id names
+FOLD_CONTENT = {"s1010-0900-2": ("D", "E", ""), "s1011-1000-1": ("F", "G", ""), "s1012-0900-10": ("x10", "y10", "")}
 # What the queue shows (open, visible, oldest first): depth-2 s1011-1000-1 is hidden
 FOLD_QUEUE = [f"s1012-0900-{i}" for i in range(3, 11)]
 # Ten days later every one of them has aged out

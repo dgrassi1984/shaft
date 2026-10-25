@@ -14,7 +14,7 @@ import json
 import re
 import statistics
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -23,7 +23,7 @@ from .core import INSTANCES, SUP_DIR, list_beneath, safe_read
 
 BASELINE = SUP_DIR / "evals" / "surprise-baseline.json"
 
-EXIT = re.compile(r"^exit (-?\d+) ·")
+EXIT = re.compile(r"^exit (-?\d{1,9}) ·")   # bounded: a tool can print any number; int() caps at 4,300 digits
 HTTP = re.compile(r"^HTTP (\d{3})\b")
 ERROR_TYPE = re.compile(r"^ERROR: (?:[A-Za-z]+Error: )?([A-Z][A-Za-z]+(?:Error|Exception))\b|^ERROR: ([A-Za-z]+Error)")
 # Most specific cause first: "zsh: can't create temp file …: operation not permitted" is the sandbox, and must land
@@ -55,7 +55,9 @@ def flag(result: str) -> tuple[str, str] | None:
             return "nonzero_exit", _trouble(text)
         # exit 0: only stderr counts — stdout may be a file that merely contains "Traceback"
         trouble = _trouble(text.split("--- stderr ---", 1)[1]) if "--- stderr ---" in text else ""
-        return ("stderr_on_success", trouble) if trouble else None
+        if trouble:
+            return "stderr_on_success", trouble
+        return ("truncated", "") if "[... truncated" in text else None
     if (m := HTTP.match(text)) and int(m.group(1)) >= 400:
         return "http_error", m.group(1)
     if text.lower() in EMPTY:
@@ -277,7 +279,8 @@ def fold(episodes: list[dict], now: datetime) -> dict[str, dict]:
     def expire(at):
         for item in items.values():
             if item["status"] == "open" and _age(item["opened"], at) > 7:
-                item.update(status="expired", reason="age", ended=at.isoformat())
+                deadline = datetime.fromisoformat(item["opened"]) + timedelta(days=7)   # dated when it ran out
+                item.update(status="expired", reason="age", ended=deadline.isoformat(timespec="seconds"))
 
     for ep in episodes:
         ts = ep.get("ts")
@@ -423,7 +426,7 @@ def stats_lines(name) -> list[str]:
         wrong[e["tool"]] += 1
         topics[p2_class(e).split(":", 2)[2]] += 1
     tools = ", ".join(f"{k[:24]} {n}/{totals[k]}" for k, n in sorted(wrong.items(), key=lambda kv: -kv[1])[:3])
-    topic = ", ".join(f'{k[:24] or "(none)"} {n}' for k, n in sorted(topics.items(), key=lambda kv: -kv[1])[:3])
+    topic = ", ".join(f'{k[:24] or "(no path)"} {n}' for k, n in sorted(topics.items(), key=lambda kv: -kv[1])[:3])
     items = fold(eps, datetime.now())
     counts = {s: sum(i["status"] == s for i in items.values()) for s in ("open", "resolved", "closed", "expired")}
     oldest = max((_age(i["opened"], datetime.now()) for i in items.values() if i["status"] == "open"), default=None)
