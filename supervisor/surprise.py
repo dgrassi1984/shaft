@@ -170,6 +170,7 @@ def _judged(js: list[dict]) -> dict:
             "brier": round(v1["brier"], 3) if v1["n"] else None,
             "brier_v2": round(v2["brier"], 3) if v2["n"] else None, "n_v2": v2["n"],
             "brier_v3": round(v3["brier"], 3) if v3["n"] else None, "n_v3": v3["n"],
+            "excluded": cal["excluded"],   # asked under a question no version scores: counted, never pooled into one
             "claims_unsupported": sum(1 for j in js if not j.get("claim_supported", True))}
 
 
@@ -210,6 +211,12 @@ def baseline(name: str, root: Path | None = None) -> dict:
     }
 
 
+def _left_out(judged: dict) -> str:
+    """' (2 left out)' beside a judged count when some confidences were asked under a question no version scores; a
+    baseline frozen before the count existed has none."""
+    return f" ({judged['excluded']} left out)" if judged.get("excluded") else ""
+
+
 def _pct(x) -> str:
     return "—" if x is None else f"{x:.0%}"
 
@@ -236,7 +243,7 @@ def report(b: dict) -> str:
         lines.append(f"| {model} ({m['first']} → {m['last']}) | {m['cycles']} | {m['turn_seconds_median']} "
                      f"| {m['turn_prompt_tokens_median']} | {m['turn_completion_tokens_median']} "
                      f"| {m['cycle_seconds_median']} | {m['cycle_completion_tokens_median']} "
-                     f"| {m['steps_per_cycle_median']} | {jm['n']} | {_pct(jm['success'])} "
+                     f"| {m['steps_per_cycle_median']} | {jm['n']}{_left_out(jm)} | {_pct(jm['success'])} "
                      f"| {_pct(jm['confidence_mean'])} | {jm['brier'] if jm['brier'] is not None else '—'} "
                      f"| {jm.get('brier_v2') if jm.get('brier_v2') is not None else '—'} ({jm.get('n_v2', 0)}) "
                      f"| {jm.get('brier_v3') if jm.get('brier_v3') is not None else '—'} ({jm.get('n_v3', 0)}) "
@@ -249,7 +256,9 @@ def report(b: dict) -> str:
               f"All models together: {j['n']} judged, success {_pct(j['success'])}, confidence v1 "
                   f"{_pct(j['confidence_mean'])}, Brier v1 {j['brier']}, Brier v2 {j.get('brier_v2')} "
                   f"(n={j.get('n_v2', 0)}), Brier v3 {j.get('brier_v3')} (n={j.get('n_v3', 0)}), "
-                  f"unsupported claims {j['claims_unsupported']}.",
+                  f"unsupported claims {j['claims_unsupported']}."
+                  + (f" {j['excluded']} confidence(s) left out of calibration (asked under a question this supervisor "
+                     "does not know)." if j.get("excluded") else ""),
 "", "| When | Episode | Tool | Flag | Target / excerpt |", "|---|---|---|---|---|"]
     lines += [f"| {e['episode'][:16]} | {e['episode_kind']} #{e['call']} | {e['tool']} | {e['flag']}"
               f"{' (' + e['detail'] + ')' if e['detail'] else ''} | {e['target'] or e['excerpt'][:70]} |"

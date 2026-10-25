@@ -615,7 +615,7 @@ def judge_pending(name: str) -> int:
         rec = {"episode_ts": ep["ts"], "judged_at": datetime.now().isoformat(timespec="seconds"),
                "confidence": intent.get("confidence"),
                "confidence_of": intent.get("confidence_of"),
-               "confidence_first": intent.get("confidence_first"), "base_rate_shown": intent.get("base_rate_shown"),
+               **{k: intent.get(k) for k in V3_FIELDS},   # the declare step's numbers (and why it could not run)
                "claimed": (ep.get("finish") or {}).get("criterion_met"),
                "goal": intent.get("goal", "")[:200],
                "origin_declared": intent.get("origin"), "origin_ref": intent.get("origin_ref"),
@@ -1189,6 +1189,11 @@ def review_text(names: list[str], hours: float = 24, now: datetime | None = None
         if (paired := paired_v3(rows))["n"]:
             out.append(f"  base rate shown (v3): Brier before the base rate {paired['brier_first']:.2f}, after "
                        f"{paired['brier_final']:.2f} on the same {paired['n']} cycles")
+        if cal["excluded"]:
+            out.append(f"  confidences left out of calibration: {cal['excluded']} "
+                       "(asked under a question this supervisor does not know)")
+        if broken := [j["base_rate_error"] for j in rows if j.get("base_rate_error")]:
+            out.append(f"  base rate file unreadable in {len(broken)} cycle(s): {broken[0]}")
         if valued(rows):
             levels = " · ".join(f"{v}: {sum(1 for j in valued(rows) if j['value'] == v)}" for v in range(6))
             out.append(f"  value grades: {levels}")

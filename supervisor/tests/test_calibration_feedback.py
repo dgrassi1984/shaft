@@ -195,12 +195,46 @@ class DeclareStepTest(unittest.TestCase):
         self.assertIn("beforehand 60% vs judged 0% (n=1, Brier 0.36", line)
         self.assertIn("Brier before the base rate 0.81, after 0.36 on the same 1 cycles", text)
 
+    def review(self, rows):
+        rows = [{**r, "episode_ts": "2026-10-24T10:00:00"} for r in rows]
+        with mock.patch.object(metrics, "judgments", return_value=rows):
+            return metrics.review_text(["x"], now=datetime(2026, 10, 24, 11))
+
+    def test_review_reports_the_excluded_count(self):
+        # Final fix F5 (Codex C3): review dropped the confidences no version scores, so they vanished from it.
+        line = "  confidences left out of calibration: 2 (asked under a question this supervisor does not know)"
+        self.assertIn(line, self.review([judged(50, "yes", "something-new"), judged(50, "no", "another"),
+                                         judged(50, "yes")]))
+        self.assertNotIn("left out of calibration", self.review([judged(50, "yes")]))
+
+    def test_review_reports_an_unreadable_base_rate_file(self):
+        # Final fix F5 (O4): an intent's base_rate_error reached the judgment row and no reader.
+        text = self.review([judged(50, "yes", metrics.CONFIDENCE_V2, base_rate_error="self/calibration.json: bad"),
+                            judged(50, "no", metrics.CONFIDENCE_V2, base_rate_error="self/calibration.json: worse"),
+                            judged(50, "yes", metrics.CONFIDENCE_V2)])
+        self.assertIn("  base rate file unreadable in 2 cycle(s): self/calibration.json: bad\n", text)
+        self.assertNotIn("base rate file unreadable", self.review([judged(50, "yes", metrics.CONFIDENCE_V2)]))
+
+    def test_surprise_reports_the_excluded_count(self):
+        # Final fix F5 (Codex C3): per model and for all models together, only above zero.
+        rows = [judged(50, "yes", "something-new"), judged(50, "yes")]
+        got = surprise._judged(rows)
+        self.assertEqual(got["excluded"], 1)
+        text = surprise.report(self.baseline(got))
+        self.assertIn("| 2 (1 left out) |", text)
+        self.assertIn("1 confidence(s) left out of calibration (asked under a question this supervisor does not know)",
+                      text)
+        plain = surprise.report(self.baseline(surprise._judged(rows[1:])))
+        self.assertNotIn("left out", plain)
+        old = {k: v for k, v in got.items() if k != "excluded"}   # a baseline frozen before the count existed
+        self.assertNotIn("left out", surprise.report(self.baseline(old)))
+
     def test_judgment_row_copies_first_and_shown(self):
         # Bug guard: the judgment row kept confidence but not confidence_first, so v3_first and the paired
         # score had nothing to read.
         ep = {"ts": "2026-10-25T10:00:00", "tools": [], "intent": {
             "goal": "g", "confidence": 60, "confidence_first": 90, "base_rate_shown": SHOWN,
-            "confidence_of": metrics.CONFIDENCE_V3}}
+            "confidence_of": metrics.CONFIDENCE_V3, "base_rate_error": "self/calibration.json: Expecting value"}}
         with tempfile.TemporaryDirectory(prefix="shaft-confidence-") as tmp, ExitStack() as stack:
             path = Path(tmp) / "judgments.jsonl"
             for name, value in (("judgments", []), ("unsampled", set()), ("live_episodes", [ep]),
@@ -216,6 +250,7 @@ class DeclareStepTest(unittest.TestCase):
         self.assertEqual((row["confidence"], row["confidence_first"]), (60, 90))
         self.assertEqual(row["base_rate_shown"], SHOWN)
         self.assertEqual(row["confidence_of"], metrics.CONFIDENCE_V3)
+        self.assertEqual(row["base_rate_error"], "self/calibration.json: Expecting value")   # final fix F5
 
     def backfilled(self, row, intent):
         """judgments() over a file holding `row`, with `intent` as its live episode's."""
@@ -278,6 +313,17 @@ class DeclareStepTest(unittest.TestCase):
         strip = lambda text: "\n".join(l for l in text.splitlines() if "Updated" not in l)
         self.assertEqual((strip(before[0]), before[1:]), (strip(after[0]), after[1:]))
 
+    @staticmethod
+    def baseline(got):
+        return {"instance": "x", "window": [None, None], "live_cycles": 0, "current_model": "m", "events": [],
+                "tool_calls": {"live": 0, "sleep": 0, "talk": 0}, "flagged": {"live": 0, "sleep": 0, "talk": 0},
+                "recurrence": {"classes": 0, "recurred": 0, "repeat_episodes": 0, "recurring": {}},
+                "flagged_by_class": {}, "judged_all_models": got,
+                "by_model": {"m": {"cycles": 1, "first": "a", "last": "b", "steps_per_cycle_median": 1,
+                                   "turn_seconds_median": 1, "turn_prompt_tokens_median": 1,
+                                   "turn_completion_tokens_median": 1, "cycle_seconds_median": 1,
+                                   "cycle_completion_tokens_median": 1, "turns": 1, "judged": got}}}
+
     def test_surprise_reports_v3_beside_v2(self):
         rows = [judged(60, "partial", metrics.CONFIDENCE_V3, confidence_first=90), judged(50, "yes", metrics.CONFIDENCE_V2)]
         got = surprise._judged(rows)
@@ -285,15 +331,7 @@ class DeclareStepTest(unittest.TestCase):
         self.assertEqual((got["brier_v2"], got["n_v2"]), (0.25, 1))
         self.assertIsNone(surprise._judged(rows[1:])["brier_v3"])
         self.assertEqual(surprise._judged(rows[1:])["n_v3"], 0)
-        b = {"instance": "x", "window": [None, None], "live_cycles": 0, "current_model": "m", "events": [],
-             "tool_calls": {"live": 0, "sleep": 0, "talk": 0}, "flagged": {"live": 0, "sleep": 0, "talk": 0},
-             "recurrence": {"classes": 0, "recurred": 0, "repeat_episodes": 0, "recurring": {}},
-             "flagged_by_class": {}, "judged_all_models": got,
-             "by_model": {"m": {"cycles": 1, "first": "a", "last": "b", "steps_per_cycle_median": 1,
-                                "turn_seconds_median": 1, "turn_prompt_tokens_median": 1,
-                                "turn_completion_tokens_median": 1, "cycle_seconds_median": 1,
-                                "cycle_completion_tokens_median": 1, "turns": 1, "judged": got}}}
-        text = surprise.report(b)
+        text = surprise.report(self.baseline(got))
         self.assertIn("| Brier v3 (n) |", text)
         self.assertIn("| 0.36 (1) |", text)
         self.assertIn("Brier v3: P(criterion met = yes) after the base rate was shown", text)
