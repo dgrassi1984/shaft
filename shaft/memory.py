@@ -21,6 +21,8 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import surprises
+
 VERDICTS = "memory/verdicts.jsonl"   # the judge's verdicts, as my sleeps received them
 
 WORD = re.compile(r"[a-zA-ZÀ-ÿ0-9]{2,}")
@@ -132,7 +134,7 @@ def corpus(root: Path) -> list[tuple[str, str]]:
                     if result.startswith("ERROR") or result == "(repeat: not run)":
                         lines.append(f"Flagged/refused call {entry.get('tool', '?')}: {result[:160]}")
                 docs.append((f"cycle {rec.get('ts', '')}", "\n".join(lines)[:CHUNK * 2]))
-    return docs
+    return docs + surprises.docs(root)   # what surprised me, and what became of it
 
 
 def _bm25(docs: list[tuple[str, str]], query: str) -> list[int]:
