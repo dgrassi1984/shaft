@@ -67,6 +67,10 @@ FOLD_EPISODES = [
     _live("2026-10-11T10:00:00", [_s("F", "G")],
           [{"id": "s1010-0900-1", "how": "found X"}, {"id": "s9999-0000-1", "how": "unknown"}],
           origin_ref="surprise:s1010-0900-1"),                                                # resolves -1; opens depth 2
+    ["not", "an", "episode"], {"ts": "garbage", "kind": "live"}, {"kind": "live"},             # malformed lines: skipped
+    {"ts": "2026-10-11T11:00:00", "kind": "live", "intent": [1], "finish": "x", "tools": []},
+    {"ts": "2026-10-11T12:00:00", "kind": "live", "intent": {"origin_ref": 5},
+     "finish": {"surprises": {"expected": "a dict, not a list"}, "resolves": "s1010-0900-2"}},
     {"ts": "2026-10-12T03:00:00", "kind": "sleep", "ended_by": "answer", "tools": [],
      "closed": [{"id": "s1010-0900-2", "outcome": "not_worth_pursuing", "note": "a one-off"},
                 {"id": "s1010-0900-1", "outcome": "answered", "note": "already resolved: no effect"}]},

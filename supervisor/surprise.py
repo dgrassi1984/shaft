@@ -93,9 +93,11 @@ def episodes(name: str, root: Path | None = None) -> list[dict]:
             continue
         for line in safe_read(root, f"memory/episodes/{fname}", "", errors="replace").splitlines():
             try:
-                out.append(json.loads(line))
+                rec = json.loads(line)
             except ValueError:
                 continue
+            if isinstance(rec, dict) and isinstance(rec.get("ts"), str):   # an instance's code may write any line
+                out.append(rec)
     return out
 
 
@@ -283,22 +285,26 @@ def fold(episodes: list[dict], now: datetime) -> dict[str, dict]:
                 item.update(status="expired", reason="age", ended=deadline.isoformat(timespec="seconds"))
 
     for ep in episodes:
-        ts = ep.get("ts")
-        if not isinstance(ts, str):
+        try:   # an instance's own code can write any line into its episodes: what is not one is skipped
+            ts = ep["ts"]
+            at = datetime.fromisoformat(ts)
+        except (KeyError, TypeError, ValueError):
             continue
         if ep.get("kind") == "live":
-            expire(datetime.fromisoformat(ts))
-            ref = str((ep.get("intent") or {}).get("origin_ref") or "")
+            expire(at)
+            intent = ep.get("intent") if isinstance(ep.get("intent"), dict) else {}
+            ref = str(intent.get("origin_ref") or "")
             parent = items.get(ref.removeprefix("surprise:")) if ref.startswith("surprise:") else None
             if parent is not None:
                 parent["followups"].append(ts)
-            finish = ep.get("finish") or {}
-            for resolved in finish.get("resolves") or []:
+            finish = ep.get("finish") if isinstance(ep.get("finish"), dict) else {}
+            resolves, opened = finish.get("resolves"), finish.get("surprises")
+            for resolved in resolves if isinstance(resolves, list) else []:
                 item = items.get(str(resolved.get("id"))) if isinstance(resolved, dict) else None
                 if item is not None and item["status"] == "open":
                     item.update(status="resolved", how=resolved.get("how", ""), ended=ts)
-            prefix = datetime.fromisoformat(ts).strftime("s%m%d-%H%M-")
-            for entry in finish.get("surprises") or []:
+            prefix = at.strftime("s%m%d-%H%M-")
+            for entry in opened if isinstance(opened, list) else []:
                 if not isinstance(entry, dict) or not any(
                         isinstance(entry.get(k), str) and entry[k].strip() for k in ("expected", "observed")):
                     continue
@@ -314,12 +320,18 @@ def fold(episodes: list[dict], now: datetime) -> dict[str, dict]:
             for item in visible[:-8]:
                 item.update(status="expired", reason="cap", ended=ts)
         elif ep.get("kind") == "sleep":
-            for closed in ep.get("closed") or []:
+            for closed in ep.get("closed") if isinstance(ep.get("closed"), list) else []:
                 item = items.get(str(closed.get("id"))) if isinstance(closed, dict) else None
                 if item is not None and item["status"] == "open":
                     item.update(status="closed", outcome=closed.get("outcome"), note=closed.get("note"), ended=ts)
     expire(now)
     return items
+
+
+def _part(ep: dict, key: str) -> dict:
+    """An episode's intent, finish or curiosity record, or {} when it is missing or not a record."""
+    value = ep.get(key)
+    return value if isinstance(value, dict) else {}
 
 
 def _age(opened: str, at: datetime) -> float:
@@ -407,7 +419,7 @@ def stats_lines(name) -> list[str]:
         return []
     js = metrics.judgments(name)
     judged = {j["episode_ts"] for j in js}
-    stated = sum(len((e.get("intent") or {}).get("predictions") or []) for e in live if e["ts"] in judged)
+    stated = sum(len(_part(e, "intent").get("predictions") or []) for e in live if e["ts"] in judged)
     measured = [j for j in js if "expectations" in j]
     verdicts = [v["verdict"] for j in measured for v in j["expectations"]]
     informative = sum(v in ("held", "contradicted") for v in verdicts)
@@ -442,7 +454,7 @@ def stats_lines(name) -> list[str]:
              + (f"; the oldest open one is {oldest:.1f} days old" if oldest is not None else ""),
              f"- Kinds of failed result that came back in a later cycle: {rec['recurred']} of {rec['classes']}"
              + (f" ({recurring})" if rec["recurred"] else "")]
-    if not any((e.get("intent") or {}).get("predictions") for e in live[-10:]):
+    if not any(_part(e, "intent").get("predictions") for e in live[-10:]):
         lines.append(f"- None of my last {min(10, len(live))} live cycles stated a prediction")
     # Each line bounded: stats.md is cut at 5,000 characters in my prompt, and calibration comes after this section.
     return ["## My expectations vs what happened"] + [l if len(l) <= 110 else l[:109] + "…" for l in lines] + [""]
@@ -531,8 +543,8 @@ def m5_report(name, since: datetime, until: datetime | None = None,
     old_honesty = _honesty(old)
     by_ts = {e["ts"]: e for e in window_eps if e.get("kind") == "live"}
     def followup(j):
-        ref = j.get("origin_ref", (by_ts.get(j["episode_ts"], {}).get("intent") or {}).get("origin_ref", ""))
-        return ref.startswith("surprise:")
+        ref = j.get("origin_ref", _part(by_ts.get(j["episode_ts"], {}), "intent").get("origin_ref", ""))
+        return str(ref or "").startswith("surprise:")
 
     follows = [j for j in js if followup(j)]
     others = [j for j in js if not followup(j)]
@@ -599,7 +611,7 @@ def m5_report(name, since: datetime, until: datetime | None = None,
               "Baseline P2 uses same-model events; talk models are inferred from the preceding live cycle "
               "or the sole baseline model.", "", "Randomised comparison (reported, not gated): a direction, not proof."]
     for drawn in (True, False):
-        group = [j for j in js if by_ts.get(j["episode_ts"], {}).get("curiosity", {}).get("drawn") is drawn]
+        group = [j for j in js if _part(by_ts.get(j["episode_ts"], {}), "curiosity").get("drawn") is drawn]
         measured = [j for j in group if j.get("followup_useful") in ("yes", "partial", "no")]
         shares = ", ".join(f'{v} {_pct(_ratio(sum(j["followup_useful"] == v for j in measured), len(measured)))}'
                            for v in ("yes", "partial", "no"))
