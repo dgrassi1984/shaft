@@ -129,7 +129,8 @@ def run(cfg, state: State, client: Client) -> str:
             "once, before acting.",
             {"confidence": {"type": "integer", "description": "0-100, your final probability that the criterion "
                             "will be fully met (criterion_met yes; partial counts as not met)"}},
-            ["confidence"]), confirm)
+            ["confidence"]), confirm, repeatable=True)   # the same number is refused in the declare's reply,
+            # accepted on the next: the repeat guard must not block that retry
     toolbox = Toolbox(state.root)
     real_run = toolbox.run
 
@@ -162,9 +163,13 @@ def run(cfg, state: State, client: Client) -> str:
             + prompts.envelope_text(broker.envelope(), agent.time_left())
             + memory.recall(state.root, about, shown=system), state.root, listed_in=inbox_text(inbox))},
     ]
+
+    def max_steps() -> int:   # a shown base rate adds a step for the confirm turn, so it takes none from the work
+        unlimited = cfg.MAX_STEPS_LIVE <= 0
+        return cfg.MAX_STEPS_LIVE + (1 if record["confirm"] and not unlimited else 0)
+
     outcome = agent.run(client, messages, toolbox, max_tokens=cfg.MAX_TOKENS_STEP, purpose="live",
-                        # one more step for the confirm turn once a base rate is shown, so it takes none from the work
-                        max_steps=lambda: cfg.MAX_STEPS_LIVE + (1 if record["confirm"] else 0), controls=controls,
+                        max_steps=max_steps, controls=controls,
                         wrap_up="Stop working now and call finish_cycle with an honest report "
                                 "(criterion_met: partial or no if you did not get there).")
 

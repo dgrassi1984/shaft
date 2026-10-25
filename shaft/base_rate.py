@@ -13,6 +13,7 @@ import stat
 from pathlib import Path
 
 FILE = "self/calibration.json"
+QUESTION = "criterion_met=yes"   # what met/n count; a file about any other question is not my base rate
 LIMIT = 64 * 1024   # a few bands; anything bigger is not the supervisor's file
 COUNTS = ("lo", "hi", "met", "n", "older_met", "older_n")
 
@@ -53,11 +54,19 @@ def load(root: Path) -> tuple[dict | None, str | None]:
         return None, f"{FILE}: {e}"
     except (ValueError, RecursionError) as e:   # bad JSON or nested too deep, bad UTF-8, not a plain file, too big
         return None, f"{FILE}: {e}"
-    bands = rates.get("bands") if isinstance(rates, dict) else None
+    if not isinstance(rates, dict):
+        return None, f"{FILE}: not an object"
+    if rates.get("question") != QUESTION:
+        return None, f"{FILE}: question {rates.get('question')!r}, not {QUESTION!r}"
+    bands = rates.get("bands")
     if not isinstance(bands, list) or not all(
             isinstance(b, dict) and all(type(b.get(k)) is int for k in COUNTS) for b in bands):
         return None, f"{FILE}: not a list of bands with {', '.join(COUNTS)}"
-    return rates, None
+    for b in bands:
+        if not (b["lo"] < b["hi"] and 0 <= b["met"] <= b["n"] and 0 <= b["older_met"] <= b["older_n"]):
+            return None, f"{FILE}: impossible band {json.dumps({k: b[k] for k in COUNTS})}"
+    # only the counts: what describe() shows is what the intent records as base_rate_shown
+    return {**rates, "bands": [{k: b[k] for k in COUNTS} for b in bands]}, None
 
 
 def has_data(rates: dict | None) -> bool:

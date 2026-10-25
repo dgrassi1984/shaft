@@ -19,6 +19,7 @@ class Control:
     spec: dict
     handler: Callable[[dict], str]
     stops: bool = False          # calling it ends the loop
+    repeatable: bool = False     # its result depends on the turn, not only its arguments: never treated as a repeat
 
 
 @dataclass
@@ -192,7 +193,9 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
         stop = False
         for c in reply.tool_calls:
             call_key = (c["name"], _canonical(c["arguments"]))
-            if call_key == last_call:
+            if c["name"] in controls and controls[c["name"]].repeatable:
+                call_key = None   # and the guard never compares across it: the next call starts a fresh count
+            elif call_key == last_call:
                 # The same call again, straight after itself: its result cannot have changed. Once I copied my
                 # previous step whole, eleven times in a row (2026-10-13) — so it is not run again, and a third
                 # identical attempt ends the reply.
