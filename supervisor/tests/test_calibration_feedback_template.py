@@ -185,19 +185,54 @@ class ConfirmStepTest(Fixture, unittest.TestCase):
         self.assertTrue(again.startswith("ERROR"), again)
         self.assertEqual(episode["intent"]["confidence"], 70)
 
-    def test_wrap_up_without_confirm_keeps_first(self):
+    def assert_shown_never_confirmed(self, episode):
+        """v2, with what was offered kept for audit: the instance never read the rate, so it is not treated (F2)."""
+        intent = episode["intent"]
+        self.assertEqual(intent["confidence_of"], live.CONFIDENCE_OF)
+        self.assertNotIn("confidence_first", intent)
+        self.assertEqual(intent["base_rate_shown"], WITH_DATA["bands"][2])
+        self.assertEqual(intent["confidence"], 85)
+        self.assertIn("**Confidence beforehand:** 85%\n", self.state.read(self.state.journal))
+
+    def test_wrap_up_without_confirm_is_v2(self):
         # Review focus 2: declared on the wrap-up turn, where no later turn exists; finish is still accepted.
+        # Final fix F2 (ruling): it was v3 with confidence == confidence_first, a "treated" cycle that never saw the rate.
         self.write_rates(WITH_DATA)
         fake, episode = self.cycle([*([read(i)] for i in range(STEPS - 1)), [declare(85), FINISH]])
         self.assertEqual(len(fake.requests), STEPS)
         self.assertTrue(fake.requests[-1]["messages"][-1]["content"].startswith("[supervisor] You have one turn"))
         self.assertEqual(episode["ended_by"], "control")
         self.assertEqual(episode["finish"]["criterion_met"], "partial")
-        intent = episode["intent"]
-        self.assertEqual(intent["confidence_of"], live.CONFIDENCE_OF_SHOWN)
-        self.assertEqual(intent["confidence"], intent["confidence_first"])
-        self.assertEqual(intent["confidence"], 85)
-        self.assertIn("**Confidence beforehand:** 85%\n", self.state.read(self.state.journal))
+        self.assert_shown_never_confirmed(episode)
+
+    def test_declare_and_finish_in_one_reply_is_v2(self):
+        # Final fix F2: a finish beside the declare ends the cycle before the rate could be read.
+        self.write_rates(WITH_DATA)
+        _, episode = self.cycle([[declare(85), FINISH]])
+        self.assertEqual(episode["ended_by"], "control")
+        self.assert_shown_never_confirmed(episode)
+
+    def test_v3_only_from_the_accepted_confirm(self):
+        # Final fix F2: the declare records what it offered; the version and the first number come with the confirm.
+        self.write_rates(WITH_DATA)
+        _, episode = self.cycle([[declare(85), confirm(60)], [read(1)], [FINISH]])   # refused, then never retried
+        self.assert_shown_never_confirmed(episode)
+        _, episode = self.cycle([[declare(85)], [confirm(85)], [FINISH]])            # kept the number: still v3
+        self.assertEqual(episode["intent"]["confidence_of"], live.CONFIDENCE_OF_SHOWN)
+        self.assertEqual((episode["intent"]["confidence_first"], episode["intent"]["confidence"]), (85, 85))
+
+    def test_judges_never_see_the_step(self):
+        # Final fix F1 on a real episode: the strings the supervisor takes out are the ones this template writes.
+        self.write_rates(WITH_DATA)
+        _, episode = self.cycle([[declare(85)], [read(1)], [confirm(65)], [read(2)], [FINISH]])
+        self.assertTrue(self.results(episode, "read_file")[0].startswith(metrics.CONFIRM_FIRST))
+        case = metrics._case(episode)
+        for mark in ("base_rate_shown", "confidence_first", "fully met in", "confirm_confidence", "your record"):
+            self.assertNotIn(mark, case)
+        self.assertIn("→ " + metrics.NEUTRAL_DECLARE + "\n\n### 2. read_file(", case)
+        (self.root / base_rate.FILE).unlink()
+        _, plain = self.cycle([[declare(85)], [FINISH]])
+        self.assertEqual(self.results(plain, "declare_intent"), [metrics.NEUTRAL_DECLARE])   # live's own v2 answer
 
 
 class RunsAsV2Test(Fixture, unittest.TestCase):
