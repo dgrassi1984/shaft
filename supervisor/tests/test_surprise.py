@@ -155,7 +155,7 @@ class PredictionLoopTest(Fixture, unittest.TestCase):
         fin = self.state.last_episode()["finish"]
         self.assertEqual(fin["surprises"], [{"expected": "", "observed": "o", "so_what": ""}])
         self.assertEqual(fin["resolves"], [{"id": "s9", "how": ""}])
-        self.assertIn("**Not resolved (no open surprise by that id):** s9", self.state.journal.read_text())
+        self.assertIn("**Not resolved:** s9 (no how given)", self.state.journal.read_text())
 
     def test_anticipated_failures_get_no_note_and_no_note_before_intent(self):
         fake = self.live([

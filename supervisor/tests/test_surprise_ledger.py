@@ -84,6 +84,25 @@ class LedgerTest(unittest.TestCase):
             {"sleep": "2026-10-03T00:00:00", "surprises": [], "unhandled": 0}])
         self.assertIn("| s1001-0000-5 | unhandled |", surprise.disposition_text("x"))
 
+    def test_disposition_guards_from_grok_review(self):
+        # Ids are whole tokens (s…-10 never cites s…-1); a close needs a note; a malformed close is skipped; a fact in a
+        # live cycle counts; an entry that only lists the id is not "left open with a reason".
+        eps = [_live("2026-10-01T00:00:00", [_s(f"a{i}", "b") for i in range(10)]),
+               {"ts": "2026-10-01T05:00:00", "kind": "live", "intent": {}, "finish": {}, "tools": [
+                   {"tool": "remember", "args": json.dumps({"fact": "x (from surprise s1001-0000-2)"}), "result": "ok"}]},
+               {"ts": "2026-10-02T00:00:00", "kind": "sleep", "ended_by": "answer",
+                "closed": [{"id": "s1001-0000-3", "outcome": "answered", "note": ""}, "junk", {"note": "no id"}],
+                "content": "Open: s1001-0000-4\ns1001-0000-5 stays open: worth a cycle\nfact s1001-0000-10 noted",
+                "tools": [{"tool": "remember", "args": "from surprise s1001-0000-10", "result": "ok"}]}]
+        self.write(eps)
+        handled = {e["id"]: e["handled"] for e in surprise.disposition("x")[0]["surprises"]}
+        self.assertEqual(handled["s1001-0000-1"], "unhandled")      # only s1001-0000-10 was cited
+        self.assertEqual(handled["s1001-0000-10"], "fact")
+        self.assertEqual(handled["s1001-0000-2"], "fact")           # remembered in a live cycle
+        self.assertEqual(handled["s1001-0000-3"], "unhandled")      # closed without a note
+        self.assertEqual(handled["s1001-0000-4"], "unhandled")      # listed, no reason
+        self.assertEqual(handled["s1001-0000-5"], "left_open")
+
     def test_stats_empty_and_absent_fields(self):
         self.write([])
         self.assertEqual(surprise.stats_lines("x"), [])
@@ -201,6 +220,36 @@ class LedgerTest(unittest.TestCase):
 
     def result(self, text, criterion):
         return next(line for line in text.splitlines() if line.startswith("| " + criterion + " |")).split(" | ")[-1].strip(" |")
+
+    def test_p1_counts_follow_ups_and_hows_not_bare_resolves(self):
+        # Grok's review: a resolve with no how passed P1 without any work; a follow-up cycle did not count.
+        data = self.trial()
+        eps = data[0]
+        eps[1]["finish"]["resolves"] = [{"id": sid, "how": ""} for sid in [f"s1001-0000-{i}" for i in range(1, 5)]]
+        row = next(l for l in self.render(data).splitlines() if l.startswith("| P1"))
+        self.assertIn("acted 25% (1/4)", row)                         # only s…-1, followed up by cycles 1–3
+        self.assertTrue(row.endswith("FAIL |"))
+
+    def test_p3_is_never_passed_on_partial_measurements(self):
+        # Grok's review: one measured cycle among many unmeasured ones passed P3.
+        data = self.trial()
+        for j in data[1][1:]:
+            j["judge"] = "judge-test"
+        for j in data[1][2:]:
+            j.pop("unreported_surprises")
+        self.assertEqual(self.result(self.render(data), "P3"), "NOT ENOUGH DATA")
+
+    def test_p2_says_when_the_window_is_worse_than_m0(self):
+        # The pre-registered gate is ≤⅓; the M0 rate beside it is a comparison, said aloud when the window is worse.
+        data = self.trial()
+        data[3]["instances"]["x"]["events"] = [dict(episode=f"2026-09-2{d}T00:00:00", episode_kind="live", flag="error",
+                                                    tool="write_file", target=f"m0-{d}/x", model="m") for d in (8, 9)]
+        data[0][4]["tools"] = data[0][0]["tools"]                     # one of the window's 3 classes recurs: 33%
+        row = next(l for l in self.render(data).splitlines() if l.startswith("| P2"))
+        self.assertIn("recurring 33% (1/3) — worse than M0", row)     # M0: 0 of 2 recurred
+        self.assertTrue(row.endswith("PASS |"))
+        self.assertNotIn("worse than M0", next(l for l in self.render(self.trial()).splitlines()
+                                               if l.startswith("| P2")))
 
     def test_m5_all_pass_and_randomised_calibration(self):
         text = self.render(self.trial())

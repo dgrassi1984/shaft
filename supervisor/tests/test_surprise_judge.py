@@ -118,7 +118,7 @@ class SurpriseJudgeTest(unittest.TestCase):
         before = path.read_bytes()
         dry = metrics.surprise_baseline("m", dry_run=True)
         self.assertEqual((dry["todo"], dry["done"]), (1, 0))
-        self.assertAlmostEqual(dry["per_judgment_usd"], .054)
+        self.assertAlmostEqual(dry["per_judgment_usd"], .046 + .028 + .008)   # with E0 (Grok)
         self.assertIn("estimate", dry["basis"])
         self.ask.assert_not_called()
         self.pick.assert_not_called()
@@ -164,17 +164,19 @@ class SurpriseJudgeTest(unittest.TestCase):
 
     def test_usage_estimate_uses_cycle_calls_only(self):
         self.sup.mkdir()
-        rows = [{"purpose": "judge m", "usd": .02}, {"purpose": "judge n", "usd": .04},
-                {"purpose": "second m", "usd": 100}]
+        # Grok's review: a paid re-judge counts too, a 0 with no tokens is a missing price, and the new fields' extra
+        # answer is added (400 output tokens at $20/M = $0.008)
+        rows = [{"purpose": "judge m", "usd": .02}, {"purpose": "surprise baseline n", "usd": .04},
+                {"purpose": "judge m", "usd": 0}, {"purpose": "second m", "usd": 100}]
         (self.sup / "judge_usage.jsonl").write_text("\n".join(json.dumps(r) for r in rows))
         cost, basis = metrics._judgment_cost()
-        self.assertAlmostEqual(cost, .03)
-        self.assertIn("2 cycle judge calls", basis)
+        self.assertAlmostEqual(cost, .03 + .008)
+        self.assertIn("2 cycle judgments + 400 output tokens", basis)
         from supervisor import cloudllm
         rows = [{"purpose": "judge m", "model": "claude-test", "input_tokens": 1000, "output_tokens": 100}]
         (self.sup / "judge_usage.jsonl").write_text(json.dumps(rows[0]))
         with mock.patch.dict(cloudllm.PRICES, {"claude-test": (2, 10, .2)}):
-            self.assertAlmostEqual(metrics._judgment_cost()[0], .003)
+            self.assertAlmostEqual(metrics._judgment_cost()[0], .003 + .008)
 
     def test_report_disagreements_and_unreported(self):
         ep = self.episode()

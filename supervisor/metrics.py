@@ -751,6 +751,9 @@ def _surprise_baseline_rows(name: str) -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
 
 
+SURPRISE_TOKENS = 400   # PLAN-surprise §1.6: the judge's extra output for the surprise fields
+
+
 def _judgment_cost() -> tuple[float, str]:
     from .cloudllm import usd
     path = SUP_DIR / "judge_usage.jsonl"
@@ -759,16 +762,20 @@ def _judgment_cost() -> tuple[float, str]:
         if not line.strip():
             continue
         row = json.loads(line)
-        if not row.get("purpose", "").startswith("judge "):
+        if not row.get("purpose", "").startswith(("judge ", "surprise baseline ")):
             continue
         cost = row.get("usd")
         if cost is None and row.get("input_tokens") is not None and row.get("output_tokens") is not None:
             cost = usd(row.get("model"), row)
-        if cost is not None:
+        if cost is not None and (cost > 0 or row.get("output_tokens")):   # a 0 with no tokens is a missing price
             costs.append(cost)
+    extra = SURPRISE_TOKENS * 20 / 1e6   # the new fields' answer, priced at Opus's $20/M output: an upper bound
     if costs:
-        return sum(costs) / len(costs), f"mean recorded cost of {len(costs)} cycle judge calls (purpose 'judge ')"
-    return 0.046 + 400 * 20 / 1e6, "no priced cycle judge usage; estimate: PLAN-measurement §4 $0.046 + 400 output tokens at $20/M"
+        return (sum(costs) / len(costs) + extra,
+                f"mean recorded cost of {len(costs)} cycle judgments + {SURPRISE_TOKENS} output tokens for the new "
+                f"fields at $20/M; newest cycles first")
+    return (0.046 + 0.028 + extra, f"no priced cycle judgment recorded; estimate: PLAN-measurement §4's $0.046 + E0's $0.028 + "
+                                   f"{SURPRISE_TOKENS} output tokens at $20/M")
 
 
 def surprise_baseline(name: str, limit: int | None = None, dry_run: bool = False) -> dict:

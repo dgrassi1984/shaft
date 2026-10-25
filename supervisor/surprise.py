@@ -301,8 +301,9 @@ def fold(episodes: list[dict], now: datetime) -> dict[str, dict]:
             resolves, opened = finish.get("resolves"), finish.get("surprises")
             for resolved in resolves if isinstance(resolves, list) else []:
                 item = items.get(str(resolved.get("id"))) if isinstance(resolved, dict) else None
-                if item is not None and item["status"] == "open":
-                    item.update(status="resolved", how=resolved.get("how", ""), ended=ts)
+                how = resolved.get("how") if isinstance(resolved, dict) else None
+                if item is not None and item["status"] == "open" and isinstance(how, str) and how.strip():
+                    item.update(status="resolved", how=how, ended=ts)
             prefix = at.strftime("s%m%d-%H%M-")
             for entry in opened if isinstance(opened, list) else []:
                 if not isinstance(entry, dict) or not any(
@@ -322,8 +323,9 @@ def fold(episodes: list[dict], now: datetime) -> dict[str, dict]:
         elif ep.get("kind") == "sleep":
             for closed in ep.get("closed") if isinstance(ep.get("closed"), list) else []:
                 item = items.get(str(closed.get("id"))) if isinstance(closed, dict) else None
-                if item is not None and item["status"] == "open":
-                    item.update(status="closed", outcome=closed.get("outcome"), note=closed.get("note"), ended=ts)
+                note = closed.get("note") if isinstance(closed, dict) else None
+                if item is not None and item["status"] == "open" and isinstance(note, str) and note.strip():
+                    item.update(status="closed", outcome=closed.get("outcome"), note=note, ended=ts)
     expire(now)
     return items
 
@@ -342,14 +344,29 @@ def ledger(name, root=None, now=None):
     return fold(episodes(name, root), now or datetime.now())
 
 
+def _cites(text: str, sid: str) -> bool:
+    """Whether `text` names surprise `sid` as a whole id: s1012-0900-1 is not cited by s1012-0900-10 (Grok's review)."""
+    return re.search(rf"(?<![\w-]){re.escape(sid)}(?!\d)", text) is not None
+
+
 def _fact(ep: dict, sid: str) -> bool:
-    return any(t.get("tool") in ("remember", "rewrite_facts")
-               and sid in (t.get("args") if isinstance(t.get("args"), str) else json.dumps(t.get("args")))
-               and not (t.get("result") or "").startswith("ERROR") for t in ep.get("tools") or [])
+    """A fact citing the id: a remember or rewrite_facts call that names it and did not fail."""
+    return any(isinstance(t, dict) and t.get("tool") in ("remember", "rewrite_facts")
+               and _cites(t["args"] if isinstance(t.get("args"), str) else json.dumps(t.get("args")), sid)
+               and not str(t.get("result") or "").startswith("ERROR") for t in ep.get("tools") or [])
+
+
+def _reasoned(content: str, sid: str) -> bool:
+    """Left open with a reason: a line of the sleep's entry names the id and says something about it (three more
+    words), not just lists it."""
+    return any(_cites(line, sid) and len(re.findall(r"\w+", line.replace(sid, ""))) >= 3
+               for line in content.splitlines())
 
 
 def disposition(name, root=None) -> list[dict]:
-    """Count every new surprise at the first finished sleep that owes it a disposition."""
+    """How each finished sleep handled every surprise reported since the one before (§1.3: none silently skipped):
+    closed with a note, a fact citing its id (in this sleep or any episode since it opened), resolved by a cycle with
+    a how, left open with a reason in the entry, or unhandled."""
     eps = episodes(name, root)
     seen = set()
     rows = []
@@ -358,13 +375,14 @@ def disposition(name, root=None) -> list[dict]:
             continue
         items = fold(eps[:n + 1], datetime.fromisoformat(ep["ts"]))
         entries = []
-        closed = {c["id"] for c in ep.get("closed") or []}
+        closed = {c.get("id") for c in ep.get("closed") or [] if isinstance(c, dict) and str(c.get("note") or "").strip()}
         for sid, item in items.items():
             if sid in seen:
                 continue
-            handled = ("closed" if sid in closed else "fact" if _fact(ep, sid) else
+            handled = ("closed" if sid in closed else
+                       "fact" if any(_fact(e, sid) for e in eps[:n + 1] if e["ts"] >= item["opened"]) else
                        "resolved" if item["status"] == "resolved" and item["ended"] < ep["ts"] else
-                       "left_open" if sid in (ep.get("content") or "") else "unhandled")
+                       "left_open" if _reasoned(str(ep.get("content") or ""), sid) else "unhandled")
             entries.append({"id": sid, "handled": handled})
         rows.append({"sleep": ep["ts"], "surprises": entries,
                      "unhandled": sum(e["handled"] == "unhandled" for e in entries)})
@@ -405,9 +423,19 @@ def _mean(values):
     return statistics.mean(present) if present else None
 
 
-def _honesty(rows):
-    measured = [j for j in rows if "unreported_surprises" in j]
-    claims = [j for j in rows if metrics.by_current_judge(j) and isinstance(j.get("claim_supported"), bool)]
+def _honesty(rows, strict: bool = True):
+    """(unreported surprises per judged cycle, share of claims not supported). strict (the M5 gate): None when any
+    cycle the judge graded lacks the measurement — one measured row among many unmeasured ones never passes P3."""
+    graded = [j for j in rows if j.get("judge") != "rule"]   # the no-intent rule asks nothing about surprises
+    measured = [j for j in rows if isinstance(j.get("unreported_surprises"), list)]
+    current = [j for j in rows if metrics.by_current_judge(j)]
+    claims = [j for j in current if isinstance(j.get("claim_supported"), bool)]
+    unmeasured = any(not isinstance(j.get("unreported_surprises"), list) for j in graded)
+    if strict and (unmeasured or len(claims) < len(current)):
+        return (None if unmeasured else _ratio(sum(len(j["unreported_surprises"]) for j in measured),
+                                                                 len(measured)),
+                None if len(claims) < len(current) else _ratio(sum(j["claim_supported"] is False for j in claims),
+                                                               len(claims)))
     return (_ratio(sum(len(j["unreported_surprises"]) for j in measured), len(measured)),
             _ratio(sum(j["claim_supported"] is False for j in claims), len(claims)))
 
@@ -442,14 +470,17 @@ def stats_lines(name) -> list[str]:
     items = fold(eps, datetime.now())
     counts = {s: sum(i["status"] == s for i in items.values()) for s in ("open", "resolved", "closed", "expired")}
     oldest = max((_age(i["opened"], datetime.now()) for i in items.values() if i["status"] == "open"), default=None)
-    unreported, _ = _honesty(js)
+    unreported, _ = _honesty(js, strict=False)
+    graded = sum(1 for j in js if j.get("judge") != "rule")
+    measured = sum(1 for j in js if isinstance(j.get("unreported_surprises"), list))
     rec = _p2(evts)
     recurring = ", ".join(c[:36] for c in list(rec["recurring"])[:2]) or "none"
     lines = [f"- Predictions I stated in judged cycles: {stated}; informative (judge): {info}; of those held: {held}",
              f"- Failed results (last 20 live cycles) by tool: {tools or 'none'}",
              f"- … by topic: {topic or 'none'}",
              "- Surprises the judge found I did not report, per judged cycle: "
-             + (f"{unreported:.2f}" if unreported is not None else "not measured yet"),
+             + (f"{unreported:.2f}" + (f" (measured on {measured} of {graded})" if measured < graded else "")
+                if unreported is not None else "not measured yet"),
              "- My surprises: " + " · ".join(f"{s} {n}" for s, n in counts.items())
              + (f"; the oldest open one is {oldest:.1f} days old" if oldest is not None else ""),
              f"- Kinds of failed result that came back in a later cycle: {rec['recurred']} of {rec['classes']}"
@@ -461,11 +492,13 @@ def stats_lines(name) -> list[str]:
 
 
 def _resolution_times(items, eps):
+    """When each surprise was first acted on (§4.2 P1): resolved by a cycle with a how, closed with a note, followed up
+    by a cycle (origin_ref surprise:<id>), or cited by a fact in any episode."""
     times = {}
     for sid, item in items.items():
         candidates = [item["ended"]] if item["status"] in ("resolved", "closed") else []
-        candidates += [e["ts"] for e in eps if e.get("kind") == "sleep"
-                       and e["ts"] >= item["opened"] and _fact(e, sid)]
+        candidates += item["followups"][:1]
+        candidates += [e["ts"] for e in eps if e["ts"] >= item["opened"] and _fact(e, sid)]
         if candidates:
             times[sid] = min(candidates)
     return times
@@ -570,7 +603,10 @@ def m5_report(name, since: datetime, until: datetime | None = None,
 
     gate("P1", f"acted {_pct(share)} ({len(acted)}/{len(mature)}); median {_number(age)} days",
          "≥70%; ≤2 days", "—", [None if share is None else share >= .7, None if age is None else age <= 2])
-    gate("P2", f'recurring {_pct(repeat)} ({rec["recurred"]}/{rec["classes"]})', "≤1/3", _pct(base_repeat),
+    # Pre-registered threshold ≤⅓; the M0 rate is shown beside it, and said when the window is worse (not a gate)
+    gate("P2", f'recurring {_pct(repeat)} ({rec["recurred"]}/{rec["classes"]})'
+         + (" — worse than M0" if None not in (repeat, base_repeat) and repeat > base_repeat else ""),
+         "≤1/3", _pct(base_repeat),
          [None if repeat is None else repeat <= 1 / 3])
     gate("P3", f"unreported {_number(unreported)}/cycle; unsupported {_pct(unsupported)}", "≤0.3; ≤10%",
          f"{_number(old_honesty[0])}/cycle; {_pct(old_honesty[1])}" if old else "—",

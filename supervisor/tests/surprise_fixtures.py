@@ -59,7 +59,8 @@ def _s(expected, observed, so_what=""):
 # at this episode's time), then its resolves, then its surprises, then the cap (more than 8 open, visible ones: the
 # oldest expires). Depth = 1 + the depth of the surprise the goal came from (origin_ref surprise:<id>); depth 2 or
 # more is never visible in the queue and never counts toward the cap. A sleep episode's closed[] closes open ones.
-# Malformed entries are skipped and issue no id; a resolve or close of an unknown or no longer open id does nothing.
+# Malformed entries are skipped and issue no id; a resolve or close of an unknown or no longer open id does nothing, and
+# so does a resolve without a how or a close without a note.
 FOLD_EPISODES = [
     _live("2026-10-01T08:00:00", [_s("the page lists 3 sources", "it lists 5")]),            # expires by age
     _live("2026-10-10T09:00:05", [_s("A", "B", "C"), "not a dict", {}, {"expected": 7, "observed": False},
@@ -71,6 +72,9 @@ FOLD_EPISODES = [
     {"ts": "2026-10-11T11:00:00", "kind": "live", "intent": [1], "finish": "x", "tools": []},
     {"ts": "2026-10-11T12:00:00", "kind": "live", "intent": {"origin_ref": 5},
      "finish": {"surprises": {"expected": "a dict, not a list"}, "resolves": "s1010-0900-2"}},
+    _live("2026-10-11T13:00:00", resolves=[{"id": "s1010-0900-2", "how": " "}]),            # no how: not resolved
+    {"ts": "2026-10-11T14:00:00", "kind": "sleep", "ended_by": "answer", "tools": [],
+     "closed": [{"id": "s1010-0900-2", "outcome": "duplicate", "note": ""}, "junk"]},          # no note: not closed
     {"ts": "2026-10-12T03:00:00", "kind": "sleep", "ended_by": "answer", "tools": [],
      "closed": [{"id": "s1010-0900-2", "outcome": "not_worth_pursuing", "note": "a one-off"},
                 {"id": "s1010-0900-1", "outcome": "answered", "note": "already resolved: no effect"}]},
