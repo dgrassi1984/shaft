@@ -91,7 +91,7 @@ class LedgerTest(unittest.TestCase):
         eps[0]["intent"].pop("predictions")
         self.write(eps, [{"episode_ts": eps[0]["ts"], "criterion_met": "yes"}])
         text = '\n'.join(surprise.stats_lines("x"))
-        self.assertIn("judged informative: not measured", text)
+        self.assertIn("informative (judge): not measured", text)
         self.assertIn("did not report, per judged cycle: not measured yet", text)
         self.assertIn("None of my last 10 live cycles stated a prediction", text)
 
@@ -107,7 +107,7 @@ class LedgerTest(unittest.TestCase):
         self.assertLessEqual(len(lines), 9)
         self.assertLessEqual(len('\n'.join(lines)), 900)
         text = '\n'.join(lines)
-        self.assertIn("Predictions I stated in judged cycles: 90; judged informative: 67%; of those, held: 50%", text)
+        self.assertIn("Predictions I stated in judged cycles: 90; informative (judge): 67%; of those held: 50%", text)
         self.assertIn("self/*", text)
         self.assertIn("did not report, per judged cycle: 0.00", text)
         self.assertIn("resolved 4", text)
@@ -129,7 +129,7 @@ class LedgerTest(unittest.TestCase):
         data[1][1]["expectations"] = [{"verdict": "contradicted"}]
         self.write(*data[:3])
         text = '\n'.join(surprise.stats_lines("x"))
-        self.assertIn("judged informative: 100%; of those, held: 0%", text)
+        self.assertIn("informative (judge): 100%; of those held: 0%", text)
         self.assertIn("did not report, per judged cycle: 1.00", text)
 
     def test_stats_status_counts_and_oldest_age(self):

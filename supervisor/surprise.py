@@ -425,17 +425,17 @@ def stats_lines(name) -> list[str]:
     for e in recent_events:
         wrong[e["tool"]] += 1
         topics[p2_class(e).split(":", 2)[2]] += 1
-    tools = ", ".join(f"{k[:24]} {n}/{totals[k]}" for k, n in sorted(wrong.items(), key=lambda kv: -kv[1])[:3])
-    topic = ", ".join(f'{k[:24] or "(no path)"} {n}' for k, n in sorted(topics.items(), key=lambda kv: -kv[1])[:3])
+    tools = ", ".join(f"{k[:24]} {n}/{totals[k]}" for k, n in sorted(wrong.items(), key=lambda kv: -kv[1])[:2])
+    topic = ", ".join(f'{k[:24] or "(no path)"} {n}' for k, n in sorted(topics.items(), key=lambda kv: -kv[1])[:2])
     items = fold(eps, datetime.now())
     counts = {s: sum(i["status"] == s for i in items.values()) for s in ("open", "resolved", "closed", "expired")}
     oldest = max((_age(i["opened"], datetime.now()) for i in items.values() if i["status"] == "open"), default=None)
     unreported, _ = _honesty(js)
     rec = _p2(evts)
     recurring = ", ".join(c[:36] for c in list(rec["recurring"])[:2]) or "none"
-    lines = [f"- Predictions I stated in judged cycles: {stated}; judged informative: {info}; of those, held: {held}",
-             f"- Where my tool results most often failed (last 20 live cycles), by tool: {tools or 'none'}",
-             f"- … and by topic: {topic or 'none'}",
+    lines = [f"- Predictions I stated in judged cycles: {stated}; informative (judge): {info}; of those held: {held}",
+             f"- Failed results (last 20 live cycles) by tool: {tools or 'none'}",
+             f"- … by topic: {topic or 'none'}",
              "- Surprises the judge found I did not report, per judged cycle: "
              + (f"{unreported:.2f}" if unreported is not None else "not measured yet"),
              "- My surprises: " + " · ".join(f"{s} {n}" for s, n in counts.items())
