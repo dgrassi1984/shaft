@@ -414,6 +414,23 @@ class SleepDispositionTest(Fixture, unittest.TestCase):
         self.assertNotIn("s1012-0900-", listed)
         self.assertEqual(listed.count("\n- s"), 1)
 
+    def test_an_expired_surprise_is_listed_as_needing_nothing(self):
+        # Review of #87: step 7 said "skip none" while close_surprise refused an expired one; the sleep is told it
+        # needs nothing (the supervisor's count calls it "expired", not "unhandled").
+        self.seed(9, ts="2026-10-12T09:00:00")                       # the cap expires s1012-0900-1
+        fake, client = self.model([
+            {"tool_calls": [("close_surprise", {"id": "s1012-0900-1", "outcome": "answered", "note": "n"})]},
+            {"content": "Slept."}])
+        with mock.patch.object(sleep.broker, "available", return_value=False):
+            sleep.run(self.cfg, self.state, client)
+        listed = fake.requests[0]["messages"][1]["content"].split("## Surprises since my last sleep", 1)[1]
+        self.assertIn("- s1012-0900-1 [expired (cap): nothing to do — a fact citing it if it taught me something]",
+                      listed)
+        self.assertIn("An expired one needs nothing", fake.requests[0]["messages"][1]["content"])
+        result = next(t["result"] for t in self.state.last_episode()["tools"] if t["tool"] == "close_surprise")
+        self.assertEqual(result, "ERROR: s1012-0900-1 is already expired: it needs nothing (remember a fact citing it "
+                                 "if it taught me something)")
+
     def test_close_is_not_offered_on_the_wrap_up_turn(self):
         # A sleep's last turn must write the entry: no tool, close_surprise included, may be called then.
         self.cfg.values["MAX_STEPS_SLEEP"] = 1

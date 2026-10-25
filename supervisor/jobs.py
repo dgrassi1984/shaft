@@ -142,12 +142,13 @@ def uncommitted(root: Path) -> set[str] | None:
     return out
 
 
-def declared(name: str, root: Path | None = None) -> tuple[list[dict], list[str]]:
+def declared(name: str, root: Path | None = None, committed: bool = False) -> tuple[list[dict], list[str]]:
     """(jobs, problems): every committed plugin whose manifest has a valid `schedule` (at most MAX_JOBS, by name),
-    and why each other committed schedule is not run. A plugin with uncommitted changes is neither: it waits."""
+    and why each other committed schedule is not run. A plugin with uncommitted changes is neither: it waits.
+    `committed`: `root` is a commit's tree (a trial replay's copy, no git of its own), so every plugin in it is."""
     root = Path(root or instance_root(name))
     jobs, problems = [], []
-    changing = uncommitted(root)
+    changing = set() if committed else uncommitted(root)
     if changing is None:
         return [], []
     for plugin in list_beneath(root, "plugins"):   # read without following a link (core.safe_read)
@@ -418,32 +419,52 @@ def tick(children: dict, now: datetime, start, names: list[str], awake_of) -> No
 
 
 # -- what the operator and the instance see --------------------------------------------------------------------------------
-def describe(name: str, limit: int = 20) -> str:
+def _rows(name: str, before: datetime | None = None) -> list[dict]:
+    """The job run log, oldest first; with `before`, only the runs logged before then."""
+    path = _dir() / f"{name}.jsonl"
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.is_file() else []
+    return [r for r in rows if before is None or r.get("ts", "") < before.isoformat(timespec="seconds")]
+
+
+def _entry_then(rows: list[dict], plugin: str, job_hash: str) -> dict:
+    """A job's state as its runs in `rows` left it: what entry() held at that moment (the state file keeps only now)."""
+    runs = [r for r in rows if r.get("plugin") == plugin and not r.get("skipped")]
+    ok = [r for r in runs if r.get("exit") == 0 and not r.get("timed_out")]
+    failed = runs[runs.index(ok[-1]) + 1:] if ok else runs
+    return {"last_ok": ok[-1]["ts"] if ok else None, "fails": len(failed), "hash": job_hash,
+            "last_error": failed[-1].get("error") if failed else None}
+
+
+def describe(name: str, limit: int = 20, as_of: datetime | None = None, root: Path | None = None) -> str:
+    """The jobs an instance declared, their state and recent runs. `as_of` and `root` (a trial replay): the record as
+    it stood when the replayed cycle began — its declared jobs from the replay's copy, their state and runs from the
+    run log before then — in the same shape as a live answer, so nothing in it says it is a replay."""
+    root = Path(root or instance_root(name))
     try:
-        jobs, problems = declared(name)
+        jobs, problems = declared(name, root, committed=as_of is not None)
     except OSError:
         return f"{name}: no folder"
+    rows = _rows(name, as_of)
     lines = [f"{name}: jobs {'OFF (shaft jobs ' + name + ' on)' if jobs_off(name) else 'on'}"]
     for j in jobs:
-        e = entry(name, j["plugin"])
+        e = entry(name, j["plugin"]) if as_of is None else _entry_then(rows, j["plugin"], j["hash"])
         state = (f"last ok {e['last_ok']}" if e.get("last_ok") else "not run yet")
         if e.get("fails") and e.get("hash") == j["hash"]:
             state += f" · {e['fails']} failure(s) in a row, now every {int(interval(j, e).total_seconds() // 60)} min"
         lines.append(f"  {j['plugin']}: every {j['every_minutes']} min{' · can wake' if j['can_wake'] else ''} · {state}"
                      + (f"\n    last error: {e['last_error'][:200]}" if e.get("last_error") else ""))
     lines += [f"  not run: {p}" for p in problems]
-    changing = uncommitted(instance_root(name)) or set()
-    lines += [f"  {p}: being changed (not committed yet) — runs once its cycle commits it"
-              for p in sorted(changing) if '"schedule"' in _manifest_text(name, p)]
+    if as_of is None:   # what is changing or waiting now: a replay's moment has passed, and neither is recorded
+        changing = uncommitted(root) or set()
+        lines += [f"  {p}: being changed (not committed yet) — runs once its cycle commits it"
+                  for p in sorted(changing) if '"schedule"' in _manifest_text(name, p)]
     if not jobs and not problems:
         lines.append("  (no plugin has a schedule)")
-    if (req := pending_wakes().get(name)):
+    if as_of is None and (req := pending_wakes().get(name)):
         lines.append(f"  wake asked by {', '.join(req['by'])} since {req['since']} (starts once it is idle)")
-    path = _dir() / f"{name}.jsonl"
-    rows = path.read_text().splitlines()[-limit:] if path.is_file() else []
     if rows:
         lines.append("  recent runs:")
-        for r in map(json.loads, rows):
+        for r in rows[-limit:]:
             what = (f"skipped ({r['skipped']})" if r.get("skipped") else
                     f"{'ok' if r.get('exit') == 0 else 'FAILED'} {r.get('seconds')}s"
                     + (f", delivered {r.get('out_chars')} chars" if r.get("delivered") else "")

@@ -366,7 +366,8 @@ def _reasoned(content: str, sid: str) -> bool:
 def disposition(name, root=None) -> list[dict]:
     """How each finished sleep handled every surprise reported since the one before (§1.3: none silently skipped):
     closed with a note, a fact citing its id (in this sleep or any episode since it opened), resolved by a cycle with
-    a how, left open with a reason in the entry, or unhandled."""
+    a how, expired before the sleep (the cap or 7 days: there is nothing left to close, and close_surprise refuses it),
+    left open with a reason in the entry, or unhandled."""
     eps = episodes(name, root)
     seen = set()
     rows = []
@@ -382,6 +383,7 @@ def disposition(name, root=None) -> list[dict]:
             handled = ("closed" if sid in closed else
                        "fact" if any(_fact(e, sid) for e in eps[:n + 1] if e["ts"] >= item["opened"]) else
                        "resolved" if item["status"] == "resolved" and item["ended"] < ep["ts"] else
+                       "expired" if item["status"] == "expired" and item["ended"] <= ep["ts"] else
                        "left_open" if _reasoned(str(ep.get("content") or ""), sid) else "unhandled")
             entries.append({"id": sid, "handled": handled})
         rows.append({"sleep": ep["ts"], "surprises": entries,

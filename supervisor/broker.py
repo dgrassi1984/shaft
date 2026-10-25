@@ -1340,7 +1340,8 @@ class Broker:
                                                  before=self.as_of.isoformat(timespec="seconds") if self.as_of else None))
         elif kind == "jobs":
             from . import jobs
-            text = jobs.describe(self.name, limit) if not self.as_of else "(a replay does not see the job record)"
+            # A replay sees the record as it stood when its cycle began, in a live answer's shape (never "a replay")
+            text = jobs.describe(self.name, limit, as_of=self.as_of, root=self.root if self.as_of else None)
         else:
             raise ValueError("kind must be judgments, runs, tools, code_changes, trials, egress or jobs")
         text = text or "(nothing recorded yet)"

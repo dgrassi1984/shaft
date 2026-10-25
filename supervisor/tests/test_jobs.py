@@ -312,3 +312,36 @@ class ConcurrentStateTest(unittest.TestCase):
                          {"thelos": 59, "wren": 59, "kant": 59})                  # no update lost
         self.assertEqual(sorted(st["wake"]), ["kant", "thelos", "wren"])
         self.assertEqual(sorted(p.name for p in (sup / "jobs").glob("*.tmp")), [])
+
+
+class ReplayRecordTest(JobCase):
+    """Bug (review of #89): in a trial replay, record(kind="jobs") answered "(a replay does not see the job record)" —
+    the instance learned it was being replayed (the class of group A's "This is a replay"). It now answers as a live
+    record would have at the replayed cycle's start."""
+
+    def test_a_replay_sees_the_job_record_as_it_stood_then_and_nothing_says_replay(self):
+        import threading
+        from supervisor import broker
+        self.plugin("watch", "def run(): return ''", {"every_minutes": 15})
+        (self.sup / "jobs").mkdir(parents=True)
+        (self.sup / "jobs" / "wren.jsonl").write_text("".join(json.dumps(r) + "\n" for r in (
+            {"ts": "2026-10-20T09:00:00", "plugin": "watch", "seconds": 1.0, "exit": 0, "timed_out": False},
+            {"ts": "2026-10-20T10:00:00", "plugin": "watch", "seconds": 2.0, "exit": 1, "timed_out": False,
+             "error": "exit 1: boom"},
+            {"ts": "2026-10-20T12:00:00", "plugin": "watch", "seconds": 1.5, "exit": 0, "timed_out": False})))
+        copy = self.project / "copy"                          # the replay's folder: a commit's tree, no git of its own
+        shutil.copytree(self.root / "plugins", copy / "plugins")
+        replay = broker.ReplayBroker("wren", self.project, {}, self.project / "replay.log", state_root=copy,
+                                     start_commit="a" * 40, as_of=datetime(2026, 10, 20, 11),
+                                     cache={}, cache_lock=threading.Lock(), billed="trial-wren",
+                                     tools_log=self.project / "tools.log")
+        text = replay._record("jobs")
+        self.assertNotIn("replay", text.lower())
+        self.assertIn("watch: every 15 min · last ok 2026-10-20T09:00:00 · 1 failure(s) in a row", text)
+        self.assertIn("last error: exit 1: boom", text)
+        self.assertIn("2026-10-20T10:00:00 watch: FAILED 2.0s", text)
+        self.assertNotIn("2026-10-20T12:00:00", text)          # logged after the cycle began
+        live = jobs.describe("wren")                            # the same shape live, with what came since
+        self.assertEqual(live.splitlines()[0], text.splitlines()[0])
+        self.assertIn("  watch: every 15 min · ", live)          # (its state comes from the state file, not written here)
+        self.assertIn("2026-10-20T12:00:00 watch: ok 1.5s", live)

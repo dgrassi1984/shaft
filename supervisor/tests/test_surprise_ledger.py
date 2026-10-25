@@ -87,7 +87,9 @@ class LedgerTest(unittest.TestCase):
     def test_disposition_guards_from_grok_review(self):
         # Ids are whole tokens (s…-10 never cites s…-1); a close needs a note; a malformed close is skipped; a fact in a
         # live cycle counts; an entry that only lists the id is not "left open with a reason".
-        eps = [_live("2026-10-01T00:00:00", [_s(f"a{i}", "b") for i in range(10)]),
+        eps = [_live("2026-10-01T00:00:00", [_s(f"a{i}", "b") for i in range(8)]),   # -1…-8; under the cap, as
+               _live("2026-10-01T00:00:20", [_s("a8", "b"), _s("a9", "b")],               # are -9 and -10 once
+                     [{"id": f"s1001-0000-{i}", "how": "x"} for i in (6, 7, 8)]),           # three are resolved
                {"ts": "2026-10-01T05:00:00", "kind": "live", "intent": {}, "finish": {}, "tools": [
                    {"tool": "remember", "args": json.dumps({"fact": "x (from surprise s1001-0000-2)"}), "result": "ok"}]},
                {"ts": "2026-10-02T00:00:00", "kind": "sleep", "ended_by": "answer",
@@ -102,6 +104,18 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual(handled["s1001-0000-3"], "unhandled")      # closed without a note
         self.assertEqual(handled["s1001-0000-4"], "unhandled")      # listed, no reason
         self.assertEqual(handled["s1001-0000-5"], "left_open")
+
+    def test_expired_before_the_sleep_is_not_unhandled(self):
+        # Bug (review of #89): a surprise the cap expired before the sleep counted as "unhandled" although
+        # close_surprise refuses it — a sleep doing exactly what step 7 asks failed the M3 acceptance "0 unhandled".
+        ids = [f"s1020-1000-{i}" for i in range(1, 10)]
+        self.write([_live("2026-10-20T10:00:00", [_s(f"e{i}", f"o{i}") for i in range(1, 10)]),   # 9: the cap expires -1
+                    {"ts": "2026-10-21T03:00:00", "kind": "sleep", "ended_by": "answer", "tools": [], "content": "",
+                     "closed": [{"id": sid, "outcome": "answered", "note": "done"} for sid in ids[1:]]}])
+        row = surprise.disposition("x")[0]
+        self.assertEqual(row["unhandled"], 0)
+        self.assertEqual(row["surprises"][0], {"id": ids[0], "handled": "expired"})
+        self.assertEqual({e["handled"] for e in row["surprises"][1:]}, {"closed"})
 
     def test_stats_empty_and_absent_fields(self):
         self.write([])
