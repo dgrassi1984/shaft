@@ -88,7 +88,17 @@ code, a capability gained and shown working; \
 5 = exceptional: an output most competent people could not have produced in one cycle. \
 Who would miss it: 'operator' = the operator; 'instance' = another SHAFT instance; 'own_capability' = a tool, \
 skill, fix or verified fact this agent will use again; 'own_record' = bookkeeping about itself (its stats, \
-judge verdicts, notes about its own cycles); 'nobody' = nothing was kept that anyone would miss."""
+judge verdicts, notes about its own cycles); 'nobody' = nothing was kept that anyone would miss.
+
+Expectations, last and separately (they change neither the verdict nor any rating above): \
+surprise is neither good nor bad. For each stated prediction in intent.predictions, give its statement, \
+verdict and evidence: could it have turned out wrong? If not ("the tool returns a result"), mark it \
+'uninformative'; otherwise say whether the log shows it 'held' or was 'contradicted'. Give [] when none \
+were stated. List as unreported_surprises the contradictions in the log of the stated predictions, or \
+of what the intent assumed, that finish.surprises leaves out, one sentence each ([] when none). Say \
+whether every reported surprise matches the log (reported_surprises_supported, true when none were \
+reported). If origin_ref is surprise:<id>, say whether the cycle actually reduced that uncertainty \
+(followup_useful: yes, partial or no); otherwise na. These fields never change criterion_met."""
 
 VERDICT_PROPS = {
     "criterion_met": {"type": "string", "enum": ["yes", "partial", "no"]},
@@ -122,7 +132,18 @@ def _schema(props: dict) -> dict:
     return {"type": "object", "properties": props, "required": list(props), "additionalProperties": False}
 
 
-JUDGE_SCHEMA = _schema({**VERDICT_PROPS, **RATING_PROPS, **VALUE_PROPS})
+SURPRISE_PROPS = {
+    "expectations": {"type": "array", "items": _schema({
+        "statement": {"type": "string"},
+        "verdict": {"type": "string", "enum": ["held", "contradicted", "uninformative"]},
+        "evidence": {"type": "string"},
+    })},
+    "unreported_surprises": {"type": "array", "items": {"type": "string"}},
+    "reported_surprises_supported": {"type": "boolean"},
+    "followup_useful": {"type": "string", "enum": ["yes", "partial", "no", "na"]},
+}
+SURPRISES = tuple(SURPRISE_PROPS)
+JUDGE_SCHEMA = _schema({**VERDICT_PROPS, **RATING_PROPS, **VALUE_PROPS, **SURPRISE_PROPS})
 
 
 def backfill_schema(missing: list[str]) -> dict:
@@ -255,7 +276,7 @@ def judge_mix(rows: list[dict]) -> str:
     return " · ".join(f"{m} {n}" for m, n in sorted(count.items(), key=lambda kv: -kv[1])) or "none"
 
 
-def _check_ratings(verdict: dict, fields=RATINGS + VALUES) -> None:
+def _check_ratings(verdict: dict, fields=RATINGS + VALUES + SURPRISES) -> None:
     """Refuse a judgment whose ratings are missing or out of range: it is never written with holes."""
     absent = [k for k in fields if k not in verdict]
     if absent:
@@ -271,6 +292,19 @@ def _check_ratings(verdict: dict, fields=RATINGS + VALUES) -> None:
         raise judge.JudgeError(f"judge returned value_for={verdict.get('value_for')!r}")
     if "value_reason" in fields and not str(verdict.get("value_reason") or "").strip():
         raise judge.JudgeError("judge returned no value_reason")
+    for k in SURPRISES:
+        if k not in fields:
+            continue
+        problem = judge._valid({k: verdict[k]}, _schema({k: SURPRISE_PROPS[k]}))
+        if not problem and k == "expectations":
+            for item in verdict[k]:
+                problem = judge._valid(item, SURPRISE_PROPS[k]["items"])
+                if problem:
+                    break
+        if not problem and k == "unreported_surprises" and any(not isinstance(v, str) for v in verdict[k]):
+            problem = "unreported_surprises must contain strings"
+        if problem:
+            raise judge.JudgeError(f"judge returned invalid {k}: {problem}")
 
 
 def _judgments_path(name: str) -> Path:
@@ -598,7 +632,8 @@ def judge_pending(name: str) -> int:
             break
         else:
             try:
-                case = _case(ep, _written_files(name, ep), _provenance_evidence(name, ep), _prior_goals(js, ep["ts"]))
+                case = _case(ep, _written_files(name, ep), _provenance_evidence(name, ep), _prior_goals(js, ep["ts"]),
+                             followed=_followed_surprise(name, ep))
                 second = second_sampled(name, ep["ts"])
                 by = judge.pick(exclude=own_models(name, ep), avoid=(judge.JUDGE2_MODEL,) if second else ())
                 verdict = judge.ask(JUDGE_SYSTEM, case, JUDGE_SCHEMA, purpose=f"judge {name}", model=by)
@@ -746,7 +781,8 @@ def backfill(name: str, limit: int | None = None) -> int:
             continue
         missing = _missing(j)
         given = {k: j.get(k) for k in [*VERDICT_PROPS, *RATINGS, *VALUES] if k in j}
-        case = (_case(ep, _written_files(name, ep), _provenance_evidence(name, ep), _prior_goals(js, ep["ts"]))
+        case = (_case(ep, _written_files(name, ep), _provenance_evidence(name, ep), _prior_goals(js, ep["ts"]),
+                      followed=_followed_surprise(name, ep))
                 + f"\n\n## The verdict and ratings already given (keep them; give only the fields asked for)\n"
                 + json.dumps(given, indent=1, ensure_ascii=False))
         try:
@@ -778,6 +814,105 @@ def backfill(name: str, limit: int | None = None) -> int:
     if done:
         log(f"{name}: backfilled {done} judged cycle(s)")
     return done
+
+
+def _surprise_baseline_rows(name: str) -> list[dict]:
+    path = SUP_DIR / "judgments" / f"{name}-surprise-baseline.jsonl"
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
+
+
+SURPRISE_TOKENS = 400   # PLAN-surprise §1.6: the judge's extra output for the surprise fields
+
+
+def _judgment_cost() -> tuple[float, str]:
+    from .cloudllm import usd
+    path = SUP_DIR / "judge_usage.jsonl"
+    costs = []
+    for line in path.read_text().splitlines() if path.exists() else []:
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if not row.get("purpose", "").startswith(("judge ", "surprise baseline ")):
+            continue
+        cost = row.get("usd")
+        if cost is None and row.get("input_tokens") is not None and row.get("output_tokens") is not None:
+            cost = usd(row.get("model"), row)
+        if cost is not None and (cost > 0 or row.get("output_tokens")):   # a 0 with no tokens is a missing price
+            costs.append(cost)
+    extra = SURPRISE_TOKENS * 20 / 1e6   # the new fields' answer, priced at Opus's $20/M output: an upper bound
+    if costs:
+        return (sum(costs) / len(costs) + extra,
+                f"mean recorded cost of {len(costs)} cycle judgments + {SURPRISE_TOKENS} output tokens for the new "
+                f"fields at $20/M; newest cycles first")
+    return (0.046 + 0.028 + extra, f"no priced cycle judgment recorded; estimate: PLAN-measurement §4's $0.046 + E0's $0.028 + "
+                                   f"{SURPRISE_TOKENS} output tokens at $20/M")
+
+
+def surprise_baseline(name: str, limit: int | None = None, dry_run: bool = False) -> dict:
+    """Re-judge the cycles from before the predictions existed (PLAN-surprise M2), into a file of their own, saving each
+    paid answer before asking for the next. Newest first: with thousands of past cycles (about $0.04 each), `limit`
+    takes the most recent ones — the same-model baseline the M5 window is compared with — not the first day's."""
+    js = judgments(name)
+    episodes = {ep["ts"]: ep for ep in live_episodes(name)}
+    seen = {r["episode_ts"] for r in _surprise_baseline_rows(name)}
+    todo = []
+    for row in reversed(js):
+        ts = row["episode_ts"]
+        ep = episodes.get(ts)
+        if row.get("judge") != "rule" and ep is not None and ts not in seen and "predictions" not in (ep.get("intent") or {}):
+            todo.append(ep)
+            seen.add(ts)
+    todo = todo[:limit]
+    cost, basis = _judgment_cost()
+    result = {"todo": len(todo), "done": 0, "estimated_usd": len(todo) * cost,
+              "per_judgment_usd": cost, "basis": basis}
+    if dry_run:
+        return result
+    path = SUP_DIR / "judgments" / f"{name}-surprise-baseline.jsonl"
+    for ep in todo:
+        try:
+            case = _case(ep, _written_files(name, ep), _provenance_evidence(name, ep), _prior_goals(js, ep["ts"]),
+                         followed=_followed_surprise(name, ep))
+            by = judge.pick(exclude=own_models(name, ep))
+            verdict = judge.ask(JUDGE_SYSTEM, case, JUDGE_SCHEMA, purpose=f"surprise baseline {name}", model=by)
+            _check_ratings(verdict)
+        except judge.JudgeError as e:
+            log(f"{name}: surprise baseline of {ep['ts']} failed: {e}")
+            break
+        row = {"episode_ts": ep["ts"], "judged_at": datetime.now().isoformat(timespec="seconds"),
+               "judge": by, "model": cycle_model(name, ep), **verdict}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        result["done"] += 1
+    return result
+
+
+def surprise_baseline_report(name: str) -> str:
+    rows = _surprise_baseline_rows(name)
+    stored = {j["episode_ts"]: j for j in judgments(name)}
+    both = [r for r in rows if r["episode_ts"] in stored]
+    disagreements = [r for r in both if r["criterion_met"] != stored[r["episode_ts"]]["criterion_met"]]
+    n = len(rows)
+    acceptance = ("not measured" if not n or len(both) != n else
+                  "PASS" if len(disagreements) * 15 <= n else "FAIL")
+    lines = [f"Surprise baseline: {name}", f"Re-judged: {n}",
+             f"criterion_met agreement: {len(both) - len(disagreements)}/{len(both)}",
+             f"M2 acceptance (all but at most 1 in 15): {acceptance}"]
+    for row in rows:
+        ts = row["episode_ts"]
+        if ts not in stored:
+            lines.append(f"{ts}: stored verdict missing")
+        elif row in disagreements:
+            lines.append(f"{ts}: stored {stored[ts]['criterion_met']}, new {row['criterion_met']}: {row['reasoning'][:200]}")
+    expectations = [e for r in rows for e in r["expectations"]]
+    lines.append("Expectations: " + ", ".join(
+        f"{sum(e['verdict'] == v for e in expectations)} {v}" for v in ("held", "contradicted", "uninformative")))
+    unreported = [(r["episode_ts"], text) for r in rows for text in r["unreported_surprises"]]
+    lines.append(f"Mean unreported surprises per cycle: {len(unreported) / n:.2f}" if n else
+                 "Mean unreported surprises per cycle: not measured")
+    lines.extend(f"{ts}: {text}" for ts, text in unreported)
+    return "\n".join(lines) + "\n"
 
 
 BACKFILL_FLUSH = 10
@@ -848,7 +983,19 @@ def _blind(ep: dict) -> dict:
     return {**ep, "intent": intent, "tools": kept}
 
 
-def _case(ep: dict, files: str = "", provenance: str = "", prior: str = "") -> str:
+def _followed_surprise(name: str, ep: dict) -> str:
+    from . import surprise
+    ref = (ep.get("intent") or {}).get("origin_ref") or ""
+    if not ref.startswith("surprise:"):
+        return ""
+    item = surprise.ledger(name).get(ref.removeprefix("surprise:"))
+    if item is None:
+        return f"{ref}: not found in the surprise ledger."
+    return json.dumps({k: item[k] for k in ("expected", "observed", "so_what", "status")},
+                      indent=1, ensure_ascii=False)
+
+
+def _case(ep: dict, files: str = "", provenance: str = "", prior: str = "", *, followed: str = "") -> str:
     ep = _blind(ep)
     tools = "\n\n".join(f"### {i}. {t['tool']}({_logged(t.get('args', ''))})\n→ {_logged(t.get('result', ''))}"
                         for i, t in enumerate(ep.get("tools", []), 1))
@@ -860,6 +1007,8 @@ def _case(ep: dict, files: str = "", provenance: str = "", prior: str = "") -> s
             + (f"\n\n## Where the goal may have come from (collected by the supervisor)\n{provenance}"
                if provenance else "")
             + (f"\n\n## The agent's earlier judged goals (newest last)\n{prior}" if prior else "")
+            + (f"\n\n## The surprise this goal came from\n{followed}"
+               if followed and ((ep.get("intent") or {}).get("origin_ref") or "").startswith("surprise:") else "")
             + (IMAGES_NOTE if any(t.get("tool") in IMAGE_TOOLS for t in ep.get("tools", [])) else ""))
 
 
@@ -1055,6 +1204,15 @@ def _battery_section(name: str) -> list[str]:
     return battery.stats_lines(name)
 
 
+def _surprise_section(name: str) -> list[str]:
+    try:
+        from . import surprise
+        return surprise.stats_lines(name)
+    except Exception as e:   # measurement never breaks a run
+        log(f"{name}: surprise section failed: {type(e).__name__}: {e}")
+        return []
+
+
 def _trials_section(name: str) -> list[str]:
     from . import trial
     try:
@@ -1112,7 +1270,7 @@ def stats_text(name: str) -> str:
                 "differ in how strictly they grade whether a criterion was met and a claim supported, so a figure "
                 "pooled across a change of judges moves with the judges, not with my cycles. Value counts every "
                 "cycle: the judges agree on it." if retired else "") + "*", ""]
-    lines += _achieved_section(js) + _value_section(all_js) + _battery_section(name)
+    lines += _achieved_section(js) + _surprise_section(name) + _value_section(all_js) + _battery_section(name)
     lines.append("## Success against my own criteria (raw)")
     if not js:
         lines += ["- No cycle graded by the current judges yet.", ""]
@@ -1250,9 +1408,10 @@ def review_text(names: list[str], hours: float = 24, now: datetime | None = None
 
 
 def write_stats(name: str) -> None:
-    """self/stats.md and self/calibration.json. The instance owns self/: a folder or a link it put at either path makes
-    safe_write refuse that write, which is logged and never raised — the other file is still written, and nothing the
-    caller does after (check_probation, the second judge's next case, the battery's record) is skipped."""
+    """self/stats.md and self/calibration.json, then the supervisor's surprise ledger. The instance owns self/: a folder
+    or a link it put at either path makes safe_write refuse that write, which is logged and never raised — the other
+    file is still written, and nothing the caller does after (check_probation, the second judge's next case, the
+    battery's record) is skipped."""
     if not (INSTANCES / name / "shaft").is_dir():   # deleted: writing would recreate a half folder (shaft delete)
         return
     for rel, content in (("self/stats.md", stats_text(name)),
@@ -1261,6 +1420,11 @@ def write_stats(name: str) -> None:
             safe_write(INSTANCES / name, rel, content)
         except (UnsafePath, OSError) as e:
             log(f"{name}: could not write {rel}: {type(e).__name__}: {e}")
+    try:   # the supervisor's own copy of the surprise ledger (docs/plans/PLAN-surprise.md §2)
+        from . import surprise
+        surprise.write_ledger(name)
+    except Exception as e:   # measurement never breaks a run
+        log(f"{name}: surprise ledger failed: {type(e).__name__}: {e}")
 
 
 # -- probation of self-modifications --------------------------------------------
