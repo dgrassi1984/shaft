@@ -45,6 +45,19 @@ def tools() -> list[dict]:
     return _request("/tools")["tools"]
 
 
+def envelope() -> dict | None:
+    """What I may still spend: calls left this run, today's allowances, probation, next sleep (GET /envelope; not a
+    tool, so asking costs no call). None without a supervisor that serves it."""
+    if not available():
+        return None
+    try:
+        env = _request("/envelope", timeout=2)["envelope"]
+    except (BrokerError, KeyError, TypeError, ValueError):
+        return None
+    ok = isinstance(env, dict) and all(isinstance(env.get(k), int) for k in ("calls_used", "calls_max"))
+    return env if ok else None   # a malformed one must not break the cycle that shows it
+
+
 SLOW_TOOLS = {"delegate_coding": 1800}   # a coding handoff runs a model loop and the test gate: minutes
 
 

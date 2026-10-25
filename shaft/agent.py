@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from . import images, pausing
+from . import broker, images, pausing
 from .llm import Client, Reply
 from .tools import Toolbox, for_log
 
@@ -50,7 +50,8 @@ def _arg(entry: dict, key: str) -> str:
     return m.group(1) if m else ""
 
 
-def call_ledger(entries: list[dict], step: int, max_steps: int, purpose: str) -> str:
+def call_ledger(entries: list[dict], step: int, max_steps: int, purpose: str, *,
+                envelope: dict | None = None, left_s: float | None = None) -> str:
     groups: list[list] = []   # [label, count], consecutive repeats merged
     for e in entries:
         label = e["tool"]
@@ -78,8 +79,15 @@ def call_ledger(entries: list[dict], step: int, max_steps: int, purpose: str) ->
             writes.append(f"{e['tool']}{' ' + path if path else ''} → {first}")
     where = "this reply" if purpose == "talk" else "this cycle"
     of = f" of {max_steps}" if max_steps > 0 else ""
+    limits = []
+    if envelope is not None:
+        cap = envelope["calls_max"]
+        limits.append(f"{max(0, cap - envelope['calls_used'])} of {cap} supervisor calls left")
+    if left_s is not None:
+        limits.append(f"about {max(0, left_s) / 60:.0f} minutes left")
+    tail = " Envelope: " + "; ".join(limits) + "." if limits else ""
     return (f"[runtime] Calls actually made so far {where} (step {step}{of}), from my tool log: {shown}. "
-            f"File writes: {'; '.join(writes) if writes else 'none'}.")
+            f"File writes: {'; '.join(writes) if writes else 'none'}.{tail}")
 
 
 def _canonical(arguments: str) -> str:
@@ -211,7 +219,8 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
         if stop:
             return Outcome(reply, "control", step, toolbox.log)
         if ledger:
-            messages[-1]["content"] += "\n\n" + call_ledger(toolbox.log[first_logged:], step, max_steps, purpose)
+            messages[-1]["content"] += "\n\n" + call_ledger(toolbox.log[first_logged:], step, max_steps, purpose,
+                                                         envelope=broker.envelope(), left_s=time_left())
         if toolbox.shown:   # what view_image showed: after the tool results, as a tool result cannot carry an image
             messages.append(images.image_message(toolbox.shown))
             toolbox.shown = []

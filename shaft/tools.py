@@ -13,7 +13,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from . import broker, images, memory, personality, selfedit
+from . import broker, clock, images, memory, personality, selfedit
 
 MAX_RESULT_CHARS = 6000
 # My tool log is what the judge grades my cycles from: it keeps what I saw. It was once cut at 2,000
@@ -41,7 +41,7 @@ PROTECTED_DIRS = {".git": "git internals",
                   "secrets": "my keys are handled by the supervisor: secret_set / secret_list / secret_delete", "memory/episodes": "episodes are append-only records",
                   "logs": "logs are written by my runtime", "inbox": "the supervisor delivers messages here"}
 # My records (the mind, beside self/'s own tools): write_file may not drop their lines unless I say replace.
-RECORD_DIRS = ("notes", "memory")
+RECORD_DIRS = ("notes", "memory", "self")
 # The operator's folder I may read (shaft share <name> <folder>): seen as shared/, never written.
 SHARED = "shared"
 SHARED_READ_ONLY = "read-only: shared/ is the operator's folder — write what you make from it to notes/"
@@ -63,10 +63,10 @@ BUILTINS = [
     _spec("write_file", "Create or overwrite a text file inside my own folder. Use it for notes/, "
           "skills/, plugins/, self/goals.md and my own code. Code changes are tested by the "
           "supervisor after the run and reverted if tests fail. It replaces the whole file: to add an "
-          "entry to a log or record, use append_file. A write that would drop lines of a record in notes/ "
-          "or memory/ is refused unless replace is true.",
+          "entry to a log or record, use append_file. A write that would drop lines of a record in notes/, "
+          "memory/ or self/ is refused unless replace is true.",
           {"path": S, "content": S,
-           "replace": {"type": "boolean", "description": "true only to replace a notes/ or memory/ record on "
+           "replace": {"type": "boolean", "description": "true only to replace a notes/, memory/ or self/ record on "
                        "purpose, dropping lines it holds now (default false)"}}, ["path", "content"]),
     _spec("append_file", "Add text to the end of a text file inside my own folder (created if missing) — "
           "the safe way to add a dated entry to a running record such as a notes/ log; nothing already "
@@ -284,7 +284,7 @@ class Toolbox:
         if not facts.exists():
             facts.write_text("# Facts I have learned\n\n")
         with facts.open("a") as f:
-            f.write(f"- [{datetime.now():%Y-%m-%d %H:%M}] {fact.strip()}\n")
+            f.write(f"- [{clock.now():%Y-%m-%d %H:%M}] {fact.strip()}\n")
         return "remembered"
 
     def _t_rewrite_facts(self, facts: str) -> str:
@@ -301,7 +301,7 @@ class Toolbox:
         dropped = [l for l in old if l not in set(lines)]
         if dropped:
             with (self.root / "memory" / "facts-archive.md").open("a") as f:
-                f.write(f"\n## Dropped in consolidation, {datetime.now():%Y-%m-%d %H:%M}\n\n" + "\n".join(dropped) + "\n")
+                f.write(f"\n## Dropped in consolidation, {clock.now():%Y-%m-%d %H:%M}\n\n" + "\n".join(dropped) + "\n")
         path.write_text("# Facts I have learned\n\n" + text + "\n")
         return f"facts consolidated: {len(old)} -> {len(lines)} ({len(dropped)} archived in memory/facts-archive.md)"
 
@@ -312,7 +312,7 @@ class Toolbox:
         if len(text) > DIGEST_MAX_CHARS:
             return f"ERROR: {len(text)} characters; a digest is at most {DIGEST_MAX_CHARS}"
         with (self.root / "memory" / "digests.md").open("a") as f:
-            f.write(f"\n## {datetime.now():%Y-%m-%d %H:%M} — digest\n\n{text}\n")
+            f.write(f"\n## {clock.now():%Y-%m-%d %H:%M} — digest\n\n{text}\n")
         return "digest written"
 
     def _t_update_self_model(self, text: str) -> str:

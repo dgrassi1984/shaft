@@ -7,9 +7,8 @@ predict my own success (calibration) and have a judge check my claim.
 from __future__ import annotations
 
 import shutil
-from datetime import datetime
 
-from . import agent, images, memory, pausing, prompts
+from . import agent, broker, clock, images, memory, pausing, prompts, recovery
 from .agent import Control
 from .llm import Client
 from .state import State
@@ -17,6 +16,9 @@ from .tools import Toolbox, _spec, for_log
 
 S = {"type": "string"}
 ORIGINS = ("self", "operator", "instance")
+# What my confidence is a probability of. It was asked as "success" but scored against yes=1/partial=0.5; the
+# supervisor now scores it against criterion_met == yes, and only for intents that carry this (A4).
+CONFIDENCE_OF = "criterion_met=yes"
 
 
 def read_inbox(state: State) -> list[tuple[str, str]]:
@@ -57,8 +59,9 @@ def run(cfg, state: State, client: Client) -> str:
             return f"ERROR: origin {origin}: cite the message, conversation or goals.md item in origin_ref"
         pausing.activity(keep=True, goal=str(args.get("goal", ""))[:300])
         record["intent"] = {"goal": args["goal"], "success_criterion": args["success_criterion"],
-                            "confidence": conf, "origin": origin, "origin_ref": ref,
-                            "at": datetime.now().isoformat(timespec="seconds")}
+                            "confidence": conf, "confidence_of": CONFIDENCE_OF,
+                            "origin": origin, "origin_ref": ref,
+                            "at": clock.now().isoformat(timespec="seconds")}
         return "intent recorded — now act"
 
     def finish(args: dict) -> str:   # allowed without an intent: a report beats silence (judged 'no')
@@ -73,7 +76,8 @@ def run(cfg, state: State, client: Client) -> str:
         "declare_intent": Control(_spec(
             "declare_intent", "Declare this cycle's goal BEFORE acting.",
             {"goal": S, "success_criterion": S,
-             "confidence": {"type": "integer", "description": "0-100, your honest probability of success"},
+             "confidence": {"type": "integer", "description": "0-100, your honest probability that the "
+                            "criterion will be fully met (criterion_met yes; partial counts as not met)"},
              "origin": {"type": "string", "enum": list(ORIGINS),
                         "description": "who chose this goal: self (you), operator, or instance (another instance)"},
              "origin_ref": {"type": "string", "description": "where it came from: the message file, the date of "
@@ -98,12 +102,18 @@ def run(cfg, state: State, client: Client) -> str:
 
     inbox = read_inbox(state)
     system = prompts.system_prompt(state, cfg, prompts.LIVE_MODE, toolbox.describe())
+    unwritten = recovery.unwritten_context(state, cfg.OPERATOR_NAME, max_chars=recovery.AUTONOMOUS_CONTEXT_CHARS)
+    if unwritten:
+        system += ("\n\n## Recent conversations I have not written up yet (transcripts)\n\n"
+                   "These may still be going on; they will be written up when they end.\n\n" + unwritten)
     # what my memory holds about my goals, my improvement plan and my messages, beyond what my context shows
     about = "\n".join([state.read(state.goals_md), prompts.improvement_plan(state), inbox_text(inbox)])
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": images.with_attached(   # images attached to my messages (PLAN-vision.md)
             prompts.LIVE.format(steps=cfg.MAX_STEPS_LIVE, inbox=inbox_text(inbox))
+            + "\n\n## My operational envelope (from the supervisor, at the start of this cycle)\n\n"
+            + prompts.envelope_text(broker.envelope(), agent.time_left())
             + memory.recall(state.root, about, shown=system), state.root, listed_in=inbox_text(inbox))},
     ]
     outcome = agent.run(client, messages, toolbox, max_tokens=cfg.MAX_TOKENS_STEP, purpose="live",

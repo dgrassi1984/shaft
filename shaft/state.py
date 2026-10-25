@@ -12,6 +12,8 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
+from . import clock
+
 ENTRY_SEPARATOR = "\n---\n"
 
 
@@ -65,7 +67,7 @@ class State:
 
     # -- writing --------------------------------------------------------------
     def append_journal(self, title: str, body: str, when: datetime | None = None) -> None:
-        when = when or datetime.now()
+        when = when or clock.now()
         self.journal.parent.mkdir(parents=True, exist_ok=True)
         # A model sometimes opens its text with a dated heading of its own ("## 2026-10-13 10:09 — ..."):
         # the journal already writes one, so drop the copy (section headings like "## What happened" stay).
@@ -75,9 +77,10 @@ class State:
             f.write(entry)
 
     def append_episode(self, record: dict) -> None:
-        record = {"ts": datetime.now().isoformat(timespec="seconds"), **record}
+        when = clock.now()
+        record = {"ts": when.isoformat(timespec="seconds"), **record}
         self.episodes_dir.mkdir(parents=True, exist_ok=True)
-        path = self.episodes_dir / f"{datetime.now():%Y-%m-%d}.jsonl"
+        path = self.episodes_dir / f"{when:%Y-%m-%d}.jsonl"
         with path.open("a") as f:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 

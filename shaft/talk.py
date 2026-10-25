@@ -21,8 +21,9 @@ import uuid
 
 from . import agent, images, memory, prompts, recovery
 from .llm import Client, LLMError
+from .live import archive_inbox
 from .state import State
-from .tools import Toolbox
+from .tools import MAX_RESULT_CHARS, Toolbox
 from .ui import Status
 
 DIM, RED, CYAN, RESET = "\033[2m", "\033[31m", "\033[36m", "\033[0m"
@@ -48,6 +49,40 @@ def since_last_talk(state: State, operator: str) -> str:
 
 def _brief(args: str, n: int) -> str:
     return re.sub(r"\s+", " ", args)[:n]
+
+
+def archive_read_inbox(state: State, entries: list[dict]) -> None:
+    """Inbox messages I read in a reply are handled there: archived like a cycle's (live.archive_inbox), or
+    the next cycle showed them again as new (REVIEW-autonomy A6). Archived on reading, not by a tool I must
+    remember to call; a reply that was discarded handled nothing, and a message read only in part (read_file shows
+    MAX_RESULT_CHARS from its offset) is not handled either."""
+    seen: dict[str, list[tuple[int, int]]] = {}
+    for entry in entries:
+        result = str(entry.get("result", ""))
+        if entry.get("tool") != "read_file" or result.startswith("ERROR") or result == agent.NOT_RUN:
+            continue
+        try:
+            args = json.loads(entry.get("args") or "{}")
+            path, offset = args.get("path", ""), int(args.get("offset") or 0)
+        except (ValueError, TypeError, AttributeError):
+            continue
+        if isinstance(path, str) and re.fullmatch(r"inbox/[^/]+\.md", path):
+            seen.setdefault(path.removeprefix("inbox/"), []).append((offset, offset + MAX_RESULT_CHARS))
+    names = []
+    for name, spans in seen.items():
+        try:
+            size = len((state.root / "inbox" / name).read_text(errors="replace"))
+        except OSError:
+            continue
+        reached = 0
+        for start, end, _ in sorted(slice(start, end).indices(size) for start, end in spans):
+            if start > reached:
+                break
+            reached = max(reached, end)
+        if reached >= size:
+            names.append(name)
+    if names:
+        archive_inbox(state, names)
 
 
 # -- views ---------------------------------------------------------------------------
@@ -253,6 +288,7 @@ def run(cfg, state: State, client: Client, show_thinking: bool = False, input_fn
         reply = _respond(client, cfg, toolbox, turn, view)
         if reply is None:
             continue  # that turn never happened
+        archive_read_inbox(state, toolbox.log[log_start:])
         history = turn[1:]  # keep tool calls and results in the conversation
         state.append_episode({"kind": "talk", "talk_id": talk_id, "role": "assistant",
                               "content": reply.content, "reasoning": reply.reasoning,
@@ -337,6 +373,7 @@ def answer(cfg, state: State, client: Client, request: dict) -> None:
     log_start = len(toolbox.log)
     reply = _respond(client, cfg, toolbox, turn, view, Interjections(cfg, state, talk_id, app, view))
     if reply is not None:
+        archive_read_inbox(state, toolbox.log[log_start:])
         state.append_episode({"kind": "talk", "talk_id": talk_id, "role": "assistant", "content": reply.content,
                               "reasoning": reply.reasoning, "tools": toolbox.log[log_start:], "usage": reply.usage,
                               "via": app})
