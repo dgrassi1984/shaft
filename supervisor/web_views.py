@@ -11,7 +11,7 @@ import re
 import time
 import urllib.parse
 
-from .web_pages import Html, esc, h, join, nav, page
+from .web_pages import Html, esc, etag, h, join, nav, page
 
 MARK = {"yes": ("✓", "good"), "partial": ("½", "warn"), "no": ("✗", "bad")}
 ICONS = {name: h('<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
@@ -717,7 +717,7 @@ def services_live(svcs: list[dict], order: list[str], runs: list[str], busy: lis
                       service_buttons(name, s["running"], runs, busy)],
                      ""))
     sched = by.get("scheduler", {}).get("running", False)
-    return join([h('<p class="dim">checked out: {v}</p>', v=version.commit_describe(version.supervisor_commit())),
+    return join([h('<p class="dim">checked out: {v}</p>', v=version.commit_describe(version.shown_commit())),
                  table(["service", "state", "pid", "version", "detail", "", ""], body),
                  h('<p class="{c}">Runs a scheduler restart would kill: {r}</p>', c="warn" if runs else "dim",
                    r=", ".join(runs) or "none"),
@@ -1305,14 +1305,17 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
                         [m["mid"] for m in sent if m.get("from") == "operator" and m.get("mid")]))))
     banner = (h('<p class="panel">Earlier chat, {date}. <a href="/i/{n}/chat">Back to the current chat</a></p>',
                 date=chat['created'][:16].replace('T', ' '), n=q(name)) if read_only and chat else Html(""))
+    feed = chat_feed(name, chat, sent, archived=read_only)
     body = join([banner, h('<section class="panel chat" data-scroll><div class="feed" data-poll="{u}" data-every="1500" data-keyed="1" '
-                         'data-follow="1">{f}</div></section><button type="button" class="newbelow" data-newbelow hidden>'
-                         '↓ New below</button>', u=feed_url, f=chat_feed(name, chat, sent, archived=read_only)), composer,
+                         'data-follow="1" data-etag="{t}" data-etag-url="{u}">{f}</div></section>'
+                         '<button type="button" class="newbelow" data-newbelow hidden>↓ New below</button>',
+                         u=feed_url, t=etag(str(feed).encode()), f=feed), composer,
                  Html('<div class="dropzone" data-dropzone hidden>Drop to attach</div>') if not read_only else Html("")])
-    aside = h('<aside class="docs" id="docs" data-poll="/fragment/docs/{n}?{d}{archive}" data-every="1500" data-lazy="1">{p}</aside>',
-              n=q(name), d=f"att={q(att)}" if att else f"list=1&dir={q(folder)}" if (folder or listing_only) and not doc else
-              f"doc={q(doc)}", p=panel,
-              archive=(f"&id={q(chat['id'])}" if read_only and chat else "") + (f"&sort={sort}" if sort else ""))
+    docs_url = (f"/fragment/docs/{q(name)}?" + (f"att={q(att)}" if att else f"list=1&dir={q(folder)}"
+                                                if (folder or listing_only) and not doc else f"doc={q(doc)}")
+                + (f"&id={q(chat['id'])}" if read_only and chat else "") + (f"&sort={sort}" if sort else ""))
+    aside = h('<aside class="docs" id="docs" data-poll="{u}" data-every="1500" data-lazy="1" data-etag="{t}" '
+              'data-etag-url="{u}">{p}</aside>', u=docs_url, t=etag(str(panel).encode()), p=panel)
     return chat_frame(name, chat_header(name, live, chat, past, read_only),
                       h('<div class="chatgrid"><div class="chatpage">{b}</div>{a}</div>', b=body, a=aside),
                       names, csrf, f"/fragment/chat/{q(name)}/header"

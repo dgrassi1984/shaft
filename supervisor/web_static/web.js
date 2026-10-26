@@ -135,7 +135,7 @@
   function toBottom(el) {
     el._atBottom = true;
     const box = el.closest("[data-scroll]");
-    if (box) box.scrollTop = box.scrollHeight;
+    if (box) { box.scrollTop = box.scrollHeight; el._top = box.scrollTop; }
     else window.scrollTo(0, document.body.scrollHeight);
   }
 
@@ -296,7 +296,10 @@
             const oldKeys = new Set([...el.querySelectorAll(".turn[data-k]")].map(n => n.dataset.k));
             // The feed this follows to its end: its own, or the one it sits in (the running reply's activity)
             const follower = el.dataset.follow ? el : el.closest && el.closest("[data-follow]");
-            if (follower) follower._atBottom = atBottom;
+            // A feed in its own box knows whether it is followed (the scroll listener): near the end is not enough —
+            // a reader who scrolled up a little is reading, and was pulled back down.
+            const following = follower && box && typeof follower._atBottom === "boolean" ? follower._atBottom : atBottom;
+            if (follower) follower._atBottom = following;
             const whole = el.dataset.keyed ? morph(el, body) !== false : (el.innerHTML = body, true);
             if (whole) el.dataset.last = body;
             else { delete el.dataset.last; delete el.dataset.etag; }   // a selected item kept: the next one brings it
@@ -311,7 +314,7 @@
                 || el.querySelector('details[data-key] summary');
               if (target) target.focus({ preventScroll: true });
             }
-            if (atBottom && follower) toBottom(follower);
+            if (following && follower) toBottom(follower);
             // A poll inside the feed (the reply's activity) that says the reply ended: the feed brings the answer now
             if (follower && follower !== el && follower._tick && el.querySelector("[data-ended]")) follower._tick();
             const newBelow = !!box && [...el.querySelectorAll(".turn[data-k]")].some(n =>
@@ -346,7 +349,9 @@
     el._tick = tick;
     later(el.dataset.now ? 0 : every);                 // a first render without live data (the rail): fill it now
     const onVisible = () => { if (document.visibilityState === "visible") tick(); };
-    const onShow = () => tick();                       // back from the cache or the app switcher
+    // Back from the back-forward cache only: the first pageshow is the load itself, whose page is the newest there is
+    // (it fetched every panel again at once, the whole chat included — 310 KB for a long one).
+    const onShow = (ev) => { if (ev && ev.persisted) tick(); };
     const onOnline = () => { fails = 0; tick(); };
     const onRefresh = () => { if (running) again = true; else later(300); };
     document.addEventListener("visibilitychange", onVisible);
@@ -1031,8 +1036,15 @@
   document.addEventListener("scroll", (ev) => {
     const box = ev.target;
     if (box.matches && box.matches("[data-scroll]")) {
+      // Following stops when the reader scrolls up, however little, and only then: a box made shorter under it (the
+      // composer growing with a restored draft) also leaves the end out of view, and that stopped the feed from
+      // following (2026-10-26). A box made taller moves it up too, but leaves it exactly at the end.
       const feed = box.querySelector("[data-follow]");
-      if (feed) feed._atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
+      const gap = box.scrollHeight - box.clientHeight - box.scrollTop;
+      if (feed && gap <= 1) feed._atBottom = true;
+      else if (feed && !(box.scrollTop >= feed._top)) feed._atBottom = false;
+      else if (feed && gap <= 40) feed._atBottom = true;     // came back down to it
+      if (feed) feed._top = box.scrollTop;
     }
     const nb = document.querySelector("[data-newbelow]");
     if (nb && box.matches && box.matches("[data-scroll]") && box.scrollTop + box.clientHeight >= box.scrollHeight - 40) {
@@ -1204,23 +1216,19 @@
     document.title = document.title.replace(/^\(\d+\) /, "");
     if (unread) document.title = `(${unread}) ${document.title}`;
   }
-  // Opening a chat: the first reply or message it sent you that this browser has not seen yet goes to the top of the
-  // feed, so you read on from there (↓ New below takes you to the end). Nothing unread, or nothing seen here before
-  // (a new browser, cleared storage): it opens on the latest, as it always did.
-  function firstUnread(feed) {
-    const seen = seenGet();
-    return [...feed.querySelectorAll("[data-seen-inst]")].find(n => {
-      const mark = seen[n.dataset.seenInst], at = n.dataset.seenReply || n.dataset.sentAt || "";
-      return !!mark && at > mark;
-    }) || null;
-  }
+  // Opening a chat lands on its last message (the operator's call, 2026-10-26: it used to open at the first unread one).
+  // Then it stays there while you follow it: whatever grows the feed or shrinks its box after the jump (the draft
+  // growing the composer, the documents sheet, an image, the phone's keyboard) scrolls it back to the end — unless you
+  // scrolled up (_atBottom, kept by the scroll listener).
   function openFeed(feed) {
-    const box = feed.closest("[data-scroll]"), first = box && firstUnread(feed);
-    if (!first) { toBottom(feed); return; }
-    box.scrollTop += first.getBoundingClientRect().top - box.getBoundingClientRect().top - 8;
-    feed._atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
-    const nb = document.querySelector("[data-newbelow]");
-    if (nb) nb.hidden = feed._atBottom;
+    toBottom(feed);
+    const box = feed.closest("[data-scroll]");
+    if (!box || typeof ResizeObserver === "undefined" || feed._pinned) return;
+    feed._pinned = new ResizeObserver(() => {
+      if (feed._atBottom) { box.scrollTop = box.scrollHeight; feed._top = box.scrollTop; }
+    });
+    feed._pinned.observe(box);
+    feed._pinned.observe(feed);
   }
   function unreadState() {
     seenFeed();                                    // only rendered current-chat replies carry these attributes

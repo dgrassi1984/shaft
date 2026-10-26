@@ -1,4 +1,8 @@
-"""Opening a chat starts at the first reply or message this browser has not seen, not at the bottom."""
+"""Opening a chat lands on its last message, and stays there while what is below the jump grows.
+
+The operator, 2026-10-26: clicking an instance must go to the last message. It opened at the first unread one instead
+(a new browser or one with nothing unread went to the end), and nothing kept it at the end once there: the draft growing
+the composer, the documents sheet or an image loading after the jump left the last message below the fold."""
 import json
 import shutil
 import subprocess
@@ -28,8 +32,11 @@ const input = JSON.parse(process.argv[2]), handlers = {};
 let stored = input.seen === null ? null : JSON.stringify({wren: input.seen});
 const classes = (...initial) => { const s = new Set(initial);
   return { contains: k => s.has(k), add: k => s.add(k), remove: k => s.delete(k), toggle(k, on) { on ? s.add(k) : s.delete(k); } }; };
-// Each feed item is 100px tall, in document order; the scroll box shows 150px of it.
-const box = { scrollTop: 0, clientHeight: input.height || 150, scrollHeight: 0,
+// Each feed item is 100px tall, in document order; the scroll box shows `height` px of it (250 by default).
+// scrollTop clamps to the end, as a browser's does
+const box = { _top: 0, get scrollTop() { return this._top; },
+  set scrollTop(v) { this._top = Math.max(0, Math.min(v, this.scrollHeight - this.clientHeight)); },
+  clientHeight: input.height || 150, scrollHeight: 0,
   getBoundingClientRect() { return { top: 0, bottom: this.clientHeight }; } };
 const items = [...input.html.matchAll(/<(?:div|p) class="[^"]*"([^>]*)>/g)].map(m =>
   Object.fromEntries([...m[1].matchAll(/data-([\w-]+)="([^"]*)"/g)].map(a => [a[1], a[2]]))).filter(a => a.k)
@@ -51,48 +58,62 @@ const document = { readyState: "loading", visibilityState: "visible", title: "wr
     q === ".feed [data-seen-reply], .feed [data-sent-at]" ? items.filter(n => n.dataset.seenReply || n.dataset.sentAt) :
     q === ".feed [data-seen-reply]" ? items.filter(n => n.dataset.seenReply) : [],
   getElementById: () => ({ setAttribute() {}, remove() {} }) };
-vm.runInNewContext(fs.readFileSync(process.argv[1], "utf8"), { document, navigator: {},
+const observers = [];
+class ResizeObserver { constructor(f) { this.f = f; this.seen = []; observers.push(this); } observe(n) { this.seen.push(n); } }
+vm.runInNewContext(fs.readFileSync(process.argv[1], "utf8"), { document, navigator: {}, ResizeObserver,
   window: { addEventListener() {}, innerHeight: 0, scrollY: 0, scrollTo() {}, getSelection: () => ({ isCollapsed: true }) },
   localStorage: { getItem: k => k === "shaft.seen" ? stored : null, setItem(k, v) { if (k === "shaft.seen") stored = v; } },
   setTimeout: () => 1, clearTimeout() {}, setInterval() {}, AbortController,
   CustomEvent: class { constructor(type) { this.type = type; } }, fetch: () => new Promise(() => {}) });
 for (const f of handlers.DOMContentLoaded || []) f();
-const at = input.expect === "bottom" ? box.scrollHeight : items.find(n => n.key === input.expect).top - 8;
-assert.equal(box.scrollTop, at, `opened at ${input.expect}`);
-assert.equal(newbelow.hidden, input.expect === "bottom", "New below offered when it did not open at the end");
+const end = () => box.scrollHeight - box.clientHeight;
+assert.equal(box.scrollTop, end(), "opened at the last message");
+assert.equal(newbelow.hidden, true, "nothing new below the last message");
 if (input.seen !== null && !input.archived) assert.equal(JSON.parse(stored).wren, input.after, "what is on screen is seen");
+// Pinned: the feed's box and the feed itself are watched; growth after the jump goes back to the end ...
+const pin = observers.find(o => o.seen.includes(box) && o.seen.includes(feed));
+assert.ok(pin, "the feed and its box are watched for size changes");
+box.matches = q => q === "[data-scroll]"; box.querySelector = () => feed;
+const scrolled = () => { for (const f of handlers.scroll || []) f({ target: box }); };
+const resized = () => { pin.f(); scrolled(); };    // the observer, then the scroll event its jump causes
+// The composer grows with a restored draft right after the jump: the box is shorter, and the jump's own scroll event
+// arrives after that — the end is out of view, but nobody scrolled up (live, 2026-10-26: 198 px short of the end).
+box.clientHeight -= 100; scrolled(); resized();
+assert.equal(box.scrollTop, end(), "the box got shorter after the jump: still at the last message");
+box.scrollHeight += 400; resized();
+assert.equal(box.scrollTop, end(), "content added after the jump: still at the last message");
+// ... unless the reader scrolled up: then it stays where they left it.
+box.scrollTop = end() - 20; scrolled();            // up a little (review, Codex 2026-10-26): within 40 px, still reading
+box.scrollHeight += 400; resized();
+assert.equal(box.scrollTop, end() - 400 - 20, "scrolled up a little: not pulled back down");
+box.scrollTop = 20; scrolled();
+box.scrollHeight += 400; resized();
+assert.equal(box.scrollTop, 20, "scrolled up: not pulled back down");
 '''
 
 
 @unittest.skipUnless(NODE, "node is not installed")
-class OpenAtFirstUnreadTest(unittest.TestCase):
-    def opens(self, seen, expect, archived=False, after=LATEST, height=150):
+class OpenAtLastMessageTest(unittest.TestCase):
+    def opens(self, seen, archived=False, after=LATEST, height=250):
         result = subprocess.run([NODE, "-e", HARNESS, str(JS), json.dumps({
-            "html": feed(archived), "seen": seen, "expect": expect, "archived": archived, "after": after,
-            "height": height})],
+            "html": feed(archived), "seen": seen, "archived": archived, "after": after, "height": height})],
             capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_opens_at_the_first_message_not_seen_here(self):
-        """Reverting this opens every chat at the bottom, past the message the instance sent after the seen reply."""
-        self.opens(SEEN, f"sm9.md")
+    def test_opens_at_the_last_message_even_with_unread_ones_above(self):
+        """Regression (2026-10-26): with a seen mark older than the instance's message, the chat opened at that
+        message, two turns above the end. It must open at the last message."""
+        self.opens(SEEN)
 
-    def test_w8_only_what_is_on_screen_is_seen_and_a_message_it_sent_counts(self):
-        """W8: seenFeed() marked every rendered reply seen — one below the fold too — and never a message the instance
-        sent (data-sent-at). Opened at its message, with the newest reply below the fold: only the message is seen."""
-        self.opens(SEEN, "sm9.md", after=SENT, height=100)
+    def test_opens_at_the_last_message_when_everything_was_seen_or_nothing_ever_was(self):
+        self.opens(LATEST)
+        self.opens(None)                    # a new browser: no mark
 
-    def test_opens_at_the_newest_reply_when_only_it_is_unread(self):
-        self.opens("2026-10-21T10:10:00", "a2")
-
-    def test_opens_at_the_end_when_everything_was_seen_or_nothing_ever_was(self):
-        self.opens(LATEST, "bottom")
-        self.opens(None, "bottom")          # a new browser: no mark, so no guess that the whole chat is unread
+    def test_w8_a_reply_whose_start_is_above_the_fold_is_not_seen(self):
+        """W8: seen means its start is on screen. A box too short for the newest reply's start above the actions row:
+        opened at the end, nothing new is marked seen."""
+        self.opens(SEEN, after=SEEN, height=150)
 
     def test_an_earlier_chat_opens_at_the_end(self):
-        """An archived chat carries no seen marks: it never jumps, and it does not mark the current chat seen."""
-        self.opens(SEEN, "bottom", archived=True)
-
-    def test_sent_cards_carry_their_time_only_in_the_current_chat(self):
-        self.assertIn(f'data-seen-inst="wren" data-sent-at="{SENT}"', feed())
-        self.assertNotIn("data-sent-at", feed(archived=True))
+        """An archived chat carries no seen marks, and it does not mark the current chat seen."""
+        self.opens(SEEN, archived=True)

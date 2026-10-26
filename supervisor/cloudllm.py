@@ -39,6 +39,7 @@ import urllib.error
 import urllib.request
 from datetime import date, datetime
 
+from . import ledger
 from .core import NETWORK_ERRORS, SUP_DIR, knob, dollars, model_names, cloud_models, json_object
 
 API = "https://api.anthropic.com/v1/messages"
@@ -131,11 +132,9 @@ def spent_today(instance: str, until: datetime | None = None) -> float:
         return 0.0
     today = (until.date() if until else date.today()).isoformat()
     total = 0.0
-    for line in USAGE.read_text().splitlines():
-        r = json.loads(line)
-        if (r["instance"] == instance and r["ts"].startswith(today)
-                and (until is None or datetime.fromisoformat(r["ts"]) < until)):
-            total += r.get("usd") or 0.0
+    for ts, usd in ledger.spend(USAGE, instance):     # what was appended since the last call, not the whole file
+        if ts.startswith(today) and (until is None or datetime.fromisoformat(ts) < until):
+            total += usd or 0.0
     return total
 
 

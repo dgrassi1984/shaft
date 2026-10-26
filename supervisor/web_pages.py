@@ -42,6 +42,12 @@ def join(parts, sep: str = "") -> Html:
     return Html(sep.join(esc(p) for p in parts))
 
 
+def etag(body: bytes) -> str:
+    """A fragment's version (web.respond). A page that draws a polled panel stamps it with the same one, so the panel's
+    first refresh is a 304 when nothing changed — not the whole chat again a second after it opened."""
+    return '"' + hashlib.sha1(body).hexdigest()[:20] + '"'
+
+
 # -- the page ------------------------------------------------------------------------------------------------------
 def _static_version(folder: Path = Path(__file__).parent / "web_static") -> str:
     """The static files' own fingerprint: a changed static asset gets a new URL, so a browser never keeps running an
@@ -120,7 +126,7 @@ def nav(names: list[str], current: str = "overview") -> Html:
     from .web_actions import post_attrs
     cur = "/overview" if current == "overview" else current
     rec = version.service("web", stale=False)
-    checkout = version.supervisor_commit()
+    checkout = version.shown_commit()
     moved = h('<a href="/services">checked out: {v}</a>', v=version.commit_describe(checkout)) \
         if rec and rec["commit"].split("+")[0] != checkout.split("+")[0] else Html("")
     running = h('<div class="nav-version dim">web: {v}{m}'

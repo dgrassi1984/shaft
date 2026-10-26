@@ -89,9 +89,9 @@ and [chat design](plans/PLAN-webui-chat.md).
   visible tab (scrolled into view, not only rendered: one below the fold stays unread until you scroll to it). A
   message it sends you marks its chat unread in the rail too. Config, Journal, earlier chats, and a failed feed refresh
   do not consume a new reply. Marks are shared across tabs in the same browser.
-  Opening an instance's chat starts at the first reply, or message it sent you, that this browser has not seen,
-  at the top of the feed, with **↓ New below** to jump to the end; with nothing unread, or no mark yet in this
-  browser, it opens on the latest. Earlier chats always open at the end.
+  Opening an instance's chat lands on its last message, earlier chats too, and stays there while what loads after
+  the jump (the draft in the composer, the documents sheet, an image) grows the feed — until you scroll up. The page
+  carries the version of the chat and documents it drew, so their first refresh is a 304, not the whole chat again.
 - The chat: files and images both ways (drop them anywhere on the page, paste or pick; each is a chip you can take
   out), the reply's activity and clock live, interject, Stop, End. Select text in a message or a document and
   **↩ Reply** quotes it in your message; from the documents sheet or full screen, the sheet closes first so the composer
