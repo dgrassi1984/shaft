@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import posixpath
 import random
 import re
 import shlex
@@ -36,8 +37,10 @@ def _arg(raw_args: str, key: str) -> str:
 
 def family(tool: str, raw_args: str) -> str | None:
     if tool in ("write_file", "append_file"):
-        parts = PurePosixPath(_arg(raw_args, "path")).parts
-        if not parts:
+        # one spelling per place: ./self/a.md and self/b/../a.md are self/ too (Grok's review); outside my folder: none
+        path = posixpath.normpath(_arg(raw_args, "path") or ".")
+        parts = PurePosixPath(path).parts
+        if not parts or parts[0] in (".", "..", "/"):
             return None
         depth = 2 if parts[0] in ("plugins", "skills", "notes", "tests") else 1
         return f"{tool} {'/'.join(parts[:depth])}/"
@@ -110,22 +113,36 @@ class Cards:
         self.root, self.seed, self.now = root, seed, now
         self.mode = mode if mode in MODES else "off"
         self.record: dict = {"mode": self.mode, "held": []}
-        self._cards: list[dict] | None = None
+        self._cards: list[dict] | None = None    # what happened: when to hold
+        self._shown: list[dict] | None = None    # what the hold shows: the same, or (shuffled) the outcomes permuted
+        self._turns: dict[str, int] = {}         # family -> the reply in which it was held
 
-    def check(self, tool: str, raw_args: str, goal: str) -> str | None:
+    def check(self, tool: str, raw_args: str, goal: str, turn: int | None = None) -> str | None:
+        """`turn`: which of my replies this call is in. A second call of a held kind in the same reply is held too —
+        I have not read the cards yet (Grok's review: it ran before the model saw them)."""
         kind = family(tool, raw_args) if self.mode != "off" else None
-        if kind is None or any(held["family"] == kind for held in self.record["held"]):
+        if kind is None:
+            return None
+        if kind in self._turns:
+            if turn is not None and self._turns[kind] == turn:
+                return (f"{HELD} The same kind of action ({kind}) was held earlier in this reply with my record of it; "
+                        "read that first, then call it again in my next reply to run it.")
             return None
         if self._cards is None:
             self._cards = load(self.root, self.now)
+            self._shown = [dict(card) for card in self._cards]
             if self.mode == "shuffled":
-                outcomes = [(card["ok"], card["error"], card["verdict"]) for card in self._cards]
+                # the control holds at the same moments as `on` (the decision reads what happened) and shows the
+                # same form with the outcomes permuted across all cards: only the content differs (Grok's review)
+                outcomes = [(card["ok"], card["error"], card["verdict"]) for card in self._shown]
                 random.Random(self.seed).shuffle(outcomes)
-                for card, outcome in zip(self._cards, outcomes):
+                for card, outcome in zip(self._shown, outcomes):
                     card["ok"], card["error"], card["verdict"] = outcome
-        comparable = [card for card in self._cards if card["family"] == kind]
-        if not comparable or comparable[-1]["ok"]:
+        if not any(card["family"] == kind for card in self._cards) or \
+                [card for card in self._cards if card["family"] == kind][-1]["ok"]:
             return None
+        self._turns[kind] = turn
+        comparable = [card for card in self._shown if card["family"] == kind]
         failed = sum(not card["ok"] for card in comparable)
         succeeded = len(comparable) - failed
         words = set(memory._tokens(goal))
@@ -134,15 +151,16 @@ class Cards:
         self.record["held"].append({"family": kind, "tool": tool,
                                     "cards": [f"{card['ts']}#{card['step']}" for card in shown],
                                     "failed": failed, "succeeded": succeeded})
-        last = comparable[-1]
+        last = next((card for card in reversed(comparable) if not card["ok"]), None)
         text = (f"{HELD} Before this runs — my record of {kind} in the last {MAX_AGE_DAYS} days: "
-                f"{failed} failed, {succeeded} succeeded (last failure "
-                f"{_at(last['ts']):%Y-%m-%d %H:%M}: {last['error']}).")
+                f"{failed} failed, {succeeded} succeeded"
+                + (f" (last failure {_at(last['ts']):%Y-%m-%d %H:%M}: {last['error']})." if last else "."))
         for card in shown:
             outcome = "ok" if card["ok"] else "failed: " + card["error"]
             judged = "not judged" if card["verdict"] is None else "cycle judged " + str(card["verdict"])
+            took = f" · {card['seconds']:.0f}s" if isinstance(card.get("seconds"), (int, float)) else ""
             text += (f"\n- {_at(card['ts']):%Y-%m-%d %H:%M} · goal \"{card['goal']}\" · "
-                     f"{outcome} · {judged}")
+                     f"{outcome}{took} · {judged}")
         text += "\n" + AGAIN
         if self.mode == "recall":
             recalled = memory.recall(self.root, goal + " " + kind, k=3, max_chars=len(text)) or "nothing recalled"

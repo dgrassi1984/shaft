@@ -242,7 +242,7 @@ def run(cfg, state: State, client: Client) -> str:
             toolbox.log.append({"tool": name, "args": for_log(raw_args), "result": refusal})
             return refusal
         try:
-            hold = held.check(name, raw_args, record["intent"]["goal"])
+            hold = held.check(name, raw_args, record["intent"]["goal"], turn=assistant_turns(messages))
         except Exception as e:   # a record the cards cannot read must never block the action itself
             hold, held.record["error"] = None, f"{type(e).__name__}: {e}"[:200]
         if hold:   # not run: what comparable actions led to, once per kind; calling it again runs it

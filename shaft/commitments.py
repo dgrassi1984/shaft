@@ -17,6 +17,10 @@ NAME = re.compile(r"[a-z0-9][a-z0-9_-]*")
 ID = re.compile(r"c\d{4}-\d{4}-[1-9]\d*")
 FAILED = ("ERROR", "(repeat: not run)", "(held, not run yet)")
 FIELDS = ("promise", "due", "criterion", "made_to")
+# Calls that record or report rather than do: commit_to's own "recorded" made any committing cycle its own evidence
+# (Grok's review). Evidence is a call that did something.
+BOOKKEEPING = ("commit_to", "settle_commitment", "declare_intent", "confirm_confidence", "finish_cycle",
+               "close_surprise")
 
 COMMIT_TO = _spec("commit_to", "Record a commitment I will keep and someone else can check.", {
     "promise": {"type": "string", "description": "What I will do."},
@@ -180,6 +184,7 @@ def _evidence(episodes: list[dict], item: dict, evidence: str) -> tuple[str, dic
             return "no such tool-log step", ep
         calls = [calls[step - 1]]
     good = any(isinstance(c, dict) and isinstance(c.get("tool"), str) and bool(c["tool"])
+               and c["tool"] not in BOOKKEEPING
                and isinstance(c.get("result"), str) and not c["result"].startswith(FAILED) for c in calls)
     return ("" if good else "cited evidence has no successful tool call"), ep
 
@@ -220,8 +225,8 @@ def _row(item: dict, now: datetime) -> str:
     shown = due.strftime("%Y-%m-%d" if due.hour == 23 and due.minute == 59 and due.second == 59 else "%Y-%m-%d %H:%M")
     late = ""
     if item["status"] == "overdue":
-        days = max(1, (_local(now).date() - due.date()).days)
-        late = f" — overdue by {days} day{'s' if days != 1 else ''}"
+        days = (_local(now).date() - due.date()).days
+        late = (f" — overdue since {due:%H:%M}" if days < 1 else f" — overdue by {days} day{'s' if days != 1 else ''}")
     return (f"- {item['id']} (to {item['made_to']}, due {shown}{late}): {item['promise']}"
             f" — check: {item['criterion']}")
 

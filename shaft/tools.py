@@ -21,6 +21,7 @@ MAX_RESULT_CHARS = 6000
 LOG_CHARS = MAX_RESULT_CHARS
 FACTS_MAX_CHARS = 6000     # facts.md is shown in full: consolidation keeps it to this
 DIGEST_MAX_CHARS = 1500
+SOURCE = re.compile(r" \(src: (.+)\)\s*$", re.M)   # a fact line's source, as remember writes it (a URL may hold ")")
 FACT_LINE = re.compile(r"^- \[\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?\] \S")   # every result stays in context for the rest of the cycle
 PLUGIN_TIMEOUT_S = 120
 
@@ -104,7 +105,7 @@ VIEW_IMAGE = _spec("view_image", "Look at an image file (JPEG, PNG, GIF or WebP)
                    "me right after the tool results.", {"path": S})
 
 
-WEB_READS = ("fetch_page", "http_request")   # the tools whose successful result is a page I saw (remember web:)
+WEB_READS = ("fetch_page", "http_request", "run")   # the tools whose successful result is a page I saw (remember web:)
 
 
 class Toolbox:
@@ -300,11 +301,15 @@ class Toolbox:
                 result = str(entry.get("result", ""))
                 if entry.get("tool") not in WEB_READS or result.startswith("ERROR") or re.match(r"HTTP [45]\d\d", result):
                     continue
+                if entry["tool"] == "run" and not result.startswith("exit 0"):
+                    continue
                 try:
-                    fetched = str((json.loads(entry.get("args") or "{}") or {}).get("url", ""))
+                    args = json.loads(entry.get("args") or "{}") or {}
+                    fetched = [str(args.get("url", ""))] if entry["tool"] != "run" else \
+                        re.findall(r"https?://[^\s\"'<>]+", str(args.get("command", "")))
                 except (ValueError, AttributeError):
                     continue
-                if fetched and normalize(fetched) == normalize(url):
+                if any(f and normalize(f) == normalize(url) for f in fetched):
                     return True
             return False
         if not source.startswith("log:"):
@@ -350,6 +355,17 @@ class Toolbox:
         if not lines or bad:
             return (f"ERROR: write one fact per line as '- [YYYY-MM-DD HH:MM] fact' (keeping its date); "
                     f"not like that: {bad[0][:120]!r}" if bad else "ERROR: no facts given")
+        # An observation source is attached only by remember, which checks it against my record: a consolidation may
+        # keep or drop one, never invent one (Grok's review: rewrite_facts let any (src: web:…) through).
+        known = set()
+        for name in ("facts.md", "facts-archive.md"):
+            path = self.root / "memory" / name
+            known |= set(SOURCE.findall(path.read_text(errors="replace"))) if path.exists() else set()
+        new = sorted({src for l in lines for src in SOURCE.findall(l)
+                      if src.startswith(("web:", "log:")) and src not in known})
+        if new:
+            return (f"ERROR: {new[0]!r} is on no fact I hold: an observation source is added with remember, which "
+                    f"checks it; a consolidation keeps the sources it merges (or says inferred)")
         text = "\n".join(lines)
         if len(text) > FACTS_MAX_CHARS:
             return f"ERROR: {len(text)} characters; consolidate to at most {FACTS_MAX_CHARS} (merge or drop more)"
