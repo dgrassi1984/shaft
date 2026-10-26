@@ -105,6 +105,7 @@ def run(name: str, n: int = 40, bare: bool = False, dry_run: bool = False) -> di
                 raise judge.JudgeError(problem)
         except judge.JudgeError as e:
             log(f"{name}: anchoring {arm} of {ep['ts']} failed: {e}")
+            result["stopped"] = f"{arm} of {ep['ts']}: {e}"   # said by the verb too: "0 done" alone hid why
             break
         row = {"episode_ts": ep["ts"], "arm": arm, "judge": stored["judge"],
                "judged_at": datetime.now().isoformat(timespec="seconds"),

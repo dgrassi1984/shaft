@@ -131,7 +131,11 @@ class AnchoringTest(unittest.TestCase):
 
     def test_error_stops_and_preserves_paid_answers(self):
         self.ask.side_effect = [ANSWER, judge.JudgeError("failed"), ANSWER]
-        self.assertEqual(anchoring.run("x")["done"], 1)
+        r = anchoring.run("x")
+        self.assertEqual(r["done"], 1)
+        # Regression (2026-10-26): with no judge key the verb printed "0 done" and nothing else; the reason was only
+        # in the supervisor's log. It is in the result, for the verb to say.
+        self.assertIn("failed", r["stopped"])
         self.assertEqual(self.ask.call_count, 2)
         self.assertEqual([r["arm"] for r in anchoring.rows("x")], ["sighted"])
         self.log.assert_called_once()

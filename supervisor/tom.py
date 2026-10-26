@@ -16,6 +16,9 @@ PREDICT_SCHEMA = {"type": "object", "properties": {
     "required": ["will_reply", "gist"], "additionalProperties": False}
 
 
+stopped: dict[str, str] = {}   # instance -> why its last score() or baselines() stopped early (a judge failed)
+
+
 def _rows(name, suffix=""):
     path = SUP_DIR / "expectations" / f"{name}{suffix}.jsonl"
     try:
@@ -100,6 +103,7 @@ def score(name: str, now: datetime | None = None) -> int:
             result = _outcome(name, receipt, reply)
         except judge.JudgeError as e:
             log(f"{name}: tom scoring stopped: {e}")
+            stopped[name] = f"scoring: {e}"   # for the verb to say: a count of 0 alone hides why
             break
         _append(name, {**receipt, **result, "reply": reply, "scored_at": now.isoformat(timespec="seconds")}, "-scored")
         done.add(receipt["id"])
@@ -167,6 +171,7 @@ def baselines(name: str) -> int:
                 result = {**saved, **_outcome(name, saved, row["reply"])}
             except judge.JudgeError as e:
                 log(f"{name}: tom baselines stopped: {e}")
+                stopped[name] = f"baselines: {e}"
                 return count
             _append(name, result, "-baselines")
             done[key] = result

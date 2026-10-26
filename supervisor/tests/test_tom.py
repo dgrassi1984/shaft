@@ -164,6 +164,7 @@ class TomTest(unittest.TestCase):
                                                          judge.JudgeError("unavailable")]) as ask:
             self.assertEqual(tom.score("a", self.start + timedelta(hours=1)), 1)
         self.assertEqual(ask.call_count, 2)
+        self.assertIn("unavailable", tom.stopped.pop("a"))   # the verb says why it stopped, not only a count
         with mock.patch.object(judge, "ask", return_value={"match": "yes", "reason": "Agrees"}):
             self.assertEqual(tom.score("a", self.start + timedelta(hours=1)), 2)
         self.assertEqual(len(tom._rows("a", "-scored")), 3)

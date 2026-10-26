@@ -1389,6 +1389,8 @@ def main(argv: list[str]) -> int:
                 r = anchoring.run(name, args.n, bare=args.bare, dry_run=args.dry_run)
                 print(f"{name}: {r['cycles']} cycle(s), {r['todo']} judge call(s) to make, {r['done']} done; about "
                       f"${r['estimated_usd']:.2f} (${r['per_judgment_usd']:.3f} each: {r['basis']})")
+                if r.get("stopped"):
+                    print(f"{name}: stopped — {r['stopped']}", file=sys.stderr)
         if args.report or not args.dry_run:
             print(anchoring.report(args.names))
         return 0
@@ -1401,6 +1403,8 @@ def main(argv: list[str]) -> int:
                 print(f"{name}: {tom.score(name)} expectation(s) scored")
             if args.baselines:
                 print(f"{name}: {tom.baselines(name)} baseline prediction(s) made")
+            if name in tom.stopped:
+                print(f"{name}: stopped — {tom.stopped.pop(name)}", file=sys.stderr)
         print(tom.report(names))
         return 0
     if args.cmd == "prefs":
