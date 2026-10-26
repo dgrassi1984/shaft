@@ -137,7 +137,10 @@ def run(cfg, state: State, client: Client) -> str:
             toolbox.log.append({"tool": name, "args": for_log(raw_args), "result": result})
             return result
         if name == "settle_commitment" and promises:   # kept only with an episode as evidence (commitments.settle)
-            result = commitments.settle(state.root, args, clock.now())
+            try:
+                result = commitments.settle(state.root, args, clock.now())
+            except OSError as e:   # a ledger I cannot read or write must not stop my sleep
+                result = f"ERROR: commitment not settled: {type(e).__name__}: {e}"
             toolbox.log.append({"tool": name, "args": for_log(raw_args), "result": result})
             return result
         refusal = ""
@@ -182,8 +185,7 @@ def run(cfg, state: State, client: Client) -> str:
          + "\n\n## Verdicts the supervisor's judge gave since my last sleep\n\n" + (verdicts.strip() or "(none new)")
          + "\n\n## Surprises since my last sleep (step 7)\n\n"
          + surprises_text(surprises.since(state.root, _last_sleep(state)))
-         + ("\n\n## My overdue commitments (step 8)\n\n" + commitments.sleep_text(state.root, clock.now())
-            if promises else "")
+         + ("\n\n## My overdue commitments (step 8)\n\n" + _overdue(state) if promises else "")
          + "\n\n## My operational envelope (from the supervisor, at the start of this cycle)\n\n"
          + prompts.envelope_text(broker.envelope(), agent.time_left())},
     ]
@@ -222,6 +224,13 @@ def run(cfg, state: State, client: Client) -> str:
     state.append_episode({"kind": "sleep", "ended_by": outcome.ended_by, "tools": toolbox.log,
                           "content": outcome.reply.content, "closed": closed})
     return entry
+
+
+def _overdue(state: State) -> str:
+    try:
+        return commitments.sleep_text(state.root, clock.now())
+    except OSError as e:   # the sleep runs without the list rather than not at all
+        return f"(my commitments could not be read: {type(e).__name__}: {e})"
 
 
 def _action(entry: dict) -> str:

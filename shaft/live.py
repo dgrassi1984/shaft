@@ -138,6 +138,12 @@ def run(cfg, state: State, client: Client) -> str:
         record["confirm"] = {"declared_at": assistant_turns(messages), "done": False}
         return "intent recorded. " + base_rate.describe(band, conf) + cost
 
+    def _promise(c: dict) -> str:
+        try:
+            return commitments.add(state.root, c, "cycle", clock.now())
+        except OSError as e:   # a ledger I cannot write must not cost me the finish
+            return f"ERROR: commitment not recorded: {type(e).__name__}: {e}"
+
     def costs(goal: str, origin: str) -> str:
         """What goals like this one have cost me, against what this cycle has left (FORECAST); '' when off."""
         env, left_s = broker.envelope(), agent.time_left()
@@ -179,7 +185,7 @@ def run(cfg, state: State, client: Client) -> str:
                             "resolves": resolves(args.get("resolves"))}
         promised = commitments.clean(args.get("commitments")) if toolbox.commit_source else []
         if promised:   # each recorded as commit_to would; one it refuses (a past due date) is said, never fatal
-            record["finish"]["commitments"] = [commitments.add(state.root, c, "cycle", clock.now()) for c in promised]
+            record["finish"]["commitments"] = [_promise(c) for c in promised]
             return "cycle finished; " + "; ".join(record["finish"]["commitments"])
         return "cycle finished"
 

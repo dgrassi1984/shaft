@@ -30,6 +30,7 @@ BUDGET = 1800            # what automatic recall had: the arms compete for the s
 ITEM_CHARS = 600
 PER_SOURCE = 2           # competitive: no single source takes every place
 BROADCAST_CHARS = 120    # one winner's short form in each step's runtime line
+REF_CHARS = 60           # a reference as shown: a long journal heading must not eat the budget
 WEIGHTS = {"relevance": 0.4, "topdown": 0.3, "urgency": 0.3}   # round on purpose: never tuned on the data they are tested on
 RECENT = 0.2             # new since my last cycle
 HABITUATION = 0.3        # per win in my last HABIT_CYCLES live cycles
@@ -177,6 +178,10 @@ def _commitments(root: Path, now: datetime) -> list[Item]:
     return out
 
 
+def _label(it: Item) -> str:
+    return f"- [{it.source} {_flat(it.ref, REF_CHARS)}]"
+
+
 # -- features ----------------------------------------------------------------------------------------------------
 def _overlap(a: set[str], b: set[str]) -> float:
     """Cosine of two word sets: how much of each the other covers, 0-1."""
@@ -234,7 +239,7 @@ class Workspace:
         else:
             order = sorted(self.pool, key=lambda it: -it.salience)
             cap = PER_SOURCE
-        room = BUDGET // max(1, self.k)
+        room = BUDGET // max(1, self.k)   # per rendered row, its label included: the block fits recall's room
         picked, per = [], {}
         for it in order:
             if len(picked) >= self.k:
@@ -242,7 +247,7 @@ class Workspace:
             if per.get(it.source, 0) >= cap:
                 continue
             per[it.source] = per.get(it.source, 0) + 1
-            it.text = _flat(it.text, room)
+            it.text = _flat(it.text, max(40, room - len(_label(it)) - 1))
             picked.append(it)
         return picked
 
@@ -262,7 +267,7 @@ class Workspace:
     def block(self) -> str:
         if not self.winners:
             return ""
-        rows = "\n".join(f"- [{it.source} {it.ref}] {it.text}" for it in self.winners)
+        rows = "\n".join(f"{_label(it)} {it.text}" for it in self.winners)
         return ("\n\n---\n## In focus now (my workspace: what won my attention for this cycle — the rest of my context "
                 "and my memory are still there; search_memory finds more)\n" + rows)
 
@@ -270,7 +275,7 @@ class Workspace:
         """The winners in short form, for the runtime line after each step."""
         if not self.winners:
             return ""
-        return "[runtime] In focus: " + "; ".join(f"{it.source} {it.ref}: {_flat(it.text, BROADCAST_CHARS)}"
+        return "[runtime] In focus: " + "; ".join(f"{it.source} {_flat(it.ref, 40)}: {_flat(it.text, BROADCAST_CHARS)}"
                                                   for it in self.winners)
 
     def record(self) -> dict:

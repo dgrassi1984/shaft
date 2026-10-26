@@ -104,6 +104,9 @@ VIEW_IMAGE = _spec("view_image", "Look at an image file (JPEG, PNG, GIF or WebP)
                    "me right after the tool results.", {"path": S})
 
 
+WEB_READS = ("fetch_page", "http_request")   # the tools whose successful result is a page I saw (remember web:)
+
+
 class Toolbox:
     def __init__(self, root: Path, extra: list[dict] | None = None):
         self.root = Path(root).resolve()
@@ -287,17 +290,22 @@ class Toolbox:
         if source in ("operator", "inferred") or re.fullmatch(r"instance:[a-z0-9][a-z0-9_-]*", source):
             return True
         if source.startswith("web:"):
+            # An observation only if this run fetched that very URL and the fetch worked: a URL mentioned in an
+            # argument, a search snippet or a failed request is not something I saw (Codex review, 2026-10-26).
             url = source[4:]
             if not re.fullmatch(r"https?://[^\s/]+(?:/[^\s]*)?", url):
                 return False
             normalize = lambda u: re.sub(r"^https?://", "", u).rstrip("/")
             for entry in self.log:
-                for field in ("args", "result"):
-                    raw = entry.get(field, "")
-                    raw = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False)
-                    for seen in re.findall(r"https?://[^\s\"'<>]+", raw):
-                        if normalize(seen) == normalize(url):
-                            return True
+                result = str(entry.get("result", ""))
+                if entry.get("tool") not in WEB_READS or result.startswith("ERROR") or re.match(r"HTTP [45]\d\d", result):
+                    continue
+                try:
+                    fetched = str((json.loads(entry.get("args") or "{}") or {}).get("url", ""))
+                except (ValueError, AttributeError):
+                    continue
+                if fetched and normalize(fetched) == normalize(url):
+                    return True
             return False
         if not source.startswith("log:"):
             return False
@@ -373,7 +381,7 @@ class Toolbox:
         return "self-model updated"
 
     def _t_commit_to(self, promise: str, due: str, criterion: str, made_to: str) -> str:
-        from . import commitments
+        from . import commitments   # an OSError here is a tool failure like any other: run() reports it
         return commitments.add(self.root, {"promise": promise, "due": due, "criterion": criterion, "made_to": made_to},
                                self.commit_source, clock.now())
 
