@@ -734,7 +734,8 @@ _missing_logged: dict[str, object] = {}     # name -> the night whose missing it
 def due(name: str, now: datetime) -> bool:
     """In tonight's window, not turned off for this instance, and the last run was at least EVERY_DAYS nights
     ago. Missing items inside the window are logged (once a night), never skipped in silence."""
-    if EVERY_DAYS <= 0 or is_off(name):
+    from . import preferences
+    if EVERY_DAYS <= 0 or is_off(name) or preferences.self_paused(name, now):
         return False
     start, end = window(now)
     if not start <= now < end:
