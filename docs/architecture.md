@@ -120,6 +120,29 @@ section "My expectations vs what happened", counts each sleep's dispositions, an
 acceptance window (`shaft surprise-report`). Nothing rewards being surprised, or not being surprised.
 
 
+**Self-knowledge measured against the record** ([PLAN-consciousness](plans/PLAN-consciousness.md)). Functional
+properties only, each scored against what the instance does, none feeding probation or a reward, each agent-side
+mechanism behind a knob its kill test flips (`shaft experiment`). A live cycle's **workspace** (`shaft/workspace.py`)
+lets deterministic codelets — memory hits, open surprises, inbox, improvement plan, kinds of action still failing,
+due goals, open commitments — compete for `WORKSPACE_K` places in automatic recall's 1,800 characters; the winners are
+recorded in the episode and broadcast after every step; after `declare_intent` they compete again for the declared
+goal and, in competition, the declared **attention** (`attention`: up to four {source, why}, scored against the tool
+log by `supervisor/attention.py`). **Outcome cards** (`shaft/cards.py`) hold the first call of a kind of action that has
+failed since it last worked, showing the comparable calls and their counts; calling again runs it. **Commitments**
+(`commit_to`, finish_cycle's `commitments`, `memory/commitments.jsonl`) are settled in sleep, kept only with an
+episode as evidence; the supervisor re-checks it (`supervisor/commitments.py`). `remember` takes a **source**
+(`log:<ts>[#step]`, `web:<url>` fetched this run, `operator`, `instance:<name>`, `inferred`), shown with the fact's age in
+search; `shaft provenance` matches observation claims against tool results by content. `declare_intent` answers with a
+**forecast** of what comparable goals cost (turns, minutes, calls, how many ran out) — costs only, never a success rate,
+which would be a second base rate before the v3 confirm. `send_message` takes `expect_reply`, timestamped by the
+broker in `.supervisor/expectations/` and scored when the reply comes (`supervisor/tom.py`; live traffic only).
+`request_pause` (1–24 h, 3 in 7 days; the scheduler skips wakes and battery nights, sleep still runs), `decline_task`
+and `state_preference` write `.supervisor/preferences/<name>.jsonl` and tell the operator (`shaft prefs`); exams and
+replays never act on them. `shaft metacog` separates confidence's discrimination (type-2 AUROC with a day-clustered
+CI, resolution, meta-I) from its bias, by domain from the tool log, and tests v3 for non-inferiority; `shaft anchoring`
+has the same judge grade sampled cycles with the instance's claim shown, re-asked and withheld, to measure how much
+the judge follows the claim.
+
 The **capability battery** is a fixed yardstick: held-out tasks the instances never see (coding with hidden
 tests, research against a frozen key, recall of their own older journal entries, self-knowledge checked
 against the supervisor's record), graded effectiveness first. Each instance is compared with a *control*:

@@ -1866,7 +1866,8 @@ def after_cycle(name: str) -> None:
     failure in one step (a judge down, a file the instance planted) must never skip the next. check_probation reverts
     a self-change that made things worse; nothing the instance can do to its folder may switch it off."""
     done = {}
-    for label, step in (("judge_pending", judge_pending), ("write_stats", write_stats),
+    from . import tom   # the instance's expectations of replies, scored once the reply came or its window closed (C4)
+    for label, step in (("judge_pending", judge_pending), ("score_expectations", tom.score), ("write_stats", write_stats),
                         ("check_probation", check_probation)):
         try:
             done[label] = step(name)

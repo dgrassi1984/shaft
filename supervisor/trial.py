@@ -401,24 +401,29 @@ def file_diff(before: dict[str, bytes], after: dict[str, bytes], limit: int = 16
 # -- one run of one past cycle -----------------------------------------------------------------------------
 def replay_arm(project: Path, name: str, state: dict, code: dict[str, bytes | None], *, model: str,
                cache: dict, cache_lock: threading.Lock, billed: str, should_stop=lambda: False,
-               keep: Path | None = None) -> dict:
+               keep: Path | None = None, prepare=None) -> dict:
     """Run the cycle that began at `state` once, with `code`, in a scratch copy. model: 'local' (the code's own
-    configuration) or a cloud model id (both runs of a pair get the same). Returns what the supervisor saw."""
+    configuration) or a cloud model id (both runs of a pair get the same). Returns what the supervisor saw.
+    `prepare(dest)`: called on the reconstructed copy before the run, and before the diff's starting point — what it
+    writes is part of the state, not of the run (the planted probe of `shaft experiment workspace`)."""
     tmp = Path(tempfile.mkdtemp(prefix="shaft-trial-")).resolve()   # outside HOME: the sandbox allows only it
     try:
         return _replay(project, name, state, code, tmp, model=model, cache=cache, cache_lock=cache_lock,
-                       billed=billed, should_stop=should_stop, keep=keep)
+                       billed=billed, should_stop=should_stop, keep=keep, prepare=prepare)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def _replay(project, name, state, code, tmp, *, model, cache, cache_lock, billed, should_stop, keep) -> dict:
+def _replay(project, name, state, code, tmp, *, model, cache, cache_lock, billed, should_stop, keep,
+            prepare=None) -> dict:
     from . import runner
     from .autonomy import describe_schedule
     from .broker import ReplayBroker
     from .core import BROKER_MAX_CALLS
     dest = reconstruct(project, name, state, code, tmp / name)
     link_env(dest, project / "instances" / name)
+    if prepare:
+        prepare(dest)
     before, seen = _files_now(dest), _episode_lines(dest)
     broker = ReplayBroker(name, project, secrets_env(), SUP_DIR / "trials" / "broker.log", state_root=dest,
                           start_commit=state["start_commit"], as_of=datetime.fromisoformat(state["t0"]),
