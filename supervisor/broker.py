@@ -217,6 +217,11 @@ SPECS = {
                           "every one. You can attach files from your folder; files sent to you arrive in your "
                           "attachments/ folder (the message says where).",
                           {"to": S, "text": S,
+                           "expect_reply": {"type": "object", "description": "optional: what you expect back — it is "
+                                            "timestamped by the supervisor and scored against the reply",
+                                            "properties": {"will_reply": {"type": "integer", "minimum": 0, "maximum": 100},
+                                                           "within_hours": {"type": "integer", "minimum": 1, "maximum": 168},
+                                                           "gist": S}, "required": ["will_reply", "within_hours", "gist"]},
                            "kind": {"type": "string", "enum": ["question", "note"],
                                     "description": "for the operator: question (wants an answer) or note"},
                            "attachments": {"type": "array", "items": {"type": "string"},
@@ -905,7 +910,8 @@ class Broker:
         cut = f"\n[... {len(text) - max_chars} more chars]" if len(text) > max_chars else ""
         return f"{title}\n{final}\n\n{text[:max_chars]}{cut}".strip()
 
-    def _send_message(self, to: str, text: str, kind: str = "note", attachments: list | None = None) -> str:
+    def _send_message(self, to: str, text: str, kind: str = "note", attachments: list | None = None,
+                      expect_reply: dict | None = None) -> str:
         from . import messages
         if not text.strip():
             raise ValueError("empty message")
@@ -919,6 +925,23 @@ class Broker:
             raise ValueError(f"unknown recipient {to!r}; try list_instances or 'operator'")
         files = self._read_attachments(attachments)              # all checked before anything is delivered
         with_files = f" with {len(files)} attachment(s)" if files else ""
+        expectation = ""
+        valid = isinstance(expect_reply, dict) and all(
+            type(expect_reply.get(k)) is int and low <= expect_reply[k] <= high
+            for k, low, high in (("will_reply", 0, 100), ("within_hours", 1, 168))) and \
+            isinstance(expect_reply.get("gist"), str)
+        if expect_reply is not None and not valid:
+            expectation = "; expectation not recorded: need will_reply 0-100, within_hours 1-168 integers and gist text"
+        elif valid:
+            expectation = "; your expectation of the reply is recorded"
+
+        def record_expectation():
+            if valid and not isinstance(self, ReplayBroker):
+                from . import tom
+                tom.record(self.name, {"id": f"{stamp:%Y%m%d-%H%M%S-%f}-to-{to}",
+                                      "sent_at": stamp.isoformat(timespec="seconds"), "to": to,
+                                      "message": f"{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}.md", "text": text[:2000],
+                                      **{k: expect_reply[k] for k in ("will_reply", "within_hours", "gist")}})
         if to == "operator":
             sent = self._operator_sent_today(stamp)
             if OPERATOR_DAILY_LIMIT and sent >= OPERATOR_DAILY_LIMIT:
@@ -930,13 +953,16 @@ class Broker:
             self._deliver("operator", f"{stem}.md",
                           f"From: {self.name}\nTo: operator\nKind: {kind}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{body}\n",
                           kind, stamp, body, atts)
-            return f"delivered to the operator ({kind}){with_files}; their reply, if any, will arrive in your inbox"
+            record_expectation()
+            return (f"delivered to the operator ({kind}){with_files}; their reply, if any, will arrive in your inbox"
+                    + expectation)
         atts = self._store(self.project / "instances" / to, f"attachments/from-{self.name}/{stamp:%Y%m%d-%H%M%S-%f}",
                            files)
         body = text.strip() + messages.attachment_lines(atts)
         self._deliver(to, f"inbox/{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}.md",
                       f"From: {self.name}\nTo: {to}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{body}\n", kind, stamp, body, atts)
-        return f"delivered to {to}{with_files}"
+        record_expectation()
+        return f"delivered to {to}{with_files}{expectation}"
 
     def _read_attachments(self, paths) -> list[tuple[str, bytes]]:
         """The files to attach, read now: inside this instance's folder (links that lead out are refused), not its
