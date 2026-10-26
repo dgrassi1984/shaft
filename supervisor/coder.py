@@ -19,7 +19,7 @@ import urllib.request
 from datetime import date, datetime
 from pathlib import Path
 
-from . import cloudllm
+from . import cloudllm, ledger
 from .core import (HOME, NETWORK_ERRORS, SUP_DIR, TreeTooBig, UnsafePath, claude_model, contained, copy_beneath,
                    dollars, knob, reserved, safe_read, safe_write, secrets_env, walk_beneath)
 
@@ -87,9 +87,8 @@ def spent_today(instance: str, until: datetime | None = None) -> float:
     if not USAGE.exists():
         return 0.0
     today = (until.date() if until else date.today()).isoformat()
-    return sum(r.get("usd") or 0 for r in map(json.loads, USAGE.read_text().splitlines())
-               if r["instance"] == instance and r["ts"].startswith(today)
-               and (until is None or datetime.fromisoformat(r["ts"]) < until))
+    return sum(usd or 0 for ts, usd in ledger.spend(USAGE, instance)
+               if ts.startswith(today) and (until is None or datetime.fromisoformat(ts) < until))
 
 
 def _hidden(rel: str) -> bool:

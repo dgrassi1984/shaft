@@ -43,6 +43,21 @@ class InstanceStateTest(unittest.TestCase):
         self.assertEqual(s["goal"], "Run the rogue-AI watch")
         self.assertEqual((s["model"], s["every"]), ("cloud mimo-v2.6-pro", "30 min"))
 
+    def test_its_judgments_are_read_once_for_both_scores(self):
+        """Regression (2026-10-26): _judged and _value each parsed the judgment ledgers — twice per instance on every
+        overview the web service builds. One read feeds both, with the same scores."""
+        rows = [{"criterion_met": "yes", "difficulty": 5, "value": 4}, {"criterion_met": "partial", "difficulty": 2,
+                                                                         "value": 2}]
+        with mock.patch.object(dashboard, "_judged", self.patches[-1].temp_original), \
+                mock.patch("supervisor.metrics.judgments", return_value=rows) as read:
+            s = dashboard.instance_state("wren")
+        self.assertEqual(read.call_count, 1)
+        self.assertEqual((s["judged"], s["success"], s["achieved"], s["value"]), (2, 0.75, 3.0, 3.0))
+        with mock.patch.object(dashboard, "_judged", self.patches[-1].temp_original), \
+                mock.patch("supervisor.metrics.judgments", side_effect=OSError("unreadable")):
+            s = dashboard.instance_state("wren")
+        self.assertEqual((s["judged"], s["success"], s["achieved"], s["value"]), (0, None, None, None))
+
     def test_a_dead_process_activity_is_not_shown(self):
         self.write_activity(2 ** 22 + 4321, phase="thinking", step=3, goal="old")
         s = dashboard.instance_state("wren")

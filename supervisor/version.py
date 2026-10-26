@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from datetime import datetime
 from functools import lru_cache
 
@@ -24,6 +25,19 @@ def supervisor_commit() -> str:
     head = git("rev-parse", "--short", "HEAD", check=False).stdout.strip() or "unknown"
     dirty = git("status", "--porcelain", "--", "supervisor", "bin", check=False).stdout.strip()
     return head + ("+changes" if dirty else "")
+
+
+SHOWN_FOR = 5.0                                   # seconds a page may show an old checkout
+_shown = {"at": -1e9, "commit": "", "by": None}
+
+
+def shown_commit() -> str:
+    """supervisor_commit for a page to show: two git processes cost ~37 ms, and every page drew it (the nav's footer,
+    2026-10-26). A few seconds old at most; a service's start-up record still reads it fresh. Kept per reader: a
+    supervisor_commit replaced (a test's) is never answered with what the one before it said."""
+    if time.monotonic() - _shown["at"] >= SHOWN_FOR or _shown["by"] is not supervisor_commit:
+        _shown.update(commit=supervisor_commit(), at=time.monotonic(), by=supervisor_commit)
+    return _shown["commit"]
 
 
 @lru_cache(maxsize=128)

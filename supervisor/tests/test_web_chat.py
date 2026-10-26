@@ -1217,6 +1217,21 @@ class NetworkTest(ChatRoutesTest):
         page = self.req("/i/wren/chat", cookie=self.cookie)
         self.assertNotIn("ETag", page.headers)                               # pages and actions: no conditionals
 
+    def test_the_page_stamps_its_feed_and_documents_so_their_first_refresh_is_a_304(self):
+        """Regression (2026-10-26): the page drew the chat, then its first refresh downloaded all of it again (310 KB
+        for a long chat) — it sent no version. The page carries each polled panel's ETag, for the URL it polls."""
+        import html, re
+        self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
+                        {"role": "assistant", "content": "a", "ts": "2026-10-19T12:00:05"}])
+        page = self.req("/i/wren/chat", cookie=self.cookie).body.decode()
+        for cls in ('class="feed"', 'class="docs"'):
+            tag = re.search(cls + r'[^>]*data-poll="([^"]+)"[^>]*data-etag="([^"]+)" data-etag-url="([^"]+)"', page)
+            self.assertIsNotNone(tag, f"{cls} carries no ETag")
+            url, etag, etag_url = map(html.unescape, tag.groups())
+            self.assertEqual(url, etag_url)
+            first = self.req(url, cookie=self.cookie, headers={"if-none-match": etag})
+            self.assertEqual((first.status, first.body), (304, b""), f"{url}: the first refresh sent it all again")
+
     def test_every_feed_item_has_a_key_the_page_updates_by(self):
         self.chat_with([{"role": "user", "content": "q", "ts": "2026-10-19T12:00:00"},
                         {"role": "assistant", "content": "a", "ts": "2026-10-19T12:00:05"}])

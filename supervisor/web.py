@@ -318,7 +318,7 @@ def respond(req: Request) -> Response:
     r = _secured(_route(req))
     if req.method == "GET" and r.status == 200 and req.path.startswith("/fragment/"):
         # A refresh that changed nothing costs a header, not the whole feed again (docs/plans/PLAN-pwa P3: ~100 a minute)
-        tag = '"' + hashlib.sha1(r.body).hexdigest()[:20] + '"'
+        tag = web_pages.etag(r.body)
         r.headers["ETag"] = tag
         if req.headers.get("if-none-match") == tag:
             r.status, r.body = 304, b""

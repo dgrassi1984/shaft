@@ -175,5 +175,45 @@ console.log(JSON.stringify({ notifications, sheets, unread }));
         self.assertEqual(out["shown"], ["START", "NEW"], out)  # the in-flight answer (OLD, from before) never shown
 
 
+
+SHOW_HARNESS = r"""
+const POLL_LIMIT_MS = 15000, net = { down: new Set() };
+const pairAgain = () => false, busyIn = () => false, fresh = () => {}, stale = () => {}, netNote = () => {};
+const checkVersion = () => {}, textOf = s => s, toBottom = () => {};
+globalThis.setTimeout = () => 1;                 // the 1.5 s timer never fires: only pageshow can fetch here
+globalThis.clearTimeout = () => {};
+const shows = [];
+const window = { addEventListener: (t, f) => { if (t === "pageshow") shows.push(f); }, innerHeight: 0, scrollY: 0 };
+const navigator = { onLine: true };
+const document = { visibilityState: "visible", body: { scrollHeight: 0 }, addEventListener: () => {} };
+const el = { dataset: { poll: "/fragment/chat/wren", every: "1500" }, isConnected: true, children: [],
+  getClientRects: () => [1], querySelectorAll: () => [], closest: () => null, dispatchEvent: () => {} };
+let fetched = 0;
+globalThis.fetch = async () => { fetched += 1; return { status: 304, ok: false, headers: { get: () => "" } }; };
+//POLL//
+(async () => {
+  poll(el);
+  shows.forEach(f => f({ persisted: false }));   // the load's own pageshow
+  await new Promise(r => setImmediate(r));
+  const onLoad = fetched;
+  shows.forEach(f => f({ persisted: true }));    // back from the back-forward cache
+  await new Promise(r => setImmediate(r));
+  console.log(JSON.stringify({ onLoad, restored: fetched - onLoad }));
+})();
+"""
+
+
+@unittest.skipUnless(NODE, "node is not installed")
+class PageShowTest(unittest.TestCase):
+    def test_the_loads_own_pageshow_fetches_nothing_a_restore_refreshes(self):
+        """Regression (2026-10-26): every panel was fetched again the moment the page loaded — the first pageshow is
+        the load itself — so a chat was downloaded twice on every open. A page restored from the cache still refreshes."""
+        m = re.search(r"^  function poll\(el\) \{\n.*?^  \}\n", WEB_JS.read_text(), re.S | re.M)
+        r = subprocess.run([NODE, "-e", SHOW_HARNESS.replace("//POLL//", m.group(0))], capture_output=True, text=True,
+                           timeout=20)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(json.loads(r.stdout), {"onLoad": 0, "restored": 1})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -27,6 +27,18 @@ class VersionTest(unittest.TestCase):
             {"pid": os.getpid(), "commit": "abc1234", "started": "2026-10-12T22:49:02",
              "settings": {"temp": 0.1, "think_budget": 4096}}))
 
+    def test_a_page_shows_the_checkout_without_two_git_processes_each_time(self):
+        """Regression (2026-10-26): every page drew supervisor_commit — two git processes, ~37 ms of a 45 ms page.
+        Pages read it at most once per SHOWN_FOR seconds; a service's start-up record reads it fresh."""
+        version._shown.update(at=-1e9, commit="", by=None)
+        self.addCleanup(version._shown.update, at=-1e9, commit="", by=None)
+        with mock.patch.object(version, "supervisor_commit", side_effect=["abc1234", "def5678", "fff0000"]) as read, \
+                mock.patch.object(version.time, "monotonic", side_effect=[100.0, 100.0, 101.0, 106.0, 106.0]):
+            self.assertEqual(version.shown_commit(), "abc1234")
+            self.assertEqual(version.shown_commit(), "abc1234")       # 1 s later: the same, no git
+            self.assertEqual(version.shown_commit(), "def5678")       # 6 s later: read again
+        self.assertEqual(read.call_count, 2)
+
     def test_issue_61_describe_and_cache_follow_commit(self):
         """#61: reverting loses tagged labels, dirty markers, or caches HEAD after it moves."""
         version.commit_describe.cache_clear()

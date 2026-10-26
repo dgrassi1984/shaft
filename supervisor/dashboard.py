@@ -83,12 +83,20 @@ def _usd_today(name: str) -> float:
         return 0.0
 
 
-def _judged(name: str) -> tuple[int, float | None, float | None]:
-    """(cycles judged, raw success over the last 10, achieved difficulty 0-5 over the last 10 rated)."""
+def _judgments(name: str) -> list[dict] | None:
+    """Its judged cycles, read once for _judged and _value (each read them: ~15 ms a read, every overview); None if
+    they cannot be read."""
     from . import metrics
     try:
-        js = metrics.judgments(name)
+        return metrics.judgments(name)
     except Exception:
+        return None
+
+
+def _judged(js: list[dict] | None) -> tuple[int, float | None, float | None]:
+    """(cycles judged, raw success over the last 10, achieved difficulty 0-5 over the last 10 rated)."""
+    from . import metrics
+    if js is None:
         return 0, None, None
     recent = js[-10:]
     rated = [v for v in map(metrics.cycle_value, js) if v is not None][-10:]
@@ -96,11 +104,13 @@ def _judged(name: str) -> tuple[int, float | None, float | None]:
             5 * sum(rated) / len(rated) if rated else None)
 
 
-def _value(name: str) -> float | None:
+def _value(js: list[dict] | None) -> float | None:
     """Mean value (0-5: what each cycle delivered) over the last 10 graded cycles."""
     from . import metrics
+    if js is None:
+        return None
     try:
-        return metrics.mean_value(metrics.valued(metrics.judgments(name))[-10:])
+        return metrics.mean_value(metrics.valued(js)[-10:])
     except Exception:
         return None
 
@@ -140,14 +150,15 @@ def instance_state(name: str, now: float | None = None) -> dict:
     interval = autonomy.wake_interval(name)
     next_wake = autonomy.next_wake(name, datetime.fromtimestamp(now), interval)
     calls, tokens = _today_usage(root)
-    n_judged, rate, achieved = _judged(name)
+    js = _judgments(name)
+    n_judged, rate, achieved = _judged(js)
     return {"name": name, "state": state, "since": busy.partition(" since ")[2], "doing": doing,
             "goal": act.get("goal", "") if act else "",
             "model": ("cloud " if cfg.get("LLM_BASE_URL") == "broker" else "") + cfg.get("LLM_MODEL", "?").split("/")[-1],
             "every": f"{int(interval.total_seconds() // 60)} min" if interval else "no wakes",
             "next_wake": next_wake, "conversations": len(convs), "calls_today": calls, "tokens_today": tokens,
             "usd_today": _usd_today(name), "judged": n_judged, "success": rate, "achieved": achieved,
-            "value": _value(name),
+            "value": _value(js),
             "tools_off": sorted(disabled_tools(name)), "trial": _trial_line(name)}
 
 
