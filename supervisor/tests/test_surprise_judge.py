@@ -209,6 +209,62 @@ class SurpriseJudgeTest(unittest.TestCase):
         self.assertEqual(metrics.surprise_baseline("m", limit=1)["done"], 1)
         self.assertEqual([r["episode_ts"] for r in metrics._surprise_baseline_rows("m")], [old["ts"]])
 
+    def test_control_asks_the_same_case_by_the_same_judge_without_the_fields(self):
+        # The M2 control (2026-10-26): the fields run failed at 54/60 on shaft and wren, and nothing said how often the
+        # same judge disagrees with itself on the same case. The control differs from the fields run only in the fields.
+        self.assertTrue(metrics.JUDGE_SYSTEM.startswith(metrics.CONTROL_SYSTEM))
+        self.assertNotIn("Expectations", metrics.CONTROL_SYSTEM)
+        self.assertIn("Value, last and separately", metrics.CONTROL_SYSTEM)
+        self.assertEqual(set(metrics.CONTROL_SCHEMA["properties"]) | set(metrics.SURPRISES),
+                         set(metrics.JUDGE_SCHEMA["properties"]))
+        a, b, c = self.episode(), self.episode("2026-10-13T09:00:00"), self.episode("2026-10-13T10:00:00")
+        path, rows = self.stored([a, b, c])
+        rows[0]["judge"], rows[1]["judge"], rows[2]["judge"] = "glm", "deepseek", "mimo"
+        path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+        (self.sup / "judgments/m-surprise-baseline.jsonl").write_text("".join(json.dumps(r) + "\n" for r in [
+            {**VERDICT, "episode_ts": a["ts"], "judge": "glm"}, {**VERDICT, "episode_ts": c["ts"], "judge": "mimo"},
+            {**VERDICT, "episode_ts": b["ts"], "judge": "glm"}]))   # b: another judge, not mirrored
+        expected = metrics._case(c, metrics._written_files("m", c), metrics._provenance_evidence("m", c),
+                                 metrics._prior_goals(rows, c["ts"]), followed=metrics._followed_surprise("m", c))
+        self.assertEqual(metrics.surprise_control("m", dry_run=True)["todo"], 2)
+        self.ask.assert_not_called()
+        no_fields = {k: v for k, v in VERDICT.items() if k not in SURPRISE}
+        self.ask.side_effect = [copy.deepcopy(no_fields), judge.JudgeError("down")]
+        self.assertEqual(metrics.surprise_control("m")["done"], 1)
+        self.assertEqual(self.ask.call_args_list[0].args, (metrics.CONTROL_SYSTEM, metrics._case(
+            a, metrics._written_files("m", a), metrics._provenance_evidence("m", a), metrics._prior_goals(rows, a["ts"]),
+            followed=metrics._followed_surprise("m", a)), metrics.CONTROL_SCHEMA))
+        self.assertEqual(self.ask.call_args_list[0].kwargs["model"], "glm")
+        self.ask.side_effect = lambda *a, **k: copy.deepcopy(no_fields)
+        self.assertEqual(metrics.surprise_control("m")["done"], 1)   # resumed: only the one left
+        self.assertEqual(self.ask.call_args.args[1], expected)
+        self.assertEqual(self.ask.call_args.kwargs["model"], "mimo")
+        self.pick.assert_not_called()
+        self.assertEqual([r["episode_ts"] for r in metrics._surprise_control_rows("m")], [a["ts"], c["ts"]])
+        self.assertEqual(metrics.surprise_control("m")["todo"], 0)
+
+    def test_control_report_pairs_the_two_runs(self):
+        stored = [{**VERDICT, "episode_ts": str(i), "judge": "glm", "criterion_met": "yes"} for i in range(8)]
+        fields = [dict(r) for r in stored]
+        control = [dict(r) for r in stored]
+        for i in (0, 1, 2):
+            fields[i]["criterion_met"] = "partial"   # stricter, only with the fields
+        fields[3]["criterion_met"] = control[3]["criterion_met"] = "no"   # both moved
+        control[4]["criterion_met"] = "partial"   # only the control
+        control[5]["judge"] = "mimo"   # another judge: not compared
+        with mock.patch.object(metrics, "judgments", return_value=stored), \
+             mock.patch.object(metrics, "_surprise_baseline_rows", return_value=fields), \
+             mock.patch.object(metrics, "_surprise_control_rows", return_value=control):
+            text = metrics.surprise_control_report(["m", "n"])
+        for part in ("Surprise control: m (7 cycles", "with the fields 3/7, control 5/7",
+                     "with the fields 4/0, control 2/0", "only the fields run moved: 3; only the control moved: 1 "
+                     "(sign test p=0.62)", "agree with each other: 3/7", "1 baseline cycle(s) without a control yet",
+                     "Surprise control: all (14 cycles", "with the fields 6/14, control 10/14"):
+            self.assertIn(part, text)
+        self.assertAlmostEqual(metrics._sign_test(5, 1), .21875)
+        self.assertEqual(metrics._sign_test(0, 0), 1.0)
+        self.assertIn("not measured", metrics.surprise_control_report(["m"]))
+
     def test_bad_baseline_is_not_written(self):
         self.stored([self.episode()])
         self.ask.side_effect = lambda *a, **k: {**VERDICT, "expectations": [{}]}
