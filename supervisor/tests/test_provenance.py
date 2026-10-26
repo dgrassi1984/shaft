@@ -69,8 +69,12 @@ class ProvenanceTest(unittest.TestCase):
         self.assertFalse((self.root / "memory/facts.md").exists())
 
     def test_web_source_result_and_url_boundaries(self):
-        self.box.log = [{"args": "{}", "result": "Read https://example.org/trees/ now"}]
+        self.box.log = [{"tool": "fetch_page", "args": '{"url": "https://example.org/trees/"}', "result": "Trees"}]
         self.assertEqual(self.remember(fact=TEXT, source="web:http://example.org/trees"), "remembered")
+        # a URL only mentioned in a result is not a page I fetched (Codex review, 2026-10-26)
+        self.box.log = [{"tool": "web_search", "args": "{}", "result": "Read https://example.org/trees/ now"}]
+        self.assertTrue(self.remember(fact=TEXT, source="web:https://example.org/trees").startswith("ERROR:"))
+        self.box.log = [{"tool": "fetch_page", "args": '{"url": "https://example.org/trees/"}', "result": "Trees"}]
         self.assertTrue(self.remember(fact=TEXT, source="web:https://example.org/tree").startswith("ERROR:"))
         self.box.log = []
         self.assertTrue(self.remember(fact=TEXT, source="web:https://example.org/trees").startswith("ERROR:"))

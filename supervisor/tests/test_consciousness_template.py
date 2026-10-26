@@ -180,8 +180,9 @@ class LiveCycleTest(Fixture, unittest.TestCase):
         made = [json.loads(line) for line in (self.root / commitments.FILE).read_text().splitlines()]
         self.assertEqual([m["promise"] for m in made], ["send the operator the row count", "file the survey"])
         self.assertEqual({m["source"] for m in made}, {"cycle"})
-        self.assertTrue(results[3][1].startswith("commitment c1026-1000-1 recorded"))
-        self.assertIn("commitment c1026-1000-2 recorded", results[4][1])
+        # the replay clock (SHAFT_NOW) advances with the process: the minute in an id is not pinned
+        self.assertRegex(results[3][1], r"^commitment c1026-10\d\d-1 recorded")
+        self.assertRegex(results[4][1], r"commitment c1026-10\d\d-[12] recorded")
         # the open commitments are in the prompt of the next run
         fake = self.live([{"content": "nothing"}])
         self.assertIn("## My open commitments", fake.requests[0]["messages"][0]["content"])
@@ -247,6 +248,49 @@ class CommitmentsElsewhereTest(Fixture, unittest.TestCase):
         self.assertEqual(json.loads((self.root / commitments.FILE).read_text())["source"], "talk")
         refused = box.run("write_file", json.dumps({"path": commitments.FILE, "content": "{}"}))
         self.assertIn("use commit_to", refused)
+
+
+class ReviewRegressionTest(Fixture, unittest.TestCase):
+    """Codex's review of the integration, 2026-10-26."""
+
+    def test_a_ledger_that_cannot_be_read_never_stops_a_cycle_or_a_sleep(self):
+        (self.root / commitments.FILE).mkdir(parents=True)   # reading or appending it raises IsADirectoryError
+        promise = {"promise": "p", "due": "tomorrow", "criterion": "c", "made_to": "self"}
+        self.live([{"tool_calls": [("declare_intent", DECLARE)]},
+                   {"tool_calls": [("finish_cycle", {**FINISH, "commitments": [promise]})]}])
+        ep = self.last()
+        self.assertEqual(ep["finish"]["criterion_met"], "yes")
+        self.assertTrue(ep["finish"]["commitments"][0].startswith("ERROR: commitment not recorded"))
+        fake, client = self.model([{"tool_calls": [("settle_commitment", {"id": "c1", "status": "void",
+                                                                          "evidence": "x"})]}, {"content": "Slept."}])
+        self.cfg.values["MAX_STEPS_SLEEP"] = 3
+        sleep.run(self.cfg, self.state, client)
+        self.assertIn("could not be read", fake.requests[0]["messages"][1]["content"])
+        self.assertTrue(self.last()["tools"][0]["result"].startswith("ERROR"))   # refused, not raised
+        self.assertIn("Slept.", self.state.read(self.state.journal))
+
+    def test_web_source_needs_a_successful_fetch_of_that_url(self):
+        box = Toolbox(self.root)
+        box.log += [{"tool": "fetch_page", "args": json.dumps({"url": "https://a.org/x"}), "result": "ERROR: timeout"},
+                    {"tool": "write_file", "args": json.dumps({"path": "notes/x", "content": "https://b.org/y"}),
+                     "result": "wrote"},
+                    {"tool": "http_request", "args": json.dumps({"url": "https://c.org/z"}), "result": "HTTP 404 nope"},
+                    {"tool": "fetch_page", "args": json.dumps({"url": "https://d.org/w/"}), "result": "Title\ntext"}]
+        for url, ok in (("https://a.org/x", False), ("https://b.org/y", False), ("https://c.org/z", False),
+                        ("https://d.org/w", True)):
+            with self.subTest(url=url):
+                out = box.run("remember", json.dumps({"fact": "f", "source": f"web:{url}"}))
+                self.assertEqual(out == "remembered", ok, out)
+
+    def test_the_rendered_block_fits_recalls_budget(self):
+        ws = workspace.Workspace("competitive", k=3)
+        ws.pool = [workspace.Item("memory", "journal " + "a very long heading " * 10 + str(i), "word " * 400,
+                                  relevance=1.0) for i in range(3)]
+        ws.score()
+        ws.winners = ws.select()
+        rows = ws.block().split("\n", 3)[3]   # after the separator and the heading
+        self.assertLessEqual(len(rows), workspace.BUDGET)
+        self.assertLessEqual(len(ws.broadcast()), 3 * (workspace.BROADCAST_CHARS + 60) + 30)
 
 
 class KnobTest(unittest.TestCase):

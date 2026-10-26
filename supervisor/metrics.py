@@ -1114,9 +1114,22 @@ NEUTRAL_DECLARE = "intent recorded — now act"   # what live's declare_intent a
 CONFIRM_FIRST = "ERROR: call confirm_confidence first"   # live's refusal of every other tool until the confirm
 
 
+# An outcome card (PLAN-consciousness B1) lists comparable earlier cycles with the judge's verdict on each: a prior on
+# the outcome, like the base rate. The judges read that the call was held, not the cards.
+HELD = "(held, not run yet)"
+HELD_SHOWN = HELD + " — the agent was shown its record of comparable calls (outcome cards; not part of this case)"
+
+
+def blind_holds(tools: list[dict]) -> list[dict]:
+    return [{**t, "result": HELD_SHOWN} if str(t.get("result", "")).startswith(HELD) else t for t in tools]
+
+
 def _blind(ep: dict) -> dict:
     """The episode as the judges see it: the base-rate step taken out, so a v3 case reads like a v2 one (its question
-    is v2's). An episode without the step comes back unchanged, so a v1 or v2 case stays byte-identical."""
+    is v2's), and the outcome cards' text (blind_holds). An episode without either comes back unchanged, so a v1 or v2
+    case stays byte-identical."""
+    if any(str(t.get("result", "")).startswith(HELD) for t in ep.get("tools", [])):
+        ep = {**ep, "tools": blind_holds(ep.get("tools", []))}
     intent, tools = ep.get("intent"), ep.get("tools", [])
     step = isinstance(intent, dict) and any(k in intent for k in V3_FIELDS)   # a rate shown, or the file unreadable
     if not step and not any(t.get("tool") in TREATMENT_TOOLS for t in tools):

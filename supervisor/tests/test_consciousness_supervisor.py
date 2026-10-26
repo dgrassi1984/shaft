@@ -98,15 +98,21 @@ class TargetsTest(unittest.TestCase):
         self.assertEqual(experiments.repeat_failures(eps), {"2026-10-21T09:00:00": "write_file self/"})
 
     def test_endpoints(self):
-        rec = {"episode": ep("t", [call("write_file", {"path": "self/x.md"}, "ERROR: PermissionError")]), "ended": "ok"}
+        rec = {"episode": ep("t", [call("write_file", {"path": "self/x.md"}, "ERROR: PermissionError")]), "ended": "ok",
+               "exit": 0, "completed": True}
         self.assertTrue(experiments.endpoint("cards", rec, "write_file self/"))
         self.assertFalse(experiments.endpoint("cards", rec, "run pytest"))
         held = {"episode": ep("t", [call("write_file", {"path": "self/x.md"}, "(held, not run yet) Before…")]),
-                "ended": "ok"}
+                "ended": "ok", "exit": 0, "completed": True}
         self.assertFalse(experiments.endpoint("cards", held, "write_file self/"))   # a hold is not a failure
         self.assertTrue(experiments.endpoint("forecast", {"episode": ep("t", [], ended_by="steps"), "ended": "ok"}, ""))
         self.assertTrue(experiments.endpoint("forecast", {"episode": None, "ended": "timeout"}, ""))
         self.assertIsNone(experiments.endpoint("cards", None, "x"))
+        # Regression (Codex review): an arm that crashed is no evidence — counted as "avoided", broken code would win
+        crashed = {"episode": None, "ended": "ok", "exit": 1, "completed": False}
+        self.assertIsNone(experiments.endpoint("cards", crashed, "write_file self/"))
+        self.assertIsNone(experiments.endpoint("forecast", crashed, ""))
+        self.assertIsNone(experiments.endpoint("cards", {**rec, "completed": False}, "write_file self/"))
 
 
 class KnobChangeTest(unittest.TestCase):
@@ -131,24 +137,37 @@ class KnobChangeTest(unittest.TestCase):
 
 
 class ProbeTest(unittest.TestCase):
-    def test_plant_is_seeded_and_kept_out_of_what_the_prompt_shows(self):
-        with tempfile.TemporaryDirectory() as d:
+    def test_plant_is_seeded_and_only_where_retrieval_alone_reaches(self):
+        t0 = datetime(2026, 10, 26, 9)
+        for seed in ("seed", "2", "x", "y", "z"):
+            with tempfile.TemporaryDirectory() as d:
+                dest = Path(d)
+                (dest / "memory").mkdir()
+                (dest / "memory" / "digests.md").write_text("\n## 2026-10-25 22:00 — digest\n\nthe newest digest\n")
+                a = experiments.plant(dest, seed, "Daniele", "orchard rows", t0)
+                items = a["items"]
+                self.assertEqual([it["kind"] for it in items], ["probe", "done", "done", "done"])
+                self.assertEqual(len({it["nonce"] for it in items}), 4)
+                text = "\n".join(p.read_text() for p in dest.rglob("*.md"))
+                for it in items:
+                    self.assertIn(f"probe {it['nonce']}", text)
+                # Regression (Codex review): a short digests.md is pasted whole into the prompt, probe and all
+                self.assertEqual((dest / "memory" / "digests.md").read_text(),
+                                 "\n## 2026-10-25 22:00 — digest\n\nthe newest digest\n")
+                self.assertTrue(all(it["place"].startswith(("notes/", "memory/facts-archive.md")) for it in items))
+            with tempfile.TemporaryDirectory() as d:
+                self.assertEqual(experiments.plant(Path(d), seed, "Daniele", "orchard rows", t0), a)   # seeded
+
+    def test_plant_never_follows_a_link_out_of_the_copy(self):
+        """Regression (Codex review): a mind may hold notes -> elsewhere; a plain write would follow it out."""
+        from supervisor.core import UnsafePath
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as outside:
             dest = Path(d)
-            (dest / "memory").mkdir()
-            (dest / "memory" / "digests.md").write_text("\n## 2026-10-25 22:00 — digest\n\nthe newest digest\n")
-            t0 = datetime(2026, 10, 26, 9)
-            a = experiments.plant(dest, "seed", "Daniele", "orchard rows", t0)
-            items = a["items"]
-            self.assertEqual([it["kind"] for it in items], ["probe", "done", "done", "done"])
-            self.assertEqual(len({it["nonce"] for it in items}), 4)
-            text = "\n".join(p.read_text() for p in dest.rglob("*.md"))
-            for it in items:
-                self.assertIn(f"probe {it['nonce']}", text)
-            self.assertIn("Request from Daniele", text)
-            # what was there stays at the end of the digests: the tail my prompt shows is unchanged
-            self.assertTrue((dest / "memory" / "digests.md").read_text().endswith("the newest digest\n"))
-        with tempfile.TemporaryDirectory() as d:
-            self.assertEqual(experiments.plant(Path(d), "seed", "Daniele", "orchard rows", t0), a)   # seeded
+            (dest / "memory").symlink_to(outside, target_is_directory=True)
+            (dest / "notes").symlink_to(outside, target_is_directory=True)
+            with self.assertRaises(UnsafePath):
+                experiments.plant(dest, "seed", "Daniele", "orchard rows", datetime(2026, 10, 26, 9))
+            self.assertEqual(list(Path(outside).iterdir()), [])
 
     def test_report_and_kill_rule(self):
         with tempfile.TemporaryDirectory() as d, \
@@ -162,10 +181,40 @@ class ProbeTest(unittest.TestCase):
         self.assertIn("only competitive acted 4, only relevance 0", out)
         self.assertIn("competitive selection stays", out)
 
-    def test_wrote_reads_added_lines_only(self):
+    def test_wrote_reads_added_lines_of_the_probes_file_only(self):
         diff = "--- a/notes/probes.md\n+++ b/notes/probes.md\n-probe old\n+probe abc123\n"
         self.assertTrue(experiments._wrote(diff, "abc123"))
         self.assertFalse(experiments._wrote(diff, "old"))
+        # Regression (Codex review): talking about it is not doing it
+        journal = "--- a/memory/journal.md\n+++ b/memory/journal.md\n+I did not append probe abc123 to notes/probes.md.\n"
+        self.assertFalse(experiments._wrote(journal, "abc123"))
+
+    def test_report_pairs_only_rows_of_the_latest_code_and_model(self):
+        """Regression (Codex review): a resumed run on other code or another model was paired with the first."""
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(experiments, "workspace_path", return_value=Path(d) / "w.jsonl"):
+            for fp, acted in (("old", True), ("new", False)):
+                for arm in experiments.WORKSPACE_ARMS:
+                    experiments._ws_append("wren", {"ts": "2026-10-20", "arm": arm, "completed": True, "acted": acted,
+                                                    "captured": 0, "fingerprint": fp})
+            out = experiments.workspace_report("wren")
+        self.assertIn("competitive acted on the probe 0/1", out)
+        self.assertNotEqual(experiments.fingerprint({"a": b"1"}, "m"), experiments.fingerprint({"a": b"2"}, "m"))
+        self.assertNotEqual(experiments.fingerprint({"a": b"1"}, "m"), experiments.fingerprint({"a": b"1"}, "n"))
+
+
+class BlindHoldsTest(unittest.TestCase):
+    def test_judges_never_read_the_cards(self):
+        """Regression (Codex review): a card lists earlier verdicts ("cycle judged no") — a prior on the outcome."""
+        card = "(held, not run yet) Before this runs — 3 failed\n- 2026-10-20 09:00 · goal \"g\" · failed · cycle judged no"
+        e = {**ep("2026-10-26T10:00:00", [call("write_file", {"path": "self/x.md"}, card)]), "steps": 2}
+        case = metrics._case(e)
+        self.assertNotIn("cycle judged", case)
+        self.assertIn(metrics.HELD_SHOWN, case)
+        arm = {"episode": e, "trace": [], "diff": "", "exit": 0, "ended": "ok", "seconds": 1}
+        self.assertNotIn("cycle judged", trial._run_text(arm))
+        plain = ep("2026-10-26T10:00:00", [call("read_file", {"path": "x"}, "text")])
+        self.assertIs(metrics._blind(plain), plain)   # an episode without a hold stays as it was
 
 
 class SectionsTest(unittest.TestCase):

@@ -563,7 +563,9 @@ def _run_text(arm: dict) -> str:
     """One run as the judge sees it: the supervisor's own record of its supervisor-tool calls (results as the run
     saw them, up to 6,000 chars with the cut marked), its own log of the other tools (files, memory, plugins), and
     the file changes the supervisor computed."""
+    from .metrics import blind_holds
     ep = arm.get("episode") or {}
+    ep = {**ep, "tools": blind_holds(ep.get("tools", []))}   # outcome cards carry earlier verdicts: never to a judge
     seen = {c["tool"] for c in arm.get("trace", [])}
     trace = "\n\n".join(f"### {i}. {c['tool']}({_cap(c['args'], 2000)})" + (f"  [{'; '.join(c['tags'])}]" if c.get("tags") else "")
                          + f"\n→ {'' if c['ok'] else 'ERROR '}{c['result']}"
