@@ -125,7 +125,7 @@ def run(cfg, state: State, client: Client) -> str:
                             "at": clock.now().isoformat(timespec="seconds")}
         if attention_on:
             record["intent"]["attention"] = workspace.attention(args.get("attention"))
-            ws.refocus(record["intent"]["attention"])
+        ws.refocus(f"{args['goal']}\n{args['success_criterion']}", record["intent"].get("attention") or [])
         if rate_error:
             record["intent"]["base_rate_error"] = rate_error
         cost = costs(args["goal"], origin)

@@ -187,6 +187,8 @@ def _relevance(pool: list[Item], about: str) -> None:
     """Relevance to this cycle, the same scorer for every source: the pool ranked by BM25 against what the cycle is
     about, as a 0-1 rank score; memory hits keep their own search rank when it is higher (the search found them by
     meaning too, which words alone miss)."""
+    for it in pool:
+        it.relevance = 0.0
     ranked = memory._bm25([(it.source, it.text) for it in pool], about)
     for rank, i in enumerate(ranked):
         pool[i].relevance = 1 - rank / len(ranked)
@@ -211,6 +213,7 @@ class Workspace:
     pool: list[Item] = field(default_factory=list)
     winners: list[Item] = field(default_factory=list)
     prior: str = ""
+    about: str = ""
     attention: list[dict] = field(default_factory=list)
     refocused: list[str] = field(default_factory=list)   # the winners after my declared attention re-ranked them
     k: int = 3
@@ -243,12 +246,15 @@ class Workspace:
             picked.append(it)
         return picked
 
-    def refocus(self, attention: list[dict]) -> None:
-        """After declare_intent: where I said I would look becomes part of the top-down prior (B3), and the broadcast
-        follows the new winners. Only competition has a top-down prior; relevance ignores it, as its control must."""
-        if self.mode != "competitive" or not attention:
+    def refocus(self, goal: str, attention: list[dict]) -> None:
+        """After declare_intent: the pool competes again for the goal I declared — relevance to it, in both modes, so
+        both know the same — and where I said I would look joins the top-down prior (B3), in competition only: plain
+        relevance has no prior, as its control must. The broadcast follows the new winners."""
+        if self.mode == "off" or not self.pool:
             return
-        self.attention = attention
+        _relevance(self.pool, f"{self.about}\n{goal}")
+        if self.mode == "competitive":
+            self.attention = attention
         self.score()
         self.winners = self.select()
         self.refocused = [it.key() for it in self.winners]
@@ -287,7 +293,7 @@ def build(root: Path, mode: str, *, about: str, shown: str, now: datetime, inbox
     """Gather every codelet's items, score them and pick the winners. A codelet that fails is left out and said in
     the record: the workspace must never stop a cycle."""
     mode = mode if mode in MODES else "competitive"
-    ws = Workspace(mode, k=max(1, k))
+    ws = Workspace(mode, k=max(1, k), about=about)
     if mode == "off":
         return ws
     for name, codelet in (("memory", lambda: _memory(root, about, shown, now)),
@@ -317,7 +323,7 @@ def build(root: Path, mode: str, *, about: str, shown: str, now: datetime, inbox
 def attention(value) -> list[dict]:
     """declare_intent's attention (B3): up to four {source, why}, kept as far as they make sense — a malformed value is
     trimmed, never an error (a cycle cannot fail for how it says where it will look)."""
-    items = value if isinstance(value, list) else [value] if isinstance(value, dict) else []
+    items = value if isinstance(value, list) else [value] if isinstance(value, (dict, str)) else []
     out = []
     for a in items:
         if isinstance(a, dict) and str(a.get("source") or "").strip():
