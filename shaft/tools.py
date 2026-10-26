@@ -75,8 +75,8 @@ BUILTINS = [
           "have one).", {"path": S}, []),
     _spec("rewrite_facts", "Consolidate memory/facts.md (in my sleep): give the whole new list — duplicates "
           "merged, superseded or trivial facts dropped, what still matters kept — one per line as "
-          "'- [YYYY-MM-DD HH:MM] fact' (keep each fact's date). At most 6,000 characters: it is shown to me in "
-          "full. Facts I drop are kept in memory/facts-archive.md, still found by search_memory.", {"facts": S}),
+          "'- [YYYY-MM-DD HH:MM] fact' (keep each fact's date and '(src: …)'). At most 6,000 characters: "
+          "it is shown to me in full. Facts I drop are kept in memory/facts-archive.md, still found by search_memory.", {"facts": S}),
     _spec("write_digest", "Add today's digest (in my sleep): a short summary, at most 1,500 characters, of "
           "what happened since my last sleep and what it means — what my future self needs once these "
           "journal entries are no longer in view. Kept in memory/digests.md; recent digests are shown to me.",
@@ -84,8 +84,9 @@ BUILTINS = [
     _spec("search_memory", "Search everything I remember (journal, facts, notes, conversations) "
           "and return the most relevant passages with their dates.",
           {"query": S, "k": {"type": "integer", "description": "max results, default 5"}}, ["query"]),
-    _spec("remember", "Store a durable fact in memory/facts.md (about the world, the operator, or myself).",
-          {"fact": S}),
+    _spec("remember", "Store a durable fact in memory/facts.md with its source: log:<episode ts>[#step], "
+          "web:<url> seen in this run, operator, instance:<name>, or inferred.",
+          {"fact": S, "source": S}),
     _spec("update_self_model", "Replace my self-model (self/self.md) with a complete new version "
           "starting with '# '. Include everything I want to keep.", {"text": S}),
     _spec("update_personality", "Rewrite one layer of self/personality.md. 'surface' = current "
@@ -278,13 +279,57 @@ class Toolbox:
         note = f"(searched by {memory.mode})\n\n" if memory.mode else ""
         return note + ("\n\n".join(f"[{h.source}] {h.text}" for h in hits) or "nothing relevant found")
 
-    def _t_remember(self, fact: str) -> str:
+    def _remember_source(self, source: str) -> bool:
+        if source in ("operator", "inferred") or re.fullmatch(r"instance:[a-z0-9][a-z0-9_-]*", source):
+            return True
+        if source.startswith("web:"):
+            url = source[4:]
+            if not re.fullmatch(r"https?://[^\s/]+(?:/[^\s]*)?", url):
+                return False
+            normalize = lambda u: re.sub(r"^https?://", "", u).rstrip("/")
+            for entry in self.log:
+                for field in ("args", "result"):
+                    raw = entry.get(field, "")
+                    raw = raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False)
+                    for seen in re.findall(r"https?://[^\s\"'<>]+", raw):
+                        if normalize(seen) == normalize(url):
+                            return True
+            return False
+        if not source.startswith("log:"):
+            return False
+        stamp, sep, step = source[4:].partition("#")
+        try:
+            datetime.fromisoformat(stamp)
+        except ValueError:
+            return False
+        if not re.match(r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}", stamp) or (
+                sep and not re.fullmatch(r"[1-9][0-9]*", step)):
+            return False
+        for path in sorted((self.root / "memory" / "episodes").glob("*.jsonl")):
+            for line in path.read_text(errors="replace").splitlines():
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                ts = rec.get("ts", "") if isinstance(rec, dict) else ""
+                if isinstance(ts, str) and (ts.replace("T", " ") == stamp.replace("T", " ") or
+                        len(stamp) == 16 and ts[:16].replace("T", " ") == stamp.replace("T", " ")):
+                    # Episodes record calls in order, without model-turn numbers: #1 is the first call.
+                    if not sep or int(step) <= len(rec.get("tools") or []):
+                        return True
+        return False
+
+    def _t_remember(self, fact: str, source: str = "") -> str:
+        if not isinstance(source, str) or not self._remember_source(source):
+            return ("ERROR: source must be log:<episode ts>[#step], web:<url>, operator, "
+                    "instance:<name> ([a-z0-9][a-z0-9_-]*), or inferred; "
+                    "if you did not observe it in this run's tool results or your record, use source=inferred")
         facts = self.root / "memory" / "facts.md"
         facts.parent.mkdir(parents=True, exist_ok=True)
         if not facts.exists():
             facts.write_text("# Facts I have learned\n\n")
         with facts.open("a") as f:
-            f.write(f"- [{clock.now():%Y-%m-%d %H:%M}] {fact.strip()}\n")
+            f.write(f"- [{clock.now():%Y-%m-%d %H:%M}] {fact.strip()} (src: {source})\n")
         return "remembered"
 
     def _t_rewrite_facts(self, facts: str) -> str:
