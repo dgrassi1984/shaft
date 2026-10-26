@@ -956,6 +956,106 @@ def surprise_baseline_report(name: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+# The M2 control (2026-10-26): the fields run's disagreements with the stored verdicts mix what the surprise fields do
+# with the judge's own noise when asked the same thing twice. The control re-asks the same case, by the same judge, with
+# the question as it stands minus the fields — so the fields are the only difference between the two runs.
+CONTROL_SYSTEM = JUDGE_SYSTEM[:JUDGE_SYSTEM.index("\n\nExpectations, last and separately")]
+CONTROL_SCHEMA = _schema({**VERDICT_PROPS, **RATING_PROPS, **VALUE_PROPS})
+_MET_RANK = {"no": 0, "partial": 1, "yes": 2}
+
+
+def _surprise_control_rows(name: str) -> list[dict]:
+    path = SUP_DIR / "judgments" / f"{name}-surprise-control.jsonl"
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
+
+
+def surprise_control(name: str, dry_run: bool = False) -> dict:
+    """Re-judge each cycle of the surprise baseline once more without the surprise fields (CONTROL_SYSTEM and
+    CONTROL_SCHEMA), by the judge of its stored verdict, into <name>-surprise-control.jsonl: resumable, each paid answer
+    saved before the next is asked. Only same-judge baseline rows are candidates: the control mirrors them."""
+    js = judgments(name)
+    stored = {j["episode_ts"]: j for j in js}
+    episodes = {ep["ts"]: ep for ep in live_episodes(name)}
+    done = {r["episode_ts"] for r in _surprise_control_rows(name)}
+    todo = [episodes[r["episode_ts"]] for r in _surprise_baseline_rows(name)
+            if _same_judge(r, stored.get(r["episode_ts"])) and r["episode_ts"] in episodes and r["episode_ts"] not in done]
+    cost, basis = _judgment_cost()
+    result = {"todo": len(todo), "done": 0, "estimated_usd": len(todo) * cost, "per_judgment_usd": cost,
+              "basis": basis + " (an upper bound: the control asks no surprise fields)"}
+    if dry_run:
+        return result
+    path = SUP_DIR / "judgments" / f"{name}-surprise-control.jsonl"
+    for ep in todo:
+        by = stored[ep["ts"]]["judge"]
+        try:
+            case = _case(ep, _written_files(name, ep), _provenance_evidence(name, ep), _prior_goals(js, ep["ts"]),
+                         followed=_followed_surprise(name, ep))
+            verdict = judge.ask(CONTROL_SYSTEM, case, CONTROL_SCHEMA, purpose=f"surprise control {name}", model=by)
+            _check_ratings(verdict, RATINGS + VALUES)
+        except judge.JudgeError as e:
+            log(f"{name}: surprise control of {ep['ts']} failed: {e}")
+            break
+        row = {"episode_ts": ep["ts"], "judged_at": datetime.now().isoformat(timespec="seconds"),
+               "judge": by, "model": cycle_model(name, ep), **verdict}
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        result["done"] += 1
+    return result
+
+
+def _sign_test(a: int, b: int) -> float:
+    """Two-sided exact sign test on a and b discordant pairs: how often a split this uneven comes by chance."""
+    n, k = a + b, min(a, b)
+    return 1.0 if not n else min(1.0, 2 * sum(math.comb(n, i) for i in range(k + 1)) / 2 ** n)
+
+
+def surprise_control_report(names: list[str]) -> str:
+    """Per instance and pooled: how often the fields run and the control each agree with the stored criterion_met, on
+    the same cycles by the same judge, and the paired split — cycles only the fields run moved against cycles only the
+    control moved. The fields move criterion_met only if that split clearly leans to the fields run."""
+    lines, pooled = [], {"n": 0, "fields": 0, "control": 0, "f_only": 0, "c_only": 0, "f_strict": 0, "f_lenient": 0,
+                         "c_strict": 0, "c_lenient": 0, "same": 0}
+    for name in names:
+        stored = {j["episode_ts"]: j for j in judgments(name)}
+        fields = {r["episode_ts"]: r for r in _surprise_baseline_rows(name) if _same_judge(r, stored.get(r["episode_ts"]))}
+        control = {r["episode_ts"]: r for r in _surprise_control_rows(name) if _same_judge(r, stored.get(r["episode_ts"]))}
+        both = sorted(set(fields) & set(control))
+        c = dict.fromkeys(pooled, 0)
+        c["n"] = len(both)
+        for ts in both:
+            was, f, k = (_MET_RANK[x["criterion_met"]] for x in (stored[ts], fields[ts], control[ts]))
+            c["fields"] += f == was
+            c["control"] += k == was
+            c["f_only"] += f != was and k == was
+            c["c_only"] += k != was and f == was
+            c["f_strict"] += f < was
+            c["f_lenient"] += f > was
+            c["c_strict"] += k < was
+            c["c_lenient"] += k > was
+            c["same"] += f == k
+        for k in pooled:
+            pooled[k] += c[k]
+        missing = len(fields) - len(both)
+        lines += _control_lines(name, c) + ([f"  {missing} baseline cycle(s) without a control yet"] if missing else [])
+    if len(names) > 1:
+        lines += _control_lines("all", pooled)
+    return "\n".join(lines) + "\n"
+
+
+def _control_lines(name: str, c: dict) -> list[str]:
+    n = c["n"]
+    if not n:
+        return [f"Surprise control: {name}: not measured (no cycle has both runs)"]
+    return [f"Surprise control: {name} ({n} cycles, each by its stored verdict's judge)",
+            f"  agreement with the stored criterion_met: with the fields {c['fields']}/{n}, control {c['control']}/{n}",
+            f"  moved stricter / more lenient: with the fields {c['f_strict']}/{c['f_lenient']}, "
+            f"control {c['c_strict']}/{c['c_lenient']}",
+            f"  only the fields run moved: {c['f_only']}; only the control moved: {c['c_only']} "
+            f"(sign test p={_sign_test(c['f_only'], c['c_only']):.2f})",
+            f"  fields run and control agree with each other: {c['same']}/{n}"]
+
+
 BACKFILL_FLUSH = 10
 
 

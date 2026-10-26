@@ -1001,6 +1001,8 @@ def main(argv: list[str]) -> int:
     p.add_argument("--limit", type=int, default=None, help="the newest this many cycles per instance (a re-run judges only "
                    "what they still lack)")
     p.add_argument("--report", action="store_true", help="only print the comparison with the stored verdicts")
+    p.add_argument("--control", action="store_true", help="the M2 control: re-judge the baseline's cycles by the same "
+                   "judge without the surprise fields, into judgments/<name>-surprise-control.jsonl, and compare")
     p = sub.add_parser("surprise-report", help="the surprise loop's acceptance window: P1-P5 against the frozen "
                        "baseline, and how each sleep handled the surprises (docs/plans/PLAN-surprise.md §4)")
     p.add_argument("names", nargs="*")
@@ -1302,6 +1304,16 @@ def main(argv: list[str]) -> int:
         for name in args.names:
             instance_root(name)
         return surprise.command(args.names or instance_names(), args.freeze)
+    if args.cmd == "surprise-rejudge" and args.control:
+        for name in args.names:
+            instance_root(name)
+            if not args.report:
+                r = metrics.surprise_control(name, dry_run=args.dry_run)
+                print(f"{name}: {r['todo']} cycle(s) for the control, {r['done']} done; about ${r['estimated_usd']:.2f} "
+                      f"(${r['per_judgment_usd']:.3f} each: {r['basis']})")
+        if args.report or not args.dry_run:
+            print(metrics.surprise_control_report(args.names))
+        return 0
     if args.cmd == "surprise-rejudge":
         for name in args.names:
             instance_root(name)
