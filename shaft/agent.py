@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from . import broker, images, pausing, surprises
+from . import broker, cards, images, pausing, surprises
 from .llm import Client, Reply
 from .tools import Toolbox, for_log
 
@@ -237,6 +237,8 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
                 _tag(toolbox.log[-1])
             else:
                 result = toolbox.run(c["name"], c["arguments"])
+                if result.startswith(cards.HELD):
+                    last_call = None   # I can call again to run an action held for review.
                 hit = _tag(toolbox.log[-1])
                 predictions = expected() if expected and hit else None
                 if predictions is not None:
