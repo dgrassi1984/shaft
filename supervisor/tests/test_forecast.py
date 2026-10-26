@@ -135,7 +135,7 @@ class TextTest(ForecastFixture):
     def test_under_min_comparable(self):
         self.append(_ep("2026-10-20T10:00:00", "map the orchard", "self", at="2026-10-20T09:00:00"))
         self.assertEqual(forecast.text("on", self.root, "map the orchard", "self", self.now),
-                         "No comparable past cycles to forecast from yet.")
+                         "")   # fewer than MIN_COMPARABLE: nothing at all, not a line at every declare
 
     def _cycles(self):
         # 3 comparable cycles: turns median 9, minutes median 34, tool calls median 14, ran_out 0.
@@ -153,7 +153,8 @@ class TextTest(ForecastFixture):
                             turns_left=12, minutes_left=50, calls_left=58)
         self.assertTrue(out.startswith(
             "Forecast from my 3 most comparable past cycles: median 9 turns, 34 minutes, 14 tool calls; "
-            "0 of 3 ran out of turns or time; the judge found the criterion met in 0 of 0 judged."))
+            "0 of 3 ran out of turns or time."))
+        self.assertNotIn("met", out)   # costs only: a success rate here would be a second base rate (v3 reads it)
         self.assertIn("This cycle has 12 turns, about 50 minutes and 58 supervisor calls left.", out)
         self.assertNotIn("Size the goal", out)
 

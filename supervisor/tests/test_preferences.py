@@ -131,11 +131,16 @@ class PreferenceTest(LedgerCase):
             self.assertEqual(len(lines), 6)
             self.assertTrue(all(len(line) <= 120 for line in lines[3:]))
             self.assertEqual([line[:4] for line in lines[3:]], ["- 1:", "- 2:", "- 3:"])
-            self.assertEqual(preferences.report("wren").splitlines(),
-                             ["wren: paused until 2026-10-26 04:03", *(json.dumps(r) for r in rows)])
+            report = preferences.report("wren").splitlines()   # text, one line per event: never raw JSON
+            self.assertEqual(report[0], "wren: paused until 2026-10-26 04:03")
+            self.assertEqual(len(report), 1 + len(rows))
+            self.assertEqual(report[1], "2026-09-01 01:00 preference about old: old preference")
+            self.assertIn("2026-10-26 00:01 pause lifted by the operator", report)
+            self.assertFalse(any(line.startswith("{") for line in report))
             self.assertEqual(preferences.report("absent"), "absent: no active pause")
         self.assertEqual(preferences.review_lines(["wren", "absent"], datetime(2026, 10, 26)),
-                         [f"wren: {json.dumps(r)}" for r in rows[2:]])
+                         [f"wren: {preferences.describe(r)}" for r in rows[2:]])
+        self.assertEqual(preferences.section("absent"), [])   # an empty ledger adds nothing to stats.md
 
 
 class BrokerPreferenceTest(LedgerCase):
@@ -169,8 +174,10 @@ class BrokerPreferenceTest(LedgerCase):
                              {"ok": True, "result": PREFERRED})
             self.assertEqual(self.live._operator_sent_today(NOW), 1)
             self.assertFalse(self.live.call("send_message", {"to": "operator", "text": "over quota"})["ok"])
-        notes = [p.read_text() for p in inbox.glob("preference-*.md")]
+        # The usual inbox name (readers of the inbox and `shaft delete` match it), marked as a notice in its header
+        notes = [p.read_text() for p in inbox.glob("*-from-wren.md") if broker.NOTICE in p.read_text()]
         self.assertEqual(len(notes), 2)
+        self.assertEqual(len(list(inbox.glob("*.md"))), 3)   # nothing named otherwise
         self.assertTrue(all(n.startswith("From: wren\nTo: operator\nKind: note\n") for n in notes))
         self.assertTrue(any("I asked for a pause until 2026-10-26 03:00: rest. `shaft prefs wren lift` ends it." in n
                             for n in notes))

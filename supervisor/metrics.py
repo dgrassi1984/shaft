@@ -1465,13 +1465,32 @@ def stats_text(name: str) -> str:
         lines.append(f"- Claims the tool log did not support: {len(unsupported)} of {len(js)}")
     vague = sum(1 for j in js if j.get("criterion_quality") != "checkable")
     lines.append(f"- Criteria the judge found vague or unverifiable: {vague}/{len(js)}")
+    lines += _sections(name, ("metacog",))   # right under calibration: inside the part my prompt shows
     fails = [j for j in js if j["criterion_met"] != "yes" and j.get("failure_mode")][-5:]
     if fails:
         lines += ["", "## Recent failure modes"] + [f"- {j['episode_ts'][:16]} — {j['failure_mode']}" for j in fails]
     lines += _second_section(js)
+    lines += _sections(name, ("attention", "commitments", "provenance", "tom", "preferences"))
     lines += ["", "## Last judgment", f"{js[-1]['goal']}", f"> {js[-1]['reasoning']}"]
     lines += _code_section(name) + _traits_section(name) + _trials_section(name)
     return "\n".join(lines) + "\n"
+
+
+# The sections of docs/plans/PLAN-consciousness.md, each from its own module. Each in its own try: a record one of them
+# cannot read must never cost the instance its whole stats.md. None of them feeds probation, base rates or a reward.
+def _sections(name: str, which: tuple[str, ...]) -> list[str]:
+    import importlib
+    out = []
+    for module in which:
+        try:
+            lines = importlib.import_module(f".{module}", __package__).section(name)
+        except Exception as e:
+            log(f"{name}: stats section {module} failed: {type(e).__name__}: {e}")
+            continue
+        if lines and lines[0] != "":   # every section is set off by a blank line
+            lines = [""] + lines
+        out += lines
+    return out
 
 
 def _window(js: list[dict], start: datetime, end: datetime) -> list[dict]:
@@ -1498,6 +1517,8 @@ def review_text(names: list[str], hours: float = 24, now: datetime | None = None
         js = judgments(name)
         rows, prev = _window(js, start, now), _window(js, start - timedelta(hours=hours), start)
         out += ["", f"■ {name}: {_summary(rows)}", f"  the {hours:g} h before: {_summary(prev)}"]
+        from . import preferences
+        out += [f"  {line}" for line in preferences.review_lines([name], start)]
         if not rows:
             out.append(f"  last judged cycle: {js[-1]['episode_ts'][:16].replace('T', ' ') if js else 'never'}")
             continue
@@ -1523,6 +1544,8 @@ def review_text(names: list[str], hours: float = 24, now: datetime | None = None
                        "(asked under a question this supervisor does not know)")
         if broken := [j["base_rate_error"] for j in rows if j.get("base_rate_error")]:
             out.append(f"  base rate file unreadable in {len(broken)} cycle(s): {broken[0]}")
+        from . import metacog
+        out.append("  metacognition (all judged cycles, not just this window): " + metacog.review_line(js))
         if valued(rows):
             levels = " · ".join(f"{v}: {sum(1 for j in valued(rows) if j['value'] == v)}" for v in range(6))
             out.append(f"  value grades: {levels}")

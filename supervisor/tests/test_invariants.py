@@ -157,7 +157,7 @@ class TalkInvariants(InstanceCase):
         self.assertIn("I remember teal", episodes)
 
     def test_talk_uses_tools_while_streaming(self):
-        replies = [{"reasoning": "store it", "tool_calls": [("remember", {"fact": "the operator likes teal"})]},
+        replies = [{"reasoning": "store it", "tool_calls": [("remember", {"fact": "the operator likes teal", "source": "operator"})]},
                    {"content": "Noted: you like teal."}]
         r = self.run_agent(replies, "talk", stdin="remember that I like teal\n/exit\n")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -199,7 +199,7 @@ class TalkInvariants(InstanceCase):
         self.assertEqual(len(self.fake.requests), 1)
 
     def test_json_protocol_for_the_terminal_client(self):
-        replies = [{"reasoning": "hm", "tool_calls": [("remember", {"fact": "the operator uses iTerm2"})]},
+        replies = [{"reasoning": "hm", "tool_calls": [("remember", {"fact": "the operator uses iTerm2", "source": "operator"})]},
                    {"content": "Noted: **iTerm2**."}]
         stdin = json.dumps({"type": "user", "text": "line one\nline two"}) + "\n" + json.dumps({"type": "exit"}) + "\n"
         r = self.run_agent(replies, "talk", "--json", stdin=stdin)

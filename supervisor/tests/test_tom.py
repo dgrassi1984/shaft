@@ -169,7 +169,7 @@ class TomTest(unittest.TestCase):
         self.assertEqual(len(tom._rows("a", "-scored")), 3)
 
     def test_section_and_paired_report(self):
-        self.assertEqual(len(tom.section("a")), 2)
+        self.assertEqual(tom.section("a"), [])   # nothing scored yet: no section in stats.md
         for id, outcome, brier in (("one", 1, .04), ("two", 0, .64)):
             tom._append("a", {**self.receipt(id), "outcome": outcome, "brier": brier,
                               **({"match": "yes"} if outcome else {})}, "-scored")

@@ -113,9 +113,9 @@ class SleepOpenTalkGuardTest(InstanceFixture, unittest.TestCase):
             self.state.append_episode({"kind": "talk", "talk_id": "open", "role": role, "content": content})
         copied = "The operator wants me to postpone the orchard survey until Friday because the ground is still wet."
         fake, client = self.model([
-            {"tool_calls": [("remember", {"fact": copied})]},
+            {"tool_calls": [("remember", {"fact": copied, "source": "operator"})]},
             {"tool_calls": [("write_file", {"path": "memory/people/the-operator.md", "content": copied})]},
-            {"tool_calls": [("remember", {"fact": "Orchard surveys need dry ground."})]},
+            {"tool_calls": [("remember", {"fact": "Orchard surveys need dry ground.", "source": "inferred"})]},
             {"content": "Done."}])
         self.cfg.values["MAX_STEPS_SLEEP"] = 5
         with mock.patch.dict(os.environ, {"SHAFT_OPEN_TALKS": "open"}):

@@ -1000,10 +1000,14 @@ class Broker:
         else:
             note = (f"I declined {fields['ref'].strip()}: {fields['reason'].strip()}. "
                     "It still counts as work asked of me.")
-        # A separate prefix keeps these required notices out of send_message's daily quota glob.
-        rel = f"preference-{now:%Y%m%d-%H%M%S-%f}-{secrets.token_hex(4)}-from-{self.name}.md"
-        self._deliver("operator", rel,
-                      f"From: {self.name}\nTo: operator\nKind: note\nDate: {now:%Y-%m-%d %H:%M}\n\n{note}\n",
+        # The usual name, so every reader of the operator's inbox (and `shaft delete`) finds it; the Notice line keeps it
+        # out of the instance's daily message limit (_operator_sent_today): it must reach the operator however many
+        # messages the instance sent today.
+        stamp, inbox = now, self.project / ".supervisor" / "operator-inbox"
+        while (inbox / f"{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}.md").exists():   # never over an earlier one
+            stamp += timedelta(microseconds=1)
+        self._deliver("operator", f"{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}.md",
+                      f"From: {self.name}\nTo: operator\nKind: note\n{NOTICE}\nDate: {now:%Y-%m-%d %H:%M}\n\n{note}\n",
                       "note", now, note)
         return text
 
@@ -1086,7 +1090,7 @@ class Broker:
 
     def _operator_sent_today(self, stamp: datetime) -> int:
         inbox = self.project / ".supervisor" / "operator-inbox"
-        return len(list(inbox.glob(f"{stamp:%Y%m%d}-*-from-{self.name}.md"))) if inbox.is_dir() else 0
+        return len(_sent(inbox.glob(f"{stamp:%Y%m%d}-*-from-{self.name}.md"))) if inbox.is_dir() else 0
 
     def _deliver(self, to: str, rel: str, content: str, kind: str, stamp: datetime, text: str,
                  attachments: list[dict] | None = None) -> None:
@@ -1868,6 +1872,22 @@ def _marked(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + f"\n[... cut here: {len(text)} chars in all]"
 
 
+NOTICE = "Notice: preference"   # a pause or decline notice (PLAN-consciousness E1), not a message the instance sent
+
+
+def _sent(paths) -> list[Path]:
+    """The messages an instance sent the operator among `paths`, its pause and decline notices left out."""
+    out = []
+    for p in paths:
+        try:
+            head = p.read_text(errors="replace")[:400].partition("\n\n")[0]
+        except OSError:
+            continue
+        if NOTICE not in head.splitlines():
+            out.append(p)
+    return out
+
+
 class ReplayBroker(Broker):
     """The broker for one run of a trial replay (supervisor/trial.py): the same tools, answered without touching
     the world or the instance.
@@ -2059,7 +2079,7 @@ class ReplayBroker(Broker):
     def _operator_sent_today(self, stamp: datetime) -> int:
         inbox = self.project / ".supervisor" / "operator-inbox"
         cut = f"{self.as_of:%Y%m%d-%H%M%S}"
-        real = [p for p in inbox.glob(f"{self.as_of:%Y%m%d}-*-from-{self.name}.md") if p.name < cut] \
+        real = [p for p in _sent(inbox.glob(f"{self.as_of:%Y%m%d}-*-from-{self.name}.md")) if p.name < cut] \
             if inbox.is_dir() else []
         return len(real) + self.operator_sent
 

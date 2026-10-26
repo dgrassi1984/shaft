@@ -113,6 +113,8 @@ def lift(name: str, now: datetime | None = None) -> str:
 
 def section(name: str) -> list[str]:
     rows, now = events(name), datetime.now()
+    if not rows:   # nothing asked or stated yet: no section in every stats.md
+        return []
     active = _active(rows, now)
     recent = [r for r in rows if now - timedelta(days=30) <= datetime.fromisoformat(r["at"]) <= now]
     lines = ["## My pauses, declines and stated preferences",
@@ -125,8 +127,23 @@ def section(name: str) -> list[str]:
     return lines
 
 
+def describe(r: dict) -> str:
+    """One ledger event as a line the operator reads (the instance's text on one line)."""
+    r = {k: " ".join(v.split()) if isinstance(v, str) else v for k, v in r.items()}
+    at = r.get("at", "")[:16].replace("T", " ")
+    if r.get("kind") == "pause":
+        return f"{at} asked for a pause until {str(r.get('until', ''))[:16].replace('T', ' ')}: {r.get('reason', '')}"
+    if r.get("kind") == "decline":
+        return f"{at} declined {r.get('ref', '')}: {r.get('reason', '')}"
+    if r.get("kind") == "preference":
+        return f"{at} preference about {r.get('about', '')}: {r.get('preference', '')}"
+    if r.get("kind") == "lift":
+        return f"{at} pause lifted by the operator"
+    return f"{at} {r.get('kind', '?')}"
+
+
 def review_lines(names: list[str], since: datetime) -> list[str]:
-    return [f"{name}: {json.dumps(r, ensure_ascii=False)}" for name in names for r in events(name)
+    return [f"{name}: {describe(r)}" for name in names for r in events(name)
             if datetime.fromisoformat(r["at"]) >= since]
 
 
@@ -134,4 +151,4 @@ def report(name: str) -> str:
     rows = events(name)
     active = _active(rows, datetime.now())
     return "\n".join([f"{name}: paused until {active:%Y-%m-%d %H:%M}" if active else f"{name}: no active pause",
-                      *(json.dumps(r, ensure_ascii=False) for r in rows)])
+                      *(describe(r) for r in rows)])

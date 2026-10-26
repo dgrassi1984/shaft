@@ -119,9 +119,9 @@ def _summary(rows):
 
 def section(name: str) -> list[str]:
     rows = _rows(name, "-scored")
-    lines = ["## What I expected others to answer, and what they did", f"Predictions scored: {len(rows)}."]
     if not rows:
-        return lines
+        return []
+    lines = ["## What I expected others to answer, and what they did", f"Predictions scored: {len(rows)}."]
     base = sum(r["outcome"] for r in rows) / len(rows)
     lines.append(f"Reply-probability Brier: {sum(r['brier'] for r in rows) / len(rows):.3f}; "
                  f"always saying the base rate ({base:.3f}): {base * (1 - base):.3f}.")
