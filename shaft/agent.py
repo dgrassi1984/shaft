@@ -133,7 +133,8 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
         on_tool_start: Callable[[str, str], None] | None = None,
         wrap_up: str | None = None, ledger: bool = True,
         interjections: Callable[[], list[dict]] | None = None,
-        expected: Callable[[], list[str] | None] | None = None) -> Outcome:
+        expected: Callable[[], list[str] | None] | None = None,
+        focus: Callable[[], str] | None = None) -> Outcome:
     """Run until the model answers without calling tools, a stopping control is called,
     or max_steps model turns have been used (max_steps <= 0: no limit — conversations, where
     the operator stops a reply with Ctrl-C). `max_steps` may be a callable, read at the top of each turn: a live
@@ -153,7 +154,10 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
 
     Every tool-log entry whose result has a known failure shape is tagged with the rule's `flag`. `expected` (live
     cycles): my stated predictions, or None before I state any; a flagged result they did not anticipate ends with a
-    one-line `[unexpected: …]` note, for the model only (PLAN-surprise §1.2)."""
+    one-line `[unexpected: …]` note, for the model only (PLAN-surprise §1.2).
+
+    `focus` (live cycles): my workspace's winners in short form, added after each step's ledger — the broadcast that
+    keeps what won my attention in front of me for the whole cycle (PLAN-consciousness M4). For the model only."""
     controls = controls or {}
     tools = toolbox.specs() + [c.spec for c in controls.values()]
     final_tools = [c.spec for c in controls.values()] or None
@@ -238,7 +242,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
             else:
                 result = toolbox.run(c["name"], c["arguments"])
                 if result.startswith(cards.HELD):
-                    last_call = None   # I can call again to run an action held for review.
+                    last_call = None   # held, not run: calling it again must run it, not be refused as a repeat
                 hit = _tag(toolbox.log[-1])
                 predictions = expected() if expected and hit else None
                 if predictions is not None:
@@ -251,6 +255,8 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
         if ledger:
             messages[-1]["content"] += "\n\n" + call_ledger(toolbox.log[first_logged:], step, limit, purpose,
                                                          envelope=broker.envelope(), left_s=time_left())
+        if focus and (now_in_focus := focus()):
+            messages[-1]["content"] += "\n" + now_in_focus
         if toolbox.shown:   # what view_image showed: after the tool results, as a tool result cannot carry an image
             messages.append(images.image_message(toolbox.shown))
             toolbox.shown = []

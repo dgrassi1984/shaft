@@ -118,8 +118,8 @@ def text(mode: str, root: Path, goal: str, origin: str, now: datetime, *, turns_
     if mode == "reserve":
         return RESERVE
     eps = comparable(root, goal, origin, now)
-    if len(eps) < MIN_COMPARABLE:
-        return "No comparable past cycles to forecast from yet."
+    if len(eps) < MIN_COMPARABLE:   # nothing to say yet: no line at every declare of a young instance
+        return ""
     s = summarise(eps, root)
     medians = [f"{round(v)} {unit}" for v, unit in ((s["turns"], "turns"), (s["minutes"], "minutes"),
                                                      (s["tool_calls"], "tool calls")) if v is not None]
@@ -132,8 +132,9 @@ def text(mode: str, root: Path, goal: str, origin: str, now: datetime, *, turns_
         left.append(f"{round(calls_left)} supervisor calls")
     out = (f"Forecast from my {s['n']} most comparable past cycles: "
            + (f"median {', '.join(medians)}; " if medians else "")
-           + f"{s['ran_out']} of {s['n']} ran out of turns or time; "
-           f"the judge found the criterion met in {s['met']} of {s['judged']} judged.")
+           + f"{s['ran_out']} of {s['n']} ran out of turns or time.")
+    # Costs only, never how often those goals were met: this sits in declare_intent's result, which the v3 confirm
+    # step reads — a success rate here would be a second base rate, outside the paired test that measures the first.
     if left:
         out += f" This cycle has {_join(left)} left."
     warn = s["ran_out"] >= RAN_OUT_SHARE * s["n"]   # a share, not a count: 3 of 4 matters more than 3 of 10

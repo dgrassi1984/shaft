@@ -34,6 +34,7 @@ PROTECTED = {
     "self/self.md": "use update_self_model",
     "self/personality.md": "use update_personality",
     "self/stats.md": "written by the supervisor from my measured results",
+    "memory/commitments.jsonl": "use commit_to to make a commitment; my sleep settles them (settle_commitment)",
     "config.env": "change a value with the supervisor's set_config(key, value) — the only way to change this "
                   "file, so the supervisor can tell my settings from the operator's",
 }
@@ -113,6 +114,7 @@ class Toolbox:
         self.remote = self._discover_broker()
         self.log: list[dict] = []
         self.shown: list[Path] = []       # images view_image showed, for the agent loop to send after the results
+        self.commit_source = ""           # "cycle" or "talk" where commit_to is offered (COMMITMENTS on), else ""
 
     # -- discovery ---------------------------------------------------------------
     def _discover_plugins(self) -> dict[str, dict]:
@@ -140,7 +142,9 @@ class Toolbox:
             return {}
 
     def _builtins(self) -> list[dict]:
-        return BUILTINS + ([VIEW_IMAGE] if images.vision() else [])
+        from . import commitments   # it builds its spec with _spec, from this module
+        return (BUILTINS + ([VIEW_IMAGE] if images.vision() else [])
+                + ([commitments.COMMIT_TO] if self.commit_source else []))
 
     def specs(self) -> list[dict]:
         return self._builtins() + list(self.plugins.values()) + list(self.remote.values()) + self.extra
@@ -367,6 +371,11 @@ class Toolbox:
         path = self.root / "self" / "self.md"
         path.write_text(edit.new_self + "\n")
         return "self-model updated"
+
+    def _t_commit_to(self, promise: str, due: str, criterion: str, made_to: str) -> str:
+        from . import commitments
+        return commitments.add(self.root, {"promise": promise, "due": due, "criterion": criterion, "made_to": made_to},
+                               self.commit_source, clock.now())
 
     def _t_update_personality(self, layer: str, text: str) -> str:
         return personality.update(self.root, layer, text)

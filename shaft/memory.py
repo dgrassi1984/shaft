@@ -19,9 +19,10 @@ import urllib.request
 from array import array
 from collections import Counter
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
-from . import surprises
+from . import clock, surprises
 
 VERDICTS = "memory/verdicts.jsonl"   # the judge's verdicts, as my sleeps received them
 
@@ -84,9 +85,6 @@ def corpus(root: Path) -> list[tuple[str, str]]:
                 head, _, body = block.partition("\n")
                 for chunk in _chunks(body) or [""]:
                     docs.append((f"journal {head[3:].strip()}", f"{head}\n{chunk}"))
-    from datetime import datetime
-    from . import clock
-
     for name in ("facts.md", "facts-archive.md"):
         path = root / "memory" / name
         if not path.exists():
