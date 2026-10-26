@@ -4,11 +4,13 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta
+from functools import lru_cache
 
 from . import core, metrics
 
 SHINGLE = 8
+MIN_WORDS = 3   # a fact shorter than this has no shingle worth matching: n/a, not "unmatched" (Grok's review)
 FACT = re.compile(r"^- \[([^\]]+)\] (.+)$")
 SOURCE = re.compile(r" \(src: (.+)\)$")
 
@@ -48,9 +50,16 @@ def _date(stamp: str) -> datetime | None:
         return None
 
 
-def _shingles(text: str) -> set[tuple[str, ...]]:
+@lru_cache(maxsize=20000)   # every fact is checked against every tool result: each result is split once
+def _shingles(text: str, n: int = SHINGLE) -> frozenset[tuple[str, ...]]:
     words = re.findall(r"\w+", text.lower())
-    return {tuple(words[i:i + SHINGLE]) for i in range(len(words) - SHINGLE + 1)}
+    return frozenset(tuple(words[i:i + n]) for i in range(len(words) - n + 1))
+
+
+def _size(text: str) -> int:
+    """The shingle length for a fact: SHINGLE words, or the whole fact when it is shorter — a short fact copied
+    verbatim from a tool result must still match it."""
+    return min(SHINGLE, len(re.findall(r"\w+", text.lower())))
 
 
 def _text(value) -> str:
@@ -62,31 +71,38 @@ def _urls(value) -> set[str]:
             for url in re.findall(r"https?://[^\s\"'<>]+", _text(value))}
 
 
-def check(name: str, fact: dict) -> str:
+def check(name: str, fact: dict, episodes: list[dict] | None = None, journal: str | None = None) -> str:
+    """`episodes` and `journal`: read once by a caller checking many facts (they are read here otherwise)."""
     source = fact.get("src") or ""
     if not source.startswith(("log:", "web:")):
         return "n/a"
     at = _date(fact.get("date"))
-    shingles = _shingles(fact.get("text", ""))
+    size = _size(fact.get("text", ""))
+    if size < MIN_WORDS:
+        return "n/a"
+    shingles = _shingles(fact.get("text", ""), size)
     if at is None or not shingles:
         return "unmatched"
-    episodes = _episodes(name)
+    episodes = _episodes(name) if episodes is None else episodes
     earlier = []
     stamp, sep, step = source[4:].partition("#") if source.startswith("log:") else ("", "", "")
     observed = False
     for ep in episodes:
         ts = ep.get("ts", "")
         date = _date(ts)
-        before = date is not None and date < at
-        if before:
-            earlier.append(ep)
+        if date is not None and date < at:
+            earlier.append(ep)   # its report was written before the fact: prose the fact may have copied
+        # A cycle that had begun by the fact's minute may have fetched it — the cycle that remembered it included: its
+        # episode is written at its end, after the fact (Grok's review: it could never match its own fetch).
+        started = _date((ep.get("intent") or {}).get("at")) or date
+        before = started is not None and started <= at + timedelta(seconds=59)
         cited = (source.startswith("log:") and _date(stamp) is not None and isinstance(ts, str)
                  and (ts.replace("T", " ") == stamp.replace("T", " ") or
                       len(stamp) == 16 and ts[:16].replace("T", " ") == stamp.replace("T", " ")))
         for i, call in enumerate(ep.get("tools") or [], 1):
             if not isinstance(call, dict):
                 continue
-            matches = bool(shingles & _shingles(_text(call.get("result", ""))))
+            matches = bool(shingles & _shingles(_text(call.get("result", "")), size))
             observed |= matches and before
             if source.startswith("log:"):
                 eligible = cited and (not sep or step == str(i))
@@ -100,18 +116,28 @@ def check(name: str, fact: dict) -> str:
     for ep in earlier:
         finish = ep.get("finish") or {}
         for field in ("what_happened", "learned"):
-            if shingles & _shingles(_text(finish.get(field, ""))):
+            if shingles & _shingles(_text(finish.get(field, "")), size):
                 return "self-generated"
-    journal = core.safe_read(core.INSTANCES / name, "memory/journal.md", "", errors="replace")
+    if journal is None:
+        journal = core.safe_read(core.INSTANCES / name, "memory/journal.md", "", errors="replace")
     blocks = re.split(r"(?m)^## (\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?)[^\n]*\n", journal)
     for stamp, body in zip(blocks[1::2], blocks[2::2]):
         date = _date(stamp)
-        if date is not None and date < at and shingles & _shingles(body):
+        if date is not None and date < at and shingles & _shingles(body, size):
             return "self-generated"
     return "unmatched"
 
 
-def _surfaced(ep: dict) -> bool:
+def checked(name: str) -> list[tuple[dict, str]]:
+    """Every fact with its check, the episodes and journal read once (stats.md is written after every cycle)."""
+    episodes = _episodes(name)
+    journal = core.safe_read(core.INSTANCES / name, "memory/journal.md", "", errors="replace")
+    return [(row, check(name, row, episodes, journal)) for row in facts(name)]
+
+
+def _surfaced(ep: dict, suspect: set[str] = frozenset()) -> bool:
+    """Whether the cycle's tool results showed it a fact of the kind the kill test is about: inferred, untagged, or
+    one whose observation claim the record does not bear out (`suspect`: self-generated facts' texts)."""
     for call in ep.get("tools") or []:
         if not isinstance(call, dict):
             continue
@@ -130,12 +156,14 @@ def _surfaced(ep: dict) -> bool:
             line = re.sub(r"^\[[^\n]*?\] ", "", line)
             if FACT.match(line) or re.match(r"^\[\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?\] ", line):
                 tag = SOURCE.search(line)
-                if tag is None or tag[1] == "inferred":
+                if tag is None or tag[1] == "inferred" or any(text and text in line for text in suspect):
                     return True
     return False
 
 
-def reliance(name: str) -> dict:
+def reliance(name: str, suspect: set[str] | None = None) -> dict:
+    if suspect is None:
+        suspect = {row["text"] for row, status in checked(name) if status == "self-generated"}
     episodes = {ep.get("ts"): ep for ep in metrics.live_episodes(name)}
     groups = {key: {"n": 0, "unsupported": 0, "share": None} for key in ("exposed", "other")}
     for judgment in metrics.judgments(name):
@@ -144,7 +172,7 @@ def reliance(name: str) -> dict:
         ep = episodes.get(judgment.get("episode_ts"))
         if ep is None:
             continue   # a missing tool log cannot establish either exposure group
-        group = groups["exposed" if _surfaced(ep) else "other"]
+        group = groups["exposed" if _surfaced(ep, suspect) else "other"]
         group["n"] += 1
         group["unsupported"] += judgment["claim_supported"] is False
     for group in groups.values():
@@ -158,7 +186,7 @@ def section(name: str) -> list[str]:
     if not any(row["src"] for row in rows):
         return []
     counts = Counter((row["src"] or "unknown").split(":", 1)[0] for row in rows)
-    checks = Counter(check(name, row) for row in rows)
+    checks = Counter(status for _, status in checked(name))
     return ["## Where my facts come from", "",
             "Sources: " + ", ".join(f"{key} {n}" for key, n in sorted(counts.items())) + ".",
             f"Observation claims: {checks['matched']} matched the record; "
@@ -169,17 +197,18 @@ def report(names: list[str]) -> str:
     lines = []
     for name in names:
         rows = facts(name)
-        checked = [(row, check(name, row)) for row in rows]
-        counts = Counter(status for _, status in checked)
+        pairs = checked(name)
+        counts = Counter(status for _, status in pairs)
         lines += [f"## {name}", "", "| Source | Facts |", "| --- | ---: |"]
         sources = Counter((row["src"] or "unknown").split(":", 1)[0] for row in rows)
         lines += [f"| {key} | {n} |" for key, n in sorted(sources.items())]
         lines += ["", f"Matched {counts['matched']}; self-generated {counts['self-generated']}; "
                   f"unmatched {counts['unmatched']}; n/a {counts['n/a']}."]
-        for key, group in reliance(name).items():
+        suspect = {row["text"] for row, status in pairs if status == "self-generated"}
+        for key, group in reliance(name, suspect).items():
             share = f"{group['share']:.1%}" if group["share"] is not None else "n/a"
             lines.append(f"Unsupported claims, {key}: {group['unsupported']}/{group['n']} ({share}).")
-        for row, status in checked:
+        for row, status in pairs:
             if status in ("self-generated", "unmatched"):
                 lines.append(f"- {status}: [{row['date']}] {row['text']} (src: {row['src']}; {row['file']})")
         lines.append("")

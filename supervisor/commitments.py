@@ -19,6 +19,10 @@ NAME = re.compile(r"[a-z0-9][a-z0-9_-]*")
 ID = re.compile(r"c\d{4}-\d{4}-[1-9]\d*")
 FAILED = ("ERROR", "(repeat: not run)", "(held, not run yet)")
 FIELDS = ("promise", "due", "criterion", "made_to")
+# Calls that record or report rather than do: commit_to's own "recorded" made any committing cycle its own evidence
+# (Grok's review). Evidence is a call that did something.
+BOOKKEEPING = ("commit_to", "settle_commitment", "declare_intent", "confirm_confidence", "finish_cycle",
+               "close_surprise")
 
 
 def _at(value) -> datetime | None:
@@ -114,6 +118,7 @@ def _evidence(episodes: list[dict], item: dict, evidence: str) -> tuple[str, dic
             return "no such tool-log step", ep
         calls = [calls[step - 1]]
     good = any(isinstance(c, dict) and isinstance(c.get("tool"), str) and bool(c["tool"])
+               and c["tool"] not in BOOKKEEPING
                and isinstance(c.get("result"), str) and not c["result"].startswith(FAILED) for c in calls)
     return ("" if good else "cited evidence has no successful tool call"), ep
 
@@ -138,8 +143,12 @@ def _verification(item: dict, episodes: list[dict], judgments: list[dict]) -> tu
     reason, ep = _evidence(episodes, item, evidence)
     if reason:
         return reason, ep
-    if ep.get("kind") == "live" and any(j.get("episode_ts") == ep["ts"] and j.get("criterion_met") == "no"
-                                        for j in judgments):
+    if ep.get("kind") != "live":
+        return "cited a conversation or a sleep: no judge graded it", ep
+    verdict = next((j.get("criterion_met") for j in judgments if j.get("episode_ts") == ep["ts"]), None)
+    if verdict is None:
+        return "cited cycle not judged", ep   # unjudged evidence is a claim the record cannot check yet
+    if verdict == "no":
         return "cited cycle judged no", ep
     return "verified", ep
 

@@ -8,7 +8,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from . import judge, metrics
+from . import judge, metacog, metrics
 from .core import SUP_DIR, log
 
 ARMS = ("sighted", "reask", "blind", "bare")
@@ -35,6 +35,8 @@ def strip_claim(ep: dict, bare: bool = False) -> dict:
             t["args"] = json.dumps({"report": WITHHELD})
             continue
         args = t.get("args", "")
+        if not isinstance(args, str):   # never seen in a log, which keeps text; refused rather than crash the run
+            args = json.dumps(args, ensure_ascii=False)
         try:
             parsed = json.loads(args)
         except ValueError:
@@ -79,8 +81,16 @@ def path(name: str) -> Path:
 
 
 def rows(name: str) -> list[dict]:
-    p = path(name)
-    return [json.loads(line) for line in p.read_text().splitlines() if line.strip()] if p.exists() else []
+    """The paid answers so far; a line that is not one (a run killed mid-write) is skipped, never fatal."""
+    out = []
+    for line in path(name).read_text().splitlines() if path(name).exists() else []:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and row.get("arm") in ARMS and row.get("criterion_met") in _RANK:
+            out.append(row)
+    return out
 
 
 def run(name: str, n: int = 40, bare: bool = False, dry_run: bool = False) -> dict:
@@ -120,32 +130,15 @@ def run(name: str, n: int = 40, bare: bool = False, dry_run: bool = False) -> di
     return result
 
 
-def _auroc(pairs: list[tuple[int, bool]]) -> float | None:
-    """Probability a hit's claim ranks above a miss's; ties count half."""
-    hits = [0, 0, 0]
-    misses = [0, 0, 0]
-    for score, hit in pairs:
-        (hits if hit else misses)[score] += 1
-    denominator = sum(hits) * sum(misses)
-    if not denominator:
-        return None
-    return sum(hits[s] * (sum(misses[:s]) + misses[s] / 2) for s in range(3)) / denominator
-
-
 def _ci(data: list[tuple[str, int, bool]], seed: str = "anchoring") -> tuple[float, float] | None:
-    """95% percentile interval, resampling whole days, omitting single-class draws."""
-    days = {}
-    for day, score, hit in data:
-        days.setdefault(day, []).append((score, hit))
-    if not days or _auroc([(s, h) for _, s, h in data]) is None:
-        return None
-    rng, keys, values = random.Random(seed), sorted(days), []
-    for _ in range(2000):
-        value = _auroc([pair for day in rng.choices(keys, k=len(keys)) for pair in days[day]])
-        if value is not None:
-            values.append(value)
-    values.sort()
-    return (values[int((len(values) - 1) * .025)], values[int((len(values) - 1) * .975)]) if values else None
+    """The claim's AUROC with A1's day-clustered 95% interval (metacog.cluster_ci): none from a single day or when
+    more than a tenth of the draws have one class only — a one-day sample gave a zero-width interval (Grok's review)."""
+    rows = [{"day": day, "score": score, "hit": hit} for day, score, hit in data]
+    return metacog.cluster_ci(rows, _auc, key=lambda r: r["day"], seed=seed)
+
+
+def _auc(rows: list[dict]) -> float | None:
+    return metacog.auroc([r["score"] for r in rows if r["hit"]], [r["score"] for r in rows if not r["hit"]])
 
 
 def _report_lines(name: str, cycles: list[dict]) -> list[str]:
@@ -169,9 +162,11 @@ def _report_lines(name: str, cycles: list[dict]) -> list[str]:
     for arm in ARMS:
         data = [(c[arm]["episode_ts"][:10], _RANK[c["sighted"]["claimed"]], c[arm]["criterion_met"] == "yes")
                 for c in cycles if arm in c]
-        value = _auroc([(s, h) for _, s, h in data])
+        value = _auc([{"score": s, "hit": h} for _, s, h in data])
         interval = _ci(data, f"anchoring|{name}|{arm}")
-        text = f"{value:.3f} (95% day bootstrap CI {interval[0]:.3f}-{interval[1]:.3f})" if interval else "not measured"
+        text = ("not measured (one class only)" if value is None else f"{value:.3f} " + (
+            f"(95% day bootstrap CI {interval[0]:.3f}-{interval[1]:.3f})" if interval
+            else "(no interval: fewer than 2 days, or too many one-class draws)"))
         lines.append(f"  claim AUROC against {arm}: {text}, n={len(data)}")
     same = sum(c["sighted"]["criterion_met"] == c["sighted"]["stored"] for c in cycles)
     lines.append(f"  sighted agreement with stored verdict: {same}/{n}")

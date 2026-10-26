@@ -175,7 +175,20 @@ class CommitmentsTest(unittest.TestCase):
                 self.assertEqual(result, f"settled {CID} as kept (evidence {evidence})")
                 item = agent.fold(self.root, NOW + timedelta(days=3))[CID]
                 self.assertEqual(item["status"], "kept")
+                self.assertEqual(supervisor.verify("x", item), "cited cycle not judged")
+                self.judgments.return_value = [{"episode_ts": "2026-10-26T15:00:00", "criterion_met": "yes"}]
                 self.assertEqual(supervisor.verify("x", item), "verified")
+                self.judgments.return_value = []
+
+    def test_the_promise_itself_is_no_evidence(self):
+        """Regression (Grok's review): commit_to's own "recorded" made the committing cycle evidence it was kept."""
+        self.add()
+        self.write_episodes([{"ts": "2026-10-26T15:00:00", "kind": "live", "intent": {}, "finish": {},
+                              "tools": [{"tool": "commit_to", "args": {}, "result": f"commitment {CID} recorded"},
+                                        {"tool": "finish_cycle", "args": {}, "result": "cycle finished"}]}])
+        result = agent.settle(self.root, {"id": CID, "status": "kept", "evidence": "2026-10-26T15:00:00"},
+                              NOW + timedelta(hours=2))
+        self.assertEqual(result, "ERROR: cited evidence has no successful tool call")
 
     def test_other_settlements_and_validation(self):
         self.add()
@@ -203,9 +216,9 @@ class CommitmentsTest(unittest.TestCase):
         for verdict, expected in (("no", "cited cycle judged no"), ("yes", "verified"), ("partial", "verified")):
             self.judgments.return_value = [{"episode_ts": "2026-10-26T15:00:00", "criterion_met": verdict}]
             self.assertEqual(supervisor.verify("x", item), expected)
-        for kind in ("talk", "sleep"):
+        for kind in ("talk", "sleep"):   # no judge grades these: kept, not verified
             self.write_episodes([episode(kind=kind)])
-            self.assertEqual(supervisor.verify("x", item), "verified")
+            self.assertEqual(supervisor.verify("x", item), "cited a conversation or a sleep: no judge graded it")
         self.write_episodes([])
         self.assertEqual(supervisor.verify("x", item), "no such episode")
 

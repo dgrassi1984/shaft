@@ -48,11 +48,25 @@ def record(name: str, receipt: dict) -> None:
     _append(name, {**receipt, "text": receipt["text"][:2000]})
 
 
+RECEIPT = {"id": str, "sent_at": str, "to": str, "within_hours": int, "will_reply": int, "gist": str}
+
+
 def receipts(name: str) -> list[dict]:
-    return _rows(name)
+    """The broker's receipts; one missing a field or with a bad time is skipped, never fatal (Grok's review)."""
+    out = []
+    for r in _rows(name):
+        try:
+            if all(type(r.get(k)) is t for k, t in RECEIPT.items()):
+                datetime.fromisoformat(r["sent_at"])
+                out.append(r)
+        except ValueError:
+            continue
+    return out
 
 
 def reply_for(name: str, receipt: dict) -> dict | None:
+    """The first message from the recipient after the send, within the window. Messages carry no thread id: any
+    message from that sender in the window counts as the reply — a known limit, stated in the plan."""
     start = datetime.fromisoformat(receipt["sent_at"])
     end = start + timedelta(hours=receipt["within_hours"])
     root, found = INSTANCES / name, []

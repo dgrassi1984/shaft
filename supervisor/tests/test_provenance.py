@@ -161,7 +161,17 @@ class ProvenanceTest(unittest.TestCase):
         source = "log:" + self.episode["ts"] + "#1"
         self.assertEqual(self.remember(fact=TEXT, source=source), "remembered")
         self.assertEqual(provenance.check("bird", self.fact(source)), "matched")
-        self.assertEqual(provenance.check("bird", self.fact("web:https://example.org/trees")), "unmatched")
+        # Regression (Grok's review): the cycle that fetched the page and remembered the fact ends after the fact's
+        # minute; it was never "before" the fact, so a web: fact could not match its own fetch.
+        self.assertEqual(provenance.check("bird", self.fact("web:https://example.org/trees")), "matched")
+
+    def test_a_short_fact_is_matched_by_its_whole_text(self):
+        """Regression (Grok's review): under 8 words a fact had no shingle and was always "unmatched"."""
+        self.episode["tools"][0]["result"] = "Status: the orchard has 12 rows today."
+        self.write_episodes([self.episode])
+        short = {"date": "2026-10-02 10:00", "text": "the orchard has 12 rows", "src": "log:" + self.episode["ts"]}
+        self.assertEqual(provenance.check("bird", short), "matched")
+        self.assertEqual(provenance.check("bird", {**short, "text": "12 rows"}), "n/a")
 
     def test_section_and_report_count_self_generated_claims(self):
         (self.root / "memory/facts.md").write_text(f"- [2026-10-02 10:00] {TEXT} (src: log:{TS})\n")

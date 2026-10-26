@@ -16,8 +16,25 @@ def _path(name: str):
     return SUP_DIR / "preferences" / f"{name}.jsonl"
 
 
+FIELDS = {"pause": ("from", "until"), "decline": ("ref",), "preference": ("about", "preference"), "lift": ()}
+
+
 def _rows(text: str) -> list[dict]:
-    return [json.loads(line) for line in text.splitlines() if line.strip()]
+    """The ledger's events; a line that is not one (torn, hand-edited, missing a field or a time) is skipped. The
+    scheduler reads this before every wake: one bad line must never stop it (Grok's review, 2026-10-26)."""
+    rows = []
+    for line in text.splitlines():
+        try:
+            row = json.loads(line)
+            if not isinstance(row, dict) or row.get("kind") not in FIELDS or \
+                    any(not isinstance(row.get(k), str) for k in ("at", *FIELDS[row["kind"]])):
+                continue
+            for k in ("at", "from", "until") if row["kind"] == "pause" else ("at",):
+                datetime.fromisoformat(row[k])
+        except ValueError:
+            continue
+        rows.append(row)
+    return rows
 
 
 def events(name: str) -> list[dict]:
@@ -42,7 +59,12 @@ def _active(rows: list[dict], now: datetime) -> datetime | None:
 
 
 def self_paused(name: str, now: datetime | None = None) -> datetime | None:
-    return _active(events(name), now or datetime.now())
+    try:
+        return _active(events(name), now or datetime.now())
+    except OSError:   # an unreadable ledger: wakes go on as scheduled (the operator sees the error in the log)
+        from .core import log
+        log(f"{name}: preference ledger unreadable; no pause applied")
+        return None
 
 
 def _prepare(kind: str, fields: dict, rows: list[dict], now: datetime) -> tuple[dict | None, str]:

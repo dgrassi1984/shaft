@@ -32,6 +32,9 @@ FAMILY_CASES = [
     ("http_request", {"url": "https://api.example.org/v1", "method": "post"}, "http_request POST api.example.org"),
     ("http_request", {"url": "https://api.example.org/v1"}, None),
     ("delegate_coding", {"task": "x"}, "delegate_coding"),
+    ("write_file", {"path": "./self/a.md"}, "write_file self/"),
+    ("write_file", {"path": "self/x/../a.md"}, "write_file self/"),
+    ("write_file", {"path": "../outside.md"}, None),
     ("read_file", {"path": "notes/x.md"}, None),
 ]
 

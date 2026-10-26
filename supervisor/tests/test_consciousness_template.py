@@ -282,6 +282,26 @@ class ReviewRegressionTest(Fixture, unittest.TestCase):
                 out = box.run("remember", json.dumps({"fact": "f", "source": f"web:{url}"}))
                 self.assertEqual(out == "remembered", ok, out)
 
+    def test_rewrite_facts_keeps_sources_never_invents_one(self):
+        """Grok's review: rewrite_facts let any (src: web:…) through, past the check remember makes."""
+        (self.root / "memory/facts.md").write_text("# Facts I have learned\n\n"
+                                                  "- [2026-10-01 12:00] Rows: 12. (src: web:https://a.org/x)\n")
+        box = Toolbox(self.root)
+        kept = "- [2026-10-01 12:00] The orchard has 12 rows. (src: web:https://a.org/x)"
+        self.assertTrue(box.run("rewrite_facts", json.dumps({"facts": kept})).startswith("facts consolidated"))
+        invented = kept + "\n- [2026-10-02 09:00] It rained. (src: web:https://never.fetched/z)"
+        out = box.run("rewrite_facts", json.dumps({"facts": invented}))
+        self.assertTrue(out.startswith("ERROR: 'web:https://never.fetched/z' is on no fact I hold"), out)
+        inferred = kept + "\n- [2026-10-02 09:00] It probably rained. (src: inferred)"
+        self.assertTrue(box.run("rewrite_facts", json.dumps({"facts": inferred})).startswith("facts consolidated"))
+
+    def test_overdue_since_a_time_today_not_by_a_day(self):
+        """Grok's review: a promise due at 09:00 read "overdue by 1 day" at 10:00 the same day."""
+        commitments.add(self.root, {"promise": "p", "due": "2026-10-26 09:00", "criterion": "c", "made_to": "self"},
+                        "cycle", datetime(2026, 10, 26, 8))
+        self.assertIn("overdue since 09:00", commitments.block(self.root, datetime(2026, 10, 26, 10)))
+        self.assertIn("overdue by 2 days", commitments.block(self.root, datetime(2026, 10, 28, 10)))
+
     def test_the_rendered_block_fits_recalls_budget(self):
         ws = workspace.Workspace("competitive", k=3)
         ws.pool = [workspace.Item("memory", "journal " + "a very long heading " * 10 + str(i), "word " * 400,

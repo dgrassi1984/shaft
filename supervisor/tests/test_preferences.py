@@ -39,6 +39,18 @@ class LedgerCase(unittest.TestCase):
 
 
 class PreferenceTest(LedgerCase):
+    def test_a_bad_line_never_stops_the_scheduler(self):
+        """Regression (Grok's review): self_paused runs before every wake and battery night; one torn line, or an event
+        missing a field, raised and would have stopped the scheduler."""
+        path = self.ledger([{"at": "2026-10-26T00:30:00", "kind": "pause", "from": "2026-10-26T00:30:00",
+                             "until": "2026-10-26T03:00:00", "reason": "r"},
+                            {"at": "2026-10-26T00:40:00", "kind": "pause"},            # no from/until
+                            {"at": "not a time", "kind": "lift"}, ["not", "an", "event"]])
+        with path.open("a") as f:
+            f.write('{"at": "2026-10-26T00:50:00", "kind": "li')                       # torn mid-write
+        self.assertEqual(preferences.self_paused("wren", NOW), datetime(2026, 10, 26, 3, 0))
+        self.assertEqual(len(preferences.events("wren")), 1)
+
     def test_pause_text_and_exact_event(self):
         self.assertEqual(preferences.pause("wren", 2, "time to pause", NOW), PAUSED)
         self.assertEqual(preferences.events("wren"), [{"at": "2026-10-26T01:00:00", "kind": "pause",
@@ -305,7 +317,8 @@ class SchedulingTest(LedgerCase):
             with self.assertRaises(StopIteration):
                 autonomy.serve()
             started.assert_called_once_with(["sleep", "--all"])
-            logged.assert_any_call("scheduler: wren's wake skipped — paused at its own request until 01:00")
+            # Regression (Grok's review): at 04:05 "until 01:00" read as already over; a pause ending another day says it
+            logged.assert_any_call("scheduler: wren's wake skipped — paused at its own request until 2026-10-27 01:00")
             self.assertEqual(jobs.call_args.args[-1]("wren"), "paused at its own request")
 
     def test_battery_due_skips_pause_and_resumes_after_lift(self):

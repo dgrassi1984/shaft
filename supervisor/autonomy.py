@@ -127,12 +127,17 @@ def next_wake(name: str, now: datetime | None = None, interval: timedelta | None
     return "due" if at <= now else f"{at:%H:%M}"
 
 
+def _until(at: datetime, now: datetime | None = None) -> str:
+    """When a pause ends, as the operator reads it: the time, and the date when it is not today."""
+    return f"{at:%H:%M}" if at.date() == (now or datetime.now()).date() else f"{at:%Y-%m-%d %H:%M}"
+
+
 def next_cycle(name: str) -> str:
     """Where a message left for the instance's next cycle stands: what the web UI tells the operator who sends one."""
     if paused(name):
         return f"{name} is paused: it reads this in its first cycle after you resume it"
     if (until := preferences.self_paused(name)):
-        return f"{name} asked for a pause until {until:%H:%M}: it reads this in its first cycle after that"
+        return f"{name} asked for a pause until {_until(until)}: it reads this in its first cycle after that"
     interval = wake_interval(name)
     at = next_wake(name, interval=interval)
     if at == "never":
@@ -239,7 +244,7 @@ def decide_wakes(now: datetime, st: dict, names: list[str], interval_of, awake_o
         if interval is None or (last and now - datetime.fromisoformat(last) < interval):
             continue
         until = self_paused_of(name, now) if self_paused_of else None
-        why = f"paused at its own request until {until:%H:%M}" if until and until > now else awake_of(name)
+        why = f"paused at its own request until {_until(until, now)}" if until and until > now else awake_of(name)
         if why:
             skip[name] = why
         else:
@@ -401,7 +406,7 @@ def wake(name: str) -> int:
     """One scheduled wake: a life cycle, unless the instance is awake already (then it is skipped)."""
     # Recheck in the child: a pause may have begun after the scheduler selected this wake.
     if (until := preferences.self_paused(name)):
-        log(f"{name}: wake skipped — paused at its own request until {until:%H:%M}")
+        log(f"{name}: wake skipped — paused at its own request until {_until(until)}")
         return 0
     record("wake", name)
     try:
@@ -418,7 +423,7 @@ def start_wake(name: str) -> str:
     if paused(name):
         raise RuntimeError(f"{name} is paused (shaft resume {name})")
     if (until := preferences.self_paused(name)):
-        raise RuntimeError(f"{name} is paused at its own request until {until:%H:%M} (shaft prefs {name} lift)")
+        raise RuntimeError(f"{name} is paused at its own request until {_until(until)} (shaft prefs {name} lift)")
     if (why := _awake(name)):
         raise RuntimeError(f"{name} is already awake ({why})")
     log(f"operator started a cycle for {name} (by hand: shaft top, the web UI or shaft cycle)")

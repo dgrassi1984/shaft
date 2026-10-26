@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import posixpath
 import random
 import re
 import threading
@@ -91,8 +92,8 @@ def family(tool: str, args: str) -> str | None:
     """The kind of consequential action a call is — the supervisor's own copy of the agent's cards.family (it never
     imports agent code); the shared cases in test_experiments keep the two in step."""
     if tool in ("write_file", "append_file"):
-        parts = [p for p in _arg(args, "path").split("/") if p and p != "."]
-        if not parts:
+        parts = [p for p in posixpath.normpath(_arg(args, "path") or ".").split("/") if p]
+        if not parts or parts[0] in (".", ".."):
             return None
         depth = 2 if parts[0] in ("plugins", "skills", "notes", "tests") else 1
         return f"{tool} {'/'.join(parts[:depth])}/"

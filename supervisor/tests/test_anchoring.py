@@ -173,19 +173,23 @@ class AnchoringTest(unittest.TestCase):
                          "against sighted: 1.000", "against reask: 0.625", "against blind: 0.000",
                          "against bare: 0.375", "sighted agreement with stored verdict: 2/4"):
             self.assertIn(expected, text)
-        self.assertIn("95% day bootstrap CI", text)
+        # four one-cycle days: too many resamples have one class, so no interval — the value is still shown
+        self.assertIn("(no interval: fewer than 2 days", text)
 
     def test_auroc_ties_and_cluster_bootstrap(self):
-        self.assertEqual(anchoring._auroc([(2, True), (0, False)]), 1)
-        self.assertEqual(anchoring._auroc([(0, True), (2, False)]), 0)
-        self.assertEqual(anchoring._auroc([(1, True), (1, False)]), .5)
-        self.assertEqual(anchoring._auroc([(2, True), (2, False), (0, False)]), .75)
-        self.assertIsNone(anchoring._auroc([(2, True)]))
+        auc = lambda pairs: anchoring._auc([{"score": sc, "hit": h} for sc, h in pairs])
+        self.assertEqual(auc([(2, True), (0, False)]), 1)
+        self.assertEqual(auc([(0, True), (2, False)]), 0)
+        self.assertEqual(auc([(1, True), (1, False)]), .5)
+        self.assertEqual(auc([(2, True), (2, False), (0, False)]), .75)
+        self.assertIsNone(auc([(2, True)]))
         # Each day has both classes. Resampling whole days always keeps a perfect ranking.
         data = [(day, score, hit) for day in ("a", "b") for score, hit in ((2, True), (0, False))]
         self.assertEqual(anchoring._ci(data), (1, 1))
         self.assertEqual(anchoring._ci(data), anchoring._ci(data))
         self.assertIsNone(anchoring._ci([("a", 2, True)]))
+        # Regression (Grok's review): one day with both classes gave a zero-width interval; now no interval
+        self.assertIsNone(anchoring._ci([("a", 2, True), ("a", 0, False)]))
 
     def test_report_reverse_pairs_and_partial_bare(self):
         records = []
@@ -208,7 +212,7 @@ class AnchoringTest(unittest.TestCase):
         text = anchoring.report(["x"])
         self.assertIn("n=1", text)
         self.assertIn("against sighted: not measured", text)
-        self.assertIn("against bare: not measured, n=0", text)
+        self.assertIn("against bare: not measured (one class only), n=0", text)
 
 
 if __name__ == "__main__":

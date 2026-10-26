@@ -160,25 +160,46 @@ class CardsTest(unittest.TestCase):
         self.assertIn("4 failed, 1 succeeded (last failure 2026-10-24 12:00: ERROR: refused)", text)
         lines = [line for line in text.splitlines() if line.startswith("- ")]
         self.assertEqual(len(lines), 3)
-        self.assertIn('2026-10-21 12:00 · goal "repair fence" · failed: ERROR: refused · not judged', lines[0])
-        self.assertIn('2026-10-20 12:00 · goal "repair fence" · ok · not judged', lines[1])
+        self.assertIn('2026-10-21 12:00 · goal "repair fence" · failed: ERROR: refused · 2s · not judged', lines[0])
+        self.assertIn('2026-10-20 12:00 · goal "repair fence" · ok · 2s · not judged', lines[1])
         self.assertIn('2026-10-23 12:00 · goal "repair"', lines[2])
         self.assertEqual(instance.record, {"mode": "on", "held": [{"family": "write_file self/",
                          "tool": "write_file", "cards": ["2026-10-21T12:00:00#1", "2026-10-20T12:00:00#1",
                          "2026-10-23T12:00:00#1"], "failed": 4, "succeeded": 1}]})
 
-    def test_shuffled_is_seeded_and_changes_hold_and_text(self):
+    def test_shuffled_holds_when_on_does_and_shows_permuted_outcomes(self):
+        """The control must differ from `on` in content only (Grok's review): it holds at the same moments — the
+        decision reads what happened — and shows the outcomes permuted across all cards."""
         a = self.episode(20, "wrote")
         b = self.episode(21, tool="delegate_coding")
         (self.root / "memory/verdicts.jsonl").write_text(json.dumps({"episode_ts": a, "criterion_met": "yes"})
                                                         + "\n" + json.dumps({"episode_ts": b,
                                                         "criterion_met": "no"}) + "\n")
-        self.assertIsNone(self.check(self.make()))
-        text = self.check(self.make("shuffled", "4"))
-        self.assertEqual(text, self.check(self.make("shuffled", "4")))
-        self.assertIn("1 failed, 0 succeeded", text)
-        self.assertIn("failed: ERROR: refused · cycle judged no", text)
-        self.assertIsNone(self.make("shuffled", "4").check("delegate_coding", '{}', "repair"))
+        self.assertIsNone(self.check(self.make()))                 # write_file worked: no hold
+        self.assertIsNone(self.check(self.make("shuffled", "4")))  # nor in the control, whatever it would show
+        on = self.make().check("delegate_coding", "{}", "repair")
+        shuffled = self.make("shuffled", "4").check("delegate_coding", "{}", "repair")
+        self.assertIn("1 failed, 0 succeeded", on)
+        self.assertEqual(shuffled, self.make("shuffled", "4").check("delegate_coding", "{}", "repair"))   # seeded
+        self.assertIn("0 failed, 1 succeeded", shuffled)           # the outcomes swapped across the two cards
+        self.assertIn("ok · 2s · cycle judged yes", shuffled)
+
+    def test_a_second_call_in_the_same_reply_is_held_too(self):
+        """Regression (Grok's review): the second call of a held kind in the same reply ran before I read the cards."""
+        self.episode(20)
+        c = self.make()
+        self.assertTrue(c.check("write_file", '{"path":"self/a"}', "g", turn=3).startswith(cards.HELD))
+        again = c.check("write_file", '{"path":"self/b"}', "g", turn=3)
+        self.assertTrue(again.startswith(cards.HELD))
+        self.assertIn("earlier in this reply", again)
+        self.assertIsNone(c.check("write_file", '{"path":"self/b"}', "g", turn=4))   # next reply: it runs
+        self.assertEqual(len(c.record["held"]), 1)
+
+    def test_one_family_per_place_however_spelled(self):
+        """Regression (Grok's review): ./self/a.md was a family of its own, apart from self/a.md."""
+        for path in ("self/a.md", "./self/a.md", "self/x/../a.md"):
+            self.assertEqual(cards.family("write_file", json.dumps({"path": path})), "write_file self/")
+        self.assertIsNone(cards.family("write_file", json.dumps({"path": "../outside.md"})))
 
     def test_recall_true_holds_payload_and_bound(self):
         self.episode(20)
