@@ -932,11 +932,9 @@ def surprise_baseline_report(name: str) -> str:
     both = [r for r in rows if _same_judge(r, stored.get(r["episode_ts"]))]
     disagreements = [r for r in both if r["criterion_met"] != stored[r["episode_ts"]]["criterion_met"]]
     n = len(rows)
-    acceptance = ("not measured" if not n or len(both) != n else
-                  "PASS" if len(disagreements) * 15 <= n else "FAIL")
     lines = [f"Surprise baseline: {name}", f"Re-judged: {n}",
              f"criterion_met agreement (same judge as the stored verdict): {len(both) - len(disagreements)}/{len(both)}",
-             f"M2 acceptance (all but at most 1 in 15): {acceptance}"]
+             f"M2 acceptance: against the no-fields control (shaft surprise-rejudge {name} --control --report)"]
     for row in rows:
         ts = row["episode_ts"]
         if ts not in stored:
@@ -1004,18 +1002,26 @@ def surprise_control(name: str, dry_run: bool = False) -> dict:
     return result
 
 
+# M2's acceptance (2026-10-26, decided by Daniele): the absolute bar ("all but at most 1 in 15") sat below the judges'
+# own re-ask noise — the control alone moved 13 of 181 verdicts, so it failed it too. The fields pass when they move
+# criterion_met no more often than the control does: they fail only when the cycles only the fields run moved outnumber
+# those only the control moved by more than chance allows (one-sided sign test below M2_ALPHA).
+M2_ALPHA = 0.05
+
+
 def _sign_test(a: int, b: int) -> float:
-    """Two-sided exact sign test on a and b discordant pairs: how often a split this uneven comes by chance."""
-    n, k = a + b, min(a, b)
-    return 1.0 if not n else min(1.0, 2 * sum(math.comb(n, i) for i in range(k + 1)) / 2 ** n)
+    """One-sided exact sign test on a and b discordant pairs: how often chance alone puts at least a of the a + b on
+    the first side (the trials' sign test)."""
+    from .trial import sign_p
+    return sign_p(a, a + b)
 
 
 def surprise_control_report(names: list[str]) -> str:
     """Per instance and pooled: how often the fields run and the control each agree with the stored criterion_met, on
     the same cycles by the same judge, and the paired split — cycles only the fields run moved against cycles only the
-    control moved. The fields move criterion_met only if that split clearly leans to the fields run."""
+    control moved — with M2's acceptance on it. M2 is met when every instance passes; the pooled line is context."""
     lines, pooled = [], {"n": 0, "fields": 0, "control": 0, "f_only": 0, "c_only": 0, "f_strict": 0, "f_lenient": 0,
-                         "c_strict": 0, "c_lenient": 0, "same": 0}
+                         "c_strict": 0, "c_lenient": 0, "same": 0, "missing": 0}
     for name in names:
         stored = {j["episode_ts"]: j for j in judgments(name)}
         fields = {r["episode_ts"]: r for r in _surprise_baseline_rows(name) if _same_judge(r, stored.get(r["episode_ts"]))}
@@ -1034,10 +1040,10 @@ def surprise_control_report(names: list[str]) -> str:
             c["c_strict"] += k < was
             c["c_lenient"] += k > was
             c["same"] += f == k
+        c["missing"] = len(fields) - len(both)
         for k in pooled:
             pooled[k] += c[k]
-        missing = len(fields) - len(both)
-        lines += _control_lines(name, c) + ([f"  {missing} baseline cycle(s) without a control yet"] if missing else [])
+        lines += _control_lines(name, c)
     if len(names) > 1:
         lines += _control_lines("all", pooled)
     return "\n".join(lines) + "\n"
@@ -1047,13 +1053,18 @@ def _control_lines(name: str, c: dict) -> list[str]:
     n = c["n"]
     if not n:
         return [f"Surprise control: {name}: not measured (no cycle has both runs)"]
+    p = _sign_test(c["f_only"], c["c_only"])
+    acceptance = (f"not measured ({c['missing']} baseline cycle(s) without a control yet)" if c["missing"] else
+                  "PASS" if p >= M2_ALPHA else "FAIL")
     return [f"Surprise control: {name} ({n} cycles, each by its stored verdict's judge)",
             f"  agreement with the stored criterion_met: with the fields {c['fields']}/{n}, control {c['control']}/{n}",
             f"  moved stricter / more lenient: with the fields {c['f_strict']}/{c['f_lenient']}, "
             f"control {c['c_strict']}/{c['c_lenient']}",
             f"  only the fields run moved: {c['f_only']}; only the control moved: {c['c_only']} "
-            f"(sign test p={_sign_test(c['f_only'], c['c_only']):.2f})",
-            f"  fields run and control agree with each other: {c['same']}/{n}"]
+            f"(one-sided sign test p={p:.2f})",
+            f"  fields run and control agree with each other: {c['same']}/{n}",
+            f"  M2 acceptance (the fields move criterion_met no more often than the control, p >= {M2_ALPHA}): "
+            f"{acceptance}"]
 
 
 BACKFILL_FLUSH = 10

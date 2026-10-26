@@ -172,7 +172,6 @@ class SurpriseJudgeTest(unittest.TestCase):
         report = metrics.surprise_baseline_report("m")
         self.assertIn("judged by glm, the stored verdict by mimo: not compared", report)
         self.assertIn("agreement (same judge as the stored verdict): 1/1", report)
-        self.assertIn("not measured", report)   # a cross-judge row never counts as a disagreement, nor as a pass
         dry = metrics.surprise_baseline("m", dry_run=True)
         self.assertEqual((dry["todo"], dry["cross_judge"]), (2, 1))
         self.assertEqual(metrics.surprise_baseline("m")["done"], 2)
@@ -185,7 +184,7 @@ class SurpriseJudgeTest(unittest.TestCase):
         self.assertEqual([json.loads(l)["judge"] for l in aside], ["glm"])
         report = metrics.surprise_baseline_report("m")
         self.assertIn("agreement (same judge as the stored verdict): 3/3", report)
-        self.assertIn("PASS", report)
+        self.assertIn("M2 acceptance: against the no-fields control (shaft surprise-rejudge m --control --report)", report)
 
     def test_baseline_leaves_out_a_cycle_without_a_usable_stored_judge(self):
         a, b = self.episode(), self.episode("2026-10-13T10:00:00")
@@ -258,12 +257,31 @@ class SurpriseJudgeTest(unittest.TestCase):
             text = metrics.surprise_control_report(["m", "n"])
         for part in ("Surprise control: m (7 cycles", "with the fields 3/7, control 5/7",
                      "with the fields 4/0, control 2/0", "only the fields run moved: 3; only the control moved: 1 "
-                     "(sign test p=0.62)", "agree with each other: 3/7", "1 baseline cycle(s) without a control yet",
+                     "(one-sided sign test p=0.31)", "agree with each other: 3/7", "1 baseline cycle(s) without a control yet",
                      "Surprise control: all (14 cycles", "with the fields 6/14, control 10/14"):
             self.assertIn(part, text)
-        self.assertAlmostEqual(metrics._sign_test(5, 1), .21875)
+        self.assertIn("M2 acceptance (the fields move criterion_met no more often than the control, p >= 0.05): "
+                      "not measured (1 baseline cycle(s) without a control yet)", text)
+        self.assertAlmostEqual(metrics._sign_test(5, 1), .109375)
         self.assertEqual(metrics._sign_test(0, 0), 1.0)
         self.assertIn("not measured", metrics.surprise_control_report(["m"]))
+
+    def test_m2_acceptance_is_relative_to_the_control(self):
+        # Regression (2026-10-26): M2 asked for all but at most 1 in 15 verdicts to agree, but the no-fields control
+        # itself moved 13 of 181 (wren 54/60 with nothing changed), so the bar failed the judge's own re-ask noise and
+        # said nothing about the fields. The fields now fail only when they move clearly more cycles than the control.
+        def acceptance(f_only, c_only, missing=0):
+            c = {"n": 60, "fields": 60 - f_only, "control": 60 - c_only, "f_only": f_only, "c_only": c_only,
+                 "f_strict": f_only, "f_lenient": 0, "c_strict": c_only, "c_lenient": 0, "same": 60 - f_only - c_only,
+                 "missing": missing}
+            return metrics._control_lines("m", c)[-1].rsplit(": ", 1)[1]
+        self.assertEqual(acceptance(3, 3), "PASS")   # wren 2026-10-26: 54/60 both ways, a FAIL under the old bar
+        self.assertEqual(acceptance(5, 2), "PASS")   # shaft 2026-10-26
+        self.assertEqual(acceptance(0, 2), "PASS")   # thelos: the fields moved less
+        self.assertEqual(acceptance(6, 0), "FAIL")   # p = 1/64
+        self.assertEqual(acceptance(12, 3), "FAIL")
+        self.assertEqual(acceptance(11, 4), "PASS")   # p = 0.059: chance still explains it
+        self.assertTrue(acceptance(6, 0, missing=1).startswith("not measured"))
 
     def test_bad_baseline_is_not_written(self):
         self.stored([self.episode()])
@@ -294,25 +312,11 @@ class SurpriseJudgeTest(unittest.TestCase):
                                               "unreported_surprises": ["The heredoc failed."]}
         metrics.surprise_baseline("m")
         text = metrics.surprise_baseline_report("m")
-        for part in ("Re-judged: 1", "stored verdict): 0/1", "FAIL", "stored yes, new partial", "x" * 200,
+        for part in ("Re-judged: 1", "stored verdict): 0/1", "stored yes, new partial", "x" * 200,
                      "Expectations: 1 held, 0 contradicted, 0 uninformative", "per cycle: 1.00",
                      ep["ts"] + ": The heredoc failed."):
             self.assertIn(part, text)
         self.assertNotIn("x" * 201, text)
-        same = [{**VERDICT, "episode_ts": ep["ts"], "judge": "judge-test"}]
-        with mock.patch.object(metrics, "_surprise_baseline_rows", return_value=same):
-            self.assertIn("PASS", metrics.surprise_baseline_report("m"))
-
-    def test_report_acceptance_boundary_and_empty_measurement(self):
-        self.assertIn("not measured", metrics.surprise_baseline_report("m"))
-        rows = [{**VERDICT, "episode_ts": str(i), "judge": "judge-test"} for i in range(15)]
-        new = [dict(r) for r in rows]
-        new[0]["criterion_met"] = "no"
-        with mock.patch.object(metrics, "judgments", return_value=rows), \
-             mock.patch.object(metrics, "_surprise_baseline_rows", return_value=new):
-            self.assertIn("PASS", metrics.surprise_baseline_report("m"))
-            new.pop()
-            self.assertIn("FAIL", metrics.surprise_baseline_report("m"))
 
     def test_record_text_json_and_old_rows(self):
         _, rows = self.stored([self.episode()])
