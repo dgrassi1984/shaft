@@ -7,6 +7,7 @@ import math
 import os
 import threading
 import time
+import urllib.error
 import urllib.request
 import uuid
 from contextlib import contextmanager
@@ -31,6 +32,8 @@ MAX_TOKENS, _ = knob(
     "SHAFT_CONSULT_MAX_TOKENS", "8000", positive_int, "maximum output tokens per model consultation",
     group="Models and spend", services=("runs", "api"))
 USAGE = SUP_DIR / "consult_usage.jsonl"
+SEND_TIMEOUT_S = 300   # one POST, no retry: well inside a reservation's 30 minutes (the chat path's retries were not)
+RESERVATION_S = 1800
 
 
 class ConsultError(cloudllm.CloudError):
@@ -65,7 +68,7 @@ def _reservations() -> list[dict]:
         rows = json.loads((SUP_DIR / "consult_reservations.json").read_text())
     except FileNotFoundError:
         return []
-    return [r for r in rows if time.time() - r["created"] <= 1800]
+    return [r for r in rows if time.time() - r["created"] <= RESERVATION_S]
 
 
 def _save_reservations(rows: list[dict]) -> None:
@@ -179,6 +182,37 @@ def envelope(instance: str) -> dict:
                 "cap_usd": daily_cap(instance), "models": models}
 
 
+def _int(value) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 1
+
+
+def _text_only(messages) -> None:
+    """Text in, text out: an image, audio or file by URL costs input the worst case cannot see (one consult with a
+    hundred image URLs reserved cents and could bill dollars — Grok's review, 2026-10-27)."""
+    if not isinstance(messages, list) or not messages:
+        raise ConsultError(400, "messages must be a non-empty list")
+    for m in messages:
+        content = m.get("content") if isinstance(m, dict) else None
+        parts = content if isinstance(content, list) else [content]
+        for part in parts:
+            if part is None or isinstance(part, str):
+                continue
+            if not (isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str)):
+                raise ConsultError(400, "consults take text only: describe or quote what an image, audio or file "
+                                        "says (non-text input is billed beyond the reserved worst case)")
+
+
+def _send_once(req: urllib.request.Request) -> tuple[dict | None, str | None, int | None]:
+    """One POST: (data, None, 200) or (None, error, HTTP status or None for a timeout or network error)."""
+    try:
+        with urllib.request.urlopen(req, timeout=SEND_TIMEOUT_S) as resp:
+            return json.load(resp), None, getattr(resp, "status", 200)
+    except urllib.error.HTTPError as e:
+        return None, f"HTTP {e.code}: {e.read().decode(errors='replace')[:400]}", e.code
+    except (*NETWORK_ERRORS, ValueError) as e:
+        return None, f"network: {e}", None
+
+
 def complete(instance: str, body: dict, secrets: dict, caller, run, run_started) -> dict:
     model = body.get("model")
     if model not in MODELS:
@@ -190,6 +224,9 @@ def complete(instance: str, body: dict, secrets: dict, caller, run, run_started)
     if body.get("plugins") or body.get("web_search_options"):   # billed on top of tokens: the reservation cannot see it
         raise ConsultError(400, "consults take no OpenRouter plugins or web search (billed beyond the reserved "
                                 "tokens); search with my own tools and send what I found")
+    if body.get("modalities"):
+        raise ConsultError(400, "consults answer in text only (no modalities)")
+    _text_only(body.get("messages"))
     item = next(m for m in menu(instance) if m["model"] == model)
     if not item["available"]:
         raise ConsultError(403, f"{model}: {item['why']}")
@@ -203,6 +240,10 @@ def complete(instance: str, body: dict, secrets: dict, caller, run, run_started)
     payload = {k: v for k, v in body.items() if k not in ("provider", "stream_options", "max_completion_tokens")}
     payload.update(model=model.removeprefix("openrouter/"), max_tokens=tokens, provider=PROVIDER,
                    usage={"include": True})
+    if isinstance(payload.get("reasoning"), dict) and "max_tokens" in payload["reasoning"]:
+        # a thinking budget above max_tokens would be output the worst case does not count
+        payload["reasoning"] = {**payload["reasoning"], "max_tokens": min(_int(payload["reasoning"]["max_tokens"]),
+                                                                          tokens)}
     prompt = json.dumps({k: v for k, v in payload.items() if k not in ("provider", "usage")}, ensure_ascii=False)
     worst = (len(prompt) / 3 * item["reserve_in_per_m"] + tokens * item["reserve_out_per_m"]) / 1e6
     reservation = uuid.uuid4().hex
@@ -219,13 +260,16 @@ def complete(instance: str, body: dict, secrets: dict, caller, run, run_started)
     try:
         req = urllib.request.Request(cloudllm.OPENROUTER_API, data=json.dumps(payload).encode(), headers={
             "content-type": "application/json", "authorization": f"Bearer {key}", "x-title": "SHAFT"})
-        data, error = cloudllm._send(req)
+        data, error, status = _send_once(req)
         usage = (data or {}).get("usage") or {}
         reported = usage.get("cost")
-        if isinstance(reported, (int, float)) and not isinstance(reported, bool) and 0 <= reported < math.inf:
-            cost = reported
-        if data is None and str(error or "").startswith("HTTP 4") and not str(error).startswith("HTTP 429"):
-            cost = 0.0   # refused outright: nothing was generated (a timeout or 5xx may have been, so those keep the worst case)
+        if isinstance(reported, (int, float)) and not isinstance(reported, bool) and 0 < reported < math.inf:
+            cost = reported   # 0 or missing: the worst case (the plan: never $0 for a call that answered)
+            if reported > worst:
+                from .core import log
+                log(f"{instance}: consult {model} cost ${reported:.6f}, over its ${worst:.6f} reservation")
+        if data is None and status is not None and 400 <= status < 500 and status != 429:
+            cost = 0.0   # one attempt, refused outright: nothing was generated (a timeout or 5xx may have been)
         if data is None or not data.get("choices"):
             raise ConsultError(502, f"OpenRouter consult failed: {error or json.dumps(data)[:400]}")
     except Exception as e:

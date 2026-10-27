@@ -36,7 +36,6 @@ def _usd(value: float) -> str:
     return f"${value:.4f}" if value >= 0.0001 else f"${value:.6f}"
 
 
-MAX_CYCLE = timedelta(hours=3)   # a live run's consults belong to a cycle that ended within this of its start
 
 
 def _num(value, default: float = 0.0) -> float:
@@ -83,31 +82,29 @@ def vendor(model: str | None) -> str | None:
 
 
 def cycle_of(name: str, row: dict, episodes: list[dict]) -> str | None:
-    """The live episode `row` belongs to: the earliest live episode that ended at or after the run started. The
-    episodes are stored with ``ts`` = when the cycle ENDED, so a run belongs to the first cycle to end after it began.
-    None for a run that is not ``live``, or when no episode ended after it."""
-    if row.get("run") != "live":
+    """The live episode `row` was made in: the one whose run started at the row's `run_started` (the supervisor puts
+    that time in the agent's environment and the episode records it). A run killed before it wrote an episode has
+    none, so its consults are booked to no cycle — a time window once charged them to the next one (Grok's review,
+    2026-10-27). None for a run that is not live."""
+    if row.get("run") != "live" or not row.get("run_started"):
         return None
-    started = _ts(row.get("run_started"))
-    if started is None:
-        return None
-    dated = [(ep, _ts(ep.get("ts"))) for ep in episodes if isinstance(ep, dict)]
-    dated = [(ep, end) for ep, end in dated if end is not None]
-    dated.sort(key=lambda pair: pair[1])
-    for ep, end in dated:
-        if end >= started:   # the first cycle to end after the run began — if it ended soon enough to be that run's
-            return ep["ts"] if end - started <= MAX_CYCLE else None
-    return None
+    return next((ep["ts"] for ep in episodes if isinstance(ep, dict) and ep.get("ts")
+                 and ep.get("run_started") == row["run_started"]), None)
 
+
+def submitted(row: dict) -> bool:
+    """A consult whose prompt went out: it answered, or it failed after sending (charged its worst case). An outright
+    refusal (charged $0) sent nothing anywhere."""
+    return row.get("error") is None or _num(row.get("usd")) > 0
 
 def models_in(name: str, ep: dict) -> set[str]:
-    """The set of models successfully consulted (error null) during one live episode, attributed by `cycle_of`."""
+    """The models this live episode sent a prompt to (`submitted`): the vendors that saw its work."""
     eps = metrics.live_episodes(name)
     found: set[str] = set()
     for row in rows(name):
         if cycle_of(name, row, eps) != ep.get("ts"):
             continue
-        if row.get("error") is None and isinstance(row.get("model"), str) and row["model"]:
+        if submitted(row) and isinstance(row.get("model"), str) and row["model"]:
             found.add(row["model"])
     return found
 
@@ -169,7 +166,7 @@ def section(name: str, cap=None) -> list[str]:
         lines.append(f"- {_display(m)}: {d['calls']} call(s), {_usd(d['usd'])}, {secs} each, {d['errors']} error(s)")
 
     eps = metrics.live_episodes(name)
-    consulted_ts = {t for r in window if r.get("run") == "live" and r.get("error") is None
+    consulted_ts = {t for r in window if r.get("run") == "live" and submitted(r)
                     if (t := cycle_of(name, r, eps))}
     window_eps = [ep for ep in eps if (t := _ts(ep.get("ts"))) is not None and since <= t <= now]
     consulted = [ep for ep in window_eps if ep["ts"] in consulted_ts]
@@ -215,9 +212,10 @@ def report(names: list[str]) -> str:
     """The operator's full text for `shaft consults`: per model, per run kind, consulted vs not, and the last 10
     calls with their caller."""
     out: list[str] = []
+    since = datetime.now() - timedelta(days=WINDOW_DAYS)
     for name in names:
-        all_rows = rows(name)
-        out.append(f"{name}: consults")
+        all_rows = rows(name, since=since.isoformat(timespec="seconds"))
+        out.append(f"{name}: consults (last 7 days)")
         if not all_rows:
             out.append("  (none)")
             continue
@@ -235,8 +233,8 @@ def report(names: list[str]) -> str:
             k = r.get("run") if isinstance(r.get("run"), str) and r["run"] else "?"
             kinds[k] = kinds.get(k, 0) + 1
         out.append("  per run: " + ", ".join(f"{k} {n}" for k, n in sorted(kinds.items())))
-        eps = metrics.live_episodes(name)
-        consulted_ts = {t for r in all_rows if r.get("run") == "live" and r.get("error") is None
+        eps = [ep for ep in metrics.live_episodes(name) if (t := _ts(ep.get("ts"))) is not None and t >= since]
+        consulted_ts = {t for r in all_rows if r.get("run") == "live" and submitted(r)
                         if (t := cycle_of(name, r, eps))}
         not_consulted = sum(1 for ep in eps if ep.get("ts") not in consulted_ts)
         out.append(f"  live cycles: {len(consulted_ts)} consulted, {not_consulted} did not")

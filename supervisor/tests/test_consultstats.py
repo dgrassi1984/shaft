@@ -7,7 +7,7 @@ import json
 import sys
 import tempfile
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -27,8 +27,11 @@ def row(ts, model, usd, seconds, run="live", run_started=None, error=None, calle
             "usd": usd, "reserved_usd": reserved_usd, "seconds": seconds, "error": error}
 
 
-def episode(ts):
-    return {"ts": ts, "kind": "live", "intent": {}, "finish": {}, "tools": []}
+def episode(ts, run_started=None):
+    """A live episode as the template writes it: `ts` when it ended, `run_started` the supervisor's start of its run
+    (default ten minutes before, the way the rows below start)."""
+    started = run_started or (datetime.fromisoformat(ts) - timedelta(minutes=10)).isoformat(timespec="seconds")
+    return {"ts": ts, "kind": "live", "intent": {}, "finish": {}, "tools": [], "run_started": started}
 
 
 class ConsultStatsTest(unittest.TestCase):
@@ -92,21 +95,29 @@ class ConsultStatsTest(unittest.TestCase):
     def test_cycle_attribution_across_two_live_episodes_plus_a_talk_row(self):
         eps = [episode("2026-10-25T10:00:00"), episode("2026-10-25T11:00:00")]
         live_1 = row("2026-10-25T10:00:00", GLM, 0.05, 10.0, run="live", run_started="2026-10-25T09:50:00")
-        live_2 = row("2026-10-25T11:00:00", GLM, 0.05, 10.0, run="live", run_started="2026-10-25T10:30:00")
+        live_2 = row("2026-10-25T11:00:00", GLM, 0.05, 10.0, run="live", run_started="2026-10-25T10:50:00")
         talk = row("2026-10-25T10:15:00", GLM, 0.05, 10.0, run="talk", run_started="2026-10-25T10:15:00")
         self.assertEqual(consultstats.cycle_of("x", live_1, eps), "2026-10-25T10:00:00")
         self.assertEqual(consultstats.cycle_of("x", live_2, eps), "2026-10-25T11:00:00")
         self.assertIsNone(consultstats.cycle_of("x", talk, eps))
         self.assertIsNone(consultstats.cycle_of("x", row("t", GLM, 0.05, 1, run="live",
-                                                          run_started="2026-10-25T12:00:00"), eps))   # no later end
+                                                          run_started="2026-10-25T12:00:00"), eps))   # no episode
+        # its run started 10:30 and was killed before writing one: not the 11:00 cycle's (run started 10:50)
+        self.assertIsNone(consultstats.cycle_of("x", row("t", GLM, 0.05, 1, run="live",
+                                                          run_started="2026-10-25T10:30:00"), eps))
 
-    def test_models_in_excludes_errored_calls(self):
+    def test_models_in_counts_what_was_sent_not_what_was_refused(self):
+        """A call that failed after sending (charged its worst case) still showed that vendor the work; an outright
+        refusal (charged $0) showed nobody anything (Grok's review)."""
         self.write_ledger([row("2026-10-25T10:00:00", GLM, 0.05, 10.0, run_started="2026-10-25T09:50:00"),
                            row("2026-10-25T10:01:00", CLAUDE, 0.20, 30.0, run_started="2026-10-25T09:50:00"),
                            row("2026-10-25T10:02:00", "openrouter/xiaomi/mimo-v2.6-pro", 0.10, 5.0,
-                               run_started="2026-10-25T09:50:00", error="timeout")])
+                               run_started="2026-10-25T09:50:00", error="network: timed out"),
+                           row("2026-10-25T10:03:00", "openrouter/google/gemini-4-argon", 0.0, 0.2,
+                               run_started="2026-10-25T09:50:00", error="HTTP 404: no endpoints")])
         self.write_episodes([episode("2026-10-25T10:00:00")])
-        self.assertEqual(consultstats.models_in("x", episode("2026-10-25T10:00:00")), {GLM, CLAUDE})
+        self.assertEqual(consultstats.models_in("x", episode("2026-10-25T10:00:00")),
+                         {GLM, CLAUDE, "openrouter/xiaomi/mimo-v2.6-pro"})
 
     def test_section_empty_without_rows(self):
         self.assertEqual(consultstats.section("x"), [])
@@ -179,7 +190,7 @@ class ConsultStatsTest(unittest.TestCase):
         eps = [episode("2026-10-25T18:00:00")]
         crashed = row("2026-10-25T10:05:00", GLM, 0.05, 10.0, run_started="2026-10-25T10:00:00")
         self.assertIsNone(consultstats.cycle_of("x", crashed, eps))   # ended 8 h later: another cycle
-        on_time = row("2026-10-25T17:30:00", GLM, 0.05, 10.0, run_started="2026-10-25T17:20:00")
+        on_time = row("2026-10-25T17:55:00", GLM, 0.05, 10.0, run_started="2026-10-25T17:50:00")
         self.assertEqual(consultstats.cycle_of("x", on_time, eps), "2026-10-25T18:00:00")
 
     def test_judges_of_a_consulted_vendor_do_not_grade_that_cycle(self):
@@ -187,8 +198,8 @@ class ConsultStatsTest(unittest.TestCase):
         them out would leave no judge, they grade it rather than nobody (logged)."""
         ep = episode("2026-10-25T10:00:00")
         self.write_ledger([row("2026-10-25T09:55:00", GLM, 0.01, 1.0, run_started="2026-10-25T09:50:00"),
-                           row("2026-10-25T09:56:00", CLAUDE, 0.01, 1.0, run_started="2026-10-25T09:50:00",
-                               error="HTTP 404")])          # failed: did not contribute
+                           row("2026-10-25T09:56:00", CLAUDE, 0.0, 1.0, run_started="2026-10-25T09:50:00",
+                               error="HTTP 404")])          # refused outright ($0): sent nothing
         self.write_episodes([ep])
         pool = ["openrouter/xiaomi/mimo-v2.6-pro", "openrouter/z-ai/glm-5.3-flash", "openrouter/deepseek/deepseek-v4.1-flash"]
         (self.instances / "x" / "config.env").write_text('LLM_MODEL="openrouter/xiaomi/mimo-v2.6-pro"\n')
@@ -203,6 +214,16 @@ class ConsultStatsTest(unittest.TestCase):
                 own = metrics.own_models("x", ep)   # only mimo (its own) and the z-ai judge: z-ai grades it
             self.assertNotIn("openrouter/z-ai/glm-5.3-flash", own)
             self.assertIn("leaving their judges out would leave none", logged.call_args.args[0])
+
+    def test_the_second_judge_skips_a_cycle_that_consulted_its_vendor(self):
+        ep = episode("2026-10-25T10:00:00")
+        self.write_ledger([row("2026-10-25T09:55:00", "openrouter/deepseek/deepseek-v5", 0.01, 1.0,
+                               run_started="2026-10-25T09:50:00")])
+        self.write_episodes([ep])
+        self.assertEqual(metrics.consulted_vendors("x", ep), {"deepseek"})
+        self.assertEqual(consultstats.vendor(judge.JUDGE2_MODEL), "deepseek")   # today's second judge
+        self.assertIn("vendor(judge.JUDGE2_MODEL) in consulted_vendors(name, ep)",
+                      Path(metrics.__file__).read_text())   # the gate sits where the second judge is queued
 
     def test_review_line(self):
         self.assertEqual(consultstats.review_line("x"), "")
@@ -225,7 +246,10 @@ class ConsultStatsTest(unittest.TestCase):
         self.assertIn("  per run: live 1, talk 1", text)
         self.assertIn("  live cycles: 1 consulted, 1 did not", text)
         self.assertIn("2026-10-25 10:00 plugin-foo: z-ai/glm-5.3 $0.05", text)
-        self.assertEqual(consultstats.report(["nobody"]), "nobody: consults\n  (none)")
+        self.assertEqual(consultstats.report(["nobody"]), "nobody: consults (last 7 days)\n  (none)")
+        # the same 7 days as the section: an old consult and the cycles before it are not counted (Grok's review)
+        self.write_ledger([row("2026-10-01T10:00:00", GLM, 9.0, 1.0)])
+        self.assertEqual(consultstats.report(["x"]), "x: consults (last 7 days)\n  (none)")
 
 
 if __name__ == "__main__":

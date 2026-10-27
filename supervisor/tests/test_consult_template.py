@@ -90,6 +90,32 @@ class TransportTest(unittest.TestCase):
                 broker.consult("m", [])
 
 
+class EpisodeRunStartedTest(unittest.TestCase):
+    """The episode carries its run's start (SHAFT_RUN_STARTED, from runner._launch): consults are booked to the cycle
+    by that exact time, so a run killed before writing an episode leaks into no other cycle (Grok's review)."""
+
+    def test_a_live_episode_records_the_supervisor_s_run_start(self):
+        try:
+            from supervisor.tests.test_consciousness_template import DECLARE, FINISH, Fixture
+        except unittest.SkipTest as e:
+            self.skipTest(str(e))
+
+        class Cycle(Fixture, unittest.TestCase):
+            def runTest(self):
+                pass
+        t = Cycle()
+        t.setUp()
+        try:
+            with mock.patch.dict(os.environ, {"SHAFT_RUN_STARTED": "2026-10-27T14:00:00"}):
+                t.live([{"tool_calls": [("declare_intent", DECLARE)]}, {"tool_calls": [("finish_cycle", FINISH)]}])
+            self.assertEqual(t.last()["run_started"], "2026-10-27T14:00:00")
+            with mock.patch.dict(os.environ, {"SHAFT_RUN_STARTED": ""}):
+                t.live([{"tool_calls": [("declare_intent", DECLARE)]}, {"tool_calls": [("finish_cycle", FINISH)]}])
+            self.assertNotIn("run_started", t.last())   # outside the supervisor: nothing invented
+        finally:
+            t.doCleanups()
+
+
 class SkillTest(unittest.TestCase):
     def test_the_skill_page_is_listed_by_its_first_line(self):
         first = (TEMPLATE / "skills" / "choosing-a-model.md").read_text().splitlines()[0]

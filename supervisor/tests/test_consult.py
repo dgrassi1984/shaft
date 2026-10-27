@@ -168,6 +168,47 @@ class ConsultTest(unittest.TestCase):
         prompt = json.dumps({k: v for k, v in sent.items() if k not in ("provider", "usage")}, ensure_ascii=False)
         self.assertAlmostEqual(self.rows()[0]["reserved_usd"], (len(prompt) / 3 * 7.429 + 100 * 8.144) / 1e6)
 
+    def test_non_text_input_the_worst_case_cannot_see_is_refused(self):
+        """Grok's review (2026-10-27, blocker): a hundred image URLs reserved cents and could bill dollars."""
+        image = {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}}
+        for messages in ([{"role": "user", "content": [{"type": "text", "text": "what is this?"}, image]}],
+                         [{"role": "user", "content": [{"type": "input_audio", "input_audio": {"data": "x"}}]}],
+                         [{"role": "user", "content": [{"type": "file", "file": {"file_data": "x"}}]}], []):
+            with self.assertRaises(consult.ConsultError):
+                self.complete({**self.body, "messages": messages})
+        with self.assertRaisesRegex(consult.ConsultError, "text only"):
+            self.complete({**self.body, "modalities": ["text", "image"]})
+        self.urlopen.assert_not_called()
+        self.upstream(self.reply())
+        self.complete({**self.body, "messages": [{"role": "user", "content": [{"type": "text", "text": "ok"}]}]})
+
+    def test_a_thinking_budget_is_clamped_to_max_tokens(self):
+        self.upstream(self.reply())
+        self.complete({**self.body, "reasoning": {"effort": "high", "max_tokens": 50000}})
+        self.assertEqual(json.loads(self.urlopen.call_args.args[0].data)["reasoning"],
+                         {"effort": "high", "max_tokens": 100})
+
+    def test_one_attempt_only_and_a_zero_cost_is_not_free(self):
+        """Grok's review: the chat path's three 600 s attempts outlived the 30-minute reservation, and an earlier
+        attempt's generation went unbilled; a reported cost of 0 recorded $0."""
+        self.urlopen.side_effect = urllib.error.HTTPError("https://fake", 503, "busy", {}, io.BytesIO(b"busy"))
+        with self.assertRaises(consult.ConsultError):
+            self.complete()
+        self.assertEqual(self.urlopen.call_count, 1)
+        self.assertEqual(self.urlopen.call_args.kwargs.get("timeout"), consult.SEND_TIMEOUT_S)
+        self.assertLess(consult.SEND_TIMEOUT_S, consult.RESERVATION_S)
+        self.upstream(self.reply(0))
+        self.complete()
+        row = self.rows()[-1]
+        self.assertEqual(row["usd"], row["reserved_usd"])
+
+    def test_a_cost_above_its_reservation_is_recorded_and_logged(self):
+        self.upstream(self.reply(5.0))
+        with mock.patch.object(core, "log") as logged:
+            self.complete()
+        self.assertEqual(self.rows()[-1]["usd"], 5.0)
+        self.assertIn("over its", logged.call_args.args[0])
+
     def test_paid_extras_the_reservation_cannot_see_are_refused(self):
         for extra in ({"plugins": [{"id": "web"}]}, {"web_search_options": {"search_context_size": "high"}}):
             with self.assertRaisesRegex(consult.ConsultError, "no OpenRouter plugins"):

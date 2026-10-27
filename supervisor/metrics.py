@@ -589,15 +589,22 @@ def own_models(name: str, ep: dict | None = None) -> list[str]:
     return own + (_consulted_judges(name, ep, own) if ep else [])
 
 
+def consulted_vendors(name: str, ep: dict) -> set[str]:
+    """The vendors this live cycle sent a consult to (consultstats.models_in); empty when the books are unreadable,
+    logged — they must not stop a judgment."""
+    from . import consultstats
+    try:
+        return {consultstats.vendor(m) for m in consultstats.models_in(name, ep)} - {None}
+    except Exception as e:
+        log(f"{name}: consulted models of {ep.get('ts')} unreadable ({type(e).__name__}: {e}); judged as usual")
+        return set()
+
+
 def _consulted_judges(name: str, ep: dict, own: list[str]) -> list[str]:
     """The judges sharing a vendor with a model this cycle consulted — none when leaving them out would leave no judge
     at all (the cycle is graded rather than not; logged), or when the consult record cannot be read."""
     from . import consultstats, judge
-    try:
-        vendors = {consultstats.vendor(m) for m in consultstats.models_in(name, ep)} - {None}
-    except Exception as e:   # the books must not stop a judgment
-        log(f"{name}: consulted models of {ep.get('ts')} unreadable ({type(e).__name__}: {e}); judged as usual")
-        return []
+    vendors = consulted_vendors(name, ep)
     hit = [m for m in judge.JUDGE_MODELS if consultstats.vendor(m) in vendors]
     left = [m for m in judge.JUDGE_MODELS if m not in hit and not any(judge.same_model(m, x) for x in own)]
     if hit and not left:
@@ -661,7 +668,11 @@ def judge_pending(name: str) -> int:
                 _check_ratings(verdict)
                 verdict["judge"] = by
                 if second and not judge.same_model(by, judge.JUDGE2_MODEL):   # never a model agreeing with itself
-                    stash_second(name, ep["ts"], case)   # judged after the run lets go of the instance
+                    from .consultstats import vendor
+                    if vendor(judge.JUDGE2_MODEL) in consulted_vendors(name, ep):   # it saw this cycle's work
+                        log(f"{name}: no second judge on {ep['ts']}: it consulted {vendor(judge.JUDGE2_MODEL)}")
+                    else:
+                        stash_second(name, ep["ts"], case)   # judged after the run lets go of the instance
             except judge.JudgeError as e:
                 log(f"{name}: judging {ep['ts']} failed: {e}")
                 break
