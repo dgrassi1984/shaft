@@ -90,26 +90,33 @@ and [chat design](plans/PLAN-webui-chat.md).
   message it sends you marks its chat unread in the rail too. Config, Journal, earlier chats, and a failed feed refresh
   do not consume a new reply. Marks are shared across tabs in the same browser.
   Opening an instance's chat lands on its last message, earlier chats too, and stays there while what loads after
-  the jump (the draft in the composer, the documents sheet, an image) grows the feed — until you scroll up. The page
+  the jump (the draft in the composer, the documents sheet, an image, the keyboard closing after Send) grows the feed
+  or moves it — until you scroll up yourself (a wheel, a finger, the scrollbar, a key). The page
   carries the version of the chat and documents it drew, so their first refresh is a 304, not the whole chat again.
 - The chat: files and images both ways (drop them anywhere on the page, paste or pick; each is a chip you can take
   out), the reply's activity and clock live, interject, Stop, End. Select text in a message or a document and
-  **↩ Reply** quotes it in your message; from the documents sheet or full screen, the sheet closes first so the composer
-  shows. Text left selected in the chat does not stop it refreshing: the selected message waits until you let go. Each message with text has Copy and Reply icons for its whole Markdown source, including
-  your own messages. Code blocks and documents have Copy icons too (a code block's stays at its corner while the
-  code scrolls sideways). Tabbing to a Copy button shows it,
-  with its focus ring. Your draft survives a reload; `/` writes,
+  **↩ Reply** quotes it: the quote waits in a chip above the field (× takes it out) and goes first when you send, as a
+  Markdown quote; from the documents sheet or full screen, the sheet closes first so the composer shows. Text left
+  selected in the chat does not stop it refreshing: the selected message waits until you let go. Each message with
+  text has Copy and Reply for its whole Markdown source, your own messages too, under the message: on a computer they
+  show on hover or when Tab reaches them, and right-click or the context-menu key opens them as a menu; on a phone or
+  tablet a long press opens the menu (Copy, Reply, Select text — a long press no longer selects text by itself). The
+  last answer keeps its Copy and Reply in view. Code blocks and documents have Copy icons too (a code block's stays
+  at its corner while the code scrolls sideways). Your draft survives a reload; `/` writes,
   Alt-↑/↓ changes chat; opt-in desktop notifications (⋯ menu) for a reply that lands while the tab is hidden.
+  The composer is one field: the paperclip attaches files, the arrow sends now (during a reply: an interjection), and
+  ⌃ beside it — or a long press on the arrow — offers **Queue after reply** (only while a reply runs) and **Next
+  cycle**. A tap on the arrow keeps the keyboard up and the text focused, as in Messages.
   Enter sends. Alt-Enter and Shift-Enter insert a new line. Cmd-Enter, or Ctrl-Enter off macOS, queues a message
-  until the current reply ends, including a failed or stopped reply. While idle it sends now. The **Queue after
-  reply** button shows only while a reply is running. Queued messages
+  until the current reply ends, including a failed or stopped reply. While idle it sends now. Queued messages
   appear below the live reply with Cancel and survive a reload or closed tab. They become one next message,
   joined in order with a blank line between texts and all attachments combined. Quotes stay with their text.
   On a phone or tablet Return is a new line while the on-screen keyboard is up (use Send to send); with a hardware
-  keyboard (an iPad's), Return sends as on a computer, after its autocorrection, and Shift/Alt-Return is a new line.
+  keyboard (an iPad's), Return sends as on a computer, after its autocorrection, and Shift/Alt-Return is a new line;
+  the shortcuts line under the field then shows (on a screen at least 600 px wide).
   **Next cycle** ([PLAN-background-messages](plans/PLAN-background-messages.md)) is not answered now: the message,
   with its files, goes to the instance's `inbox/` and it takes it up in its next scheduled cycle, as it reads any
-  inbox message. Nothing opens or holds a conversation. The button's tooltip and the confirmation say when that is
+  inbox message. Nothing opens or holds a conversation. Its line in the menu, its tooltip and the confirmation say when that is
   (the next wake's time, a cycle running now, no scheduled cycles, or paused). It shows in the chat as yours, marked
   **⏾ next cycle · waiting**, then **read** once a cycle has read it. Its answer, if it sends one, is a message
   like any other (a card with Reply, and a push). Quoting a question answers it, as Send now does. Only the
@@ -133,19 +140,25 @@ and [chat design](plans/PLAN-webui-chat.md).
   Refreshes keep Manage open or closed, link focus, and activity scroll. Chat thumbnails reserve space;
   images loading keep the feed at the bottom if you have not scrolled up. After Save, focus returns to Edit
   and survives the document refresh.
-- While a reply runs, its activity is refreshed on its own (`/fragment/chat/<name>/live`); the rest of the chat is
-  answered "not modified" until something else changes, rather than sent again whole every 1.5 seconds. The activity
-  log keeps your place if you scrolled up in it and follows its end if you are there; when the reply ends it stays
-  until the answer replaces it, which is fetched at once. Rendered
+- While a reply runs, its activity and the answer so far are refreshed on their own (`/fragment/chat/<name>/live`):
+  one line says what it is doing now (tap it for every step), dots show before the first word, then the answer
+  streams in as it is written. The rest of the chat is answered "not modified" until something else changes, rather
+  than sent again whole every 1.5 seconds. The streaming answer is not a live region (VoiceOver would read it again at
+  every refresh); the finished reply is announced once. The activity log keeps your place if you scrolled up in it
+  and follows its end if you are there; when the reply ends it stays until the answer replaces it, which is fetched
+  at once. Rendered
   Markdown and the documents' hashes are kept until their text or file changes.
-- The chat header refreshes every 1.5 seconds: state, model, today's spend, actions, busy state icon, Clear and
-  Earlier chats. When the instance is busy and not writing a reply, an icon next to its name (⏳ in a cycle or
-  working, 💤 sleeping, ⏸ paused by you, 💬 in a conversation, • other states) opens the busy notice on hover, tap
-  or keyboard. The open state notice, history list and ⋯ menu and keyboard focus survive refreshes; your draft and
-  documents stay in place.
-  A failed refresh marks the header stale. Clear sends the conversation id shown by the header; a missing or
-  outdated id is refused with a request to reload. Cleared conversations stay in Earlier web chats and Transcripts.
-- **Earlier chats** sits in the chat header. Its quick list shows the latest 20 and the total count;
+- The chat header refreshes every 1.5 seconds. It is the name with its state and model under it, then three controls:
+  **Documents**, **New chat** and **⋯**. ⋯ holds the instance's pages, Earlier chats, its actions, notifications and
+  Reload / update, and last, apart and in red, **Kill**. The icons are one drawn set in the text's colour (no emoji)
+  and stay their size when the text size grows. When the instance is busy and not writing a reply, its state under
+  the name (with an icon: working, asleep, paused by you, waiting for you) opens a notice on hover, tap or keyboard
+  saying what a message does now. The open notice, history list, ⋯ menu and keyboard focus survive refreshes; your
+  draft and documents stay in place.
+  A failed refresh marks the header stale. New chat (what Clear did) sends the conversation id shown by the header; a
+  missing or outdated id is refused with a request to reload. Its conversation stays in Earlier web chats and
+  Transcripts.
+- **Earlier chats** is in the ⋯ menu. Its quick list shows the latest 20 and the total count;
   **All earlier chats** opens `/i/<name>/chats`, with every saved ended web chat, newest first.
   Each entry shows its date, the first line of the first user message, trimmed to 80 characters, and message count.
   Archive links use `?id=` and support bookmarks and normal browser Back. An archive has an **Earlier chat**
@@ -154,13 +167,13 @@ and [chat design](plans/PLAN-webui-chat.md).
   not snapshots. Editing, commenting, deleting, restoring and creating documents are unavailable there.
   **Open in the current chat to edit or comment** opens the selected file in the current chat. Reply document
   cards in an archive also open the file in the current chat.
-- **Clear chat** ends an open conversation and clears the page. The conversation stays in Earlier chats and
+- **New chat** ends an open conversation and clears the page. The conversation stays in Earlier chats and
   Transcripts. **End the conversation** leaves messages visible; the next message starts a new conversation.
   The current chat's ended footer says **journal write-up requested**. The web UI has no completion marker.
   **Stop the reply** stops only the running reply and keeps the conversation open.
 - Failed replies explain the next action and keep the raw error under **Technical details**. Partial answers remain
-  visible and are marked **incomplete**. **Retry** fills the composer with the original message; you must press Send.
-  It asks before replacing a different draft. Retry is offered only for a refused connection before sending, or a
+  visible and are marked **incomplete**. **Retry** sends the original message again, in one tap (a repeated tap carries
+  the same message id, so it is not sent twice). It asks before replacing a different draft. Retry is offered only for a refused connection before sending, or a
   known model HTTP 5xx failure with API evidence that no tools ran. Older records and uncertain outcomes link to
   Activity and Services. Interjected requests need inspection rather than a one-message retry.
 - **Documents**: a Markdown file an instance writes under its `notes/docs/` shows beside the chat, live, as it writes
@@ -238,7 +251,7 @@ and [chat design](plans/PLAN-webui-chat.md).
   **Access** (tools, wake floor and cloud cap, jobs, shared folder,
   mail and calendar grants, battery, key names), **Judge**, **Changes**, **Benchmarks**, **Transcripts**,
   **Journal**, **Activity** (connections, plugins, jobs), with its actions and earlier chats.
-- **Kill** (with the other actions: overview cards, the ⋯ menu, Summary) pauses the instance and stops what it runs
+- **Kill** (last and apart from the other actions: in the ⋯ menu and on Summary; not on the overview's cards) pauses the instance and stops what it runs
   now, as `shaft kill`. **Delete…** is on its Summary page only, enabled once it runs nothing: you type its name to
   confirm (the server checks it again), it runs `shaft delete <name> --yes` with the archive, and the page goes back
   to the overview ([kill and delete](plans/PLAN-kill-delete.md)).
@@ -277,8 +290,12 @@ next refresh or action opens the pairing page. Your chat draft stays in this bro
 - **Typing:** on a phone, Return makes a new line and Send sends; with a hardware keyboard Return sends. Fields, including the Drive editor, use at least 16 px text.
   The reply's activity, a document's overwritten-lines disclosure, and each judge model have 44 px touch targets.
   Field borders have at least 3:1 contrast against the page and panel backgrounds in both themes.
-- **Layout:** the chat fills the screen. ☰ lists the chats and pages, 📄 the documents, ⋯ the instance's pages and
-  actions. Chats and Documents sheets move focus inside and keep Tab there. The covered page is inactive.
+- **Layout:** the chat fills the screen. The sidebar icon lists the chats and pages, Documents the documents, ⋯ the
+  instance's pages and actions. Every other page has a bar on a phone: **‹ Chat** (back to the chat — the installed
+  app has no browser Back), its title, and the sidebar icon; an instance's pages are one strip that scrolls sideways.
+  Markdown tables in answers and documents keep their columns and scroll sideways; a page's own tables become
+  label/value rows. Messages and notices show at the top, clear of the notch and the composer. Choosing another
+  document marks the panel loading until it is there. Chats and Documents sheets move focus inside and keep Tab there. The covered page is inactive.
   Close with ✕ or Escape to return focus to the opener. Choosing a Chats link also closes that sheet.
   Resizing restores normal interaction when a sheet becomes a side panel. Messages and network notices
   appear above the sheets. The documents sheet and the comment box stay above the on-screen keyboard. Sheets and the ⋯ menu leave room for the notch in landscape.
