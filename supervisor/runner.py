@@ -946,6 +946,7 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
         else:
             approved = None   # a failed gate records nothing: the record before it is what was put back
             saved = _keep_rejected(name, rejected_to, after, touched) if rejected_to else ""
+            mine, not_mine = _keep_for_instance(root, after, touched)
             _put_back(name, root, before["code"], touched)
             back = gate.revert_config(root, list(config_writes))
             undone = touched + ([f"config.env ({', '.join(back)})"] if back else [])
@@ -953,11 +954,16 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
             kept_at = next((l[len("full log: "):] for l in test_log.splitlines() if l.startswith("full log: ")), "")
             log(f"{name}: code change FAILED tests, reverted: {touched} config: {back}"
                 + (f"; failing: {'; '.join(names)}" if names else "") + (f"; full log {kept_at}" if kept_at else "")
-                + (f"; the rejected files are kept in {saved}" if saved else ""))
+                + (f"; the rejected files are kept in {saved}" if saved else "")
+                + (f"; a copy for the instance in {mine}" if mine else "")
+                + (f"; no copy for the instance: {not_mine}" if not_mine else ""))
             if undone:
                 journal_note(root, "Supervisor: code change reverted",
                              "My changes to " + ", ".join(undone) + " were reverted because the tests failed."
                              + (f" The rejected files are kept in {saved}." if saved else "")
+                             + (f" What I wrote is kept in {mine}, as it was when the tests ran (a copy, not code:"
+                                " nothing runs it)." if mine else "")
+                             + (f" A copy of what I wrote could not be kept ({not_mine})." if not_mine else "")
                              + ("\n\nFailing tests:\n" + "\n".join(f"- {n}" for n in names) if names else "")
                              + "\n\nLast lines of the test output:\n\n```\n" + test_log[-1500:] + "\n```")
     _commit_outside_config(name, root, list(config_writes) if "config.env" in kept else [])
@@ -1019,6 +1025,34 @@ def _keep_rejected(name: str, folder: Path, code: dict[str, bytes], paths: list[
         raise RunRefused(f"the code the gate rejected could not be kept in {folder} ({e}); it was not put back: "
                          f"{', '.join(there)}") from None
     return str(folder) if there else ""
+
+
+REVERTED = "notes/reverted"   # in the instance's own folder: a reverted change's files, as the instance wrote them
+
+
+def _keep_for_instance(root: Path, code: dict, paths: list[str]) -> tuple[str, str]:
+    """Copy what the gate is about to put back into the instance's own notes/reverted/<stamp>/, so the instance can
+    read what it lost: a revert before any commit leaves no history (thelos, 2026-10-27: a failing test file it was
+    building from was gone). notes/ is mind, not code: the copy is committed to its mind store and never gated or
+    run. Every write goes through the no-link descriptors (safe_write*). Best effort, unlike _keep_rejected: a copy
+    that cannot be made (a link the instance put in the way, a full disk) never stops the revert. Returns (the
+    folder, relative to the instance, or ""; why no copy was made, or "")."""
+    there = [p for p in paths if p in code]
+    if not there:
+        return "", ""
+    rel = f"{REVERTED}/{datetime.now():%Y%m%d-%H%M%S-%f}"
+    try:
+        for p in there:
+            v = code[p]
+            if isinstance(v, gate.Link):          # a link: what it pointed to, as text, never the link
+                safe_write(root, f"{rel}/{p}.link", v.target + "\n")
+            elif isinstance(v, gate.Invalid):
+                safe_write(root, f"{rel}/{p}.invalid", v.why + "\n")
+            else:
+                safe_write_bytes(root, f"{rel}/{p}", v, exclusive=True)
+    except (OSError, UnsafePath) as e:
+        return "", f"{type(e).__name__}: {e}"
+    return rel + "/", ""
 
 
 def _put_back(name: str, root: Path, approved: dict, paths: list[str]) -> None:
