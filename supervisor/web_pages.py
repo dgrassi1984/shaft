@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 from .dashboard import clean, event_tone
+from .web_icons import LAUNCH_DEVICES
 
 
 class Html(str):
@@ -105,6 +106,17 @@ APP_NAME = "SHAFT"
 THEME = {"light": "#f6f6f4", "dark": "#141413"}       # the page's --bg in each scheme (web.css)
 
 
+# One shared fragment (68 links, ~16 KB), built once rather than on each page render. Include it everywhere
+# so installation from any page gets the device matrix without adding a route argument to page().
+STARTUP_LINKS = Html("".join(
+    f'<link rel="apple-touch-startup-image" href="/launch/{pw}x{ph}-{scheme}.png?v={STATIC_VERSION}" '
+    f'media="(device-width: {w}px) and (device-height: {h}px) and (-webkit-device-pixel-ratio: {r}) '
+    f'and (orientation: {orientation}) and (prefers-color-scheme: {scheme})">'
+    for w, h, r in LAUNCH_DEVICES
+    for orientation, pw, ph in (("portrait", w * r, h * r), ("landscape", h * r, w * r))
+    for scheme in THEME))
+
+
 def page(title: str, body: Html, nav: Html = Html(""), csrf: str = "") -> Html:
     meta = h('<meta name="csrf" content="{csrf}">', csrf=csrf) if csrf else Html("")
     return h('<!doctype html><html lang="en"><head><meta charset="utf-8">'
@@ -119,14 +131,16 @@ def page(title: str, body: Html, nav: Html = Html(""), csrf: str = "") -> Html:
              '<meta name="theme-color" content="{dark}" media="(prefers-color-scheme: dark)">'
              '<meta name="static-version" content="{v}">'
              '<link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v={v}">'
-             '<link rel="apple-touch-icon" href="/static/icon-180.png?v={v}">'
+             '<link rel="apple-touch-icon" href="/static/icon-152.png?v={v}" sizes="152x152">'
+             '<link rel="apple-touch-icon" href="/static/icon-167.png?v={v}" sizes="167x167">'
+             '<link rel="apple-touch-icon" href="/static/icon-180.png?v={v}" sizes="180x180">{startup}'
              '<link rel="stylesheet" href="/static/web.css?v={v}">'
              '<script src="/static/web.js?v={v}" defer></script>'
              '<script src="/static/comments.js?v={v}" defer></script></head>'
              '<body><div class="{shell}">{nav}<main>{body}</main></div></body></html>',
              shell="shell" if nav else "shell single",
              meta=meta, title=title, v=STATIC_VERSION, nav=nav, body=body, app=APP_NAME, light=THEME["light"],
-             dark=THEME["dark"])
+             dark=THEME["dark"], startup=STARTUP_LINKS)
 
 
 # The pages used now and then, under the rail's chats: the one list of them (a second list, passed in and ignored,
@@ -238,6 +252,7 @@ self.addEventListener("fetch", (ev) => {
   if (req.method !== "GET") return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
+  if (url.pathname.startsWith("/launch/")) return;   // iOS fetches startup images at install; never put them in CacheStorage
   if (req.mode === "navigate") {                     // the server, always; when it cannot be reached, say so
     ev.respondWith(fetch(req).then((r) => {
       if (r.status >= 502 && r.status <= 504) return caches.match("/offline");
