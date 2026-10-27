@@ -61,6 +61,46 @@ def _static_version(folder: Path = Path(__file__).parent / "web_static") -> str:
 STATIC_VERSION = _static_version()      # read once at start: the service is restarted to load new code anyway
 
 
+# The UI's one icon set (docs/plans/PLAN-pwa-market M1): line icons on a 24-unit grid, drawn in the text's colour. Colour
+# emoji as controls rendered as pale blobs in dark mode and read as disabled (iPhone review I10).
+ICON_PATHS = {
+    "copy": '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H4v13h4"/>',
+    "check": '<path d="m5 12 4 4L19 6"/>',
+    "reply": '<path d="m9 4-6 6 6 6M3 10h10a8 8 0 0 1 8 8v2"/>',
+    "delete": '<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/>',
+    "edit": '<path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+    "download": '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>',
+    "expand": '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
+    "collapse": '<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/>',
+    "sidebar": '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9.5 4v16"/>',
+    "docs": '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/><path d="M14 3v5h5M9 13h6M9 17h4"/>',
+    "more": '<circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/>',
+    "compose": '<path d="M11 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"/>'
+               '<path d="M17.5 2.5a2.1 2.1 0 0 1 3 3L12 14l-4 1 1-4Z"/>',
+    "history": '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/>',
+    "close": '<path d="M18 6 6 18M6 6l12 12"/>',
+    "back": '<path d="m15 18-6-6 6-6"/>',
+    "up": '<path d="m18 15-6-6-6 6"/>',
+    "send": '<path d="M12 19V5M5 12l7-7 7 7"/>',
+    "attach": '<path d="m21 11-8.6 8.6a5 5 0 0 1-7-7l8.5-8.6a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9"/>',
+    "stop": '<rect x="6" y="6" width="12" height="12" rx="2.5"/>',
+    "pause": '<rect x="6.5" y="5" width="3.5" height="14" rx="1"/><rect x="14" y="5" width="3.5" height="14" rx="1"/>',
+    "sleep": '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z"/>',
+    "busy": '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
+    "waiting": '<path d="M21 12a8 8 0 0 1-11.6 7.1L4 21l1.9-5.4A8 8 0 1 1 21 12Z"/>',
+    "select": '<path d="M5 4h4M7 4v16M5 20h4M13 8h7M13 12h7M13 16h5"/>',
+}
+_FILLED = {"more", "stop"}                     # drawn as solid shapes, not outlines
+
+
+def icon(name: str, size: int = 20) -> Html:
+    """An icon from ICON_PATHS, decorative (its control carries the name: aria-label)."""
+    fill = 'fill="currentColor" stroke="none"' if name in _FILLED else \
+        'fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"'
+    return Html(f'<svg class="i" width="{size}" height="{size}" viewBox="0 0 24 24" {fill} aria-hidden="true" '
+                f'focusable="false">{ICON_PATHS[name]}</svg>')
+
+
 APP_NAME = "SHAFT"
 THEME = {"light": "#f6f6f4", "dark": "#141413"}       # the page's --bg in each scheme (web.css)
 
@@ -379,7 +419,7 @@ def instance_card(i: dict) -> Html:
              '<span class="dim">· {model}</span></header>{rows}<footer>{buttons}'
              '<a class="msglink" href="/i/{name}#write">Message…</a></footer></article>',
              cls=state_class(i["state"]), name=i["name"], model=i["model"], rows=join(rows),
-             buttons=instance_buttons(i))
+             buttons=instance_buttons(i, kill=False))
 
 
 def _when(m: dict) -> str:

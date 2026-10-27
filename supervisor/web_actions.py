@@ -216,9 +216,11 @@ def _update_question(name: str) -> tuple[str, str]:
     return hit[1]
 
 
-def instance_buttons(i: dict, delete: bool = False) -> Html:
+def instance_buttons(i: dict, delete: bool = False, kill: bool = True) -> Html:
     """The instance actions of the overview and the instance page (TUI keys c, p, s, u, K); `delete`: also Delete…
-    (TUI D) — on the instance's own page only."""
+    (TUI D) — on the instance's own page only. Kill and Delete come last, apart (.dangerzone): beside Pause on every
+    card they were one slip from a stop (iPhone review I13). `kill`: False leaves Kill off (the overview's cards: it
+    stays on the instance's Summary and in its ⋯ menu)."""
     name, state = i["name"], i["state"]
     idle = state == "idle"
     paused = state == "paused by you"
@@ -231,13 +233,14 @@ def instance_buttons(i: dict, delete: bool = False) -> Html:
                   {"name": name}),
            button("sleep", "Sleep now", a.SLEEP_QUESTION.format(name=name), {"name": name},
                   "" if idle else f"{name} is {state} — a sleep starts only when it is idle"),
-           button("update", "Update", question, {"name": name}, nothing),
-           button("kill", "Kill", a.KILL_QUESTION.format(name=name), {"name": name}, cls="danger")]
+           button("update", "Update", question, {"name": name}, nothing)]
+    danger = [button("kill", "Kill", a.KILL_QUESTION.format(name=name), {"name": name}, cls="danger")] if kill else []
     if delete:
-        out.append(button("delete", "Delete…", a.DELETE_QUESTION.format(name=name), {"name": name},
+        danger.append(button("delete", "Delete…", a.DELETE_QUESTION.format(name=name), {"name": name},
                           "" if state in DELETABLE else f"{name} is {state} — kill it first", cls="danger",
                           typed=name, after="home"))
-    return h('<div class="actions">{b}</div>', b=join(out))
+    zone = h('<div class="actions dangerzone">{d}</div>', d=join(danger)) if danger else Html("")
+    return h('<div class="actions">{b}</div>{z}', b=join(out), z=zone)
 
 
 def message_forms(name: str, question: dict | None) -> Html:
