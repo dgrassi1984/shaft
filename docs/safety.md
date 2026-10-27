@@ -118,7 +118,20 @@
   invariant tests and plugin checks run; failure restores the old code and the config lines the instance
   set, and tells the instance why. The supervisor's own tests run from its last commit (and the template's), in a
   clean copy under `.supervisor/gate-tests/`, never from the checkout: an edit someone is still making there cannot
-  decide a verdict. The plugin check and the instance's own tests run in its sandbox with no network at
+  decide a verdict. They run in two parts: modules that read the instance (`test_invariants`, modules naming
+  `SHAFT_UNDER_TEST`, and their direct or indirect importers) at every gate; the rest ("shared") once per commit pair
+  while a pass is fresh. A module the scan cannot parse also runs at every gate. The shared pass is recorded beside
+  the tree under `.supervisor/gate-tests/<commits>/`, one file per key (commits, interpreter on disk, `SHAFT_*` settings
+  except `SHAFT_UNDER_TEST`), reused for up to a day. Only passes with tests run are recorded, never failures; a shared
+  run that fails or times out deletes that key's record. A lock allows one shared run per commit pair at a time; its wait
+  is bounded by the stage timeout and fails closed. Each part passes only with exit 0 and its runner's successful
+  report carrying the token given on stdin. The shared part sets `SHAFT_UNDER_TEST` to an unreadable folder and blocks
+  instance-part modules from import, so reaching the instance through a route the split missed fails it. `load_tests`
+  hooks fail their part. A test that hides the variable's name AND skips when the folder is unreadable can escape this;
+  that residual case is accepted because supervisor tests are trusted committed code instances cannot edit. The
+  unpaused scheduler warms the shared part after each merge (`shaft gate warm`), refreshing passes older than half a
+  day on its hourly check. A warm-up failure is one panel alert, not retried on those commits during that scheduler run.
+  The plugin check and the instance's own tests run in its sandbox with no network at
   all, like `run` without its proxy. A check that runs past its time counts as failed, and so does any error of the
   gate's own (it never lets a change through unjudged). Each run is settled whatever happens to it: the agent
   and everything it started run in a process group of their own, ended (SIGTERM, then SIGKILL) before the gate

@@ -1209,6 +1209,9 @@ def main(argv: list[str]) -> int:
     tsub.add_parser("work", help="run the queued trials' tests and replays that may run now (the scheduler does this)")
     p = sub.add_parser("check", help="run the test gate against an instance's code")
     p.add_argument("name", nargs="?", default=DEFAULT_INSTANCE)
+    p = sub.add_parser("gate", help="the test gate's upkeep: warm runs the supervisor's shared tests on the current "
+                                    "commit unless their pass is recorded (the scheduler does it after each merge)")
+    p.add_argument("action", choices=["warm"])
     args = parser.parse_args(argv)
 
     if args.cmd == "talk":
@@ -1513,6 +1516,13 @@ def main(argv: list[str]) -> int:
         print(output)
         print("PASS" if ok else "FAIL")
         return 0 if ok else 1
+    if args.cmd == "gate":
+        try:
+            os.nice(10)                     # behind the instances' own work: nothing waits on it
+        except OSError:
+            pass
+        gate.stop_stages_on_signal()        # stopped with the scheduler: its test run goes too
+        return gate.warm()
     return 2
 
 

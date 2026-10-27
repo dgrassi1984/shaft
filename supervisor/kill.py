@@ -7,11 +7,12 @@ its code changes, commit, run lock released (runner._run). Killing the holder in
 commit, and the run's unchecked code would become the next run's baseline.
 
 Which processes are the instance's: those whose working folder is inside instances/<name>/ and whose parent is a
-supervisor process (`python -m supervisor …`, or the terminal client `-m supervisor.talk_ui`) — the agent of a cycle
+supervisor process (`python -m supervisor …`, or the terminal client `-m supervisor.talk_ui`; never the gate's test
+runner `-m supervisor.gate_suite`, which holds no run) — the agent of a cycle
 or a reply, a job's plugin, a broker `run` command — with everything below them, plus an agent or plugin orphaned by its
 holder's death. The parent rule keeps the operator's own shells in that folder safe. A terminal conversation's client is
 stopped last, once its reply has settled. Spared:
-the gate checking a finished run (its test runner and plugin check, while no agent of that holder is alive: killing
+the gate checking a finished run (its test runners and plugin check, while no agent of that holder is alive: killing
 them would fail the gate and revert the code), and a battery's exams — they run in a copy of the instance, not in its
 folder; the battery process itself gets SIGTERM, its designed stop (it cuts the exam, kills what the exam left running
 in the copy, and deletes the copy, battery.py).
@@ -29,10 +30,12 @@ from pathlib import Path
 
 from .core import INSTANCES, SUP_DIR, log
 
-SUPERVISOR = re.compile(r"(^|\s)-m supervisor(\.\w+)?(\s|$)")       # also the terminal client, supervisor.talk_ui
+# Also the terminal client, supervisor.talk_ui. Not the gate's test runner (supervisor.gate_suite): it holds no run, and
+# taken for a holder, what a test started in an instance's folder was stopped as that instance's (2026-10-27).
+SUPERVISOR = re.compile(r"(^|\s)-m supervisor(?!\.gate_suite(\s|$))(\.\w+)?(\s|$)")
 AGENT = re.compile(r"(^|\s)-m shaft(\s|$)")                       # the agent: python -m shaft live|talk|serve…
 ORPHAN = re.compile(r"(^|\s)-m shaft(\.plugin_runner)?(\s|$)")       # an agent or plugin whose supervisor is gone
-GATE = re.compile(r"(^|\s)-m (unittest|pytest)(\s|$)|shaft\.plugin_runner --check")
+GATE = re.compile(r"(^|\s)-m (unittest|pytest|supervisor\.gate_suite)(\s|$)|shaft\.plugin_runner --check")
 TERM_GRACE_S = 15
 PS, LSOF = "/bin/ps", "/usr/sbin/lsof"
 

@@ -172,19 +172,30 @@ class GateTest(unittest.TestCase):
         (copy / "tests").mkdir()
         calls, profiles = [], []
 
-        def fake_stage(stage, argv, timeout_s, **kw):   # every command the gate runs goes through _stage
+        commits = Path(tempfile.mkdtemp(prefix="shaft-commits-")).resolve()   # the committed tree, in its own folder
+        self.addCleanup(shutil.rmtree, commits, True)
+        tree = commits / "project"
+        (tree / "supervisor").mkdir(parents=True)
+        (tree / "supervisor" / "gate_suite.py").write_text("")
+
+        def fake_stage(stage, argv, timeout_s, input=None, **kw):   # every command the gate runs goes through _stage
             calls.append((argv, kw))
             if argv[0] == sandbox.SANDBOX_EXEC:          # the profile is deleted after the gate: read it now
                 profiles.append(Path(argv[2]).read_text())
+            if "supervisor.gate_suite" in argv:          # the split runner's own report, with the token it was given
+                part = argv[argv.index("supervisor.gate_suite") + 1]
+                line = {"part": part, "tests_run": 1, "ok": True, "nonce": input.strip()}
+                return subprocess.CompletedProcess(argv, 0, "GATE_SUITE " + json.dumps(line) + "\n", "")
             return subprocess.CompletedProcess(argv, 0, "", "")
         with mock.patch.object(gate, "_stage", side_effect=fake_stage), \
-                mock.patch.object(gate, "committed_tree", return_value=(real, "abc")):   # test_gate covers it
-            ok, _ = gate.run_tests(copy, HOME, env_root=real)
-        self.assertTrue(ok)
+                mock.patch.object(gate, "committed_tree", return_value=(tree, "abc")):   # test_gate covers it
+            ok, out = gate.run_tests(copy, HOME, env_root=real)
+        self.assertTrue(ok, out)
         venv_py = str(real / ".venv" / "bin" / "python")
-        invariants, plugins, tests = calls
-        self.assertEqual(invariants[0][0], PYTHON)
-        self.assertEqual(invariants[1]["cwd"], real)                 # the committed tree, not the checkout
+        shared, instance, plugins, tests = calls
+        for part in (shared, instance):                              # the supervisor's tests, on its own Python
+            self.assertEqual(part[0][0], PYTHON)
+            self.assertEqual(part[1]["cwd"], tree)                   # the committed tree, not the checkout
         self.assertIn(venv_py, plugins[0])
         self.assertIn(venv_py, tests[0])
         self.assertEqual(plugins[1]["env"]["SHAFT_PYTHON"], venv_py)

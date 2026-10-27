@@ -13,7 +13,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/anchoring.py` | — | `strip_claim`, `case`, `candidates`, `path`, `rows`, `run`, `report` |
 | `supervisor/api.py` | `Conversations`, `Answered`, `Live`, `Handler` | `allowed_logins`, `serve`, `url`, `command` |
 | `supervisor/attention.py` | — | `label`, `matches`, `score`, `section`, `report` |
-| `supervisor/autonomy.py` | — | `running`, `service`, `wake_interval`, `wake_floor`, `next_wake`, `next_cycle`, `describe_schedule`, `record`, `sleep_due`, `scheduler_installed`, `next_sleep`, `replay_next_sleep`, `replay_next_wake`, `decide_wakes`, `update_jobs`, `updating`, `update_ended`, `serve`, `stop_children_on_signal`, `battery_jobs`, `wake`, `start_wake`, `tick`, `autonomy` |
+| `supervisor/autonomy.py` | `WarmState` | `running`, `service`, `wake_interval`, `wake_floor`, `next_wake`, `next_cycle`, `describe_schedule`, `record`, `sleep_due`, `scheduler_installed`, `next_sleep`, `replay_next_sleep`, `replay_next_wake`, `decide_wakes`, `update_jobs`, `updating`, `update_ended`, `serve`, `stop_children_on_signal`, `battery_jobs`, `gate_warm`, `warm_ended`, `wake`, `start_wake`, `tick`, `autonomy` |
 | `supervisor/baseline.py` | `BaselineError` | `record_path`, `committed`, `read`, `write`, `unapproved`, `update` |
 | `supervisor/battery.py` | `Interrupted`, `ExamBroker` | `base`, `items_dir`, `off_path`, `is_off`, `results_path`, `load_items`, `checksum`, `backup`, `exam_dir`, `make_exam_copy`, `make_control`, `run_hidden_tests`, `grade`, `headline`, `truth`, `recall_candidates`, `make_recall`, `results`, `era`, `order`, `run`, `window`, `due`, `stats_lines`, `report` |
 | `supervisor/bonsai_lora.py` | — | `load_text_model`, `load`, `logits_of`, `make_cache`, `render`, `make_lora_class`, `attach_lora`, `spike`, `train`, `load_adapter`, `generate`, `answers` |
@@ -37,7 +37,8 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/evolution.py` | — | `drift`, `distinct`, `breed` |
 | `supervisor/experiments.py` | `ExperimentError` | `knob_change`, `family`, `repeat_failures`, `targets`, `queue`, `endpoint`, `report`, `plant`, `workspace_path`, `workspace_rows`, `run_workspace`, `fingerprint`, `workspace_report` |
 | `supervisor/finetune.py` | — | `backend`, `build_dataset`, `cmd_dataset`, `overfit`, `evaluate`, `cmd_evaluate`, `cmd_finetune` |
-| `supervisor/gate.py` | `Link`, `Invalid`, `RestoreFailed`, `StageTimedOut` | `links`, `refused`, `snapshot`, `changed`, `restore`, `unrestored`, `config_without`, `revert_config`, `committed_tree`, `stop_group`, `run_tests`, `failing_tests`, `keep_log`, `run_instance_tests` |
+| `supervisor/gate.py` | `Link`, `Invalid`, `RestoreFailed`, `StageTimedOut` | `links`, `refused`, `snapshot`, `changed`, `restore`, `unrestored`, `config_without`, `revert_config`, `commits_id`, `committed_tree`, `stop_group`, `end_stages`, `stop_stages_on_signal`, `shared_key`, `record_path`, `recorded_pass`, `warm`, `run_tests`, `failing_tests`, `keep_log`, `run_instance_tests` |
+| `supervisor/gate_suite.py` | `Split`, `HookRefused` | `discover`, `partition`, `report`, `main` |
 | `supervisor/google.py` | `AccountError`, `ApiError`, `Account` | `accounts_dir`, `old_accounts_dir`, `unmigrated`, `account`, `accounts`, `scopes`, `scope_text`, `login_command`, `migrate`, `client_keys`, `refresh`, `operator_addresses`, `login`, `instance_key_login`, `consent` |
 | `supervisor/jobs.py` | — | `entry`, `jobs_off`, `set_jobs_off`, `uncommitted`, `declared`, `report_problems`, `interval`, `due`, `run`, `request_wake`, `take_wake`, `pending_wakes`, `tick`, `describe` |
 | `supervisor/judge.py` | `JudgeError` | `same_model`, `pick`, `rotation`, `available`, `ask`, `second_available`, `ask_second` |
@@ -69,7 +70,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_anchoring.py` | `AnchoringTest` | `episode`, `judgment` |
 | `supervisor/tests/test_api.py` | `KeepingStringIO`, `FakeProc`, `ApiTest`, `InterjectTest`, `LongReplyTest`, `InboxDoorbellTest`, `ConversationIdTest`, `StreamHeardTest` | `fake_run_agent` |
 | `supervisor/tests/test_attachments.py` | `BrokerAttachmentsTest`, `TelegramAttachmentsTest`, `SameSecondTest` | — |
-| `supervisor/tests/test_autonomy.py` | `SleepDueTest`, `WakeTest` | — |
+| `supervisor/tests/test_autonomy.py` | `SleepDueTest`, `WakeTest`, `GateWarmTest` | — |
 | `supervisor/tests/test_autonomy_gaps_supervisor.py` | `A2Test`, `A4Test`, `A5Test`, `ReplayLedgerTest`, `ConfidenceBackfillTest`, `OldTemplateCompatibilityTest`, `A8Test` | `judgment` |
 | `supervisor/tests/test_autonomy_gaps_template.py` | `InstanceFixture`, `OpenTalkContextTest`, `SleepOpenTalkGuardTest`, `SleepRecordTest`, `SleepVerdictOverflowTest`, `CycleRecallTest`, `ConfidenceQuestionTest`, `OperationalEnvelopeTest`, `TalkInboxTest`, `TalkPartialReadTest`, `GoalsGuardTest`, `ReplayClockTest` | `record_json`, `verdict` |
 | `supervisor/tests/test_background_messages.py` | `Fixture`, `NextCycleMessageTest`, `NextCycleRouteTest`, `NextCycleCommentTest`, `NextCycleCommentRouteTest`, `NextWakeTest`, `CycleReadsItTest` | — |
@@ -84,7 +85,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_comments_js.py` | `CommentsJsTest` | — |
 | `supervisor/tests/test_commit.py` | `CommitStateTest`, `IgnoredFileTest`, `ConfigMergeTest`, `HistoryToolTest`, `RecordToolTest`, `UpdateCase`, `UpdateNoteTest`, `QueuedUpdateTest`, `UpdateKeepsUncommittedWorkTest` | `git` |
 | `supervisor/tests/test_commitments.py` | `CommitmentsTest` | `episode` |
-| `supervisor/tests/test_config_writers.py` | `ConfigWritersTest`, `SetConfigTest`, `SandboxTest` | `git`, `instance_tests_only` |
+| `supervisor/tests/test_config_writers.py` | `ConfigWritersTest`, `SetConfigTest`, `SandboxTest` | `git`, `instance_tests_only`, `committed_copy` |
 | `supervisor/tests/test_consciousness_supervisor.py` | `FamilyTest`, `AttentionTest`, `TargetsTest`, `KnobChangeTest`, `ProbeTest`, `BlindHoldsTest`, `SectionsTest` | `ep`, `call` |
 | `supervisor/tests/test_consciousness_template.py` | `Fixture`, `WorkspaceUnitTest`, `LiveCycleTest`, `CommitmentsElsewhereTest`, `ReviewRegressionTest`, `KnobTest` | `failing_write` |
 | `supervisor/tests/test_consult.py` | `ConsultTest`, `ConsultLimitsTest` | — |
@@ -102,7 +103,8 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_embed_memory.py` | `EmbedCacheBoundTest` | — |
 | `supervisor/tests/test_exam_isolation.py` | `Case`, `ExamFolderTest`, `NoProcessOutlivesItsItemTest` | `alive`, `tree` |
 | `supervisor/tests/test_forecast.py` | `ForecastFixture`, `ComparableTest`, `SummariseTest`, `TextTest` | — |
-| `supervisor/tests/test_gate.py` | `GateTest`, `InstanceTestsTest`, `FakeProjectCase`, `CommittedTreeTest`, `GateErrorFailsClosedTest`, `StageTimeoutTest`, `StageProcessGroupTest`, `GateLocalhostTest` | `git` |
+| `supervisor/tests/test_gate.py` | `GateTest`, `InstanceTestsTest`, `FakeProjectCase`, `CommittedTreeTest`, `SharedFixtureCase`, `SharedRecordTest`, `WarmTest`, `StageEndTest`, `GateErrorFailsClosedTest`, `StageTimeoutTest`, `StageProcessGroupTest`, `GateLocalhostTest` | `git` |
+| `supervisor/tests/test_gate_suite.py` | `Tree`, `Partition`, `OnThisCommit`, `Run` | `plain`, `count` |
 | `supervisor/tests/test_google.py` | `FakeGoogle`, `GoogleCase`, `LoginTest`, `MigrateTest`, `CliTest` | — |
 | `supervisor/tests/test_interject.py` | `AnswerHearsInterjectionsTest` | — |
 | `supervisor/tests/test_invariants.py` | `InstanceCase`, `ReflectInvariants`, `TalkInvariants`, `LiveInvariants`, `TemplateMeasurement`, `ExamInvariants`, `SandboxInvariants` | — |

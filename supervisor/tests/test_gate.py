@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -11,6 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 from supervisor import gate
+from supervisor.gate_suite import UNDER_TEST   # spelled out, the name would put this module in the instance part
 
 
 class GateTest(unittest.TestCase):
@@ -110,6 +112,8 @@ class FakeProjectCase(unittest.TestCase):
         (tests / "__init__.py").write_text("")
         self.sandbox = self.project / "supervisor" / "sandbox.py"
         self.sandbox.write_text('PROFILE = "closed"\n')
+        # The gate runs the committed tree's own split runner, as it does the real project's.
+        shutil.copy(gate.PROJECT / "supervisor" / "gate_suite.py", self.project / "supervisor" / "gate_suite.py")
         (tests / "test_sandbox.py").write_text(
             "import unittest\nfrom pathlib import Path\nfrom supervisor import sandbox\n\n"
             "class T(unittest.TestCase):\n"
@@ -150,9 +154,12 @@ class CommittedTreeTest(FakeProjectCase):
         self.sandbox.write_text('PROFILE = "half-writ')                       # a syntax error, mid-edit
         (self.project / "supervisor" / "tests" / "test_wip.py").write_text("import unittest\n"
             "class W(unittest.TestCase):\n    def test_unfinished(self):\n        self.fail('wip')\n")
+        tree, _ = gate.committed_tree(self.project)
+        for record in tree.parent.glob("shared-passed-*.json"):            # run them again, not from the record
+            record.unlink()
         ok, out = self.gate()
         self.assertTrue(ok, out)
-        self.assertIn("Ran 3 tests", out)
+        self.assertIn("Ran 3 tests", out)                                 # the committed three, not the checkout's
         self.assertIn(f"supervisor invariants ({gate._git(self.project, 'rev-parse', 'HEAD').decode()[:10]})", out)
 
     def test_a_committed_breaking_change_still_fails_the_gate(self):
@@ -182,6 +189,338 @@ class CommittedTreeTest(FakeProjectCase):
         self.assertNotEqual(second, first)
         self.assertFalse(first.parent.exists())
         self.assertFalse((second / "notes.txt").exists())
+
+
+# A shared supervisor test that says each time it runs, in a file outside the tree (the tree is the test's cwd).
+COUNTS_ITS_RUNS = ("import time, unittest\nfrom pathlib import Path\n\nclass C(unittest.TestCase):\n"
+                   "    def test_counted(self):\n"
+                   "        with open({log!r}, 'a') as f:\n            f.write('ran\\n')\n"
+                   "        if Path({hang!r}).exists():\n            time.sleep(120)\n"
+                   "        if Path({fail!r}).exists():\n            self.fail('asked to fail')\n")
+# An instance-part test: it reads the instance under test, and fails when the instance holds a file named BAD.
+READS_THE_INSTANCE = ("import os, unittest\nfrom pathlib import Path\n\n"
+                      f"TARGET = Path(os.environ[{UNDER_TEST!r}])\n\n"
+                      "class I(unittest.TestCase):\n    def test_instance_is_good(self):\n"
+                      "        self.assertFalse((TARGET / 'BAD').exists(), 'the instance is bad')\n")
+
+
+class SharedFixtureCase(FakeProjectCase):
+    """A committed project with a shared test that counts its runs and an instance-part test that reads the instance."""
+
+    def setUp(self):
+        super().setUp()
+        self.log, self.fail_flag, self.hang_flag = self.tmp / "runs.log", self.tmp / "fail-now", self.tmp / "hang-now"
+        tests = self.project / "supervisor" / "tests"
+        (tests / "test_counted.py").write_text(COUNTS_ITS_RUNS.format(log=str(self.log), fail=str(self.fail_flag),
+                                                                      hang=str(self.hang_flag)))
+        (tests / "test_invariants.py").write_text(READS_THE_INSTANCE)
+        git(self.project, "add", "-A")
+        git(self.project, "commit", "-qm", "counted and instance tests")
+
+    def runs(self) -> int:
+        return len(self.log.read_text().splitlines()) if self.log.exists() else 0
+
+    def record(self) -> Path:
+        """The record of a gate run with this process's settings."""
+        tree, _ = gate.committed_tree(self.project)
+        return gate.record_path(tree, gate.shared_key(tree, {**os.environ, UNDER_TEST: str(self.inst)}))
+
+
+class SharedRecordTest(SharedFixtureCase):
+    """PLAN-gate-cache M1: the shared part of the supervisor's tests runs once per commit, its pass recorded beside the
+    committed tree; the instance part runs at every gate. Regression for 2026-10-27 14:13–14:23: thelos's settle held
+    the instance for 10 minutes re-running 2,000 supervisor tests that had not changed."""
+
+    def test_a_second_gate_on_the_same_commit_does_not_run_the_shared_part_again(self):
+        ok, out = self.gate()
+        self.assertTrue(ok, out)
+        self.assertEqual(self.runs(), 1)
+        self.assertTrue(self.record().is_file())
+        ok, out = self.gate()
+        self.assertTrue(ok, out)
+        self.assertEqual(self.runs(), 1)
+        self.assertIn("-- instance part: 1 tests --", out)
+        self.assertIn("-- shared part: passed on this commit at ", out)
+        self.assertIn("(4 tests, ", out)
+        self.assertIn("not run again --", out)
+
+    def test_a_new_commit_runs_it_again(self):
+        self.assertTrue(self.gate()[0])
+        git(self.project, "commit", "-q", "--allow-empty", "-m", "next")
+        self.assertTrue(self.gate()[0])
+        self.assertEqual(self.runs(), 2)
+
+    def test_a_failure_is_not_recorded(self):
+        self.fail_flag.write_text("x")
+        ok, out = self.gate()
+        self.assertFalse(ok, out)
+        self.assertIn("FAIL: test_counted", out)
+        self.assertFalse(self.record().exists())
+        self.fail_flag.unlink()
+        self.assertTrue(self.gate()[0])                  # ran again, passed, recorded
+        self.assertTrue(self.gate()[0])
+        self.assertEqual(self.runs(), 2)
+
+    def test_a_record_that_does_not_match_is_ignored(self):
+        import json
+        self.assertTrue(self.gate()[0])
+        good = json.loads(self.record().read_text())
+        old = (gate.datetime.now() - gate.timedelta(seconds=gate.TREE_IDLE_S + 60)).isoformat(timespec="seconds")
+        future = (gate.datetime.now() + gate.timedelta(hours=1)).isoformat(timespec="seconds")
+        bad = {"python": {**good, "python": "/usr/bin/python3:0:0"}, "env": {**good, "env": "0" * 64},
+               "commits": {**good, "commits": "0" * 16}, "old": {**good, "passed_at": old},
+               "future": {**good, "passed_at": future}, "none ran": {**good, "tests_run": 0},
+               "count not a number": {**good, "tests_run": "4"}, "not a dict": [good]}
+        runs = 1
+        for why, record in bad.items():
+            with self.subTest(why=why):
+                self.record().write_text(json.dumps(record))
+                ok, out = self.gate()
+                self.assertTrue(ok, out)
+                runs += 1
+                self.assertEqual(self.runs(), runs, why)
+        self.record().write_text("{not json")
+        self.assertTrue(self.gate()[0])
+        self.assertEqual(self.runs(), runs + 1)
+
+    def test_the_settings_the_tests_see_are_part_of_the_key(self):
+        self.assertTrue(self.gate()[0])
+        with mock.patch.dict(os.environ, {"SHAFT_SOME_KNOB": "2"}):
+            self.assertTrue(self.gate()[0])
+        self.assertEqual(self.runs(), 2)
+        self.assertTrue(self.gate()[0])                   # back to the first settings: their record is still there
+        with mock.patch.dict(os.environ, {UNDER_TEST: "/elsewhere"}):           # the gate's own: not part of it
+            self.assertTrue(self.gate()[0])
+        self.assertEqual(self.runs(), 2)
+
+    def test_with_a_shared_record_a_bad_instance_still_fails_the_gate_20261027(self):
+        self.assertTrue(self.gate()[0])
+        (self.inst / "BAD").write_text("x")
+        ok, out = self.gate()
+        self.assertFalse(ok, out)
+        self.assertIn("FAIL: test_instance_is_good", out)
+        self.assertIn("the instance is bad", out)
+        self.assertEqual(self.runs(), 1)                  # the shared part came from its record
+
+    def test_two_gates_at_once_run_the_shared_part_once(self):
+        import threading
+        results = []
+        threads = [threading.Thread(target=lambda: results.append(self.gate())) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=120)
+        self.assertEqual([ok for ok, _ in results], [True, True], results)
+        self.assertEqual(self.runs(), 1)
+
+    def test_waiting_for_another_gate_is_bounded_and_fails_closed(self):
+        import fcntl
+        tree, _ = gate.committed_tree(self.project)
+        with open(tree.parent / gate.SHARED_LOCK, "a") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            with mock.patch("supervisor.core.log"):
+                ok, out = self.gate(timeout_s=2)
+        self.assertFalse(ok, out)
+        self.assertIn("shared part", out)
+        self.assertIn("timed out after 2s, counted as failed", out)
+        self.assertEqual(self.runs(), 0)
+
+    def test_a_line_a_test_prints_cannot_pass_for_the_shared_part(self):
+        forger = ("import os, unittest\n\nclass F(unittest.TestCase):\n    def test_forge(self):\n"
+                  "        print('GATE_SUITE {\"part\": \"shared\", \"tests_run\": 9, \"ok\": true}', flush=True)\n"
+                  "        os._exit(0)\n")
+        (self.project / "supervisor" / "tests" / "test_forger.py").write_text(forger)
+        git(self.project, "add", "-A")
+        git(self.project, "commit", "-qm", "a test that forges the runner's line and exits 0")
+        ok, out = self.gate()
+        self.assertFalse(ok, out)
+        self.assertIn("no report", out)
+        self.assertFalse(self.record().exists())
+
+    def test_no_shared_tests_is_a_pass_never_recorded(self):
+        tests = self.project / "supervisor" / "tests"
+        for name in ("test_counted.py", "test_sandbox.py"):
+            (tests / name).unlink()
+        git(self.project, "add", "-A")
+        git(self.project, "commit", "-qm", "only the instance part left")
+        ok, out = self.gate()
+        self.assertTrue(ok, out)
+        self.assertFalse(self.record().exists())
+
+    def test_a_log_that_cannot_be_written_never_makes_the_gate_raise(self):
+        # Codex on M1: core.log writes the file directly; raising out of run_tests leaves the change unsettled (B8).
+        with mock.patch("supervisor.core.log", side_effect=PermissionError("supervisor.log: read-only")):
+            ok, out = self.gate()                                   # passes and records: logs on the way
+            self.assertTrue(ok, out)
+            self.assertTrue(self.record().is_file())
+            (self.inst / ".tmp").mkdir(exist_ok=True)
+            shutil.rmtree(self.inst / ".tmp")
+            (self.inst / ".tmp").symlink_to(self.tmp, target_is_directory=True)   # the gate's own error: logged
+            ok, out = self.gate()
+        self.assertFalse(ok)
+        self.assertIn("UnsafePath", out)
+
+    def test_a_tree_without_the_split_runner_fails_closed(self):
+        (self.project / "supervisor" / "gate_suite.py").unlink()
+        git(self.project, "add", "-A")
+        git(self.project, "commit", "-qm", "no runner")
+        with mock.patch("supervisor.core.log"):
+            ok, out = self.gate()
+        self.assertFalse(ok, out)
+        self.assertIn("supervisor/gate_suite.py", out)
+        self.assertEqual(self.runs(), 0)
+
+
+class WarmTest(SharedFixtureCase):
+    """PLAN-gate-cache M2: the scheduler's warm-up runs the shared part when a commit has no record (or one past half its
+    life), so the first gate after a merge does not pay for it while holding its instance."""
+
+    def warm(self, timeout_s: int = 120) -> tuple[int, list[str]]:
+        with mock.patch("supervisor.core.log") as log:
+            code = gate.warm(timeout_s)
+        return code, [c.args[0] for c in log.call_args_list]
+
+    def test_a_warm_up_records_the_pass_the_next_gate_reads(self):
+        code, logged = self.warm()
+        self.assertEqual(code, 0)
+        self.assertEqual(self.runs(), 1)
+        self.assertTrue(self.record().is_file())          # under the key the gates use
+        self.assertTrue(any("shared supervisor tests passed" in l for l in logged), logged)
+        ok, out = self.gate()
+        self.assertTrue(ok, out)
+        self.assertIn("not run again", out)
+        self.assertEqual(self.warm()[0], 0)               # a fresh record: nothing to do
+        self.assertEqual(self.runs(), 1)
+
+    def test_a_record_past_half_its_life_is_refreshed_while_gates_still_use_it(self):
+        import json
+        self.assertEqual(self.warm()[0], 0)
+        rec = json.loads(self.record().read_text())
+        aging = gate.datetime.now() - gate.timedelta(seconds=gate.WARM_REFRESH_S + 60)
+        self.record().write_text(json.dumps({**rec, "passed_at": aging.isoformat(timespec="seconds")}))
+        self.assertTrue(self.gate()[0])
+        self.assertEqual(self.runs(), 1)                  # a gate still takes it
+        self.assertEqual(self.warm()[0], 0)
+        self.assertEqual(self.runs(), 2)                  # the warm-up does not wait for it to expire
+        self.assertGreater(json.loads(self.record().read_text())["passed_at"], aging.isoformat(timespec="seconds"))
+
+    def test_a_failed_warm_up_records_nothing_and_raises_a_panel_alert(self):
+        from supervisor import panel
+        self.fail_flag.write_text("x")
+        code, logged = self.warm()
+        self.assertEqual(code, gate.WARM_FAILED)
+        self.assertFalse(self.record().exists())
+        alerts = [l for l in logged if panel.ALERT_LINE.search(l) and "passed" not in l]   # what the panel shows
+        self.assertEqual(len(alerts), 1, logged)
+        self.assertIn("test_counted", alerts[0])
+        self.assertIn("every instance's code change fails its gate", alerts[0])
+
+    def test_a_warm_up_that_cannot_get_the_lock_fails_and_says_so(self):
+        import fcntl
+        tree, _ = gate.committed_tree(self.project)
+        with open(tree.parent / gate.SHARED_LOCK, "a") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            code, logged = self.warm(timeout_s=2)
+        self.assertEqual(code, gate.WARM_FAILED)
+        self.assertTrue(any("FAILED" in l and "timed out after 2s" in l for l in logged), logged)
+        self.assertEqual(self.runs(), 0)
+
+    def test_a_warm_up_and_a_gate_at_once_run_the_shared_part_once(self):
+        import threading
+        results = {}
+        threads = [threading.Thread(target=lambda: results.update(warm=gate.warm(120))),
+                   threading.Thread(target=lambda: results.update(gate=self.gate()))]
+        with mock.patch("supervisor.core.log"):
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=120)
+        self.assertEqual(results["warm"], 0)
+        self.assertTrue(results["gate"][0], results["gate"][1])
+        self.assertEqual(self.runs(), 1)
+
+    def test_a_failed_refresh_drops_the_old_record_so_gates_run_it_again(self):
+        # Codex on M2: a refresh that failed left the 12-24 h old pass for the gates to keep taking.
+        import json
+        self.assertEqual(self.warm()[0], 0)
+        rec = json.loads(self.record().read_text())
+        aging = gate.datetime.now() - gate.timedelta(seconds=gate.WARM_REFRESH_S + 60)
+        self.record().write_text(json.dumps({**rec, "passed_at": aging.isoformat(timespec="seconds")}))
+        self.fail_flag.write_text("x")                    # the same commit's tests fail now (a library moved)
+        self.assertEqual(self.warm()[0], gate.WARM_FAILED)
+        self.assertFalse(self.record().exists())
+        ok, out = self.gate()
+        self.assertFalse(ok, out)                         # the gate ran them itself, and they fail
+        self.assertEqual(self.runs(), 3)
+
+    def test_a_refresh_that_times_out_drops_the_old_record_too(self):
+        # Codex (M3 wording): only a run that reported failure deleted the record; one that timed out raised first.
+        import json
+        self.assertEqual(self.warm()[0], 0)
+        rec = json.loads(self.record().read_text())
+        aging = gate.datetime.now() - gate.timedelta(seconds=gate.WARM_REFRESH_S + 60)
+        self.record().write_text(json.dumps({**rec, "passed_at": aging.isoformat(timespec="seconds")}))
+        self.hang_flag.write_text("x")
+        code, logged = self.warm(timeout_s=4)
+        self.assertEqual(code, gate.WARM_FAILED)
+        self.assertTrue(any("FAILED" in l and "timed out after 4s" in l for l in logged), logged)
+        self.assertFalse(self.record().exists())
+
+    def test_shaft_gate_warm_lowers_its_priority_ends_its_stages_on_a_signal_and_returns_warm_s_code(self):
+        from supervisor import __main__ as cli
+        with mock.patch.object(gate, "warm", return_value=gate.WARM_FAILED) as warm, mock.patch("os.nice") as nice, \
+                mock.patch.object(gate, "stop_stages_on_signal") as trap:
+            self.assertEqual(cli.main(["gate", "warm"]), gate.WARM_FAILED)
+        warm.assert_called_once_with()
+        nice.assert_called_once()
+        trap.assert_called_once_with()
+
+
+class StageEndTest(unittest.TestCase):
+    """Codex on M2: a stage starts its own session, so the death of the process that started it (the warm-up, stopped
+    with the scheduler) left it running. end_stages ends every running stage with what it started."""
+
+    def test_end_stages_ends_a_running_stage_and_its_children(self):
+        import threading
+        tmp = Path(tempfile.mkdtemp(prefix="shaft-stage-")).resolve()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        child = tmp / "child.pid"
+        code = ("import subprocess, sys, time\n"
+                f"p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+                f"open({str(child)!r}, 'w').write(str(p.pid))\ntime.sleep(60)\n")
+        done = []
+        t = threading.Thread(target=lambda: done.append(gate._stage("probe", [sys.executable, "-c", code], 60)))
+        t0 = time.monotonic()
+        t.start()
+        while not (child.exists() and child.read_text()):
+            self.assertLess(time.monotonic() - t0, 20, "the probe stage did not start")
+            time.sleep(0.05)
+        self.assertEqual(len(gate._STAGES), 1)
+        gate.end_stages()
+        t.join(timeout=20)
+        self.assertFalse(t.is_alive())
+        self.assertLess(time.monotonic() - t0, 30)                  # ended, not timed out at 60 s
+        with self.assertRaises(ProcessLookupError):                  # what it started went too
+            os.kill(int(child.read_text()), 0)
+        self.assertEqual(gate._STAGES, set())
+
+    def test_a_git_that_does_not_answer_is_killed_and_raises(self):
+        class Hung:
+            pid, returncode, killed = 1, None, False
+
+            def communicate(self, timeout=None):
+                if timeout is not None and not self.killed:
+                    raise subprocess.TimeoutExpired("git", timeout)
+                return b"", b""
+
+            def kill(self):
+                self.killed = True
+        hung = Hung()
+        with mock.patch.object(gate.subprocess, "Popen", return_value=hung):
+            with self.assertRaises(RuntimeError) as e:
+                gate._git(Path("/p"), "rev-parse", "HEAD", timeout_s=10)
+        self.assertTrue(hung.killed)
+        self.assertIn("no answer in 10s", str(e.exception))
 
 
 class GateErrorFailsClosedTest(FakeProjectCase):

@@ -64,6 +64,17 @@ def instance_tests_only(root: Path, home: Path):
         os.unlink(prof)
 
 
+def committed_copy(case: unittest.TestCase) -> Path:
+    """A stand-in for gate.committed_tree's copy: in a folder of its own, as the real one is (the gate keeps its lock
+    and its record of the shared tests beside the tree), holding the split runner the gate runs."""
+    commits = Path(tempfile.mkdtemp(prefix="shaft-gate-commits-")).resolve()
+    case.addCleanup(shutil.rmtree, commits, True)
+    tree = commits / "project"
+    (tree / "supervisor").mkdir(parents=True)
+    shutil.copy(gate.PROJECT / "supervisor" / "gate_suite.py", tree / "supervisor" / "gate_suite.py")
+    return tree
+
+
 class ConfigWritersTest(unittest.TestCase):
     def setUp(self):
         self.project = Path(tempfile.mkdtemp(prefix="shaft-cfgw-")).resolve()
@@ -141,7 +152,8 @@ class ConfigWritersTest(unittest.TestCase):
         stderr = "".join(f"{'=' * 70}\n{n}\n{'-' * 70}\nAssertionError: {'x' * 800}\n\n" for n in names) \
             + "Ran 1109 tests\n\nFAILED (failures=8)\n"
         stage = subprocess.CompletedProcess([], 1, "", stderr)
-        with mock.patch.object(gate, "committed_tree", return_value=(self.project, "abc")), \
+        tree = committed_copy(self)
+        with mock.patch.object(gate, "committed_tree", return_value=(tree, "abc")), \
              mock.patch.object(gate, "_stage", return_value=stage), \
              mock.patch.object(core, "SUP_DIR", self.project / ".supervisor"):
             ok, out = REAL_RUN_TESTS(self.root, self.project)       # the real gate, its stages stubbed
@@ -180,8 +192,7 @@ class ConfigWritersTest(unittest.TestCase):
         # Regression (found 2026-10-16): a gate stage past its timeout raised TimeoutExpired out of runner._settle.
         # The change stayed on disk, neither kept nor reverted, and the next run's snapshot took it as its "before":
         # it passed without ever being gated. The real gate.run_tests runs here, every stage; the instance's test hangs.
-        tree = self.project.parent / (self.project.name + "-tree")                 # a tiny committed supervisor
-        self.addCleanup(shutil.rmtree, tree, True)
+        tree = committed_copy(self)                                                # a tiny committed supervisor
         (tree / "supervisor" / "tests").mkdir(parents=True)
         for rel in ("supervisor/__init__.py", "supervisor/tests/__init__.py"):
             (tree / rel).write_text("")

@@ -91,6 +91,8 @@ shaft pause [name] · shaft resume [name] · shaft check [name] · shaft list
 shaft setup                          # recreate missing template/instance worktrees from local or origin branches,
                                      # then install the pre-push guard (as shaft mind guard); exit 1 if another
                                      # tool's pre-push hook is in the way (docs/migration.md)
+shaft gate warm                      # run the gate's shared supervisor tests on the current commit unless their
+                                     # pass is recorded (fresh: under 12 h); the scheduler runs it after each merge
 shaft kill <name> [--wait S]         # pause it AND stop what it runs now: a cycle, a reply, a job, the battery,
                                      # a trial replay; the run still settles (journal note, gate, commit). Waits up
                                      # to S s (120) for that; shaft resume <name> undoes the pause
