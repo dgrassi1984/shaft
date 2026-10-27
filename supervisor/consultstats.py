@@ -28,6 +28,17 @@ def _ts(value) -> datetime | None:
         return None
 
 
+def _usd(value: float) -> str:
+    """Dollars as the instance can read them: a consult often costs a fraction of a cent ($0.000024 for a real
+    glm-5.3 call), which two decimals showed as $0.00."""
+    if value == 0 or value >= 0.01:
+        return f"${value:.2f}"
+    return f"${value:.4f}" if value >= 0.0001 else f"${value:.6f}"
+
+
+MAX_CYCLE = timedelta(hours=3)   # a live run's consults belong to a cycle that ended within this of its start
+
+
 def _num(value, default: float = 0.0) -> float:
     try:
         return float(value)
@@ -84,8 +95,8 @@ def cycle_of(name: str, row: dict, episodes: list[dict]) -> str | None:
     dated = [(ep, end) for ep, end in dated if end is not None]
     dated.sort(key=lambda pair: pair[1])
     for ep, end in dated:
-        if end >= started:
-            return ep["ts"]
+        if end >= started:   # the first cycle to end after the run began — if it ended soon enough to be that run's
+            return ep["ts"] if end - started <= MAX_CYCLE else None
     return None
 
 
@@ -127,16 +138,19 @@ def section(name: str, cap=None) -> list[str]:
     window = [r for r in rows(name) if (t := _ts(r.get("ts"))) is not None and since <= t <= now]
     if not window:
         return []
+    if cap is None:
+        from . import consult
+        cap = consult.daily_cap(name)
     lines = ["## Consulting other models (last 7 days)"]
 
     total = sum(_num(r.get("usd")) for r in window)
     mean = total / WINDOW_DAYS
-    allowance = f"- I spent ${total:.2f} consulting other models in the last 7 days (${mean:.2f}/day)."
+    allowance = f"- I spent {_usd(total)} consulting other models in the last 7 days ({_usd(mean)}/day)."
     if cap is not None:
         cap = _num(cap)
         today = sum(_num(r.get("usd")) for r in window if (t := _ts(r.get("ts"))) and t.date() == now.date())
-        allowance = (f"- I spent ${total:.2f} consulting in the last 7 days (${mean:.2f}/day); today ${today:.2f} of "
-                     f"the ${cap:.2f} daily cap.")
+        allowance = (f"- I spent {_usd(total)} consulting in the last 7 days ({_usd(mean)}/day); today {_usd(today)} "
+                     f"of my ${cap:.2f} daily consult allowance.")
     lines.append(allowance)
 
     by_model: dict[str, dict] = {}
@@ -152,7 +166,7 @@ def section(name: str, cap=None) -> list[str]:
     for m in sorted(by_model):
         d = by_model[m]
         secs = f"{sum(d['seconds']) / len(d['seconds']):.0f}s" if d["seconds"] else "?"
-        lines.append(f"- {_display(m)}: {d['calls']} call(s), ${d['usd']:.2f}, {secs} each, {d['errors']} error(s)")
+        lines.append(f"- {_display(m)}: {d['calls']} call(s), {_usd(d['usd'])}, {secs} each, {d['errors']} error(s)")
 
     eps = metrics.live_episodes(name)
     consulted_ts = {t for r in window if r.get("run") == "live" and r.get("error") is None
@@ -167,12 +181,12 @@ def section(name: str, cap=None) -> list[str]:
                  f"without consulting: success {_success_text({ep['ts'] for ep in not_consulted}, js_by_ts)}, "
                  f"mean value {_value_text({ep['ts'] for ep in not_consulted}, js_by_ts)}.")
 
-    met = [j for j in js_by_ts.values() if j.get("criterion_met") == "yes"
-           and (t := _ts(j.get("episode_ts"))) is not None and since <= t <= now]
+    live_usd = sum(_num(r.get("usd")) for r in window if r.get("run") == "live" and cycle_of(name, r, eps))
+    met = [ep for ep in consulted if (js_by_ts.get(ep["ts"]) or {}).get("criterion_met") == "yes"]
     if met:
-        lines.append(f"- Consult dollars per met cycle: ${total / len(met):.2f} ({len(met)} met).")
-    else:
-        lines.append("- Consult dollars per met cycle: no met cycle judged.")
+        lines.append(f"- Consult dollars per met consulted cycle: {_usd(live_usd / len(met))} ({len(met)} met).")
+    elif consulted:
+        lines.append("- Consult dollars per met consulted cycle: no consulted cycle judged met yet.")
 
     top = max(by_model.items(), key=lambda kv: kv[1]["calls"])
     if len(window) >= 20 and top[1]["calls"] / len(window) >= 0.9:
@@ -194,7 +208,7 @@ def review_line(name: str) -> str:
         by_model[m] = by_model.get(m, 0) + 1
     top = max(by_model, key=by_model.get)
     total = sum(_num(r.get("usd")) for r in window)
-    return f"{len(window)} consult(s) in 7 days, ${total:.2f}, top model {_display(top)}"
+    return f"{len(window)} consult(s) in 7 days, {_usd(total)}, top model {_display(top)}"
 
 
 def report(names: list[str]) -> str:
@@ -215,7 +229,7 @@ def report(names: list[str]) -> str:
             d[1] += _num(r.get("usd"))
         out.append("  per model:")
         for m in sorted(by_model):
-            out.append(f"    {_display(m)}: {by_model[m][0]} call(s), ${by_model[m][1]:.2f}")
+            out.append(f"    {_display(m)}: {by_model[m][0]} call(s), {_usd(by_model[m][1])}")
         kinds: dict[str, int] = {}
         for r in all_rows:
             k = r.get("run") if isinstance(r.get("run"), str) and r["run"] else "?"
@@ -230,5 +244,6 @@ def report(names: list[str]) -> str:
         for r in all_rows[-10:]:
             caller = r.get("caller") if isinstance(r.get("caller"), str) and r["caller"] else "?"
             out.append(f"    {str(r.get('ts', ''))[:16].replace('T', ' ')} {caller}: "
-                       f"{_display(str(r.get('model', '?')))} ${_num(r.get('usd')):.2f}")
+                       f"{_display(str(r.get('model', '?')))} {_usd(_num(r.get('usd')))}"
+                       + (f" error: {str(r['error'])[:80]}" if r.get("error") else ""))
     return "\n".join(out)

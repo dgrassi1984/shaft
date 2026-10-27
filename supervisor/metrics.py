@@ -581,9 +581,30 @@ def cycle_model(name: str, ep: dict) -> str | None:
 
 def own_models(name: str, ep: dict | None = None) -> list[str]:
     """The models an instance thinks with — the one its cycle ran on and the one configured now: the judge rotation
-    never grades it with either (no self-preference)."""
+    never grades it with either (no self-preference). A cycle that consulted other models (docs/plans/
+    PLAN-model-choice.md) adds every judge of a consulted model's vendor: a cycle that asked z-ai/glm-5.3 is not graded
+    by a z-ai judge."""
     configured = config_values(_instance_text(name, "config.env")).get("LLM_MODEL")
-    return [m for m in ((cycle_model(name, ep) if ep else None), configured) if m]
+    own = [m for m in ((cycle_model(name, ep) if ep else None), configured) if m]
+    return own + (_consulted_judges(name, ep, own) if ep else [])
+
+
+def _consulted_judges(name: str, ep: dict, own: list[str]) -> list[str]:
+    """The judges sharing a vendor with a model this cycle consulted — none when leaving them out would leave no judge
+    at all (the cycle is graded rather than not; logged), or when the consult record cannot be read."""
+    from . import consultstats, judge
+    try:
+        vendors = {consultstats.vendor(m) for m in consultstats.models_in(name, ep)} - {None}
+    except Exception as e:   # the books must not stop a judgment
+        log(f"{name}: consulted models of {ep.get('ts')} unreadable ({type(e).__name__}: {e}); judged as usual")
+        return []
+    hit = [m for m in judge.JUDGE_MODELS if consultstats.vendor(m) in vendors]
+    left = [m for m in judge.JUDGE_MODELS if m not in hit and not any(judge.same_model(m, x) for x in own)]
+    if hit and not left:
+        log(f"{name}: {ep.get('ts')} consulted {sorted(vendors)}; leaving their judges out would leave none, so they "
+            f"may grade it")
+        return []
+    return hit
 
 
 def _unsampled_path(name: str, sup: Path | None = None) -> Path:
@@ -1483,7 +1504,7 @@ def stats_text(name: str) -> str:
     if fails:
         lines += ["", "## Recent failure modes"] + [f"- {j['episode_ts'][:16]} — {j['failure_mode']}" for j in fails]
     lines += _second_section(js)
-    lines += _sections(name, ("attention", "commitments", "provenance", "tom", "preferences"))
+    lines += _sections(name, ("attention", "commitments", "provenance", "tom", "preferences", "consultstats"))
     lines += ["", "## Last judgment", f"{js[-1]['goal']}", f"> {js[-1]['reasoning']}"]
     lines += _code_section(name) + _traits_section(name) + _trials_section(name)
     return "\n".join(lines) + "\n"
@@ -1530,8 +1551,10 @@ def review_text(names: list[str], hours: float = 24, now: datetime | None = None
         js = judgments(name)
         rows, prev = _window(js, start, now), _window(js, start - timedelta(hours=hours), start)
         out += ["", f"■ {name}: {_summary(rows)}", f"  the {hours:g} h before: {_summary(prev)}"]
-        from . import preferences
+        from . import consultstats, preferences
         out += [f"  {line}" for line in preferences.review_lines([name], start)]
+        if (consults := consultstats.review_line(name)):
+            out.append(f"  consults: {consults}")
         if not rows:
             out.append(f"  last judged cycle: {js[-1]['episode_ts'][:16].replace('T', ' ') if js else 'never'}")
             continue

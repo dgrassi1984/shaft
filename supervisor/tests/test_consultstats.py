@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "template"))
-from supervisor import consultstats, metrics
+from supervisor import consult, consultstats, judge, metrics
 
 NOW = datetime(2026, 10, 27, 12, 0, 0)
 
@@ -49,6 +49,9 @@ class ConsultStatsTest(unittest.TestCase):
         self.judgments_patch = mock.patch.object(metrics, "judgments", return_value=[])
         self.judgments = self.judgments_patch.start()
         self.addCleanup(self.judgments_patch.stop)
+        cap = mock.patch.object(consult, "daily_cap", return_value=3.0)   # read by section(); the operator's or the knob
+        cap.start()
+        self.addCleanup(cap.stop)
         self.clock = mock.patch.object(consultstats, "datetime", wraps=datetime)
         self.clock.start().now.return_value = NOW
         self.addCleanup(self.clock.stop)
@@ -125,21 +128,23 @@ class ConsultStatsTest(unittest.TestCase):
         ]
         lines = consultstats.section("x")
         self.assertEqual(lines[0], "## Consulting other models (last 7 days)")
-        self.assertEqual(lines[1], "- I spent $0.38 consulting other models in the last 7 days ($0.05/day).")
+        self.assertEqual(lines[1], "- I spent $0.38 consulting in the last 7 days ($0.05/day); today $0.00 of my "
+                                   "$3.00 daily consult allowance.")
         self.assertEqual(lines[2], "- anthropic/claude-opus-5.5: 1 call(s), $0.20, 30s each, 0 error(s)")
         self.assertEqual(lines[3], "- z-ai/glm-5.3: 3 call(s), $0.18, 10s each, 1 error(s)")
         self.assertEqual(lines[4], "- Live cycles in the last 7 days: 2 consulted, 1 did not.")
         self.assertEqual(lines[5], "- Consulted: success 50% (2 judged), mean value 2.00; "
                                    "without consulting: success 100% (1 judged), mean value 2.00.")
-        self.assertEqual(lines[6], "- Consult dollars per met cycle: $0.19 (2 met).")
+        # live consult dollars over the met cycles that consulted (the 10-27 cycle was met without consulting)
+        self.assertEqual(lines[6], "- Consult dollars per met consulted cycle: $0.38 (1 met).")
 
     def test_section_cap_line(self):
         self.write_ledger([row("2026-10-26T10:00:00", GLM, 0.30, 10.0, run_started="2026-10-26T09:50:00")])
         self.write_episodes([episode("2026-10-26T10:00:00")])
         self.judgments.return_value = [{"episode_ts": "2026-10-26T10:00:00", "criterion_met": "yes", "value": 3}]
-        self.assertIn("- I spent $0.30 consulting in the last 7 days ($0.04/day); today $0.00 of the $3.00 daily cap.",
-                      consultstats.section("x", cap=3.0))
-        self.assertIn("($0.04/day).", consultstats.section("x")[1])   # no cap: no comparison clause
+        self.assertIn("- I spent $0.30 consulting in the last 7 days ($0.04/day); today $0.00 of my $5.00 daily "
+                      "consult allowance.", consultstats.section("x", cap=5.0))
+        self.assertIn("of my $3.00 daily consult allowance.", consultstats.section("x")[1])   # read when not passed
 
     def test_collapse_line_on_and_off_at_the_threshold(self):
         episodes = [episode("2026-10-27T10:00:00")]
@@ -154,11 +159,50 @@ class ConsultStatsTest(unittest.TestCase):
         rows = [row(f"2026-10-26T10:{i:02d}:00", GLM, 0.01, 1.0, run="sleep") for i in range(17)]
         rows += [row(f"2026-10-26T11:{i:02d}:00", CLAUDE, 0.01, 1.0, run="sleep") for i in range(3)]
         self.write_ledger(rows)
-        self.assertFalse(any("Collapse" in l for l in consultstats.section("x")))
+        self.assertFalse(any("collapse" in l for l in consultstats.section("x")))
         # 19 consults in all (below 20): no collapse even at 100%.
         rows = [row(f"2026-10-26T10:{i:02d}:00", GLM, 0.01, 1.0, run="sleep") for i in range(19)]
         self.write_ledger(rows)
-        self.assertFalse(any("Collapse" in l for l in consultstats.section("x")))
+        self.assertFalse(any("collapse" in l for l in consultstats.section("x")))
+
+    def test_a_fraction_of_a_cent_is_not_shown_as_zero(self):
+        """A real glm-5.3 consult cost $0.000024 (2026-10-27): two decimals showed every line as $0.00."""
+        self.write_ledger([row("2026-10-26T10:00:00", GLM, 0.000024, 0.4, run="sleep")])
+        lines = consultstats.section("x")
+        self.assertIn("- z-ai/glm-5.3: 1 call(s), $0.000024, 0s each, 0 error(s)", lines)
+        self.assertIn("$0.000024 consulting", lines[1])
+        self.assertEqual(consultstats._usd(0), "$0.00")
+        self.assertEqual(consultstats._usd(0.0042), "$0.0042")
+        self.assertEqual(consultstats._usd(1.5), "$1.50")
+
+    def test_a_run_that_left_no_episode_is_not_charged_to_the_next_cycle(self):
+        eps = [episode("2026-10-25T18:00:00")]
+        crashed = row("2026-10-25T10:05:00", GLM, 0.05, 10.0, run_started="2026-10-25T10:00:00")
+        self.assertIsNone(consultstats.cycle_of("x", crashed, eps))   # ended 8 h later: another cycle
+        on_time = row("2026-10-25T17:30:00", GLM, 0.05, 10.0, run_started="2026-10-25T17:20:00")
+        self.assertEqual(consultstats.cycle_of("x", on_time, eps), "2026-10-25T18:00:00")
+
+    def test_judges_of_a_consulted_vendor_do_not_grade_that_cycle(self):
+        """A cycle that asked z-ai/glm-5.3 is not graded by the z-ai judge (vendor, not exact model); and if leaving
+        them out would leave no judge, they grade it rather than nobody (logged)."""
+        ep = episode("2026-10-25T10:00:00")
+        self.write_ledger([row("2026-10-25T09:55:00", GLM, 0.01, 1.0, run_started="2026-10-25T09:50:00"),
+                           row("2026-10-25T09:56:00", CLAUDE, 0.01, 1.0, run_started="2026-10-25T09:50:00",
+                               error="HTTP 404")])          # failed: did not contribute
+        self.write_episodes([ep])
+        pool = ["openrouter/xiaomi/mimo-v2.6-pro", "openrouter/z-ai/glm-5.3-flash", "openrouter/deepseek/deepseek-v4.1-flash"]
+        (self.instances / "x" / "config.env").write_text('LLM_MODEL="openrouter/xiaomi/mimo-v2.6-pro"\n')
+        with mock.patch.object(judge, "JUDGE_MODELS", pool), \
+                mock.patch.object(metrics, "cycle_model", return_value="openrouter/xiaomi/mimo-v2.6-pro"):
+            own = metrics.own_models("x", ep)
+            self.assertIn("openrouter/z-ai/glm-5.3-flash", own)
+            self.assertNotIn("openrouter/deepseek/deepseek-v4.1-flash", own)
+            self.assertEqual(judge.pick(exclude=own), "openrouter/deepseek/deepseek-v4.1-flash")
+            self.assertEqual(metrics.own_models("x"), ["openrouter/xiaomi/mimo-v2.6-pro"])   # no cycle: no consults
+            with mock.patch.object(judge, "JUDGE_MODELS", pool[:2]), mock.patch.object(metrics, "log") as logged:
+                own = metrics.own_models("x", ep)   # only mimo (its own) and the z-ai judge: z-ai grades it
+            self.assertNotIn("openrouter/z-ai/glm-5.3-flash", own)
+            self.assertIn("leaving their judges out would leave none", logged.call_args.args[0])
 
     def test_review_line(self):
         self.assertEqual(consultstats.review_line("x"), "")

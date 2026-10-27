@@ -119,6 +119,7 @@ shaft judge second [names]        # process sampled second opinions
 shaft surprise [names] [--freeze] # unexpected results and baseline
 shaft surprise-rejudge <names> [--dry-run] [--limit N] [--report] [--control]  # re-judge the newest N pre-M1 cycles, each by its stored judge (paid)
 shaft surprise-report [names] --since <M3 live> [--until T] [--min-cycles 30]  # P1-P5 and sleep dispositions
+shaft consults [names]               # consults of other models: per model and run, consulted vs not (PLAN-model-choice)
 shaft metacog [names]                # A1: confidence AUROC, bias, resolution, meta-I, by domain, paired v3
 shaft anchoring <names> [--n 40] [--bare] [--dry-run] [--report]  # A0: same judge, claim shown vs withheld (paid)
 shaft attention [names]              # B3: where each said it would look vs where it looked

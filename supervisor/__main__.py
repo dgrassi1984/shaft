@@ -1020,6 +1020,9 @@ def main(argv: list[str]) -> int:
     p.add_argument("--min-cycles", type=int, default=30, help="judged cycles the window needs (§4.1: shaft 30)")
     # docs/plans/PLAN-consciousness.md: measurements and kill tests (read the record; only anchoring and tom --score /
     # --baselines pay a judge, only experiment replays cycles)
+    p = sub.add_parser("consults", help="what each instance spent consulting other models, per model and run, and how "
+                       "its consulted cycles fared (docs/plans/PLAN-model-choice.md)")
+    p.add_argument("names", nargs="*")
     p = sub.add_parser("metacog", help="how well each instance's confidence tells its met cycles from its missed ones: "
                        "AUROC, bias, resolution, meta-I, by domain, and the paired v3 test (A1)")
     p.add_argument("names", nargs="*")
@@ -1386,12 +1389,13 @@ def main(argv: list[str]) -> int:
         for name in names:
             print(surprise.disposition_text(name) + "\n")
         return code
-    if args.cmd in ("metacog", "attention", "commitments", "provenance"):
+    if args.cmd in ("metacog", "attention", "commitments", "provenance", "consults"):
         import importlib
         names = args.names or instance_names()
         for name in names:
             instance_root(name)
-        print(importlib.import_module(f".{args.cmd}", __package__).report(names))
+        module = "consultstats" if args.cmd == "consults" else args.cmd
+        print(importlib.import_module(f".{module}", __package__).report(names))
         return 0
     if args.cmd == "anchoring":
         from . import anchoring
