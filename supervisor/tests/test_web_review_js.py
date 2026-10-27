@@ -167,7 +167,7 @@ state = "hidden"; away({ type: "visibilitychange" });
 console.log(JSON.stringify(sent));
 """)
         self.assertEqual(json.loads(out), [["/fragment/chat/wren?away=1&at=1234", True]] * 2)
-        self.assertIn('...(el.dataset.follow ? { "X-Shaft-At": String(Date.now()) } : {})', JS)
+        self.assertIn('"X-Shaft-At": String(Date.now())', JS)
 
 
 @unittest.skipUnless(NODE, "node is not installed")
@@ -204,6 +204,23 @@ async function click(url) { let wait; handlers.notificationclick({ notification:
   await click("/i/wren/chat");
   assert.deepEqual(opened, ["https://shaft.test/i/wren/chat"], "navigate refused: a window opens instead");
 })().catch(e => { console.error(e); process.exitCode = 1; });
+""", web_pages.service_worker())
+
+    def test_m11_notification_navigates_an_archived_chat_to_the_current_chat(self):
+        """M11: notificationclick focused an archive because it matched only the current chat's pathname."""
+        node(self.HARNESS + r"""
+(async () => {
+  const there = {url: "https://shaft.test/i/wren/chat?id=web-old", focused:0, navigated:[],
+    focus() {this.focused++; return this;},
+    async navigate(url) {this.navigated.push(url); this.url=url; return this;}};
+  clients = [there];
+  await click("/i/wren/chat");
+  assert.deepEqual(there.navigated, ["https://shaft.test/i/wren/chat"]);
+  assert.equal(there.focused, 1);
+  assert.deepEqual(opened, []);
+  await click("/i/wren/chat");
+  assert.equal(there.navigated.length, 1, "the current chat keeps its composer");
+})().catch(e => {console.error(e); process.exitCode = 1;});
 """, web_pages.service_worker())
 
     def test_w5_a_subscription_the_browser_renewed_is_handed_to_shaft(self):

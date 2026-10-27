@@ -78,7 +78,9 @@
     } catch (e) { failed.add("service worker update"); }
     try {
       const keys = await caches.keys();
-      for (const key of keys.filter(k => k.startsWith("shaft-"))) {
+      // An unchanged worker does not reinstall: its shell (especially /offline) must survive the reload.
+      const active = "shaft-" + (document.querySelector('meta[name="static-version"]') || {}).content;
+      for (const key of keys.filter(k => k.startsWith("shaft-") && k !== active)) {
         try { await caches.delete(key); } catch (e) { failed.add("app cache deletion"); }
       }
     } catch (e) { failed.add("app cache deletion"); }
@@ -261,7 +263,7 @@
         // The feed's poll says when the page sent it: one that arrives after the page said it went away is not
         // watching (web_chat.watching)
         const headers = { ...(el.dataset.etag && el.dataset.etagUrl === url ? { "If-None-Match": el.dataset.etag } : {}),
-                          ...(el.dataset.follow ? { "X-Shaft-At": String(Date.now()) } : {}) };
+                          ...(el.dataset.follow ? { "X-Shaft-At": String(Date.now()), "X-Shaft-Watching": sheet ? "0" : "1" } : {}) };
         const r = await fetch(url, { credentials: "same-origin", cache: "no-store", signal: ctl.signal, headers });
         if (pairAgain(r)) return;
         checkVersion(r);
@@ -1190,7 +1192,7 @@
     return (r.top >= b.top && r.top < b.bottom) || (r.top <= b.top && r.bottom >= b.bottom);   // its start, or it fills it
   }
   function seenFeed() {
-    if (document.visibilityState !== "visible") return;
+    if (sheet || document.visibilityState !== "visible") return;  // a covering sheet hides the feed
     const seen = seenGet();
     let changed = false;
     document.querySelectorAll(".feed [data-seen-reply], .feed [data-sent-at]").forEach(item => {
@@ -1657,6 +1659,7 @@
       }
     }
     if (kind && !sheet) {
+      away();                                      // stop suppressing push as soon as the feed is covered
       sheet = { kind, panel, opener: opener || document.querySelector(sheetOpeners[kind]), inert: [],
         attrs: ["role", "aria-modal", "aria-label", "tabindex", "aria-owns"].map(k => [k, panel.getAttribute(k)]) };
       panel.setAttribute("role", "dialog");

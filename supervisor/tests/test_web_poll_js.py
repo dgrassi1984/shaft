@@ -14,6 +14,7 @@ WEB_JS = Path(__file__).resolve().parents[1] / "web_static" / "web.js"
 NODE = shutil.which("node")
 
 HARNESS = r"""
+const sheet = null;
 const POLL_LIMIT_MS = 15000;
 const net = { down: new Set() };
 const busyIn = () => false, fresh = () => {}, stale = () => {}, netNote = () => {}, checkVersion = () => {};
@@ -59,6 +60,7 @@ setTimeout(() => {                       // 2.05 s: the first poll (sent at 2 s)
 
 
 HEADER_HARNESS = r"""
+const sheet = null;
 const POLL_LIMIT_MS = 15000, net = { down: new Set() };
 const pairAgain = () => false;
 const busyIn = () => false, netNote = () => {}, checkVersion = () => {};
@@ -177,6 +179,7 @@ console.log(JSON.stringify({ notifications, sheets, unread }));
 
 
 SHOW_HARNESS = r"""
+const sheet = null;
 const POLL_LIMIT_MS = 15000, net = { down: new Set() };
 const pairAgain = () => false, busyIn = () => false, fresh = () => {}, stale = () => {}, netNote = () => {};
 const checkVersion = () => {}, textOf = s => s, toBottom = () => {};
