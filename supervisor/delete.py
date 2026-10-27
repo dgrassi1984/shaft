@@ -164,7 +164,7 @@ def _all(*fns):
 
 
 def shared_edits(name: str) -> list[Edit]:
-    from . import jobs
+    from . import consult, jobs
     s = SUP_DIR
     mine = lambda v: v == name or (isinstance(v, str) and v.startswith(name + "@"))   # 'wren@trial:t-…:0A' too
 
@@ -196,6 +196,11 @@ def shared_edits(name: str) -> list[Edit]:
         gone = {k: data.pop(k) for k in [k for k in data if k.split(":")[0] == name]}
         return [gone] if gone else None
 
+    def dismissed_consults(data):
+        gone = [r for r in data if mine(r.get("instance"))]
+        data[:] = [r for r in data if not mine(r.get("instance"))]
+        return gone
+
     edits = [Edit(s / "jobs" / "state.json", _json(jobs_state), jobs._editing_lock),
              Edit(s / "api-answered.json", _json(answered)),
              Edit(s / "schedule.json", _json(_pop("wakes", name))),
@@ -205,6 +210,8 @@ def shared_edits(name: str) -> list[Edit]:
              Edit(s / "telegram.json", _json(telegram_state)),
              Edit(s / "top_dismissed.json", _json(dismissed)),
              Edit(s / "cloud_usage.jsonl", _jsonl(lambda r: mine(r.get("instance")))),
+             Edit(s / "consult_usage.jsonl", _jsonl(lambda r: mine(r.get("instance"))), consult.editing_lock),
+             Edit(s / "consult_reservations.json", _json(dismissed_consults), consult.editing_lock),
              Edit(s / "coder_usage.jsonl", _jsonl(lambda r: mine(r.get("instance")))),
              Edit(s / "trial_usage.jsonl", _jsonl(lambda r: mine(r.get("instance")))),
              Edit(s / "doorbell.jsonl", _jsonl(lambda r: mine(r.get("instance")))),

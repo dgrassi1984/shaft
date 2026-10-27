@@ -275,12 +275,14 @@ SPECS = {
         "called, with arguments and outcome), 'code_changes' (code changes of yours that passed the tests), "
         "'trials' (your trials of proposed changes: progress and verdicts), 'egress' (every connection your "
         "sandbox made to the internet through the proxy, or why it was refused), 'jobs' (your scheduled plugins: "
-        "their timers, recent runs, errors, wakes they asked for). "
+        "their timers, recent runs, errors, wakes they asked for), 'consults' (your model consultations in "
+        "the last 7 days). "
         "Newest last — except judgments: whole verdicts, newest first, as many as fit, with every field (the "
         "reasons for the difficulty, origin and value ratings, and the second judge's blind verdict where there is "
         "one); page back with `before`, or ask for one cycle's verdict with `cycle`. Use it to check your claims "
         "about yourself. (Your own tool traces are also in memory/episodes/*.jsonl.)",
-        {"kind": {"type": "string", "enum": ["judgments", "runs", "tools", "code_changes", "trials", "egress", "jobs"]},
+        {"kind": {"type": "string", "enum": ["judgments", "runs", "tools", "code_changes", "trials", "egress", "jobs",
+                                                    "consults"]},
          "limit": {"type": "integer", "description": "entries, default 20, max 200"},
          "cycle": {"type": "string", "description": "judgments: one cycle's verdict in full, by its time "
                                                     "('2026-10-13 17:42')"},
@@ -647,6 +649,8 @@ class Broker:
         from .core import disabled_tools
         self.disabled = disabled_tools(name)   # switched off by the operator: not offered, and refused
         self.unavailable: dict[str, str] = {}   # tool -> why it is refused in this kind of run (a scheduled job's)
+        self.run_kind = None
+        self.run_started = None
         self.model_allowed = True              # False: /llm refuses (a scheduled job is a script, docs/plans/PLAN-jobs.md)
         self.bot = ""                           # set by tool_specs: its Telegram bot, if the operator can be reached there
         # The operator's folder this run may read (shaft share): the instance's own runs and its trial replays,
@@ -726,6 +730,8 @@ class Broker:
             def do_POST(self):
                 if not self._authorised():
                     return
+                if self.path.rstrip("/") == "/llm/consult/v1/chat/completions":
+                    return self._consult()
                 if self.path.rstrip("/") == "/llm/v1/chat/completions":
                     return self._llm()
                 m = re.fullmatch(r"/tools/([a-z_]+)", self.path)
@@ -736,6 +742,35 @@ class Broker:
                 except ValueError:
                     return self._reply(400, {"ok": False, "error": "body must be JSON"})
                 self._reply(200, broker.call(m.group(1), args if isinstance(args, dict) else {}))
+
+            def _consult(self):
+                from . import consult
+                body = {}
+                try:
+                    if not broker.model_allowed:
+                        raise consult.ConsultError(403, "a scheduled job has no model; consults are unavailable")
+                    if broker.usage_name != broker.name:
+                        raise consult.ConsultError(403, "consults are unavailable in replay and battery runs")
+                    body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+                    if not isinstance(body, dict):
+                        raise ValueError("body must be an object")
+                    reply = consult.complete(broker.name, body, broker.secrets,
+                                             self.headers.get("X-Shaft-Caller", "")[:60],
+                                             broker.run_kind, broker.run_started)
+                except consult.ConsultError as e:
+                    broker._log(f"{broker.name} consult {body.get('model', '?')} -> REFUSED {e}")
+                    return self._reply(e.status, {"error": {"message": str(e)}})
+                except ValueError:
+                    return self._reply(400, {"error": {"message": "body must be a JSON object"}})
+                except Exception as e:
+                    broker._log(f"{broker.name} consult -> ERROR {type(e).__name__}: {e}")
+                    return self._reply(502, {"error": {"message": f"consult failed: {type(e).__name__}: {e}"}})
+                broker._envelope = None
+                u = reply.get("usage") or {}
+                broker._log(f"{broker.name} consult {body.get('model')} -> complete "
+                            f"(in {u.get('prompt_tokens')}, out {u.get('completion_tokens')}, "
+                            f"${reply['shaft']['usd']:.6f})")
+                self._reply(200, reply)
 
             def _llm(self):
                 from . import cloudllm, selfhosted, vision
@@ -1312,7 +1347,7 @@ class Broker:
         cached = getattr(self, "_envelope", None)
         if cached and time.monotonic() - cached[0] < self.ENVELOPE_TTL_S:
             return {**cached[1], "calls_used": self.calls, "calls_max": self.max_calls}
-        from . import autonomy, cloudllm, coder, metrics, trial
+        from . import autonomy, cloudllm, coder, consult, metrics, trial
         from .core import log
 
         def field(label, compute):
@@ -1337,6 +1372,8 @@ class Broker:
         env = {"calls_used": self.calls, "calls_max": self.max_calls,
                 "cloud": field("cloud", lambda: {"spent_usd": float(cloudllm.spent_today(usage_name, **until)),
                                                  "cap_usd": float(cloudllm.daily_cap(self.name))}),
+                "consult": None if self.usage_name != self.name or not self.model_allowed else
+                    field("consult", lambda: consult.envelope(self.name)),
                 "coder": None if "delegate_coding" in self.disabled or "delegate_coding" in unavailable else
                     field("coder", lambda: {"spent_usd": float(coder.spent_today(self.name, **until)),
                                             "cap_usd": float(coder.DAILY_USD)}),
@@ -1402,6 +1439,24 @@ class Broker:
         elif kind == "tools":
             mine = f"] {self.name} "
             text = "\n".join(_tail_lines(self.tools_log, 20000, keep=lambda l: mine in l and logged(l))[-limit:])
+        elif kind == "consults":
+            from . import consult
+            start = ((self.as_of or datetime.now()) - timedelta(days=7)).isoformat(timespec="seconds")
+            rows = []
+            for line in _tail_lines(consult.USAGE, 100000):
+                try:
+                    row = json.loads(line)
+                except ValueError:   # one torn line must not take the whole record down
+                    continue
+                if isinstance(row, dict):
+                    rows.append(row)
+            rows = [r for r in rows if r.get("instance") == self.name and r.get("ts", "") >= start
+                    and known(r.get("ts", "").replace("T", " "))][-limit:]
+            text = "\n".join(f"{r['ts']} {r['model']} caller={r.get('caller', '')} "
+                             f"run={r.get('run')} started={r.get('run_started')} "
+                             f"in={r.get('input_tokens')} out={r.get('output_tokens')} "
+                             f"${r['usd']:.6f} reserved=${r['reserved_usd']:.6f} "
+                             f"{r.get('seconds')}s error={r.get('error')}" for r in rows)
         elif kind == "code_changes":
             text = "\n".join(json.dumps(r) for r in jsonl(SUP_DIR / "code_changes" / f"{self.name}.jsonl", "ts"))
         elif kind == "trials":
@@ -1416,7 +1471,7 @@ class Broker:
             # A replay sees the record as it stood when its cycle began, in a live answer's shape (never "a replay")
             text = jobs.describe(self.name, limit, as_of=self.as_of, root=self.root if self.as_of else None)
         else:
-            raise ValueError("kind must be judgments, runs, tools, code_changes, trials, egress or jobs")
+            raise ValueError("kind must be judgments, runs, tools, code_changes, trials, egress, jobs or consults")
         text = text or "(nothing recorded yet)"
         return text if len(text) <= RUN_OUTPUT_CHARS else "[... older entries cut]\n" + text[-RUN_OUTPUT_CHARS:]
 

@@ -381,15 +381,17 @@ def cmd_limits(name: str | None, limit: str | None, value: str | None) -> int:
     """The operator's own limits for an instance, kept in supervisor/tools/<name>.json (never its config.env, which
     it can change): how often it may wake (WAKE_INTERVAL_MINUTES in its config.env, at least the floor) and how much
     it may spend on cloud models a day."""
-    from . import autonomy, cloudllm
+    from . import autonomy, cloudllm, consult
     from .core import _update_tool_settings
     if limit and not (name and value):
-        print("usage: shaft limits <name> wake-floor <minutes>|off · shaft limits <name> cloud-cap <dollars>|off",
+        print("usage: shaft limits <name> wake-floor <minutes>|off · shaft limits <name> cloud-cap <dollars>|off "
+              "· shaft limits <name> consult-cap <dollars>|off",
               file=sys.stderr)
         return 2
     if limit:
         instance_root(name)
-        key = {"wake-floor": "wake_floor_minutes", "cloud-cap": "cloud_daily_usd"}[limit]
+        key = {"wake-floor": "wake_floor_minutes", "cloud-cap": "cloud_daily_usd",
+               "consult-cap": "consult_daily_usd"}[limit]
         if value == "off":
             new = None
         else:
@@ -409,7 +411,10 @@ def cmd_limits(name: str | None, limit: str | None, value: str | None) -> int:
         cap = cloudllm.daily_cap(n)
         print(f"{n}: wakes every {int(interval.total_seconds() // 60) if interval else 'never'} min · wake floor {floor} min"
               f"{' (yours)' if floor != default_floor else ' (default)'} · cloud cap ${cap:.2f}"
-              f"{' (yours)' if cap != cloudllm.DAILY_USD else ' (default)'} · spent today ${cloudllm.spent_today(n):.2f}")
+              f"{' (yours)' if cap != cloudllm.DAILY_USD else ' (default)'} · spent today ${cloudllm.spent_today(n):.2f}"
+              f" · consult cap ${consult.daily_cap(n):.2f}"
+              f"{' (yours)' if consult.daily_cap(n) != consult.DAILY_USD else ' (default)'}"
+              f" · consult spent today ${consult.spent_today(n):.2f}")
     return 0
 
 
@@ -1015,6 +1020,9 @@ def main(argv: list[str]) -> int:
     p.add_argument("--min-cycles", type=int, default=30, help="judged cycles the window needs (§4.1: shaft 30)")
     # docs/plans/PLAN-consciousness.md: measurements and kill tests (read the record; only anchoring and tom --score /
     # --baselines pay a judge, only experiment replays cycles)
+    p = sub.add_parser("consults", help="what each instance spent consulting other models, per model and run, and how "
+                       "its consulted cycles fared (docs/plans/PLAN-model-choice.md)")
+    p.add_argument("names", nargs="*")
     p = sub.add_parser("metacog", help="how well each instance's confidence tells its met cycles from its missed ones: "
                        "AUROC, bias, resolution, meta-I, by domain, and the paired v3 test (A1)")
     p.add_argument("names", nargs="*")
@@ -1106,10 +1114,10 @@ def main(argv: list[str]) -> int:
     p.add_argument("--yes", action="store_true", help="no question (otherwise you type its name to confirm)")
     p.add_argument("--no-archive", action="store_true", help="keep no archive: its mind is gone for good")
     p = sub.add_parser("limits", help="the operator's own limits for an instance: its wake floor (shortest wake interval "
-                                      "it may set itself) and its daily cloud cap; 'off' goes back to the default")
+                                      "it may set itself) and its daily cloud and consult caps; 'off' goes back to the default")
     p.add_argument("name", nargs="?")
-    p.add_argument("limit", nargs="?", choices=["wake-floor", "cloud-cap"])
-    p.add_argument("value", nargs="?", help="minutes (wake-floor), dollars (cloud-cap), or off")
+    p.add_argument("limit", nargs="?", choices=["wake-floor", "cloud-cap", "consult-cap"])
+    p.add_argument("value", nargs="?", help="minutes (wake-floor), dollars (cloud-cap or consult-cap), or off")
     p = sub.add_parser("jobs", help="instances' scheduled jobs (their own plugins on a timer): list, or switch an "
                                     "instance's jobs on/off")
     p.add_argument("name", nargs="?")
@@ -1381,12 +1389,13 @@ def main(argv: list[str]) -> int:
         for name in names:
             print(surprise.disposition_text(name) + "\n")
         return code
-    if args.cmd in ("metacog", "attention", "commitments", "provenance"):
+    if args.cmd in ("metacog", "attention", "commitments", "provenance", "consults"):
         import importlib
         names = args.names or instance_names()
         for name in names:
             instance_root(name)
-        print(importlib.import_module(f".{args.cmd}", __package__).report(names))
+        module = "consultstats" if args.cmd == "consults" else args.cmd
+        print(importlib.import_module(f".{module}", __package__).report(names))
         return 0
     if args.cmd == "anchoring":
         from . import anchoring
