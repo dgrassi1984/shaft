@@ -262,8 +262,9 @@ class SchedulingTest(LedgerCase):
     def test_next_cycle_and_next_wake_text(self):
         preferences.pause("wren", 2, "why", NOW)
         with mock.patch.object(autonomy, "paused", return_value=False), \
-             mock.patch.object(preferences, "datetime", wraps=datetime) as dt:
-            dt.now.return_value = NOW
+             mock.patch.object(preferences, "datetime", wraps=datetime) as dt, \
+             mock.patch.object(autonomy, "datetime", wraps=datetime) as adt:   # both clocks: it once passed only on 10-26
+            dt.now.return_value = adt.now.return_value = NOW
             self.assertEqual(autonomy.next_cycle("wren"),
                              "wren asked for a pause until 03:00: it reads this in its first cycle after that")
             with mock.patch.object(autonomy, "_state", return_value={}):
@@ -272,11 +273,12 @@ class SchedulingTest(LedgerCase):
     def test_wake_child_rechecks_pause_and_manual_start_explains_lift(self):
         preferences.pause("wren", 2, "why", NOW)
         with mock.patch.object(preferences, "datetime", wraps=datetime) as dt, \
+             mock.patch.object(autonomy, "datetime", wraps=datetime) as adt, \
              mock.patch.object(autonomy, "paused", return_value=False), \
              mock.patch.object(autonomy, "log") as logged, \
              mock.patch.object(autonomy, "record") as recorded, \
              mock.patch.object(autonomy, "run_agent") as run:
-            dt.now.return_value = NOW
+            dt.now.return_value = adt.now.return_value = NOW
             self.assertEqual(autonomy.wake("wren"), 0)
             run.assert_not_called()
             recorded.assert_not_called()
