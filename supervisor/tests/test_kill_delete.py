@@ -54,6 +54,19 @@ class TargetsTest(unittest.TestCase):
         agent = (33, 30, f"{PY} -E -s -m shaft live", str(self.root))
         self.assertEqual(kill.targets("kdx", self.table(holder, gate, plug, agent), self.root)[0], [31, 32, 33])
 
+    def test_the_gates_test_runner_is_not_a_supervisor_holding_a_run_20261027(self):
+        # Regression (PLAN-gate-cache M0): `python -m supervisor.gate_suite` matched SUPERVISOR, so what it started
+        # in an instance's folder looked like that instance's agent — the kill test's stand-in operator shell, whose
+        # parent is the test runner, was stopped (-15) in the shared part and passed under `-m unittest`.
+        runner = (80, 1, f"{PY} -E -s -m supervisor.gate_suite shared", "/p/.supervisor/gate-tests/ab/shaft")
+        shell = (81, 80, "sleep 60", str(self.root))
+        self.assertEqual(kill.targets("kdx", self.table(runner, shell), self.root), ([], []))
+        self.assertIsNone(kill.SUPERVISOR.search(runner[2]))
+        self.assertIsNotNone(kill.GATE.search(runner[2]))
+        self.assertIsNotNone(kill.GATE.search(f"{PY} -E -s -m supervisor.gate_suite instance --nonce-stdin"))
+        for still in ("-m supervisor wake kdx", "-m supervisor.talk_ui kdx", "-m supervisor.gate_suitex"):
+            self.assertIsNotNone(kill.SUPERVISOR.search(f"{PY} -E -s {still}"), still)
+
     def test_a_battery_gets_its_own_sigterm_not_its_exam(self):
         procs = self.table((40, 1, f"{PY} -E -s -m supervisor battery run kdx --until 05:00", "/p"),
                            (41, 40, f"{PY} -E -s -m shaft exam", str(self.root)),
