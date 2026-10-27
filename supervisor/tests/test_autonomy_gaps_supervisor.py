@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
-from supervisor import autonomy, broker, cloudllm, coder, core, judge, metrics, runner, surprise, trial
+from supervisor import autonomy, broker, cloudllm, coder, consult, core, judge, metrics, runner, surprise, trial
 
 
 def judgment(goal, judged_at, episode_ts="2026-10-01T10:00:00", **extra):
@@ -277,7 +277,7 @@ class A5Test(unittest.TestCase):
                                root=self.project / "copy", share=False, usage_name="billed-x")
         self.b.calls = 7
         self.expected = {"calls_used": 7, "calls_max": 60, "cloud": {"spent_usd": 1.25, "cap_usd": 10.0},
-                         "coder": {"spent_usd": 2.0, "cap_usd": 12.0},
+                         "consult": None, "coder": {"spent_usd": 2.0, "cap_usd": 12.0},
                          "trials": {"started": 2, "per_day": 4, "spent_usd": 3.0, "cap_usd": 15.0},
                          "probation": [], "next_sleep": "2026-10-25 04:00", "next_wake": "14:00"}
 
@@ -450,7 +450,7 @@ class ReplayLedgerTest(unittest.TestCase):
             replay.calls, replay.max_calls, replay.disabled = 3, 60, set()
             replay.unavailable = {"trial": "replay", "delegate_coding": "replay"}
             expected = {"calls_used": 3, "calls_max": 60, "cloud": {"spent_usd": 1.25, "cap_usd": 10.0},
-                        "coder": {"spent_usd": 1.25, "cap_usd": 12.0},
+                        "consult": None, "coder": {"spent_usd": 1.25, "cap_usd": 12.0},
                         "trials": {"started": 1, "per_day": 4, "spent_usd": 1.25, "cap_usd": 15.0},
                         "probation": [{"commit": "abcdefgh", "files": ["shaft/live.py"],
                                        "cycles_used": 1, "cycles_needed": metrics.PROBATION_CYCLES}],
@@ -466,6 +466,8 @@ class ReplayLedgerTest(unittest.TestCase):
             live.name = live.usage_name = "x"
             live.calls, live.max_calls, live.as_of = 3, 60, None
             live.disabled, live.unavailable = set(), {}
+            live.model_allowed = True
+            stack.enter_context(mock.patch.object(consult, "envelope", return_value=None))
             for module in (cloudllm, coder):
                 date = stack.enter_context(mock.patch.object(module, "date"))
                 date.today.return_value = at.date()

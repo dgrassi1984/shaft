@@ -74,6 +74,10 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_CLOUD_DAILY_USD` | `8` | dollars per day an instance may spend on its cloud model (shaft limits can set one instance's own cap) | [cloudllm.py](../supervisor/cloudllm.py) |
 | `SHAFT_DECISION_MODELS` | `typesafe/jev-1.13,~typesafe/jev-latest` | the models the broker's decide tool may call (OpenRouter's decisions API); the first is its default | [cloudllm.py](../supervisor/cloudllm.py) |
 | `SHAFT_DECISION_PROVIDER` | `{"data_collection": "deny", "zdr": true, "allow_fallbacks": false}` | the decide tool's provider routing and data policy (JSON) | [cloudllm.py](../supervisor/cloudllm.py) |
+| `SHAFT_CONSULT_MODELS` | `openrouter/anthropic/claude-opus-5.5,openrouter/anthropic/claude-sonnet-5.5,openrouter/moonshotai/kimi-k3.1-pro,openrouter/google/gemini-4-argon,openrouter/openai/gpt-6.1-sol,openrouter/openai/gpt-6.1-terra,openrouter/meta/muse-spark-1.3,openrouter/z-ai/glm-5.3,openrouter/minimax/minimax-m3.1-flash` | models on the instance's consult menu | [consult.py](../supervisor/consult.py) |
+| `SHAFT_CONSULT_DAILY_USD` | `3` | dollars per day per instance for model consultations; `shaft limits <name> consult-cap <usd>` overrides this | [consult.py](../supervisor/consult.py) |
+| `SHAFT_CONSULT_PROVIDER` | `{"data_collection": "deny", "zdr": true, "require_parameters": true}` | OpenRouter consult provider routing and data policy; instances cannot override it | [consult.py](../supervisor/consult.py) |
+| `SHAFT_CONSULT_MAX_TOKENS` | `8000` | default and maximum output tokens per consultation | [consult.py](../supervisor/consult.py) |
 | `SHAFT_CODER_MODEL` | `claude-opus-5-5` | the model an instance hands a coding task to (delegate) | [coder.py](../supervisor/coder.py) |
 | `SHAFT_CODER_DAILY_USD` | `5` | dollars per day per instance its coding hand-offs may spend | [coder.py](../supervisor/coder.py) |
 | `SHAFT_CYCLE_TIMEOUT_S` | `2400` | seconds a cycle (and a trial's replayed cycle) may run before it is stopped | [core.py](../supervisor/core.py) |

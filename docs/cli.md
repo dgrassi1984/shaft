@@ -68,8 +68,9 @@ shaft distinct [name]           # blind test: can the judge tell it from the bar
 shaft distinct [name] --strict  # …again on answers stripped of specifics: voice, not memory
 shaft dataset|finetune [name]   # M6: export experiences / train a judged LoRA adapter (MLX)
 
-shaft limits [name] [wake-floor <min>|cloud-cap <usd>|off]  # your own limits for an instance: the shortest wake
-                                     # interval it may set (default 10) and its daily cloud cap (default $8)
+shaft limits [name] [wake-floor <min>|cloud-cap <usd>|consult-cap <usd>|off]
+                                     # wake floor (default 10 min), daily cloud cap ($8), daily consult cap ($3)
+                                     # use off as the value to restore the selected limit's default
 shaft jobs [name] [on|off]           # instances' scheduled jobs: their plugins on a timer (runs, errors, wakes)
 shaft tools <name> [on|off <tool>]   # an instance's supervisor tools, e.g. off delegate_coding (operator-only:
                                      # kept in .supervisor/, so the instance cannot switch it back on)
