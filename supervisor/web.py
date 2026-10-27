@@ -42,7 +42,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import web_pages
+from . import web_icons, web_pages
 from .web_views import TEXT_TYPES                  # files shown as text: Files, messages, the documents panel
 from .web_pages import Html
 from .core import EMBED_PORT, LLM_PORTS, SUP_DIR, UnsafePath, knob, port, log, read_beneath
@@ -305,6 +305,26 @@ def _static(name: str, versioned: bool = False) -> Response:
     return Response(200, path.read_bytes(), {"Content-Type": ctype, "Cache-Control": cache})
 
 
+# Bounded by LAUNCH_SIZES and the two schemes. Serialize first renders so simultaneous installs draw each once.
+_launch_images: dict = {}
+_launch_lock = threading.Lock()
+
+
+def _launch(name: str, versioned: bool) -> Response:
+    match = re.fullmatch(r"([1-9][0-9]{2,3})x([1-9][0-9]{2,3})-(light|dark)\.png", name)
+    if match:
+        w, h, scheme = int(match[1]), int(match[2]), match[3]
+        if (w, h) in web_icons.LAUNCH_SIZES:
+            with _launch_lock:
+                key = (w, h, scheme)
+                if key not in _launch_images:
+                    _launch_images[key] = web_icons.launch_png(w, h, web_pages.THEME[scheme])
+                body = _launch_images[key]
+            cache = "public, max-age=31536000, immutable" if versioned else "max-age=3600"
+            return Response(200, body, {"Content-Type": "image/png", "Cache-Control": cache})
+    return _html(404, web_pages.message_page("Not found", "No such launch image."))
+
+
 def _secured(r: Response) -> Response:
     r.headers.update({"Content-Security-Policy": CSP, "X-Content-Type-Options": "nosniff",
                       "Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY",
@@ -339,6 +359,8 @@ def _route(req: Request) -> Response:
     if req.path.startswith("/static/"):
         return _static(urllib.parse.unquote(req.path.removeprefix("/static/")),
                        versioned=req.query.get("v") == web_pages.STATIC_VERSION)
+    if req.path.startswith("/launch/"):               # WebKit 259328: startup fetches carry no paired cookie
+        return _launch(req.path.removeprefix("/launch/"), req.query.get("v") == web_pages.STATIC_VERSION)
     if req.path == "/favicon.ico":                  # asked by browsers on their own: the icon, not a refusal page
         return _static("icon-180.png")
     # The app's shell (docs/plans/PLAN-pwa P1): fetched by the browser before it is paired, with nothing private in it.

@@ -1,7 +1,7 @@
 """The web UI's app icons, drawn here (stdlib only: no image tools on the Mac) and written to web_static/.
 
 One drawing — a shaft of light on a dark tile, as favicon.svg — at the sizes a Home Screen app needs (docs/plans/PLAN-pwa P1):
-  icon-180.png           Apple's touch icon: opaque and full bleed (iOS rounds the corners itself; a transparent
+  icon-152.png, -167, -180 Apple's touch icon: opaque and full bleed (iOS rounds the corners itself; a transparent
                          corner showed as black)
   icon-192.png, -512     the manifest's icons: the rounded tile, transparent outside it
   icon-maskable-512.png  the manifest's maskable icon: full bleed, the glyph inside the central 80% safe zone
@@ -57,7 +57,46 @@ def png(size: int, bleed: bool = False, glyph: float = 1.0) -> bytes:
             + chunk(b"IDAT", zlib.compress(b"".join(rows), 9)) + chunk(b"IEND", b""))
 
 
-ICONS = {"icon-180.png": dict(size=180, bleed=True, glyph=.9), "icon-192.png": dict(size=192),
+# CSS portrait size and DPR; both orientations share this bounded allowlist (C17).
+LAUNCH_DEVICES = ((375, 667, 2), (375, 812, 3), (390, 844, 3), (393, 852, 3), (402, 874, 3),
+                  (414, 896, 2), (414, 896, 3), (428, 926, 3), (430, 932, 3), (440, 956, 3),
+                  (744, 1133, 2), (768, 1024, 2), (810, 1080, 2), (820, 1180, 2), (834, 1194, 2),
+                  (1024, 1366, 2), (1032, 1376, 2))
+LAUNCH_SIZES = frozenset(size for w, h, r in LAUNCH_DEVICES for size in ((w * r, h * r), (h * r, w * r)))
+
+
+def launch_png(width: int, height: int, background: str) -> bytes:
+    """An opaque startup image. Only the glyph's bounds need supersampling, not millions of background pixels."""
+    bg = bytes.fromhex(background.lstrip("#")) + b"\xff"
+    row = b"\0" + bg * width
+    rows = [row] * height
+    size = round(min(width, height) * .22)
+    left, top = (width - size) // 2, (height - size) // 2
+    x0, x1 = int(size * 26 / 64), int(size * 38 / 64) + 1
+    for py in range(int(size * 10 / 64), int(size * 54 / 64) + 1):
+        glyph = bytearray()
+        for px in range(x0, x1):
+            acc = [0, 0, 0]
+            for sy in range(SS):
+                for sx in range(SS):
+                    c = _colour((px + (sx + .5) / SS) * 64 / size,
+                                (py + (sy + .5) / SS) * 64 / size, True, 1.0)
+                    c = bg if c[:3] == BG else c
+                    for k in range(3):
+                        acc[k] += c[k]
+            glyph += bytes(round(v / (SS * SS)) for v in acc) + b"\xff"
+        start = 1 + (left + x0) * 4
+        rows[top + py] = row[:start] + glyph + row[start + len(glyph):]
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xffffffff)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(b"".join(rows), 6)) + chunk(b"IEND", b""))
+
+
+ICONS = {"icon-152.png": dict(size=152, bleed=True, glyph=.9),
+         "icon-167.png": dict(size=167, bleed=True, glyph=.9), "icon-180.png": dict(size=180, bleed=True, glyph=.9),
+         "icon-192.png": dict(size=192),
          "icon-512.png": dict(size=512), "icon-maskable-512.png": dict(size=512, bleed=True, glyph=.72)}
 
 
