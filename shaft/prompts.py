@@ -13,6 +13,21 @@ def now() -> datetime:
     return clock.now()
 
 
+def consult_line(consult) -> str:
+    """My consult allowance and the menu, priced (docs/plans/PLAN-model-choice.md): "" when it is not mine this run."""
+    try:
+        left = max(0.0, consult["cap_usd"] - consult["spent_usd"] - (consult.get("reserved_usd") or 0))
+        menu = [m for m in consult.get("models") or [] if isinstance(m, dict) and m.get("model")]
+        ok = [f"{m['model'].removeprefix('openrouter/')} {m['in_per_m']:g}/{m['out_per_m']:g}"
+              for m in menu if m.get("available")]
+        off = [m["model"].removeprefix("openrouter/") for m in menu if not m.get("available")]
+        return (f"Consult allowance today: ${left:.2f} left of ${consult['cap_usd']:.2f} "
+                f"(other models, $ per million input/output tokens: {', '.join(ok) or 'none available'}"
+                + (f"; unavailable: {', '.join(off)}" if off else "") + "; skills/choosing-a-model.md).")
+    except (KeyError, TypeError, ValueError):
+        return ""
+
+
 def envelope_text(env: dict | None, left_s: float | None) -> str:
     """My limits, before I hit them: a refusal used to be the first I heard of a budget (A5)."""
     lines = []
@@ -31,6 +46,8 @@ def envelope_text(env: dict | None, left_s: float | None) -> str:
             lines.append(f"{label} today: ${budget['spent_usd']:.2f} of ${budget['cap_usd']:.2f}.")
         except (KeyError, TypeError, ValueError):   # null (not mine this run) or not as expected
             pass
+    if (line := consult_line(env.get("consult"))):
+        lines.append(line)
     trials = env.get("trials")
     try:
         lines.append(f"Trials today: {trials['started']} of {trials['per_day']} started, "

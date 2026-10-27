@@ -58,6 +58,32 @@ def envelope() -> dict | None:
     return env if ok else None   # a malformed one must not break the cycle that shows it
 
 
+def consult(model: str, messages: list[dict], max_tokens: int | None = None, caller: str = "",
+            timeout: int = 110, **options) -> dict:
+    """Ask another model on my consult allowance (POST /llm/consult/v1/chat/completions; skills/choosing-a-model.md).
+    Returns the OpenAI-style reply plus "shaft": {usd, spent_usd, reserved_usd, cap_usd}. `caller` (my plugin's name)
+    is recorded with the cost. Raises BrokerError with the supervisor's reason (not on the menu, over the allowance…).
+    The timeout stays under a plugin's 120 s: a call cut off still runs, and is still billed, at the supervisor."""
+    url = os.environ.get("SHAFT_BROKER_URL")
+    if not url:
+        raise BrokerError("no broker: SHAFT_BROKER_URL is not set (am I running outside the supervisor?)")
+    body = {"model": model, "messages": messages, **options, **({"max_tokens": max_tokens} if max_tokens else {})}
+    req = urllib.request.Request(url.rstrip("/") + "/llm/consult/v1/chat/completions", data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json", "X-Shaft-Caller": caller[:60],
+                                          "X-Shaft-Token": os.environ.get("SHAFT_BROKER_TOKEN", "")})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.load(resp)
+    except urllib.error.HTTPError as e:
+        try:
+            why = json.loads(e.read()).get("error", {}).get("message")
+        except (ValueError, AttributeError):
+            why = None
+        raise BrokerError(f"consult {model}: HTTP {e.code}: {why or 'refused'}") from e
+    except (urllib.error.URLError, OSError) as e:
+        raise BrokerError(f"consult {model}: broker unreachable or too slow ({e})") from e
+
+
 SLOW_TOOLS = {"delegate_coding": 1800}   # a coding handoff runs a model loop and the test gate: minutes
 
 
