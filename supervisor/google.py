@@ -1,7 +1,7 @@
 """The operator's Google accounts, shared by every Google service an instance may be granted (docs/plans/PLAN-calendar.md).
 
-One login per account covers Gmail and Calendar, both read-only (`shaft google login`). The supervisor keeps each
-account's refresh token in .supervisor/google/<alias>.json (0600, outside every sandbox) with the OAuth client that
+One login (`shaft google login`) covers Gmail reads and Calendar reads/writes (docs/plans/PLAN-calendar-write.md).
+The supervisor keeps each account's refresh token in .supervisor/google/<alias>.json (0600, outside every sandbox) with the OAuth client that
 issued it and the scopes Google actually granted; instances never hold a credential. mail.py and calendar.py enforce
 their own grants on top of an `Account`; nothing here knows about labels or calendars.
 
@@ -40,9 +40,10 @@ DRIVE = "https://www.googleapis.com/auth/drive"
 SHEETS = "https://www.googleapis.com/auth/spreadsheets"
 DOCS = "https://www.googleapis.com/auth/documents"
 SLIDES = "https://www.googleapis.com/auth/presentations"
-SCOPES = (GMAIL, CALENDAR)                            # one login asks for both
-SCOPE_NAMES = {GMAIL: "gmail.readonly", CALENDAR: "calendar.readonly", GMAIL_MODIFY: "gmail.modify", DRIVE: "drive",
-               SHEETS: "spreadsheets", DOCS: "documents", SLIDES: "presentations"}
+CALENDAR_EVENTS = "https://www.googleapis.com/auth/calendar.events"
+SCOPES = (GMAIL, CALENDAR, CALENDAR_EVENTS)             # operator consent; per-calendar write grants stay separate
+SCOPE_NAMES = {GMAIL: "gmail.readonly", CALENDAR: "calendar.readonly", CALENDAR_EVENTS: "calendar.events",
+               GMAIL_MODIFY: "gmail.modify", DRIVE: "drive", SHEETS: "spreadsheets", DOCS: "documents", SLIDES: "presentations"}
 # What an instance's own Google key may be granted (a bundle of scopes, all or nothing), and the hosts its token is
 # good for (the key is bound to them).
 # gmail.modify: read, send, label, trash; never a permanent delete, the settings or anything outside Gmail.
@@ -289,12 +290,25 @@ class Account:
             return self._token
 
     def get(self, url: str, **params) -> dict:
-        """GET one Google API URL (read-only: nothing here ever writes), as this account."""
+        """GET one Google API URL as this account."""
+        return self._request("GET", url, None, **params)
+
+    def post(self, url: str, body: dict, **params) -> dict:
+        return self._request("POST", url, body, **params)
+
+    def patch(self, url: str, body: dict, *, etag: str = "", **params) -> dict:
+        return self._request("PATCH", url, body, headers={"If-Match": etag} if etag else {}, **params)
+
+    def _request(self, method: str, url: str, body: dict | None, *, headers: dict | None = None, **params) -> dict:
+        """One door and the same refresh/quota handling for reads and writes (PLAN-calendar-write M0).
+        Transport failures are not retried: an insert may already have reached Google."""
         query = urllib.parse.urlencode({k: v for k, v in params.items() if v not in (None, "")}, doseq=True)
         refreshed, waited, attempt = False, 0.0, 0
         while True:
             req = urllib.request.Request(url + (f"?{query}" if query else ""),
-                                         headers={"Authorization": f"Bearer {self.token()}"})
+                                         data=json.dumps(body).encode() if body is not None else None, method=method,
+                                         headers={"Authorization": f"Bearer {self.token()}",
+                                                  "Content-Type": "application/json", **(headers or {})})
             try:
                 with urlopen(req, timeout=30) as resp:
                     return json.load(resp)
