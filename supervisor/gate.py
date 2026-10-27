@@ -3,6 +3,8 @@
 The supervisor never imports agent code. It snapshots the instance's code
 before a run; if the run changed it, the test suites run, and failing changes
 are restored byte-for-byte from the snapshot.
+The supervisor's own tests run in two parts; the shared part's pass is recorded
+per commit (docs/plans/PLAN-gate-cache.md).
 """
 from __future__ import annotations
 
@@ -326,7 +328,8 @@ def committed_tree(project: Path | None = None) -> tuple[Path, str]:
     pair of commits, made once and reused, in a folder named like the project's and committed as its own repository
     (the runner refuses a project without .git; a test's git commands never reach the real one). Nothing of the
     running system is in it: an empty instances/ and a .env without secrets, so the sandbox probes still aim at files
-    that exist, and no test can touch a real instance. Returns the copy and the commits' label."""
+    that exist, and no test can touch a real instance. The shared part's records and lock live beside the tree in
+    the commits' folder and are removed with it. Returns the copy and the commits' label."""
     import shutil
     import time
     project = Path(project or PROJECT)
@@ -605,7 +608,11 @@ def _shared_part(tree: Path, label: str, env: dict, timeout_s: int, max_age_s: f
         if (rec := recorded_pass(tree, key, max_age_s)):
             return True, (f"-- shared part: passed on this commit at {rec['passed_at'][11:16]} ({rec['tests_run']} "
                           f"tests, {rec['seconds']:.0f} s), not run again --\n"), "", False
-        ok, section, full, ran, seconds = _part("shared", tree, env, timeout_s, label)
+        try:
+            ok, section, full, ran, seconds = _part("shared", tree, env, timeout_s, label)
+        except BaseException:   # timed out or could not run: no pass now, so an older one must not stand in for it
+            record_path(tree, key).unlink(missing_ok=True)
+            raise
         if ok and ran:
             try:
                 _record(tree, key, ran, seconds, label)

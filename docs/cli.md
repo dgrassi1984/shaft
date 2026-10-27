@@ -83,6 +83,8 @@ shaft mail [name]                    # accounts and grants
 shaft calendar <name> grant|revoke <alias> primary|<title>|<id>   # one calendar it may read · shaft calendar <name> off
 shaft calendar [name] · shaft calendar calendars <alias>          # grants · an account's calendars, to pick one
 shaft pause [name] · shaft resume [name] · shaft check [name] · shaft setup · shaft list
+shaft gate warm                     # run the gate's shared supervisor tests on the current commit unless their pass
+                                    # is recorded (fresh: under 12 h); the scheduler runs it after each merge
 shaft kill <name> [--wait S]         # pause it AND stop what it runs now: a cycle, a reply, a job, the battery,
                                      # a trial replay; the run still settles (journal note, gate, commit). Waits up
                                      # to S s (120) for that; shaft resume <name> undoes the pause

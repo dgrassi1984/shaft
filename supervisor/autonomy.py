@@ -292,7 +292,8 @@ def _awake(name: str) -> str:
 
 def serve(poll_s: int = 30) -> int:
     """The scheduler service: wake each instance on its own interval and run the nightly sleep, as child
-    processes (an instance on a cloud model does not wait behind one on the local model); log every decision."""
+    processes (an instance on a cloud model does not wait behind one on the local model); log every decision.
+    Also warm the gate's shared supervisor tests for new commits (gate_warm) while the scheduler is not paused."""
     log(f"scheduler started (wakes per instance, WAKE_INTERVAL_MINUTES, default {WAKE_DEFAULT_MIN}; "
         f"sleep daily from {SLEEP_AT[0]:02d}:{SLEEP_AT[1]:02d})")
     from .version import record_service   # the settings it holds (settings.not_live)

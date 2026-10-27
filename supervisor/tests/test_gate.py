@@ -192,9 +192,10 @@ class CommittedTreeTest(FakeProjectCase):
 
 
 # A shared supervisor test that says each time it runs, in a file outside the tree (the tree is the test's cwd).
-COUNTS_ITS_RUNS = ("import unittest\nfrom pathlib import Path\n\nclass C(unittest.TestCase):\n"
+COUNTS_ITS_RUNS = ("import time, unittest\nfrom pathlib import Path\n\nclass C(unittest.TestCase):\n"
                    "    def test_counted(self):\n"
                    "        with open({log!r}, 'a') as f:\n            f.write('ran\\n')\n"
+                   "        if Path({hang!r}).exists():\n            time.sleep(120)\n"
                    "        if Path({fail!r}).exists():\n            self.fail('asked to fail')\n")
 # An instance-part test: it reads the instance under test, and fails when the instance holds a file named BAD.
 READS_THE_INSTANCE = ("import os, unittest\nfrom pathlib import Path\n\n"
@@ -208,9 +209,10 @@ class SharedFixtureCase(FakeProjectCase):
 
     def setUp(self):
         super().setUp()
-        self.log, self.fail_flag = self.tmp / "runs.log", self.tmp / "fail-now"
+        self.log, self.fail_flag, self.hang_flag = self.tmp / "runs.log", self.tmp / "fail-now", self.tmp / "hang-now"
         tests = self.project / "supervisor" / "tests"
-        (tests / "test_counted.py").write_text(COUNTS_ITS_RUNS.format(log=str(self.log), fail=str(self.fail_flag)))
+        (tests / "test_counted.py").write_text(COUNTS_ITS_RUNS.format(log=str(self.log), fail=str(self.fail_flag),
+                                                                      hang=str(self.hang_flag)))
         (tests / "test_invariants.py").write_text(READS_THE_INSTANCE)
         git(self.project, "add", "-A")
         git(self.project, "commit", "-qm", "counted and instance tests")
@@ -450,6 +452,19 @@ class WarmTest(SharedFixtureCase):
         ok, out = self.gate()
         self.assertFalse(ok, out)                         # the gate ran them itself, and they fail
         self.assertEqual(self.runs(), 3)
+
+    def test_a_refresh_that_times_out_drops_the_old_record_too(self):
+        # Codex (M3 wording): only a run that reported failure deleted the record; one that timed out raised first.
+        import json
+        self.assertEqual(self.warm()[0], 0)
+        rec = json.loads(self.record().read_text())
+        aging = gate.datetime.now() - gate.timedelta(seconds=gate.WARM_REFRESH_S + 60)
+        self.record().write_text(json.dumps({**rec, "passed_at": aging.isoformat(timespec="seconds")}))
+        self.hang_flag.write_text("x")
+        code, logged = self.warm(timeout_s=4)
+        self.assertEqual(code, gate.WARM_FAILED)
+        self.assertTrue(any("FAILED" in l and "timed out after 4s" in l for l in logged), logged)
+        self.assertFalse(self.record().exists())
 
     def test_shaft_gate_warm_lowers_its_priority_ends_its_stages_on_a_signal_and_returns_warm_s_code(self):
         from supervisor import __main__ as cli
