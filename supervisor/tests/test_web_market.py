@@ -215,6 +215,36 @@ class IPadTest(unittest.TestCase):
         self.assertNotIn("--name phone-app</code>", page)
 
 
+class RetryInPlaceTest(unittest.TestCase):
+    def chat(self) -> dict:
+        return {"id": "web-a", "state": "idle", "created": "2026-10-27T10:00:00", "turns": [
+            {"role": "user", "content": "first", "ts": "2026-10-27T10:00:00"},
+            {"role": "assistant", "content": "", "ts": "2026-10-27T10:00:05", "note": "error: CloudError: HTTP 503",
+             "note_kind": "model", "note_retry": True, "retry_text": "first"}]}
+
+    def test_p9_retry_folds_the_failed_try_and_the_model_never_sees_it(self):
+        """iPad review P9: Retry added a second copy of the question and a second error under the first."""
+        from supervisor import web_chat
+        chat = self.chat()
+        self.assertIn('data-retry-of="1"', str(web_views.chat_feed("wren", chat, [])))
+        self.assertFalse(web_chat.mark_retried(chat, 1, "something else"))        # only the text that failed
+        self.assertFalse(web_chat.mark_retried(chat, 0, "first"))
+        self.assertTrue(web_chat.mark_retried(chat, 1, "first"))
+        self.assertFalse(web_chat.mark_retried(chat, 1, "first"))                 # once
+        chat["turns"].append({"role": "user", "content": "first", "ts": "2026-10-27T10:01:00"})
+        self.assertEqual(web_chat._api_messages(chat), [{"role": "user", "content": "first"}])
+        feed = str(web_views.chat_feed("wren", chat, []))
+        self.assertEqual(feed.count(">first<"), 1)
+        self.assertIn('<p class="dim retried" data-k="a1">The first try failed and was sent again', feed)
+        self.assertNotIn("The model could not finish the reply", feed)
+
+    def test_a_failure_that_may_have_run_tools_is_never_folded(self):
+        from supervisor import web_chat
+        chat = self.chat()
+        chat["turns"][1]["note_retry"] = False
+        self.assertFalse(web_chat.mark_retried(chat, 1, "first"))
+
+
 class AlertsTest(unittest.TestCase):
     def test_i15_a_log_line_alert_reads_on_a_phone_in_its_own_words(self):
         """Review I15: raw log lines with Python dicts, all bold red, each a wall of text on a phone."""

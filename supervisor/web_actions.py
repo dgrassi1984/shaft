@@ -279,6 +279,25 @@ def tool_switches(name: str, off: set[str]) -> Html:
 _ALERT_LINE = re.compile(r"^(\d\d:\d\d(?::\d\d)?) ([\w.-]+): (.+)$", re.S)
 
 
+_TOKEN = re.compile(r"\b([a-z][a-z0-9]*(?:_[a-z0-9]+)+|exit|code)=(\{[^{}]*\}|\[[^\[\]]*\]|'[^']*'|\"[^\"]*\"|[^\s,]+)")
+
+
+def _readable(text: str) -> str:
+    """A log line's machine tokens in plain type, its words unchanged (iPad review P5): broker_calls={'run': 2,
+    'web_search': 2} → broker calls: run 2, web search 2; finish_reason='stop' → finish reason: stop; exit=1 → exit 1."""
+    def value(v: str) -> str:
+        v = v.strip()
+        if v[:1] in "{[":
+            parts = [p.strip().strip("'\"") for p in v[1:-1].split(",") if p.strip()]
+            return ", ".join(p.replace("': ", " ").replace("\": ", " ").replace(": ", " ").replace("'", "")
+                             .replace("_", " ") for p in parts) or "none"
+        return v.strip("'\"")
+    def one(m: re.Match) -> str:
+        key = m[1].replace("_", " ")
+        return f"{key} {m[2]}" if m[1] in ("exit", "code") else f"{key}: {value(m[2])}"
+    return _TOKEN.sub(one, text)
+
+
 def alert_line(a: dict) -> Html:
     """One open alert and the action that dismisses it alone. `ids` is a JSON list of that one id — the same field
     `dismiss` reads, a list because a log alert's id has a space in its time. A log line ("07:31:38 shaft: end live
@@ -287,6 +306,7 @@ def alert_line(a: dict) -> Html:
     text = a["text"]
     m = _ALERT_LINE.match(text)
     when, who, what = (m.groups() if m else ("", "", text))
+    what = _readable(what)
     head = what if len(what) <= 90 else what[:89].rstrip() + "…"
     full = h('<details class="alertfull"><summary>Full line</summary><pre>{t}</pre></details>', t=text) \
         if len(what) > 90 else Html("")

@@ -466,8 +466,9 @@ def _post(req: Request, dev: str) -> Response:
             # Next cycle (background=1): to the inbox, read in its next cycle (PLAN-background-messages.md)
             send = (web_chat.background if fields.get("background") == "1" else
                     web_chat.queue if fields.get("queue") == "1" else web_chat.send)
+            extra = {"retry_of": fields.get("retry_of", "")} if send is web_chat.send else {}
             _, said = send(m[1], (req.headers.get("tailscale-user-login") or "").lower(),
-                                    fields.get("text", ""), files, mid=fields.get("mid", ""))
+                                    fields.get("text", ""), files, mid=fields.get("mid", ""), **extra)
         except web_chat.Refused as e:
             return _html(409, web_pages.h("<p>{t}</p>", t=str(e)))
         return _html(200, web_pages.h("<p>{t}</p>", t=said))

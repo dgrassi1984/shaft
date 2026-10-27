@@ -1094,7 +1094,7 @@ def _comment_chips(items: list[dict] | None, kind: str = "") -> Html:
                   u=q(item["doc"]), doc=item["doc"], id=item["id"], pre=pre) for item in items)
 
 
-def _reply_failure(name: str, turn: dict, archived: bool) -> Html:
+def _reply_failure(name: str, turn: dict, archived: bool, k: int = -1) -> Html:
     """Keep raw errors available without making the operator interpret them."""
     note = turn.get("note") or ""
     if not note:
@@ -1108,7 +1108,8 @@ def _reply_failure(name: str, turn: dict, archived: bool) -> Html:
            "model": "The model could not finish the reply."}.get(kind, "The reply failed.")
     action = ("No external actions ran: Retry sends it again." if offer else
               "Actions may already have run. Check Activity and Services before sending again.")
-    recovery = (h('<button type="button" class="small" data-retry="{text}">Retry</button>', text=turn["retry_text"])
+    recovery = (h('<button type="button" class="small" data-retry="{text}" data-retry-of="{k}">Retry</button>',
+                  text=turn["retry_text"], k=k)
                 if offer else h('<a href="/i/{n}/activity">Activity</a> · <a href="/services">Services</a>', n=q(name)))
     return h('<p class="warn recovery">{why} {action}</p><div class="actions">{recovery}</div>'
              '<details class="tech"><summary>Technical details</summary><pre>{raw}</pre></details>',
@@ -1203,8 +1204,13 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
                      h('<div class="emptychat" data-k="empty"><p class="big">Chat with {n}</p><p class="dim">No chat open '
                        'with {n}. Write below to start one; earlier chats are in ⋯.</p></div>', n=name)])
     items = []
-    last_answer = max((k for k, t in enumerate(chat["turns"]) if t["role"] != "user"), default=-1)
+    last_answer = max((k for k, t in enumerate(chat["turns"]) if t["role"] != "user" and not t.get("retried")), default=-1)
     for k, t in enumerate(chat["turns"]):
+        if t.get("retried"):                     # a try that failed and was sent again (Retry): one quiet line
+            if t["role"] != "user":
+                items.append((t["ts"], h('<p class="dim retried" data-k="a{k}">The first try failed and was sent again '
+                                         '<span class="dim">({ts})</span>.</p>', k=k, ts=_turn_time(t["ts"]))))
+            continue
         raw = t.get("shown", t.get("content", "")) if t["role"] == "user" else t.get("content", "")
         # A message's actions sit under it, out of sight until wanted: hover or keyboard focus on a computer, long-press
         # or right-click opens them as a menu (web.js msgMenu). Two bordered boxes on every message were bigger than a
@@ -1239,7 +1245,7 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
             body = markdown(t["content"]) if t.get("content") else Html("")
             if not t.get("content") and not t.get("note"):
                 body = Html('<p class="dim">(no answer)</p>')
-            recovery = _reply_failure(name, t, archived)
+            recovery = _reply_failure(name, t, archived, k)
             cards = join([doc_cards(t.get("docs"), name if archived else ""), _comment_chips(t.get("answered"), "answered"),
                           _comment_chips(t.get("opened"), "opened")])
             seen = h(' data-seen-inst="{n}" data-seen-reply="{ts}"', n=name, ts=t["ts"]) if not archived else Html("")
@@ -1321,6 +1327,7 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
         '<form class="composer" data-post="/chat/{n}/send" data-multipart="1" data-reset="1" data-files data-draft="{n}" data-sent-mids="{mids}" '
         'data-max-file="{mf}" data-max-total="{mt}" data-max-files="{mn}"><input type="hidden" name="mid" value="">'
         '<input type="hidden" name="queue" value=""><input type="hidden" name="background" value="">'
+        '<input type="hidden" name="retry_of" value="">'
         '<div class="chips" data-picked></div><div class="cbox">'
         '<label class="pick iconbtn" title="Attach files">{attach}<span class="sr">Attach files</span>'
         '<input type="file" name="files" multiple class="sr-file"></label>'

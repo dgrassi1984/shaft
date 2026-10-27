@@ -897,3 +897,29 @@ form.composer > * { min-width: 0; }
 .alerts li > form.act button { border-color: transparent; background: transparent; color: var(--dim); padding-left: 0; }
 .alerts li > form.act button:hover { color: var(--text); }
 .rail .badge, nav .badge { margin-left: .35rem; }
+
+/* P3 (iPad review): a page's table becomes label/value rows by the page's own width, not only at phone width — an iPad
+   in portrait at XXL text wrapped Settings' description one letter a line. The chat page keeps its own container. */
+main { container: page / inline-size; }
+@container page (max-width: 36rem) {
+  table:not(.md) thead { display: none; }
+  table:not(.md), table:not(.md) > tbody, table:not(.md) tr, table:not(.md) td { display: block; width: 100%; }
+  table:not(.md) tr { border-bottom: 1px solid var(--line); padding: .3rem 0; }
+  table:not(.md) td { border: 0; padding: .05rem 0; display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); gap: .4rem; }
+  table:not(.md) td > * { min-width: 0; }
+  table:not(.md) td::before { content: attr(data-label); color: var(--dim); }
+  table:not(.md) td:empty { display: none; }
+}
+/* P12: the ⋯ menu's actions are rows, as a menu's are — not a grid of bordered buttons; what cannot run now is dimmed */
+.chathead .menubody .actions { display: grid; gap: 0; margin: .35rem 0 0; padding-top: .35rem;
+    border-top: 1px solid var(--line); }
+.chathead .menubody .actions form.act { display: block; }
+.chathead .menubody .actions button { display: flex; align-items: center; width: 100%; text-align: left; border: 0;
+    background: transparent; border-radius: 8px; padding: .5rem .6rem; font-size: .95rem; min-height: 40px; color: var(--text); }
+.chathead .menubody .actions button:not(:disabled):hover { background: var(--hover); border-color: transparent; }
+.chathead .menubody .actions button:disabled { opacity: .4; }
+.chathead .menubody .actions button.danger:not(:disabled) { color: var(--bad); }
+@media (pointer: coarse) { .chathead .menubody .actions button { min-height: 44px; } }
+/* the overview's cards: quiet pills, not a wall of boxes */
+.card footer button.act { background: var(--bg); border-color: transparent; border-radius: 999px; }
+.card footer button.act:not(:disabled):hover { border-color: var(--accent); }

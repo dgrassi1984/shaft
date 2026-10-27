@@ -495,6 +495,8 @@
     const sentMid = mid ? mid.value : "";
     const payload = new FormData(form);
     if (queue) queue.value = "";              // the next send chooses its own mode
+    const retryOf = form.querySelector("input[name=retry_of]");
+    if (retryOf) retryOf.value = "";           // only the Retry that set it
     if (background) background.value = "";
     const sentFiles = [...(form.querySelector("input[type=file]") || { files: [] }).files];
     if (form.dataset.draft && mid) {
@@ -954,6 +956,19 @@
     if (menu) menu.open = false;
   }, true);
 
+  let hardwareKeys = false;                      // a hardware keyboard has typed in this page (M18, the keydown below)
+  // The ⋯ menu opened from the keyboard: focus goes to its first item (a click leaves focus where it is)
+  document.addEventListener("toggle", (ev) => {
+    const d = ev.target;
+    if (!d.matches || !d.matches("details.chatmenu") || !d.open || !d._byKey) return;
+    delete d._byKey;
+    const first = d.querySelector(".menubody a, .menubody button:not(:disabled)");
+    if (first) first.focus();
+  }, true);
+  document.addEventListener("keydown", (ev) => {
+    const s = (ev.key === "Enter" || ev.key === " ") && ev.target.closest && ev.target.closest("details.chatmenu > summary");
+    if (s) s.parentElement._byKey = true;
+  }, true);
   function sendComposer(form, queued) {
     const queue = form.querySelector("input[name=queue]");
     if (queue) queue.value = queued ? "1" : "";
@@ -977,13 +992,19 @@
     }
     const form = ev.target.closest && ev.target.closest("form[data-files]");
     const inBox = form && ev.target.tagName === "TEXTAREA";
-    // Typing on a touch device with no on-screen keyboard: a hardware one (an iPad's), whose shortcuts are then true
-    if (inBox && touchOnly() && keyboardUp() === false && ev.key && ev.key.length === 1) document.body.classList.add("hwkbd");
+    // A hardware keyboard proves itself: a key with a physical code (KeyA, Enter), or a modifier or arrow an on-screen
+    // keyboard has not. A floating iPad keyboard leaves the page its height, so "no keyboard up" alone took it for a
+    // hardware one and Return sent (review C6/M18). Until proven, Return on a touch device is a new line.
+    if (inBox && touchOnly() && keyboardUp() === false && ((ev.code && ev.code !== "Unidentified")
+        || ["Shift", "Meta", "Control", "Alt", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Escape"].includes(ev.key))) {
+      hardwareKeys = true;
+      document.body.classList.add("hwkbd");
+    }
     // On a touch device Return sends only while no on-screen keyboard is up (a hardware keyboard is typing, as on an
     // iPad's), and then when its line break arrives (beforeinput below): iOS applies the Return's autocorrection after
     // this keydown, so sending here would send the uncorrected word. With the on-screen keyboard it stays a new line.
     if (inBox) form._returnSends = ev.key === "Enter" && !ev.isComposing && touchOnly() && !ev.metaKey && !ev.ctrlKey
-      && !ev.altKey && !ev.shiftKey && keyboardUp() === false;
+      && !ev.altKey && !ev.shiftKey && keyboardUp() === false && hardwareKeys;
     // Cmd/Ctrl+Enter queues on hardware keyboards, touch devices too.
     if (inBox && ev.key === "Enter" && !ev.isComposing && (!touchOnly() || ev.metaKey || ev.ctrlKey)) {
       ev.preventDefault();
@@ -1001,7 +1022,13 @@
     // Shortcuts on a chat: / writes, Esc closes a menu, Alt-↑ / Alt-↓ go to the chat above or below in the rail.
     const typing = ev.target.closest && ev.target.closest("input, textarea, select, [contenteditable]");
     if (ev.key === "Escape") {
-      document.querySelectorAll("details.menu[open]").forEach(d => { d.open = false; delete d._hover; });
+      document.querySelectorAll("details.menu[open]").forEach(d => {
+        const inside = d.contains && d.contains(document.activeElement);
+        d.open = false;
+        delete d._hover;
+        const summary = inside && d.querySelector("summary");   // focus back where it was opened (review C8/M13)
+        if (summary) summary.focus();
+      });
       return;
     }
     if (ev.key === "/" && !typing && composer()) {
@@ -1281,6 +1308,8 @@
       box.value = text;
       box.dispatchEvent(new Event("input", { bubbles: true }));   // a draft, and a new message id
     }
+    const of = form.querySelector("input[name=retry_of]");
+    if (of) of.value = b.dataset.retryOf || "";   // in place: the failed try folds into one line (iPad review P9)
     sendComposer(form, false);
   });
 
@@ -2062,7 +2091,7 @@
     const box = document.querySelector("form.composer textarea");
     if (box) grow(box);
     document.body.classList.toggle("kbd", keyboardUp());
-    if (keyboardUp()) document.body.classList.toggle("hwkbd", false);   // the on-screen keyboard now: its shortcuts are not true
+    if (keyboardUp()) { document.body.classList.toggle("hwkbd", false); hardwareKeys = false; }   // the on-screen keyboard now: its shortcuts are not true
     // iOS scrolls the whole page to show a focused field; the page is already the visible height: put it back
     if (document.body.classList.contains("chatapp") && window.scrollY) window.scrollTo(0, 0);
   }

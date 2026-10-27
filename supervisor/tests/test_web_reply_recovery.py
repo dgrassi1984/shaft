@@ -212,14 +212,15 @@ class RetryJsTest(unittest.TestCase):
         handler = next((h for h in handlers if '[data-retry]' in h), "")
         script = r'''
 let listener = () => {}, inputs = 0, prompts = 0, allow = false, sends = 0, chips = 0;
-const form = {};
+const retryOf = { value: "" };
+const form = { querySelector: q => q === "input[name=retry_of]" ? retryOf : null };
 const quoteChip = () => { chips += 1; };
 const box = { value: "draft", focus() {}, setSelectionRange() {}, dispatchEvent() { inputs++; }, closest: () => form };
 const document = { addEventListener: (_, f) => listener = f, querySelector: () => box };
 const confirm = () => { prompts++; return allow; };
 const sendComposer = (f, queued) => { if (f !== form || queued) throw new Error("wrong send"); sends++; };
 //HANDLER//
-const button = { dataset: { retry: "original request" } };
+const button = { dataset: { retry: "original request", retryOf: "3" } };
 const event = { target: { closest: () => button } };
 listener(event);
 const kept = box.value, sentFirst = sends;
@@ -233,7 +234,7 @@ const quoteKept = form._quote, sendsAfterRefusal = sends;
 allow = true;
 listener(event);
 console.log(JSON.stringify({ kept, sentFirst, value: box.value, inputs, prompts, sends, disabled: !!button.disabled,
-                             quoteKept, sendsAfterRefusal, quote: form._quote, chips }));
+                             quoteKept, sendsAfterRefusal, quote: form._quote, chips, retryOf: retryOf.value }));
 '''
         result = subprocess.run([shutil.which("node"), "-e", script.replace("//HANDLER//", handler)],
                                 capture_output=True, text=True, timeout=10)
@@ -242,4 +243,4 @@ console.log(JSON.stringify({ kept, sentFirst, value: box.value, inputs, prompts,
         self.assertEqual(json.loads(result.stdout), {"kept": "draft", "sentFirst": 0, "value": "original request",
                                                      "inputs": 1, "prompts": 4, "sends": 3, "disabled": False,
                                                      "quoteKept": "> another message", "sendsAfterRefusal": 2,
-                                                     "quote": "", "chips": 1})
+                                                     "quote": "", "chips": 1, "retryOf": "3"})
