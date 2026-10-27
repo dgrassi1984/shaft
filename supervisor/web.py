@@ -592,6 +592,12 @@ def _get(req: Request, csrf: str) -> Response | None:
         last = _last_chat(req)
         to = f"/i/{last}/chat" if last in names else f"/i/{names[0]}/chat" if names else "/overview"
         return Response(302, b"", {"Location": to})
+    if path == "/fragment/calendar-proposals":
+        from . import calendar_proposals
+        return _html(200, v.calendar_proposals_body(calendar_proposals.listing()))
+    if path == "/calendar/proposals":
+        from . import calendar_proposals
+        return _html(200, v.calendar_proposals_page(calendar_proposals.listing(), names, csrf))
     if path == "/overview":
         return _html(200, web_pages.overview_page(overview(), csrf))
     if path == "/fragment/overview":

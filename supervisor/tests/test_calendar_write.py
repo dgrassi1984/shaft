@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from unittest import mock
 
-from supervisor import broker, core, google
+from supervisor import broker, core, google, telegram, web, webpush
 from supervisor.tests import test_calendar as read
 
 
@@ -51,7 +51,7 @@ class FakeWriteCalendar(read.FakeCalendar):
         return super().__call__(req, timeout)
 
 
-class WriteTest(read.CalendarCase):
+class WriteCase(read.CalendarCase):
     def setUp(self):
         super().setUp()
         self.cal = FakeWriteCalendar()
@@ -61,6 +61,12 @@ class WriteTest(read.CalendarCase):
         saved = google.account('work')
         saved['scope'] += ' ' + google.CALENDAR_EVENTS
         google._save_account('work', saved)
+        for patch in (mock.patch.object(telegram, 'tokens', return_value={}),
+                      mock.patch.object(telegram, 'paired_id', return_value=None),
+                      mock.patch.object(telegram, 'send'), mock.patch.object(webpush, 'notify'),
+                      mock.patch.object(web, 'url', return_value='https://shaft.test')):
+            patch.start()
+            self.addCleanup(patch.stop)
         self.grant_write()
         now = datetime.now().astimezone() + timedelta(days=1)
         self.args = {'calendar': 'work/Operator', 'title': 'Focus', 'start': now.isoformat(),
@@ -82,6 +88,8 @@ class WriteTest(read.CalendarCase):
         self.assertEqual(len(self.cal.writes), before)
         return error
 
+
+class WriteTest(WriteCase):
     def test_create_move_and_record(self):
         b = self.broker()
         self.ok(b, 'calendar_create', {**self.args, 'location': 'Office', 'description': 'Quiet'})
@@ -109,7 +117,8 @@ class WriteTest(read.CalendarCase):
     def test_read_grant_and_revoke_mid_run(self):
         b = self.broker()
         core.set_calendar_grants('wren', [{'account': 'work', 'calendar': read.PRIMARY, 'name': 'Operator'}])
-        for tool, args in [('calendar_create', self.args), ('calendar_move', self.move_args())]:
+        for tool, args in [('calendar_create', self.args), ('calendar_move', self.move_args()),
+                           ('calendar_respond', {'id': self.handle(read.PRIMARY, 'external1'), 'response': 'yes'})]:
             self.assertIn('no calendar granted for writing', self.refused(b, tool, args))
         self.assertEqual(self.cal.requests, [])
         self.assertFalse(set(broker.CALENDAR_WRITE_TOOLS) & {s['function']['name'] for s in b.tool_specs()})
@@ -118,7 +127,7 @@ class WriteTest(read.CalendarCase):
         self.assertIn('[writable]', b.calendar_env())
         core.set_calendar_grants('wren', [])
         self.deny(contains='no calendar granted')
-        self.assertEqual(len(self.rows()), 3)
+        self.assertEqual(len(self.rows()), 4)
 
     def test_missing_write_scope_names_exact_login_without_google(self):
         saved = google.account('work')
@@ -145,21 +154,23 @@ class WriteTest(read.CalendarCase):
             self.deny(args={**self.args, **changes})
         self.assertEqual(self.cal.requests, [])
 
-    def test_adding_attendees_refused_without_google(self):
+    def test_adding_attendees_proposes_without_google_write(self):
         for attendees in [[{'email': 'other@example.com'}], [{'email': read.ME}]]:
-            self.deny(args={**self.args, 'attendees': attendees}, contains='approval; proposals are not yet available')
-            self.deny('calendar_move', self.move_args(attendees=attendees), 'approval; proposals are not yet available')
-        self.assertEqual(self.cal.requests, [])
+            for tool, args in [('calendar_create', {**self.args, 'attendees': attendees}),
+                               ('calendar_move', self.move_args(attendees=attendees))]:
+                self.assertIn('proposed (id ', self.ok(self.broker(), tool, args))
+        self.assertEqual(self.cal.writes, [])
 
-    def test_other_attendee_and_invitation_and_omitted_attendees_refused(self):
-        self.deny('calendar_move', self.move_args('external1'), 'approval; proposals are not yet available')
+    def test_other_attendee_invitation_and_omitted_attendees_propose(self):
+        self.assertIn('proposed', self.ok(self.broker(), 'calendar_move', self.move_args('external1')))
         own = self.cal.events[read.PRIMARY]['own1']
         for fields in [{'attendees': [{'email': 'other@example.com', 'self': True}]},
                        {'attendees': [{'email': read.ME}, {'email': 'other@example.com'}]},
                        {'attendeesOmitted': True}]:
             self.cal.events[read.PRIMARY]['own1'] = {**own, **fields}
-            self.deny('calendar_move', self.move_args(), 'approval; proposals are not yet available')
-        self.assertIn('approval', self.rows()[0]['answer'])
+            self.assertIn('proposed', self.ok(self.broker(), 'calendar_move', self.move_args()))
+        self.assertEqual(self.cal.writes, [])
+        self.assertIn('proposal', self.rows()[0]['answer'])
         self.assertIn('[written by Mallory', self.rows()[0]['written_by'])
 
     def test_operator_address_casefold_and_calendar_timezone(self):
@@ -226,7 +237,7 @@ class WriteTest(read.CalendarCase):
         self.assertIn('switched it off', self.refused(b, 'calendar_create', self.args))
         self.assertEqual(self.cal.requests, [])
         self.assertEqual(self.rows()[0]['outcome'], 'refused')
-        self.assertNotIn('calendar_respond', broker.SPECS)
+        self.assertIn('calendar_respond', broker.SPECS)
 
     def test_missing_event_version_and_wrong_calendar_event_never_written(self):
         del self.cal.events[read.PRIMARY]['own1']['etag']

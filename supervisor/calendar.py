@@ -346,7 +346,7 @@ def render_event(hdl: str, cal_label: str, ev: dict, master: dict | None, operat
 
 
 # -- direct writes (docs/plans/PLAN-calendar-write.md M1): never invite, notify, or patch a series -----------------
-APPROVAL_REQUIRED = "this change needs the operator's approval; proposals are not yet available (M2)"
+APPROVAL_REQUIRED = "this change needs the operator's approval; submit a proposal (M2)"
 
 
 def write_times(start: str, end: str, timezone: str, now: datetime, *, check_instants: bool = True) -> dict:
@@ -383,7 +383,7 @@ def write_times(start: str, end: str, timezone: str, now: datetime, *, check_ins
 
 def direct_only(ev: dict, address: str) -> None:
     """Google's attendee `self` flag refers to the calendar, so compare the account's address. An omitted
-    attendee list is incomplete, not evidence that nobody else would be told. Invitations wait for M2 too."""
+    attendee list is incomplete, not evidence that nobody else would be told. Invitations require approval too."""
     if ev.get("attendeesOmitted") or any((a.get("email") or "").casefold() != address.casefold()
                                           for a in ev.get("attendees") or []):
         raise PermissionError(APPROVAL_REQUIRED)

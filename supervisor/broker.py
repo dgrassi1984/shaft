@@ -464,16 +464,21 @@ for _tool in CALENDAR_WRITE_TOOLS:
         "Give ISO dates (exclusive end) or date-times, with an offset or an IANA timezone; otherwise the calendar's "
         "zone is used. Only events with no attendees other than the operator are written directly, sendUpdates=none. "
         "Adding attendees, invitations, or changes that tell someone else need the operator's approval and are "
-        "refused for now; M2 will turn them into proposals. At most 20 write attempts per day by default, and "
+        "proposed for approval. You will be told the outcome in your inbox. At most 20 attempts per day, and "
         "30 calendar calls per run including reads.",
         {("calendar" if _tool == "calendar_create" else "id"): {"type": "string", "description":
             "write-granted account/name" if _tool == "calendar_create" else "event handle from calendar_events"},
          "start": {"type": "string"}, "end": {"type": "string"}, "timezone": {"type": "string"},
          "title": {"type": "string"}, "location": {"type": "string"}, "description": {"type": "string"},
          "attendees": {"type": "array", "items": {"type": "object"},
-                       "description": "adding attendees needs approval, not yet available"}},
+                       "description": "adding attendees creates an approval proposal"}},
         ["calendar" if _tool == "calendar_create" else "id", "start", "end"] +
         (["title"] if _tool == "calendar_create" else []))
+CALENDAR_WRITE_TOOLS += ("calendar_respond",)
+SPECS["calendar_respond"] = _spec(
+    "calendar_respond", "Answer yes/no/maybe to an invitation on a write-granted calendar by event handle. "
+    "Always proposes for operator approval; the outcome arrives in your inbox.",
+    {"id": {"type": "string"}, "response": {"type": "string", "enum": ["yes", "no", "maybe"]}})
 CALENDAR_WRITES_PER_DAY, _ = knob(
     "SHAFT_CALENDAR_WRITES_PER_DAY", "20", whole, "calendar write attempts per instance per day (0: no writes)",
     group="Runs and conversations", services=("runs", "api"))
@@ -1941,8 +1946,6 @@ class Broker:
                     g for g in grants if target == f"{g['account']}/{g['name']}"]
         if len(hits) != 1:
             raise PermissionError("calendar/event is not granted for writing to you; use a granted calendar or event handle")
-        if attendees:
-            raise PermissionError(gcal.APPROVAL_REQUIRED)
         # Validate syntax before token refresh. Instant comparisons for naive times without a named zone must
         # wait for the calendar zone: treating those times as UTC would wrongly refuse some valid intervals.
         now = datetime.now().astimezone()
@@ -1957,7 +1960,6 @@ class Broker:
         if move and not gcal.by_operator(original, acct.address):
             self._calendar_attempt["written_by"] = gcal.written_by(original, self._operator())
         if move:
-            gcal.direct_only(original, acct.address)
             if original.get("recurrence"):
                 raise PermissionError("move one recurring occurrence from calendar_events, never the series")
             if not original.get("etag"):
@@ -1972,6 +1974,31 @@ class Broker:
                 body[key] = value
         self._calendar_attempt["after"] = {"start": body["start"], "end": body["end"],
                                            "title": body.get("summary", original.get("summary"))}
+        if attendees:
+            if not isinstance(attendees, list) or any(not isinstance(a, dict) or not isinstance(a.get("email"), str)
+                                                      or not a["email"].strip() for a in attendees):
+                raise ValueError("attendees must be objects with an email address")
+            # Added to the event's list, never in place of it (Google's PATCH replaces the whole array: "adding" one
+            # person dropped every invitee), and only the address: no field of the instance's choosing reaches Google.
+            existing = [dict(a) for a in original.get("attendees") or []] if move else []
+            if move and original.get("attendeesOmitted"):
+                raise PermissionError("Google cut this event's attendee list; adding attendees would drop the rest")
+            known = {(a.get("email") or "").casefold() for a in existing}
+            added = []
+            for a in attendees:
+                email = a["email"].strip()
+                if email.casefold() not in known:
+                    known.add(email.casefold())
+                    added.append({"email": email})
+            body["attendees"] = existing + added
+        proposal = bool(attendees)
+        if move:
+            try:
+                gcal.direct_only(original, acct.address)
+            except PermissionError:
+                proposal = True
+        if proposal:
+            return self._calendar_propose(tool, target, grant, original, body, acct.address, eid if move else "")
         self._calendar_attempt["submitted"] = True
         url = f"{gcal.API}/{gcal._path(grant['calendar'], 'events', *([eid] if move else []))}"
         # If attendees changed since the read, Google must refuse the stale edit rather than bypass approval.
@@ -1980,6 +2007,69 @@ class Broker:
         self._calendar_attempt["answer"] = answer
         return gcal.render_event(gcal.handle(grant["account"], grant["calendar"], answer["id"]),
                                  f"{grant['account']}/{grant['name']}", answer, None, self._operator(), acct.address)
+
+    def _calendar_propose(self, tool, target, grant, original, body, address, eid):
+        """Freeze the Google request before notifying the operator (PLAN-calendar-write M2/D2–D5).
+        Proposing consumes the daily budget; approval audit rows never consume it a second time."""
+        from . import calendar as gcal, calendar_proposals
+        people = sorted({a.get("email", "") for a in (original.get("attendees") or []) + (body.get("attendees") or [])
+                         if a.get("email") and a["email"].casefold() != address.casefold()}
+                        | ({original["organizer"]["email"]} if original.get("organizer", {}).get("email")
+                           and not gcal.by_operator(original, address) else set()))
+        title = body.get("summary", original.get("summary", "(no title)"))
+        action = {"calendar_create": "Create", "calendar_move": "Move", "calendar_respond": "Respond to"}[tool]
+        summary = f"{action}: {title}"
+        if original.get("summary") and original["summary"] != title:
+            summary += f" (was {original['summary']})"
+        if "start" in body:
+            summary += f"; {gcal.span(original)} -> {gcal.span(body)}" if original else f"; {gcal.span(body)}"
+        for key in ("location", "description"):
+            if key in body:
+                summary += f"; {key}: {body[key]}"
+        if "attendees" in body and tool != "calendar_respond":
+            summary += "; attendees: " + ", ".join(a['email'] for a in body['attendees'])
+            if original.get('attendees'):
+                summary += " (was " + ", ".join(a.get('email', '?') for a in original['attendees']) + ")"
+        if tool == "calendar_respond":
+            summary += "; response: " + next(a['responseStatus'] for a in body['attendees']
+                                             if a.get('email', '').casefold() == address.casefold())
+        if original.get("attendeesOmitted"):
+            summary += "; Google omitted attendees: notification recipients may be incomplete"
+        if original and not gcal.by_operator(original, address):
+            summary = gcal.written_by(original, self._operator()) + "\n" + summary
+        request = {"method": "PATCH" if eid else "POST",
+                   "path": gcal._path(grant['calendar'], 'events', *([eid] if eid else [])),
+                   "body": body, "etag": original.get("etag"), "sendUpdates": "all"}
+        row = calendar_proposals.create(self.name, tool, grant, target, request, summary, people, original)
+        self._calendar_attempt.update(submitted=True, proposal=row['id'], before=original or None,
+                                      after=body, answer={"proposal": row['id']})
+        if original and not gcal.by_operator(original, address):
+            self._calendar_attempt['written_by'] = gcal.written_by(original, self._operator())
+        return f"proposed (id {row['id']}): waiting for the operator's approval; you will be told in your inbox"
+
+    def _calendar_respond(self, id: str, response: str) -> str:
+        from . import calendar as gcal, google
+        statuses = {"yes": "accepted", "no": "declined", "maybe": "tentative"}
+        if response not in statuses:
+            raise ValueError("response must be yes, no or maybe")
+        alias, h, eid = (str(id).strip().split("/", 2) + ["", ""])[:3]
+        grant = next((g for g in self.calendar_grants() if g.get("write") and g['account'] == alias
+                      and gcal.HASH_RE.fullmatch(h) and gcal.cal_hash(g['calendar']) == h
+                      and gcal.EVENT_RE.fullmatch(eid)), None)
+        if grant is None:
+            raise PermissionError("calendar/event is not granted for writing to you")
+        acct = self._google_account(alias, google.CALENDAR_EVENTS)
+        original = gcal.event(acct, grant['calendar'], eid)
+        if original.get('recurrence'):
+            raise PermissionError("respond to one recurring occurrence, never the series")
+        if not original.get('etag'):
+            raise PermissionError("the event has no version for a conditional response")
+        attendees = [dict(a) for a in original.get('attendees') or []]
+        mine = [a for a in attendees if a.get('email', '').casefold() == acct.address.casefold()]
+        if len(mine) != 1 or original.get('attendeesOmitted'):
+            raise ValueError("the event must include the operator's own attendee and its full attendee list")
+        mine[0]['responseStatus'] = statuses[response]
+        return self._calendar_propose("calendar_respond", id, grant, original, {"attendees": attendees}, acct.address, eid)
 
     # -- images (docs/plans/PLAN-vision.md) ----------------------------------------------------------------------------------------
     def _image_file(self, path: str) -> tuple[str, bytes]:
