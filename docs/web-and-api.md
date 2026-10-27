@@ -89,6 +89,7 @@ and [chat design](plans/PLAN-webui-chat.md).
   visible tab (scrolled into view, not only rendered: one below the fold stays unread until you scroll to it). A
   message it sends you marks its chat unread in the rail too. Config, Journal, earlier chats, and a failed feed refresh
   do not consume a new reply. Marks are shared across tabs in the same browser.
+  A long chat shows its last 80 turns; **Show the N earlier messages** shows them all (`?all=1`, its refreshes too).
   Opening an instance's chat lands on its last message, earlier chats too, and stays there while what loads after
   the jump (the draft in the composer, the documents sheet, an image, the keyboard closing after Send) grows the feed
   or moves it — until you scroll up yourself (a wheel, a finger, the scrollbar, a key). The page
@@ -112,7 +113,9 @@ and [chat design](plans/PLAN-webui-chat.md).
   appear below the live reply with Cancel and survive a reload or closed tab. They become one next message,
   joined in order with a blank line between texts and all attachments combined. Quotes stay with their text.
   On a phone or tablet Return is a new line while the on-screen keyboard is up (use Send to send); with a hardware
-  keyboard (an iPad's), Return sends as on a computer, after its autocorrection, and Shift/Alt-Return is a new line;
+  keyboard (an iPad's, once it has proved itself: a key with a physical code, or a modifier or arrow — a floating
+  on-screen keyboard leaves the page its height and is not taken for one), Return sends as on a computer, after its
+  autocorrection, and Shift/Alt-Return is a new line;
   the shortcuts line under the field then shows (on a screen at least 600 px wide).
   **Next cycle** ([PLAN-background-messages](plans/PLAN-background-messages.md)) is not answered now: the message,
   with its files, goes to the instance's `inbox/` and it takes it up in its next scheduled cycle, as it reads any
@@ -172,8 +175,10 @@ and [chat design](plans/PLAN-webui-chat.md).
   The current chat's ended footer says **journal write-up requested**. The web UI has no completion marker.
   **Stop the reply** stops only the running reply and keeps the conversation open.
 - Failed replies explain the next action and keep the raw error under **Technical details**. Partial answers remain
-  visible and are marked **incomplete**. **Retry** sends the original message again, in one tap (a repeated tap carries
-  the same message id, so it is not sent twice). It asks before replacing a different draft. Retry is offered only for a refused connection before sending, or a
+  visible and are marked **incomplete**. **Retry** sends the original message again, in one tap, in place: the failed
+  try and its question fold into one line ("The first try failed and was sent again") and the instance no longer sees
+  them (a repeated tap carries the same message id, so it is not sent twice; a quote waiting in the composer is asked
+  about, never sent along). It asks before replacing a different draft. Retry is offered only for a refused connection before sending, or a
   known model HTTP 5xx failure with API evidence that no tools ran. Older records and uncertain outcomes link to
   Activity and Services. Interjected requests need inspection rather than a one-message retry.
 - **Documents**: a Markdown file an instance writes under its `notes/docs/` shows beside the chat, live, as it writes
@@ -290,6 +295,9 @@ next refresh or action opens the pairing page. Your chat draft stays in this bro
 - **Typing:** on a phone, Return makes a new line and Send sends; with a hardware keyboard Return sends. Fields, including the Drive editor, use at least 16 px text.
   The reply's activity, a document's overwritten-lines disclosure, and each judge model have 44 px touch targets.
   Field borders have at least 3:1 contrast against the page and panel backgrounds in both themes.
+- **Home Screen:** iPhone and iPad touch icons (152, 167, 180 px) and a launch screen per device, orientation and
+  light/dark (`/launch/<w>x<h>-<scheme>.png`, drawn on demand from an allowlist of sizes, served before pairing:
+  WebKit fetches them without cookies). **Unpair this browser** is in Settings, and in the phone's ☰ sheet.
 - **Layout:** the chat fills the screen. The sidebar icon lists the chats and pages, Documents the documents, ⋯ the
   instance's pages and actions. Every other page has a bar on a phone: **‹ Chat** (back to the chat — the installed
   app has no browser Back), its title, and the sidebar icon; an instance's pages are one strip that scrolls sideways.
