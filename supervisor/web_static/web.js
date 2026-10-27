@@ -892,6 +892,44 @@
     });
   });
 
+  // A tap on Send (or its menu) must not take focus from the text: the keyboard closing first moved the button out from
+  // under the finger, and the tap only closed the keyboard — nothing was sent (iPhone review I2, 3 of 3 in Safari).
+  // mousedown: iOS sends it after the touch, where focus would move; the click still comes. The keyboard stays up, as
+  // in Messages.
+  document.addEventListener("mousedown", (ev) => {
+    const b = ev.target.closest && ev.target.closest("form.composer button.send, form.composer .sendmenu button, "
+      + "form.composer .sendmenu > summary");
+    const box = b && b.closest("form.composer").querySelector("textarea");
+    if (b && box && document.activeElement === box) ev.preventDefault();
+  });
+  // Long-press the send arrow: the other ways to send (the ⌃ beside it opens the same menu). Pointer events, and the
+  // finger must still be down when the time is up: with touch events a plain tap opened the menu after sending.
+  let sendPress = null;
+  document.addEventListener("pointerdown", (ev) => {
+    const b = ev.pointerType === "touch" && ev.target.closest && ev.target.closest("form.composer button.send");
+    if (!b) return;
+    clearTimeout(sendPress && sendPress.timer);
+    sendPress = { id: ev.pointerId, timer: setTimeout(() => {
+      if (!sendPress || sendPress.id !== ev.pointerId) return;
+      sendPress = null;
+      const menu = b.closest("form.composer").querySelector(".sendmenu");
+      if (menu) { menu.open = true; b._pressed = true; }
+    }, 500) };
+  });
+  for (const type of ["pointerup", "pointercancel", "pointerleave"]) {
+    document.addEventListener(type, (ev) => {
+      if (sendPress && sendPress.id === ev.pointerId) { clearTimeout(sendPress.timer); sendPress = null; }
+    }, true);
+  }
+  document.addEventListener("click", (ev) => {
+    const b = ev.target.closest && ev.target.closest("form.composer button.send");
+    if (b && b._pressed) { ev.preventDefault(); delete b._pressed; }   // the long press opened the menu: no send
+  }, true);
+  document.addEventListener("submit", (ev) => {        // chosen from the menu: it closes
+    const menu = ev.target.querySelector && ev.target.querySelector(".sendmenu[open]");
+    if (menu) menu.open = false;
+  }, true);
+
   function sendComposer(form, queued) {
     const queue = form.querySelector("input[name=queue]");
     if (queue) queue.value = queued ? "1" : "";
@@ -915,6 +953,8 @@
     }
     const form = ev.target.closest && ev.target.closest("form[data-files]");
     const inBox = form && ev.target.tagName === "TEXTAREA";
+    // Typing on a touch device with no on-screen keyboard: a hardware one (an iPad's), whose shortcuts are then true
+    if (inBox && touchOnly() && keyboardUp() === false && ev.key && ev.key.length === 1) document.body.classList.add("hwkbd");
     // On a touch device Return sends only while no on-screen keyboard is up (a hardware keyboard is typing, as on an
     // iPad's), and then when its line break arrives (beforeinput below): iOS applies the Return's autocorrection after
     // this keydown, so sending here would send the uncorrected word. With the on-screen keyboard it stays a new line.
@@ -1035,6 +1075,15 @@
     const b = document.querySelector('form[data-files] button[data-queue="1"]');
     if (b && feed.querySelector) b.hidden = !feed.querySelector('[data-k="live"]');
   }
+  // A scroll the reader made: a wheel, a finger, a scrollbar, a key. Only those stop the feed following: the keyboard
+  // closing after Send also moves the box up, and your own message then waited under "New below" (iPhone review I8).
+  let readerScrolled = 0;
+  for (const type of ["wheel", "touchmove", "pointerdown", "keydown"]) {
+    document.addEventListener(type, (ev) => {
+      if (type === "keydown" && !["ArrowUp", "PageUp", "Home", " "].includes(ev.key)) return;
+      if (ev.target && ev.target.closest && ev.target.closest("[data-scroll]")) readerScrolled = Date.now();
+    }, { capture: true, passive: true });
+  }
   document.addEventListener("scroll", (ev) => {
     const box = ev.target;
     if (box.matches && box.matches("[data-scroll]")) {
@@ -1044,7 +1093,7 @@
       const feed = box.querySelector("[data-follow]");
       const gap = box.scrollHeight - box.clientHeight - box.scrollTop;
       if (feed && gap <= 1) feed._atBottom = true;
-      else if (feed && !(box.scrollTop >= feed._top)) feed._atBottom = false;
+      else if (feed && !(box.scrollTop >= feed._top) && Date.now() - readerScrolled < 1500) feed._atBottom = false;
       else if (feed && gap <= 40) feed._atBottom = true;     // came back down to it
       if (feed) feed._top = box.scrollTop;
     }
@@ -1150,7 +1199,9 @@
     const box = document.querySelector("form.composer textarea");
     if (b && box) quoteText(b.closest("[data-raw]").dataset.raw, box);
   });
-  // Retry fills the composer with the message that failed. It does not send: sending would run the request again.
+  // Retry sends the message that failed again, in one tap. The server offers it only when the failed request cannot
+  // have run anything (classify_reply: no tools ran); Retry then Send was two taps for one intent (iPhone review I14).
+  // A draft in the composer is not replaced without asking.
   document.addEventListener("click", (ev) => {
     const b = ev.target.closest && ev.target.closest("[data-retry]");
     if (!b) return;
@@ -1163,8 +1214,131 @@
       box.value = text;
       box.dispatchEvent(new Event("input", { bubbles: true }));   // a draft, and a new message id
     }
-    box.focus();
-    box.setSelectionRange(text.length, text.length);
+    b.disabled = true;
+    sendComposer(box.closest("form"), false);
+  });
+
+  // A message's actions as a menu (PLAN-pwa-market decision 2): long-press on touch, right-click or the context-menu key
+  // on a computer, as in Messages or Slack. They are the message's own buttons (shown on hover and Tab, hidden on
+  // touch): the menu presses them. On touch, "Select text" lets the text be selected, which a long press now is not.
+  const selectIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" '
+    + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4h4M7 4v16M5 20h4M13 8h7M13 12h7M13 16h5"/></svg>';
+  function msgMenuBox() {
+    let m = document.getElementById("msgmenu");
+    if (!m) {
+      m = document.createElement("div");
+      m.id = "msgmenu";
+      m.setAttribute("role", "menu");
+      m.setAttribute("aria-label", "Message actions");
+      m.hidden = true;
+      m.addEventListener("keydown", (ev) => {
+        const items = [...m.querySelectorAll("button")];
+        const at = items.indexOf(document.activeElement);
+        if (ev.key === "Escape" || ev.key === "Tab") { ev.preventDefault(); closeMsgMenu(true); }
+        else if (ev.key === "ArrowDown" || ev.key === "ArrowUp") {
+          ev.preventDefault();
+          items[(at + (ev.key === "ArrowDown" ? 1 : -1) + items.length) % items.length].focus();
+        }
+      });
+      document.body.appendChild(m);
+    }
+    return m;
+  }
+  function closeMsgMenu(back) {
+    const m = document.getElementById("msgmenu");
+    if (!m || m.hidden) return;
+    m.hidden = true;
+    const turn = m._turn;
+    m._turn = null;
+    if (!turn) return;
+    turn.classList.remove("menuopen");
+    const first = back && turn.querySelector(".msgactions button");
+    if (first && first.getClientRects().length) first.focus({ preventScroll: true });
+  }
+  function selectText(turn) {
+    const body = turn.querySelector(".md, .wrap");
+    if (!body) return;
+    turn.classList.add("selecting");
+    const range = document.createRange();
+    range.selectNodeContents(body);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+  function openMsgMenu(turn, x, y, keyboard) {
+    const acts = [...turn.querySelectorAll(".msgactions button")];
+    if (!acts.length) return false;
+    const m = msgMenuBox();
+    m.textContent = "";
+    const items = acts.map(b => [b.dataset.copy !== undefined ? "Copy" : "Reply", b.innerHTML, () => b.click()]);
+    if (touchOnly()) items.push(["Select text", selectIcon, () => selectText(turn)]);
+    for (const [label, svg, run] of items) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.setAttribute("role", "menuitem");
+      b.innerHTML = svg;
+      b.append(document.createTextNode(label));
+      b.addEventListener("click", () => { closeMsgMenu(false); run(); });
+      m.appendChild(b);
+    }
+    closeMsgMenu(false);
+    m._turn = turn;
+    turn.classList.add("menuopen");
+    m.hidden = false;
+    if (keyboard) {
+      const r = turn.getBoundingClientRect();
+      x = r.left + 12;
+      y = Math.min(r.bottom, window.innerHeight - 8);
+    }
+    const w = m.offsetWidth, hgt = m.offsetHeight;
+    m.style.left = `${Math.max(8, Math.min(x, window.innerWidth - w - 8))}px`;
+    m.style.top = `${y + 8 + hgt <= window.innerHeight - 8 ? y + 8 : Math.max(8, y - hgt - 8)}px`;
+    if (keyboard) m.querySelector("button").focus();
+    return true;
+  }
+  const pressable = (t) => t && t.closest && t.closest(".feed .turn")
+    && !t.closest("a, button, summary, input, textarea, select, details.activity, #msgmenu");
+  let press = null;                     // pointer events, and the finger still down when the time is up
+  document.addEventListener("pointerdown", (ev) => {
+    const turn = ev.pointerType === "touch" && pressable(ev.target);
+    if (!turn || !ev.isPrimary || turn.classList.contains("selecting")) return;
+    const x = ev.clientX, y = ev.clientY, id = ev.pointerId;
+    if (press) clearTimeout(press.timer);
+    press = { x, y, id, timer: setTimeout(() => {
+      if (!press || press.id !== id) return;
+      press = null;
+      openMsgMenu(turn, x, y);
+    }, 500) };
+  });
+  document.addEventListener("pointermove", (ev) => {
+    if (press && press.id === ev.pointerId && Math.hypot(ev.clientX - press.x, ev.clientY - press.y) > 10) {
+      clearTimeout(press.timer);
+      press = null;
+    }
+  }, true);
+  for (const type of ["pointerup", "pointercancel"]) {
+    document.addEventListener(type, (ev) => {
+      if (press && press.id === ev.pointerId) { clearTimeout(press.timer); press = null; }
+    }, true);
+  }
+  document.addEventListener("contextmenu", (ev) => {
+    const turn = ev.target && ev.target.closest && ev.target.closest(".feed .turn");
+    if (!turn || ev.target.closest("a, input, textarea")) return;
+    const sel = window.getSelection();
+    if (sel && !sel.isCollapsed && turn.contains(sel.anchorNode)) return;   // the browser's own menu copies a selection
+    const keyboard = !ev.clientX && !ev.clientY;                           // the context-menu key, Shift-F10
+    if (openMsgMenu(turn, ev.clientX, ev.clientY, keyboard)) ev.preventDefault();
+  });
+  document.addEventListener("pointerdown", (ev) => {
+    const m = document.getElementById("msgmenu");
+    if (m && !m.hidden && !m.contains(ev.target)) closeMsgMenu(false);
+  }, true);
+  document.addEventListener("scroll", () => closeMsgMenu(false), true);
+  document.addEventListener("selectionchange", () => {      // Select text ends when the selection is let go
+    const sel = window.getSelection();
+    document.querySelectorAll(".feed .turn.selecting").forEach(t => {
+      if (!sel || sel.isCollapsed || !t.contains(sel.anchorNode)) t.classList.remove("selecting");
+    });
   });
 
   let quoteTimer = null;
@@ -1625,7 +1799,8 @@
     document.querySelectorAll("[data-show-docs]").forEach(b => b.setAttribute("aria-expanded", String(docsOn())));
   }
   let sheet = null;
-  const sheetOpeners = { docs: "[data-show-docs]", nav: ".chathead [data-toggle-nav]" };
+  const sheetOpeners = { docs: ["[data-show-docs]"], nav: [".chathead [data-toggle-nav]", ".pagebar [data-toggle-nav]"] };
+  const openerOf = (kind) => sheetOpeners[kind].map(s => document.querySelector(s)).find(Boolean) || null;
   function sheetFocusables(root) {
     return [...root.querySelectorAll('button, a[href], input, textarea, select, summary, [tabindex], [contenteditable]')]
       .filter(el => !el.disabled && el.tabIndex >= 0 && !el.closest("[inert]") && el.getClientRects().length);
@@ -1639,9 +1814,9 @@
     (close || sheetFocusables(sheet.panel)[0] || sheet.panel).focus();
   }
   function syncSheets(opener) {
-    const grid = document.querySelector(".chatgrid");
-    if (!grid) return;
-    const nav = document.querySelector("nav"), docs = document.getElementById("docs");
+    const grid = document.querySelector(".chatgrid");     // none on the other pages: only the rail's sheet there
+    if (!grid && !document.querySelector(".pagebar")) return;
+    const nav = document.querySelector("nav"), docs = grid ? document.getElementById("docs") : null;
     const fixed = el => el && el.getClientRects().length && getComputedStyle(el).position === "fixed";
     // Read the actual layout: Documents also becomes a sheet at the chat-area container breakpoint.
     const kind = document.body.classList.contains("navopen") && fixed(nav) ? "nav" : fixed(docs) ? "docs" : null;
@@ -1651,7 +1826,7 @@
       old.inert.forEach(el => el.removeAttribute("inert"));
       old.attrs.forEach(([key, value]) => value === null ? old.panel.removeAttribute(key) : old.panel.setAttribute(key, value));
       sheet = null;
-      const back = old.opener && old.opener.isConnected ? old.opener : document.querySelector(sheetOpeners[old.kind]);
+      const back = old.opener && old.opener.isConnected ? old.opener : openerOf(old.kind);
       if (back && back.getClientRects().length) back.focus();
       else if (old.panel.getClientRects().length) {
         const first = sheetFocusables(old.panel)[0];
@@ -1660,7 +1835,7 @@
     }
     if (kind && !sheet) {
       away();                                      // stop suppressing push as soon as the feed is covered
-      sheet = { kind, panel, opener: opener || document.querySelector(sheetOpeners[kind]), inert: [],
+      sheet = { kind, panel, opener: opener || openerOf(kind), inert: [],
         attrs: ["role", "aria-modal", "aria-label", "tabindex", "aria-owns"].map(k => [k, panel.getAttribute(k)]) };
       panel.setAttribute("role", "dialog");
       panel.setAttribute("aria-modal", "true");
@@ -1683,7 +1858,7 @@
     } else if (sheet && !sheetRoots().some(root => root.contains(document.activeElement))) {
       focusSheet();                               // a polled document replaced the focused control
     }
-    const expanded = grid.classList.contains("docfullscreen");
+    const expanded = !!grid && grid.classList.contains("docfullscreen");
     if (docs) docs.querySelectorAll("[data-fullscreen-doc]").forEach(button => {
       button.title = expanded ? "Exit full screen" : "Full screen";   // the label stays: aria-pressed says which
       button.setAttribute("aria-pressed", String(expanded));
@@ -1796,6 +1971,9 @@
   function fitViewport() {
     const vv = window.visualViewport;
     if (!vv) return;
+    // Pinched in to read: the visible part is smaller because it is magnified, not because of a keyboard. Resizing the
+    // app to it shrank the layout under the reader's fingers and fought their panning (review C7).
+    if (vv.scale > 1.01) return;
     const root = document.documentElement.style;
     root.setProperty("--vvh", `${Math.round(vv.height)}px`);
     // What the keyboard leaves visible, for the sheets fixed over the page (the documents, a comment): their bottom —
@@ -1817,6 +1995,15 @@
     window.visualViewport.addEventListener("resize", fitViewport);
     window.visualViewport.addEventListener("scroll", fitViewport);
   }
+  // iOS scrolls the page to show a focused field after the last visualViewport event: the whole chat went off screen,
+  // the header and the feed above it and only the buttons left (iPhone review I1). The chat page never scrolls itself.
+  window.addEventListener("scroll", () => {
+    const vv = window.visualViewport;
+    if (document.body.classList.contains("chatapp") && window.scrollY && !(vv && vv.scale > 1.01)) window.scrollTo(0, 0);
+  }, { passive: true });
+  document.addEventListener("focusin", (ev) => {
+    if (ev.target.matches && ev.target.matches("form.composer textarea")) setTimeout(fitViewport, 350);
+  });
 
   function start() {
     region("toast", "status");
@@ -1841,6 +2028,11 @@
         .addEventListener("change", () => syncSheets());
       const observer = new ResizeObserver(() => syncSheets());
       observer.observe(grid.parentElement);        // main is the chat-area query container
+    } else if (document.querySelector(".pagebar")) {   // another page: its rail is a sheet on a phone
+      window.matchMedia("(max-width: 720px), (pointer: coarse) and (max-height: 520px)")
+        .addEventListener("change", () => syncSheets());
+      const on = document.querySelector(".tabs a.on");    // the strip of an instance's pages shows the one open
+      if (on && on.scrollIntoView) on.scrollIntoView({ block: "nearest", inline: "center" });
     }
     fitViewport();
     if ("serviceWorker" in navigator) {             // the app's shell: offline page and cached static files

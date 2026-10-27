@@ -245,16 +245,22 @@ await p.type('now');sending=p.send();await Promise.resolve();assert.equal(p.payl
         from supervisor.web_views import chat_page
         from html.parser import HTMLParser
         class Buttons(HTMLParser):
+            # Its name: aria-label (the send arrow is an icon), else its text without the explaining line under it
             def __init__(self):
-                super().__init__(); self.labels = []; self.current = None
+                super().__init__(); self.labels = []; self.current = None; self.inner = 0
             def handle_starttag(self, tag, attrs):
                 attrs = dict(attrs)
                 if tag == 'button' and 'data-queue' in attrs:
-                    self.current = [attrs['data-queue'], '', 'hidden' in attrs]
+                    self.current = [attrs['data-queue'], attrs.get('aria-label') or '', 'hidden' in attrs]
+                    self.named = bool(attrs.get('aria-label'))
+                elif self.current is not None and tag == 'span':
+                    self.inner += 1
             def handle_data(self, data):
-                if self.current is not None: self.current[1] += data
+                if self.current is not None and not self.inner and not self.named: self.current[1] += data
             def handle_endtag(self, tag):
-                if tag == 'button' and self.current is not None:
+                if tag == 'span' and self.inner:
+                    self.inner -= 1
+                elif tag == 'button' and self.current is not None:
                     self.labels.append(self.current); self.current = None
         for state, queue_hidden in ((None, True), ('idle', True), ('replying', False)):
             buttons = Buttons()

@@ -82,11 +82,17 @@ box.clientHeight -= 100; scrolled(); resized();
 assert.equal(box.scrollTop, end(), "the box got shorter after the jump: still at the last message");
 box.scrollHeight += 400; resized();
 assert.equal(box.scrollTop, end(), "content added after the jump: still at the last message");
+// I8 (iPhone review 2026-10-27): the keyboard closing after Send moves the box up with no reader gesture; the feed
+// kept following only if nobody scrolled — your own message waited under "New below". Not the reader: still followed.
+box.scrollTop = end() - 300; scrolled();
+box.scrollHeight += 400; resized();
+assert.equal(box.scrollTop, end(), "moved up by a layout change, not the reader: still at the last message");
 // ... unless the reader scrolled up: then it stays where they left it.
-box.scrollTop = end() - 20; scrolled();            // up a little (review, Codex 2026-10-26): within 40 px, still reading
+const read = () => { for (const f of handlers.wheel || []) f({ target: { closest: () => box } }); };
+read(); box.scrollTop = end() - 20; scrolled();    // up a little (review, Codex 2026-10-26): within 40 px, still reading
 box.scrollHeight += 400; resized();
 assert.equal(box.scrollTop, end() - 400 - 20, "scrolled up a little: not pulled back down");
-box.scrollTop = 20; scrolled();
+read(); box.scrollTop = 20; scrolled();
 box.scrollHeight += 400; resized();
 assert.equal(box.scrollTop, 20, "scrolled up: not pulled back down");
 '''

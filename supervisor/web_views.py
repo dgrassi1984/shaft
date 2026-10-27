@@ -86,7 +86,15 @@ def _sort_bar(sort: str, folder: str, chat_id: str = "") -> Html:
     return h('<div class="docsort" role="group" aria-label="Sort the documents">{h}</div>', h=join(heads))
 
 
-def frame(title: str, body: Html, names: list[str], csrf: str, current: str = "") -> Html:
+def frame(title: str, body: Html, names: list[str], csrf: str, current: str = "", bar: bool = True) -> Html:
+    """A page with the rail. On a phone the rail is a sheet behind ☰ and the page has a bar: ‹ Chat, its title, ☰ —
+    the installed app has no browser Back, and the rail filled half the screen above every page (iPhone review I5)."""
+    if bar:
+        back = f"/i/{q(current[2:])}/chat" if current.startswith("i:") else "/"
+        body = join([h('<div class="pagebar"><a class="iconbtn back" href="{b}" aria-label="Back to the chat">{bi}'
+                       '<span>Chat</span></a><b class="pbtitle">{t}</b><button type="button" class="navbtn iconbtn" '
+                       'data-toggle-nav aria-label="Chats and pages" aria-expanded="false">{si}</button></div>',
+                       b=back, bi=icon("back"), t=title, si=icon("sidebar")), body])
     return page(title, body, nav(names, current), csrf)
 
 
@@ -132,7 +140,7 @@ def files_page(name: str, parts: tuple, entries: list[dict], total: int, page_nu
 
 def chat_frame(name: str, head: Html, body: Html, names: list[str], csrf: str, header_url: str) -> Html:
     head = h('<div data-poll="{u}" data-every="1500">{head}</div>', u=header_url, head=head)
-    return frame(f"{name} · chat", join([head, body]), names, csrf, current=f"i:{name}")
+    return frame(f"{name} · chat", join([head, body]), names, csrf, current=f"i:{name}", bar=False)
 
 
 def earlier_chats(name: str, past: list[dict]) -> Html:
@@ -188,7 +196,7 @@ def chat_header(name: str, live: dict, chat: dict | None, past: list[dict], read
            if chat and not read_only else Html(""))
     return h('<header class="chathead"><button type="button" class="navbtn iconbtn" data-toggle-nav '
              'aria-label="Chats and pages" aria-expanded="false" data-focus="nav">{side}</button>'
-             '<div class="titleblock"><h1>{name}</h1><div class="sub">{sub}<span class="dim facts">{facts}</span>'
+             '<div class="titleblock"><h1>{name}</h1><div class="sub">{sub}<span class="dim facts">{brief}</span>'
              '</div></div><div class="headtools">'
              '<button type="button" class="iconbtn docsbtn" data-show-docs title="Documents (notes/docs/)" '
              'aria-label="Documents" data-focus="docs">{docs}</button>{new}'
@@ -204,6 +212,7 @@ def chat_header(name: str, live: dict, chat: dict | None, past: list[dict], read
              'title="Clear the app cache and load the current version">Reload / update</button></div>'
              '</div></details></div></header>',
              name=name, sub=sub, facts=" · ".join(f for f in facts if f), pages=pages, buttons=buttons, new=new,
+             brief=" · ".join(f for f in [facts[0], *facts[2:]] if f),   # the state is already beside it
              earlier=h('<div class="earlier">{e}</div>', e=earlier), side=icon("sidebar"), docs=icon("docs"),
              more=icon("more"), hist=icon("history", 16))
 
@@ -756,15 +765,23 @@ def _chat_attachments(cid: str, k: int, atts: list[dict]) -> Html:
     return h('<div class="atts">{o}</div>', o=join(out)) if out else Html("")
 
 
-def _activity(lines_: list[str], key: str, open_: bool = False, item: str = "", ended: bool = False) -> Html:
+def _activity(lines_: list[str], key: str, open_: bool = False, item: str = "", ended: bool = False,
+              now: bool = False) -> Html:
     """What it did during a reply, collapsible; `key` keeps it open or shut across the feed's refreshes. `item`: its
     data-k, when it is an item of a keyed poll itself (live_activity): unkeyed, morph replaced it whole each second
-    and its log jumped back to the top."""
+    and its log jumped back to the top. `now`: the reply is running, and the one line says what it is doing now."""
     if not lines_:
         return Html("")
-    return h('<details class="activity"{i}{e} data-key="{k}"{o}><summary>what it did ({n})</summary><div data-scroll-key="{k}">{l}</div></details>',
-             i=h(' data-k="{i}"', i=item) if item else "", e=Html(" data-ended") if ended else "", k=key, o=Html(" open") if open_ else "", n=len(lines_),
-             l=join(h("<p>{x}</p>", x=x) for x in lines_))
+    label = (h('<span class="working">{x}</span> <span class="dim">· {n} steps</span>', x=_one_line(lines_[-1]), n=len(lines_))
+             if now else h("what it did ({n})", n=len(lines_)))
+    return h('<details class="activity"{i}{e} data-key="{k}"{o}><summary>{label}</summary><div data-scroll-key="{k}">{l}</div></details>',
+             i=h(' data-k="{i}"', i=item) if item else "", e=Html(" data-ended") if ended else "", k=key, o=Html(" open") if open_ else "",
+             label=label, l=join(h("<p>{x}</p>", x=x) for x in lines_))
+
+
+def _one_line(text: str, limit: int = 90) -> str:
+    line = " ".join(str(text).split())
+    return line[:limit - 1] + "…" if len(line) > limit else line
 
 
 def _my_text(text: str) -> Html:
@@ -1090,7 +1107,7 @@ def _reply_failure(name: str, turn: dict, archived: bool) -> Html:
     why = {"connection": "The connection to the instance failed.",
            "service": "The service could not finish the reply.",
            "model": "The model could not finish the reply."}.get(kind, "The reply failed.")
-    action = ("No external actions ran. Press Retry, then Send, to try the message again." if offer else
+    action = ("No external actions ran: Retry sends it again." if offer else
               "Actions may already have run. Check Activity and Services before sending again.")
     recovery = (h('<button type="button" class="small" data-retry="{text}">Retry</button>', text=turn["retry_text"])
                 if offer else h('<a href="/i/{n}/activity">Activity</a> · <a href="/services">Services</a>', n=q(name)))
@@ -1162,7 +1179,16 @@ def live_activity(chat: dict | None) -> Html:
     if not chat:
         return Html("")
     if chat.get("state") == "replying":
-        return _activity((chat.get("reply") or {}).get("activity", []), "live", open_=True, item="act")
+        # The answer as it streams in (the server saves it as it comes: web_chat._run). It showed only at the end, behind
+        # "the answer appears when it is ready" (reviews C11, I9). Not a live region: VoiceOver would read the whole
+        # reply again at every refresh; the finished turn is announced once (web.js morph).
+        reply = chat.get("reply") or {}
+        answer = reply.get("answer") or ""
+        steps = _activity(reply.get("activity", []), "live", item="act", now=True)
+        if not answer.strip():
+            return join([steps, Html('<p class="typing" data-k="wait" aria-label="working"><span></span><span></span>'
+                                     '<span></span></p>')])
+        return join([steps, h('<div class="streaming" data-k="ans">{a}</div>', a=markdown(answer))])   # markdown: its .md
     last = next((t for t in reversed(chat.get("turns") or []) if t["role"] == "assistant"), None)
     if not last:
         return Html("")
@@ -1175,7 +1201,8 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
     from .web_actions import button, post_attrs
     if not chat:
         return join([*_sent_cards(name, sent, archived),
-                     h('<p class="dim" data-k="empty">No chat open with {n}. Write below to start one.</p>', n=name)])
+                     h('<div class="emptychat" data-k="empty"><p class="big">Chat with {n}</p><p class="dim">No chat open '
+                       'with {n}. Write below to start one; earlier chats are in ⋯.</p></div>', n=name)])
     items = []
     last_answer = max((k for k, t in enumerate(chat["turns"]) if t["role"] != "user"), default=-1)
     for k, t in enumerate(chat["turns"]):
@@ -1256,9 +1283,8 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
                   'data-now="1"></div>', n=q(name)) if not archived else _activity(r.get("activity", []), "live", open_=True))
         feed.append(h('<div class="turn it live" data-k="live"><div class="who">{n} <span class="dim">replying since {s}'
                       '<span class="elapsed" data-since="{iso}"></span></span></div>'
-                      '{act}{partial}<div class="actions">{stop}</div></div>', n=name, s=_turn_time(r.get("started", "")),
+                      '{act}<div class="actions">{stop}</div></div>', n=name, s=_turn_time(r.get("started", "")),
                       iso=r.get("started", ""), act=live,
-                      partial=h('<p class="dim">the answer appears when it is ready</p>'),
                       stop=button("chat-stop", "Stop the reply",
                                   "stop this reply? Only the reply stops. The conversation stays open.",
                                   {"cid": chat["id"]}, cls="small")))

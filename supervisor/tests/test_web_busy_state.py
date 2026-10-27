@@ -19,31 +19,33 @@ PHONE = "(max-width: 720px), (pointer: coarse) and (max-height: 520px)"
 class BusyStateHeaderTest(unittest.TestCase):
     def test_issue_60_busy_header_renders_state_icon_accessible_name_and_sentence_without_warn(self):
         """Reverting #60 brings back the standing p.warn busy paragraph and removes the state icon from .chathead."""
-        expected_icons = [
-            ("in a cycle", "⏳"),
-            ("working", "⏳"),
-            ("sleeping", "💤"),
-            ("paused by you", "⏸"),
-            ("in a conversation (waiting for you)", "💬"),
-            ("reflecting", "•"),
-            ("talking", "•"),
-            ("answering (API)", "•"),
-            ("writing up a conversation", "•"),
-            ("being updated", "•"),
+        from supervisor.web_pages import icon as svg
+        # PLAN-pwa-market: an SVG icon (the emoji read as disabled and were blobs in dark mode), the state in words beside
+        # it, under the name; its notice says in plain words what a message does now (api.py work()).
+        expected = [
+            ("in a cycle", "busy", "Your message pauses its cycle; the cycle resumes after the reply."),
+            ("working", "busy", None),
+            ("sleeping", "sleep", "Your message pauses its sleep; the sleep resumes after the reply."),
+            ("paused by you", "pause", "No cycles run until you resume thelos. It still answers your messages."),
+            ("in a conversation (waiting for you)", "waiting", "It is waiting for you in another conversation."),
+            ("reflecting", "busy", None),
+            ("talking", "busy", None),
+            ("answering (API)", "busy", None),
+            ("writing up a conversation", "busy", None),
+            ("being updated", "busy", None),
         ]
-        for state, icon in expected_icons:
+        fallback = "Your message is answered once it pauses or finishes what it is doing; the reply&#x27;s activity says which."
+        for state, name, words in expected:
             with self.subTest(state=state):
                 body = str(web_views.chat_header("thelos", {"name": "thelos", "model": "m", "state": state},
                                                  {"id": "c1", "state": "idle"}, []))
                 self.assertNotIn('<p class="warn">', body)
                 self.assertIn(
-                    f'<h1>thelos</h1><details class="menu busystate" data-key="busy-state">'
-                    f'<summary data-focus="busy" aria-label="thelos is {state}">{icon}</summary>'
-                    f'<div class="menubody">thelos is {state} now: a cycle or sleep pauses for your message, '
-                    f'anything else is waited for — the reply\'s activity says which.</div></details>',
-                    body,
-                )
-                # Outside .facts (which is hidden at <=720 px) and inside <header class="chathead">.
+                    f'<h1>thelos</h1><div class="sub"><details class="menu busystate" data-key="busy-state">'
+                    f'<summary data-focus="busy" aria-label="thelos is {state}">{svg(name, 14)}<span>{state}</span>'
+                    f'</summary><div class="menubody">', body)
+                self.assertIn(words or fallback, body)
+                self.assertNotRegex(body, "[⏳💤⏸💬🕘📄☰]")
                 facts_start = body.index('<span class="dim facts">')
                 self.assertLess(body.index('data-key="busy-state"'), facts_start)
                 self.assertLess(body.index('data-key="busy-state"'), body.index("</header>"))
@@ -58,7 +60,7 @@ class BusyStateHeaderTest(unittest.TestCase):
         self.assertTrue(declarations("details.menu.busystate > summary"))
         phone = block(PHONE)
         self.assertIn("flex: 0 1 auto;", "\n".join(declarations(".chathead h1", phone)))
-        self.assertIn("margin-left: auto;", "\n".join(declarations(".chathead .earliermenu", phone)))
+        self.assertIn("margin-left: auto;", "\n".join(declarations(".chathead .headtools")))
 
     @unittest.skipUnless(NODE, "node is not installed")
     def test_issue_60_busy_state_opens_on_hover_tap_keyboard_closes_on_escape_outside_and_survives_poll(self):

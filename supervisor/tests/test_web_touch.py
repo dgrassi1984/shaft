@@ -58,7 +58,7 @@ class TouchTest(unittest.TestCase):
         self.assertRegex(JS, r'ev\.key === "Enter" && !ev\.isComposing && \(!touchOnly\(\) \|\| ev\.metaKey \|\| ev\.ctrlKey\)')   # modifiers: #70
         composer = str(web_views.chat_page("wren", None, [], [], {}, ["wren"], "t"))
         self.assertIn('placeholder="Message wren"', composer)              # no "Enter sends" in the field itself
-        self.assertIn('<span class="dim keys">Enter sends · Alt-Enter new line · ⌘-Enter queues', composer)
+        self.assertIn('<span class="dim keys">Enter sends · Shift-Enter new line · ⌘-Enter queues', composer)
 
 
 if __name__ == "__main__":
@@ -78,10 +78,10 @@ class PhoneLayoutTest(unittest.TestCase):
 
     def test_the_rail_and_the_documents_are_sheets(self):
         phone = block(self.PHONE)
-        self.assertIn("body:has(.chatgrid) nav { display: none; }", phone)
-        self.assertRegex(phone, r"body\.navopen:has\(\.chatgrid\) nav \{ display: flex;[^}]*position: fixed; inset: 0;")
+        self.assertIn("body:has(.chatgrid) nav, .shell > nav { display: none; }", phone)    # every page (PLAN-pwa-market)
+        self.assertRegex(phone, r"body\.navopen \.shell > nav \{ display: flex;[^}]*position: fixed; inset: 0;")
         page = str(web_views.chat_page("wren", None, [], [], {}, ["wren"], "t"))
-        self.assertIn('class="navbtn" data-toggle-nav aria-label="Chats and pages"', page)
+        self.assertIn('class="navbtn iconbtn" data-toggle-nav aria-label="Chats and pages"', page)
         self.assertIn("data-close-docs", str(web_views.docs_panel("wren", [], "", None, "none", set())))
         self.assertIn('class="small closenav" data-toggle-nav aria-label="Close the chats"', page)  # no Escape key
         self.assertIn("showDocs(true, a);", JS)                             # a card opens the sheet
@@ -97,7 +97,7 @@ class PhoneLayoutTest(unittest.TestCase):
             layer = re.search(r'z-index: (\d+)', rule)
             self.assertIsNotNone(layer, selector)
             self.assertGreater(int(layer.group(1)), max(sheet_layers))
-        for selector in ("body.navopen:has(.chatgrid) nav", ".chatgrid.showdocs > aside.docs", ".menubody"):
+        for selector in ("body.navopen .shell > nav", ".chatgrid.showdocs > aside.docs", ".menubody"):
             rules = re.findall(re.escape(selector) + r" \{([^}]+)\}", CSS)
             fixed = [rule for rule in rules if "position: fixed" in rule]
             self.assertTrue(fixed, selector)

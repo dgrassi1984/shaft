@@ -551,7 +551,7 @@ class StylesTest(TestCase):
         css = (Path(web_pages.__file__).parent / "web_static" / "web.css").read_text()
         self.assertRegex(css, r"nav \.nav-version \{[^}]*font-size: \.8rem;[^}]*overflow-wrap: anywhere;[^}]*order: 4;")
         self.assertRegex(css, r"nav \.nav-version a \{[^}]*display: block;")
-        self.assertRegex(css, r"body\.navopen:has\(\.chatgrid\) nav \{[^}]*overflow-y: auto;")
+        self.assertRegex(css, r"body\.navopen \.shell > nav \{[^}]*overflow-y: auto;")   # every page's sheet now
 
     def test_what_the_page_hides_stays_hidden(self):
         """Found live: form.docedit { display: grid } showed the document editor the page had hidden."""
