@@ -208,11 +208,15 @@ self.addEventListener("fetch", (ev) => {
 self.addEventListener("push", (ev) => {
   ev.waitUntil((async () => {
     let shown = [{ title: "SHAFT", body: "Something new", url: "/", tag: "shaft" }];
+    // A stalled tailnet must not consume the push lifetime before iOS gets its required notification.
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 4000);
     try {
-      const r = await fetch("/push/latest", { credentials: "same-origin", cache: "no-store" });
+      const r = await fetch("/push/latest", { credentials: "same-origin", cache: "no-store", signal: ctl.signal });
       const got = r.ok ? ((await r.json()).events || []) : [];
       if (got.length) shown = got;
-    } catch (e) { /* off the tailnet: the plain notification */ }
+    } catch (e) { /* off the tailnet, or timed out: the plain notification */ }
+    finally { clearTimeout(timer); }
     if (self.navigator.setAppBadge) self.navigator.setAppBadge().catch(() => {});
     for (const n of shown) {
       await self.registration.showNotification(n.title, {
@@ -229,7 +233,11 @@ self.addEventListener("notificationclick", (ev) => {
   const url = new URL((ev.notification.data || {}).url || "/", self.location.origin);
   ev.waitUntil((async () => {
     const list = (await self.clients.matchAll({ type: "window", includeUncontrolled: true })).filter((c) => "focus" in c);
-    const there = list.find((c) => new URL(c.url).pathname === url.pathname);
+    const there = list.find((c) => {
+      const current = new URL(c.url);
+      // Archives share the chat's path: bring one forward only after navigating to the current chat.
+      return current.pathname === url.pathname && !current.searchParams.has("id");
+    });
     if (there) {
       try { return await there.focus(); } catch (e) { /* refused: open it instead */ }
       return self.clients.openWindow(url.href);

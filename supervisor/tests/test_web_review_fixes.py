@@ -158,6 +158,20 @@ class RailTest(ChatRoutesTest):
 
 
 class WatchingTest(ChatRoutesTest):
+    def test_m10_covered_feed_does_not_watch_but_still_renders(self):
+        """M10: a feed poll behind a covering sheet renewed push suppression."""
+        self.replying([])
+        self.get("/fragment/chat/wren", headers={"x-shaft-at": "1000"})
+        self.assertTrue(web_chat.watchers("wren"))
+        covered = self.get("/fragment/chat/wren", headers={"x-shaft-at": "2000", "x-shaft-watching": "0"})
+        self.assertEqual(covered.status, 200)
+        self.assertIn(b"hi", covered.body)
+        self.assertEqual(web_chat.watchers("wren"), set())
+        self.get("/fragment/chat/wren", headers={"x-shaft-at": "1500"})  # an older poll arriving late
+        self.assertEqual(web_chat.watchers("wren"), set())
+        self.get("/fragment/chat/wren", headers={"x-shaft-at": "2500"})  # sheet closed
+        self.assertTrue(web_chat.watchers("wren"))
+
     def test_w9_each_device_watches_for_itself_and_says_when_it_goes(self):
         """W9: one desktop tab on wren's chat silenced every push to the phone; a phone that locked stayed watching
         for 6 s more. The feed's poll marks only the device asking, and ?away=1 ends it."""

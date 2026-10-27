@@ -607,8 +607,13 @@ def _get(req: Request, csrf: str) -> Response | None:
         if chat and chat.get("instance") != m[1]:
             return None
         if not qs.get("id"):
-            # its page is open and visible here: no push to this device (unless this poll left before its away)
-            web_chat.watching(m[1], req.device, _page_ms(req.headers.get("x-shaft-at")))
+            # A covering sheet still polls the feed, but must not silence push. Stamp both paths so a late
+            # poll sent before the sheet opened cannot restore watching (as with the page's away signal).
+            at = _page_ms(req.headers.get("x-shaft-at"))
+            if req.headers.get("x-shaft-watching") == "0":
+                web_chat.unwatch(m[1], req.device, at)
+            else:
+                web_chat.watching(m[1], req.device, at)
         return _html(200, v.chat_feed(m[1], chat, _sent_during(m[1], chat, bool(qs.get("id"))),
                                       archived=bool(qs.get("id"))))
     if m := re.match(r"^/fragment/chat/([A-Za-z0-9_-]+)/live$", path):
