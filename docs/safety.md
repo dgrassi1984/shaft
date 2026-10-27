@@ -35,6 +35,21 @@
   **Your calendars, one per grant** (`shaft calendar <name> grant <alias> <calendar>`;
   [PLAN-calendar.md](plans/PLAN-calendar.md)): `calendar_events`, `calendar_event`, offered only when granted. Every call
   names a granted calendar; the credential and the grant stay with the supervisor.
+  **Calendar writes** ([calendar write plan](../docs/plans/PLAN-calendar-write.md)): `shaft calendar thelos grant-write
+  <alias> <calendar>` grants one instance one calendar; write implies read, and `revoke-write` keeps read access.
+  `calendar_create` and `calendar_move` run at once with `sendUpdates=none` when no attendees are supplied and,
+  for a move, the event has no attendees other than the operator and no other organiser is identified.
+  An incomplete attendee list also requires approval. Changes that would tell someone else, supplied attendees, invitations,
+  and every `calendar_respond` RSVP become proposals. Only the operator approves or declines in the web UI at
+  `/calendar/proposals`, through the tailnet and paired-browser checks with CSRF protection.
+  Approval re-checks the write grant and sends the frozen request with `sendUpdates=all`; moves and RSVPs use the
+  saved ETag, so a changed event fails without a fresh read and retry. A durable claim prevents double approval
+  or a crash from submitting the proposal again. Decline and expiry send no write; `SHAFT_CALENDAR_PROPOSAL_HOURS`
+  defaults to 24. Outcomes go to the instance's inbox; delivery failures are logged without undoing the decision.
+  `SHAFT_CALENDAR_WRITES_PER_DAY` defaults to 20 per instance, counting submitted write attempts and proposals.
+  Attempts and proposal outcomes are audited in `.supervisor/calendar/<instance>.jsonl`, available through
+  `record(kind="calendar")`. Writes are refused in trial replays. No delete, cancel, or whole-series changes;
+  only one occurrence at a time.
 - **Broker**: privileged tools and credentials, including web search (ScrapeBadger), page fetching
   (public addresses only, re-checked on every redirect; `fetch_page` and `http_request` connect to the very
   address they checked, with TLS still verifying the name asked for, so a name that answers public for the

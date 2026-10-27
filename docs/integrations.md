@@ -67,11 +67,16 @@ Source: [channel routing](../supervisor/channel.py), [the web UI's pushes](../su
 ## Google accounts (`shaft google …`)
 
 Mail and Calendar share your Google accounts ([PLAN-calendar.md](plans/PLAN-calendar.md)). An instance never holds a
-Google credential: neither scope can be limited to one label or one calendar, so the supervisor keeps each account's
+Google credential: these scopes cannot be limited to one label or one calendar, so the supervisor keeps each account's
 refresh token in `.supervisor/google/<alias>.json` (0600) and enforces every grant itself. One login per account asks
-for `gmail.readonly` and `calendar.readonly` together and records the scopes Google actually granted (the consent page
-lets you untick one): `shaft google` lists them. A tool whose scope was not granted refuses, naming the login to run
-again; it never returns an empty result. Nothing in the mailbox or a calendar is ever changed.
+for `gmail.readonly`, `calendar.readonly`, and `calendar.events` together and records the scopes Google actually granted
+(the consent page lets you untick one): `shaft google` lists them. A tool whose scope was not granted refuses, naming
+the login to run again; it never returns an empty result. The operator's mailbox access stays read-only; calendar
+writes require per-instance write grants ([calendar write plan](../docs/plans/PLAN-calendar-write.md)).
+
+Before re-login, add `https://www.googleapis.com/auth/calendar.events` in Google Cloud → Google Auth Platform →
+Data Access for each OAuth project. Then run `shaft google login <alias> <address>` again for each operator account
+that needs calendar writes (with `--client <name>` for its OAuth client, if needed).
 
 Each account records the OAuth client it logged in with (a refresh token works only with the client that issued it).
 A client is named in `.env` as `GMAIL_<CLIENT>_CLIENT_ID` / `GMAIL_<CLIENT>_CLIENT_SECRET`; `--client` picks it, and
@@ -175,7 +180,9 @@ response, conference link, recurrence, attachment links (never downloaded). Priv
 shown; declined ones are shown and marked. `shaft calendar calendars work` lists the account's calendars;
 `shaft calendar example grant work primary` (or a title, or an ID) resolves it once and saves its ID with its title in
 `.supervisor/tools/example.json`. A title shared by two calendars is refused, both listed: grant by ID. `revoke` and
-`off` hold from the instance's next calendar call.
+`off` hold from the instance's next calendar call. `grant-write` adds write access to one calendar and implies read;
+`revoke-write` keeps read access. See [calendar write safety](safety.md) and
+[calendar write plan](../docs/plans/PLAN-calendar-write.md) for direct writes and operator-approved proposals.
 
 Every Calendar API call names a granted calendar in its path, and nothing an instance calls spans calendars (no
 free/busy, no calendar list). An event's id is `<alias>/<hash of the calendar>/<event>`, resolved against the

@@ -256,6 +256,11 @@ and [chat design](plans/PLAN-webui-chat.md).
   **Access** (tools, wake floor and cloud cap, jobs, shared folder,
   mail and calendar grants, battery, key names), **Judge**, **Changes**, **Benchmarks**, **Transcripts**,
   **Journal**, **Activity** (connections, plugins, jobs), with its actions and earlier chats.
+- **Calendar approvals** (`/calendar/proposals`) lists pending proposals and up to 30 decided proposals, newest proposals first.
+  Each shows the instance, change summary, who would be told, and expiry time. Pending proposals have **Approve** and **Decline**
+  buttons; decided proposals show their state and outcome. Approval submits the saved request; decline sends no write.
+  Each proposal sends a Telegram message through the instance's bot to the paired operator when both are configured,
+  linking to this page when an HTTPS web URL is configured. Notification failure leaves the proposal available here.
 - **Kill** (last and apart from the other actions: in the ⋯ menu and on Summary; not on the overview's cards) pauses the instance and stops what it runs
   now, as `shaft kill`. **Delete…** is on its Summary page only, enabled once it runs nothing: you type its name to
   confirm (the server checks it again), it runs `shaft delete <name> --yes` with the archive, and the page goes back
