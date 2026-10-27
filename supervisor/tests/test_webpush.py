@@ -224,7 +224,7 @@ class RoutesTest(WebTest):
     def test_the_service_worker_shows_what_it_fetches_and_opens_the_chat(self):
         sw = self.req("/sw.js").body.decode()
         self.assertIn('self.addEventListener("push"', sw)
-        self.assertIn('fetch("/push/latest", { credentials: "same-origin", cache: "no-store" })', sw)
+        self.assertIn('fetch("/push/latest", { credentials: "same-origin", cache: "no-store", signal: ctl.signal })', sw)
         self.assertIn("self.registration.showNotification(n.title", sw)        # always one: iOS requires it
         self.assertIn("for (const n of shown)", sw)                            # each waiting event its own
         self.assertIn('self.addEventListener("notificationclick"', sw)

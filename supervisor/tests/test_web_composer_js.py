@@ -15,10 +15,12 @@ class ComposerJsTest(unittest.TestCase):
         script = r"""
 const fs=require('node:fs'), vm=require('node:vm'), assert=require('node:assert/strict');
 const storage=new Map(); let serial=0;
-function page(mids=[], touch=false, feed=[]) {     // feed: the message ids of the turns the feed shows (data-mid)
+function page(mids=[], touch=false, feed=[], bubble=false) {   // feed: the message ids the feed shows (data-mid);
+                                                                 // bubble: a feed the "sending…" copy goes in
   const handlers={}, win={}, elements={}, viewportHandlers={}, viewport={height:900,addEventListener(k,fn){viewportHandlers[k]=fn;}}; let resolve, reject, payload;
   const node=()=>({dataset:{},style:{},children:[],setAttribute(){},querySelectorAll:()=>[],
     appendChild(n){this.children.push(n);},append(...ns){this.children.push(...ns);},remove(){},
+    replaceChildren(...ns){this.children=ns;},
     addEventListener(k,fn){this[k]=fn;},classList:{add(){},remove(){},toggle(){},contains(){return false;}}});
   const sendButton={dataset:{queue:''}}, queueButton={dataset:{queue:'1'}};
   const mid={value:''}, queue={value:''}, files={type:'file',files:[],closest:()=>form}, chips=node();
@@ -28,19 +30,21 @@ function page(mids=[], touch=false, feed=[]) {     // feed: the message ids of t
     dispatchEvent(ev){for(const fn of handlers[ev.type]||[]) fn({target:box});}};
   const form={dataset:{post:'/chat/wren/send',draft:'wren',files:'',multipart:'1',reset:'1',sentMids:JSON.stringify(mids)},
     closest:()=>null,querySelectorAll:()=>[sendButton,queueButton],querySelector:q=>({'textarea':box,'textarea[name=text]':box,'input[name=mid]':mid,'input[name=queue]':queue,
-      'input[type=file]':files,'[data-picked]':chips,'button[type=submit]':sendButton})[q]||null,
-    reset(){box.value='';mid.value='';files.files=[];}};
+      'input[type=file]':files,'[data-picked]':chips,'button[type=submit]':sendButton,'.quotechip':form.chip})[q]||null,
+    insertBefore(n){this.chip=n;},reset(){box.value='';mid.value='';files.files=[];}};
+  const feedNode={...node(),closest:()=>null};
   const selection={isCollapsed:false,rangeCount:1,toString:()=> 'selected quote',removeAllRanges(){},
     getRangeAt:()=>({commonAncestorContainer:{nodeType:1,closest:()=>({dataset:{}})}})};
   const document={readyState:'loading',visibilityState:'hidden',body:node(),documentElement:{style:{setProperty(){}}},
     addEventListener(k,fn){(handlers[k]||=[]).push(fn);},dispatchEvent(){},
-    querySelector:q=>q==='form.composer textarea'?box:['form[data-files]','form[data-draft]'].includes(q)?form:null,
+    querySelector:q=>q==='form.composer textarea'?box:['form[data-files]','form[data-draft]'].includes(q)?form
+      :q==='.feed[data-follow]'&&bubble?feedNode:null,
     querySelectorAll:q=>q==='.feed [data-mid]'?feed.map(m=>({dataset:{mid:m},classList:{contains:()=>false}})):[],
     getElementById:id=>elements[id]||null,
     createElement(){const n=node();Object.defineProperty(n,'id',{set(id){elements[id]=n;}});return n;}};
   const context={document,URL,URLSearchParams,Event,AbortController,navigator:{},
     crypto:{randomUUID:()=>`m-${++serial}`},location:{href:'https://shaft.test/i/wren/chat'},
-    window:{innerHeight:900,visualViewport:viewport,addEventListener(k,fn){(win[k]||=[]).push(fn);},getSelection:()=>selection,
+    window:{innerHeight:900,visualViewport:viewport,scrollTo(){},addEventListener(k,fn){(win[k]||=[]).push(fn);},getSelection:()=>selection,
       matchMedia:()=>({matches:touch})},
     localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},
     setTimeout(){},clearTimeout(){},setInterval(){},
@@ -77,13 +81,29 @@ const A={name:'a.txt',size:1,type:'text/plain'},B={name:'b.txt',size:1,type:'tex
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_issue_21_quotes_save_grow_and_reset_identity(self):
-        """Removing quote input dispatch loses the restored quote, growth and new retry identity."""
+        """Reverting #21 loses the restored quote or keeps the old retry identity. PLAN-pwa-market (iPhone review I17):
+        the quote is a chip above the field, not "> " lines typed into it; Send puts it first, as the same quote."""
         self.run_composer("""
 for(const kind of ['reply','quote']) {
  storage.clear();const p=page();p.mid.value='old';await p[kind]();
- assert.equal(p.mid.value,'');assert.equal(p.box.style.height,'122px');
- const q=page();await q.load();assert.equal(q.box.value,p.box.value);assert.ok(q.box.value.includes('quote'));
+ assert.equal(p.mid.value,'');assert.equal(p.box.value,'');
+ assert.ok(p.form.chip,'a chip shows the quote');assert.ok(storage.get('shaft.quote.wren').includes('quote'));
+ const q=page();await q.load();assert.ok(q.form._quote.includes('quote'),'kept with the draft');
+ await q.type('my answer');const sending=q.send();await Promise.resolve();
+ const nl=String.fromCharCode(10),t=q.payload().text;assert.ok(/^> (whole|selected) quote/.test(t)&&t.endsWith('quote'+nl+nl+'my answer'),t);q.answer();await sending;
+ assert.equal(storage.get('shaft.quote.wren'),undefined);
 }
+""")
+
+    def test_p8_the_field_empties_as_the_bubble_appears_and_a_failure_puts_the_text_back(self):
+        """iPad review P8 (2026-10-27): for a second the text was both in the field and in the "sending…" bubble."""
+        self.run_composer("""
+const p=page([],false,[],true);await p.type('hello');let sending=p.send();await Promise.resolve();
+assert.equal(p.box.value,'','empty while sending');assert.equal(p.payload().text,'hello');
+p.answer();await sending;assert.equal(p.box.value,'');assert.equal(storage.get('shaft.draft.wren'),undefined);
+await p.type('again');sending=p.send();await Promise.resolve();assert.equal(p.box.value,'');
+await p.type('more');p.fail();await sending;
+assert.equal(p.box.value,'again'+String.fromCharCode(10,10)+'more','a failure puts it back, before what came after');
 """)
 
     def test_issue_21_picker_adds_and_send_keeps_later_files(self):
@@ -210,15 +230,18 @@ const p=page([],true);p.resize(600);await p.type('touch');await p.key({});assert
         page) must send once its line break arrives, after any autocorrection; with the on-screen keyboard up, or with
         Shift/Alt, it stays a new line. Reverting the fix leaves a hardware-keyboard Return typing a new line."""
         self.run_composer("""
-let p=page([],true);await p.type('hello');await p.key({});
+// M18 (review C6): a floating iPad keyboard leaves the page its height; its Return has no physical code: a new line
+let p=page([],true);await p.type('floating');await p.key({});assert.equal(await p.lineBreak(),false);
+assert.equal(p.payload(),undefined,'a Return with no hardware key behind it does not send');
+p=page([],true);await p.type('hello');await p.key({code:'Enter'});
 assert.equal(p.payload(),undefined, 'nothing is sent at keydown: the autocorrection comes after it');
 assert.equal(await p.lineBreak('insertReplacementText'),false);     // autocorrect lands first, the Return still sends
 assert.equal(await p.lineBreak(),true, 'the line break is cancelled');
 assert.ok(p.payload(), 'Return with a hardware keyboard must send');assert.equal(p.payload().queue,'');
 p.answer();await p.form.sending;
-p=page([],true);await p.type('para');await p.key({});assert.equal(await p.lineBreak('insertParagraph'),true);assert.ok(p.payload());
+p=page([],true);await p.type('para');await p.key({code:'Enter'});assert.equal(await p.lineBreak('insertParagraph'),true);assert.ok(p.payload());
 for (const modifier of ['shiftKey','altKey']) {
- p=page([],true);await p.type('two lines');await p.key({[modifier]:true});
+ p=page([],true);await p.type('two lines');await p.key({[modifier]:true,code:'Enter'});
  assert.equal(await p.lineBreak(),false);assert.equal(p.payload(),undefined);
 }
 p=page([],true);p.resize(600);await p.type('on-screen');await p.key({});
@@ -245,16 +268,22 @@ await p.type('now');sending=p.send();await Promise.resolve();assert.equal(p.payl
         from supervisor.web_views import chat_page
         from html.parser import HTMLParser
         class Buttons(HTMLParser):
+            # Its name: aria-label (the send arrow is an icon), else its text without the explaining line under it
             def __init__(self):
-                super().__init__(); self.labels = []; self.current = None
+                super().__init__(); self.labels = []; self.current = None; self.inner = 0
             def handle_starttag(self, tag, attrs):
                 attrs = dict(attrs)
                 if tag == 'button' and 'data-queue' in attrs:
-                    self.current = [attrs['data-queue'], '', 'hidden' in attrs]
+                    self.current = [attrs['data-queue'], attrs.get('aria-label') or '', 'hidden' in attrs]
+                    self.named = bool(attrs.get('aria-label'))
+                elif self.current is not None and tag == 'span':
+                    self.inner += 1
             def handle_data(self, data):
-                if self.current is not None: self.current[1] += data
+                if self.current is not None and not self.inner and not self.named: self.current[1] += data
             def handle_endtag(self, tag):
-                if tag == 'button' and self.current is not None:
+                if tag == 'span' and self.inner:
+                    self.inner -= 1
+                elif tag == 'button' and self.current is not None:
                     self.labels.append(self.current); self.current = None
         for state, queue_hidden in ((None, True), ('idle', True), ('replying', False)):
             buttons = Buttons()

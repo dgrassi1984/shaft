@@ -86,7 +86,7 @@ class RecoveryTest(unittest.TestCase):
                     self.assertIn("You stopped this reply.", rendered)
                 else:
                     self.assertIn("Technical details", rendered)
-                    self.assertIn("Press Retry, then Send" if retry else "Check Activity and Services", rendered)
+                    self.assertIn("Retry sends it again" if retry else "Check Activity and Services", rendered)
                     if not retry:
                         self.assertIn('href="/i/wren/activity"', rendered)
                         self.assertIn('href="/services"', rendered)
@@ -163,8 +163,9 @@ class RecoveryTest(unittest.TestCase):
         """Reverting #11 hides Clear's full label and leaves End/Stop consequences unexplained."""
         chat = self.chat()
         header = str(web_views.chat_header("wren", {}, chat, []))
-        self.assertIn('>Clear<span class="docslabel"> chat</span></button>', header)   # 'Clear chat'; 'Clear' on a phone
-        self.assertIn("kept in Earlier chats and Transcripts", header)
+        # Clear is New chat (PLAN-pwa-market): an icon named for what it does; its confirm says what is kept
+        self.assertIn('title="New chat" aria-label="New chat" data-focus="clear">', header)
+        self.assertIn("Start a new chat? This one is kept in Earlier chats and Transcripts", header)
         self.assertIn("Only the reply stops. The conversation stays open.", str(web_views.chat_feed("wren", chat, [])))
         chat["state"] = "idle"
         rendered = str(web_views.chat_feed("wren", chat, []))
@@ -202,26 +203,44 @@ class ApiFailureTest(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("node"), "Node is required")
 class RetryJsTest(unittest.TestCase):
-    def test_issue_9_retry_prefills_once_never_sends_and_protects_draft(self):
-        """Reverting #9 loses the Retry handler; replacing drafts without consent discards the operator's work."""
+    def test_issue_9_retry_sends_once_and_protects_draft(self):
+        """Reverting #9 loses the Retry handler; replacing drafts without consent discards the operator's work.
+        PLAN-pwa-market (iPhone review I14): Retry sends in one tap — it is offered only when the failed request ran no
+        tools (classify_reply), and a repeated tap carries the same message id (no new input), so it is not sent twice."""
         src = (Path(__file__).resolve().parents[1] / "web_static" / "web.js").read_text()
         handlers = re.findall(r'  document.addEventListener\("click", \(ev\) => \{\n.*?^  \}\);', src, re.S | re.M)
         handler = next((h for h in handlers if '[data-retry]' in h), "")
         script = r'''
-let listener = () => {}, inputs = 0, prompts = 0, allow = false;
-const box = { value: "draft", focus() {}, setSelectionRange() {}, dispatchEvent() { inputs++; } };
+let listener = () => {}, inputs = 0, prompts = 0, allow = false, sends = 0, chips = 0;
+const retryOf = { value: "" };
+const form = { querySelector: q => q === "input[name=retry_of]" ? retryOf : null };
+const quoteChip = () => { chips += 1; };
+const box = { value: "draft", focus() {}, setSelectionRange() {}, dispatchEvent() { inputs++; }, closest: () => form };
 const document = { addEventListener: (_, f) => listener = f, querySelector: () => box };
 const confirm = () => { prompts++; return allow; };
+const sendComposer = (f, queued) => { if (f !== form || queued) throw new Error("wrong send"); sends++; };
 //HANDLER//
-const event = { target: { closest: () => ({ dataset: { retry: "original request" } }) } };
+const button = { dataset: { retry: "original request", retryOf: "3" } };
+const event = { target: { closest: () => button } };
 listener(event);
-const kept = box.value;
+const kept = box.value, sentFirst = sends;
 allow = true;
 listener(event);
 listener(event);
-console.log(JSON.stringify({ kept, value: box.value, inputs, prompts }));
+// Codex review: a quote waiting in the composer went out with the failed message, unasked
+box.value = "original request"; form._quote = "> another message"; allow = false;
+listener(event);
+const quoteKept = form._quote, sendsAfterRefusal = sends;
+allow = true;
+listener(event);
+console.log(JSON.stringify({ kept, sentFirst, value: box.value, inputs, prompts, sends, disabled: !!button.disabled,
+                             quoteKept, sendsAfterRefusal, quote: form._quote, chips, retryOf: retryOf.value }));
 '''
         result = subprocess.run([shutil.which("node"), "-e", script.replace("//HANDLER//", handler)],
                                 capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout), {"kept": "draft", "value": "original request", "inputs": 1, "prompts": 2})
+        # not disabled: a resend that failed can be retried (Codex review: it stayed off for good)
+        self.assertEqual(json.loads(result.stdout), {"kept": "draft", "sentFirst": 0, "value": "original request",
+                                                     "inputs": 1, "prompts": 4, "sends": 3, "disabled": False,
+                                                     "quoteKept": "> another message", "sendsAfterRefusal": 2,
+                                                     "quote": "", "chips": 1, "retryOf": "3"})

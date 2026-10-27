@@ -42,7 +42,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import web_pages
+from . import web_icons, web_pages
 from .web_views import TEXT_TYPES                  # files shown as text: Files, messages, the documents panel
 from .web_pages import Html
 from .core import EMBED_PORT, LLM_PORTS, SUP_DIR, UnsafePath, knob, port, log, read_beneath
@@ -305,6 +305,26 @@ def _static(name: str, versioned: bool = False) -> Response:
     return Response(200, path.read_bytes(), {"Content-Type": ctype, "Cache-Control": cache})
 
 
+# Bounded by LAUNCH_SIZES and the two schemes. Serialize first renders so simultaneous installs draw each once.
+_launch_images: dict = {}
+_launch_lock = threading.Lock()
+
+
+def _launch(name: str, versioned: bool) -> Response:
+    match = re.fullmatch(r"([1-9][0-9]{2,3})x([1-9][0-9]{2,3})-(light|dark)\.png", name)
+    if match:
+        w, h, scheme = int(match[1]), int(match[2]), match[3]
+        if (w, h) in web_icons.LAUNCH_SIZES:
+            with _launch_lock:
+                key = (w, h, scheme)
+                if key not in _launch_images:
+                    _launch_images[key] = web_icons.launch_png(w, h, web_pages.THEME[scheme])
+                body = _launch_images[key]
+            cache = "public, max-age=31536000, immutable" if versioned else "max-age=3600"
+            return Response(200, body, {"Content-Type": "image/png", "Cache-Control": cache})
+    return _html(404, web_pages.message_page("Not found", "No such launch image."))
+
+
 def _secured(r: Response) -> Response:
     r.headers.update({"Content-Security-Policy": CSP, "X-Content-Type-Options": "nosniff",
                       "Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY",
@@ -339,6 +359,8 @@ def _route(req: Request) -> Response:
     if req.path.startswith("/static/"):
         return _static(urllib.parse.unquote(req.path.removeprefix("/static/")),
                        versioned=req.query.get("v") == web_pages.STATIC_VERSION)
+    if req.path.startswith("/launch/"):               # WebKit 259328: startup fetches carry no paired cookie
+        return _launch(req.path.removeprefix("/launch/"), req.query.get("v") == web_pages.STATIC_VERSION)
     if req.path == "/favicon.ico":                  # asked by browsers on their own: the icon, not a refusal page
         return _static("icon-180.png")
     # The app's shell (docs/plans/PLAN-pwa P1): fetched by the browser before it is paired, with nothing private in it.
@@ -466,8 +488,9 @@ def _post(req: Request, dev: str) -> Response:
             # Next cycle (background=1): to the inbox, read in its next cycle (PLAN-background-messages.md)
             send = (web_chat.background if fields.get("background") == "1" else
                     web_chat.queue if fields.get("queue") == "1" else web_chat.send)
+            extra = {"retry_of": fields.get("retry_of", "")} if send is web_chat.send else {}
             _, said = send(m[1], (req.headers.get("tailscale-user-login") or "").lower(),
-                                    fields.get("text", ""), files, mid=fields.get("mid", ""))
+                                    fields.get("text", ""), files, mid=fields.get("mid", ""), **extra)
         except web_chat.Refused as e:
             return _html(409, web_pages.h("<p>{t}</p>", t=str(e)))
         return _html(200, web_pages.h("<p>{t}</p>", t=said))
@@ -607,10 +630,15 @@ def _get(req: Request, csrf: str) -> Response | None:
         if chat and chat.get("instance") != m[1]:
             return None
         if not qs.get("id"):
-            # its page is open and visible here: no push to this device (unless this poll left before its away)
-            web_chat.watching(m[1], req.device, _page_ms(req.headers.get("x-shaft-at")))
+            # A covering sheet still polls the feed, but must not silence push. Stamp both paths so a late
+            # poll sent before the sheet opened cannot restore watching (as with the page's away signal).
+            at = _page_ms(req.headers.get("x-shaft-at"))
+            if req.headers.get("x-shaft-watching") == "0":
+                web_chat.unwatch(m[1], req.device, at)
+            else:
+                web_chat.watching(m[1], req.device, at)
         return _html(200, v.chat_feed(m[1], chat, _sent_during(m[1], chat, bool(qs.get("id"))),
-                                      archived=bool(qs.get("id"))))
+                                      archived=bool(qs.get("id")), whole=qs.get("all") == "1"))
     if m := re.match(r"^/fragment/chat/([A-Za-z0-9_-]+)/live$", path):
         # The running reply's activity, polled on its own (W12): it changes every second, and inside the feed it
         # changed the feed's ETag on every poll — the whole conversation rendered and sent again each 1.5 s.
@@ -954,6 +982,7 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str,
                                       panel=panel, doc=doc, att=qs.get("att", ""), folder=qs.get("dir", ""),
                                       sort=v.doc_sort(qs["sort"]) if qs.get("sort") else "",
                                       listing_only=qs.get("list") == "1" and not qs.get("doc"),
+                                      whole=qs.get("all") == "1",
                                       later="" if read_only else _next_cycle(name)),
                      {"Set-Cookie": f"{LAST_CHAT}={name}; Path=/; Max-Age={COOKIE_DAYS * 86400}; Secure; SameSite=Strict"})
     if tab in ("config", "drive", "access"):

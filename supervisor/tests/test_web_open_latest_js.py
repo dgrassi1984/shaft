@@ -60,7 +60,9 @@ const document = { readyState: "loading", visibilityState: "visible", title: "wr
   getElementById: () => ({ setAttribute() {}, remove() {} }) };
 const observers = [];
 class ResizeObserver { constructor(f) { this.f = f; this.seen = []; observers.push(this); } observe(n) { this.seen.push(n); } }
-vm.runInNewContext(fs.readFileSync(process.argv[1], "utf8"), { document, navigator: {}, ResizeObserver,
+let clock = 1e12;                                    // Date.now, moved on by hand: a gesture counts for 1.5 s
+class FakeDate extends Date { static now() { return clock; } }
+vm.runInNewContext(fs.readFileSync(process.argv[1], "utf8"), { document, navigator: {}, ResizeObserver, Date: FakeDate,
   window: { addEventListener() {}, innerHeight: 0, scrollY: 0, scrollTo() {}, getSelection: () => ({ isCollapsed: true }) },
   localStorage: { getItem: k => k === "shaft.seen" ? stored : null, setItem(k, v) { if (k === "shaft.seen") stored = v; } },
   setTimeout: () => 1, clearTimeout() {}, setInterval() {}, AbortController,
@@ -82,10 +84,28 @@ box.clientHeight -= 100; scrolled(); resized();
 assert.equal(box.scrollTop, end(), "the box got shorter after the jump: still at the last message");
 box.scrollHeight += 400; resized();
 assert.equal(box.scrollTop, end(), "content added after the jump: still at the last message");
+// I8 (iPhone review 2026-10-27): the keyboard closing after Send moves the box up with no reader gesture; the feed
+// kept following only if nobody scrolled — your own message waited under "New below". Not the reader: still followed.
+box.scrollTop = end() - 300; scrolled();
+box.scrollHeight += 400; resized();
+assert.equal(box.scrollTop, end(), "moved up by a layout change, not the reader: still at the last message");
 // ... unless the reader scrolled up: then it stays where they left it.
-box.scrollTop = end() - 20; scrolled();            // up a little (review, Codex 2026-10-26): within 40 px, still reading
+const read = () => { for (const f of handlers.wheel || []) f({ target: { closest: () => box } }); };
+read(); box.scrollTop = end() - 20; scrolled();    // up a little (review, Codex 2026-10-26): within 40 px, still reading
 box.scrollHeight += 400; resized();
 assert.equal(box.scrollTop, end() - 400 - 20, "scrolled up a little: not pulled back down");
+// Codex review: a scrollbar held down, then dragged after the 1.5 s a gesture counts for, still counts
+box.scrollTop = end(); scrolled();                 // back at the end: following again
+assert.equal(feed._atBottom, true);
+// A tap (Retry) is not a scroll: the feed shortening after it moves the box up, and it still follows (found live)
+clock += 5000;                                      // the wheel above is long over
+for (const f of handlers.pointerdown || []) f({ target: { closest: () => box } });
+for (const f of handlers.pointerup || []) f({});
+box.scrollTop = end() - 300; scrolled();
+box.scrollHeight += 400; resized();
+assert.equal(box.scrollTop, end(), "a tap, then a layout change: still at the last message");
+for (const f of handlers.pointerdown || []) f({ target: { closest: () => box } });
+clock += 5000;                                      // held for 5 s, then dragged
 box.scrollTop = 20; scrolled();
 box.scrollHeight += 400; resized();
 assert.equal(box.scrollTop, 20, "scrolled up: not pulled back down");

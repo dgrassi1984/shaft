@@ -71,7 +71,7 @@ nav .unpair button { font-size: .8rem; color: var(--dim); width: 100%; }
 .svc.idle { color: var(--dim); }
 .svc .dim { font-size: .85em; }
 .alerts { list-style: none; padding: .6rem .8rem; margin: 0 0 .8rem; border: 1px solid var(--bad); border-radius: 8px;
-          color: var(--bad); font-weight: 600; }
+          color: var(--bad); font-weight: 600; overflow-wrap: anywhere; }
 
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: .8rem; margin-bottom: .8rem; }
 .card { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--dim); border-radius: 8px;
@@ -166,6 +166,12 @@ td:empty::before { content: ""; }
 .md h4 { font-size: 1.3rem; }
 .md h5 { font-size: 1.15rem; }
 .md h6 { font-size: 1rem; }
+/* In a chat answer and a journal entry, a scale like iOS's (Title 2 / Title 3 / Headline at a 17 px body): a document's
+   2rem title (#59) was 34 px in a reply, larger than the screen's own title (PLAN-pwa-market M1). Documents keep #59's. */
+.turn .md h2, .entry .md h2 { font-size: 1.4rem; }
+.turn .md h3, .entry .md h3 { font-size: 1.25rem; }
+.turn .md h4, .entry .md h4 { font-size: 1.1rem; }
+.turn .md h5, .turn .md h6, .entry .md h5, .entry .md h6 { font-size: 1rem; }
 .md > :first-child { margin-top: 0; }
 .md ul { margin: .6rem 0; padding-left: 1.5rem; }
 .md p { margin: .75em 0; }
@@ -191,14 +197,19 @@ td:empty::before { content: ""; }
 .att { margin: .5rem 0 1rem; }
 img.attachment { max-width: 100%; max-height: 70vh; border-radius: 6px; border: 1px solid var(--line); }
 
+/* A page's table becomes label/value rows on a phone; a Markdown table (an answer, a document) keeps its columns and
+   scrolls sideways in its .tablewrap — as cards its columns were lost (iPhone review I16). */
 @media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
-  table thead { display: none; }
-  table, tbody, tr, td { display: block; width: 100%; }
-  tr { border-bottom: 1px solid var(--line); padding: .3rem 0; }
-  td { border: 0; padding: .05rem 0; display: grid; grid-template-columns: 6.5rem 1fr; gap: .4rem; }
-  td::before { content: attr(data-label); color: var(--dim); }
-  td:empty { display: none; }
+  table:not(.md) thead { display: none; }
+  table:not(.md), table:not(.md) > tbody, table:not(.md) tr, table:not(.md) td { display: block; width: 100%; }
+  table:not(.md) tr { border-bottom: 1px solid var(--line); padding: .3rem 0; }
+  table:not(.md) td { border: 0; padding: .05rem 0; display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); gap: .4rem; }
+  table:not(.md) td > * { min-width: 0; }      /* a Config row's form was wider than the phone (I6) */
+  table:not(.md) td::before { content: attr(data-label); color: var(--dim); }
+  table:not(.md) td:empty { display: none; }
   table.num td:not(:first-child) { text-align: left; }
+  table.md { width: max-content; min-width: 100%; }
+  table.md td, table.md th { overflow-wrap: normal; min-width: 6rem; }
   .kv .row { grid-template-columns: 6.5rem 1fr; }
 }
 .clip { display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
@@ -225,7 +236,8 @@ textarea { font: inherit; width: 100%; padding: .4rem .5rem; border-radius: 6px;
            background: var(--bg); color: var(--text); resize: vertical; }
 
 /* M3 config, drive, access */
-form.cfg { display: flex; flex-wrap: wrap; gap: .3rem; align-items: center; margin: 0; }
+form.cfg { display: flex; flex-wrap: wrap; gap: .3rem; align-items: center; margin: 0; min-width: 0; }
+form.cfg input, form.cfg select { min-width: 0; flex: 1 1 8rem; }
 form.cfg.add { margin-top: .3rem; }
 input, select { font: inherit; font-size: .85rem; padding: .2rem .4rem; border-radius: 5px; border: 1px solid var(--line);
                 background: var(--bg); color: var(--text); max-width: 100%; }
@@ -524,8 +536,8 @@ a.button { display: inline-block; padding: .45rem .9rem; border: 1px solid var(-
 @media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
   body:has(.chatgrid) { height: var(--vvh, 100dvh); overflow: hidden; }
   body:has(.chatgrid) .shell { display: block; height: 100%; min-height: 0; }
-  body:has(.chatgrid) nav { display: none; }
-  body.navopen:has(.chatgrid) nav { display: flex; flex-direction: column; flex-wrap: nowrap; align-items: stretch;
+  body:has(.chatgrid) nav, .shell > nav { display: none; }
+  body.navopen .shell > nav { display: flex; flex-direction: column; flex-wrap: nowrap; align-items: stretch;
       position: fixed; inset: 0; z-index: 60; height: auto; background: var(--bg); overflow-y: auto; border: 0;
       padding: calc(env(safe-area-inset-top) + .8rem) max(1rem, env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 1rem)
                max(1rem, env(safe-area-inset-left)); }
@@ -544,7 +556,6 @@ a.button { display: inline-block; padding: .45rem .9rem; border: 1px solid var(-
   .chathead h1 { font-size: 1.1rem; flex: 0 1 auto; min-width: 4em;   /* the name stays readable: ~5 letters */
  overflow: hidden; text-overflow: ellipsis;
                  white-space: nowrap; }
-  .chathead .earliermenu { margin-left: auto; }
   .chathead .facts, .docslabel { display: none; }
   .navbtn, .closedocs { display: inline-flex; align-items: center; justify-content: center; }
   .menufacts { display: block; margin: 0 0 .4rem; font-size: .85rem; }
@@ -570,6 +581,11 @@ a.button { display: inline-block; padding: .45rem .9rem; border: 1px solid var(-
       z-index: 55; border: 0; border-radius: 0;
       padding: calc(env(safe-area-inset-top) + .6rem) max(1rem, env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 1rem)
                max(1rem, env(safe-area-inset-left)); overflow-y: auto; }
+  /* an iPad in portrait: a side sheet over the chat, not the whole screen (iPad review P11) */
+  @media (min-width: 721px) and (min-height: 521px) {
+    .chatgrid.showdocs > aside.docs { left: auto; width: min(30rem, 92vw); border-left: 1px solid var(--line);
+        box-shadow: -12px 0 40px rgba(0, 0, 0, .18); }
+  }
 }
 
 /* docs/plans/PLAN-pwa P3 */
@@ -626,3 +642,286 @@ details.threads form.act { display: inline; margin: 0; }
 .docshead { flex-wrap: wrap; }
 .docshead > [data-fullscreen-doc] { margin-left: auto; }
 .docshead:has([data-fullscreen-doc]) .closedocs { margin-left: 0; }
+
+/* docs/plans/PLAN-pwa-market: the chat at market standard on iPhone, iPad and a computer. Icons are SVG at fixed px
+   (they stay 20 px when Dynamic Type grows the text, as SF Symbols in a native bar do); hit areas are 44 px on touch. */
+:root { --hover: color-mix(in srgb, var(--text) 7%, transparent); --bubble: color-mix(in srgb, var(--accent) 13%, var(--panel));
+        --col: 46rem; }
+svg.i { display: block; flex: none; }
+.iconbtn { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; min-width: 40px;
+           padding: 0; border: 0; border-radius: 10px; background: transparent; color: var(--text); cursor: pointer;
+           -webkit-tap-highlight-color: transparent; }
+.iconbtn:hover, button.iconbtn:not(:disabled):hover { background: var(--hover); border-color: transparent; }
+.iconbtn:focus-visible, .msgactions button:focus-visible, .composer button:focus-visible,
+details.menu > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (pointer: coarse) {
+  .iconbtn, button.iconbtn, details.menu > summary.iconbtn, label.pick.iconbtn { width: 44px; height: 44px; min-width: 44px;
+      min-height: 44px; padding: 0; }
+  /* App chrome: a long press selects nothing and opens no callout (the message text keeps both) */
+  .chathead, .composer .sendgroup, .composer label.pick, .msgactions, .pagebar, nav { -webkit-touch-callout: none;
+      -webkit-user-select: none; user-select: none; }
+  input:not([type=checkbox]):not([type=radio]):not([type=file]), select { min-height: 44px; }   /* review C10 */
+}
+
+/* The chat header: a title with its state under it, then Documents, New chat and ⋯ (review I11) */
+.chathead { display: flex; flex-wrap: nowrap; align-items: center; gap: .25rem; margin: 0 0 .4rem; min-height: 44px; }
+.chathead .titleblock { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; justify-content: center;
+                        padding: 0 .25rem; }
+.chathead h1 { margin: 0; font-size: 1.0625rem; font-weight: 650; line-height: 1.25; min-width: 0; overflow: hidden;
+               text-overflow: ellipsis; white-space: nowrap; }
+/* not overflow: hidden here — the busy notice opens under it and was clipped on an iPad or a computer (Codex review);
+   each part ellipsises itself */
+.chathead .sub { display: flex; align-items: center; gap: 0; min-width: 0; font-size: .78rem; color: var(--dim);
+                 white-space: nowrap; line-height: 1.3; }
+.chathead .sub > .state { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.chathead .sub .facts { display: inline; overflow: hidden; text-overflow: ellipsis; font-size: inherit; min-width: 0; }
+.chathead .sub > :first-child:not(:empty) ~ .facts:not(:empty)::before { content: "·"; margin: 0 .35em; }
+.chathead .headtools { display: flex; align-items: center; gap: 2px; flex: none; margin-left: auto; }
+.chathead details.menu > summary.iconbtn { border: 0; background: transparent; font-size: inherit; padding: 0; }
+.chathead details.menu[open] > summary.iconbtn { background: var(--hover); }
+.chathead form.clearbtn { display: inline-flex; }
+details.menu.busystate > summary { display: inline-flex; align-items: center; gap: .25rem; border: 0; background: none;
+    padding: 0; font-size: inherit; color: var(--warn); min-height: 0; min-width: 0; }
+details.menu.busystate .menubody { font-size: .9rem; color: var(--text); white-space: normal; }
+.chathead .menubody { left: auto; right: 0; top: calc(100% + 4px); width: min(22rem, calc(100vw - 1rem)); }
+.chathead .titleblock .menubody { left: 0; right: auto; }
+.menubody .actions { margin-top: .4rem; }
+.menubody .dangerzone, .actions.dangerzone { border-top: 1px solid var(--line); padding-top: .5rem; margin-top: .5rem; }
+button.act.danger:not(:disabled) { background: transparent; }
+details.earliermenu { margin: .2rem 0 .3rem; border-top: 1px solid var(--line); padding-top: .3rem; }
+details.earliermenu > summary { display: flex; align-items: center; gap: .4rem; cursor: pointer; padding: .3rem .4rem;
+    border-radius: 6px; list-style: none; }
+details.earliermenu > summary::-webkit-details-marker { display: none; }
+details.earliermenu > summary:hover { background: var(--hover); }
+details.earliermenu .earlier { border: 0; margin: 0; padding: .2rem .4rem; }
+details.earliermenu .earlier .lines a { display: block; padding: .35rem 0; }
+@media (pointer: coarse) { details.earliermenu > summary, details.earliermenu .earlier .lines a { min-height: 44px;
+    display: flex; align-items: center; } }
+
+/* The conversation: one readable column (~46rem) on a wide screen, the page's own background, your messages as bubbles,
+   the instance's as text (reviews I12, iPad C4) */
+.chatpage > .panel.chat { background: transparent; border: 0; padding: 0 .1rem; border-radius: 0; }
+.chat .feed { max-width: var(--col); margin: 0 auto; gap: .9rem; padding: .4rem 0 .6rem; }
+.chatpage > form.composer, .chatpage > .newbelow { width: 100%; max-width: var(--col); margin-left: auto; margin-right: auto; }
+.turn { border: 0; padding: 0; border-radius: 0; max-width: 100%; position: relative; }
+.turn.it { background: transparent; }
+.turn.me { background: var(--bubble); border-radius: 18px 18px 6px 18px; padding: .5rem .85rem; max-width: min(85%, 36rem); }
+.turn.me .who { font-size: .72rem; font-weight: 500; color: var(--dim); margin-bottom: .1rem; }
+.turn.it .who { font-size: .8rem; color: var(--dim); font-weight: 600; margin-bottom: .15rem; }
+.turn.sent, .turn.later { border: 1px dashed var(--line); padding: .5rem .85rem; border-radius: 12px; }
+.turn.later { border-color: var(--cycle); }
+.turn.live { border: 0; }
+.turn.me blockquote { border-left-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.chat-day { font-size: .72rem; text-transform: uppercase; letter-spacing: .06em; }
+/* A message's actions: under it, on hover or focus; the last answer's always (they are a menu on touch: web.js msgMenu) */
+.msgactions { display: flex; gap: 2px; margin-top: .2rem; opacity: 0; transition: opacity .12s; }
+.turn.me .msgactions { justify-content: flex-end; margin: .1rem -.45rem -.3rem 0; }
+.turn:hover .msgactions, .turn:focus-within .msgactions, .turn[data-last] .msgactions { opacity: 1; }
+.msgactions button.icon { opacity: .75; width: 32px; height: 32px; padding: 0; border: 0; background: transparent;
+    border-radius: 8px; color: var(--dim); }
+.msgactions button.icon:hover { opacity: 1; background: var(--hover); color: var(--text); }
+@media (hover: none) {
+  /* touch: out of sight but still in the page for VoiceOver and a keyboard; long-press opens them as a menu */
+  .turn:not([data-last]) .msgactions:not(:focus-within), .turn.me .msgactions:not(:focus-within) {
+      position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); opacity: 1; }
+  .turn[data-last] .msgactions { opacity: 1; }
+  .msgactions button.icon { width: 44px; height: 44px; }
+  .feed .turn:not(.selecting) { -webkit-touch-callout: none; }
+  .feed .turn:not(.selecting) .md, .feed .turn:not(.selecting) .wrap { -webkit-user-select: none; user-select: none; }
+}
+/* the long-press / right-click menu */
+#msgmenu { position: fixed; z-index: 62; min-width: 12rem; background: var(--panel); border: 1px solid var(--line);
+           border-radius: 12px; box-shadow: 0 10px 34px rgba(0, 0, 0, .28); padding: .3rem; display: grid; }
+#msgmenu[hidden] { display: none; }
+#msgmenu button { display: flex; align-items: center; gap: .6rem; border: 0; background: transparent; text-align: left;
+                  padding: .55rem .7rem; border-radius: 8px; min-height: 44px; width: 100%; font-size: 1rem; }
+#msgmenu button:hover, #msgmenu button:focus-visible { background: var(--hover); outline: none; }
+.turn.menuopen { z-index: 1; }
+.turn.me.menuopen { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); }
+
+/* The reply that is running: one line of what it is doing, the answer as it streams in, Stop (reviews C11, I9) */
+.turn.live .who { color: var(--dim); }
+.turn.live details.activity { margin: .1rem 0 .3rem; }
+details.activity > summary { cursor: pointer; color: var(--dim); list-style: none; display: inline-flex; align-items: center;
+    gap: .3rem; border-radius: 6px; padding: .1rem .3rem .1rem 0; max-width: 100%; }
+details.activity > summary::-webkit-details-marker { display: none; }
+details.activity > summary::before { content: "›"; display: inline-block; transition: transform .15s; font-size: 1rem; }
+details.activity[open] > summary::before { transform: rotate(90deg); }
+details.activity > summary .working { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.typing { display: inline-flex; gap: .3rem; margin: .4rem 0; }
+.typing span { width: .45rem; height: .45rem; border-radius: 50%; background: var(--dim); animation: typing 1.2s infinite ease-in-out; }
+.typing span:nth-child(2) { animation-delay: .15s; } .typing span:nth-child(3) { animation-delay: .3s; }
+@keyframes typing { 0%, 60%, 100% { opacity: .25; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
+.streaming > .md > p:last-child::after { content: ""; display: inline-block; width: .5em; height: 1em; margin-left: .1em;
+    vertical-align: text-bottom; background: var(--text); opacity: .5; animation: caret 1s steps(2) infinite; }
+@keyframes caret { 50% { opacity: 0; } }
+.turn.live .actions button { border-radius: 999px; padding-left: .9rem; padding-right: .9rem; }
+
+/* The composer: one rounded field — the paperclip, the text, the send arrow and ⌃ for the other ways to send (I7) */
+form.composer { gap: .3rem; }
+.composer .cbox { display: flex; align-items: flex-end; gap: 2px; border: 1px solid var(--field); border-radius: 22px;
+                  background: var(--panel); padding: 3px; }
+.composer .cbox:focus-within { border-color: var(--accent); }
+form.composer .cbox textarea { flex: 1 1 auto; min-width: 0; border: 0; background: transparent; outline: none;
+    min-height: 40px; padding: .55rem .3rem; line-height: 1.35; resize: none; }
+.composer label.pick.iconbtn { color: var(--dim); border-radius: 50%; }
+.composer label.pick.iconbtn:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+.composer .sendgroup { display: flex; align-items: center; gap: 0; flex: none; }
+.composer button.send { width: 36px; height: 36px; min-width: 36px; min-height: 36px; margin: 2px; border-radius: 50%;
+    background: var(--accent); color: #fff; }
+.composer button.send:not(:disabled):hover { background: color-mix(in srgb, var(--accent) 85%, #000); }
+form.composer:has(textarea:placeholder-shown):not(:has(.chip)) button.send { opacity: .4; }
+.composer .sendmenu > summary.iconbtn { width: 28px; min-width: 28px; border: 0; background: transparent; color: var(--dim);
+    border-radius: 8px; font-size: inherit; padding: 0; }
+.composer .sendmenu .menubody, .chatpage .composer .sendmenu .menubody { position: absolute; top: auto; left: auto; right: 0;
+    bottom: calc(100% + 8px); width: min(19rem, calc(100vw - 1.5rem)); max-height: none; padding: .3rem; display: grid; }
+.composer .sendmenu .menubody button { display: grid; text-align: left; border: 0; background: transparent; border-radius: 8px;
+    padding: .55rem .7rem; font-weight: 600; }
+.composer .sendmenu .menubody button:hover { background: var(--hover); }
+.composer .sendmenu .menubody button[hidden] { display: none; }
+.composer .sendmenu .menubody button .dim { font-weight: 400; font-size: .8rem; }
+.composer .keys { font-size: .72rem; text-align: center; margin: 0; }
+@media (pointer: coarse) {
+  .composer button.send { width: 40px; height: 40px; min-width: 40px; min-height: 40px; }
+  .composer .sendmenu > summary.iconbtn { width: 36px; min-width: 36px; }
+  form.composer .cbox textarea { min-height: 44px; }
+}
+@media (min-width: 600px) {     /* an iPad typing on a hardware keyboard: the shortcuts are true (iPad C3) */
+  body.hwkbd .composer .keys { display: block; }
+}
+
+.emptychat { display: grid; place-content: center; text-align: center; min-height: 40vh; min-height: 40dvh; padding: 2rem 1rem; }
+.emptychat .big { font-size: 1.35rem; font-weight: 650; margin: 0 0 .3rem; color: var(--text); }
+.emptychat .dim { margin: 0; }
+.newbelow { border-radius: 999px; }
+
+/* Messages and notices: at the top, clear of the notch and of the composer (a toast sat on Send: I19, C9) */
+#toast { top: calc(.5rem + env(safe-area-inset-top)); bottom: auto; max-width: calc(100vw - 2rem - env(safe-area-inset-left)
+         - env(safe-area-inset-right)); border-radius: 12px; box-shadow: 0 6px 24px rgba(0, 0, 0, .22); }
+#netnote { max-width: calc(100vw - 1rem - env(safe-area-inset-left) - env(safe-area-inset-right)); }
+@media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
+  #comment-box { padding-left: max(1rem, env(safe-area-inset-left)); padding-right: max(1rem, env(safe-area-inset-right)); }
+  .chathead .menubody, .chathead .titleblock .menubody { position: fixed; left: .5rem; right: .5rem; width: auto;
+      top: calc(var(--vvtop, 0px) + 3.4rem + env(safe-area-inset-top));
+      max-height: calc(var(--vvh, 100dvh) - 4.4rem - env(safe-area-inset-top)); overflow-y: auto;
+      padding-left: max(1rem, env(safe-area-inset-left)); padding-right: max(1rem, env(safe-area-inset-right)); }
+  .chat .feed { padding-left: .2rem; padding-right: .2rem; }
+}
+/* A phone held sideways: little height — a compact header and a one-line field (iPhone review I3) */
+@media (pointer: coarse) and (max-height: 520px) {
+  .chathead { min-height: 40px; margin-bottom: .1rem; }
+  .chathead .sub { display: none; }
+  form.composer .cbox textarea { min-height: 40px; padding-top: .45rem; padding-bottom: .45rem; }
+  body:has(.chatgrid) main { padding-top: 0; }
+}
+
+/* Pages other than the chat on a phone (PLAN-pwa-market decision 3): a bar on top, the rail a sheet behind ☰ */
+.pagebar { display: none; }
+@media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
+  .pagebar { display: flex; align-items: center; gap: .25rem; position: sticky; top: 0; z-index: 20; background: var(--bg);
+             margin: -.8rem -1rem .6rem; padding: .25rem max(.5rem, env(safe-area-inset-right)) .25rem
+             max(.5rem, env(safe-area-inset-left)); border-bottom: 1px solid var(--line); min-height: 48px; }
+  .pagebar .back { width: auto; padding: 0 .6rem 0 .2rem; gap: .1rem; color: var(--accent); font-size: 1rem; }
+  .pagebar .pbtitle { flex: 1 1 auto; min-width: 0; text-align: center; overflow: hidden; text-overflow: ellipsis;
+                      white-space: nowrap; font-size: 1rem; }
+  .pagebar .navbtn { margin-left: auto; }
+  .pagehead { margin-bottom: .6rem; }
+  .pagehead h1 { font-size: 1.6rem; }
+  /* the instance's twelve pages: one strip that scrolls sideways, not three rows (I25) */
+  .tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: 0 -1rem; padding: 0 1rem .2rem;
+          -webkit-overflow-scrolling: touch; width: calc(100% + 2rem); }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tabs a { white-space: nowrap; flex: none; }
+  .pagehead { flex-direction: column; align-items: stretch; }
+  body.navopen .shell > nav form.unpair { order: 5; }
+}
+nav form.unpair button { color: var(--bad); border-color: transparent; background: transparent; }
+
+/* The sheets' ✕ and the alert badge (iPhone review I20: a tall oval in the touch-sized row) */
+button.closenav, button.closedocs { border: 0; background: transparent; border-radius: 10px; width: 44px; height: 44px;
+    min-width: 44px; padding: 0; display: inline-flex; align-items: center; justify-content: center; color: var(--text); }
+button.closenav:hover, button.closedocs:not(:disabled):hover { background: var(--hover); }
+.badge { display: inline-flex; align-items: center; justify-content: center; align-self: center; min-width: 1.35rem;
+         height: 1.35rem; line-height: 1; padding: 0 .35rem; border-radius: 999px; flex: none; }
+.navbtn.news::after { top: 7px; right: 6px; width: 9px; height: 9px; box-shadow: 0 0 0 2px var(--bg); }  /* px: an icon's badge */
+.chathead .sub details.busystate { min-width: 0; flex: 0 1 auto; }
+.chathead .sub details.busystate > summary { max-width: 100%; }
+.chathead .sub details.busystate > summary > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.quotechip { display: flex; align-items: flex-start; gap: .4rem; margin: 0 .2rem; padding: .35rem .3rem .35rem .7rem;
+              border-left: 3px solid var(--accent); background: var(--panel); border-radius: 8px; font-size: .85rem;
+              color: var(--dim); }
+.quotechip > span { flex: 1 1 auto; min-width: 0; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2;
+                    -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; }
+.quotechip .unquote { flex: none; border: 0; background: none; padding: 0 .3rem; font-size: 1.1rem; line-height: 1;
+                      color: var(--dim); min-width: 32px; min-height: 32px; }
+@media (pointer: coarse) { .quotechip .unquote { min-width: 44px; min-height: 44px; } }
+/* Alerts: a red frame and mark, the words in the text's colour and weight (I15) */
+.alerts { font-weight: 400; color: var(--text); }
+.alerts li { display: grid; gap: .15rem; padding: .45rem 0; border-bottom: 1px solid var(--line); }
+.alerts li:last-child { border-bottom: 0; }
+.alerts .alerthead { overflow-wrap: anywhere; }
+.alerts .alerthead::first-letter { color: var(--bad); }
+.alerts li > form.act { justify-self: start; }
+details.alertfull > summary { cursor: pointer; color: var(--dim); font-size: .85rem; }
+details.alertfull pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .78rem; margin: .2rem 0; }
+aside.docs.loading > :not(.docshead) { opacity: .45; pointer-events: none; transition: opacity .15s .1s; }
+aside.docs.loading::before { content: ""; display: block; height: 2px; margin: -.5rem -.8rem .5rem;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent); background-size: 50% 100%;
+    background-repeat: no-repeat; animation: docsload 1s linear infinite; }
+@keyframes docsload { from { background-position: -50% 0; } to { background-position: 150% 0; } }
+
+/* iPad review (2026-10-27, the new build) */
+/* P1: a quote with a long URL widened the composer, then the page (1141 px on an 820 px iPad) */
+form.composer { grid-template-columns: minmax(0, 1fr); }
+form.composer > * { min-width: 0; }
+.quotechip > span { overflow-wrap: anywhere; }
+/* P2: the rail's toggle and ✕ showed beside a rail that is always there, and did nothing: only where it is a sheet */
+.navbtn.iconbtn, nav button.closenav { display: none; }
+@media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
+  .chathead .navbtn.iconbtn, .pagebar .navbtn.iconbtn { display: inline-flex; }
+  body.navopen nav button.closenav { display: inline-flex; }
+  /* P4: Unpair stays in the phone's sheet; beside the rail of every page it is in Settings */
+}
+@media not all and (max-width: 720px) {
+  @media not all and (pointer: coarse) and (max-height: 520px) { nav form.unpair { display: none; } }
+}
+/* P9: New below is a pill, not the column's width */
+.chatpage > .newbelow { width: auto; max-width: none; margin-left: 0; margin-right: 0; align-self: center; }
+/* P10: an instance's twelve pages are one strip that scrolls sideways at every width */
+.tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tabs a { white-space: nowrap; flex: none; }
+/* P11: the documents over the chat on an iPad in portrait: a side sheet, not the whole screen */
+.doclist + .dim, aside.docs > .dim { text-align: center; padding: 2rem 1rem; }
+/* P5, P14: alerts' Dismiss quiet; a gap before the badge */
+.alerts li > form.act button { border-color: transparent; background: transparent; color: var(--dim); padding-left: 0; }
+.alerts li > form.act button:hover { color: var(--text); }
+.rail .badge, nav .badge { margin-left: .35rem; }
+
+/* P3 (iPad review): a page's table becomes label/value rows by the page's own width, not only at phone width — an iPad
+   in portrait at XXL text wrapped Settings' description one letter a line. The chat page keeps its own container. */
+main { container: page / inline-size; }
+@container page (max-width: 36rem) {
+  table:not(.md) thead { display: none; }
+  table:not(.md), table:not(.md) > tbody, table:not(.md) tr, table:not(.md) td { display: block; width: 100%; }
+  table:not(.md) tr { border-bottom: 1px solid var(--line); padding: .3rem 0; }
+  table:not(.md) td { border: 0; padding: .05rem 0; display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); gap: .4rem; }
+  table:not(.md) td > * { min-width: 0; }
+  table:not(.md) td::before { content: attr(data-label); color: var(--dim); }
+  table:not(.md) td:empty { display: none; }
+}
+/* P12: the ⋯ menu's actions are rows, as a menu's are — not a grid of bordered buttons; what cannot run now is dimmed */
+.chathead .menubody .actions { display: grid; gap: 0; margin: .35rem 0 0; padding-top: .35rem;
+    border-top: 1px solid var(--line); }
+.chathead .menubody .actions form.act { display: block; }
+.chathead .menubody .actions button { display: flex; align-items: center; width: 100%; text-align: left; border: 0;
+    background: transparent; border-radius: 8px; padding: .5rem .6rem; font-size: .95rem; min-height: 40px; color: var(--text); }
+.chathead .menubody .actions button:not(:disabled):hover { background: var(--hover); border-color: transparent; }
+.chathead .menubody .actions button:disabled { opacity: .4; }
+.chathead .menubody .actions button.danger:not(:disabled) { color: var(--bad); }
+@media (pointer: coarse) { .chathead .menubody .actions button { min-height: 44px; } }
+/* the overview's cards: quiet pills, not a wall of boxes */
+.card footer button.act { background: var(--bg); border-color: transparent; border-radius: 999px; }
+.card footer button.act:not(:disabled):hover { border-color: var(--accent); }
+.earliermsgs { justify-self: center; margin: .2rem 0 .6rem; }
+.earliermsgs a.button { border-radius: 999px; font-size: .85rem; padding: .4rem .9rem; }

@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 from .dashboard import clean, event_tone
+from .web_icons import LAUNCH_DEVICES
 
 
 class Html(str):
@@ -61,8 +62,59 @@ def _static_version(folder: Path = Path(__file__).parent / "web_static") -> str:
 STATIC_VERSION = _static_version()      # read once at start: the service is restarted to load new code anyway
 
 
+# The UI's one icon set (docs/plans/PLAN-pwa-market M1): line icons on a 24-unit grid, drawn in the text's colour. Colour
+# emoji as controls rendered as pale blobs in dark mode and read as disabled (iPhone review I10).
+ICON_PATHS = {
+    "copy": '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H4v13h4"/>',
+    "check": '<path d="m5 12 4 4L19 6"/>',
+    "reply": '<path d="m9 4-6 6 6 6M3 10h10a8 8 0 0 1 8 8v2"/>',
+    "delete": '<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/>',
+    "edit": '<path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+    "download": '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>',
+    "expand": '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
+    "collapse": '<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/>',
+    "sidebar": '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9.5 4v16"/>',
+    "docs": '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/><path d="M14 3v5h5M9 13h6M9 17h4"/>',
+    "more": '<circle cx="5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="19" cy="12" r="1.4"/>',
+    "compose": '<path d="M11 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"/>'
+               '<path d="M17.5 2.5a2.1 2.1 0 0 1 3 3L12 14l-4 1 1-4Z"/>',
+    "history": '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/>',
+    "close": '<path d="M18 6 6 18M6 6l12 12"/>',
+    "back": '<path d="m15 18-6-6 6-6"/>',
+    "up": '<path d="m18 15-6-6-6 6"/>',
+    "send": '<path d="M12 19V5M5 12l7-7 7 7"/>',
+    "attach": '<path d="m21 11-8.6 8.6a5 5 0 0 1-7-7l8.5-8.6a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9"/>',
+    "stop": '<rect x="6" y="6" width="12" height="12" rx="2.5"/>',
+    "pause": '<rect x="6.5" y="5" width="3.5" height="14" rx="1"/><rect x="14" y="5" width="3.5" height="14" rx="1"/>',
+    "sleep": '<path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z"/>',
+    "busy": '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
+    "waiting": '<path d="M21 12a8 8 0 0 1-11.6 7.1L4 21l1.9-5.4A8 8 0 1 1 21 12Z"/>',
+    "select": '<path d="M5 4h4M7 4v16M5 20h4M13 8h7M13 12h7M13 16h5"/>',
+}
+_FILLED = {"more", "stop"}                     # drawn as solid shapes, not outlines
+
+
+def icon(name: str, size: int = 20) -> Html:
+    """An icon from ICON_PATHS, decorative (its control carries the name: aria-label)."""
+    fill = 'fill="currentColor" stroke="none"' if name in _FILLED else \
+        'fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"'
+    return Html(f'<svg class="i" width="{size}" height="{size}" viewBox="0 0 24 24" {fill} aria-hidden="true" '
+                f'focusable="false">{ICON_PATHS[name]}</svg>')
+
+
 APP_NAME = "SHAFT"
 THEME = {"light": "#f6f6f4", "dark": "#141413"}       # the page's --bg in each scheme (web.css)
+
+
+# One shared fragment (68 links, ~16 KB), built once rather than on each page render. Include it everywhere
+# so installation from any page gets the device matrix without adding a route argument to page().
+STARTUP_LINKS = Html("".join(
+    f'<link rel="apple-touch-startup-image" href="/launch/{pw}x{ph}-{scheme}.png?v={STATIC_VERSION}" '
+    f'media="(device-width: {w}px) and (device-height: {h}px) and (-webkit-device-pixel-ratio: {r}) '
+    f'and (orientation: {orientation}) and (prefers-color-scheme: {scheme})">'
+    for w, h, r in LAUNCH_DEVICES
+    for orientation, pw, ph in (("portrait", w * r, h * r), ("landscape", h * r, w * r))
+    for scheme in THEME))
 
 
 def page(title: str, body: Html, nav: Html = Html(""), csrf: str = "") -> Html:
@@ -79,14 +131,16 @@ def page(title: str, body: Html, nav: Html = Html(""), csrf: str = "") -> Html:
              '<meta name="theme-color" content="{dark}" media="(prefers-color-scheme: dark)">'
              '<meta name="static-version" content="{v}">'
              '<link rel="icon" type="image/svg+xml" href="/static/favicon.svg?v={v}">'
-             '<link rel="apple-touch-icon" href="/static/icon-180.png?v={v}">'
+             '<link rel="apple-touch-icon" href="/static/icon-152.png?v={v}" sizes="152x152">'
+             '<link rel="apple-touch-icon" href="/static/icon-167.png?v={v}" sizes="167x167">'
+             '<link rel="apple-touch-icon" href="/static/icon-180.png?v={v}" sizes="180x180">{startup}'
              '<link rel="stylesheet" href="/static/web.css?v={v}">'
              '<script src="/static/web.js?v={v}" defer></script>'
              '<script src="/static/comments.js?v={v}" defer></script></head>'
              '<body><div class="{shell}">{nav}<main>{body}</main></div></body></html>',
              shell="shell" if nav else "shell single",
              meta=meta, title=title, v=STATIC_VERSION, nav=nav, body=body, app=APP_NAME, light=THEME["light"],
-             dark=THEME["dark"])
+             dark=THEME["dark"], startup=STARTUP_LINKS)
 
 
 # The pages used now and then, under the rail's chats: the one list of them (a second list, passed in and ignored,
@@ -133,12 +187,23 @@ def nav(names: list[str], current: str = "overview") -> Html:
                 '<button type="button" data-hard-reload title="Clear the app cache and load the current version">'
                 'Reload / update</button></div>', v=version.service_version(rec), m=moved)
     return h('<nav><a class="brand" href="/">SHAFT</a><button type="button" class="small closenav" data-toggle-nav '
-             'aria-label="Close the chats">✕</button><div class="rail" data-poll="/fragment/rail?c={c}" data-every="3000" '
+             'aria-label="Close the chats">{x}</button><div class="rail" data-poll="/fragment/rail?c={c}" data-every="3000" '
              'data-now="1" data-hidden="1">{rail}</div>'
              '<form class="unpair" data-post="/unpair" data-after="reload" data-confirm="Unpair this browser? You will '
              'need a new link from `shaft web pair` to use it again."{a}><button type="submit">Unpair this browser'
              '</button></form>{version}</nav>', c=cur, rail=rail(names, cur), a=post_attrs("this page"),
-             version=running)
+             version=running, x=icon("close"))
+
+
+def pagebar(title: str, current: str = "") -> Html:
+    """A page's bar on a phone (CSS shows it there only): ‹ Chat, its title, ☰. The installed app has no browser Back,
+    and the rail filled half the screen above every page (iPhone review I5). An instance's page goes back to its chat."""
+    import urllib.parse
+    back = f"/i/{urllib.parse.quote(current[2:], safe='')}/chat" if current.startswith("i:") else "/"
+    return h('<div class="pagebar"><a class="iconbtn back" href="{b}" aria-label="Back to the chat">{bi}<span>Chat</span>'
+             '</a><b class="pbtitle">{t}</b><button type="button" class="navbtn iconbtn" data-toggle-nav '
+             'aria-label="Chats and pages" aria-expanded="false">{si}</button></div>',
+             b=back, bi=icon("back"), t=title, si=icon("sidebar"))
 
 
 def message_page(title: str, text: str, detail: str = "") -> Html:
@@ -187,6 +252,7 @@ self.addEventListener("fetch", (ev) => {
   if (req.method !== "GET") return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
+  if (url.pathname.startsWith("/launch/")) return;   // iOS fetches startup images at install; never put them in CacheStorage
   if (req.mode === "navigate") {                     // the server, always; when it cannot be reached, say so
     ev.respondWith(fetch(req).then((r) => {
       if (r.status >= 502 && r.status <= 504) return caches.match("/offline");
@@ -208,11 +274,15 @@ self.addEventListener("fetch", (ev) => {
 self.addEventListener("push", (ev) => {
   ev.waitUntil((async () => {
     let shown = [{ title: "SHAFT", body: "Something new", url: "/", tag: "shaft" }];
+    // A stalled tailnet must not consume the push lifetime before iOS gets its required notification.
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 4000);
     try {
-      const r = await fetch("/push/latest", { credentials: "same-origin", cache: "no-store" });
+      const r = await fetch("/push/latest", { credentials: "same-origin", cache: "no-store", signal: ctl.signal });
       const got = r.ok ? ((await r.json()).events || []) : [];
       if (got.length) shown = got;
-    } catch (e) { /* off the tailnet: the plain notification */ }
+    } catch (e) { /* off the tailnet, or timed out: the plain notification */ }
+    finally { clearTimeout(timer); }
     if (self.navigator.setAppBadge) self.navigator.setAppBadge().catch(() => {});
     for (const n of shown) {
       await self.registration.showNotification(n.title, {
@@ -229,7 +299,11 @@ self.addEventListener("notificationclick", (ev) => {
   const url = new URL((ev.notification.data || {}).url || "/", self.location.origin);
   ev.waitUntil((async () => {
     const list = (await self.clients.matchAll({ type: "window", includeUncontrolled: true })).filter((c) => "focus" in c);
-    const there = list.find((c) => new URL(c.url).pathname === url.pathname);
+    const there = list.find((c) => {
+      const current = new URL(c.url);
+      // Archives share the chat's path: bring one forward only after navigating to the current chat.
+      return current.pathname === url.pathname && !current.searchParams.has("id");
+    });
     if (there) {
       try { return await there.focus(); } catch (e) { /* refused: open it instead */ }
       return self.clients.openWindow(url.href);
@@ -289,9 +363,10 @@ def unpaired_page(expired: bool = False) -> Html:
     bar to open a pairing link in: the link is pasted here instead."""
     return page("Link expired" if expired else "Pair this app", h(
         '<section class="notice"><h1>{title}</h1>{reason}'
-        '<p>In your terminal run <code>shaft web pair --name phone-app</code>, copy the link it prints, and paste it '
-        'here. It works once, for 10 minutes.</p>'
-        '<form method="post" action="/pair" class="pairform"><input name="link" type="url" inputmode="url" required '
+        '<p>In your terminal run <code>shaft web pair --name &lt;this device&gt;</code> (phone-app, ipad-app…), copy '
+        'the link it prints, and paste it here. It works once, for 10 minutes.</p>'
+        # text, not url: the server takes the bare token too (_token_from_link); type=url refused it (iPad review P13)
+        '<form method="post" action="/pair" class="pairform"><input name="link" type="text" inputmode="url" required '
         'autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://…/pair?t=…" '
         'aria-label="Pairing link"><button type="submit">Pair</button></form>'
         '<p class="dim">In a browser you can also just open the link.</p>'
@@ -379,7 +454,7 @@ def instance_card(i: dict) -> Html:
              '<span class="dim">· {model}</span></header>{rows}<footer>{buttons}'
              '<a class="msglink" href="/i/{name}#write">Message…</a></footer></article>',
              cls=state_class(i["state"]), name=i["name"], model=i["model"], rows=join(rows),
-             buttons=instance_buttons(i))
+             buttons=instance_buttons(i, kill=False))
 
 
 def _when(m: dict) -> str:
@@ -459,4 +534,5 @@ def overview(snap: dict) -> Html:
 def overview_page(snap: dict, csrf: str) -> Html:
     body = h('<h1 class="sr">Overview</h1><div id="overview" data-poll="/fragment/overview">{live}</div>',
              live=overview(snap))
-    return page("Overview", body, nav([i["name"] for i in snap["instances"]], "overview"), csrf)
+    return page("Overview", join([pagebar("Overview"), body]), nav([i["name"] for i in snap["instances"]], "overview"),
+                csrf)

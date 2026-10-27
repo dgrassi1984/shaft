@@ -359,7 +359,13 @@
           if (localStorage.getItem(draftKey) === submittedDraft) localStorage.removeItem(draftKey);
         } catch (e) { /* none */ }
         api.toast(message);
-        if (box === form) close(false);
+        if (box === form) {
+          // Only the submitted snapshot was saved; keep any text typed while the request was in flight.
+          if (textarea.value !== body.get("text")) {
+            form._saveDraft();
+            result.textContent = `The earlier version was ${body.has("send") ? "sent" : "saved"}. Your later text is still here.`;
+          } else close(false);
+        }
         api.refreshDocs();
       } catch (e) {
         result.textContent = `No answer: ${e.message}. Submit again to retry safely.`;

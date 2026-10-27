@@ -271,6 +271,7 @@ box.scrollBox = true; box.clientHeight = 300; box.scrollHeight = 1000;
 box.querySelector = () => p;
 toBottom(p); box.scrollHeight = 1200;
 for (const f of handlers.load || []) f({target: img}); assert.equal(box.scrollTop, 1200);
+for (const f of handlers.wheel || []) f({target: {closest: () => box}});   // the reader scrolls up (I8: only that stops it)
 box.scrollTop = 100;
 for (const f of handlers.scroll || []) f({target: box});
 box.scrollHeight = 1400;

@@ -9,7 +9,8 @@ JS = Path(__file__).resolve().parents[1] / "web_static" / "web.js"
 
 HARNESS = r"""
 const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
-const handlers = {}, media = [], observers = [];
+const handlers = {}, media = [], observers = [], requests = [];
+const feed = {dataset:{poll:"/fragment/chat/wren"}};
 let phone = true, narrow = true;
 const classes = () => { const s = new Set(); return { contains:k=>s.has(k), add:k=>s.add(k), remove:k=>s.delete(k),
   toggle(k,on){ if(on === undefined) on=!s.has(k); on?s.add(k):s.delete(k); return on; } }; };
@@ -54,12 +55,12 @@ const toast=new Element('toast',body), announce=new Element('announce',body); to
 const document={readyState:'loading',body,activeElement:composer,
   addEventListener(k,fn){(handlers[k] ||= []).push(fn);},
   querySelector(q){return ({'.chatgrid':grid,nav,main,'.chathead [data-toggle-nav]':navbtn,
-    '[data-show-docs]':docbtn})[q]||null;},
+    '[data-show-docs]':docbtn, '.feed[data-follow][data-poll]':feed})[q]||null;},
   querySelectorAll(q){return ({'[data-show-docs]':[docbtn],'[data-toggle-nav]':[navbtn,navclose]})[q]||[];},
   getElementById(id){return ({docs,toast,announce})[id]||body.children.find(el=>el.id===id)||null;}};
 const window={addEventListener(){},matchMedia(q){assert.equal(q,'(max-width: 720px), (pointer: coarse) and (max-height: 520px)');
   return {addEventListener(k,fn){assert.equal(k,'change');media.push(fn);}};}};
-vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),{document,window,URL,location:{href:'https://shaft.test/i/wren/chat'},history:{replaceState(){}},navigator:{},setInterval(){},setTimeout(){},clearTimeout(){},
+vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),{document,window,URL,location:{href:'https://shaft.test/i/wren/chat'},history:{replaceState(){}},navigator:{},fetch:(url,opts)=>{requests.push([url,opts]);return Promise.resolve();},setInterval(){},setTimeout(){},clearTimeout(){},
   localStorage:{getItem(){return null;},setItem(){},removeItem(){}},
   getComputedStyle(el){return {position:el===nav?(phone?'fixed':'static'):(phone||narrow||grid.classList.contains('docfullscreen')?'fixed':'static')};},
   ResizeObserver:class {constructor(fn){observers.push(fn);} observe(el){assert.equal(el,main);}}});
@@ -84,6 +85,19 @@ class SheetsJsTest(unittest.TestCase):
                                  "\n})().catch(e=>{console.error(e);process.exitCode=1;});", str(JS)],
                                 text=True, capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_m10_opening_a_sheet_unwatches_immediately(self):
+        """M10: opening Documents or Chats left the device watching until its next poll."""
+        self.run_sheet(r"""
+for (const opener of [docbtn, navbtn]) {
+  requests.length = 0;
+  await click(opener);
+  assert.equal(requests.length, 1);
+  assert.match(requests[0][0], /^\/fragment\/chat\/wren\?away=1&at=\d+$/);
+  assert.equal(requests[0][1].keepalive, true);
+  await key('Escape');
+}
+""")
 
     def test_issue_6_documents_focus_close_and_poll(self):
         """Reverting #6 leaves focus behind Documents, permits Tab escape, and loses the opener after polling."""

@@ -11,20 +11,11 @@ import re
 import time
 import urllib.parse
 
-from .web_pages import Html, esc, etag, h, join, nav, page
+from .web_pages import Html, esc, etag, h, icon, join, nav, page, pagebar
 
 MARK = {"yes": ("✓", "good"), "partial": ("½", "warn"), "no": ("✗", "bad")}
-ICONS = {name: h('<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
-                'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">{p}</svg>', p=Html(path))
-         for name, path in {
-             "copy": '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H4v13h4"/>',
-             "reply": '<path d="m9 4-6 6 6 6M3 10h10a8 8 0 0 1 8 8v2"/>',
-             "delete": '<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/>',
-             "edit": '<path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
-             "download": '<path d="M12 3v12M7 10l5 5 5-5M5 21h14"/>',
-             "expand": '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
-             "collapse": '<path d="M4 14h6v6M20 10h-6V4M14 10l7-7M3 21l7-7"/>',
-         }.items()}
+ICONS = {name: icon(name, 16) for name in ("copy", "reply", "delete", "edit", "download", "expand", "collapse", "select")}
+_CLOSE = icon("close")                         # the sheets' ✕, drawn
 _DOT = Html('<span class="mark" title="changed in this chat">●</span> ')
 # The documents drawer's full-screen toggle: both glyphs, CSS shows the one aria-pressed calls for (web.js flips it).
 FULLSCREEN = h('<button type="button" class="small icon" data-fullscreen-doc aria-pressed="false" title="Full screen" '
@@ -32,8 +23,8 @@ FULLSCREEN = h('<button type="button" class="small icon" data-fullscreen-doc ari
 INSTANCE_TABS = [("chat", "Chat"), ("", "Summary"), ("config", "Config"), ("drive", "Drive"), ("files", "Files"), ("access", "Access"),
                  ("judge", "Judge"), ("changes", "Changes"), ("benchmarks", "Benchmarks"),
                  ("transcripts", "Transcripts"), ("journal", "Journal"), ("activity", "Activity")]
-BUSY_ICONS = {"in a cycle": "⏳", "working": "⏳", "sleeping": "💤", "paused by you": "⏸",
-              "in a conversation (waiting for you)": "💬"}
+BUSY_ICONS = {"in a cycle": "busy", "working": "busy", "sleeping": "sleep", "paused by you": "pause",
+              "in a conversation (waiting for you)": "waiting"}
 
 
 def q(value: str) -> str:
@@ -96,7 +87,11 @@ def _sort_bar(sort: str, folder: str, chat_id: str = "") -> Html:
     return h('<div class="docsort" role="group" aria-label="Sort the documents">{h}</div>', h=join(heads))
 
 
-def frame(title: str, body: Html, names: list[str], csrf: str, current: str = "") -> Html:
+def frame(title: str, body: Html, names: list[str], csrf: str, current: str = "", bar: bool = True) -> Html:
+    """A page with the rail. On a phone the rail is a sheet behind ☰ and the page has a bar: ‹ Chat, its title, ☰ —
+    the installed app has no browser Back, and the rail filled half the screen above every page (iPhone review I5)."""
+    if bar:
+        body = join([pagebar(title, current), body])
     return page(title, body, nav(names, current), csrf)
 
 
@@ -142,7 +137,7 @@ def files_page(name: str, parts: tuple, entries: list[dict], total: int, page_nu
 
 def chat_frame(name: str, head: Html, body: Html, names: list[str], csrf: str, header_url: str) -> Html:
     head = h('<div data-poll="{u}" data-every="1500">{head}</div>', u=header_url, head=head)
-    return frame(f"{name} · chat", join([head, body]), names, csrf, current=f"i:{name}")
+    return frame(f"{name} · chat", join([head, body]), names, csrf, current=f"i:{name}", bar=False)
 
 
 def earlier_chats(name: str, past: list[dict]) -> Html:
@@ -160,47 +155,64 @@ def earlier_chats(name: str, past: list[dict]) -> Html:
 
 
 def chat_header(name: str, live: dict, chat: dict | None, past: list[dict], read_only: bool = False) -> Html:
-    """The current facts and actions, refreshed independently of the composer and documents."""
+    """The current facts and actions, refreshed independently of the composer and documents. A title with the state
+    under it and three controls (Documents, New chat, ⋯); pages, earlier chats and the instance's actions are in ⋯,
+    Kill last and apart. Seven bordered boxes read as a toolbar, and Clear sat one tap from the title (review I11)."""
     from .web_actions import instance_buttons, post_attrs
     pages = join(h('<a href="{href}">{label}</a>', href=f"/i/{q(name)}" + (f"/{t}" if t else ""), label=label)
                  for t, label in INSTANCE_TABS if t != "chat")
     state = live.get("state", "?")
+    replying = bool(chat and chat.get("state") == "replying")
     facts = [live.get("model") or "", state + (f" since {live['since']}" if live.get("since") else "")]
     if live.get("usd_today"):
         facts.append(f"${live['usd_today']:.2f} today")
-    buttons = instance_buttons(live) if live.get("name") else Html("")
+    buttons, danger = instance_buttons(live, split=True) if live.get("name") else (Html(""), Html(""))
     earlier = join([h('<p class="dim">latest {limit} of {total}</p>', limit=min(20, len(past)), total=len(past)),
                     earlier_chats(name, past[:20]), link(f"/i/{q(name)}/chats", "All earlier chats")])
-    busy = (h('<details class="menu busystate" data-key="busy-state"><summary data-focus="busy" '
-              'aria-label="{n} is {s}">{icon}</summary><div class="menubody">{n} is {s} now: a cycle or sleep '
-              'pauses for your message, anything else is waited for — the reply\'s activity says which.</div></details>',
-              n=name, s=state, icon=BUSY_ICONS.get(state, "•"))
-            if state not in ("idle", "?") and not (chat and chat.get("state") == "replying") else Html(""))
-    return h('<header class="chathead"><button type="button" class="navbtn" data-toggle-nav aria-label="Chats and pages" '
-             'aria-expanded="false" data-focus="nav">☰</button><h1>{name}</h1>{busy}'
-             '<details class="menu earliermenu" data-key="earlier-chats"><summary data-focus="earlier" aria-label="Earlier chats" title="Earlier chats">🕘<span class="docslabel"> Earlier chats</span></summary>'
-             '<div class="menubody">{earlier}</div></details><span class="dim facts">{facts}</span>'
-             '<button type="button" class="small docsbtn" data-show-docs title="its documents (notes/docs/)" '
-             'aria-label="Documents" data-focus="docs">📄<span class="docslabel"> Documents</span></button>{clear}'
-             '<details class="menu" data-key="chat-menu"><summary data-focus="menu" title="{name}: pages and actions" '
-             'aria-label="{name}: pages and actions">⋯'
-             '</summary><div class="menubody"><p class="dim menufacts">{facts}</p>'
-             '<div class="menupages">{pages}</div><div class="actions">{buttons}'
+    if state not in ("idle", "?") and not replying:
+        # What a message does now (api.py work(): a cycle or sleep pauses for the reply; another conversation or run is
+        # waited for; paused by you holds no run, so it answers at once). Plain words for the old one-line rule.
+        what = {"paused by you": f"No cycles run until you resume {name}. It still answers your messages.",
+                "sleeping": "Your message pauses its sleep; the sleep resumes after the reply.",
+                "in a cycle": "Your message pauses its cycle; the cycle resumes after the reply.",
+                # dashboard.instance_state: an open conversation and no run — nothing holds it, so it answers now
+                "in a conversation (waiting for you)": "A conversation with you is open, waiting for your next "
+                                                       "message. A message is answered now."
+                }.get(state, "Your message is answered once it pauses or finishes what it is doing; the reply's "
+                           "activity says which.")
+        sub = h('<details class="menu busystate" data-key="busy-state"><summary data-focus="busy" '
+                'aria-label="{n} is {s}">{icon}<span>{s}</span></summary><div class="menubody">{w}</div></details>',
+                n=name, s=state, w=what, icon=icon(BUSY_ICONS.get(state, "busy"), 14))
+    else:
+        sub = h('<span class="state">{s}</span>', s="replying…" if replying else state if state != "?" else "")
+    # New chat: what Clear did, under the name every chat app gives it. Its confirm says what is kept.
+    new = (h('<form class="act clearbtn" data-post="/chat/{n}/clear" data-confirm="Start a new chat? This one is kept in '
+             'Earlier chats and Transcripts. An open conversation is ended first, and a journal write-up is requested."{a}>'
+             '<input type="hidden" name="cid" value="{cid}"><button type="submit" class="iconbtn" title="New chat" '
+             'aria-label="New chat" data-focus="clear">{i}</button></form>', n=q(name), cid=chat["id"],
+             a=post_attrs("this chat"), i=icon("compose"))
+           if chat and not read_only else Html(""))
+    return h('<header class="chathead"><button type="button" class="navbtn iconbtn" data-toggle-nav '
+             'aria-label="Chats and pages" aria-expanded="false" data-focus="nav">{side}</button>'
+             '<div class="titleblock"><h1>{name}</h1><div class="sub">{sub}<span class="dim facts">{brief}</span>'
+             '</div></div><div class="headtools">'
+             '<button type="button" class="iconbtn docsbtn" data-show-docs title="Documents (notes/docs/)" '
+             'aria-label="Documents" data-focus="docs">{docs}</button>{new}'
+             '<details class="menu chatmenu" data-key="chat-menu"><summary class="iconbtn" data-focus="menu" '
+             'title="{name}: pages and actions" aria-label="{name}: pages and actions">{more}</summary>'
+             '<div class="menubody"><p class="dim menufacts">{facts}</p>'
+             '<div class="menupages">{pages}</div>'
+             '<details class="earliermenu" data-key="earlier-chats"><summary data-focus="earlier">{hist} Earlier chats'
+             '</summary>{earlier}</details>'
+             '{buttons}<div class="actions menuapp">'
+             '<button type="button" class="small" data-notify data-focus="notify">Notify me on this device</button>'
              '<button type="button" class="small" data-hard-reload data-focus="hard-reload" '
-             'title="Clear the app cache and load the current version">Reload / update</button></div>'
-             '<div class="actions"><button type="button" class="small" data-notify data-focus="notify">Notify me on this device</button></div>'
-             '</div></details></header>',
-             name=name, busy=busy, facts=" · ".join(f for f in facts if f), pages=pages, buttons=buttons,
-             earlier=h('<div class="earlier">{e}</div>', e=earlier) if earlier else Html(""),
-             # always on screen (it sat under the last answer, below the fold on a phone); the chat shown now.
-             # On a phone it reads "Clear" (the header also holds the state icon and Earlier chats); its confirm says what is kept.
-             clear=h('<form class="act clearbtn" data-post="/chat/{n}/clear" data-confirm="Clear this chat from the page? '
-                     'The conversation is kept in Earlier chats and Transcripts. An open conversation is ended first, and '
-                     'a journal write-up is requested."{a}><input type="hidden" name="cid" value="{cid}">'
-                     '<button type="submit" class="small" title="Empty this page. The conversation is kept." '
-                     'data-focus="clear">Clear<span class="docslabel"> chat</span></button></form>', n=q(name), cid=chat["id"],
-                     a=post_attrs("this chat"))
-             if chat and not read_only else Html(""))
+             'title="Clear the app cache and load the current version">Reload / update</button></div>{danger}'
+             '</div></details></div></header>',
+             name=name, sub=sub, facts=" · ".join(f for f in facts if f), pages=pages, buttons=buttons, new=new, danger=danger,
+             brief=" · ".join(f for f in [facts[0], *facts[2:]] if f),   # the state is already beside it
+             earlier=h('<div class="earlier">{e}</div>', e=earlier), side=icon("sidebar"), docs=icon("docs"),
+             more=icon("more"), hist=icon("history", 16))
 
 
 def section(title: str, body, cls: str = "") -> Html:
@@ -751,15 +763,23 @@ def _chat_attachments(cid: str, k: int, atts: list[dict]) -> Html:
     return h('<div class="atts">{o}</div>', o=join(out)) if out else Html("")
 
 
-def _activity(lines_: list[str], key: str, open_: bool = False, item: str = "", ended: bool = False) -> Html:
+def _activity(lines_: list[str], key: str, open_: bool = False, item: str = "", ended: bool = False,
+              now: bool = False) -> Html:
     """What it did during a reply, collapsible; `key` keeps it open or shut across the feed's refreshes. `item`: its
     data-k, when it is an item of a keyed poll itself (live_activity): unkeyed, morph replaced it whole each second
-    and its log jumped back to the top."""
+    and its log jumped back to the top. `now`: the reply is running, and the one line says what it is doing now."""
     if not lines_:
         return Html("")
-    return h('<details class="activity"{i}{e} data-key="{k}"{o}><summary>what it did ({n})</summary><div data-scroll-key="{k}">{l}</div></details>',
-             i=h(' data-k="{i}"', i=item) if item else "", e=Html(" data-ended") if ended else "", k=key, o=Html(" open") if open_ else "", n=len(lines_),
-             l=join(h("<p>{x}</p>", x=x) for x in lines_))
+    label = (h('<span class="working">{x}</span> <span class="dim">· {n} steps</span>', x=_one_line(lines_[-1]), n=len(lines_))
+             if now else h("what it did ({n})", n=len(lines_)))
+    return h('<details class="activity"{i}{e} data-key="{k}"{o}><summary>{label}</summary><div data-scroll-key="{k}">{l}</div></details>',
+             i=h(' data-k="{i}"', i=item) if item else "", e=Html(" data-ended") if ended else "", k=key, o=Html(" open") if open_ else "",
+             label=label, l=join(h("<p>{x}</p>", x=x) for x in lines_))
+
+
+def _one_line(text: str, limit: int = 90) -> str:
+    line = " ".join(str(text).split())
+    return line[:limit - 1] + "…" if len(line) > limit else line
 
 
 def _my_text(text: str) -> Html:
@@ -981,8 +1001,8 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
              h('<p class="dim">none yet: ask {n} for one, it appears here as it writes it.</p>', n=name))
     expand = FULLSCREEN if open_path and text is not None and not problem else Html("")
     head = h('<div class="docshead">{title}{new}{expand}<button type="button" '
-             'class="small closedocs" data-close-docs aria-label="Close the documents">✕</button></div>{list}',
-             title=title, expand=expand, new="" if open_path or archived else new,
+             'class="small closedocs" data-close-docs aria-label="Close the documents">{x}</button></div>{list}',
+             x=_CLOSE, title=title, expand=expand, new="" if open_path or archived else new,
              list="" if open_path else h('{s}<div class="doclist">{i}</div>', i=join(entries) if entries else empty,
                                                     s=_sort_bar(doc_sort(sort), folder, chat_id) if len(entries) > 1 else ""))
     download = (download_icon(f"/i/{q(name)}/file?path={q(DIR + '/' + open_path)}")
@@ -1053,7 +1073,8 @@ def attachment_panel(name: str, file_name: str, url: str, text: str | None, prob
     expand = FULLSCREEN if text is not None else Html("")
     head = h('<div class="docshead"><button type="button" class="small" data-back-docs aria-label="Back to the documents">'
              '← Documents</button> <span class="dim">sent by {n}</span>{expand}<button type="button" class="small '
-             'closedocs" data-close-docs aria-label="Close the documents">✕</button></div>', n=name, expand=expand)
+             'closedocs" data-close-docs aria-label="Close the documents">{x}</button></div>', n=name, expand=expand,
+             x=_CLOSE)
     download = download_icon(url) if url else Html("")
     if text is None:
         return join([head, h('<p class="bad">{p}</p>', p=problem or f"{file_name} cannot be shown."),
@@ -1073,7 +1094,7 @@ def _comment_chips(items: list[dict] | None, kind: str = "") -> Html:
                   u=q(item["doc"]), doc=item["doc"], id=item["id"], pre=pre) for item in items)
 
 
-def _reply_failure(name: str, turn: dict, archived: bool) -> Html:
+def _reply_failure(name: str, turn: dict, archived: bool, k: int = -1) -> Html:
     """Keep raw errors available without making the operator interpret them."""
     note = turn.get("note") or ""
     if not note:
@@ -1085,9 +1106,10 @@ def _reply_failure(name: str, turn: dict, archived: bool) -> Html:
     why = {"connection": "The connection to the instance failed.",
            "service": "The service could not finish the reply.",
            "model": "The model could not finish the reply."}.get(kind, "The reply failed.")
-    action = ("No external actions ran. Press Retry, then Send, to try the message again." if offer else
+    action = ("No external actions ran: Retry sends it again." if offer else
               "Actions may already have run. Check Activity and Services before sending again.")
-    recovery = (h('<button type="button" class="small" data-retry="{text}">Retry</button>', text=turn["retry_text"])
+    recovery = (h('<button type="button" class="small" data-retry="{text}" data-retry-of="{k}">Retry</button>',
+                  text=turn["retry_text"], k=k)
                 if offer else h('<a href="/i/{n}/activity">Activity</a> · <a href="/services">Services</a>', n=q(name)))
     return h('<p class="warn recovery">{why} {action}</p><div class="actions">{recovery}</div>'
              '<details class="tech"><summary>Technical details</summary><pre>{raw}</pre></details>',
@@ -1157,7 +1179,16 @@ def live_activity(chat: dict | None) -> Html:
     if not chat:
         return Html("")
     if chat.get("state") == "replying":
-        return _activity((chat.get("reply") or {}).get("activity", []), "live", open_=True, item="act")
+        # The answer as it streams in (the server saves it as it comes: web_chat._run). It showed only at the end, behind
+        # "the answer appears when it is ready" (reviews C11, I9). Not a live region: VoiceOver would read the whole
+        # reply again at every refresh; the finished turn is announced once (web.js morph).
+        reply = chat.get("reply") or {}
+        answer = reply.get("answer") or ""
+        steps = _activity(reply.get("activity", []), "live", item="act", now=True)
+        if not answer.strip():
+            return join([steps, Html('<p class="typing" data-k="wait" aria-label="working"><span></span><span></span>'
+                                     '<span></span></p>')])
+        return join([steps, h('<div class="streaming" data-k="ans">{a}</div>', a=markdown(answer))])   # markdown: its .md
     last = next((t for t in reversed(chat.get("turns") or []) if t["role"] == "assistant"), None)
     if not last:
         return Html("")
@@ -1165,18 +1196,43 @@ def live_activity(chat: dict | None) -> Html:
         or Html('<span data-k="end" data-ended hidden></span>')
 
 
-def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = False) -> Html:
-    """The conversation as it stands: each turn, the files it sent you meanwhile, and the reply running now."""
+CHAT_WINDOW = 80          # turns a chat page draws (review C13/M21); "Show the N earlier messages" draws them all
+
+
+def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = False, whole: bool = False) -> Html:
+    """The conversation as it stands: each turn, the files it sent you meanwhile, and the reply running now. A long one
+    shows its last CHAT_WINDOW turns unless `whole` (?all=1): every poll rendered, sent and morphed the whole history,
+    and a phone opened a long chat slowly (review C13/M21). Turns keep their own index (data-k), so nothing shifts."""
     from .web_actions import button, post_attrs
     if not chat:
         return join([*_sent_cards(name, sent, archived),
-                     h('<p class="dim" data-k="empty">No chat open with {n}. Write below to start one.</p>', n=name)])
+                     h('<div class="emptychat" data-k="empty"><p class="big">Chat with {n}</p><p class="dim">No chat open '
+                       'with {n}. Write below to start one; earlier chats are in ⋯.</p></div>', n=name)])
     items = []
+    first = 0 if whole else max(0, len(chat["turns"]) - CHAT_WINDOW)
+    if first:
+        since = chat["turns"][first]["ts"]
+        sent = [m for m in sent if m.get("ts", "") >= since]
+        more = f"?id={q(chat['id'])}&all=1" if archived else "?all=1"
+        items.append(("", h('<p class="earliermsgs" data-k="more"><a class="button" href="{u}">Show the {n} earlier '
+                            'messages</a></p>', u=more, n=first)))
+    last_answer = max((k for k, t in enumerate(chat["turns"]) if t["role"] != "user" and not t.get("retried")), default=-1)
     for k, t in enumerate(chat["turns"]):
+        if k < first:
+            continue
+        if t.get("retried"):                     # a try that failed and was sent again (Retry): one quiet line
+            if t["role"] != "user":
+                items.append((t["ts"], h('<p class="dim retried" data-k="a{k}">The first try failed and was sent again '
+                                         '<span class="dim">({ts})</span>.</p>', k=k, ts=_turn_time(t["ts"]))))
+            continue
         raw = t.get("shown", t.get("content", "")) if t["role"] == "user" else t.get("content", "")
-        controls = (h('<button type="button" class="copy small icon" data-copy title="copy the message as Markdown" '
-                      'aria-label="Copy the message">{copy}</button><button type="button" class="reply small icon" '
-                      'data-reply-message title="Reply to the message" aria-label="Reply to the message">{reply}</button>',
+        # A message's actions sit under it, out of sight until wanted: hover or keyboard focus on a computer, long-press
+        # or right-click opens them as a menu (web.js msgMenu). Two bordered boxes on every message were bigger than a
+        # short one (iPhone review I12). The last answer keeps its Copy in view (.turn[data-last]).
+        controls = (h('<div class="msgactions"><button type="button" class="copy small icon" data-copy '
+                      'title="Copy the message as Markdown" aria-label="Copy the message">{copy}</button>'
+                      '<button type="button" class="reply small icon" data-reply-message title="Reply to the message" '
+                      'aria-label="Reply to the message">{reply}</button></div>',
                       copy=ICONS["copy"], reply=ICONS["reply"]) if raw else Html(""))
         if t["role"] == "user":
             tag = h(' <span class="dim">· during its reply</span>') if t.get("interjected") else Html("")
@@ -1191,8 +1247,8 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
             shown = t.get("shown", t["content"])
             # data-mid: the page's id for the message, so the "sending" copy it shows goes once this one is here (W7)
             items.append((t["ts"], h('<div class="turn me" data-k="u{k}" data-raw="{raw}"{mid}><div class="who">you '
-                                     '<span class="dim">{ts}</span>{tag}{controls}</div>'
-                                     '{text}{atts}</div>', k=k, ts=_turn_time(t["ts"]), tag=tag, raw=shown, controls=controls,
+                                     '<span class="dim">{ts}</span>{tag}</div>'
+                                     '{text}{atts}{controls}</div>', k=k, ts=_turn_time(t["ts"]), tag=tag, raw=shown, controls=controls,
                                      mid=_mid_attr(t.get("mid")),
                                      text=_my_text(shown) if shown else Html(""),
                                      atts=_chat_attachments(chat["id"], k, t.get("attachments")))))
@@ -1203,13 +1259,14 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
             body = markdown(t["content"]) if t.get("content") else Html("")
             if not t.get("content") and not t.get("note"):
                 body = Html('<p class="dim">(no answer)</p>')
-            recovery = _reply_failure(name, t, archived)
+            recovery = _reply_failure(name, t, archived, k)
             cards = join([doc_cards(t.get("docs"), name if archived else ""), _comment_chips(t.get("answered"), "answered"),
                           _comment_chips(t.get("opened"), "opened")])
             seen = h(' data-seen-inst="{n}" data-seen-reply="{ts}"', n=name, ts=t["ts"]) if not archived else Html("")
-            items.append((t["ts"], h('<div class="turn it" data-k="a{k}" data-raw="{raw}"{seen}><div class="who">{n} '
-                                     '<span class="dim">{ts}</span>{mark}{copy}</div>{act}{body}{cards}{recovery}</div>',
+            items.append((t["ts"], h('<div class="turn it" data-k="a{k}" data-raw="{raw}"{seen}{last}><div class="who">{n} '
+                                     '<span class="dim">{ts}</span>{mark}</div>{act}{body}{cards}{recovery}{copy}</div>',
                                      k=k, raw=t.get("content") or "", n=name, ts=_turn_time(t["ts"]), seen=seen,
+                                     last=Html(" data-last") if k == last_answer else "",
                                      mark=mark, copy=controls, act=_activity(t.get("activity", []), f"t{k}"),
                                      body=body, cards=cards, recovery=recovery)))
     items += [(m["ts"], card) for m, card in zip(sent, _sent_cards(name, sent, archived))]
@@ -1245,9 +1302,8 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
                   'data-now="1"></div>', n=q(name)) if not archived else _activity(r.get("activity", []), "live", open_=True))
         feed.append(h('<div class="turn it live" data-k="live"><div class="who">{n} <span class="dim">replying since {s}'
                       '<span class="elapsed" data-since="{iso}"></span></span></div>'
-                      '{act}{partial}<div class="actions">{stop}</div></div>', n=name, s=_turn_time(r.get("started", "")),
+                      '{act}<div class="actions">{stop}</div></div>', n=name, s=_turn_time(r.get("started", "")),
                       iso=r.get("started", ""), act=live,
-                      partial=h('<p class="dim">the answer appears when it is ready</p>'),
                       stop=button("chat-stop", "Stop the reply",
                                   "stop this reply? Only the reply stops. The conversation stays open.",
                                   {"cid": chat["id"]}, cls="small")))
@@ -1275,29 +1331,39 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
 
 def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], live: dict, names: list[str],
               csrf: str, read_only: bool = False, panel: Html = Html(""), doc: str = "", att: str = "",
-              later: str = "", folder: str = "", sort: str = "", listing_only: bool = False) -> Html:
+              later: str = "", folder: str = "", sort: str = "", listing_only: bool = False, whole: bool = False) -> Html:
     """`att` (<message file>/<index>): the panel shows that text attachment, not a document (attachment_panel).
     `folder` (?dir=): with no document open, the panel lists that folder of notes/docs/.
     `later`: when its next cycle is (autonomy.next_cycle), the Next cycle button's title."""
     from . import messages
     feed_url = f"/fragment/chat/{q(name)}" + (f"?id={q(chat['id'])}" if read_only and chat else "")
+    if whole:                                          # all of it asked for: its refreshes too
+        feed_url += ("&" if "?" in feed_url else "?") + "all=1"
     composer = Html("") if read_only else h(
         '<form class="composer" data-post="/chat/{n}/send" data-multipart="1" data-reset="1" data-files data-draft="{n}" data-sent-mids="{mids}" '
         'data-max-file="{mf}" data-max-total="{mt}" data-max-files="{mn}"><input type="hidden" name="mid" value="">'
         '<input type="hidden" name="queue" value=""><input type="hidden" name="background" value="">'
-        '<div class="chips" data-picked></div>'
-        '<textarea name="text" rows="2" maxlength="20000" placeholder="Message {n}" aria-label="Message {n}">'
-        '</textarea>'
-        '<div class="actions"><label class="pick">Attach files<input type="file" name="files" multiple class="sr-file">'
-        '</label>'
-        '<span class="dim keys">Enter sends · Alt-Enter new line · ⌘-Enter queues · / to write · Alt-↑↓ another chat</span>'
-        '<button type="submit" data-queue="">Send now</button>'
+        '<input type="hidden" name="retry_of" value="">'
+        '<div class="chips" data-picked></div><div class="cbox">'
+        '<label class="pick iconbtn" title="Attach files">{attach}<span class="sr">Attach files</span>'
+        '<input type="file" name="files" multiple class="sr-file"></label>'
+        # prose: the keyboard capitalises and corrects it (review C15)
+        '<textarea name="text" rows="1" maxlength="20000" placeholder="Message {n}" aria-label="Message {n}" '
+        'autocapitalize="sentences" autocorrect="on" spellcheck="true"></textarea>'
+        # One send arrow; the other two ways to send behind it (the operator's call, 2026-10-27: "One arrow + menu").
+        '<div class="sendgroup"><button type="submit" class="send iconbtn" data-queue="" title="Send now" '
+        'aria-label="Send now">{send}</button>'
+        '<details class="menu sendmenu" data-key="send-menu"><summary class="iconbtn" title="More ways to send" '
+        'aria-label="More ways to send">{up}</summary><div class="menubody">'
         # Queue after reply only while a reply runs (web.js syncQueue keeps it in step with the feed's live turn).
         '<button type="submit" data-queue="1" title="Wait for the current reply to finish; sends now if idle"{qh}>'
-        'Queue after reply</button>'
+        'Queue after reply<span class="dim">sent when the current reply ends</span></button>'
         # Next cycle: not answered now — to its inbox, read in its next cycle (PLAN-background-messages.md)
         '<button type="submit" data-background="1" title="Not answered now: to {n}&#x27;s inbox, {later}">'
-        'Next cycle</button></div></form>',
+        'Next cycle<span class="dim">not answered now — {later}</span></button></div></details></div></div>'
+        '<span class="dim keys">Enter sends · Shift-Enter new line · ⌘-Enter queues · / to write · Alt-↑↓ another chat'
+        '</span></form>',
+        attach=icon("attach"), send=icon("send"), up=icon("up"),
         qh="" if (chat or {}).get("state") == "replying" else Html(" hidden"), later=later or "for its next cycle",
         n=name, mf=messages.ATTACH_MAX_BYTES, mt=messages.ATTACH_MAX_TOTAL, mn=messages.ATTACH_MAX_FILES,
         mids=json.dumps(list(dict.fromkeys((chat or {}).get("mids", []) +
@@ -1305,7 +1371,7 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
                         [m["mid"] for m in sent if m.get("from") == "operator" and m.get("mid")]))))
     banner = (h('<p class="panel">Earlier chat, {date}. <a href="/i/{n}/chat">Back to the current chat</a></p>',
                 date=chat['created'][:16].replace('T', ' '), n=q(name)) if read_only and chat else Html(""))
-    feed = chat_feed(name, chat, sent, archived=read_only)
+    feed = chat_feed(name, chat, sent, archived=read_only, whole=whole)
     body = join([banner, h('<section class="panel chat" data-scroll><div class="feed" data-poll="{u}" data-every="1500" data-keyed="1" '
                          'data-follow="1" data-etag="{t}" data-etag-url="{u}">{f}</div></section>'
                          '<button type="button" class="newbelow" data-newbelow hidden>↓ New below</button>',

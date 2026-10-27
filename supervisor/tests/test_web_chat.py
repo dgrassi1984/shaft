@@ -357,7 +357,7 @@ class ChatRoutesTest(WebTest):
             no = self.req("/chat/wren/send", "POST", cookie=self.cookie, body=body,
                           headers={"content-type": ctype, "sec-fetch-site": "same-origin"})
         self.assertEqual((ok.status, no.status), (200, 403))
-        send.assert_called_once_with("wren", ME, "hi", [], mid="")
+        send.assert_called_once_with("wren", ME, "hi", [], mid="", retry_of="")   # retry_of: Retry in place (P9)
 
     def test_issue_70_queue_routes_require_csrf(self):
         """Reverting #70 bypasses queuing and leaves cancellation unavailable to the paired page."""
@@ -491,7 +491,9 @@ class ChatCentricTest(ChatRoutesTest):
         self.assertIn("earlier answer", body)
         self.assertIn("Your next message starts a new conversation", body)
         self.assertIn('data-post="/chat/wren/send"', body)
-        self.assertIn('<summary data-focus="earlier" aria-label="Earlier chats" title="Earlier chats">🕘<span class="docslabel"> Earlier chats</span></summary>', body)  # #8: beside navigation
+        # #8, then PLAN-pwa-market: in the ⋯ menu, with the instance's pages (the header keeps three controls)
+        self.assertRegex(body, r'data-key="chat-menu">.*<details class="earliermenu" data-key="earlier-chats"><summary '
+                               r'data-focus="earlier"><svg[^>]*>.*?</svg> Earlier chats</summary>')
         self.assertIn(f"/i/wren/chat?id={old['id']}", body)
         frag = self.req("/fragment/chat/wren", cookie=self.cookie).body.decode()
         self.assertIn("earlier answer", frag)                                       # its refresh shows the same
@@ -1142,8 +1144,8 @@ class ClearInHeaderTest(ChatRoutesTest):
         self.assertIn('>Resume<', body)
         self.assertNotIn('>Pause<', body)
         self.assertIn('different-model · paused by you · $1.25 today', body)
-        self.assertIn('wren is paused by you now', body)
-        self.assertIn('details class="menu" data-key="chat-menu"', body)
+        self.assertIn('No cycles run until you resume wren. It still answers your messages.', body)
+        self.assertIn('details class="menu chatmenu" data-key="chat-menu"', body)
         idle = self.req("/fragment/chat/wren/header", cookie=self.cookie).body.decode()
         self.assertNotIn('class="warn"', idle)
         self.assertNotIn('textarea', body)

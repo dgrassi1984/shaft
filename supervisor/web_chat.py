@@ -308,7 +308,25 @@ def _post(chat: dict, route: str, body: dict, timeout: float = 15) -> tuple[int,
 
 
 def _api_messages(chat: dict) -> list[dict]:
-    return [{"role": t["role"], "content": t["content"]} for t in chat["turns"] if t.get("content") or t["role"] == "user"]
+    """The conversation for the API — without a try that failed and was retried (mark_retried): the model would read the
+    question twice and a failed answer between."""
+    return [{"role": t["role"], "content": t["content"]} for t in chat["turns"]
+            if not t.get("retried") and (t.get("content") or t["role"] == "user")]
+
+
+def mark_retried(chat: dict, k: int, text: str) -> bool:
+    """Retry in place (iPad review P9): the failed reply `k` and the question it answered are kept, marked retried —
+    the feed folds them into one line, the API no longer sees them. Only a failure that offered Retry (note_retry: no
+    tools ran), the question being the text sent again. False: nothing marked, the message is sent as any other."""
+    turns = chat.get("turns") or []
+    if not 0 < k < len(turns):
+        return False
+    failed, asked = turns[k], turns[k - 1]
+    if (failed.get("role") != "assistant" or not failed.get("note_retry") or failed.get("retried")
+            or asked.get("role") != "user" or (failed.get("retry_text") or "").strip() != text.strip()):
+        return False
+    failed["retried"] = asked["retried"] = True
+    return True
 
 
 # -- why a reply failed ----------------------------------------------------------------------------------------------
@@ -704,15 +722,21 @@ def send_comment_background(name: str, login: str, pid: str) -> str:
 
 
 def send(name: str, login: str, text: str, files: list[tuple[str, bytes]], mid: str = "", *,
-         comment_block: str = "", comments: list[dict] | None = None) -> tuple[dict, str]:
+         comment_block: str = "", comments: list[dict] | None = None, retry_of: str = "") -> tuple[dict, str]:
     """A message from the operator: a new reply if none is running, an interjection otherwise. (chat, what to say)
-    `mid`: the page's id for this message — sent again after an answer that never arrived, it is not sent twice."""
+    `mid`: the page's id for this message — sent again after an answer that never arrived, it is not sent twice.
+    `retry_of`: the index of the failed reply this sends again (Retry): it and its question fold (mark_retried)."""
     from . import messages
     with _inst_lock(name):
         if _in_chat(c := open_chat(name), mid):
             return c, f"already sent to {name}"
         if messages.sent_mid(name, mid):          # the same message, sent for its next cycle before its answer was lost
             return open_chat(name) or {}, f"already sent to {name} for its next cycle"
+        if retry_of.isdigit() and (c := open_chat(name)) and c.get("state") != "replying" and not files:
+            with _lock(c["id"]):
+                c = load(c["id"])
+                if mark_retried(c, int(retry_of), text):
+                    save(c)
         chat, said = _send(name, login, text, files, comment_block=comment_block, comments=comments, mid=mid)
     # a question it quotes is answered, as a Telegram reply answers it
     if (answered := messages.answer_quoted(name, text)):

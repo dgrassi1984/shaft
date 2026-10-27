@@ -18,7 +18,7 @@ function page() {
     readyState: 'loading',
     body: { appendChild() {}, classList: { contains: () => false } },
     addEventListener(k, fn) { (handlers[k] ||= []).push(fn); },
-    querySelector: q => q === 'meta[name="static-version"]' ? { content: 'old' } : null,
+    querySelector: q => q === 'meta[name="static-version"]' ? { content: 'current' } : null,
     querySelectorAll: () => [],
     getElementById: id => els.find(e => e.id === id) || null,
     createElement() {
@@ -68,7 +68,7 @@ function page() {
   assert.equal(reloads, 1);
   if (mode !== 'missing' && mode !== 'storage') {
     assert.deepEqual(updated, [0, 1]);
-    assert.deepEqual(removed, ['shaft-old', 'shaft-current']);
+    assert.deepEqual(removed, ['shaft-old']);
   }
   assert.equal(saved.get('other'), 'keep');
   if (['update', 'cache', 'missing'].includes(mode)) {
@@ -90,6 +90,10 @@ class HardReloadJsTest(unittest.TestCase):
     def run_mode(self, mode):
         result = subprocess.run([NODE, "-e", HARNESS, mode, str(JS)], text=True, capture_output=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+
+    def test_b7_reload_preserves_the_active_offline_cache(self):
+        """B7: unchanged sw.js must retain its installed cache and /offline after Reload / update."""
+        self.run_mode("success")
 
     def test_issue_66_reload_clears_only_app_caches(self):
         """Reverting #66 leaves registrations and SHAFT caches in place instead of reloading once."""
