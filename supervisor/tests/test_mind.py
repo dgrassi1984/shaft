@@ -227,6 +227,23 @@ class CutoverTest(Project):
         with self.assertRaisesRegex(mind.MindError, "not SHAFT's"):
             mind.guard_project(self.project)
 
+    def test_setup_installs_the_push_guard(self):
+        # Bug (2026-10-27): only a manual `shaft mind guard` installed the hook, so a fresh clone set up as the README
+        # said could `git push --all` the instance branches. `shaft setup` is the first step of every install and move.
+        empty = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+        with mock.patch.object(cli, "git", return_value=empty), \
+                mock.patch.object(cli.mind, "guard_project", return_value=Path("/x/hooks/pre-push")) as guard, \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(cli.cmd_setup(), 0)
+        guard.assert_called_once_with()
+        self.assertIn("instance/* branches are refused on push", out.getvalue())
+        # Someone else's pre-push hook: the worktrees are made, but setup says the guard is missing and fails.
+        with mock.patch.object(cli, "git", return_value=empty), \
+                mock.patch.object(cli.mind, "guard_project", side_effect=mind.MindError("pre-push exists and is not SHAFT's")), \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(cli.cmd_setup(), 1)
+        self.assertIn("push guard is not installed", err.getvalue())
+
 
 class ReadersTest(unittest.TestCase):
     """drift, status, create, fork and birth read and write the mind through the store."""

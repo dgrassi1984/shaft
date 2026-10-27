@@ -11,9 +11,24 @@ By Daniele Grassi. [MIT licensed](LICENSE).
 
 ## Status
 
-Personal research project. **macOS only. Expect breakage.** Interfaces, defaults,
-and model dependencies can change. Start with one instance and inspect its activity
-before leaving it autonomous. See the [design history](docs/plans/PLAN.md).
+Personal research project, at **v0.13.0** (2026-10-27). **macOS only. Expect breakage.**
+Interfaces, defaults, and model dependencies can change. Start with one instance and
+inspect its activity before leaving it autonomous.
+
+The author runs it every day on one Mac mini, with several instances on cloud and
+local models. On `main` today:
+
+- the supervisor, sandbox, broker, test gate with probation, and cloud judges;
+- private mind stores, kept out of the shared repository;
+- the terminal client, the web UI/PWA for iPhone and iPad, the API, and Telegram;
+- mail, calendar, and Drive grants, instance-owned Google accounts, a shared
+  Chromium, scheduled jobs, and per-instance Python environments;
+- trials, the capability battery, consults with other models, and the measurement
+  reports in the [CLI reference](docs/cli.md).
+
+The reference documents below describe the current behaviour. The plans in
+[docs/plans/](docs/plans/PLAN.md) are dated design records. Their status lines
+describe the plan when it was written, so they may be out of date.
 
 > **Safety:** Instances execute self-written code and can reach the public internet
 > through an egress proxy. That proxy rejects localhost, LAN, and tailnet addresses;
@@ -43,7 +58,12 @@ from memory.
 ## Requirements
 
 - macOS with `sandbox-exec` and a logged-in user session for `launchd` services.
-- Python 3.12 or later available as `python3`, git, and `uv` on your PATH.
+- Python 3.12 or later available as `python3`, git, and `uv` on your PATH. With
+  Homebrew: `brew install python@3.12 uv`. The scheduler, API, web, and Telegram
+  services record the absolute path of the Python that installed them. The
+  model and embedding services run `.venv-bonsai`'s Python. If either moves,
+  run the service's `on` command again.
+- Git `user.name` and `user.email` set, because creating an instance makes commits.
 - Cloud-provider credentials for the cloud-only quickstart below.
 - Optional: Apple Silicon and the MLX model pack for [local inference](docs/local-model.md).
 - Optional: Tailscale for the [web UI and API](docs/web-and-api.md).
@@ -67,8 +87,18 @@ This path needs no local model, only cloud API keys.
    ```
 
    `setup` restores worktrees for existing local or `origin` branches. It does not
-   create a template or an instance from nothing. If the last command fails, this
-   checkout lacks the required template branch; instance creation cannot proceed.
+   create a template or an instance from nothing. It also installs a `pre-push`
+   hook that refuses to push `instance/*` branches, because their history holds
+   the instances' minds. If another tool already owns that hook, `setup` exits
+   with status 1. In that case, merge SHAFT's refusal into the hook yourself.
+   If the last command fails, this checkout lacks the required template branch,
+   and you cannot create instances.
+
+   Optionally, put the launcher on your PATH (the rest of this guide uses `bin/shaft`):
+
+   ```bash
+   mkdir -p ~/.local/bin && ln -s "$PWD/bin/shaft" ~/.local/bin/shaft
+   ```
 
 2. Copy the secret template, then edit `.env` with your own keys:
 
@@ -76,10 +106,10 @@ This path needs no local model, only cloud API keys.
    cp .env.example .env
    ```
 
-   Set `ANTHROPIC_API_KEY` and `OPENROUTER_API_KEY` to use the default cloud and
-   judge configuration. `SCRAPEBADGER_API_KEY` is optional for web search.
-   Do not put secrets in instance config. The default judge pool uses both
-   providers.
+   Set `ANTHROPIC_API_KEY` for the `claude-haiku-5-5` instance below, and
+   `OPENROUTER_API_KEY` for the default judges. The judges are all OpenRouter
+   models (`SHAFT_JUDGE_MODELS`), as are consultations with other models. `SCRAPEBADGER_API_KEY` is optional for web search.
+   Do not put secrets in instance config.
 
 3. Install the terminal client dependencies:
 
@@ -98,7 +128,6 @@ This path needs no local model, only cloud API keys.
    bin/shaft config example set OPERATOR_NAME="Your Name" LLM_BASE_URL=broker LLM_MODEL=claude-haiku-5-5
    ```
 
-   Git needs an author name and email configured because `new` makes commits.
    The second command updates `instances/example/config.env`. You can instead
    edit that file to set `OPERATOR_NAME`, `LLM_BASE_URL="broker"`, and
    `LLM_MODEL="claude-haiku-5-5"`. Leave `LLM_API_KEY` empty. Your name is optional;
@@ -147,6 +176,15 @@ instance settings. Supervisor knobs use environment > `.supervisor/settings.env`
 > default; long-running services need a restart to pick up saved changes.
 See [configuration](docs/configuration.md) for every knob and its default.
 
+## Backups and moving to a new Mac
+
+GitHub holds only `main` and `template`. The instances exist only on this Mac:
+their branches, their private mind stores under `.supervisor/minds/`, their
+gitignored files, and the supervisor's state and credentials. A fresh clone gives
+you SHAFT, not your instances. To move a setup, stop it, copy the whole project
+folder, and reinstall the services on the new Mac. Follow
+[moving SHAFT to a new Mac](docs/migration.md), which also lists what to back up.
+
 ## Development
 
 Run the supervisor tests from the repository root:
@@ -166,7 +204,9 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and review guidanc
 - [Integrations](docs/integrations.md)
 - [Local and self-hosted models](docs/local-model.md)
 - [Rules the supervisor enforces](docs/safety.md)
-- [Design plans and milestones](docs/plans/PLAN.md)
+- [Moving SHAFT to a new Mac](docs/migration.md)
+- [A worktree the tests pass in](docs/worktrees.md) (development)
+- [Design plans and milestones](docs/plans/PLAN.md) (dated design records)
 - [Security policy](SECURITY.md)
 
 ## License

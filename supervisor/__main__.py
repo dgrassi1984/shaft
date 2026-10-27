@@ -277,7 +277,7 @@ def _said(text: str) -> None:
 
 
 def cmd_setup() -> int:
-    """Recreate missing worktrees from branches — e.g. after a fresh clone."""
+    """Recreate missing worktrees from branches — e.g. after a fresh clone — and install the push guard."""
     branches = git("for-each-ref", "--format=%(refname:short)", "refs/heads/template",
                    "refs/heads/instance/").stdout.split()
     remote = git("for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/template",
@@ -296,6 +296,13 @@ def cmd_setup() -> int:
         path.parent.mkdir(exist_ok=True)
         git("worktree", "add", "-q", str(path), branch)
         print(f"created {branch:24} {path.relative_to(PROJECT)}")
+    # A fresh clone has no hooks: until `shaft mind guard` ran, nothing stopped `git push --all` from publishing the
+    # instance branches, whose history holds the minds of the past (PLAN-mind-out-of-git.md D4).
+    try:
+        print(f"guarded {mind.guard_project()}: instance/* branches are refused on push")
+    except mind.MindError as e:
+        print(f"worktrees ready, but the push guard is not installed: {e}", file=sys.stderr)
+        return 1
     return 0
 
 

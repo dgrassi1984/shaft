@@ -4,9 +4,10 @@
 mkdir -p ~/.local/bin
 ln -s "$PWD/bin/shaft" ~/.local/bin/shaft   # once; add ~/.local/bin to PATH
 
-shaft talk [name]               # chat with its tools, in the terminal client (see web-and-api.md); --plain for line mode
+shaft talk [name]               # chat with its tools, in the terminal client (see web-and-api.md); --plain for line mode,
+                                #   --show-thinking to print its reasoning
 shaft talk [name] --as "NAME"   # you are not the operator: recorded as NAME, never remembered as the operator
-shaft live|reflect|sleep [name|--all]   # one autonomous cycle / reflection / consolidation
+shaft live|reflect|sleep [names…|--all]   # one autonomous cycle / reflection / consolidation
 shaft autonomy on|off|status    # SHAFT's scheduler service: each instance wakes every WAKE_INTERVAL_MINUTES
                                 # (its config.env; default 120, at least 10, 0 = never; a wake while it is
                                 # already awake is skipped), sleep daily from 04:00 (made up later if missed)
@@ -23,7 +24,7 @@ shaft top                       # control panel, tabs 0–9: overview (state, no
                                 #   off runs using api/model/embed, asks to be forced, naming them; logged). a writes each instance a one-line recap; what it is doing now
                                 #   and did in the last hour; by a small model from its own records
                                 #   (SHAFT_RECAP_MODEL, default claude-haiku-5-5; supervisor/recap.py, usage is recorded in the recaps cost category). ? lists the keys; --once prints a text snapshot
-shaft web on|off|status|pair|unpair   # the same control panel in a browser, tailnet only, plus chat, config,
+shaft web on|off|status|pair [--name N]|unpair <id|name>|--all   # the same control panel in a browser, tailnet only, plus chat, config,
                                 #   drive and access (web-and-api.md)
 shaft cycle <name>              # one cycle of an idle instance now, detached (shaft top's c)
 shaft recap [names]             # write the one-line recaps now (shaft top's a)
@@ -35,43 +36,47 @@ shaft docs <name> rm PATH --expect-sha SHA   # delete an existing document only 
                                 #   its next run commits the deletion; comment threads are kept
 shaft docs <name> comments [PATH] [--sync]   # the comment threads on its documents; --sync rewrites the
                                 #   read-only copy notes/comments/PATH from the supervisor's store
-shaft config <name> [set KEY=VALUE…|unset KEY…] [--expect KEY=VALUE]   # its config.env as the operator: one
+shaft config <name> [set KEY=VALUE…|unset KEY…] [--expect KEY=VALUE] [--expect-unset KEY]   # its config.env as the operator: one
                                 #   write and one commit; refused if a value changed since you looked
 shaft drive <name> [set --file F|remove] --expect-sha SHA   # what it is for (drive.md), compare-and-set
-shaft settings [set KEY=VALUE…|unset KEY…] [--expect KEY=VALUE]   # the supervisor's own settings (configuration.md): every
+shaft settings [set KEY=VALUE…|unset KEY…] [--expect KEY=VALUE] [--expect-unset KEY] [--json]   # the supervisor's own settings (configuration.md): every
                                 #   knob with its value, source and default; set/unset write .supervisor/settings.env
-shaft status [name]             # how each instance is doing, open conversations, which code is running
+shaft status [names…]           # how each instance is doing, open conversations, which code is running
 shaft model on|off|status       # SHAFT's own Bonsai 2 server (launchd, :8780; started on demand, exits when idle)
 shaft api on|off|status|key|inbox-key   # OpenAI-compatible API + inbox doorbell on your tailnet (web-and-api.md)
 shaft telegram token <name>|pair|unpair|on|off|status   # talk with each instance from Telegram (integrations.md)
 shaft log [name] -n 5           # recent journal entries
 shaft stats [name]              # achieved difficulty, goal origins, judged success, calibration, honesty
-shaft judge backfill [name]     # rate origin/difficulty/novelty of cycles judged before those ratings existed
-shaft battery run [name]        # the capability battery now (normally the scheduler runs it at night)
+shaft judge backfill [names…]   # rate origin/difficulty/novelty of cycles judged before those ratings existed
+shaft battery run [names…]      # the capability battery now (normally the scheduler runs it at night);
+                                #   --until HH:MM, --only <categories>, --limit N, --no-control
 shaft battery run <name> --control-only   # only the control: do the items discriminate?
-shaft battery report|recall|backup [name] # results and judge spend · freeze recall questions · back up items
+shaft battery report|recall|backup [names…] # results and judge spend · freeze recall questions (recall --force:
+                                #   new questions, a new era) · back up items
 shaft battery off|on <name>      # no battery for this instance, scheduled or by hand
 
 shaft inbox [--clear]           # questions and notes instances sent you (you also get a notification)
 shaft reply <name> "…"          # answer its open question
 shaft send <name> "…"           # message it
 
-shaft update [name|--all]       # merge template fixes into instances, gate-tested; a busy one is queued and
+shaft update [names…|--all]       # merge template fixes into instances, gate-tested; a busy one is queued and
                                 # updated by the scheduler as soon as it is idle, before its next wake
 shaft new <name> [--from <i>]   # new instance from the template, or forked from <i> (genes, not memories)
 shaft new <name> --from <i> --seed   # …also knowing what <i> knows about you: its people file and facts.md,
                                 # marked as <i>'s beliefs in <i>'s voice; never its self, journal or episodes
 shaft breed <a> <b> <child>     # child from two instances' recombined genes, fresh mind (judge picks)
 shaft drift [name]              # how its personality changed; distance to other instances
-shaft mind status|backfill|check|cutover|guard [name]   # the private mind stores (cutover: one instance, idle)
+shaft mind status|backfill|check|cutover|guard [names…] [-n N]   # the private mind stores (cutover: one instance, idle)
 shaft distinct [name]           # blind test: can the judge tell it from the bare base model?
 shaft distinct [name] --strict  # …again on answers stripped of specifics: voice, not memory
-shaft dataset|finetune [name]   # M6: export experiences / train a judged LoRA adapter (MLX)
+shaft dataset|finetune [name]   # M6: export experiences / train a judged LoRA adapter (MLX);
+                                #   finetune --iters N, --min-examples N (default 20)
 
 shaft limits [name] [wake-floor <min>|cloud-cap <usd>|consult-cap <usd>|off]
                                      # wake floor (default 10 min), daily cloud cap ($8), daily consult cap ($3)
                                      # use off as the value to restore the selected limit's default
 shaft jobs [name] [on|off]           # instances' scheduled jobs: their plugins on a timer (runs, errors, wakes)
+shaft job run <name> <plugin>        # run one scheduled job now (the scheduler's own entry point)
 shaft tools <name> [on|off <tool>]   # an instance's supervisor tools, e.g. off delegate_coding (operator-only:
                                      # kept in .supervisor/, so the instance cannot switch it back on)
 shaft channel <name> [auto|web|telegram]   # where its messages to you notify you (integrations.md): auto = where
@@ -82,7 +87,10 @@ shaft mail <name> grant|revoke <alias> <label>   # the label's threads an instan
 shaft mail [name]                    # accounts and grants
 shaft calendar <name> grant|revoke <alias> primary|<title>|<id>   # one calendar it may read · shaft calendar <name> off
 shaft calendar [name] · shaft calendar calendars <alias>          # grants · an account's calendars, to pick one
-shaft pause [name] · shaft resume [name] · shaft check [name] · shaft setup · shaft list
+shaft pause [name] · shaft resume [name] · shaft check [name] · shaft list
+shaft setup                          # recreate missing template/instance worktrees from local or origin branches,
+                                     # then install the pre-push guard (as shaft mind guard); exit 1 if another
+                                     # tool's pre-push hook is in the way (docs/migration.md)
 shaft kill <name> [--wait S]         # pause it AND stop what it runs now: a cycle, a reply, a job, the battery,
                                      # a trial replay; the run still settles (journal note, gate, commit). Waits up
                                      # to S s (120) for that; shaft resume <name> undoes the pause
@@ -95,8 +103,10 @@ shaft delete <name> [--yes] [--no-archive]   # remove it and every trace of it: 
 
 shaft trial list [name]                    # trials of proposed changes (an instance asks with its `trial` tool)
 shaft trial show <name> <id>               # one trial: each replayed cycle, outcome, the report it was sent
-shaft trial run <name> --cand PATH=FILE …  # an operator trial (planted tests; --base PATH=FILE, --aa, --model)
-shaft trial replay <name> <episode-ts>     # replay one past cycle once with the current code (debug)
+shaft trial run <name> --cand PATH=FILE …  # an operator trial (planted tests; --base PATH=FILE, --aa,
+                                           #   --model auto|cloud|local, --hypothesis T, -n N, --episodes TS…)
+shaft trial replay <name> <episode-ts>     # replay one past cycle once with the current code (debug;
+                                           #   --model local|<cloud id>, --keep DIR copies the folder)
 shaft trial work                           # run what may run now (the scheduler does this)
 ```
 
@@ -111,10 +121,12 @@ identity costs usefulness. Records go to `.supervisor/evals/distinct-<name>-*.js
 ## Additional commands
 
 ```text
-shaft share <name> <folder>|off     # grant or revoke a read-only shared folder
+shaft share <name> [<folder>|off]   # show, grant or revoke a read-only shared folder
 shaft browser [install [--playwright X.Y.Z]]
-shaft secret <name> set <key> --hosts <host>  # prompt for a host-bound key
-shaft secret <name> google <key> <address> --client <client> [--scope drive]
+shaft secret <name> set <key> --hosts <host> [--header H] [--scheme S]  # prompt for a host-bound key
+                                    #   (default: Authorization: Bearer <value>; --scheme '' sends it raw)
+shaft secret <name> list|delete [<key>]  # its keys, described without values · remove one
+shaft secret <name> google <key> <address> --client <client> [--scope gmail.modify|drive]
 shaft judge second [names]        # process sampled second opinions
 shaft surprise [names] [--freeze] # unexpected results and baseline
 shaft surprise-rejudge <names> [--dry-run] [--limit N] [--report] [--control]  # re-judge the newest N pre-M1 cycles, each by its stored judge (paid)
