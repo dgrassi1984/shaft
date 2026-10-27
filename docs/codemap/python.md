@@ -177,7 +177,10 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_web_docs_sort.py` | `SizeLabelTest`, `WhenLabelTest`, `DocsSortViewTest`, `DocsSortRouteTest`, `DocsSortJsTest` | `order` |
 | `supervisor/tests/test_web_files.py` | `FilesTest` | — |
 | `supervisor/tests/test_web_forms_js.py` | `FormJsTest`, `AfterHandlersTest` | — |
+| `supervisor/tests/test_web_launch.py` | `Links`, `LaunchTest` | — |
 | `supervisor/tests/test_web_layout_recovery.py` | `RecoveryTest`, `RecoveryJsTest` | — |
+| `supervisor/tests/test_web_market.py` | `StreamingTest`, `HeaderTest`, `ComposerTest`, `LongPressTest`, `MessageActionsTest`, `IPadTest`, `RetryInPlaceTest`, `LongChatTest`, `AlertsTest`, `LayoutTest` | `replying` |
+| `supervisor/tests/test_web_market_js.py` | `MarketJsTest` | — |
 | `supervisor/tests/test_web_md.py` | `NeverMarkupTest`, `BlocksTest`, `InlineTest`, `MarkdownHeadingScaleTest`, `PlaceholdersInLinksTest` | `md` |
 | `supervisor/tests/test_web_notify_js.py` | `NotifyButtonJsTest` | — |
 | `supervisor/tests/test_web_open_latest_js.py` | `OpenAtLastMessageTest` | `feed` |
@@ -206,11 +209,11 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/web.py` | `Request`, `Response`, `Handler` | `allowed_logins`, `tailnet_hosts`, `record_hosts`, `allowed_hosts`, `url`, `new_pairing`, `devices`, `unpair`, `device_from_cookie`, `csrf_token`, `overview`, `respond`, `activity`, `attachment_path`, `serve`, `command` |
 | `supervisor/web_actions.py` | `Refused` | `run`, `page_wait`, `server_limit`, `post_attrs`, `button`, `instance_buttons`, `message_forms`, `tool_switches`, `alert_line`, `tool_row`, `saved_row`, `alert_buttons`, `service_buttons`, `guarded`, `autonomy_button` |
 | `supervisor/web_alerts.py` | — | `event`, `forward_new`, `start` |
-| `supervisor/web_chat.py` | `Refused`, `Relay` | `load`, `save`, `chats`, `open_chat`, `watching`, `unwatch`, `watchers`, `reply_event`, `summary`, `shown`, `new_chat`, `reap`, `classify_reply`, `replying`, `edit_diff`, `doc_saved`, `send_comment`, `background`, `send_comment_background`, `send`, `queue`, `unqueue`, `stop`, `end`, `clear`, `parse_multipart` |
+| `supervisor/web_chat.py` | `Refused`, `Relay` | `load`, `save`, `chats`, `open_chat`, `watching`, `unwatch`, `watchers`, `reply_event`, `summary`, `shown`, `new_chat`, `reap`, `mark_retried`, `classify_reply`, `replying`, `edit_diff`, `doc_saved`, `send_comment`, `background`, `send_comment_background`, `send`, `queue`, `unqueue`, `stop`, `end`, `clear`, `parse_multipart` |
 | `supervisor/web_config.py` | — | `run`, `config_row`, `config_page`, `drive_diff`, `drive_page`, `access_page`, `access` |
-| `supervisor/web_icons.py` | — | `png`, `main` |
+| `supervisor/web_icons.py` | — | `png`, `launch_png`, `main` |
 | `supervisor/web_md.py` | — | `esc`, `render`, `inline`, `plain`, `first_line` |
-| `supervisor/web_pages.py` | `Html` | `esc`, `h`, `join`, `etag`, `page`, `rail`, `nav`, `message_page`, `manifest`, `service_worker`, `offline_page`, `unpaired_page`, `pair_page`, `state_class`, `instance_card`, `message_line`, `overview`, `overview_page` |
+| `supervisor/web_pages.py` | `Html` | `esc`, `h`, `join`, `etag`, `icon`, `page`, `rail`, `nav`, `pagebar`, `message_page`, `manifest`, `service_worker`, `offline_page`, `unpaired_page`, `pair_page`, `state_class`, `instance_card`, `message_line`, `overview`, `overview_page` |
 | `supervisor/web_settings.py` | — | `listing`, `run`, `status`, `page_body` |
 | `supervisor/web_views.py` | — | `q`, `size_label`, `when_label`, `doc_sort`, `frame`, `instance_frame`, `files_page`, `chat_frame`, `earlier_chats`, `chat_header`, `section`, `lines`, `rows`, `table`, `pre`, `link`, `download_icon`, `when`, `clip`, `inline`, `markdown`, `spark`, `instance_live`, `instance_summary`, `judge_page`, `judge_detail_page`, `trials_live`, `trials_page`, `trial_report`, `trial_page`, `benchmarks_page`, `changes_page`, `journal_page`, `activity_page`, `transcripts_page`, `transcript_page`, `messages_page`, `text_view`, `message_page`, `costs_page`, `services_live`, `services_log`, `services_page`, `doc_cards`, `in_chat`, `threads_list`, `docs_panel`, `attachment_panel`, `live_activity`, `chat_feed`, `chat_page` |
 | `supervisor/webpush.py` | `PushError` | `b64url`, `ensure_key`, `public_key`, `vapid_token`, `subscriptions`, `allowed_endpoint`, `subscribe`, `holds`, `status`, `unsubscribe`, `take`, `notify`, `fingerprint` |
