@@ -33,6 +33,13 @@ FIELDS: dict[str, tuple[type, object]] = {
     "MAX_STEPS_TALK": (int, 0),        # 0 = no limit (conversations)
     "CONTEXT_JOURNAL_CHARS": (int, 16000),
     "CURIOSITY_EVERY_CYCLES": (int, 5),   # one live cycle in this many, on average, takes its goal from my surprises; 0 = never
+    # docs/plans/PLAN-consciousness.md: each mechanism on, behind a knob its kill test flips (shaft experiment …)
+    "OUTCOME_CARDS": (str, "on"),         # before a kind of action that has been failing, what comparable ones led to
+    "WORKSPACE": (str, "competitive"),    # what wins a small space at the front of my live cycle
+    "WORKSPACE_K": (int, 3),              # how many items it holds
+    "ATTENTION_SCHEMA": (str, "on"),      # declare_intent asks where I expect to look
+    "COMMITMENTS": (str, "on"),           # commit_to, kept against my record
+    "FORECAST": (str, "on"),              # what goals like mine have cost, when I declare one
     "OPERATOR_NAME": (str, "the operator"),
 }
 
@@ -87,8 +94,11 @@ def parse_env_file(path: Path) -> dict[str, str]:
     return out
 
 
-# Values the model server accepts (Bonsai's template raises on anything else, which would fail every call).
-CHOICES = {"LLM_REASONING_EFFORT": ("medium", "xhigh", "low")}
+# The values a setting accepts; anything else keeps the next source's value. LLM_REASONING_EFFORT: what the model server
+# accepts (Bonsai's template raises on anything else, which would fail every call). The rest: PLAN-consciousness's knobs.
+CHOICES = {"LLM_REASONING_EFFORT": ("medium", "xhigh", "low"),
+           "OUTCOME_CARDS": ("on", "off", "shuffled", "recall"), "WORKSPACE": ("competitive", "relevance", "off"),
+           "ATTENTION_SCHEMA": ("on", "off"), "COMMITMENTS": ("on", "off"), "FORECAST": ("on", "reserve", "off")}
 
 
 def _coerce(kind: type, raw: str, name: str = ""):

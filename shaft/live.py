@@ -5,12 +5,19 @@ the outcome after; both are recorded so the supervisor can measure how well I
 predict my own success (calibration) and have a judge check my claim. When my record has judged cycles in
 the band of the confidence I declare, I see that base rate and confirm or change the number once before
 acting (base_rate.py); a confirmed intent keeps both numbers (v3), one never confirmed stays v2.
+
+PLAN-consciousness, each behind its knob in config.py: my workspace picks what is in front of me for the whole cycle
+(workspace.py); declare_intent asks where I expect to look (the attention schema, which re-focuses the workspace) and
+answers with what goals like this one have cost me (forecast.py); before a kind of action that has been failing, the
+first such call is held while I see what comparable ones led to (cards.py); finish_cycle and commit_to record the
+promises I make (commitments.py).
 """
 from __future__ import annotations
 
 import shutil
 
-from . import agent, base_rate, broker, clock, images, memory, pausing, prompts, recovery, surprises
+from . import (agent, base_rate, broker, cards, clock, commitments, forecast, images, memory, pausing, prompts, recovery,
+               surprises, workspace)
 from .agent import Control
 from .llm import Client
 from .state import State
@@ -27,6 +34,16 @@ CONFIDENCE_OF = "criterion_met=yes"
 CONFIDENCE_OF_SHOWN = "criterion_met=yes;base_rate_shown"
 
 MAX_PREDICTIONS = 3
+# declare_intent's attention schema (PLAN-consciousness B3), and finish_cycle's promises (C2)
+ATTENTION = {"type": "array", "description": "optional, up to 4: where you expect to look this cycle — a source "
+             "(web, memory, notes/…, shaft/…, operator, another instance, coder, record) and why; it focuses your "
+             "workspace, and the supervisor compares it with the calls you make",
+             "items": {"type": "object", "properties": {"source": S, "why": S}, "required": ["source"]}}
+PROMISES = {"type": "array", "description": "promises you made this cycle and will keep later: "
+            "{promise, due (YYYY-MM-DD[ HH:MM], today, tomorrow), criterion (how someone else could check), made_to "
+            "(operator, self, or an instance's name)}; [] if none",
+            "items": {"type": "object", "properties": {"promise": S, "due": S, "criterion": S, "made_to": S},
+                      "required": ["promise", "due", "criterion", "made_to"]}}
 
 
 def predictions(value) -> list[str]:
@@ -78,6 +95,10 @@ def run(cfg, state: State, client: Client) -> str:
     record: dict = {"intent": None, "finish": None, "confirm": None}   # confirm: set only when a base rate was shown
     rates, rate_error = base_rate.load(state.root)
     started = clock.started()   # the draw's seed and the queue it draws from: the same in every replay of this cycle
+    seed = f"{cfg.NAME}|{started:%Y-%m-%dT%H:%M}"
+    held = cards.Cards(state.root, cfg.OUTCOME_CARDS, seed, clock.now())
+    ws = workspace.Workspace("off")   # built below, once the prompt's sources are read
+    attention_on = cfg.ATTENTION_SCHEMA == "on"
 
     def declare(args: dict) -> str:
         if record["intent"]:
@@ -102,16 +123,39 @@ def run(cfg, state: State, client: Client) -> str:
                             "origin": origin, "origin_ref": ref,
                             "predictions": predictions(args.get("predictions")),
                             "at": clock.now().isoformat(timespec="seconds")}
+        if attention_on:
+            record["intent"]["attention"] = workspace.attention(args.get("attention"))
+        ws.refocus(f"{args['goal']}\n{args['success_criterion']}", record["intent"].get("attention") or [])
         if rate_error:
             record["intent"]["base_rate_error"] = rate_error
+        cost = costs(args["goal"], origin)
         band = base_rate.band_for(rates, conf) if rates else None
         if not band:
-            return "intent recorded — now act"
+            return "intent recorded — now act" + cost
         # what was offered, for audit; the question stays v2 until a confirm shows the rate was read (confirm)
         record["intent"]["base_rate_shown"] = band
         # a confirm is accepted only from a later reply: one written beside this declare never saw the rate
         record["confirm"] = {"declared_at": assistant_turns(messages), "done": False}
-        return "intent recorded. " + base_rate.describe(band, conf)
+        return "intent recorded. " + base_rate.describe(band, conf) + cost
+
+    def _promise(c: dict) -> str:
+        try:
+            return commitments.add(state.root, c, "cycle", clock.now())
+        except OSError as e:   # a ledger I cannot write must not cost me the finish
+            return f"ERROR: commitment not recorded: {type(e).__name__}: {e}"
+
+    def costs(goal: str, origin: str) -> str:
+        """What goals like this one have cost me, against what this cycle has left (FORECAST); '' when off."""
+        env, left_s = broker.envelope(), agent.time_left()
+        unlimited = cfg.MAX_STEPS_LIVE <= 0
+        try:
+            text = forecast.text(cfg.FORECAST, state.root, goal, origin, clock.now(),
+                                 turns_left=None if unlimited else max(0, cfg.MAX_STEPS_LIVE - assistant_turns(messages)),
+                                 minutes_left=None if left_s is None else max(0.0, left_s / 60),
+                                 calls_left=None if env is None else max(0, env["calls_max"] - env["calls_used"]))
+        except Exception as e:   # a forecast my record cannot give must never cost me the declare
+            text = f"(no forecast: {type(e).__name__}: {e})"
+        return f"\n\n{text}" if text else ""
 
     def confirm(args: dict) -> str:
         pending = record["confirm"]
@@ -139,6 +183,10 @@ def run(cfg, state: State, client: Client) -> str:
         record["finish"] = {"what_happened": args.get("what_happened", ""), "criterion_met": met,
                             "learned": args.get("learned", ""), "surprises": surprises.clean(args.get("surprises")),
                             "resolves": resolves(args.get("resolves"))}
+        promised = commitments.clean(args.get("commitments")) if toolbox.commit_source else []
+        if promised:   # each recorded as commit_to would; one it refuses (a past due date) is said, never fatal
+            record["finish"]["commitments"] = [_promise(c) for c in promised]
+            return "cycle finished; " + "; ".join(record["finish"]["commitments"])
         return "cycle finished"
 
     controls = {
@@ -154,7 +202,8 @@ def run(cfg, state: State, client: Client) -> str:
                             "surprise:<id> for a goal taken from one of your open surprises"},
              "predictions": {"type": "array", "items": S, "description": "1-3 short, specific things you expect "
                              "your work to find that could turn out wrong (e.g. 'the watch finds no new primary "
-                             "source since 11:57'); optional"}},
+                             "source since 11:57'); optional"},
+             **({"attention": ATTENTION} if attention_on else {})},
             ["goal", "success_criterion", "confidence", "origin"]),
             declare),
         "finish_cycle": Control(_spec(
@@ -166,7 +215,8 @@ def run(cfg, state: State, client: Client) -> str:
                            "items": {"type": "object", "properties": {"expected": S, "observed": S, "so_what": S},
                                      "required": ["expected", "observed", "so_what"]}},
              "resolves": {"type": "array", "description": "open surprises (by id) this cycle answered, and how",
-                          "items": {"type": "object", "properties": {"id": S, "how": S}, "required": ["id", "how"]}}},
+                          "items": {"type": "object", "properties": {"id": S, "how": S}, "required": ["id", "how"]}},
+             **({"commitments": PROMISES} if cfg.COMMITMENTS == "on" else {})},
             ["what_happened", "criterion_met", "learned"]), finish, stops=True),
     }
     if base_rate.has_data(rates):   # offered only when declare_intent can show a base rate: otherwise v2 as before
@@ -178,6 +228,7 @@ def run(cfg, state: State, client: Client) -> str:
             ["confidence"]), confirm, repeatable=True)   # the same number is refused in the declare's reply,
             # accepted on the next: the repeat guard must not block that retry
     toolbox = Toolbox(state.root)
+    toolbox.commit_source = "cycle" if cfg.COMMITMENTS == "on" else ""
     real_run = toolbox.run
 
     def gated_run(name: str, raw_args: str) -> str:   # no acting before the intent is declared (and confirmed)
@@ -190,6 +241,13 @@ def run(cfg, state: State, client: Client) -> str:
         if refusal:
             toolbox.log.append({"tool": name, "args": for_log(raw_args), "result": refusal})
             return refusal
+        try:
+            hold = held.check(name, raw_args, record["intent"]["goal"], turn=assistant_turns(messages))
+        except Exception as e:   # a record the cards cannot read must never block the action itself
+            hold, held.record["error"] = None, f"{type(e).__name__}: {e}"[:200]
+        if hold:   # not run: what comparable actions led to, once per kind; calling it again runs it
+            toolbox.log.append({"tool": name, "args": for_log(raw_args), "result": hold})
+            return hold
         return real_run(name, raw_args)
     toolbox.run = gated_run
 
@@ -202,7 +260,15 @@ def run(cfg, state: State, client: Client) -> str:
         system += ("\n\n## Recent conversations I have not written up yet (transcripts)\n\n"
                    "These may still be going on; they will be written up when they end.\n\n" + unwritten)
     # what my memory holds about my goals, my improvement plan and my messages, beyond what my context shows
-    about = "\n".join([state.read(state.goals_md), prompts.improvement_plan(state), inbox_text(inbox)])
+    plan, goals = prompts.improvement_plan(state), state.read(state.goals_md)
+    about = "\n".join([goals, plan, inbox_text(inbox)])
+    if cfg.WORKSPACE != "off":   # its winners replace automatic recall, in the same room (workspace.BUDGET)
+        try:
+            ws = workspace.build(state.root, cfg.WORKSPACE, about=about, shown=system, now=clock.now(), inbox=inbox,
+                                 plan=plan, goals=goals, k=cfg.WORKSPACE_K)
+        except Exception as e:   # a workspace that cannot be built falls back to recall: it must never stop a cycle
+            ws = workspace.Workspace("off", errors=[f"{type(e).__name__}: {e}"[:200]])
+    focus = ws.block() if ws.mode != "off" else memory.recall(state.root, about, shown=system)
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": images.with_attached(   # images attached to my messages (PLAN-vision.md)
@@ -210,7 +276,7 @@ def run(cfg, state: State, client: Client) -> str:
             + (prompts.CURIOSITY if curiosity["drawn"] else "")
             + "\n\n## My operational envelope (from the supervisor, at the start of this cycle)\n\n"
             + prompts.envelope_text(broker.envelope(), agent.time_left())
-            + memory.recall(state.root, about, shown=system), state.root, listed_in=inbox_text(inbox))},
+            + focus, state.root, listed_in=inbox_text(inbox))},
     ]
 
     def max_steps() -> int:   # a shown base rate adds a step for the confirm turn, so it takes none from the work
@@ -220,6 +286,7 @@ def run(cfg, state: State, client: Client) -> str:
     outcome = agent.run(client, messages, toolbox, max_tokens=cfg.MAX_TOKENS_STEP, purpose="live",
                         max_steps=max_steps, controls=controls,
                         expected=lambda: record["intent"]["predictions"] if record["intent"] else None,
+                        focus=ws.broadcast if ws.mode != "off" else None,
                         wrap_up="Stop working now and call finish_cycle with an honest report "
                                 "(criterion_met: partial or no if you did not get there).")
 
@@ -250,7 +317,9 @@ def run(cfg, state: State, client: Client) -> str:
     ended = clock.now()
     episode = {"ts": ended.isoformat(timespec="seconds"), "kind": "live", "intent": intent, "finish": fin,
                "ended_by": outcome.ended_by, "steps": outcome.steps, "tools": toolbox.log,
-               "inbox": [n for n, _ in inbox], "curiosity": curiosity}
+               "inbox": [n for n, _ in inbox], "curiosity": curiosity, "cards": held.record}
+    if ws.mode != "off" or ws.errors:
+        episode["workspace"] = ws.record()
     if fin and (fin["surprises"] or fin["resolves"]):   # their ids, as the queue will know them
         items = surprises.fold(surprises.episodes(state.root) + [episode], ended)
         opened = [it for it in items.values() if it["opened"] == episode["ts"]]

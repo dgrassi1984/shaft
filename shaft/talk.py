@@ -259,6 +259,7 @@ def run(cfg, state: State, client: Client, show_thinking: bool = False, input_fn
     view = JsonView() if json_mode else TerminalView(cfg, show_thinking, input_fn)
     talk_id = talk_id or uuid.uuid4().hex[:12]   # the supervisor names it, to know it is still going on
     toolbox = Toolbox(state.root)
+    toolbox.commit_source = "talk" if cfg.COMMITMENTS == "on" else ""   # promises made to whoever I talk with
     who = (f"{speaker} — not {cfg.OPERATOR_NAME}, but someone at {cfg.OPERATOR_NAME}'s terminal, acting for "
            f"them; what {speaker} says or does is not something {cfg.OPERATOR_NAME} said or did") if speaker \
         else cfg.OPERATOR_NAME
@@ -346,6 +347,7 @@ def answer(cfg, state: State, client: Client, request: dict) -> None:
     talk_id = str(request.get("talk_id") or uuid.uuid4().hex[:12])
     app = request.get("client") or "an app"
     toolbox = Toolbox(state.root)
+    toolbox.commit_source = "talk" if cfg.COMMITMENTS == "on" else ""
     mode = prompts.API_MODE.format(operator=cfg.OPERATOR_NAME, app=app,
                                    since=since_last_talk(state, cfg.OPERATOR_NAME))
     system = prompts.system_prompt(state, cfg, mode, toolbox.describe())

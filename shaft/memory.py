@@ -19,9 +19,10 @@ import urllib.request
 from array import array
 from collections import Counter
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
-from . import surprises
+from . import clock, surprises
 
 VERDICTS = "memory/verdicts.jsonl"   # the judge's verdicts, as my sleeps received them
 
@@ -84,16 +85,28 @@ def corpus(root: Path) -> list[tuple[str, str]]:
                 head, _, body = block.partition("\n")
                 for chunk in _chunks(body) or [""]:
                     docs.append((f"journal {head[3:].strip()}", f"{head}\n{chunk}"))
-    facts = root / "memory" / "facts.md"
-    if facts.exists():
-        for line in facts.read_text().splitlines():
-            if line.startswith("- "):
-                docs.append(("fact", line[2:]))
-    for name in ("facts-archive.md", "digests.md"):   # dropped facts stay findable; digests summarise old days
+    for name in ("facts.md", "facts-archive.md"):
         path = root / "memory" / name
-        if path.exists():
-            for chunk in _chunks(path.read_text(errors="replace")):
-                docs.append((f"memory/{name}", chunk))
+        if not path.exists():
+            continue
+        for line in path.read_text().splitlines():
+            if not line.startswith("- "):
+                continue
+            tag = re.search(r" \(src: (.+)\)$", line)
+            label = "fact" if name == "facts.md" else "memory/facts-archive.md"
+            label += f", src {tag[1] if tag else 'unknown'}"
+            date = re.match(r"- \[(\d{4}-\d{2}-\d{2})(?: \d{2}:\d{2})?\]", line)
+            if date:
+                try:
+                    age = (clock.now().date() - datetime.fromisoformat(date[1]).date()).days
+                    label += f", {age} days old"
+                except ValueError:
+                    pass
+            docs.append((label, line[2:]))
+    path = root / "memory" / "digests.md"
+    if path.exists():
+        for chunk in _chunks(path.read_text(errors="replace")):
+            docs.append(("memory/digests.md", chunk))
     for folder in ("notes", "skills", "memory/people"):
         base = root / folder
         for path in sorted(base.rglob("*.md")) if base.is_dir() else []:

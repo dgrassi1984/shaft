@@ -6,7 +6,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from . import clock, personality, surprises
+from . import clock, commitments, personality, surprises
 
 
 def now() -> datetime:
@@ -137,7 +137,7 @@ CONTEXT = """\
 ## Open surprises (my curiosity queue: what contradicted what I expected, oldest first)
 
 {surprises}
-
+{promises}
 ## My measured performance (self/stats.md, written by the supervisor)
 
 {stats}
@@ -232,11 +232,13 @@ This is your sleep cycle: consolidate what happened since your last sleep (the r
 journal above; use search_memory and read_file for more). Use your tools to:
 
 1. remember any durable facts worth keeping (about the world, {operator}, yourself) — \
-not trivia, not things already in your facts. Then, if your facts have grown past what you can \
+not trivia, not things already in your facts — each with its source: the cycle that observed it \
+(log:<episode ts>), operator, instance:<name>, or inferred when you concluded it rather than saw it. Then, if your facts have grown past what you can \
 read at a glance or repeat each other, rewrite_facts: merge, drop what is superseded, keep the dates \
 (at most 6,000 characters; what you drop stays searchable in memory/facts-archive.md).
 2. update memory/people/{operator_file}.md with what you have learned about {operator} \
-(write the whole file; keep what is still true).
+(write the whole file; keep what is still true): also how they answer — what they ask back, how \
+soon, what they say no to — so the file predicts them, not only describes them.
 3. update_personality: revise the surface layer from evidence. Change the core layer \
 only if several experiences point the same way — cite them.
 4. update self/goals.md if your goals changed; pass replace=true when deliberately dropping goals.
@@ -247,7 +249,7 @@ future self needs once these journal entries are no longer in view — and what 
 7. Go through the surprises since your last sleep (listed below). For each, do one: remember the corrected \
 belief as a fact citing its id ("… (from surprise s1013-0653-1)"); close_surprise(id, outcome, note) when it \
 needs no cycle; or leave it open as a question worth a cycle, and say why in your entry. Skip none. An expired \
-one needs nothing — a fact citing it only if it taught you something.
+one needs nothing — a fact citing it only if it taught you something.{settle}
 
 Then answer (without calling a tool) with your sleep journal entry: what you \
 consolidated, what you changed about yourself and why, and under "How I will improve" \
@@ -344,8 +346,24 @@ def system_prompt(state, cfg, mode_note: str, tools: str | None = None) -> str:
         sleep=last_sleep(state, journal),
         improvement=improvement_plan(state),
         surprises=surprises.block(root),
+        promises=_promises(root, cfg),
     )
     return f"{identity}\n\n{context}"
+
+
+def _promises(root: Path, cfg) -> str:
+    """My open commitments, overdue first (PLAN-consciousness C2): what I said I would do is part of who I am."""
+    if getattr(cfg, "COMMITMENTS", "off") != "on":
+        return ""
+    try:
+        open_ = commitments.block(root, now())
+    except Exception as e:   # every prompt shows this block: a record it cannot read must not stop the run
+        open_ = f"(my commitments could not be read: {type(e).__name__}: {e})"
+    return f"\n## My open commitments (commit_to; my sleep settles the overdue ones)\n\n{open_}\n"
+
+
+SETTLE = ("\n8. Settle every overdue commitment (listed below) with settle_commitment: kept only with the episode that "
+          "shows it done (its ts, or ts#step), never from memory; otherwise broken, superseded or void, and why.")
 
 
 def last_sleep(state, shown_journal: str = "") -> str:

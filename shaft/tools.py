@@ -21,6 +21,7 @@ MAX_RESULT_CHARS = 6000
 LOG_CHARS = MAX_RESULT_CHARS
 FACTS_MAX_CHARS = 6000     # facts.md is shown in full: consolidation keeps it to this
 DIGEST_MAX_CHARS = 1500
+SOURCE = re.compile(r" \(src: (.+)\)\s*$", re.M)   # a fact line's source, as remember writes it (a URL may hold ")")
 FACT_LINE = re.compile(r"^- \[\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?\] \S")   # every result stays in context for the rest of the cycle
 PLUGIN_TIMEOUT_S = 120
 
@@ -34,6 +35,7 @@ PROTECTED = {
     "self/self.md": "use update_self_model",
     "self/personality.md": "use update_personality",
     "self/stats.md": "written by the supervisor from my measured results",
+    "memory/commitments.jsonl": "use commit_to to make a commitment; my sleep settles them (settle_commitment)",
     "config.env": "change a value with the supervisor's set_config(key, value) — the only way to change this "
                   "file, so the supervisor can tell my settings from the operator's",
 }
@@ -75,8 +77,8 @@ BUILTINS = [
           "have one).", {"path": S}, []),
     _spec("rewrite_facts", "Consolidate memory/facts.md (in my sleep): give the whole new list — duplicates "
           "merged, superseded or trivial facts dropped, what still matters kept — one per line as "
-          "'- [YYYY-MM-DD HH:MM] fact' (keep each fact's date). At most 6,000 characters: it is shown to me in "
-          "full. Facts I drop are kept in memory/facts-archive.md, still found by search_memory.", {"facts": S}),
+          "'- [YYYY-MM-DD HH:MM] fact' (keep each fact's date and '(src: …)'). At most 6,000 characters: "
+          "it is shown to me in full. Facts I drop are kept in memory/facts-archive.md, still found by search_memory.", {"facts": S}),
     _spec("write_digest", "Add today's digest (in my sleep): a short summary, at most 1,500 characters, of "
           "what happened since my last sleep and what it means — what my future self needs once these "
           "journal entries are no longer in view. Kept in memory/digests.md; recent digests are shown to me.",
@@ -84,8 +86,9 @@ BUILTINS = [
     _spec("search_memory", "Search everything I remember (journal, facts, notes, conversations) "
           "and return the most relevant passages with their dates.",
           {"query": S, "k": {"type": "integer", "description": "max results, default 5"}}, ["query"]),
-    _spec("remember", "Store a durable fact in memory/facts.md (about the world, the operator, or myself).",
-          {"fact": S}),
+    _spec("remember", "Store a durable fact in memory/facts.md with its source: log:<episode ts>[#step], "
+          "web:<url> seen in this run, operator, instance:<name>, or inferred.",
+          {"fact": S, "source": S}),
     _spec("update_self_model", "Replace my self-model (self/self.md) with a complete new version "
           "starting with '# '. Include everything I want to keep.", {"text": S}),
     _spec("update_personality", "Rewrite one layer of self/personality.md. 'surface' = current "
@@ -102,6 +105,9 @@ VIEW_IMAGE = _spec("view_image", "Look at an image file (JPEG, PNG, GIF or WebP)
                    "me right after the tool results.", {"path": S})
 
 
+WEB_READS = ("fetch_page", "http_request", "run")   # the tools whose successful result is a page I saw (remember web:)
+
+
 class Toolbox:
     def __init__(self, root: Path, extra: list[dict] | None = None):
         self.root = Path(root).resolve()
@@ -112,6 +118,7 @@ class Toolbox:
         self.remote = self._discover_broker()
         self.log: list[dict] = []
         self.shown: list[Path] = []       # images view_image showed, for the agent loop to send after the results
+        self.commit_source = ""           # "cycle" or "talk" where commit_to is offered (COMMITMENTS on), else ""
 
     # -- discovery ---------------------------------------------------------------
     def _discover_plugins(self) -> dict[str, dict]:
@@ -139,7 +146,9 @@ class Toolbox:
             return {}
 
     def _builtins(self) -> list[dict]:
-        return BUILTINS + ([VIEW_IMAGE] if images.vision() else [])
+        from . import commitments   # it builds its spec with _spec, from this module
+        return (BUILTINS + ([VIEW_IMAGE] if images.vision() else [])
+                + ([commitments.COMMIT_TO] if self.commit_source else []))
 
     def specs(self) -> list[dict]:
         return self._builtins() + list(self.plugins.values()) + list(self.remote.values()) + self.extra
@@ -278,13 +287,66 @@ class Toolbox:
         note = f"(searched by {memory.mode})\n\n" if memory.mode else ""
         return note + ("\n\n".join(f"[{h.source}] {h.text}" for h in hits) or "nothing relevant found")
 
-    def _t_remember(self, fact: str) -> str:
+    def _remember_source(self, source: str) -> bool:
+        if source in ("operator", "inferred") or re.fullmatch(r"instance:[a-z0-9][a-z0-9_-]*", source):
+            return True
+        if source.startswith("web:"):
+            # An observation only if this run fetched that very URL and the fetch worked: a URL mentioned in an
+            # argument, a search snippet or a failed request is not something I saw (Codex review, 2026-10-26).
+            url = source[4:]
+            if not re.fullmatch(r"https?://[^\s/]+(?:/[^\s]*)?", url):
+                return False
+            normalize = lambda u: re.sub(r"^https?://", "", u).rstrip("/")
+            for entry in self.log:
+                result = str(entry.get("result", ""))
+                if entry.get("tool") not in WEB_READS or result.startswith("ERROR") or re.match(r"HTTP [45]\d\d", result):
+                    continue
+                if entry["tool"] == "run" and not result.startswith("exit 0"):
+                    continue
+                try:
+                    args = json.loads(entry.get("args") or "{}") or {}
+                    fetched = [str(args.get("url", ""))] if entry["tool"] != "run" else \
+                        re.findall(r"https?://[^\s\"'<>]+", str(args.get("command", "")))
+                except (ValueError, AttributeError):
+                    continue
+                if any(f and normalize(f) == normalize(url) for f in fetched):
+                    return True
+            return False
+        if not source.startswith("log:"):
+            return False
+        stamp, sep, step = source[4:].partition("#")
+        try:
+            datetime.fromisoformat(stamp)
+        except ValueError:
+            return False
+        if not re.match(r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}", stamp) or (
+                sep and not re.fullmatch(r"[1-9][0-9]*", step)):
+            return False
+        for path in sorted((self.root / "memory" / "episodes").glob("*.jsonl")):
+            for line in path.read_text(errors="replace").splitlines():
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                ts = rec.get("ts", "") if isinstance(rec, dict) else ""
+                if isinstance(ts, str) and (ts.replace("T", " ") == stamp.replace("T", " ") or
+                        len(stamp) == 16 and ts[:16].replace("T", " ") == stamp.replace("T", " ")):
+                    # Episodes record calls in order, without model-turn numbers: #1 is the first call.
+                    if not sep or int(step) <= len(rec.get("tools") or []):
+                        return True
+        return False
+
+    def _t_remember(self, fact: str, source: str = "") -> str:
+        if not isinstance(source, str) or not self._remember_source(source):
+            return ("ERROR: source must be log:<episode ts>[#step], web:<url>, operator, "
+                    "instance:<name> ([a-z0-9][a-z0-9_-]*), or inferred; "
+                    "if you did not observe it in this run's tool results or your record, use source=inferred")
         facts = self.root / "memory" / "facts.md"
         facts.parent.mkdir(parents=True, exist_ok=True)
         if not facts.exists():
             facts.write_text("# Facts I have learned\n\n")
         with facts.open("a") as f:
-            f.write(f"- [{clock.now():%Y-%m-%d %H:%M}] {fact.strip()}\n")
+            f.write(f"- [{clock.now():%Y-%m-%d %H:%M}] {fact.strip()} (src: {source})\n")
         return "remembered"
 
     def _t_rewrite_facts(self, facts: str) -> str:
@@ -293,6 +355,17 @@ class Toolbox:
         if not lines or bad:
             return (f"ERROR: write one fact per line as '- [YYYY-MM-DD HH:MM] fact' (keeping its date); "
                     f"not like that: {bad[0][:120]!r}" if bad else "ERROR: no facts given")
+        # An observation source is attached only by remember, which checks it against my record: a consolidation may
+        # keep or drop one, never invent one (Grok's review: rewrite_facts let any (src: web:…) through).
+        known = set()
+        for name in ("facts.md", "facts-archive.md"):
+            path = self.root / "memory" / name
+            known |= set(SOURCE.findall(path.read_text(errors="replace"))) if path.exists() else set()
+        new = sorted({src for l in lines for src in SOURCE.findall(l)
+                      if src.startswith(("web:", "log:")) and src not in known})
+        if new:
+            return (f"ERROR: {new[0]!r} is on no fact I hold: an observation source is added with remember, which "
+                    f"checks it; a consolidation keeps the sources it merges (or says inferred)")
         text = "\n".join(lines)
         if len(text) > FACTS_MAX_CHARS:
             return f"ERROR: {len(text)} characters; consolidate to at most {FACTS_MAX_CHARS} (merge or drop more)"
@@ -322,6 +395,11 @@ class Toolbox:
         path = self.root / "self" / "self.md"
         path.write_text(edit.new_self + "\n")
         return "self-model updated"
+
+    def _t_commit_to(self, promise: str, due: str, criterion: str, made_to: str) -> str:
+        from . import commitments   # an OSError here is a tool failure like any other: run() reports it
+        return commitments.add(self.root, {"promise": promise, "due": due, "criterion": criterion, "made_to": made_to},
+                               self.commit_source, clock.now())
 
     def _t_update_personality(self, layer: str, text: str) -> str:
         return personality.update(self.root, layer, text)
