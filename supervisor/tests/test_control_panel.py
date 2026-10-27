@@ -438,7 +438,7 @@ class PanelKeys(unittest.TestCase):
             self.keys(ui, snap, "n")
             self.assertEqual((self.ran, logged), ([], []))
             self.keys(ui, snap, "r", "y")
-        self.assertEqual(self.ran, [["autonomy", "on"]])
+        self.assertEqual(self.ran, [["autonomy", "on", "--force"]])   # the CLI guards it too: forced, it says so
         self.assertEqual(len(logged), 1)
         self.assertIn("top: operator forced shaft autonomy on past the guard:", logged[0])
         with mock.patch.object(panel, "scheduled_runs", return_value=[]):

@@ -23,7 +23,7 @@ import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from . import autonomy, evolution, finetune, gate, messages, metrics, mind, runner, surprise, version
+from . import actions, autonomy, evolution, finetune, gate, messages, metrics, mind, runner, surprise, version
 from .core import (DEFAULT_INSTANCE, HOME, INSTANCES, MIND_PATHS, add_all_but_mind, NAME_RE, PROJECT, SUP_DIR, TEMPLATE, commit_state,
                    git, git_wt, instance_config, instance_names, instance_root, journal_entries, journal_note, log, paused,
                    safe_mkdir, safe_read, safe_write, set_update_queued, update_queued)
@@ -904,6 +904,7 @@ def main(argv: list[str]) -> int:
     p.add_argument("name")
     p = sub.add_parser("api", help="OpenAI-compatible API for the instances, on your tailnet")
     p.add_argument("action", choices=["on", "off", "status", "key", "inbox-key", "serve"])
+    p.add_argument("--force", action="store_true", help="on/off even if it would kill or cut off runs in progress")
     p = sub.add_parser("config", help="an instance's config.env as the operator: list it, set KEY=VALUE …, unset KEY …"
                                       " (one write, one commit; --expect refuses if a value changed since you looked)")
     p.add_argument("name")
@@ -959,10 +960,13 @@ def main(argv: list[str]) -> int:
     p.add_argument("name", nargs="?", help="token: the instance the bot is for")
     p = sub.add_parser("model", help="SHAFT's own Bonsai 2 model server (launchd service)")
     p.add_argument("action", choices=["on", "off", "status"])
+    p.add_argument("--force", action="store_true", help="on/off even if it would kill or cut off runs in progress")
     p = sub.add_parser("embed", help="SHAFT's embedding service for memory search (launchd service)")
     p.add_argument("action", choices=["on", "off", "status"])
+    p.add_argument("--force", action="store_true", help="on/off even if it would kill or cut off runs in progress")
     p = sub.add_parser("autonomy", help="the autonomous schedule (SHAFT's scheduler service): on, off, status")
     p.add_argument("action", choices=["on", "off", "status", "serve"])
+    p.add_argument("--force", action="store_true", help="on/off even if it would kill or cut off runs in progress")
     p = sub.add_parser("top", help="live view of every instance, the services and the messages between instances; "
                                    "starts a cycle for an idle one (q quits)")
     p.add_argument("--once", action="store_true", help="print one snapshot as text and exit")
@@ -1221,6 +1225,9 @@ def main(argv: list[str]) -> int:
         return autonomy.wake(args.name)
     if args.cmd == "tick":
         return autonomy.tick()
+    if args.cmd in actions.GUARDED_CLI and (refused := actions.cli_guard(args.cmd, args.action, args.force)):
+        print(refused, file=sys.stderr)
+        return 1
     if args.cmd == "api":
         from . import api
         return api.command(args.action)
