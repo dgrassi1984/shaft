@@ -61,7 +61,11 @@ def own_files(name: str) -> list[Path]:
              s / "jobs" / f"{name}.jsonl", s / "battery" / f"off-{name}", s / "battery" / "results" / f"{name}.jsonl",
              s / "battery" / f"{name}.sb", s / "battery" / f"{name}-control.sb", s / "battery" / "control" / name,
              s / "battery" / "exam" / name, s / "web" / "comments" / f"{name}.json", s / "tools" / f"{name}.json",
-             s / "baselines" / f"{name}.json", s / "baselines" / f"{name}.files"]
+             s / "baselines" / f"{name}.json", s / "baselines" / f"{name}.files",
+             s / "judgments" / f"{name}-anchoring.jsonl", s / "expectations" / f"{name}.jsonl",
+             s / "expectations" / f"{name}-scored.jsonl", s / "expectations" / f"{name}-baselines.jsonl",
+             s / "preferences" / f"{name}.jsonl", s / "experiments" / f"{name}.jsonl",
+             s / "experiments" / f"{name}-workspace.jsonl"]
     found = [p for p in exact if p.exists() or p.is_symlink()]
     found += _matching(s / "judgments" / "second-cases", rf"{n}@.+")
     found += _matching(s / "gate-logs", rf"{n}-{ts}-\d+\.log")
