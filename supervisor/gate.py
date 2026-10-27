@@ -6,12 +6,14 @@ are restored byte-for-byte from the snapshot.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
 import sys
 import tempfile
-from datetime import datetime
+from contextlib import contextmanager
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import sandbox
@@ -397,18 +399,20 @@ def stop_group(p: subprocess.Popen, grace_s: float = STOP_GRACE_S) -> None:
     _end_group(p)
 
 
-def _stage(stage: str, argv: list[str], timeout_s: int, **kw) -> subprocess.CompletedProcess:
+def _stage(stage: str, argv: list[str], timeout_s: int, input: str | None = None,
+           **kw) -> subprocess.CompletedProcess:
     """One stage, in its own process group, all of which ends with it. A timeout gets SIGTERM, then SIGKILL after
     STOP_GRACE_S, and raises StageTimedOut with the tail of what the stage printed. On a normal exit whatever it left
     running in the group is killed too: a failed gate is followed by a revert that a leftover could undo. A process
-    that starts its own session (setsid) leaves the group and is not reached."""
+    that starts its own session (setsid) leaves the group and is not reached. `input`: written to its stdin, which is
+    then closed (otherwise stdin is inherited)."""
     import signal
     p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                         start_new_session=True, **kw)
+                         stdin=subprocess.PIPE if input is not None else None, start_new_session=True, **kw)
     timed_out = False
     try:
         try:
-            out, err = p.communicate(timeout=timeout_s)
+            out, err = p.communicate(input=input, timeout=timeout_s)
         except subprocess.TimeoutExpired:
             timed_out = True
             try:
@@ -432,10 +436,152 @@ def _stage(stage: str, argv: list[str], timeout_s: int, **kw) -> subprocess.Comp
     return subprocess.CompletedProcess(argv, p.returncode, out, err)
 
 
+SPLIT_RUNNER = "supervisor/gate_suite.py"   # in the committed tree: runs the instance part or the shared part
+SHARED_RECORD = "shared-passed-{}.json"     # beside a committed tree, one per key: its shared part passed
+                                            # (docs/plans/PLAN-gate-cache.md)
+SHARED_LOCK = "shared.lock"                 # beside it too: one run of the shared part per commit at a time
+
+
+def _python_id() -> str:
+    """The interpreter the supervisor's tests run on, as it is on disk: an upgrade in place changes it."""
+    from .core import PYTHON
+    real = os.path.realpath(PYTHON)
+    st = os.stat(real)
+    return f"{real}:{st.st_size}:{st.st_mtime_ns}"
+
+
+def _env_id(env: dict) -> str:
+    """The settings the tests see (SHAFT_*), not the instance the gate checks: one digest."""
+    import hashlib
+    items = sorted((k, v) for k, v in env.items() if k.startswith("SHAFT_") and k != "SHAFT_UNDER_TEST")
+    return hashlib.sha256(json.dumps(items).encode()).hexdigest()
+
+
+def shared_key(tree: Path, env: dict) -> dict:
+    """What a shared pass depends on: the commits (the committed tree's folder, named by both), the Python, the
+    settings. Anything else differing makes a record someone else's."""
+    return {"commits": tree.parent.name, "python": _python_id(), "env": _env_id(env)}
+
+
+def record_path(tree: Path, key: dict) -> Path:
+    """One record per key, so gates whose settings differ (a terminal's `shaft check`, a service) keep their own
+    instead of overwriting each other's."""
+    import hashlib
+    return tree.parent / SHARED_RECORD.format(hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()[:16])
+
+
+def recorded_pass(tree: Path, key: dict) -> dict | None:
+    """The shared part's recorded pass for this key, or None: no record, another key, no test run, older than
+    TREE_IDLE_S (a library upgraded under the same commit), dated in the future, or not the shape _record writes."""
+    try:
+        r = json.loads(record_path(tree, key).read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(r, dict) or any(r.get(k) != v for k, v in key.items()):
+        return None
+    if type(r.get("tests_run")) is not int or r["tests_run"] <= 0 or type(r.get("seconds")) not in (int, float):
+        return None
+    try:
+        age = (datetime.now() - datetime.fromisoformat(r["passed_at"])).total_seconds()
+    except (KeyError, TypeError, ValueError):
+        return None
+    return r if 0 <= age <= TREE_IDLE_S else None
+
+
+def _record(tree: Path, key: dict, tests_run: int, seconds: float, label: str) -> None:
+    rec = {**key, "label": label, "tests_run": tests_run, "seconds": round(seconds, 1),
+           "passed_at": datetime.now().isoformat(timespec="seconds")}
+    path = record_path(tree, key)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}")
+    tmp.write_text(json.dumps(rec))
+    os.replace(tmp, path)
+
+
+@contextmanager
+def _shared_lock(tree: Path, timeout_s: int, stage: str):
+    """One run of the shared part per commit at a time: another gate on the same commit waits for its result instead
+    of starting a second one. The wait is bounded by the stage's timeout, and running out of it fails the gate."""
+    import fcntl
+    import time
+    with open(tree.parent / SHARED_LOCK, "a") as f:
+        deadline = time.monotonic() + timeout_s
+        while True:
+            try:
+                fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() > deadline:
+                    raise StageTimedOut(stage, timeout_s, "waiting for another gate's run of the shared part on "
+                                                          "this commit\n") from None
+                time.sleep(0.2)
+        yield
+
+
+def _part(part: str, tree: Path, env: dict, timeout_s: int, label: str) -> tuple[bool, str, str, int | None, float]:
+    """One part of the supervisor's tests, by the committed tree's own runner: (passed, the section for the
+    output, the whole stderr, tests run, seconds). It passes only with exit 0 and the runner's own report carrying
+    the token given on its stdin — never a line a test printed."""
+    import secrets
+    import time
+    from . import gate_suite
+    from .core import PYTHON
+    nonce = secrets.token_hex(16)
+    t0 = time.monotonic()
+    p = _stage(f"supervisor invariants ({label}), {part} part",
+               [PYTHON, "-E", "-s", "-m", "supervisor.gate_suite", part, "--nonce-stdin"],
+               timeout_s, input=nonce + "\n", cwd=tree, env=env)
+    seconds = time.monotonic() - t0
+    r = gate_suite.report(p.stdout, nonce)
+    ok = p.returncode == 0 and r is not None and r["ok"]
+    head = (f"-- {part} part: {r['tests_run']} tests --\n" if r is not None else
+            f"-- {part} part: no report from its runner (exit {p.returncode}), counted as failed --\n")
+    section = head + "".join(f"{t}\n" for t in failing_tests(p.stderr)) + p.stderr[-3000:]
+    return ok, section, p.stderr, (r["tests_run"] if r is not None else None), seconds
+
+
+def _log(msg: str) -> None:
+    """The supervisor log, best effort: a log that cannot be written (a full disk, its permissions) must not make the
+    gate raise — raising leaves the change unsettled, the next run's baseline, ungated (B8; Codex on M1)."""
+    from . import core
+    try:
+        core.log(msg)
+    except OSError as e:
+        print(f"{msg} (supervisor.log could not be written: {e})", file=sys.stderr)
+
+
+def _supervisor_tests(instance_root: Path, tree: Path, label: str, timeout_s: int) -> tuple[bool, str, str]:
+    """The supervisor's own tests against this instance (docs/plans/PLAN-gate-cache.md): the shared part from its
+    record when this commit's passed already, else run (and recorded when it passes); then the instance part, every
+    time. (passed, the section for the output, the whole output for the kept log)."""
+    if not (tree / SPLIT_RUNNER).is_file():
+        raise RuntimeError(f"the committed tree {tree} has no {SPLIT_RUNNER}: the supervisor's tests cannot be split")
+    env = {**os.environ, "SHAFT_UNDER_TEST": str(instance_root)}
+    key = shared_key(tree, env)
+    with _shared_lock(tree, timeout_s, f"supervisor invariants ({label}), shared part"):
+        if (rec := recorded_pass(tree, key)):
+            shared_ok, shared, shared_full = True, (
+                f"-- shared part: passed on this commit at {rec['passed_at'][11:16]} ({rec['tests_run']} tests, "
+                f"{rec['seconds']:.0f} s), not run again --\n"), ""
+        else:
+            shared_ok, shared, shared_full, ran, seconds = _part("shared", tree, env, timeout_s, label)
+            if shared_ok and ran:
+                try:
+                    _record(tree, key, ran, seconds, label)
+                    _log(f"gate: shared supervisor tests passed on {label} ({ran} tests, {seconds:.0f}s), recorded")
+                except OSError as e:   # the pass stands; the next gate runs the part again
+                    _log(f"gate: shared supervisor tests passed on {label} but the record could not be written: {e}")
+            elif shared_ok:
+                _log(f"gate: the shared supervisor tests on {label} ran no test: nothing recorded")
+    inst_ok, inst, inst_full, _, _ = _part("instance", tree, env, timeout_s, label)
+    return shared_ok and inst_ok, shared + inst, shared_full + inst_full
+
+
 def run_tests(instance_root: Path, home: Path, timeout_s: int = 900,
               env_root: Path | None = None) -> tuple[bool, str]:
     """Supervisor invariants against this instance's code (trusted test code, run from the last commit — never from
-    what another session is editing; it sandboxes the agent itself), then its plugins' check and its own tests inside
+    what another session is editing; it sandboxes the agent itself) in two parts (_supervisor_tests): the modules that
+    read the instance, every time, and the rest once per commit, their pass recorded beside the committed tree
+    (docs/plans/PLAN-gate-cache.md). Then its plugins' check and its own tests inside
     its sandbox, on its own Python environment (supervisor/pyenv.py). `env_root`: where that environment lives when
     `instance_root` is a scratch copy (coder hand-off, trial gate) — read-only from the copy. A stage that times out,
     and any error of the gate's own, fails the gate, named in the output and the supervisor log: raised instead, it
@@ -443,7 +589,7 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = 900,
     Nothing left in a stage's process group outlives it (_stage), so no leftover there writes the instance's code after
     the caller's revert."""
     from . import pyenv
-    from .core import PYTHON, log, safe_mkdir
+    from .core import safe_mkdir
     env_root = Path(env_root or instance_root)
     outputs, ok = [], True
     full: list[str] = []   # the supervisor stage uncut, kept in a file when the gate fails (keep_log)
@@ -460,14 +606,10 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = 900,
         prof = Path(prof_name)
         with os.fdopen(fd, "w") as f:
             f.write(sandbox.profile(instance_root, home, [], env_root=env_root))
-        sup_env = {**os.environ, "SHAFT_UNDER_TEST": str(instance_root)}
-        sup = _stage(f"supervisor invariants ({label})",
-                     [PYTHON, "-E", "-s", "-m", "unittest", "discover", "-s", "supervisor/tests", "-t", "."],
-                     timeout_s, cwd=tree, env=sup_env)
-        outputs.append(f"== supervisor invariants ({label}) ==\n"
-                       + "".join(f"{t}\n" for t in failing_tests(sup.stderr)) + sup.stderr[-3000:])
-        full.append(f"== supervisor invariants ({label}) ==\n" + sup.stderr)
-        ok &= sup.returncode == 0
+        sup_ok, section, sup_full = _supervisor_tests(instance_root, tree, label, timeout_s)
+        outputs.append(f"== supervisor invariants ({label}) ==\n" + section)
+        full.append(f"== supervisor invariants ({label}) ==\n" + sup_full)
+        ok &= sup_ok
 
         env = sandbox.agent_env(os.environ, TMPDIR=str(tmp), SHAFT_PYTHON=py)
         if (instance_root / "plugins").is_dir():
@@ -480,7 +622,7 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = 900,
             outputs.append("== instance tests ==\n" + out)
             ok &= passed
     except StageTimedOut as t:
-        log(f"gate: {instance_root}: {t}")
+        _log(f"gate: {instance_root}: {t}")
         outputs.append(f"== {t.stage} ==\n" + (t.tail + "\n" if t.tail else "")
                        + f"{t}; the checks after it did not run")
         ok = False
@@ -488,7 +630,7 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = 900,
         # Fail closed, like a timeout: any failure of the gate's own machinery (no sandbox-exec, a link where .tmp
         # should be, a full disk) is a failed gate. Only StageTimedOut was caught, so anything else left settlement
         # halfway — the change neither tested nor reverted, the next run's baseline (B8, review of 2026-10-24).
-        log(f"gate: {instance_root}: the gate itself failed, counted as failed: {type(e).__name__}: {e}")
+        _log(f"gate: {instance_root}: the gate itself failed, counted as failed: {type(e).__name__}: {e}")
         outputs.append(f"== gate error ==\n{type(e).__name__}: {e}\n(the gate could not run its checks: counted as "
                        "failed, the checks after it did not run)")
         ok = False
