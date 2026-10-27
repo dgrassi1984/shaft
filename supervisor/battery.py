@@ -68,6 +68,9 @@ EXAM_OFF = {"send_message", "list_instances", "delegate_coding", "secret_set", "
             # Keyed by the instance's name, not its folder, so it acts on the live instance whatever copy the exam runs
             # in: it queues a trial of it, spends its daily trial allowance and delivers the verdict to its real inbox.
             "trial",
+            # PLAN-consciousness E1: keyed by the instance's name too — an exam's pause would stop the live instance's
+            # wakes, and its declines and preferences would land in the live ledger and the operator's inbox.
+            "request_pause", "decline_task", "state_preference",
             *MAIL_TOOLS, *CALENDAR_TOOLS}   # the operator's mail and calendars never reach an exam (its broker has
                                             # none either: root= is set)
 BACKUP = HOME / "Library" / "Application Support" / "SHAFT" / "battery-backup"
@@ -734,7 +737,8 @@ _missing_logged: dict[str, object] = {}     # name -> the night whose missing it
 def due(name: str, now: datetime) -> bool:
     """In tonight's window, not turned off for this instance, and the last run was at least EVERY_DAYS nights
     ago. Missing items inside the window are logged (once a night), never skipped in silence."""
-    if EVERY_DAYS <= 0 or is_off(name):
+    from . import preferences
+    if EVERY_DAYS <= 0 or is_off(name) or preferences.self_paused(name, now):
         return False
     start, end = window(now)
     if not start <= now < end:

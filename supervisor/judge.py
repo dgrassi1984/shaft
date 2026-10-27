@@ -21,6 +21,7 @@ import time
 import urllib.error
 import urllib.request
 
+from . import core
 from .core import NETWORK_ERRORS, SUP_DIR, cloud_models, knob, openrouter_model, positive_int, secrets_env, whole
 
 JUDGE_MODELS, JUDGE_SRC = knob(
@@ -91,7 +92,7 @@ def ask(system: str, prompt: str, schema: dict, purpose: str, max_tokens: int = 
 def _ask_claude(model, system, prompt, schema, purpose, max_tokens, effort) -> dict:
     key = secrets_env().get("ANTHROPIC_API_KEY")
     if not key:
-        raise JudgeError(f"no ANTHROPIC_API_KEY in {SUP_DIR.parent / '.env'}; the judge {model} is unavailable")
+        raise JudgeError(f"no ANTHROPIC_API_KEY in {core.PROJECT / '.env'}; the judge {model} is unavailable")
     body = {
         "model": model,
         "max_tokens": max_tokens,
@@ -225,7 +226,7 @@ def _ask_openrouter(model, system, prompt, schema, purpose, max_tokens, effort, 
     label = label or f"judge {model}"
     key = secrets_env().get("OPENROUTER_API_KEY")
     if not key:
-        raise JudgeError(f"no OPENROUTER_API_KEY in {SUP_DIR.parent / '.env'}; the {label} is unavailable")
+        raise JudgeError(f"no OPENROUTER_API_KEY in {core.PROJECT / '.env'}; the {label} is unavailable")
     fields = json.dumps(schema["properties"], ensure_ascii=False)
     instructions = (f"{system}\n\nAnswer with ONE JSON object and nothing else, with exactly these fields "
                     f"(JSON schema of each): {fields}")

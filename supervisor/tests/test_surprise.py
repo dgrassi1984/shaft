@@ -46,7 +46,8 @@ class Fixture:
             (self.root / folder).mkdir()
         self.state = State(self.root)
         self.cfg = config.load(self.root, environ={"LLM_BASE_URL": "http://127.0.0.1:1/v1", "LLM_MODEL": "fake",
-                                                 "MAX_STEPS_SLEEP": "4", "NAME": "wren"})
+                                                 "MAX_STEPS_SLEEP": "4", "NAME": "wren",
+                                                 "FORECAST": "off"})   # these pin declare's result; D1 has its own
         # Agent time fixed the day after the seeded surprises (clock.now() follows SHAFT_NOW, as in a replay)
         self.enterContext(mock.patch.dict(os.environ, {"SHAFT_ROOT": str(self.root), "SHAFT_NOW": "2026-10-13T08:00:00"},
                                           clear=True))

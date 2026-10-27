@@ -68,7 +68,8 @@ class Fixture:
             (self.root / folder).mkdir()
         self.state = State(self.root)
         self.cfg = config.load(self.root, environ={"LLM_BASE_URL": "http://127.0.0.1:1/v1", "LLM_MODEL": "fake",
-                                                 "MAX_STEPS_LIVE": str(STEPS)})
+                                                 "MAX_STEPS_LIVE": str(STEPS),
+                                                 "FORECAST": "off"})   # these pin declare's result; D1 has its own
         self.enterContext(mock.patch.dict(os.environ, {"SHAFT_ROOT": str(self.root)}, clear=True))
         self.enterContext(mock.patch("sys.stderr", new_callable=io.StringIO))
 

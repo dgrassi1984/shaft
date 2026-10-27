@@ -1114,9 +1114,22 @@ NEUTRAL_DECLARE = "intent recorded — now act"   # what live's declare_intent a
 CONFIRM_FIRST = "ERROR: call confirm_confidence first"   # live's refusal of every other tool until the confirm
 
 
+# An outcome card (PLAN-consciousness B1) lists comparable earlier cycles with the judge's verdict on each: a prior on
+# the outcome, like the base rate. The judges read that the call was held, not the cards.
+HELD = "(held, not run yet)"
+HELD_SHOWN = HELD + " — the agent was shown its record of comparable calls (outcome cards; not part of this case)"
+
+
+def blind_holds(tools: list[dict]) -> list[dict]:
+    return [{**t, "result": HELD_SHOWN} if str(t.get("result", "")).startswith(HELD) else t for t in tools]
+
+
 def _blind(ep: dict) -> dict:
     """The episode as the judges see it: the base-rate step taken out, so a v3 case reads like a v2 one (its question
-    is v2's). An episode without the step comes back unchanged, so a v1 or v2 case stays byte-identical."""
+    is v2's), and the outcome cards' text (blind_holds). An episode without either comes back unchanged, so a v1 or v2
+    case stays byte-identical."""
+    if any(str(t.get("result", "")).startswith(HELD) for t in ep.get("tools", [])):
+        ep = {**ep, "tools": blind_holds(ep.get("tools", []))}
     intent, tools = ep.get("intent"), ep.get("tools", [])
     step = isinstance(intent, dict) and any(k in intent for k in V3_FIELDS)   # a rate shown, or the file unreadable
     if not step and not any(t.get("tool") in TREATMENT_TOOLS for t in tools):
@@ -1465,13 +1478,32 @@ def stats_text(name: str) -> str:
         lines.append(f"- Claims the tool log did not support: {len(unsupported)} of {len(js)}")
     vague = sum(1 for j in js if j.get("criterion_quality") != "checkable")
     lines.append(f"- Criteria the judge found vague or unverifiable: {vague}/{len(js)}")
+    lines += _sections(name, ("metacog",))   # right under calibration: inside the part my prompt shows
     fails = [j for j in js if j["criterion_met"] != "yes" and j.get("failure_mode")][-5:]
     if fails:
         lines += ["", "## Recent failure modes"] + [f"- {j['episode_ts'][:16]} — {j['failure_mode']}" for j in fails]
     lines += _second_section(js)
+    lines += _sections(name, ("attention", "commitments", "provenance", "tom", "preferences"))
     lines += ["", "## Last judgment", f"{js[-1]['goal']}", f"> {js[-1]['reasoning']}"]
     lines += _code_section(name) + _traits_section(name) + _trials_section(name)
     return "\n".join(lines) + "\n"
+
+
+# The sections of docs/plans/PLAN-consciousness.md, each from its own module. Each in its own try: a record one of them
+# cannot read must never cost the instance its whole stats.md. None of them feeds probation, base rates or a reward.
+def _sections(name: str, which: tuple[str, ...]) -> list[str]:
+    import importlib
+    out = []
+    for module in which:
+        try:
+            lines = importlib.import_module(f".{module}", __package__).section(name)
+        except Exception as e:
+            log(f"{name}: stats section {module} failed: {type(e).__name__}: {e}")
+            continue
+        if lines and lines[0] != "":   # every section is set off by a blank line
+            lines = [""] + lines
+        out += lines
+    return out
 
 
 def _window(js: list[dict], start: datetime, end: datetime) -> list[dict]:
@@ -1498,6 +1530,8 @@ def review_text(names: list[str], hours: float = 24, now: datetime | None = None
         js = judgments(name)
         rows, prev = _window(js, start, now), _window(js, start - timedelta(hours=hours), start)
         out += ["", f"■ {name}: {_summary(rows)}", f"  the {hours:g} h before: {_summary(prev)}"]
+        from . import preferences
+        out += [f"  {line}" for line in preferences.review_lines([name], start)]
         if not rows:
             out.append(f"  last judged cycle: {js[-1]['episode_ts'][:16].replace('T', ' ') if js else 'never'}")
             continue
@@ -1523,6 +1557,8 @@ def review_text(names: list[str], hours: float = 24, now: datetime | None = None
                        "(asked under a question this supervisor does not know)")
         if broken := [j["base_rate_error"] for j in rows if j.get("base_rate_error")]:
             out.append(f"  base rate file unreadable in {len(broken)} cycle(s): {broken[0]}")
+        from . import metacog
+        out.append("  metacognition (all judged cycles, not just this window): " + metacog.review_line(js))
         if valued(rows):
             levels = " · ".join(f"{v}: {sum(1 for j in valued(rows) if j['value'] == v)}" for v in range(6))
             out.append(f"  value grades: {levels}")
@@ -1843,7 +1879,8 @@ def after_cycle(name: str) -> None:
     failure in one step (a judge down, a file the instance planted) must never skip the next. check_probation reverts
     a self-change that made things worse; nothing the instance can do to its folder may switch it off."""
     done = {}
-    for label, step in (("judge_pending", judge_pending), ("write_stats", write_stats),
+    from . import tom   # the instance's expectations of replies, scored once the reply came or its window closed (C4)
+    for label, step in (("judge_pending", judge_pending), ("score_expectations", tom.score), ("write_stats", write_stats),
                         ("check_probation", check_probation)):
         try:
             done[label] = step(name)

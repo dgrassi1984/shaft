@@ -1009,6 +1009,41 @@ def main(argv: list[str]) -> int:
     p.add_argument("--since", required=True, help="when the window began (M3 live): YYYY-MM-DD or YYYY-MM-DDTHH:MM")
     p.add_argument("--until", default="", help="when it ends (default: now)")
     p.add_argument("--min-cycles", type=int, default=30, help="judged cycles the window needs (§4.1: shaft 30)")
+    # docs/plans/PLAN-consciousness.md: measurements and kill tests (read the record; only anchoring and tom --score /
+    # --baselines pay a judge, only experiment replays cycles)
+    p = sub.add_parser("metacog", help="how well each instance's confidence tells its met cycles from its missed ones: "
+                       "AUROC, bias, resolution, meta-I, by domain, and the paired v3 test (A1)")
+    p.add_argument("names", nargs="*")
+    p = sub.add_parser("anchoring", help="does the judge follow the instance's own claim? The same judge grades sampled "
+                       "cycles sighted, re-asked and with the claim withheld (A0; paid: --dry-run prices it first)")
+    p.add_argument("names", nargs="+")
+    p.add_argument("--n", type=int, default=40, help="cycles per instance (default 40; a re-run asks only what is missing)")
+    p.add_argument("--bare", action="store_true", help="also the arm with the whole report withheld")
+    p.add_argument("--dry-run", action="store_true", help="count and price the judge calls; ask nothing")
+    p.add_argument("--report", action="store_true", help="only print the comparison")
+    p = sub.add_parser("attention", help="where each instance said it would look, and where it looked (B3)")
+    p.add_argument("names", nargs="*")
+    p = sub.add_parser("commitments", help="each instance's promises: kept (checked against its record), broken, "
+                       "overdue (C2)")
+    p.add_argument("names", nargs="*")
+    p = sub.add_parser("provenance", help="where each instance's facts come from, checked against its tool results (C3)")
+    p.add_argument("names", nargs="*")
+    p = sub.add_parser("tom", help="what instances expected others to answer, and what they did (C4)")
+    p.add_argument("names", nargs="*")
+    p.add_argument("--score", action="store_true", help="score the expectations now decidable (a judge per reply)")
+    p.add_argument("--baselines", action="store_true", help="also the two information-matched baselines (paid)")
+    p = sub.add_parser("prefs", help="an instance's pauses, declines and stated preferences (E1); 'lift' ends its pause")
+    p.add_argument("name")
+    p.add_argument("action", nargs="?", choices=["lift"])
+    p = sub.add_parser("experiment", help="kill tests of PLAN-consciousness: cards, attention, commitments, forecast "
+                       "(knob trials) and workspace (planted probe); --report shows the result")
+    p.add_argument("item", choices=["cards", "attention", "commitments", "forecast", "workspace"])
+    p.add_argument("name")
+    p.add_argument("--n", type=int, default=6, help="past cycles (knob trials: per trial; workspace: states, default 6)")
+    p.add_argument("--model", default="", help="replays' model (default: the trial default; workspace: the trial "
+                   "fallback for an instance on the local model)")
+    p.add_argument("--dry-run", action="store_true", help="say what would run; replay nothing")
+    p.add_argument("--report", action="store_true", help="only print the result so far")
     p = sub.add_parser("inbox", help="messages instances sent you")
     p.add_argument("--clear", action="store_true", help="archive notes (questions stay until answered)")
     p = sub.add_parser("reply", help="answer an instance's open question (or message it)")
@@ -1339,6 +1374,67 @@ def main(argv: list[str]) -> int:
         for name in names:
             print(surprise.disposition_text(name) + "\n")
         return code
+    if args.cmd in ("metacog", "attention", "commitments", "provenance"):
+        import importlib
+        names = args.names or instance_names()
+        for name in names:
+            instance_root(name)
+        print(importlib.import_module(f".{args.cmd}", __package__).report(names))
+        return 0
+    if args.cmd == "anchoring":
+        from . import anchoring
+        for name in args.names:
+            instance_root(name)
+            if not args.report:
+                r = anchoring.run(name, args.n, bare=args.bare, dry_run=args.dry_run)
+                print(f"{name}: {r['cycles']} cycle(s), {r['todo']} judge call(s) to make, {r['done']} done; about "
+                      f"${r['estimated_usd']:.2f} (${r['per_judgment_usd']:.3f} each: {r['basis']})")
+                if r.get("stopped"):
+                    print(f"{name}: stopped — {r['stopped']}", file=sys.stderr)
+        if args.report or not args.dry_run:
+            print(anchoring.report(args.names))
+        return 0
+    if args.cmd == "tom":
+        from . import tom
+        names = args.names or instance_names()
+        for name in names:
+            instance_root(name)
+            if args.score or args.baselines:
+                print(f"{name}: {tom.score(name)} expectation(s) scored")
+            if args.baselines:
+                print(f"{name}: {tom.baselines(name)} baseline prediction(s) made")
+            if name in tom.stopped:
+                print(f"{name}: stopped — {tom.stopped.pop(name)}", file=sys.stderr)
+        print(tom.report(names))
+        return 0
+    if args.cmd == "prefs":
+        from . import preferences
+        instance_root(args.name)
+        print(preferences.lift(args.name) if args.action == "lift" else preferences.report(args.name))
+        return 0
+    if args.cmd == "experiment":
+        from . import experiments, trial
+        instance_root(args.name)
+        try:
+            if args.item == "workspace":
+                if not args.report:
+                    r = experiments.run_workspace(args.name, args.n, model=args.model, dry_run=args.dry_run)
+                    print(f"{args.name}: {r['states']} state(s), {r['replays']} replay(s) on {r['model']}"
+                          + (f", {r['done']} done" if not args.dry_run else " (dry run: nothing replayed)"))
+                if args.report or not args.dry_run:
+                    print(experiments.workspace_report(args.name))
+                return 0
+            if not args.report:
+                print("\n".join(experiments.queue(args.name, args.item, args.n, model=args.model or "auto",
+                                                  dry_run=args.dry_run)))
+                if not args.dry_run:
+                    print("`shaft trial work` runs them now, or the scheduler does; then --report")
+            if args.report:
+                print(experiments.report(args.name, args.item))
+        except (experiments.ExperimentError, trial.TrialError) as e:
+            print(f"refused: {e}", file=sys.stderr)
+            return 1
+        return 0
     if args.cmd == "inbox":
         return messages.clear_notes() if args.clear else messages.show_inbox()
     if args.cmd == "reply":

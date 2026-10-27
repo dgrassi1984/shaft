@@ -299,6 +299,10 @@ class DeleteTest(unittest.TestCase):
                  "gate-logs/kdx-20261020-101010-123456.log", "evals/battery-kdx-20261020-101010.json",
                  "evals/distinct-kdx-20261020-101010.json", "datasets/kdx-20261020-101010/a.jsonl",
                  "web/comments/kdx.json", "tools/kdx.json",
+                 # PLAN-consciousness: delete once left these behind (anchoring, reply expectations, preferences, kill tests)
+                 "judgments/kdx-anchoring.jsonl", "expectations/kdx.jsonl", "expectations/kdx-scored.jsonl",
+                 "expectations/kdx-baselines.jsonl", "preferences/kdx.jsonl", "experiments/kdx.jsonl",
+                 "experiments/kdx-workspace.jsonl",
                  "operator-inbox/20261020-101010-123456-from-kdx.md",
                  "operator-inbox/read/20261020-101010-123456-from-kdx.md",
                  "operator-inbox/attachments/20261020-101010-123456-from-kdx/a.png"]

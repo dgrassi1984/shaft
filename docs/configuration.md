@@ -168,6 +168,12 @@ reviewed ref was `refs/heads/publish-prep-template`.
 | `MAX_STEPS_TALK` | `0` | `0` |
 | `CONTEXT_JOURNAL_CHARS` | `16000` | `16000` |
 | `CURIOSITY_EVERY_CYCLES` | `5` | `5` |
+| `OUTCOME_CARDS` | `'on'` | uses built-in default |
+| `WORKSPACE` | `'competitive'` | uses built-in default |
+| `WORKSPACE_K` | `3` | uses built-in default |
+| `ATTENTION_SCHEMA` | `'on'` | uses built-in default |
+| `COMMITMENTS` | `'on'` | uses built-in default |
+| `FORECAST` | `'on'` | uses built-in default |
 | `OPERATOR_NAME` | `'the operator'` | empty |
 
 `LLM_PRESENCE_PENALTY` uses tenths (15 means 1.5). `MAX_STEPS_TALK=0` removes the
@@ -175,6 +181,14 @@ conversation step limit. `WAKE_INTERVAL_MINUTES=0` disables periodic wakes; posi
 values are bounded by the operator's wake floor (default 10 minutes). `CURIOSITY_EVERY_CYCLES=5` makes one live
 cycle in five, on average, a curiosity cycle while the instance has open surprises and no operator message waits
 (0 = never; [PLAN-surprise](plans/PLAN-surprise.md)).
+The six knobs after it switch the mechanisms of [PLAN-consciousness](plans/PLAN-consciousness.md), each on by default:
+`OUTCOME_CARDS` (on, off, shuffled, recall: before a kind of action that has been failing, the first such call in a
+cycle is held while the instance sees what comparable ones led to), `WORKSPACE` (competitive, relevance, off: what wins
+`WORKSPACE_K` places at the front of a live cycle, in automatic recall's place, broadcast after every step),
+`ATTENTION_SCHEMA` (declare_intent asks where it expects to look), `COMMITMENTS` (commit_to, settled in sleep against
+the record) and `FORECAST` (on, reserve, off: what comparable goals cost, or a fixed reserve rule). A value outside
+these keeps the default with a warning. `shaft experiment` flips a knob's default in code to run its kill test, and
+refuses an instance whose config.env sets that knob.
 Sources: template `shaft/config.py:17`, [autonomy.py](../supervisor/autonomy.py).
 
 Cloud routing uses `LLM_BASE_URL="broker"` and a model in `SHAFT_CLOUD_MODELS`.

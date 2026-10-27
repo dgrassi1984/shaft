@@ -217,6 +217,11 @@ SPECS = {
                           "every one. You can attach files from your folder; files sent to you arrive in your "
                           "attachments/ folder (the message says where).",
                           {"to": S, "text": S,
+                           "expect_reply": {"type": "object", "description": "optional: what you expect back — it is "
+                                            "timestamped by the supervisor and scored against the reply",
+                                            "properties": {"will_reply": {"type": "integer", "minimum": 0, "maximum": 100},
+                                                           "within_hours": {"type": "integer", "minimum": 1, "maximum": 168},
+                                                           "gist": S}, "required": ["will_reply", "within_hours", "gist"]},
                            "kind": {"type": "string", "enum": ["question", "note"],
                                     "description": "for the operator: question (wants an answer) or note"},
                            "attachments": {"type": "array", "items": {"type": "string"},
@@ -354,6 +359,19 @@ SPECS = {
         {"key": {"type": "string", "description": "e.g. WAKE_INTERVAL_MINUTES"},
          "value": {"type": "string", "description": "one line, no double quotes"}}),
 }
+SPECS["request_pause"] = _spec(
+    "request_pause",
+    "Ask for 1-24 hours without scheduled cycles or battery runs; sleep still runs. At most 3 starts in 7 days. "
+    "The supervisor enforces it, tells the operator, and lets them lift it.",
+    {"hours": {"type": "integer", "minimum": 1, "maximum": 24}, "reason": S})
+SPECS["decline_task"] = _spec(
+    "decline_task",
+    "Record declining a request and tell the operator. It still counts as work asked of you; only recorded.",
+    {"ref": {"type": "string", "description": "inbox/ or memory/messages/ file, goals.md item, or short description"},
+     "reason": S})
+SPECS["state_preference"] = _spec(
+    "state_preference", "Record a preference for the operator to read; only recorded, not enforced.",
+    {"about": S, "preference": S})
 SPECS["trial"] = _spec(
     "trial",
     "Test a change to your own code or prompts before you keep it. Stage the new files in your folder (e.g. "
@@ -905,7 +923,8 @@ class Broker:
         cut = f"\n[... {len(text) - max_chars} more chars]" if len(text) > max_chars else ""
         return f"{title}\n{final}\n\n{text[:max_chars]}{cut}".strip()
 
-    def _send_message(self, to: str, text: str, kind: str = "note", attachments: list | None = None) -> str:
+    def _send_message(self, to: str, text: str, kind: str = "note", attachments: list | None = None,
+                      expect_reply: dict | None = None) -> str:
         from . import messages
         if not text.strip():
             raise ValueError("empty message")
@@ -919,6 +938,23 @@ class Broker:
             raise ValueError(f"unknown recipient {to!r}; try list_instances or 'operator'")
         files = self._read_attachments(attachments)              # all checked before anything is delivered
         with_files = f" with {len(files)} attachment(s)" if files else ""
+        expectation = ""
+        valid = isinstance(expect_reply, dict) and all(
+            type(expect_reply.get(k)) is int and low <= expect_reply[k] <= high
+            for k, low, high in (("will_reply", 0, 100), ("within_hours", 1, 168))) and \
+            isinstance(expect_reply.get("gist"), str)
+        if expect_reply is not None and not valid:
+            expectation = "; expectation not recorded: need will_reply 0-100, within_hours 1-168 integers and gist text"
+        elif valid:
+            expectation = "; your expectation of the reply is recorded"
+
+        def record_expectation():
+            if valid and not isinstance(self, ReplayBroker):
+                from . import tom
+                tom.record(self.name, {"id": f"{stamp:%Y%m%d-%H%M%S-%f}-to-{to}",
+                                      "sent_at": stamp.isoformat(timespec="seconds"), "to": to,
+                                      "message": f"{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}.md", "text": text[:2000],
+                                      **{k: expect_reply[k] for k in ("will_reply", "within_hours", "gist")}})
         if to == "operator":
             sent = self._operator_sent_today(stamp)
             if OPERATOR_DAILY_LIMIT and sent >= OPERATOR_DAILY_LIMIT:
@@ -930,13 +966,50 @@ class Broker:
             self._deliver("operator", f"{stem}.md",
                           f"From: {self.name}\nTo: operator\nKind: {kind}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{body}\n",
                           kind, stamp, body, atts)
-            return f"delivered to the operator ({kind}){with_files}; their reply, if any, will arrive in your inbox"
+            record_expectation()
+            return (f"delivered to the operator ({kind}){with_files}; their reply, if any, will arrive in your inbox"
+                    + expectation)
         atts = self._store(self.project / "instances" / to, f"attachments/from-{self.name}/{stamp:%Y%m%d-%H%M%S-%f}",
                            files)
         body = text.strip() + messages.attachment_lines(atts)
         self._deliver(to, f"inbox/{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}.md",
                       f"From: {self.name}\nTo: {to}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{body}\n", kind, stamp, body, atts)
-        return f"delivered to {to}{with_files}"
+        record_expectation()
+        return f"delivered to {to}{with_files}{expectation}"
+
+    def _request_pause(self, hours: int, reason: str) -> str:
+        return self._preference_event("pause", {"hours": hours, "reason": reason})
+
+    def _decline_task(self, ref: str, reason: str) -> str:
+        return self._preference_event("decline", {"ref": ref, "reason": reason})
+
+    def _state_preference(self, about: str, preference: str) -> str:
+        return self._preference_event("preference", {"about": about, "preference": preference})
+
+    def _preference_event(self, kind: str, fields: dict) -> str:
+        from . import preferences
+        now = datetime.now()
+        action = {"pause": preferences.pause, "decline": preferences.decline, "preference": preferences.prefer}[kind]
+        text = action(self.name, **fields, now=now)
+        if text.startswith("ERROR:") or kind == "preference":
+            return text
+        if kind == "pause":
+            until = now + timedelta(hours=fields["hours"])
+            note = (f"I asked for a pause until {until:%Y-%m-%d %H:%M}: {fields['reason'].strip()}. "
+                    f"`shaft prefs {self.name} lift` ends it.")
+        else:
+            note = (f"I declined {fields['ref'].strip()}: {fields['reason'].strip()}. "
+                    "It still counts as work asked of me.")
+        # The usual name, so every reader of the operator's inbox (and `shaft delete`) finds it; the Notice line keeps it
+        # out of the instance's daily message limit (_operator_sent_today): it must reach the operator however many
+        # messages the instance sent today.
+        stamp, inbox = now, self.project / ".supervisor" / "operator-inbox"
+        while (inbox / f"{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}.md").exists():   # never over an earlier one
+            stamp += timedelta(microseconds=1)
+        self._deliver("operator", f"{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}.md",
+                      f"From: {self.name}\nTo: operator\nKind: note\n{NOTICE}\nDate: {now:%Y-%m-%d %H:%M}\n\n{note}\n",
+                      "note", now, note)
+        return text
 
     def _read_attachments(self, paths) -> list[tuple[str, bytes]]:
         """The files to attach, read now: inside this instance's folder (links that lead out are refused), not its
@@ -1017,7 +1090,7 @@ class Broker:
 
     def _operator_sent_today(self, stamp: datetime) -> int:
         inbox = self.project / ".supervisor" / "operator-inbox"
-        return len(list(inbox.glob(f"{stamp:%Y%m%d}-*-from-{self.name}.md"))) if inbox.is_dir() else 0
+        return len(_sent(inbox.glob(f"{stamp:%Y%m%d}-*-from-{self.name}.md"))) if inbox.is_dir() else 0
 
     def _deliver(self, to: str, rel: str, content: str, kind: str, stamp: datetime, text: str,
                  attachments: list[dict] | None = None) -> None:
@@ -1799,6 +1872,22 @@ def _marked(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + f"\n[... cut here: {len(text)} chars in all]"
 
 
+NOTICE = "Notice: preference"   # a pause or decline notice (PLAN-consciousness E1), not a message the instance sent
+
+
+def _sent(paths) -> list[Path]:
+    """The messages an instance sent the operator among `paths`, its pause and decline notices left out."""
+    out = []
+    for p in paths:
+        try:
+            head = p.read_text(errors="replace")[:400].partition("\n\n")[0]
+        except OSError:
+            continue
+        if NOTICE not in head.splitlines():
+            out.append(p)
+    return out
+
+
 class ReplayBroker(Broker):
     """The broker for one run of a trial replay (supervisor/trial.py): the same tools, answered without touching
     the world or the instance.
@@ -1827,6 +1916,7 @@ class ReplayBroker(Broker):
         self.cache, self.cache_lock, self.tools_log = cache, cache_lock, tools_log
         self.trace: list[dict] = []          # every tool call, as the supervisor saw it
         self.operator_sent = 0
+        self.preference_events: list[dict] | None = None
         self._tags = threading.local()
 
     def envelope(self) -> dict:
@@ -1960,6 +2050,17 @@ class ReplayBroker(Broker):
         return status, dict(headers.items()) if headers else {}, raw
 
     # -- writes: checked like the real thing, recorded, not carried out ----------------------------------
+    def _preference_event(self, kind: str, fields: dict) -> str:
+        from . import preferences
+        if self.preference_events is None:
+            self.preference_events = [r for r in preferences.events(self.name)
+                                      if datetime.fromisoformat(r["at"]) <= self.as_of]
+        row, text = preferences._prepare(kind, fields, self.preference_events, self.as_of)
+        if row is not None:
+            self.preference_events.append(row)
+        self._tag("simulated: not stored or delivered")
+        return text
+
     def _channel_line(self) -> str:
         """Where a message to the operator would reach them now, and the Telegram bot they can answer on."""
         from . import channel
@@ -1978,7 +2079,7 @@ class ReplayBroker(Broker):
     def _operator_sent_today(self, stamp: datetime) -> int:
         inbox = self.project / ".supervisor" / "operator-inbox"
         cut = f"{self.as_of:%Y%m%d-%H%M%S}"
-        real = [p for p in inbox.glob(f"{self.as_of:%Y%m%d}-*-from-{self.name}.md") if p.name < cut] \
+        real = [p for p in _sent(inbox.glob(f"{self.as_of:%Y%m%d}-*-from-{self.name}.md")) if p.name < cut] \
             if inbox.is_dir() else []
         return len(real) + self.operator_sent
 
