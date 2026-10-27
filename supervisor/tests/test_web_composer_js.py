@@ -15,7 +15,8 @@ class ComposerJsTest(unittest.TestCase):
         script = r"""
 const fs=require('node:fs'), vm=require('node:vm'), assert=require('node:assert/strict');
 const storage=new Map(); let serial=0;
-function page(mids=[], touch=false, feed=[]) {     // feed: the message ids of the turns the feed shows (data-mid)
+function page(mids=[], touch=false, feed=[], bubble=false) {   // feed: the message ids the feed shows (data-mid);
+                                                                 // bubble: a feed the "sending…" copy goes in
   const handlers={}, win={}, elements={}, viewportHandlers={}, viewport={height:900,addEventListener(k,fn){viewportHandlers[k]=fn;}}; let resolve, reject, payload;
   const node=()=>({dataset:{},style:{},children:[],setAttribute(){},querySelectorAll:()=>[],
     appendChild(n){this.children.push(n);},append(...ns){this.children.push(...ns);},remove(){},
@@ -31,17 +32,19 @@ function page(mids=[], touch=false, feed=[]) {     // feed: the message ids of t
     closest:()=>null,querySelectorAll:()=>[sendButton,queueButton],querySelector:q=>({'textarea':box,'textarea[name=text]':box,'input[name=mid]':mid,'input[name=queue]':queue,
       'input[type=file]':files,'[data-picked]':chips,'button[type=submit]':sendButton,'.quotechip':form.chip})[q]||null,
     insertBefore(n){this.chip=n;},reset(){box.value='';mid.value='';files.files=[];}};
+  const feedNode={...node(),closest:()=>null};
   const selection={isCollapsed:false,rangeCount:1,toString:()=> 'selected quote',removeAllRanges(){},
     getRangeAt:()=>({commonAncestorContainer:{nodeType:1,closest:()=>({dataset:{}})}})};
   const document={readyState:'loading',visibilityState:'hidden',body:node(),documentElement:{style:{setProperty(){}}},
     addEventListener(k,fn){(handlers[k]||=[]).push(fn);},dispatchEvent(){},
-    querySelector:q=>q==='form.composer textarea'?box:['form[data-files]','form[data-draft]'].includes(q)?form:null,
+    querySelector:q=>q==='form.composer textarea'?box:['form[data-files]','form[data-draft]'].includes(q)?form
+      :q==='.feed[data-follow]'&&bubble?feedNode:null,
     querySelectorAll:q=>q==='.feed [data-mid]'?feed.map(m=>({dataset:{mid:m},classList:{contains:()=>false}})):[],
     getElementById:id=>elements[id]||null,
     createElement(){const n=node();Object.defineProperty(n,'id',{set(id){elements[id]=n;}});return n;}};
   const context={document,URL,URLSearchParams,Event,AbortController,navigator:{},
     crypto:{randomUUID:()=>`m-${++serial}`},location:{href:'https://shaft.test/i/wren/chat'},
-    window:{innerHeight:900,visualViewport:viewport,addEventListener(k,fn){(win[k]||=[]).push(fn);},getSelection:()=>selection,
+    window:{innerHeight:900,visualViewport:viewport,scrollTo(){},addEventListener(k,fn){(win[k]||=[]).push(fn);},getSelection:()=>selection,
       matchMedia:()=>({matches:touch})},
     localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},
     setTimeout(){},clearTimeout(){},setInterval(){},
@@ -90,6 +93,17 @@ for(const kind of ['reply','quote']) {
  const nl=String.fromCharCode(10),t=q.payload().text;assert.ok(/^> (whole|selected) quote/.test(t)&&t.endsWith('quote'+nl+nl+'my answer'),t);q.answer();await sending;
  assert.equal(storage.get('shaft.quote.wren'),undefined);
 }
+""")
+
+    def test_p8_the_field_empties_as_the_bubble_appears_and_a_failure_puts_the_text_back(self):
+        """iPad review P8 (2026-10-27): for a second the text was both in the field and in the "sending…" bubble."""
+        self.run_composer("""
+const p=page([],false,[],true);await p.type('hello');let sending=p.send();await Promise.resolve();
+assert.equal(p.box.value,'','empty while sending');assert.equal(p.payload().text,'hello');
+p.answer();await sending;assert.equal(p.box.value,'');assert.equal(storage.get('shaft.draft.wren'),undefined);
+await p.type('again');sending=p.send();await Promise.resolve();assert.equal(p.box.value,'');
+await p.type('more');p.fail();await sending;
+assert.equal(p.box.value,'again'+String.fromCharCode(10,10)+'more','a failure puts it back, before what came after');
 """)
 
     def test_issue_21_picker_adds_and_send_keeps_later_files(self):

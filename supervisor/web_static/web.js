@@ -506,6 +506,14 @@
       } catch (e) { /* no storage: retry still works in this page */ }
     }
     const shown = form.dataset.draft ? pending(form, sentMid) : null;
+    // The field empties as the "sending…" bubble appears: for a second the text was in both (iPad review P8). Its draft
+    // and the attempt stay saved; a send that fails puts the text back (unsent()).
+    if (shown && box) { box.value = ""; grow(box); }
+    const unsent = () => {
+      if (!shown || !box || box.value === typed) return;
+      box.value = box.value ? `${typed}\n\n${box.value}` : typed;   // what was typed meanwhile stays after it
+      grow(box);
+    };
     const multipart = !!form.dataset.multipart;          // files go with it: the browser sets the boundary
     const row = form.closest("[data-row]");
     const waitMs = waitMsFor(form);
@@ -519,9 +527,10 @@
                    ...(row || form.dataset.addRow ? { "X-Row": "1" } : {}) },
         body: multipart ? payload : new URLSearchParams(payload),
       });
-      if (pairAgain(r)) { if (shown) shown.remove(); return; }
+      if (pairAgain(r)) { if (shown) shown.remove(); unsent(); return; }
       const body = await r.text();
-      toast(textOf(body) || (r.ok ? "done" : `HTTP ${r.status}`), !r.ok);
+      // A message sent shows itself in the chat: its toast covered the header (iPad review P7). Anything else says so.
+      if (!(r.ok && shown)) toast(textOf(body) || (r.ok ? "done" : `HTTP ${r.status}`), !r.ok);
       const refusal = form.querySelector("[data-refusal]") || (form.dataset.after === "doc-deleted"
                       ? form.closest(".docview").querySelector("[data-delete-refusal]") : null);
       if (refusal) refusal.replaceChildren(...(r.ok ? [] : refusalNodes(r, body)));
@@ -558,7 +567,7 @@
       if (r.ok && form.dataset.guard !== undefined && !form.dataset.reset) markSaved(form);
       if (r.ok && form.dataset.keep) dropKept(form);   // saved: the copy kept in this browser goes
       if (r.ok && form.dataset.reset) {
-        const later = box && box.value !== typed ? box.value : null;   // typed while it was sending: kept
+        const later = box && box.value && box.value !== typed ? box.value : null;   // typed while it was sending: kept
         if (form.dataset.draft) {
           box.value = later === null ? "" : later;
           const input = form.querySelector("input[type=file]");
@@ -572,13 +581,13 @@
         else if (box) grow(box);
         if (box && form.dataset.draft && !touchOnly()) box.focus();   // write the next one (a phone keeps its keyboard down)
       }
-      if (!r.ok && shown) shown.remove();
+      if (!r.ok && shown) { shown.remove(); unsent(); }
       if (r.ok && form.dataset.diff) hideDiff(form);   // saved: back to the text, which is kept
       if (r.ok && form.dataset.after === "reload") setTimeout(() => location.reload(), 800);   // Unpair this browser
       if (r.ok && form.dataset.after === "home") setTimeout(() => { location.href = "/"; }, 1500);   // it is gone
       document.dispatchEvent(new Event("shaft:refresh"));      // show what the action changed, now
     } catch (e) {                                  // the answer was lost. A chat id is safe to repeat; anything else may have happened
-      if (shown) shown.remove();
+      if (shown) { shown.remove(); unsent(); }
       toast(lostAnswer(form, e, waitMs), true);
     } finally {
       clearTimeout(limit);
@@ -2053,6 +2062,7 @@
     const box = document.querySelector("form.composer textarea");
     if (box) grow(box);
     document.body.classList.toggle("kbd", keyboardUp());
+    if (keyboardUp()) document.body.classList.toggle("hwkbd", false);   // the on-screen keyboard now: its shortcuts are not true
     // iOS scrolls the whole page to show a focused field; the page is already the visible height: put it back
     if (document.body.classList.contains("chatapp") && window.scrollY) window.scrollTo(0, 0);
   }

@@ -169,4 +169,11 @@ def page_body(data: dict, scheduled: list[str], busy: list[str]) -> Html:
     intro = h('<p class="dim">The supervisor\'s settings, saved in <code class="wrap">{f}</code> (a process\'s '
               'environment wins over the file, the file over the default). Ports, interpreter paths and endpoints are '
               'set from a terminal only: <code>shaft settings</code>.</p>', f=data["file"])
-    return join([h("<h1>Settings</h1>"), intro, live, *sections, secrets])
+    from .web_actions import post_attrs
+    # This browser's pairing: on a computer or an iPad the rail is the page's frame, and Unpair sat at its foot on
+    # every page (decision 4, iPad review P4). It is here, and in the phone's ☰ sheet.
+    device = section("This browser", h(
+        '<form class="unpair" data-post="/unpair" data-after="reload" data-confirm="Unpair this browser? You will need a '
+        'new link from `shaft web pair` to use it again."{a}><button type="submit" class="act danger">Unpair this '
+        'browser</button></form>', a=post_attrs("this page")))
+    return join([h("<h1>Settings</h1>"), intro, live, *sections, secrets, device])

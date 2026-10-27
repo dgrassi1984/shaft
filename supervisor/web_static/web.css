@@ -581,6 +581,11 @@ a.button { display: inline-block; padding: .45rem .9rem; border: 1px solid var(-
       z-index: 55; border: 0; border-radius: 0;
       padding: calc(env(safe-area-inset-top) + .6rem) max(1rem, env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 1rem)
                max(1rem, env(safe-area-inset-left)); overflow-y: auto; }
+  /* an iPad in portrait: a side sheet over the chat, not the whole screen (iPad review P11) */
+  @media (min-width: 721px) and (min-height: 521px) {
+    .chatgrid.showdocs > aside.docs { left: auto; width: min(30rem, 92vw); border-left: 1px solid var(--line);
+        box-shadow: -12px 0 40px rgba(0, 0, 0, .18); }
+  }
 }
 
 /* docs/plans/PLAN-pwa P3 */
@@ -864,3 +869,31 @@ aside.docs.loading::before { content: ""; display: block; height: 2px; margin: -
     background: linear-gradient(90deg, transparent, var(--accent), transparent); background-size: 50% 100%;
     background-repeat: no-repeat; animation: docsload 1s linear infinite; }
 @keyframes docsload { from { background-position: -50% 0; } to { background-position: 150% 0; } }
+
+/* iPad review (2026-10-27, the new build) */
+/* P1: a quote with a long URL widened the composer, then the page (1141 px on an 820 px iPad) */
+form.composer { grid-template-columns: minmax(0, 1fr); }
+form.composer > * { min-width: 0; }
+.quotechip > span { overflow-wrap: anywhere; }
+/* P2: the rail's toggle and ✕ showed beside a rail that is always there, and did nothing: only where it is a sheet */
+.navbtn.iconbtn, nav button.closenav { display: none; }
+@media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
+  .chathead .navbtn.iconbtn, .pagebar .navbtn.iconbtn { display: inline-flex; }
+  body.navopen nav button.closenav { display: inline-flex; }
+  /* P4: Unpair stays in the phone's sheet; beside the rail of every page it is in Settings */
+}
+@media not all and (max-width: 720px) {
+  @media not all and (pointer: coarse) and (max-height: 520px) { nav form.unpair { display: none; } }
+}
+/* P9: New below is a pill, not the column's width */
+.chatpage > .newbelow { width: auto; max-width: none; margin-left: 0; margin-right: 0; align-self: center; }
+/* P10: an instance's twelve pages are one strip that scrolls sideways at every width */
+.tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tabs a { white-space: nowrap; flex: none; }
+/* P11: the documents over the chat on an iPad in portrait: a side sheet, not the whole screen */
+.doclist + .dim, aside.docs > .dim { text-align: center; padding: 2rem 1rem; }
+/* P5, P14: alerts' Dismiss quiet; a gap before the badge */
+.alerts li > form.act button { border-color: transparent; background: transparent; color: var(--dim); padding-left: 0; }
+.alerts li > form.act button:hover { color: var(--text); }
+.rail .badge, nav .badge { margin-left: .35rem; }

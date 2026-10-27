@@ -184,6 +184,37 @@ class MessageActionsTest(unittest.TestCase):
         self.assertIn(".turn:hover .msgactions, .turn:focus-within .msgactions", CSS)
 
 
+class IPadTest(unittest.TestCase):
+    """The iPad review of the new build (2026-10-27, iPad Air 11-inch simulator)."""
+
+    def test_p1_a_long_quote_never_widens_the_composer(self):
+        """P1: a quote with a long URL made the page 1141 px wide on an 820 px iPad."""
+        self.assertIn("form.composer { grid-template-columns: minmax(0, 1fr); }", CSS)
+        self.assertIn("form.composer > * { min-width: 0; }", CSS)
+        self.assertIn(".quotechip > span { overflow-wrap: anywhere; }", CSS)
+
+    def test_p2_the_rail_toggle_shows_only_where_the_rail_is_a_sheet(self):
+        """P2: the toggle and ✕ showed beside the iPad's permanent rail, and did nothing."""
+        self.assertIn(".navbtn.iconbtn, nav button.closenav { display: none; }", CSS)
+        self.assertIn(".chathead .navbtn.iconbtn, .pagebar .navbtn.iconbtn { display: inline-flex; }", block(PHONE))
+
+    def test_p4_unpair_is_in_settings_not_at_the_foot_of_every_page(self):
+        from supervisor import web_settings
+        src = Path(web_settings.__file__).read_text()
+        self.assertIn('data-post="/unpair"', src)
+        self.assertIn("nav form.unpair { display: none; }", CSS)
+
+    def test_p6_p7_shortcuts_line_and_send_toast(self):
+        """P6: the shortcuts line stayed with the on-screen keyboard up. P7: "sent to kant" covered the header."""
+        self.assertIn('if (keyboardUp()) document.body.classList.toggle("hwkbd", false);', JS)
+        self.assertIn("if (!(r.ok && shown)) toast(", JS)
+
+    def test_p13_the_pairing_box_takes_a_bare_token(self):
+        page = str(web_pages.unpaired_page())
+        self.assertIn('name="link" type="text" inputmode="url"', page)
+        self.assertNotIn("--name phone-app</code>", page)
+
+
 class AlertsTest(unittest.TestCase):
     def test_i15_a_log_line_alert_reads_on_a_phone_in_its_own_words(self):
         """Review I15: raw log lines with Python dicts, all bold red, each a wall of text on a phone."""

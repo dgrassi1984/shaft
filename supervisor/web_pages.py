@@ -348,9 +348,10 @@ def unpaired_page(expired: bool = False) -> Html:
     bar to open a pairing link in: the link is pasted here instead."""
     return page("Link expired" if expired else "Pair this app", h(
         '<section class="notice"><h1>{title}</h1>{reason}'
-        '<p>In your terminal run <code>shaft web pair --name phone-app</code>, copy the link it prints, and paste it '
-        'here. It works once, for 10 minutes.</p>'
-        '<form method="post" action="/pair" class="pairform"><input name="link" type="url" inputmode="url" required '
+        '<p>In your terminal run <code>shaft web pair --name &lt;this device&gt;</code> (phone-app, ipad-app…), copy '
+        'the link it prints, and paste it here. It works once, for 10 minutes.</p>'
+        # text, not url: the server takes the bare token too (_token_from_link); type=url refused it (iPad review P13)
+        '<form method="post" action="/pair" class="pairform"><input name="link" type="text" inputmode="url" required '
         'autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://…/pair?t=…" '
         'aria-label="Pairing link"><button type="submit">Pair</button></form>'
         '<p class="dim">In a browser you can also just open the link.</p>'
