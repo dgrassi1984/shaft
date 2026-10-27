@@ -27,6 +27,8 @@ def run(question: str, model: str = "openrouter/z-ai/glm-5.3") -> str:
   call runs.
 - A plugin is stopped after 120 s. A slow model writing 8000 tokens can take longer, and a call cut off is still
   paid. I keep `max_tokens` to what the answer needs, and use the fast models for quick questions.
+- Text in, text out. An image, audio or file is refused, because its cost cannot be reserved in advance; I send
+  what it says instead. A `reasoning` budget is capped at `max_tokens`.
 - Refusals tell me why: not on the menu, no qualifying provider, over my allowance. A scheduled job, a trial
   replay or a battery exam cannot consult.
 - `record(kind="consults")` lists my consults of the last 7 days with their cost. `self/stats.md` shows how

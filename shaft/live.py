@@ -14,6 +14,7 @@ promises I make (commitments.py).
 """
 from __future__ import annotations
 
+import os
 import shutil
 
 from . import (agent, base_rate, broker, cards, clock, commitments, forecast, images, memory, pausing, prompts, recovery,
@@ -318,6 +319,8 @@ def run(cfg, state: State, client: Client) -> str:
     episode = {"ts": ended.isoformat(timespec="seconds"), "kind": "live", "intent": intent, "finish": fin,
                "ended_by": outcome.ended_by, "steps": outcome.steps, "tools": toolbox.log,
                "inbox": [n for n, _ in inbox], "curiosity": curiosity, "cards": held.record}
+    if os.environ.get("SHAFT_RUN_STARTED"):   # the supervisor's start of this run: my consults are booked against it
+        episode["run_started"] = os.environ["SHAFT_RUN_STARTED"]
     if ws.mode != "off" or ws.errors:
         episode["workspace"] = ws.record()
     if fin and (fin["surprises"] or fin["resolves"]):   # their ids, as the queue will know them
