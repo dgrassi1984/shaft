@@ -1134,14 +1134,15 @@
     document.addEventListener(type, (ev) => {
       if (type === "keydown" && !["ArrowUp", "PageUp", "Home", " "].includes(ev.key)) return;
       if (ev.target && ev.target.closest && ev.target.closest("[data-scroll]")) {
-        readerScrolled = Date.now();
+        // a press only holds (a scrollbar dragged): a tap is not a scroll — Retry's tap, then the feed shortening,
+        // stopped it following (found live, 2026-10-27)
         if (type === "pointerdown") readerHolding = true;
+        else readerScrolled = Date.now();
       }
     }, { capture: true, passive: true });
   }
   for (const type of ["pointerup", "pointercancel"]) {
-    document.addEventListener(type, () => { if (readerHolding) { readerHolding = false; readerScrolled = Date.now(); } },
-      { capture: true, passive: true });
+    document.addEventListener(type, () => { readerHolding = false; }, { capture: true, passive: true });
   }
   document.addEventListener("scroll", (ev) => {
     const box = ev.target;

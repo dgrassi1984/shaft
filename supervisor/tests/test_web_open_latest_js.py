@@ -97,6 +97,13 @@ assert.equal(box.scrollTop, end() - 400 - 20, "scrolled up a little: not pulled 
 // Codex review: a scrollbar held down, then dragged after the 1.5 s a gesture counts for, still counts
 box.scrollTop = end(); scrolled();                 // back at the end: following again
 assert.equal(feed._atBottom, true);
+// A tap (Retry) is not a scroll: the feed shortening after it moves the box up, and it still follows (found live)
+clock += 5000;                                      // the wheel above is long over
+for (const f of handlers.pointerdown || []) f({ target: { closest: () => box } });
+for (const f of handlers.pointerup || []) f({});
+box.scrollTop = end() - 300; scrolled();
+box.scrollHeight += 400; resized();
+assert.equal(box.scrollTop, end(), "a tap, then a layout change: still at the last message");
 for (const f of handlers.pointerdown || []) f({ target: { closest: () => box } });
 clock += 5000;                                      // held for 5 s, then dragged
 box.scrollTop = 20; scrolled();
