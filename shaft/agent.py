@@ -145,6 +145,9 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
     wrap up (`wrap_up`) and only the controls stay available, so a cycle ends with a
     report instead of being cut off mid-thought.
 
+    Before that final turn, a model-only line beside the ledger counts turns including the current one.
+    It is rebuilt from this turn's limit, so a newly granted confirm turn cannot leave a stale countdown.
+
     With `ledger`, each step's last tool result ends with the calls actually made so far in this run (from
     the tool log), so I check what I did against the log, not against my memory of my plan. It goes only to
     the model: the tool log, which the judge and metrics read, keeps the results as the tools returned them.
@@ -189,7 +192,25 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
                 messages.append({"role": "user", "content": f"[supervisor] You have {why} left. {wrap_up}"})
                 reply = call(messages, final_tools)
             else:
-                reply = call(messages)
+                model_messages = messages
+                remaining = limit - step + 1
+                # 2026-10-27: cycles reached the final turn with closures still unrun. Warn for at most
+                # three turns, or a quarter of a short budget, so pacing does not dominate the run.
+                if wrap_up and limit > 0 and 2 <= remaining <= min(3, limit // 4) + 1:
+                    minutes = (f" (about {left / 60:.0f} minutes)"
+                               if left is not None and left < remaining * WRAP_UP_RESERVE_S else "")
+                    note = f"[supervisor] {remaining} turns left{minutes}: close what you opened."
+                    model_messages = list(messages)
+                    # Images or interjections may follow the ledger. Copy its tool result so the warning
+                    # reaches only this model call, never the tool log or subsequent turns (including retries).
+                    result_at = next((i for i in range(len(messages) - 1, -1, -1)
+                                      if messages[i]["role"] == "tool"), None)
+                    if result_at is not None:
+                        model_messages[result_at] = {**messages[result_at],
+                                                     "content": messages[result_at]["content"] + "\n" + note}
+                    else:
+                        model_messages.append({"role": "user", "content": note})
+                reply = call(model_messages)
         except pausing.Paused:   # the call was cut off for a conversation: redo this step afterwards
             del messages[mark:]
             step -= 1
