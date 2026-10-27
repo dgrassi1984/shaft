@@ -65,15 +65,16 @@ def busy_instances() -> list[str]:
 def service_guard(service: str, action: str, busy=None) -> str:
     """Why stopping or restarting this service now would hurt a run (empty if it would not)."""
     from . import panel
-    runs = panel.scheduled_runs() if service == "scheduler" or (service == "autonomy" and action == "off") else []
+    runs = panel.scheduled_runs() if service in ("scheduler", "autonomy") else []
     in_use = (busy or busy_instances)() if service in ("model", "embed", "api") else []
     return guard_reason(service, action, runs, in_use)
 
 
 def guard_reason(service: str, action: str, scheduled: list[str], busy: list[str]) -> str:
     """service_guard from what is running now (panel.scheduled_runs, busy_instances): for a page that shows every
-    service's buttons at once and asks the system once."""
-    if (service == "scheduler" or (service == "autonomy" and action == "off")) and scheduled:
+    service's buttons at once and asks the system once. `autonomy on` counts too: on a running scheduler it is a
+    restart (it killed shaft's sleep and wren's cycle from a terminal, 2026-10-27)."""
+    if service in ("scheduler", "autonomy") and scheduled:
         return (f"the scheduler's runs share its process group, so this would kill them: {', '.join(scheduled)}."
                 + LATER)
     if service in ("model", "embed", "api") and busy:
@@ -95,6 +96,24 @@ def force_question(service: str, action: str, why: str) -> str:
 
 def log_forced(who: str, args: list[str], why: str) -> None:
     log(f"{who}: operator forced {say(args)} past the guard: {why.removesuffix(LATER)}")
+
+
+FORCE = "--force"
+GUARDED_CLI = ("api", "model", "embed", "autonomy")   # the shaft verbs whose on/off restarts or stops a service
+
+
+def cli_guard(cmd: str, action: str, force: bool) -> str:
+    """The same guard for `shaft <cmd> on|off` typed in a terminal, which both panels also run: empty to go ahead,
+    else why it is refused. Only a running service can hurt a run; a forced one is logged, like the panels'."""
+    from .autonomy import running
+    service = "scheduler" if cmd == "autonomy" else cmd
+    if action not in ("on", "off") or not running(service):
+        return ""
+    why = service_guard(cmd, "off" if action == "off" else "restart")
+    if why and force:
+        log_forced("cli", [cmd, action], why)
+        return ""
+    return why and f"not now: {why.removesuffix(LATER)} Try again when they end, or add {FORCE} (they end unfinished)."
 
 
 def trial_cost_estimate() -> float | None:
