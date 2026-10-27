@@ -181,6 +181,17 @@ def nav(names: list[str], current: str = "overview") -> Html:
              version=running, x=icon("close"))
 
 
+def pagebar(title: str, current: str = "") -> Html:
+    """A page's bar on a phone (CSS shows it there only): ‹ Chat, its title, ☰. The installed app has no browser Back,
+    and the rail filled half the screen above every page (iPhone review I5). An instance's page goes back to its chat."""
+    import urllib.parse
+    back = f"/i/{urllib.parse.quote(current[2:], safe='')}/chat" if current.startswith("i:") else "/"
+    return h('<div class="pagebar"><a class="iconbtn back" href="{b}" aria-label="Back to the chat">{bi}<span>Chat</span>'
+             '</a><b class="pbtitle">{t}</b><button type="button" class="navbtn iconbtn" data-toggle-nav '
+             'aria-label="Chats and pages" aria-expanded="false">{si}</button></div>',
+             b=back, bi=icon("back"), t=title, si=icon("sidebar"))
+
+
 def message_page(title: str, text: str, detail: str = "") -> Html:
     """A page for a refusal or a notice: what happened, and what to do about it."""
     extra = h('<p class="dim">{d}</p>', d=detail) if detail else Html("")
@@ -507,4 +518,5 @@ def overview(snap: dict) -> Html:
 def overview_page(snap: dict, csrf: str) -> Html:
     body = h('<h1 class="sr">Overview</h1><div id="overview" data-poll="/fragment/overview">{live}</div>',
              live=overview(snap))
-    return page("Overview", body, nav([i["name"] for i in snap["instances"]], "overview"), csrf)
+    return page("Overview", join([pagebar("Overview"), body]), nav([i["name"] for i in snap["instances"]], "overview"),
+                csrf)

@@ -11,7 +11,7 @@ import re
 import time
 import urllib.parse
 
-from .web_pages import Html, esc, etag, h, icon, join, nav, page
+from .web_pages import Html, esc, etag, h, icon, join, nav, page, pagebar
 
 MARK = {"yes": ("✓", "good"), "partial": ("½", "warn"), "no": ("✗", "bad")}
 ICONS = {name: icon(name, 16) for name in ("copy", "reply", "delete", "edit", "download", "expand", "collapse", "select")}
@@ -91,11 +91,7 @@ def frame(title: str, body: Html, names: list[str], csrf: str, current: str = ""
     """A page with the rail. On a phone the rail is a sheet behind ☰ and the page has a bar: ‹ Chat, its title, ☰ —
     the installed app has no browser Back, and the rail filled half the screen above every page (iPhone review I5)."""
     if bar:
-        back = f"/i/{q(current[2:])}/chat" if current.startswith("i:") else "/"
-        body = join([h('<div class="pagebar"><a class="iconbtn back" href="{b}" aria-label="Back to the chat">{bi}'
-                       '<span>Chat</span></a><b class="pbtitle">{t}</b><button type="button" class="navbtn iconbtn" '
-                       'data-toggle-nav aria-label="Chats and pages" aria-expanded="false">{si}</button></div>',
-                       b=back, bi=icon("back"), t=title, si=icon("sidebar")), body])
+        body = join([pagebar(title, current), body])
     return page(title, body, nav(names, current), csrf)
 
 

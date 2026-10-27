@@ -198,6 +198,8 @@ class LayoutTest(unittest.TestCase):
         self.assertIn('data-toggle-nav aria-label="Chats and pages"', page.split('class="pagebar"')[1])
         chat = str(web_views.chat_page("wren", None, [], [], {}, ["wren"], "t"))
         self.assertNotIn('class="pagebar"', chat)
+        # every page with the rail: the overview builds its own page (found live: it had no bar)
+        self.assertIn('return page("Overview", join([pagebar("Overview"), body])', Path(web_pages.__file__).read_text())
         self.assertIn(".tabs { flex-wrap: nowrap; overflow-x: auto;", CSS)
 
     def test_i1_the_chat_page_never_scrolls_itself(self):
