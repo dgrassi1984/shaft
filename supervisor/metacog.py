@@ -14,6 +14,7 @@ from . import metrics
 MIN_V3, MIN_FAILURES, MARGIN = 40, 12, -0.05
 BINS = 10
 MIN_CLASS = 5   # met and missed cycles each, before stats.md shows a number: one miss in 13 gave wren "AUROC 0.12"
+MIN_DAYS = 5    # days a day-clustered interval resamples: three gave shaft "AUROC 0.60 [0.17, 0.64]" (2026-10-27)
 
 
 def auroc(pos: list[float], neg: list[float]) -> float | None:
@@ -76,14 +77,15 @@ def meta_i(pairs, bins: int = BINS) -> dict | None:
 
 def cluster_ci(rows: list[dict], stat, *, key=lambda r: r["episode_ts"][:10], n_boot: int = 2000,
                seed: str = "metacog") -> tuple[float, float] | None:
-    """95% percentile interval from resampled days; refuse over 10% undefined draws.
+    """95% percentile interval from resampled days; none from fewer than MIN_DAYS days (three days have only ten
+    distinct resamples, so the "interval" is a handful of values), and none over 10% undefined draws.
 
     Percentiles interpolate linearly between adjacent sorted bootstrap estimates.
     """
     clusters = {}
     for row in rows:
         clusters.setdefault(key(row), []).append(row)
-    if len(clusters) < 2 or n_boot < 1:
+    if len(clusters) < MIN_DAYS or n_boot < 1:
         return None
     groups = list(clusters.values())
     rng = random.Random(seed)

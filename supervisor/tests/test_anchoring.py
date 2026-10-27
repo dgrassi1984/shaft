@@ -174,7 +174,7 @@ class AnchoringTest(unittest.TestCase):
                          "against bare: 0.375", "sighted agreement with stored verdict: 2/4"):
             self.assertIn(expected, text)
         # four one-cycle days: too many resamples have one class, so no interval — the value is still shown
-        self.assertIn("(no interval: fewer than 2 days", text)
+        self.assertIn("(no interval: fewer than 5 days", text)
 
     def test_auroc_ties_and_cluster_bootstrap(self):
         auc = lambda pairs: anchoring._auc([{"score": sc, "hit": h} for sc, h in pairs])
@@ -184,7 +184,7 @@ class AnchoringTest(unittest.TestCase):
         self.assertEqual(auc([(2, True), (2, False), (0, False)]), .75)
         self.assertIsNone(auc([(2, True)]))
         # Each day has both classes. Resampling whole days always keeps a perfect ranking.
-        data = [(day, score, hit) for day in ("a", "b") for score, hit in ((2, True), (0, False))]
+        data = [(day, score, hit) for day in "abcde" for score, hit in ((2, True), (0, False))]
         self.assertEqual(anchoring._ci(data), (1, 1))
         self.assertEqual(anchoring._ci(data), anchoring._ci(data))
         self.assertIsNone(anchoring._ci([("a", 2, True)]))

@@ -545,12 +545,15 @@ def _launch(name: str, root: Path, kind: str, agent_args: list[str], budget: int
     if localmodel.is_service(instance_config(name).get("LLM_BASE_URL", "")):
         localmodel.ensure(f"{name}'s {kind}")   # it runs only while used (localmodel.py)
     broker = Broker(name, PROJECT, secrets_env(), SUP_DIR / "broker.log", max_calls=BROKER_MAX_CALLS)
+    broker.run_kind = kind
+    broker.run_started = datetime.now().isoformat(timespec="seconds")
     broker.start()
     SUP_DIR.mkdir(exist_ok=True)
     rebuild_env(name, root, broker)
     extra = {"SHAFT_DEADLINE": f"{time.time() + budget - 60:.0f}"} if budget else {}
     from .autonomy import describe_schedule
     extra["SHAFT_SCHEDULE"] = describe_schedule(name)
+    extra["SHAFT_RUN_STARTED"] = broker.run_started   # the episode carries it: its consults are matched to it exactly
     extra["SHAFT_OPEN_TALKS"] = ",".join(open_conversations(name))   # not to be written up yet
     cmd, env = agent_command(root, broker, agent_args, SUP_DIR / f"{name}.sb", LLM_PORTS, extra)
     return broker, cmd, env

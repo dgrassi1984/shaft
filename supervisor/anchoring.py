@@ -131,8 +131,9 @@ def run(name: str, n: int = 40, bare: bool = False, dry_run: bool = False) -> di
 
 
 def _ci(data: list[tuple[str, int, bool]], seed: str = "anchoring") -> tuple[float, float] | None:
-    """The claim's AUROC with A1's day-clustered 95% interval (metacog.cluster_ci): none from a single day or when
-    more than a tenth of the draws have one class only — a one-day sample gave a zero-width interval (Grok's review)."""
+    """The claim's AUROC with A1's day-clustered 95% interval (metacog.cluster_ci): none from fewer than MIN_DAYS
+    days or when more than a tenth of the draws have one class only — a one-day sample gave a zero-width interval
+    (Grok's review)."""
     rows = [{"day": day, "score": score, "hit": hit} for day, score, hit in data]
     return metacog.cluster_ci(rows, _auc, key=lambda r: r["day"], seed=seed)
 
@@ -166,7 +167,7 @@ def _report_lines(name: str, cycles: list[dict]) -> list[str]:
         interval = _ci(data, f"anchoring|{name}|{arm}")
         text = ("not measured (one class only)" if value is None else f"{value:.3f} " + (
             f"(95% day bootstrap CI {interval[0]:.3f}-{interval[1]:.3f})" if interval
-            else "(no interval: fewer than 2 days, or too many one-class draws)"))
+            else f"(no interval: fewer than {metacog.MIN_DAYS} days, or too many one-class draws)"))
         lines.append(f"  claim AUROC against {arm}: {text}, n={len(data)}")
     same = sum(c["sighted"]["criterion_met"] == c["sighted"]["stored"] for c in cycles)
     lines.append(f"  sighted agreement with stored verdict: {same}/{n}")

@@ -61,15 +61,24 @@ class MetacogTest(unittest.TestCase):
         self.assertEqual(metacog.paired_v3([])['verdict'], 'not enough data')
 
     def test_cluster_ci_seed_and_missing_resamples(self):
-        rows = [row(c, True, day) for day, c in enumerate((10, 30, 90), 1)]
+        rows = [row(c, True, day) for day, c in enumerate((10, 30, 90, 50, 70), 1)]
         stat = lambda rs: sum(r['confidence'] for r in rs) / len(rs)
         ci = metacog.cluster_ci(rows, stat, n_boot=100, seed='test')
         self.assertEqual(ci, metacog.cluster_ci(rows, stat, n_boot=100, seed='test'))
-        self.assertEqual(ci, (10, 70))
+        self.assertLess(ci[0], 50)
+        self.assertGreater(ci[1], 50)
         self.assertIsNone(metacog.cluster_ci(rows[:1], stat))
         self.assertIsNone(metacog.cluster_ci(rows, lambda rs: None, n_boot=100))
         self.assertIsNone(metacog.cluster_ci([row(0, False), row(100, True, 2)], metacog._auc))
         self.assertEqual(metacog.cluster_ci(rows, lambda rs: 0.5), (0.5, 0.5))
+
+    def test_no_interval_from_fewer_than_five_days(self):
+        """Live, 2026-10-27: shaft's stats.md read "AUROC 0.60 [0.17, 0.64]" from three days of v3 cycles — ten
+        distinct resamples, the estimate at the interval's edge. Below MIN_DAYS there is no interval."""
+        rows = [row(c, c > 50, day) for day in (1, 2, 3) for c in (20, 40, 60, 80, 30, 70)]
+        self.assertIsNone(metacog.cluster_ci(rows, metacog._auc))
+        more = rows + [row(c, c > 50, day) for day in (4, 5) for c in (20, 40, 60, 80, 30, 70)]
+        self.assertIsNotNone(metacog.cluster_ci(more, metacog._auc))
 
     def test_domains(self):
         examples = [('coding', 'run', '{}'), ('coding', 'delegate_coding', '{}'),

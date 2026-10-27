@@ -51,12 +51,15 @@ def _state(snap: dict, name: str) -> str:
     return next((i["state"] for i in snap["instances"] if i["name"] == name), "?")
 
 
-def _guard(form: dict, args: list[str], why: str) -> None:
-    """A service guard: refused unless the operator forced it (the "Force …" button, asked first), which is logged."""
+def _guard(form: dict, args: list[str], why: str) -> list[str]:
+    """A service guard: refused unless the operator forced it (the "Force …" button, asked first), which is logged.
+    The args to run: a forced action carries --force, since the CLI holds it back too."""
     if why and form.get("force") != "1":
         raise Refused(f"not now: {why}")
     if why:
         actions.log_forced(WHO, args, why)
+        return args + [actions.FORCE]
+    return args
 
 
 def run(verb: str, form: dict, snap: dict, names: list[str], services: list[str]) -> tuple[int, str]:
@@ -87,14 +90,14 @@ def _run(verb: str, form: dict, snap: dict, names: list[str], services: list[str
             raise Refused(NOT_FROM_HERE[svc])
         args = ["autonomy" if svc == "scheduler" else svc, op]
         running = any(s["name"] == svc and s["running"] for s in snap.get("services", []))
-        _guard(form, args, actions.service_guard(svc, op if op == "off" else "restart") if running else "")
+        args = _guard(form, args, actions.service_guard(svc, op if op == "off" else "restart") if running else "")
         return _ran(args, timeout=actions.SLOW_S)
     if verb == "autonomy":
         op = form.get("op", "")
         if op not in ("on", "off"):
             raise Refused(f"autonomy {op!r}?")
-        _guard(form, ["autonomy", op], actions.service_guard("autonomy", op))
-        return _ran(["autonomy", op], timeout=actions.SLOW_S)
+        args = _guard(form, ["autonomy", op], actions.service_guard("autonomy", op))
+        return _ran(args, timeout=actions.SLOW_S)
     from . import web_settings
     if verb in web_settings.VERBS:
         return web_settings.run(verb, form)

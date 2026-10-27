@@ -51,6 +51,12 @@ SERVICES = {
 }
 
 
+def running(name: str) -> bool:
+    """Whether launchd has the service's process up now (what `service(name, "status")` prints as its state)."""
+    r = _launchctl("print", f"gui/{os.getuid()}/{SERVICES[name]['label']}")
+    return any(l.strip() == "state = running" for l in r.stdout.splitlines())
+
+
 def service(name: str, action: str) -> int:
     svc = SERVICES[name]
     label, domain = svc["label"], f"gui/{os.getuid()}"

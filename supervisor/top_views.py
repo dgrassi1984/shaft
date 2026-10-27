@@ -792,5 +792,5 @@ def ask_guarded(ui, service: str, action: str, question: str, args: list[str], r
 
     def forced() -> str:
         actions.log_forced("top", args, why)
-        return run_now(args, timeout=actions.SLOW_S)
+        return run_now(args + [actions.FORCE], timeout=actions.SLOW_S)   # the CLI holds it back too
     ask(ui, actions.force_question(service, action, why) + " (y to force)", forced)

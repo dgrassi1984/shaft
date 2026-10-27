@@ -23,7 +23,7 @@ import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from . import autonomy, evolution, finetune, gate, messages, metrics, mind, runner, surprise, version
+from . import actions, autonomy, evolution, finetune, gate, messages, metrics, mind, runner, surprise, version
 from .core import (DEFAULT_INSTANCE, HOME, INSTANCES, MIND_PATHS, add_all_but_mind, NAME_RE, PROJECT, SUP_DIR, TEMPLATE, commit_state,
                    git, git_wt, instance_config, instance_names, instance_root, journal_entries, journal_note, log, paused,
                    safe_mkdir, safe_read, safe_write, set_update_queued, update_queued)
@@ -381,15 +381,17 @@ def cmd_limits(name: str | None, limit: str | None, value: str | None) -> int:
     """The operator's own limits for an instance, kept in supervisor/tools/<name>.json (never its config.env, which
     it can change): how often it may wake (WAKE_INTERVAL_MINUTES in its config.env, at least the floor) and how much
     it may spend on cloud models a day."""
-    from . import autonomy, cloudllm
+    from . import autonomy, cloudllm, consult
     from .core import _update_tool_settings
     if limit and not (name and value):
-        print("usage: shaft limits <name> wake-floor <minutes>|off · shaft limits <name> cloud-cap <dollars>|off",
+        print("usage: shaft limits <name> wake-floor <minutes>|off · shaft limits <name> cloud-cap <dollars>|off "
+              "· shaft limits <name> consult-cap <dollars>|off",
               file=sys.stderr)
         return 2
     if limit:
         instance_root(name)
-        key = {"wake-floor": "wake_floor_minutes", "cloud-cap": "cloud_daily_usd"}[limit]
+        key = {"wake-floor": "wake_floor_minutes", "cloud-cap": "cloud_daily_usd",
+               "consult-cap": "consult_daily_usd"}[limit]
         if value == "off":
             new = None
         else:
@@ -409,7 +411,10 @@ def cmd_limits(name: str | None, limit: str | None, value: str | None) -> int:
         cap = cloudllm.daily_cap(n)
         print(f"{n}: wakes every {int(interval.total_seconds() // 60) if interval else 'never'} min · wake floor {floor} min"
               f"{' (yours)' if floor != default_floor else ' (default)'} · cloud cap ${cap:.2f}"
-              f"{' (yours)' if cap != cloudllm.DAILY_USD else ' (default)'} · spent today ${cloudllm.spent_today(n):.2f}")
+              f"{' (yours)' if cap != cloudllm.DAILY_USD else ' (default)'} · spent today ${cloudllm.spent_today(n):.2f}"
+              f" · consult cap ${consult.daily_cap(n):.2f}"
+              f"{' (yours)' if consult.daily_cap(n) != consult.DAILY_USD else ' (default)'}"
+              f" · consult spent today ${consult.spent_today(n):.2f}")
     return 0
 
 
@@ -904,6 +909,7 @@ def main(argv: list[str]) -> int:
     p.add_argument("name")
     p = sub.add_parser("api", help="OpenAI-compatible API for the instances, on your tailnet")
     p.add_argument("action", choices=["on", "off", "status", "key", "inbox-key", "serve"])
+    p.add_argument("--force", action="store_true", help="on/off even if it would kill or cut off runs in progress")
     p = sub.add_parser("config", help="an instance's config.env as the operator: list it, set KEY=VALUE …, unset KEY …"
                                       " (one write, one commit; --expect refuses if a value changed since you looked)")
     p.add_argument("name")
@@ -959,10 +965,13 @@ def main(argv: list[str]) -> int:
     p.add_argument("name", nargs="?", help="token: the instance the bot is for")
     p = sub.add_parser("model", help="SHAFT's own Bonsai 2 model server (launchd service)")
     p.add_argument("action", choices=["on", "off", "status"])
+    p.add_argument("--force", action="store_true", help="on/off even if it would kill or cut off runs in progress")
     p = sub.add_parser("embed", help="SHAFT's embedding service for memory search (launchd service)")
     p.add_argument("action", choices=["on", "off", "status"])
+    p.add_argument("--force", action="store_true", help="on/off even if it would kill or cut off runs in progress")
     p = sub.add_parser("autonomy", help="the autonomous schedule (SHAFT's scheduler service): on, off, status")
     p.add_argument("action", choices=["on", "off", "status", "serve"])
+    p.add_argument("--force", action="store_true", help="on/off even if it would kill or cut off runs in progress")
     p = sub.add_parser("top", help="live view of every instance, the services and the messages between instances; "
                                    "starts a cycle for an idle one (q quits)")
     p.add_argument("--once", action="store_true", help="print one snapshot as text and exit")
@@ -1011,6 +1020,9 @@ def main(argv: list[str]) -> int:
     p.add_argument("--min-cycles", type=int, default=30, help="judged cycles the window needs (§4.1: shaft 30)")
     # docs/plans/PLAN-consciousness.md: measurements and kill tests (read the record; only anchoring and tom --score /
     # --baselines pay a judge, only experiment replays cycles)
+    p = sub.add_parser("consults", help="what each instance spent consulting other models, per model and run, and how "
+                       "its consulted cycles fared (docs/plans/PLAN-model-choice.md)")
+    p.add_argument("names", nargs="*")
     p = sub.add_parser("metacog", help="how well each instance's confidence tells its met cycles from its missed ones: "
                        "AUROC, bias, resolution, meta-I, by domain, and the paired v3 test (A1)")
     p.add_argument("names", nargs="*")
@@ -1102,10 +1114,10 @@ def main(argv: list[str]) -> int:
     p.add_argument("--yes", action="store_true", help="no question (otherwise you type its name to confirm)")
     p.add_argument("--no-archive", action="store_true", help="keep no archive: its mind is gone for good")
     p = sub.add_parser("limits", help="the operator's own limits for an instance: its wake floor (shortest wake interval "
-                                      "it may set itself) and its daily cloud cap; 'off' goes back to the default")
+                                      "it may set itself) and its daily cloud and consult caps; 'off' goes back to the default")
     p.add_argument("name", nargs="?")
-    p.add_argument("limit", nargs="?", choices=["wake-floor", "cloud-cap"])
-    p.add_argument("value", nargs="?", help="minutes (wake-floor), dollars (cloud-cap), or off")
+    p.add_argument("limit", nargs="?", choices=["wake-floor", "cloud-cap", "consult-cap"])
+    p.add_argument("value", nargs="?", help="minutes (wake-floor), dollars (cloud-cap or consult-cap), or off")
     p = sub.add_parser("jobs", help="instances' scheduled jobs (their own plugins on a timer): list, or switch an "
                                     "instance's jobs on/off")
     p.add_argument("name", nargs="?")
@@ -1221,6 +1233,9 @@ def main(argv: list[str]) -> int:
         return autonomy.wake(args.name)
     if args.cmd == "tick":
         return autonomy.tick()
+    if args.cmd in actions.GUARDED_CLI and (refused := actions.cli_guard(args.cmd, args.action, args.force)):
+        print(refused, file=sys.stderr)
+        return 1
     if args.cmd == "api":
         from . import api
         return api.command(args.action)
@@ -1374,12 +1389,13 @@ def main(argv: list[str]) -> int:
         for name in names:
             print(surprise.disposition_text(name) + "\n")
         return code
-    if args.cmd in ("metacog", "attention", "commitments", "provenance"):
+    if args.cmd in ("metacog", "attention", "commitments", "provenance", "consults"):
         import importlib
         names = args.names or instance_names()
         for name in names:
             instance_root(name)
-        print(importlib.import_module(f".{args.cmd}", __package__).report(names))
+        module = "consultstats" if args.cmd == "consults" else args.cmd
+        print(importlib.import_module(f".{module}", __package__).report(names))
         return 0
     if args.cmd == "anchoring":
         from . import anchoring

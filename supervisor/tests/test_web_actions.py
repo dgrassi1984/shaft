@@ -280,7 +280,8 @@ class AGuardTheOperatorForces(ActionsTest):
 
     def test_unforced_it_is_refused(self):
         for verb, form in (("service", {"service": "scheduler", "op": "on"}), ("service", {"service": "api", "op": "on"}),
-                           ("service", {"service": "api", "op": "off"}), ("autonomy", {"op": "off"})):
+                           ("service", {"service": "api", "op": "off"}), ("autonomy", {"op": "off"}),
+                           ("autonomy", {"op": "on"})):   # on restarts a running scheduler (2026-10-27)
             status, body = self.act(verb, **form)
             self.assertEqual(status, 409, body)
             self.assertIn("not now:", body)
@@ -291,7 +292,8 @@ class AGuardTheOperatorForces(ActionsTest):
         self.assertEqual(self.act("service", service="scheduler", op="on", force="1")[0], 200)
         self.assertEqual(self.act("service", service="api", op="on", force="1")[0], 200)
         self.assertEqual(self.act("autonomy", op="off", force="1")[0], 200)
-        self.assertEqual([r[1] for r in self.ran], [["autonomy", "on"], ["api", "on"], ["autonomy", "off"]])
+        self.assertEqual([r[1] for r in self.ran],   # the CLI guards them too: forced, they say so
+                         [["autonomy", "on", "--force"], ["api", "on", "--force"], ["autonomy", "off", "--force"]])
         self.assertEqual(len(self.logged), 3)
         self.assertIn("web: operator forced shaft autonomy on past the guard: the scheduler's runs", self.logged[0])
         self.assertIn("thelos (live since 14:06), wren (live since 14:08)", self.logged[0])
