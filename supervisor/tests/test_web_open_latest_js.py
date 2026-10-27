@@ -60,7 +60,9 @@ const document = { readyState: "loading", visibilityState: "visible", title: "wr
   getElementById: () => ({ setAttribute() {}, remove() {} }) };
 const observers = [];
 class ResizeObserver { constructor(f) { this.f = f; this.seen = []; observers.push(this); } observe(n) { this.seen.push(n); } }
-vm.runInNewContext(fs.readFileSync(process.argv[1], "utf8"), { document, navigator: {}, ResizeObserver,
+let clock = 1e12;                                    // Date.now, moved on by hand: a gesture counts for 1.5 s
+class FakeDate extends Date { static now() { return clock; } }
+vm.runInNewContext(fs.readFileSync(process.argv[1], "utf8"), { document, navigator: {}, ResizeObserver, Date: FakeDate,
   window: { addEventListener() {}, innerHeight: 0, scrollY: 0, scrollTo() {}, getSelection: () => ({ isCollapsed: true }) },
   localStorage: { getItem: k => k === "shaft.seen" ? stored : null, setItem(k, v) { if (k === "shaft.seen") stored = v; } },
   setTimeout: () => 1, clearTimeout() {}, setInterval() {}, AbortController,
@@ -92,7 +94,12 @@ const read = () => { for (const f of handlers.wheel || []) f({ target: { closest
 read(); box.scrollTop = end() - 20; scrolled();    // up a little (review, Codex 2026-10-26): within 40 px, still reading
 box.scrollHeight += 400; resized();
 assert.equal(box.scrollTop, end() - 400 - 20, "scrolled up a little: not pulled back down");
-read(); box.scrollTop = 20; scrolled();
+// Codex review: a scrollbar held down, then dragged after the 1.5 s a gesture counts for, still counts
+box.scrollTop = end(); scrolled();                 // back at the end: following again
+assert.equal(feed._atBottom, true);
+for (const f of handlers.pointerdown || []) f({ target: { closest: () => box } });
+clock += 5000;                                      // held for 5 s, then dragged
+box.scrollTop = 20; scrolled();
 box.scrollHeight += 400; resized();
 assert.equal(box.scrollTop, 20, "scrolled up: not pulled back down");
 '''

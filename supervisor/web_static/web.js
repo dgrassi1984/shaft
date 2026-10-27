@@ -919,21 +919,26 @@
     const b = ev.pointerType === "touch" && ev.target.closest && ev.target.closest("form.composer button.send");
     if (!b) return;
     clearTimeout(sendPress && sendPress.timer);
+    delete b._pressed;                         // a new press: an old one's "no send" must not eat this one's click
     sendPress = { id: ev.pointerId, timer: setTimeout(() => {
       if (!sendPress || sendPress.id !== ev.pointerId) return;
       sendPress = null;
       const menu = b.closest("form.composer").querySelector(".sendmenu");
-      if (menu) { menu.open = true; b._pressed = true; }
+      if (menu) { menu.open = true; b._pressed = ev.pointerId; }
     }, 500) };
   });
   for (const type of ["pointerup", "pointercancel", "pointerleave"]) {
     document.addEventListener(type, (ev) => {
       if (sendPress && sendPress.id === ev.pointerId) { clearTimeout(sendPress.timer); sendPress = null; }
+      // cancelled after the menu opened (a drag away): no click comes to clear it, so it goes now
+      if (type === "pointercancel") document.querySelectorAll("form.composer button.send").forEach(b => {
+        if (b._pressed === ev.pointerId) delete b._pressed;
+      });
     }, true);
   }
   document.addEventListener("click", (ev) => {
     const b = ev.target.closest && ev.target.closest("form.composer button.send");
-    if (b && b._pressed) { ev.preventDefault(); delete b._pressed; }   // the long press opened the menu: no send
+    if (b && b._pressed !== undefined) { ev.preventDefault(); delete b._pressed; }   // the long press opened the menu: no send
   }, true);
   document.addEventListener("submit", (ev) => {        // chosen from the menu: it closes
     const menu = ev.target.querySelector && ev.target.querySelector(".sendmenu[open]");
@@ -1087,12 +1092,20 @@
   }
   // A scroll the reader made: a wheel, a finger, a scrollbar, a key. Only those stop the feed following: the keyboard
   // closing after Send also moves the box up, and your own message then waited under "New below" (iPhone review I8).
-  let readerScrolled = 0;
+  // A finger or a scrollbar held down counts until it lifts: held, then dragged after 1.5 s, it did not count (Codex).
+  let readerScrolled = 0, readerHolding = false;
   for (const type of ["wheel", "touchmove", "pointerdown", "keydown"]) {
     document.addEventListener(type, (ev) => {
       if (type === "keydown" && !["ArrowUp", "PageUp", "Home", " "].includes(ev.key)) return;
-      if (ev.target && ev.target.closest && ev.target.closest("[data-scroll]")) readerScrolled = Date.now();
+      if (ev.target && ev.target.closest && ev.target.closest("[data-scroll]")) {
+        readerScrolled = Date.now();
+        if (type === "pointerdown") readerHolding = true;
+      }
     }, { capture: true, passive: true });
+  }
+  for (const type of ["pointerup", "pointercancel"]) {
+    document.addEventListener(type, () => { if (readerHolding) { readerHolding = false; readerScrolled = Date.now(); } },
+      { capture: true, passive: true });
   }
   document.addEventListener("scroll", (ev) => {
     const box = ev.target;
@@ -1103,7 +1116,7 @@
       const feed = box.querySelector("[data-follow]");
       const gap = box.scrollHeight - box.clientHeight - box.scrollTop;
       if (feed && gap <= 1) feed._atBottom = true;
-      else if (feed && !(box.scrollTop >= feed._top) && Date.now() - readerScrolled < 1500) feed._atBottom = false;
+      else if (feed && !(box.scrollTop >= feed._top) && (readerHolding || Date.now() - readerScrolled < 1500)) feed._atBottom = false;
       else if (feed && gap <= 40) feed._atBottom = true;     // came back down to it
       if (feed) feed._top = box.scrollTop;
     }
@@ -1247,13 +1260,19 @@
     if (!box) return;
     const text = b.dataset.retry;
     if (!text) return;
-    if (box.value && box.value !== text && !confirm("Replace your draft with the failed message?")) return;
+    const form = box.closest("form");
+    // A quote waiting in the composer is part of the draft: it is asked about and dropped, never sent with the failed
+    // message (Codex review of the branch). The composer's busy guard and the message id keep a second tap from a
+    // second send; Retry is not disabled, so a resend that failed can be tried again.
+    if ((box.value && box.value !== text) || form._quote) {
+      if (!confirm("Replace your draft with the failed message?")) return;
+      if (form._quote) { form._quote = ""; quoteChip(form); }
+    }
     if (box.value !== text) {                  // a second click must not append a copy
       box.value = text;
       box.dispatchEvent(new Event("input", { bubbles: true }));   // a draft, and a new message id
     }
-    b.disabled = true;
-    sendComposer(box.closest("form"), false);
+    sendComposer(form, false);
   });
 
   // A message's actions as a menu (PLAN-pwa-market decision 2): long-press on touch, right-click or the context-menu key
@@ -1334,8 +1353,10 @@
     if (keyboard) m.querySelector("button").focus();
     return true;
   }
-  const pressable = (t) => t && t.closest && t.closest(".feed .turn")
-    && !t.closest("a, button, summary, input, textarea, select, details.activity, #msgmenu");
+  // The message pressed, or null: a link, a button or the activity log keep their own touch (a boolean here was taken
+  // for the message, and the long press threw before its timer started — Codex review of the branch)
+  const pressable = (t) => !t || !t.closest || t.closest("a, button, summary, input, textarea, select, details.activity, #msgmenu")
+    ? null : t.closest(".feed .turn");
   let press = null;                     // pointer events, and the finger still down when the time is up
   document.addEventListener("pointerdown", (ev) => {
     const turn = ev.pointerType === "touch" && pressable(ev.target);
@@ -1369,7 +1390,7 @@
   });
   document.addEventListener("pointerdown", (ev) => {
     const m = document.getElementById("msgmenu");
-    if (m && !m.hidden && !m.contains(ev.target)) closeMsgMenu(false);
+    if (m && m._turn && !m.contains(ev.target)) closeMsgMenu(false);      // _turn: it is open
   }, true);
   document.addEventListener("scroll", () => closeMsgMenu(false), true);
   document.addEventListener("selectionchange", () => {      // Select text ends when the selection is let go

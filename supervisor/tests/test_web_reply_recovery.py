@@ -211,8 +211,9 @@ class RetryJsTest(unittest.TestCase):
         handlers = re.findall(r'  document.addEventListener\("click", \(ev\) => \{\n.*?^  \}\);', src, re.S | re.M)
         handler = next((h for h in handlers if '[data-retry]' in h), "")
         script = r'''
-let listener = () => {}, inputs = 0, prompts = 0, allow = false, sends = 0;
+let listener = () => {}, inputs = 0, prompts = 0, allow = false, sends = 0, chips = 0;
 const form = {};
+const quoteChip = () => { chips += 1; };
 const box = { value: "draft", focus() {}, setSelectionRange() {}, dispatchEvent() { inputs++; }, closest: () => form };
 const document = { addEventListener: (_, f) => listener = f, querySelector: () => box };
 const confirm = () => { prompts++; return allow; };
@@ -225,10 +226,20 @@ const kept = box.value, sentFirst = sends;
 allow = true;
 listener(event);
 listener(event);
-console.log(JSON.stringify({ kept, sentFirst, value: box.value, inputs, prompts, sends, disabled: !!button.disabled }));
+// Codex review: a quote waiting in the composer went out with the failed message, unasked
+box.value = "original request"; form._quote = "> another message"; allow = false;
+listener(event);
+const quoteKept = form._quote, sendsAfterRefusal = sends;
+allow = true;
+listener(event);
+console.log(JSON.stringify({ kept, sentFirst, value: box.value, inputs, prompts, sends, disabled: !!button.disabled,
+                             quoteKept, sendsAfterRefusal, quote: form._quote, chips }));
 '''
         result = subprocess.run([shutil.which("node"), "-e", script.replace("//HANDLER//", handler)],
                                 capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
+        # not disabled: a resend that failed can be retried (Codex review: it stayed off for good)
         self.assertEqual(json.loads(result.stdout), {"kept": "draft", "sentFirst": 0, "value": "original request",
-                                                     "inputs": 1, "prompts": 2, "sends": 2, "disabled": True})
+                                                     "inputs": 1, "prompts": 4, "sends": 3, "disabled": False,
+                                                     "quoteKept": "> another message", "sendsAfterRefusal": 2,
+                                                     "quote": "", "chips": 1})

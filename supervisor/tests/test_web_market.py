@@ -111,7 +111,7 @@ const form = { querySelector: q => q === ".sendmenu" ? menu : null };
 const send = { closest: q => q === "form.composer button.send" ? send : q === "form.composer" ? form : null };
 const document = { addEventListener: (t, f) => (handlers[t] = handlers[t] || []).push(f), readyState: "loading",
   getElementById: () => null,
-  querySelector: () => null, querySelectorAll: () => [], body: { classList: { contains: () => false, add() {}, toggle() {} } },
+  querySelector: () => null, querySelectorAll: q => q === "form.composer button.send" ? [send] : [], body: { classList: { contains: () => false, add() {}, toggle() {} } },
   documentElement: { style: { setProperty() {} } } };
 vm.runInNewContext(fs.readFileSync(process.argv[1], "utf8"), { document, navigator: {}, localStorage: {},
   window: { addEventListener() {}, matchMedia: () => ({ matches: true, addEventListener() {} }) },
@@ -131,6 +131,25 @@ assert.equal(menu.open, true, "a long press opens the other ways to send");
 let prevented = false;
 fire("click", { target: send, preventDefault() { prevented = true; } });
 assert.equal(prevented, true, "the long press's own click does not send");
+// Codex review: a long press cancelled after the menu opened left its "no send" behind, and ate the next real Send
+menu.open = false;
+fire("pointerdown", { pointerType: "touch", pointerId: 3, target: send });
+run();
+fire("pointercancel", { pointerId: 3 });
+prevented = false;
+fire("click", { target: send, preventDefault() { prevented = true; } });
+assert.equal(prevented, false, "after a cancelled long press, the next tap sends");
+// Codex review: a long press on a message threw (its target test returned a boolean): the menu never opened
+let asked = 0;
+const turn = { classList: { contains: () => false }, querySelectorAll: () => { asked += 1; return []; } };
+const text = { closest: q => q === ".feed .turn" ? turn : null };
+fire("pointerdown", { pointerType: "touch", pointerId: 4, isPrimary: true, clientX: 10, clientY: 10, target: text });
+run();
+assert.equal(asked, 1, "a long press on a message's text opens its menu");
+const link = { closest: q => q === ".feed .turn" ? turn : q.startsWith("a,") ? {} : null };
+fire("pointerdown", { pointerType: "touch", pointerId: 5, isPrimary: true, clientX: 10, clientY: 10, target: link });
+run();
+assert.equal(asked, 1, "a long press on a link inside it is the link's");
 '''
 
     def test_a_tap_never_opens_the_send_menu(self):

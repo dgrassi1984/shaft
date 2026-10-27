@@ -175,8 +175,9 @@ def chat_header(name: str, live: dict, chat: dict | None, past: list[dict], read
         what = {"paused by you": f"No cycles run until you resume {name}. It still answers your messages.",
                 "sleeping": "Your message pauses its sleep; the sleep resumes after the reply.",
                 "in a cycle": "Your message pauses its cycle; the cycle resumes after the reply.",
-                "in a conversation (waiting for you)": "It is waiting for you in another conversation. A message "
-                                                       "here is answered once that one ends."
+                # dashboard.instance_state: an open conversation and no run — nothing holds it, so it answers now
+                "in a conversation (waiting for you)": "A conversation with you is open, waiting for your next "
+                                                       "message. A message is answered now."
                 }.get(state, "Your message is answered once it pauses or finishes what it is doing; the reply's "
                            "activity says which.")
         sub = h('<details class="menu busystate" data-key="busy-state"><summary data-focus="busy" '

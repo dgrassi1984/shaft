@@ -27,7 +27,8 @@ class BusyStateHeaderTest(unittest.TestCase):
             ("working", "busy", None),
             ("sleeping", "sleep", "Your message pauses its sleep; the sleep resumes after the reply."),
             ("paused by you", "pause", "No cycles run until you resume thelos. It still answers your messages."),
-            ("in a conversation (waiting for you)", "waiting", "It is waiting for you in another conversation."),
+            ("in a conversation (waiting for you)", "waiting", "A conversation with you is open, waiting for your "
+                                                             "next message. A message is answered now."),
             ("reflecting", "busy", None),
             ("talking", "busy", None),
             ("answering (API)", "busy", None),

@@ -664,8 +664,11 @@ details.menu > summary:focus-visible { outline: 2px solid var(--accent); outline
                         padding: 0 .25rem; }
 .chathead h1 { margin: 0; font-size: 1.0625rem; font-weight: 650; line-height: 1.25; min-width: 0; overflow: hidden;
                text-overflow: ellipsis; white-space: nowrap; }
+/* not overflow: hidden here — the busy notice opens under it and was clipped on an iPad or a computer (Codex review);
+   each part ellipsises itself */
 .chathead .sub { display: flex; align-items: center; gap: 0; min-width: 0; font-size: .78rem; color: var(--dim);
-                 white-space: nowrap; overflow: hidden; line-height: 1.3; }
+                 white-space: nowrap; line-height: 1.3; }
+.chathead .sub > .state { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .chathead .sub .facts { display: inline; overflow: hidden; text-overflow: ellipsis; font-size: inherit; min-width: 0; }
 .chathead .sub > :first-child:not(:empty) ~ .facts:not(:empty)::before { content: "·"; margin: 0 .35em; }
 .chathead .headtools { display: flex; align-items: center; gap: 2px; flex: none; margin-left: auto; }
