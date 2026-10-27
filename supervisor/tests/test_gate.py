@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -11,6 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 from supervisor import gate
+from supervisor.gate_suite import UNDER_TEST   # spelled out, the name would put this module in the instance part
 
 
 class GateTest(unittest.TestCase):
@@ -196,15 +198,13 @@ COUNTS_ITS_RUNS = ("import unittest\nfrom pathlib import Path\n\nclass C(unittes
                    "        if Path({fail!r}).exists():\n            self.fail('asked to fail')\n")
 # An instance-part test: it reads the instance under test, and fails when the instance holds a file named BAD.
 READS_THE_INSTANCE = ("import os, unittest\nfrom pathlib import Path\n\n"
-                      "TARGET = Path(os.environ['SHAFT_UNDER_TEST'])\n\n"
+                      f"TARGET = Path(os.environ[{UNDER_TEST!r}])\n\n"
                       "class I(unittest.TestCase):\n    def test_instance_is_good(self):\n"
                       "        self.assertFalse((TARGET / 'BAD').exists(), 'the instance is bad')\n")
 
 
-class SharedRecordTest(FakeProjectCase):
-    """PLAN-gate-cache M1: the shared part of the supervisor's tests runs once per commit, its pass recorded beside the
-    committed tree; the instance part runs at every gate. Regression for 2026-10-27 14:13–14:23: thelos's settle held
-    the instance for 10 minutes re-running 2,000 supervisor tests that had not changed."""
+class SharedFixtureCase(FakeProjectCase):
+    """A committed project with a shared test that counts its runs and an instance-part test that reads the instance."""
 
     def setUp(self):
         super().setUp()
@@ -221,7 +221,13 @@ class SharedRecordTest(FakeProjectCase):
     def record(self) -> Path:
         """The record of a gate run with this process's settings."""
         tree, _ = gate.committed_tree(self.project)
-        return gate.record_path(tree, gate.shared_key(tree, {**os.environ, "SHAFT_UNDER_TEST": str(self.inst)}))
+        return gate.record_path(tree, gate.shared_key(tree, {**os.environ, UNDER_TEST: str(self.inst)}))
+
+
+class SharedRecordTest(SharedFixtureCase):
+    """PLAN-gate-cache M1: the shared part of the supervisor's tests runs once per commit, its pass recorded beside the
+    committed tree; the instance part runs at every gate. Regression for 2026-10-27 14:13–14:23: thelos's settle held
+    the instance for 10 minutes re-running 2,000 supervisor tests that had not changed."""
 
     def test_a_second_gate_on_the_same_commit_does_not_run_the_shared_part_again(self):
         ok, out = self.gate()
@@ -281,7 +287,7 @@ class SharedRecordTest(FakeProjectCase):
             self.assertTrue(self.gate()[0])
         self.assertEqual(self.runs(), 2)
         self.assertTrue(self.gate()[0])                   # back to the first settings: their record is still there
-        with mock.patch.dict(os.environ, {"SHAFT_UNDER_TEST": "/elsewhere"}):   # the gate's own: not part of it
+        with mock.patch.dict(os.environ, {UNDER_TEST: "/elsewhere"}):           # the gate's own: not part of it
             self.assertTrue(self.gate()[0])
         self.assertEqual(self.runs(), 2)
 
@@ -361,6 +367,145 @@ class SharedRecordTest(FakeProjectCase):
         self.assertFalse(ok, out)
         self.assertIn("supervisor/gate_suite.py", out)
         self.assertEqual(self.runs(), 0)
+
+
+class WarmTest(SharedFixtureCase):
+    """PLAN-gate-cache M2: the scheduler's warm-up runs the shared part when a commit has no record (or one past half its
+    life), so the first gate after a merge does not pay for it while holding its instance."""
+
+    def warm(self, timeout_s: int = 120) -> tuple[int, list[str]]:
+        with mock.patch("supervisor.core.log") as log:
+            code = gate.warm(timeout_s)
+        return code, [c.args[0] for c in log.call_args_list]
+
+    def test_a_warm_up_records_the_pass_the_next_gate_reads(self):
+        code, logged = self.warm()
+        self.assertEqual(code, 0)
+        self.assertEqual(self.runs(), 1)
+        self.assertTrue(self.record().is_file())          # under the key the gates use
+        self.assertTrue(any("shared supervisor tests passed" in l for l in logged), logged)
+        ok, out = self.gate()
+        self.assertTrue(ok, out)
+        self.assertIn("not run again", out)
+        self.assertEqual(self.warm()[0], 0)               # a fresh record: nothing to do
+        self.assertEqual(self.runs(), 1)
+
+    def test_a_record_past_half_its_life_is_refreshed_while_gates_still_use_it(self):
+        import json
+        self.assertEqual(self.warm()[0], 0)
+        rec = json.loads(self.record().read_text())
+        aging = gate.datetime.now() - gate.timedelta(seconds=gate.WARM_REFRESH_S + 60)
+        self.record().write_text(json.dumps({**rec, "passed_at": aging.isoformat(timespec="seconds")}))
+        self.assertTrue(self.gate()[0])
+        self.assertEqual(self.runs(), 1)                  # a gate still takes it
+        self.assertEqual(self.warm()[0], 0)
+        self.assertEqual(self.runs(), 2)                  # the warm-up does not wait for it to expire
+        self.assertGreater(json.loads(self.record().read_text())["passed_at"], aging.isoformat(timespec="seconds"))
+
+    def test_a_failed_warm_up_records_nothing_and_raises_a_panel_alert(self):
+        from supervisor import panel
+        self.fail_flag.write_text("x")
+        code, logged = self.warm()
+        self.assertEqual(code, gate.WARM_FAILED)
+        self.assertFalse(self.record().exists())
+        alerts = [l for l in logged if panel.ALERT_LINE.search(l) and "passed" not in l]   # what the panel shows
+        self.assertEqual(len(alerts), 1, logged)
+        self.assertIn("test_counted", alerts[0])
+        self.assertIn("every instance's code change fails its gate", alerts[0])
+
+    def test_a_warm_up_that_cannot_get_the_lock_fails_and_says_so(self):
+        import fcntl
+        tree, _ = gate.committed_tree(self.project)
+        with open(tree.parent / gate.SHARED_LOCK, "a") as held:
+            fcntl.flock(held, fcntl.LOCK_EX)
+            code, logged = self.warm(timeout_s=2)
+        self.assertEqual(code, gate.WARM_FAILED)
+        self.assertTrue(any("FAILED" in l and "timed out after 2s" in l for l in logged), logged)
+        self.assertEqual(self.runs(), 0)
+
+    def test_a_warm_up_and_a_gate_at_once_run_the_shared_part_once(self):
+        import threading
+        results = {}
+        threads = [threading.Thread(target=lambda: results.update(warm=gate.warm(120))),
+                   threading.Thread(target=lambda: results.update(gate=self.gate()))]
+        with mock.patch("supervisor.core.log"):
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=120)
+        self.assertEqual(results["warm"], 0)
+        self.assertTrue(results["gate"][0], results["gate"][1])
+        self.assertEqual(self.runs(), 1)
+
+    def test_a_failed_refresh_drops_the_old_record_so_gates_run_it_again(self):
+        # Codex on M2: a refresh that failed left the 12-24 h old pass for the gates to keep taking.
+        import json
+        self.assertEqual(self.warm()[0], 0)
+        rec = json.loads(self.record().read_text())
+        aging = gate.datetime.now() - gate.timedelta(seconds=gate.WARM_REFRESH_S + 60)
+        self.record().write_text(json.dumps({**rec, "passed_at": aging.isoformat(timespec="seconds")}))
+        self.fail_flag.write_text("x")                    # the same commit's tests fail now (a library moved)
+        self.assertEqual(self.warm()[0], gate.WARM_FAILED)
+        self.assertFalse(self.record().exists())
+        ok, out = self.gate()
+        self.assertFalse(ok, out)                         # the gate ran them itself, and they fail
+        self.assertEqual(self.runs(), 3)
+
+    def test_shaft_gate_warm_lowers_its_priority_ends_its_stages_on_a_signal_and_returns_warm_s_code(self):
+        from supervisor import __main__ as cli
+        with mock.patch.object(gate, "warm", return_value=gate.WARM_FAILED) as warm, mock.patch("os.nice") as nice, \
+                mock.patch.object(gate, "stop_stages_on_signal") as trap:
+            self.assertEqual(cli.main(["gate", "warm"]), gate.WARM_FAILED)
+        warm.assert_called_once_with()
+        nice.assert_called_once()
+        trap.assert_called_once_with()
+
+
+class StageEndTest(unittest.TestCase):
+    """Codex on M2: a stage starts its own session, so the death of the process that started it (the warm-up, stopped
+    with the scheduler) left it running. end_stages ends every running stage with what it started."""
+
+    def test_end_stages_ends_a_running_stage_and_its_children(self):
+        import threading
+        tmp = Path(tempfile.mkdtemp(prefix="shaft-stage-")).resolve()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        child = tmp / "child.pid"
+        code = ("import subprocess, sys, time\n"
+                f"p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+                f"open({str(child)!r}, 'w').write(str(p.pid))\ntime.sleep(60)\n")
+        done = []
+        t = threading.Thread(target=lambda: done.append(gate._stage("probe", [sys.executable, "-c", code], 60)))
+        t0 = time.monotonic()
+        t.start()
+        while not (child.exists() and child.read_text()):
+            self.assertLess(time.monotonic() - t0, 20, "the probe stage did not start")
+            time.sleep(0.05)
+        self.assertEqual(len(gate._STAGES), 1)
+        gate.end_stages()
+        t.join(timeout=20)
+        self.assertFalse(t.is_alive())
+        self.assertLess(time.monotonic() - t0, 30)                  # ended, not timed out at 60 s
+        with self.assertRaises(ProcessLookupError):                  # what it started went too
+            os.kill(int(child.read_text()), 0)
+        self.assertEqual(gate._STAGES, set())
+
+    def test_a_git_that_does_not_answer_is_killed_and_raises(self):
+        class Hung:
+            pid, returncode, killed = 1, None, False
+
+            def communicate(self, timeout=None):
+                if timeout is not None and not self.killed:
+                    raise subprocess.TimeoutExpired("git", timeout)
+                return b"", b""
+
+            def kill(self):
+                self.killed = True
+        hung = Hung()
+        with mock.patch.object(gate.subprocess, "Popen", return_value=hung):
+            with self.assertRaises(RuntimeError) as e:
+                gate._git(Path("/p"), "rev-parse", "HEAD", timeout_s=10)
+        self.assertTrue(hung.killed)
+        self.assertIn("no answer in 10s", str(e.exception))
 
 
 class GateErrorFailsClosedTest(FakeProjectCase):

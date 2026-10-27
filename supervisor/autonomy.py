@@ -17,10 +17,11 @@ import signal
 import subprocess
 import sys
 import time
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import localmodel, preferences
+from . import gate, localmodel, preferences
 from .core import (PROJECT, PYTHON, SUP_DIR, instance_config, instance_names, log, paused, set_update_queued,
                    update_queued)
 from .runner import Busy, is_busy, run_agent
@@ -300,10 +301,14 @@ def serve(poll_s: int = 30) -> int:
     if (note := startup_note()):
         log(note)
     children: dict[str, tuple[subprocess.Popen, float]] = {}
+    warm = WarmState()
     stop_children_on_signal(children)
     while True:
         for job, (proc, started) in list(children.items()):
-            if proc.poll() is not None:
+            if proc.poll() is not None and job == "gate warm":      # it says how it ended itself (warm_ended)
+                warm_ended(warm, proc.returncode, time.monotonic() - started)
+                del children[job]
+            elif proc.poll() is not None:
                 err = proc.stderr.read().strip()[-300:] if proc.stderr else ""
                 log(f"scheduler: {job} ended exit={proc.returncode} after {time.monotonic() - started:.0f}s"
                     + (f" — {err}" if proc.returncode and err else ""))
@@ -337,6 +342,7 @@ def serve(poll_s: int = 30) -> int:
                       lambda n: "waking already" if f"wake {n}" in children else
                       "being updated" if updating(n, children) else
                       "paused at its own request" if preferences.self_paused(n, now) else _awake(n))
+            gate_warm(children, warm, _start)   # the shared supervisor tests of a new commit, before a gate needs them
             if "trials" not in children:   # trials of proposed changes; on the local model only in its idle time
                 from . import trial
                 if trial.has_work():
@@ -400,6 +406,62 @@ def _batteries(children: dict, now: datetime, sleeping_due: bool) -> None:
     for name in start:
         children[f"battery {name}"] = (_start(["battery", "run", name, "--until", f"{end:%H:%M}"]),
                                        time.monotonic())
+
+
+WARM_CHECK_S = 3600   # the same commit is looked at again hourly: the child exits at once while its record is fresh
+
+
+@dataclass
+class WarmState:
+    """The scheduler's memory for gate_warm: the commits it last started a warm-up for, when, and those that failed."""
+    pair: str | None = None
+    started: float = float("-inf")
+    failed: set[str] = field(default_factory=set)
+    unreadable: bool = False
+
+
+def gate_warm(children: dict, st: WarmState, start, now: float | None = None) -> None:
+    """Start `shaft gate warm` (gate.warm, docs/plans/PLAN-gate-cache.md) when main has moved to commits with no warm-up
+    yet, and hourly for the same ones, so the first gate after a merge reads the shared supervisor tests' pass instead
+    of running them while holding its instance. A commit whose warm-up failed is not tried again: its failure is an
+    alert, and every gate on it runs the shared part anyway."""
+    if "gate warm" in children:
+        return
+    now = time.monotonic() if now is None else now
+    try:
+        try:
+            pair = gate.commits_id()
+        except Exception as e:                # no commit to read: say so once
+            if not st.unreadable:
+                st.unreadable = True
+                log(f"scheduler: the gate's warm-up cannot read the project's commits: {type(e).__name__}: {e}")
+            return
+        st.unreadable = False
+        if pair in st.failed or (pair == st.pair and now - st.started < WARM_CHECK_S):
+            return
+        st.pair, st.started = pair, now
+        children["gate warm"] = (start(["gate", "warm"]), time.monotonic())
+    except Exception as e:                    # never the scheduler's loop: wakes, sleeps and jobs go on (Codex, M2)
+        try:
+            log(f"scheduler: the gate's warm-up could not start: {type(e).__name__}: {e}")
+        except Exception:
+            pass
+
+
+def warm_ended(st: WarmState, returncode: int, seconds: float = 0.0) -> None:
+    """A warm-up child ended. A failure marks its commits as tried. warm() logs its own alert for a failure it knew
+    (gate.WARM_FAILED), so that one is said here without the words the panel alerts on; any other failure exit — a
+    crash before warm() could say anything — is the alert."""
+    if returncode != 0 and st.pair:
+        st.failed.add(st.pair)
+    if returncode == 0:
+        log(f"scheduler: gate warm ended after {seconds:.0f}s: the shared supervisor tests' pass is recorded")
+    elif returncode == gate.WARM_FAILED:
+        log(f"scheduler: gate warm ended after {seconds:.0f}s without a pass (said above); not tried again on "
+            f"{st.pair}")
+    else:
+        log(f"scheduler: gate warm ended exit={returncode} after {seconds:.0f}s, before it could say why; not tried "
+            f"again on {st.pair}")
 
 
 def _start(args: list[str]) -> subprocess.Popen:

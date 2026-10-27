@@ -94,5 +94,137 @@ class WakeTest(unittest.TestCase):
         self.assertIn("is skipped", text)
 
 
+
+class GateWarmTest(unittest.TestCase):
+    """PLAN-gate-cache M2: the scheduler starts `shaft gate warm` when main moves to a new commit, checks again hourly
+    (the child exits at once while the record is fresh), and never retries a commit whose warm-up failed."""
+
+    def setUp(self):
+        self.pair = "a" * 16
+        self.started = []
+        p = mock.patch.object(autonomy.gate, "commits_id", lambda: self.pair)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def start(self, args):
+        self.started.append(args)
+        return object()
+
+    def tick(self, children, st, at):
+        autonomy.gate_warm(children, st, self.start, now=at)
+
+    def test_a_new_commit_starts_one_warm_up_and_the_same_commit_is_checked_hourly(self):
+        st, children = autonomy.WarmState(), {}
+        self.tick(children, st, 0)
+        self.assertEqual(self.started, [["gate", "warm"]])
+        self.assertIn("gate warm", children)
+        self.tick(children, st, 5)                        # running: not a second one
+        children.clear()
+        self.tick(children, st, 60)                       # same commit, within the hour
+        self.assertEqual(len(self.started), 1)
+        self.pair = "b" * 16                              # main moved
+        self.tick(children, st, 120)
+        self.assertEqual(len(self.started), 2)
+        children.clear()
+        self.tick(children, st, 120 + autonomy.WARM_CHECK_S + 1)   # the hourly check of the same commit
+        self.assertEqual(len(self.started), 3)
+
+    def test_a_failed_warm_up_is_not_retried_on_its_commit(self):
+        st, children = autonomy.WarmState(), {}
+        self.tick(children, st, 0)
+        children.clear()
+        with mock.patch.object(autonomy, "log"):
+            autonomy.warm_ended(st, autonomy.gate.WARM_FAILED)
+        self.tick(children, st, autonomy.WARM_CHECK_S * 5)
+        self.assertEqual(len(self.started), 1)
+        self.pair = "c" * 16                              # a new commit gets its own try
+        self.tick(children, st, autonomy.WARM_CHECK_S * 5)
+        self.assertEqual(len(self.started), 2)
+        children.clear()
+        with mock.patch.object(autonomy, "log"):
+            autonomy.warm_ended(st, 0)                    # a pass marks nothing
+        self.tick(children, st, autonomy.WARM_CHECK_S * 7)
+        self.assertEqual(len(self.started), 3)
+
+    def test_the_scheduler_loop_starts_the_warm_up_and_hears_how_it_ended(self):
+        # Wired into serve, not only defined: two ticks of the real loop, everything around the warm-up stubbed.
+        class Stop(Exception):
+            pass
+
+        class Done:                                       # the warm-up child, finished with a failure
+            returncode, stderr = 1, None
+
+            def poll(self):
+                return 1
+        seen, ended = {}, []
+
+        def fake_warm(children, st, start, now=None):
+            seen.setdefault("children", children)
+            seen.setdefault("state", st)
+            seen.setdefault("start", start)
+
+        def fake_sleep(_):
+            if "ticked" in seen:
+                raise Stop
+            seen["ticked"] = True
+            seen["children"]["gate warm"] = (Done(), 0.0)  # it ends before the next tick
+        sup = Path(tempfile.mkdtemp(prefix="shaft-sched-"))
+        self.addCleanup(__import__("shutil").rmtree, sup, True)
+        with mock.patch.object(autonomy, "gate_warm", fake_warm), \
+                mock.patch.object(autonomy, "warm_ended", lambda st, code, secs: ended.append((st, code))), \
+                mock.patch.object(autonomy.time, "sleep", fake_sleep), \
+                mock.patch.object(autonomy, "SUP_DIR", sup), mock.patch.object(autonomy, "log"), \
+                mock.patch.object(autonomy, "stop_children_on_signal"), \
+                mock.patch("supervisor.version.record_service"), \
+                mock.patch("supervisor.browser.startup_note", return_value=""), \
+                mock.patch.object(autonomy, "instance_names", return_value=[]), \
+                mock.patch.object(autonomy, "_state", return_value={}), \
+                mock.patch.object(autonomy, "sleep_due", return_value=False), \
+                mock.patch.object(autonomy, "_batteries"), mock.patch("supervisor.jobs.tick"), \
+                mock.patch("supervisor.trial.has_work", return_value=False):
+            with self.assertRaises(Stop):
+                autonomy.serve(poll_s=0)
+        self.assertIs(seen["start"], autonomy._start)
+        self.assertIsInstance(seen["state"], autonomy.WarmState)
+        self.assertEqual(ended, [(seen["state"], 1)])
+
+    def test_a_warm_up_that_cannot_start_never_stops_the_scheduler(self):
+        # Codex on M2: an OSError from Popen, or from the log itself, escaped into serve's loop.
+        st, children = autonomy.WarmState(), {}
+
+        def broken_start(args):
+            raise OSError("fork: resource temporarily unavailable")
+        with mock.patch.object(autonomy, "log") as log:
+            autonomy.gate_warm(children, st, broken_start, now=0)
+        self.assertEqual(children, {})
+        self.assertIn("could not start", log.call_args.args[0])
+        with mock.patch.object(autonomy, "log", side_effect=OSError("log: read-only")), \
+                mock.patch.object(autonomy.gate, "commits_id", side_effect=RuntimeError("no git")):
+            autonomy.gate_warm(children, autonomy.WarmState(), self.start, now=0)
+        with mock.patch.object(autonomy, "log", side_effect=OSError("log: read-only")):
+            autonomy.gate_warm(children, autonomy.WarmState(), broken_start, now=0)
+
+    def test_one_failure_one_alert(self):
+        # Codex on M2: warm() logs the alert; the scheduler's own "ended exit=…" line raised a second one.
+        from supervisor import panel
+        lines = []
+        st = autonomy.WarmState(pair="d" * 16)
+        with mock.patch.object(autonomy, "log", side_effect=lines.append):
+            autonomy.warm_ended(st, autonomy.gate.WARM_FAILED, 500)
+            autonomy.warm_ended(st, 0, 480)
+            autonomy.warm_ended(st, 1, 2)                 # a crash before warm() could say anything
+        alert = [bool(panel.ALERT_LINE.search(l)) and "passed" not in l for l in lines]
+        self.assertEqual(alert, [False, False, True], lines)
+
+    def test_a_commit_that_cannot_be_read_starts_nothing_and_never_raises(self):
+        st, children = autonomy.WarmState(), {}
+        with mock.patch.object(autonomy.gate, "commits_id", side_effect=RuntimeError("git: not a repository")), \
+                mock.patch.object(autonomy, "log") as log:
+            self.tick(children, st, 0)
+            self.tick(children, st, 1)
+        self.assertEqual(self.started, [])
+        self.assertEqual(log.call_count, 1)               # said once, not every tick
+        self.assertIn("not a repository", log.call_args.args[0])
+
 if __name__ == "__main__":
     unittest.main()

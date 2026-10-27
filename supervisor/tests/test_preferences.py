@@ -309,6 +309,7 @@ class SchedulingTest(LedgerCase):
              mock.patch.object(autonomy, "_awake", return_value=""), \
              mock.patch.object(autonomy, "_batteries"), \
              mock.patch.object(autonomy, "_start") as started, \
+             mock.patch.object(autonomy, "gate_warm"), \
              mock.patch.object(autonomy, "stop_children_on_signal"), \
              mock.patch.object(autonomy.time, "sleep", side_effect=StopIteration), \
              mock.patch("supervisor.version.record_service"), \

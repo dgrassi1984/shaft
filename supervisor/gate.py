@@ -278,14 +278,20 @@ def revert_config(instance_root: Path, writes: list[dict]) -> list[str]:
     return back
 
 
+COMMITS_ID_S = 10                  # how long commits_id waits for git
 TREES = ".supervisor/gate-tests"   # under the project: the tests' sandbox probes need it inside the home folder
 TREE_IDLE_S = 86400                # a committed tree no gate has used for a day is removed
 
 
-def _git(repo: Path, *args: str) -> bytes:
-    """git's stdout."""
+def _git(repo: Path, *args: str, timeout_s: float | None = None) -> bytes:
+    """git's stdout. With `timeout_s`, a git that has not answered by then is killed and raises."""
     p = subprocess.Popen(["git", "-C", str(repo), *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    out, err = p.communicate()
+    try:
+        out, err = p.communicate(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        p.communicate()
+        raise RuntimeError(f"git -C {repo} {' '.join(args)}: no answer in {timeout_s}s") from None
     if p.returncode:
         raise RuntimeError(f"git -C {repo} {' '.join(args)}: {err.decode(errors='replace').strip()}")
     return out
@@ -296,6 +302,21 @@ def _extract(repo: Path, rev: str, dest: Path) -> None:
     import tarfile
     with tarfile.open(fileobj=io.BytesIO(_git(repo, "archive", "--format=tar", rev))) as tar:
         tar.extractall(dest, filter="data")
+
+
+def _commits(project: Path, timeout_s: float | None = None) -> tuple[str, str]:
+    template = project / "template"
+    head = _git(project, "rev-parse", "HEAD", timeout_s=timeout_s).decode().strip()
+    tpl = (_git(template, "rev-parse", "HEAD", timeout_s=timeout_s).decode().strip()
+           if (template / ".git").exists() else "")
+    return head, tpl
+
+
+def commits_id(project: Path | None = None) -> str:
+    """The name of the committed tree's folder for the project's commits now: what the scheduler's warm-up watches,
+    every tick — so git gets COMMITS_ID_S to answer, never the scheduler's whole loop."""
+    head, tpl = _commits(Path(project or PROJECT), COMMITS_ID_S)
+    return head[:16] + (f"-{tpl[:16]}" if tpl else "")
 
 
 def committed_tree(project: Path | None = None) -> tuple[Path, str]:
@@ -310,8 +331,7 @@ def committed_tree(project: Path | None = None) -> tuple[Path, str]:
     import time
     project = Path(project or PROJECT)
     template = project / "template"
-    head = _git(project, "rev-parse", "HEAD").decode().strip()
-    tpl = _git(template, "rev-parse", "HEAD").decode().strip() if (template / ".git").exists() else ""
+    head, tpl = _commits(project)
     label = head[:10] + (f" template {tpl[:10]}" if tpl else "")
     base = project / TREES
     base.mkdir(parents=True, exist_ok=True)
@@ -399,6 +419,29 @@ def stop_group(p: subprocess.Popen, grace_s: float = STOP_GRACE_S) -> None:
     _end_group(p)
 
 
+_STAGES: set[subprocess.Popen] = set()   # the stages running in this process (end_stages)
+
+
+def end_stages() -> None:
+    """End every stage this process is running, with all it started (stop_group): a stage starts its own session, so
+    its parent's death alone does not end it — a hung test of a warm-up stopped with the scheduler ran on (Codex, M2)."""
+    for p in list(_STAGES):
+        stop_group(p)
+
+
+def stop_stages_on_signal() -> None:
+    """For a process whose work is a gate stage (`shaft gate warm`): on SIGTERM or SIGINT end the stages first, then
+    let the signal do what it was sent to do."""
+    import signal
+
+    def on_signal(signum, frame):
+        end_stages()
+        signal.signal(signum, signal.SIG_DFL)
+        os.kill(os.getpid(), signum)
+    for s in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(s, on_signal)
+
+
 def _stage(stage: str, argv: list[str], timeout_s: int, input: str | None = None,
            **kw) -> subprocess.CompletedProcess:
     """One stage, in its own process group, all of which ends with it. A timeout gets SIGTERM, then SIGKILL after
@@ -409,6 +452,7 @@ def _stage(stage: str, argv: list[str], timeout_s: int, input: str | None = None
     import signal
     p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                          stdin=subprocess.PIPE if input is not None else None, start_new_session=True, **kw)
+    _STAGES.add(p)
     timed_out = False
     try:
         try:
@@ -431,6 +475,7 @@ def _stage(stage: str, argv: list[str], timeout_s: int, input: str | None = None
                         f.close()
     finally:
         _end_group(p)
+        _STAGES.discard(p)
     if timed_out:
         raise StageTimedOut(stage, timeout_s, (out + err)[-2000:])   # what it printed before it was stopped
     return subprocess.CompletedProcess(argv, p.returncode, out, err)
@@ -440,6 +485,8 @@ SPLIT_RUNNER = "supervisor/gate_suite.py"   # in the committed tree: runs the in
 SHARED_RECORD = "shared-passed-{}.json"     # beside a committed tree, one per key: its shared part passed
                                             # (docs/plans/PLAN-gate-cache.md)
 SHARED_LOCK = "shared.lock"                 # beside it too: one run of the shared part per commit at a time
+WARM_REFRESH_S = TREE_IDLE_S // 2           # a record this old is run again by the warm-up while gates still take it
+WARM_FAILED = 3                             # warm()'s exit when it failed and logged the alert itself
 
 
 def _python_id() -> str:
@@ -470,9 +517,10 @@ def record_path(tree: Path, key: dict) -> Path:
     return tree.parent / SHARED_RECORD.format(hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()[:16])
 
 
-def recorded_pass(tree: Path, key: dict) -> dict | None:
+def recorded_pass(tree: Path, key: dict, max_age_s: float = TREE_IDLE_S) -> dict | None:
     """The shared part's recorded pass for this key, or None: no record, another key, no test run, older than
-    TREE_IDLE_S (a library upgraded under the same commit), dated in the future, or not the shape _record writes."""
+    `max_age_s` (TREE_IDLE_S: a library upgraded under the same commit), dated in the future, or not the shape _record
+    writes."""
     try:
         r = json.loads(record_path(tree, key).read_text())
     except (OSError, ValueError):
@@ -485,7 +533,7 @@ def recorded_pass(tree: Path, key: dict) -> dict | None:
         age = (datetime.now() - datetime.fromisoformat(r["passed_at"])).total_seconds()
     except (KeyError, TypeError, ValueError):
         return None
-    return r if 0 <= age <= TREE_IDLE_S else None
+    return r if 0 <= age <= max_age_s else None
 
 
 def _record(tree: Path, key: dict, tests_run: int, seconds: float, label: str) -> None:
@@ -549,6 +597,59 @@ def _log(msg: str) -> None:
         print(f"{msg} (supervisor.log could not be written: {e})", file=sys.stderr)
 
 
+def _shared_part(tree: Path, label: str, env: dict, timeout_s: int, max_age_s: float) -> tuple[bool, str, str, bool]:
+    """The shared part, under the commit's lock: from a record of this key no older than `max_age_s`, else run, and
+    recorded when it passes with tests run. (passed, section, whole stderr, whether it ran now)."""
+    key = shared_key(tree, env)
+    with _shared_lock(tree, timeout_s, f"supervisor invariants ({label}), shared part"):
+        if (rec := recorded_pass(tree, key, max_age_s)):
+            return True, (f"-- shared part: passed on this commit at {rec['passed_at'][11:16]} ({rec['tests_run']} "
+                          f"tests, {rec['seconds']:.0f} s), not run again --\n"), "", False
+        ok, section, full, ran, seconds = _part("shared", tree, env, timeout_s, label)
+        if ok and ran:
+            try:
+                _record(tree, key, ran, seconds, label)
+                _log(f"gate: shared supervisor tests passed on {label} ({ran} tests, {seconds:.0f}s), recorded")
+            except OSError as e:   # the pass stands; the next gate runs the part again
+                _log(f"gate: shared supervisor tests passed on {label} but the record could not be written: {e}")
+        elif ok:
+            _log(f"gate: the shared supervisor tests on {label} ran no test: nothing recorded")
+        else:   # a pass recorded earlier no longer holds: a failed refresh must not leave it for the gates (Codex, M2)
+            record_path(tree, key).unlink(missing_ok=True)
+        return ok, section, full, True
+
+
+def warm(timeout_s: int = 900) -> int:
+    """The scheduler's warm-up (`shaft gate warm`, autonomy.gate_warm): run the shared part on the project's commits
+    now unless a record of the gates' key is younger than WARM_REFRESH_S, so the first gate after a merge reads it
+    instead of running it while holding its instance. A failure is logged as an alert — on main, every instance's code
+    change would fail its gate — and recorded nowhere. 0: passed or fresh; WARM_FAILED: failed, timed out or could not run,
+the alert logged (any other exit, such as a crash before this, is the scheduler's to report)."""
+    label = "?"
+    try:
+        tree, label = committed_tree()
+        if not (tree / SPLIT_RUNNER).is_file():
+            raise RuntimeError(f"the committed tree {tree} has no {SPLIT_RUNNER}")
+        env = {k: v for k, v in os.environ.items() if k != "SHAFT_UNDER_TEST"}   # the key gates compute
+        ok, _, full, ran = _shared_part(tree, label, env, timeout_s, WARM_REFRESH_S)
+    except StageTimedOut as t:
+        _log(f"gate: warm-up of the shared supervisor tests on {label} FAILED: {t}")
+        return WARM_FAILED
+    except Exception as e:
+        _log(f"gate: warm-up of the shared supervisor tests on {label} FAILED: {type(e).__name__}: {e}")
+        return WARM_FAILED
+    if ok:
+        return 0
+    names = failing_tests(full)
+    try:
+        kept = f"; full log {keep_log(Path('gate-warm'), [f'== shared part ({label}) ==', full])}"
+    except OSError:
+        kept = ""
+    _log(f"gate: shared supervisor tests FAILED on {label} — every instance's code change fails its gate until this "
+         f"is fixed" + (f"; failing: {'; '.join(names)}" if names else "") + kept)
+    return WARM_FAILED
+
+
 def _supervisor_tests(instance_root: Path, tree: Path, label: str, timeout_s: int) -> tuple[bool, str, str]:
     """The supervisor's own tests against this instance (docs/plans/PLAN-gate-cache.md): the shared part from its
     record when this commit's passed already, else run (and recorded when it passes); then the instance part, every
@@ -556,22 +657,7 @@ def _supervisor_tests(instance_root: Path, tree: Path, label: str, timeout_s: in
     if not (tree / SPLIT_RUNNER).is_file():
         raise RuntimeError(f"the committed tree {tree} has no {SPLIT_RUNNER}: the supervisor's tests cannot be split")
     env = {**os.environ, "SHAFT_UNDER_TEST": str(instance_root)}
-    key = shared_key(tree, env)
-    with _shared_lock(tree, timeout_s, f"supervisor invariants ({label}), shared part"):
-        if (rec := recorded_pass(tree, key)):
-            shared_ok, shared, shared_full = True, (
-                f"-- shared part: passed on this commit at {rec['passed_at'][11:16]} ({rec['tests_run']} tests, "
-                f"{rec['seconds']:.0f} s), not run again --\n"), ""
-        else:
-            shared_ok, shared, shared_full, ran, seconds = _part("shared", tree, env, timeout_s, label)
-            if shared_ok and ran:
-                try:
-                    _record(tree, key, ran, seconds, label)
-                    _log(f"gate: shared supervisor tests passed on {label} ({ran} tests, {seconds:.0f}s), recorded")
-                except OSError as e:   # the pass stands; the next gate runs the part again
-                    _log(f"gate: shared supervisor tests passed on {label} but the record could not be written: {e}")
-            elif shared_ok:
-                _log(f"gate: the shared supervisor tests on {label} ran no test: nothing recorded")
+    shared_ok, shared, shared_full, _ = _shared_part(tree, label, env, timeout_s, TREE_IDLE_S)
     inst_ok, inst, inst_full, _, _ = _part("instance", tree, env, timeout_s, label)
     return shared_ok and inst_ok, shared + inst, shared_full + inst_full
 

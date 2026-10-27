@@ -118,10 +118,13 @@ class Partition(unittest.TestCase):
 class OnThisCommit(unittest.TestCase):
     """The real supervisor/tests."""
 
-    def test_the_modules_known_to_read_the_instance_are_in_its_part_test_vision_included_20261027(self):
+    def test_the_instance_part_is_the_modules_that_read_the_instance_test_vision_included_20261027(self):
+        # Exactly these: every module here runs at every gate. test_gate.py once joined them by quoting the variable's
+        # name in a fixture (2026-10-27, M2), and every gate ran its 40 s of tests again. A module that truly reads the
+        # instance belongs on this list; one that only names the variable should spell it via gate_suite.UNDER_TEST.
         inst, _ = gate_suite.partition(PROJECT / "supervisor" / "tests", PROJECT)
-        for m in ("test_invariants", "test_judge_evidence", "test_vision"):
-            self.assertIn(f"supervisor.tests.{m}", inst)
+        self.assertEqual(inst, [f"supervisor.tests.{m}" for m in ("test_invariants", "test_judge_evidence",
+                                                                   "test_vision")])
 
     def test_the_scan_knows_every_module_discover_asks_for(self):
         split = gate_suite.Split(PROJECT / "supervisor" / "tests", PROJECT)
