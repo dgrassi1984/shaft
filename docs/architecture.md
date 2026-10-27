@@ -27,6 +27,9 @@ An agent's mind consists of `self/`, `memory/`, `notes/`, and `inbox/`. These li
 instance folder but are excluded from the project repository: the supervisor versions it after every run in `.supervisor/minds/<name>.git`, a private git
 repository with no remote and a pre-push hook that always fails (`shaft mind status`). What an instance read
 and wrote for itself cannot be pushed or merged with the code ([PLAN-mind-out-of-git.md](plans/PLAN-mind-out-of-git.md)).
+The `instance/<name>` branches are local-only too: their older history still holds minds, so the project's
+pre-push hook, installed by `shaft setup` (or `shaft mind guard`), refuses to push them. A clone of the
+repository therefore never carries instances; [moving SHAFT to a new Mac](migration.md) copies the folder instead.
 
 Inside an instance:
 
