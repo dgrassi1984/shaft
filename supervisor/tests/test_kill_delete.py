@@ -111,7 +111,8 @@ class KillTest(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix="shaft-kill-")).resolve()
         self.root = self.tmp / "instances" / "kdx"
         (self.root / "shaft").mkdir(parents=True)
-        self.patches = [mock.patch.object(kill, "INSTANCES", self.tmp / "instances")]
+        self.patches = [mock.patch.object(kill, "INSTANCES", self.tmp / "instances"),
+                        mock.patch.object(core, "INSTANCES", self.tmp / "instances")]
         for p in self.patches:
             p.start()
         self.procs: list[subprocess.Popen] = []
@@ -275,6 +276,7 @@ class DeleteTest(unittest.TestCase):
         self.other = self.project / "instances" / "kdx-2"
         (self.other / "shaft").mkdir(parents=True)
         self.patches = [mock.patch.object(delete, "PROJECT", self.project),
+                        mock.patch.object(core, "INSTANCES", self.project / "instances"),
                         mock.patch.object(delete, "INSTANCES", self.project / "instances"),
                         mock.patch.object(delete, "git", lambda *a, check=True: subprocess.run(
                             ["git", "-C", str(self.project), *a], capture_output=True, text=True, check=check)),

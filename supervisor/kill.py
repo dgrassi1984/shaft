@@ -25,10 +25,9 @@ import signal
 import subprocess
 import time
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 
-from .core import INSTANCES, SUP_DIR, log
+from .core import INSTANCES, SUP_DIR, log, set_paused
 
 # Also the terminal client, supervisor.talk_ui. Not the gate's test runner (supervisor.gate_suite): it holds no run, and
 # taken for a holder, what a test started in an instance's folder was stopped as that instance's (2026-10-27).
@@ -267,10 +266,7 @@ def runner_busy(name: str) -> bool:
 
 def kill(name: str, wait_s: float = 120, say=print) -> int:
     """Pause the instance and stop what it runs now. 0: it is free; 1: something still holds it after `wait_s`."""
-    stamp = SUP_DIR / f"paused-{name}"
-    if not stamp.exists():
-        SUP_DIR.mkdir(exist_ok=True)
-        stamp.write_text(datetime.now().isoformat())
+    set_paused(name, True, reason="a kill")
     log(f"kill {name} by operator: paused, stopping what it runs")
     stopped: dict[int, str] = {}
     termed: dict[int, float] = {}
