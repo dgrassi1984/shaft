@@ -1196,16 +1196,30 @@ def live_activity(chat: dict | None) -> Html:
         or Html('<span data-k="end" data-ended hidden></span>')
 
 
-def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = False) -> Html:
-    """The conversation as it stands: each turn, the files it sent you meanwhile, and the reply running now."""
+CHAT_WINDOW = 80          # turns a chat page draws (review C13/M21); "Show the N earlier messages" draws them all
+
+
+def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = False, whole: bool = False) -> Html:
+    """The conversation as it stands: each turn, the files it sent you meanwhile, and the reply running now. A long one
+    shows its last CHAT_WINDOW turns unless `whole` (?all=1): every poll rendered, sent and morphed the whole history,
+    and a phone opened a long chat slowly (review C13/M21). Turns keep their own index (data-k), so nothing shifts."""
     from .web_actions import button, post_attrs
     if not chat:
         return join([*_sent_cards(name, sent, archived),
                      h('<div class="emptychat" data-k="empty"><p class="big">Chat with {n}</p><p class="dim">No chat open '
                        'with {n}. Write below to start one; earlier chats are in ⋯.</p></div>', n=name)])
     items = []
+    first = 0 if whole else max(0, len(chat["turns"]) - CHAT_WINDOW)
+    if first:
+        since = chat["turns"][first]["ts"]
+        sent = [m for m in sent if m.get("ts", "") >= since]
+        more = f"?id={q(chat['id'])}&all=1" if archived else "?all=1"
+        items.append(("", h('<p class="earliermsgs" data-k="more"><a class="button" href="{u}">Show the {n} earlier '
+                            'messages</a></p>', u=more, n=first)))
     last_answer = max((k for k, t in enumerate(chat["turns"]) if t["role"] != "user" and not t.get("retried")), default=-1)
     for k, t in enumerate(chat["turns"]):
+        if k < first:
+            continue
         if t.get("retried"):                     # a try that failed and was sent again (Retry): one quiet line
             if t["role"] != "user":
                 items.append((t["ts"], h('<p class="dim retried" data-k="a{k}">The first try failed and was sent again '
@@ -1317,12 +1331,14 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
 
 def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], live: dict, names: list[str],
               csrf: str, read_only: bool = False, panel: Html = Html(""), doc: str = "", att: str = "",
-              later: str = "", folder: str = "", sort: str = "", listing_only: bool = False) -> Html:
+              later: str = "", folder: str = "", sort: str = "", listing_only: bool = False, whole: bool = False) -> Html:
     """`att` (<message file>/<index>): the panel shows that text attachment, not a document (attachment_panel).
     `folder` (?dir=): with no document open, the panel lists that folder of notes/docs/.
     `later`: when its next cycle is (autonomy.next_cycle), the Next cycle button's title."""
     from . import messages
     feed_url = f"/fragment/chat/{q(name)}" + (f"?id={q(chat['id'])}" if read_only and chat else "")
+    if whole:                                          # all of it asked for: its refreshes too
+        feed_url += ("&" if "?" in feed_url else "?") + "all=1"
     composer = Html("") if read_only else h(
         '<form class="composer" data-post="/chat/{n}/send" data-multipart="1" data-reset="1" data-files data-draft="{n}" data-sent-mids="{mids}" '
         'data-max-file="{mf}" data-max-total="{mt}" data-max-files="{mn}"><input type="hidden" name="mid" value="">'
@@ -1355,7 +1371,7 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
                         [m["mid"] for m in sent if m.get("from") == "operator" and m.get("mid")]))))
     banner = (h('<p class="panel">Earlier chat, {date}. <a href="/i/{n}/chat">Back to the current chat</a></p>',
                 date=chat['created'][:16].replace('T', ' '), n=q(name)) if read_only and chat else Html(""))
-    feed = chat_feed(name, chat, sent, archived=read_only)
+    feed = chat_feed(name, chat, sent, archived=read_only, whole=whole)
     body = join([banner, h('<section class="panel chat" data-scroll><div class="feed" data-poll="{u}" data-every="1500" data-keyed="1" '
                          'data-follow="1" data-etag="{t}" data-etag-url="{u}">{f}</div></section>'
                          '<button type="button" class="newbelow" data-newbelow hidden>↓ New below</button>',

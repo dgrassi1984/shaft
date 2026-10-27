@@ -923,3 +923,5 @@ main { container: page / inline-size; }
 /* the overview's cards: quiet pills, not a wall of boxes */
 .card footer button.act { background: var(--bg); border-color: transparent; border-radius: 999px; }
 .card footer button.act:not(:disabled):hover { border-color: var(--accent); }
+.earliermsgs { justify-self: center; margin: .2rem 0 .6rem; }
+.earliermsgs a.button { border-radius: 999px; font-size: .85rem; padding: .4rem .9rem; }

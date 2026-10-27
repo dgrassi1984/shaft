@@ -206,8 +206,19 @@ class IPadTest(unittest.TestCase):
 
     def test_p6_p7_shortcuts_line_and_send_toast(self):
         """P6: the shortcuts line stayed with the on-screen keyboard up. P7: "sent to kant" covered the header."""
-        self.assertIn('if (keyboardUp()) document.body.classList.toggle("hwkbd", false);', JS)
+        self.assertIn('if (keyboardUp()) { document.body.classList.toggle("hwkbd", false); hardwareKeys = false; }', JS)
         self.assertIn("if (!(r.ok && shown)) toast(", JS)
+
+    def test_p3_a_page_table_stacks_by_the_page_width(self):
+        """P3: an iPad in portrait at XXL text wrapped Settings' description one letter a line (stacked at phone width only)."""
+        self.assertIn("main { container: page / inline-size; }", CSS)
+        page = CSS[CSS.index("@container page (max-width: 36rem) {"):]
+        self.assertIn("table:not(.md) thead { display: none; }", page[:page.index("\n}\n")])
+
+    def test_p12_m13_the_chat_menu_is_rows_and_takes_focus(self):
+        self.assertIn(".chathead .menubody .actions button { display: flex; align-items: center; width: 100%;", CSS)
+        self.assertIn('if (!d.matches || !d.matches("details.chatmenu") || !d.open || !d._byKey) return;', JS)
+        self.assertIn('const summary = inside && d.querySelector("summary");', JS)
 
     def test_p13_the_pairing_box_takes_a_bare_token(self):
         page = str(web_pages.unpaired_page())
@@ -245,13 +256,35 @@ class RetryInPlaceTest(unittest.TestCase):
         self.assertFalse(web_chat.mark_retried(chat, 1, "first"))
 
 
+class LongChatTest(unittest.TestCase):
+    def test_m21_a_long_chat_draws_its_last_turns_and_offers_the_rest(self):
+        """Review C13/M21: every poll rendered, sent and morphed the whole history of a long chat."""
+        turns = [{"role": "user" if k % 2 == 0 else "assistant", "content": f"m{k}", "ts": f"2026-10-27T10:{k // 60:02d}:{k % 60:02d}"}
+                 for k in range(200)]
+        chat = {"id": "web-a", "state": "idle", "created": "2026-10-27T10:00:00", "turns": turns}
+        feed = str(web_views.chat_feed("wren", chat, []))
+        self.assertIn('<a class="button" href="?all=1">Show the 120 earlier messages</a>', feed)
+        self.assertNotIn('data-k="u0"', feed)
+        self.assertIn('data-k="u120"', feed)              # each turn keeps its own index: nothing shifts
+        self.assertIn('data-k="a199"', feed)
+        whole = str(web_views.chat_feed("wren", chat, [], whole=True))
+        self.assertIn('data-k="u0"', whole)
+        self.assertNotIn("earlier messages", whole)
+        page = str(web_views.chat_page("wren", chat, [], [], {}, ["wren"], "t", whole=True))
+        self.assertIn('data-poll="/fragment/chat/wren?all=1"', page)   # its refreshes stay whole
+        short = {**chat, "turns": turns[:10]}
+        self.assertNotIn("earlier messages", str(web_views.chat_feed("wren", short, [])))
+
+
 class AlertsTest(unittest.TestCase):
     def test_i15_a_log_line_alert_reads_on_a_phone_in_its_own_words(self):
         """Review I15: raw log lines with Python dicts, all bold red, each a wall of text on a phone."""
         line = ("07:31:38 shaft: end live exit=1 broker_calls={'run': 2, 'web_search': 2} finish_reason='stop', "
                 "reasoning_chars=7988 and more words")
         out = str(web_actions.alert_line({"id": "x", "text": line}))
-        self.assertIn('<span class="dim">07:31:38</span> <b>shaft</b> <span class="alertwhat">end live exit=1', out)
+        # its machine tokens in plain type (iPad review P5), the words unchanged
+        self.assertIn('<span class="dim">07:31:38</span> <b>shaft</b> <span class="alertwhat">end live exit 1 broker calls: '
+                      'run 2, web search 2 finish reason: stop', out)
         self.assertIn("…</span>", out)
         self.assertIn("<summary>Full line</summary><pre>07:31:38 shaft: end live", out)   # nothing lost, nothing reworded
         short = str(web_actions.alert_line({"id": "y", "text": "wren: code change FAILED tests"}))

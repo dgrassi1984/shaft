@@ -638,7 +638,7 @@ def _get(req: Request, csrf: str) -> Response | None:
             else:
                 web_chat.watching(m[1], req.device, at)
         return _html(200, v.chat_feed(m[1], chat, _sent_during(m[1], chat, bool(qs.get("id"))),
-                                      archived=bool(qs.get("id"))))
+                                      archived=bool(qs.get("id")), whole=qs.get("all") == "1"))
     if m := re.match(r"^/fragment/chat/([A-Za-z0-9_-]+)/live$", path):
         # The running reply's activity, polled on its own (W12): it changes every second, and inside the feed it
         # changed the feed's ETag on every poll — the whole conversation rendered and sent again each 1.5 s.
@@ -982,6 +982,7 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str,
                                       panel=panel, doc=doc, att=qs.get("att", ""), folder=qs.get("dir", ""),
                                       sort=v.doc_sort(qs["sort"]) if qs.get("sort") else "",
                                       listing_only=qs.get("list") == "1" and not qs.get("doc"),
+                                      whole=qs.get("all") == "1",
                                       later="" if read_only else _next_cycle(name)),
                      {"Set-Cookie": f"{LAST_CHAT}={name}; Path=/; Max-Age={COOKIE_DAYS * 86400}; Secure; SameSite=Strict"})
     if tab in ("config", "drive", "access"):

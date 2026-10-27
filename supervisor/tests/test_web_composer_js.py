@@ -230,15 +230,18 @@ const p=page([],true);p.resize(600);await p.type('touch');await p.key({});assert
         page) must send once its line break arrives, after any autocorrection; with the on-screen keyboard up, or with
         Shift/Alt, it stays a new line. Reverting the fix leaves a hardware-keyboard Return typing a new line."""
         self.run_composer("""
-let p=page([],true);await p.type('hello');await p.key({});
+// M18 (review C6): a floating iPad keyboard leaves the page its height; its Return has no physical code: a new line
+let p=page([],true);await p.type('floating');await p.key({});assert.equal(await p.lineBreak(),false);
+assert.equal(p.payload(),undefined,'a Return with no hardware key behind it does not send');
+p=page([],true);await p.type('hello');await p.key({code:'Enter'});
 assert.equal(p.payload(),undefined, 'nothing is sent at keydown: the autocorrection comes after it');
 assert.equal(await p.lineBreak('insertReplacementText'),false);     // autocorrect lands first, the Return still sends
 assert.equal(await p.lineBreak(),true, 'the line break is cancelled');
 assert.ok(p.payload(), 'Return with a hardware keyboard must send');assert.equal(p.payload().queue,'');
 p.answer();await p.form.sending;
-p=page([],true);await p.type('para');await p.key({});assert.equal(await p.lineBreak('insertParagraph'),true);assert.ok(p.payload());
+p=page([],true);await p.type('para');await p.key({code:'Enter'});assert.equal(await p.lineBreak('insertParagraph'),true);assert.ok(p.payload());
 for (const modifier of ['shiftKey','altKey']) {
- p=page([],true);await p.type('two lines');await p.key({[modifier]:true});
+ p=page([],true);await p.type('two lines');await p.key({[modifier]:true,code:'Enter'});
  assert.equal(await p.lineBreak(),false);assert.equal(p.payload(),undefined);
 }
 p=page([],true);p.resize(600);await p.type('on-screen');await p.key({});
