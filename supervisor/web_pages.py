@@ -173,12 +173,12 @@ def nav(names: list[str], current: str = "overview") -> Html:
                 '<button type="button" data-hard-reload title="Clear the app cache and load the current version">'
                 'Reload / update</button></div>', v=version.service_version(rec), m=moved)
     return h('<nav><a class="brand" href="/">SHAFT</a><button type="button" class="small closenav" data-toggle-nav '
-             'aria-label="Close the chats">✕</button><div class="rail" data-poll="/fragment/rail?c={c}" data-every="3000" '
+             'aria-label="Close the chats">{x}</button><div class="rail" data-poll="/fragment/rail?c={c}" data-every="3000" '
              'data-now="1" data-hidden="1">{rail}</div>'
              '<form class="unpair" data-post="/unpair" data-after="reload" data-confirm="Unpair this browser? You will '
              'need a new link from `shaft web pair` to use it again."{a}><button type="submit">Unpair this browser'
              '</button></form>{version}</nav>', c=cur, rail=rail(names, cur), a=post_attrs("this page"),
-             version=running)
+             version=running, x=icon("close"))
 
 
 def message_page(title: str, text: str, detail: str = "") -> Html:

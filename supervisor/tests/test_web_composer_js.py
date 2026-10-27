@@ -19,6 +19,7 @@ function page(mids=[], touch=false, feed=[]) {     // feed: the message ids of t
   const handlers={}, win={}, elements={}, viewportHandlers={}, viewport={height:900,addEventListener(k,fn){viewportHandlers[k]=fn;}}; let resolve, reject, payload;
   const node=()=>({dataset:{},style:{},children:[],setAttribute(){},querySelectorAll:()=>[],
     appendChild(n){this.children.push(n);},append(...ns){this.children.push(...ns);},remove(){},
+    replaceChildren(...ns){this.children=ns;},
     addEventListener(k,fn){this[k]=fn;},classList:{add(){},remove(){},toggle(){},contains(){return false;}}});
   const sendButton={dataset:{queue:''}}, queueButton={dataset:{queue:'1'}};
   const mid={value:''}, queue={value:''}, files={type:'file',files:[],closest:()=>form}, chips=node();
@@ -28,8 +29,8 @@ function page(mids=[], touch=false, feed=[]) {     // feed: the message ids of t
     dispatchEvent(ev){for(const fn of handlers[ev.type]||[]) fn({target:box});}};
   const form={dataset:{post:'/chat/wren/send',draft:'wren',files:'',multipart:'1',reset:'1',sentMids:JSON.stringify(mids)},
     closest:()=>null,querySelectorAll:()=>[sendButton,queueButton],querySelector:q=>({'textarea':box,'textarea[name=text]':box,'input[name=mid]':mid,'input[name=queue]':queue,
-      'input[type=file]':files,'[data-picked]':chips,'button[type=submit]':sendButton})[q]||null,
-    reset(){box.value='';mid.value='';files.files=[];}};
+      'input[type=file]':files,'[data-picked]':chips,'button[type=submit]':sendButton,'.quotechip':form.chip})[q]||null,
+    insertBefore(n){this.chip=n;},reset(){box.value='';mid.value='';files.files=[];}};
   const selection={isCollapsed:false,rangeCount:1,toString:()=> 'selected quote',removeAllRanges(){},
     getRangeAt:()=>({commonAncestorContainer:{nodeType:1,closest:()=>({dataset:{}})}})};
   const document={readyState:'loading',visibilityState:'hidden',body:node(),documentElement:{style:{setProperty(){}}},
@@ -77,12 +78,17 @@ const A={name:'a.txt',size:1,type:'text/plain'},B={name:'b.txt',size:1,type:'tex
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_issue_21_quotes_save_grow_and_reset_identity(self):
-        """Removing quote input dispatch loses the restored quote, growth and new retry identity."""
+        """Reverting #21 loses the restored quote or keeps the old retry identity. PLAN-pwa-market (iPhone review I17):
+        the quote is a chip above the field, not "> " lines typed into it; Send puts it first, as the same quote."""
         self.run_composer("""
 for(const kind of ['reply','quote']) {
  storage.clear();const p=page();p.mid.value='old';await p[kind]();
- assert.equal(p.mid.value,'');assert.equal(p.box.style.height,'122px');
- const q=page();await q.load();assert.equal(q.box.value,p.box.value);assert.ok(q.box.value.includes('quote'));
+ assert.equal(p.mid.value,'');assert.equal(p.box.value,'');
+ assert.ok(p.form.chip,'a chip shows the quote');assert.ok(storage.get('shaft.quote.wren').includes('quote'));
+ const q=page();await q.load();assert.ok(q.form._quote.includes('quote'),'kept with the draft');
+ await q.type('my answer');const sending=q.send();await Promise.resolve();
+ const nl=String.fromCharCode(10),t=q.payload().text;assert.ok(/^> (whole|selected) quote/.test(t)&&t.endsWith('quote'+nl+nl+'my answer'),t);q.answer();await sending;
+ assert.equal(storage.get('shaft.quote.wren'),undefined);
 }
 """)
 

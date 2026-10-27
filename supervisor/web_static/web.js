@@ -271,7 +271,7 @@
           throw new Error(`its web service is not answering, HTTP ${r.status}`);
         }
         if (r.status === 304) {
-          if (!again && el.dataset.poll === url) { fails = 0; recovered(); }
+          if (!again && el.dataset.poll === url) { fails = 0; recovered(); settled(el, url); }
           return;
         }
         const body = await r.text();
@@ -323,6 +323,7 @@
               !oldKeys.has(n.dataset.k) && n.getBoundingClientRect().top >= box.getBoundingClientRect().bottom);
             el.dispatchEvent(new CustomEvent("shaft:swapped", { bubbles: true, detail: { newBelow } }));
           }
+          settled(el, url);
           recovered();
         } else {
           fails += 1;
@@ -341,6 +342,12 @@
         if (again) { again = false; later(0); }
         else later(Math.min(every * slow * 2 ** Math.min(fails, 4), 15000 * slow));   // back within 15 s
       }
+    }
+    function settled(el, url) {               // the documents show the one asked for: loading is over (a 304 too)
+      if (el.id !== "docs" || el.dataset.poll !== url) return;
+      el.dataset.shown = url;
+      el.classList.remove("loading");
+      el.removeAttribute("aria-busy");
     }
     function recovered() {
       fresh(el);
@@ -478,6 +485,7 @@
     // Next cycle: to its inbox, read in its next cycle — only from its button; Enter and Cmd-Enter never send so
     const background = form.querySelector("input[name=background]");
     if (background) background.value = ev.submitter?.dataset.background || "";
+    if (form.dataset.draft) takeQuote(form);
     buttons.forEach(b => { b.disabled = true; });
     form.dataset.busy = "1";
     const box = form.querySelector("textarea[name=text]");
@@ -802,6 +810,8 @@
     const form = document.querySelector("form[data-draft]");
     if (!form) return;
     const box = form.querySelector("textarea");
+    try { form._quote = localStorage.getItem(quoteKey(form)) || ""; } catch (e) { /* none kept */ }
+    if (form._quote) quoteChip(form);
     try {
       if (!box.value) box.value = localStorage.getItem(draftKey(form)) || "";
       const attempt = JSON.parse(localStorage.getItem(pendingKey(form)) || "null");
@@ -1181,18 +1191,46 @@
     }
     quoteText(q.text, q.composer, q.doc);
   }
+  // A quote waits above the field as a chip, not as "> " lines typed into it (iPhone review I17). Sent, it goes first,
+  // as the same Markdown quote (web_views._my_text shows it quoted); it is kept with the draft (shaft.quote.<name>).
+  const quoteKey = (form) => `shaft.quote.${form.dataset.draft}`;
+  function quoteChip(form) {
+    let chip = form.querySelector(".quotechip");
+    const quote = form._quote || "";
+    try { if (quote) localStorage.setItem(quoteKey(form), quote); else localStorage.removeItem(quoteKey(form)); }
+    catch (e) { /* no storage: the quote lives as long as the page */ }
+    if (!quote) { if (chip) chip.remove(); return; }
+    if (!chip) {
+      chip = document.createElement("div");
+      chip.className = "quotechip";
+      form.insertBefore(chip, form.querySelector(".cbox") || form.querySelector("textarea"));
+    }
+    const shown = document.createElement("span");
+    shown.textContent = quote.replace(/^> ?/gm, "").trim();
+    const x = document.createElement("button");
+    x.type = "button";
+    x.className = "unquote";
+    x.setAttribute("aria-label", "Remove the quote");
+    x.textContent = "×";
+    x.addEventListener("click", () => { form._quote = ""; quoteChip(form); form.querySelector("textarea").focus(); });
+    chip.replaceChildren(shown, x);
+  }
   function quoteText(text, box, doc = "") {
     const from = doc ? `> (from notes/docs/${doc})\n` : "";     // a quote from a document names it
-    const quoted = from + text.trim().split(/\r?\n/).map(l => `> ${l}`.trimEnd()).join("\n") + "\n\n";
-    const before = box.value.slice(0, box.selectionStart);
-    const after = box.value.slice(box.selectionEnd);
-    const lead = before && !before.endsWith("\n\n") ? (before.endsWith("\n") ? "\n" : "\n\n") : "";
-    box.value = before + lead + quoted + after;
-    const at = (before + lead + quoted).length;
+    const quoted = from + text.trim().split(/\r?\n/).map(l => `> ${l}`.trimEnd()).join("\n");
+    const form = box.closest("form[data-draft]");
+    form._quote = form._quote ? `${form._quote}\n>\n${quoted}` : quoted;
+    quoteChip(form);
     window.getSelection().removeAllRanges();
     box.focus();
-    box.setSelectionRange(at, at);
-    box.dispatchEvent(new Event("input", { bubbles: true }));   // a quoted reply is a draft too
+    composerChanged(form);                                        // a new message: a new id
+  }
+  function takeQuote(form) {                     // at Send: the quote goes before the text, and the chip goes
+    const box = form.querySelector("textarea[name=text]");
+    if (!form._quote || !box) return;
+    box.value = `${form._quote}\n\n${box.value}`;
+    form._quote = "";
+    quoteChip(form);
   }
   document.addEventListener("click", (ev) => {
     const b = ev.target.closest && ev.target.closest("[data-reply-message]");
@@ -1749,10 +1787,16 @@
       grow(box, 0.7);
     }
   }
+  // Another document asked for: the panel says it is loading until it arrives — on a phone's network the old one stayed
+  // up, looking current and usable, with nothing to say the tap was taken (review C12).
   function refreshDocs() {
     const panel = document.getElementById("docs");
     if (!panel) return;
     delete panel.dataset.etag;
+    if (panel.dataset.shown !== undefined && panel.dataset.poll !== panel.dataset.shown) {
+      panel.classList.add("loading");
+      panel.setAttribute("aria-busy", "true");
+    }
     if (panel._tick) panel._tick();
   }
   // The separate comment composer shares the page's request and feedback conventions.
@@ -2018,6 +2062,8 @@
     const grid = document.querySelector(".chatgrid");
     if (grid) {
       document.body.classList.add("chatapp");
+      const docsPanel = document.getElementById("docs");
+      if (docsPanel) docsPanel.dataset.shown = docsPanel.dataset.poll;   // drawn with the page: not loading
       const asked = new URL(location.href).searchParams;
       if (asked.get("doc") || asked.get("att") || asked.get("dir")) showDocs(true);
       else {

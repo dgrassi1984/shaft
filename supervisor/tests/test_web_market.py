@@ -64,6 +64,8 @@ class HeaderTest(unittest.TestCase):
         self.assertGreater(buttons.index(">Delete…<"), zone)
         self.assertNotIn(">Kill<", str(web_actions.instance_buttons({"name": "wren", "state": "idle"}, kill=False)))
         self.assertIn("instance_buttons(i, kill=False)", Path(web_pages.__file__).read_text())
+        menu = self.header()
+        self.assertLess(menu.index("Reload / update"), menu.index('class="actions dangerzone"'))   # last in ⋯, found live
 
 
 class ComposerTest(unittest.TestCase):
@@ -163,6 +165,20 @@ class MessageActionsTest(unittest.TestCase):
         self.assertIn(".turn:hover .msgactions, .turn:focus-within .msgactions", CSS)
 
 
+class AlertsTest(unittest.TestCase):
+    def test_i15_a_log_line_alert_reads_on_a_phone_in_its_own_words(self):
+        """Review I15: raw log lines with Python dicts, all bold red, each a wall of text on a phone."""
+        line = ("07:31:38 shaft: end live exit=1 broker_calls={'run': 2, 'web_search': 2} finish_reason='stop', "
+                "reasoning_chars=7988 and more words")
+        out = str(web_actions.alert_line({"id": "x", "text": line}))
+        self.assertIn('<span class="dim">07:31:38</span> <b>shaft</b> <span class="alertwhat">end live exit=1', out)
+        self.assertIn("…</span>", out)
+        self.assertIn("<summary>Full line</summary><pre>07:31:38 shaft: end live", out)   # nothing lost, nothing reworded
+        short = str(web_actions.alert_line({"id": "y", "text": "wren: code change FAILED tests"}))
+        self.assertNotIn("Full line", short)
+        self.assertIn("wren: code change FAILED tests", short)
+
+
 class LayoutTest(unittest.TestCase):
     def test_i16_markdown_tables_keep_their_columns_on_a_phone(self):
         """Review I16: the phone's label/value table rule also hit table.md: an answer's columns were lost."""
@@ -196,6 +212,16 @@ class LayoutTest(unittest.TestCase):
     def test_i3_landscape_phone_is_compact(self):
         landscape = block("(pointer: coarse) and (max-height: 520px)")
         self.assertIn(".chathead .sub { display: none; }", landscape)
+
+    def test_c12_choosing_a_document_says_it_is_loading_until_it_is_there(self):
+        """Review C12: on a phone's network the old document stayed up, looking current, after a tap on another."""
+        refresh = JS[JS.index("  function refreshDocs() {"):]
+        refresh = refresh[:refresh.index("\n  }\n")]
+        self.assertIn('panel.classList.add("loading");', refresh)
+        self.assertIn('panel.setAttribute("aria-busy", "true");', refresh)
+        # cleared by an answer for the one asked for — a 304 too, which fires no swap (it stuck there, found in review)
+        self.assertIn("{ fails = 0; recovered(); settled(el, url); }", JS)
+        self.assertIn("aside.docs.loading > :not(.docshead) { opacity: .45; pointer-events: none;", CSS)
 
     def test_c9_i19_toasts_at_the_top_clear_of_the_composer_and_notch(self):
         rule = CSS[CSS.rindex("#toast { top:"):]

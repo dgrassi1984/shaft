@@ -15,6 +15,7 @@ from .web_pages import Html, esc, etag, h, icon, join, nav, page
 
 MARK = {"yes": ("✓", "good"), "partial": ("½", "warn"), "no": ("✗", "bad")}
 ICONS = {name: icon(name, 16) for name in ("copy", "reply", "delete", "edit", "download", "expand", "collapse", "select")}
+_CLOSE = icon("close")                         # the sheets' ✕, drawn
 _DOT = Html('<span class="mark" title="changed in this chat">●</span> ')
 # The documents drawer's full-screen toggle: both glyphs, CSS shows the one aria-pressed calls for (web.js flips it).
 FULLSCREEN = h('<button type="button" class="small icon" data-fullscreen-doc aria-pressed="false" title="Full screen" '
@@ -169,7 +170,7 @@ def chat_header(name: str, live: dict, chat: dict | None, past: list[dict], read
     facts = [live.get("model") or "", state + (f" since {live['since']}" if live.get("since") else "")]
     if live.get("usd_today"):
         facts.append(f"${live['usd_today']:.2f} today")
-    buttons = instance_buttons(live) if live.get("name") else Html("")
+    buttons, danger = instance_buttons(live, split=True) if live.get("name") else (Html(""), Html(""))
     earlier = join([h('<p class="dim">latest {limit} of {total}</p>', limit=min(20, len(past)), total=len(past)),
                     earlier_chats(name, past[:20]), link(f"/i/{q(name)}/chats", "All earlier chats")])
     if state not in ("idle", "?") and not replying:
@@ -206,12 +207,12 @@ def chat_header(name: str, live: dict, chat: dict | None, past: list[dict], read
              '<div class="menupages">{pages}</div>'
              '<details class="earliermenu" data-key="earlier-chats"><summary data-focus="earlier">{hist} Earlier chats'
              '</summary>{earlier}</details>'
-             '<div class="actions">{buttons}</div><div class="actions menuapp">'
+             '{buttons}<div class="actions menuapp">'
              '<button type="button" class="small" data-notify data-focus="notify">Notify me on this device</button>'
              '<button type="button" class="small" data-hard-reload data-focus="hard-reload" '
-             'title="Clear the app cache and load the current version">Reload / update</button></div>'
+             'title="Clear the app cache and load the current version">Reload / update</button></div>{danger}'
              '</div></details></div></header>',
-             name=name, sub=sub, facts=" · ".join(f for f in facts if f), pages=pages, buttons=buttons, new=new,
+             name=name, sub=sub, facts=" · ".join(f for f in facts if f), pages=pages, buttons=buttons, new=new, danger=danger,
              brief=" · ".join(f for f in [facts[0], *facts[2:]] if f),   # the state is already beside it
              earlier=h('<div class="earlier">{e}</div>', e=earlier), side=icon("sidebar"), docs=icon("docs"),
              more=icon("more"), hist=icon("history", 16))
@@ -1003,8 +1004,8 @@ def docs_panel(name: str, listing: list[dict], open_path: str, text: str | None,
              h('<p class="dim">none yet: ask {n} for one, it appears here as it writes it.</p>', n=name))
     expand = FULLSCREEN if open_path and text is not None and not problem else Html("")
     head = h('<div class="docshead">{title}{new}{expand}<button type="button" '
-             'class="small closedocs" data-close-docs aria-label="Close the documents">✕</button></div>{list}',
-             title=title, expand=expand, new="" if open_path or archived else new,
+             'class="small closedocs" data-close-docs aria-label="Close the documents">{x}</button></div>{list}',
+             x=_CLOSE, title=title, expand=expand, new="" if open_path or archived else new,
              list="" if open_path else h('{s}<div class="doclist">{i}</div>', i=join(entries) if entries else empty,
                                                     s=_sort_bar(doc_sort(sort), folder, chat_id) if len(entries) > 1 else ""))
     download = (download_icon(f"/i/{q(name)}/file?path={q(DIR + '/' + open_path)}")
@@ -1075,7 +1076,8 @@ def attachment_panel(name: str, file_name: str, url: str, text: str | None, prob
     expand = FULLSCREEN if text is not None else Html("")
     head = h('<div class="docshead"><button type="button" class="small" data-back-docs aria-label="Back to the documents">'
              '← Documents</button> <span class="dim">sent by {n}</span>{expand}<button type="button" class="small '
-             'closedocs" data-close-docs aria-label="Close the documents">✕</button></div>', n=name, expand=expand)
+             'closedocs" data-close-docs aria-label="Close the documents">{x}</button></div>', n=name, expand=expand,
+             x=_CLOSE)
     download = download_icon(url) if url else Html("")
     if text is None:
         return join([head, h('<p class="bad">{p}</p>', p=problem or f"{file_name} cannot be shown."),

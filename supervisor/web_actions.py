@@ -11,6 +11,7 @@ runs it.
 from __future__ import annotations
 
 import json
+import re
 
 from . import actions
 from .web_pages import Html, h, join
@@ -216,11 +217,12 @@ def _update_question(name: str) -> tuple[str, str]:
     return hit[1]
 
 
-def instance_buttons(i: dict, delete: bool = False, kill: bool = True) -> Html:
+def instance_buttons(i: dict, delete: bool = False, kill: bool = True, split: bool = False):
     """The instance actions of the overview and the instance page (TUI keys c, p, s, u, K); `delete`: also Delete…
     (TUI D) — on the instance's own page only. Kill and Delete come last, apart (.dangerzone): beside Pause on every
     card they were one slip from a stop (iPhone review I13). `kill`: False leaves Kill off (the overview's cards: it
-    stays on the instance's Summary and in its ⋯ menu)."""
+    stays on the instance's Summary and in its ⋯ menu). `split`: the two groups apart, (actions, danger), for a menu
+    that puts its own items between them."""
     name, state = i["name"], i["state"]
     idle = state == "idle"
     paused = state == "paused by you"
@@ -240,7 +242,8 @@ def instance_buttons(i: dict, delete: bool = False, kill: bool = True) -> Html:
                           "" if state in DELETABLE else f"{name} is {state} — kill it first", cls="danger",
                           typed=name, after="home"))
     zone = h('<div class="actions dangerzone">{d}</div>', d=join(danger)) if danger else Html("")
-    return h('<div class="actions">{b}</div>{z}', b=join(out), z=zone)
+    main = h('<div class="actions">{b}</div>', b=join(out))
+    return (main, zone) if split else join([main, zone])
 
 
 def message_forms(name: str, question: dict | None) -> Html:
@@ -270,11 +273,23 @@ def tool_switches(name: str, off: set[str]) -> Html:
              '</tbody></table></div>', r=join(rows))
 
 
+_ALERT_LINE = re.compile(r"^(\d\d:\d\d(?::\d\d)?) ([\w.-]+): (.+)$", re.S)
+
+
 def alert_line(a: dict) -> Html:
     """One open alert and the action that dismisses it alone. `ids` is a JSON list of that one id — the same field
-    `dismiss` reads, a list because a log alert's id has a space in its time."""
-    return h('<li>⚠ {t} {b}</li>', t=a["text"],
-             b=button("dismiss", "Dismiss", "", {"ids": json.dumps([a["id"]])}, cls="small"))
+    `dismiss` reads, a list because a log alert's id has a space in its time. A log line ("07:31:38 shaft: end live
+    exit=1 broker_calls={...}") shows its time and who apart and its first 90 characters, the rest behind a tap: all of it
+    in bold red, with Python dicts, was a wall on a phone (iPhone review I15). The words are the log's own."""
+    text = a["text"]
+    m = _ALERT_LINE.match(text)
+    when, who, what = (m.groups() if m else ("", "", text))
+    head = what if len(what) <= 90 else what[:89].rstrip() + "…"
+    full = h('<details class="alertfull"><summary>Full line</summary><pre>{t}</pre></details>', t=text) \
+        if len(what) > 90 else Html("")
+    return h('<li><span class="alerthead">⚠ {w}{who}<span class="alertwhat">{h}</span></span>{full}{b}</li>',
+             w=h('<span class="dim">{t}</span> ', t=when) if when else "", who=h('<b>{n}</b> ', n=who) if who else "",
+             h=head, full=full, b=button("dismiss", "Dismiss", "", {"ids": json.dumps([a["id"]])}, cls="small"))
 
 
 def tool_row(name: str, tool: str, off: set[str]) -> Html:

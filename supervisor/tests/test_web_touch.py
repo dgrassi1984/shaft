@@ -157,7 +157,7 @@ class NetworkClientTest(unittest.TestCase):
     def test_a_refresh_asks_for_what_changed_and_gives_up_in_time(self):
         self.assertIn('{ "If-None-Match": el.dataset.etag }', JS)
         self.assertIn("if (r.status === 304) {", JS)                       # unchanged: nothing re-rendered
-        self.assertIn("{ fails = 0; recovered(); }", JS)                   # #26: and this panel is fresh again
+        self.assertIn("{ fails = 0; recovered(); settled(el, url); }", JS)   # #26: fresh again; C12: loaded
         self.assertIn("const POLL_LIMIT_MS = 15000;", JS)
         self.assertIn("signal: ctl.signal", JS)
 
