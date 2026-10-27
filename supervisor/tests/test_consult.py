@@ -150,6 +150,24 @@ class ConsultTest(unittest.TestCase):
         self.assertEqual((refused["usd"], consult._reservations()), (0.0, []))
         self.assertGreater(refused["reserved_usd"], 0)
 
+    def test_the_menu_shows_the_list_price_and_reserves_the_dearest_provider(self):
+        """Live, 2026-10-27: the menu showed glm-5.3 at its dearest zero-retention provider (7.43/8.14 per million,
+        like Opus) while it lists at 0.07/1.40 and a real call cost $0.000024."""
+        cheap = self.model.removeprefix("openrouter/")
+        self.catalogue["models"][0]["pricing"] = {"prompt": "0.00000007", "completion": "0.0000014"}
+        self.catalogue["endpoints"] = [
+            {"model_id": cheap, "tag": "wafer", "pricing": {"prompt": "0.00000007", "completion": "0.0000014"}},
+            {"model_id": cheap, "tag": "dear", "pricing": {"prompt": "0.000007429", "completion": "0.000008144"}}]
+        self.cache()
+        item = consult.menu("wren")[0]
+        self.assertEqual((round(item["in_per_m"], 4), round(item["out_per_m"], 4)), (0.07, 1.4))
+        self.assertEqual((round(item["reserve_in_per_m"], 3), round(item["reserve_out_per_m"], 3)), (7.429, 8.144))
+        self.upstream(self.reply(None))                 # no cost back: the worst case is what is recorded
+        self.complete()
+        sent = json.loads(self.urlopen.call_args.args[0].data)
+        prompt = json.dumps({k: v for k, v in sent.items() if k not in ("provider", "usage")}, ensure_ascii=False)
+        self.assertAlmostEqual(self.rows()[0]["reserved_usd"], (len(prompt) / 3 * 7.429 + 100 * 8.144) / 1e6)
+
     def test_paid_extras_the_reservation_cannot_see_are_refused(self):
         for extra in ({"plugins": [{"id": "web"}]}, {"web_search_options": {"search_context_size": "high"}}):
             with self.assertRaisesRegex(consult.ConsultError, "no OpenRouter plugins"):

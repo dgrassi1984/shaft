@@ -152,19 +152,23 @@ def menu(instance: str, fetch: bool = True) -> list[dict]:
                      and e.get("provider_name") not in PROVIDER.get("ignore", [])]
         pricing = model.get("pricing") or {}
         pin, pout = _price(pricing.get("prompt")), _price(pricing.get("completion"))
-        # Reserve at the most expensive qualifying endpoint, rather than the catalogue's lowest price.
+        # The menu shows the model's list price (what a call usually costs); the reservation takes the most
+        # expensive qualifying provider, since OpenRouter may route to any of them. Showing that worst price made
+        # z-ai/glm-5.3 look as dear as Opus (7.43/8.14 against 0.07/1.40; a real call cost $0.000024, 2026-10-27).
+        rin, rout = pin, pout
         for endpoint in endpoints:
             prices = endpoint.get("pricing") or {}
             a, b = _price(prices.get("prompt")), _price(prices.get("completion"))
             if a is None or b is None:
-                pin = pout = None
+                rin = rout = None
                 break
-            if pin is not None and pout is not None:
-                pin, pout = max(pin, a), max(pout, b)
+            if rin is not None and rout is not None:
+                rin, rout = max(rin, a), max(rout, b)
         why = "no qualifying zero-retention provider under SHAFT_CONSULT_PROVIDER" if not endpoints else ""
-        if pin is None or pout is None:
+        if None in (pin, pout, rin, rout):
             why = "unknown price; the daily cap cannot count this model"
-        result.append({"model": name, "in_per_m": pin, "out_per_m": pout, "available": not why, "why": why})
+        result.append({"model": name, "in_per_m": pin, "out_per_m": pout, "reserve_in_per_m": rin,
+                       "reserve_out_per_m": rout, "available": not why, "why": why})
     return result
 
 
@@ -200,7 +204,7 @@ def complete(instance: str, body: dict, secrets: dict, caller, run, run_started)
     payload.update(model=model.removeprefix("openrouter/"), max_tokens=tokens, provider=PROVIDER,
                    usage={"include": True})
     prompt = json.dumps({k: v for k, v in payload.items() if k not in ("provider", "usage")}, ensure_ascii=False)
-    worst = (len(prompt) / 3 * item["in_per_m"] + tokens * item["out_per_m"]) / 1e6
+    worst = (len(prompt) / 3 * item["reserve_in_per_m"] + tokens * item["reserve_out_per_m"]) / 1e6
     reservation = uuid.uuid4().hex
     with editing_lock():
         rows = _reservations()
