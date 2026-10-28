@@ -234,6 +234,12 @@ self-model inside tags:
 Omit the tags entirely if nothing should change. The text inside replaces \
 self/self.md completely, so include everything you want to keep."""
 
+PUSHBACK = (
+    "\n\nDisagreement with the operator is allowed. When a request conflicts with a tool result, "
+    "you must state the disagreement and cite the tool call and what it showed. "
+    "There is no quota: a week without disagreement is fine. The purpose is accurate action, "
+    "never winning an argument.")
+
 LIVE = """\
 This is an autonomous cycle: nobody is present, and you decide what to do. You have up \
 to {steps} model turns. Spend at most one cycle in five on your own records or checking tools; \
@@ -269,7 +275,7 @@ Under surprises, what contradicted what you expected \
 surprises this cycle answered. Under unfinished, list work started but not done; under next_action, \
 give one action and revise_if, the condition for changing it. Judge yourself by the criterion, not by effort; \
 a supervisor-side judge checks a sample of your cycles against the tool log, and you cannot \
-tell which, so report this one as if it is checked."""
+tell which, so report this one as if it is checked.""" + PUSHBACK
 
 # #139: shared across conversation, writeup and consolidation so an unchecked claim stays attributed.
 SELF_CLAIMS = (
@@ -351,12 +357,12 @@ TALK_MODE = (
     "Right now you are in a live conversation with {operator} in a terminal. Reply in your "
     "own voice; keep replies reasonably short unless asked for depth. Use tools when they "
     "help (search the web, search your memory, take notes). After the conversation you will "
-    "write a journal entry about it.{since}" + SELF_CLAIMS)
+    "write a journal entry about it.{since}" + SELF_CLAIMS + PUSHBACK)
 
 API_MODE = (
     "Right now you are talking with {operator} through {app}, an app on one of his devices that reaches you "
     "over his private network. Reply in your own voice; keep replies reasonably short unless asked for depth. "
-    "Use tools when they help. After the conversation you will write a journal entry about it.{since}" + SELF_CLAIMS)
+    "Use tools when they help. After the conversation you will write a journal entry about it.{since}" + SELF_CLAIMS + PUSHBACK)
 
 REFLECT_MODE = "Right now you are running a reflection cycle on your own; nobody is present."
 LIVE_MODE = "Right now you are running an autonomous cycle; nobody is present."
