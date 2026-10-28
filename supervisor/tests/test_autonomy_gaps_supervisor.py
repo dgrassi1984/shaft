@@ -280,7 +280,7 @@ class A5Test(unittest.TestCase):
         self.b = broker.Broker("x", self.project, {"FAKE_KEY": "private-secret-value"}, self.project / "tools.log",
                                root=self.project / "copy", share=False, usage_name="billed-x")
         self.b.calls = 7
-        self.expected = {"calls_used": 7, "calls_max": 60, "pushes": {"today": 0, "budget": 6}, "cloud": {"spent_usd": 1.25, "cap_usd": 10.0},
+        self.expected = {"run_usd": 0, "calls_used": 7, "calls_max": 60, "pushes": {"today": 0, "budget": 6}, "cloud": {"spent_usd": 1.25, "cap_usd": 10.0},
                          "consult": None, "coder": {"spent_usd": 2.0, "cap_usd": 12.0},
                          "trials": {"started": 2, "per_day": 4, "spent_usd": 3.0, "cap_usd": 15.0},
                          "probation": [], "next_sleep": "2026-10-25 04:00", "next_wake": "14:00"}
@@ -454,7 +454,7 @@ class ReplayLedgerTest(unittest.TestCase):
             replay.project, replay.operator_sent = root, 0
             replay.calls, replay.max_calls, replay.disabled = 3, 60, set()
             replay.unavailable = {"trial": "replay", "delegate_coding": "replay"}
-            expected = {"calls_used": 3, "calls_max": 60,
+            expected = {"calls_used": 3, "calls_max": 60, "run_usd": None,
                         "pushes": {"today": 0, "budget": 6}, "cloud": {"spent_usd": 1.25, "cap_usd": 10.0},
                         "consult": None, "coder": {"spent_usd": 1.25, "cap_usd": 12.0},
                         "trials": {"started": 1, "per_day": 4, "spent_usd": 1.25, "cap_usd": 15.0},

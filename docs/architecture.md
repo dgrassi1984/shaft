@@ -283,7 +283,36 @@ goal and, in competition, the declared **attention** (`attention`: up to four {s
 log by `supervisor/attention.py`). **Outcome cards** (`shaft/cards.py`) hold the first call of a kind of action that has
 failed since it last worked, showing the comparable calls and their counts; calling again runs it. **Commitments**
 (`commit_to`, finish_cycle's `commitments`, `memory/commitments.jsonl`) are settled in sleep, kept only with an
-episode as evidence; the supervisor re-checks it (`supervisor/commitments.py`). `remember` takes a **source**
+episode as evidence; the supervisor re-checks it (`supervisor/commitments.py`).
+
+Projects (#106) use append-only `memory/projects.jsonl` opened/closed by `open_project` and `close_project`.
+Each records a name, future ISO deadline (a date includes the whole day), optional positive calls/dollar budgets,
+and one line saying what done means. `declare_intent(project=...)` accepts an open id; its episode carries that id.
+Live and sleep prompts show measured boundaries; `self/stats.md` uses the supervisor's independent read-only fold.
+At risk means at most 20% of the original span remains, at least 80% of a budget is spent, or two consecutive
+judged project cycles received no/partial. Past boundary means the deadline is reached, a budget exhausted,
+or three consecutive judged no/partial cycles. Unjudged cycles do not reset the judged streak; a judged yes does.
+Sleep includes freshly fetched verdict pages as well as `memory/verdicts.jsonl`. The live prompt uses verdicts
+already received by sleeps; supervisor stats uses its own judgments. Thresholds are fixed, with no new knobs.
+`project_usage` on each live episode stores the final envelope's broker `calls_used` and `run_usd`. The dollars
+are the recorded cloud, coder and consult charges collected in that broker's request context, including model
+streaming and the work before intent declaration. Local inference has no dollar charge here. Trial replay and
+judge costs are outside the project's live-cycle spending. Missing usage renders as unknown, never zero;
+without another measured boundary, unknown usage is shown as at risk. This is a record of task viability.
+A project at risk is re-planned, narrowed or abandoned honestly, never defended. In sleep each project past
+a boundary must be closed or re-planned with evidence; a re-plan closes the old record and opens a replacement.
+
+During sleep only, `propose_drive_amendment` (#105) writes `notes/drive-proposals/<id>.md` with current/proposed
+text, evidence and 1-3 behavioural predictions under 300 characters each. A prediction must name a trigger
+and an observable action; a lexical check rejects vague statements. The one ineligible-topic regex list in
+`shaft/drive_proposals.py` rejects survival, secrecy, acquiring resources and resisting control/oversight.
+This is a keyword/phrase screen, not a semantic classifier. Only the operator edits `drive.md`; its tool and
+sandbox protection remains. The proposal is first tested as a `shaft/prompts.py` trial candidate, because
+trials cannot target `drive.md`. The operator compares results with its predictions. `shaft drive` lists,
+accepts through the existing SHA compare-and-set, or rejects with a reason; `<id>.decision.json` records the
+decision, proposal digest and predictions for the instance to read. Falsification is the operator's check.
+
+`remember` takes a **source**
 (`log:<ts>[#step]`, `web:<url>` fetched this run, `operator`, `instance:<name>`, `inferred`), shown with the fact's age in
 search; `shaft provenance` matches observation claims against tool results by content. `declare_intent` answers with a
 **forecast** of what comparable goals cost (turns, minutes, calls, how many ran out) — costs only, never a success rate,

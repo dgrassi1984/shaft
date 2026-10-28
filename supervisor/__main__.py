@@ -956,9 +956,11 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("drive", help="an instance's drive.md (what it is for): show it, set --file FILE, or remove it "
                                      "(the default drive applies); --expect-sha from `shaft drive <name>`")
     p.add_argument("name")
-    p.add_argument("action", nargs="?", choices=["set", "remove"])
+    p.add_argument("action", nargs="?", choices=["set", "remove", "proposals", "accept", "reject"])
     p.add_argument("--file")
     p.add_argument("--expect-sha")
+    p.add_argument("id", nargs="?")
+    p.add_argument("--reason")
     p = sub.add_parser("docs", help="an instance's documents (notes/docs/*.md, shown beside the web chat): list them, "
                                     "show PATH, set PATH --file FILE --expect-sha SHA (none for a new one), or "
                                     "rm PATH --expect-sha SHA; its next "
@@ -1278,6 +1280,9 @@ def main(argv: list[str]) -> int:
         from . import settings
         return settings.command(args.action, args.items, args.expect, args.expect_unset, args.json, args.from_web)
     if args.cmd == "drive":
+        if args.action in ("proposals", "accept", "reject"):
+            from . import drive_proposals
+            return drive_proposals.command(args.name, args.action, args.id, args.expect_sha, args.reason)
         from . import opconfig
         return opconfig.drive_command(args.name, args.action, args.file, args.expect_sha)
     if args.cmd == "docs":

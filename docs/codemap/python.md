@@ -45,7 +45,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/jobs.py` | — | `entry`, `jobs_off`, `set_jobs_off`, `uncommitted`, `declared`, `report_problems`, `interval`, `due`, `run`, `request_wake`, `take_wake`, `pending_wakes`, `tick`, `describe` |
 | `supervisor/judge.py` | `JudgeError` | `same_model`, `pick`, `rotation`, `available`, `ask`, `second_available`, `ask_second` |
 | `supervisor/kill.py` | `Proc` | `processes`, `talk_clients`, `targets`, `end_left_in`, `running`, `replaying`, `runner_busy`, `kill` |
-| `supervisor/ledger.py` | — | `spend` |
+| `supervisor/ledger.py` | — | `record_charge`, `spend` |
 | `supervisor/localmodel.py` | — | `server_of`, `is_service`, `pinned_by`, `idle_exit_due`, `answers`, `plist`, `ensure`, `down_problem` |
 | `supervisor/mail.py` | `NotVisible` | `label_id`, `visible`, `get_thread`, `search`, `attachments`, `body_text`, `sender_line`, `render`, `pick_attachment`, `attachment_bytes` |
 | `supervisor/messages.py` | — | `record`, `attachment_name`, `size_text`, `store_attachments`, `from_operator`, `attachment_lines`, `history`, `appended`, `pending`, `show_inbox`, `deliver_background`, `sent_mid`, `deliver_external`, `reply`, `answer_quoted`, `quoted_questions`, `send`, `clear_notes` |
@@ -217,6 +217,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_web_touch.py` | `TouchTest`, `PhoneLayoutTest`, `DocumentsCloseTest`, `NetworkClientTest`, `AccessibilityTest`, `CommentsTouchTest` | `block` |
 | `supervisor/tests/test_web_unread_js.py` | `UnreadTest` | `feed` |
 | `supervisor/tests/test_webpush.py` | `PushTest`, `KeyAndTokenTest`, `SubscriptionsTest`, `QueueTest`, `RoutesTest`, `WhenTest`, `RenewRaceTest`, `PairedOnlyTest` | `unb64`, `raw_to_der` |
+| `supervisor/tests/test_x_metacog.py` | `ControlsTest`, `JudgmentTest`, `MeasurementsTest` | — |
 | `supervisor/tom.py` | — | `record`, `receipts`, `reply_for`, `score`, `section`, `baselines`, `report` |
 | `supervisor/top.py` | `UI` | `keys`, `shown`, `participants`, `follow`, `handle`, `dispatch`, `extras`, `recap_line`, `render_main`, `render_list`, `wrap`, `render_message`, `render`, `plain`, `code_stamp`, `main` |
 | `supervisor/top_views.py` | `Overlay` | `run_now`, `run_detached`, `service_guard`, `tab_bar`, `footer`, `window`, `scroll_to`, `wrap`, `spark`, `page`, `current`, `render_instance`, `judge_line`, `judge_detail`, `render_judge`, `trial_line`, `render_trials`, `render_benchmarks`, `render_changes`, `render_costs`, `render_services`, `render_help`, `transcript_line`, `render_transcripts`, `ask`, `handle_overlay`, `render_pick`, `instance_action`, `handle_view`, `ask_guarded` |

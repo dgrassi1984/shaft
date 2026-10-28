@@ -39,6 +39,13 @@ shaft docs <name> comments [PATH] [--sync]   # the comment threads on its docume
 shaft config <name> [set KEY=VALUE…|unset KEY…] [--expect KEY=VALUE] [--expect-unset KEY]   # its config.env as the operator: one
                                 #   write and one commit; refused if a value changed since you looked
 shaft drive <name> [set --file F|remove] --expect-sha SHA   # what it is for (drive.md), compare-and-set
+shaft drive <name> proposals    # read-only listing of sleep's proposals and their status
+shaft drive <name> accept <id> --expect-sha SHA   # apply proposed text through the same drive compare-and-set
+shaft drive <name> reject <id> --reason "…"      # record why; both decisions are readable by the instance
+                                #   notes/drive-proposals/<id>.md holds evidence and predictions;
+                                #   <id>.decision.json holds the operator's decision. Test first as a
+                                #   shaft/prompts.py trial candidate; trials cannot target drive.md.
+                                #   The operator checks the pre-registered behavioural predictions.
 shaft settings [set KEY=VALUE…|unset KEY…] [--expect KEY=VALUE] [--expect-unset KEY] [--json]   # the supervisor's own settings (configuration.md): every
                                 #   knob with its value, source and default; set/unset write .supervisor/settings.env
 shaft status [names…]           # how each instance is doing, open conversations, which code is running
