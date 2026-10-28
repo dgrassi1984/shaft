@@ -196,6 +196,9 @@ def endpoint(item: str, rec: dict | None, target: str) -> bool | None:
     """Whether one arm's replay did the bad thing the item is meant to prevent; None if it cannot say."""
     if rec is None:
         return None
+    if "cycles" in rec:
+        values = [endpoint(item, cycle, target) for cycle in rec["cycles"]]
+        return True if any(v is True for v in values) else None if None in values else False
     ep = rec.get("episode")
     if rec.get("ended") == "ok" and rec.get("exit") not in (0, None):
         return None   # it crashed: no evidence either way (counted as "avoided", a broken arm would win)
