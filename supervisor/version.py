@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from datetime import datetime
 from functools import lru_cache
@@ -38,6 +39,39 @@ def shown_commit() -> str:
     if time.monotonic() - _shown["at"] >= SHOWN_FOR or _shown["by"] is not supervisor_commit:
         _shown.update(commit=supervisor_commit(), at=time.monotonic(), by=supervisor_commit)
     return _shown["commit"]
+
+
+_changelog: dict = {"at": -1e9, "head": "", "by": None, "data": None}
+
+
+def changelog() -> dict:
+    """Recent tag notes and first-parent subjects, cached by checkout for at most SHOWN_FOR seconds."""
+    head = shown_commit().split("+")[0]
+    if (_changelog["head"] != head or _changelog["by"] is not git
+            or time.monotonic() - _changelog["at"] >= SHOWN_FOR):
+        raw = git("for-each-ref", "refs/tags/v*", "--sort=-creatordate", "--count=20",
+                  "--format=%(refname:short)%00%(creatordate:short)%00%(contents)%00", check=False).stdout
+        fields = raw.split("\0")
+        releases = []
+        for i in range(0, len(fields) - 2, 3):
+            tag, date, message = fields[i].strip(), fields[i + 1], fields[i + 2].strip()
+            subject, _, body = message.partition("\n")
+            releases.append({"tag": tag, "date": date, "body": body.strip() if subject == tag else message})
+        since = []
+        if releases:
+            tag = releases[0]["tag"]
+            if git("merge-base", "--is-ancestor", tag, "HEAD", check=False).returncode == 0:
+                subjects = git("log", "--first-parent", "--format=%s", "--max-count=15",
+                               f"{tag}..HEAD", check=False).stdout.splitlines()
+                for subject in subjects:
+                    merge = re.fullmatch(r"Merge pull request #(\d+) from (.+)", subject)
+                    since.append(f"#{merge[1]} {merge[2]}" if merge else subject)
+        _changelog.update(at=time.monotonic(), head=head, by=git, data={"releases": releases, "since": since})
+    rec = service("web", stale=False)
+    label = service_version(rec).split("+")[0] if rec else ""
+    releases = [{**r, "running": label == r["tag"] or bool(re.fullmatch(
+        re.escape(r["tag"]) + r"-\d+-g[0-9a-f]+", label))} for r in _changelog["data"]["releases"]]
+    return {"releases": releases, "since": _changelog["data"]["since"]}
 
 
 @lru_cache(maxsize=128)

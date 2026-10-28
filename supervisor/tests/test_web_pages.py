@@ -75,7 +75,8 @@ class EveryPageShowsWhatItsTabShows(PagesTest):
             for path in ("/overview", "/services", "/costs", "/i/shaft"):
                 body = self.get(path)
                 nav = body.split("<nav>", 1)[1].split("</nav>", 1)[0]
-                self.assertIn("web: v0.2.0-60-gabc1234+changes", nav)
+                # the running version, now the button that opens the changelog
+                self.assertRegex(nav, r'web: <button type="button" data-changelog[^>]*>v0\.2\.0-60-gabc1234\+changes</button>')
                 self.assertNotIn("checked out:", nav)
                 self.assertGreater(nav.index('class="nav-version'), nav.index("</form>"))
             with mock.patch.object(version, "supervisor_commit", return_value="def5678"):
@@ -84,7 +85,7 @@ class EveryPageShowsWhatItsTabShows(PagesTest):
                 rec.update(commit="def5678", describe="v0.2.0-61-gdef5678")
                 self.assertNotIn("checked out:", self.get("/overview"))
         self.assertNotIn("nav-version", web_pages.rail([]))
-        self.assertIn("web: unknown — restart to record", self.get("/overview"))
+        self.assertIn('aria-haspopup="dialog">unknown — restart to record</button>', self.get("/overview"))
 
     def test_issue_61_services_version_column_and_checkout(self):
         """#61: reverting loses the version column, scheduler version, and missing-record prompt."""

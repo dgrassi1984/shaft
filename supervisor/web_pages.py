@@ -183,7 +183,8 @@ def nav(names: list[str], current: str = "overview") -> Html:
     checkout = version.shown_commit()
     moved = h('<a href="/services">checked out: {v}</a>', v=version.commit_describe(checkout)) \
         if rec and rec["commit"].split("+")[0] != checkout.split("+")[0] else Html("")
-    running = h('<div class="nav-version dim">web: {v}{m}'
+    running = h('<div class="nav-version dim">web: <button type="button" data-changelog title="What&#39;s new" '
+                'aria-haspopup="dialog">{v}</button>{m}'
                 '<button type="button" data-hard-reload title="Clear the app cache and load the current version">'
                 'Reload / update</button></div>', v=version.service_version(rec), m=moved)
     return h('<nav><a class="brand" href="/">SHAFT</a><button type="button" class="small closenav" data-toggle-nav '
@@ -193,6 +194,19 @@ def nav(names: list[str], current: str = "overview") -> Html:
              'need a new link from `shaft web pair` to use it again."{a}><button type="submit">Unpair this browser'
              '</button></form>{version}</nav>', c=cur, rail=rail(names, cur), a=post_attrs("this page"),
              version=running, x=icon("close"))
+
+
+def changelog_body(data: dict) -> Html:
+    from .web_md import render
+    sections = []
+    if data["since"]:
+        sections.append(h('<section><h2>Since the last release</h2><ul>{items}</ul></section>',
+                          items=join(h('<li>{s}</li>', s=s) for s in data["since"])))
+    for release in data["releases"]:
+        sections.append(h('<section><h2>{tag} {running}</h2><p class="dim">{date}</p>{body}</section>',
+                          tag=release["tag"], date=release["date"], body=render(release["body"]),
+                          running="(running web)" if release["running"] else ""))
+    return join(sections) if sections else h('<p class="dim">No release notes available.</p>')
 
 
 def pagebar(title: str, current: str = "") -> Html:

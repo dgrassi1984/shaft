@@ -61,6 +61,36 @@
     box._t = setTimeout(() => { box.className = ""; }, bad ? 10000 : 5000);
   }
 
+  document.addEventListener("click", async (ev) => {
+    const button = ev.target.closest("[data-changelog]");
+    if (!button) return;
+    const dialog = document.createElement("dialog");
+    dialog.className = "changelog";
+    dialog.setAttribute("aria-labelledby", "changelog-title");
+    dialog.innerHTML = '<header><h1 id="changelog-title">What\'s new</h1>' +
+      '<button type="button" data-close-changelog autofocus>Close</button></header>' +
+      '<div class="changelog-body" aria-live="polite"><p>Loading…</p></div>';
+    const body = dialog.querySelector(".changelog-body");
+    dialog.querySelector("[data-close-changelog]").addEventListener("click", () => dialog.close());
+    dialog.addEventListener("click", (e) => {
+      if (e.target !== dialog) return;
+      const r = dialog.getBoundingClientRect();
+      if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) dialog.close();
+    });
+    dialog.addEventListener("keydown", (e) => e.stopPropagation());   // the rail's sheet must not trap Tab or Escape
+    dialog.addEventListener("close", () => { dialog.remove(); syncSheets(); button.focus(); });
+    document.body.appendChild(dialog);
+    dialog.showModal();
+    try {
+      const r = await fetch("/fragment/changelog", { cache: "no-store" });
+      if (pairAgain(r)) return;
+      if (!r.ok) throw new Error("changelog unavailable");
+      body.innerHTML = await r.text();
+    } catch (_) {
+      body.textContent = "Could not load release notes. Close and try again.";
+    }
+  });
+
   let reloading = false;
   const reloadFailure = "shaft.reload.failure";
   async function hardReload() {
@@ -1918,6 +1948,7 @@
     (close || sheetFocusables(sheet.panel)[0] || sheet.panel).focus();
   }
   function syncSheets(opener) {
+    if (document.querySelector("dialog.changelog[open]")) return;
     const grid = document.querySelector(".chatgrid");     // none on the other pages: only the rail's sheet there
     if (!grid && !document.querySelector(".pagebar")) return;
     const nav = document.querySelector("nav"), docs = grid ? document.getElementById("docs") : null;
