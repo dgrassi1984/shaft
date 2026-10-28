@@ -175,6 +175,8 @@ reviewed ref was `refs/heads/publish-prep-template`.
 | `TALK_REPLY_S` | `45` | uses built-in default |
 | `MAX_STEPS_TALK` | `0` | `0` |
 | `CONTEXT_JOURNAL_CHARS` | `16000` | `16000` |
+| `STALE_LINE_HOURS` | `24` | uses built-in default |
+| `STALE_GOAL_HOURS` | `48` | uses built-in default |
 | `CRITERION_CHARS` | `600` | uses built-in default |
 | `GOALS_CHARS` | `12000` | uses built-in default |
 | `BRIEFING` | `'notes/briefing.md'` | `notes/briefing.md` |
@@ -187,6 +189,11 @@ reviewed ref was `refs/heads/publish-prep-template`.
 | `COMMITMENTS` | `'on'` | uses built-in default |
 | `FORECAST` | `'on'` | uses built-in default |
 | `OPERATOR_NAME` | `'the operator'` | empty |
+
+`STALE_LINE_HOURS` flags dates older than this many hours in self/goals.md and self/self.md
+at sleep. `STALE_GOAL_HOURS` flags Active goal bullets with no live touch in that window,
+only if the operator sent a conversation turn during it. Set either to 0 to disable that check.
+Sleep asks for a fix, retirement or reason to keep each item, recorded in its journal.
 
 `TALK_REPLY_CALLS` and `TALK_REPLY_S` bound work before a conversation reply. When either budget
 is used, the next model call is offered only `queue_for_next_cycle` and must answer with its next steps. A running
