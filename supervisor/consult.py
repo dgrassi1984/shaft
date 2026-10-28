@@ -283,6 +283,7 @@ def complete(instance: str, body: dict, secrets: dict, caller, run, run_started)
                        "input_tokens": usage.get("prompt_tokens"), "output_tokens": usage.get("completion_tokens"),
                        "usd": cost, "reserved_usd": worst, "seconds": round(time.monotonic() - started, 1),
                        "error": error}
+                ledger.record_charge(cost)
                 with USAGE.open("a") as f:
                     f.write(json.dumps(row) + "\n")
             finally:

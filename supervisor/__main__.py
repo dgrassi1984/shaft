@@ -963,9 +963,11 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("drive", help="an instance's drive.md (what it is for): show it, set --file FILE, or remove it "
                                      "(the default drive applies); --expect-sha from `shaft drive <name>`")
     p.add_argument("name")
-    p.add_argument("action", nargs="?", choices=["set", "remove"])
+    p.add_argument("action", nargs="?", choices=["set", "remove", "proposals", "accept", "reject"])
     p.add_argument("--file")
     p.add_argument("--expect-sha")
+    p.add_argument("id", nargs="?")
+    p.add_argument("--reason")
     p = sub.add_parser("docs", help="an instance's documents (notes/docs/*.md, shown beside the web chat): list them, "
                                     "show PATH, set PATH --file FILE --expect-sha SHA (none for a new one), or "
                                     "rm PATH --expect-sha SHA; its next "
@@ -1058,6 +1060,9 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("consults", help="what each instance spent consulting other models, per model and run, and how "
                        "its consulted cycles fared (docs/plans/PLAN-model-choice.md)")
     p.add_argument("names", nargs="*")
+    p = sub.add_parser("compression", help="offline memory compression assay with held-out recall (#113)")
+    p.add_argument("name")
+    p.add_argument("--since", default="", help="inclusive sleep date: YYYY-MM-DD")
     p = sub.add_parser("metacog", help="how well each instance's confidence tells its met cycles from its missed ones: "
                        "AUROC (clauses apart), bias, resolution, meta-I, by domain, paired v3, claim confusion "
                        "matrix and doubt/first-error alignment (A1, #98)")
@@ -1084,17 +1089,21 @@ def main(argv: list[str]) -> int:
     p.add_argument("name")
     p.add_argument("action", nargs="?", choices=["lift"])
     p = sub.add_parser("experiment", help="kill tests of PLAN-consciousness: cards, attention, commitments, forecast "
-                       "(knob trials), workspace (planted probe), privileged and recognition; --report shows results")
-    p.add_argument("item", choices=["cards", "attention", "commitments", "forecast", "workspace", "privileged", "recognition"])
+                       "(knob trials), workspace, monitors, choice-blindness, privileged and recognition; --report shows results")
+    p.add_argument("item", choices=["cards", "attention", "commitments", "forecast", "workspace", "monitors",
+                                   "choice-blindness", "privileged", "recognition"])
     p.add_argument("name")
-    p.add_argument("--n", type=int, default=6, help="past cycles (knob trials: per trial; otherwise: states, default 6)")
+    p.add_argument("--n", type=int, default=6, help="past cycles (knob trials: per trial; choice-blindness: four "
+                   "presentations per cycle; otherwise: states; default 6)")
     p.add_argument("--k", type=int, default=3, help="independent replays per privileged state (default 3)")
     p.add_argument("--max-usd", type=float, default=5.0, help="privileged/recognition: dollars this run may spend "
                    "(default 5; charged as the operator's, not to the instance's trial budget)")
     p.add_argument("--model", default="", help="replays' model (default: the trial default; workspace: the trial "
-                   "fallback for an instance on the local model)")
+                   "fallback for an instance on the local model; monitors/choice-blindness: cloud fallback)")
     p.add_argument("--dry-run", action="store_true", help="say what would run; replay nothing")
     p.add_argument("--report", action="store_true", help="only print the result so far")
+    p.add_argument("--channel", choices=["base_rate", "surprises", "envelope"],
+                   help="monitors only: intervene on just this channel (default: each separately)")
     p = sub.add_parser("inbox", help="messages instances sent you")
     p.add_argument("--clear", action="store_true", help="archive notes (questions stay until answered)")
     p = sub.add_parser("reply", help="answer an instance's open question (or message it)")
@@ -1215,6 +1224,11 @@ def main(argv: list[str]) -> int:
     p.add_argument("action", nargs="?", help="grant, revoke, grant-write, revoke-write, off — or, after calendars, the account alias")
     p.add_argument("alias", nargs="?", help="the account alias")
     p.add_argument("which", nargs="?", help="primary, a calendar's title, or its ID")
+    p = sub.add_parser("actions", help="action classes, history and approvals (#142)")
+    p.add_argument("name")
+    p.add_argument("action", nargs="?", choices=["restore", "overreach", "approve", "reject"])
+    p.add_argument("target", nargs="?", help="class to restore, or action/proposal id")
+    p.add_argument("--reason", default="", help="reject reason; 'over-reach' demotes the class")
     p = sub.add_parser("trial", help="trials of proposed changes: list, show, run (operator), replay, work")
     tsub = p.add_subparsers(dest="action", required=True)
     q = tsub.add_parser("list", help="every trial, newest last")
@@ -1292,6 +1306,9 @@ def main(argv: list[str]) -> int:
         from . import settings
         return settings.command(args.action, args.items, args.expect, args.expect_unset, args.json, args.from_web)
     if args.cmd == "drive":
+        if args.action in ("proposals", "accept", "reject"):
+            from . import drive_proposals
+            return drive_proposals.command(args.name, args.action, args.id, args.expect_sha, args.reason)
         from . import opconfig
         return opconfig.drive_command(args.name, args.action, args.file, args.expect_sha)
     if args.cmd == "docs":
@@ -1367,6 +1384,31 @@ def main(argv: list[str]) -> int:
             print(f"unknown calendar action {args.action!r}: grant, revoke, grant-write, revoke-write or off", file=sys.stderr)
             return 2
         return cmd_calendar(args.target, args.action, args.alias, args.which)
+    if args.cmd == "actions":
+        from . import calendar_proposals
+        try:
+            if args.action and not args.target:
+                raise ValueError('an action needs a class or id')
+            if args.action == 'restore':
+                actions.restore(args.name, args.target)
+            elif args.action == 'overreach':
+                actions.overreach(args.name, args.target)
+            elif args.action in ('approve', 'reject'):
+                row = next((r for r in calendar_proposals.listing()
+                            if r['id'] == args.target and r['instance'] == args.name), None)
+                if row is None:
+                    raise ValueError('no such proposal for this instance')
+                row = (calendar_proposals.decide(args.target, True) if args.action == 'approve' else
+                       calendar_proposals.reject(args.target, args.reason))
+                print(json.dumps(row, ensure_ascii=False))
+                return 1 if row['state'] == 'failed' else 0
+            state = actions.status(args.name)
+            state['proposals'] = [r for r in calendar_proposals.listing() if r['instance'] == args.name]
+            print(json.dumps(state, ensure_ascii=False, indent=2))
+            return 0
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            return 2
     if args.cmd == "autonomy":
         return autonomy.autonomy(args.action)
     if args.cmd == "status":
@@ -1446,6 +1488,14 @@ def main(argv: list[str]) -> int:
         for name in names:
             print(surprise.disposition_text(name) + "\n")
         return code
+    if args.cmd == "compression":
+        from . import compression
+        instance_root(args.name)
+        try:
+            print(compression.report(args.name, args.since))
+        except (ValueError, mind.MindError) as e:
+            raise SystemExit(str(e))
+        return 0
     if args.cmd in ("metacog", "attention", "commitments", "provenance", "consults"):
         import importlib
         names = args.names or instance_names()
@@ -1489,6 +1539,19 @@ def main(argv: list[str]) -> int:
         from . import experiments, trial
         instance_root(args.name)
         try:
+            if args.channel and args.item != "monitors":
+                raise experiments.ExperimentError("--channel is only for monitors")
+            if args.item in ("monitors", "choice-blindness"):
+                run = experiments.run_monitors if args.item == "monitors" else experiments.run_choice_blindness
+                report = experiments.monitors_report if args.item == "monitors" else experiments.choice_blindness_report
+                kw = {"channel": args.channel} if args.item == "monitors" else {}
+                if not args.report:
+                    r = run(args.name, args.n, model=args.model, dry_run=args.dry_run, **kw)
+                    print(f"{args.name}: {r['states']} state(s), {r['replays']} presentation(s) on {r['model']}"
+                          + (" (dry run: no spend)" if args.dry_run else f", {r['done']} done"))
+                if args.report or not args.dry_run:
+                    print(report(args.name, **kw))
+                return 0
             if args.item in ("privileged", "recognition"):
                 from . import privileged
                 if args.model:

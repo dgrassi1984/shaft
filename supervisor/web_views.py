@@ -1399,19 +1399,21 @@ def calendar_proposals_body(rows: list[dict]) -> Html:
     from .web_actions import button
     def render(row):
         buttons = join(button('calendar-' + verb, label, fields={'id': row['id']})
-                       for verb, label in [('approve', 'Approve'), ('decline', 'Decline')]) if row['state'] == 'pending' else h(
+                       for verb, label in [('approve', 'Approve'), ('decline', 'Decline')] +
+                       ([('overreach', 'Reject as over-reach')] if row.get('action') else [])) if row['state'] == 'pending' else h(
                            '<p>{state}: {outcome}</p>', state=row['state'], outcome=row['outcome'])
-        return h('<article><h3>{instance}</h3><pre class="wrap">{summary}</pre>'
+        return h('<article><h3>{instance}</h3><p>Class: {action_class} · Proposal: {pid} · Action: {aid}</p><pre class="wrap">{summary}</pre>'
                  '<p>Who would be told: {people}</p><p>Expires: {expires}</p>{buttons}</article>',
-                 instance=row['instance'], summary=row['summary'], people=', '.join(row['attendees']) or 'unknown attendees',
+                 instance=row['instance'], action_class=row.get('action_class', 'staged'), pid=row['id'], aid=row.get('action', ''),
+                 summary=row['summary'], people=', '.join(row['attendees']) or 'none recorded',
                  expires=row['expires_at'], buttons=buttons)
     pending = [r for r in rows if r['state'] == 'pending']
     recent = [r for r in rows if r['state'] != 'pending'][:30]
-    body = join([Html('<h2>Pending calendar approvals</h2>'), join(render(r) for r in pending) if pending else
+    body = join([Html('<h2>Pending action approvals</h2>'), join(render(r) for r in pending) if pending else
                  Html('<p>No pending proposals.</p>'), Html('<h2>Recent decisions</h2>'), join(render(r) for r in recent)])
     return body
 
 
 def calendar_proposals_page(rows: list[dict], names: list[str], csrf: str) -> Html:
     body = h('<section data-poll="/fragment/calendar-proposals">{body}</section>', body=calendar_proposals_body(rows))
-    return frame('Calendar approvals', body, names, csrf, current='/calendar/proposals')
+    return frame('Action approvals', body, names, csrf, current='/calendar/proposals')

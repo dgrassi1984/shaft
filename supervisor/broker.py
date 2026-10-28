@@ -712,6 +712,7 @@ class Broker:
         self.google_lock = threading.Lock()
         self.mail_bytes = 0                     # attachment bytes downloaded this run
         self.token = secrets.token_hex(16)
+        self._project_charges = []
         self.calls = 0
         self.counts: dict[str, int] = {}
         self.remembered: dict[str, list] = {}    # original cloud-model turns, resent verbatim
@@ -777,6 +778,14 @@ class Broker:
             def do_POST(self):
                 if not self._authorised():
                     return
+                from . import ledger
+                token = ledger.charges.set(broker._project_charges)
+                try:
+                    return self._post()
+                finally:
+                    ledger.charges.reset(token)
+
+            def _post(self):
                 if self.path.rstrip("/") == "/llm/consult/v1/chat/completions":
                     return self._consult()
                 if self.path.rstrip("/") == "/llm/v1/chat/completions":
@@ -952,6 +961,7 @@ class Broker:
 
     def _call(self, tool: str, args: dict) -> dict:
         started = time.monotonic()
+        self._current_action = None
         self.calls += 1
         self.counts[tool] = self.counts.get(tool, 0) + 1
         if tool == "mail_read" and (str(args.get("message") or 1) != "1" or str(args.get("offset") or 0) != "0"):
@@ -961,6 +971,7 @@ class Broker:
             self.counts["mail_read_pages"] = self.counts.get("mail_read_pages", 0) + 1
         if tool in self.disabled:
             result = {"ok": False, "error": f"{tool} is not available to you (the operator switched it off)"}
+            self._action_denied(tool, args, result['error'])
         elif tool in self.unavailable:
             result = {"ok": False, "error": f"{tool} is not available {self.unavailable[tool]}"}
         elif self.calls > self.max_calls:
@@ -971,8 +982,11 @@ class Broker:
             result = {"ok": False, "error": f"at most {MAIL_CALLS_PER_RUN} mail calls per run"}
         elif tool in CALENDAR_TOOLS and not self.calendar_grants():
             result = {"ok": False, "error": "no calendar granted to you"}
+            if tool in CALENDAR_WRITE_TOOLS:
+                self._action_denied(tool, args, result['error'])
         elif tool in CALENDAR_WRITE_TOOLS and not any(g.get("write") for g in self.calendar_grants()):
             result = {"ok": False, "error": "no calendar granted for writing to you"}
+            self._action_denied(tool, args, result['error'])
         elif tool in CALENDAR_TOOLS and sum(self.counts.get(t, 0) for t in CALENDAR_TOOLS) > CALENDAR_CALLS_PER_RUN:
             result = {"ok": False, "error": f"at most {CALENDAR_CALLS_PER_RUN} calendar calls per run"}
         elif tool == "describe_image" and self.counts.get(tool, 0) > DESCRIBE_CALLS_PER_RUN:
@@ -987,8 +1001,34 @@ class Broker:
         shown = {k: ("[value withheld]" if tool == "secret_set" and k == "value" else v) for k, v in args.items()}
         brief = json.dumps(shown, ensure_ascii=False)[:160]
         status = "ok" if result["ok"] else f"ERROR {result['error'][:200]}"
-        self._log(f"{self.name} {tool} {brief} -> {status} ({(time.monotonic() - started) * 1000:.0f} ms)")
+        action = self._current_action
+        classified = f" class={action['class']} action={action['id']} mode={action['mode']}" if action else ""
+        self._log(f"{self.name} {tool} {brief}{classified} -> {status} ({(time.monotonic() - started) * 1000:.0f} ms)")
         return result
+
+    def _action_route(self, tool, args, *, event=None, address=''):
+        """#142: one class-policy dispatch for operator actions. Calendar calls arrive after their grant/event
+        checks, because a move's recipients come from Google's event, never from instance-supplied arguments."""
+        from . import actions
+        if self.name not in actions.ACTION_INSTANCES or self.as_of or isinstance(self, ReplayBroker):
+            return None
+        action_class = actions.classify(tool, args, event=event, address=address)
+        if action_class is None:
+            return None
+        self._current_action = {'class': action_class, 'id': 'unclaimed', 'mode': 'refused'}
+        action = actions.begin(self.name, tool, action_class, calendar=tool in CALENDAR_WRITE_TOOLS)
+        self._current_action = action
+        if tool in CALENDAR_WRITE_TOOLS:
+            self._calendar_attempt.update(action_class=action_class, action=action['id'])
+        if action['mode'] == 'refused':
+            raise PermissionError(f"{action_class} actions refused after over-reach; "
+                                  f"shaft actions {self.name} restore {action_class} (action {action['id']})")
+        return action
+
+    def _action_denied(self, tool, args, reason):
+        from . import actions
+        if not self.as_of and not isinstance(self, ReplayBroker):
+            self._current_action = actions.refuse(self.name, tool, args, reason)
 
     def _log(self, line: str) -> None:
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1433,6 +1473,11 @@ class Broker:
         mind.require(self.name, self.project)
         return "HEAD", mind.head(self.name, self.project)
 
+    def _run_usd(self):
+        """Charges recorded by this broker's requests; another run's spending never enters (#106)."""
+        values = getattr(self, "_project_charges", None)
+        return sum(values) if values is not None and all(v is not None for v in values) else None
+
     ENVELOPE_TTL_S = 60   # the template asks every step; the ledgers it reads (cloud usage: megabytes) change slowly
 
     def envelope(self) -> dict:
@@ -1443,7 +1488,8 @@ class Broker:
     def _operational_envelope(self, as_of: datetime | None = None) -> dict:
         cached = getattr(self, "_envelope", None)
         if cached and time.monotonic() - cached[0] < self.ENVELOPE_TTL_S:
-            return {**cached[1], "calls_used": self.calls, "calls_max": self.max_calls}
+            return {**cached[1], "calls_used": self.calls, "calls_max": self.max_calls,
+                    "run_usd": self._run_usd()}
         from . import autonomy, cloudllm, coder, consult, metrics, trial
         from .core import log
 
@@ -1466,7 +1512,7 @@ class Broker:
             return {"started": usage["started"], "per_day": trial.TRIALS_PER_DAY,
                     "spent_usd": float(usage["usd"]), "cap_usd": float(trial.DAILY_USD)}
 
-        env = {"calls_used": self.calls, "calls_max": self.max_calls,
+        env = {"calls_used": self.calls, "calls_max": self.max_calls, "run_usd": self._run_usd(),
                 "pushes": field("pushes", lambda: self._push_usage(as_of)),
                 "cloud": field("cloud", lambda: {"spent_usd": float(cloudllm.spent_today(usage_name, **until)),
                                                  "cap_usd": float(cloudllm.daily_cap(self.name))}),
@@ -1979,7 +2025,7 @@ class Broker:
         return self._calendar_write("calendar_move", id, title, start, end, timezone, location, description, attendees)
 
     def _calendar_write(self, tool, target, title, start, end, timezone, location, description, attendees) -> str:
-        from . import calendar as gcal, google
+        from . import actions, calendar as gcal, google
         move = tool == "calendar_move"
         grants = [g for g in self.calendar_grants() if g.get("write")]
         alias, h, eid = (str(target).strip().split("/", 2) + ["", ""])[:3]
@@ -1987,6 +2033,7 @@ class Broker:
                 and gcal.cal_hash(g["calendar"]) == h and gcal.EVENT_RE.fullmatch(eid))] if move else [
                     g for g in grants if target == f"{g['account']}/{g['name']}"]
         if len(hits) != 1:
+            self._action_denied(tool, {'attendees': attendees}, 'calendar/event is not granted for writing')
             raise PermissionError("calendar/event is not granted for writing to you; use a granted calendar or event handle")
         # Validate syntax before token refresh. Instant comparisons for naive times without a named zone must
         # wait for the calendar zone: treating those times as UTC would wrongly refuse some valid intervals.
@@ -2033,12 +2080,10 @@ class Broker:
                     known.add(email.casefold())
                     added.append({"email": email})
             body["attendees"] = existing + added
-        proposal = bool(attendees)
-        if move:
-            try:
-                gcal.direct_only(original, acct.address)
-            except PermissionError:
-                proposal = True
+        proposal = actions.classify(tool, {'attendees': attendees}, event=original, address=acct.address) == 'staged'
+        action = self._action_route(tool, {'attendees': attendees}, event=original, address=acct.address)
+        if action:
+            proposal = action['mode'] == 'staged'
         if proposal:
             return self._calendar_propose(tool, target, grant, original, body, acct.address, eid if move else "")
         self._calendar_attempt["submitted"] = True
@@ -2082,6 +2127,10 @@ class Broker:
         request = {"method": "PATCH" if eid else "POST",
                    "path": gcal._path(grant['calendar'], 'events', *([eid] if eid else [])),
                    "body": body, "etag": original.get("etag"), "sendUpdates": "all"}
+        if action := self._current_action:
+            request.update(action_class=action['class'], action=action['id'])
+            if action['class'] == 'reversible':
+                request['sendUpdates'] = 'none'
         row = calendar_proposals.create(self.name, tool, grant, target, request, summary, people, original)
         self._calendar_attempt.update(submitted=True, proposal=row['id'], before=original or None,
                                       after=body, answer={"proposal": row['id']})
@@ -2099,6 +2148,7 @@ class Broker:
                       and gcal.HASH_RE.fullmatch(h) and gcal.cal_hash(g['calendar']) == h
                       and gcal.EVENT_RE.fullmatch(eid)), None)
         if grant is None:
+            self._action_denied('calendar_respond', {}, 'calendar/event is not granted for writing')
             raise PermissionError("calendar/event is not granted for writing to you")
         acct = self._google_account(alias, google.CALENDAR_EVENTS)
         original = gcal.event(acct, grant['calendar'], eid)
@@ -2111,6 +2161,7 @@ class Broker:
         if len(mine) != 1 or original.get('attendeesOmitted'):
             raise ValueError("the event must include the operator's own attendee and its full attendee list")
         mine[0]['responseStatus'] = statuses[response]
+        self._action_route('calendar_respond', {'id': id, 'response': response}, event=original, address=acct.address)
         return self._calendar_propose("calendar_respond", id, grant, original, {"attendees": attendees}, acct.address, eid)
 
     # -- images (docs/plans/PLAN-vision.md) ----------------------------------------------------------------------------------------

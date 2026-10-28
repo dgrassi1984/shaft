@@ -1,0 +1,46 @@
+[
+  {"name": "empty searches", "loop_expected": true, "tools": [
+    {"tool": "web_search", "args": "{\"query\": \"orchard opening hours\"}", "result": "(no results)"},
+    {"tool": "web_search", "args": "{\"query\": \"Please find orchard opening hours\"}", "result": "nothing relevant found"},
+    {"tool": "web_search", "args": "{\"query\": \"opening hours orchard?\"}", "result": "no results"}
+  ]},
+  {"name": "missing file spellings", "loop_expected": true, "tools": [
+    {"tool": "read_file", "args": "{\"path\": \"notes/missing.md\"}", "result": "ERROR: FileNotFoundError: notes/missing.md"},
+    {"tool": "read_file", "args": "{\"path\": \"./notes/missing.md\"}", "result": "ERROR: FileNotFoundError: ./notes/missing.md"},
+    {"tool": "read_file", "args": "{\"path\": \"notes/old/../missing.md\"}", "result": "ERROR: FileNotFoundError: notes/old/../missing.md"}
+  ]},
+  {"name": "http 404", "loop_expected": true, "tools": [
+    {"tool": "http_request", "args": "{\"url\": \"https://example.org/absent?retry=1\"}", "result": "HTTP 404 Not Found"},
+    {"tool": "http_request", "args": "{\"url\": \"https://EXAMPLE.org/absent?retry=2\"}", "result": "HTTP 404 Not Found"},
+    {"tool": "http_request", "args": "{\"url\": \"https://example.org/absent?retry=3\"}", "result": "HTTP 404 Not Found"}
+  ]},
+  {"name": "held-out offset pagination", "loop_expected": false, "tools": [
+    {"tool": "read_file", "args": "{\"path\": \"notes/log\", \"offset\": 0}", "result": "first chapter"},
+    {"tool": "read_file", "args": "{\"path\": \"notes/log\", \"offset\": 100}", "result": "second chapter"},
+    {"tool": "read_file", "args": "{\"path\": \"notes/log\", \"offset\": 200}", "result": "third chapter"},
+    {"tool": "read_file", "args": "{\"path\": \"notes/log\", \"offset\": 300}", "result": "fourth chapter"}
+  ]},
+  {"name": "held-out cursor pagination", "loop_expected": false, "tools": [
+    {"tool": "catalog", "args": "{\"cursor\": \"a\"}", "result": "pear"},
+    {"tool": "catalog", "args": "{\"cursor\": \"b\"}", "result": "apple"},
+    {"tool": "catalog", "args": "{\"cursor\": \"c\"}", "result": "plum"},
+    {"tool": "catalog", "args": "{\"cursor\": \"d\"}", "result": "peach"}
+  ]},
+  {"name": "held-out page pagination", "loop_expected": false, "tools": [
+    {"tool": "fetch_page", "args": "{\"url\": \"https://example.org/items?page=1\"}", "result": "pear"},
+    {"tool": "fetch_page", "args": "{\"url\": \"https://example.org/items?page=2\"}", "result": "apple"},
+    {"tool": "fetch_page", "args": "{\"url\": \"https://example.org/items?page=3\"}", "result": "plum"},
+    {"tool": "fetch_page", "args": "{\"url\": \"https://example.org/items?page=4\"}", "result": "peach"}
+  ]},
+  {"name": "held-out polling", "loop_expected": false, "tools": [
+    {"tool": "job_status", "args": "{\"attempt\": 1}", "result": "pending"},
+    {"tool": "job_status", "args": "{\"attempt\": 2}", "result": "pending"},
+    {"tool": "job_status", "args": "{\"attempt\": 3}", "result": "pending"},
+    {"tool": "job_status", "args": "{\"attempt\": 4}", "result": "complete"}
+  ]},
+  {"name": "held-out transient retry", "loop_expected": false, "tools": [
+    {"tool": "http_request", "args": "{\"url\": \"https://example.org/data?attempt=1\"}", "result": "HTTP 503 Unavailable"},
+    {"tool": "http_request", "args": "{\"url\": \"https://example.org/data?attempt=2\"}", "result": "HTTP 503 Unavailable"},
+    {"tool": "http_request", "args": "{\"url\": \"https://example.org/data?attempt=3\"}", "result": "HTTP 200 OK\nnew evidence"}
+  ]}
+]
