@@ -17,8 +17,8 @@ from __future__ import annotations
 import os
 import shutil
 
-from . import (agent, base_rate, broker, cards, clock, commitments, forecast, images, memory, pausing, prompts, recovery,
-               surprises, workspace)
+from . import (agent, base_rate, broker, cards, clock, commitments, forecast, images, loopguard, memory, pausing, prompts,
+               recovery, surprises, workspace)
 from .agent import Control
 from .llm import Client
 from .state import State
@@ -277,6 +277,7 @@ def run(cfg, state: State, client: Client) -> str:
             ["confidence"]), confirm, repeatable=True)   # the same number is refused in the declare's reply,
             # accepted on the next: the repeat guard must not block that retry
     toolbox = Toolbox(state.root)
+    toolbox.loop_guard = loopguard.Guard(cfg.LOOP_GUARD, cfg.LOOP_EFFECT_ROUNDS)
     toolbox.commit_source = "cycle" if cfg.COMMITMENTS == "on" else ""
     real_run = toolbox.run
 
@@ -376,6 +377,7 @@ def run(cfg, state: State, client: Client) -> str:
                "ended_by": outcome.ended_by, "steps": outcome.steps, "tools": toolbox.log,
                "completed": completed(toolbox.log, toolbox.plugins),
                "inbox": [n for n, _ in inbox], "curiosity": curiosity, "cards": held.record}
+    episode.update(toolbox.loop_guard.record())
     if outcome.wrapped_up:
         episode["wrapped_up"] = outcome.wrapped_up
     if os.environ.get("SHAFT_RUN_STARTED"):   # the supervisor's start of this run: my consults are booked against it

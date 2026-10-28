@@ -19,7 +19,7 @@ import re
 import sys
 import uuid
 
-from . import agent, clock, images, memory, prompts, recovery
+from . import agent, clock, images, loopguard, memory, prompts, recovery
 from .llm import Client, LLMError
 from .live import archive_inbox
 from .state import State
@@ -297,7 +297,8 @@ def run(cfg, state: State, client: Client, show_thinking: bool = False, input_fn
         state.append_episode({"kind": "talk", "talk_id": talk_id, "role": "assistant",
                               "content": reply.content, "reasoning": reply.reasoning,
                               "tools": toolbox.log[log_start:], "usage": reply.usage,
-                              "attempts": reply.attempts, "turn_messages": len(turn) - start})
+                              "attempts": reply.attempts, "turn_messages": len(turn) - start,
+                              **toolbox.loop_guard.record()})
 
     view.bye(any(m["role"] == "assistant" and m.get("content") for m in history))
 
@@ -385,7 +386,7 @@ def answer(cfg, state: State, client: Client, request: dict) -> None:
         archive_read_inbox(state, toolbox.log[log_start:])
         state.append_episode({"kind": "talk", "talk_id": talk_id, "role": "assistant", "content": reply.content,
                               "reasoning": reply.reasoning, "tools": toolbox.log[log_start:], "usage": reply.usage,
-                              "via": app})
+                              "via": app, **toolbox.loop_guard.record()})
 
 
 def _respond(client: Client, cfg, toolbox: Toolbox, messages: list[dict], view, interjections=None):
@@ -415,6 +416,7 @@ def _respond(client: Client, cfg, toolbox: Toolbox, messages: list[dict], view, 
         "queue_for_next_cycle", "Queue unfinished conversation work for my next live cycle; sends no reply.",
         {"task": {"type": "string"}, "why": {"type": "string"}}), queue)}
     tools = toolbox.specs() + [c.spec for c in controls.values()]
+    toolbox.loop_guard = loopguard.Guard(cfg.LOOP_GUARD, cfg.LOOP_EFFECT_ROUNDS)
 
     def on_progress(processed: int, total: int) -> None:
         if total:
