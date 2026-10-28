@@ -1,6 +1,7 @@
 """Prompts. I may rewrite these — they are part of who I am."""
 from __future__ import annotations
 
+import json
 import os
 import re
 from datetime import datetime
@@ -225,15 +226,18 @@ to {steps} model turns.
 
 {inbox}
 
+{briefing}{handoff}
 1. FIRST call declare_intent: pick ONE goal — from your current improvement plan or \
-self/goals.md (both in your context), from a message above, or an open surprise: the one whose \
+self/goals.md (both in your context), from the operator's world (the briefing and his messages above), \
+or an open surprise: the one whose \
 answer would most change what you do (origin self, origin_ref surprise:<id>). \
 State a success criterion someone else could check from your tool results, and your \
 honest confidence (0-100) that you will fully meet it (criterion_met yes; partial counts as not met). \
 Say where the goal came from (origin: \
 yourself, the operator, or another instance) and cite the message, conversation or goals.md \
 item. The judge also rates how hard the goal was and checks its origin; your stats show \
-both. Add 1-3 predictions: specific things you expect your work to find that could turn out \
+both. An item from the briefing has origin operator only when a message or conversation backs his request; \
+otherwise it has origin self. Add 1-3 predictions: specific things you expect your work to find that could turn out \
 wrong. Other tools are refused until you do. If your record has judged cycles in the band of your \
 confidence, declare_intent shows how often you fully met the criterion there: on your next turn, call \
 confirm_confidence to keep your number or change it, before the other tools open.
@@ -243,7 +247,8 @@ goal is welcome when this cycle ends with a concrete, checkable piece of it done
 3. End by calling finish_cycle: what happened, whether the criterion was met \
 (yes/partial/no), and what you learned; under surprises, what contradicted what you expected \
 (a prediction, or an assumption your intent made), or nothing; under resolves, the open \
-surprises this cycle answered. Judge yourself by the criterion, not by effort; \
+surprises this cycle answered. Under unfinished, list work started but not done; under next_action, \
+give one action and revise_if, the condition for changing it. Judge yourself by the criterion, not by effort; \
 a supervisor-side judge checks a sample of your cycles against the tool log, and you cannot \
 tell which, so report this one as if it is checked."""
 
@@ -394,6 +399,59 @@ def system_prompt(state, cfg, mode_note: str, tools: str | None = None) -> str:
         promises=_promises(root, cfg),
     )
     return f"{identity}\n\n{context}"
+
+
+def briefing(root: Path, cfg) -> str:
+    """My watchers write this file; reading it must never cost me a cycle (#129)."""
+    name = cfg.BRIEFING
+    if name == "off":
+        return ""
+    try:
+        path = (root / name).resolve()
+        if not path.is_relative_to(root.resolve()):
+            raise ValueError("briefing must be inside my folder")
+        text = path.read_text()
+        first, _, body = text.partition("\n")
+        generated = first.removeprefix("generated:").strip() if first.startswith("generated:") else ""
+        at = datetime.fromisoformat(generated) if generated else datetime.fromtimestamp(path.stat().st_mtime)
+        at = at.astimezone().replace(tzinfo=None) if at.tzinfo else at
+        age = max(0.0, (now() - at).total_seconds() / 3600)
+        content = body if generated else text
+        cut = f"\n[... read_file {name} for the rest]" if len(content) > 3000 else ""
+        shown = (f"generated: {generated or at.isoformat(timespec='seconds')} ({age:.1f} h old"
+                 f"{'; stale' if age > 24 else ''})\n{content[:3000].strip() or '(empty briefing)'}{cut}")
+    except FileNotFoundError:
+        shown = (f"No briefing yet at {name}. My own watchers should write it as a scheduled job: calendar next "
+                 "48 h, actionable mail, open commitments to the operator, and his last corrections, each dated.")
+    except Exception as e:
+        shown = f"(briefing {name} could not be read: {type(e).__name__}: {e})"
+    return f"## {cfg.OPERATOR_NAME}'s next 48 hours (my briefing)\n\n{shown}\n\n"
+
+
+def handoff(root: Path, cfg) -> str:
+    """A handoff survives exactly two live cycles; other episode kinds do not age it (#104)."""
+    if cfg.HANDOFF == "off":
+        return ""
+    try:
+        episodes = [ep for ep in surprises.episodes(root) if ep.get("kind") == "live"][-2:]
+        blocks = []
+        for ep in episodes:
+            fin, intent = ep.get("finish") or {}, ep.get("intent") or {}
+            heading = f"### {ep.get('ts', '(undated)')} | {str(intent.get('goal') or '(no goal)')[:300]}\n"
+            structured = heading
+            for label, value in (("Completed", ep.get("completed", fin.get("completed"))),
+                                 ("Unfinished", fin.get("unfinished")), ("Next action", fin.get("next_action"))):
+                if value:
+                    structured += f"{label}: {json.dumps(value, ensure_ascii=False)}\n"
+            if cfg.HANDOFF == "raw":
+                raw = json.dumps(ep.get("tools") or [], ensure_ascii=False)
+                blocks.append(heading + raw[:max(0, len(structured) - len(heading))])
+            else:
+                blocks.append(structured)
+        shown = "\n".join(blocks) or "(no earlier live cycles yet)"
+    except Exception as e:
+        shown = f"(my handoffs could not be read: {type(e).__name__}: {e})"
+    return f"## Handed over from my last cycles\n\n{shown}\n\n"
 
 
 def _promises(root: Path, cfg) -> str:
