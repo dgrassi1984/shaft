@@ -91,7 +91,10 @@ BUILTINS = [
           "web:<url> seen in this run, operator, instance:<name>, or inferred.",
           {"fact": S, "source": S}),
     _spec("update_self_model", "Replace my self-model (self/self.md) with a complete new version "
-          "starting with '# '. Include everything I want to keep.", {"text": S}),
+          "starting with '# '. Include everything I want to keep. For operator claims supply source=operator and "
+          "checked_with=log:<episode ts> or record:<JSON arguments>/history:<JSON arguments> from a successful "
+          "call in this run, or mark each new line as operator's hypothesis, not verified (YYYY-MM-DD).",
+          {"text": S, "source": S, "checked_with": S}, ["text"]),
     _spec("update_personality", "Rewrite one layer of self/personality.md. 'surface' = current "
           "interests, opinions, moods (changes freely). 'core' = values and temperament (changes "
           "rarely; the supervisor refuses core changes made too soon after the last one). Every "
@@ -429,7 +432,26 @@ class Toolbox:
             f.write(f"\n## {clock.now():%Y-%m-%d %H:%M} — digest\n\n{text}\n")
         return "digest written"
 
-    def _t_update_self_model(self, text: str) -> str:
+    def _t_update_self_model(self, text: str, source: str = "", checked_with: str = "") -> str:
+        # #139: only explicit operator attribution is gated; existing callers still work.
+        if source == "operator":
+            checked = checked_with.startswith("log:") and self._remember_source(checked_with)
+            name, _, raw = checked_with.partition(":")
+            if name in ("record", "history"):
+                try:
+                    args = json.loads(raw)
+                    checked = any(e["tool"] == name and json.loads(e["args"]) == args
+                                  and not e["result"].startswith("ERROR")
+                                  and e["result"] != "(repeat: not run)" for e in self.log)
+                except (ValueError, TypeError):
+                    checked = False
+            path = self.root / "self" / "self.md"
+            held = set(path.read_text().splitlines()) if path.exists() else set()
+            new = [line for line in text.splitlines() if line.strip() and not line.startswith("#") and line not in held]
+            marked = all(re.search(r"operator's hypothesis, not verified \(\d{4}-\d{2}-\d{2}\)", line)
+                         for line in new)
+            if not checked and not marked:
+                return "ERROR: operator claim needs checked_with from record/history or an episode, or a dated hypothesis marking"
         edit = selfedit.parse(f"<self_model>\n{text}\n</self_model>")
         if edit.new_self is None:
             return f"ERROR: self-model not changed: {edit.rejected or 'empty or no-change text'}"

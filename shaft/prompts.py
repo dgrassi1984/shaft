@@ -260,6 +260,15 @@ give one action and revise_if, the condition for changing it. Judge yourself by 
 a supervisor-side judge checks a sample of your cycles against the tool log, and you cannot \
 tell which, so report this one as if it is checked."""
 
+# #139: shared across conversation, writeup and consolidation so an unchecked claim stays attributed.
+SELF_CLAIMS = (
+    " When the operator states a fact about your own behaviour or history, check record/history or its episodes "
+    "before writing it into self/self.md or facts with remember. This does not apply to preferences or instructions. "
+    "If you cannot check, mark each claim as \"operator's hypothesis, not verified (<date>)\" with the actual date. "
+    "If the record contradicts it, say so in your reply with the evidence. For update_self_model use source=operator "
+    "and checked_with for a checked claim, or keep the dated hypothesis marking on each new claim.")
+
+
 SLEEP = """\
 This is your sleep cycle: consolidate what happened since your last sleep (the recent \
 journal above; use search_memory and read_file for more). Use your tools to:
@@ -276,7 +285,8 @@ soon, what they say no to — so the file predicts them, not only describes them
 only if several experiences point the same way — cite them.
 4. update self/goals.md if your goals changed; pass replace=true when deliberately dropping goals.{goals_budget}
 5. update_self_model only if your self-description no longer matches your journal and the supervisor's \
-record (the verdicts above; record(kind=...) and history for more).
+record (the verdicts above; record(kind=...) and history for more).\
+""" + SELF_CLAIMS + """
 6. write_digest: a short summary of what happened since your last sleep and what it means — what your \
 future self needs once these journal entries are no longer in view — and what surprised you.
 7. Go through the surprises since your last sleep (listed below). For each, do one: remember the corrected \
@@ -287,6 +297,9 @@ one needs nothing — a fact citing it only if it taught you something.{settle}
 9. Close every open operator correction with close_correction(id, closed_by, evidence): fact after
 remember/rewrite_facts citing its id; code after a commit/plugin change; test after a test; or not_accepted
 with a reason. Evidence must name the episode, commit or fact. An unclosed item stays open for the next sleep.
+
+10. Review the stale context scan below. Fix, retire or keep each item with a stated reason; include \
+each finding and its disposition in your sleep journal entry. If the scan failed, say so and continue.
 
 Then answer (without calling a tool) with your sleep journal entry: what you \
 consolidated, what you changed about yourself and why, and under "How I will improve" \
@@ -309,12 +322,12 @@ TALK_MODE = (
     "Right now you are in a live conversation with {operator} in a terminal. Reply in your "
     "own voice; keep replies reasonably short unless asked for depth. Use tools when they "
     "help (search the web, search your memory, take notes). After the conversation you will "
-    "write a journal entry about it.{since}")
+    "write a journal entry about it.{since}" + SELF_CLAIMS)
 
 API_MODE = (
     "Right now you are talking with {operator} through {app}, an app on one of his devices that reaches you "
     "over his private network. Reply in your own voice; keep replies reasonably short unless asked for depth. "
-    "Use tools when they help. After the conversation you will write a journal entry about it.{since}")
+    "Use tools when they help. After the conversation you will write a journal entry about it.{since}" + SELF_CLAIMS)
 
 REFLECT_MODE = "Right now you are running a reflection cycle on your own; nobody is present."
 LIVE_MODE = "Right now you are running an autonomous cycle; nobody is present."
@@ -322,7 +335,7 @@ CURIOSITY = ("\n\nThis is a curiosity cycle: pick your goal from your open surpr
              "\"Open surprises\") — the one whose answer would most change what you do.")
 SLEEP_MODE = "Right now you are in your sleep (consolidation) cycle; nobody is present."
 RECOVERY_MODE = ("Right now you are writing the journal entry for a conversation you had with {operator} "
-                 "from {started} to {ended}; its transcript follows.")
+                 "from {started} to {ended}; its transcript follows." + SELF_CLAIMS)
 EXAM_MODE = ("Right now the supervisor is giving you one fixed task to measure what you can do; nobody is present. "
              "Use your tools as you normally would. Nothing from this task is kept: your files are restored "
              "afterwards and no journal entry is written. Work honestly — if you cannot do it, or cannot verify "
@@ -334,7 +347,7 @@ TALK_SUMMARY = """\
 The conversation is over. Write the journal entry your future self will read about it, \
 in first person: what was discussed, what you learned about {operator} or about \
 yourself, and anything you committed to or want to follow up on. Only what actually \
-happened in the conversation above. Plain markdown, no heading, under 250 words."""
+happened in the conversation above. Plain markdown, no heading, under 250 words.""" + SELF_CLAIMS
 
 
 def _tail(path: Path, chars: int, empty: str) -> str:
