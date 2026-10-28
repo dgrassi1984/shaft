@@ -355,6 +355,57 @@ def paused(name: str) -> bool:
     return (SUP_DIR / "paused").exists() or (SUP_DIR / f"paused-{name}").exists()
 
 
+def set_paused(name: str | None, enabled: bool, *, reason: str = "the operator") -> None:
+    """Set or lift a pause flag (`.supervisor/paused-<name>`, or `paused` for all), then tell each instance it touches
+    in a journal note: the scheduler leaves a paused instance out without a word, and thelos took an operator pause
+    (2026-10-25 12:42 to 26 14:36) for the scheduler silently skipping its wakes. Re-pausing writes nothing; notes
+    are best effort and never stop the pause, resume, kill or delete that called this."""
+    flag = SUP_DIR / (f"paused-{name}" if name else "paused")
+    now = datetime.now()
+    SUP_DIR.mkdir(exist_ok=True)
+    if enabled:
+        try:
+            with flag.open("x") as f:
+                f.write(now.isoformat())
+        except FileExistsError:
+            return
+        title = f"Supervisor: paused by {reason}"
+        body = f"{'Global pause' if name is None else 'Pause'} started at {now:%Y-%m-%d %H:%M} by {reason}. "
+        body += "No autonomous cycle, nightly sleep, job or battery starts while paused. Conversations still run."
+    else:
+        try:
+            started = datetime.fromisoformat(flag.read_text().strip())
+            if started.tzinfo is not None:      # a stamp written with its zone: as local time
+                started = started.astimezone().replace(tzinfo=None)
+            minutes = max(0, round((now - started).total_seconds() / 60))
+            duration = (f"The pause lasted {minutes // 60} h {minutes % 60} min (since {started:%Y-%m-%d %H:%M})."
+                        if minutes >= 60 else f"The pause lasted {minutes} min (since {started:%Y-%m-%d %H:%M}).")
+        except (OSError, UnicodeError, ValueError):
+            duration = "The pause duration is unknown because its stored start time could not be read."
+        try:
+            flag.unlink()
+        except FileNotFoundError:
+            return
+        title = f"Supervisor: resumed by {reason}"
+        body = f"{'Global pause' if name is None else 'Pause'} ended at {now:%Y-%m-%d %H:%M}. {duration}"
+    for affected in ([name] if name else instance_names()):
+        try:
+            root = INSTANCES / affected
+            if not root.is_dir():       # delete also clears the flag after removing the instance
+                continue
+            note = body
+            if not enabled:
+                if name is None and (SUP_DIR / f"paused-{affected}").exists():
+                    note += " The global pause ended, but this instance is still individually paused."
+                elif paused(affected):
+                    note += " This instance is still paused by the global pause."
+                else:
+                    note += " Autonomous starts are allowed again."
+            journal_note(root, title, note)
+        except Exception as e:
+            log(f"{affected}: journal note {title!r} NOT written: {e}")
+
+
 def update_queued(name: str) -> str | None:
     """When a `shaft update` that found the instance busy was queued, else None. The scheduler runs it once the
     instance is idle, before any wake (autonomy.serve)."""
