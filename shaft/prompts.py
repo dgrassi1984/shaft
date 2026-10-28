@@ -7,7 +7,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from . import clock, commitments, corrections, personality, projects, surprises
+from . import clock, commitments, corrections, personality, projects, surprises, x_probes
 
 
 def now() -> datetime:
@@ -467,7 +467,7 @@ def system_prompt(state, cfg, mode_note: str, tools: str | None = None) -> str:
         projects=projects.block(root, now()),
         corrections=corrections.block(root, now()),
     )
-    return f"{identity}\n\n{context}"
+    return x_probes.context(root, f"{identity}\n\n{context}")
 
 
 def briefing(root: Path, cfg) -> str:

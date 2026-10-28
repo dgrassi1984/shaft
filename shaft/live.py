@@ -18,7 +18,7 @@ import os
 import shutil
 
 from . import (agent, base_rate, broker, cards, clock, commitments, forecast, images, loopguard, memory, pausing, projects,
-               prompts, recovery, surprises, workspace)
+               prompts, recovery, surprises, workspace, x_probes)
 from .agent import Control
 from .llm import Client
 from .state import State
@@ -337,8 +337,7 @@ def run(cfg, state: State, client: Client) -> str:
                            "The supervisor multiplies their probabilities, assuming independence. No confirm step or base rate is shown.",
                 "noconfirm": "Declare confidence 0-100. No confirm step or base rate is shown."}[mode]
             + (prompts.CURIOSITY if curiosity["drawn"] else "")
-            + "\n\n## My operational envelope (from the supervisor, at the start of this cycle)\n\n"
-            + prompts.envelope_text(broker.envelope(), agent.time_left())
+            + x_probes.envelope(state.root, broker.envelope(), agent.time_left())
             + focus, state.root, listed_in=inbox_text(inbox))},
     ]
 
