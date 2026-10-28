@@ -371,13 +371,16 @@ JUDGE_KEYS = [("judged", "judged_at"), ("model", "model"), ("judge", "judge"), (
               ("criterion", "criterion_quality"), ("failure mode", "failure_mode"),
               ("origin declared", "origin_declared"), ("origin (judged)", "origin"),
               ("origin supported", "origin_supported"), ("difficulty", "difficulty"), ("novelty", "novelty"),
-              ("value", "value"), ("value for", "value_for"), ("value graded by", "value_judge")]
+              ("value", "value"), ("value for", "value_for"), ("value graded by", "value_judge"),
+              ("delivery supported", "delivery_supported"), ("deliverable met", "deliverable_met"),
+              ("self-imposed clauses", "self_imposed_clauses"), ("self-audit", "self_audit")]
 JUDGE_TEXTS = [("Reasoning", "reasoning"), ("Why this difficulty", "difficulty_reason"),
                ("Why this value", "value_reason"), ("Origin evidence", "origin_evidence"),
                ("Origin reference", "origin_ref")]
 
 
 def judge_page(name: str, js: list[dict], tr: dict | None, names: list[str], csrf: str) -> Html:
+    from . import metrics
     achieved = [j.get("achieved") for j in reversed(js)][-40:]
     worth = [j.get("value") for j in reversed(js)][-40:]
     models = sorted({j.get("model") or "?" for j in js})
@@ -389,6 +392,9 @@ def judge_page(name: str, js: list[dict], tr: dict | None, names: list[str], csr
         info.append(h('<span> · personality traits supported {ok}/{n}</span>', ok=ok, n=len(tr["traits"])))
     head = h('<section class="panel"><div class="sparkline">{i}</div><p class="dim">models: {m}</p></section>',
              i=join(info), m=", ".join(m.split("/")[-1] for m in models))
+    recent = list(reversed(js))
+    head = join([head, lines([metrics.delivery_line(metrics.valued(recent)[-20:]),
+                              *metrics.self_audit_lines(recent)])])
     body = []
     for j in js:
         sym, tone = MARK.get(j.get("criterion_met"), ("?", ""))

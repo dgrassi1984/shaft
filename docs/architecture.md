@@ -57,6 +57,23 @@ notes/        its own work
 
 ## Measuring improvement and autonomy
 
+Before a live cycle calls `declare_intent`, its prompt shows the inbox, the operator briefing (`BRIEFING`) and
+the handoff (`HANDOFF`). The briefing is a local file written by the instance's own scheduled watchers, with no
+mail or calendar call during prompt construction. The operator's world is a goal source beside the improvement
+plan and goals.md. A briefing item has origin `operator` only when a message or conversation backs the request;
+otherwise it has origin `self`. The judge still checks the cited origin.
+
+`finish_cycle` accepts optional `unfinished` (an array of strings) and `next_action` (`{action, revise_if}`).
+They are stored in the episode's `finish` record. The episode's top-level `completed` array comes from successful,
+state-changing tool-log calls, never from `what_happened`. The classification is kept in template `shaft/tools.py`.
+Reads, searches, controls, errors, held calls and repeat refusals are excluded. Plugins and shell commands count
+as opaque invocations, without interpreting their output as evidence of a specific write or commit. HTTP calls
+count when their method can change state or they save a response; `history` counts when it restores a file.
+At most eight calls are kept, in call order, as `tool: args`, with argument values cut at 80 characters and each
+summary cut at 240. The prompt shows each cycle's date and goal.
+Its handoff survives the next two live cycles only. Old episodes show the fields they have, and a handoff read
+error renders a line. See [template knobs](configuration.md#instance-configenv) for the display switches.
+
 An instance can meet its own success criteria by choosing undemanding goals. The judge therefore also rates **difficulty** (1–5, a fixed scale, from
 what the tool log shows the work required), **novelty** (1–5, against its earlier goals) and **origin**:
 who chose the goal: itself, the operator, or another instance. The judge uses the messages
@@ -64,6 +81,38 @@ and conversations the supervisor collects, checked against what the instance dec
 `self/stats.md` is **achieved difficulty** (success × difficulty, 0–5 per cycle); probation compares it
 before and after a self-change. Cycles judged before the ratings existed are rated with
 `shaft judge backfill` (verdicts unchanged).
+
+Judges grade effectiveness first. `declare_intent` takes a checkable `success_criterion`, limited by
+`CRITERION_CHARS` (default 600), and refuses longer criteria with their length and limit.
+The LIVE prompt allows at most one cycle in five on the instance's own records or checking tools.
+`finish_cycle` requires `delivered_via`: `message`, `mail`, `notion`, `web_document` or `none`.
+It only records the report; delivery is a separate earlier tool call. Use `none` for journal or ordinary notes.
+
+Fresh judgments add these fields alongside the existing verdict, rating, value and surprise fields:
+
+| Field | Values | Meaning |
+|---|---|---|
+| `delivery_supported` | `yes`, `no`, `na` | A successful call on the claimed channel carried this cycle's result to the operator; `no` means a failed claim, never a bonus; `na` means no channel or `none`. |
+| `deliverable_met` | `yes`, `partial`, `no` | The deliverable itself was produced and correct, apart from self-imposed process clauses. |
+| `self_imposed_clauses` | `met`, `partial`, `not_met`, `none` | Whether clauses that only check or document the instance's own process or records were met. |
+| `self_audit` | boolean | The cycle's main work checked, audited or kept books about its own records, verdicts, claims or checking tools. |
+
+`criterion_met` still grades the whole criterion. Sleep receives these fields through `record(kind="judgments")`;
+a partial/no with `deliverable_met=yes` is not a reason to add a rung to the improvement plan.
+Both judges and the surprise control request the new fields. Ordinary backfill still asks only for missing
+ratings and value fields; old verdicts do not become incomplete because these fields are absent.
+
+Operator-valued cycles split into delivered (`delivery_supported=yes`), filed (`no` or `na`), and unknown
+(field absent or null). `self/stats.md`, `shaft stats`, status, review and the judge panels show the split.
+The value section uses its existing model-specific last-20 window; status and panels use the last 20 valued
+cycles; review uses its requested time window. Self-audit figures use the last 20 judged cycles, report
+unknown rows separately, and give true/known counts since the field existed. They also count non-yes verdicts
+whose deliverable was met. Old and rule-only rows with no answer stay unknown.
+
+For every instance, `value_for=own_capability` or `own_record` caps at 3 unless the same cycle's log shows that
+work used in something delivered to the operator. `value_reason` states when the cap applies; the operator-facing
+scale stays unchanged. `shaft judge value-regrade` re-asks only value fields on selected historical cycles and
+prints a comparison without changing stored verdicts. See [CLI](cli.md).
 
 Calibration v2 measures P(criterion met = yes), identified by `confidence_of="criterion_met=yes"`.
 Its Brier score uses yes=1 and partial/no=0. Older v1 confidence asked for "probability of success" and
