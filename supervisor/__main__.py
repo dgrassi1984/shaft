@@ -1051,6 +1051,9 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("consults", help="what each instance spent consulting other models, per model and run, and how "
                        "its consulted cycles fared (docs/plans/PLAN-model-choice.md)")
     p.add_argument("names", nargs="*")
+    p = sub.add_parser("compression", help="offline memory compression assay with held-out recall (#113)")
+    p.add_argument("name")
+    p.add_argument("--since", default="", help="inclusive sleep date: YYYY-MM-DD")
     p = sub.add_parser("metacog", help="how well each instance's confidence tells its met cycles from its missed ones: "
                        "AUROC, bias, resolution, meta-I, by domain, and the paired v3 test (A1)")
     p.add_argument("names", nargs="*")
@@ -1431,6 +1434,14 @@ def main(argv: list[str]) -> int:
         for name in names:
             print(surprise.disposition_text(name) + "\n")
         return code
+    if args.cmd == "compression":
+        from . import compression
+        instance_root(args.name)
+        try:
+            print(compression.report(args.name, args.since))
+        except (ValueError, mind.MindError) as e:
+            raise SystemExit(str(e))
+        return 0
     if args.cmd in ("metacog", "attention", "commitments", "provenance", "consults"):
         import importlib
         names = args.names or instance_names()
