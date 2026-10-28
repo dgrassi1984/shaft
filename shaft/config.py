@@ -32,6 +32,7 @@ FIELDS: dict[str, tuple[type, object]] = {
     "MAX_STEPS_SLEEP": (int, 30),
     "MAX_STEPS_TALK": (int, 0),        # 0 = no limit (conversations)
     "CONTEXT_JOURNAL_CHARS": (int, 16000),
+    "CRITERION_CHARS": (int, 600),
     "GOALS_CHARS": (int, 12000),       # how much of my goals I carry into every prompt
     "BRIEFING": (str, "notes/briefing.md"),   # my watchers' view of the operator's next 48 hours; off disables
     "HANDOFF": (str, "on"),           # my last two live cycles: structured, raw tool log, or off

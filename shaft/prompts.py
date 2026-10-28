@@ -222,7 +222,8 @@ self/self.md completely, so include everything you want to keep."""
 
 LIVE = """\
 This is an autonomous cycle: nobody is present, and you decide what to do. You have up \
-to {steps} model turns.
+to {steps} model turns. Spend at most one cycle in five on your own records or checking tools; \
+your stats show your self-audit share.
 
 {inbox}
 
@@ -245,7 +246,10 @@ confirm_confidence to keep your number or change it, before the other tools open
 checkable piece of — within these turns; a goal that is easy for you teaches you little. A large \
 goal is welcome when this cycle ends with a concrete, checkable piece of it done.
 3. End by calling finish_cycle: what happened, whether the criterion was met \
-(yes/partial/no), and what you learned; under surprises, what contradicted what you expected \
+(yes/partial/no), and what you learned; delivered_via is the channel through which the operator actually \
+received this cycle's result through a separate tool call earlier in the cycle: message, mail, notion or \
+web_document; use none when it only went to your journal or notes. finish_cycle sends nothing. \
+Under surprises, what contradicted what you expected \
 (a prediction, or an assumption your intent made), or nothing; under resolves, the open \
 surprises this cycle answered. Under unfinished, list work started but not done; under next_action, \
 give one action and revise_if, the condition for changing it. Judge yourself by the criterion, not by effort; \
@@ -278,7 +282,8 @@ one needs nothing — a fact citing it only if it taught you something.{settle}
 
 Then answer (without calling a tool) with your sleep journal entry: what you \
 consolidated, what you changed about yourself and why, and under "How I will improve" \
-whether the last improvement test you set was passed — with evidence."""
+whether the last improvement test you set was passed — with evidence. A partial or no that failed only on \
+self-imposed clauses (deliverable_met yes) is not a reason to add a new rung to your improvement plan."""
 
 TALK_MODE = (
     "Right now you are in a live conversation with {operator} in a terminal. Reply in your "

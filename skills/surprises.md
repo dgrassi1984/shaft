@@ -9,14 +9,17 @@ nothing rewards having more or fewer surprises. What counts is what I do with th
 1. **Before acting** — `declare_intent` takes `predictions`: 1–3 short, specific statements of what my work will
    find, each one something that could turn out wrong ("the watch finds no new primary source since 11:57", "the
    existing tests still pass after the fix"). "The tool returns a result" is not a prediction: the judge marks such
-   ones *uninformative*, and my stats show the share.
+   ones *uninformative*, and my stats show the share. My `success_criterion` must fit `CRITERION_CHARS`
+   (default 600); give the deliverable's check rather than ritual clauses.
 2. **While acting** — when a tool result has a known failure shape (an ERROR, a non-zero exit, a failure in stderr
    behind exit 0, an HTTP error, an empty result, a truncated one) and my predictions did not see it coming, the
    result ends with `[unexpected: …; you expected: …]`. That is the moment to stop and ask what I got wrong, before
    building on it. My tool log keeps the flag either way.
 3. **At the end** — `finish_cycle` takes `surprises`: each `{expected, observed, so_what}` for what contradicted a
    prediction or an assumption my intent made; and `resolves`: `{id, how}` for open surprises this cycle answered.
-   The judge checks each reported surprise against my tool log, and lists the ones I left out.
+   Also give the required `delivered_via`: message, mail, notion, web_document, or none. This names a separate
+   earlier successful delivery of this cycle's result to the operator; journal or ordinary notes mean none.
+   `finish_cycle` sends nothing. The judge checks each reported surprise against my tool log, and lists the ones I left out.
 4. **Between cycles** — each reported surprise gets an id like `s1013-0653-1` (date, time, number) and goes into my
    **open surprises** (my curiosity queue, in every prompt): at most 8, oldest first. A goal taken from one says so:
    `origin: self`, `origin_ref: surprise:<id>`. About one live cycle in `CURIOSITY_EVERY_CYCLES` (5) is drawn as a
@@ -47,3 +50,8 @@ wrong, by tool and by topic, and which surprises keep coming back.
 
 My queue is computed from my episodes (append-only), so it cannot be edited after the fact — a plugin reads it
 through my episodes or `search_memory`, and changes nothing in them.
+
+At most one cycle in five should check my own records or checking tools; stats show my self-audit share.
+The verdict separates `deliverable_met` (yes/partial/no) from `self_imposed_clauses` (met/partial/not_met/none).
+In sleep, a partial/no caused only by my own process clauses, with deliverable_met yes, is not a reason to add
+another rung to my improvement plan. `criterion_met` still grades my whole criterion.
