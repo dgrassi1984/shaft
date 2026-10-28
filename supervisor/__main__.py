@@ -26,7 +26,7 @@ from pathlib import Path
 from . import actions, autonomy, evolution, finetune, gate, messages, metrics, mind, runner, surprise, version
 from .core import (DEFAULT_INSTANCE, HOME, INSTANCES, MIND_PATHS, add_all_but_mind, NAME_RE, PROJECT, SUP_DIR, TEMPLATE, commit_state,
                    git, git_wt, instance_config, instance_names, instance_root, journal_entries, journal_note, log, paused,
-                   safe_mkdir, safe_read, safe_write, set_update_queued, update_queued)
+                   safe_mkdir, safe_read, safe_write, set_paused, set_update_queued, update_queued)
 from .runner import (Busy, busy_with, is_busy, model_server, request_yield, run_agent, run_lock, sharing_model,
                      spawn_recover)
 
@@ -1500,12 +1500,7 @@ def main(argv: list[str]) -> int:
     if args.cmd in ("pause", "resume"):
         if args.name:
             instance_root(args.name)
-        flag = SUP_DIR / (f"paused-{args.name}" if args.name else "paused")
-        SUP_DIR.mkdir(exist_ok=True)
-        if args.cmd == "pause":
-            flag.write_text(datetime.now().isoformat())
-        else:
-            flag.unlink(missing_ok=True)
+        set_paused(args.name, args.cmd == "pause")
         log(f"{args.cmd} {args.name or 'all'} by operator")
         print(f"{args.cmd}d {args.name or 'all instances'}.")
         return 0

@@ -27,7 +27,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from .core import INSTANCES, NAME_RE, PROJECT, SUP_DIR, git, log
+from .core import INSTANCES, NAME_RE, PROJECT, SUP_DIR, git, log, set_paused
 
 ARCHIVES = "deleted"
 SKIP_IN_FOLDER = {".venv", ".uv", ".tmp", "__pycache__"}   # rebuilt on demand (pyenv.py) or scratch
@@ -396,9 +396,7 @@ def delete(name: str, *, keep_archive: bool = True, say=print) -> int:
         raise Refused(f"no instance named {name!r}, and nothing of one left")
     if left := kill.running(name):
         raise Refused(f"{name} is busy ({'; '.join(left)}): shaft kill {name} first")
-    paused = SUP_DIR / f"paused-{name}"
-    SUP_DIR.mkdir(exist_ok=True)
-    paused.write_text(datetime.now().isoformat())   # no wake, sleep, job, battery or replay starts meanwhile
+    set_paused(name, True, reason="a delete")
     try:
         with run_lock(name, wait=False, kind="delete"):   # nor a reply or a cycle started by hand
             found = find(name)                              # as it is now, under the lock
@@ -420,8 +418,8 @@ def delete(name: str, *, keep_archive: bool = True, say=print) -> int:
                 shutil.rmtree(found.mind)
     except Busy:
         raise Refused(f"{name} was just taken by a run: shaft kill {name} first") from None
-    for p in (SUP_DIR / "locks" / f"{name}.lock", paused):
-        p.unlink(missing_ok=True)
+    (SUP_DIR / "locks" / f"{name}.lock").unlink(missing_ok=True)
+    set_paused(name, False, reason="a delete")
     gone = [p for p in own_files(name) if p.exists()] + ([INSTANCES / name] if (INSTANCES / name).exists() else [])
     if gone or mind.exists(name):
         raise RuntimeError(f"{name}: still there after the delete: {', '.join(map(str, gone or [mind.store(name)]))}")
