@@ -69,6 +69,7 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_BATTERY_CONTROL_REF` | `template` | the git branch a battery control instance is made from | [battery.py](../supervisor/battery.py) |
 | `SHAFT_BATTERY_RECALL_MIN_AGE_H` | `48` | hours old a journal entry must be to make a battery recall item | [battery.py](../supervisor/battery.py) |
 | `SHAFT_OPERATOR_PER_DAY` | `0` | messages per day one instance may send the operator (0: no limit) | [broker.py](../supervisor/broker.py) |
+| `SHAFT_PUSH_BUDGET` | `6` | measured operator pushes per day (0: not shown); never blocks delivery | [pushes.py](../supervisor/pushes.py) |
 | `SHAFT_DESCRIBE_MODEL` | `claude-haiku-5-5` | the model describe_image uses for an instance whose own model cannot see images | [broker.py](../supervisor/broker.py) |
 | `SHAFT_CLOUD_MODELS` | `claude-haiku-5-5,claude-opus-5-5,openrouter/xiaomi/mimo-v2.6-pro` | the cloud models an instance may run on (through the broker) | [cloudllm.py](../supervisor/cloudllm.py) |
 | `SHAFT_OPENROUTER_PROVIDER` | `{"only": ["novita", "deepinfra"], "order": ["novita", "deepinfra"], "allow_fallbacks": false, "data_collection": "deny", "zdr": true, "require_parameters": true}` | OpenRouter's provider routing for every openrouter/ call (JSON): which providers, and the data policy | [cloudllm.py](../supervisor/cloudllm.py) |
@@ -107,6 +108,7 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_MODEL_TEMP` | `0.6` | SHAFT's own model's sampling temperature | [localmodel.py](../supervisor/localmodel.py) |
 | `SHAFT_PROMPT_CACHE_GB` | `8` | gigabytes of prompt cache SHAFT's own model server keeps | [localmodel.py](../supervisor/localmodel.py) |
 | `SHAFT_PROBATION_CYCLES` | `6` | judged cycles a kept self-change stays on probation (reverted on a clear drop) | [metrics.py](../supervisor/metrics.py) |
+| `SHAFT_CORRECTION_ALERT_CYCLES` | `6` | alert when an operator correction remains open for more than this many live cycles; 0 disables | [panel.py](../supervisor/panel.py) |
 | `SHAFT_JUDGE_ALERT_USD` | `3` | judge spend per day that raises an alert (the judge has no cap) | [panel.py](../supervisor/panel.py) |
 | `SHAFT_RECAP_MODEL` | `claude-haiku-5-5` | the model that writes the overview's one-line recap of each instance | [recap.py](../supervisor/recap.py) |
 | `SHAFT_SELF_HOSTED` | `{}` | self-hosted model servers instances may run on through the broker (JSON: name -> url, sampling, think_budget) | [selfhosted.py](../supervisor/selfhosted.py) |
@@ -170,9 +172,14 @@ reviewed ref was `refs/heads/publish-prep-template`.
 | `MAX_TOKENS_STEP` | `16384` | `16384` |
 | `MAX_STEPS_LIVE` | `12` | `12` |
 | `MAX_STEPS_SLEEP` | `30` | `30` |
+| `TALK_REPLY_CALLS` | `3` | uses built-in default |
+| `TALK_REPLY_S` | `45` | uses built-in default |
 | `MAX_STEPS_TALK` | `0` | `0` |
 | `CONTEXT_JOURNAL_CHARS` | `16000` | `16000` |
+| `STALE_LINE_HOURS` | `24` | uses built-in default |
+| `STALE_GOAL_HOURS` | `48` | uses built-in default |
 | `CRITERION_CHARS` | `600` | uses built-in default |
+| `CONFIDENCE_MODE` | `'confirm'` | uses built-in default |
 | `GOALS_CHARS` | `12000` | uses built-in default |
 | `BRIEFING` | `'notes/briefing.md'` | `notes/briefing.md` |
 | `HANDOFF` | `'on'` | `on` |
@@ -185,8 +192,26 @@ reviewed ref was `refs/heads/publish-prep-template`.
 | `FORECAST` | `'on'` | uses built-in default |
 | `OPERATOR_NAME` | `'the operator'` | empty |
 
+`STALE_LINE_HOURS` flags dates older than this many hours in self/goals.md and self/self.md
+at sleep. `STALE_GOAL_HOURS` flags Active goal bullets with no live touch in that window,
+only if the operator sent a conversation turn during it. Set either to 0 to disable that check.
+Sleep asks for a fix, retirement or reason to keep each item, recorded in its journal.
+
+`TALK_REPLY_CALLS` and `TALK_REPLY_S` bound work before a conversation reply. When either budget
+is used, the next model call is offered only `queue_for_next_cycle` and must answer with its next steps. A running
+call finishes normally. Set either knob to 0 to disable that budget.
+`queue_for_next_cycle(task, why)` puts unfinished work in the instance's own inbox for its next live cycle.
 `CRITERION_CHARS` limits `declare_intent.success_criterion` in characters. An overlong criterion is refused
 with its length and the limit, asking for the deliverable's check rather than ritual clauses.
+
+`CONFIDENCE_MODE` accepts `confirm` (default), `clauses`, or `noconfirm`; the live prompt names the resolved mode.
+`confirm` keeps the existing declare and base-rate confirmation flow. `clauses` asks for 1-4 success-criterion
+clauses, each with an integer confidence 0-100. The template records them with a null combined confidence;
+the supervisor multiplies their probabilities when it writes the judgment, assuming independence because
+all clauses must hold. This v4 confidence stays apart from v1-v3 in calibration, AUROC and base rates.
+Both `clauses` and `noconfirm` omit the base rate and `confirm_confidence`; `noconfirm` records a single v2 confidence.
+These arms are available for a later trial. No instance configuration changes automatically. If the Thelos trial
+selects `noconfirm`, the operator sets it in Thelos's `config.env`. Invalid values follow the usual warning and fallback.
 
 `LLM_PRESENCE_PENALTY` uses tenths (15 means 1.5). `MAX_STEPS_TALK=0` removes the
 conversation step limit. `WAKE_INTERVAL_MINUTES=0` disables periodic wakes; positive
