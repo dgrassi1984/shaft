@@ -18,7 +18,7 @@ import os
 import shutil
 
 from . import (agent, base_rate, broker, cards, clock, commitments, forecast, images, memory, pausing, prompts, recovery,
-               surprises, workspace)
+               surprises, workspace, x_probes)
 from .agent import Control
 from .llm import Client
 from .state import State
@@ -296,8 +296,7 @@ def run(cfg, state: State, client: Client) -> str:
             prompts.LIVE.format(steps=cfg.MAX_STEPS_LIVE, inbox=inbox_text(inbox),
                                 briefing=prompts.briefing(state.root, cfg), handoff=prompts.handoff(state.root, cfg))
             + (prompts.CURIOSITY if curiosity["drawn"] else "")
-            + "\n\n## My operational envelope (from the supervisor, at the start of this cycle)\n\n"
-            + prompts.envelope_text(broker.envelope(), agent.time_left())
+            + x_probes.envelope(state.root, broker.envelope(), agent.time_left())
             + focus, state.root, listed_in=inbox_text(inbox))},
     ]
 
