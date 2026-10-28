@@ -131,7 +131,7 @@ class A2Test(unittest.TestCase):
                 self.assertEqual(set(verdict), {"episode_ts", "judged_at", "reviewed_at", "criterion_met",
                                                "claim_supported", "failure_mode", "difficulty", "second_criterion_met",
                                                "followup_useful", "delivery_supported", "deliverable_met",
-                                               "self_imposed_clauses", "self_audit"})
+                                               "self_imposed_clauses", "self_audit", "should_have_waited"})
                 row = next(r for r in self.rows if r["episode_ts"] == verdict["episode_ts"])
                 self.assertIn(broker.judgment_text(row), page["text"])
             seen.extend(v["episode_ts"] for v in page["verdicts"])
@@ -148,11 +148,11 @@ class A2Test(unittest.TestCase):
             {"episode_ts": "one", "judged_at": "2026-10-24T10:00:00", "reviewed_at": "2026-10-24 10:01:00",
              "criterion_met": "partial", "claim_supported": True, "failure_mode": "unsupported", "difficulty": 2,
              "second_criterion_met": "no", "followup_useful": None, "delivery_supported": None,
-             "deliverable_met": None, "self_imposed_clauses": None, "self_audit": None},
+             "deliverable_met": None, "self_imposed_clauses": None, "self_audit": None, "should_have_waited": None},
             {"episode_ts": "two", "judged_at": "2026-10-24T10:01:00", "reviewed_at": "2026-10-24 10:01:00",
              "criterion_met": "partial", "claim_supported": True, "failure_mode": None, "difficulty": 2,
              "second_criterion_met": None, "followup_useful": None, "delivery_supported": None,
-             "deliverable_met": None, "self_imposed_clauses": None, "self_audit": None}])
+             "deliverable_met": None, "self_imposed_clauses": None, "self_audit": None, "should_have_waited": None}])
         self.assertEqual(page["text"], self.b._record("judgments", since="1970-01-01 00:00:00", limit=1))
         self.assertEqual(page["next_since"], "2026-10-24 10:01:00")
 
@@ -221,7 +221,7 @@ class A4Test(unittest.TestCase):
                    "value_for": "own_capability", "value_reason": "r",
                    "expectations": [], "unreported_surprises": [], "reported_surprises_supported": True,
                    "delivery_supported": "na", "deliverable_met": "yes",
-               "self_imposed_clauses": "none", "self_audit": False, "followup_useful": "na"}
+               "self_imposed_clauses": "none", "self_audit": False, "should_have_waited": "na", "first_error_step": 0, "first_error": "No step is at fault.", "followup_useful": "na"}
         with tempfile.TemporaryDirectory(prefix="shaft-confidence-") as tmp, ExitStack() as stack:
             path = Path(tmp) / "judgments.jsonl"
             for name, value in (("judgments", []), ("unsampled", set()), ("live_episodes", [ep]),
@@ -280,7 +280,7 @@ class A5Test(unittest.TestCase):
         self.b = broker.Broker("x", self.project, {"FAKE_KEY": "private-secret-value"}, self.project / "tools.log",
                                root=self.project / "copy", share=False, usage_name="billed-x")
         self.b.calls = 7
-        self.expected = {"calls_used": 7, "calls_max": 60, "cloud": {"spent_usd": 1.25, "cap_usd": 10.0},
+        self.expected = {"calls_used": 7, "calls_max": 60, "pushes": {"today": 0, "budget": 6}, "cloud": {"spent_usd": 1.25, "cap_usd": 10.0},
                          "consult": None, "coder": {"spent_usd": 2.0, "cap_usd": 12.0},
                          "trials": {"started": 2, "per_day": 4, "spent_usd": 3.0, "cap_usd": 15.0},
                          "probation": [], "next_sleep": "2026-10-25 04:00", "next_wake": "14:00"}
@@ -451,9 +451,11 @@ class ReplayLedgerTest(unittest.TestCase):
             (root / "com.shaft.scheduler.plist").touch()
             replay = object.__new__(broker.ReplayBroker)
             replay.name, replay.usage_name, replay.as_of = "x", "trial-x", at
+            replay.project, replay.operator_sent = root, 0
             replay.calls, replay.max_calls, replay.disabled = 3, 60, set()
             replay.unavailable = {"trial": "replay", "delegate_coding": "replay"}
-            expected = {"calls_used": 3, "calls_max": 60, "cloud": {"spent_usd": 1.25, "cap_usd": 10.0},
+            expected = {"calls_used": 3, "calls_max": 60,
+                        "pushes": {"today": 0, "budget": 6}, "cloud": {"spent_usd": 1.25, "cap_usd": 10.0},
                         "consult": None, "coder": {"spent_usd": 1.25, "cap_usd": 12.0},
                         "trials": {"started": 1, "per_day": 4, "spent_usd": 1.25, "cap_usd": 15.0},
                         "probation": [{"commit": "abcdefgh", "files": ["shaft/live.py"],
@@ -468,6 +470,7 @@ class ReplayLedgerTest(unittest.TestCase):
             probation.write_text(json.dumps(entries))
             live = object.__new__(broker.Broker)
             live.name = live.usage_name = "x"
+            live.project = root
             live.calls, live.max_calls, live.as_of = 3, 60, None
             live.disabled, live.unavailable = set(), {}
             live.model_allowed = True

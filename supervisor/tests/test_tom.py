@@ -97,7 +97,8 @@ class TomTest(unittest.TestCase):
     def test_operator_replay_has_no_receipt(self):
         out = self.make(True).call("send_message", {"to": "operator", "text": "hi", "expect_reply": self.expect})
         self.assertTrue(out["ok"])
-        self.assertTrue(out["result"].endswith("; your expectation of the reply is recorded"))
+        # #140 appends the day's push count after the expectation note; both are said
+        self.assertIn("; your expectation of the reply is recorded", out["result"])
         self.assertFalse((self.sup / "operator-inbox").exists())
         self.assertEqual(tom.receipts("a"), [])
 

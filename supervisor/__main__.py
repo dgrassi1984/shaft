@@ -1073,7 +1073,8 @@ def main(argv: list[str]) -> int:
                        "its consulted cycles fared (docs/plans/PLAN-model-choice.md)")
     p.add_argument("names", nargs="*")
     p = sub.add_parser("metacog", help="how well each instance's confidence tells its met cycles from its missed ones: "
-                       "AUROC, bias, resolution, meta-I, by domain, and the paired v3 test (A1)")
+                       "AUROC (clauses apart), bias, resolution, meta-I, by domain, paired v3, claim confusion "
+                       "matrix and doubt/first-error alignment (A1, #98)")
     p.add_argument("names", nargs="*")
     p = sub.add_parser("anchoring", help="does the judge follow the instance's own claim? The same judge grades sampled "
                        "cycles sighted, re-asked and with the claim withheld (A0; paid: --dry-run prices it first)")

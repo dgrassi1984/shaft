@@ -12,7 +12,7 @@ from . import core, metrics
 SHINGLE = 8
 MIN_WORDS = 3   # a fact shorter than this has no shingle worth matching: n/a, not "unmatched" (Grok's review)
 FACT = re.compile(r"^- \[([^\]]+)\] (.+)$")
-SOURCE = re.compile(r" \(src: (.+)\)$")
+SOURCE = re.compile(r" \(src: (.+?)\)(?=$| \(superseded by \[)")
 
 
 def facts(name: str) -> list[dict]:
