@@ -28,6 +28,7 @@ class Outcome:
     ended_by: str                # "answer" | "control" | "steps"
     steps: int
     transcript: list = field(default_factory=list)
+    wrapped_up: str = ""
 
 
 REPEAT_LIMIT = 2   # identical calls in a row that are refused before the reply is ended
@@ -167,6 +168,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
     call = call or (lambda msgs, t=tools: client.complete(msgs, max_tokens, purpose, tools=t))
     reply = None
     step = 0
+    wrapped_up = ""
     last_call, repeats = None, 0   # the previous tool call, and how many times in a row it came back unchanged
     first_logged = len(toolbox.log)   # a conversation's toolbox outlives one reply: the ledger counts this run's
     while True:
@@ -191,6 +193,8 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
                        f"about {left / 60:.0f} minutes" if left is not None and left < WRAP_UP_RESERVE_S else "one turn")
                 messages.append({"role": "user", "content": f"[supervisor] You have {why} left. {wrap_up}"})
                 reply = call(messages, final_tools)
+                wrapped_up = ("yield" if yielding else "deadline"
+                              if left is not None and left < WRAP_UP_RESERVE_S else "steps")
             else:
                 model_messages = messages
                 remaining = limit - step + 1
@@ -229,7 +233,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
                                   for c in reply.tool_calls]
         messages.append(turn)
         if not reply.tool_calls:
-            return Outcome(reply, "answer", step, toolbox.log)
+            return Outcome(reply, "answer", step, toolbox.log, wrapped_up)
         stop = False
         for c in reply.tool_calls:
             call_key = (c["name"], _canonical(c["arguments"]))
@@ -242,7 +246,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
                 repeats += 1
                 if repeats >= REPEAT_LIMIT:
                     messages.append({"role": "tool", "tool_call_id": c["id"], "content": REPEATED_STOP})
-                    return Outcome(reply, "repeating", step, toolbox.log)
+                    return Outcome(reply, "repeating", step, toolbox.log, wrapped_up)
                 messages.append({"role": "tool", "tool_call_id": c["id"], "content": REPEATED.format(name=c["name"])})
                 toolbox.log.append({"tool": c["name"], "args": for_log(c["arguments"]), "result": NOT_RUN})
                 _tag(toolbox.log[-1])
@@ -272,7 +276,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
                 on_tool(c["name"], c["arguments"], result)
             messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
         if stop:
-            return Outcome(reply, "control", step, toolbox.log)
+            return Outcome(reply, "control", step, toolbox.log, wrapped_up)
         if ledger:
             messages[-1]["content"] += "\n\n" + call_ledger(toolbox.log[first_logged:], step, limit, purpose,
                                                          envelope=broker.envelope(), left_s=time_left())
@@ -283,4 +287,4 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
             toolbox.shown = []
         if last and wrap_up:
             break
-    return Outcome(reply, "steps", step, toolbox.log)
+    return Outcome(reply, "steps", step, toolbox.log, wrapped_up)

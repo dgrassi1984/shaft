@@ -319,6 +319,8 @@ def run(cfg, state: State, client: Client) -> str:
     episode = {"ts": ended.isoformat(timespec="seconds"), "kind": "live", "intent": intent, "finish": fin,
                "ended_by": outcome.ended_by, "steps": outcome.steps, "tools": toolbox.log,
                "inbox": [n for n, _ in inbox], "curiosity": curiosity, "cards": held.record}
+    if outcome.wrapped_up:
+        episode["wrapped_up"] = outcome.wrapped_up
     if os.environ.get("SHAFT_RUN_STARTED"):   # the supervisor's start of this run: my consults are booked against it
         episode["run_started"] = os.environ["SHAFT_RUN_STARTED"]
     if ws.mode != "off" or ws.errors:

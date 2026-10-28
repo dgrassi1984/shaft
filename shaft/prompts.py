@@ -261,7 +261,7 @@ read at a glance or repeat each other, rewrite_facts: merge, drop what is supers
 soon, what they say no to — so the file predicts them, not only describes them.
 3. update_personality: revise the surface layer from evidence. Change the core layer \
 only if several experiences point the same way — cite them.
-4. update self/goals.md if your goals changed; pass replace=true when deliberately dropping goals.
+4. update self/goals.md if your goals changed; pass replace=true when deliberately dropping goals.{goals_budget}
 5. update_self_model only if your self-description no longer matches your journal and the supervisor's \
 record (the verdicts above; record(kind=...) and history for more).
 6. write_digest: a short summary of what happened since your last sleep and what it means — what your \
@@ -332,6 +332,31 @@ def _skills(root: Path) -> str:
     return "\n".join(rows) or "(none yet)"
 
 
+def goals_text(text: str, budget: int) -> str:
+    """My goals whole when they fit; otherwise whole sections, with directions to what I left out."""
+    if len(text) <= budget:
+        return text.strip() or "(none yet)"
+    headings = list(re.finditer(r"^## (.+)$", text, re.MULTILINE))
+    starts = [0] + [m.start() for m in headings[1:]]
+    ends = starts[1:] + [len(text)]
+    titles = [m.group(1).strip() for m in headings] or ["Goals"]
+    shown = [f"self/goals.md: {len(text)} characters; budget {budget} characters.\n"]
+    used = 0
+    omitted = False
+    for i, (start, end, title) in enumerate(zip(starts, ends, titles)):
+        section = text[start:end]
+        if i == 0 and len(section) > budget:
+            shown.append(section[:budget] + "\n[... first section cut at the budget ...]\n")
+            used = budget
+        elif not omitted and used + len(section) <= budget:
+            shown.append(section)
+            used += len(section)
+        else:
+            omitted = True
+            shown.append(f"\n[Left out: {title} ({len(section)} characters); read_file self/goals.md for it.]\n")
+    return "".join(shown).strip()
+
+
 def system_prompt(state, cfg, mode_note: str, tools: str | None = None) -> str:
     root = state.root
     journal, shown, total = state.recent_journal(cfg.CONTEXT_JOURNAL_CHARS)
@@ -354,7 +379,7 @@ def system_prompt(state, cfg, mode_note: str, tools: str | None = None) -> str:
     context = CONTEXT.format(
         self_model=state.read(state.self_md).strip() or "(empty — I have not written one yet)",
         personality=personality.read(root).strip(),
-        goals=state.read(state.goals_md).strip() or "(none yet)",
+        goals=goals_text(state.read(state.goals_md), cfg.GOALS_CHARS),
         stats=_head(root / "self" / "stats.md", 5000, "(no measurements yet)"),   # headline first
         facts=_tail(root / "memory" / "facts.md", 6000, "(none yet)"),   # kept to this by my sleep
         digests=_tail(root / "memory" / "digests.md", 3500, "(none yet — my sleeps will write them)"),
