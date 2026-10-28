@@ -17,7 +17,7 @@ import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from . import browser, core, egress, pyenv
+from . import browser, core, corrections, egress, pyenv
 from .core import (SUP_DIR, calendar_grants, disabled_tools, dollars, git, instance_config, instance_names,
                    instance_root, journal_entries, knob, list_beneath, mail_grants, paused, safe_read, shared_folder)
 from . import selfhosted
@@ -28,6 +28,9 @@ from . import selfhosted
 JUDGE_ALERT_USD, _ = knob(
     "SHAFT_JUDGE_ALERT_USD", "3", dollars, "judge spend per day that raises an alert (the judge has no cap)",
     group="Judging", services=("web",))
+CORRECTION_ALERT_CYCLES, _ = knob(
+    "SHAFT_CORRECTION_ALERT_CYCLES", "6", core.whole, "live cycles a correction may remain open before an alert; 0 = off",
+    group="Runs and conversations", services=("web",))
 CAP_ALERT = 0.8                                                    # a cap this full raises an alert
 ALERT_HOURS = 12                                                   # log alerts this recent are shown
 SERVICE_LOGS = {"model": "com.shaft.model.log", "embed": "com.shaft.embed.log", "api": "com.shaft.api.log",
@@ -422,6 +425,9 @@ def alerts(snap: dict | None = None, now: datetime | None = None, cost: dict | N
         if line[1:20] >= since:
             out.append({"id": log_alert_id(line), "text": line[12:20] + line[21:200]})
     out.extend(pause_alert(p) for p in core.long_pauses(now))
+    if CORRECTION_ALERT_CYCLES > 0:
+        for name in instance_names():
+            out.extend(corrections.alerts(name, CORRECTION_ALERT_CYCLES, now))
     return out
 
 

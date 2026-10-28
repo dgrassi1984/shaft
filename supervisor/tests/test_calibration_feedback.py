@@ -108,7 +108,7 @@ VERDICT = {"criterion_met": "partial", "claim_supported": True, "criterion_quali
            "origin": "self", "origin_supported": True, "origin_evidence": "r", "value": 2,
            "value_for": "own_capability", "value_reason": "r", "expectations": [], "unreported_surprises": [],
            "reported_surprises_supported": True, "delivery_supported": "na", "deliverable_met": "yes",
-               "self_imposed_clauses": "none", "self_audit": False, "followup_useful": "na"}   # the surprise fields (PLAN-surprise M2)
+               "self_imposed_clauses": "none", "self_audit": False, "should_have_waited": "na", "first_error_step": 0, "first_error": "No step is at fault.", "followup_useful": "na"}   # the surprise fields (PLAN-surprise M2)
 SHOWN ={"lo": 70, "hi": 100, "met": 3, "n": 4}
 
 
@@ -490,7 +490,7 @@ class JudgesBlindToTheBaseRateTest(unittest.TestCase):
         for mark in TREATMENT_MARKS:
             self.assertNotIn(mark, case)
         self.assertIn("### 1. declare_intent(", case)
-        self.assertIn("→ intent recorded — now act\n\n### 2. read_file(", case)    # the refused read is left out too
+        self.assertIn("→ intent recorded — now act\n\n### 4. read_file(", case)    # original index; the refused read is left out
         self.assertIn('"confidence": 65', case)                                   # the final number, as before
         self.assertIn('"confidence_of": "criterion_met=yes"', case)               # v3 reads as the question it asks
         self.assertEqual(ep["intent"]["confidence_first"], 85)                    # the episode itself is untouched
