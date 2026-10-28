@@ -168,6 +168,30 @@ class ConfigWritersTest(unittest.TestCase):
         listed = reverted.split("Failing tests:", 1)[1].split("Last lines", 1)[0]
         self.assertEqual([l[2:] for l in listed.strip().splitlines()], names)
 
+    def test_a_reverted_change_is_kept_in_the_instance_s_notes_and_named_20261027(self):
+        # Regression (thelos, 2026-10-27): a mid-run revert deleted a failing test file it was building from; code
+        # reverted before any commit has no history, and the gate kept a copy only on the interrupted-run path.
+        self.cycle(FAILING, lambda broker: None)
+        self.assertFalse((self.root / "tests" / "test_text_stats.py").exists())          # reverted, as before
+        kept = sorted((self.root / "notes" / "reverted").glob("*"))
+        self.assertEqual(len(kept), 1, kept)
+        self.assertEqual((kept[0] / "tests" / "test_text_stats.py").read_text(), FAILING)  # byte for byte
+        self.assertEqual((kept[0] / "plugins" / "text_stats" / "main.py").read_text(),
+                         "def run(**args):\n    return 'stats'\n")
+        reverted = self.journal_entry("Supervisor: code change reverted")
+        self.assertIn(f"notes/reverted/{kept[0].name}/", reverted)
+        unsettled = git(self.root, "status", "--porcelain", "--untracked-files=all", "--", *gate.CODE_PATHS)
+        self.assertEqual([l for l in unsettled.splitlines() if "__pycache__" not in l], [])   # the copy is no code
+
+    def test_a_copy_that_cannot_be_kept_never_stops_the_revert(self):
+        (self.root / "notes").mkdir()
+        (self.root / "notes" / "reverted").symlink_to(self.project, target_is_directory=True)   # the instance's link
+        self.cycle(FAILING, lambda broker: None)
+        self.assertFalse((self.root / "tests" / "test_text_stats.py").exists())          # still reverted
+        self.assertFalse(list(self.project.glob("*/tests/test_text_stats.py")))          # nothing written through it
+        reverted = self.journal_entry("Supervisor: code change reverted")
+        self.assertIn("could not be kept", reverted)
+
     def test_an_operator_edit_mid_cycle_survives_the_instance_failing_its_tests(self):
         self.cycle(FAILING, lambda broker: self.operator_edits(OPERATOR))
         config = (self.root / "config.env").read_text()
