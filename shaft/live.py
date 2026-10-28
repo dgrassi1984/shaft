@@ -34,6 +34,7 @@ CONFIDENCE_OF = "criterion_met=yes"
 # number on the same cycles.
 CONFIDENCE_OF_SHOWN = "criterion_met=yes;base_rate_shown"
 
+DELIVERY_CHANNELS = ("message", "mail", "notion", "web_document", "none")
 MAX_PREDICTIONS = 3
 # declare_intent's attention schema (PLAN-consciousness B3), and finish_cycle's promises (C2)
 ATTENTION = {"type": "array", "description": "optional, up to 4: where you expect to look this cycle — a source "
@@ -107,6 +108,10 @@ def run(cfg, state: State, client: Client) -> str:
         conf = int(args.get("confidence", -1))
         if not args.get("goal") or not args.get("success_criterion") or not 0 <= conf <= 100:
             return "ERROR: need goal, success_criterion and confidence 0-100"
+        length = len(args["success_criterion"])
+        if length > cfg.CRITERION_CHARS:
+            return (f"ERROR: success_criterion has {length} characters; limit {cfg.CRITERION_CHARS}. "
+                    "Give the deliverable's check rather than ritual clauses.")
         origin, ref = str(args.get("origin", "")).lower(), str(args.get("origin_ref", "")).strip()
         if origin not in ORIGINS:
             return "ERROR: origin must be self, operator or instance — who chose this goal"
@@ -181,7 +186,10 @@ def run(cfg, state: State, client: Client) -> str:
         met = str(args.get("criterion_met", "")).lower()
         if met not in ("yes", "partial", "no"):
             return "ERROR: criterion_met must be yes, partial or no"
-        record["finish"] = {"what_happened": args.get("what_happened", ""), "criterion_met": met,
+        delivered = args.get("delivered_via") or "none"   # left out (a forced wrap-up turn): nothing claimed
+        if delivered not in DELIVERY_CHANNELS:
+            return "ERROR: delivered_via must be message, mail, notion, web_document or none"
+        record["finish"] = {"delivered_via": delivered, "what_happened": args.get("what_happened", ""), "criterion_met": met,
                             "learned": args.get("learned", ""), "surprises": surprises.clean(args.get("surprises")),
                             "resolves": resolves(args.get("resolves"))}
         promised = commitments.clean(args.get("commitments")) if toolbox.commit_source else []
@@ -210,6 +218,7 @@ def run(cfg, state: State, client: Client) -> str:
         "finish_cycle": Control(_spec(
             "finish_cycle", "End the cycle and report the outcome against the criterion.",
             {"what_happened": S, "criterion_met": {"type": "string", "enum": ["yes", "partial", "no"]},
+             "delivered_via": {"type": "string", "enum": list(DELIVERY_CHANNELS)},
              "learned": S,
              "surprises": {"type": "array", "description": "what contradicted what you expected this cycle — a "
                            "prediction, or an assumption your intent made; [] if nothing did",
@@ -218,7 +227,7 @@ def run(cfg, state: State, client: Client) -> str:
              "resolves": {"type": "array", "description": "open surprises (by id) this cycle answered, and how",
                           "items": {"type": "object", "properties": {"id": S, "how": S}, "required": ["id", "how"]}},
              **({"commitments": PROMISES} if cfg.COMMITMENTS == "on" else {})},
-            ["what_happened", "criterion_met", "learned"]), finish, stops=True),
+            ["what_happened", "criterion_met", "learned", "delivered_via"]), finish, stops=True),
     }
     if base_rate.has_data(rates):   # offered only when declare_intent can show a base rate: otherwise v2 as before
         controls["confirm_confidence"] = Control(_spec(
