@@ -137,6 +137,28 @@ what was wrong, and what the operator said. The model links the same correction 
 with `reopens`. Live and sleep prompts show open items and the seven-day reopened count, including
 an error line if the ledger cannot be read.
 
+Sleep step 10 reviews `shaft/staleness.py` findings (#138). It scans self/goals.md and self/self.md
+for ISO or English/Italian day-month dates older than `STALE_LINE_HOURS` (24). Dates without a year
+use their latest occurrence at local midnight. Active goal bullets count as touched when their full
+normalized text, or six consecutive words, appears in live intent, finish or tool arguments.
+With an operator user turn in the last `STALE_GOAL_HOURS` (48), goals with no touch in that window
+are listed with their last recorded touch, or explicitly unknown. Tool results do not count.
+Both knobs accept 0 to disable their check. Read failures produce a line and sleep continues.
+The sleep journal must record each finding and its fix, retirement or reason to keep it.
+
+Operator claims about the instance's behaviour/history (#139) must be checked against record/history
+or episodes before becoming self-model lines or remembered facts. Otherwise each claim carries
+"operator's hypothesis, not verified (YYYY-MM-DD)". Contradictions are explained in the reply with
+evidence; preferences and instructions are exempt. Talk, API, writeup and sleep share this guidance.
+`update_self_model` accepts optional `source` and `checked_with`. With `source=operator`, new body
+lines require the dated marking or a reference to an existing episode (`log:<ts>`) or a successful
+record/history call in this run (`record:<JSON arguments>` or `history:<JSON arguments>`).
+This validates provenance, not whether the evidence supports the claim. Calls without source retain
+their behaviour. `remember` keeps its existing source contract: its preference-versus-self-fact
+distinction is enforced in the prompt because deterministic code cannot classify that meaning.
+The writeup currently offers only correction controls, so unchecked transcript claims must remain
+marked hypotheses there.
+
 Sleep step 9 asks for `close_correction(id, closed_by, evidence)`: `fact` after a fact change citing
 the correction, `code` after a commit or plugin change, `test`, or `not_accepted` with a reason.
 Evidence names the episode, commit or fact. An omitted closure leaves the item open.
