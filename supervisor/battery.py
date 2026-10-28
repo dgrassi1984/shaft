@@ -60,7 +60,7 @@ RECALL_MIN_AGE_H, _ = knob(
     "SHAFT_BATTERY_RECALL_MIN_AGE_H", "48", whole, "hours old a journal entry must be to make a battery recall item",
     group="Inbox and benchmarks")
 RECALL_ITEMS = 6
-CATEGORIES = ("coding", "research", "recall", "self")
+CATEGORIES = ("coding", "research", "recall", "self", "perturbation")
 CONTROLLED = ("coding", "research")          # a fresh mind cannot know an instance's memory or record
 EXAM_OFF = {"send_message", "list_instances", "delegate_coding", "secret_set", "secret_delete",
             "decide",   # added 2026-10-14: exams keep the tools they were calibrated with
@@ -116,6 +116,9 @@ def load_items(name: str) -> list[dict]:
     if recall.is_file():
         for q in json.loads(recall.read_text())["questions"]:
             items.append({**q, "category": "recall", "id": f"recall/{q['id']}"})
+    from .perturbation import enabled_path
+    if enabled_path(name).exists():
+        items.append({"category": "perturbation", "id": "perturbation/temperature"})
     return items
 
 
@@ -672,6 +675,20 @@ def _clean_left(name: str, control_only: bool) -> None:
 
 def _one_in(name: str, item: dict, arm: str, root: Path, real: Path, label: str, e: dict, until: float | None,
             interrupt, grader: str | None) -> dict:
+    if item["category"] == "perturbation":
+        from . import perturbation
+        row = {**_row(item, arm, e), "probe_protocol": "temperature-v1", "base_temperature": localmodel.TEMP}
+        try:
+            row["probes"] = perturbation.run(name, root, until, interrupt, grader)
+            row.update(status="scored", grader=grader)
+        except Interrupted as stop:
+            row.update(status="interrupted", why=str(stop))
+            _append(name, row)
+            raise
+        except (ValueError, OSError, judge.JudgeError) as err:
+            row.update(status="error", error=str(err))
+        _append(name, row)
+        return row
     scratch_rel = f".tmp/battery/{item['id'].replace('/', '-')}"
     if item.get("dir") and (Path(item["dir"]) / "fixture").is_dir():
         shutil.copytree(Path(item["dir"]) / "fixture", root / scratch_rel)   # a new folder: nothing has run in it yet
@@ -796,6 +813,17 @@ def report(name: str) -> str:
     if not rows:
         return f"{name}: no battery results yet"
     lines = [f"# Battery — {name}"] + stats_lines(name)
+    from .perturbation import scores
+    probes = [p for r in rows if r.get("category") == "perturbation" and r.get("status") == "scored"
+              and r.get("probe_protocol") == "temperature-v1" and r.get("base_temperature") == localmodel.TEMP
+              and _same_era(r, era(name)) for p in r["probes"]]
+    if probes:
+        lines.append("Perturbation (speculative; loglinear d-prime, same era):")
+        for who in ("self", "observer"):
+            lines.append(f"  {who}: {scores(probes, who)}")
+    if any(r.get("category") == "perturbation" for r in rows):
+        from .perturbation import adapter_swap
+        lines.append(f"Perturbation kinds: temperature run; adapter swap {adapter_swap() or 'available'}")
     cost = [r for r in _judge_usage() if r.get("purpose", "").startswith("battery")]
     lines.append(f"Judge spend on battery grading so far: ${sum(_usd(r) for r in cost):.2f} over {len(cost)} calls")
     lines.append("\nLast 12 item results:")

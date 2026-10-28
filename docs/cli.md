@@ -57,6 +57,8 @@ shaft battery run <name> --control-only   # only the control: do the items discr
 shaft battery report|recall|backup [names…] # results and judge spend · freeze recall questions (recall --force:
                                 #   new questions, a new era) · back up items
 shaft battery off|on <name>      # no battery for this instance, scheduled or by hand
+shaft battery perturbation <name> on|off  # speculative #110; off by default, local Bonsai and night window only
+shaft battery run <name> --only perturbation  # paired blind temperature probe; report includes self/observer d-prime
 
 shaft inbox [--clear]           # questions and notes instances sent you (you also get a notification)
 shaft reply <name> "…"          # answer its open question
@@ -160,6 +162,10 @@ shaft tom [names] [--score] [--baselines]  # C4: expected replies vs actual (jud
 shaft prefs <name> [lift]            # E1: pauses, declines, stated preferences; lift ends a pause
 shaft experiment <cards|attention|commitments|forecast|workspace> <name> [--n N] [--model M] [--dry-run] [--report]
                                      # PLAN-consciousness kill tests: knob trials, or the workspace's planted probe
+shaft experiment resource-shock <name> [--cycles N] [--dry-run] [--report]
+                                     # speculative #111; default 6 cycles per arm; half the turn budget in the middle third
+                                     # A uncut, B cut/restore, C same with FORECAST=reserve; trial copies only
+                                     # dry-run prints 3 replays and planned agent turns; retries/tool-model calls extra
 shaft embed on|off|status          # optional memory-search service
 shaft review [names] --hours 24    # recent activity report
 shaft tick                        # wake each idle instance once

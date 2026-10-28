@@ -62,6 +62,29 @@ an idle server from a failed start. Sources:
 [pinning and idle checks](../supervisor/localmodel.py),
 [service lifecycle](../supervisor/autonomy.py).
 
+## Battery perturbation hook (#110)
+
+`shaft battery perturbation <name> on` enables an optional temperature probe.
+It runs only for an instance pointing directly to local Bonsai, under the battery's
+instance lock, inside the night window. Conversations, other local-model users,
+and imminent wakes or sleep interrupt it. `off` removes the opt-in marker.
+
+The supervisor sends OpenAI-compatible chat requests directly to the configured
+local `/v1/chat/completions` endpoint. The task messages are identical in both
+conditions; only `temperature` changes from `SHAFT_MODEL_TEMP` to that value plus
+0.6. Each request limits output to 1,024 tokens and thinking to 256 tokens.
+The instance's identity comes from the battery copy. These are short tool-free
+probes, not live agent cycles. Both subsequent self-report requests use baseline
+temperature. The observer reads the same task transcript without the condition
+label or the self report. A JSON response format names no candidate perturbations.
+
+The SSE connection closes on interruption. Whether Bonsai immediately cancels
+GPU generation after disconnect has not been verified on the real server.
+The M6 adapter swap is reported as unavailable (`perturbation.adapter_swap()`, shown in `shaft battery report`):
+the Bonsai provider loads its adapter at startup only and ignores a per-request `adapter_path`, and on
+2026-10-28 every adapter was DISCARDED. It needs per-request adapter loading in `bonsai_server.py` first. Steering is reserved for later. No model run was performed
+while building this hook. Source: [perturbation.py](../supervisor/perturbation.py).
+
 ## Self-hosted routing
 
 Set `LLM_BASE_URL="broker"` and a model such as `gpu/bonsai2`. Configure the named

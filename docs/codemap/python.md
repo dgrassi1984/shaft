@@ -36,7 +36,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/egress.py` | `Refused`, `Egress` | `log_path`, `public_address`, `recent`, `describe`, `summary` |
 | `supervisor/embed_server.py` | `Embedder` | `make_handler`, `main` |
 | `supervisor/evolution.py` | — | `drift`, `distinct`, `breed` |
-| `supervisor/experiments.py` | `ExperimentError` | `knob_change`, `family`, `repeat_failures`, `targets`, `queue`, `endpoint`, `report`, `plant`, `workspace_path`, `workspace_rows`, `run_workspace`, `fingerprint`, `workspace_report` |
+| `supervisor/experiments.py` | `ExperimentError` | `knob_change`, `family`, `repeat_failures`, `targets`, `queue`, `endpoint`, `report`, `plant`, `workspace_path`, `workspace_rows`, `run_workspace`, `fingerprint`, `workspace_report`, `shock_steps`, `shock_measures`, `resource_shock`, `resource_shock_report` |
 | `supervisor/finetune.py` | — | `backend`, `build_dataset`, `cmd_dataset`, `overfit`, `evaluate`, `cmd_evaluate`, `cmd_finetune` |
 | `supervisor/gate.py` | `Link`, `Invalid`, `RestoreFailed`, `StageTimedOut` | `links`, `refused`, `snapshot`, `changed`, `restore`, `unrestored`, `config_without`, `revert_config`, `commits_id`, `committed_tree`, `stop_group`, `end_stages`, `stop_stages_on_signal`, `shared_key`, `record_path`, `recorded_pass`, `warm`, `run_tests`, `failing_tests`, `keep_log`, `run_instance_tests` |
 | `supervisor/gate_suite.py` | `Split`, `HookRefused` | `discover`, `partition`, `report`, `main` |
@@ -168,6 +168,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_tool_switch.py` | `ToolSwitchTest` | — |
 | `supervisor/tests/test_transcripts.py` | `TranscriptData`, `TranscriptView` | — |
 | `supervisor/tests/test_trial.py` | `Fixture`, `ReconstructTest`, `ReplayEndToEndTest`, `ReplayLeavesTheMindStoreTest`, `ReplaySeesItsRealVenvTest`, `PreemptTest`, `ReplayBrokerTest`, `VerdictTest`, `RequestTest`, `LocalTimeTest`, `FlowTest`, `WorkerTest` | `git`, `snapshot` |
+| `supervisor/tests/test_trial_multicycle.py` | `RunTest`, `LedgerTest`, `LiveRunTest` | `result` |
 | `supervisor/tests/test_turns_left.py` | `TurnsLeftTest` | — |
 | `supervisor/tests/test_version.py` | `VersionTest` | `done` |
 | `supervisor/tests/test_vision.py` | `FakeModels`, `Case`, `CapabilityTest`, `PrepareTest`, `DescribeTest`, `ReplayAttachmentsTest`, `JudgeNoteTest`, `TemplateTest`, `AnswerEndToEndTest` | `png`, `image_part` |
