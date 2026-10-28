@@ -887,7 +887,13 @@ def cmd_trial(args) -> int:
         import threading
         rec = trial.replay_arm(PROJECT, args.name, st, trial.committed_code(PROJECT, args.name), model=args.model,
                                cache={}, cache_lock=threading.Lock(), billed=f"{args.name}@trial:replay",
-                               keep=Path(args.keep).resolve() if args.keep else None)
+                               keep=Path(args.keep).resolve() if args.keep else None,
+                               cycles=args.cycles, sleep_between=args.sleep,
+                               on_unit=lambda unit: trial._ledger({"instance": args.name, "trial": "replay",
+                                   "by": "operator", "kind": "arm", "model": args.model,
+                                   "usd": unit["usd"], "seconds": unit["seconds"], "ended": unit["ended"],
+                                   "tokens_in": unit["usage"]["prompt_tokens"],
+                                   "tokens_out": unit["usage"]["completion_tokens"]}))
         ep2 = rec["episode"] or {}
         print(f"state: {st['start_commit'][:10]} (cycle began {st['t0']}; inbox {st['inbox']})")
         print(f"exit {rec['exit']} · {rec['ended']} · {rec['seconds']} s · completed {rec['completed']} · "
@@ -903,7 +909,8 @@ def cmd_trial(args) -> int:
     change = _pairs(args.cand)
     try:
         t = trial.create(args.name, change, args.hypothesis, by="operator", episodes=args.episodes, n=args.n,
-                         base=_pairs(args.base) or None, allow_empty=args.aa, model=args.model)
+                         base=_pairs(args.base) or None, allow_empty=args.aa, model=args.model,
+                         cycles=args.cycles, sleep_between=args.sleep)
     except trial.TrialError as e:
         print(f"refused: {e}", file=sys.stderr)
         return 1
@@ -1220,6 +1227,8 @@ def main(argv: list[str]) -> int:
                    help="replace PATH in the current version (A) too — for planted tests")
     q.add_argument("--aa", action="store_true", help="A/A calibration: the 'change' is the current code itself")
     q.add_argument("--hypothesis", default="operator trial")
+    q.add_argument("--cycles", type=int, default=1, help="consecutive live cycles per arm from one past state")
+    q.add_argument("--sleep", action="store_true", help="sleep between each pair of replayed live cycles")
     q.add_argument("-n", type=int, default=0)
     q.add_argument("--episodes", nargs="*", default=[])
     q.add_argument("--model", choices=["auto", "cloud", "local"], default="auto")
@@ -1228,6 +1237,8 @@ def main(argv: list[str]) -> int:
     q.add_argument("ts", help="the episode's ts")
     q.add_argument("--model", default="local", help="'local' (its own configuration) or a cloud model id")
     q.add_argument("--keep", help="copy the replayed folder here")
+    q.add_argument("--cycles", type=int, default=1, help="consecutive live cycles from one past state")
+    q.add_argument("--sleep", action="store_true", help="sleep between each pair of replayed live cycles")
     tsub.add_parser("work", help="run the queued trials' tests and replays that may run now (the scheduler does this)")
     p = sub.add_parser("check", help="run the test gate against an instance's code")
     p.add_argument("name", nargs="?", default=DEFAULT_INSTANCE)

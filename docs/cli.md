@@ -110,11 +110,18 @@ shaft delete <name> [--yes] [--no-archive]   # remove it and every trace of it: 
 shaft trial list [name]                    # trials of proposed changes (an instance asks with its `trial` tool)
 shaft trial show <name> <id>               # one trial: each replayed cycle, outcome, the report it was sent
 shaft trial run <name> --cand PATH=FILE …  # an operator trial (planted tests; --base PATH=FILE, --aa,
-                                           #   --model auto|cloud|local, --hypothesis T, -n N, --episodes TS…)
+                                           #   --model auto|cloud|local, --hypothesis T, -n N, --episodes TS…, --cycles N, --sleep)
 shaft trial replay <name> <episode-ts>     # replay one past cycle once with the current code (debug;
-                                           #   --model local|<cloud id>, --keep DIR copies the folder)
+                                           #   --model local|<cloud id>, --keep DIR copies the folder, --cycles N, --sleep)
 shaft trial work                           # run what may run now (the scheduler does this)
 ```
+
+`--cycles N` replays N consecutive live cycles per arm from one reconstructed past state, default 1.
+`--sleep` runs consolidation between every pair of live cycles, never after the last. Each operation uses the
+same scratch copy. The next operation's clock advances by the preceding operation's elapsed seconds, at least
+one second. Results include every cycle and sleep, and the judge compares whole runs. `SHAFT_TRIAL_N_MAX`
+limits live cycles plus sleeps across all selected states per arm; `-n` is reduced to fit, with at least two states.
+Each cycle and sleep has a separate trial ledger row. Operator trials remain exempt from the daily dollar cap.
 
 Operator pauses lasting `SHAFT_PAUSE_ALERT_HOURS` (default 3, 0 = off) appear in `shaft alerts`, `shaft top` and the
 web overview. Each has a stable `pause:<name>:<since>` id and the resume command; a global pause names all instances
