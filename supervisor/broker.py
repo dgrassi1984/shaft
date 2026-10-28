@@ -85,7 +85,7 @@ def judgment_text(j: dict, reasoning_chars: int | None = None) -> str:
     if j.get("value") is not None:
         out.append(f"Value {j['value']}/5, for {j.get('value_for')}" + (f": {j['value_reason']}" if j.get("value_reason") else "")
                    + (f" (graded later by {j['value_judge']})" if j.get("value_judge") else ""))
-    for key in ("delivery_supported", "deliverable_met", "self_imposed_clauses", "self_audit"):
+    for key in ("delivery_supported", "deliverable_met", "self_imposed_clauses", "self_audit", "should_have_waited"):
         if key in j:
             out.append(f"{key}: {j[key]}")
     if j.get("origin"):
@@ -1084,8 +1084,11 @@ class Broker:
                           f"From: {self.name}\nTo: operator\nKind: {kind}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{body}\n",
                           kind, stamp, body, atts)
             record_expectation()
+            self._envelope = None
+            push = self._push_usage(stamp)
             return (f"delivered to the operator ({kind}){with_files}; their reply, if any, will arrive in your inbox"
-                    + expectation)
+                    + expectation + (f"; pushes to the operator today: {push['today']} of budget {push['budget']}"
+                                     if push else ""))
         atts = self._store(self.project / "instances" / to, f"attachments/from-{self.name}/{stamp:%Y%m%d-%H%M%S-%f}",
                            files)
         body = text.strip() + messages.attachment_lines(atts)
@@ -1209,6 +1212,13 @@ class Broker:
     def _operator_sent_today(self, stamp: datetime) -> int:
         inbox = self.project / ".supervisor" / "operator-inbox"
         return len(_sent(inbox.glob(f"{stamp:%Y%m%d}-*-from-{self.name}.md"))) if inbox.is_dir() else 0
+
+    def _push_usage(self, as_of: datetime | None = None) -> dict | None:
+        from . import pushes
+        try:
+            return pushes.usage(self.name, self.project / ".supervisor", as_of)
+        except OSError:   # measurement must not turn a delivered message into a failed tool call
+            return None
 
     def _deliver(self, to: str, rel: str, content: str, kind: str, stamp: datetime, text: str,
                  attachments: list[dict] | None = None) -> None:
@@ -1453,6 +1463,7 @@ class Broker:
                     "spent_usd": float(usage["usd"]), "cap_usd": float(trial.DAILY_USD)}
 
         env = {"calls_used": self.calls, "calls_max": self.max_calls,
+                "pushes": field("pushes", lambda: self._push_usage(as_of)),
                 "cloud": field("cloud", lambda: {"spent_usd": float(cloudllm.spent_today(usage_name, **until)),
                                                  "cap_usd": float(cloudllm.daily_cap(self.name))}),
                 "consult": None if self.usage_name != self.name or not self.model_allowed else
@@ -1515,7 +1526,8 @@ class Broker:
                 return json.dumps({"text": text, "verdicts": [
                     {**{key: r.get(key) for key in ("episode_ts", "judged_at", "criterion_met", "claim_supported",
                                                    "failure_mode", "difficulty", "deliverable_met",
-                                                   "self_imposed_clauses", "self_audit", "delivery_supported")},
+                                                   "self_imposed_clauses", "self_audit", "delivery_supported",
+                                                   "should_have_waited")},
                      "followup_useful": r.get("followup_useful"),
                      "reviewed_at": _reviewed_at(r),
                      "second_criterion_met": (r.get("second") or {}).get("criterion_met")} for r in shown],
@@ -2376,6 +2388,12 @@ class ReplayBroker(Broker):
         real = [p for p in _sent(inbox.glob(f"{self.as_of:%Y%m%d}-*-from-{self.name}.md")) if p.name < cut] \
             if inbox.is_dir() else []
         return len(real) + self.operator_sent
+
+    def _push_usage(self, as_of: datetime | None = None) -> dict | None:
+        push = super()._push_usage(self.as_of)
+        if push:
+            push["today"] += self.operator_sent
+        return push
 
     def _store(self, root: Path, rel_dir: str, files: list[tuple[str, bytes]]) -> list[dict]:
         from . import messages   # checked like the real thing, nothing written

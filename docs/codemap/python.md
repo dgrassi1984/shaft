@@ -56,6 +56,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/panel.py` | — | `cached`, `jsonl`, `judge_usd`, `costs`, `judgments`, `traits`, `template_merges`, `journal_heading`, `instance_detail`, `probation_events`, `changes`, `trials`, `trial_progress`, `battery_status`, `evals`, `surprise_summary`, `log_tail`, `services_detail`, `scheduled_runs`, `extras`, `pause_alert`, `alerts`, `model_down_problem`, `log_alert_id`, `transcripts`, `transcript_summary`, `transcript_lines`, `dismissed`, `dismiss` |
 | `supervisor/preferences.py` | — | `events`, `self_paused`, `pause`, `decline`, `prefer`, `lift`, `section`, `describe`, `review_lines`, `report` |
 | `supervisor/provenance.py` | — | `facts`, `check`, `checked`, `reliance`, `section`, `report` |
+| `supervisor/pushes.py` | — | `records`, `usage`, `reactions`, `lines` |
 | `supervisor/pyenv.py` | — | `venv_python`, `python`, `uv_binary`, `uv_env`, `path_dirs`, `needs_rebuild`, `rebuild_command`, `describe` |
 | `supervisor/recap.py` | `RecapError` | `redact`, `context`, `ask`, `load`, `write`, `start`, `running`, `command` |
 | `supervisor/runner.py` | `Busy`, `Presence`, `RunRefused`, `Turn` | `run_lock`, `busy_with`, `judge_ok`, `spawn_recover`, `model_server`, `sharing_model`, `request_yield`, `replying`, `Reply`, `open_conversations`, `is_busy`, `enforce_journal`, `enforce_core`, `run_agent`, `rebuild_env`, `agent_command`, `stage_docs`, `end_all_runs`, `stop_runs_on_signal`, `run_conversation` |
@@ -127,6 +128,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_m3_talk.py` | `ReplyFirstTest`, `CorrectionsTest` | `tool` |
 | `supervisor/tests/test_m4_context.py` | `StalenessTest`, `OperatorClaimsTest` | — |
 | `supervisor/tests/test_m5_facts.py` | `FactsTest` | — |
+| `supervisor/tests/test_m5_pushes.py` | `PushTest` | — |
 | `supervisor/tests/test_mail.py` | `FakeGmail`, `MailCase`, `EnforcementTest`, `OfferedTest`, `ReplayTest`, `AttachmentTest`, `ConfigTest`, `CliTest`, `TemplatePromptTest` | `ms`, `b64`, `msg`, `git` |
 | `supervisor/tests/test_mail_paging.py` | `PagingTest` | — |
 | `supervisor/tests/test_measurement.py` | `InstanceDirCase`, `CycleValueTest`, `JudgingTest`, `ValueTest`, `JudgeMixTest`, `ModelTest`, `ProbationMeasureTest`, `ChanceOfDropTest`, `BatteryExamCopyTest`, `HiddenTestsTest`, `BatteryScheduleTest`, `BatteryResultsTest`, `BrokerRootTest`, `BatteryEndToEndTest` | `judgment`, `valued_j`, `tree` |
