@@ -36,7 +36,10 @@ FIELDS: dict[str, tuple[type, object]] = {
     "CONTEXT_JOURNAL_CHARS": (int, 16000),
     "STALE_LINE_HOURS": (int, 24),     # sleep review; 0 disables each check
     "STALE_GOAL_HOURS": (int, 48),
+    "CRITERION_CHARS": (int, 600),
     "GOALS_CHARS": (int, 12000),       # how much of my goals I carry into every prompt
+    "BRIEFING": (str, "notes/briefing.md"),   # my watchers' view of the operator's next 48 hours; off disables
+    "HANDOFF": (str, "on"),           # my last two live cycles: structured, raw tool log, or off
     "CURIOSITY_EVERY_CYCLES": (int, 5),   # one live cycle in this many, on average, takes its goal from my surprises; 0 = never
     # docs/plans/PLAN-consciousness.md: each mechanism on, behind a knob its kill test flips (shaft experiment …)
     "OUTCOME_CARDS": (str, "on"),         # before a kind of action that has been failing, what comparable ones led to
@@ -103,7 +106,8 @@ def parse_env_file(path: Path) -> dict[str, str]:
 # accepts (Bonsai's template raises on anything else, which would fail every call). The rest: PLAN-consciousness's knobs.
 CHOICES = {"LLM_REASONING_EFFORT": ("medium", "xhigh", "low"),
            "OUTCOME_CARDS": ("on", "off", "shuffled", "recall"), "WORKSPACE": ("competitive", "relevance", "off"),
-           "ATTENTION_SCHEMA": ("on", "off"), "COMMITMENTS": ("on", "off"), "FORECAST": ("on", "reserve", "off")}
+           "ATTENTION_SCHEMA": ("on", "off"), "COMMITMENTS": ("on", "off"), "FORECAST": ("on", "reserve", "off"),
+           "HANDOFF": ("on", "raw", "off")}
 
 
 def _coerce(kind: type, raw: str, name: str = ""):
