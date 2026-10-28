@@ -194,10 +194,15 @@ def _valid(out: object, schema: dict) -> str:
         if k not in out:
             return f"missing {k}"
         v, t = out[k], spec.get("type")
+        if isinstance(t, list):
+            if all(_valid({k: v}, {"properties": {k: {**spec, "type": kind}}}) for kind in t):
+                return f"{k} is not a {t}"
+            continue
         if t == "string" and not isinstance(v, str) or t == "boolean" and not isinstance(v, bool) or \
                 t == "integer" and (not isinstance(v, int) or isinstance(v, bool)) or \
                 t == "number" and (not isinstance(v, (int, float)) or isinstance(v, bool)) or \
-                t == "array" and not isinstance(v, list) or t == "object" and not isinstance(v, dict):
+                t == "array" and not isinstance(v, list) or t == "object" and not isinstance(v, dict) or \
+                t == "null" and v is not None:
             return f"{k} is not a {t}"
         if "enum" in spec and v not in spec["enum"]:
             return f"{k}={v!r} not in {spec['enum']}"
