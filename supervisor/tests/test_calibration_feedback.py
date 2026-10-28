@@ -107,7 +107,8 @@ VERDICT = {"criterion_met": "partial", "claim_supported": True, "criterion_quali
            "failure_mode": "", "reasoning": "r", "difficulty": 2, "difficulty_reason": "r", "novelty": 2,
            "origin": "self", "origin_supported": True, "origin_evidence": "r", "value": 2,
            "value_for": "own_capability", "value_reason": "r", "expectations": [], "unreported_surprises": [],
-           "reported_surprises_supported": True, "followup_useful": "na"}   # the surprise fields (PLAN-surprise M2)
+           "reported_surprises_supported": True, "delivery_supported": "na", "deliverable_met": "yes",
+               "self_imposed_clauses": "none", "self_audit": False, "followup_useful": "na"}   # the surprise fields (PLAN-surprise M2)
 SHOWN ={"lo": 70, "hi": 100, "met": 3, "n": 4}
 
 

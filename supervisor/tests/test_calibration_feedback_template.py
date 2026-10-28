@@ -56,7 +56,7 @@ def read(i):
     return ("read_file", {"path": f"notes/{i}.md"})   # distinct paths: the agent does not rerun an identical call
 
 
-FINISH = ("finish_cycle", {"what_happened": "Counted", "criterion_met": "partial", "learned": "Need a map"})
+FINISH = ("finish_cycle", {"delivered_via": "none", "what_happened": "Counted", "criterion_met": "partial", "learned": "Need a map"})
 
 
 class Fixture:

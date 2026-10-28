@@ -17,7 +17,7 @@ sandboxed agent over JSON lines (`talk --json`); pipes and `--plain` get line mo
 - The instance is held only while it replies: an open chat waiting for you does not block the API or a
   journal write-up. A chat left with nothing typed for `SHAFT_IDLE_MINUTES` (30) closes itself.
 - Terminal and API replies get about `TALK_REPLY_CALLS` (3) tool calls or `TALK_REPLY_S` (45) seconds
-  before the next model call must answer without tools. Each knob accepts 0 to disable its budget.
+  before the next model call must answer, offered only `queue_for_next_cycle`. Each knob accepts 0 to disable its budget.
   Running calls finish normally. `queue_for_next_cycle(task, why)` writes unfinished work to the
   instance's own inbox, marked `queued from conversation` with the conversation date. The next live
   cycle sees it and is asked to report back. Queuing itself sends nothing to the operator.

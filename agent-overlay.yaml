@@ -33,8 +33,10 @@ issues:
   # severity_labels: [P0, P1, P2]
   never_set: [wip, milestone]
 
-# gate:                          # unset: a workflow will ask, not invent
-#   - <test command>
+gate:                            # CONTRIBUTING.md; needs the worktree provisioned per docs/worktrees.md
+  # the services' interpreter (launchd plists: python@3.12) on a clean PATH. sandbox-exec refuses one under ~/.cache/uv
+  # (a runner's venv), and under 3.14 test_gate_suite's guarded-read test fails on main as well, 2026-10-28
+  - env -u VIRTUAL_ENV PATH=/opt/homebrew/bin:/usr/bin:/bin /opt/homebrew/opt/python@3.12/bin/python3.12 -m unittest discover -s supervisor/tests -t .
 
 worktree:
   root: ../shaft-<slug>
@@ -51,7 +53,7 @@ ship:
     # files: []                 # unset: auto-detect
     # changelog: CHANGELOG.md   # unset: auto if present; none to skip
     tag: "v{version}"
-  # procedure: docs/deploy.md   # optional; deploy/verify only
+  procedure: docs/deploy.md     # deploy/verify only (the operator asked for deploys, 2026-10-28)
 
 # review:
 #   failure_classes: AGENTS.md   # unset: falls back to project.conventions

@@ -25,7 +25,7 @@ from . import google
 API = "https://gmail.googleapis.com/gmail/v1/users/me"
 THREAD_RE = re.compile(r"^[0-9a-f]{6,32}$")          # Gmail's thread ids: hex
 HIDDEN = {"DRAFT", "TRASH", "SPAM"}                   # unsent drafts and deleted mail are never shown
-BODY_CHARS, THREAD_CHARS = 20_000, 60_000
+THREAD_CHARS = 6_000                                 # the template's tools.MAX_RESULT_CHARS, headers and footer included
 FILE_MAX = 25 * 1024 ** 2                             # Gmail's own limit on an attachment
 
 
@@ -188,23 +188,53 @@ def sender_line(sender: str, operator: str) -> str:
             "not the operator's]")
 
 
-def render(handle: str, labels: list[str], msgs: list[dict], acct: google.Account, operator: str) -> str:
-    from .broker import _marked
+def render(handle: str, labels: list[str], msgs: list[dict], acct: google.Account, operator: str,
+           message: int = 1, offset: int = 0) -> str:
+    message, offset = int(message), int(offset)
+    if not 1 <= message <= len(msgs):
+        raise ValueError(f"message is 1 to {len(msgs)} in {handle}")
+    bodies = [body_text(acct, m) for m in msgs]
+    if not 0 <= offset <= len(bodies[message - 1]):
+        raise ValueError(f"offset is 0 to {len(bodies[message - 1])} in message {message}")
+
+    def footer(i, pos, remaining):
+        return (f"\n\n[{len(msgs) - i + 1} message(s), {remaining} character(s) left; next: "
+                f"mail_read(id={handle!r}, message={i}, offset={pos})]")
+
+    # Reserve the largest possible footer before adding any text, so the runtime cannot cut the next call off.
+    remaining = sum(len(b) for b in bodies[message - 1:]) - offset
+    reserve = max(len(footer(i, len(bodies[i - 1]), remaining)) for i in range(message, len(msgs) + 1))
+    end = "\n\n[End of thread]"
+    budget = THREAD_CHARS - max(reserve, len(end))
     out = [f"Thread {handle} · label {', '.join(labels)} · {len(msgs)} message(s), oldest first"]
-    for i, m in enumerate(msgs, 1):
-        out.append(f"\n--- message {i} of {len(msgs)} ---")
+    used = len(out[0])
+    for i in range(message, len(msgs) + 1):
+        m, body = msgs[i - 1], bodies[i - 1]
+        pos = offset if i == message else 0
+        head = [f"\n\n--- message {i} of {len(msgs)} ---"]
         for name in ("From", "To", "Cc", "Date", "Subject"):
             if (value := _header(m, name.lower())):
-                out.append(f"{name}: {value}")
+                head.append(f"{name}: {value}")
         atts = attachments(m)
         if atts:
             from .messages import size_text
-            out.append("Attachments: " + "; ".join(f"{a['index']}. {a['name']} ({a['type']}, {size_text(a['size'])})"
+            head.append("Attachments: " + "; ".join(f"{a['index']}. {a['name']} ({a['type']}, {size_text(a['size'])})"
                                                    for a in atts)
                        + f"  → mail_attachment(id='{handle}', message={i}, attachment=<number or name>)")
-        out.append(sender_line(_header(m, "from"), operator))
-        out.append(_marked(body_text(acct, m), BODY_CHARS))
-    return _marked("\n".join(out), THREAD_CHARS)
+        head.append(sender_line(_header(m, "from"), operator))
+        prefix = "\n".join(head) + "\n"
+        room = budget - used - len(prefix)
+        if room < min(1, len(body) - pos):
+            if i == message:
+                raise ValueError("message headers and paging footer exceed the mail page budget")
+            return "".join(out) + footer(i, pos, remaining)
+        text = body[pos:pos + room]
+        out.extend((prefix, text))
+        used += len(prefix) + len(text)
+        remaining -= len(text)
+        if pos + len(text) < len(body):
+            return "".join(out) + footer(i, pos + len(text), remaining)
+    return "".join(out) + end
 
 
 def pick_attachment(msg: dict, which) -> dict:
