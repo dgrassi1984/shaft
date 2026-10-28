@@ -5,7 +5,8 @@ import json
 import re
 from datetime import datetime
 
-from . import agent, broker, clock, commitments, corrections, memory, prompts, recovery, staleness, surprises
+from . import (agent, broker, clock, commitments, corrections, drive_proposals, memory, projects, prompts, recovery,
+               staleness, surprises)
 from .llm import Client, LLMError
 from .state import State
 from .tools import FACT_LINE, SOURCE, Toolbox, _spec, for_log
@@ -162,7 +163,8 @@ def run(cfg, state: State, client: Client) -> str:
     toolbox.remote = {name: spec for name, spec in toolbox.remote.items() if name in ("record", "history")}
     toolbox.plugins = {}
     promises = cfg.COMMITMENTS == "on"
-    toolbox.extra = [CLOSE_SURPRISE, corrections.CLOSE, RETIRE_FACT] + ([commitments.SETTLE] if promises else [])
+    toolbox.extra = [projects.OPEN, projects.CLOSE, drive_proposals.PROPOSE, CLOSE_SURPRISE, corrections.CLOSE, RETIRE_FACT]
+    toolbox.extra += [commitments.SETTLE] if promises else []
     real_run = toolbox.run
     closed: list[dict] = []
 
@@ -193,6 +195,15 @@ def run(cfg, state: State, client: Client) -> str:
             return real_run(name, raw_args)
         if not isinstance(args, dict):
             return real_run(name, raw_args)
+        handlers = {"open_project": projects.open_project, "close_project": projects.close_project,
+                    "propose_drive_amendment": drive_proposals.propose}
+        if name in handlers:
+            try:
+                result = handlers[name](state.root, args, clock.now())
+            except (OSError, ValueError) as e:
+                result = f"ERROR: {name}: {type(e).__name__}: {e}"
+            toolbox.log.append({"tool": name, "args": for_log(raw_args), "result": result})
+            return result
         if name == "close_correction":
             try:
                 result = corrections.close(state.root, args, clock.now())
@@ -264,6 +275,8 @@ def run(cfg, state: State, client: Client) -> str:
         {"role": "user", "content": prompts.SLEEP.format(operator=cfg.OPERATOR_NAME, operator_file=operator_file,
                                                          settle=prompts.SETTLE if promises else "",
                                                          goals_budget=goals_budget)
+         + "\n\n## My projects (step 12)\n\n" + projects.block(state.root, clock.now(),
+             verdicts=fetched["verdicts"] if fetched else [])
          + "\n\n## Stale context review (step 10)\n\n" + stale
          + "\n\n## Possible fact conflicts (step 11; candidates, not proof)\n\n" + fact_candidates(state.root)
          + "\n\n## Verdicts the supervisor's judge gave since my last sleep\n\n" + (verdicts.strip() or "(none new)")
