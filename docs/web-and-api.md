@@ -16,7 +16,12 @@ sandboxed agent over JSON lines (`talk --json`); pipes and `--plain` get line mo
   runs older code than is checked out (`shaft model on` restarts it). `shaft status` shows the same.
 - The instance is held only while it replies: an open chat waiting for you does not block the API or a
   journal write-up. A chat left with nothing typed for `SHAFT_IDLE_MINUTES` (30) closes itself.
-- No limit on tool rounds in a conversation (Ctrl-C is the brake). Shift-Enter in iTerm2 needs
+- Terminal and API replies get about `TALK_REPLY_CALLS` (3) tool calls or `TALK_REPLY_S` (45) seconds
+  before the next model call must answer without tools. Each knob accepts 0 to disable its budget.
+  Running calls finish normally. `queue_for_next_cycle(task, why)` writes unfinished work to the
+  instance's own inbox, marked `queued from conversation` with the conversation date. The next live
+  cycle sees it and is asked to report back. Queuing itself sends nothing to the operator.
+- Shift-Enter in iTerm2 needs
   Settings / Profiles / Keys / General / "Report modifiers using CSI u" (Option-Enter always works).
 
 ## The API (`shaft api on`)

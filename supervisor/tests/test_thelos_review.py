@@ -70,6 +70,7 @@ class PauseAlertsTest(unittest.TestCase):
         self.now = datetime(2026, 10, 28, 12)
         for patch in (mock.patch.object(core, "SUP_DIR", self.sup),
                       mock.patch.object(panel, "SUP_DIR", self.sup),
+                      mock.patch.object(panel, "instance_names", return_value=[]),
                       mock.patch.object(preferences, "SUP_DIR", self.sup),
                       mock.patch.object(core, "PAUSE_ALERT_HOURS", 3),
                       mock.patch.object(core, "settings_file", return_value={}),
