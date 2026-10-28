@@ -343,6 +343,9 @@ def cmd_status(names: list[str]) -> int:
               + (f" · achieved difficulty {5 * sum(rated[-20:]) / len(rated[-20:]):.1f}/5 (last {len(rated[-20:])})"
                  if rated else "")
               + (f" · value {worth:.1f}/5 (last {len(metrics.valued(js)[-20:])})" if worth is not None else ""))
+        print("  " + metrics.delivery_line(metrics.valued(js)[-20:]))
+        for line in metrics.self_audit_lines(js):
+            print("  " + line)
         print(f"  LLM today   {calls} calls · {tokens} completion tokens · {errors} errors")
         print(f"  versions    {version.describe(name)}")
         if tools_off:
@@ -1008,9 +1011,13 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("stats", help="an instance's measured performance (judge + calibration)")
     p.add_argument("name", nargs="?", default=DEFAULT_INSTANCE)
     p = sub.add_parser("judge", help="judging: 'backfill' asks cycles judged before for the ratings and value they lack; "
-                                     "'second' runs the second judge on the cycles its sample picked")
-    p.add_argument("action", choices=["backfill", "second"])
+                                     "'second' runs the second judge; 'value-regrade' re-asks only value, dry run only (paid)")
+    p.add_argument("action", choices=["backfill", "second", "value-regrade"])
     p.add_argument("names", nargs="*")
+    p.add_argument("--min-value", type=int, default=0, help="value-regrade: minimum stored value")
+    p.add_argument("--value-for", default="own_capability,own_record", help="value-regrade: comma-separated beneficiaries")
+    p.add_argument("--since", default="", help="value-regrade: cycles since DATE (ISO format)")
+    p.add_argument("--limit", type=int, default=None, help="value-regrade: newest N matching cycles")
     p = sub.add_parser("battery", help="the capability battery: run, report, recall (questions), backup, off|on per instance")
     p.add_argument("action", choices=["run", "report", "recall", "backup", "off", "on"])
     p.add_argument("names", nargs="*")
@@ -1364,6 +1371,17 @@ def main(argv: list[str]) -> int:
         return 0
     if args.cmd == "judge" and args.action == "second":
         print(f"second judge: {metrics.second_pending(args.names or None)} cycle(s) graded")
+        return 0
+    if args.cmd == "judge" and args.action == "value-regrade":
+        if len(args.names) != 1:
+            print("value-regrade needs exactly one instance", file=sys.stderr)
+            return 2
+        instance_root(args.names[0])
+        try:
+            print(metrics.value_regrade(args.names[0], args.min_value, args.value_for, args.since, args.limit), end="")
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            return 2
         return 0
     if args.cmd == "judge":
         for name in args.names or instance_names():

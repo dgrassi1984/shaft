@@ -85,6 +85,9 @@ def judgment_text(j: dict, reasoning_chars: int | None = None) -> str:
     if j.get("value") is not None:
         out.append(f"Value {j['value']}/5, for {j.get('value_for')}" + (f": {j['value_reason']}" if j.get("value_reason") else "")
                    + (f" (graded later by {j['value_judge']})" if j.get("value_judge") else ""))
+    for key in ("delivery_supported", "deliverable_met", "self_imposed_clauses", "self_audit"):
+        if key in j:
+            out.append(f"{key}: {j[key]}")
     if j.get("origin"):
         out.append(f"Origin: {j['origin']} (I declared {j.get('origin_declared') or 'none'}; matches: "
                    f"{j.get('origin_supported')})" + (f" — {j['origin_evidence']}" if j.get("origin_evidence") else ""))
@@ -1502,7 +1505,8 @@ class Broker:
             if since and format == "json":
                 return json.dumps({"text": text, "verdicts": [
                     {**{key: r.get(key) for key in ("episode_ts", "judged_at", "criterion_met", "claim_supported",
-                                                   "failure_mode", "difficulty")},
+                                                   "failure_mode", "difficulty", "deliverable_met",
+                                                   "self_imposed_clauses", "self_audit", "delivery_supported")},
                      "followup_useful": r.get("followup_useful"),
                      "reviewed_at": _reviewed_at(r),
                      "second_criterion_met": (r.get("second") or {}).get("criterion_met")} for r in shown],

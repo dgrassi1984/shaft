@@ -130,7 +130,8 @@ class A2Test(unittest.TestCase):
             for verdict in page["verdicts"]:
                 self.assertEqual(set(verdict), {"episode_ts", "judged_at", "reviewed_at", "criterion_met",
                                                "claim_supported", "failure_mode", "difficulty", "second_criterion_met",
-                                               "followup_useful"})
+                                               "followup_useful", "delivery_supported", "deliverable_met",
+                                               "self_imposed_clauses", "self_audit"})
                 row = next(r for r in self.rows if r["episode_ts"] == verdict["episode_ts"])
                 self.assertIn(broker.judgment_text(row), page["text"])
             seen.extend(v["episode_ts"] for v in page["verdicts"])
@@ -146,10 +147,12 @@ class A2Test(unittest.TestCase):
         self.assertEqual(page["verdicts"], [
             {"episode_ts": "one", "judged_at": "2026-10-24T10:00:00", "reviewed_at": "2026-10-24 10:01:00",
              "criterion_met": "partial", "claim_supported": True, "failure_mode": "unsupported", "difficulty": 2,
-             "second_criterion_met": "no", "followup_useful": None},
+             "second_criterion_met": "no", "followup_useful": None, "delivery_supported": None,
+             "deliverable_met": None, "self_imposed_clauses": None, "self_audit": None},
             {"episode_ts": "two", "judged_at": "2026-10-24T10:01:00", "reviewed_at": "2026-10-24 10:01:00",
              "criterion_met": "partial", "claim_supported": True, "failure_mode": None, "difficulty": 2,
-             "second_criterion_met": None, "followup_useful": None}])
+             "second_criterion_met": None, "followup_useful": None, "delivery_supported": None,
+             "deliverable_met": None, "self_imposed_clauses": None, "self_audit": None}])
         self.assertEqual(page["text"], self.b._record("judgments", since="1970-01-01 00:00:00", limit=1))
         self.assertEqual(page["next_since"], "2026-10-24 10:01:00")
 
@@ -217,7 +220,8 @@ class A4Test(unittest.TestCase):
                    "origin": "self", "origin_supported": True, "origin_evidence": "r", "value": 2,
                    "value_for": "own_capability", "value_reason": "r",
                    "expectations": [], "unreported_surprises": [], "reported_surprises_supported": True,
-                   "followup_useful": "na"}
+                   "delivery_supported": "na", "deliverable_met": "yes",
+               "self_imposed_clauses": "none", "self_audit": False, "followup_useful": "na"}
         with tempfile.TemporaryDirectory(prefix="shaft-confidence-") as tmp, ExitStack() as stack:
             path = Path(tmp) / "judgments.jsonl"
             for name, value in (("judgments", []), ("unsampled", set()), ("live_episodes", [ep]),
