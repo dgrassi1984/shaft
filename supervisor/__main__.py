@@ -887,7 +887,13 @@ def cmd_trial(args) -> int:
         import threading
         rec = trial.replay_arm(PROJECT, args.name, st, trial.committed_code(PROJECT, args.name), model=args.model,
                                cache={}, cache_lock=threading.Lock(), billed=f"{args.name}@trial:replay",
-                               keep=Path(args.keep).resolve() if args.keep else None)
+                               keep=Path(args.keep).resolve() if args.keep else None,
+                               cycles=args.cycles, sleep_between=args.sleep,
+                               on_unit=lambda unit: trial._ledger({"instance": args.name, "trial": "replay",
+                                   "by": "operator", "kind": "arm", "model": args.model,
+                                   "usd": unit["usd"], "seconds": unit["seconds"], "ended": unit["ended"],
+                                   "tokens_in": unit["usage"]["prompt_tokens"],
+                                   "tokens_out": unit["usage"]["completion_tokens"]}))
         ep2 = rec["episode"] or {}
         print(f"state: {st['start_commit'][:10]} (cycle began {st['t0']}; inbox {st['inbox']})")
         print(f"exit {rec['exit']} · {rec['ended']} · {rec['seconds']} s · completed {rec['completed']} · "
@@ -903,7 +909,8 @@ def cmd_trial(args) -> int:
     change = _pairs(args.cand)
     try:
         t = trial.create(args.name, change, args.hypothesis, by="operator", episodes=args.episodes, n=args.n,
-                         base=_pairs(args.base) or None, allow_empty=args.aa, model=args.model)
+                         base=_pairs(args.base) or None, allow_empty=args.aa, model=args.model,
+                         cycles=args.cycles, sleep_between=args.sleep)
     except trial.TrialError as e:
         print(f"refused: {e}", file=sys.stderr)
         return 1
@@ -1053,6 +1060,9 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("consults", help="what each instance spent consulting other models, per model and run, and how "
                        "its consulted cycles fared (docs/plans/PLAN-model-choice.md)")
     p.add_argument("names", nargs="*")
+    p = sub.add_parser("compression", help="offline memory compression assay with held-out recall (#113)")
+    p.add_argument("name")
+    p.add_argument("--since", default="", help="inclusive sleep date: YYYY-MM-DD")
     p = sub.add_parser("metacog", help="how well each instance's confidence tells its met cycles from its missed ones: "
                        "AUROC (clauses apart), bias, resolution, meta-I, by domain, paired v3, claim confusion "
                        "matrix and doubt/first-error alignment (A1, #98)")
@@ -1207,6 +1217,11 @@ def main(argv: list[str]) -> int:
     p.add_argument("action", nargs="?", help="grant, revoke, grant-write, revoke-write, off — or, after calendars, the account alias")
     p.add_argument("alias", nargs="?", help="the account alias")
     p.add_argument("which", nargs="?", help="primary, a calendar's title, or its ID")
+    p = sub.add_parser("actions", help="action classes, history and approvals (#142)")
+    p.add_argument("name")
+    p.add_argument("action", nargs="?", choices=["restore", "overreach", "approve", "reject"])
+    p.add_argument("target", nargs="?", help="class to restore, or action/proposal id")
+    p.add_argument("--reason", default="", help="reject reason; 'over-reach' demotes the class")
     p = sub.add_parser("trial", help="trials of proposed changes: list, show, run (operator), replay, work")
     tsub = p.add_subparsers(dest="action", required=True)
     q = tsub.add_parser("list", help="every trial, newest last")
@@ -1222,6 +1237,8 @@ def main(argv: list[str]) -> int:
                    help="replace PATH in the current version (A) too — for planted tests")
     q.add_argument("--aa", action="store_true", help="A/A calibration: the 'change' is the current code itself")
     q.add_argument("--hypothesis", default="operator trial")
+    q.add_argument("--cycles", type=int, default=1, help="consecutive live cycles per arm from one past state")
+    q.add_argument("--sleep", action="store_true", help="sleep between each pair of replayed live cycles")
     q.add_argument("-n", type=int, default=0)
     q.add_argument("--episodes", nargs="*", default=[])
     q.add_argument("--model", choices=["auto", "cloud", "local"], default="auto")
@@ -1230,6 +1247,8 @@ def main(argv: list[str]) -> int:
     q.add_argument("ts", help="the episode's ts")
     q.add_argument("--model", default="local", help="'local' (its own configuration) or a cloud model id")
     q.add_argument("--keep", help="copy the replayed folder here")
+    q.add_argument("--cycles", type=int, default=1, help="consecutive live cycles from one past state")
+    q.add_argument("--sleep", action="store_true", help="sleep between each pair of replayed live cycles")
     tsub.add_parser("work", help="run the queued trials' tests and replays that may run now (the scheduler does this)")
     p = sub.add_parser("check", help="run the test gate against an instance's code")
     p.add_argument("name", nargs="?", default=DEFAULT_INSTANCE)
@@ -1358,6 +1377,31 @@ def main(argv: list[str]) -> int:
             print(f"unknown calendar action {args.action!r}: grant, revoke, grant-write, revoke-write or off", file=sys.stderr)
             return 2
         return cmd_calendar(args.target, args.action, args.alias, args.which)
+    if args.cmd == "actions":
+        from . import calendar_proposals
+        try:
+            if args.action and not args.target:
+                raise ValueError('an action needs a class or id')
+            if args.action == 'restore':
+                actions.restore(args.name, args.target)
+            elif args.action == 'overreach':
+                actions.overreach(args.name, args.target)
+            elif args.action in ('approve', 'reject'):
+                row = next((r for r in calendar_proposals.listing()
+                            if r['id'] == args.target and r['instance'] == args.name), None)
+                if row is None:
+                    raise ValueError('no such proposal for this instance')
+                row = (calendar_proposals.decide(args.target, True) if args.action == 'approve' else
+                       calendar_proposals.reject(args.target, args.reason))
+                print(json.dumps(row, ensure_ascii=False))
+                return 1 if row['state'] == 'failed' else 0
+            state = actions.status(args.name)
+            state['proposals'] = [r for r in calendar_proposals.listing() if r['instance'] == args.name]
+            print(json.dumps(state, ensure_ascii=False, indent=2))
+            return 0
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            return 2
     if args.cmd == "autonomy":
         return autonomy.autonomy(args.action)
     if args.cmd == "status":
@@ -1437,6 +1481,14 @@ def main(argv: list[str]) -> int:
         for name in names:
             print(surprise.disposition_text(name) + "\n")
         return code
+    if args.cmd == "compression":
+        from . import compression
+        instance_root(args.name)
+        try:
+            print(compression.report(args.name, args.since))
+        except (ValueError, mind.MindError) as e:
+            raise SystemExit(str(e))
+        return 0
     if args.cmd in ("metacog", "attention", "commitments", "provenance", "consults"):
         import importlib
         names = args.names or instance_names()
