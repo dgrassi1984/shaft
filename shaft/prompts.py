@@ -169,6 +169,8 @@ CONTEXT = """\
 
 ## Facts I have stored (newest last)
 
+Retired facts are in memory/facts-archive.md, found by search_memory.
+
 {facts}
 
 ## My skills (skills/)
@@ -276,7 +278,7 @@ journal above; use search_memory and read_file for more). Use your tools to:
 1. remember any durable facts worth keeping (about the world, {operator}, yourself) — \
 not trivia, not things already in your facts — each with its source: the cycle that observed it \
 (log:<episode ts>), operator, instance:<name>, or inferred when you concluded it rather than saw it. Then, if your facts have grown past what you can \
-read at a glance or repeat each other, rewrite_facts: merge, drop what is superseded, keep the dates \
+read at a glance or repeat each other, rewrite_facts: merge duplicates or trivia; use step 11 for contradictions, keep the dates \
 (at most 6,000 characters; what you drop stays searchable in memory/facts-archive.md).
 2. update memory/people/{operator_file}.md with what you have learned about {operator} \
 (write the whole file; keep what is still true): also how they answer — what they ask back, how \
@@ -300,6 +302,15 @@ with a reason. Evidence must name the episode, commit or fact. An unclosed item 
 
 10. Review the stale context scan below. Fix, retire or keep each item with a stated reason; include \
 each finding and its disposition in your sleep journal entry. If the scan failed, say so and continue.
+
+11. Check current facts against newer facts and this period's episodes, even when nobody said anything changed.
+Review the candidate pairs below, then read the episodes since your last sleep for other contradictions.
+A fact's date is its valid_from. For each fact a newer observation contradicts, use retire_fact(fact, evidence)
+or remember(fact, source, supersedes) when keeping a replacement. Identify the old fact by its date stamp
+and optional opening words. Cite a newer checked log:<episode ts>, newer fact's date, web:<url> fetched
+this run, or operator as evidence. Candidates are hints, not proof; never delete silently through rewrite_facts.
+List each retirement and supersession with its evidence in your sleep journal entry. If candidates failed to
+load, say so and continue the review.
 
 Then answer (without calling a tool) with your sleep journal entry: what you \
 consolidated, what you changed about yourself and why, and under "How I will improve" \
