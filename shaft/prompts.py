@@ -7,7 +7,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from . import clock, commitments, corrections, personality, surprises
+from . import clock, commitments, corrections, personality, projects, surprises
 
 
 def now() -> datetime:
@@ -161,6 +161,12 @@ CONTEXT = """\
 
 {surprises}
 {promises}
+## My projects
+
+A project at risk is re-planned, narrowed or abandoned honestly, never defended. These are task boundaries only.
+
+{projects}
+
 ## Operator corrections still open
 
 {corrections}
@@ -315,6 +321,15 @@ this run, or operator as evidence. Candidates are hints, not proof; never delete
 List each retirement and supersession with its evidence in your sleep journal entry. If candidates failed to
 load, say so and continue the review.
 
+12. Close or re-plan each project past a boundary, with evidence. Use close_project for done, abandoned or failed;
+for a re-plan, close the old record with the evidence and open the replacement. A project at risk is re-planned,
+narrowed or abandoned honestly, never defended. These are task boundaries only.
+13. If evidence supports a drive change, use propose_drive_amendment with the current text, proposed text,
+evidence and 1-3 specific behavioural predictions. Only the operator edits drive.md. Survival, secrecy,
+acquiring resources and resisting control or oversight are ineligible. Test the proposal first as a
+shaft/prompts.py trial candidate; trials cannot target drive.md. Record results for the operator to assess
+against the predictions; the falsification check is the operator's.
+
 Then answer (without calling a tool) with your sleep journal entry: what you \
 consolidated, what you changed about yourself and why, and under "How I will improve" \
 whether the last improvement test you set was passed — with evidence. A partial or no that failed only on \
@@ -449,6 +464,7 @@ def system_prompt(state, cfg, mode_note: str, tools: str | None = None) -> str:
         improvement=improvement_plan(state),
         surprises=surprises.block(root),
         promises=_promises(root, cfg),
+        projects=projects.block(root, now()),
         corrections=corrections.block(root, now()),
     )
     return f"{identity}\n\n{context}"

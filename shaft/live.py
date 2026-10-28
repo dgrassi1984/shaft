@@ -17,8 +17,8 @@ from __future__ import annotations
 import os
 import shutil
 
-from . import (agent, base_rate, broker, cards, clock, commitments, forecast, images, loopguard, memory, pausing, prompts,
-               recovery, surprises, workspace)
+from . import (agent, base_rate, broker, cards, clock, commitments, forecast, images, loopguard, memory, pausing, projects,
+               prompts, recovery, surprises, workspace)
 from .agent import Control
 from .llm import Client
 from .state import State
@@ -133,12 +133,18 @@ def run(cfg, state: State, client: Client) -> str:
             if why := surprises.ineligible(state.root, m.group(1) if m else ref):
                 listed = ", ".join(it["id"] for it in surprises.queue(state.root)) or "none"
                 return f"ERROR: origin_ref {ref!r}: {why} (open in my queue: {listed})"
+        project = args.get("project")
+        if project is not None and (not isinstance(project, str) or
+                projects.fold(state.root).get(project, {}).get("status") != "open"):
+            return "ERROR: project must name an open project"
         pausing.activity(keep=True, goal=str(args.get("goal", ""))[:300])
         record["intent"] = {"goal": args["goal"], "success_criterion": args["success_criterion"],
                             "confidence": conf, "confidence_of": CONFIDENCE_OF_CLAUSES if mode == "clauses" else CONFIDENCE_OF,
                             "origin": origin, "origin_ref": ref,
                             "predictions": predictions(args.get("predictions")),
                             "at": clock.now().isoformat(timespec="seconds")}
+        if project is not None:
+            record["intent"]["project"] = project
         if mode == "clauses":
             record["intent"]["clauses"] = [{"clause": c["clause"], "confidence": c["confidence"]} for c in clauses]
         if attention_on:
@@ -224,7 +230,7 @@ def run(cfg, state: State, client: Client) -> str:
     controls = {
         "declare_intent": Control(_spec(
             "declare_intent", "Declare this cycle's goal BEFORE acting.",
-            {"goal": S, "success_criterion": S,
+            {"goal": S, "success_criterion": S, "project": {"type": "string", "description": "optional open project id"},
              "confidence": {"type": "integer", "description": "0-100, your honest probability that the "
                             "criterion will be fully met (criterion_met yes; partial counts as not met)"},
              "origin": {"type": "string", "enum": list(ORIGINS),
@@ -259,6 +265,7 @@ def run(cfg, state: State, client: Client) -> str:
              **({"commitments": PROMISES} if cfg.COMMITMENTS == "on" else {})},
             ["what_happened", "criterion_met", "learned", "delivered_via"]), finish, stops=True),
     }
+    controls.update(projects.controls(state.root, clock.now))
     if mode == "clauses":
         schema = controls["declare_intent"].spec["function"]["parameters"]
         del schema["properties"]["confidence"]
@@ -378,6 +385,8 @@ def run(cfg, state: State, client: Client) -> str:
                "completed": completed(toolbox.log, toolbox.plugins),
                "inbox": [n for n, _ in inbox], "curiosity": curiosity, "cards": held.record}
     episode.update(toolbox.loop_guard.record())
+    env = broker.envelope()
+    episode["project_usage"] = {"calls": env.get("calls_used"), "usd": env.get("run_usd")} if env else None
     if outcome.wrapped_up:
         episode["wrapped_up"] = outcome.wrapped_up
     if os.environ.get("SHAFT_RUN_STARTED"):   # the supervisor's start of this run: my consults are booked against it
