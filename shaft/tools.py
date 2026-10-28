@@ -107,6 +107,46 @@ VIEW_IMAGE = _spec("view_image", "Look at an image file (JPEG, PNG, GIF or WebP)
 
 WEB_READS = ("fetch_page", "http_request", "run")   # the tools whose successful result is a page I saw (remember web:)
 
+# Handoff evidence (#104), from BUILTINS and the supervisor's broker registry. Plugins and shell runs are opaque:
+# record the successful invocation, never infer that the work claimed in its prose happened.
+STATE_CHANGING = frozenset({
+    "write_file", "append_file", "rewrite_facts", "write_digest", "remember", "update_self_model",
+    "update_personality", "commit_to", "settle_commitment", "close_surprise", "send_message", "run",
+    "secret_set", "secret_delete", "delegate_coding", "set_config", "request_pause", "decline_task",
+    "state_preference", "trial", "mail_attachment", "calendar_create", "calendar_move", "calendar_respond",
+})
+
+
+def completed(entries: list[dict], plugins: dict) -> list[str]:
+    """At most eight successful state-changing calls, with bounded argument summaries from the log alone."""
+    from . import surprises   # imported here: surprises reads episodes, which this module's callers write
+    out = []
+    for entry in entries:
+        name, result = entry.get("tool"), entry.get("result", "")
+        if not isinstance(result, str) or result.startswith("(held, not run yet)") or (
+                (surprises.flag(result) or ("",))[0] in ("error", "refused", "nonzero_exit", "stderr_on_success",
+                                                         "http_error")):
+            continue   # the same failure shapes the surprise rule counts: a failed write did not happen
+        raw = str(entry.get("args") or "{}")
+        try:
+            args = json.loads(raw)
+        except ValueError:
+            args = {}   # for_log may have cut the arguments; ordinary writers are still evidence
+        if not isinstance(args, dict):
+            args = {}
+        changes = name in STATE_CHANGING or name in plugins
+        if name == "http_request":
+            changes = str(args.get("method", "GET")).upper() not in ("GET", "HEAD", "OPTIONS") or bool(args.get("save_to"))
+        elif name == "history":
+            changes = bool(args.get("save_as"))
+        if not changes:
+            continue
+        summary = (json.dumps({k: str(v)[:80] for k, v in args.items()}, ensure_ascii=False) if args else raw)
+        out.append(f"{name}: {' '.join(summary.split())[:240]}")
+        if len(out) == 8:
+            break
+    return out
+
 
 class Toolbox:
     def __init__(self, root: Path, extra: list[dict] | None = None):

@@ -22,7 +22,7 @@ from . import (agent, base_rate, broker, cards, clock, commitments, forecast, im
 from .agent import Control
 from .llm import Client
 from .state import State
-from .tools import Toolbox, _spec, for_log
+from .tools import Toolbox, _spec, completed, for_log
 
 S = {"type": "string"}
 ORIGINS = ("self", "operator", "instance")
@@ -184,6 +184,13 @@ def run(cfg, state: State, client: Client) -> str:
         record["finish"] = {"what_happened": args.get("what_happened", ""), "criterion_met": met,
                             "learned": args.get("learned", ""), "surprises": surprises.clean(args.get("surprises")),
                             "resolves": resolves(args.get("resolves"))}
+        unfinished = args.get("unfinished")
+        record["finish"]["unfinished"] = [s for s in unfinished if isinstance(s, str)] \
+            if isinstance(unfinished, list) else []
+        next_ = args.get("next_action")
+        if isinstance(next_, dict):
+            record["finish"]["next_action"] = {k: next_[k] for k in ("action", "revise_if")
+                                               if isinstance(next_.get(k), str)}
         promised = commitments.clean(args.get("commitments")) if toolbox.commit_source else []
         if promised:   # each recorded as commit_to would; one it refuses (a past due date) is said, never fatal
             record["finish"]["commitments"] = [_promise(c) for c in promised]
@@ -211,6 +218,10 @@ def run(cfg, state: State, client: Client) -> str:
             "finish_cycle", "End the cycle and report the outcome against the criterion.",
             {"what_happened": S, "criterion_met": {"type": "string", "enum": ["yes", "partial", "no"]},
              "learned": S,
+             "unfinished": {"type": "array", "items": S, "description": "work started but not done; [] if none"},
+             "next_action": {"type": "object", "properties": {"action": S, "revise_if": S},
+                             "required": ["action", "revise_if"],
+                             "description": "one next step and the condition under which to revise it"},
              "surprises": {"type": "array", "description": "what contradicted what you expected this cycle — a "
                            "prediction, or an assumption your intent made; [] if nothing did",
                            "items": {"type": "object", "properties": {"expected": S, "observed": S, "so_what": S},
@@ -273,7 +284,8 @@ def run(cfg, state: State, client: Client) -> str:
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": images.with_attached(   # images attached to my messages (PLAN-vision.md)
-            prompts.LIVE.format(steps=cfg.MAX_STEPS_LIVE, inbox=inbox_text(inbox))
+            prompts.LIVE.format(steps=cfg.MAX_STEPS_LIVE, inbox=inbox_text(inbox),
+                                briefing=prompts.briefing(state.root, cfg), handoff=prompts.handoff(state.root, cfg))
             + (prompts.CURIOSITY if curiosity["drawn"] else "")
             + "\n\n## My operational envelope (from the supervisor, at the start of this cycle)\n\n"
             + prompts.envelope_text(broker.envelope(), agent.time_left())
@@ -318,6 +330,7 @@ def run(cfg, state: State, client: Client) -> str:
     ended = clock.now()
     episode = {"ts": ended.isoformat(timespec="seconds"), "kind": "live", "intent": intent, "finish": fin,
                "ended_by": outcome.ended_by, "steps": outcome.steps, "tools": toolbox.log,
+               "completed": completed(toolbox.log, toolbox.plugins),
                "inbox": [n for n, _ in inbox], "curiosity": curiosity, "cards": held.record}
     if outcome.wrapped_up:
         episode["wrapped_up"] = outcome.wrapped_up
