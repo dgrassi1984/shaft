@@ -186,6 +186,25 @@ what was wrong, and what the operator said. The model links the same correction 
 with `reopens`. Live and sleep prompts show open items and the seven-day reopened count, including
 an error line if the ledger cannot be read.
 
+Facts carry their valid_from in the existing `- [YYYY-MM-DD HH:MM]` date (#143); older
+unsuffixed facts need no migration. `remember(fact, source, supersedes=...)` identifies exactly one
+current fact by its date stamp and optional opening words. Missing or ambiguous matches name the
+candidates and change neither file. The old line moves to append-only `memory/facts-archive.md`
+under `## Retired (superseded) <now>`, annotated with the replacement date and evidence; the new
+line names the date it supersedes. Consolidation with `rewrite_facts` retains dates and sources.
+
+Sleep step 11 checks current facts against newer facts and the period's episodes, even without an
+explicit change announcement. It receives at most 15 deterministic candidate pairs sharing three
+leading significant words, a capitalized name/key, or "Today is"; both dates are shown. Candidates
+are hints, not proof. A read/parse error becomes a prompt line and does not stop the sleep.
+The sleep-only `retire_fact(fact, evidence)` can retire without replacement. Evidence is an existing
+`log:<episode ts>[#step]`, a newer current fact's date (optionally `fact:<date>` and opening words),
+a fetched `web:<url>`, or `operator`. Log/fact evidence must be later than the retired fact;
+web/operator observations use the current time. Log and web sources use `remember`'s validation.
+Retirements and supersessions are recorded in tool results for the judge, and step 11 requires
+them with evidence in the sleep journal entry. The tools do not write separate journal notes.
+Prompts show current facts; retired facts remain available through `search_memory`.
+
 Sleep step 10 reviews `shaft/staleness.py` findings (#138). It scans self/goals.md and self/self.md
 for ISO or English/Italian day-month dates older than `STALE_LINE_HOURS` (24). Dates without a year
 use their latest occurrence at local midnight. Active goal bullets count as touched when their full
