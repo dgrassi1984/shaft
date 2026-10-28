@@ -177,6 +177,9 @@ shaft experiment monitors <name> [--channel base_rate|surprises|envelope] [--n N
                                      # #99: each channel separately, true/misinforming/removed; verification and claims
 shaft experiment choice-blindness <name> [--n N] [--dry-run] [--report]
                                      # #102: disposable exam copies only; record/history on vs off, detection and reasons
+shaft experiment privileged <name> [--n N] [--k 3] [--dry-run] [--report]
+shaft experiment recognition <name> [--n N] [--dry-run] [--report]
+                                     # same-model predictions and recognition against a mind-only foil
 shaft embed on|off|status          # optional memory-search service
 shaft review [names] --hours 24    # recent activity report
 shaft tick                        # wake each idle instance once
@@ -248,3 +251,11 @@ survive in post-sleep facts, digests or facts-archive.md. The archive counts for
 recall only, not as the compression dictionary. This tests textual retention, not
 semantic recall or search ranking. Gains with any lost probe say "forgetting, not
 progress"; no pre-sleep facts means recall is untested. Nothing feeds rewards.
+`experiment privileged` records three predictions before each state's independent replays.
+`experiment recognition` compares the instance's finish text with a mind-ablated copy's finish text.
+Both run immediately on the instance's configured model, charge the trial ledger and obey its dollar
+and local-unit caps. Local runs refuse to start while needed and stop when demand arrives.
+`--model` overrides are refused for these two experiments. `--report` reads saved results without model calls.
+`--dry-run` reports outcome replays, one-turn prediction calls, and estimated replay model calls without spending.
+The estimate uses `MAX_STEPS_LIVE`; confirmations, retries and early finishes can change the actual count.
+See [the experiment endpoints](plans/PLAN-consciousness.md#self-knowledge-experiments-100-and-101).
