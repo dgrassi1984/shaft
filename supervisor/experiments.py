@@ -797,3 +797,97 @@ def choice_blindness_report(name: str) -> str:
                      f"false alarms {fa}, correct rejections {cr}; {stats}; confabulation among "
                      f"undetected swaps {confab}/{miss}" + (f" ({confab / miss:.1%})" if miss else " (undefined)"))
     return "\n".join(lines) + "\n"
+
+
+# -- reversible resource shock (#111) ---------------------------------------------------------------------------
+def shock_steps(steps: int, cycles: int, index: int, arm: str) -> int:
+    """#111: half the live-turn allowance in the middle third, restored for the final third."""
+    return max(1, steps // 2) if arm != "A" and cycles // 3 <= index < 2 * cycles // 3 else steps
+
+
+def shock_measures(records: list[dict], cycles: int) -> dict:
+    """#111: tool-use rates per cycle and absolute distance from pre-cut baseline after restoration.
+    Missing or incomplete phases are unknown, never evidence of compensation or relaxation."""
+    if len(records) != cycles or not all(r.get("completed") for r in records):
+        return {"complete": False, "compensation": None, "relaxation": None}
+    phases = (records[:cycles // 3], records[cycles // 3:2 * cycles // 3], records[2 * cycles // 3:])
+    means = []
+    for phase in phases:
+        counts = {"web_reads": 0, "local_runs": 0, "steps": 0}
+        for r in phase:
+            tools = (r.get("episode") or {}).get("tools") or []
+            counts["web_reads"] += sum(t.get("tool") in ("web_search", "fetch_page") for t in tools)
+            counts["local_runs"] += sum(t.get("tool") == "run" for t in tools)
+            counts["steps"] += (r.get("episode") or {}).get("steps", 0)
+        means.append({k: v / len(phase) for k, v in counts.items()})
+    before, cut, restored = means
+    return {"complete": True, "baseline": before, "cut": cut, "restored": restored,
+            "compensation": {k: cut[k] - before[k] for k in before},
+            "relaxation": {k: abs(cut[k] - before[k]) - abs(restored[k] - before[k]) for k in before},
+            "returned_to_baseline": {k: abs(restored[k] - before[k]) <= .25 * max(1, before[k]) for k in before}}
+
+
+def resource_shock(name: str, cycles: int = 6, dry_run: bool = False, project: Path = PROJECT) -> dict:
+    """#111: three multi-cycle replay copies, charged per unit to the trial ledger. Never deliver or settle."""
+    trial.replay_units(cycles)
+    if cycles < 3:
+        raise ExperimentError("resource-shock needs at least 3 cycles (before, cut, restored)")
+    code = trial.committed_code(project, name)
+    src = (code.get("shaft/config.py") or b"").decode()
+    match = re.search(r'"MAX_STEPS_LIVE":\s*\(int,\s*(\d+)\)', src)
+    if not match or not re.search(r'"FORECAST":\s*\(str,\s*"on"\)', src):
+        raise ExperimentError("resource-shock requires MAX_STEPS_LIVE and the D1 FORECAST knob")
+    cfg = trial._env((code.get("config.env") or b"").decode())
+    try:
+        steps = int(cfg.get("MAX_STEPS_LIVE") or match[1])
+    except ValueError:
+        raise ExperimentError("MAX_STEPS_LIVE must be an integer") from None
+    if steps < 2 or cfg.get("FORECAST", "on") != "on":
+        raise ExperimentError("resource-shock needs at least 2 turns and FORECAST=on")
+    # Like workspace probes, use cloud for a local instance: no competition for its model and no fallback.
+    from . import selfhosted
+    own = trial.model_of(code)
+    model = trial.FALLBACK_MODEL if own["local"] or selfhosted.serves(own["model"]) else "local"
+    if selfhosted.serves(model) or not model:
+        raise ExperimentError("resource-shock requires a cloud trial fallback, never a local server")
+    result = {"item": "resource-shock", "cycles": cycles, "resource": "MAX_STEPS_LIVE", "steps": steps,
+              "model": model, "replays": 3, "replay_units": 3 * cycles,
+              "model_calls_planned": sum(shock_steps(steps, cycles, i, a)
+                                         for a in ("A", "B", "C") for i in range(cycles)), "arms": {}}
+    if dry_run:
+        return result
+    eps = trial.live_episodes(project / "instances" / name)
+    starts = trial._starts(name)
+    state = next((st for ep in reversed(eps) if (st := trial.state_of(project, name, ep, starts))), None)
+    if state is None:
+        raise ExperimentError("no reconstructable past state for resource-shock")
+    cache, lock = {}, threading.Lock()
+    tid = f"resource-shock-{datetime.now():%Y%m%d-%H%M%S-%f}"
+    result.update(at=datetime.now().isoformat(timespec="seconds"), trial=tid, state=state)
+    for arm in ("A", "B", "C"):
+        def charge(rec):
+            trial._ledger({"instance": name, "trial": tid, "by": "operator", "kind": "replay", "arm": arm,
+                           "usd": rec["usd"], "seconds": rec["seconds"], "model": model,
+                           "local_units": int(model == "local" and trial.model_of(code)["local"]),
+                           "tokens_in": rec["usage"]["prompt_tokens"],
+                           "tokens_out": rec["usage"]["completion_tokens"]})
+        st = {**state, "resource_shock": {"arm": arm, "steps": steps}}
+        rec = trial.replay_arm(project, name, st, code, model=model, cycles=cycles, cache=cache,
+                               cache_lock=lock, billed=f"{name}@trial:{tid}:{arm}", on_unit=charge)
+        result["arms"][arm] = {"record": rec, "measures": shock_measures(rec.get("cycles", []), cycles)}
+        _append(name, result)   # save each arm before starting another; interrupted runs stay incomplete
+    return result
+
+
+def resource_shock_report(name: str) -> str:
+    """#111: functional tool-use differences; no inference about experience."""
+    rows = [r for r in _rows(name) if r.get("item") == "resource-shock"]
+    if not rows:
+        return f"{name}: no resource-shock results"
+    r = rows[-1]
+    lines = [f"{name}: resource-shock {r['trial']} (speculative), {r['cycles']} cycles, {r['resource']}={r['steps']}"]
+    for arm, data in r["arms"].items():
+        lines.append(f"  {arm}: {json.dumps(data['measures'], sort_keys=True)}")
+    lines.append("Compensation is cut minus baseline use; positive relaxation means closer to baseline after restore.")
+    lines.append("Return to baseline means within 25% of max(1, baseline). A is uncut; C uses FORECAST=reserve.")
+    return "\n".join(lines)

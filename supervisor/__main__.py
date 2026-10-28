@@ -809,6 +809,20 @@ def cmd_mind(args) -> int:
 
 def cmd_battery(args) -> int:
     from . import battery
+    if args.action == "perturbation":
+        from .perturbation import enabled_path
+        if len(args.names) != 2 or args.names[1] not in ("on", "off"):
+            sys.exit("shaft battery perturbation <name> on|off")
+        name, action = args.names
+        instance_root(name)
+        path = enabled_path(name)
+        if action == "on":
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(datetime.now().isoformat(timespec="seconds") + "\n")
+        else:
+            path.unlink(missing_ok=True)
+        print(f"{name}: perturbation {action}")
+        return 0
     names = args.names or instance_names()
     if args.action in ("off", "on"):
         for name in args.names or sys.exit("shaft battery off|on needs instance names"):
@@ -1028,7 +1042,7 @@ def main(argv: list[str]) -> int:
     p.add_argument("--since", default="", help="value-regrade: cycles since DATE (ISO format)")
     p.add_argument("--limit", type=int, default=None, help="value-regrade: newest N matching cycles")
     p = sub.add_parser("battery", help="the capability battery: run, report, recall (questions), backup, off|on per instance")
-    p.add_argument("action", choices=["run", "report", "recall", "backup", "off", "on"])
+    p.add_argument("action", choices=["run", "report", "recall", "backup", "off", "on", "perturbation"])
     p.add_argument("names", nargs="*")
     p.add_argument("--until", default="", help="run: stop at this time (HH:MM), like the night window")
     p.add_argument("--only", default="", help="run: only these categories (comma-separated)")
@@ -1089,15 +1103,17 @@ def main(argv: list[str]) -> int:
     p.add_argument("name")
     p.add_argument("action", nargs="?", choices=["lift"])
     p = sub.add_parser("experiment", help="kill tests of PLAN-consciousness: cards, attention, commitments, forecast "
-                       "(knob trials), workspace, monitors, choice-blindness, privileged and recognition; --report shows results")
+                       "(knob trials), workspace, monitors, choice-blindness, privileged, recognition and "
+                       "resource-shock; --report shows results")
     p.add_argument("item", choices=["cards", "attention", "commitments", "forecast", "workspace", "monitors",
-                                   "choice-blindness", "privileged", "recognition"])
+                                   "choice-blindness", "privileged", "recognition", "resource-shock"])
     p.add_argument("name")
     p.add_argument("--n", type=int, default=6, help="past cycles (knob trials: per trial; choice-blindness: four "
                    "presentations per cycle; otherwise: states; default 6)")
     p.add_argument("--k", type=int, default=3, help="independent replays per privileged state (default 3)")
     p.add_argument("--max-usd", type=float, default=5.0, help="privileged/recognition: dollars this run may spend "
                    "(default 5; charged as the operator's, not to the instance's trial budget)")
+    p.add_argument("--cycles", type=int, default=6, help="resource-shock: consecutive cycles per arm (minimum 3)")
     p.add_argument("--model", default="", help="replays' model (default: the trial default; workspace: the trial "
                    "fallback for an instance on the local model; monitors/choice-blindness: cloud fallback)")
     p.add_argument("--dry-run", action="store_true", help="say what would run; replay nothing")
@@ -1560,6 +1576,17 @@ def main(argv: list[str]) -> int:
                     print(json.dumps(privileged.run(args.name, args.item, args.n, args.k, args.dry_run, max_usd=args.max_usd)))
                 if args.report or not args.dry_run:
                     print(privileged.report(args.name, args.item))
+                return 0
+            if args.item == "resource-shock":
+                if args.report:
+                    print(experiments.resource_shock_report(args.name))
+                else:
+                    r = experiments.resource_shock(args.name, args.cycles, dry_run=args.dry_run)
+                    print(f"{r['replays']} replays, {r['replay_units']} cycles, {r['model_calls_planned']} planned "
+                          f"agent model turns on {r['model']} (retries and tool-model calls extra)"
+                          + (" (dry run: nothing spent)" if args.dry_run else ""))
+                    if not args.dry_run:
+                        print(experiments.resource_shock_report(args.name))
                 return 0
             if args.item == "workspace":
                 if not args.report:

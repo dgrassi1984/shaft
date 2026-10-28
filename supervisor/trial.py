@@ -430,7 +430,12 @@ def _replay(project, name, state, code, tmp, *, model, cache, cache_lock, billed
     units = []
     for i in range(replay_units(cycles, sleep_between)):
         kind = "sleep" if sleep_between and i % 2 else "live"
-        rec = _replay_cycle(project, name, state, code, tmp, dest, kind=kind, clock=clock,
+        cycle_state = state
+        if state.get("resource_shock"):
+            from .experiments import shock_steps
+            spec = state["resource_shock"]
+            cycle_state = {**state, "resource_shock_steps": shock_steps(spec["steps"], cycles, i, spec["arm"])}
+        rec = _replay_cycle(project, name, cycle_state, code, tmp, dest, kind=kind, clock=clock,
                             model=model, cache=cache.setdefault(i, {}), cache_lock=cache_lock,
                             billed=f"{billed}:u{i}" if cycles > 1 else billed, should_stop=should_stop)
         units.append(rec)
@@ -485,6 +490,9 @@ def _replay_cycle(project, name, state, code, tmp, dest, *, kind, clock, model, 
     extra = {"SHAFT_DEADLINE": f"{time.time() + budget - 60:.0f}", "SHAFT_SCHEDULE": describe_schedule(name, _config(project, name)),
              "SHAFT_NOW": clock.isoformat(timespec="seconds"),
              "SHAFT_OPEN_TALKS": ",".join(_talk_ids(dest))}   # no write-ups of old conversations, in either run
+    if "resource_shock_steps" in state:
+        extra["MAX_STEPS_LIVE"] = str(state["resource_shock_steps"])
+        extra["FORECAST"] = "reserve" if state["resource_shock"]["arm"] == "C" else "on"
     ports = list(LLM_PORTS)
     if model == "local":
         port = model_of({k: v for k, v in code.items() if v is not None}).get("port")
@@ -951,6 +959,10 @@ def _lock_holder_alive(name: str) -> bool:
 def local_free_for(seconds: float, project: Path = PROJECT) -> tuple[bool, str]:
     """Whether the local model is free now and for the next `seconds`: no run or conversation of an instance on
     it, and no wake or sleep coming due."""
+    return _local_free_for(seconds, project)
+
+
+def _local_free_for(seconds: float, project: Path, held_battery: str = "") -> tuple[bool, str]:
     from . import autonomy
     from .core import paused
     from .runner import open_conversations
@@ -962,13 +974,16 @@ def local_free_for(seconds: float, project: Path = PROJECT) -> tuple[bool, str]:
     for n in _instances(project):
         cfg = _config(project, n)
         if cfg.get("LLM_BASE_URL", "") == "broker":
-            continue
-        if _lock_holder_alive(n):
+            from . import selfhosted
+            if not held_battery or not selfhosted.serves(cfg.get("LLM_MODEL")) or not localmodel.is_service(
+                    selfhosted.server(cfg["LLM_MODEL"])["url"]):
+                continue
+        if n != held_battery and _lock_holder_alive(n):
             return False, f"{n} is running"
         if open_conversations(n):
             return False, f"{n} is in a conversation"
         interval = autonomy.wake_interval(n, cfg)
-        if due_any and interval and not paused(n):
+        if n != held_battery and due_any and interval and not paused(n):
             last = (st.get("wakes") or {}).get(n)
             nxt = datetime.fromisoformat(last) + interval if last else now
             if nxt <= now + timedelta(seconds=seconds):
