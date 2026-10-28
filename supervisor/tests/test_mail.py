@@ -294,6 +294,17 @@ class EnforcementTest(MailCase):
             b.call("mail_read", {"id": "work/aaa111"})
         self.assertIn(f"at most {broker.MAIL_CALLS_PER_RUN} mail calls", self.refused(b, "mail_read", {"id": "work/aaa111"}))
 
+    def test_continuation_pages_do_not_count_against_the_mail_cap(self):
+        """#134: at 6,000 characters a page, a 160,000-character thread needs ~28 pages; were each page counted
+        against MAIL_CALLS_PER_RUN, one long thread would use up the run's mail budget and stop half-way. A
+        continuation still checks the label (test_mail_paging) and counts as a broker call; a new thread does not
+        get past the cap."""
+        b = self.broker()
+        for _ in range(broker.MAIL_CALLS_PER_RUN):
+            b.call("mail_read", {"id": "work/aaa111"})
+        self.assertIn("work/aaa111", self.ok(b, "mail_read", {"id": "work/aaa111", "message": 1, "offset": 1}))
+        self.assertIn(f"at most {broker.MAIL_CALLS_PER_RUN} mail calls", self.refused(b, "mail_read", {"id": "work/aaa111"}))
+
 
 class OfferedTest(MailCase):
     grant = False
@@ -353,9 +364,8 @@ class ReplayTest(MailCase):
         self.gmail.add("fff666", [msg("m20", "fff666", [TAG], 12, "Zed <z@example.com>", "Too new", text="AFTER-AS-OF")])
         first, second = self.replay(cache, lock, as_of), self.replay(cache, lock, as_of)
         a = self.ok(first, "mail_read", {"id": "work/aaa111"})
-        asked = len(self.gmail.requests)
-        self.assertEqual(a, self.ok(second, "mail_read", {"id": "work/aaa111"}))
-        self.assertEqual(len(self.gmail.requests), asked)       # the second run's answer came from the first's
+        self.gmail.threads["aaa111"][0]["payload"]["parts"][0]["body"]["data"] = b64(b"changed since first read")
+        self.assertEqual(a, self.ok(second, "mail_read", {"id": "work/aaa111"}))   # shared text, fresh label check
         self.assertIn("Hello from the tagged thread", a)
         self.assertNotIn("a reply that came later", a)
         self.assertIn("not visible to you", self.refused(first, "mail_read", {"id": "work/fff666"}))
@@ -518,10 +528,13 @@ class ConfigTest(MailCase):
         self.assertIn("try again in a minute", err)
         self.assertLessEqual(sum(slept), google.QUOTA_WAIT_S)
 
-    def test_long_bodies_cut_and_said(self):
+    def test_long_bodies_paged_and_said(self):
+        """#134: a long body must give a continuation call instead of a permanent cut."""
         self.gmail.add("abc123", [msg("m30", "abc123", [TAG], 9, "Long <l@example.com>", "Long", text="x" * 30000)])
         out = self.ok(self.broker(), "mail_read", {"id": "work/abc123"})
-        self.assertIn("[... cut here: 30000 chars in all]", out)
+        self.assertIn("next: mail_read(id='work/abc123', message=1, offset=", out)
+        self.assertLessEqual(len(out), 6000)
+        self.assertNotIn("[... cut here:", out)
 
     def test_nothing_is_ever_written_to_gmail(self):
         b = self.broker()
