@@ -145,7 +145,7 @@ def page(title: str, body: Html, nav: Html = Html(""), csrf: str = "") -> Html:
 
 # The pages used now and then, under the rail's chats: the one list of them (a second list, passed in and ignored,
 # would have dropped the Settings page from the nav when the two were merged).
-MANAGE = [("/overview", "Overview"), ("/messages", "Messages"), ("/trials", "Trials"), ("/costs", "Costs"),
+MANAGE = [("/overview", "Overview"), ("/messages", "Messages"), ("/calendar/proposals", "Calendar approvals"), ("/trials", "Trials"), ("/costs", "Costs"),
           ("/services", "Services"), ("/settings", "Settings")]
 
 

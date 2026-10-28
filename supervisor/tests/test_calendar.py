@@ -416,7 +416,8 @@ class OfferedTest(CalendarCase):
     def test_granted_tools_name_the_grant(self):
         core.set_calendar_grants("wren", [{"account": "work", "calendar": PRIMARY, "name": "Operator"}])
         specs = {s["function"]["name"]: s for s in self.broker().tool_specs()}
-        self.assertTrue(set(broker.CALENDAR_TOOLS) <= set(specs))
+        self.assertTrue({"calendar_events", "calendar_event"} <= set(specs))
+        self.assertFalse(set(broker.CALENDAR_WRITE_TOOLS) & set(specs))
         self.assertIn("Granted to you: work/Operator (account/name).",
                       specs["calendar_events"]["function"]["description"])
 

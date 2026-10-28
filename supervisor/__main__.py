@@ -677,7 +677,8 @@ def cmd_calendar(target: str | None, action: str | None, alias: str | None, whic
 
     def show(name: str) -> None:
         grants = calendar_grants(name)
-        print(f"{name} may read: " + ("; ".join(f"{g['account']}/{g['name']} ({g['calendar']})" for g in grants)
+        print(f"{name} may read: " + ("; ".join(f"{g['account']}/{g['name']} ({g['calendar']})"
+                                                   + (" [writable]" if g.get("write") else "") for g in grants)
                                       if grants else "no calendar"))
 
     def session(name: str):
@@ -716,24 +717,33 @@ def cmd_calendar(target: str | None, action: str | None, alias: str | None, whic
     elif not (alias and which):
         print(f"usage: shaft calendar {target} {action} <alias> primary|<title>|<id>", file=sys.stderr)
         return 2
-    elif action == "grant":
+    elif action in ("grant", "grant-write"):
         try:
             cal = gcal.resolve(session(alias), which)
         except (google.AccountError, google.ApiError) as e:
             print(f"not granted: {e}", file=sys.stderr)
             return 2
-        set_calendar_grants(target, grants + [{"account": alias, "calendar": cal["id"], "name": cal["title"]}])
-        log(f"{target}: calendar grant {alias}/{cal['id']} ({cal['title']}) added by the operator")
-    else:   # revoke: by `primary` (its ID is the account's address), the grant's ID or its title, without asking Google
+        # PLAN-calendar-write M0: write implies read; upgrading replaces the same record, never a parallel grant.
+        prior = next((g for g in grants if (g["account"], g["calendar"]) == (alias, cal["id"])), {})
+        grant = {"account": alias, "calendar": cal["id"], "name": cal["title"]}
+        if action == "grant-write" or prior.get("write"):
+            grant["write"] = True
+        rest = [g for g in grants if (g["account"], g["calendar"]) != (alias, cal["id"])]
+        set_calendar_grants(target, rest + [grant])
+        log(f"{target}: calendar {action} {alias}/{cal['id']} ({cal['title']}) added by the operator")
+    else:   # revoke by the stored name/ID without contacting Google; revoke-write leaves its read grant.
         ids = {(google.account(alias) or {}).get("address", "").casefold()} if which == "primary" else set()
-        rest = [g for g in grants if not (g["account"] == alias and (which in (g["calendar"], g["name"])
-                                                                     or g["calendar"].casefold() in ids))]
-        if rest == grants:
-            print(f"{target} has no calendar grant {alias}/{which}", file=sys.stderr)
+        hits = [g for g in grants if g["account"] == alias and (which in (g["calendar"], g["name"])
+                                                             or g["calendar"].casefold() in ids)]
+        if not hits or (action == "revoke-write" and not any(g.get("write") for g in hits)):
+            print(f"{target} has no calendar {action} grant {alias}/{which}", file=sys.stderr)
             show(target)
             return 1
+        rest = [g for g in grants if g not in hits]
+        if action == "revoke-write":
+            rest += [{k: v for k, v in g.items() if k != "write"} for g in hits]
         set_calendar_grants(target, rest)
-        log(f"{target}: calendar grant {alias}/{which} revoked by the operator")
+        log(f"{target}: calendar {action} {alias}/{which} revoked by the operator")
     show(target)
     print(f"(from {target}'s next calendar call; the prompt line changes from its next run)")
     return 0
@@ -1177,10 +1187,10 @@ def main(argv: list[str]) -> int:
     p.add_argument("alias", nargs="?", help="the account alias")
     p.add_argument("label", nargs="?", help="the Gmail label")
     p = sub.add_parser("calendar", help="your calendars an instance may read, one per grant: "
-                                        "'<name> grant|revoke <alias> primary|<title>|<id>', '<name> off', '<name>' "
+                                        "'<name> grant|revoke|grant-write|revoke-write <alias> primary|<title>|<id>', '<name> off', '<name>' "
                                         "shows; 'calendars <alias>' lists an account's; alone lists all grants")
     p.add_argument("target", nargs="?", help="an instance, or 'calendars'")
-    p.add_argument("action", nargs="?", help="grant, revoke, off — or, after calendars, the account alias")
+    p.add_argument("action", nargs="?", help="grant, revoke, grant-write, revoke-write, off — or, after calendars, the account alias")
     p.add_argument("alias", nargs="?", help="the account alias")
     p.add_argument("which", nargs="?", help="primary, a calendar's title, or its ID")
     p = sub.add_parser("trial", help="trials of proposed changes: list, show, run (operator), replay, work")
@@ -1327,8 +1337,8 @@ def main(argv: list[str]) -> int:
             return 2
         return cmd_mail(args.target, args.action, args.alias, args.label)
     if args.cmd == "calendar":
-        if args.target not in (None, "calendars") and args.action not in (None, "grant", "revoke", "off"):
-            print(f"unknown calendar action {args.action!r}: grant, revoke or off", file=sys.stderr)
+        if args.target not in (None, "calendars") and args.action not in (None, "grant", "revoke", "grant-write", "revoke-write", "off"):
+            print(f"unknown calendar action {args.action!r}: grant, revoke, grant-write, revoke-write or off", file=sys.stderr)
             return 2
         return cmd_calendar(args.target, args.action, args.alias, args.which)
     if args.cmd == "autonomy":

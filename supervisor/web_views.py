@@ -1386,3 +1386,26 @@ def chat_page(name: str, chat: dict | None, sent: list[dict], past: list[dict], 
                       h('<div class="chatgrid"><div class="chatpage">{b}</div>{a}</div>', b=body, a=aside),
                       names, csrf, f"/fragment/chat/{q(name)}/header"
                       + (f"?id={q(chat['id'])}" if read_only and chat else ""))
+
+
+def calendar_proposals_body(rows: list[dict]) -> Html:
+    """Approval lives behind the same tailnet/CSRF action door as other operator actions (plan M2/D3)."""
+    from .web_actions import button
+    def render(row):
+        buttons = join(button('calendar-' + verb, label, fields={'id': row['id']})
+                       for verb, label in [('approve', 'Approve'), ('decline', 'Decline')]) if row['state'] == 'pending' else h(
+                           '<p>{state}: {outcome}</p>', state=row['state'], outcome=row['outcome'])
+        return h('<article><h3>{instance}</h3><pre class="wrap">{summary}</pre>'
+                 '<p>Who would be told: {people}</p><p>Expires: {expires}</p>{buttons}</article>',
+                 instance=row['instance'], summary=row['summary'], people=', '.join(row['attendees']) or 'unknown attendees',
+                 expires=row['expires_at'], buttons=buttons)
+    pending = [r for r in rows if r['state'] == 'pending']
+    recent = [r for r in rows if r['state'] != 'pending'][:30]
+    body = join([Html('<h2>Pending calendar approvals</h2>'), join(render(r) for r in pending) if pending else
+                 Html('<p>No pending proposals.</p>'), Html('<h2>Recent decisions</h2>'), join(render(r) for r in recent)])
+    return body
+
+
+def calendar_proposals_page(rows: list[dict], names: list[str], csrf: str) -> Html:
+    body = h('<section data-poll="/fragment/calendar-proposals">{body}</section>', body=calendar_proposals_body(rows))
+    return frame('Calendar approvals', body, names, csrf, current='/calendar/proposals')

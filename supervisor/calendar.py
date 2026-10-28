@@ -6,7 +6,7 @@ every call names one granted calendar in its path (calendars/<id>/events, calend
 here spans calendars for an instance (no free/busy, no calendar list): `calendars` and `resolve` serve the operator's
 CLI at grant time only. An event handle is <alias>/<hash of the calendar ID>/<event ID>; the broker resolves the
 hash against the instance's grants as they are now, so an event of any other calendar cannot even be addressed.
-Read-only: nothing here writes (the scope could not).
+Direct writes use separate grants and calendar.events; see docs/plans/PLAN-calendar-write.md M0–M1.
 
 Text in an event organised by someone else (its description and location) is shown under a line saying who wrote
 it: invitations are a prompt-injection channel, as mail is.
@@ -343,3 +343,49 @@ def render_event(hdl: str, cal_label: str, ev: dict, master: dict | None, operat
         if ev.get("description"):
             out.append("Description:\n" + _marked(_text(ev["description"]), DESCRIPTION_CHARS))
     return "\n".join(out)
+
+
+# -- direct writes (docs/plans/PLAN-calendar-write.md M1): never invite, notify, or patch a series -----------------
+APPROVAL_REQUIRED = "this change needs the operator's approval; submit a proposal (M2)"
+
+
+def write_times(start: str, end: str, timezone: str, now: datetime, *, check_instants: bool = True) -> dict:
+    """Validate the requested instants without rounding/cutting; Google's all-day end is exclusive. A naive
+    datetime needs the named calendar zone, never the supervisor machine's implicit zone."""
+    from zoneinfo import ZoneInfo
+    zone = ZoneInfo(timezone) if timezone else None
+    points, instants = [], []
+    for text in (start, end):
+        if not isinstance(text, str) or not text:
+            raise ValueError("start and end are required ISO dates or date-times")
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+            dt = datetime.combine(date.fromisoformat(text), datetime.min.time(), zone)
+            point = {"date": text}
+        else:
+            dt = datetime.fromisoformat(text)
+            if dt.tzinfo is None:
+                if zone is None:
+                    raise ValueError("a time zone is required for a date-time without an offset")
+                dt = dt.replace(tzinfo=zone)
+            point = {"dateTime": dt.isoformat(), **({"timeZone": timezone} if timezone else {})}
+        if dt.tzinfo is None:
+            raise ValueError("a calendar time zone is required for all-day dates")
+        points.append(point)
+        instants.append(dt.timestamp())
+    if ("date" in points[0]) != ("date" in points[1]):
+        raise ValueError("start and end must both be dates or both be date-times")
+    if check_instants and instants[0] >= instants[1]:
+        raise ValueError("start must be before end")
+    if check_instants and any(abs(t - now.timestamp()) > WINDOW_DAYS * 86400 for t in instants):
+        raise ValueError("start and end must both be within 92 days of now")
+    return dict(zip(("start", "end"), points))
+
+
+def direct_only(ev: dict, address: str) -> None:
+    """Google's attendee `self` flag refers to the calendar, so compare the account's address. An omitted
+    attendee list is incomplete, not evidence that nobody else would be told. Invitations require approval too."""
+    if ev.get("attendeesOmitted") or any((a.get("email") or "").casefold() != address.casefold()
+                                          for a in ev.get("attendees") or []):
+        raise PermissionError(APPROVAL_REQUIRED)
+    if ev.get("organizer") and not by_operator(ev, address):
+        raise PermissionError(APPROVAL_REQUIRED)

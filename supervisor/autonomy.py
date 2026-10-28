@@ -321,6 +321,9 @@ def serve(poll_s: int = 30) -> int:
         # Before the pause check, as `shaft update` itself runs while paused.
         for name in update_jobs(children, instance_names(), _awake):
             children[f"update {name}"] = (_start(["update", name]), time.monotonic())
+        # Calendar expiry belongs to the supervisor, including when all instances are paused (plan M2).
+        from . import calendar_proposals
+        calendar_proposals.expire()
         if not (SUP_DIR / "paused").exists():
             st, now = _state(), datetime.now()
             _batteries(children, now, sleep_due(now, st))

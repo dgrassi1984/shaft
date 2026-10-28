@@ -1,5 +1,5 @@
 """The operator's Google accounts (docs/plans/PLAN-calendar.md M1): one `shaft google login` asks for gmail.readonly and
-calendar.readonly together and records what Google granted; account files live in .supervisor/google/, moved there
+calendar.readonly + calendar.events together and records what Google granted; account files live in .supervisor/google/, moved there
 from docs/plans/PLAN-mail's .supervisor/mail/ by `shaft google migrate`; `shaft mail login` is gone."""
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ class FakeGoogle:
     """Google's token endpoint, Gmail's profile and the primary calendar, as login uses them. `granted` is what the
     operator left ticked on the consent page."""
 
-    def __init__(self, address: str = ME, granted: str = f"{google.GMAIL} {google.CALENDAR}"):
+    def __init__(self, address: str = ME, granted: str = f"{google.GMAIL} {google.CALENDAR} {google.CALENDAR_EVENTS}"):
         self.address, self.granted = address, granted
         self.requests: list[tuple[str, dict]] = []
 
@@ -71,14 +71,14 @@ class LoginTest(GoogleCase):
         with redirect_stdout(io.StringIO()):
             return google.login("work", address, self.secrets, client=client, open_url=self.browser(**kw), timeout_s=5)
 
-    def test_login_asks_both_scopes_and_records_what_was_granted(self):
+    def test_login_asks_all_scopes_and_records_what_was_granted(self):
         saved = self.login(ME)
-        self.assertEqual(self.asked[0]["scope"].split(), [google.GMAIL, google.CALENDAR])
+        self.assertEqual(self.asked[0]["scope"].split(), [google.GMAIL, google.CALENDAR, google.CALENDAR_EVENTS])
         self.assertEqual(self.asked[0]["include_granted_scopes"], "true")
-        self.assertEqual(google.scopes(saved), {google.GMAIL, google.CALENDAR})
+        self.assertEqual(google.scopes(saved), {google.GMAIL, google.CALENDAR, google.CALENDAR_EVENTS})
         on_disk = json.loads((self.sup / "google" / "work.json").read_text())
-        self.assertEqual(google.scopes(on_disk), {google.GMAIL, google.CALENDAR})
-        self.assertEqual(google.scope_text(on_disk), "gmail.readonly, calendar.readonly")
+        self.assertEqual(google.scopes(on_disk), {google.GMAIL, google.CALENDAR, google.CALENDAR_EVENTS})
+        self.assertEqual(google.scope_text(on_disk), "gmail.readonly, calendar.readonly, calendar.events")
 
     def test_partial_grant_recorded_as_such(self):
         # The operator unticked Calendar on the consent page: mail keeps working, a calendar call names the login.

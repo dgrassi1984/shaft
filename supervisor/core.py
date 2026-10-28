@@ -584,9 +584,11 @@ def set_mail_grants(name: str, grants: list[dict]) -> list[dict]:
 # every API call name a granted calendar. Stored by calendar ID (it survives a rename), with its title at grant time.
 def calendar_grants(name: str) -> list[dict]:
     """The calendars this instance may read (`shaft calendar <name> grant <alias> <calendar>`):
-    [{account, calendar (its ID), name (its title when granted)}]."""
+    [{account, calendar (its ID), name (its title when granted), write?}].
+    PLAN-calendar-write M0: write implies read because both levels share one record; removing write keeps read."""
     raw = _tool_settings(name).get("calendar")
-    return [{"account": g["account"], "calendar": g["calendar"], "name": g.get("name") or g["calendar"]}
+    return [{"account": g["account"], "calendar": g["calendar"], "name": g.get("name") or g["calendar"],
+             **({"write": True} if g.get("write") is True else {})}
             for g in raw if isinstance(g, dict) and isinstance(g.get("account"), str)
             and isinstance(g.get("calendar"), str) and g["calendar"]] if isinstance(raw, list) else []
 
@@ -594,7 +596,8 @@ def calendar_grants(name: str) -> list[dict]:
 def set_calendar_grants(name: str, grants: list[dict]) -> list[dict]:
     keep: list[dict] = []
     for g in grants:
-        g = {"account": g["account"], "calendar": g["calendar"], "name": g.get("name") or g["calendar"]}
+        g = {"account": g["account"], "calendar": g["calendar"], "name": g.get("name") or g["calendar"],
+             **({"write": True} if g.get("write") is True else {})}
         if not any((k["account"], k["calendar"]) == (g["account"], g["calendar"]) for k in keep):
             keep.append(g)
     _update_tool_settings(name, calendar=keep or None)
