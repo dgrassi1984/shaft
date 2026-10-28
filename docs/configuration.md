@@ -58,6 +58,8 @@ It does not add grants. Other instances retain their current behavior. The selec
 class demotion and restoration are read from supervisor-owned state on each dispatch.
 Calendar proposals retain `SHAFT_CALENDAR_WRITES_PER_DAY` and `SHAFT_CALENDAR_PROPOSAL_HOURS`.
 
+`SHAFT_GATE_TIMEOUT_S` defaults to 1800 seconds because the shared supervisor suite can exceed 900 seconds under load.
+
 This table is extracted statically from production `knob()` calls in `supervisor/*.py`.
 Defaults below are source defaults, not values read from this checkout's private state.
 `PROJECT` means the clone root. Paths are resolved under that root at runtime.
@@ -104,6 +106,7 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_FT_PYTHON` | `str(PROJECT / ".venv-ft" / "bin" / "python")` | the interpreter fine-tuning runs with | [finetune.py](../supervisor/finetune.py) |
 | `SHAFT_FT_BASE_MODEL` | `mlx-community/Qwen3.8-27B-4bit` | the base model fine-tuning starts from when it does not train Bonsai itself | [finetune.py](../supervisor/finetune.py) |
 | `SHAFT_BONSAI_PYTHON` | `str(PROJECT / ".venv-bonsai" / "bin" / "python")` | the interpreter Bonsai LoRA training runs with | [finetune.py](../supervisor/finetune.py) |
+| `SHAFT_GATE_TIMEOUT_S` | `1800` | seconds each gate test stage may run before it times out; positive integer | [gate.py](../supervisor/gate.py) |
 | `SHAFT_JOB_MIN_MINUTES` | `5` | the shortest interval an instance's own job (a plugin on a timer) may run at | [jobs.py](../supervisor/jobs.py) |
 | `SHAFT_JUDGE_MODELS` | `openrouter/xiaomi/mimo-v2.6-pro,openrouter/z-ai/glm-5.3-flash,openrouter/deepseek/deepseek-v4.1-flash` | the judge pool: each judgment picks one at random, never the judged instance's own model | [judge.py](../supervisor/judge.py) |
 | `SHAFT_JUDGE_EVERY` | `2` | the main judge grades one live run in this many (1: every run) | [judge.py](../supervisor/judge.py) |

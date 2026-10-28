@@ -19,6 +19,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import sandbox
+from .core import knob, positive_int
+
+GATE_TIMEOUT_S, _ = knob(
+    "SHAFT_GATE_TIMEOUT_S", "1800", positive_int, "seconds each gate test stage may run before it times out",
+    group="Runs and conversations", services=("runs", "api", "scheduler"))
 
 # .python-version and requirements.txt declare the instance's own Python environment (supervisor/pyenv.py): code
 # like the rest, tested when changed and committed when kept, so a lost .venv/ can be rebuilt from them.
@@ -626,7 +631,7 @@ def _shared_part(tree: Path, label: str, env: dict, timeout_s: int, max_age_s: f
         return ok, section, full, True
 
 
-def warm(timeout_s: int = 900) -> int:
+def warm(timeout_s: int = GATE_TIMEOUT_S) -> int:
     """The scheduler's warm-up (`shaft gate warm`, autonomy.gate_warm): run the shared part on the project's commits
     now unless a record of the gates' key is younger than WARM_REFRESH_S, so the first gate after a merge reads it
     instead of running it while holding its instance. A failure is logged as an alert — on main, every instance's code
@@ -669,7 +674,7 @@ def _supervisor_tests(instance_root: Path, tree: Path, label: str, timeout_s: in
     return shared_ok and inst_ok, shared + inst, shared_full + inst_full
 
 
-def run_tests(instance_root: Path, home: Path, timeout_s: int = 900,
+def run_tests(instance_root: Path, home: Path, timeout_s: int = GATE_TIMEOUT_S,
               env_root: Path | None = None) -> tuple[bool, str]:
     """Supervisor invariants against this instance's code (trusted test code, run from the last commit — never from
     what another session is editing; it sandboxes the agent itself) in two parts (_supervisor_tests): the modules that
@@ -764,7 +769,7 @@ def keep_log(instance_root: Path, parts: list[str]) -> Path:
 NO_TESTS_RAN = 5   # unittest's exit code when discovery finds no tests (Python 3.12+)
 
 
-def run_instance_tests(instance_root: Path, prof: Path, env: dict, py: str, timeout_s: int = 900) -> tuple[bool, str]:
+def run_instance_tests(instance_root: Path, prof: Path, env: dict, py: str, timeout_s: int = GATE_TIMEOUT_S) -> tuple[bool, str]:
     """The instance's own tests, inside its sandbox. `-t .` only when tests/ is a package:
     a plain folder of test files must work too (a correct coder-written test was rejected
     because tests/ had no __init__.py)."""
