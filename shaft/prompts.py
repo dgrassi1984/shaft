@@ -6,7 +6,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from . import clock, commitments, personality, surprises
+from . import clock, commitments, corrections, personality, surprises
 
 
 def now() -> datetime:
@@ -158,6 +158,10 @@ CONTEXT = """\
 
 {surprises}
 {promises}
+## Operator corrections still open
+
+{corrections}
+
 ## My measured performance (self/stats.md, written by the supervisor)
 
 {stats}
@@ -271,9 +275,25 @@ belief as a fact citing its id ("… (from surprise s1013-0653-1)"); close_surpr
 needs no cycle; or leave it open as a question worth a cycle, and say why in your entry. Skip none. An expired \
 one needs nothing — a fact citing it only if it taught you something.{settle}
 
+9. Close every open operator correction with close_correction(id, closed_by, evidence): fact after
+remember/rewrite_facts citing its id; code after a commit/plugin change; test after a test; or not_accepted
+with a reason. Evidence must name the episode, commit or fact. An unclosed item stays open for the next sleep.
+
 Then answer (without calling a tool) with your sleep journal entry: what you \
 consolidated, what you changed about yourself and why, and under "How I will improve" \
 whether the last improvement test you set was passed — with evidence."""
+
+
+def reply_budget(cfg) -> str:
+    limits = []
+    calls, seconds = getattr(cfg, "TALK_REPLY_CALLS", 3), getattr(cfg, "TALK_REPLY_S", 45)
+    if calls > 0:
+        limits.append(f"{calls} tool calls")
+    if seconds > 0:
+        limits.append(f"{seconds} seconds")
+    return (" Answer within about " + " or ".join(limits) + "; queue the rest for your next cycle "
+            "with queue_for_next_cycle(task, why), then say what you will do next.") if limits else ""
+
 
 TALK_MODE = (
     "Right now you are in a live conversation with {operator} in a terminal. Reply in your "
@@ -392,6 +412,7 @@ def system_prompt(state, cfg, mode_note: str, tools: str | None = None) -> str:
         improvement=improvement_plan(state),
         surprises=surprises.block(root),
         promises=_promises(root, cfg),
+        corrections=corrections.block(root, now()),
     )
     return f"{identity}\n\n{context}"
 

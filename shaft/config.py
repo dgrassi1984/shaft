@@ -30,6 +30,8 @@ FIELDS: dict[str, tuple[type, object]] = {
     "MAX_TOKENS_STEP": (int, 16384),     # one model turn inside a tool loop (live, sleep)
     "MAX_STEPS_LIVE": (int, 12),
     "MAX_STEPS_SLEEP": (int, 30),
+    "TALK_REPLY_CALLS": (int, 3),       # reply first, queue the rest; 0 disables each budget
+    "TALK_REPLY_S": (int, 45),
     "MAX_STEPS_TALK": (int, 0),        # 0 = no limit (conversations)
     "CONTEXT_JOURNAL_CHARS": (int, 16000),
     "GOALS_CHARS": (int, 12000),       # how much of my goals I carry into every prompt

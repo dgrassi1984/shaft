@@ -5,7 +5,7 @@ import json
 import re
 from datetime import datetime
 
-from . import agent, broker, clock, commitments, memory, prompts, recovery, surprises
+from . import agent, broker, clock, commitments, corrections, memory, prompts, recovery, surprises
 from .llm import Client, LLMError
 from .state import State
 from .tools import Toolbox, _spec, for_log
@@ -116,7 +116,7 @@ def run(cfg, state: State, client: Client) -> str:
     toolbox.remote = {name: spec for name, spec in toolbox.remote.items() if name in ("record", "history")}
     toolbox.plugins = {}
     promises = cfg.COMMITMENTS == "on"
-    toolbox.extra = [CLOSE_SURPRISE] + ([commitments.SETTLE] if promises else [])
+    toolbox.extra = [CLOSE_SURPRISE, corrections.CLOSE] + ([commitments.SETTLE] if promises else [])
     real_run = toolbox.run
     closed: list[dict] = []
 
@@ -147,6 +147,13 @@ def run(cfg, state: State, client: Client) -> str:
             return real_run(name, raw_args)
         if not isinstance(args, dict):
             return real_run(name, raw_args)
+        if name == "close_correction":
+            try:
+                result = corrections.close(state.root, args, clock.now())
+            except (OSError, ValueError) as e:
+                result = f"ERROR: correction not closed: {type(e).__name__}: {e}"
+            toolbox.log.append({"tool": name, "args": for_log(raw_args), "result": result})
+            return result
         if name == "close_surprise":
             result = close(args)
             toolbox.log.append({"tool": name, "args": for_log(raw_args), "result": result})

@@ -35,6 +35,7 @@ PROTECTED = {
     "self/self.md": "use update_self_model",
     "self/personality.md": "use update_personality",
     "self/stats.md": "written by the supervisor from my measured results",
+    "memory/corrections.jsonl": "use record_correction at conversation writeup; close_correction in sleep",
     "memory/commitments.jsonl": "use commit_to to make a commitment; my sleep settles them (settle_commitment)",
     "config.env": "change a value with the supervisor's set_config(key, value) — the only way to change this "
                   "file, so the supervisor can tell my settings from the operator's",
