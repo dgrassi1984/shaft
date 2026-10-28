@@ -173,6 +173,8 @@ reviewed ref was `refs/heads/publish-prep-template`.
 | `MAX_STEPS_TALK` | `0` | `0` |
 | `CONTEXT_JOURNAL_CHARS` | `16000` | `16000` |
 | `GOALS_CHARS` | `12000` | uses built-in default |
+| `BRIEFING` | `'notes/briefing.md'` | `notes/briefing.md` |
+| `HANDOFF` | `'on'` | `on` |
 | `CURIOSITY_EVERY_CYCLES` | `5` | `5` |
 | `OUTCOME_CARDS` | `'on'` | uses built-in default |
 | `WORKSPACE` | `'competitive'` | uses built-in default |
@@ -196,6 +198,18 @@ the record) and `FORECAST` (on, reserve, off: what comparable goals cost, or a f
 these keeps the default with a warning. `shaft experiment` flips a knob's default in code to run its kill test, and
 refuses an instance whose config.env sets that knob.
 Sources: template `shaft/config.py:17`, [autonomy.py](../supervisor/autonomy.py).
+
+`BRIEFING` names a file inside the instance's repository, or `off` to hide the briefing. The instance's own
+watchers write it as a scheduled job with the next 48 hours of calendar, actionable mail, open commitments to the
+operator and his last corrections, each dated. Prompt construction only reads the file. A first line
+`generated: <ISO time>` dates the briefing; otherwise its mtime does. The prompt shows its age in hours, marks it
+stale after 24 hours, and caps its content at 3,000 characters with a `read_file` pointer. Missing, empty or
+unreadable files render a line explaining their state.
+
+`HANDOFF=on` shows the last two live episodes' completed calls, unfinished work and next action with its revision
+condition. Other episode kinds do not age the handoff. `raw` shows those episodes' tool logs, cut to the character
+budget of their structured blocks; a shorter log stays shorter. `off` hides the block. Invalid modes keep the
+next source's value with a warning. These switches affect prompt display; live episodes still record handoffs.
 
 Cloud routing uses `LLM_BASE_URL="broker"` and a model in `SHAFT_CLOUD_MODELS`.
 Self-hosted routing uses the same base URL and `<server>/<model>`, where the server
