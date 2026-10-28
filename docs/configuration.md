@@ -171,6 +171,8 @@ reviewed ref was `refs/heads/publish-prep-template`.
 | `MAX_STEPS_LIVE` | `12` | `12` |
 | `MAX_STEPS_SLEEP` | `30` | `30` |
 | `MAX_STEPS_TALK` | `0` | `0` |
+| `LOOP_GUARD` | `'shadow'` | `shadow` |
+| `LOOP_EFFECT_ROUNDS` | `3` | `3` |
 | `CONTEXT_JOURNAL_CHARS` | `16000` | `16000` |
 | `CRITERION_CHARS` | `600` | uses built-in default |
 | `GOALS_CHARS` | `12000` | uses built-in default |
@@ -187,6 +189,14 @@ reviewed ref was `refs/heads/publish-prep-template`.
 
 `CRITERION_CHARS` limits `declare_intent.success_criterion` in characters. An overlong criterion is refused
 with its length and the limit, asking for the deliverable's check rather than ritual clauses.
+
+`LOOP_GUARD` controls the effect-loop guard (#103): `shadow` records would-fire events in the episode's
+`loop_shadow` array without changing model input; `on` also appends advice after the call executes;
+`off` records nothing. The existing exact-call repeat guard stays active in all three modes.
+`LOOP_EFFECT_ROUNDS` is a positive integer, default 3. A first failed result counts as round one;
+new successful observations reset the count. A successful observation seen earlier in this run counts as
+no new evidence. Counts require consecutive calls in the same tool/target family.
+See [effect-loop measurement](architecture.md#effect-loop-measurement) for target rules and replay reporting.
 
 `LLM_PRESENCE_PENALTY` uses tenths (15 means 1.5). `MAX_STEPS_TALK=0` removes the
 conversation step limit. `WAKE_INTERVAL_MINUTES=0` disables periodic wakes; positive
