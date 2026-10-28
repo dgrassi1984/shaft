@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 from contextlib import redirect_stdout, redirect_stderr
 import json
+import shutil
 import random
 import subprocess
 import tarfile
@@ -206,14 +207,13 @@ class PredictionCopyTest(unittest.TestCase):
         """#100: the real template exam and sandbox submit one prediction without a live instance or paid provider."""
         fake = FakeLLM([{"tool_calls": [("submit_answer", {"answer": json.dumps(PRED)})]}])
         self.addCleanup(fake.close)
+        # a copy of the template's files, not `git archive`: the instance gate runs these tests on a plain copy of
+        # the tree with no git repository (it failed there on 2026-10-28, failing every instance's gate)
         template = Path(__file__).resolve().parents[2] / "template"
-        data = subprocess.run(["git", "-C", str(template), "archive", "HEAD", "shaft"],
-                              capture_output=True, check=True).stdout
         with tempfile.TemporaryDirectory(prefix="shaft-predict-test-") as tmp:
             root = Path(tmp) / "x"
             root.mkdir()
-            with tarfile.open(fileobj=io.BytesIO(data)) as tar:
-                tar.extractall(root, filter="data")
+            shutil.copytree(template / "shaft", root / "shaft", ignore=shutil.ignore_patterns("__pycache__"))
             (root / "config.env").write_text(f'LLM_BASE_URL="{fake.url}"\nLLM_MODEL="fake"\n')
             broker = mock.Mock(port=fake.port, token="fake", shared=None, env_root=root)
             broker.egress.port = fake.port
