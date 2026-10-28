@@ -217,6 +217,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_web_touch.py` | `TouchTest`, `PhoneLayoutTest`, `DocumentsCloseTest`, `NetworkClientTest`, `AccessibilityTest`, `CommentsTouchTest` | `block` |
 | `supervisor/tests/test_web_unread_js.py` | `UnreadTest` | `feed` |
 | `supervisor/tests/test_webpush.py` | `PushTest`, `KeyAndTokenTest`, `SubscriptionsTest`, `QueueTest`, `RoutesTest`, `WhenTest`, `RenewRaceTest`, `PairedOnlyTest` | `unb64`, `raw_to_der` |
+| `supervisor/tests/test_x_metacog.py` | `ControlsTest`, `JudgmentTest`, `MeasurementsTest` | — |
 | `supervisor/tom.py` | — | `record`, `receipts`, `reply_for`, `score`, `section`, `baselines`, `report` |
 | `supervisor/top.py` | `UI` | `keys`, `shown`, `participants`, `follow`, `handle`, `dispatch`, `extras`, `recap_line`, `render_main`, `render_list`, `wrap`, `render_message`, `render`, `plain`, `code_stamp`, `main` |
 | `supervisor/top_views.py` | `Overlay` | `run_now`, `run_detached`, `service_guard`, `tab_bar`, `footer`, `window`, `scroll_to`, `wrap`, `spark`, `page`, `current`, `render_instance`, `judge_line`, `judge_detail`, `render_judge`, `trial_line`, `render_trials`, `render_benchmarks`, `render_changes`, `render_costs`, `render_services`, `render_help`, `transcript_line`, `render_transcripts`, `ask`, `handle_overlay`, `render_pick`, `instance_action`, `handle_view`, `ask_guarded` |
