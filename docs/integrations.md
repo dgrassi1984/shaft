@@ -244,8 +244,8 @@ Each run happens in the `run` sandbox, with its own broker and egress proxy:
 - supervisor tools, mail and calendar grants, the instance's keys, its Python environment and the internet;
 - no model, and no `delegate_coding`, `trial` or `send_message`;
 - writes only to `.jobs/<plugin>/` (gitignored state), `.tmp/` and its browser profile `.browser/`;
-- at most 120 s and 30 tool calls, at least 5 minutes apart (`SHAFT_JOB_MIN_MINUTES`), at most 5 jobs per
-  instance.
+- at most 120 s and 30 tool calls, at least 5 minutes apart (`SHAFT_JOB_MIN_MINUTES`), at most `SHAFT_JOBS_MAX`
+  jobs per instance (default 12); beyond it, the rest by name are not run and are named in the problem report.
 
 What a run returns lands in the instance's inbox, from "job <plugin>". An empty return delivers nothing. A job with
 `can_wake: true` whose run returns `{"message": …, "wake": true}` starts a cycle as soon as the instance is idle.

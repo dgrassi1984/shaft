@@ -38,7 +38,9 @@ MIN_MINUTES, _ = knob(
     "SHAFT_JOB_MIN_MINUTES", "5", positive_int, "the shortest interval an instance's own job (a plugin on a timer) may "
     "run at", group="Inbox and benchmarks", services=("runs", "api", "scheduler"))
 MAX_MINUTES = 7 * 24 * 60
-MAX_JOBS = 5
+MAX_JOBS, _ = knob(
+    "SHAFT_JOBS_MAX", "12", positive_int, "scheduled plugins (jobs) an instance may run; beyond it, the rest by name "
+    "are not run", group="Inbox and benchmarks", services=("runs", "api", "scheduler"))
 TIMEOUT_S = 120
 MAX_CALLS = 30
 MAX_OUTPUT = 4000

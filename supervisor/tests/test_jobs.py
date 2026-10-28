@@ -4,6 +4,7 @@ sandbox runs the plugins; only the scheduler's children are fakes."""
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -98,12 +99,26 @@ class DeclaredTest(JobCase):
         self.assertIn("every_minutes must be a whole number", self.inbox()[0])
         self.assertIn("plugins/broken/plugin.json does not parse", self.inbox()[0])
 
-    def test_at_most_five_jobs(self):
-        for i in range(jobs.MAX_JOBS + 1):
-            self.plugin(f"p{i}", "def run(): return ''", {"every_minutes": 10})
+    def test_max_jobs_follows_the_knob(self):
+        env = {k: v for k, v in os.environ.items() if k != "SHAFT_JOBS_MAX"}
+        env["SHAFT_SUPERVISOR_DIR"] = str(self.project / "settings")
+        for value, expected in ((None, "12"), ("17", "17")):
+            with self.subTest(value=value):
+                if value is not None:
+                    env["SHAFT_JOBS_MAX"] = value
+                out = subprocess.run([core.PYTHON, "-c", "from supervisor import jobs; print(jobs.MAX_JOBS)"],
+                                     capture_output=True, text=True, check=True, env=env)
+                self.assertEqual(out.stdout.strip(), expected)
+
+    def test_at_most_twelve_jobs(self):
+        for i in reversed(range(13)):
+            self.plugin(f"p{i:02}", "def run(): return ''", {"every_minutes": 10})
         declared, problems = jobs.declared("wren")
-        self.assertEqual(len(declared), jobs.MAX_JOBS)
-        self.assertIn("not run: p5", problems[-1])
+        self.assertEqual([j["plugin"] for j in declared], [f"p{i:02}" for i in range(12)])
+        self.assertEqual(problems, ["13 scheduled plugins; at most 12 run — not run: p12"])
+        started = []
+        jobs.tick({}, datetime.now(), started.append, ["wren"], lambda n: "")
+        self.assertEqual(started, [["job", "run", "wren", f"p{i:02}"] for i in range(12)])
 
 
 class SchedulerTest(JobCase):
