@@ -1596,10 +1596,11 @@ def stats_text(name: str) -> str:
     from . import pushes
     js = judgments(name)
     push_lines = ["- " + line for line in pushes.lines(name, js)] + [""]
+    project_lines = _sections(name, ("projects",))
     if not js:
         return "\n".join(["# My measured performance", "", "*Written by the supervisor.* No judged cycles yet.", ""]
                          + _battery_section(name) + _code_section(name) + _traits_section(name)
-                         + push_lines + _trials_section(name)) + "\n"
+                         + push_lines + project_lines + _trials_section(name)) + "\n"
     retired = [j for j in js if not by_current_judge(j)]
     all_js, js = js, [j for j in js if by_current_judge(j)]      # success and claims: current judges only
     scores = [SCORE[j["criterion_met"]] for j in js]
@@ -1615,7 +1616,7 @@ def stats_text(name: str) -> str:
                 "differ in how strictly they grade whether a criterion was met and a claim supported, so a figure "
                 "pooled across a change of judges moves with the judges, not with my cycles. Value counts every "
                 "cycle: the judges agree on it." if retired else "") + "*", ""]
-    lines += push_lines
+    lines += push_lines + project_lines
     lines += ["- " + line for line in self_audit_lines(all_js)] + [""]
     lines += _achieved_section(js) + _surprise_section(name) + _value_section(all_js) + _battery_section(name)
     lines.append("## Success against my own criteria (raw)")

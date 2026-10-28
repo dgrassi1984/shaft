@@ -55,6 +55,37 @@ inbox/        messages waiting for it (from you or other instances)
 notes/        its own work
 ```
 
+## Effect-loop measurement
+
+The shared template `shaft/agent.py` loop keeps its exact-call repeat guard and adds an effect guard (#103),
+configured by `LOOP_GUARD` and `LOOP_EFFECT_ROUNDS`. Its target table lives in `shaft/loopguard.py`:
+lexical paths, URL host/path without query parameters, query words with case/punctuation/request filler removed,
+a shell command's program and subcommand, or a plugin/tool name. This groups cosmetic variants, not arbitrary
+semantic paraphrases. A successful write (tools.STATE_CHANGING) is never "no new evidence", whatever it answers:
+remember says "remembered" for every fact. On thelos's 1,412 real episodes (2026-10-28) the shadow guard would
+fire in 19, each a run of failures on one target (most of them rewrite_facts or write_digest refused for size in
+a sleep); `python -m shaft.loopguard report <episodes dir>` measures it again.
+Observations reuse `surprises.flag(result)` including its detail; otherwise they hash the result after normalising
+whitespace, ISO timestamps, UUIDs and named ID fields. JSON key order is ignored. New content resets the streak,
+so advancing pagination, changing status and successful retries can continue. Long unchanged polling can still
+cross the configured threshold; the guard cannot know that a future poll will change.
+
+Shadow mode, the default, adds no model-visible text. Executed tool-log entries store an `effect` signature and
+turn number, and episodes store would-fire events as `loop_shadow` entries with `turn`, `family`, `rounds` and
+`would_say`. On mode appends the advice to the executed result, offering another hypothesis, another source or
+an honest stop. It never blocks the call. Off mode stores neither signatures nor events.
+The tool log keeps the original result in every mode. Held calls and exact-repeat refusals are not new effects.
+
+From the template directory, `python -m shaft.loopguard report <episodes-dir>` replays direct `*.jsonl` files
+without executing tools or writing files; `--rounds N` selects a threshold. Stored signatures avoid replaying
+truncated arguments. Old entries without signatures use their recorded arguments/results.
+For a measured false-positive rate, label reviewed episodes with `loop_expected: false` for legitimate work
+or `true` for confirmed/planted loops in a separate evaluation copy. The report divides flagged legitimate
+episodes by labelled legitimate episodes. Unlabelled episodes appear in totals but not that denominator;
+the rate is `null` if none are labelled. The fixture corpus in `supervisor/tests/loop_effect_fixtures.json`
+keeps planted failures separate from held-out pagination, polling and transient retries. Its measured rate
+does not establish the rate on real runs.
+
 ## Measuring improvement and autonomy
 
 Before a live cycle calls `declare_intent`, its prompt shows the inbox, the operator briefing (`BRIEFING`) and
@@ -283,7 +314,36 @@ goal and, in competition, the declared **attention** (`attention`: up to four {s
 log by `supervisor/attention.py`). **Outcome cards** (`shaft/cards.py`) hold the first call of a kind of action that has
 failed since it last worked, showing the comparable calls and their counts; calling again runs it. **Commitments**
 (`commit_to`, finish_cycle's `commitments`, `memory/commitments.jsonl`) are settled in sleep, kept only with an
-episode as evidence; the supervisor re-checks it (`supervisor/commitments.py`). `remember` takes a **source**
+episode as evidence; the supervisor re-checks it (`supervisor/commitments.py`).
+
+Projects (#106) use append-only `memory/projects.jsonl` opened/closed by `open_project` and `close_project`.
+Each records a name, future ISO deadline (a date includes the whole day), optional positive calls/dollar budgets,
+and one line saying what done means. `declare_intent(project=...)` accepts an open id; its episode carries that id.
+Live and sleep prompts show measured boundaries; `self/stats.md` uses the supervisor's independent read-only fold.
+At risk means at most 20% of the original span remains, at least 80% of a budget is spent, or two consecutive
+judged project cycles received no/partial. Past boundary means the deadline is reached, a budget exhausted,
+or three consecutive judged no/partial cycles. Unjudged cycles do not reset the judged streak; a judged yes does.
+Sleep includes freshly fetched verdict pages as well as `memory/verdicts.jsonl`. The live prompt uses verdicts
+already received by sleeps; supervisor stats uses its own judgments. Thresholds are fixed, with no new knobs.
+`project_usage` on each live episode stores the final envelope's broker `calls_used` and `run_usd`. The dollars
+are the recorded cloud, coder and consult charges collected in that broker's request context, including model
+streaming and the work before intent declaration. Local inference has no dollar charge here. Trial replay and
+judge costs are outside the project's live-cycle spending. Missing usage renders as unknown, never zero;
+without another measured boundary, unknown usage is shown as at risk. This is a record of task viability.
+A project at risk is re-planned, narrowed or abandoned honestly, never defended. In sleep each project past
+a boundary must be closed or re-planned with evidence; a re-plan closes the old record and opens a replacement.
+
+During sleep only, `propose_drive_amendment` (#105) writes `notes/drive-proposals/<id>.md` with current/proposed
+text, evidence and 1-3 behavioural predictions under 300 characters each. A prediction must name a trigger
+and an observable action; a lexical check rejects vague statements. The one ineligible-topic regex list in
+`shaft/drive_proposals.py` rejects survival, secrecy, acquiring resources and resisting control/oversight.
+This is a keyword/phrase screen, not a semantic classifier. Only the operator edits `drive.md`; its tool and
+sandbox protection remains. The proposal is first tested as a `shaft/prompts.py` trial candidate, because
+trials cannot target `drive.md`. The operator compares results with its predictions. `shaft drive` lists,
+accepts through the existing SHA compare-and-set, or rejects with a reason; `<id>.decision.json` records the
+decision, proposal digest and predictions for the instance to read. Falsification is the operator's check.
+
+`remember` takes a **source**
 (`log:<ts>[#step]`, `web:<url>` fetched this run, `operator`, `instance:<name>`, `inferred`), shown with the fact's age in
 search; `shaft provenance` matches observation claims against tool results by content. `declare_intent` answers with a
 **forecast** of what comparable goals cost (turns, minutes, calls, how many ran out) — costs only, never a success rate,

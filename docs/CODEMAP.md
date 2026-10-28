@@ -15,29 +15,29 @@ is behind the code, regenerate it.**
 
 |  |  |
 |---|---|
-| Tracked files | 306 |
-| Languages | 234 Python, 56 Markdown, 2 JavaScript, 1 YAML, 1 CSS |
-| Tests | 154 |
-| Python files | 234 |
-| Python modules with public symbols | 230 |
+| Tracked files | 312 |
+| Languages | 241 Python, 54 Markdown, 2 JavaScript, 1 YAML, 1 JSON, 1 CSS |
+| Tests | 159 |
+| Python files | 241 |
+| Python modules with public symbols | 237 |
 
 ## Layout
 
 | Path | Files |
 |---|---|
-| `supervisor/` | 243 |
-| `docs/` | 53 |
+| `supervisor/` | 251 |
+| `docs/` | 51 |
 | `(root)` | 8 |
 | `.claude/` | 1 |
 | `bin/` | 1 |
 
 ## Python
 
-230 modules expose a public class or function. Full list:
+237 modules expose a public class or function. Full list:
 [codemap/python.md](codemap/python.md).
 
 ## Tests
 
 | Path | Files |
 |---|---|
-| `supervisor/` | 154 |
+| `supervisor/` | 159 |
