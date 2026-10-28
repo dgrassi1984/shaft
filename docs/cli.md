@@ -58,6 +58,8 @@ shaft judge backfill [names…]   # add missing origin/difficulty/novelty and va
 shaft judge value-regrade <name> [--min-value N] [--value-for own_capability,own_record] [--since DATE] [--limit N]
                                 # paid value-only dry run, newest matching cycles first; prints before → after
                                 #   and how many fell to <=3; never writes stored verdicts; no write mode
+shaft judge pushback-outcome <name> [--since DATE] [--days 3] [--write]
+                                # preview unscored cited cycles without calls or writes; --write pays and stores apart
 shaft battery run [names…]      # the capability battery now (normally the scheduler runs it at night);
                                 #   --until HH:MM, --only <categories>, --limit N, --no-control
 shaft battery run <name> --control-only   # only the control: do the items discriminate?
@@ -228,6 +230,23 @@ backfill, baseline or stats file. Example:
 ```text
 shaft judge value-regrade thelos --min-value 4 --value-for own_capability,own_record --since 2026-10-22 --limit 37
 ```
+
+`judge pushback-outcome` accepts exactly one instance. `--since` is an inclusive ISO date or timestamp;
+`--days` is a non-negative minimum age, default 3. Without `--write`, it prints eligible unscored cited cycles
+and makes no calls or writes. With `--write`, it makes one paid judge request per cycle with a retained episode,
+using later episodes, conversations and operator messages. It stores `borne_out=yes|no|unclear` and one sentence
+in `.supervisor/judgments/<name>-pushback-outcomes.jsonl`. Original verdict rows stay unchanged.
+Already scored cycles are skipped. Normal paid usage accounting still applies. Example:
+
+```text
+shaft judge pushback-outcome thelos --since 2026-10-23 --days 3
+shaft judge pushback-outcome thelos --since 2026-10-23 --days 3 --write
+```
+
+Stats and review show cited pushbacks per week, the share borne out among scored cited cycles, and an annoyance
+count separately. Annoyance counts a pushback cycle once if its own operator message was archived within
+60 seconds. It is a timing measure and never a grade input. Alert dismissals are timestamped but cannot be
+attributed to a specific message. See [architecture](architecture.md) for the matching rules and unknown cases.
 
 Stats, status, review and judge panels split operator-valued cycles into delivered, filed and unknown.
 Only `delivery_supported=yes` counts as delivered. New `no` or `na` answers count as filed; older missing

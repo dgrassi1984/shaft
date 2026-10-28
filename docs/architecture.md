@@ -134,6 +134,33 @@ a partial/no with `deliverable_met=yes` is not a reason to add a rung to the imp
 Both judges and the surprise control request the new fields. Ordinary backfill still asks only for missing
 ratings and value fields; old verdicts do not become incomplete because these fields are absent.
 
+Talk, API and live prompts allow disagreement with the operator and require it when a request conflicts
+with a tool result. The instance must cite the call and what it showed. There is no quota.
+Fresh live-cycle judgments require `pushback=none|cited|uncited` in its own property group.
+A disagreement without a cited tool result is unsupported and classified `uncited`.
+Conversations are not currently judged. Old verdicts remain valid without this field.
+
+`shaft judge pushback-outcome` previews cited cycles at least three days old without calls or writes.
+With `--write`, one judge request per unscored cycle assesses later episodes and operator messages as
+`borne_out=yes|no|unclear`, with one sentence. Each later-evidence section uses the existing 8,000-character
+limit and marks cuts. Results go to `.supervisor/judgments/<name>-pushback-outcomes.jsonl`, never the original
+verdict file. Already scored cycles are skipped. Paid requests retain normal judge usage accounting.
+
+Inbox archives and terminal/web alert dismissals append timestamped events to
+`.supervisor/dismissals.jsonl`; failures to record an event do not fail the original action.
+Message archive events identify the message file; the supervisor's message log identifies its sender.
+Alert events identify the alert and its instance when the alert id contains one. Alert dismissals cannot
+establish that a particular message was dismissed and are not attributed to pushback cycles.
+Annoyance counts pushback cycles whose own `send_message(to=operator)` message was archived within 60 seconds.
+It matches the message text and the recorded run start/end, counts each cycle once, and skips cycles missing
+that boundary. This measures timing, not causation. Reply-triggered archives also count as archives.
+
+`self/stats.md` and review report cited pushbacks in the last seven days, the share borne out among all scored
+cited cycles, and the last seven days' annoyance count on separate lines. The scored denominator includes
+`unclear`, which is also shown separately. Uncited and ungraded counts remain visible. None of these measures
+changes effectiveness, value or training scores. Operator acceptance, thumbs, agreement and dismissals
+are never grade inputs. There is no self-rated care score.
+
 Operator-valued cycles split into delivered (`delivery_supported=yes`), filed (`no` or `na`), and unknown
 (field absent or null). `self/stats.md`, `shaft stats`, status, review and the judge panels show the split.
 The value section uses its existing model-specific last-20 window; status and panels use the last 20 valued

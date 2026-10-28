@@ -265,7 +265,7 @@ def reply(name: str, text: str) -> int:
     quoted = f"> {open_q[0]['body'][:600]}\n\n" if open_q else ""
     path = _deliver(name, quoted + text, "reply" if ref else "message", ref)
     if open_q:
-        _archive(open_q[0]["path"])
+        _archive(open_q[0]["path"], "reply")
     log(f"operator -> {name}: {'reply to ' + ref if ref else 'message'}")
     print(f"delivered to {name} ({path.name}); it will read it in its next cycle or conversation.")
     return 0
@@ -279,7 +279,7 @@ def answer_quoted(name: str, text: str) -> list[str]:
     the question is answered — archived from the operator inbox, as a Telegram reply to it does. Returns the files."""
     done = []
     for m in quoted_questions(name, text):
-        _archive(m["path"])
+        _archive(m["path"], "reply")
         done.append(m["path"].name)
     return done
 
@@ -320,7 +320,22 @@ def clear_notes() -> int:
     return 0
 
 
-def _archive(path: Path) -> None:
+def dismissal(sup_dir: Path, action: str, ref: str, name: str = "") -> None:
+    """#141: timestamp operator dismissals separately; measurement must not fail the action."""
+    row = {"ts": datetime.now().isoformat(timespec="seconds"), "action": action, "ref": ref, "name": name}
+    try:
+        sup_dir.mkdir(parents=True, exist_ok=True)
+        with (sup_dir / "dismissals.jsonl").open("a") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            f.write(json.dumps(row) + "\n")
+    except OSError:
+        pass
+
+
+def _archive(path: Path, action: str = "archive") -> None:
+    """`action`: "archive" when the operator cleared it unanswered (a dismissal, #141's annoyance), "reply" when an
+    answer archived it — never counted as annoyance."""
     done = OPERATOR_INBOX / "read"
     done.mkdir(parents=True, exist_ok=True)
     shutil.move(path, done / path.name)
+    dismissal(SUP_DIR, action, path.name)

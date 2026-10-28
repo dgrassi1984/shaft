@@ -56,7 +56,7 @@ def reactions(name: str, rows: list[dict], sup_dir: Path, now: datetime) -> list
     """One outcome per push, using the next operator message or supervisor-logged conversation start.
 
     No response means none recorded yet as of now, within 24 h. It does not claim causation. Inbox read flags
-    and panel dismissals have no event timestamps, so cannot establish a dismissal within a minute.
+    and panel dismissals do not establish a response. Timed dismissals are measured separately (#141).
     """
     replies = [_time(r["ts"]) for r in rows if r.get("from") == "operator" and r.get("to") == name]
     try:
