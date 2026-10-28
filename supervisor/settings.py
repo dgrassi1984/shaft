@@ -24,7 +24,7 @@ from . import core
 from .core import KNOB_GROUPS, KNOBS, SERVICE_NAMES, config_lock, log, resolve
 
 # Every module that calls knob() at import (test_settings greps the code for knob(" calls and checks each is here).
-MODULES = ("core", "api", "battery", "broker", "calendar_proposals", "cloudllm", "coder", "consult",
+MODULES = ("core", "actions", "api", "battery", "broker", "calendar_proposals", "cloudllm", "coder", "consult",
            "finetune", "jobs", "judge", "localmodel", "metrics", "panel", "recap", "selfhosted", "telegram", "trial", "vision", "web")
 VALUE_MAX = 4000
 HEADER = ("# SHAFT's supervisor settings — written by `shaft settings set|unset` (and the web UI's Settings page).\n"

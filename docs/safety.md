@@ -1,5 +1,45 @@
 # Rules the supervisor enforces
 
+## Operator action classes (#142)
+
+`SHAFT_ACTION_INSTANCES` selects the instances using this model, initially `thelos` only.
+Other instances retain their existing broker behavior. Grants still apply on every call.
+The classification table lives in `supervisor/actions.py`.
+
+| Class | Existing tools and arguments | Initial behavior |
+|---|---|---|
+| reversible | Calendar creates without supplied attendees; moves whose current event tells nobody | Direct |
+| staged | Calendar creates/moves with supplied attendees; moves with another attendee or organiser, or an incomplete attendee list; every `calendar_respond` | Proposal |
+| irreversible | Sending as the operator or deleting. No existing operator broker tool does either | Always a proposal |
+
+Mail and calendar reads keep their current grant checks and do not change class state.
+`send_message` is outside the class model for every recipient. It sends as the instance, never as the operator,
+and class demotions do not change message delivery.
+Instance-owned keys and API calls are outside this operator-account model. There are no operator
+mail-send, Notion-write or Docs-write broker tools today. Local notes and drafts stay in the instance's sandbox.
+Supplied attendees require a proposal even if the only supplied address is the operator's, preserving the
+existing calendar rule. A move's classification uses the current Google event, never just the caller's arguments.
+
+Only the operator decides an over-reach: a recorded action marked with `shaft actions <name> overreach <action-id>`,
+or a proposal rejected with the exact reason `over-reach`. A refused call is recorded with mode `refused` and its
+reason, without changing class state. This includes disabled tools, absent calendar write grants and refused
+class entitlement. Invalid arguments, budgets, stale ETags, Google errors, expiry and ordinary declines also do not
+demote a class. One operator-marked incident counts once, including after restore.
+An over-reach changes reversible to staged, or staged/irreversible to refused, for that instance's entire class.
+`shaft actions <name> restore <class>` restores its initial behavior; irreversible can never become direct.
+State and history live in the supervisor's locked, append-only `actions/<name>.jsonl` under `SUP_DIR`.
+Class changes apply on the next dispatch; an already claimed dispatch may finish.
+
+All proposals use the existing calendar proposal journal and `/calendar/proposals` approval page.
+Approve or reject there or with `shaft actions <name> approve|reject <proposal-id>`.
+`--reason over-reach` on CLI rejection, or the page's **Reject as over-reach** button, demotes the class.
+Proposals expire after `SHAFT_CALENDAR_PROPOSAL_HOURS` (24). Calendar writes and proposals retain their existing
+calendar cap. Approval rechecks class entitlement and write grants. A durable claim prevents duplicate submission.
+Demoted reversible calendar actions approved later still use `sendUpdates=none`.
+The broker call log includes the class, action id and disposition for classified calls.
+
+## Other enforced rules
+
 - **Sandbox** (macOS `sandbox-exec`): an instance writes inside its own folder,
   except `config.env`, `drive.md` and `shaft-docs/`. It cannot read other files in your home or
   protected operator locations such as per-user temp/cache directories,
