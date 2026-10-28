@@ -12,6 +12,7 @@ from .tools import Toolbox, _spec, for_log
 
 # When my last finished sleep read the judge's verdicts: the next one asks only for those judged since (A2).
 VERDICTS_REVIEWED = "memory/verdicts-reviewed.md"
+SLEEP_VERDICT_PAGES = 3
 
 
 def _since(state: State) -> str:
@@ -89,11 +90,25 @@ def run(cfg, state: State, client: Client) -> str:
     fetched = None
     verdicts = "The supervisor's record could not be read: no broker available."
     if broker.available():
-        try:
-            fetched = _verdicts(broker.call("record", kind="judgments", limit=20, since=since, format="json"))
+        cursor = since
+        for _ in range(SLEEP_VERDICT_PAGES):
+            try:
+                page = _verdicts(broker.call("record", kind="judgments", limit=20, since=cursor, format="json"))
+            except (broker.BrokerError, ValueError, TypeError) as e:
+                if fetched is None:
+                    verdicts = f"The supervisor's record could not be read: {' '.join(str(e).split())}"
+                break
+            if fetched is None:
+                fetched = page
+            else:
+                fetched["text"] += "\n\n" + page["text"]
+                fetched["verdicts"].extend(page["verdicts"])
+                fetched["left_out"].extend(page["left_out"])
+                fetched["next_since"] = page["next_since"]
             verdicts = fetched["text"]
-        except (broker.BrokerError, ValueError, TypeError) as e:
-            verdicts = f"The supervisor's record could not be read: {' '.join(str(e).split())}"
+            cursor = page["next_since"]
+            if cursor is None:
+                break
     unwritten, turns = recovery.unwritten_transcripts(
         state, cfg.OPERATOR_NAME, max_chars=recovery.AUTONOMOUS_CONTEXT_CHARS)
     shingles = set().union(*(_shingles(text) for text in turns))
@@ -178,10 +193,16 @@ def run(cfg, state: State, client: Client) -> str:
                    "These conversations are still going on. Awareness only: do not consolidate them with remember, "
                    "rewrite_facts, write_digest, update_personality, update_self_model or memory/people writes. "
                    "A later sleep will consolidate them after they are written up.\n\n" + unwritten)
+    goals_size = len(state.read(state.goals_md))
+    goals_budget = (f" self/goals.md is {goals_size} characters, over the {cfg.GOALS_CHARS}-character budget. "
+                    f"Rewrite the whole file with replace=true under {cfg.GOALS_CHARS} characters, keeping active "
+                    "goals and standing rules; move history to a notes/ file."
+                    if goals_size > cfg.GOALS_CHARS else "")
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": prompts.SLEEP.format(operator=cfg.OPERATOR_NAME, operator_file=operator_file,
-                                                         settle=prompts.SETTLE if promises else "")
+                                                         settle=prompts.SETTLE if promises else "",
+                                                         goals_budget=goals_budget)
          + "\n\n## Verdicts the supervisor's judge gave since my last sleep\n\n" + (verdicts.strip() or "(none new)")
          + "\n\n## Surprises since my last sleep (step 7)\n\n"
          + surprises_text(surprises.since(state.root, _last_sleep(state)))
