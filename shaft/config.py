@@ -33,6 +33,8 @@ FIELDS: dict[str, tuple[type, object]] = {
     "TALK_REPLY_CALLS": (int, 3),       # reply first, queue the rest; 0 disables each budget
     "TALK_REPLY_S": (int, 45),
     "MAX_STEPS_TALK": (int, 0),        # 0 = no limit (conversations)
+    "LOOP_GUARD": (str, "shadow"),     # #103: effect repeats, measured before showing a note
+    "LOOP_EFFECT_ROUNDS": (int, 3),
     "CONTEXT_JOURNAL_CHARS": (int, 16000),
     "STALE_LINE_HOURS": (int, 24),     # sleep review; 0 disables each check
     "STALE_GOAL_HOURS": (int, 48),
@@ -109,14 +111,17 @@ CHOICES = {"LLM_REASONING_EFFORT": ("medium", "xhigh", "low"),
            "CONFIDENCE_MODE": ("confirm", "clauses", "noconfirm"),
            "OUTCOME_CARDS": ("on", "off", "shuffled", "recall"), "WORKSPACE": ("competitive", "relevance", "off"),
            "ATTENTION_SCHEMA": ("on", "off"), "COMMITMENTS": ("on", "off"), "FORECAST": ("on", "reserve", "off"),
-           "HANDOFF": ("on", "raw", "off")}
+           "HANDOFF": ("on", "raw", "off"), "LOOP_GUARD": ("shadow", "on", "off")}
 
 
 def _coerce(kind: type, raw: str, name: str = ""):
     if name in CHOICES and raw not in CHOICES[name]:
         raise ValueError(f"must be one of {', '.join(CHOICES[name])}")
     if kind is int:
-        return int(raw)
+        value = int(raw)
+        if name == "LOOP_EFFECT_ROUNDS" and value < 1:
+            raise ValueError("must be positive")
+        return value
     return raw
 
 

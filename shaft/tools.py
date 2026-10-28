@@ -35,12 +35,15 @@ PROTECTED = {
     "self/self.md": "use update_self_model",
     "self/personality.md": "use update_personality",
     "self/stats.md": "written by the supervisor from my measured results",
+    "drive.md": "only the operator edits my drive; propose_drive_amendment during sleep",
+    "memory/projects.jsonl": "use open_project and close_project",
     "memory/corrections.jsonl": "use record_correction at conversation writeup; close_correction in sleep",
     "memory/commitments.jsonl": "use commit_to to make a commitment; my sleep settles them (settle_commitment)",
     "config.env": "change a value with the supervisor's set_config(key, value) — the only way to change this "
                   "file, so the supervisor can tell my settings from the operator's",
 }
-PROTECTED_DIRS = {".git": "git internals",
+PROTECTED_DIRS = {"notes/drive-proposals": "use propose_drive_amendment during sleep; the operator writes decisions",
+                  ".git": "git internals",
                   "secrets": "my keys are handled by the supervisor: secret_set / secret_list / secret_delete", "memory/episodes": "episodes are append-only records",
                   "logs": "logs are written by my runtime", "inbox": "the supervisor delivers messages here"}
 # My records (the mind, beside self/'s own tools): write_file may not drop their lines unless I say replace.
