@@ -21,7 +21,7 @@ MAX_RESULT_CHARS = 6000
 LOG_CHARS = MAX_RESULT_CHARS
 FACTS_MAX_CHARS = 6000     # facts.md is shown in full: consolidation keeps it to this
 DIGEST_MAX_CHARS = 1500
-SOURCE = re.compile(r" \(src: (.+)\)\s*$", re.M)   # a fact line's source, as remember writes it (a URL may hold ")")
+SOURCE = re.compile(r" \(src: (.+?)\)(?=\s*$| \(superseded by \[)", re.M)   # a fact line's source, as remember writes it (a URL may hold ")")
 FACT_LINE = re.compile(r"^- \[\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?\] \S")   # every result stays in context for the rest of the cycle
 PLUGIN_TIMEOUT_S = 120
 
@@ -35,6 +35,7 @@ PROTECTED = {
     "self/self.md": "use update_self_model",
     "self/personality.md": "use update_personality",
     "self/stats.md": "written by the supervisor from my measured results",
+    "memory/corrections.jsonl": "use record_correction at conversation writeup; close_correction in sleep",
     "memory/commitments.jsonl": "use commit_to to make a commitment; my sleep settles them (settle_commitment)",
     "config.env": "change a value with the supervisor's set_config(key, value) — the only way to change this "
                   "file, so the supervisor can tell my settings from the operator's",
@@ -76,7 +77,8 @@ BUILTINS = [
     _spec("list_files", "List files under a directory of my folder (or of shared/, the operator's folder, when I "
           "have one).", {"path": S}, []),
     _spec("rewrite_facts", "Consolidate memory/facts.md (in my sleep): give the whole new list — duplicates "
-          "merged, superseded or trivial facts dropped, what still matters kept — one per line as "
+          "merged, trivial facts dropped, what still matters kept; retire contradictions with "
+          "remember(supersedes=...) or sleep-only retire_fact — one per line as "
           "'- [YYYY-MM-DD HH:MM] fact' (keep each fact's date and '(src: …)'). At most 6,000 characters: "
           "it is shown to me in full. Facts I drop are kept in memory/facts-archive.md, still found by search_memory.", {"facts": S}),
     _spec("write_digest", "Add today's digest (in my sleep): a short summary, at most 1,500 characters, of "
@@ -87,10 +89,14 @@ BUILTINS = [
           "and return the most relevant passages with their dates.",
           {"query": S, "k": {"type": "integer", "description": "max results, default 5"}}, ["query"]),
     _spec("remember", "Store a durable fact in memory/facts.md with its source: log:<episode ts>[#step], "
-          "web:<url> seen in this run, operator, instance:<name>, or inferred.",
-          {"fact": S, "source": S}),
+          "web:<url> seen in this run, operator, instance:<name>, or inferred. Optional supersedes names "
+          "one current fact by its date stamp and optional opening words; it is archived with both dates.",
+          {"fact": S, "source": S, "supersedes": S}, ["fact", "source"]),
     _spec("update_self_model", "Replace my self-model (self/self.md) with a complete new version "
-          "starting with '# '. Include everything I want to keep.", {"text": S}),
+          "starting with '# '. Include everything I want to keep. For operator claims supply source=operator and "
+          "checked_with=log:<episode ts> or record:<JSON arguments>/history:<JSON arguments> from a successful "
+          "call in this run, or mark each new line as operator's hypothesis, not verified (YYYY-MM-DD).",
+          {"text": S, "source": S, "checked_with": S}, ["text"]),
     _spec("update_personality", "Rewrite one layer of self/personality.md. 'surface' = current "
           "interests, opinions, moods (changes freely). 'core' = values and temperament (changes "
           "rarely; the supervisor refuses core changes made too soon after the last one). Every "
@@ -376,18 +382,67 @@ class Toolbox:
                         return True
         return False
 
-    def _t_remember(self, fact: str, source: str = "") -> str:
+    def _t_remember(self, fact: str, source: str = "", supersedes: str = "") -> str:
         if not isinstance(source, str) or not self._remember_source(source):
             return ("ERROR: source must be log:<episode ts>[#step], web:<url>, operator, "
                     "instance:<name> ([a-z0-9][a-z0-9_-]*), or inferred; "
                     "if you did not observe it in this run's tool results or your record, use source=inferred")
         facts = self.root / "memory" / "facts.md"
+        old = self._fact_match(supersedes) if supersedes else ""
+        stamp = f"{clock.now():%Y-%m-%d %H:%M}"
+        suffix = f" (supersedes: [{old.split(']')[0][3:]}])" if old else ""
+        new = f"- [{stamp}] {fact.strip()}{suffix} (src: {source})"
+        if old:
+            self._retire_fact(old, f"superseded by [{stamp}]: {source}: {' '.join(fact.split())[:120]}", new)
+            return f"remembered; retired {old} (superseded by [{stamp}])"
         facts.parent.mkdir(parents=True, exist_ok=True)
         if not facts.exists():
             facts.write_text("# Facts I have learned\n\n")
         with facts.open("a") as f:
-            f.write(f"- [{clock.now():%Y-%m-%d %H:%M}] {fact.strip()} (src: {source})\n")
+            f.write(new + "\n")
         return "remembered"
+
+    def _fact_match(self, fact: str) -> str:
+        path = self.root / "memory" / "facts.md"
+        lines = [line for line in path.read_text().splitlines() if FACT_LINE.match(line)] if path.exists() else []
+        key = fact.strip().removeprefix("- ").removeprefix("[").replace("]", "", 1)
+        selector = re.fullmatch(r"(\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})?)(?: (.+))?", key)
+        matches = [line for line in lines if selector and line.startswith(f"- [{selector[1]}] ")
+                   and line.split("] ", 1)[1].startswith(selector[2] or "")]
+        if len(matches) != 1:
+            candidates = matches or lines
+            raise ValueError(f"fact {fact!r} matched {len(matches)} current facts; candidates: "
+                             + ("; ".join(candidates) or "none"))
+        return matches[0]
+
+    def _retire_fact(self, old: str, evidence: str, new: str = "") -> str:
+        path = self.root / "memory" / "facts.md"
+        lines = path.read_text().splitlines()
+        lines.remove(old)
+        with (path.parent / "facts-archive.md").open("a") as f:
+            f.write(f"\n## Retired (superseded) {clock.now():%Y-%m-%d %H:%M}\n\n{old} ({evidence})\n")
+        if new:
+            lines.append(new)
+        path.write_text("\n".join(lines) + "\n")
+        return f"retired {old} ({evidence})"
+
+    def _t_retire_fact(self, fact: str, evidence: str) -> str:
+        old = self._fact_match(fact)
+        source = evidence.strip()
+        at = old.split("]", 1)[0][3:]
+        if source.startswith("log:") and self._remember_source(source):
+            newer = datetime.fromisoformat(source[4:].partition("#")[0])
+        elif source == "operator" or source.startswith("web:") and self._remember_source(source):
+            newer = clock.now()
+        else:
+            try:
+                observation = self._fact_match(source.removeprefix("fact:"))
+                newer = datetime.fromisoformat(observation.split("]", 1)[0][3:])
+            except ValueError:
+                return "ERROR: evidence must cite a checked log:<episode ts>[#step], newer fact's date, web:<url>, or operator"
+        if newer.astimezone().replace(tzinfo=None) <= datetime.fromisoformat(at):
+            return f"ERROR: evidence {evidence!r} must be newer than [{at}]"
+        return self._retire_fact(old, f"superseded by [{newer:%Y-%m-%d %H:%M}]: {source}")
 
     def _t_rewrite_facts(self, facts: str) -> str:
         lines = [l.strip() for l in facts.strip().splitlines() if l.strip()]
@@ -428,7 +483,26 @@ class Toolbox:
             f.write(f"\n## {clock.now():%Y-%m-%d %H:%M} — digest\n\n{text}\n")
         return "digest written"
 
-    def _t_update_self_model(self, text: str) -> str:
+    def _t_update_self_model(self, text: str, source: str = "", checked_with: str = "") -> str:
+        # #139: only explicit operator attribution is gated; existing callers still work.
+        if source == "operator":
+            checked = checked_with.startswith("log:") and self._remember_source(checked_with)
+            name, _, raw = checked_with.partition(":")
+            if name in ("record", "history"):
+                try:
+                    args = json.loads(raw)
+                    checked = any(e["tool"] == name and json.loads(e["args"]) == args
+                                  and not e["result"].startswith("ERROR")
+                                  and e["result"] != "(repeat: not run)" for e in self.log)
+                except (ValueError, TypeError):
+                    checked = False
+            path = self.root / "self" / "self.md"
+            held = set(path.read_text().splitlines()) if path.exists() else set()
+            new = [line for line in text.splitlines() if line.strip() and not line.startswith("#") and line not in held]
+            marked = all(re.search(r"operator's hypothesis, not verified \(\d{4}-\d{2}-\d{2}\)", line)
+                         for line in new)
+            if not checked and not marked:
+                return "ERROR: operator claim needs checked_with from record/history or an episode, or a dated hypothesis marking"
         edit = selfedit.parse(f"<self_model>\n{text}\n</self_model>")
         if edit.new_self is None:
             return f"ERROR: self-model not changed: {edit.rejected or 'empty or no-change text'}"

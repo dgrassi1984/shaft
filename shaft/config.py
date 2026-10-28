@@ -30,11 +30,16 @@ FIELDS: dict[str, tuple[type, object]] = {
     "MAX_TOKENS_STEP": (int, 16384),     # one model turn inside a tool loop (live, sleep)
     "MAX_STEPS_LIVE": (int, 12),
     "MAX_STEPS_SLEEP": (int, 30),
+    "TALK_REPLY_CALLS": (int, 3),       # reply first, queue the rest; 0 disables each budget
+    "TALK_REPLY_S": (int, 45),
     "MAX_STEPS_TALK": (int, 0),        # 0 = no limit (conversations)
     "LOOP_GUARD": (str, "shadow"),     # #103: effect repeats, measured before showing a note
     "LOOP_EFFECT_ROUNDS": (int, 3),
     "CONTEXT_JOURNAL_CHARS": (int, 16000),
+    "STALE_LINE_HOURS": (int, 24),     # sleep review; 0 disables each check
+    "STALE_GOAL_HOURS": (int, 48),
     "CRITERION_CHARS": (int, 600),
+    "CONFIDENCE_MODE": (str, "confirm"),   # confirm after the base rate, per-clause, or without confirmation
     "GOALS_CHARS": (int, 12000),       # how much of my goals I carry into every prompt
     "BRIEFING": (str, "notes/briefing.md"),   # my watchers' view of the operator's next 48 hours; off disables
     "HANDOFF": (str, "on"),           # my last two live cycles: structured, raw tool log, or off
@@ -103,6 +108,7 @@ def parse_env_file(path: Path) -> dict[str, str]:
 # The values a setting accepts; anything else keeps the next source's value. LLM_REASONING_EFFORT: what the model server
 # accepts (Bonsai's template raises on anything else, which would fail every call). The rest: PLAN-consciousness's knobs.
 CHOICES = {"LLM_REASONING_EFFORT": ("medium", "xhigh", "low"),
+           "CONFIDENCE_MODE": ("confirm", "clauses", "noconfirm"),
            "OUTCOME_CARDS": ("on", "off", "shuffled", "recall"), "WORKSPACE": ("competitive", "relevance", "off"),
            "ATTENTION_SCHEMA": ("on", "off"), "COMMITMENTS": ("on", "off"), "FORECAST": ("on", "reserve", "off"),
            "HANDOFF": ("on", "raw", "off"), "LOOP_GUARD": ("shadow", "on", "off")}

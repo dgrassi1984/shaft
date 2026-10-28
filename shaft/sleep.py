@@ -5,10 +5,10 @@ import json
 import re
 from datetime import datetime
 
-from . import agent, broker, clock, commitments, loopguard, memory, prompts, recovery, surprises
+from . import agent, broker, clock, commitments, corrections, loopguard, memory, prompts, recovery, staleness, surprises
 from .llm import Client, LLMError
 from .state import State
-from .tools import Toolbox, _spec, for_log
+from .tools import FACT_LINE, SOURCE, Toolbox, _spec, for_log
 
 # When my last finished sleep read the judge's verdicts: the next one asks only for those judged since (A2).
 VERDICTS_REVIEWED = "memory/verdicts-reviewed.md"
@@ -54,6 +54,52 @@ CLOSE_SURPRISE = _spec(
      "note": {"type": "string", "description": "why: one sentence"}})
 
 
+RETIRE_FACT = _spec(
+    "retire_fact", "Retire one current fact contradicted by a newer observation (in my sleep). "
+    "fact is its date stamp and optional opening words. evidence is log:<episode ts>[#step], "
+    "a newer current fact's date (optionally fact:<date>), web:<url> fetched this run, or operator. "
+    "Dated evidence must be later; the old fact and evidence remain searchable in the archive.",
+    {"fact": S, "evidence": S})
+
+
+def fact_candidates(root) -> str:
+    try:
+        path = root / "memory" / "facts.md"
+        rows = []
+        for line in path.read_text().splitlines() if path.exists() else []:
+            if not FACT_LINE.match(line):
+                continue
+            stamp, text = line[3:].split("] ", 1)
+            at = datetime.fromisoformat(stamp)
+            text = SOURCE.sub("", text).split(" (supersedes:")[0]
+            words = memory._tokens(text)
+            keys = {"prefix:" + " ".join(words[:3])} if len(words) >= 3 else set()
+            keys |= {"entity:" + word.lower() for word in re.findall(r"\b[A-Z][a-z]+(?:-[A-Za-z]+)*\b", text)}
+            if text.lower().startswith("today is "):
+                keys.add("key:today is")
+            rows.append((at, line, keys))
+        # a key most facts share (the operator's name) pairs everything with everything: on thelos's real facts it
+        # filled all 15 pairs with "Daniele" (2026-10-28). Only keys a few facts share count, and an older fact gets
+        # one pair: the newest fact it shares the most of them with.
+        seen: dict[str, int] = {}
+        for _, _, keys in rows:
+            for k in keys:
+                seen[k] = seen.get(k, 0) + 1
+        common = max(3, len(rows) // 10)
+        rows = sorted((at, line, {k for k in keys if k.startswith("key:") or seen[k] <= common}) for at, line, keys in rows)
+        pairs = []
+        for i, (at, line, keys) in enumerate(rows):
+            later = [(len(keys & other_keys), when, other) for when, other, other_keys in rows[i + 1:]
+                     if when > at and keys & other_keys]
+            if later:
+                pairs.append(f"- Older: {line}\n  Newer: {max(later)[2]}")
+                if len(pairs) == 15:
+                    break
+        return "\n".join(pairs) or "(no candidate pairs; still check this period's episodes)"
+    except Exception as e:   # a prompt block reading a record must not stop the sleep
+        return f"(fact candidates could not be read: {type(e).__name__}: {e})"
+
+
 def _last_sleep(state: State) -> str:
     """When my last finished sleep ended (its episode's ts), or '' before my first: the surprises since then are mine
     to go through."""
@@ -76,7 +122,7 @@ def surprises_text(items: list[dict]) -> str:
 
 
 # The writes a sleep must not make from an open conversation, and the file each one changes ("": all new text).
-GUARDED = {"remember": "", "write_digest": "", "rewrite_facts": "memory/facts.md",
+GUARDED = {"retire_fact": "", "remember": "", "write_digest": "", "rewrite_facts": "memory/facts.md",
            "update_personality": "self/personality.md", "update_self_model": "self/self.md"}
 
 
@@ -117,7 +163,7 @@ def run(cfg, state: State, client: Client) -> str:
     toolbox.remote = {name: spec for name, spec in toolbox.remote.items() if name in ("record", "history")}
     toolbox.plugins = {}
     promises = cfg.COMMITMENTS == "on"
-    toolbox.extra = [CLOSE_SURPRISE] + ([commitments.SETTLE] if promises else [])
+    toolbox.extra = [CLOSE_SURPRISE, corrections.CLOSE, RETIRE_FACT] + ([commitments.SETTLE] if promises else [])
     real_run = toolbox.run
     closed: list[dict] = []
 
@@ -148,6 +194,13 @@ def run(cfg, state: State, client: Client) -> str:
             return real_run(name, raw_args)
         if not isinstance(args, dict):
             return real_run(name, raw_args)
+        if name == "close_correction":
+            try:
+                result = corrections.close(state.root, args, clock.now())
+            except (OSError, ValueError) as e:
+                result = f"ERROR: correction not closed: {type(e).__name__}: {e}"
+            toolbox.log.append({"tool": name, "args": for_log(raw_args), "result": result})
+            return result
         if name == "close_surprise":
             result = close(args)
             toolbox.log.append({"tool": name, "args": for_log(raw_args), "result": result})
@@ -184,6 +237,13 @@ def run(cfg, state: State, client: Client) -> str:
         if refusal:
             toolbox.log.append({"tool": name, "args": for_log(raw_args), "result": refusal})
             return refusal
+        if name == "retire_fact":
+            try:
+                result = toolbox._t_retire_fact(**args)
+            except Exception as e:
+                result = f"ERROR: {type(e).__name__}: {e}"
+            toolbox.log.append({"tool": name, "args": for_log(raw_args), "result": result})
+            return result
         return real_run(name, raw_args)
     toolbox.run = gated_run
 
@@ -192,18 +252,21 @@ def run(cfg, state: State, client: Client) -> str:
     if unwritten:
         system += ("\n\n## Recent conversations I have not written up yet (transcripts)\n\n"
                    "These conversations are still going on. Awareness only: do not consolidate them with remember, "
-                   "rewrite_facts, write_digest, update_personality, update_self_model or memory/people writes. "
+                   "rewrite_facts, retire_fact, write_digest, update_personality, update_self_model or memory/people writes. "
                    "A later sleep will consolidate them after they are written up.\n\n" + unwritten)
     goals_size = len(state.read(state.goals_md))
     goals_budget = (f" self/goals.md is {goals_size} characters, over the {cfg.GOALS_CHARS}-character budget. "
                     f"Rewrite the whole file with replace=true under {cfg.GOALS_CHARS} characters, keeping active "
                     "goals and standing rules; move history to a notes/ file."
                     if goals_size > cfg.GOALS_CHARS else "")
+    stale = staleness.block(state.root, clock.now(), cfg.STALE_LINE_HOURS, cfg.STALE_GOAL_HOURS)
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": prompts.SLEEP.format(operator=cfg.OPERATOR_NAME, operator_file=operator_file,
                                                          settle=prompts.SETTLE if promises else "",
                                                          goals_budget=goals_budget)
+         + "\n\n## Stale context review (step 10)\n\n" + stale
+         + "\n\n## Possible fact conflicts (step 11; candidates, not proof)\n\n" + fact_candidates(state.root)
          + "\n\n## Verdicts the supervisor's judge gave since my last sleep\n\n" + (verdicts.strip() or "(none new)")
          + "\n\n## Surprises since my last sleep (step 7)\n\n"
          + surprises_text(surprises.since(state.root, _last_sleep(state)))

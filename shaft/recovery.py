@@ -10,10 +10,12 @@ from __future__ import annotations
 import json
 import os
 import sys
+from datetime import timedelta
 
-from . import prompts
+from . import agent, clock, corrections, prompts
 from .llm import Client, LLMError
 from .state import State
+from .tools import Toolbox
 from .ui import Status
 
 MAX_TRANSCRIPT_CHARS = 24000
@@ -83,26 +85,65 @@ def run(cfg, state: State, client: Client) -> int:
         who = speaker or cfg.OPERATOR_NAME
         about = (f"{speaker} (not {cfg.OPERATOR_NAME}: someone acting for them — do not attribute what "
                  f"{speaker} said or did to {cfg.OPERATOR_NAME})") if speaker else who
-        dialogue = [{"role": "user" if t["role"] == "user" else "assistant", "content": t["content"]}
-                    for t in turns]
-        while sum(len(m["content"]) for m in dialogue) > MAX_TRANSCRIPT_CHARS and len(dialogue) > 2:
-            dialogue.pop(0)
+        pages = [""]
+        for t in turns:
+            label = f"[{t['ts']}] {who if t['role'] == 'user' else 'me'}: "
+            room = MAX_TRANSCRIPT_CHARS - len(label) - 2
+            for offset in range(0, len(t["content"]), room):
+                fragment = label + t["content"][offset:offset + room] + "\n\n"
+                if len(pages[-1]) + len(fragment) > MAX_TRANSCRIPT_CHARS:
+                    pages.append("")
+                pages[-1] += fragment
         system = prompts.system_prompt(state, cfg, prompts.RECOVERY_MODE.format(
             operator=about, started=started.replace("T", " ")[:16], ended=ended.replace("T", " ")[:16]))
-        messages = [{"role": "system", "content": system}, *dialogue,
-                    {"role": "user", "content": prompts.TALK_SUMMARY.format(operator=who)}]
+        def record(args: dict) -> str:
+            if speaker:
+                return "ERROR: this speaker is not the operator"
+            try:
+                return corrections.record(state.root, args, talk_id, clock.now())
+            except (OSError, ValueError) as e:
+                return f"ERROR: correction not recorded: {type(e).__name__}: {e}"
+
+        controls = {"record_correction": agent.Control(corrections.RECORD, record)} if not speaker else {}
+        instruction = ("Before the journal entry, record_correction for each fact the operator corrected or complaint "
+                       "about your behaviour in this transcript page. Use its timestamp and words. For a correction "
+                       "already recorded within 7 days, pass its id in reopens. Do not accept it as a fact about "
+                       "yourself without checking the record.") if not speaker else ""
+        summaries = []
         when = started[:16].replace("T", " ")
         ui = Status(sys.stderr)
         ui.show(f"conversation of {when} has no journal entry yet · waiting for the model")
         try:
-            reply = client.stream(
-                messages, cfg.MAX_TOKENS_REFLECT, purpose="talk_recovery", think=False,
-                on_progress=lambda done, total: ui.show(
-                    f"conversation of {when} · reading the transcript", f"{done * 100 // max(total, 1)}%"),
-                on_reasoning=lambda _: ui.show(f"conversation of {when} · writing my journal entry"),
-                on_content=lambda _: None)
+            def call(messages, tools=None):
+                return client.stream(
+                    messages, cfg.MAX_TOKENS_REFLECT, purpose="talk_recovery", think=False, tools=tools,
+                    on_progress=lambda done, total: ui.show(
+                        f"conversation of {when} · reading the transcript", f"{done * 100 // max(total, 1)}%"),
+                    on_reasoning=lambda _: ui.show(f"conversation of {when} · writing my journal entry"),
+                    on_content=lambda _: None)
+
+            for page in pages:
+                recent = [it for it in corrections.fold(state.root).values()
+                          if timedelta(0) <= corrections._at(ended) - corrections._at(it["when"]) <= timedelta(days=7)]
+                messages = [{"role": "system", "content": system},
+                            {"role": "user", "content": "Transcript page:\n" + page + "\n\n" + instruction
+                             + "\nRecent corrections, including closed ones:\n" + json.dumps(recent, ensure_ascii=False)
+                             + "\n\n" + prompts.TALK_SUMMARY.format(operator=who)}]
+                box = Toolbox(state.root)
+                outcome = agent.run(client, messages, box, max_tokens=cfg.MAX_TOKENS_REFLECT,
+                                    purpose="talk_recovery", max_steps=12, controls=controls,
+                                    call=lambda ms, t=None: call(ms, [c.spec for c in controls.values()] or None),
+                                    wrap_up="Finish recording corrections, then write the journal entry.")
+                if not (outcome.reply and (outcome.reply.content or "").strip()):   # a wrap-up answer is fine too
+                    raise LLMError(f"conversation writeup wrote no entry (ended by {outcome.ended_by})")
+                summaries.append(outcome.reply.content)
+            reply = outcome.reply
+            if len(summaries) > 1:
+                reply = call([{"role": "system", "content": system},
+                              {"role": "user", "content": "Summaries of all transcript pages:\n\n"
+                               + "\n\n".join(summaries) + "\n\n" + prompts.TALK_SUMMARY.format(operator=who)}])
             ui.clear()
-        except LLMError as e:
+        except (LLMError, OSError, ValueError) as e:
             ui.clear()
             print(f"could not write the missing entry for conversation {talk_id}: {e}", file=sys.stderr)
             continue

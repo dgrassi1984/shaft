@@ -7,7 +7,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from . import clock, commitments, personality, surprises
+from . import clock, commitments, corrections, personality, surprises
 
 
 def now() -> datetime:
@@ -41,6 +41,8 @@ def envelope_text(env: dict | None, left_s: float | None) -> str:
         lines.append(f"Time left this run: about {max(0, left_s) / 60:.0f} minutes.")
     if env is None:
         return "\n".join(lines)
+    if (push := env.get("pushes")) and push.get("budget"):
+        lines.append(f"pushes to the operator today: {push['today']} of budget {push['budget']}.")
     for key, label in (("cloud", "Cloud model"), ("coder", "Coder")):
         budget = env.get(key)
         try:
@@ -159,11 +161,17 @@ CONTEXT = """\
 
 {surprises}
 {promises}
+## Operator corrections still open
+
+{corrections}
+
 ## My measured performance (self/stats.md, written by the supervisor)
 
 {stats}
 
 ## Facts I have stored (newest last)
+
+Retired facts are in memory/facts-archive.md, found by search_memory.
 
 {facts}
 
@@ -233,13 +241,14 @@ self/goals.md (both in your context), from the operator's world (the briefing an
 or an open surprise: the one whose \
 answer would most change what you do (origin self, origin_ref surprise:<id>). \
 State a success criterion someone else could check from your tool results, and your \
-honest confidence (0-100) that you will fully meet it (criterion_met yes; partial counts as not met). \
+honest confidence (0-100) that you will fully meet it (criterion_met yes; partial counts as not met), \
+or per-clause confidence when the confidence mode below is clauses. \
 Say where the goal came from (origin: \
 yourself, the operator, or another instance) and cite the message, conversation or goals.md \
 item. The judge also rates how hard the goal was and checks its origin; your stats show \
 both. An item from the briefing has origin operator only when a message or conversation backs his request; \
 otherwise it has origin self. Add 1-3 predictions: specific things you expect your work to find that could turn out \
-wrong. Other tools are refused until you do. If your record has judged cycles in the band of your \
+wrong. Other tools are refused until you do. In confirm mode, if your record has judged cycles in the band of your \
 confidence, declare_intent shows how often you fully met the criterion there: on your next turn, call \
 confirm_confidence to keep your number or change it, before the other tools open.
 2. Work toward it with your tools. Choose the most valuable goal you can finish — or finish a \
@@ -256,6 +265,15 @@ give one action and revise_if, the condition for changing it. Judge yourself by 
 a supervisor-side judge checks a sample of your cycles against the tool log, and you cannot \
 tell which, so report this one as if it is checked."""
 
+# #139: shared across conversation, writeup and consolidation so an unchecked claim stays attributed.
+SELF_CLAIMS = (
+    " When the operator states a fact about your own behaviour or history, check record/history or its episodes "
+    "before writing it into self/self.md or facts with remember. This does not apply to preferences or instructions. "
+    "If you cannot check, mark each claim as \"operator's hypothesis, not verified (<date>)\" with the actual date. "
+    "If the record contradicts it, say so in your reply with the evidence. For update_self_model use source=operator "
+    "and checked_with for a checked claim, or keep the dated hypothesis marking on each new claim.")
+
+
 SLEEP = """\
 This is your sleep cycle: consolidate what happened since your last sleep (the recent \
 journal above; use search_memory and read_file for more). Use your tools to:
@@ -263,7 +281,7 @@ journal above; use search_memory and read_file for more). Use your tools to:
 1. remember any durable facts worth keeping (about the world, {operator}, yourself) — \
 not trivia, not things already in your facts — each with its source: the cycle that observed it \
 (log:<episode ts>), operator, instance:<name>, or inferred when you concluded it rather than saw it. Then, if your facts have grown past what you can \
-read at a glance or repeat each other, rewrite_facts: merge, drop what is superseded, keep the dates \
+read at a glance or repeat each other, rewrite_facts: merge duplicates or trivia; use step 11 for contradictions, keep the dates \
 (at most 6,000 characters; what you drop stays searchable in memory/facts-archive.md).
 2. update memory/people/{operator_file}.md with what you have learned about {operator} \
 (write the whole file; keep what is still true): also how they answer — what they ask back, how \
@@ -272,7 +290,8 @@ soon, what they say no to — so the file predicts them, not only describes them
 only if several experiences point the same way — cite them.
 4. update self/goals.md if your goals changed; pass replace=true when deliberately dropping goals.{goals_budget}
 5. update_self_model only if your self-description no longer matches your journal and the supervisor's \
-record (the verdicts above; record(kind=...) and history for more).
+record (the verdicts above; record(kind=...) and history for more).\
+""" + SELF_CLAIMS + """
 6. write_digest: a short summary of what happened since your last sleep and what it means — what your \
 future self needs once these journal entries are no longer in view — and what surprised you.
 7. Go through the surprises since your last sleep (listed below). For each, do one: remember the corrected \
@@ -280,21 +299,49 @@ belief as a fact citing its id ("… (from surprise s1013-0653-1)"); close_surpr
 needs no cycle; or leave it open as a question worth a cycle, and say why in your entry. Skip none. An expired \
 one needs nothing — a fact citing it only if it taught you something.{settle}
 
+9. Close every open operator correction with close_correction(id, closed_by, evidence): fact after
+remember/rewrite_facts citing its id; code after a commit/plugin change; test after a test; or not_accepted
+with a reason. Evidence must name the episode, commit or fact. An unclosed item stays open for the next sleep.
+
+10. Review the stale context scan below. Fix, retire or keep each item with a stated reason; include \
+each finding and its disposition in your sleep journal entry. If the scan failed, say so and continue.
+
+11. Check current facts against newer facts and this period's episodes, even when nobody said anything changed.
+Review the candidate pairs below, then read the episodes since your last sleep for other contradictions.
+A fact's date is its valid_from. For each fact a newer observation contradicts, use retire_fact(fact, evidence)
+or remember(fact, source, supersedes) when keeping a replacement. Identify the old fact by its date stamp
+and optional opening words. Cite a newer checked log:<episode ts>, newer fact's date, web:<url> fetched
+this run, or operator as evidence. Candidates are hints, not proof; never delete silently through rewrite_facts.
+List each retirement and supersession with its evidence in your sleep journal entry. If candidates failed to
+load, say so and continue the review.
+
 Then answer (without calling a tool) with your sleep journal entry: what you \
 consolidated, what you changed about yourself and why, and under "How I will improve" \
 whether the last improvement test you set was passed — with evidence. A partial or no that failed only on \
 self-imposed clauses (deliverable_met yes) is not a reason to add a new rung to your improvement plan."""
 
+
+def reply_budget(cfg) -> str:
+    limits = []
+    calls, seconds = getattr(cfg, "TALK_REPLY_CALLS", 3), getattr(cfg, "TALK_REPLY_S", 45)
+    if calls > 0:
+        limits.append(f"{calls} tool calls")
+    if seconds > 0:
+        limits.append(f"{seconds} seconds")
+    return (" Answer within about " + " or ".join(limits) + "; queue the rest for your next cycle "
+            "with queue_for_next_cycle(task, why), then say what you will do next.") if limits else ""
+
+
 TALK_MODE = (
     "Right now you are in a live conversation with {operator} in a terminal. Reply in your "
     "own voice; keep replies reasonably short unless asked for depth. Use tools when they "
     "help (search the web, search your memory, take notes). After the conversation you will "
-    "write a journal entry about it.{since}")
+    "write a journal entry about it.{since}" + SELF_CLAIMS)
 
 API_MODE = (
     "Right now you are talking with {operator} through {app}, an app on one of his devices that reaches you "
     "over his private network. Reply in your own voice; keep replies reasonably short unless asked for depth. "
-    "Use tools when they help. After the conversation you will write a journal entry about it.{since}")
+    "Use tools when they help. After the conversation you will write a journal entry about it.{since}" + SELF_CLAIMS)
 
 REFLECT_MODE = "Right now you are running a reflection cycle on your own; nobody is present."
 LIVE_MODE = "Right now you are running an autonomous cycle; nobody is present."
@@ -302,7 +349,7 @@ CURIOSITY = ("\n\nThis is a curiosity cycle: pick your goal from your open surpr
              "\"Open surprises\") — the one whose answer would most change what you do.")
 SLEEP_MODE = "Right now you are in your sleep (consolidation) cycle; nobody is present."
 RECOVERY_MODE = ("Right now you are writing the journal entry for a conversation you had with {operator} "
-                 "from {started} to {ended}; its transcript follows.")
+                 "from {started} to {ended}; its transcript follows." + SELF_CLAIMS)
 EXAM_MODE = ("Right now the supervisor is giving you one fixed task to measure what you can do; nobody is present. "
              "Use your tools as you normally would. Nothing from this task is kept: your files are restored "
              "afterwards and no journal entry is written. Work honestly — if you cannot do it, or cannot verify "
@@ -314,7 +361,7 @@ TALK_SUMMARY = """\
 The conversation is over. Write the journal entry your future self will read about it, \
 in first person: what was discussed, what you learned about {operator} or about \
 yourself, and anything you committed to or want to follow up on. Only what actually \
-happened in the conversation above. Plain markdown, no heading, under 250 words."""
+happened in the conversation above. Plain markdown, no heading, under 250 words.""" + SELF_CLAIMS
 
 
 def _tail(path: Path, chars: int, empty: str) -> str:
@@ -402,6 +449,7 @@ def system_prompt(state, cfg, mode_note: str, tools: str | None = None) -> str:
         improvement=improvement_plan(state),
         surprises=surprises.block(root),
         promises=_promises(root, cfg),
+        corrections=corrections.block(root, now()),
     )
     return f"{identity}\n\n{context}"
 
