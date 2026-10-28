@@ -120,8 +120,14 @@ messages carries the label; then all its messages are, later replies included. D
 One instance may read several accounts: grant a label on each; `mail_search` covers every grant unless told one.
 `shaft mail example grant work AssistantAccess` checks that the label exists and saves the grant in
 `.supervisor/tools/example.json`. `shaft mail example revoke work AssistantAccess` or `shaft mail example off` holds from example's
-next mail call. A label renamed or deleted in Gmail is refused until you grant it again. Up to 30 mail calls per run.
-Bodies are cut at 20,000 characters (60,000 per thread). Downloads go to `mail/<alias>/<thread>/` in the instance's
+next mail call. A label renamed or deleted in Gmail is refused until you grant it again. Up to 30 mail calls per run; a continuation page of `mail_read` (message or offset past the start) counts as a call but not against those 30.
+`mail_read(id=…)` returns pages of at most 6,000 characters, including headers and footer, so the agent's tool-result
+cap preserves the whole page. Follow the footer's exact `mail_read(id=…, message=…, offset=…)` call until
+`End of thread`. `message` starts at 1, oldest first; `offset` is a character offset in that message's text,
+default 0. Long messages continue across pages without losing text. Each continuation repeats the message headers
+and sender marking, and each page checks the granted label again. The footer counts remaining messages, including
+any partly read message, and remaining body characters.
+Downloads go to `mail/<alias>/<thread>/` in the instance's
 folder (gitignored by the template; a download is refused until `shaft update` brings that rule). Limits: 25 MB per
 file, 100 MB per run. Each body is shown under a line saying who wrote it and that it is not your instruction.
 Trial replays read the same mail, as of the replayed cycle, shared by the pair. Battery exams get none.
