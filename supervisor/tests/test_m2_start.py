@@ -117,7 +117,9 @@ class StartTest(InstanceFixture, unittest.TestCase):
                  for s in client.complete.call_args_list[0].kwargs["tools"]}
         self.assertEqual(specs["finish_cycle"]["properties"]["unfinished"]["items"], {"type": "string"})
         self.assertEqual(specs["finish_cycle"]["properties"]["next_action"]["required"], ["action", "revise_if"])
-        self.assertEqual(specs["finish_cycle"]["required"], ["what_happened", "criterion_met", "learned"])
+        required = specs["finish_cycle"]["required"]   # the handoff stays optional; #130 added delivered_via
+        self.assertTrue({"what_happened", "criterion_met", "learned"} <= set(required))
+        self.assertFalse({"unfinished", "next_action"} & set(required))
 
     def test_completed_uses_successful_writes_not_claims_or_reads(self):
         """#104: reverting log-derived completion lets the finish prose invent sends and commits."""
