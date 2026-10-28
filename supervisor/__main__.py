@@ -887,7 +887,13 @@ def cmd_trial(args) -> int:
         import threading
         rec = trial.replay_arm(PROJECT, args.name, st, trial.committed_code(PROJECT, args.name), model=args.model,
                                cache={}, cache_lock=threading.Lock(), billed=f"{args.name}@trial:replay",
-                               keep=Path(args.keep).resolve() if args.keep else None)
+                               keep=Path(args.keep).resolve() if args.keep else None,
+                               cycles=args.cycles, sleep_between=args.sleep,
+                               on_unit=lambda unit: trial._ledger({"instance": args.name, "trial": "replay",
+                                   "by": "operator", "kind": "arm", "model": args.model,
+                                   "usd": unit["usd"], "seconds": unit["seconds"], "ended": unit["ended"],
+                                   "tokens_in": unit["usage"]["prompt_tokens"],
+                                   "tokens_out": unit["usage"]["completion_tokens"]}))
         ep2 = rec["episode"] or {}
         print(f"state: {st['start_commit'][:10]} (cycle began {st['t0']}; inbox {st['inbox']})")
         print(f"exit {rec['exit']} · {rec['ended']} · {rec['seconds']} s · completed {rec['completed']} · "
@@ -903,7 +909,8 @@ def cmd_trial(args) -> int:
     change = _pairs(args.cand)
     try:
         t = trial.create(args.name, change, args.hypothesis, by="operator", episodes=args.episodes, n=args.n,
-                         base=_pairs(args.base) or None, allow_empty=args.aa, model=args.model)
+                         base=_pairs(args.base) or None, allow_empty=args.aa, model=args.model,
+                         cycles=args.cycles, sleep_between=args.sleep)
     except trial.TrialError as e:
         print(f"refused: {e}", file=sys.stderr)
         return 1
@@ -1051,6 +1058,9 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("consults", help="what each instance spent consulting other models, per model and run, and how "
                        "its consulted cycles fared (docs/plans/PLAN-model-choice.md)")
     p.add_argument("names", nargs="*")
+    p = sub.add_parser("compression", help="offline memory compression assay with held-out recall (#113)")
+    p.add_argument("name")
+    p.add_argument("--since", default="", help="inclusive sleep date: YYYY-MM-DD")
     p = sub.add_parser("metacog", help="how well each instance's confidence tells its met cycles from its missed ones: "
                        "AUROC (clauses apart), bias, resolution, meta-I, by domain, paired v3, claim confusion "
                        "matrix and doubt/first-error alignment (A1, #98)")
@@ -1225,6 +1235,8 @@ def main(argv: list[str]) -> int:
                    help="replace PATH in the current version (A) too — for planted tests")
     q.add_argument("--aa", action="store_true", help="A/A calibration: the 'change' is the current code itself")
     q.add_argument("--hypothesis", default="operator trial")
+    q.add_argument("--cycles", type=int, default=1, help="consecutive live cycles per arm from one past state")
+    q.add_argument("--sleep", action="store_true", help="sleep between each pair of replayed live cycles")
     q.add_argument("-n", type=int, default=0)
     q.add_argument("--episodes", nargs="*", default=[])
     q.add_argument("--model", choices=["auto", "cloud", "local"], default="auto")
@@ -1233,6 +1245,8 @@ def main(argv: list[str]) -> int:
     q.add_argument("ts", help="the episode's ts")
     q.add_argument("--model", default="local", help="'local' (its own configuration) or a cloud model id")
     q.add_argument("--keep", help="copy the replayed folder here")
+    q.add_argument("--cycles", type=int, default=1, help="consecutive live cycles from one past state")
+    q.add_argument("--sleep", action="store_true", help="sleep between each pair of replayed live cycles")
     tsub.add_parser("work", help="run the queued trials' tests and replays that may run now (the scheduler does this)")
     p = sub.add_parser("check", help="run the test gate against an instance's code")
     p.add_argument("name", nargs="?", default=DEFAULT_INSTANCE)
@@ -1462,6 +1476,14 @@ def main(argv: list[str]) -> int:
         for name in names:
             print(surprise.disposition_text(name) + "\n")
         return code
+    if args.cmd == "compression":
+        from . import compression
+        instance_root(args.name)
+        try:
+            print(compression.report(args.name, args.since))
+        except (ValueError, mind.MindError) as e:
+            raise SystemExit(str(e))
+        return 0
     if args.cmd in ("metacog", "attention", "commitments", "provenance", "consults"):
         import importlib
         names = args.names or instance_names()

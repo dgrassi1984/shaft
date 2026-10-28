@@ -182,6 +182,8 @@ reviewed ref was `refs/heads/publish-prep-template`.
 | `TALK_REPLY_CALLS` | `3` | uses built-in default |
 | `TALK_REPLY_S` | `45` | uses built-in default |
 | `MAX_STEPS_TALK` | `0` | `0` |
+| `LOOP_GUARD` | `'shadow'` | `shadow` |
+| `LOOP_EFFECT_ROUNDS` | `3` | `3` |
 | `CONTEXT_JOURNAL_CHARS` | `16000` | `16000` |
 | `STALE_LINE_HOURS` | `24` | uses built-in default |
 | `STALE_GOAL_HOURS` | `48` | uses built-in default |
@@ -211,6 +213,13 @@ call finishes normally. Set either knob to 0 to disable that budget.
 `CRITERION_CHARS` limits `declare_intent.success_criterion` in characters. An overlong criterion is refused
 with its length and the limit, asking for the deliverable's check rather than ritual clauses.
 
+`LOOP_GUARD` controls the effect-loop guard (#103): `shadow` records would-fire events in the episode's
+`loop_shadow` array without changing model input; `on` also appends advice after the call executes;
+`off` records nothing. The existing exact-call repeat guard stays active in all three modes.
+`LOOP_EFFECT_ROUNDS` is a positive integer, default 3. A first failed result counts as round one;
+new successful observations reset the count. A successful observation seen earlier in this run counts as
+no new evidence. Counts require consecutive calls in the same tool/target family.
+See [effect-loop measurement](architecture.md#effect-loop-measurement) for target rules and replay reporting.
 `CONFIDENCE_MODE` accepts `confirm` (default), `clauses`, or `noconfirm`; the live prompt names the resolved mode.
 `confirm` keeps the existing declare and base-rate confirmation flow. `clauses` asks for 1-4 success-criterion
 clauses, each with an integer confidence 0-100. The template records them with a null combined confidence;

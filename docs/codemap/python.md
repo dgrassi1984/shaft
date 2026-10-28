@@ -26,6 +26,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/cloudllm.py` | `CloudError` | `daily_cap`, `billed`, `usd`, `prompt_size`, `spent_today`, `to_anthropic`, `from_anthropic`, `complete`, `decide`, `openrouter_stream`, `as_sse` |
 | `supervisor/coder.py` | `CoderError` | `spent_today`, `write`, `check_targets`, `test_in_scratch`, `delegate` |
 | `supervisor/commitments.py` | — | `ledger`, `verify`, `section`, `report` |
+| `supervisor/compression.py` | — | `score`, `probes`, `assay`, `report` |
 | `supervisor/consult.py` | `ConsultError` | `daily_cap`, `spent_today`, `editing_lock`, `menu`, `envelope`, `complete` |
 | `supervisor/consultstats.py` | — | `rows`, `vendor`, `cycle_of`, `submitted`, `models_in`, `section`, `review_line`, `report` |
 | `supervisor/core.py` | `Knob`, `KeyStoreUnreadable`, `UnsafePath`, `TooBig`, `TreeTooBig`, `Budget` | `settings_file`, `resolve`, `knob`, `positive_int`, `whole`, `dollars`, `hours`, `port`, `temperature`, `gigabytes`, `ports`, `model_name`, `model_names`, `cloud_model`, `claude_model`, `openrouter_model`, `cloud_models`, `json_object`, `describe_knobs`, `log`, `secrets_env`, `git`, `git_wt`, `instance_root`, `instance_names`, `paused`, `long_pauses`, `set_paused`, `update_queued`, `set_update_queued`, `instance_config`, `config_set_line`, `config_lock`, `config_values`, `config_line`, `config_with`, `disabled_tools`, `shared_folder`, `check_shared_folder`, `set_shared_folder`, `mail_grants`, `set_mail_grants`, `calendar_grants`, `set_calendar_grants`, `read_secrets`, `store_secret`, `store_google_key`, `is_google_key`, `describe_key`, `delete_secret`, `set_tool`, `journal_entries`, `contained`, `open_beneath`, `dir_beneath`, `read_beneath`, `safe_read_bytes`, `safe_read`, `list_beneath`, `set_aside`, `unlink_beneath`, `walk_beneath`, `read_tree`, `reserved`, `link_stays_inside`, `copy_beneath`, `safe_write`, `safe_write_bytes`, `safe_mkdir`, `journal_note`, `not_mind`, `add_all_but_mind`, `err_text`, `changed_vs_head`, `commit_state` |
@@ -63,8 +64,6 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/sandbox.py` | — | `user_folder`, `profile`, `run_profile`, `job_profile`, `agent_env`, `wrap` |
 | `supervisor/selfhosted.py` | — | `serves`, `server`, `host_port`, `think_budget`, `open_reply`, `complete`, `stream` |
 | `supervisor/settings.py` | `Refused` | `load_all`, `file_values`, `check`, `set_values`, `not_live`, `model_choices`, `listing`, `command` |
-| `supervisor/settings.py` | `Refused` | `load_all`, `file_values`, `check`, `set_values`, `not_live`, `model_choices`, `listing`, `command` |
-| `supervisor/settings.py` | `Refused` | `load_all`, `file_values`, `check`, `set_values`, `not_live`, `model_choices`, `listing`, `command` |
 | `supervisor/surprise.py` | — | `flag`, `kind_of`, `episodes`, `events`, `recurrence`, `cycles`, `baseline`, `report`, `command`, `fold`, `ledger`, `disposition`, `disposition_text`, `p2_class`, `stats_lines`, `write_ledger`, `m5_report`, `m5_command` |
 | `supervisor/talk_input.py` | `Draft` | `enter_sequences`, `other_modified_keys` |
 | `supervisor/talk_stats.py` | `Stats` | — |
@@ -93,6 +92,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_comments_js.py` | `CommentsJsTest` | — |
 | `supervisor/tests/test_commit.py` | `CommitStateTest`, `IgnoredFileTest`, `ConfigMergeTest`, `HistoryToolTest`, `RecordToolTest`, `UpdateCase`, `UpdateNoteTest`, `QueuedUpdateTest`, `UpdateKeepsUncommittedWorkTest` | `git` |
 | `supervisor/tests/test_commitments.py` | `CommitmentsTest` | `episode` |
+| `supervisor/tests/test_compression.py` | `CompressionTest` | `noise` |
 | `supervisor/tests/test_config_writers.py` | `ConfigWritersTest`, `SetConfigTest`, `SandboxTest` | `git`, `instance_tests_only`, `committed_copy` |
 | `supervisor/tests/test_consciousness_supervisor.py` | `FamilyTest`, `AttentionTest`, `TargetsTest`, `KnobChangeTest`, `ProbeTest`, `BlindHoldsTest`, `SectionsTest` | `ep`, `call` |
 | `supervisor/tests/test_consciousness_template.py` | `Fixture`, `WorkspaceUnitTest`, `LiveCycleTest`, `CommitmentsElsewhereTest`, `ReviewRegressionTest`, `KnobTest` | `failing_write` |
@@ -126,6 +126,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_limits.py` | `LimitsTest` | — |
 | `supervisor/tests/test_live_goal_choice.py` | `LiveGoalChoiceTest` | — |
 | `supervisor/tests/test_localmodel.py` | `IdleRuleTest`, `ServerIdleExitTest`, `LaunchdTest`, `EnsureTest`, `CallersTest`, `StatusTest` | — |
+| `supervisor/tests/test_loop_effect.py` | `EffectTest`, `AgentEffectTest` | — |
 | `supervisor/tests/test_m2_start.py` | `StartTest` | `call` |
 | `supervisor/tests/test_m2_value.py` | `CycleControlsTest`, `ValueJudgmentTest` | — |
 | `supervisor/tests/test_m3_talk.py` | `ReplyFirstTest`, `CorrectionsTest` | `tool` |
@@ -177,6 +178,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_tool_switch.py` | `ToolSwitchTest` | — |
 | `supervisor/tests/test_transcripts.py` | `TranscriptData`, `TranscriptView` | — |
 | `supervisor/tests/test_trial.py` | `Fixture`, `ReconstructTest`, `ReplayEndToEndTest`, `ReplayLeavesTheMindStoreTest`, `ReplaySeesItsRealVenvTest`, `PreemptTest`, `ReplayBrokerTest`, `VerdictTest`, `RequestTest`, `LocalTimeTest`, `FlowTest`, `WorkerTest` | `git`, `snapshot` |
+| `supervisor/tests/test_trial_multicycle.py` | `RunTest`, `LedgerTest`, `LiveRunTest` | `result` |
 | `supervisor/tests/test_turns_left.py` | `TurnsLeftTest` | — |
 | `supervisor/tests/test_version.py` | `VersionTest` | `done` |
 | `supervisor/tests/test_vision.py` | `FakeModels`, `Case`, `CapabilityTest`, `PrepareTest`, `DescribeTest`, `ReplayAttachmentsTest`, `JudgeNoteTest`, `TemplateTest`, `AnswerEndToEndTest` | `png`, `image_part` |
@@ -224,7 +226,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tom.py` | — | `record`, `receipts`, `reply_for`, `score`, `section`, `baselines`, `report` |
 | `supervisor/top.py` | `UI` | `keys`, `shown`, `participants`, `follow`, `handle`, `dispatch`, `extras`, `recap_line`, `render_main`, `render_list`, `wrap`, `render_message`, `render`, `plain`, `code_stamp`, `main` |
 | `supervisor/top_views.py` | `Overlay` | `run_now`, `run_detached`, `service_guard`, `tab_bar`, `footer`, `window`, `scroll_to`, `wrap`, `spark`, `page`, `current`, `render_instance`, `judge_line`, `judge_detail`, `render_judge`, `trial_line`, `render_trials`, `render_benchmarks`, `render_changes`, `render_costs`, `render_services`, `render_help`, `transcript_line`, `render_transcripts`, `ask`, `handle_overlay`, `render_pick`, `instance_action`, `handle_view`, `ask_guarded` |
-| `supervisor/trial.py` | `TrialError` | `load`, `save`, `all_trials`, `usage_today`, `branch`, `committed_code`, `model_of`, `live_episodes`, `start_time`, `state_of`, `mind_rev`, `reconstruct`, `link_env`, `copy_attachments`, `file_diff`, `replay_arm`, `judge_case`, `state_context`, `judge_pair`, `decide`, `sign_p`, `verdict`, `create`, `request`, `gate_check`, `local_free_for`, `local_never_free`, `runnable`, `has_work`, `run_pair`, `conclude`, `report`, `deliver`, `sweep_scratch`, `work`, `describe`, `describe_all`, `match`, `stats_lines` |
+| `supervisor/trial.py` | `TrialError` | `load`, `save`, `all_trials`, `usage_today`, `branch`, `committed_code`, `model_of`, `live_episodes`, `start_time`, `state_of`, `mind_rev`, `reconstruct`, `link_env`, `copy_attachments`, `file_diff`, `replay_arm`, `replay_units`, `judge_case`, `state_context`, `judge_pair`, `decide`, `sign_p`, `verdict`, `create`, `request`, `gate_check`, `local_free_for`, `local_never_free`, `runnable`, `has_work`, `run_pair`, `conclude`, `report`, `deliver`, `sweep_scratch`, `work`, `describe`, `describe_all`, `match`, `stats_lines` |
 | `supervisor/version.py` | — | `supervisor_commit`, `shown_commit`, `commit_describe`, `service_version`, `record_service`, `service`, `instance`, `describe` |
 | `supervisor/vision.py` | `VisionError` | `sees_images`, `sees_images_or_no`, `sniff`, `prepare_bytes`, `data_url`, `split_data_url`, `count`, `prepare`, `without_images` |
 | `supervisor/web.py` | `Request`, `Response`, `Handler` | `allowed_logins`, `tailnet_hosts`, `record_hosts`, `allowed_hosts`, `url`, `new_pairing`, `devices`, `unpair`, `device_from_cookie`, `csrf_token`, `overview`, `respond`, `activity`, `attachment_path`, `serve`, `command` |

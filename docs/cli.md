@@ -115,11 +115,18 @@ shaft delete <name> [--yes] [--no-archive]   # remove it and every trace of it: 
 shaft trial list [name]                    # trials of proposed changes (an instance asks with its `trial` tool)
 shaft trial show <name> <id>               # one trial: each replayed cycle, outcome, the report it was sent
 shaft trial run <name> --cand PATH=FILE …  # an operator trial (planted tests; --base PATH=FILE, --aa,
-                                           #   --model auto|cloud|local, --hypothesis T, -n N, --episodes TS…)
+                                           #   --model auto|cloud|local, --hypothesis T, -n N, --episodes TS…, --cycles N, --sleep)
 shaft trial replay <name> <episode-ts>     # replay one past cycle once with the current code (debug;
-                                           #   --model local|<cloud id>, --keep DIR copies the folder)
+                                           #   --model local|<cloud id>, --keep DIR copies the folder, --cycles N, --sleep)
 shaft trial work                           # run what may run now (the scheduler does this)
 ```
+
+`--cycles N` replays N consecutive live cycles per arm from one reconstructed past state, default 1.
+`--sleep` runs consolidation between every pair of live cycles, never after the last. Each operation uses the
+same scratch copy. The next operation's clock advances by the preceding operation's elapsed seconds, at least
+one second. Results include every cycle and sleep, and the judge compares whole runs. `SHAFT_TRIAL_N_MAX`
+limits live cycles plus sleeps across all selected states per arm; `-n` is reduced to fit, with at least two states.
+Each cycle and sleep has a separate trial ledger row. Operator trials remain exempt from the daily dollar cap.
 
 Operator pauses lasting `SHAFT_PAUSE_ALERT_HOURS` (default 3, 0 = off) appear in `shaft alerts`, `shaft top` and the
 web overview. Each has a stable `pause:<name>:<since>` id and the resume command; a global pause names all instances
@@ -149,6 +156,7 @@ shaft surprise [names] [--freeze] # unexpected results and baseline
 shaft surprise-rejudge <names> [--dry-run] [--limit N] [--report] [--control]  # re-judge the newest N pre-M1 cycles, each by its stored judge (paid)
 shaft surprise-report [names] --since <M3 live> [--until T] [--min-cycles 30]  # P1-P5 and sleep dispositions
 shaft consults [names]               # consults of other models: per model and run, consulted vs not (PLAN-model-choice)
+shaft compression <name> [--since DATE] # #113: offline two-part compression and held-out fact recall
 shaft metacog [names]                # A1: confidence AUROC (v4 clauses apart), paired v3, claim matrix, doubt/error alignment
 shaft anchoring <names> [--n 40] [--bare] [--dry-run] [--report]  # A0: same judge, claim shown vs withheld (paid)
 shaft attention [names]              # B3: where each said it would look vs where it looked
@@ -199,3 +207,27 @@ Stats, status, review and judge panels split operator-valued cycles into deliver
 Only `delivery_supported=yes` counts as delivered. New `no` or `na` answers count as filed; older missing
 answers stay unknown. Self-audit lines show true/known counts over the last 20 judged cycles, unknown counts,
 and true/known counts since the field existed, plus non-yes verdicts with the deliverable met.
+
+`compression` is a speculative, read-only assay. Each `name: sleep DATE TIME` mind
+commit supplies facts.md and digests.md after sleep; its first parent supplies them
+before sleep. This preserves rewritten facts and digest history without reading
+current memory. A parentless sleep is unscored; absent mind history is an error.
+The parent is the last committed state, not a snapshot of uncommitted edits at run
+start. Skipped sleeps and sleeps without a recorded commit are not measured.
+
+The held-out window is the 24 hours after the snapshot's commit time. Only live
+runs that started strictly after it and ended within that window contribute tool
+names, arguments and results. Legacy episodes without run_started are excluded;
+historical log truncation cannot be recovered. Empty windows are unscored. Sleeps whose
+24-hour window has not elapsed are unscored. This is not a controlled experiment.
+
+Positive Δbits means `(L(before) + L(logs|before)) - (L(after) + L(logs|after))`.
+All lengths use zlib; conditional streams use the last 32 KiB of memory as zdict,
+while L(memory) charges the compressed size of the entire facts-plus-digests text.
+Subtracting the no-memory log baseline in each arm cancels in this difference.
+The table reports the median over scored sleeps. Recall probes are every unique
+pre-sleep bullet fact's text, without dates or source tags. Exact substrings must
+survive in post-sleep facts, digests or facts-archive.md. The archive counts for
+recall only, not as the compression dictionary. This tests textual retention, not
+semantic recall or search ranking. Gains with any lost probe say "forgetting, not
+progress"; no pre-sleep facts means recall is untested. Nothing feeds rewards.
