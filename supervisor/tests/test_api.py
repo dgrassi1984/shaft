@@ -185,6 +185,55 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(content, "(no answer: the reply stopped after 30 steps — steps)")
         self.assertNotIn("Let me check", content)                           # the narration is not passed off as one
 
+    def test_thelos_error_overwrite_2026_10_28(self):
+        message = "talk: reply cut off at max_tokens=16384 twice (completion_tokens=16384); nothing saved"
+
+        def run_agent(name, kind, args, interactive, driver=None, **kw):
+            proc = FakeProc()
+            proc.stdout = io.StringIO("".join(json.dumps(e) + "\n" for e in errors))
+            proc.stderr = io.StringIO("")
+            driver(proc)
+            return 0
+
+        for stream in (True, False):
+            for later_error in (False, True):
+                with self.subTest(stream=stream, later_error=later_error):
+                    errors = [{"type": "error", "message": message}]
+                    if later_error:
+                        errors.append({"type": "error", "message": "later failure"})
+                    body = {"model": "shaft", "stream": stream, "messages": [{"role": "user", "content": "hi"}]}
+                    with mock.patch.object(api, "run_agent", run_agent):
+                        if stream:
+                            raw = self.req("/chat/completions", body).read().decode()
+                        else:
+                            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                                self.req("/chat/completions", body)
+                            self.assertEqual(ctx.exception.code, 502)
+                            raw = ctx.exception.read().decode()
+                    self.assertIn("cut off at max_tokens=16384 twice", raw)
+                    self.assertNotIn("stopped without answering", raw)
+                    self.assertNotIn("later failure", raw)
+
+    def test_agent_without_content_or_error_still_says_stopped_without_answering(self):
+        def run_agent(name, kind, args, interactive, driver=None, **kw):
+            proc = FakeProc()
+            proc.stdout = io.StringIO("")
+            proc.stderr = io.StringIO("")
+            driver(proc)
+            return 0
+
+        for stream in (True, False):
+            with self.subTest(stream=stream), mock.patch.object(api, "run_agent", run_agent):
+                body = {"model": "shaft", "stream": stream, "messages": [{"role": "user", "content": "hi"}]}
+                if stream:
+                    raw = self.req("/chat/completions", body).read().decode()
+                else:
+                    with self.assertRaises(urllib.error.HTTPError) as ctx:
+                        self.req("/chat/completions", body)
+                    self.assertEqual(ctx.exception.code, 502)
+                    raw = ctx.exception.read().decode()
+                self.assertIn("shaft stopped without answering (exit 0)", raw)
+
     def test_plain_chat_and_same_conversation_keeps_its_id(self):
         body = {"model": "shaft", "messages": [{"role": "user", "content": "hi"}]}
         out = json.load(self.req("/chat/completions", body))
