@@ -34,6 +34,8 @@ FIELDS: dict[str, tuple[type, object]] = {
     "TALK_REPLY_S": (int, 45),
     "MAX_STEPS_TALK": (int, 0),        # 0 = no limit (conversations)
     "CONTEXT_JOURNAL_CHARS": (int, 16000),
+    "STALE_LINE_HOURS": (int, 24),     # sleep review; 0 disables each check
+    "STALE_GOAL_HOURS": (int, 48),
     "GOALS_CHARS": (int, 12000),       # how much of my goals I carry into every prompt
     "CURIOSITY_EVERY_CYCLES": (int, 5),   # one live cycle in this many, on average, takes its goal from my surprises; 0 = never
     # docs/plans/PLAN-consciousness.md: each mechanism on, behind a knob its kill test flips (shaft experiment …)

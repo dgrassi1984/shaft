@@ -5,7 +5,7 @@ import json
 import re
 from datetime import datetime
 
-from . import agent, broker, clock, commitments, corrections, memory, prompts, recovery, surprises
+from . import agent, broker, clock, commitments, corrections, memory, prompts, recovery, staleness, surprises
 from .llm import Client, LLMError
 from .state import State
 from .tools import Toolbox, _spec, for_log
@@ -205,11 +205,13 @@ def run(cfg, state: State, client: Client) -> str:
                     f"Rewrite the whole file with replace=true under {cfg.GOALS_CHARS} characters, keeping active "
                     "goals and standing rules; move history to a notes/ file."
                     if goals_size > cfg.GOALS_CHARS else "")
+    stale = staleness.block(state.root, clock.now(), cfg.STALE_LINE_HOURS, cfg.STALE_GOAL_HOURS)
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": prompts.SLEEP.format(operator=cfg.OPERATOR_NAME, operator_file=operator_file,
                                                          settle=prompts.SETTLE if promises else "",
                                                          goals_budget=goals_budget)
+         + "\n\n## Stale context review (step 10)\n\n" + stale
          + "\n\n## Verdicts the supervisor's judge gave since my last sleep\n\n" + (verdicts.strip() or "(none new)")
          + "\n\n## Surprises since my last sleep (step 7)\n\n"
          + surprises_text(surprises.since(state.root, _last_sleep(state)))
