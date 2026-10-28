@@ -143,6 +143,14 @@ class RunTest(unittest.TestCase):
 class LedgerTest(existing.Fixture):
     """#108: each cycle and sleep has its own ledger row, without double charging aggregates."""
 
+    def setUp(self):
+        super().setUp()
+        # its own ledger: ten local rows left in the shared one made test_trial's local-time tests, run after this
+        # module, see today's local units as spent and send their replays to the cloud
+        ledger = Path(tempfile.mkdtemp(prefix="shaft-ledger-")) / "trial_usage.jsonl"
+        self.addCleanup(shutil.rmtree, ledger.parent, True)
+        self.enterContext(mock.patch.object(trial, "LEDGER", ledger))
+
     def test_ledger_counts_three_cycles_and_two_sleeps_per_arm(self):
         t = trial.create(existing.NAME, {}, "test", by="operator", n=2, cycles=3, sleep_between=True,
                          allow_empty=True, project=self.project)
