@@ -33,6 +33,7 @@ CONFIDENCE_OF = "criterion_met=yes"
 # set by an accepted confirm_confidence, and scored by the supervisor as its own version (v3), the first and the final
 # number on the same cycles.
 CONFIDENCE_OF_SHOWN = "criterion_met=yes;base_rate_shown"
+CONFIDENCE_OF_CLAUSES = "criterion_met=yes;clauses"
 
 DELIVERY_CHANNELS = ("message", "mail", "notion", "web_document", "none")
 MAX_PREDICTIONS = 3
@@ -95,7 +96,8 @@ def assistant_turns(messages: list[dict]) -> int:
 
 def run(cfg, state: State, client: Client) -> str:
     record: dict = {"intent": None, "finish": None, "confirm": None}   # confirm: set only when a base rate was shown
-    rates, rate_error = base_rate.load(state.root)
+    mode = cfg.CONFIDENCE_MODE
+    rates, rate_error = base_rate.load(state.root) if mode == "confirm" else (None, None)
     started = clock.started()   # the draw's seed and the queue it draws from: the same in every replay of this cycle
     seed = f"{cfg.NAME}|{started:%Y-%m-%dT%H:%M}"
     held = cards.Cards(state.root, cfg.OUTCOME_CARDS, seed, clock.now())
@@ -105,8 +107,16 @@ def run(cfg, state: State, client: Client) -> str:
     def declare(args: dict) -> str:
         if record["intent"]:
             return "ERROR: intent already declared for this cycle"
-        conf = int(args.get("confidence", -1))
-        if not args.get("goal") or not args.get("success_criterion") or not 0 <= conf <= 100:
+        clauses = args.get("clauses")
+        if mode == "clauses":
+            if not isinstance(clauses, list) or not 1 <= len(clauses) <= 4 or any(
+                    not isinstance(c, dict) or not isinstance(c.get("clause"), str) or not c["clause"].strip()
+                    or type(c.get("confidence")) is not int or not 0 <= c["confidence"] <= 100 for c in clauses):
+                return "ERROR: need 1-4 clauses, each with clause text and confidence 0-100"
+            conf = None   # the supervisor combines these; the instance never supplies the combined probability
+        else:
+            conf = int(args.get("confidence", -1))
+        if not args.get("goal") or not args.get("success_criterion") or (mode != "clauses" and not 0 <= conf <= 100):
             return "ERROR: need goal, success_criterion and confidence 0-100"
         length = len(args["success_criterion"])
         if length > cfg.CRITERION_CHARS:
@@ -125,10 +135,12 @@ def run(cfg, state: State, client: Client) -> str:
                 return f"ERROR: origin_ref {ref!r}: {why} (open in my queue: {listed})"
         pausing.activity(keep=True, goal=str(args.get("goal", ""))[:300])
         record["intent"] = {"goal": args["goal"], "success_criterion": args["success_criterion"],
-                            "confidence": conf, "confidence_of": CONFIDENCE_OF,
+                            "confidence": conf, "confidence_of": CONFIDENCE_OF_CLAUSES if mode == "clauses" else CONFIDENCE_OF,
                             "origin": origin, "origin_ref": ref,
                             "predictions": predictions(args.get("predictions")),
                             "at": clock.now().isoformat(timespec="seconds")}
+        if mode == "clauses":
+            record["intent"]["clauses"] = [{"clause": c["clause"], "confidence": c["confidence"]} for c in clauses]
         if attention_on:
             record["intent"]["attention"] = workspace.attention(args.get("attention"))
         ws.refocus(f"{args['goal']}\n{args['success_criterion']}", record["intent"].get("attention") or [])
@@ -192,6 +204,10 @@ def run(cfg, state: State, client: Client) -> str:
         record["finish"] = {"delivered_via": delivered, "what_happened": args.get("what_happened", ""), "criterion_met": met,
                             "learned": args.get("learned", ""), "surprises": surprises.clean(args.get("surprises")),
                             "resolves": resolves(args.get("resolves"))}
+        record["finish"]["doubts"] = [{"step": d["step"], "what": d["what"]}
+                                     for d in args.get("doubts", []) if isinstance(d, dict)
+                                     and type(d.get("step")) is int and d["step"] >= 1
+                                     and isinstance(d.get("what"), str)] if isinstance(args.get("doubts", []), list) else []
         unfinished = args.get("unfinished")
         record["finish"]["unfinished"] = [s for s in unfinished if isinstance(s, str)] \
             if isinstance(unfinished, list) else []
@@ -227,6 +243,9 @@ def run(cfg, state: State, client: Client) -> str:
             {"what_happened": S, "criterion_met": {"type": "string", "enum": ["yes", "partial", "no"]},
              "delivered_via": {"type": "string", "enum": list(DELIVERY_CHANNELS)},
              "learned": S,
+             "doubts": {"type": "array", "description": "optional steps you doubt, using 1-based tool-log indices; "
+                        "these never change criterion_met", "items": {"type": "object", "properties": {
+                            "step": {"type": "integer", "minimum": 1}, "what": S}, "required": ["step", "what"]}},
              "unfinished": {"type": "array", "items": S, "description": "work started but not done; [] if none"},
              "next_action": {"type": "object", "properties": {"action": S, "revise_if": S},
                              "required": ["action", "revise_if"],
@@ -240,7 +259,16 @@ def run(cfg, state: State, client: Client) -> str:
              **({"commitments": PROMISES} if cfg.COMMITMENTS == "on" else {})},
             ["what_happened", "criterion_met", "learned", "delivered_via"]), finish, stops=True),
     }
-    if base_rate.has_data(rates):   # offered only when declare_intent can show a base rate: otherwise v2 as before
+    if mode == "clauses":
+        schema = controls["declare_intent"].spec["function"]["parameters"]
+        del schema["properties"]["confidence"]
+        schema["required"].remove("confidence")
+        schema["properties"]["clauses"] = {"type": "array", "minItems": 1, "maxItems": 4,
+            "description": "1-4 clauses of the success criterion; give each probability, never combine them",
+            "items": {"type": "object", "properties": {"clause": S, "confidence": {
+                "type": "integer", "minimum": 0, "maximum": 100}}, "required": ["clause", "confidence"]}}
+        schema["required"].append("clauses")
+    if mode == "confirm" and base_rate.has_data(rates):   # offered only when declare_intent can show a base rate
         controls["confirm_confidence"] = Control(_spec(
             "confirm_confidence", "After declare_intent showed your base rate: keep or change your confidence, "
             "once, before acting.",
@@ -295,6 +323,11 @@ def run(cfg, state: State, client: Client) -> str:
         {"role": "user", "content": images.with_attached(   # images attached to my messages (PLAN-vision.md)
             prompts.LIVE.format(steps=cfg.MAX_STEPS_LIVE, inbox=inbox_text(inbox),
                                 briefing=prompts.briefing(state.root, cfg), handoff=prompts.handoff(state.root, cfg))
+            + f"\n\nConfidence mode: {mode}. " + {
+                "confirm": "Declare confidence 0-100; confirm it on a later turn if a base rate is shown.",
+                "clauses": "Declare 1-4 clauses with a confidence 0-100 for each. Do not combine them. "
+                           "The supervisor multiplies their probabilities, assuming independence. No confirm step or base rate is shown.",
+                "noconfirm": "Declare confidence 0-100. No confirm step or base rate is shown."}[mode]
             + (prompts.CURIOSITY if curiosity["drawn"] else "")
             + "\n\n## My operational envelope (from the supervisor, at the start of this cycle)\n\n"
             + prompts.envelope_text(broker.envelope(), agent.time_left())
@@ -322,6 +355,8 @@ def run(cfg, state: State, client: Client) -> str:
     if intent:
         first, final = intent.get("confidence_first", intent["confidence"]), intent["confidence"]
         confidence = f"{first}%" + (f" → {final}% after my base rate" if first != final else "")
+        if mode == "clauses":
+            confidence = "; ".join(f"{c['clause']}: {c['confidence']}%" for c in intent["clauses"])
         lines += [f"**Goal:** {intent['goal']}", f"**Success criterion:** {intent['success_criterion']}",
                   f"**Confidence beforehand:** {confidence}"]
         if intent["predictions"]:

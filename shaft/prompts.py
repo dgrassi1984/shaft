@@ -241,13 +241,14 @@ self/goals.md (both in your context), from the operator's world (the briefing an
 or an open surprise: the one whose \
 answer would most change what you do (origin self, origin_ref surprise:<id>). \
 State a success criterion someone else could check from your tool results, and your \
-honest confidence (0-100) that you will fully meet it (criterion_met yes; partial counts as not met). \
+honest confidence (0-100) that you will fully meet it (criterion_met yes; partial counts as not met), \
+or per-clause confidence when the confidence mode below is clauses. \
 Say where the goal came from (origin: \
 yourself, the operator, or another instance) and cite the message, conversation or goals.md \
 item. The judge also rates how hard the goal was and checks its origin; your stats show \
 both. An item from the briefing has origin operator only when a message or conversation backs his request; \
 otherwise it has origin self. Add 1-3 predictions: specific things you expect your work to find that could turn out \
-wrong. Other tools are refused until you do. If your record has judged cycles in the band of your \
+wrong. Other tools are refused until you do. In confirm mode, if your record has judged cycles in the band of your \
 confidence, declare_intent shows how often you fully met the criterion there: on your next turn, call \
 confirm_confidence to keep your number or change it, before the other tools open.
 2. Work toward it with your tools. Choose the most valuable goal you can finish — or finish a \
