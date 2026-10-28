@@ -79,6 +79,8 @@ def judgment_text(j: dict, reasoning_chars: int | None = None) -> str:
            f"{j.get('criterion_quality')}" + (f", failure: {j['failure_mode']}" if j.get("failure_mode") else "") + "."]
     if j.get("reasoning"):
         out.append(f"Reasoning: {reasoning(j['reasoning'])}")
+    if "first_error_step" in j:
+        out.append(f"first_error_step: {j['first_error_step']}; first_error: {j.get('first_error', '')}")
     if j.get("difficulty") is not None:
         out.append(f"Difficulty {j['difficulty']}/5" + (f": {j['difficulty_reason']}" if j.get("difficulty_reason") else "")
                    + (f" · novelty {j['novelty']}/5" if j.get("novelty") is not None else ""))
@@ -117,6 +119,8 @@ def judgment_text(j: dict, reasoning_chars: int | None = None) -> str:
                    f"{s.get('difficulty')}/5" + (f", value {s['value']}/5" if s.get("value") is not None else "")
                    + (f", failure: {s['failure_mode']}" if s.get("failure_mode") else "")
                    + f". Reasoning: {reasoning(s.get('reasoning', ''))}")
+        if "first_error_step" in s:
+            out.append(f"Second first_error_step: {s['first_error_step']}; first_error: {s.get('first_error', '')}")
     return "\n".join(out)
 
 
@@ -1528,6 +1532,7 @@ class Broker:
                                                    "failure_mode", "difficulty", "deliverable_met",
                                                    "self_imposed_clauses", "self_audit", "delivery_supported",
                                                    "should_have_waited")},
+                     **{key: r[key] for key in ("first_error_step", "first_error") if key in r},
                      "followup_useful": r.get("followup_useful"),
                      "reviewed_at": _reviewed_at(r),
                      "second_criterion_met": (r.get("second") or {}).get("criterion_met")} for r in shown],

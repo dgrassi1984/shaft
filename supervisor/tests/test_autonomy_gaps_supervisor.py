@@ -221,7 +221,7 @@ class A4Test(unittest.TestCase):
                    "value_for": "own_capability", "value_reason": "r",
                    "expectations": [], "unreported_surprises": [], "reported_surprises_supported": True,
                    "delivery_supported": "na", "deliverable_met": "yes",
-               "self_imposed_clauses": "none", "self_audit": False, "should_have_waited": "na", "followup_useful": "na"}
+               "self_imposed_clauses": "none", "self_audit": False, "should_have_waited": "na", "first_error_step": 0, "first_error": "No step is at fault.", "followup_useful": "na"}
         with tempfile.TemporaryDirectory(prefix="shaft-confidence-") as tmp, ExitStack() as stack:
             path = Path(tmp) / "judgments.jsonl"
             for name, value in (("judgments", []), ("unsampled", set()), ("live_episodes", [ep]),

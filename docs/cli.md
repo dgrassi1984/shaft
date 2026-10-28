@@ -144,7 +144,7 @@ shaft surprise [names] [--freeze] # unexpected results and baseline
 shaft surprise-rejudge <names> [--dry-run] [--limit N] [--report] [--control]  # re-judge the newest N pre-M1 cycles, each by its stored judge (paid)
 shaft surprise-report [names] --since <M3 live> [--until T] [--min-cycles 30]  # P1-P5 and sleep dispositions
 shaft consults [names]               # consults of other models: per model and run, consulted vs not (PLAN-model-choice)
-shaft metacog [names]                # A1: confidence AUROC, bias, resolution, meta-I, by domain, paired v3
+shaft metacog [names]                # A1: confidence AUROC (v4 clauses apart), paired v3, claim matrix, doubt/error alignment
 shaft anchoring <names> [--n 40] [--bare] [--dry-run] [--report]  # A0: same judge, claim shown vs withheld (paid)
 shaft attention [names]              # B3: where each said it would look vs where it looked
 shaft commitments [names]            # C2: promises, kept (checked against the record), broken, overdue
@@ -165,6 +165,13 @@ The examples use `shaft` after installing the symlink. From the repository root,
 `bin/shaft` works without it. Commands with an omitted single instance name often
 default to `shaft`, which is not created automatically. Pass a name explicitly.
 Use `bin/shaft --help` and `bin/shaft <command> --help` for exact argument syntax.
+
+`shaft metacog` reports v4 clause-product confidence AUROC separately from v1 and v2/v3.
+Its confusion matrix uses all judged cycles with a known claim and verdict, including older judges.
+Rows are the instance's claim; columns are judge yes/partial/no. The sampled second judge sees the claim;
+A0 withholds it in a separate anchoring regrade. The report names this fallback and counts excluded rows.
+The doubt/error line counts cycles where any doubted tool-log step equals or precedes the judge's
+`first_error_step`, divided by cycles with both a doubt and a located error. With none, the rate is unavailable.
 
 Sources: [argument parser](../supervisor/__main__.py),
 [default instance](../supervisor/core.py),

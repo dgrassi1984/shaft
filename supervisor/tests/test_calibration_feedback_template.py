@@ -252,7 +252,7 @@ class ConfirmStepTest(Fixture, unittest.TestCase):
         case = metrics._case(episode)
         for mark in ("base_rate_shown", "confidence_first", "fully met in", "confirm_confidence", "your record"):
             self.assertNotIn(mark, case)
-        self.assertIn("→ " + metrics.NEUTRAL_DECLARE + "\n\n### 2. read_file(", case)
+        self.assertIn("→ " + metrics.NEUTRAL_DECLARE + "\n\n### 4. read_file(", case)
         (self.root / base_rate.FILE).unlink()
         _, plain = self.cycle([[declare(85)], [FINISH]])
         self.assertEqual(self.results(plain, "declare_intent"), [metrics.NEUTRAL_DECLARE])   # live's own v2 answer
