@@ -118,9 +118,19 @@ def scope_text(data: dict) -> str:
 
 def login_command(alias: str, data: dict | None = None) -> str:
     data = data or account(alias) or {}
-    client = data.get("client") or ""
+    client = (data.get("client") or "").removesuffix(":web")
     return (f"shaft google login {alias} {data.get('address') or '<address>'}"
             + (f" --client {client}" if client and client != alias else ""))
+
+
+def missing_scope_message(alias: str, data: dict, scope: str) -> str:
+    """Consent cannot grant a scope the project's Data Access list omits. Name both operator steps, for the CLI
+    refusal and the Access page alike, using the account's project/client rather than a guessed default."""
+    client = (data.get("client") or alias).removesuffix(":web")
+    return (f"Google account {alias!r} lacks {SCOPE_NAMES.get(scope, scope)}. Add {scope} in Google Cloud → "
+            f"Google Auth Platform → Data Access for client {client}'s project "
+            "(https://console.cloud.google.com/auth/scopes), then Log in again on Access or run "
+            f"`{login_command(alias, data)}` again and tick it.")
 
 
 def _save_account(alias: str, data: dict) -> Path:
@@ -170,8 +180,11 @@ def migrate() -> list[str]:
 
 def client_keys(client: str) -> tuple[str, str]:
     """The .env names of an OAuth client's ID and secret: GMAIL_<CLIENT>_CLIENT_ID / _CLIENT_SECRET (named in
-    docs/plans/PLAN-mail, kept for every Google service: the .env is the operator's)."""
-    stem = f"GMAIL_{client.upper().replace('-', '_')}"
+    docs/plans/PLAN-mail, kept for every Google service: the .env is the operator's). Internal client names ending
+    in :web select the separately configured Web application credentials, including when refreshing a saved login."""
+    web = client.endswith(":web")
+    client = client.removesuffix(":web")
+    stem = f"GMAIL_{client.upper().replace('-', '_')}" + ("_WEB" if web else "")
     return f"{stem}_CLIENT_ID", f"{stem}_CLIENT_SECRET"
 
 
@@ -179,13 +192,14 @@ def _client(client: str, secrets_env: dict[str, str]) -> tuple[str, str]:
     """An account's OAuth client, by name. One per Google organisation at least: an Internal app (work.example) only
     signs in its own organisation's users, so a personal Google account needs its own client (an External app in
     production). A refresh token works only with the client that issued it, so each account records its own."""
-    if not CLIENT_RE.match(client or ""):
+    if not CLIENT_RE.fullmatch((client or "").removesuffix(":web")):
         raise AccountError(f"{client!r} is not an OAuth client name (lowercase letters, digits, -)")
     keys = client_keys(client)
     missing = [k for k in keys if not secrets_env.get(k)]
     if missing:
         raise AccountError(f"Google client {client!r} needs {' and '.join(missing)} in {core.PROJECT / '.env'} (the "
-                           "Desktop OAuth client of its Google Cloud app: README, Google accounts)")
+                           f"{'Web application' if client.endswith(':web') else 'Desktop'} OAuth client of its Google Cloud app: "
+                           "README, Google accounts)")
     return secrets_env[keys[0]], secrets_env[keys[1]]
 
 
@@ -286,7 +300,7 @@ class Account:
             self._token, self._expires = refresh(
                 saved["client"], saved["refresh_token"], self.secrets,
                 f"Google account {self.alias!r} ({saved.get('address', '?')})",
-                f"shaft google login {self.alias} {saved.get('address', '<address>')} --client {saved['client']}")
+                login_command(self.alias, saved))
             return self._token
 
     def get(self, url: str, **params) -> dict:

@@ -80,8 +80,18 @@ def run(verb: str, name: str, form: dict) -> tuple[int, str]:
         if op == "off":
             return _ran([verb, name, "off"])
         alias, what = form.get("alias", "").strip(), form.get("what", "").strip()
-        if op not in ("grant", "revoke") or not alias or not what:
+        allowed = ("grant", "revoke", "grant-write", "revoke-write") if verb == "calendar" else ("grant", "revoke")
+        if op not in allowed or not alias or not what:
             raise Refused(f"{verb} {op} needs an account and a {'label' if verb == 'mail' else 'calendar'}")
+        if verb == "calendar" and op == "grant" and form.get("writable"):
+            status, text = _ran([verb, name, op, alias, what])
+            if status != 200:
+                return status, text
+            # cmd_calendar appends the resolved grant, including an existing one. Use that saved ID for the
+            # upgrade: titles may contain commas or quotes. Both operations keep the CLI as the grant writer.
+            from .core import calendar_grants
+            grant = [g for g in calendar_grants(name) if g["account"] == alias][-1]
+            return _ran([verb, name, "grant-write", alias, grant["calendar"]])
         return _ran([verb, name, op, alias, what])
     if verb == "battery-switch":
         if form.get("op") not in ("on", "off"):
@@ -177,6 +187,32 @@ def drive_page(name: str, text: str | None, sha: str, rendered: Html) -> Html:
 
 
 # -- access ----------------------------------------------------------------------------------------------------------
+WRITE_CONFIRM = ("Writes that tell nobody else happen at once; the rest wait for approval on /calendar/proposals.")
+
+
+def google_accounts(name: str, accounts: dict) -> Html:
+    """Show granted consent separately from instance grants: allowing writes cannot repair an old login. Never
+    expose credentials; a missing web client gets its own setup instructions, never another project's client."""
+    from . import core, google, web, web_google
+    rows = []
+    env = core.secrets_env() if accounts else {}
+    for alias, data in accounts.items():
+        client = (data.get("client") or alias).removesuffix(":web")
+        missing = [google.missing_scope_message(alias, data, scope) for scope in google.SCOPES
+                   if scope not in google.scopes(data)]
+        keys = google.client_keys(client + ":web")
+        login = (h('<form method="get" action="/google/login"{a}><input type="hidden" name="alias" value="{alias}">'
+                   '<input type="hidden" name="name" value="{n}"><button type="submit" class="small">Log in again</button>'
+                   '</form>', alias=alias, n=name, a=post_attrs("Access", actions.RUN_NOW_S))
+                 if all(env.get(k) for k in keys) else h('<p>{s}</p>', s=web_google.setup(client, web.url() + "/google/callback")))
+        rows.append(h('<li>{alias} · {address} · client {client} · granted {scopes} · since {since}'
+                      '{missing}{login}</li>', alias=alias, address=data.get("address", "?"), client=data.get("client", "?"),
+                      scopes=", ".join(sorted(google.scopes(data))) or "none", since=data.get("created", "?"),
+                      missing=join(h('<p>{m} <a href="https://console.cloud.google.com/auth/scopes">Google Cloud Data Access</a></p>',
+                                     m=m) for m in missing), login=login))
+    return h('<ul class="lines">{r}</ul>', r=join(rows))
+
+
 def access_page(name: str, a: dict, row: str = "") -> Html:
     from .web_actions import tool_switches
     n = name
@@ -224,16 +260,26 @@ def access_page(name: str, a: dict, row: str = "") -> Html:
     acct_opts = join(h('<option value="{x}">{x}</option>', x=x) for x in accounts)
 
     def grants(kind: str, items: list[dict], what_key: str, what_label: str) -> Html:
-        rows = [h('<li>{acct}/{label} {b}</li>', acct=g["account"], label=g[what_label],
+        rows = [h('<li>{acct}/{label} {w} {b}</li>', acct=g["account"], label=g[what_label],
+                  w=(join([h('<span>{s}</span>', s="writable" if g.get("write") else "read only"),
+                           button("calendar", "Read only" if g.get("write") else "Allow writing",
+                                  (f"Make {n}'s calendar {g['account']}/{g['name']} read only? " if g.get("write")
+                                   else f"Allow {n} to write to {g['account']}/{g['name']}? ") + WRITE_CONFIRM,
+                                  {"name": n, "op": "revoke-write" if g.get("write") else "grant-write",
+                                                  "alias": g["account"], "what": g["calendar"]}, cls="small")])
+                     if kind == "calendar" else Html("")),
                   b=button(kind, "Revoke", f"revoke {n}'s {kind} grant {g['account']}/{g[what_label]}? From its next "
                            f"{kind} call.", {"name": n, "op": "revoke", "alias": g["account"], "what": g[what_key]},
                            cls="small")) for g in items]
         grant = (h('<form class="act" data-post="/action/{k}" data-confirm="Let {n} read this {thing}? The check is '
-                   'made by the CLI."{a}><input type="hidden" name="name" value="{n}"><input type="hidden" name="op" '
+                   'made by the CLI. {confirm}"{a}><input type="hidden" name="name" value="{n}"><input type="hidden" name="op" '
                    'value="grant"><select name="alias" aria-label="account">{o}</select><input name="what" '
-                   'placeholder="{ph}" aria-label="{thing}" required><button type="submit" class="small">Grant</button>'
+                   'placeholder="{ph}" aria-label="{thing}" required>{writable}<button type="submit" class="small">Grant</button>'
                    '</form>', k=kind, n=n, o=acct_opts, thing="label" if kind == "mail" else "calendar",
                    ph="label" if kind == "mail" else "primary, a title or an ID",
+                   confirm=WRITE_CONFIRM if kind == "calendar" else "",
+                   writable=Html('<label><input type="checkbox" name="writable" value="1">writable</label>')
+                            if kind == "calendar" else Html(""),
                    a=post_attrs("Access", actions.RUN_NOW_S))
                  if accounts else h('<p class="dim">No Google account logged in: <code>shaft google login …</code> in '
                                     'your terminal.</p>'))
@@ -264,7 +310,8 @@ def access_page(name: str, a: dict, row: str = "") -> Html:
                 ("", "Limits (shaft limits)", join([floor, cap])), ("jobs", "Scheduled jobs (shaft jobs)", jobs),
                 ("share", "Shared folder (shaft share)", share),
                 ("mail", "Your mail it may read (shaft mail)", grants("mail", a["mail"], "label", "label")),
-                ("calendar", "Your calendars it may read (shaft calendar)", grants("calendar", a["calendar"], "calendar", "name")),
+                ("calendar", "Your calendars (shaft calendar)", grants("calendar", a["calendar"], "calendar", "name")),
+                ("", "Google accounts", google_accounts(n, a.get("google_accounts", {}))),
                 ("battery-switch", "Capability battery", battery),
                 ("", "Its own keys (shaft secret): names only", join([keys, h(
                     '<p class="dim">Set or delete a key in your terminal: <code>shaft secret {n} set &lt;key&gt; '
@@ -282,11 +329,14 @@ def access(name: str) -> dict:
     floor = autonomy.wake_floor(name)
     cap = cloudllm.daily_cap(name)
     now, why = channel.route(name)
+    accounts = google.accounts()
     return {"channel": channel.preference(name), "channel_now": now, "channel_why": why,
             "tools_off": sorted(disabled_tools(name)), "wake_floor": floor, "wake_floor_default": autonomy.WAKE_FLOOR_MIN,
             "wake_floor_own": floor != autonomy.WAKE_FLOOR_MIN, "cloud_cap": cap, "cloud_cap_default": cloudllm.DAILY_USD,
             "cloud_cap_own": cap != cloudllm.DAILY_USD, "spent_today": cloudllm.spent_today(name),
             "jobs_off": jobs.jobs_off(name), "jobs_text": jobs.describe(name), "shared": str(shared_folder(name) or ""),
-            "mail": mail_grants(name), "calendar": calendar_grants(name), "accounts": sorted(google.accounts()),
+            "mail": mail_grants(name), "calendar": calendar_grants(name), "accounts": sorted(accounts),
+            "google_accounts": {alias: {k: data.get(k) for k in ("address", "client", "scope", "created")}
+                                for alias, data in accounts.items()},
             "battery_off": battery.off_path(name).exists(),
             "keys": [describe_key(k, e) for k, e in sorted(read_secrets(instance_root(name)).items())]}

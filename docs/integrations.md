@@ -93,6 +93,17 @@ shaft google login work operator@work.example
 shaft google login home operator@example.com --client personal
 ```
 
+For **Log in again** on the web Access page, create a separate OAuth client of type **Web application** in the
+same project as the account's desktop client. Register the authorized redirect URI `<web.url()>/google/callback`,
+substituting the web UI's actual HTTPS tailnet URL. Access shows the exact URI to register when setup is missing.
+Set `GMAIL_<CLIENT>_WEB_CLIENT_ID` and `GMAIL_<CLIENT>_WEB_CLIENT_SECRET` in `.env`, with the same `<CLIENT>` as
+the account's desktop client. Replace hyphens with underscores and use uppercase in environment names.
+Add any missing scopes in [Google Auth Platform → Data Access](https://console.cloud.google.com/auth/scopes)
+before logging in again, especially `https://www.googleapis.com/auth/calendar.events` for write grants.
+There is no fallback to another client. Web consent records the client as `<client>:web`; refresh resolves that
+suffix to the web credential names, because a refresh token must use the client that issued it.
+The CLI re-login command still names the base desktop client and can replace a web login with a desktop login.
+
 Google's quotas are per user per minute, shared by every instance on the account. A call over
 quota waits up to 60 s, then fails, saying so. Accounts logged in before Calendar (PLAN-mail) kept their files in
 `.supervisor/mail/`: `shaft google migrate` moves them (until then they are not read, and the error says so).

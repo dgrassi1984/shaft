@@ -254,8 +254,21 @@ and [chat design](plans/PLAN-webui-chat.md).
   depth. Links, absolute paths and `..` are refused. Both routes require the tailnet login and paired browser.
   Folder zip downloads are not available),
   **Access** (tools, wake floor and cloud cap, jobs, shared folder,
-  mail and calendar grants, battery, key names), **Judge**, **Changes**, **Benchmarks**, **Transcripts**,
+  mail and calendar read/write grants, Google accounts and re-login, battery, key names), **Judge**, **Changes**, **Benchmarks**, **Transcripts**,
   **Journal**, **Activity** (connections, plugins, jobs), with its actions and earlier chats.
+- **Access Google accounts** lists each alias, address, OAuth client, granted scopes, login date, and missing operator scopes.
+  Missing scopes show the exact CLI login command and the client's Google Cloud Data Access setup steps.
+  Calendar rows show whether they are writable. **Allow writing** and **Read only** change the stored grant by calendar ID.
+  The grant form's **writable** checkbox grants reading, then writing. Writing requires `calendar.events` consent;
+  the CLI refuses the write grant with setup and re-login instructions if that scope is missing.
+  Writes that tell nobody else happen at once; the rest wait for approval on `/calendar/proposals`.
+- **Log in again** on Access starts Google consent in the same paired browser, including a phone on the tailnet.
+  Configure a separate OAuth client of type **Web application** in the account client's same Google Cloud project.
+  Register exactly `<web.url()>/google/callback`, using the actual HTTPS tailnet URL shown by Access, and set
+  `GMAIL_<CLIENT>_WEB_CLIENT_ID` and `GMAIL_<CLIENT>_WEB_CLIENT_SECRET` in `.env`.
+  Without those credentials, Access shows the setup steps instead of the button. There is no desktop-client fallback.
+  The callback requires the same paired browser and a one-use state that expires after ten minutes; PKCE binds the code exchange.
+  It checks the signed-in address before saving and returns to Access with a result. Restarting the web server cancels pending logins.
 - **Calendar approvals** (`/calendar/proposals`) lists pending proposals and up to 30 decided proposals, newest proposals first.
   Each shows the instance, change summary, who would be told, and expiry time. Pending proposals have **Approve** and **Decline**
   buttons; decided proposals show their state and outcome. Approval submits the saved request; decline sends no write.
@@ -323,7 +336,8 @@ no answer does not send it twice. Any other action that gets no answer says the 
 to check; the page waits at least as long as the server allows that action. Chat
 goes through the API (`X-Shaft-Conversation`, `/v1/chat/end`), so restart the API on the same code
 (`shaft api on`). A reply keeps going if the browser closes; only Stop stops it. Secrets, `new`, `breed`,
-`finetune`, the Google logins and `mind cutover` stay in the terminal.
+`finetune`, first-time Google logins, instance Google key logins, and `mind cutover` stay in the terminal.
+Existing operator Google accounts can log in again from Access.
 
 Sources: [terminal selection](../supervisor/__main__.py),
 [terminal client](../supervisor/talk_ui.py),
