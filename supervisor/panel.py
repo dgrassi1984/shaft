@@ -629,6 +629,11 @@ def dismiss(ids: list[str]) -> None:
     keep = {i for i in dismissed() | set(ids) if not (m := _DAY.search(i)) or m.group(0) >= cut}
     SUP_DIR.mkdir(exist_ok=True)
     (SUP_DIR / DISMISSED).write_text(json.dumps(sorted(keep)))
+    from . import messages
+    for ref in ids:
+        parts = ref.split(":")
+        name = parts[1] if len(parts) > 2 and parts[0] in ("cap", "pause", "correction") else ""
+        messages.dismissal(SUP_DIR, "dismiss", ref, name)
 
 
 def _jobs_summary(name: str) -> str:

@@ -1034,12 +1034,15 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("stats", help="an instance's measured performance (judge + calibration)")
     p.add_argument("name", nargs="?", default=DEFAULT_INSTANCE)
     p = sub.add_parser("judge", help="judging: 'backfill' asks cycles judged before for the ratings and value they lack; "
-                                     "'second' runs the second judge; 'value-regrade' re-asks only value, dry run only (paid)")
-    p.add_argument("action", choices=["backfill", "second", "value-regrade"])
+                                     "'second' runs the second judge; 'value-regrade' re-asks only value (paid); "
+                                     "'pushback-outcome' previews later outcomes, --write pays and stores apart")
+    p.add_argument("action", choices=["backfill", "second", "value-regrade", "pushback-outcome"])
     p.add_argument("names", nargs="*")
+    p.add_argument("--days", type=int, default=3, help="pushback-outcome: minimum cycle age in days")
+    p.add_argument("--write", action="store_true", help="pushback-outcome: pay for judgments and store apart")
     p.add_argument("--min-value", type=int, default=0, help="value-regrade: minimum stored value")
     p.add_argument("--value-for", default="own_capability,own_record", help="value-regrade: comma-separated beneficiaries")
-    p.add_argument("--since", default="", help="value-regrade: cycles since DATE (ISO format)")
+    p.add_argument("--since", default="", help="value-regrade/pushback-outcome: cycles since DATE (ISO format)")
     p.add_argument("--limit", type=int, default=None, help="value-regrade: newest N matching cycles")
     p = sub.add_parser("battery", help="the capability battery: run, report, recall (questions), backup, off|on per instance")
     p.add_argument("action", choices=["run", "report", "recall", "backup", "off", "on", "perturbation"])
@@ -1441,6 +1444,18 @@ def main(argv: list[str]) -> int:
         for name in args.names:
             instance_root(name)
         print(metrics.review_text(args.names or instance_names(), args.hours), end="")
+        return 0
+    if args.cmd == "judge" and args.action == "pushback-outcome":
+        if len(args.names) != 1:
+            print("pushback-outcome needs exactly one instance", file=sys.stderr)
+            return 2
+        instance_root(args.names[0])
+        from . import pushback
+        try:
+            print(pushback.outcome(args.names[0], args.since, args.days, args.write), end="")
+        except (ValueError, metrics.judge.JudgeError) as e:
+            print(str(e), file=sys.stderr)
+            return 2
         return 0
     if args.cmd == "judge" and args.action == "second":
         print(f"second judge: {metrics.second_pending(args.names or None)} cycle(s) graded")

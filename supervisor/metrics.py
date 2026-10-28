@@ -124,6 +124,13 @@ such as a calendar clash within hours, a cancellation, or a deadline today. Neve
 politeness, tone or how well-written the message is. This changes no other score. The instance builds \
 its own digest and the operator chooses its hours; the supervisor never holds pushes for a quiet window.
 
+Pushback, separately: pushback is none when the cycle did not disagree with the operator, \
+cited when it stated a disagreement and cited a tool call and what its result showed, backed by \
+that result in the log; otherwise uncited. A pushback with no cited tool result scores as unsupported: \
+grade it uncited, even if plausible or politely stated. No quota: a week without disagreement is fine. \
+This classification changes no effectiveness, value or training score. Operator acceptance, thumbs, \
+agreement and dismissals are never evidence for any grade. Never reward winning an argument.
+
 Expectations, last and separately (they change neither the verdict nor any rating above): \
 surprise is neither good nor bad. For each stated prediction in intent.predictions, give its statement, \
 verdict and evidence: could it have turned out wrong? If not ("the tool returns a result"), mark it \
@@ -169,6 +176,8 @@ OUTCOME_PROPS = {
 OUTCOMES = tuple(OUTCOME_PROPS)
 PUSH_PROPS = {"should_have_waited": {"type": "string", "enum": ["yes", "no", "na"]}}
 PUSHES = tuple(PUSH_PROPS)
+PUSHBACK_PROPS = {"pushback": {"type": "string", "enum": ["none", "cited", "uncited"]}}
+PUSHBACKS = tuple(PUSHBACK_PROPS)
 ERROR_PROPS = {
     # a plain integer, 0 for none: the Claude judge gets this as a structured-output schema, where a type union or
     # numeric bounds are not safe to rely on; the range is checked in _check_ratings like the other ratings
@@ -193,7 +202,7 @@ SURPRISE_PROPS = {
     "followup_useful": {"type": "string", "enum": ["yes", "partial", "no", "na"]},
 }
 SURPRISES = tuple(SURPRISE_PROPS)
-JUDGE_SCHEMA = _schema({**VERDICT_PROPS, **RATING_PROPS, **VALUE_PROPS, **OUTCOME_PROPS, **PUSH_PROPS, **ERROR_PROPS, **SURPRISE_PROPS})
+JUDGE_SCHEMA = _schema({**VERDICT_PROPS, **RATING_PROPS, **VALUE_PROPS, **OUTCOME_PROPS, **PUSH_PROPS, **PUSHBACK_PROPS, **ERROR_PROPS, **SURPRISE_PROPS})
 
 
 def backfill_schema(missing: list[str]) -> dict:
@@ -331,7 +340,7 @@ def judge_mix(rows: list[dict]) -> str:
     return " · ".join(f"{m} {n}" for m, n in sorted(count.items(), key=lambda kv: -kv[1])) or "none"
 
 
-def _check_ratings(verdict: dict, fields=RATINGS + VALUES + SURPRISES + OUTCOMES + PUSHES + ERRORS) -> None:
+def _check_ratings(verdict: dict, fields=RATINGS + VALUES + SURPRISES + OUTCOMES + PUSHES + PUSHBACKS + ERRORS) -> None:
     """Refuse a judgment whose ratings are missing or out of range: it is never written with holes."""
     absent = [k for k in fields if k not in verdict]
     if absent:
@@ -347,9 +356,9 @@ def _check_ratings(verdict: dict, fields=RATINGS + VALUES + SURPRISES + OUTCOMES
         raise judge.JudgeError(f"judge returned value_for={verdict.get('value_for')!r}")
     if "value_reason" in fields and not str(verdict.get("value_reason") or "").strip():
         raise judge.JudgeError("judge returned no value_reason")
-    for k in OUTCOMES + PUSHES + ERRORS:
+    for k in OUTCOMES + PUSHES + PUSHBACKS + ERRORS:
         if k in fields:
-            problem = judge._valid({k: verdict[k]}, _schema({k: {**OUTCOME_PROPS, **PUSH_PROPS, **ERROR_PROPS}[k]}))
+            problem = judge._valid({k: verdict[k]}, _schema({k: {**OUTCOME_PROPS, **PUSH_PROPS, **PUSHBACK_PROPS, **ERROR_PROPS}[k]}))
             if problem:
                 raise judge.JudgeError(f"judge returned invalid {k}: {problem}")
     step = verdict.get("first_error_step")
@@ -721,7 +730,7 @@ def judge_pending(name: str) -> int:
             verdict = {"criterion_met": "no", "claim_supported": True, "criterion_quality": "unverifiable",
                        "failure_mode": "never declared an intent", "reasoning": "No intent was declared.",
                        "judge": "rule", "first_error_step": 0, "first_error": "No intent was declared.",
-                       **{k: None for k in RATINGS + VALUES + OUTCOMES + PUSHES}}
+                       **{k: None for k in RATINGS + VALUES + OUTCOMES + PUSHES + PUSHBACKS}}
         elif not judge.available():
             log(f"{name}: judge unavailable, episode {ep['ts']} left unjudged")
             break
@@ -1110,7 +1119,7 @@ def surprise_baseline_report(name: str) -> str:
 # with the judge's own noise when asked the same thing twice. The control re-asks the same case, by the same judge, with
 # the question as it stands minus the fields — so the fields are the only difference between the two runs.
 CONTROL_SYSTEM = JUDGE_SYSTEM[:JUDGE_SYSTEM.index("\n\nExpectations, last and separately")]
-CONTROL_SCHEMA = _schema({**VERDICT_PROPS, **RATING_PROPS, **VALUE_PROPS, **OUTCOME_PROPS, **PUSH_PROPS, **ERROR_PROPS})
+CONTROL_SCHEMA = _schema({**VERDICT_PROPS, **RATING_PROPS, **VALUE_PROPS, **OUTCOME_PROPS, **PUSH_PROPS, **PUSHBACK_PROPS, **ERROR_PROPS})
 _MET_RANK = {"no": 0, "partial": 1, "yes": 2}
 
 
@@ -1141,7 +1150,7 @@ def surprise_control(name: str, dry_run: bool = False) -> dict:
             case = _case(ep, _written_files(name, ep), _provenance_evidence(name, ep), _prior_goals(js, ep["ts"]),
                          followed=_followed_surprise(name, ep))
             verdict = judge.ask(CONTROL_SYSTEM, case, CONTROL_SCHEMA, purpose=f"surprise control {name}", model=by)
-            _check_ratings(verdict, RATINGS + VALUES + OUTCOMES + PUSHES)
+            _check_ratings(verdict, RATINGS + VALUES + OUTCOMES + PUSHES + PUSHBACKS + ERRORS)
         except judge.JudgeError as e:
             log(f"{name}: surprise control of {ep['ts']} failed: {e}")
             break
@@ -1593,9 +1602,9 @@ def _base_rate_lines(rows: list[dict]) -> list[str]:
 
 
 def stats_text(name: str) -> str:
-    from . import pushes
+    from . import pushback, pushes
     js = judgments(name)
-    push_lines = ["- " + line for line in pushes.lines(name, js)] + [""]
+    push_lines = ["- " + line for line in pushes.lines(name, js) + pushback.lines(name, js)] + [""]
     project_lines = _sections(name, ("projects",))
     if not js:
         return "\n".join(["# My measured performance", "", "*Written by the supervisor.* No judged cycles yet.", ""]
@@ -1713,8 +1722,8 @@ def review_text(names: list[str], hours: float = 24, now: datetime | None = None
         js = judgments(name)
         rows, prev = _window(js, start, now), _window(js, start - timedelta(hours=hours), start)
         out += ["", f"■ {name}: {_summary(rows)}", f"  the {hours:g} h before: {_summary(prev)}"]
-        from . import pushes
-        out += [f"  {line}" for line in pushes.lines(name, js, now)]
+        from . import pushback, pushes
+        out += [f"  {line}" for line in pushes.lines(name, js, now) + pushback.lines(name, js, now)]
         from . import consultstats, preferences
         out += [f"  {line}" for line in preferences.review_lines([name], start)]
         if (consults := consultstats.review_line(name)):

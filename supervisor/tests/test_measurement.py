@@ -66,7 +66,7 @@ class JudgingTest(InstanceDirCase):
                "value": 3, "value_for": "operator", "value_reason": "the release note the operator asked for",
                "expectations": [], "unreported_surprises": [], "reported_surprises_supported": True,
                "delivery_supported": "na", "deliverable_met": "yes",
-               "self_imposed_clauses": "none", "self_audit": False, "should_have_waited": "na", "first_error_step": 0, "first_error": "No step is at fault.", "followup_useful": "na"}
+               "self_imposed_clauses": "none", "self_audit": False, "should_have_waited": "na", "pushback": "none", "first_error_step": 0, "first_error": "No step is at fault.", "followup_useful": "na"}
     FIELDS = metrics.RATINGS + metrics.VALUES
 
     def test_a_judged_cycle_records_origin_difficulty_and_novelty(self):
