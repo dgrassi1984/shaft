@@ -1083,10 +1083,13 @@ def main(argv: list[str]) -> int:
     p.add_argument("name")
     p.add_argument("action", nargs="?", choices=["lift"])
     p = sub.add_parser("experiment", help="kill tests of PLAN-consciousness: cards, attention, commitments, forecast "
-                       "(knob trials) and workspace (planted probe); --report shows the result")
-    p.add_argument("item", choices=["cards", "attention", "commitments", "forecast", "workspace"])
+                       "(knob trials), workspace (planted probe), privileged and recognition; --report shows results")
+    p.add_argument("item", choices=["cards", "attention", "commitments", "forecast", "workspace", "privileged", "recognition"])
     p.add_argument("name")
-    p.add_argument("--n", type=int, default=6, help="past cycles (knob trials: per trial; workspace: states, default 6)")
+    p.add_argument("--n", type=int, default=6, help="past cycles (knob trials: per trial; otherwise: states, default 6)")
+    p.add_argument("--k", type=int, default=3, help="independent replays per privileged state (default 3)")
+    p.add_argument("--max-usd", type=float, default=5.0, help="privileged/recognition: dollars this run may spend "
+                   "(default 5; charged as the operator's, not to the instance's trial budget)")
     p.add_argument("--model", default="", help="replays' model (default: the trial default; workspace: the trial "
                    "fallback for an instance on the local model)")
     p.add_argument("--dry-run", action="store_true", help="say what would run; replay nothing")
@@ -1485,6 +1488,15 @@ def main(argv: list[str]) -> int:
         from . import experiments, trial
         instance_root(args.name)
         try:
+            if args.item in ("privileged", "recognition"):
+                from . import privileged
+                if args.model:
+                    raise trial.TrialError("self-knowledge experiments use the instance's own model")
+                if not args.report:
+                    print(json.dumps(privileged.run(args.name, args.item, args.n, args.k, args.dry_run, max_usd=args.max_usd)))
+                if args.report or not args.dry_run:
+                    print(privileged.report(args.name, args.item))
+                return 0
             if args.item == "workspace":
                 if not args.report:
                     r = experiments.run_workspace(args.name, args.n, model=args.model, dry_run=args.dry_run)
