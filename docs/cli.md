@@ -173,6 +173,10 @@ shaft tom [names] [--score] [--baselines]  # C4: expected replies vs actual (jud
 shaft prefs <name> [lift]            # E1: pauses, declines, stated preferences; lift ends a pause
 shaft experiment <cards|attention|commitments|forecast|workspace> <name> [--n N] [--model M] [--dry-run] [--report]
                                      # PLAN-consciousness kill tests: knob trials, or the workspace's planted probe
+shaft experiment monitors <name> [--channel base_rate|surprises|envelope] [--n N] [--dry-run] [--report]
+                                     # #99: each channel separately, true/misinforming/removed; verification and claims
+shaft experiment choice-blindness <name> [--n N] [--dry-run] [--report]
+                                     # #102: disposable exam copies only; record/history on vs off, detection and reasons
 shaft embed on|off|status          # optional memory-search service
 shaft review [names] --hours 24    # recent activity report
 shaft tick                        # wake each idle instance once
@@ -186,6 +190,12 @@ The examples use `shaft` after installing the symlink. From the repository root,
 default to `shaft`, which is not created automatically. Pass a name explicitly.
 Use `bin/shaft --help` and `bin/shaft <command> --help` for exact argument syntax.
 
+The `monitors` and `choice-blindness` experiments run immediately on the trial cloud fallback;
+`--model openrouter/<provider/model>` overrides it. They refuse local models. `--dry-run` makes no model or
+judge calls and writes no results. `--report` reads the latest run. For monitors, `--n` selects up to N recent
+reconstructible states, with three replays per selected channel. For choice blindness, it selects up to N past
+cycles with a goal, numeric confidence and a tool result, with four exam presentations per cycle. Neither
+experiment delivers a verdict to the instance. These are paid commands unless `--dry-run` or `--report` is set.
 `shaft metacog` reports v4 clause-product confidence AUROC separately from v1 and v2/v3.
 Its confusion matrix uses all judged cycles with a known claim and verdict, including older judges.
 Rows are the instance's claim; columns are judge yes/partial/no. The sampled second judge sees the claim;

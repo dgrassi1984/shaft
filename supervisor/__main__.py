@@ -1089,14 +1089,17 @@ def main(argv: list[str]) -> int:
     p.add_argument("name")
     p.add_argument("action", nargs="?", choices=["lift"])
     p = sub.add_parser("experiment", help="kill tests of PLAN-consciousness: cards, attention, commitments, forecast "
-                       "(knob trials) and workspace (planted probe); --report shows the result")
-    p.add_argument("item", choices=["cards", "attention", "commitments", "forecast", "workspace"])
+                       "(knob trials), workspace, monitors and choice-blindness; --report shows the result")
+    p.add_argument("item", choices=["cards", "attention", "commitments", "forecast", "workspace", "monitors",
+                                   "choice-blindness"])
     p.add_argument("name")
-    p.add_argument("--n", type=int, default=6, help="past cycles (knob trials: per trial; workspace: states, default 6)")
+    p.add_argument("--n", type=int, default=6, help="past cycles (choice-blindness: four presentations per cycle; default 6)")
     p.add_argument("--model", default="", help="replays' model (default: the trial default; workspace: the trial "
-                   "fallback for an instance on the local model)")
+                   "fallback for an instance on the local model; monitors/choice-blindness: cloud fallback)")
     p.add_argument("--dry-run", action="store_true", help="say what would run; replay nothing")
     p.add_argument("--report", action="store_true", help="only print the result so far")
+    p.add_argument("--channel", choices=["base_rate", "surprises", "envelope"],
+                   help="monitors only: intervene on just this channel (default: each separately)")
     p = sub.add_parser("inbox", help="messages instances sent you")
     p.add_argument("--clear", action="store_true", help="archive notes (questions stay until answered)")
     p = sub.add_parser("reply", help="answer an instance's open question (or message it)")
@@ -1532,6 +1535,19 @@ def main(argv: list[str]) -> int:
         from . import experiments, trial
         instance_root(args.name)
         try:
+            if args.channel and args.item != "monitors":
+                raise experiments.ExperimentError("--channel is only for monitors")
+            if args.item in ("monitors", "choice-blindness"):
+                run = experiments.run_monitors if args.item == "monitors" else experiments.run_choice_blindness
+                report = experiments.monitors_report if args.item == "monitors" else experiments.choice_blindness_report
+                kw = {"channel": args.channel} if args.item == "monitors" else {}
+                if not args.report:
+                    r = run(args.name, args.n, model=args.model, dry_run=args.dry_run, **kw)
+                    print(f"{args.name}: {r['states']} state(s), {r['replays']} presentation(s) on {r['model']}"
+                          + (" (dry run: no spend)" if args.dry_run else f", {r['done']} done"))
+                if args.report or not args.dry_run:
+                    print(report(args.name, **kw))
+                return 0
             if args.item == "workspace":
                 if not args.report:
                     r = experiments.run_workspace(args.name, args.n, model=args.model, dry_run=args.dry_run)

@@ -35,10 +35,11 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/delete.py` | `Refused`, `Edit`, `Found` | `own_files`, `shared_edits`, `find`, `archive`, `delete` |
 | `supervisor/doc_comments.py` | `Refused` | `add_thread`, `reply`, `delivered`, `edit`, `delete`, `mark_sent`, `set_state`, `take_notices`, `put_back_notices`, `threads`, `waiting`, `open_counts`, `get_post`, `block`, `parse_answer`, `copy_text`, `sync_copy` |
 | `supervisor/docs.py` | `Refused` | `folder`, `sha`, `read`, `listing`, `snapshot`, `changed`, `write`, `remove`, `command` |
+| `supervisor/drive_proposals.py` | — | `command` |
 | `supervisor/egress.py` | `Refused`, `Egress` | `log_path`, `public_address`, `recent`, `describe`, `summary` |
 | `supervisor/embed_server.py` | `Embedder` | `make_handler`, `main` |
 | `supervisor/evolution.py` | — | `drift`, `distinct`, `breed` |
-| `supervisor/experiments.py` | `ExperimentError` | `knob_change`, `family`, `repeat_failures`, `targets`, `queue`, `endpoint`, `report`, `plant`, `workspace_path`, `workspace_rows`, `run_workspace`, `fingerprint`, `workspace_report` |
+| `supervisor/experiments.py` | `ExperimentError` | `knob_change`, `family`, `repeat_failures`, `targets`, `queue`, `endpoint`, `report`, `plant`, `workspace_path`, `workspace_rows`, `run_workspace`, `fingerprint`, `workspace_report`, `verification_calls`, `prepare_monitor`, `run_monitors`, `monitor_direction`, `monitors_report`, `choice_cases`, `detection_stats`, `run_choice_blindness`, `choice_blindness_report` |
 | `supervisor/finetune.py` | — | `backend`, `build_dataset`, `cmd_dataset`, `overfit`, `evaluate`, `cmd_evaluate`, `cmd_finetune` |
 | `supervisor/gate.py` | `Link`, `Invalid`, `RestoreFailed`, `StageTimedOut` | `links`, `refused`, `snapshot`, `changed`, `restore`, `unrestored`, `config_without`, `revert_config`, `commits_id`, `committed_tree`, `stop_group`, `end_stages`, `stop_stages_on_signal`, `shared_key`, `record_path`, `recorded_pass`, `warm`, `run_tests`, `failing_tests`, `keep_log`, `run_instance_tests` |
 | `supervisor/gate_suite.py` | `Split`, `HookRefused` | `discover`, `partition`, `report`, `main` |
@@ -56,6 +57,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/opconfig.py` | `Refused` | `model_choices`, `base_url_for`, `effort_choices`, `fields`, `coupled`, `set_values`, `drive`, `set_drive`, `config_command`, `drive_command` |
 | `supervisor/panel.py` | — | `cached`, `jsonl`, `judge_usd`, `costs`, `judgments`, `traits`, `template_merges`, `journal_heading`, `instance_detail`, `probation_events`, `changes`, `trials`, `trial_progress`, `battery_status`, `evals`, `surprise_summary`, `log_tail`, `services_detail`, `scheduled_runs`, `extras`, `pause_alert`, `alerts`, `model_down_problem`, `log_alert_id`, `transcripts`, `transcript_summary`, `transcript_lines`, `dismissed`, `dismiss` |
 | `supervisor/preferences.py` | — | `events`, `self_paused`, `pause`, `decline`, `prefer`, `lift`, `section`, `describe`, `review_lines`, `report` |
+| `supervisor/projects.py` | — | `lines`, `section` |
 | `supervisor/provenance.py` | — | `facts`, `check`, `checked`, `reliance`, `section`, `report` |
 | `supervisor/pushes.py` | — | `records`, `usage`, `reactions`, `lines` |
 | `supervisor/pyenv.py` | — | `venv_python`, `python`, `uv_binary`, `uv_env`, `path_dirs`, `needs_rebuild`, `rebuild_command`, `describe` |
@@ -223,6 +225,8 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_web_unread_js.py` | `UnreadTest` | `feed` |
 | `supervisor/tests/test_webpush.py` | `PushTest`, `KeyAndTokenTest`, `SubscriptionsTest`, `QueueTest`, `RoutesTest`, `WhenTest`, `RenewRaceTest`, `PairedOnlyTest` | `unb64`, `raw_to_der` |
 | `supervisor/tests/test_x_metacog.py` | `ControlsTest`, `JudgmentTest`, `MeasurementsTest` | — |
+| `supervisor/tests/test_x_probes.py` | `CopyTest`, `EndpointTest`, `RunnerTest`, `DeclareTest` | `rates`, `entry`, `tree`, `episodes` |
+| `supervisor/tests/test_x_projects.py` | `ProjectsTest`, `ChargesTest` | — |
 | `supervisor/tom.py` | — | `record`, `receipts`, `reply_for`, `score`, `section`, `baselines`, `report` |
 | `supervisor/top.py` | `UI` | `keys`, `shown`, `participants`, `follow`, `handle`, `dispatch`, `extras`, `recap_line`, `render_main`, `render_list`, `wrap`, `render_message`, `render`, `plain`, `code_stamp`, `main` |
 | `supervisor/top_views.py` | `Overlay` | `run_now`, `run_detached`, `service_guard`, `tab_bar`, `footer`, `window`, `scroll_to`, `wrap`, `spark`, `page`, `current`, `render_instance`, `judge_line`, `judge_detail`, `render_judge`, `trial_line`, `render_trials`, `render_benchmarks`, `render_changes`, `render_costs`, `render_services`, `render_help`, `transcript_line`, `render_transcripts`, `ask`, `handle_overlay`, `render_pick`, `instance_action`, `handle_view`, `ask_guarded` |
