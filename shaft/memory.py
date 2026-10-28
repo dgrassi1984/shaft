@@ -92,7 +92,7 @@ def corpus(root: Path) -> list[tuple[str, str]]:
         for line in path.read_text().splitlines():
             if not line.startswith("- "):
                 continue
-            tag = re.search(r" \(src: (.+)\)$", line)
+            tag = re.search(r" \(src: (.+?)\)(?=$| \(superseded by \[)", line)
             label = "fact" if name == "facts.md" else "memory/facts-archive.md"
             label += f", src {tag[1] if tag else 'unknown'}"
             date = re.match(r"- \[(\d{4}-\d{2}-\d{2})(?: \d{2}:\d{2})?\]", line)
