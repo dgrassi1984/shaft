@@ -606,6 +606,9 @@ def _get(req: Request, csrf: str) -> Response | None:
         return _html(200, web_pages.overview_page(overview(), csrf))
     if path == "/fragment/overview":
         return _html(200, web_pages.overview(overview()))
+    if path == "/fragment/changelog":
+        from . import version
+        return _html(200, web_pages.changelog_body(version.changelog()))
     if path == "/fragment/rail":
         from . import messages, web_chat
         history = messages.history()

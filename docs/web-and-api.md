@@ -83,6 +83,11 @@ and [chat design](plans/PLAN-webui-chat.md).
   `checked out: …` linking to Services. Services shows the checkout above the live table and a version for
   every service, including the scheduler, alongside the existing older-code warning. Older records use their
   saved commit; a service without a record says `unknown — restart to record`.
+- Click the running version in the navigation footer to open **What's new**. The popup shows the 20 newest
+  release tag messages, their dates, and which release the web service is running. Above them, up to 15
+  first-parent commit subjects since the newest release show merged pull request numbers and branches.
+  Release data is cached for at most five seconds. Each opening fetches fresh HTML without browser caching.
+  The popup scrolls on a phone and closes with Escape, **Close**, or a tap on the backdrop.
 - **Reload / update** in the navigation footer and the chat's ⋯ menu asks the service worker to update,
   deletes only `shaft-*` app caches, then reloads the current page. The update notice uses the same action.
   It keeps saved drafts, the pairing cookie and notifications (the worker is not unregistered: that would drop

@@ -57,6 +57,16 @@ nav .unpair { margin-top: auto; }
 nav .nav-version { font-size: .8rem; padding: .5rem; overflow-wrap: anywhere; order: 4; }
 nav .nav-version a { display: block; padding: .2rem 0; color: inherit; }
 nav .nav-version button { display: block; margin-top: .4rem; width: 100%; }
+nav .nav-version button[data-changelog] { display: inline; width: auto; margin: 0; padding: .2rem; color: inherit; }
+.changelog { width: calc(100% - 2rem); max-width: 42rem; max-height: 85vh; max-height: 85dvh;
+             padding: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); }
+.changelog::backdrop { background: #0008; }
+.changelog[open] { display: flex; flex-direction: column; }
+.changelog header { display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+                    padding: 1rem; border-bottom: 1px solid var(--line); }
+.changelog h1 { margin: 0; }
+.changelog-body { padding: 1rem; overflow-y: auto; overflow-wrap: anywhere; }
+.changelog-body section + section { border-top: 1px solid var(--line); margin-top: 1rem; padding-top: 1rem; }
 main { padding: 1rem 1.2rem 3rem; min-width: 0; }
 
 button { font: inherit; padding: .35rem .8rem; border-radius: 6px; border: 1px solid var(--line);
