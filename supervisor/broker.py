@@ -2203,6 +2203,7 @@ class ReplayBroker(Broker):
         super().__init__(name, project, secrets_env, log_path, max_calls=max_calls, root=state_root, usage_name=billed,
                          share=True)   # it replays the instance's own cycle, which could read the folder
         self.start_commit, self.as_of = start_commit, as_of
+        self.history_as_of = as_of
         self.cache, self.cache_lock, self.tools_log = cache, cache_lock, tools_log
         self.trace: list[dict] = []          # every tool call, as the supervisor saw it
         self.operator_sent = 0
@@ -2258,7 +2259,7 @@ class ReplayBroker(Broker):
     def _history_heads(self) -> tuple[str, str | None]:
         """Both stop at the replayed cycle: its starting commit, and its mind as of the cycle's start."""
         from . import mind
-        return self.start_commit, mind.at(self.name, self.as_of, self.project)
+        return self.start_commit, mind.at(self.name, self.history_as_of, self.project)
 
     # -- reads: real, shared by the pair ---------------------------------------------------------------
     def _web_search(self, query: str, page: int = 1) -> str:

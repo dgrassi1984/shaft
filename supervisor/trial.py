@@ -39,7 +39,8 @@ from math import comb
 from pathlib import Path
 
 from . import gate, localmodel, mind
-from .core import (CYCLE_TIMEOUT_S, DOCS_COPY, HOME, LLM_PORTS, MIND_PATHS, PROJECT, SUP_DIR, TreeTooBig, UnsafePath,
+from .core import (CYCLE_TIMEOUT_S, DOCS_COPY, HOME, LLM_PORTS, MIND_PATHS, PROJECT, SLEEP_TIMEOUT_S, SUP_DIR,
+                   TreeTooBig, UnsafePath,
                    cloud_model, contained, copy_beneath, dollars, hours, knob, list_beneath, log, positive_int,
                    read_tree, reserved, safe_read, safe_read_bytes, safe_write, secrets_env, whole)
 
@@ -53,8 +54,8 @@ LOCAL_UNITS_PER_DAY, LOCAL_UNITS_SRC = knob(
     "SHAFT_TRIAL_LOCAL_UNITS_PER_DAY", "24", whole, "replayed cycles per day an instance's own trials may run on the "
     "local model; past it they run on the fallback model", group="Trials", services=("runs", "scheduler"))
 N_MAX, N_MAX_SRC = knob(
-    "SHAFT_TRIAL_N_MAX", "10", positive_int, "the most past cycles one trial replays", group="Trials",
-    services=("runs", "api"))
+    "SHAFT_TRIAL_N_MAX", "10", positive_int, "the most replay units per arm across all past states (live cycles and sleeps)",
+    group="Trials", services=("runs", "api"))
 LOCAL_WAIT_H, LOCAL_WAIT_SRC = knob(
     "SHAFT_TRIAL_LOCAL_WAIT_H", "6", hours, "hours a trial waits for the local model's idle time before it runs on the "
     "fallback model", group="Trials", services=("runs", "scheduler"))
@@ -401,37 +402,88 @@ def file_diff(before: dict[str, bytes], after: dict[str, bytes], limit: int = 16
 # -- one run of one past cycle -----------------------------------------------------------------------------
 def replay_arm(project: Path, name: str, state: dict, code: dict[str, bytes | None], *, model: str,
                cache: dict, cache_lock: threading.Lock, billed: str, should_stop=lambda: False,
-               keep: Path | None = None, prepare=None) -> dict:
-    """Run the cycle that began at `state` once, with `code`, in a scratch copy. model: 'local' (the code's own
-    configuration) or a cloud model id (both runs of a pair get the same). Returns what the supervisor saw.
+               keep: Path | None = None, prepare=None, cycles: int = 1, sleep_between: bool = False,
+               on_unit=None) -> dict:
+    """Replay `cycles` live cycles from `state` in one scratch copy, optionally sleeping between each pair.
+    model: 'local' (the code's own configuration) or a cloud model id (both runs of a pair get the same).
+    Returns what the supervisor saw. `on_unit(record)` accounts for each cycle and sleep as it finishes.
     `prepare(dest)`: called on the reconstructed copy before the run, and before the diff's starting point — what it
     writes is part of the state, not of the run (the planted probe of `shaft experiment workspace`)."""
+    replay_units(cycles, sleep_between)   # validate before reconstructing or spending
     tmp = Path(tempfile.mkdtemp(prefix="shaft-trial-")).resolve()   # outside HOME: the sandbox allows only it
     try:
         return _replay(project, name, state, code, tmp, model=model, cache=cache, cache_lock=cache_lock,
-                       billed=billed, should_stop=should_stop, keep=keep, prepare=prepare)
+                       billed=billed, should_stop=should_stop, keep=keep, prepare=prepare,
+                       cycles=cycles, sleep_between=sleep_between, on_unit=on_unit)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _replay(project, name, state, code, tmp, *, model, cache, cache_lock, billed, should_stop, keep,
-            prepare=None) -> dict:
-    from . import runner
-    from .autonomy import describe_schedule
-    from .broker import ReplayBroker
-    from .core import BROKER_MAX_CALLS
+            prepare=None, cycles=1, sleep_between=False, on_unit=None) -> dict:
     dest = reconstruct(project, name, state, code, tmp / name)
     link_env(dest, project / "instances" / name)
     if prepare:
         prepare(dest)
+    before = _files_now(dest)
+    clock = datetime.fromisoformat(state["t0"])
+    units = []
+    for i in range(replay_units(cycles, sleep_between)):
+        kind = "sleep" if sleep_between and i % 2 else "live"
+        rec = _replay_cycle(project, name, state, code, tmp, dest, kind=kind, clock=clock,
+                            model=model, cache=cache.setdefault(i, {}), cache_lock=cache_lock,
+                            billed=f"{billed}:u{i}" if cycles > 1 else billed, should_stop=should_stop)
+        units.append(rec)
+        if on_unit:
+            on_unit(rec)
+        clock += timedelta(seconds=max(1, rec["seconds"]))
+        if not rec["completed"] or should_stop():
+            break
+    if keep:
+        shutil.copytree(dest, keep, symlinks=True, dirs_exist_ok=True)
+    if cycles == 1:
+        return units[0]   # preserve the original single-cycle record exactly
+    live = [u for i, u in enumerate(units) if not sleep_between or i % 2 == 0]
+    sleeps = [u for i, u in enumerate(units) if sleep_between and i % 2]
+    return {**units[-1], "cycles": live, "sleeps": sleeps,
+            "ended": "preempted" if len(units) < replay_units(cycles, sleep_between)
+                     and units[-1]["completed"] else units[-1]["ended"],
+            "endpoints": {"completed_cycles": sum(c["completed"] for c in live),
+                          "steps": sum((c.get("episode") or {}).get("steps", 0) for c in live)},
+            "completed": len(units) == replay_units(cycles, sleep_between) and all(u["completed"] for u in units),
+            "seconds": round(sum(u["seconds"] for u in units), 1),
+            "usd": round(sum(u["usd"] for u in units), 6),
+            "usage": {k: sum(u["usage"][k] for u in units) for k in units[0]["usage"]},
+            "trace": [c for u in units for c in u["trace"]], "diff": file_diff(before, _files_now(dest))}
+
+
+def replay_units(cycles: int, sleep_between: bool = False) -> int:
+    """#108: live cycles plus one sleep between each pair, charged as replay units."""
+    if isinstance(cycles, bool) or not isinstance(cycles, int) or cycles < 1:
+        raise TrialError("cycles must be a positive integer")
+    units = cycles + (cycles - 1 if sleep_between else 0)
+    if units > N_MAX:
+        raise TrialError(f"{units} replay units exceed SHAFT_TRIAL_N_MAX={N_MAX} [{N_MAX_SRC}]")
+    return units
+
+
+def _replay_cycle(project, name, state, code, tmp, dest, *, kind, clock, model, cache, cache_lock,
+                  billed, should_stop) -> dict:
+    from . import runner
+    from .autonomy import describe_schedule
+    from .broker import ReplayBroker
+    from .core import BROKER_MAX_CALLS
     before, seen = _files_now(dest), _episode_lines(dest)
+    usage_before, usd_before = _llm_usage(dest), _cloud_usd(billed)
     broker = ReplayBroker(name, project, secrets_env(), SUP_DIR / "trials" / "broker.log", state_root=dest,
-                          start_commit=state["start_commit"], as_of=datetime.fromisoformat(state["t0"]),
+                          start_commit=state["start_commit"], as_of=clock,
                           cache=cache, cache_lock=cache_lock, billed=billed, tools_log=SUP_DIR / "broker.log",
                           max_calls=BROKER_MAX_CALLS)
+    broker.history_as_of = datetime.fromisoformat(state["t0"])
     broker.start()
-    extra = {"SHAFT_DEADLINE": f"{time.time() + CYCLE_TIMEOUT_S - 60:.0f}", "SHAFT_SCHEDULE": describe_schedule(name, _config(project, name)),
-             "SHAFT_NOW": state["t0"],
+    budget = SLEEP_TIMEOUT_S if kind == "sleep" else CYCLE_TIMEOUT_S
+    extra = {"SHAFT_DEADLINE": f"{time.time() + budget - 60:.0f}", "SHAFT_SCHEDULE": describe_schedule(name, _config(project, name)),
+             "SHAFT_NOW": clock.isoformat(timespec="seconds"),
              "SHAFT_OPEN_TALKS": ",".join(_talk_ids(dest))}   # no write-ups of old conversations, in either run
     ports = list(LLM_PORTS)
     if model == "local":
@@ -446,7 +498,7 @@ def _replay(project, name, state, code, tmp, *, model, cache, cache_lock, billed
     out_path = tmp / "agent-output.txt"
     started, ended, code_ = time.monotonic(), "ok", None
     try:
-        cmd, env = runner.agent_command(dest, broker, ["live"], Path(prof), ports, extra)
+        cmd, env = runner.agent_command(dest, broker, [kind], Path(prof), ports, extra)
         with out_path.open("w") as out:
             proc = subprocess.Popen(cmd, cwd=dest, env=env, stdin=subprocess.DEVNULL, stdout=out,
                                     stderr=subprocess.STDOUT, start_new_session=True)
@@ -454,7 +506,7 @@ def _replay(project, name, state, code, tmp, *, model, cache, cache_lock, billed
                 try:
                     code_ = proc.wait(timeout=2)
                 except subprocess.TimeoutExpired:
-                    over = time.monotonic() - started > CYCLE_TIMEOUT_S
+                    over = time.monotonic() - started > budget
                     if over or should_stop():
                         ended = "timeout" if over else "preempted"
                         try:
@@ -465,15 +517,15 @@ def _replay(project, name, state, code, tmp, *, model, cache, cache_lock, billed
     finally:
         broker.stop()
         Path(prof).unlink(missing_ok=True)
-    episode = next((e for e in reversed(_new_episodes(dest, seen)) if e.get("kind") == "live"), None)
-    usage = _llm_usage(dest)
+    episode = next((e for e in reversed(_new_episodes(dest, seen)) if e.get("kind") == kind), None)
+    usage = {k: round(v - usage_before[k], 1) if isinstance(v, float) else v - usage_before[k]
+             for k, v in _llm_usage(dest).items()}
     record = {"exit": code_, "ended": ended, "seconds": round(time.monotonic() - started, 1), "model": model,
               "episode": episode, "trace": broker.trace, "diff": file_diff(before, _files_now(dest)),
-              "usage": usage, "usd": _cloud_usd(billed),
+              "usage": usage, "usd": round(_cloud_usd(billed) - usd_before, 6),
               "output_tail": out_path.read_text(errors="replace")[-1500:]}
-    record["completed"] = (code_ == 0 and ended == "ok" and bool(episode) and bool((episode or {}).get("intent")))
-    if keep:
-        shutil.copytree(dest, keep, symlinks=True, dirs_exist_ok=True)
+    record["completed"] = (code_ == 0 and ended == "ok" and bool(episode)
+                           and (bool(episode.get("intent")) if kind == "live" else episode.get("ended_by") == "answer"))
     return record
 
 
@@ -519,7 +571,8 @@ def _cloud_usd(billed: str) -> float:
 
 # -- judging ---------------------------------------------------------------------------------------------
 JUDGE_SYSTEM = """\
-You compare two runs of the same autonomous cycle of a SHAFT agent: an AI agent that lives in its own folder and \
+You compare two whole runs of a SHAFT agent, each with consecutive live cycles and optional sleeps. Compare all \
+cycles' tool logs and finishes across each whole run. This AI agent lives in its own folder and \
 pursues goals it sets itself. Both runs started from exactly the same state (its memory, goals and inbox) and got \
 the same answers from the web; they differ only in the agent's own code or prompts. You are not told which run \
 uses which.
@@ -564,6 +617,13 @@ def _run_text(arm: dict) -> str:
     saw them, up to 6,000 chars with the cut marked), its own log of the other tools (files, memory, plugins), and
     the file changes the supervisor computed."""
     from .metrics import blind_holds
+    if "cycles" in arm:
+        parts = []
+        for i, cycle in enumerate(arm["cycles"]):
+            parts.append(f"## Live cycle {i + 1}\n{_run_text(cycle)}")
+            if i < len(arm["sleeps"]):
+                parts.append(f"## Sleep after cycle {i + 1}\n{_run_text(arm["sleeps"][i])}")
+        return "\n\n".join(parts)
     ep = arm.get("episode") or {}
     ep = {**ep, "tools": blind_holds(ep.get("tools", []))}   # outcome cards carry earlier verdicts: never to a judge
     seen = {c["tool"] for c in arm.get("trace", [])}
@@ -576,7 +636,7 @@ def _run_text(arm: dict) -> str:
            + (f", ended by {ep.get('ended_by')} after {ep.get('steps')} turns" if ep else ", wrote no cycle record")
            + f", {arm.get('seconds')} s")
     return (f"## Declared before acting\n{json.dumps(ep.get('intent'), ensure_ascii=False)}\n\n"
-            f"## Claimed afterwards\n{json.dumps(ep.get('finish'), ensure_ascii=False)}\n\n"
+            f"## Claimed afterwards\n{json.dumps(ep.get('finish', ep.get('content')), ensure_ascii=False)}\n\n"
             f"## How it ended\n{how}\n\n"
             f"## Supervisor tools it called (the supervisor's own record)\n{trace or '(none)'}\n\n"
             f"## Its other tools (its own cycle record)\n{own or '(none)'}\n\n"
@@ -717,9 +777,10 @@ def _new_state(st: dict) -> dict:
 
 def create(name: str, change: dict[str, bytes | None], hypothesis: str, *, by: str = "instance",
            episodes: list[str] = (), n: int = 0, project: Path = PROJECT, base: dict[str, bytes] | None = None,
-           allow_empty: bool = False, model: str = "auto") -> dict:
+           allow_empty: bool = False, model: str = "auto", cycles: int = 1, sleep_between: bool = False) -> dict:
     """Queue a trial of `change` (path -> new bytes, None = delete) against the instance's committed code.
     Operator-only extras: `base` replaces A's files (planted tests), `allow_empty` (A/A calibration), `model`."""
+    units = replay_units(cycles, sleep_between)
     root = project / "instances" / name
     a = committed_code(project, name)
     for rel, data in (base or {}).items():
@@ -731,7 +792,9 @@ def create(name: str, change: dict[str, bytes | None], hypothesis: str, *, by: s
             {k: v for k, v in _env((b.get("config.env") or b"").decode()).items() if k.startswith("LLM_")}:
         raise TrialError("a trial compares thinking, not models: the change may not alter LLM_* settings in "
                          "config.env")
-    n = max(N_MIN, min(int(n or N_DEFAULT), N_MAX))
+    n = max(N_MIN, min(int(n or N_DEFAULT), N_MAX // units))
+    if n * units > N_MAX:
+        raise TrialError(f"at least {N_MIN} states × {units} units exceed SHAFT_TRIAL_N_MAX={N_MAX}")
     tid = _new_id(name)
     states = _choose(project, name, root, n, list(episodes), tid)
     if len(states) < N_MIN:
@@ -742,6 +805,8 @@ def create(name: str, change: dict[str, bytes | None], hypothesis: str, *, by: s
          "files": [{"path": rel, "sha256": _sha(data)} for rel, data in sorted(change.items())],
          "llm": model_of(a), "states": [_new_state(s) for s in states], "verdict": None, "delivered": False,
          "gate": None}
+    if cycles != 1 or sleep_between:
+        t.update(cycles=cycles, sleep_between=sleep_between)
     _freeze(name, tid, "base", a)
     _freeze(name, tid, "candidate", b)
     save(t)
@@ -815,7 +880,11 @@ def _extend(name: str, tid: str, root: Path, project: Path) -> str:
         raise TrialError(f"only a finished trial with no clear difference can be extended ({tid} is "
                          f"{t['status']}, {(t.get('verdict') or {}).get('label')})")
     have = {s["ts"] for s in t["states"]}
-    more = _choose(project, name, root, EXTEND_BY, [], f"{tid}+{len(have)}", exclude=have)
+    units = replay_units(t.get("cycles", 1), t.get("sleep_between", False))
+    room = N_MAX // units - len(have)
+    if room <= 0:
+        raise TrialError(f"trial reached SHAFT_TRIAL_N_MAX={N_MAX} replay units")
+    more = _choose(project, name, root, min(EXTEND_BY, room), [], f"{tid}+{len(have)}", exclude=have)
     if not more:
         raise TrialError("no further past cycles of yours to add")
     t["states"] += [_new_state(s) for s in more]
@@ -992,9 +1061,27 @@ def run_pair(project: Path, t: dict, i: int, model: str) -> None:
     random.Random(f"{t['id']}:{i}").shuffle(order)   # who meets the world first (and fills the cache) is random
     arms: dict[str, dict] = {}
 
+    label = "local" if local else (t["llm"]["model"] if run_model == "local" else run_model)
+    recorded = set()
+
+    def charge(arm, rec):
+        recorded.add(arm)
+        _ledger({"instance": name, "trial": t["id"], "by": t["by"], "kind": "arm", "state": i, "arm": arm,
+                 "model": label, "replay_kind": (rec.get("episode") or {}).get("kind", "live"),
+                 "usd": rec["usd"], "seconds": rec["seconds"],
+                 "ended": rec["ended"], "tokens_in": rec["usage"]["prompt_tokens"],
+                 "tokens_out": rec["usage"]["completion_tokens"],
+                 "web_reads": sum(1 for c in rec["trace"] if c["tool"] in ("web_search", "fetch_page")
+                                  and "same answer as the other run" not in c.get("tags", []))})
+
     def one(arm: str) -> None:
         arms[arm] = replay_arm(project, name, s, arms_code[arm], model=run_model, cache=cache, cache_lock=lock,
-                               billed=f"{name}@trial:{t['id']}:{i}{arm}", should_stop=stop)
+                               billed=f"{name}@trial:{t['id']}:{i}{arm}",
+                               should_stop=lambda: stop() or not _within_caps(t)
+                               or (local and t["by"] == "instance"
+                                   and usage_today(name)["local_units"] >= LOCAL_UNITS_PER_DAY),
+                               cycles=t.get("cycles", 1), sleep_between=t.get("sleep_between", False),
+                               on_unit=lambda rec: charge(arm, rec))
     log(f"{name}: trial {t['id']} past cycle {i + 1}/{len(t['states'])} ({s['ts']}) on "
         f"{'the local model' if local else run_model if run_model != 'local' else t['llm']['model']}")
     if local:
@@ -1008,14 +1095,9 @@ def run_pair(project: Path, t: dict, i: int, model: str) -> None:
             th.start()
         for th in threads:
             th.join()
-    label = "local" if local else (t["llm"]["model"] if run_model == "local" else run_model)
     for arm, rec in arms.items():
-        _ledger({"instance": name, "trial": t["id"], "by": t["by"], "kind": "arm", "state": i, "arm": arm,
-                 "model": "local" if local else label, "usd": rec["usd"], "seconds": rec["seconds"],
-                 "ended": rec["ended"], "tokens_in": rec["usage"]["prompt_tokens"],
-                 "tokens_out": rec["usage"]["completion_tokens"],
-                 "web_reads": sum(1 for c in rec["trace"] if c["tool"] in ("web_search", "fetch_page")
-                                  and "same answer as the other run" not in c.get("tags", []))})
+        if arm not in recorded:   # older replay adapters return a single record without calling on_unit
+            charge(arm, rec)
         (_dir(name, t["id"]) / "arms").mkdir(parents=True, exist_ok=True)
         (_dir(name, t["id"]) / "arms" / f"{i:02d}{arm}.json").write_text(json.dumps(rec, indent=1, ensure_ascii=False))
     if any(a["ended"] == "preempted" for a in arms.values()) or len(arms) < 2:
