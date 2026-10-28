@@ -41,6 +41,8 @@ def envelope_text(env: dict | None, left_s: float | None) -> str:
         lines.append(f"Time left this run: about {max(0, left_s) / 60:.0f} minutes.")
     if env is None:
         return "\n".join(lines)
+    if (push := env.get("pushes")) and push.get("budget"):
+        lines.append(f"pushes to the operator today: {push['today']} of budget {push['budget']}.")
     for key, label in (("cloud", "Cloud model"), ("coder", "Coder")):
         budget = env.get(key)
         try:
