@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from . import broker, cards, images, pausing, surprises
+from . import broker, cards, images, loopguard, pausing, surprises
 from .llm import Client, Reply
 from .tools import Toolbox, for_log
 
@@ -171,6 +171,9 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
     wrapped_up = ""
     last_call, repeats = None, 0   # the previous tool call, and how many times in a row it came back unchanged
     first_logged = len(toolbox.log)   # a conversation's toolbox outlives one reply: the ledger counts this run's
+    configured = getattr(toolbox, "loop_guard", None)
+    guard = loopguard.Guard(configured.mode, configured.limit) if configured else loopguard.Guard()
+    toolbox.loop_guard = guard
     while True:
         limit = max_steps() if callable(max_steps) else max_steps
         if 0 < limit <= step:
@@ -256,6 +259,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
             if on_tool_start:
                 on_tool_start(c["name"], c["arguments"])
             if c["name"] in controls:
+                guard.last, guard.rounds = None, 0
                 try:
                     args = json.loads(c["arguments"] or "{}")
                     result = controls[c["name"]].handler(args)
@@ -269,6 +273,8 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
                 if result.startswith(cards.HELD):
                     last_call = None   # held, not run: calling it again must run it, not be refused as a repeat
                 hit = _tag(toolbox.log[-1])
+                if not result.startswith(cards.HELD):
+                    result += guard.observe(c["name"], c["arguments"], result, step, toolbox.log[-1])
                 predictions = expected() if expected and hit else None
                 if predictions is not None:
                     result += surprises.note(hit, predictions)

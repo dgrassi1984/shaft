@@ -5,8 +5,8 @@ import json
 import re
 from datetime import datetime
 
-from . import (agent, broker, clock, commitments, corrections, drive_proposals, memory, projects, prompts, recovery,
-               staleness, surprises)
+from . import (agent, broker, clock, commitments, corrections, drive_proposals, loopguard, memory, projects, prompts,
+               recovery, staleness, surprises)
 from .llm import Client, LLMError
 from .state import State
 from .tools import FACT_LINE, SOURCE, Toolbox, _spec, for_log
@@ -160,6 +160,7 @@ def run(cfg, state: State, client: Client) -> str:
         state, cfg.OPERATOR_NAME, max_chars=recovery.AUTONOMOUS_CONTEXT_CHARS)
     shingles = set().union(*(_shingles(text) for text in turns))
     toolbox = Toolbox(state.root)
+    toolbox.loop_guard = loopguard.Guard(cfg.LOOP_GUARD, cfg.LOOP_EFFECT_ROUNDS)
     toolbox.remote = {name: spec for name, spec in toolbox.remote.items() if name in ("record", "history")}
     toolbox.plugins = {}
     promises = cfg.COMMITMENTS == "on"
@@ -297,7 +298,8 @@ def run(cfg, state: State, client: Client) -> str:
         summary = (f"{why} before writing my sleep entry. "
                    f"Tools that succeeded: {'; '.join(changes) or 'none'}.")
         state.append_journal("Sleep (unfinished)", summary)
-        state.append_episode({"kind": "sleep", "ended_by": outcome.ended_by, "tools": toolbox.log, "closed": closed})
+        state.append_episode({"kind": "sleep", "ended_by": outcome.ended_by, "tools": toolbox.log, "closed": closed,
+                              **toolbox.loop_guard.record()})
         raise LLMError(summary)
     # Before the journal entry: a finished sleep without a marker would otherwise be the next one's starting point,
     # skipping what it did not read. A failed read keeps where it started, so the next sleep asks again.
@@ -319,7 +321,7 @@ def run(cfg, state: State, client: Client) -> str:
     entry += "\n\n*Consolidation actions:* " + ("; ".join(changes) or "none")
     state.append_journal("Sleep", entry)
     state.append_episode({"kind": "sleep", "ended_by": outcome.ended_by, "tools": toolbox.log,
-                          "content": outcome.reply.content, "closed": closed})
+                          "content": outcome.reply.content, "closed": closed, **toolbox.loop_guard.record()})
     return entry
 
 
