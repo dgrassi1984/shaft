@@ -187,6 +187,7 @@ class SleepRecordTest(InstanceFixture, unittest.TestCase):
                 calls = self.fake_broker(lambda name, **args: record_json("VERDICT: reviewed orchard",
                                                                           next_since=next_since))
                 for finished in (False, True):
+                    calls.reset_mock()
                     self.cfg.values["MAX_STEPS_SLEEP"] = 1
                     reply = {"content": "Reviewed."} if finished else {
                         "tool_calls": [("read_file", {"path": "self/goals.md"})]}
@@ -198,7 +199,7 @@ class SleepRecordTest(InstanceFixture, unittest.TestCase):
                         with self.assertRaises(LLMError):
                             sleep.run(self.cfg, self.state, client)
                         self.assertEqual(marker.exists(), initial is not None)
-                    self.assertEqual(calls.call_args, mock.call("record", kind="judgments", limit=20,
+                    self.assertEqual(calls.call_args_list[0], mock.call("record", kind="judgments", limit=20,
                                                                 since=initial or "1970-01-01 00:00:00", format="json"))
                     self.assertIn("VERDICT: reviewed orchard", fake.requests[0]["messages"][1]["content"])
 

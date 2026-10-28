@@ -62,6 +62,7 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_INBOX_PER_HOUR` | `30` | messages per hour the API's inbox (doorbell) accepts for one instance | [api.py](../supervisor/api.py) |
 | `SHAFT_INBOX_WAKES_PER_HOUR` | `4` | wakes per hour inbox messages may start for one instance | [api.py](../supervisor/api.py) |
 | `SHAFT_API_HTTPS_PORT` | `8443` | the API's https port on the tailnet (tailscale serve) | [api.py](../supervisor/api.py) |
+| `SHAFT_PAUSE_ALERT_HOURS` | `3` | hours an operator pause may last before an alert; 0 = off. Read by CLI runs and web. | [core.py](../supervisor/core.py) |
 | `SHAFT_BATTERY_VERSION` | `v1` | the battery item set in use (.supervisor/battery/items/<version>) | [battery.py](../supervisor/battery.py) |
 | `SHAFT_BATTERY_EVERY_DAYS` | `5` | nights between an instance's scheduled capability batteries (0: never scheduled) | [battery.py](../supervisor/battery.py) |
 | `SHAFT_BATTERY_ITEM_TIMEOUT_S` | `1800` | seconds one battery item may run | [battery.py](../supervisor/battery.py) |
@@ -171,6 +172,7 @@ reviewed ref was `refs/heads/publish-prep-template`.
 | `MAX_STEPS_SLEEP` | `30` | `30` |
 | `MAX_STEPS_TALK` | `0` | `0` |
 | `CONTEXT_JOURNAL_CHARS` | `16000` | `16000` |
+| `GOALS_CHARS` | `12000` | uses built-in default |
 | `CURIOSITY_EVERY_CYCLES` | `5` | `5` |
 | `OUTCOME_CARDS` | `'on'` | uses built-in default |
 | `WORKSPACE` | `'competitive'` | uses built-in default |

@@ -45,6 +45,7 @@ OPERATOR_DAILY_LIMIT, _ = knob(
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
 
 
+SLEEP_JUDGMENTS_BUDGET = 24000   # the sleep's own read, from code: a 5,500 page held two of thelos's verdicts
 JUDGMENTS_BUDGET = 5500   # under the 6,000 characters at which a template instance's runtime cuts a tool result
 
 
@@ -64,14 +65,20 @@ def _reviewed_at(row: dict) -> str:
     return max(_judged_at(row), _judged_at(second) if isinstance(second, dict) else "")
 
 
-def judgment_text(j: dict) -> str:
+def judgment_text(j: dict, reasoning_chars: int | None = None) -> str:
     """One verdict with every field the judge gave — the reasons behind each rating, not just the grades."""
+    def reasoning(text):
+        if reasoning_chars is not None and len(text) > reasoning_chars:
+            return (text[:reasoning_chars] + "… (full: record(kind='judgments', "
+                    f"cycle='{_when(j.get('episode_ts'))}'))")
+        return text
+
     out = [f"### {_when(j.get('episode_ts'))} — {j.get('goal', '')}",
            f"I claimed {j.get('claimed')} at {j.get('confidence')}% confidence. Judge ({j.get('judge', '?')}): criterion "
            f"met **{j.get('criterion_met')}**, my claim supported: {j.get('claim_supported')}, criterion "
            f"{j.get('criterion_quality')}" + (f", failure: {j['failure_mode']}" if j.get("failure_mode") else "") + "."]
     if j.get("reasoning"):
-        out.append(f"Reasoning: {j['reasoning']}")
+        out.append(f"Reasoning: {reasoning(j['reasoning'])}")
     if j.get("difficulty") is not None:
         out.append(f"Difficulty {j['difficulty']}/5" + (f": {j['difficulty_reason']}" if j.get("difficulty_reason") else "")
                    + (f" · novelty {j['novelty']}/5" if j.get("novelty") is not None else ""))
@@ -106,7 +113,7 @@ def judgment_text(j: dict) -> str:
                    f"**{s.get('criterion_met')}**, claim supported {s.get('claim_supported')}, difficulty "
                    f"{s.get('difficulty')}/5" + (f", value {s['value']}/5" if s.get("value") is not None else "")
                    + (f", failure: {s['failure_mode']}" if s.get("failure_mode") else "")
-                   + f". Reasoning: {s.get('reasoning', '')}")
+                   + f". Reasoning: {reasoning(s.get('reasoning', ''))}")
     return "\n".join(out)
 
 
@@ -118,7 +125,7 @@ def judgments_text(rows: list[dict], limit: int = 20, cycle: str = "", before: s
     return _judgments_text(rows, limit, cycle, before, budget, left_out)
 
 
-def _judgments_text(rows, limit, cycle, before, budget, left_out, since="", shown=None) -> str:
+def _judgments_text(rows, limit, cycle, before, budget, left_out, since="", shown=None, reasoning_chars=None) -> str:
     if cycle:
         want = cycle.strip().replace("T", " ")[:16]
         hit = [r for r in rows if _when(r.get("episode_ts")) == want]
@@ -128,9 +135,9 @@ def _judgments_text(rows, limit, cycle, before, budget, left_out, since="", show
         if hit and shown is not None:
             shown.append(hit[-1])
         if hit and since:
-            return (judgment_text(hit[-1]) + "\n\n(1 new verdict, oldest first. Next: "
+            return (judgment_text(hit[-1], reasoning_chars) + "\n\n(1 new verdict, oldest first. Next: "
                     f"record(kind='judgments', since='{_reviewed_at(hit[-1])}').)")
-        return judgment_text(hit[-1]) if hit else (f"no judged cycle at {want}; the latest: "
+        return judgment_text(hit[-1], reasoning_chars) if hit else (f"no judged cycle at {want}; the latest: "
                                                    + ", ".join(_when(r.get("episode_ts")) for r in rows[-5:][::-1]))
     if before:
         cut = before.strip().replace("T", " ")[:16]
@@ -138,7 +145,7 @@ def _judgments_text(rows, limit, cycle, before, budget, left_out, since="", show
     rows = sorted(rows, key=_reviewed_at) if since else rows[::-1]
     picked, used = [], 0
     for r in rows[:max(1, min(int(limit), 200))]:
-        t = judgment_text(r)
+        t = judgment_text(r, reasoning_chars)
         if picked and used + len(t) + 2 > budget:
             break
         picked.append(t)
@@ -160,7 +167,7 @@ def _judgments_text(rows, limit, cycle, before, budget, left_out, since="", show
             if k:
                 picked = picked[:k]
             while not k and n < len(rows) and _reviewed_at(rows[n]) == stamp:
-                picked.append(judgment_text(rows[n]))
+                picked.append(judgment_text(rows[n], reasoning_chars))
                 n += 1
         if len(picked) < len(rows):
             tail = (f"\n\n({len(picked)} of {len(rows)} new verdicts, oldest first. The rest: "
@@ -1486,7 +1493,12 @@ class Broker:
             # Returned whole, never cut like the other kinds below: the sleep reads it through broker.call, and a
             # cut would drop verdicts its marker then counts as read (the budget keeps a page short anyway).
             shown = []
-            text = _judgments_text(rows, limit, cycle, before, JUDGMENTS_BUDGET, left_out, since, shown)
+            # Sleep calls broker.call from code, outside the model tool's 6,000-character result cut
+            # (2026-10-28, C1): compact reasons let it review twenty verdicts rather than two.
+            sleep_read = bool(since and format == "json")
+            text = _judgments_text(rows, limit, cycle, before,
+                                   SLEEP_JUDGMENTS_BUDGET if sleep_read else JUDGMENTS_BUDGET,
+                                   left_out, since, shown, reasoning_chars=600 if sleep_read else None)
             if since and format == "json":
                 return json.dumps({"text": text, "verdicts": [
                     {**{key: r.get(key) for key in ("episode_ts", "judged_at", "criterion_met", "claim_supported",

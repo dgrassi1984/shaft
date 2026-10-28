@@ -62,6 +62,31 @@ def forward_new() -> int:
     return pushed
 
 
+def forward_pauses() -> int:
+    """Push each long operator pause once, across restarts (2026-10-28, A1). Resuming drops its saved id;
+    a failed push remains eligible on the next loop."""
+    from . import panel, webpush
+    path = core.SUP_DIR / "web" / "pause-alerts.json"
+    try:
+        saved = set(json.loads(path.read_text()))
+    except (OSError, ValueError):
+        saved = set()
+    sent = {key for key in saved if (core.SUP_DIR / (
+        "paused" if key.split(":")[1] == "all" else f"paused-{key.split(':')[1]}")).exists()}
+    pushed = 0
+    for pause in core.long_pauses():
+        alert = panel.pause_alert(pause)
+        if alert["id"] not in sent:
+            if webpush.notify({"title": "Operator pause", "body": alert["text"],
+                               "url": "/overview", "tag": alert["id"]}):
+                sent.add(alert["id"])
+                pushed += 1
+    if sent != saved:   # this runs every EVERY_S seconds: write only what changed
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(sorted(sent)))
+    return pushed
+
+
 def start() -> threading.Event:
     """The forwarding thread, every EVERY_S seconds; set the returned event to stop it."""
     stop = threading.Event()
@@ -71,6 +96,10 @@ def start() -> threading.Event:
             try:
                 forward_new()
             except Exception as e:                   # one bad row must not stop the alerts; say what went wrong
+                log(f"web: alerts: {type(e).__name__}: {e}")
+            try:
+                forward_pauses()
+            except Exception as e:
                 log(f"web: alerts: {type(e).__name__}: {e}")
             stop.wait(EVERY_S)
     threading.Thread(target=loop, daemon=True, name="web-alerts").start()
