@@ -712,6 +712,7 @@ class Broker:
         self.google_lock = threading.Lock()
         self.mail_bytes = 0                     # attachment bytes downloaded this run
         self.token = secrets.token_hex(16)
+        self._project_charges = []
         self.calls = 0
         self.counts: dict[str, int] = {}
         self.remembered: dict[str, list] = {}    # original cloud-model turns, resent verbatim
@@ -777,6 +778,14 @@ class Broker:
             def do_POST(self):
                 if not self._authorised():
                     return
+                from . import ledger
+                token = ledger.charges.set(broker._project_charges)
+                try:
+                    return self._post()
+                finally:
+                    ledger.charges.reset(token)
+
+            def _post(self):
                 if self.path.rstrip("/") == "/llm/consult/v1/chat/completions":
                     return self._consult()
                 if self.path.rstrip("/") == "/llm/v1/chat/completions":
@@ -1464,6 +1473,11 @@ class Broker:
         mind.require(self.name, self.project)
         return "HEAD", mind.head(self.name, self.project)
 
+    def _run_usd(self):
+        """Charges recorded by this broker's requests; another run's spending never enters (#106)."""
+        values = getattr(self, "_project_charges", None)
+        return sum(values) if values is not None and all(v is not None for v in values) else None
+
     ENVELOPE_TTL_S = 60   # the template asks every step; the ledgers it reads (cloud usage: megabytes) change slowly
 
     def envelope(self) -> dict:
@@ -1474,7 +1488,8 @@ class Broker:
     def _operational_envelope(self, as_of: datetime | None = None) -> dict:
         cached = getattr(self, "_envelope", None)
         if cached and time.monotonic() - cached[0] < self.ENVELOPE_TTL_S:
-            return {**cached[1], "calls_used": self.calls, "calls_max": self.max_calls}
+            return {**cached[1], "calls_used": self.calls, "calls_max": self.max_calls,
+                    "run_usd": self._run_usd()}
         from . import autonomy, cloudllm, coder, consult, metrics, trial
         from .core import log
 
@@ -1497,7 +1512,7 @@ class Broker:
             return {"started": usage["started"], "per_day": trial.TRIALS_PER_DAY,
                     "spent_usd": float(usage["usd"]), "cap_usd": float(trial.DAILY_USD)}
 
-        env = {"calls_used": self.calls, "calls_max": self.max_calls,
+        env = {"calls_used": self.calls, "calls_max": self.max_calls, "run_usd": self._run_usd(),
                 "pushes": field("pushes", lambda: self._push_usage(as_of)),
                 "cloud": field("cloud", lambda: {"spent_usd": float(cloudllm.spent_today(usage_name, **until)),
                                                  "cap_usd": float(cloudllm.daily_cap(self.name))}),

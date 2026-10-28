@@ -188,6 +188,7 @@ def write(root: Path, instance: str, task: str) -> tuple[list[dict], str, dict]:
         raise CoderError(f"the coder did not submit within {MAX_TURNS} turns")
     finally:
         usage["usd"] = round(usage["usd"], 4)
+        ledger.record_charge(usage["usd"])
         usage["seconds"] = round(time.monotonic() - started, 1)
         USAGE.parent.mkdir(parents=True, exist_ok=True)
         with USAGE.open("a") as f:

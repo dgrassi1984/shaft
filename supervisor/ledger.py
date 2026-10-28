@@ -12,9 +12,21 @@ before: spend that cannot be read is never counted as none.
 from __future__ import annotations
 
 import json
+import math
 import os
 import threading
+from contextvars import ContextVar
 from pathlib import Path
+
+# Each broker request carries its run's charge collector, including streaming model calls (#106).
+charges = ContextVar("shaft_run_charges", default=None)
+
+
+def record_charge(usd) -> None:
+    target = charges.get()
+    if target is not None:
+        target.append(usd if type(usd) in (int, float) and math.isfinite(usd) and usd >= 0 else None)
+
 
 _lock = threading.Lock()
 _cache: dict[str, dict] = {}
