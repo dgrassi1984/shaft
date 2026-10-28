@@ -65,7 +65,8 @@ class JudgingTest(InstanceDirCase):
                "origin_evidence": "the operator's message", "difficulty": 3, "difficulty_reason": "r", "novelty": 4,
                "value": 3, "value_for": "operator", "value_reason": "the release note the operator asked for",
                "expectations": [], "unreported_surprises": [], "reported_surprises_supported": True,
-               "followup_useful": "na"}
+               "delivery_supported": "na", "deliverable_met": "yes",
+               "self_imposed_clauses": "none", "self_audit": False, "followup_useful": "na"}
     FIELDS = metrics.RATINGS + metrics.VALUES
 
     def test_a_judged_cycle_records_origin_difficulty_and_novelty(self):
@@ -217,7 +218,9 @@ class JudgingTest(InstanceDirCase):
         with mock.patch.object(judge, "available", return_value=True), \
              mock.patch.object(judge, "ask", return_value=dict(self.VERDICT)) as ask:
             self.assertEqual(metrics.judge_pending("m"), 2)
-        self.assertEqual(ask.call_args.args[2]["required"][-7:-4], ["value", "value_for", "value_reason"])
+        required = ask.call_args.args[2]["required"]
+        start = required.index("value")
+        self.assertEqual(required[start:start + 3], ["value", "value_for", "value_reason"])
         self.assertIn("what would be lost if it had not run", ask.call_args.args[0])
         a, b = metrics.judgments("m")
         self.assertEqual((a["value"], a["value_for"]), (3, "operator"))

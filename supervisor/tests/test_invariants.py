@@ -262,7 +262,7 @@ class LiveInvariants(InstanceCase):
             {"tool_calls": [("write_file", {"path": "notes/teal.md", "content": "teal is a color"}),
                             ("write_file", {"path": "../escape.txt", "content": "x"}),
                             ("write_file", {"path": "memory/journal.md", "content": "rewritten"})]},
-            {"tool_calls": [("finish_cycle", {"what_happened": "wrote it", "criterion_met": "yes",
+            {"tool_calls": [("finish_cycle", {"delivered_via": "none", "what_happened": "wrote it", "criterion_met": "yes",
                                               "learned": "small is good"})]},
         ]
         before = self.journal()
@@ -289,7 +289,7 @@ class LiveInvariants(InstanceCase):
     def test_near_deadline_the_cycle_wraps_up_with_a_report(self):
         # Regression: wren's sleep was killed at its time budget mid-thought, leaving no journal entry.
         import time
-        r = self.run_agent([{"tool_calls": [("finish_cycle", {"what_happened": "ran out of time",
+        r = self.run_agent([{"tool_calls": [("finish_cycle", {"delivered_via": "none", "what_happened": "ran out of time",
                                                               "criterion_met": "no", "learned": "start smaller"})]}],
                            "live", extra_env={"SHAFT_DEADLINE": str(int(time.time()) + 120)})
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -316,7 +316,7 @@ class TemplateMeasurement(InstanceCase):
             {"tool_calls": [("declare_intent", {"goal": "answer the operator", "success_criterion": "sent",
                                                 "confidence": 70, "origin": "operator",
                                                 "origin_ref": "inbox 20261013-from-operator.md"})]},
-            {"tool_calls": [("finish_cycle", {"what_happened": "x", "criterion_met": "no", "learned": "y"})]},
+            {"tool_calls": [("finish_cycle", {"delivered_via": "none", "what_happened": "x", "criterion_met": "no", "learned": "y"})]},
         ]
         r = self.run_agent(replies, "live")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -331,7 +331,7 @@ class TemplateMeasurement(InstanceCase):
         replies = [
             {"tool_calls": [("declare_intent", {"goal": "g", "success_criterion": "c", "confidence": 50,
                                                 "origin": "self"})]},
-            {"tool_calls": [("finish_cycle", {"what_happened": long_claim, "criterion_met": "yes",
+            {"tool_calls": [("finish_cycle", {"delivered_via": "none", "what_happened": long_claim, "criterion_met": "yes",
                                               "learned": "z"})]},
         ]
         r = self.run_agent(replies, "live")

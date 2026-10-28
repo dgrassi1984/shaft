@@ -246,7 +246,9 @@ def judge_detail(j: dict, width: int) -> list[str]:
             ("claimed", "claimed"), ("confidence", "confidence"), ("claim supported", "claim_supported"),
             ("criterion", "criterion_quality"), ("failure mode", "failure_mode"), ("origin declared", "origin_declared"),
             ("origin (judged)", "origin"), ("origin supported", "origin_supported"), ("difficulty", "difficulty"),
-            ("novelty", "novelty"), ("value", "value"), ("value for", "value_for"), ("value graded by", "value_judge")]
+            ("novelty", "novelty"), ("value", "value"), ("value for", "value_for"), ("value graded by", "value_judge"),
+            ("delivery supported", "delivery_supported"), ("deliverable met", "deliverable_met"),
+            ("self-imposed clauses", "self_imposed_clauses"), ("self-audit", "self_audit")]
     out = [f"cycle {j.get('episode_ts', '')}", ""] + wrap(f"Goal: {j.get('goal', '')}", width) + [""]
     shown = {**j, "confidence": metrics.confidence_shown(j)}      # "90 → 60" where the base rate moved it
     out += [f"{label:<17}{shown.get(k)}" for label, k in keys if shown.get(k) not in (None, "")]
@@ -280,6 +282,9 @@ def render_judge(snap, ui, width, height):
         ok = sum(1 for t in tr["traits"] if t["supported"] == "yes")
         info.append(f" · personality traits supported {ok}/{len(tr['traits'])}", style="dim")
     head += [info, Text(f" models: {', '.join(m.split('/')[-1] for m in models)}", style="dim", no_wrap=True)]
+    recent = list(reversed(js))
+    head += [Text(" " + line, style="dim", no_wrap=True) for line in
+             [metrics.delivery_line(metrics.valued(recent)[-20:]), *metrics.self_audit_lines(recent)]]
     rows = max(1, height - len(head) - 1)
     ui.sel = max(0, min(ui.sel, len(js) - 1))
     ui.top = scroll_to(ui.sel, ui.top, rows)

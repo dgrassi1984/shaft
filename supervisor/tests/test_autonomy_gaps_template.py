@@ -283,7 +283,7 @@ class ConfidenceQuestionTest(InstanceFixture, unittest.TestCase):
         fake, client = self.model([{"tool_calls": [("declare_intent", {
             "goal": "Count trees", "success_criterion": "All trees counted", "confidence": 73,
             "origin": "self"})]}, {"tool_calls": [("finish_cycle", {
-                "what_happened": "Counted some", "criterion_met": "partial", "learned": "Need a map"})]}])
+                "delivered_via": "none", "what_happened": "Counted some", "criterion_met": "partial", "learned": "Need a map"})]}])
         live.run(self.cfg, self.state, client)
         episode = self.state.last_episode()
         self.assertEqual(episode["kind"], "live")

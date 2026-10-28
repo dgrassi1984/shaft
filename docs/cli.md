@@ -46,8 +46,11 @@ shaft model on|off|status       # SHAFT's own Bonsai 2 server (launchd, :8780; s
 shaft api on|off|status|key|inbox-key   # OpenAI-compatible API + inbox doorbell on your tailnet (web-and-api.md)
 shaft telegram token <name>|pair|unpair|on|off|status   # talk with each instance from Telegram (integrations.md)
 shaft log [name] -n 5           # recent journal entries
-shaft stats [name]              # achieved difficulty, goal origins, judged success, calibration, honesty
-shaft judge backfill [names…]   # rate origin/difficulty/novelty of cycles judged before those ratings existed
+shaft stats [name]              # achieved difficulty, goal origins, success, calibration, delivery split, self-audit share
+shaft judge backfill [names…]   # add missing origin/difficulty/novelty and value fields; keep verdicts
+shaft judge value-regrade <name> [--min-value N] [--value-for own_capability,own_record] [--since DATE] [--limit N]
+                                # paid value-only dry run, newest matching cycles first; prints before → after
+                                #   and how many fell to <=3; never writes stored verdicts; no write mode
 shaft battery run [names…]      # the capability battery now (normally the scheduler runs it at night);
                                 #   --until HH:MM, --only <categories>, --limit N, --no-control
 shaft battery run <name> --control-only   # only the control: do the items discriminate?
@@ -168,3 +171,19 @@ Sources: [argument parser](../supervisor/__main__.py),
 [distinct evaluation](../supervisor/evolution.py).
 See [clients](web-and-api.md), [integrations](integrations.md), and
 [configuration](configuration.md) for the setup behind these commands.
+
+`judge value-regrade` accepts exactly one instance. Defaults: minimum value 0, beneficiaries
+`own_capability,own_record`, no date cutoff or limit. `--since` is an inclusive ISO date or timestamp;
+`--limit` is positive. It asks only for `value`, `value_for`, `value_reason`, reuses the stored value judge
+(or the original judge when no later value judge was recorded), and skips cycles whose episode or eligible
+stored judge is unavailable. It pays for new judge calls and their usual usage log, but writes no verdict,
+backfill, baseline or stats file. Example:
+
+```text
+shaft judge value-regrade thelos --min-value 4 --value-for own_capability,own_record --since 2026-10-22 --limit 37
+```
+
+Stats, status, review and judge panels split operator-valued cycles into delivered, filed and unknown.
+Only `delivery_supported=yes` counts as delivered. New `no` or `na` answers count as filed; older missing
+answers stay unknown. Self-audit lines show true/known counts over the last 20 judged cycles, unknown counts,
+and true/known counts since the field existed, plus non-yes verdicts with the deliverable met.

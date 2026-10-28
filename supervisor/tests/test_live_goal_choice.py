@@ -13,6 +13,15 @@ E4 = "Choose the most valuable goal you can finish"
 
 
 class LiveGoalChoiceTest(unittest.TestCase):
+    def test_operator_world_and_handoff_instructions(self):
+        """#129/#104: reverting LIVE loses the operator goal source and the revisable handoff instructions."""
+        step1, step3 = prompts.LIVE.split("\n1. ", 1)[1].split("\n2. ", 1)[0], prompts.LIVE.split("\n3. ", 1)[1]
+        for text in ("current improvement plan", "self/goals.md", "operator's world", "briefing", "origin_ref",
+                     "judge", "message or conversation", "otherwise it has origin self"):
+            self.assertIn(text, step1)
+        for text in ("unfinished", "next_action", "revise_if"):
+            self.assertIn(text, step3)
+
     def test_step_2_no_longer_prefers_small_goals(self):
         if E4 not in prompts.LIVE:
             self.skipTest("template/ predates E4 (claude/e4-live-step2, held until the M5 window closes)")

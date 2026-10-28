@@ -18,7 +18,8 @@ VERDICT = {"criterion_met": "partial", "claim_supported": True, "criterion_quali
            "difficulty": 2, "difficulty_reason": "a few known steps", "novelty": 2,
            "value": 2, "value_for": "own_capability", "value_reason": "a fixed parser it uses again",
            "expectations": [], "unreported_surprises": [], "reported_surprises_supported": True,
-           "followup_useful": "na"}
+           "delivery_supported": "na", "deliverable_met": "yes",
+               "self_imposed_clauses": "none", "self_audit": False, "followup_useful": "na"}
 
 
 def _judgment(ts, reasoning="r" * 600, second=None, met="yes"):

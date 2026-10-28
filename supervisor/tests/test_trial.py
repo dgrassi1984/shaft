@@ -183,7 +183,7 @@ class ReplayEndToEndTest(Fixture):
             {"tool_calls": [("run", {"command": "curl -s -o /dev/null -w 'status %{http_code}' "
                                                 "-X POST https://example.com/hook || true"})]},
             {"tool_calls": [("write_file", {"path": "notes/answer.md", "content": "The owl is purple."})]},
-            {"tool_calls": [("finish_cycle", {"what_happened": "replied", "criterion_met": "yes", "learned": "-"})]},
+            {"tool_calls": [("finish_cycle", {"delivered_via": "none", "what_happened": "replied", "criterion_met": "yes", "learned": "-"})]},
         ])
         self.addCleanup(self.fake.close)
         self.llm_url = self.fake.url
@@ -254,7 +254,7 @@ class ReplaySeesItsRealVenvTest(Fixture):
                                                 ".venv/bin/python hello; "
                                                 "touch .venv/bin/planted 2>/dev/null && echo WROTE || echo DENIED; "
                                                 "rm -f .uv/marker 2>/dev/null; [ -e .uv/marker ] && echo KEPT"})]},
-            {"tool_calls": [("finish_cycle", {"what_happened": "ran", "criterion_met": "yes", "learned": "-"})]},
+            {"tool_calls": [("finish_cycle", {"delivered_via": "none", "what_happened": "ran", "criterion_met": "yes", "learned": "-"})]},
         ])
         self.addCleanup(self.fake.close)
         self.llm_url = self.fake.url
