@@ -32,7 +32,7 @@ from supervisor.tests.fakellm import FakeLLM
 
 DECLARE = {"goal": "Rewrite my self-model", "success_criterion": "self/self.md says X", "confidence": 60,
            "origin": "self"}
-FINISH = {"what_happened": "Refused, then used update_self_model", "criterion_met": "partial", "learned": "own tool"}
+FINISH = {"delivered_via": "none", "what_happened": "Refused, then used update_self_model", "criterion_met": "partial", "learned": "own tool"}
 SURPRISE = {"expected": "write_file self/self.md works", "observed": "PermissionError: use update_self_model",
             "so_what": "self.md has its own tool"}
 

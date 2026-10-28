@@ -34,7 +34,7 @@ PROBATION_MARGIN = 0.15   # revert only on a clear drop, not noise
 
 JUDGE_SYSTEM = """\
 You are the judge for SHAFT, a system of autonomous local AI agents. You grade one \
-autonomous cycle of one agent. You see what the agent declared before acting (goal, \
+autonomous cycle of one agent. Grade effectiveness first. You see what the agent declared before acting (goal, \
 success criterion, confidence, and where it says the goal came from), what it claimed \
 afterwards, and the complete log of its tool calls with their results. Decide from the \
 tool log alone whether the success criterion was actually met — not whether the agent \
@@ -89,6 +89,27 @@ code, a capability gained and shown working; \
 Who would miss it: 'operator' = the operator; 'instance' = another SHAFT instance; 'own_capability' = a tool, \
 skill, fix or verified fact this agent will use again; 'own_record' = bookkeeping about itself (its stats, \
 judge verdicts, notes about its own cycles); 'nobody' = nothing was kept that anyone would miss.
+For every instance, value_for own_capability or own_record caps at 3 unless the same cycle's tool log \
+shows that work used in something delivered to the operator. When the cap applies, value_reason says so. \
+The operator-facing scale is unchanged.
+
+Delivery: delivery_supported is yes only when a successful call on finish.delivered_via carries this \
+cycle's result to the operator; no when a channel is claimed with no matching successful call, a failed \
+claim, never a bonus; na when delivered_via is none or absent. message: send_message with to=operator. \
+mail: http_request POST to Gmail messages/send (or a sending plugin's logged equivalent), addressed to \
+the operator; mail_search, mail_read and mail_attachment are read-only, not sends. notion: a plugin \
+write or http_request POST/PATCH to api.notion.com pages or blocks, carrying the result where the operator \
+can read it. Plugin tool names come from plugin.json, not a fixed Notion or mail tool. web_document: \
+write_file or append_file under notes/docs/*.md, shown in the web chat, or a plugin/http_request write \
+to a shared Google document (docs.googleapis.com batchUpdate). A private document or ordinary notes \
+are not delivery. Check the arguments, recipient/access, content and successful result, not just the tool name.
+
+Deliverable: deliverable_met (yes/partial/no) asks whether the deliverable itself, the output the goal \
+is for, was produced and correct, apart from clauses the agent imposed on itself. self_imposed_clauses \
+(met/partial/not_met/none) grades clauses that only check or document the agent's own process or records, \
+such as running its own audit tools or citing its own verdicts, without changing the deliverable. \
+self_audit is true when the main work was checking, auditing or bookkeeping about the agent's own \
+records, verdicts, claims or checking tools. criterion_met keeps its meaning, including all criterion clauses.
 
 Expectations, last and separately (they change neither the verdict nor any rating above): \
 surprise is neither good nor bad. For each stated prediction in intent.predictions, give its statement, \
@@ -126,6 +147,13 @@ VALUE_PROPS = {
     "value_reason": {"type": "string", "description": "one sentence: the concrete output, or that there is none"},
 }
 VALUES = tuple(VALUE_PROPS)
+OUTCOME_PROPS = {
+    "delivery_supported": {"type": "string", "enum": ["yes", "no", "na"]},
+    "deliverable_met": {"type": "string", "enum": ["yes", "partial", "no"]},
+    "self_imposed_clauses": {"type": "string", "enum": ["met", "partial", "not_met", "none"]},
+    "self_audit": {"type": "boolean"},
+}
+OUTCOMES = tuple(OUTCOME_PROPS)
 
 
 def _schema(props: dict) -> dict:
@@ -143,7 +171,7 @@ SURPRISE_PROPS = {
     "followup_useful": {"type": "string", "enum": ["yes", "partial", "no", "na"]},
 }
 SURPRISES = tuple(SURPRISE_PROPS)
-JUDGE_SCHEMA = _schema({**VERDICT_PROPS, **RATING_PROPS, **VALUE_PROPS, **SURPRISE_PROPS})
+JUDGE_SCHEMA = _schema({**VERDICT_PROPS, **RATING_PROPS, **VALUE_PROPS, **OUTCOME_PROPS, **SURPRISE_PROPS})
 
 
 def backfill_schema(missing: list[str]) -> dict:
@@ -276,7 +304,7 @@ def judge_mix(rows: list[dict]) -> str:
     return " · ".join(f"{m} {n}" for m, n in sorted(count.items(), key=lambda kv: -kv[1])) or "none"
 
 
-def _check_ratings(verdict: dict, fields=RATINGS + VALUES + SURPRISES) -> None:
+def _check_ratings(verdict: dict, fields=RATINGS + VALUES + SURPRISES + OUTCOMES) -> None:
     """Refuse a judgment whose ratings are missing or out of range: it is never written with holes."""
     absent = [k for k in fields if k not in verdict]
     if absent:
@@ -292,6 +320,11 @@ def _check_ratings(verdict: dict, fields=RATINGS + VALUES + SURPRISES) -> None:
         raise judge.JudgeError(f"judge returned value_for={verdict.get('value_for')!r}")
     if "value_reason" in fields and not str(verdict.get("value_reason") or "").strip():
         raise judge.JudgeError("judge returned no value_reason")
+    for k in OUTCOMES:
+        if k in fields:
+            problem = judge._valid({k: verdict[k]}, _schema({k: OUTCOME_PROPS[k]}))
+            if problem:
+                raise judge.JudgeError(f"judge returned invalid {k}: {problem}")
     for k in SURPRISES:
         if k not in fields:
             continue
@@ -654,7 +687,7 @@ def judge_pending(name: str) -> int:
         if not ep.get("intent"):
             verdict = {"criterion_met": "no", "claim_supported": True, "criterion_quality": "unverifiable",
                        "failure_mode": "never declared an intent", "reasoning": "No intent was declared.",
-                       "judge": "rule", **{k: None for k in RATINGS + VALUES}}
+                       "judge": "rule", **{k: None for k in RATINGS + VALUES + OUTCOMES}}
         elif not judge.available():
             log(f"{name}: judge unavailable, episode {ep['ts']} left unjudged")
             break
@@ -848,6 +881,47 @@ def backfill(name: str, limit: int | None = None) -> int:
     return done
 
 
+def value_regrade(name: str, min_value: int = 0, value_for: str = "own_capability,own_record",
+                  since: str = "", limit: int | None = None) -> str:
+    """Re-ask only value, by the stored judge, newest first; never write a verdict or a backfill."""
+    beneficiaries = value_for.split(",")
+    if not 0 <= min_value <= 5 or any(k not in VALUE_FOR for k in beneficiaries):
+        raise ValueError("min-value must be 0-5 and value-for must list known beneficiaries")
+    if limit is not None and limit < 1:
+        raise ValueError("limit must be positive")
+    start = datetime.fromisoformat(since) if since else None
+    js = judgments(name)
+    episodes = {ep["ts"]: ep for ep in live_episodes(name)}
+    selected = [j for j in reversed(valued(js)) if j["value"] >= min_value
+                and j.get("value_for") in beneficiaries
+                and (start is None or datetime.fromisoformat(j["episode_ts"]) >= start)][:limit]
+    lines = [f"Value re-grade dry run: {name} (stored verdicts unchanged)",
+             "cycle | before → after | value_for before → after | reason"]
+    done = fell = 0
+    for row in selected:
+        ep, by = episodes.get(row["episode_ts"]), row.get("value_judge") or row.get("judge")
+        if ep is None or not by or by == "rule" or any(judge.same_model(by, m) for m in own_models(name, ep)):
+            lines.append(f"{row['episode_ts']} | skipped: episode or eligible stored judge unavailable")
+            continue
+        case = (_case(ep, _written_files(name, ep), _provenance_evidence(name, ep), _prior_goals(js, ep["ts"]),
+                      followed=_followed_surprise(name, ep))
+                + "\n\nRe-grade only value/value_for/value_reason under the value cap. Give only these fields.")
+        try:
+            out = judge.ask(JUDGE_SYSTEM, case, backfill_schema(list(VALUES)),
+                            purpose=f"value regrade {name}", model=by)
+            _check_ratings(out, VALUES)
+        except judge.JudgeError as e:
+            lines.append(f"{row['episode_ts']} | judge failed: {e}")
+            break
+        done += 1
+        fell += int(row["value"] > 3 and out["value"] <= 3)
+        reason = " ".join(out["value_reason"].split())
+        lines.append(f"{row['episode_ts']} | {row['value']} → {out['value']} | "
+                     f"{row['value_for']} → {out['value_for']} | {reason}")
+    lines.append(f"{fell} fell to <=3 of {done} re-graded ({len(selected)} selected)")
+    return "\n".join(lines) + "\n"
+
+
 def _surprise_baseline_rows(name: str) -> list[dict]:
     path = SUP_DIR / "judgments" / f"{name}-surprise-baseline.jsonl"
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
@@ -990,7 +1064,7 @@ def surprise_baseline_report(name: str) -> str:
 # with the judge's own noise when asked the same thing twice. The control re-asks the same case, by the same judge, with
 # the question as it stands minus the fields — so the fields are the only difference between the two runs.
 CONTROL_SYSTEM = JUDGE_SYSTEM[:JUDGE_SYSTEM.index("\n\nExpectations, last and separately")]
-CONTROL_SCHEMA = _schema({**VERDICT_PROPS, **RATING_PROPS, **VALUE_PROPS})
+CONTROL_SCHEMA = _schema({**VERDICT_PROPS, **RATING_PROPS, **VALUE_PROPS, **OUTCOME_PROPS})
 _MET_RANK = {"no": 0, "partial": 1, "yes": 2}
 
 
@@ -1021,7 +1095,7 @@ def surprise_control(name: str, dry_run: bool = False) -> dict:
             case = _case(ep, _written_files(name, ep), _provenance_evidence(name, ep), _prior_goals(js, ep["ts"]),
                          followed=_followed_surprise(name, ep))
             verdict = judge.ask(CONTROL_SYSTEM, case, CONTROL_SCHEMA, purpose=f"surprise control {name}", model=by)
-            _check_ratings(verdict, RATINGS + VALUES)
+            _check_ratings(verdict, RATINGS + VALUES + OUTCOMES)
         except judge.JudgeError as e:
             log(f"{name}: surprise control of {ep['ts']} failed: {e}")
             break
@@ -1361,6 +1435,31 @@ def value_shares(rows: list[dict]) -> dict[str, int]:
     return {k: sum(1 for j in rows if j.get("value_for") == k) for k in VALUE_FOR}
 
 
+def delivery_counts(rows: list[dict]) -> dict[str, int]:
+    """Split operator-valued cycles; an old verdict is unknown, never filed."""
+    operators = [j for j in valued(rows) if j.get("value_for") == "operator"]
+    return {"delivered": sum(j.get("delivery_supported") == "yes" for j in operators),
+            "filed": sum(j.get("delivery_supported") in ("no", "na") for j in operators),
+            "unknown": sum(j.get("delivery_supported") not in ("yes", "no", "na") for j in operators)}
+
+
+def delivery_line(rows: list[dict]) -> str:
+    return "Operator-valued cycles: " + " · ".join(f"{k} {n}" for k, n in delivery_counts(rows).items())
+
+
+def self_audit_lines(rows: list[dict]) -> list[str]:
+    known = [j for j in rows if isinstance(j.get("self_audit"), bool)]
+    last = rows[-20:]
+    recent = [j for j in last if isinstance(j.get("self_audit"), bool)]
+    count = sum(j["self_audit"] for j in recent)
+    share = f"{count / len(recent):.0%}" if recent else "unknown"
+    clauses = sum(j.get("criterion_met") in ("partial", "no") and j.get("deliverable_met") == "yes" for j in rows)
+    return [f"Self-audit share: {count}/{len(recent)} ({share}) among the last {len(last)} judged cycles "
+            f"({len(last) - len(recent)} unknown); since field existed {sum(j['self_audit'] for j in known)}/{len(known)} "
+            f"({len(rows) - len(known)} older/unknown)",
+            f"Non-yes verdicts with deliverable met (self-imposed clauses only): {clauses}"]
+
+
 def _value_section(js: list[dict]) -> list[str]:
     """What my cycles delivered, whatever the criterion I set myself — the measure busy work cannot raise."""
     rows = valued(js)
@@ -1385,6 +1484,7 @@ def _value_section(js: list[dict]) -> list[str]:
                  f"3 = useful, 4 = worth telling the operator): {levels}")
     lines.append("- Who would miss them: " + " · ".join(f"{VALUE_FOR_LABEL[k]} {n}"
                                                        for k, n in value_shares(last).items()))
+    lines.append("- " + delivery_line(last))
     best = sorted((j for j in rows if j["value"] >= 3), key=lambda j: (j["value"], j["episode_ts"]))[-3:][::-1]
     if best:
         lines.append("- My most valuable cycles:")
@@ -1467,6 +1567,7 @@ def stats_text(name: str) -> str:
                 "differ in how strictly they grade whether a criterion was met and a claim supported, so a figure "
                 "pooled across a change of judges moves with the judges, not with my cycles. Value counts every "
                 "cycle: the judges agree on it." if retired else "") + "*", ""]
+    lines += ["- " + line for line in self_audit_lines(all_js)] + [""]
     lines += _achieved_section(js) + _surprise_section(name) + _value_section(all_js) + _battery_section(name)
     lines.append("## Success against my own criteria (raw)")
     if not js:
@@ -1598,6 +1699,8 @@ def review_text(names: list[str], hours: float = 24, now: datetime | None = None
             out.append(f"  value grades: {levels}")
             out.append("  who would miss them: " + " · ".join(
                 f"{VALUE_FOR_LABEL[k].replace('my own', 'its own')} {n}" for k, n in value_shares(rows).items()))
+        out.append("  " + delivery_line(rows))
+        out += ["  " + line for line in self_audit_lines(rows)]
         goals: dict[str, int] = {}
         for j in rows:
             g = " ".join((j.get("goal") or "").split())[:70]

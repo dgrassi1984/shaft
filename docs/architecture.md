@@ -81,6 +81,38 @@ and conversations the supervisor collects, checked against what the instance dec
 before and after a self-change. Cycles judged before the ratings existed are rated with
 `shaft judge backfill` (verdicts unchanged).
 
+Judges grade effectiveness first. `declare_intent` takes a checkable `success_criterion`, limited by
+`CRITERION_CHARS` (default 600), and refuses longer criteria with their length and limit.
+The LIVE prompt allows at most one cycle in five on the instance's own records or checking tools.
+`finish_cycle` requires `delivered_via`: `message`, `mail`, `notion`, `web_document` or `none`.
+It only records the report; delivery is a separate earlier tool call. Use `none` for journal or ordinary notes.
+
+Fresh judgments add these fields alongside the existing verdict, rating, value and surprise fields:
+
+| Field | Values | Meaning |
+|---|---|---|
+| `delivery_supported` | `yes`, `no`, `na` | A successful call on the claimed channel carried this cycle's result to the operator; `no` means a failed claim, never a bonus; `na` means no channel or `none`. |
+| `deliverable_met` | `yes`, `partial`, `no` | The deliverable itself was produced and correct, apart from self-imposed process clauses. |
+| `self_imposed_clauses` | `met`, `partial`, `not_met`, `none` | Whether clauses that only check or document the instance's own process or records were met. |
+| `self_audit` | boolean | The cycle's main work checked, audited or kept books about its own records, verdicts, claims or checking tools. |
+
+`criterion_met` still grades the whole criterion. Sleep receives these fields through `record(kind="judgments")`;
+a partial/no with `deliverable_met=yes` is not a reason to add a rung to the improvement plan.
+Both judges and the surprise control request the new fields. Ordinary backfill still asks only for missing
+ratings and value fields; old verdicts do not become incomplete because these fields are absent.
+
+Operator-valued cycles split into delivered (`delivery_supported=yes`), filed (`no` or `na`), and unknown
+(field absent or null). `self/stats.md`, `shaft stats`, status, review and the judge panels show the split.
+The value section uses its existing model-specific last-20 window; status and panels use the last 20 valued
+cycles; review uses its requested time window. Self-audit figures use the last 20 judged cycles, report
+unknown rows separately, and give true/known counts since the field existed. They also count non-yes verdicts
+whose deliverable was met. Old and rule-only rows with no answer stay unknown.
+
+For every instance, `value_for=own_capability` or `own_record` caps at 3 unless the same cycle's log shows that
+work used in something delivered to the operator. `value_reason` states when the cap applies; the operator-facing
+scale stays unchanged. `shaft judge value-regrade` re-asks only value fields on selected historical cycles and
+prints a comparison without changing stored verdicts. See [CLI](cli.md).
+
 Calibration v2 measures P(criterion met = yes), identified by `confidence_of="criterion_met=yes"`.
 Its Brier score uses yes=1 and partial/no=0. Older v1 confidence asked for "probability of success" and
 uses yes=1/partial=0.5/no=0. Stats, reviews and surprise baselines keep their scores and counts separate.

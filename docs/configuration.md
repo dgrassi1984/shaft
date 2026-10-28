@@ -172,6 +172,7 @@ reviewed ref was `refs/heads/publish-prep-template`.
 | `MAX_STEPS_SLEEP` | `30` | `30` |
 | `MAX_STEPS_TALK` | `0` | `0` |
 | `CONTEXT_JOURNAL_CHARS` | `16000` | `16000` |
+| `CRITERION_CHARS` | `600` | uses built-in default |
 | `GOALS_CHARS` | `12000` | uses built-in default |
 | `BRIEFING` | `'notes/briefing.md'` | `notes/briefing.md` |
 | `HANDOFF` | `'on'` | `on` |
@@ -183,6 +184,9 @@ reviewed ref was `refs/heads/publish-prep-template`.
 | `COMMITMENTS` | `'on'` | uses built-in default |
 | `FORECAST` | `'on'` | uses built-in default |
 | `OPERATOR_NAME` | `'the operator'` | empty |
+
+`CRITERION_CHARS` limits `declare_intent.success_criterion` in characters. An overlong criterion is refused
+with its length and the limit, asking for the deliverable's check rather than ritual clauses.
 
 `LLM_PRESENCE_PENALTY` uses tenths (15 means 1.5). `MAX_STEPS_TALK=0` removes the
 conversation step limit. `WAKE_INTERVAL_MINUTES=0` disables periodic wakes; positive

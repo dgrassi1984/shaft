@@ -29,7 +29,7 @@ from supervisor.tests.fakellm import FakeLLM
 NOW = "2026-10-26T10:00:00"
 DECLARE = {"goal": "Fix the orchard survey notes", "success_criterion": "notes/orchard.md lists every row",
            "confidence": 60, "origin": "self", "predictions": ["the file has 12 rows"]}
-FINISH = {"what_happened": "wrote the notes", "criterion_met": "yes", "learned": "rows are in the survey"}
+FINISH = {"delivered_via": "none", "what_happened": "wrote the notes", "criterion_met": "yes", "learned": "rows are in the survey"}
 
 
 class Fixture:
