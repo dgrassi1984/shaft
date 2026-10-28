@@ -110,7 +110,11 @@ def corpus(root: Path) -> list[tuple[str, str]]:
     for folder in ("notes", "skills", "memory/people"):
         base = root / folder
         for path in sorted(base.rglob("*.md")) if base.is_dir() else []:
-            for chunk in _chunks(path.read_text(errors="replace")):
+            try:
+                text = path.read_text(errors="replace")
+            except OSError as e:   # an unreadable note (including my briefing) must not stop automatic recall
+                text = f"(could not be read: {type(e).__name__}: {e})"
+            for chunk in _chunks(text):
                 docs.append((path.relative_to(root).as_posix(), chunk))
     verdicts = {row["episode_ts"]: row for row in verdict_rows(root)}
     episodes = root / "memory" / "episodes"
