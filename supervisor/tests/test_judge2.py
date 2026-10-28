@@ -19,7 +19,7 @@ VERDICT = {"criterion_met": "partial", "claim_supported": True, "criterion_quali
            "value": 2, "value_for": "own_capability", "value_reason": "a fixed parser it uses again",
            "expectations": [], "unreported_surprises": [], "reported_surprises_supported": True,
            "delivery_supported": "na", "deliverable_met": "yes",
-               "self_imposed_clauses": "none", "self_audit": False, "followup_useful": "na"}
+               "self_imposed_clauses": "none", "self_audit": False, "should_have_waited": "na", "followup_useful": "na"}
 
 
 def _judgment(ts, reasoning="r" * 600, second=None, met="yes"):

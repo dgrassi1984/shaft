@@ -96,6 +96,7 @@ Fresh judgments add these fields alongside the existing verdict, rating, value a
 | `deliverable_met` | `yes`, `partial`, `no` | The deliverable itself was produced and correct, apart from self-imposed process clauses. |
 | `self_imposed_clauses` | `met`, `partial`, `not_met`, `none` | Whether clauses that only check or document the instance's own process or records were met. |
 | `self_audit` | boolean | The cycle's main work checked, audited or kept books about its own records, verdicts, claims or checking tools. |
+| `should_have_waited` | `yes`, `no`, `na` | Whether any operator push could have waited for a morning digest; `no` means all pushes were time-critical, `na` means no push. Judged from the tool log, content and timing, never tone or politeness. |
 
 `criterion_met` still grades the whole criterion. Sleep receives these fields through `record(kind="judgments")`;
 a partial/no with `deliverable_met=yes` is not a reason to add a rung to the improvement plan.
@@ -149,11 +150,25 @@ This code calls the broker directly, so the model tool's 6,000-character result 
 reads without `since` keep the 5,500-character budget and full reasoning. Ties may exceed the page budget to avoid
 skipping verdicts with the same timestamp.
 
-The broker operational envelope has the same eight keys in live runs and replays: `calls_used`,
-`calls_max`, `cloud`, `coder`, `trials`, `probation`, `next_sleep`, `next_wake`. Replays reconstruct
+The broker operational envelope has the same keys in live runs and replays: `calls_used`,
+`calls_max`, `cloud`, `consult`, `coder`, `trials`, `probation`, `next_sleep`, `next_wake`, `pushes`.
+`pushes` holds today's count and `SHAFT_PUSH_BUDGET` (default 6), or null when the budget is 0.
+The template shows "pushes to the operator today: N of budget B"; `send_message` to the operator
+returns the count after delivery too. A push is an instance-to-operator message with `alert` in the
+supervisor's message log. Counts use the supervisor's local calendar day and survive inbox archiving.
+The budget is measured, never enforced. Replays reconstruct
 the instance's spend and trial starts strictly before the cycle start on that date, probation cycles
 judged before it, and the next scheduled sleep and wake. They carry no replay flag. Closed probation
 entries cannot be reconstructed; see [trial fidelity gaps](plans/PLAN-trials.md#8-known-fidelity-gaps-equal-for-both-arms-so-the-comparison-stays-fair).
+
+`self/stats.md`, `shaft stats` and review report pushes today and each of the last seven calendar days,
+the share of judged push cycles with `should_have_waited=yes` (excluding `na` and ungraded old rows),
+and operator reactions separately. Reaction counts use the next operator message to that instance or
+`start talk`/`start api` in the supervisor log: within 1 hour, 1–24 hours, or no response recorded yet
+within 24 hours as of the report. Several pushes can precede the same response; this measures sequence,
+not causation or approval. API starts include web and Telegram conversations. No timestamped per-message
+read or dismissal event exists: inbox `read` is inferred from current file location, and panel dismissals
+store alert IDs only, so a dismissal within a minute cannot be measured. No outcomes feed a combined score.
 
 With `since` and `format="json"`, `record` returns the same text plus the shown verdicts, unsampled
 episode timestamps (`left_out`), and `next_since`. Verdicts from the last two seconds remain for a later
