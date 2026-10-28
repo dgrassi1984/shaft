@@ -56,6 +56,23 @@ notes/        its own work
 
 ## Measuring improvement and autonomy
 
+Before a live cycle calls `declare_intent`, its prompt shows the inbox, the operator briefing (`BRIEFING`) and
+the handoff (`HANDOFF`). The briefing is a local file written by the instance's own scheduled watchers, with no
+mail or calendar call during prompt construction. The operator's world is a goal source beside the improvement
+plan and goals.md. A briefing item has origin `operator` only when a message or conversation backs the request;
+otherwise it has origin `self`. The judge still checks the cited origin.
+
+`finish_cycle` accepts optional `unfinished` (an array of strings) and `next_action` (`{action, revise_if}`).
+They are stored in the episode's `finish` record. The episode's top-level `completed` array comes from successful,
+state-changing tool-log calls, never from `what_happened`. The classification is kept in template `shaft/tools.py`.
+Reads, searches, controls, errors, held calls and repeat refusals are excluded. Plugins and shell commands count
+as opaque invocations, without interpreting their output as evidence of a specific write or commit. HTTP calls
+count when their method can change state or they save a response; `history` counts when it restores a file.
+At most eight calls are kept, in call order, as `tool: args`, with argument values cut at 80 characters and each
+summary cut at 240. The prompt shows each cycle's date and goal.
+Its handoff survives the next two live cycles only. Old episodes show the fields they have, and a handoff read
+error renders a line. See [template knobs](configuration.md#instance-configenv) for the display switches.
+
 An instance can meet its own success criteria by choosing undemanding goals. The judge therefore also rates **difficulty** (1–5, a fixed scale, from
 what the tool log shows the work required), **novelty** (1–5, against its earlier goals) and **origin**:
 who chose the goal: itself, the operator, or another instance. The judge uses the messages
