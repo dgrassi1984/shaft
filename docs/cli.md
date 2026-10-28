@@ -113,6 +113,12 @@ shaft trial replay <name> <episode-ts>     # replay one past cycle once with the
 shaft trial work                           # run what may run now (the scheduler does this)
 ```
 
+Operator pauses lasting `SHAFT_PAUSE_ALERT_HOURS` (default 3, 0 = off) appear in `shaft alerts`, `shaft top` and the
+web overview. Each has a stable `pause:<name>:<since>` id and the resume command; a global pause names all instances
+and uses `shaft resume`. Instance self-pauses do not raise these alerts. The web service also pushes each long
+operator pause once to paired devices, opening `/overview`, and saves pushed ids in
+`.supervisor/web/pause-alerts.json`. Resuming removes the alert and drops its saved push id on the next loop.
+
 `shaft distinct` asks the instance and the bare base model the same four personal questions and
 has the judge pick which answer is the instance's. An instance is easy to spot when it cites its
 journal, goal IDs or PR numbers, so `--strict` also has the judge rewrite all eight answers,

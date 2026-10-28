@@ -93,6 +93,11 @@ base rate moved it.
 judge's time if later), oldest first, even for older cycles; a tie in the same second is never split across pages.
 Minute-only timestamps mean `:00`; `T` and space separators are accepted. Use the returned continuation's
 `since` to read the next page. Without `since`, verdicts remain newest first.
+Sleep's `since` + `format="json"` read uses a 24,000-character page budget and cuts each main and second judge's
+reasoning at 600 characters, with a `record(kind='judgments', cycle='YYYY-MM-DD HH:MM')` pointer to the full verdict.
+This code calls the broker directly, so the model tool's 6,000-character result cut does not apply. Text reads and
+reads without `since` keep the 5,500-character budget and full reasoning. Ties may exceed the page budget to avoid
+skipping verdicts with the same timestamp.
 
 The broker operational envelope has the same eight keys in live runs and replays: `calls_used`,
 `calls_max`, `cloud`, `coder`, `trials`, `probation`, `next_sleep`, `next_wake`. Replays reconstruct

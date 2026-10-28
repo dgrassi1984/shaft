@@ -17,7 +17,7 @@ import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from . import browser, egress, pyenv
+from . import browser, core, egress, pyenv
 from .core import (SUP_DIR, calendar_grants, disabled_tools, dollars, git, instance_config, instance_names,
                    instance_root, journal_entries, knob, list_beneath, mail_grants, paused, safe_read, shared_folder)
 from . import selfhosted
@@ -382,6 +382,16 @@ def extras(snap: dict) -> dict:
     return snap
 
 
+def pause_alert(pause: dict) -> dict:
+    """One stable, dismissable operator reminder shared with web pushes (2026-10-28, A1)."""
+    name, since = pause["name"], pause["since"]
+    who = "all instances have" if name == "all" else f"{name} has"
+    resume = "shaft resume" + ("" if name == "all" else f" {name}")
+    return {"id": f"pause:{name}:{since:%Y-%m-%dT%H:%M}",
+            "text": f"{who} been paused by the operator for {pause['hours']:.0f} h "
+                    f"(since {since:%m-%d %H:%M}) — {resume}"}
+
+
 def alerts(snap: dict | None = None, now: datetime | None = None, cost: dict | None = None) -> list[dict]:
     """What needs the operator: a service down, a cap at 80% or more, judge spend past its alert line, and
     failures in the supervisor log of the last ALERT_HOURS hours. Each has a stable id, so it can be dismissed.
@@ -411,6 +421,7 @@ def alerts(snap: dict | None = None, now: datetime | None = None, cost: dict | N
     for line in _log_failures():
         if line[1:20] >= since:
             out.append({"id": log_alert_id(line), "text": line[12:20] + line[21:200]})
+    out.extend(pause_alert(p) for p in core.long_pauses(now))
     return out
 
 

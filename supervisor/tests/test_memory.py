@@ -145,7 +145,7 @@ class SleepConsolidationTest(unittest.TestCase):
 
     def test_digests_are_kept_shown_and_searchable(self):
         self.assertEqual(self.run_tool("write_digest", text="Built the weather plugin; slept well."), "digest written")
-        cfg = mock.Mock(NAME="shaft", OPERATOR_NAME="the operator", CONTEXT_JOURNAL_CHARS=1000)
+        cfg = mock.Mock(NAME="shaft", OPERATOR_NAME="the operator", CONTEXT_JOURNAL_CHARS=1000, GOALS_CHARS=12000)
         self.assertIn("Built the weather plugin", prompts.system_prompt(State(self.root), cfg, "m"))
         with mock.patch.dict(os.environ, {"SHAFT_EMBED_URL": ""}):
             self.assertEqual(memory.search(self.root, "weather plugin")[0].source, "memory/digests.md")

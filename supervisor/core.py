@@ -230,6 +230,9 @@ CYCLE_TIMEOUT_S, CYCLE_SRC = knob(
 SLEEP_TIMEOUT_S, SLEEP_SRC = knob(
     "SHAFT_SLEEP_TIMEOUT_S", "5400", positive_int, "seconds the nightly sleep (consolidation) may run; nobody is "
     "waiting for it", group="Runs and conversations")
+PAUSE_ALERT_HOURS, _ = knob(
+    "SHAFT_PAUSE_ALERT_HOURS", "3", whole, "hours an operator pause may last before an alert; 0 = off",
+    group="Runs and conversations", services=("runs", "web"))
 # 8780: SHAFT's own Bonsai 2 server (supervisor/bonsai_server.py); Atomic Chat's 1337 is no longer used.
 LLM_PORTS, PORTS_SRC = knob(
     "SHAFT_LLM_PORTS", "8780", ports, "the local model servers' ports a run's sandbox may reach (the first is SHAFT's "
@@ -353,6 +356,34 @@ def instance_names() -> list[str]:
 
 def paused(name: str) -> bool:
     return (SUP_DIR / "paused").exists() or (SUP_DIR / f"paused-{name}").exists()
+
+
+def long_pauses(now: datetime | None = None) -> list[dict]:
+    """Operator flags past the alert threshold, excluding instance self-pauses (2026-10-28, A1): a forgotten
+    operator pause has no expiry. Old or damaged flag contents fall back to their file's modification time."""
+    if not PAUSE_ALERT_HOURS:
+        return []
+    now = now or datetime.now()
+    if now.tzinfo is not None:
+        now = now.astimezone().replace(tzinfo=None)
+    out = []
+    for flag in sorted(SUP_DIR.glob("paused*")):
+        if flag.name != "paused" and not flag.name.startswith("paused-"):
+            continue
+        try:
+            try:
+                since = datetime.fromisoformat(flag.read_text().strip())
+            except (ValueError, UnicodeError):
+                since = datetime.fromtimestamp(flag.stat().st_mtime)
+            if since.tzinfo is not None:
+                since = since.astimezone().replace(tzinfo=None)
+        except OSError:                          # resumed while this snapshot was read
+            continue
+        hours = (now - since).total_seconds() / 3600
+        if hours >= PAUSE_ALERT_HOURS:
+            out.append({"name": "all" if flag.name == "paused" else flag.name[7:],
+                        "since": since, "hours": hours})
+    return out
 
 
 def set_paused(name: str | None, enabled: bool, *, reason: str = "the operator") -> None:
