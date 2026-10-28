@@ -258,6 +258,7 @@ def complete(instance: str, body: dict, secrets: dict, remembered: dict[str, lis
 
 def _record(instance: str, model: str, tokens_in, tokens_out, usd: float, started: float, stop, error,
             cache: dict | None = None) -> None:
+    ledger.record_charge(round(usd, 6))
     USAGE.parent.mkdir(parents=True, exist_ok=True)
     with USAGE.open("a") as f:
         f.write(json.dumps({"ts": datetime.now().isoformat(timespec="seconds"), "instance": instance, "model": model,

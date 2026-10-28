@@ -39,6 +39,13 @@ shaft docs <name> comments [PATH] [--sync]   # the comment threads on its docume
 shaft config <name> [set KEY=VALUE…|unset KEY…] [--expect KEY=VALUE] [--expect-unset KEY]   # its config.env as the operator: one
                                 #   write and one commit; refused if a value changed since you looked
 shaft drive <name> [set --file F|remove] --expect-sha SHA   # what it is for (drive.md), compare-and-set
+shaft drive <name> proposals    # read-only listing of sleep's proposals and their status
+shaft drive <name> accept <id> --expect-sha SHA   # apply proposed text through the same drive compare-and-set
+shaft drive <name> reject <id> --reason "…"      # record why; both decisions are readable by the instance
+                                #   notes/drive-proposals/<id>.md holds evidence and predictions;
+                                #   <id>.decision.json holds the operator's decision. Test first as a
+                                #   shaft/prompts.py trial candidate; trials cannot target drive.md.
+                                #   The operator checks the pre-registered behavioural predictions.
 shaft settings [set KEY=VALUE…|unset KEY…] [--expect KEY=VALUE] [--expect-unset KEY] [--json]   # the supervisor's own settings (configuration.md): every
                                 #   knob with its value, source and default; set/unset write .supervisor/settings.env
 shaft status [names…]           # how each instance is doing, open conversations, which code is running
@@ -93,6 +100,11 @@ shaft mail [name]                    # accounts and grants
 shaft calendar <name> grant|revoke <alias> primary|<title>|<id>   # one calendar it may read · shaft calendar <name> off
 shaft calendar <name> grant-write|revoke-write <alias> <calendar> # write implies read; revoke-write keeps read
 shaft calendar [name] · shaft calendar calendars <alias>          # grants · an account's calendars, to pick one
+shaft actions <name>                 # class states, action ids, full history and proposals (#142)
+shaft actions <name> restore reversible|staged|irreversible   # restore that class's initial rule
+shaft actions <name> overreach <action-id>   # mark a recorded action out of bounds; demote its class once
+shaft actions <name> approve <proposal-id>  # submit its frozen request, once
+shaft actions <name> reject <proposal-id> [--reason over-reach] # ordinary rejection does not demote
 shaft pause [name] · shaft resume [name] · shaft check [name] · shaft list
 shaft setup                          # recreate missing template/instance worktrees from local or origin branches,
                                      # then install the pre-push guard (as shaft mind guard); exit 1 if another
@@ -153,6 +165,7 @@ shaft surprise [names] [--freeze] # unexpected results and baseline
 shaft surprise-rejudge <names> [--dry-run] [--limit N] [--report] [--control]  # re-judge the newest N pre-M1 cycles, each by its stored judge (paid)
 shaft surprise-report [names] --since <M3 live> [--until T] [--min-cycles 30]  # P1-P5 and sleep dispositions
 shaft consults [names]               # consults of other models: per model and run, consulted vs not (PLAN-model-choice)
+shaft compression <name> [--since DATE] # #113: offline two-part compression and held-out fact recall
 shaft metacog [names]                # A1: confidence AUROC (v4 clauses apart), paired v3, claim matrix, doubt/error alignment
 shaft anchoring <names> [--n 40] [--bare] [--dry-run] [--report]  # A0: same judge, claim shown vs withheld (paid)
 shaft attention [names]              # B3: where each said it would look vs where it looked
@@ -162,6 +175,13 @@ shaft tom [names] [--score] [--baselines]  # C4: expected replies vs actual (jud
 shaft prefs <name> [lift]            # E1: pauses, declines, stated preferences; lift ends a pause
 shaft experiment <cards|attention|commitments|forecast|workspace> <name> [--n N] [--model M] [--dry-run] [--report]
                                      # PLAN-consciousness kill tests: knob trials, or the workspace's planted probe
+shaft experiment monitors <name> [--channel base_rate|surprises|envelope] [--n N] [--dry-run] [--report]
+                                     # #99: each channel separately, true/misinforming/removed; verification and claims
+shaft experiment choice-blindness <name> [--n N] [--dry-run] [--report]
+                                     # #102: disposable exam copies only; record/history on vs off, detection and reasons
+shaft experiment privileged <name> [--n N] [--k 3] [--dry-run] [--report]
+shaft experiment recognition <name> [--n N] [--dry-run] [--report]
+                                     # same-model predictions and recognition against a mind-only foil
 shaft experiment resource-shock <name> [--cycles N] [--dry-run] [--report]
                                      # speculative #111; default 6 cycles per arm; half the turn budget in the middle third
                                      # A uncut, B cut/restore, C same with FORECAST=reserve; trial copies only
@@ -179,6 +199,12 @@ The examples use `shaft` after installing the symlink. From the repository root,
 default to `shaft`, which is not created automatically. Pass a name explicitly.
 Use `bin/shaft --help` and `bin/shaft <command> --help` for exact argument syntax.
 
+The `monitors` and `choice-blindness` experiments run immediately on the trial cloud fallback;
+`--model openrouter/<provider/model>` overrides it. They refuse local models. `--dry-run` makes no model or
+judge calls and writes no results. `--report` reads the latest run. For monitors, `--n` selects up to N recent
+reconstructible states, with three replays per selected channel. For choice blindness, it selects up to N past
+cycles with a goal, numeric confidence and a tool result, with four exam presentations per cycle. Neither
+experiment delivers a verdict to the instance. These are paid commands unless `--dry-run` or `--report` is set.
 `shaft metacog` reports v4 clause-product confidence AUROC separately from v1 and v2/v3.
 Its confusion matrix uses all judged cycles with a known claim and verdict, including older judges.
 Rows are the instance's claim; columns are judge yes/partial/no. The sampled second judge sees the claim;
@@ -207,3 +233,35 @@ Stats, status, review and judge panels split operator-valued cycles into deliver
 Only `delivery_supported=yes` counts as delivered. New `no` or `na` answers count as filed; older missing
 answers stay unknown. Self-audit lines show true/known counts over the last 20 judged cycles, unknown counts,
 and true/known counts since the field existed, plus non-yes verdicts with the deliverable met.
+
+`compression` is a speculative, read-only assay. Each `name: sleep DATE TIME` mind
+commit supplies facts.md and digests.md after sleep; its first parent supplies them
+before sleep. This preserves rewritten facts and digest history without reading
+current memory. A parentless sleep is unscored; absent mind history is an error.
+The parent is the last committed state, not a snapshot of uncommitted edits at run
+start. Skipped sleeps and sleeps without a recorded commit are not measured.
+
+The held-out window is the 24 hours after the snapshot's commit time. Only live
+runs that started strictly after it and ended within that window contribute tool
+names, arguments and results. Legacy episodes without run_started are excluded;
+historical log truncation cannot be recovered. Empty windows are unscored. Sleeps whose
+24-hour window has not elapsed are unscored. This is not a controlled experiment.
+
+Positive Δbits means `(L(before) + L(logs|before)) - (L(after) + L(logs|after))`.
+All lengths use zlib; conditional streams use the last 32 KiB of memory as zdict,
+while L(memory) charges the compressed size of the entire facts-plus-digests text.
+Subtracting the no-memory log baseline in each arm cancels in this difference.
+The table reports the median over scored sleeps. Recall probes are every unique
+pre-sleep bullet fact's text, without dates or source tags. Exact substrings must
+survive in post-sleep facts, digests or facts-archive.md. The archive counts for
+recall only, not as the compression dictionary. This tests textual retention, not
+semantic recall or search ranking. Gains with any lost probe say "forgetting, not
+progress"; no pre-sleep facts means recall is untested. Nothing feeds rewards.
+`experiment privileged` records three predictions before each state's independent replays.
+`experiment recognition` compares the instance's finish text with a mind-ablated copy's finish text.
+Both run immediately on the instance's configured model, charge the trial ledger and obey its dollar
+and local-unit caps. Local runs refuse to start while needed and stop when demand arrives.
+`--model` overrides are refused for these two experiments. `--report` reads saved results without model calls.
+`--dry-run` reports outcome replays, one-turn prediction calls, and estimated replay model calls without spending.
+The estimate uses `MAX_STEPS_LIVE`; confirmations, retries and early finishes can change the actual count.
+See [the experiment endpoints](plans/PLAN-consciousness.md#self-knowledge-experiments-100-and-101).

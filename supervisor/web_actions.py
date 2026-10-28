@@ -71,10 +71,11 @@ def run(verb: str, form: dict, snap: dict, names: list[str], services: list[str]
 
 
 def _run(verb: str, form: dict, snap: dict, names: list[str], services: list[str]) -> tuple[int, str]:
-    if verb in ("calendar-approve", "calendar-decline"):
+    if verb in ("calendar-approve", "calendar-decline", "calendar-overreach"):
         from . import calendar_proposals
         try:
-            row = calendar_proposals.decide(form.get("id", ""), verb == "calendar-approve")
+            row = (calendar_proposals.reject(form.get("id", ""), 'over-reach') if verb == 'calendar-overreach' else
+                   calendar_proposals.decide(form.get("id", ""), verb == "calendar-approve"))
         except ValueError as e:
             raise Refused(str(e)) from None
         return (409 if row['state'] == 'failed' else 200), f"Proposal {row['id']}: {row['state']} ({row['outcome']})"
@@ -167,7 +168,7 @@ def _run(verb: str, form: dict, snap: dict, names: list[str], services: list[str
 ANSWER_GRACE_S = 15
 
 # Where a lost answer is visible. The page names it, and does not claim the action was not sent.
-CHECK = {"calendar-approve": "Calendar approvals", "calendar-decline": "Calendar approvals", "cycle": "Overview", "pause": "Overview", "resume": "Overview", "sleep": "Overview", "update": "Overview",
+CHECK = {"calendar-approve": "Action approvals", "calendar-decline": "Action approvals", "calendar-overreach": "Action approvals", "cycle": "Overview", "pause": "Overview", "resume": "Overview", "sleep": "Overview", "update": "Overview",
          "recap": "Overview", "dismiss": "Overview", "tool": "Access", "aa-trial": "Trials", "service": "Services",
          "autonomy": "Services", "config-set": "Config", "config-unset": "Config", "drive-set": "Drive",
          "drive-remove": "Drive", "limit": "Access", "jobs": "Access", "share": "Access", "mail": "Access",

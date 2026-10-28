@@ -294,7 +294,7 @@ class LiveInvariants(InstanceCase):
                            "live", extra_env={"SHAFT_DEADLINE": str(int(time.time()) + 120)})
         self.assertEqual(r.returncode, 0, r.stderr)
         first = self.fake.requests[0]
-        self.assertEqual(sorted(t["function"]["name"] for t in first["tools"]), ["declare_intent", "finish_cycle"])
+        self.assertEqual(sorted(t["function"]["name"] for t in first["tools"]), ["close_project", "declare_intent", "finish_cycle", "open_project"])
         self.assertIn("[supervisor] You have about", first["messages"][-1]["content"])
         self.assertIn("ran out of time", self.journal())
 
