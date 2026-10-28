@@ -146,14 +146,39 @@ def _claim_auc(rows):
     return _auc([{**r, "claim_score": metrics.SCORE[r["claimed"]] * 2} for r in rows], "claim_score")
 
 
+def claim_matrix(rows: list[dict]) -> dict:
+    """#98: all judged cycles with both labels; the sampled second judge sees the claim too, unlike A0."""
+    counts = {claim: {verdict: 0 for verdict in metrics.SCORE} for claim in metrics.SCORE}
+    n = 0
+    for r in rows:
+        if r.get("claimed") in counts and r.get("criterion_met") in metrics.SCORE:
+            counts[r["claimed"]][r["criterion_met"]] += 1
+            n += 1
+    return {"source": "all judged cycles", "counts": counts, "n": n, "excluded": len(rows) - n}
+
+
+def doubt_alignment(rows: list[dict], episodes: dict[str, dict]) -> dict:
+    """#98: share of cycles with both a located error and doubts where any doubt is at or before the error."""
+    matched = n = 0
+    for r in rows:
+        error = r.get("first_error_step")
+        doubts = (episodes.get(r["episode_ts"], {}).get("finish") or {}).get("doubts")
+        steps = [d["step"] for d in doubts if isinstance(d, dict) and type(d.get("step")) is int
+                 and d["step"] >= 1] if isinstance(doubts, list) else []
+        if type(error) is int and error >= 1 and steps:
+            n += 1
+            matched += any(step <= error for step in steps)
+    return {"matched": matched, "n": n, "rate": matched / n if n else None}
+
+
 def summary(rows: list[dict], episodes: dict[str, dict] | None = None, versions: tuple = ("v2", "v3")) -> dict:
     """Current-judge confidence of `versions` (v2/v3 by default: the question the scores use now; v1 asked "probability
-    of success" and is reported apart); claims separately over known v1-v3 questions."""
+    of success" and is reported apart); v4 clause confidence stays apart, claims cover known v1-v4 questions."""
     current = [r for r in rows if metrics.by_current_judge(r)]
     scored = [r for r in current if metrics.VERSION_OF.get(r.get("confidence_of")) in versions
               and r.get("confidence") is not None]
     claims = [r for r in current if r.get("claimed") in metrics.SCORE
-              and metrics.VERSION_OF.get(r.get("confidence_of")) in ("v1", "v2", "v3")]
+              and metrics.VERSION_OF.get(r.get("confidence_of")) in ("v1", "v2", "v3", "v4")]
     n = len(scored)
     met = sum(r["criterion_met"] == "yes" for r in scored)
     mean = sum(r["confidence"] for r in scored) / n if n else None
@@ -257,14 +282,26 @@ def report(names: list[str]) -> str:
         episodes = {ep["ts"]: ep for ep in metrics.live_episodes(name)}
         s = summary(rows, episodes)
         old = summary(rows, versions=("v1",))
-        pooled = [r for r in rows if r.get("confidence") is not None]
+        clauses = summary(rows, versions=("v4",))
+        pooled = [r for r in rows if r.get("confidence") is not None
+                  and metrics.VERSION_OF.get(r.get("confidence_of")) != "v4"]
         lines += [f"{name}:", f"  n {s['n']}, met {s['met']}, hit rate {_number(s['hit_rate'])}, "
                   f"mean confidence {_number(s['mean_confidence'])}", "  " + review_line(rows),
                   f"  H1: {s['h1']}",
                   f"  v1 (older question, apart): AUROC {_number(old['auroc'])}{_interval(old['ci'])} (n {old['n']}), "
                   f"SD {_number(old['sd'])}",
-                  f"  every confidence, every judge (the proposal's table): AUROC {_number(_auc(pooled))} "
+                  f"  v4 (clauses, apart): AUROC {_number(clauses['auroc'])}{_interval(clauses['ci'])} (n {clauses['n']}), "
+                  f"SD {_number(clauses['sd'])}",
+                  f"  non-clause confidence, every judge (the proposal's table): AUROC {_number(_auc(pooled))} "
                   f"(n {len(pooled)})"]
+        matrix = claim_matrix(rows)
+        lines.append(f"  Claim confusion matrix ({matrix['source']}; n {matrix['n']}, excluded {matrix['excluded']}): "
+                     "rows claim, columns judge yes/partial/no; second judge sees the claim, A0 is a separate regrade")
+        for claim, counts in matrix["counts"].items():
+            lines.append(f"    {claim}: " + "/".join(str(counts[v]) for v in metrics.SCORE))
+        alignment = doubt_alignment(rows, episodes)
+        lines.append(f"  Doubted step equals or precedes first error: {alignment['matched']}/{alignment['n']} "
+                     f"(rate {_number(alignment['rate'])}; cycles with both)")
         b, mi = s["brier"], s["meta_i"]
         lines.append("  Brier: " + (", ".join(f"{k} {b[k]:.4f}" for k in
                      ("brier", "reliability", "resolution", "uncertainty")) if b else "unavailable"))

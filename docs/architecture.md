@@ -140,6 +140,29 @@ declare_intent; the supervisor overwrites it after each judged live cycle and ne
 instance changes no score. A folder or a link the instance puts at either file is refused and logged; the rest of
 the after-cycle work, probation included, still runs. The views show a cycle's confidence as `90 → 60` where the
 base rate moved it.
+
+`CONFIDENCE_MODE=confirm` keeps this flow. `noconfirm` records v2 without showing a base rate or offering
+`confirm_confidence`. `clauses` records 1-4 `{clause, confidence}` entries and a null confidence in the episode.
+When `judge_pending` copies the intent into a judgment row, the supervisor computes
+`100 * product(clause.confidence / 100)`. All clauses must hold; this rule assumes independence.
+The instance never combines the probabilities. The judgment keeps the clauses and labels the result
+`confidence_of="criterion_met=yes;clauses"` (v4). Calibration and metacog AUROC report v4 apart from v1-v3;
+`base_rates` stores its counts separately under `clauses`, outside the bands shown by the confirm flow.
+The live prompt names the resolved mode. The arms await a later trial; no instance is switched here.
+
+`finish_cycle` can record `doubts: [{step, what}]`, using 1-based indices in the original tool log.
+They never change its `criterion_met` claim. Fresh judge verdicts require `first_error_step`, the earliest step
+whose result or use made the outcome fail, and `first_error`, a one-sentence explanation. The step is 0
+when the criterion was met or no step is at fault (a plain integer: the Claude judge receives the schema as a
+structured-output format). These fields never change the verdict; old judgments stay valid.
+Judges retain original step numbers when confirmation calls are withheld. `record(kind="judgments")` exposes
+the error fields for the instance to read.
+
+An instance could build a `postmortem` plugin that reads `record(kind="judgments")` for a failed cycle's
+`first_error_step` and `first_error`, looks up that step in the tool log and its own `finish.doubts`, and puts
+the located error into the next attempt at the same goal. This is an idea, not an installed plugin.
+Use `trial` to compare retries with and without the located error; keep it only if more retries succeed.
+
 `record(kind='judgments', since=...)` reviews verdicts by when they were judged (`judged_at`, or the second
 judge's time if later), oldest first, even for older cycles; a tie in the same second is never split across pages.
 Minute-only timestamps mean `:00`; `T` and space separators are accepted. Use the returned continuation's
@@ -272,6 +295,12 @@ replays never act on them. `shaft metacog` separates confidence's discrimination
 CI, resolution, meta-I) from its bias, by domain from the tool log, and tests v3 for non-inferiority; `shaft anchoring`
 has the same judge grade sampled cycles with the instance's claim shown, re-asked and withheld, to measure how much
 the judge follows the claim.
+
+`shaft metacog` also reports a claim-versus-verdict confusion matrix over all judged cycles with both labels,
+including older judges, with claim rows and judge yes/partial/no columns. The sampled second judge sees the
+claim too; A0's claim-withheld sample is a separate anchoring regrade, so this matrix uses all judged cycles
+and says so. It also reports the share of cycles with both doubts and a located error where any doubted step
+equals or precedes `first_error_step`; missing doubts or a first_error_step of 0 (none) do not enter the denominator.
 
 The **capability battery** is a fixed yardstick: held-out tasks the instances never see (coding with hidden
 tests, research against a frozen key, recall of their own older journal entries, self-knowledge checked

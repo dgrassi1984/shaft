@@ -179,6 +179,7 @@ reviewed ref was `refs/heads/publish-prep-template`.
 | `STALE_LINE_HOURS` | `24` | uses built-in default |
 | `STALE_GOAL_HOURS` | `48` | uses built-in default |
 | `CRITERION_CHARS` | `600` | uses built-in default |
+| `CONFIDENCE_MODE` | `'confirm'` | uses built-in default |
 | `GOALS_CHARS` | `12000` | uses built-in default |
 | `BRIEFING` | `'notes/briefing.md'` | `notes/briefing.md` |
 | `HANDOFF` | `'on'` | `on` |
@@ -202,6 +203,15 @@ call finishes normally. Set either knob to 0 to disable that budget.
 `queue_for_next_cycle(task, why)` puts unfinished work in the instance's own inbox for its next live cycle.
 `CRITERION_CHARS` limits `declare_intent.success_criterion` in characters. An overlong criterion is refused
 with its length and the limit, asking for the deliverable's check rather than ritual clauses.
+
+`CONFIDENCE_MODE` accepts `confirm` (default), `clauses`, or `noconfirm`; the live prompt names the resolved mode.
+`confirm` keeps the existing declare and base-rate confirmation flow. `clauses` asks for 1-4 success-criterion
+clauses, each with an integer confidence 0-100. The template records them with a null combined confidence;
+the supervisor multiplies their probabilities when it writes the judgment, assuming independence because
+all clauses must hold. This v4 confidence stays apart from v1-v3 in calibration, AUROC and base rates.
+Both `clauses` and `noconfirm` omit the base rate and `confirm_confidence`; `noconfirm` records a single v2 confidence.
+These arms are available for a later trial. No instance configuration changes automatically. If the Thelos trial
+selects `noconfirm`, the operator sets it in Thelos's `config.env`. Invalid values follow the usual warning and fallback.
 
 `LLM_PRESENCE_PENALTY` uses tenths (15 means 1.5). `MAX_STEPS_TALK=0` removes the
 conversation step limit. `WAKE_INTERVAL_MINUTES=0` disables periodic wakes; positive

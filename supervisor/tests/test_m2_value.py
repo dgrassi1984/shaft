@@ -19,7 +19,7 @@ VERDICT = {
     "difficulty": 2, "difficulty_reason": "routine", "novelty": 2,
     "value": 3, "value_for": "operator", "value_reason": "a useful result",
     "delivery_supported": "no", "deliverable_met": "yes", "self_imposed_clauses": "not_met",
-    "self_audit": False, "should_have_waited": "na", "expectations": [], "unreported_surprises": [],
+    "self_audit": False, "should_have_waited": "na", "first_error_step": 0, "first_error": "No step is at fault.", "expectations": [], "unreported_surprises": [],
     "reported_surprises_supported": True, "followup_useful": "na",
 }
 
