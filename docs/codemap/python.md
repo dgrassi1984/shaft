@@ -123,6 +123,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_live_goal_choice.py` | `LiveGoalChoiceTest` | — |
 | `supervisor/tests/test_localmodel.py` | `IdleRuleTest`, `ServerIdleExitTest`, `LaunchdTest`, `EnsureTest`, `CallersTest`, `StatusTest` | — |
 | `supervisor/tests/test_m3_talk.py` | `ReplyFirstTest`, `CorrectionsTest` | `tool` |
+| `supervisor/tests/test_m4_context.py` | `StalenessTest`, `OperatorClaimsTest` | — |
 | `supervisor/tests/test_mail.py` | `FakeGmail`, `MailCase`, `EnforcementTest`, `OfferedTest`, `ReplayTest`, `AttachmentTest`, `ConfigTest`, `CliTest`, `TemplatePromptTest` | `ms`, `b64`, `msg`, `git` |
 | `supervisor/tests/test_measurement.py` | `InstanceDirCase`, `CycleValueTest`, `JudgingTest`, `ValueTest`, `JudgeMixTest`, `ModelTest`, `ProbationMeasureTest`, `ChanceOfDropTest`, `BatteryExamCopyTest`, `HiddenTestsTest`, `BatteryScheduleTest`, `BatteryResultsTest`, `BrokerRootTest`, `BatteryEndToEndTest` | `judgment`, `valued_j`, `tree` |
 | `supervisor/tests/test_memory.py` | `FakeEmbedder`, `ImprovementPlanTest`, `RecallTest`, `SleepConsolidationTest`, `SemanticSearchTest` | `concept_vector`, `instance` |
