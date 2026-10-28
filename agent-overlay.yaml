@@ -34,8 +34,9 @@ issues:
   never_set: [wip, milestone]
 
 gate:                            # CONTRIBUTING.md; needs the worktree provisioned per docs/worktrees.md
-  # system python3 on a clean PATH: sandbox-exec refuses an interpreter under ~/.cache/uv (a runner's venv), 2026-10-28
-  - env -u VIRTUAL_ENV PATH=/opt/homebrew/bin:/usr/bin:/bin python3 -m unittest discover -s supervisor/tests -t .
+  # the services' interpreter (launchd plists: python@3.12) on a clean PATH. sandbox-exec refuses one under ~/.cache/uv
+  # (a runner's venv), and under 3.14 test_gate_suite's guarded-read test fails on main as well, 2026-10-28
+  - env -u VIRTUAL_ENV PATH=/opt/homebrew/bin:/usr/bin:/bin /opt/homebrew/opt/python@3.12/bin/python3.12 -m unittest discover -s supervisor/tests -t .
 
 worktree:
   root: ../shaft-<slug>
