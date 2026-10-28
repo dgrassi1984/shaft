@@ -161,7 +161,7 @@ reviewed ref was `refs/heads/publish-prep-template`.
 | `LLM_API_KEY` | `''` | empty |
 | `LLM_TIMEOUT_S` | `900` | `900` |
 | `MAX_TOKENS_REFLECT` | `16384` | `16384` |
-| `MAX_TOKENS_TALK` | `8192` | `8192` |
+| `MAX_TOKENS_TALK` | `16384` | `16384` |
 | `WAKE_INTERVAL_MINUTES` | `120` | `120` |
 | `LLM_CONTEXT_TOKENS` | `262144` | `262144` |
 | `LLM_REASONING_EFFORT` | `'medium'` | `medium` |

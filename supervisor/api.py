@@ -516,10 +516,13 @@ class Handler(BaseHTTPRequestHandler):
                     continue
                 if ev.get("type") in ("content", "turn_end"):
                     answered.set()
+                if ev.get("type") == "error":
+                    errored.set()
                 events.put(ev)
 
         cancelled = threading.Event()
         answered = threading.Event()
+        errored = threading.Event()
 
         def work():
             reply = Reply(model, "api")      # a running cycle of this instance pauses for this reply, then resumes
@@ -542,7 +545,7 @@ class Handler(BaseHTTPRequestHandler):
                 if code == REFUSED:
                     events.put({"type": "error", "message": f"the supervisor refused to start {model}'s run: its "
                                 "code could not be checked (the reason is in the panel's alerts and supervisor.log)"})
-                elif not answered.is_set():   # the agent ended without a reply: say why, never an empty answer
+                elif not answered.is_set() and not errored.is_set():   # keep the agent's own reason if it gave one
                     err = (procs[0].stderr.read() if procs and procs[0].stderr else "")[-800:].strip()
                     events.put({"type": "error", "message": f"{model} stopped without answering (exit {code})"
                                                            + (f": {err}" if err else "")})
@@ -614,7 +617,8 @@ class Handler(BaseHTTPRequestHandler):
                 if t == "heard":
                     heard += 1
                 if t == "error":
-                    error = ev["message"]
+                    if error is None:          # later errors must not mask the cause
+                        error = ev["message"]
                 elif (n := _note(ev)) is not None:
                     notes.append(n)
                     if stream:
