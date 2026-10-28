@@ -16,7 +16,7 @@ VERDICT = {"criterion_met": "yes", "claim_supported": True, "criterion_quality":
            "failure_mode": "", "reasoning": "test passed", "origin": "self", "origin_supported": True,
            "origin_evidence": "own goal", "difficulty": 3, "difficulty_reason": "debugging", "novelty": 2,
            "value": 3, "value_for": "own_capability", "value_reason": "fixed parser", "delivery_supported": "na", "deliverable_met": "yes",
-           "self_imposed_clauses": "none", "self_audit": False, **SURPRISE}
+           "self_imposed_clauses": "none", "self_audit": False, "should_have_waited": "na", "first_error_step": 0, "first_error": "No step is at fault.", **SURPRISE}
 
 
 class SurpriseJudgeTest(unittest.TestCase):

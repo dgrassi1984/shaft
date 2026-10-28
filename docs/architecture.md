@@ -48,6 +48,7 @@ self/         self.md (self-model), personality.md (core/surface, every trait ci
               came from, judged success, calibration, battery scores), calibration.json (written by
               the supervisor: the base rates declare_intent shows)
 memory/       journal.md (append-only), facts.md, people/, messages/, episodes/*.jsonl,
+              corrections.jsonl (append-only operator corrections and their closures),
               verdicts-reviewed.md (when its last finished sleep read the judge's verdicts: the next
               sleep is shown those judged since)
 inbox/        messages waiting for it (from you or other instances)
@@ -126,6 +127,7 @@ Fresh judgments add these fields alongside the existing verdict, rating, value a
 | `deliverable_met` | `yes`, `partial`, `no` | The deliverable itself was produced and correct, apart from self-imposed process clauses. |
 | `self_imposed_clauses` | `met`, `partial`, `not_met`, `none` | Whether clauses that only check or document the instance's own process or records were met. |
 | `self_audit` | boolean | The cycle's main work checked, audited or kept books about its own records, verdicts, claims or checking tools. |
+| `should_have_waited` | `yes`, `no`, `na` | Whether any operator push could have waited for a morning digest; `no` means all pushes were time-critical, `na` means no push. Judged from the tool log, content and timing, never tone or politeness. |
 
 `criterion_met` still grades the whole criterion. Sleep receives these fields through `record(kind="judgments")`;
 a partial/no with `deliverable_met=yes` is not a reason to add a rung to the improvement plan.
@@ -169,6 +171,29 @@ declare_intent; the supervisor overwrites it after each judged live cycle and ne
 instance changes no score. A folder or a link the instance puts at either file is refused and logged; the rest of
 the after-cycle work, probation included, still runs. The views show a cycle's confidence as `90 → 60` where the
 base rate moved it.
+
+`CONFIDENCE_MODE=confirm` keeps this flow. `noconfirm` records v2 without showing a base rate or offering
+`confirm_confidence`. `clauses` records 1-4 `{clause, confidence}` entries and a null confidence in the episode.
+When `judge_pending` copies the intent into a judgment row, the supervisor computes
+`100 * product(clause.confidence / 100)`. All clauses must hold; this rule assumes independence.
+The instance never combines the probabilities. The judgment keeps the clauses and labels the result
+`confidence_of="criterion_met=yes;clauses"` (v4). Calibration and metacog AUROC report v4 apart from v1-v3;
+`base_rates` stores its counts separately under `clauses`, outside the bands shown by the confirm flow.
+The live prompt names the resolved mode. The arms await a later trial; no instance is switched here.
+
+`finish_cycle` can record `doubts: [{step, what}]`, using 1-based indices in the original tool log.
+They never change its `criterion_met` claim. Fresh judge verdicts require `first_error_step`, the earliest step
+whose result or use made the outcome fail, and `first_error`, a one-sentence explanation. The step is 0
+when the criterion was met or no step is at fault (a plain integer: the Claude judge receives the schema as a
+structured-output format). These fields never change the verdict; old judgments stay valid.
+Judges retain original step numbers when confirmation calls are withheld. `record(kind="judgments")` exposes
+the error fields for the instance to read.
+
+An instance could build a `postmortem` plugin that reads `record(kind="judgments")` for a failed cycle's
+`first_error_step` and `first_error`, looks up that step in the tool log and its own `finish.doubts`, and puts
+the located error into the next attempt at the same goal. This is an idea, not an installed plugin.
+Use `trial` to compare retries with and without the located error; keep it only if more retries succeed.
+
 `record(kind='judgments', since=...)` reviews verdicts by when they were judged (`judged_at`, or the second
 judge's time if later), oldest first, even for older cycles; a tie in the same second is never split across pages.
 Minute-only timestamps mean `:00`; `T` and space separators are accepted. Use the returned continuation's
@@ -179,11 +204,25 @@ This code calls the broker directly, so the model tool's 6,000-character result 
 reads without `since` keep the 5,500-character budget and full reasoning. Ties may exceed the page budget to avoid
 skipping verdicts with the same timestamp.
 
-The broker operational envelope has the same eight keys in live runs and replays: `calls_used`,
-`calls_max`, `cloud`, `coder`, `trials`, `probation`, `next_sleep`, `next_wake`. Replays reconstruct
+The broker operational envelope has the same keys in live runs and replays: `calls_used`,
+`calls_max`, `cloud`, `consult`, `coder`, `trials`, `probation`, `next_sleep`, `next_wake`, `pushes`.
+`pushes` holds today's count and `SHAFT_PUSH_BUDGET` (default 6), or null when the budget is 0.
+The template shows "pushes to the operator today: N of budget B"; `send_message` to the operator
+returns the count after delivery too. A push is an instance-to-operator message with `alert` in the
+supervisor's message log. Counts use the supervisor's local calendar day and survive inbox archiving.
+The budget is measured, never enforced. Replays reconstruct
 the instance's spend and trial starts strictly before the cycle start on that date, probation cycles
 judged before it, and the next scheduled sleep and wake. They carry no replay flag. Closed probation
 entries cannot be reconstructed; see [trial fidelity gaps](plans/PLAN-trials.md#8-known-fidelity-gaps-equal-for-both-arms-so-the-comparison-stays-fair).
+
+`self/stats.md`, `shaft stats` and review report pushes today and each of the last seven calendar days,
+the share of judged push cycles with `should_have_waited=yes` (excluding `na` and ungraded old rows),
+and operator reactions separately. Reaction counts use the next operator message to that instance or
+`start talk`/`start api` in the supervisor log: within 1 hour, 1–24 hours, or no response recorded yet
+within 24 hours as of the report. Several pushes can precede the same response; this measures sequence,
+not causation or approval. API starts include web and Telegram conversations. No timestamped per-message
+read or dismissal event exists: inbox `read` is inferred from current file location, and panel dismissals
+store alert IDs only, so a dismissal within a minute cannot be measured. No outcomes feed a combined score.
 
 With `since` and `format="json"`, `record` returns the same text plus the shown verdicts, unsampled
 episode timestamps (`left_out`), and `next_since`. Verdicts from the last two seconds remain for a later
@@ -208,6 +247,63 @@ section "My expectations vs what happened", counts each sleep's dispositions, an
 acceptance window (`shaft surprise-report`). Nothing rewards being surprised, or not being surprised.
 
 
+Operator corrections (#135) are extracted during the conversation writeup in `shaft/recovery.py`.
+The writeup reads every saved turn in bounded transcript pages and offers `record_correction` before
+it writes the journal entry. Open conversations remain excluded. Each correction in
+`memory/corrections.jsonl` gets an id such as `k1028-1405-1`, its original timestamp and conversation id,
+what was wrong, and what the operator said. The model links the same correction within seven days
+with `reopens`. Live and sleep prompts show open items and the seven-day reopened count, including
+an error line if the ledger cannot be read.
+
+Facts carry their valid_from in the existing `- [YYYY-MM-DD HH:MM]` date (#143); older
+unsuffixed facts need no migration. `remember(fact, source, supersedes=...)` identifies exactly one
+current fact by its date stamp and optional opening words. Missing or ambiguous matches name the
+candidates and change neither file. The old line moves to append-only `memory/facts-archive.md`
+under `## Retired (superseded) <now>`, annotated with the replacement date and evidence; the new
+line names the date it supersedes. Consolidation with `rewrite_facts` retains dates and sources.
+
+Sleep step 11 checks current facts against newer facts and the period's episodes, even without an
+explicit change announcement. It receives at most 15 deterministic candidate pairs sharing three
+leading significant words, a capitalized name/key, or "Today is"; both dates are shown. Candidates
+are hints, not proof. A read/parse error becomes a prompt line and does not stop the sleep.
+The sleep-only `retire_fact(fact, evidence)` can retire without replacement. Evidence is an existing
+`log:<episode ts>[#step]`, a newer current fact's date (optionally `fact:<date>` and opening words),
+a fetched `web:<url>`, or `operator`. Log/fact evidence must be later than the retired fact;
+web/operator observations use the current time. Log and web sources use `remember`'s validation.
+Retirements and supersessions are recorded in tool results for the judge, and step 11 requires
+them with evidence in the sleep journal entry. The tools do not write separate journal notes.
+Prompts show current facts; retired facts remain available through `search_memory`.
+
+Sleep step 10 reviews `shaft/staleness.py` findings (#138). It scans self/goals.md and self/self.md
+for ISO or English/Italian day-month dates older than `STALE_LINE_HOURS` (24). Dates without a year
+use their latest occurrence at local midnight. Active goal bullets count as touched when their full
+normalized text, or six consecutive words, appears in live intent, finish or tool arguments.
+With an operator user turn in the last `STALE_GOAL_HOURS` (48), goals with no touch in that window
+are listed with their last recorded touch, or explicitly unknown. Tool results do not count.
+Both knobs accept 0 to disable their check. Read failures produce a line and sleep continues.
+The sleep journal must record each finding and its fix, retirement or reason to keep it.
+
+Operator claims about the instance's behaviour/history (#139) must be checked against record/history
+or episodes before becoming self-model lines or remembered facts. Otherwise each claim carries
+"operator's hypothesis, not verified (YYYY-MM-DD)". Contradictions are explained in the reply with
+evidence; preferences and instructions are exempt. Talk, API, writeup and sleep share this guidance.
+`update_self_model` accepts optional `source` and `checked_with`. With `source=operator`, new body
+lines require the dated marking or a reference to an existing episode (`log:<ts>`) or a successful
+record/history call in this run (`record:<JSON arguments>` or `history:<JSON arguments>`).
+This validates provenance, not whether the evidence supports the claim. Calls without source retain
+their behaviour. `remember` keeps its existing source contract: its preference-versus-self-fact
+distinction is enforced in the prompt because deterministic code cannot classify that meaning.
+The writeup currently offers only correction controls, so unchecked transcript claims must remain
+marked hypotheses there.
+
+Sleep step 9 asks for `close_correction(id, closed_by, evidence)`: `fact` after a fact change citing
+the correction, `code` after a commit or plugin change, `test`, or `not_accepted` with a reason.
+Evidence names the episode, commit or fact. An omitted closure leaves the item open.
+The supervisor reads the ledger without importing template code. `panel.alerts` emits the stable id
+`correction:<instance>:<id>` after more than `SHAFT_CORRECTION_ALERT_CYCLES` live cycles since the correction.
+The default is 6, and 0 disables the alert. A missing, unreadable or malformed ledger raises no alert.
+
+
 **Self-knowledge measured against the record** ([PLAN-consciousness](plans/PLAN-consciousness.md)). Functional
 properties only, each scored against what the instance does, none feeding probation or a reward, each agent-side
 mechanism behind a knob its kill test flips (`shaft experiment`). A live cycle's **workspace** (`shaft/workspace.py`)
@@ -230,6 +326,12 @@ replays never act on them. `shaft metacog` separates confidence's discrimination
 CI, resolution, meta-I) from its bias, by domain from the tool log, and tests v3 for non-inferiority; `shaft anchoring`
 has the same judge grade sampled cycles with the instance's claim shown, re-asked and withheld, to measure how much
 the judge follows the claim.
+
+`shaft metacog` also reports a claim-versus-verdict confusion matrix over all judged cycles with both labels,
+including older judges, with claim rows and judge yes/partial/no columns. The sampled second judge sees the
+claim too; A0's claim-withheld sample is a separate anchoring regrade, so this matrix uses all judged cycles
+and says so. It also reports the share of cycles with both doubts and a located error where any doubted step
+equals or precedes `first_error_step`; missing doubts or a first_error_step of 0 (none) do not enter the denominator.
 
 The **capability battery** is a fixed yardstick: held-out tasks the instances never see (coding with hidden
 tests, research against a frozen key, recall of their own older journal entries, self-knowledge checked
