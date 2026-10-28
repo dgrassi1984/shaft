@@ -52,12 +52,19 @@ tokens and instance-owned keys are stored by their setup commands, not in instan
 
 ## Every supervisor knob
 
+`SHAFT_ACTION_INSTANCES` enables the conservative [operator action classes](safety.md#operator-action-classes-142)
+for a comma-separated list of instance names. Its default is `thelos`; an empty value selects nobody.
+It does not add grants. Other instances retain their current behavior. The selection is read at process start;
+class demotion and restoration are read from supervisor-owned state on each dispatch.
+Calendar proposals retain `SHAFT_CALENDAR_WRITES_PER_DAY` and `SHAFT_CALENDAR_PROPOSAL_HOURS`.
+
 This table is extracted statically from production `knob()` calls in `supervisor/*.py`.
 Defaults below are source defaults, not values read from this checkout's private state.
 `PROJECT` means the clone root. Paths are resolved under that root at runtime.
 
 | Name | Default | Meaning | Declaration |
 |---|---|---|---|
+| `SHAFT_ACTION_INSTANCES` | `thelos` | Instances using conservative operator action classes; comma-separated, empty disables | [actions.py](../supervisor/actions.py) |
 | `SHAFT_API_PORT` | `8781` | the API's local port (OpenAI-compatible; the web UI and Telegram chat through it) | [api.py](../supervisor/api.py) |
 | `SHAFT_INBOX_PER_HOUR` | `30` | messages per hour the API's inbox (doorbell) accepts for one instance | [api.py](../supervisor/api.py) |
 | `SHAFT_INBOX_WAKES_PER_HOUR` | `4` | wakes per hour inbox messages may start for one instance | [api.py](../supervisor/api.py) |

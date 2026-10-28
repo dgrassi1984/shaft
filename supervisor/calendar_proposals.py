@@ -1,4 +1,4 @@
-"""Operator approvals, PLAN-calendar-write M2/D2–D5. One shared append-only journal at
+"""Operator approvals, PLAN-calendar-write M2/D2–D5 and #142. One shared append-only journal at
 .supervisor/calendar/proposals.jsonl stores snapshots; the last snapshot per id is authoritative. flock covers
 state checks and submission across web/scheduler/broker processes. Approval sends the frozen request, never a
 freshly read event. A durable failed claim before submission prevents retries after an ambiguous process death.
@@ -49,6 +49,7 @@ def _save(stream, row):
 def _outcome(row):
     from . import messages
     path = core.SUP_DIR / 'calendar' / f"{row['instance']}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
     with path.open('a') as stream:
         fcntl.flock(stream, fcntl.LOCK_EX)
         stream.write(json.dumps({"ts": row['decided_at'], "tool": row['tool'], "proposal": row['id'],
@@ -87,6 +88,8 @@ def create(instance, tool, grant, target, request, summary, attendees, before):
                calendar=grant['calendar'], target=target, request=request, summary=summary, attendees=attendees,
                before=before, created_at=now.isoformat(), expires_at=(now + timedelta(hours=PROPOSAL_HOURS)).isoformat(),
                state='pending', outcome=None)
+    if 'action_class' in request:
+        row.update(action_class=request['action_class'], action=request['action'])
     with _journal() as (stream, rows):
         _save(stream, row)
     _notify(row)
@@ -127,6 +130,33 @@ def expire() -> None:
 
 
 def decide(pid, approve, *, secrets=None):
+    return _decide(pid, approve, secrets=secrets)
+
+
+def reject(pid, reason):
+    """#142: only the exact reason 'over-reach' changes class entitlement; ordinary decline does not."""
+    return _decide(pid, False, reason=reason)
+
+
+def _submit(row, secrets):
+    from . import actions
+    req = row['request']
+    if row.get('action_class') and actions.status(row['instance'])['classes'][row['action_class']] == 'refused':
+        raise PermissionError('action class is refused after over-reach; restore it before approval')
+    if not any(g.get('write') and g['account'] == row['account'] and g['calendar'] == row['calendar']
+               for g in core.calendar_grants(row['instance'])):
+        raise PermissionError('calendar is no longer granted for writing')
+    acct = google.Account(row['account'], core.secrets_env() if secrets is None else secrets)
+    acct.require(google.CALENDAR_EVENTS)
+    from .calendar import API
+    send = getattr(acct, req['method'].lower())
+    params = {'sendUpdates': req['sendUpdates']}
+    if req['method'] == 'PATCH':
+        params['etag'] = req['etag']
+    return send(f"{API}/{req['path']}", req['body'], **params)
+
+
+def _decide(pid, approve, *, secrets=None, reason=''):
     listing()
     with _journal() as (stream, rows):
         row = rows.get(pid)
@@ -137,6 +167,13 @@ def decide(pid, approve, *, secrets=None):
         row['decided_at'] = datetime.now().astimezone().isoformat()
         if not approve:
             row.update(state='declined', outcome='Declined by the operator.')
+            if reason:
+                row.update(reason=reason, outcome=f'Declined by the operator: {reason}')
+            if reason == 'over-reach':
+                if not row.get('action'):
+                    raise ValueError('proposal predates action classes; mark a recorded action instead')
+                from . import actions
+                actions.overreach(row['instance'], row['action'])
         else:
             row.update(state='failed', approved_by='operator', outcome='Submission interrupted; do not retry automatically.')
             _save(stream, row)  # claim before any external write; double approval can never send twice
@@ -144,18 +181,7 @@ def decide(pid, approve, *, secrets=None):
                 if datetime.fromisoformat(row['expires_at']) <= datetime.now().astimezone():
                     row.update(state='expired', outcome='The proposal expired before approval.')
                 else:
-                    if not any(g.get('write') and g['account'] == row['account'] and g['calendar'] == row['calendar']
-                               for g in core.calendar_grants(row['instance'])):
-                        raise PermissionError('calendar is no longer granted for writing')
-                    acct = google.Account(row['account'], core.secrets_env() if secrets is None else secrets)
-                    acct.require(google.CALENDAR_EVENTS)
-                    req = row['request']
-                    from .calendar import API
-                    send = getattr(acct, req['method'].lower())
-                    params = {'sendUpdates': req['sendUpdates']}
-                    if req['method'] == 'PATCH':
-                        params['etag'] = req['etag']
-                    answer = send(f"{API}/{req['path']}", req['body'], **params)
+                    answer = _submit(row, secrets)
                     row.update(state='approved', outcome=answer)
             except Exception as e:
                 row.update(state='failed', outcome=f'{type(e).__name__}: {e}')

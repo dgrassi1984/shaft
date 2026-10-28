@@ -91,6 +91,11 @@ shaft mail [name]                    # accounts and grants
 shaft calendar <name> grant|revoke <alias> primary|<title>|<id>   # one calendar it may read · shaft calendar <name> off
 shaft calendar <name> grant-write|revoke-write <alias> <calendar> # write implies read; revoke-write keeps read
 shaft calendar [name] · shaft calendar calendars <alias>          # grants · an account's calendars, to pick one
+shaft actions <name>                 # class states, action ids, full history and proposals (#142)
+shaft actions <name> restore reversible|staged|irreversible   # restore that class's initial rule
+shaft actions <name> overreach <action-id>   # mark a recorded action out of bounds; demote its class once
+shaft actions <name> approve <proposal-id>  # submit its frozen request, once
+shaft actions <name> reject <proposal-id> [--reason over-reach] # ordinary rejection does not demote
 shaft pause [name] · shaft resume [name] · shaft check [name] · shaft list
 shaft setup                          # recreate missing template/instance worktrees from local or origin branches,
                                      # then install the pre-push guard (as shaft mind guard); exit 1 if another

@@ -118,6 +118,9 @@ Source: [Google account login](../supervisor/google.py).
 
 ## Mail (`shaft mail …`)
 
+These operator-mail tools remain read-only under the [action class model](safety.md#operator-action-classes-142).
+They still check the granted label on each thread. There is no operator mail-send broker tool.
+
 An instance you pick may read the Gmail threads that carry a label you pick ([PLAN-mail.md](plans/PLAN-mail.md)), on an
 account logged in with `shaft google login`. The search filters on the label's ID, and every thread it returns,
 reads or downloads from is checked again before anything of it is shown. A thread is visible while any of its
@@ -196,6 +199,13 @@ share as Viewer when it need not edit. Files shared with it by others are writte
 Source: [Drive scope bundle](../supervisor/google.py).
 
 ## Calendar (`shaft calendar …`)
+
+For instances in `SHAFT_ACTION_INSTANCES` (default `thelos`), the [action classes](safety.md#operator-action-classes-142)
+preserve the initial calendar behavior: changes that tell nobody run directly; supplied attendees, invitations,
+incomplete attendee lists and RSVPs require proposals. An over-reach can make direct changes require approval or
+make a staged class refused. `shaft actions <name>` shows class state, history and proposals; `restore <class>`
+restores the initial rule. All classes share the existing `/calendar/proposals` queue, expiry and approval checks.
+Other instances keep their current calendar behavior.
 
 An instance you pick may read the calendars you pick, one per grant ([PLAN-calendar.md](plans/PLAN-calendar.md)), with full
 event details: title, time and time zone, location, description, organiser, attendees and their responses, your

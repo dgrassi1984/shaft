@@ -1215,6 +1215,11 @@ def main(argv: list[str]) -> int:
     p.add_argument("action", nargs="?", help="grant, revoke, grant-write, revoke-write, off — or, after calendars, the account alias")
     p.add_argument("alias", nargs="?", help="the account alias")
     p.add_argument("which", nargs="?", help="primary, a calendar's title, or its ID")
+    p = sub.add_parser("actions", help="action classes, history and approvals (#142)")
+    p.add_argument("name")
+    p.add_argument("action", nargs="?", choices=["restore", "overreach", "approve", "reject"])
+    p.add_argument("target", nargs="?", help="class to restore, or action/proposal id")
+    p.add_argument("--reason", default="", help="reject reason; 'over-reach' demotes the class")
     p = sub.add_parser("trial", help="trials of proposed changes: list, show, run (operator), replay, work")
     tsub = p.add_subparsers(dest="action", required=True)
     q = tsub.add_parser("list", help="every trial, newest last")
@@ -1367,6 +1372,31 @@ def main(argv: list[str]) -> int:
             print(f"unknown calendar action {args.action!r}: grant, revoke, grant-write, revoke-write or off", file=sys.stderr)
             return 2
         return cmd_calendar(args.target, args.action, args.alias, args.which)
+    if args.cmd == "actions":
+        from . import calendar_proposals
+        try:
+            if args.action and not args.target:
+                raise ValueError('an action needs a class or id')
+            if args.action == 'restore':
+                actions.restore(args.name, args.target)
+            elif args.action == 'overreach':
+                actions.overreach(args.name, args.target)
+            elif args.action in ('approve', 'reject'):
+                row = next((r for r in calendar_proposals.listing()
+                            if r['id'] == args.target and r['instance'] == args.name), None)
+                if row is None:
+                    raise ValueError('no such proposal for this instance')
+                row = (calendar_proposals.decide(args.target, True) if args.action == 'approve' else
+                       calendar_proposals.reject(args.target, args.reason))
+                print(json.dumps(row, ensure_ascii=False))
+                return 1 if row['state'] == 'failed' else 0
+            state = actions.status(args.name)
+            state['proposals'] = [r for r in calendar_proposals.listing() if r['instance'] == args.name]
+            print(json.dumps(state, ensure_ascii=False, indent=2))
+            return 0
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            return 2
     if args.cmd == "autonomy":
         return autonomy.autonomy(args.action)
     if args.cmd == "status":
