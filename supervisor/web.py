@@ -10,8 +10,9 @@ browser, for the tailnet only. Stdlib only, run by the system Python like every 
 Who may use it: a request needs BOTH
   - a Tailscale-User-Login in SHAFT_API_LOGINS (set by `tailscale serve`; the server listens on 127.0.0.1 only), and
   - a paired browser's cookie. `shaft web pair` prints a link valid for PAIR_MINUTES, usable once; opening it shows a
-    button, and pressing it (a POST: a link preview cannot spend it) sets an HttpOnly, Secure, SameSite=Strict
-    cookie. Only a hash of the cookie's secret is kept (.supervisor/web/devices.json).
+    button, and pressing it (a POST: a link preview cannot spend it) sets an HttpOnly, Secure, SameSite=Lax
+    cookie: Lax, not Strict, so it rides on a top-level GET from another site — Google's redirect back to
+    /google/callback (web_google.py) — while another site's POST still carries none. Only a hash of the cookie's secret is kept (.supervisor/web/devices.json).
 Any process on the Mac could forge the login header to 127.0.0.1; none can forge the cookie. Instances cannot reach
 the port at all: a run's sandbox allows only the LLM, embed, broker and egress ports, and serve() refuses to listen
 on a port a run may reach.
@@ -392,6 +393,9 @@ def _route(req: Request) -> Response:
         return _post(req, dev)
     if req.method != "GET":
         return _html(405, web_pages.message_page("Not allowed", f"{req.method} is not supported."))
+    if req.path in ("/google/login", "/google/callback"):
+        from . import web_google
+        return web_google.route(req)
     if req.path == "/push/latest":                  # what this device's push shows: what waits for it (webpush.take)
         from . import webpush
         if req.headers.get("sec-fetch-site") != "same-origin":   # it takes them: never a link from another site
@@ -1000,6 +1004,8 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str,
             body = web_config.drive_page(name, text, sha, v.markdown(text) if text is not None else Html(""))
         else:
             body = web_config.access_page(name, web_config.access(name))
+            if qs.get("google"):
+                body = web_pages.h('<p role="status">{result}</p>{body}', result=qs["google"], body=body)
         return _html(200, v.instance_frame(name, tab, tab, body, names, csrf))
     if tab == "transcripts":
         filt = qs.get("f", "") if qs.get("f", "") in v.TX_FILTERS else ""

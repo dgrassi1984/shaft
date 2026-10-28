@@ -294,6 +294,9 @@ class WriteCliTest(read.CalendarCase):
     cli = read.CliTest.cli
 
     def test_write_grant_implies_read_listing_revoke_write_and_off(self):
+        saved = google.account('work')
+        saved['scope'] += ' ' + google.CALENDAR_EVENTS
+        google._save_account('work', saved)
         code, out = self.cli('calendar', 'wren', 'grant-write', 'work', 'primary')
         self.assertEqual(code, 0, out)
         self.assertIn('[writable]', out)

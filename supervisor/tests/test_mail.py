@@ -482,7 +482,16 @@ class ConfigTest(MailCase):
         self.gmail.refuse_refresh = True
         err = self.refused(self.broker(), "mail_read", {"id": "work/aaa111"})
         self.assertIn("Google refused its login (invalid_grant revoked)", err)
-        self.assertIn("shaft google login work operator@work.example --client work", err)
+        self.assertIn("`shaft google login work operator@work.example` again", err)   # the client is the alias's
+
+    def test_login_command_names_a_client_only_when_it_differs_and_never_its_web_twin(self):
+        from supervisor import google
+        self.assertEqual(google.login_command("home", {"address": "me@example.com", "client": "personal"}),
+                         "shaft google login home me@example.com --client personal")      # home -> personal, as live
+        self.assertEqual(google.login_command("home", {"address": "me@example.com", "client": "personal:web"}),
+                         "shaft google login home me@example.com --client personal")      # :web is internal
+        self.assertEqual(google.login_command("work", {"address": "op@w.example", "client": "work:web"}),
+                         "shaft google login work op@w.example")
 
     def test_body_marked_as_senders(self):
         b = self.broker()

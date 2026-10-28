@@ -719,6 +719,10 @@ def cmd_calendar(target: str | None, action: str | None, alias: str | None, whic
         return 2
     elif action in ("grant", "grant-write"):
         try:
+            if action == "grant-write":
+                saved = google.account(alias) or {}
+                if google.CALENDAR_EVENTS not in google.scopes(saved):
+                    raise google.AccountError(google.missing_scope_message(alias, saved, google.CALENDAR_EVENTS))
             cal = gcal.resolve(session(alias), which)
         except (google.AccountError, google.ApiError) as e:
             print(f"not granted: {e}", file=sys.stderr)
