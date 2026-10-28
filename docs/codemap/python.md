@@ -123,6 +123,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_limits.py` | `LimitsTest` | — |
 | `supervisor/tests/test_live_goal_choice.py` | `LiveGoalChoiceTest` | — |
 | `supervisor/tests/test_localmodel.py` | `IdleRuleTest`, `ServerIdleExitTest`, `LaunchdTest`, `EnsureTest`, `CallersTest`, `StatusTest` | — |
+| `supervisor/tests/test_loop_effect.py` | `EffectTest`, `AgentEffectTest` | — |
 | `supervisor/tests/test_m2_start.py` | `StartTest` | `call` |
 | `supervisor/tests/test_m2_value.py` | `CycleControlsTest`, `ValueJudgmentTest` | — |
 | `supervisor/tests/test_m3_talk.py` | `ReplyFirstTest`, `CorrectionsTest` | `tool` |
