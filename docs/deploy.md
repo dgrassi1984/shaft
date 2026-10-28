@@ -29,13 +29,18 @@ SHAFT runs from the primary checkout (`~/Development/shaft`, on `main`) and its 
 2. **Update the instances** from the template: `bin/shaft update --all`. It is gate-tested per instance; a busy
    instance is queued and updated by the scheduler as soon as it is idle. A refused update (a merge conflict, a red
    gate) is a stop: report it, do not force it.
-3. **Restart the long-running services** so they load the new code. Wakes are started with `start_new_session`,
-   so restarting the scheduler does not end a running cycle. A conversation does end with its service, so first
-   check `bin/shaft status` for open conversations and restart `api`, `web` or `telegram` only when none is open
-   on it (wait, or leave that one for the operator).
+3. **Restart the long-running services** so they load the new code, each only when nothing it runs is going on:
+   - `scheduler`: only when no instance is awake. On SIGTERM it stops its wakes on purpose ("live stopped with the
+     supervisor (signal 15); its changes are settled at its next run"), so a restart mid-cycle throws that cycle
+     away: on 2026-10-28 the v0.17.0 deploy cut three live cycles short this way. Check that no wake, sleep or
+     update is running (`ps -ax | grep -- '-m supervisor \(wake\|sleep\|update\)'`, or "live since" in
+     `bin/shaft update --all`'s answer); otherwise wait, or leave the scheduler for later. A queued update runs
+     either way: the running scheduler starts it when the instance is idle.
+   - `api`, `web`, `telegram`: only when no conversation is open on them (`runner.open_conversations(name)` is
+     empty for every instance, or `bin/shaft status`).
 
    ```bash
-   for s in scheduler web api telegram; do launchctl kickstart -k gui/$(id -u)/com.shaft.$s; done
+   launchctl kickstart -k gui/$(id -u)/com.shaft.<service>
    ```
 
    Only services that are loaded (`launchctl list | grep com.shaft`) are restarted; `model` and `embed` do not

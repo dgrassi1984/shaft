@@ -48,6 +48,7 @@ self/         self.md (self-model), personality.md (core/surface, every trait ci
               came from, judged success, calibration, battery scores), calibration.json (written by
               the supervisor: the base rates declare_intent shows)
 memory/       journal.md (append-only), facts.md, people/, messages/, episodes/*.jsonl,
+              corrections.jsonl (append-only operator corrections and their closures),
               verdicts-reviewed.md (when its last finished sleep read the judge's verdicts: the next
               sleep is shown those judged since)
 inbox/        messages waiting for it (from you or other instances)
@@ -175,6 +176,22 @@ left open with a reason). The judge adds `expectations`, `unreported_surprises`,
 the fold (shared test fixtures keep the two in step), writes `.supervisor/surprises/<name>.json` and the stats.md
 section "My expectations vs what happened", counts each sleep's dispositions, and renders the pre-registered
 acceptance window (`shaft surprise-report`). Nothing rewards being surprised, or not being surprised.
+
+
+Operator corrections (#135) are extracted during the conversation writeup in `shaft/recovery.py`.
+The writeup reads every saved turn in bounded transcript pages and offers `record_correction` before
+it writes the journal entry. Open conversations remain excluded. Each correction in
+`memory/corrections.jsonl` gets an id such as `k1028-1405-1`, its original timestamp and conversation id,
+what was wrong, and what the operator said. The model links the same correction within seven days
+with `reopens`. Live and sleep prompts show open items and the seven-day reopened count, including
+an error line if the ledger cannot be read.
+
+Sleep step 9 asks for `close_correction(id, closed_by, evidence)`: `fact` after a fact change citing
+the correction, `code` after a commit or plugin change, `test`, or `not_accepted` with a reason.
+Evidence names the episode, commit or fact. An omitted closure leaves the item open.
+The supervisor reads the ledger without importing template code. `panel.alerts` emits the stable id
+`correction:<instance>:<id>` after more than `SHAFT_CORRECTION_ALERT_CYCLES` live cycles since the correction.
+The default is 6, and 0 disables the alert. A missing, unreadable or malformed ledger raises no alert.
 
 
 **Self-knowledge measured against the record** ([PLAN-consciousness](plans/PLAN-consciousness.md)). Functional
