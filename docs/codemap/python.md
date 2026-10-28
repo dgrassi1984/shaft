@@ -61,6 +61,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/privileged.py` | — | `mind_ablated_copy`, `rows`, `item_id`, `prediction`, `outcome`, `scores`, `comparison`, `recognition_scores`, `recognition_prompt`, `run`, `report` |
 | `supervisor/projects.py` | — | `lines`, `section` |
 | `supervisor/provenance.py` | — | `facts`, `check`, `checked`, `reliance`, `section`, `report` |
+| `supervisor/pushback.py` | — | `outcome`, `annoyance`, `lines` |
 | `supervisor/pushes.py` | — | `records`, `usage`, `reactions`, `lines` |
 | `supervisor/pyenv.py` | — | `venv_python`, `python`, `uv_binary`, `uv_env`, `path_dirs`, `needs_rebuild`, `rebuild_command`, `describe` |
 | `supervisor/recap.py` | `RecapError` | `redact`, `context`, `ask`, `load`, `write`, `start`, `running`, `command` |
@@ -229,6 +230,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_x_metacog.py` | `ControlsTest`, `JudgmentTest`, `MeasurementsTest` | — |
 | `supervisor/tests/test_x_probes.py` | `CopyTest`, `EndpointTest`, `RunnerTest`, `DeclareTest` | `rates`, `entry`, `tree`, `episodes` |
 | `supervisor/tests/test_x_projects.py` | `ProjectsTest`, `ChargesTest` | — |
+| `supervisor/tests/test_x_pushback.py` | `PushbackTest` | — |
 | `supervisor/tests/test_x_selfknow.py` | `ScoresTest`, `CopiesTest`, `PredictionCopyTest`, `RunTest` | `record`, `archive`, `snapshot` |
 | `supervisor/tests/test_x_wild.py` | `PerturbationTest`, `ResourceShockTest`, `AdapterSwapTest` | `record` |
 | `supervisor/tom.py` | — | `record`, `receipts`, `reply_for`, `score`, `section`, `baselines`, `report` |
