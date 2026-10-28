@@ -76,6 +76,7 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_BATTERY_CONTROL_REF` | `template` | the git branch a battery control instance is made from | [battery.py](../supervisor/battery.py) |
 | `SHAFT_BATTERY_RECALL_MIN_AGE_H` | `48` | hours old a journal entry must be to make a battery recall item | [battery.py](../supervisor/battery.py) |
 | `SHAFT_OPERATOR_PER_DAY` | `0` | messages per day one instance may send the operator (0: no limit) | [broker.py](../supervisor/broker.py) |
+| `SHAFT_PUSH_BUDGET` | `6` | measured operator pushes per day (0: not shown); never blocks delivery | [pushes.py](../supervisor/pushes.py) |
 | `SHAFT_DESCRIBE_MODEL` | `claude-haiku-5-5` | the model describe_image uses for an instance whose own model cannot see images | [broker.py](../supervisor/broker.py) |
 | `SHAFT_CLOUD_MODELS` | `claude-haiku-5-5,claude-opus-5-5,openrouter/xiaomi/mimo-v2.6-pro` | the cloud models an instance may run on (through the broker) | [cloudllm.py](../supervisor/cloudllm.py) |
 | `SHAFT_OPENROUTER_PROVIDER` | `{"only": ["novita", "deepinfra"], "order": ["novita", "deepinfra"], "allow_fallbacks": false, "data_collection": "deny", "zdr": true, "require_parameters": true}` | OpenRouter's provider routing for every openrouter/ call (JSON): which providers, and the data policy | [cloudllm.py](../supervisor/cloudllm.py) |
@@ -185,6 +186,7 @@ reviewed ref was `refs/heads/publish-prep-template`.
 | `STALE_LINE_HOURS` | `24` | uses built-in default |
 | `STALE_GOAL_HOURS` | `48` | uses built-in default |
 | `CRITERION_CHARS` | `600` | uses built-in default |
+| `CONFIDENCE_MODE` | `'confirm'` | uses built-in default |
 | `GOALS_CHARS` | `12000` | uses built-in default |
 | `BRIEFING` | `'notes/briefing.md'` | `notes/briefing.md` |
 | `HANDOFF` | `'on'` | `on` |
@@ -208,6 +210,15 @@ call finishes normally. Set either knob to 0 to disable that budget.
 `queue_for_next_cycle(task, why)` puts unfinished work in the instance's own inbox for its next live cycle.
 `CRITERION_CHARS` limits `declare_intent.success_criterion` in characters. An overlong criterion is refused
 with its length and the limit, asking for the deliverable's check rather than ritual clauses.
+
+`CONFIDENCE_MODE` accepts `confirm` (default), `clauses`, or `noconfirm`; the live prompt names the resolved mode.
+`confirm` keeps the existing declare and base-rate confirmation flow. `clauses` asks for 1-4 success-criterion
+clauses, each with an integer confidence 0-100. The template records them with a null combined confidence;
+the supervisor multiplies their probabilities when it writes the judgment, assuming independence because
+all clauses must hold. This v4 confidence stays apart from v1-v3 in calibration, AUROC and base rates.
+Both `clauses` and `noconfirm` omit the base rate and `confirm_confidence`; `noconfirm` records a single v2 confidence.
+These arms are available for a later trial. No instance configuration changes automatically. If the Thelos trial
+selects `noconfirm`, the operator sets it in Thelos's `config.env`. Invalid values follow the usual warning and fallback.
 
 `LLM_PRESENCE_PENALTY` uses tenths (15 means 1.5). `MAX_STEPS_TALK=0` removes the
 conversation step limit. `WAKE_INTERVAL_MINUTES=0` disables periodic wakes; positive

@@ -64,6 +64,12 @@ message would go now; each message's page in the web UI says where it notified y
 
 Source: [channel routing](../supervisor/channel.py), [the web UI's pushes](../supervisor/web_alerts.py).
 
+`SHAFT_PUSH_BUDGET` (default 6) measures daily pushes per instance without refusing sends.
+The instance sees its count in its operational envelope and after `send_message` to the operator.
+Stats report counts, judged push timing and recorded operator reactions separately. The instance's
+message-discipline skill and digest job own any quiet window; the operator chooses its hours.
+The supervisor does not hold pushes for a digest.
+
 ## Google accounts (`shaft google …`)
 
 Mail and Calendar share your Google accounts ([PLAN-calendar.md](plans/PLAN-calendar.md)). An instance never holds a
