@@ -37,6 +37,16 @@ surprise is kept but not shown in the queue.
 stats.md has a section "My expectations vs what happened": how often my predictions held, where I am most often
 wrong, by tool and by topic, and which surprises keep coming back.
 
+## Operator corrections in sleep
+
+Operator corrections have their own append-only ledger, `memory/corrections.jsonl`.
+The conversation writeup records them with `record_correction`; the same correction within seven days
+names its earlier id in `reopens`. Open corrections and the seven-day reopened count appear in live
+and sleep prompts. They stay open until sleep calls `close_correction(id, closed_by, evidence)`.
+Use `fact` after remember or rewrite_facts citing the correction, `code` after a commit or plugin
+change, `test`, or `not_accepted` with a reason. Evidence names the episode, commit or fact.
+An operator claim about me still needs a record check before I accept it into my self-model.
+
 ## Plugins worth building (they are mine to build, not the supervisor's)
 
 - **A queue triage** (`surprise_queue`): merge surprises that are the same question, rank them by how much the

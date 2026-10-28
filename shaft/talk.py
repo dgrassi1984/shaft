@@ -19,11 +19,11 @@ import re
 import sys
 import uuid
 
-from . import agent, images, memory, prompts, recovery
+from . import agent, clock, images, memory, prompts, recovery
 from .llm import Client, LLMError
 from .live import archive_inbox
 from .state import State
-from .tools import MAX_RESULT_CHARS, Toolbox
+from .tools import MAX_RESULT_CHARS, Toolbox, _spec
 from .ui import Status
 
 DIM, RED, CYAN, RESET = "\033[2m", "\033[31m", "\033[36m", "\033[0m"
@@ -259,11 +259,13 @@ def run(cfg, state: State, client: Client, show_thinking: bool = False, input_fn
     view = JsonView() if json_mode else TerminalView(cfg, show_thinking, input_fn)
     talk_id = talk_id or uuid.uuid4().hex[:12]   # the supervisor names it, to know it is still going on
     toolbox = Toolbox(state.root)
+    toolbox.conversation_when = clock.now()
     toolbox.commit_source = "talk" if cfg.COMMITMENTS == "on" else ""   # promises made to whoever I talk with
     who = (f"{speaker} — not {cfg.OPERATOR_NAME}, but someone at {cfg.OPERATOR_NAME}'s terminal, acting for "
            f"them; what {speaker} says or does is not something {cfg.OPERATOR_NAME} said or did") if speaker \
         else cfg.OPERATOR_NAME
     mode = prompts.TALK_MODE.format(operator=who, since=since_last_talk(state, cfg.OPERATOR_NAME))
+    mode += prompts.reply_budget(cfg)
     system = prompts.system_prompt(state, cfg, mode, toolbox.describe())
     unwritten = recovery.unwritten_context(state, cfg.OPERATOR_NAME)
     if unwritten:   # remembered now, written up into the journal when this conversation ends
@@ -279,6 +281,7 @@ def run(cfg, state: State, client: Client, show_thinking: bool = False, input_fn
             break
         if not user:
             continue
+        toolbox.reply_started = time.monotonic()
         state.append_episode({"kind": "talk", "talk_id": talk_id, "role": "user", "content": user,
                               **({"speaker": speaker} if speaker else {})})
         # what my memory holds about this message, beyond what my context already shows
@@ -343,13 +346,16 @@ class Interjections:
 def answer(cfg, state: State, client: Client, request: dict) -> None:
     """One reply for an OpenAI-compatible client (via the supervisor's API): the client sends the
     whole conversation each time; I answer as myself and log the new turn."""
+    reply_started = time.monotonic()
     view = JsonView()
     talk_id = str(request.get("talk_id") or uuid.uuid4().hex[:12])
     app = request.get("client") or "an app"
     toolbox = Toolbox(state.root)
+    toolbox.conversation_when = clock.now()
     toolbox.commit_source = "talk" if cfg.COMMITMENTS == "on" else ""
     mode = prompts.API_MODE.format(operator=cfg.OPERATOR_NAME, app=app,
                                    since=since_last_talk(state, cfg.OPERATOR_NAME))
+    mode += prompts.reply_budget(cfg)
     system = prompts.system_prompt(state, cfg, mode, toolbox.describe())
     app_rules = "\n\n".join(_text(m.get("content")) for m in request.get("messages", []) if m.get("role") == "system")
     if app_rules.strip():
@@ -365,6 +371,7 @@ def answer(cfg, state: State, client: Client, request: dict) -> None:
         return
     view.ready({"name": cfg.NAME, "model": cfg.LLM_MODEL, "journal_entries": len(state.journal_entries()),
                 "tools": len(toolbox.specs())})
+    toolbox.reply_started = reply_started
     state.append_episode({"kind": "talk", "talk_id": talk_id, "role": "user", "content": dialogue[-1]["content"],
                           "via": app})
     asked = dialogue[-1]["content"]
@@ -384,7 +391,30 @@ def answer(cfg, state: State, client: Client, request: dict) -> None:
 def _respond(client: Client, cfg, toolbox: Toolbox, messages: list[dict], view, interjections=None):
     """Stream one reply, reporting each phase to the view:
     waiting for the model → reading my memory (prompt %) → thinking → answer / tools."""
-    tools = toolbox.specs()
+    began = getattr(toolbox, "reply_started", time.monotonic())
+    first_logged = len(toolbox.log)
+    when = getattr(toolbox, "conversation_when", clock.now())
+
+    def queue(args: dict) -> str:
+        task, why = args.get("task"), args.get("why")
+        if not all(isinstance(s, str) and s.strip() for s in (task, why)):
+            return "ERROR: task and why must be non-empty text"
+        stamp = clock.now()
+        inbox = toolbox.root / "inbox"
+        try:
+            inbox.mkdir(parents=True, exist_ok=True)
+            path = inbox / f"{stamp:%Y%m%d-%H%M%S-%f}-{uuid.uuid4().hex[:8]}-from-self.md"
+            path.write_text(f"From: {cfg.NAME}\nTo: {cfg.NAME}\nKind: queued from conversation\n"
+                            f"Date: {when:%Y-%m-%d %H:%M}\n\n{task.strip()}\n\nWhy: {why.strip()}\n"
+                            "Handle this in your next live cycle and report back to the operator.\n")
+        except OSError as e:
+            return f"ERROR: could not queue task: {e}"
+        return f"Queued in inbox/{path.name} for my next cycle."
+
+    controls = {"queue_for_next_cycle": agent.Control(_spec(
+        "queue_for_next_cycle", "Queue unfinished conversation work for my next live cycle; sends no reply.",
+        {"task": {"type": "string"}, "why": {"type": "string"}}), queue)}
+    tools = toolbox.specs() + [c.spec for c in controls.values()]
 
     def on_progress(processed: int, total: int) -> None:
         if total:
@@ -395,6 +425,14 @@ def _respond(client: Client, cfg, toolbox: Toolbox, messages: list[dict], view, 
                     f"{chars / 1000:.1f}k chars" if chars >= 1000 else f"{chars} chars")
 
     def call(msgs, t=tools):
+        calls = getattr(cfg, "TALK_REPLY_CALLS", 3)
+        seconds = getattr(cfg, "TALK_REPLY_S", 45)
+        if (calls > 0 and len(toolbox.log) - first_logged >= calls
+                or seconds > 0 and time.monotonic() - began >= seconds):
+            t = [c.spec for c in controls.values()]   # only the queue: the rest of the work waits for a cycle
+            msgs = [*msgs, {"role": "user", "content": "[runtime] Reply now, saying what you will do next. "
+                           "The reply-first budget is used: no more tools, except queue_for_next_cycle for "
+                           "the work you have not done."}]
         started, first = time.monotonic(), []
 
         def timed(f):   # notes when the first generated text arrives: before it, the prompt is being read
@@ -423,7 +461,7 @@ def _respond(client: Client, cfg, toolbox: Toolbox, messages: list[dict], view, 
     view.status("waiting for the model")
     try:
         outcome = agent.run(client, messages, toolbox, max_tokens=cfg.MAX_TOKENS_TALK, purpose="talk",
-                            max_steps=cfg.MAX_STEPS_TALK, call=call, on_tool=on_tool,
+                            max_steps=cfg.MAX_STEPS_TALK, controls=controls, call=call, on_tool=on_tool,
                             on_tool_start=view.tool_start, interjections=interjections)
         view.turn_end(outcome.steps, outcome.ended_by)
         return outcome.reply
