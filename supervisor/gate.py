@@ -674,12 +674,14 @@ TEST_BUDGET_S = 10   # and no one supervisor test may take longer: the change th
 def budget(timeout_s: int = GATE_TIMEOUT_S) -> int:
     """`shaft gate budget`, the check before a merge (agent-overlay.yaml's gate, docs/plans/PLAN-gate-5min.md): both
     parts of the supervisor's tests on the last commits, the way a gate runs them (committed_tree, _part), the
-    instance part against the template. Fails when a part fails, takes more than 1/BUDGET_SHARE of the stage limit,
-    holds a test slower than TEST_BUDGET_S, or runs a test twice; prints where the time went either way. Uncommitted changes are not in
-    it. 0 within budget, 1 not."""
+    instance part against the template, its own cases included. Fails when a part fails, takes more than
+    1/BUDGET_SHARE of the stage limit, holds a test slower than TEST_BUDGET_S, or runs a test twice; prints where the
+    time went either way. Uncommitted changes are not in it. 0 within budget, 1 not."""
     from . import gate_suite
     tree, label = committed_tree()
-    env = {**os.environ, "SHAFT_UNDER_TEST": str(tree / "template")}
+    # No instance under test: the invariants then read the tree's template/ and run the template's own cases too (every
+    # CONFIDENCE_MODE, TemplateMeasurement), which they skip for an instance (Codex review).
+    env = {k: v for k, v in os.environ.items() if k != "SHAFT_UNDER_TEST"}
     print(f"gate budget on {label}: each part within {timeout_s // BUDGET_SHARE}s of the {timeout_s}s stage limit, "
           f"no test over {TEST_BUDGET_S}s, {GATE_WORKERS} workers")
     within = True

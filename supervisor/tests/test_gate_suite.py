@@ -417,6 +417,34 @@ class Workers(unittest.TestCase):
         self.assertFalse(gate_suite.report(out.stdout)["ok"])
         self.assertIn("test_dies did not finish: a worker died", out.stderr)
 
+    def test_a_worker_that_dies_after_its_results_fails_the_part(self):
+        """Codex review: a worker that returned every result, then died on its way out (here a finalizer), passed the
+        part; in one process that exit code was the runner's own, and failed it."""
+        late = ("import os, unittest\nfrom multiprocessing import util\n\nclass L(unittest.TestCase):\n"
+                "    def test_l(self):\n        util.Finalize(None, os._exit, args=(23,), exitpriority=0)\n")
+        t = self.tree({"test_late.py": late})
+        out = t.run("shared", workers=1, nonce="n")
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertEqual(gate_suite.report(out.stdout, "n"), {"part": "shared", "tests_run": 1, "ok": False, "nonce": "n"})
+        self.assertIn("exited with 23 after its modules ran", out.stderr)
+
+    def test_every_worker_start_makes_a_supervisor_folder_of_its_own(self):
+        """Codex review: two probes that each saw a folder other than the parent's did not show the workers' folders
+        differ. _worker_start is what every worker runs first."""
+        import os
+        from unittest import mock
+        t = self.tree({})
+        split = gate_suite.Split(t.tests(), t.root)
+        seen = []
+        with mock.patch.dict(os.environ, {"SHAFT_SUPERVISOR_DIR": "/parent"}):
+            for _ in range(3):
+                gate_suite._worker_start(split, "instance", None)          # no fence: nothing put on sys.meta_path
+                seen.append(os.environ["SHAFT_SUPERVISOR_DIR"])
+        self.addCleanup(lambda: [shutil.rmtree(d, ignore_errors=True) for d in seen])
+        self.assertEqual(len(set(seen)), 3)
+        self.assertNotIn("/parent", seen)
+        self.assertTrue(all(Path(d).is_dir() for d in seen))
+
     def test_the_fence_holds_in_every_worker(self):
         sneaky = ("import importlib, unittest\n"
                   "harness = importlib.import_module('supervisor.tests.test_' + 'invariants')\n\n"

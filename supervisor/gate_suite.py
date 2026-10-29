@@ -297,6 +297,7 @@ def run_part(split: Split, part: str, workers: int) -> tuple[int, bool, list[str
                              mp_context=multiprocessing.get_context("spawn"),
                              initializer=_worker_start, initargs=(split, part, blocked)) as pool:
         futures = {pool.submit(_run_module, n): n for n in names}
+        workers_seen = dict(pool._processes)              # private, checked below: fail closed if it goes
         for f in as_completed(futures):
             try:
                 r = f.result()
@@ -313,6 +314,14 @@ def run_part(split: Split, part: str, workers: int) -> tuple[int, bool, list[str
             if r["text"]:
                 sys.stderr.write(r["text"])
                 sys.stderr.flush()
+        workers_seen.update(pool._processes)
+    # A worker that returned every result and then died on its way out (a finalizer, an atexit hook) failed the part
+    # in one process — its exit code was the runner's. Its results stand only if it exited cleanly (Codex review).
+    for pid, proc in sorted(workers_seen.items()):
+        if proc.exitcode != 0:
+            ok = False
+            print(f"gate_suite: worker {pid} exited with {proc.exitcode} after its modules ran, counted as failed",
+                  file=sys.stderr, flush=True)
     seconds = round(time.monotonic() - t0, 1)
     print(f"Ran {run} tests of the {part} part in {seconds}s ({len(names)} modules, {workers} workers): "
           f"{'OK' if ok else 'FAILED'}", file=sys.stderr)
