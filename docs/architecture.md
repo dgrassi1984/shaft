@@ -118,7 +118,10 @@ who chose the goal: itself, the operator, or another instance. The judge uses th
 and conversations the supervisor collects, checked against what the instance declared. The headline in
 `self/stats.md` is **achieved difficulty** (success × difficulty, 0–5 per cycle); probation compares it
 before and after a self-change. Cycles judged before the ratings existed are rated with
-`shaft judge backfill` (verdicts unchanged).
+`shaft judge backfill` (verdicts unchanged). Judged success and unsupported claims count only judges in today's
+rotation, and are given **per judge**: each judge's 7 days to the latest verdict against its 7 before, "too few" under
+10 verdicts. Judges differ several-fold on claims, so no figure pools two of them (docs/plans/PLAN-judge-mix.md).
+The success line sits under achieved difficulty, inside the first 5000 characters the LIVE prompt shows.
 
 Judges grade effectiveness first. `declare_intent` takes a checkable `success_criterion`, limited by
 `CRITERION_CHARS` (default 600), and refuses longer criteria with their length and limit.

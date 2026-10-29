@@ -323,7 +323,7 @@ class JudgeLessOftenTest(unittest.TestCase):
             rows = [dict(j, judge=GLM) for j in metrics.judgments("wren") if j.get("judge") != "rule"]
             with mock.patch.object(metrics, "judgments", return_value=rows):
                 text = metrics.stats_text("wren")
-        self.assertIn("Judged success rate: **100%**", text)       # 2 judged, both yes; the 3 left out are not "no"
+        self.assertIn(f"{metrics.judge_label({'judge': GLM})} too few (2) vs none", text)   # 2 judged; the 3 left out are not "no"
         self.assertIn("The main judge grades one live run in 2", text)
         self.assertIn("3 of my runs were left out: they have no verdict, and are not counted as failures", text)
 

@@ -366,7 +366,7 @@ class SurpriseJudgeTest(unittest.TestCase):
                     results.append((metrics.stats_text("m"), metrics.review_text(["m"], now=datetime(2026, 10, 14))))
             self.assertEqual(results[0], results[1])
             stats = results[0][0]
-            self.assertIn("Judged success rate: **100%**", stats)
+            self.assertIn("judge-test too few (1) vs none", stats)   # per judge, PLAN-judge-mix 2026-10-29
             self.assertLess(stats.index("SURPRISE-STATS"), stats.index("## Success against"))
 
 
