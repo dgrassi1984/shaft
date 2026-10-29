@@ -1347,6 +1347,104 @@
     sendComposer(form, false);
   });
 
+  // Feedback stays in the supervisor. Only an explicit Send delivers it.
+  const feedbackPending = new Set();
+  async function keepFeedback(group, thumb, reason, clear, send = false) {
+    const target = group.dataset.feedbackTarget;
+    const name = group.dataset.feedbackName;
+    const pending = name + ":" + target;
+    if (feedbackPending.has(pending)) return false;
+    feedbackPending.add(pending);
+    const buttons = [...group.querySelectorAll("button")];
+    buttons.forEach(b => { b.disabled = true; });
+    try {
+      const post = async op => {
+        const body = new URLSearchParams(JSON.parse(target));
+        body.set("op", op);
+        body.set("id", group.dataset.feedbackId || "");
+        body.set("thumb", thumb);
+        body.set("reason", reason);
+        return fetch("/feedback/" + encodeURIComponent(name), {
+          method: "POST", credentials: "same-origin", body, headers: { "X-CSRF-Token": csrf() }
+        });
+      };
+      // A new down rating must exist before Send can name its current id.
+      if (send && group.dataset.feedbackThumb !== thumb) {
+        const kept = await post("rate");
+        if (pairAgain(kept)) return false;
+        if (!kept.ok) { toast(textOf(await kept.text()), true); return false; }
+        group.dataset.feedbackId = kept.headers.get("X-Feedback-Id");
+        group.dataset.feedbackThumb = thumb;
+        group.dataset.feedbackReason = reason;
+      }
+      const r = await post(clear ? "clear" : send ? "send" : "rate");
+      if (pairAgain(r)) return false;
+      toast(textOf(await r.text()) || `HTTP ${r.status}`, !r.ok);
+      if (r.ok) {
+        const feed = document.querySelector(".feed[data-poll]");
+        if (feed) { if (feed._tick) feed._tick(); }
+        else location.reload();
+      }
+      return r.ok;
+    } catch (e) {
+      toast(`Feedback could not be kept: ${e.message}`, true);
+      return false;
+    } finally {
+      feedbackPending.delete(pending);
+      buttons.forEach(b => { b.disabled = false; });
+    }
+  }
+  function feedbackSheet(button, group, sending = false) {
+    if (document.querySelector("dialog.feedback-sheet[open]")) return;   // one closing is removed on its close event
+    const dialog = document.createElement("dialog");
+    dialog.className = "feedback-sheet";
+    dialog.setAttribute("aria-labelledby", "feedback-label");
+    const thumb = sending ? group.dataset.feedbackThumb : "down";
+    dialog.innerHTML = '<form><label id="feedback-label" for="feedback-reason">What was ' +
+      (thumb === "up" ? 'good' : 'wrong') + '? (optional)</label>' +
+      '<textarea id="feedback-reason" name="reason" maxlength="2000" rows="4"></textarea>' +
+      '<div class="feedback-actions"><button type="submit" class="primary" value="send">Send to ' +
+      group.dataset.feedbackName + '</button>' +
+      (sending ? '' : '<button type="submit" value="keep">Just keep it</button>') +
+      '<button type="button" data-feedback-cancel>Cancel</button></div></form>';
+    const form = dialog.querySelector("form");
+    const reason = dialog.querySelector("textarea");
+    reason.value = group.dataset.feedbackReason || "";
+    let saving = false;
+    form.addEventListener("submit", async ev => {
+      ev.preventDefault();
+      if (saving) return;
+      saving = true;
+      const save = form.querySelector("button[type=submit]");
+      save.disabled = true;
+      // Only the Send button sends: a submit with no known button (Enter, an extension) just keeps it.
+      if (await keepFeedback(group, thumb, reason.value, false, !!ev.submitter && ev.submitter.value === "send"))
+        dialog.close();
+      saving = false;
+      save.disabled = false;
+    });
+    dialog.querySelector("[data-feedback-cancel]").addEventListener("click", () => dialog.close());
+    dialog.addEventListener("keydown", ev => ev.stopPropagation());
+    dialog.addEventListener("close", () => {
+      dialog.remove();
+      syncSheets();
+      if (button.isConnected) button.focus({ preventScroll: true });
+    });
+    document.body.appendChild(dialog);
+    dialog.showModal();
+    reason.focus();
+  }
+  document.addEventListener("click", ev => {
+    const button = ev.target.closest && ev.target.closest("[data-thumb], [data-feedback-send]");
+    if (!button || button.disabled) return;
+    const group = button.closest("[data-feedback-target]");
+    if (!group) return;
+    if (button.dataset.feedbackSend !== undefined) feedbackSheet(button, group, true);
+    else if (button.getAttribute("aria-pressed") === "true") keepFeedback(group, button.dataset.thumb, "", true);
+    else if (button.dataset.thumb === "down") feedbackSheet(button, group);
+    else keepFeedback(group, "up", "", false);
+  });
+
   // A message's actions as a menu (PLAN-pwa-market decision 2): long-press on touch, right-click or the context-menu key
   // on a computer, as in Messages or Slack. They are the message's own buttons (shown on hover and Tab, hidden on
   // touch): the menu presses them. On touch, "Select text" lets the text be selected, which a long press now is not.
@@ -1398,11 +1496,12 @@
     sel.addRange(range);
   }
   function openMsgMenu(turn, x, y, keyboard) {
-    const acts = [...turn.querySelectorAll(".msgactions button")];
+    const acts = [...turn.querySelectorAll(".msgactions button, .who [data-reply-message], .who [data-thumb], .who [data-feedback-send]")];
     if (!acts.length) return false;
     const m = msgMenuBox();
     m.textContent = "";
-    const items = acts.map(b => [b.dataset.copy !== undefined ? "Copy" : "Reply", b.innerHTML, () => b.click()]);
+    const items = acts.map(b => [b.dataset.feedbackSend !== undefined ? "Send feedback…" : b.dataset.thumb ? (b.getAttribute("aria-pressed") === "true" ? "Clear thumbs " : "Thumbs ") +
+      (b.dataset.thumb === "up" ? "up" : "down") : b.dataset.copy !== undefined ? "Copy" : "Reply", b.dataset.feedbackSend !== undefined ? "" : b.innerHTML, () => b.click()]);
     if (touchOnly()) items.push(["Select text", selectIcon, () => selectText(turn)]);
     for (const [label, svg, run] of items) {
       const b = document.createElement("button");
@@ -1954,7 +2053,7 @@
     (close || sheetFocusables(sheet.panel)[0] || sheet.panel).focus();
   }
   function syncSheets(opener) {
-    if (document.querySelector("dialog.changelog[open]")) return;
+    if (document.querySelector("dialog.changelog[open], dialog.feedback-sheet[open]")) return;
     const grid = document.querySelector(".chatgrid");     // none on the other pages: only the rail's sheet there
     if (!grid && !document.querySelector(".pagebar")) return;
     const nav = document.querySelector("nav"), docs = grid ? document.getElementById("docs") : null;

@@ -103,6 +103,13 @@ def save(chat: dict) -> None:
     tmp = d / f".{chat['id']}.{os.getpid()}.{threading.get_ident()}"
     tmp.write_text(json.dumps(chat, ensure_ascii=False, indent=1))
     os.replace(tmp, d / f"{chat['id']}.json")
+    # The persisted user turn is the delivery receipt, including after a restart.
+    ids = {fid for t in chat.get("turns", []) for fid in t.get("feedback", [])}
+    if ids:
+        from . import feedback
+        for item in feedback.items(chat["instance"]):
+            if item["id"] in ids and not item["sent"]:
+                feedback.mark_sent(item["id"], "chat", chat["id"])
 
 
 _parsed: dict[str, tuple[tuple, dict]] = {}     # path -> ((inode, mtime_ns, size), chat): read again only when it changes
@@ -225,6 +232,60 @@ def _adopt_edits(name: str, chat: dict) -> None:
             chat.setdefault("pending_edits", {}).setdefault(path, e)
 
 
+def pending_feedback(chat: dict) -> list[dict]:
+    """Only current, unsent ratings can accompany another user turn."""
+    from . import feedback
+    current = {r["id"] for r in feedback.items(chat["instance"]) if not r["sent"]}
+    return [p for p in chat.get("pending_feedback", []) if p["id"] in current]
+
+
+def send_feedback(name: str, item: dict, text: str) -> str:
+    """Called under the instance lock, after validating the recorded reply."""
+    from . import feedback
+    target = item["target"]
+    chat = open_chat(name)
+    if item["sent"]:
+        raise ValueError("That feedback was already delivered.")
+    if target["kind"] == "chat" and chat and chat["id"] == target["chat"]:
+        with _lock(chat["id"]):
+            chat = load(chat["id"])
+            if any(p["id"] == item["id"] for p in pending_feedback(chat)):
+                raise ValueError("That feedback is already waiting for your next message.")
+            if item["thumb"] == "down":
+                chat["pending_feedback"] = pending_feedback(chat) + [{"id": item["id"], "note": text}]
+                save(chat)
+                return "Feedback goes with your next message."
+    feedback.deliver(item, text)
+    return "Feedback delivered to its inbox."
+
+
+def unpend_feedback(name: str, item: dict) -> None:
+    target = item["target"]
+    if target["kind"] != "chat":
+        raise ValueError("That feedback is not pending in a chat.")
+    with _lock(target["chat"]):
+        chat = load(target["chat"])
+        if chat:
+            chat["pending_feedback"] = [p for p in pending_feedback(chat) if p["id"] != item["id"]]
+            save(chat)
+
+
+def _take_feedback(chat: dict, turn: dict) -> None:
+    pending = pending_feedback(chat)
+    chat.pop("pending_feedback", None)
+    if pending:
+        turn["content"] += "\n\n" + "\n\n".join(p["note"] for p in pending)
+        turn["feedback"] = [p["id"] for p in pending]
+
+
+def _deliver_pending_feedback(chat: dict) -> None:
+    from . import feedback
+    current = {r["id"]: r for r in feedback.items(chat["instance"])}
+    for p in pending_feedback(chat):
+        feedback.deliver(current[p["id"]], p["note"])
+    chat.pop("pending_feedback", None)
+
+
 def _flush_queue(chat: dict) -> bool:
     """#70: the queued messages become one user turn (in order, attachments combined), with the document edits and
     comment notices that were waiting, taken now; the caller starts the reply. True when there was something."""
@@ -235,6 +296,7 @@ def _flush_queue(chat: dict) -> bool:
     turn = {"role": "user", "content": "\n\n".join(t["content"] for t in queued),
             "shown": "\n\n".join(t.get("shown", "") for t in queued), "ts": _now(),
             "attachments": [a for t in queued for a in t.get("attachments", [])]}
+    _take_feedback(chat, turn)
     edits, paths, deleted = _take_edits(chat)
     if edits:
         turn["content"] = (turn["content"] + "\n\n" + edits).strip()
@@ -840,6 +902,7 @@ def _send(name: str, login: str, text: str, files: list[tuple[str, bytes]], *,
                 save(chat)
                 return chat, (f"{name} reads it at its next step" if status == 202 else
                               f"{name} was just finishing: it answers this next")
+            _take_feedback(chat, turn)
             chat["turns"].append(turn)
             last_answer = max((i for i, t in enumerate(chat["turns"]) if t["role"] == "assistant"), default=-1)
             starting = [t for t in chat["turns"][last_answer + 1:]
@@ -889,6 +952,7 @@ def _end(cid: str) -> str:
         chat = load(cid)
         if chat.get("state") == "replying":         # a reply of its own began meanwhile (a message heard too late)
             raise Refused("a reply began meanwhile: it is written up when that reply ends and the chat is quiet")
+        _deliver_pending_feedback(chat)
         chat["state"], chat["ended"] = "ended", _now()
         save(chat)
     log(f"web: chat {cid} with {chat['instance']} ended by the operator")

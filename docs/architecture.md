@@ -169,7 +169,8 @@ that boundary. This measures timing, not causation. Reply-triggered archives als
 cited cycles, and the last seven days' annoyance count on separate lines. The scored denominator includes
 `unclear`, which is also shown separately. Uncited and ungraded counts remain visible. None of these measures
 changes effectiveness, value or training scores. Operator acceptance, thumbs, agreement and dismissals
-are never grade inputs. There is no self-rated care score.
+are never grade inputs. A 👎 removes that reply from fine-tuning data; it changes no grade.
+There is no self-rated care score.
 
 Operator-valued cycles split into delivered (`delivery_supported=yes`), filed (`no` or `na`), and unknown
 (field absent or null). `self/stats.md`, `shaft stats`, status, review and the judge panels show the split.

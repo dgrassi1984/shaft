@@ -696,11 +696,14 @@ def message_page(m: dict, texts: dict, names: list[str], csrf: str) -> Html:
         atts.append(h('<div class="att">{i}</div>', i=join(item)))
     alert = (h('<p class="dim">notified on {c}: {why}</p>', c="the web UI" if m["alert"] == "web" else "Telegram",
                why=m.get("alert_why", "")) if m.get("alert") else Html(""))      # channel.py: where it alerted you
+    from . import feedback
+    rating = (_feedback_buttons(m["from"], {"kind": "message", "file": m["file"]}, feedback.by_target(m["from"]))
+              if m["from"] in names and m["to"] == "operator" else Html(""))
     body = h('<p><a href="/messages">← every message</a></p><h1>{who}</h1>'
              '<p class="dim">{ts} · {kind} · {status} · {file}</p>{alert}'
-             '<section class="panel">{text}</section>{atts}',
+             '<section class="panel">{text}{feedback}</section>{atts}',
              who=f"{m['from']} → {m['to']}", ts=m["ts"].replace("T", " "), kind=m.get("kind") or "note", status=status,
-             file=m["file"], text=pre(m["text"], "wrap"), alert=alert,
+             file=m["file"], text=pre(m["text"], "wrap"), alert=alert, feedback=rating,
              atts=section(f"Attachments ({len(atts)})", join(atts)) if atts else Html(""))
     return frame("Message", body, names, csrf, current="/messages")
 
@@ -1211,10 +1214,31 @@ def _later_card(m: dict) -> Html:
              text=_my_text(shown) if shown else Html(""), a=atts)
 
 
+def _feedback_buttons(name: str, target: dict, ratings: dict) -> Html:
+    from . import feedback
+    item = ratings.get(feedback.key(target), {})
+    fields = ({"kind": "chat", "cid": target["chat"], "k": target["k"]} if target["kind"] == "chat"
+              else {"kind": "message", "file": target["file"]})
+    return h('<span class="feedback" data-feedback-name="{n}" data-feedback-target="{target}" '
+             'data-feedback-id="{id}" data-feedback-reason="{reason}" data-feedback-thumb="{thumb}">{buttons}{send}</span>',
+             n=name, target=json.dumps(fields), id=item.get("id", ""), reason=item.get("reason", ""),
+             thumb=item.get("thumb", ""),
+             send=(h('<span class="dim small">sent {time}</span>', time=_turn_time(item["sent"]["ts"]))
+                   if item.get("sent") else h('<button type="button" class="small" data-feedback-send>Send…</button>')
+                   if item else Html("")),
+             buttons=join(h('<button type="button" class="small icon" data-thumb="{thumb}" aria-pressed="{pressed}" '
+                            'aria-label="{label}" title="{title}" data-focus="feedback-{key}-{thumb}">{icon}</button>',
+                            thumb=thumb, pressed="true" if item.get("thumb") == thumb else "false", label=label,
+                            title=item.get("reason") or label, key=feedback.key(target), icon=icon("thumb-" + thumb, 16))
+                          for thumb, label in (("up", "Thumbs up"), ("down", "Thumbs down"))))
+
+
 def _sent_cards(name: str, sent: list[dict], archived: bool = False) -> list[Html]:
     """What the instance sent the operator (send_message), one card each; Reply quotes it in the composer, and a quoted
     question is answered by the message that quotes it (web_chat.answer_quoted), as a Telegram reply answers it.
     data-sent-at: when it came, so opening the chat can start at the first one this browser has not seen (web.js)."""
+    from . import feedback
+    ratings = feedback.by_target(name)
     cards = []
     for m in sent:             # files open in a sheet of their own: in an app, a link replaced its only view
         if m.get("from") == "operator":         # left for its next cycle (web._sent_during)
@@ -1233,9 +1257,10 @@ def _sent_cards(name: str, sent: list[dict], archived: bool = False) -> list[Htm
         cards.append(h('<div class="turn sent" data-k="s{f}" data-raw="{raw}"{at}><div class="who">{n} sent you '
                        '<a href="/messages/{f}">{what}</a> <span class="dim">{ts}</span><button type="button" '
                        'class="reply small icon" data-reply-message title="Reply to the message" '
-                       'aria-label="Reply to the message">{reply}</button></div>{t}'
+                       'aria-label="Reply to the message">{reply}</button>{feedback}</div>{t}'
                        '<div class="atts">{a}</div></div>', n=name, f=q(m["file"]), raw=m["text"], what=what,
                        ts=_turn_time(m["ts"]), reply=ICONS["reply"], t=markdown(m["text"]), a=atts,
+                       feedback=_feedback_buttons(name, {"kind": "message", "file": m["file"]}, ratings),
                        at=h(' data-seen-inst="{n}" data-sent-at="{ts}"', n=name, ts=m["ts"]) if not archived else ""))
     return cards
 
@@ -1276,6 +1301,8 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
     shows its last CHAT_WINDOW turns unless `whole` (?all=1): every poll rendered, sent and morphed the whole history,
     and a phone opened a long chat slowly (review C13/M21). Turns keep their own index (data-k), so nothing shifts."""
     from .web_actions import button, post_attrs
+    from . import feedback
+    ratings = feedback.by_target(name)
     if not chat:
         return join([*_sent_cards(name, sent, archived),
                      h('<div class="emptychat" data-k="empty"><p class="big">Chat with {n}</p><p class="dim">No chat open '
@@ -1301,11 +1328,15 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
         # A message's actions sit under it, out of sight until wanted: hover or keyboard focus on a computer, long-press
         # or right-click opens them as a menu (web.js msgMenu). Two bordered boxes on every message were bigger than a
         # short one (iPhone review I12). The last answer keeps its Copy in view (.turn[data-last]).
-        controls = (h('<div class="msgactions"><button type="button" class="copy small icon" data-copy '
-                      'title="Copy the message as Markdown" aria-label="Copy the message">{copy}</button>'
-                      '<button type="button" class="reply small icon" data-reply-message title="Reply to the message" '
-                      'aria-label="Reply to the message">{reply}</button></div>',
-                      copy=ICONS["copy"], reply=ICONS["reply"]) if raw else Html(""))
+        # Copy and Reply need text; a reply can be rated even when it failed with none (its thumbs alone).
+        controls = (h('<div class="msgactions">{own}{feedback}</div>',
+                      own=h('<button type="button" class="copy small icon" data-copy '
+                            'title="Copy the message as Markdown" aria-label="Copy the message">{copy}</button>'
+                            '<button type="button" class="reply small icon" data-reply-message title="Reply to the message" '
+                            'aria-label="Reply to the message">{reply}</button>', copy=ICONS["copy"], reply=ICONS["reply"])
+                      if raw else Html(""),
+                      feedback=_feedback_buttons(name, {"kind": "chat", "chat": chat["id"], "k": k}, ratings)
+                      if t["role"] == "assistant" else Html("")) if raw or t["role"] == "assistant" else Html(""))
         if t["role"] == "user":
             tag = h(' <span class="dim">· during its reply</span>') if t.get("interjected") else Html("")
             if t.get("edits"):
@@ -1315,6 +1346,8 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
                 tag = join([tag, join(h(' <span class="editchip">🗑 deleted {p}</span>', p=p) for p in t["deleted"])])
             if t.get("comments"):
                 tag = join([tag, _comment_chips(t["comments"])])
+            if t.get("feedback"):
+                tag = join([tag, h(' <span class="editchip">👎 feedback</span>')])
             # A comment-only turn's shown text is empty: the chips are the turn, not an empty bubble.
             shown = t.get("shown", t["content"])
             # data-mid: the page's id for the message, so the "sending" copy it shows goes once this one is here (W7)
@@ -1388,6 +1421,19 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
                       '<span class="dim">queued — sent when this reply ends</span></div>{text}{atts}{cancel}</div>',
                       mid=t["mid"], dm=_mid_attr(t["mid"]), text=_my_text(t["shown"]), cancel=cancel,
                       atts=join(h('<p class="dim">📎 {n}</p>', n=a["name"]) for a in t.get("attachments", []))))
+    if not archived:
+        current = {r["id"]: r for r in ratings.values() if not r["sent"]}
+        for p in chat.get("pending_feedback", []):
+            if p["id"] not in current:
+                continue
+            feed.append(h('<div class="turn me" data-k="queue-feedback-{id}">'
+                          '<span class="dim">👎 on its reply of {k} goes with your next message</span>'
+                          '<form class="act" data-post="/feedback/{n}"{a}>'
+                          '<input type="hidden" name="op" value="unpend">'
+                          '<input type="hidden" name="id" value="{id}">'
+                          '<button type="submit" class="small" aria-label="Keep feedback without sending">×</button>'
+                          '</form></div>', id=p["id"], k=_turn_time(current[p["id"]]["reply_ts"]), n=q(name),
+                          a=post_attrs("the feedback (is it still pending?)")))
     if chat.get("pending_edits") and not archived:
         feed.append(h('<p class="pending-edits" data-k="pend">✎ Your changes to {p} go to {n} with your next message.</p>',
                       p=", ".join(sorted(chat["pending_edits"])), n=name))
