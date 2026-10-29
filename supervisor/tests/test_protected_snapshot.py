@@ -91,7 +91,7 @@ class ProtectedSnapshotTest(RunTransactionCase):
             "        self.assertEqual(run(), 'approved plugin')\n")
         seen = []
 
-        def tests(tree, home, env_root=None):
+        def tests(tree, home, env_root=None, data_root=None):
             self.assertEqual(env_root, self.root)
             plugin.write_text("raise RuntimeError('swapped before tests')\n")
             seen.append(tree)
@@ -182,7 +182,7 @@ class ProtectedSnapshotTest(RunTransactionCase):
         (folder / "main.py").write_text(source)
         checked = []
 
-        def check(tree, home, env_root=None):
+        def check(tree, home, env_root=None, data_root=None):
             result = subprocess.run([sys.executable, "-E", "-s", "-m", "shaft.plugin_runner", "--check"],
                                     cwd=tree, capture_output=True, text=True)
             checked.append(result.stdout)
@@ -225,7 +225,7 @@ class ProtectedSnapshotTest(RunTransactionCase):
             self.assertTrue(out.startswith("exit 0"), out)
             self.assertIn("new working plugin", out)
 
-            def check(copy, home, env_root=None):
+            def check(copy, home, env_root=None, data_root=None):
                 prof = copy / ".tmp/check.sb"
                 prof.write_text(sandbox.profile(copy, home, []))
                 result = subprocess.run(sandbox.wrap(prof, [sys.executable, "-E", "-s", "-m",
@@ -253,3 +253,95 @@ class ProtectedSnapshotTest(RunTransactionCase):
             r = subprocess.run(sandbox.wrap(prof, [sys.executable, "-I", "-c", script,
                                str(tree / "shaft/__init__.py")]), cwd=self.root, capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_gate_tests_find_the_instance_data_beside_their_protected_code(self):
+        """Regression, 2026-10-29: #86 ran the gate's tests in a copy that held only the code, so a test finding the
+        instance's notes from its own file (wren's Path(__file__).parent.parent / "notes/ledger/…") failed with
+        FileNotFoundError, and every code change wren made was reverted whatever it was. Real gate, real sandbox: the
+        tests read and write the instance's data as before #86, and still write neither copy of the code."""
+        shutil.copy(Path(__file__).resolve().parents[2] / "template/shaft/plugin_runner.py",
+                    self.root / "shaft/plugin_runner.py")
+        git(self.root, "add", "shaft")
+        git(self.root, "commit", "-qm", "plugin runner")
+        before = runner._snapshot(self.root)
+        (self.root / "notes/ledger").mkdir(parents=True)
+        (self.root / "notes/ledger/key").write_text("treasury")
+        (self.root / ".uv").mkdir()   # an empty .venv would choose a missing interpreter (pyenv.python)
+        (self.root / "tests").mkdir()
+        (self.root / "tests/test_data.py").write_text(
+            "import pathlib, tempfile, unittest\n"
+            "ROOT = pathlib.Path(__file__).resolve().parent.parent\n"
+            "class T(unittest.TestCase):\n"
+            "    def test_data(self):\n"
+            "        self.assertEqual((ROOT / 'notes/ledger/key').read_text(), 'treasury')\n"
+            "        self.assertEqual(pathlib.Path('memory/journal.md').read_text(), '# kant — journal\\n')\n"
+            "        (ROOT / 'notes/written').write_text('by the gate')\n"
+            "        with tempfile.NamedTemporaryFile() as f:\n"   # the copy's .tmp, its scratch space
+            "            f.write(b'scratch')\n"
+            "    def test_code_stays_read_only(self):\n"
+            f"        for p in (ROOT / 'shaft/__init__.py', pathlib.Path({str(self.root / 'shaft/__init__.py')!r}),\n"
+            f"                  pathlib.Path({str(self.root / '.uv/lib.py')!r})):\n"
+            "            with self.assertRaises(PermissionError):\n"
+            "                p.write_text('bad')\n")
+        with self.settings(), mock.patch.object(gate, "_supervisor_tests", return_value=(True, "", "")):
+            kept = runner._settle("kant", self.root, "live", before, [])
+            said = [c.args[0] for c in runner.log.call_args_list]
+            self.assertEqual(list((runner.SUP_DIR / "protected/kant").iterdir()), [])
+        self.assertTrue(kept)
+        self.assertTrue(any("code change passed tests" in s for s in said), said)
+        self.assertEqual((self.root / "notes/written").read_text(), "by the gate")
+        self.assertEqual((self.root / "shaft/__init__.py").read_text(), "")
+
+    def test_launched_code_finds_the_instance_data_from_its_own_file(self):
+        """Regression, 2026-10-29: the same #86 gap at launch — approved code that finds the instance's notes from its
+        own file (wren's treasury key) looked in the protected copy, which had no notes."""
+        (self.root / "notes/ledger").mkdir(parents=True)
+        (self.root / "notes/ledger/key").write_text("treasury")
+        (self.root / "shaft/__main__.py").write_text(
+            "from pathlib import Path\nprint((Path(__file__).resolve().parent.parent / 'notes/ledger/key').read_text())\n")
+        git(self.root, "add", "shaft")
+        git(self.root, "commit", "-qm", "reads its key")
+        b, output = self.fake_broker(), []
+        with self.launch_settings(b), mock.patch.object(runner, "_settle", return_value=True), \
+                mock.patch.object(sandbox, "wrap", side_effect=lambda profile, cmd: cmd):
+            self.assertEqual(runner._run("kant", self.root, "live", [], False, output=output), 0)
+        self.assertEqual(output[0].strip(), "treasury")
+
+    def test_only_data_is_linked_never_code_config_or_scratch(self):
+        """The links into the instance carry its data only: a code path the snapshot lacks (a tests/ holding nothing
+        but __pycache__) is absent, never a link to the unprotected working code; the gate's config.env and .tmp are
+        the copy's own."""
+        (self.root / "tests/__pycache__").mkdir(parents=True)
+        (self.root / "config.env").write_text("LIVE=1\n")
+        code = gate.snapshot(self.root)
+        self.assertNotIn("tests", {p.split("/")[0] for p in code})
+        tree = protected.make(code, self.project / "protected", "kant", b"JUDGED=1\n", instance=self.root)
+        try:
+            self.assertFalse((tree / "tests").exists() or (tree / "tests").is_symlink())
+            for name in ("shaft", "plugins", ".tmp", "config.env"):
+                self.assertFalse((tree / name).is_symlink(), name)
+            self.assertEqual((tree / "config.env").read_text(), "JUDGED=1\n")
+            self.assertEqual((tree / "memory").resolve(), self.root / "memory")
+            self.assertEqual((tree / "memory/journal.md").read_text(), "# kant — journal\n")
+        finally:
+            protected.remove(tree)
+        self.assertTrue((self.root / "memory/journal.md").exists(), "removing the copy followed a link")
+
+    def test_nothing_linked_can_supply_an_import(self):
+        """Codex review of the fix: the copy leads the import path (the launch puts it first, the gate runs -m unittest
+        in it), so a linked unittest.py would have replaced the gate's own runner and a linked json.py the launched
+        code's json, from bytes never checked. Module files and packages are not linked; a plain folder is."""
+        for name in ("unittest.py", "json.pyc", "fast.cpython-312-darwin.so", "x.pth", "Upper.PY"):
+            (self.root / name).write_text("raise SystemExit(0)\n")
+        (self.root / "pkg").mkdir()
+        (self.root / "pkg/__init__.py").write_text("")
+        tree = protected.make(gate.snapshot(self.root), self.project / "protected", "kant", instance=self.root)
+        try:
+            for name in ("unittest.py", "json.pyc", "fast.cpython-312-darwin.so", "x.pth", "Upper.PY", "pkg"):
+                self.assertFalse(os.path.lexists(tree / name), name)
+            self.assertTrue((tree / "memory").is_symlink())
+            r = subprocess.run([sys.executable, "-E", "-s", "-m", "unittest", "--help"], cwd=tree,
+                               capture_output=True, text=True)
+            self.assertIn("discover", r.stdout)
+        finally:
+            protected.remove(tree)

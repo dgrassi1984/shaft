@@ -51,7 +51,7 @@ def git(cwd, *args):
 REAL_RUN_TESTS = gate.run_tests
 
 
-def instance_tests_only(root: Path, home: Path, env_root: Path | None = None):
+def instance_tests_only(root: Path, home: Path, env_root: Path | None = None, data_root: Path | None = None):
     """The gate's tests minus the supervisor invariants (they would run this whole suite again, inside itself):
     the instance's own tests, in its sandbox, for real."""
     fd, prof = tempfile.mkstemp(suffix=".sb")
@@ -163,7 +163,7 @@ class ConfigWritersTest(unittest.TestCase):
         for n in names:                                             # ...the kept log has every failure whole
             self.assertIn(f"{n}\n{'-' * 70}\nAssertionError: {'x' * 800}", kept.read_text())
 
-        self.cycle(FAILING, lambda broker: None, gate_tests=lambda root, home, env_root=None: (False, out))
+        self.cycle(FAILING, lambda broker: None, gate_tests=lambda root, home, env_root=None, data_root=None: (False, out))
         reverted = self.journal_entry("Supervisor: code change reverted")
         listed = reverted.split("Failing tests:", 1)[1].split("Last lines", 1)[0]
         self.assertEqual([l[2:] for l in listed.strip().splitlines()], names)
@@ -228,7 +228,8 @@ class ConfigWritersTest(unittest.TestCase):
                  "        sys.stderr.write('test_x started\\n'); sys.stderr.flush(); time.sleep(120)\n")
         with mock.patch.object(gate, "committed_tree", return_value=(tree, "tree")):
             self.cycle(hangs, lambda broker: None,
-                       lambda root, home, env_root=None: REAL_RUN_TESTS(root, home, timeout_s=5, env_root=env_root))
+                       lambda root, home, env_root=None, data_root=None:
+                       REAL_RUN_TESTS(root, home, timeout_s=5, env_root=env_root, data_root=data_root))
         self.assertFalse((self.root / "plugins" / "text_stats" / "main.py").exists())   # reverted, not left on disk
         self.assertFalse((self.root / "tests" / "test_text_stats.py").exists())
         unsettled = git(self.root, "status", "--porcelain", "--untracked-files=all", "--", *gate.CODE_PATHS)

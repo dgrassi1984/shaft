@@ -675,7 +675,7 @@ def _supervisor_tests(instance_root: Path, tree: Path, label: str, timeout_s: in
 
 
 def run_tests(instance_root: Path, home: Path, timeout_s: int = GATE_TIMEOUT_S,
-              env_root: Path | None = None) -> tuple[bool, str]:
+              env_root: Path | None = None, data_root: Path | None = None) -> tuple[bool, str]:
     """Supervisor invariants against this instance's code (trusted test code, run from the last commit — never from
     what another session is editing; it sandboxes the agent itself) in two parts (_supervisor_tests): the modules that
     read the instance, every time, and the rest once per commit, their pass recorded beside the committed tree
@@ -685,7 +685,9 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = GATE_TIMEOUT_S,
     and any error of the gate's own, fails the gate, named in the output and the supervisor log: raised instead, it
     left the change on disk unsettled, neither kept nor reverted, and the next run took it as its baseline — ungated.
     Nothing left in a stage's process group outlives it (_stage), so no leftover there writes the instance's code after
-    the caller's revert."""
+    the caller's revert. `data_root`: the instance itself when `instance_root` is its protected code copy (#86, linked
+    to its data by protected._link_data): the tests read and write its folder as they did before the copy, never its
+    code paths or its Python environment, and only read the copy but for its .tmp."""
     from . import pyenv
     from .core import safe_mkdir
     env_root = Path(env_root or instance_root)
@@ -703,10 +705,18 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = GATE_TIMEOUT_S,
         fd, prof_name = tempfile.mkstemp(prefix="shaft-tests-", suffix=".sb")   # outside the instance
         prof = Path(prof_name)
         with os.fdopen(fd, "w") as f:
-            f.write(sandbox.profile(instance_root, home, [], env_root=env_root))
-            # #86: tests may use scratch space, but cannot chmod, replace or rewrite the code they judge.
-            code_root = instance_root.resolve()
-            f.write(f"(deny file-write* (literal {sandbox._q(code_root)}))\n")
+            if data_root is None:
+                f.write(sandbox.profile(instance_root, home, [], env_root=env_root))
+                # #86: tests may use scratch space, but cannot chmod, replace or rewrite the code they judge.
+                code_root = instance_root.resolve()
+                f.write(f"(deny file-write* (literal {sandbox._q(code_root)}))\n")
+            else:   # the instance's own sandbox, as at launch; the copy read-only but for its scratch space
+                f.write(sandbox.profile(data_root, home, [], env_root=env_root))
+                f.write(sandbox.protected_code(instance_root, home))
+                f.write(f"(allow file-write* (subpath {sandbox._q(instance_root.resolve() / '.tmp')}))\n")
+                code_root = Path(data_root).resolve()
+                for name in pyenv.ENV_DIRS:   # read in place, never changed (#86; Codex review of the fix)
+                    f.write(f"(deny file-write* (subpath {sandbox._q(code_root / name)}))\n")
             for name in CODE_PATHS:
                 f.write(f"(deny file-write* (subpath {sandbox._q(code_root / name)}))\n")
         sup_ok, section, sup_full = _supervisor_tests(instance_root, tree, label, timeout_s)

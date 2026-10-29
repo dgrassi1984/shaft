@@ -561,7 +561,7 @@ def _launch(name: str, root: Path, kind: str, agent_args: list[str], budget: int
         if approved is None:
             raise RunRefused("no approved code for the launch")
         try:
-            tree = protected.make(approved, SUP_DIR / "protected" / name, name)
+            tree = protected.make(approved, SUP_DIR / "protected" / name, name, instance=root)
         except (OSError, TreeTooBig, ValueError) as e:
             raise RunRefused(f"could not protect its approved code: {e}") from None
         extra["SHAFT_CODE_ROOT"] = str(tree)
@@ -971,8 +971,8 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
         else:
             try:
                 with protected.copy(after, SUP_DIR / "protected" / name, name,
-                                    safe_read_bytes(root, "config.env", b"")) as tree:
-                    ok, test_log = gate.run_tests(tree, HOME, env_root=root)
+                                    safe_read_bytes(root, "config.env", b""), instance=root) as tree:
+                    ok, test_log = gate.run_tests(tree, HOME, env_root=root, data_root=root)
             except Exception as e:   # a failed copy is a failed gate, never an unchecked change kept
                 ok, test_log = False, f"== protected copy ==\n{type(e).__name__}: {e}"
         if ok:
