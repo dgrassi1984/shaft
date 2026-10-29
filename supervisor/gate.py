@@ -22,7 +22,10 @@ from . import sandbox
 from .core import knob, positive_int
 
 GATE_TIMEOUT_S, _ = knob(
-    "SHAFT_GATE_TIMEOUT_S", "1800", positive_int, "seconds each gate test stage may run before it times out",
+    "SHAFT_GATE_TIMEOUT_S", "300", positive_int, "seconds each gate test stage may run before it times out",
+    group="Runs and conversations", services=("runs", "api", "scheduler"))
+GATE_WORKERS, _ = knob(
+    "SHAFT_GATE_WORKERS", "4", positive_int, "processes each part of the supervisor's tests runs in at a gate",
     group="Runs and conversations", services=("runs", "api", "scheduler"))
 
 # .python-version and requirements.txt declare the instance's own Python environment (supervisor/pyenv.py): code
@@ -584,7 +587,7 @@ def _part(part: str, tree: Path, env: dict, timeout_s: int, label: str) -> tuple
     nonce = secrets.token_hex(16)
     t0 = time.monotonic()
     p = _stage(f"supervisor invariants ({label}), {part} part",
-               [PYTHON, "-E", "-s", "-m", "supervisor.gate_suite", part, "--nonce-stdin"],
+               [PYTHON, "-E", "-s", "-m", "supervisor.gate_suite", part, "--nonce-stdin", "--workers", str(GATE_WORKERS)],
                timeout_s, input=nonce + "\n", cwd=tree, env=env)
     seconds = time.monotonic() - t0
     r = gate_suite.report(p.stdout, nonce)
@@ -660,6 +663,46 @@ the alert logged (any other exit, such as a crash before this, is the scheduler'
     _log(f"gate: shared supervisor tests FAILED on {label} — every instance's code change fails its gate until this "
          f"is fixed" + (f"; failing: {'; '.join(names)}" if names else "") + kept)
     return WARM_FAILED
+
+
+BUDGET_SHARE = 2     # each part must pass within this share of the stage limit: room for a loaded machine
+TEST_BUDGET_S = 10   # and no one supervisor test may take longer: the change that adds a slow test fails, not a later one
+
+
+def budget(timeout_s: int = GATE_TIMEOUT_S) -> int:
+    """`shaft gate budget`, the check before a merge (agent-overlay.yaml's gate, docs/plans/PLAN-gate-5min.md): both
+    parts of the supervisor's tests on the last commits, the way a gate runs them (committed_tree, _part), the
+    instance part against the template. Fails when a part fails, takes more than 1/BUDGET_SHARE of the stage limit,
+    or holds a test slower than TEST_BUDGET_S; prints where the time went either way. Uncommitted changes are not in
+    it. 0 within budget, 1 not."""
+    from . import gate_suite
+    tree, label = committed_tree()
+    env = {**os.environ, "SHAFT_UNDER_TEST": str(tree / "template")}
+    print(f"gate budget on {label}: each part within {timeout_s // BUDGET_SHARE}s of the {timeout_s}s stage limit, "
+          f"no test over {TEST_BUDGET_S}s, {GATE_WORKERS} workers")
+    within = True
+    for part in ("instance", "shared"):
+        try:
+            ok, section, full, ran, seconds = _part(part, tree, env, timeout_s, label)
+        except StageTimedOut as t:
+            print(f"\n{part} part: {t}\n{t.tail}")
+            within = False
+            continue
+        times = gate_suite.times(full) or {}
+        slow = [(n, s) for n, s in times.get("slowest_tests", []) if s > TEST_BUDGET_S]
+        over = seconds > timeout_s / BUDGET_SHARE
+        within &= ok and not over and not slow
+        print(f"\n{part} part: {ran} tests in {seconds:.0f}s"
+              + ("" if ok else " FAILED") + (f", over its {timeout_s // BUDGET_SHARE}s budget" if over else ""))
+        for n, s in slow:
+            print(f"  over {TEST_BUDGET_S}s: {n} ({s:.1f}s)")
+        print("  slowest modules: " + ", ".join(f"{n.rpartition('.')[2]} {s:.0f}s"
+                                                for n, s in times.get("slowest_modules", [])[:5]))
+        print("  slowest tests:   " + ", ".join(f"{n.split(' ')[0]} {s:.1f}s" for n, s in times.get("slowest_tests", [])[:5]))
+        if not ok:
+            print(section)
+    print("\nWITHIN BUDGET" if within else "\nOVER BUDGET")
+    return 0 if within else 1
 
 
 def _supervisor_tests(instance_root: Path, tree: Path, label: str, timeout_s: int) -> tuple[bool, str, str]:

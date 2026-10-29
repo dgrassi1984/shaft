@@ -26,7 +26,14 @@ the instance under a name the scan cannot see AND skips its check when the folde
 supervisor's tests are trusted, committed code no instance can edit; the guards are for an honest mistake, not for a
 test written to slip past them.
 
-Output is unittest's own (stderr, so gate.failing_tests reads it), then one last stdout line for the gate:
+A part runs in `--workers N` spawned processes (gate.py passes SHAFT_GATE_WORKERS; default 1), one module per task,
+the biggest files first (docs/plans/PLAN-gate-5min.md). Each worker loads its module with discover's own walk, every
+other module a stand-in, so a module that fails to import or has a hook fails as it did in one process; each worker
+installs the fence before importing any test, and has its own SHAFT_SUPERVISOR_DIR. A worker that dies fails the part.
+
+Output is unittest's (stderr, so gate.failing_tests reads it): the failures of each module, a `GATE_SUITE_TIMES`
+line with the part's seconds and slowest modules and tests (for `shaft gate budget`, never the verdict), then one last
+stdout line for the gate:
 `GATE_SUITE {"part": ..., "tests_run": N, "ok": true|false[, "nonce": ...]}`. With `--nonce-stdin` the first line of
 stdin is read before any test is imported and repeated in that line, so a test cannot print a line the gate takes for
 the real one. Exit 0 when ok, 1 when not, 2 for a wrong argument."""
@@ -128,16 +135,17 @@ class Split:
 
 
 class _PartLoader(unittest.TestLoader):
-    """discover, importing only the modules of one part (None: all of them). Another part's module is an empty
-    stand-in — no tests, no load_tests, its file untouched — so discover's walk goes on exactly as it would."""
+    """discover, importing only the modules of one part (None: all of them), and of those only `only` when it is
+    given (a worker's one module). Any other module is an empty stand-in — no tests, no load_tests, its file
+    untouched — so discover's walk goes on exactly as it would."""
 
-    def __init__(self, split: Split, part: str | None):
+    def __init__(self, split: Split, part: str | None, only: str | None = None):
         super().__init__()
-        self.split, self.part, self.asked = split, part, []
+        self.split, self.part, self.only, self.asked = split, part, only, []
 
     def _get_module_from_name(self, name):
         self.asked.append(name)
-        if self.part is not None and self.split.part_of(name) != self.part:
+        if (self.part is not None and self.split.part_of(name) != self.part) or (self.only not in (None, name)):
             return types.ModuleType(name)
         return super()._get_module_from_name(name)
 
@@ -164,10 +172,10 @@ if not hasattr(unittest.TestLoader, "_get_module_from_name"):   # the hook _Part
                       "discover")                                 # parts would import everything (fail closed)
 
 
-def discover(split: Split, part: str | None) -> tuple[unittest.TestSuite, list[str]]:
-    """The suite of one part (None: the whole suite; a name no part has: no module imported) and every module name
-    discover asked for."""
-    loader = _PartLoader(split, part)
+def discover(split: Split, part: str | None, only: str | None = None) -> tuple[unittest.TestSuite, list[str]]:
+    """The suite of one part (None: the whole suite; a name no part has: no module imported), or of its module
+    `only`, and every module name discover asked for."""
+    loader = _PartLoader(split, part, only)
     if str(split.top) not in sys.path:
         sys.path.insert(0, str(split.top))
     suite = loader.discover(str(split.tests), top_level_dir=str(split.top))
@@ -220,13 +228,128 @@ def _count(split: Split) -> dict:
             **{part: discover(split, part)[0].countTestCases() for part in PARTS}}
 
 
+TIMES = "GATE_SUITE_TIMES "   # stderr: the part's seconds and slowest tests, for the budget check (not the gate's verdict)
+SLOWEST_KEPT = 15
+
+
+def _modules_of(split: Split, part: str) -> list[str]:
+    """The part's modules discover would load, in its order, none imported: each one a worker's task."""
+    asked = discover(split, part="")[1]                  # a part no module is in: every module a stand-in
+    return [n for n in dict.fromkeys(asked) if n in split.modules and split.part_of(n) == part]
+
+
+_worker: dict = {}
+
+
+def _worker_start(split: Split, part: str, blocked: list[str] | None) -> None:
+    """A worker process: its own supervisor folder (tests write locks and logs there, and workers run at once), and
+    in the shared part the same fence as one process had, before any test module is imported."""
+    os.environ["SHAFT_SUPERVISOR_DIR"] = tempfile.mkdtemp(prefix="shaft-sup-test-")
+    fence = None
+    if blocked is not None:
+        fence = _Fence(set(blocked))
+        sys.meta_path.insert(0, fence)
+    _worker.update(split=split, part=part, fence=fence)
+
+
+def _run_module(name: str) -> dict:
+    """One module, as discover would load it within its part, run in this worker. Never raises: a test that stops the
+    run (KeyboardInterrupt, SystemExit out of a fixture) is the module's failure, its tests counted as not run."""
+    import io
+    import time
+    fence = _worker["fence"]
+    tried = len(fence.tried) if fence else 0
+    out = io.StringIO()
+    t0 = time.monotonic()
+    try:
+        runner = unittest.TextTestRunner(stream=out, verbosity=0)
+        result = runner.run(discover(_worker["split"], _worker["part"], only=name)[0])
+        run, ok = result.testsRun, result.wasSuccessful()
+        durations = [(str(t), round(s, 3)) for t, s in getattr(result, "collectedDurations", [])]
+        text = out.getvalue() if not ok else ""
+    except BaseException:                                # SystemExit included: never a report a test chose
+        run, ok, durations = 0, False, []
+        text = out.getvalue() + traceback.format_exc() + f"gate_suite: {name} stopped before it finished, counted as failed\n"
+    return {"module": name, "tests_run": run, "ok": ok, "text": text, "seconds": round(time.monotonic() - t0, 3),
+            "durations": durations, "tried": list(fence.tried[tried:]) if fence else []}
+
+
+def _size(split: Split, name: str) -> int:
+    try:
+        return split.modules[name].stat().st_size
+    except OSError:
+        return 0
+
+
+def run_part(split: Split, part: str, workers: int) -> tuple[int, bool, list[str], dict]:
+    """Every module of `part` across `workers` processes, the biggest files first so the slowest are not left for the
+    end: (tests run, ok, modules that tried to import the instance part, timings). Workers are spawned, not forked,
+    so none inherits a half-imported test module, and they share this process's group: a gate stage that times out
+    ends them with it. A worker that dies fails the part."""
+    import multiprocessing
+    import time
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+    names = sorted(_modules_of(split, part), key=lambda n: -_size(split, n))
+    blocked = sorted(split.reads) if part == "shared" else None
+    t0 = time.monotonic()
+    run, ok, tried, durations, modules = 0, True, [], [], {}
+    with ProcessPoolExecutor(max_workers=max(1, min(workers, len(names) or 1)),
+                             mp_context=multiprocessing.get_context("spawn"),
+                             initializer=_worker_start, initargs=(split, part, blocked)) as pool:
+        futures = {pool.submit(_run_module, n): n for n in names}
+        for f in as_completed(futures):
+            try:
+                r = f.result()
+            except BaseException as e:                   # the worker died (os._exit, a crash): fail closed
+                ok = False
+                print(f"gate_suite: the worker running {futures[f]} died ({type(e).__name__}: {e}), counted as "
+                      "failed", file=sys.stderr, flush=True)
+                continue
+            run += r["tests_run"]
+            ok &= r["ok"]
+            tried += r["tried"]
+            durations += r["durations"]
+            modules[r["module"]] = r["seconds"]
+            if r["text"]:
+                sys.stderr.write(r["text"])
+                sys.stderr.flush()
+    seconds = round(time.monotonic() - t0, 1)
+    print(f"Ran {run} tests of the {part} part in {seconds}s ({len(names)} modules, {workers} workers): "
+          f"{'OK' if ok else 'FAILED'}", file=sys.stderr)
+    times = {"seconds": seconds,
+             "slowest_tests": sorted(durations, key=lambda d: -d[1])[:SLOWEST_KEPT],
+             "slowest_modules": sorted(modules.items(), key=lambda m: -m[1])[:SLOWEST_KEPT]}
+    return run, ok, tried, times
+
+
+def times(stderr: str) -> dict | None:
+    """The timings the last run printed (run_part), or None."""
+    line = next((l for l in reversed(stderr.splitlines()) if l.startswith(TIMES)), None)
+    try:
+        return json.loads(line[len(TIMES):]) if line else None
+    except ValueError:
+        return None
+
+
 def main(argv: list[str]) -> int:
-    args = [a for a in argv if a != "--nonce-stdin"]
-    if len(args) != 1 or args[0] not in (*PARTS, "count") or (args[0] == "count" and len(args) != len(argv)):
-        print(f"usage: python -m supervisor.gate_suite {'|'.join(PARTS)} [--nonce-stdin] | count", file=sys.stderr)
+    args, workers = [], 1
+    rest = iter(argv)
+    for a in rest:
+        if a == "--workers":
+            try:
+                workers = int(next(rest, ""))
+            except ValueError:
+                workers = 0
+        else:
+            args.append(a)
+    plain = [a for a in args if a != "--nonce-stdin"]
+    if (len(plain) != 1 or plain[0] not in (*PARTS, "count") or workers < 1
+            or (plain[0] == "count" and len(plain) != len(argv))):
+        print(f"usage: python -m supervisor.gate_suite {'|'.join(PARTS)} [--nonce-stdin] [--workers N] | count",
+              file=sys.stderr)
         return 2
-    part = args[0]
-    nonce = sys.stdin.readline().strip() if "--nonce-stdin" in argv else None   # before any test can read stdin
+    part = plain[0]
+    nonce = sys.stdin.readline().strip() if "--nonce-stdin" in args else None   # before any test can read stdin
     split = Split(Path.cwd() / TESTS, Path.cwd())
     if part == "count":
         print(json.dumps(_count(split)))
@@ -242,18 +365,15 @@ def main(argv: list[str]) -> int:
         print("gate_suite: the shared part does not run as root: root can read the folder that stands in for the "
               "instance", file=sys.stderr)
         return done(0, False)
-    fence, poison, result = None, None, None
+    poison, run, tried = None, 0, []
     if part == "shared":
         poison = Path(tempfile.mkdtemp(prefix="shaft-no-instance-"))
         poison.chmod(0)
-        os.environ[UNDER_TEST] = str(poison)             # before any test module is imported
-        fence = _Fence(split.reads)
-        sys.meta_path.insert(0, fence)
+        os.environ[UNDER_TEST] = str(poison)             # before any worker starts: they inherit it
     try:
-        runner = unittest.TextTestRunner(stream=sys.stderr)
-        result = runner.run(discover(split, part)[0])
-        ok = result.wasSuccessful()
-    except BaseException:                                # SystemExit included: never a report a test chose
+        run, ok, tried, timing = run_part(split, part, workers)
+        print(TIMES + json.dumps(timing), file=sys.stderr)
+    except BaseException:
         traceback.print_exc()
         print("gate_suite: the part stopped before it finished, counted as failed", file=sys.stderr)
         ok = False
@@ -261,11 +381,11 @@ def main(argv: list[str]) -> int:
         if poison:
             poison.chmod(0o700)
             shutil.rmtree(poison, ignore_errors=True)
-    if fence and fence.tried:
+    if tried:
         ok = False
-        print(f"gate_suite: the shared part tried to import {', '.join(sorted(set(fence.tried)))}, which "
+        print(f"gate_suite: the shared part tried to import {', '.join(sorted(set(tried)))}, which "
               "read(s) the instance under test", file=sys.stderr)
-    return done(result.testsRun if result else 0, ok)
+    return done(run, ok)
 
 
 if __name__ == "__main__":

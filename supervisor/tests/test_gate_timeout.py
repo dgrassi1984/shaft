@@ -12,9 +12,10 @@ class GateTimeoutTest(unittest.TestCase):
                 self.assertEqual(inspect.signature(function).parameters["timeout_s"].default,
                                  gate.GATE_TIMEOUT_S)
 
-    def test_knob_defaults_to_1800_seconds(self):
+    def test_knob_defaults_to_300_seconds(self):
+        """The operator's limit (2026-10-29): five minutes a stage. `shaft gate budget` keeps each part within half."""
         knob = core.KNOBS["SHAFT_GATE_TIMEOUT_S"]
-        self.assertEqual(knob.parse(knob.default), 1800)
+        self.assertEqual(knob.parse(knob.default), 300)
 
 
 if __name__ == "__main__":
