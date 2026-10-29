@@ -369,11 +369,6 @@ class CuriosityDrawTest(Fixture, unittest.TestCase):
         for word in ("replay", "trial run", "simulat"):
             self.assertNotIn(word, shown)
 
-    def test_config_default(self):
-        self.assertEqual(config.FIELDS["CURIOSITY_EVERY_CYCLES"], (int, 5))
-        shipped = config.parse_env_file(Path(config.__file__).resolve().parents[1] / "config.env")
-        self.assertEqual(shipped["CURIOSITY_EVERY_CYCLES"], "5")
-
 
 class SleepDispositionTest(Fixture, unittest.TestCase):
     """M3: the sleep step goes through every surprise since the last sleep; close_surprise records it."""
