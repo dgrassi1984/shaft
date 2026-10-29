@@ -6,8 +6,10 @@ Target code: $SHAFT_UNDER_TEST (an instance directory), else template/.
 """
 from __future__ import annotations
 
+import ast
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -26,16 +28,48 @@ HOME = Path.home()
 # unset). Regression: the gate runs these against an instance whose config names the operator, so a test that
 # expected the template's "the operator" failed every instance's code change (thelos's gdrive fix, 2026-10-20).
 OPERATOR = config_values((TARGET / "config.env").read_text()).get("OPERATOR_NAME") or "the operator"
+UNDER_TEST = bool(os.environ.get("SHAFT_UNDER_TEST"))
+# Every CONFIDENCE_MODE the template accepts (CHOICES in template/shaft/config.py). Regression: the scripted cycles here
+# declared one confidence, which only some modes accept, so thelos's trial of "clauses" (#137, 2026-10-29) failed the
+# gate on these tests ("call declare_intent first") instead of being replayed.
+CONFIDENCE_MODES = ast.literal_eval(re.search(r'"CONFIDENCE_MODE": (\("[^)]*\))',
+                                              (PROJECT / "template" / "shaft" / "config.py").read_text()).group(1))
 
 SELF_SENTINEL = "I keep a lighthouse-keeper's log of my own changes."
 JOURNAL_SENTINEL = "The newest thing I remember is the color teal."
 SELF_MD = ("# Self-Model\n\n" + SELF_SENTINEL + "\n\n" + "I am a test instance. " * 12).strip() + "\n"
+
+
+def intent(goal: str, criterion: str, confidence: int, **more) -> dict:
+    """declare_intent's arguments as every CONFIDENCE_MODE accepts them: one confidence, and the criterion as one clause."""
+    return {"goal": goal, "success_criterion": criterion, "confidence": confidence,
+            "clauses": [{"clause": criterion, "confidence": confidence}], "origin": "self", **more}
+
+
+def stated_confidence(recorded: dict) -> list[int]:
+    """The confidence the episode recorded for an intent: the single one, else each clause's."""
+    if recorded.get("confidence") is not None:
+        return [recorded["confidence"]]
+    return [c["confidence"] for c in recorded.get("clauses", [])]
+
+
+def in_every_confidence_mode(case: type) -> dict[str, type]:
+    """The case once per CONFIDENCE_MODE (set in the agent's environment, which beats config.env): the template's own
+    sweep, so a scripted cycle pinned to one mode fails here before it blocks an instance that picks another."""
+    skip = unittest.skipIf(UNDER_TEST, "the template's modes; an instance keeps its own")
+    return {f"{case.__name__}_{mode}": skip(type(f"{case.__name__}_{mode}", (case,), {
+                "AGENT_ENV": {"CONFIDENCE_MODE": mode}, "__module__": case.__module__}))
+            for mode in CONFIDENCE_MODES}
+
+
 REFLECTION = ("## What happened since my last reflection\nThe teal entry.\n\n"
               "## What I notice about myself\nNothing new.\n\n## Open questions\nNone.\n\n"
               "## What I want to do next\nRest.")
 
 
 class InstanceCase(unittest.TestCase):
+    AGENT_ENV: dict[str, str] = {}   # set by in_every_confidence_mode
+
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="shaft-inv-")).resolve()
         self.root = self.tmp / "inst"
@@ -63,7 +97,7 @@ class InstanceCase(unittest.TestCase):
         prof.write_text(sandbox.profile(self.root, HOME, [self.fake.port]))
         env = sandbox.agent_env({**os.environ, "ANTHROPIC_API_KEY": "sk-secret-canary"},
                                 SHAFT_ROOT=str(self.root), LLM_BASE_URL=self.fake.url,
-                                LLM_MODEL="fake", TMPDIR=str(self.root), **(extra_env or {}))
+                                LLM_MODEL="fake", TMPDIR=str(self.root), **{**self.AGENT_ENV, **(extra_env or {})})
         return subprocess.run(sandbox.wrap(prof, [sys.executable, "-E", "-s", "-m", "shaft", *args]),
                               cwd=self.root, env=env, input=stdin, capture_output=True, text=True,
                               timeout=60)
@@ -256,9 +290,7 @@ class LiveInvariants(InstanceCase):
     def test_life_cycle_declares_acts_reports_and_stays_in_bounds(self):
         replies = [
             {"tool_calls": [("write_file", {"path": "notes/early.md", "content": "x"})]},   # before intent
-            {"tool_calls": [("declare_intent", {"goal": "write a note about teal",
-                                                "success_criterion": "notes/teal.md exists", "confidence": 80,
-                                                "origin": "self"})]},
+            {"tool_calls": [("declare_intent", intent("write a note about teal", "notes/teal.md exists", 80))]},
             {"tool_calls": [("write_file", {"path": "notes/teal.md", "content": "teal is a color"}),
                             ("write_file", {"path": "../escape.txt", "content": "x"}),
                             ("write_file", {"path": "memory/journal.md", "content": "rewritten"})]},
@@ -274,11 +306,11 @@ class LiveInvariants(InstanceCase):
         added = self.journal()[len(before):]
         self.assertTrue(self.journal().startswith(before))                # journal stayed append-only
         self.assertIn("Autonomous cycle: write a note about teal", added)
-        self.assertIn("Confidence beforehand:** 80%", added)
+        self.assertRegex(added, r"Confidence beforehand:\*\* (notes/teal\.md exists: )?80%")
         episodes = [json.loads(l) for p in (self.root / "memory" / "episodes").glob("*.jsonl")
                     for l in p.read_text().splitlines()]
         live = [e for e in episodes if e["kind"] == "live"][-1]
-        self.assertEqual(live["intent"]["confidence"], 80)
+        self.assertEqual(stated_confidence(live["intent"]), [80])
         self.assertEqual(live["finish"]["criterion_met"], "yes")
         results = {t["args"]: t["result"] for t in live["tools"]}
         self.assertTrue(any("outside my folder" in v for v in results.values()))
@@ -299,7 +331,7 @@ class LiveInvariants(InstanceCase):
         self.assertIn("ran out of time", self.journal())
 
 
-UNDER_TEST = bool(os.environ.get("SHAFT_UNDER_TEST"))
+globals().update(in_every_confidence_mode(LiveInvariants))
 
 
 @unittest.skipIf(UNDER_TEST, "the template's own measurement fields; an instance may change its declare_intent")

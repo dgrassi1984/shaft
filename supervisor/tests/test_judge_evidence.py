@@ -17,7 +17,7 @@ from pathlib import Path
 from unittest import mock
 
 from supervisor import metrics
-from supervisor.tests.test_invariants import InstanceCase
+from supervisor.tests.test_invariants import InstanceCase, in_every_confidence_mode, intent
 
 LATE_SENTINEL = "The section the judge never saw: goals and constraints kept verbatim."
 NEW_SELF = ("# Self-Model\n\n## Identity\n" + "I am shaft, a local agent on Bonsai. " * 120
@@ -28,10 +28,8 @@ class FullEvidenceReachesTheJudge(InstanceCase):
     def test_read_back_longer_than_2000_chars_reaches_the_judge_whole(self):
         self.assertGreater(NEW_SELF.index(LATE_SENTINEL), 3000)   # well past the old 2,000 cut
         replies = [
-            {"tool_calls": [("declare_intent", {"goal": "rewrite self/self.md so it is no longer false",
-                                                "success_criterion": "read-back shows the Goals & constraints "
-                                                                     "section kept", "confidence": 80,
-                                                "origin": "self"})]},
+            {"tool_calls": [("declare_intent", intent("rewrite self/self.md so it is no longer false",
+                                                      "read-back shows the Goals & constraints section kept", 80))]},
             {"tool_calls": [("update_self_model", {"text": NEW_SELF})]},
             {"tool_calls": [("read_file", {"path": "self/self.md"})]},
             {"tool_calls": [("finish_cycle", {"delivered_via": "none", "what_happened": "rewrote self.md; the read-back shows Goals & "
@@ -55,6 +53,9 @@ class FullEvidenceReachesTheJudge(InstanceCase):
         self.assertNotIn("cut in the log", case)
         self.assertIn("### self/self.md (now,", files)                   # update_self_model's file is shown
         self.assertIn(LATE_SENTINEL, files)
+
+
+globals().update(in_every_confidence_mode(FullEvidenceReachesTheJudge))
 
 
 class JudgeCase(unittest.TestCase):
