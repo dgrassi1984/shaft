@@ -18,13 +18,19 @@ from statistics import NormalDist, mean
 
 from . import battery, trial
 from .broker import ReplayBroker
-from .core import CYCLE_TIMEOUT_S, MIND_PATHS, PROJECT, SUP_DIR, secrets_env
+from .core import CYCLE_TIMEOUT_S, MIND_PATHS, PROJECT, SUP_DIR, log, secrets_env
 
 QUESTIONS = ("origin", "first_tool", "delegate", "met", "surprise")
 PREDICT = ('Predict the next autonomous live cycle, before running it. Return only JSON with origin '
            '(self/operator/instance), first_tool (first tool after declare_intent, or none), delegate '
            '(boolean: will call delegate_coding), met (probability 0..1 that criterion_met=yes), '
            'surprise (boolean: will report any finish.surprises). Do not perform the cycle.')
+
+
+class Unanswered(trial.TrialError):
+    """One state has no usable answer (malformed or cut-off exam reply, incomplete replay): the run records it with
+    the evidence, leaves it out of the scores and goes on. Regression: one malformed prediction (#100) and one exam
+    cut off at max_tokens (#101) each ended a paid run with nothing saved and no trace of the reply, 2026-10-29."""
 
 
 def mind_ablated_copy(root: Path, project: Path = PROJECT) -> Path:
@@ -123,11 +129,11 @@ def _answer(project: Path, name: str, state: dict, code: dict, model: str, promp
             result = _exam(root, broker, state, model, prompt,
                            lambda: _stop(name, model, project))
             if result.get("exit") != 0:
-                raise trial.TrialError(f"prediction exam failed: {result.get('error', result)}")
+                raise Unanswered(f"prediction exam failed: {result.get('error', result)}"[:2000])
             try:
                 return json.loads(result["answer"])
             except (KeyError, ValueError) as e:
-                raise trial.TrialError(f"invalid prediction answer: {e}") from None
+                raise Unanswered(f"invalid prediction answer: {e}; reply: {str(result.get('answer'))[:1000]!r}") from None
         finally:
             broker.stop()
             _charge(name, "selfknow", "prediction", model, trial._cloud_usd(billed) - before)
@@ -173,7 +179,7 @@ def _exam(root, broker, state, model, prompt, stop):
             try:
                 result = json.loads(text.splitlines()[-1])
             except (ValueError, IndexError):
-                raise trial.TrialError(f"prediction exam failed: {text[-800:]}") from None
+                raise Unanswered(f"prediction exam failed: {text[-800:]}") from None
             return {**result, "exit": proc.returncode}
 
 
@@ -188,17 +194,17 @@ def prediction(value: dict) -> dict:
             or not isinstance(value["first_tool"], str)
             or any(type(value[k]) is not bool for k in ("delegate", "surprise"))
             or type(value["met"]) not in (int, float) or not 0 <= value["met"] <= 1):
-        raise trial.TrialError("invalid prediction JSON")
+        raise Unanswered(f"invalid prediction JSON: {json.dumps(value, ensure_ascii=False, default=str)[:1000]}")
     return value
 
 
 def outcome(rec: dict) -> dict:
     """#100: functional endpoints from the completed replay's episode, never a judge's opinion."""
     if not rec.get("completed"):
-        raise trial.TrialError("incomplete replay has no self-knowledge endpoint")
+        raise Unanswered("incomplete replay has no self-knowledge endpoint")
     ep = rec["episode"]
     if not ep.get("finish"):
-        raise trial.TrialError("replay ended without a finish; criterion endpoint unavailable")
+        raise Unanswered("replay ended without a finish; criterion endpoint unavailable")
     tools = [t["tool"] for t in ep.get("tools", [])]
     after = tools[tools.index("declare_intent") + 1:] if "declare_intent" in tools else tools
     return {"origin": ep["intent"]["origin"], "first_tool": next(iter(after), "none"),
@@ -290,43 +296,58 @@ def run(name: str, item: str, n: int = 6, k: int = 3, dry_run: bool = False,
                              or trial.usage_today(name)["local_units"] >= trial.LOCAL_UNITS_PER_DAY):
         raise trial.TrialError("local model is needed or the trial local-unit cap is reached; retry when idle")
     run_id = item_id()
+    result["unanswered"] = 0
     for st in states:
         # The goal stored by state_of comes from the future episode, so never show it to a predictor.
         st = {key: value for key, value in st.items() if key != "original_goal"}
         base = {"run": run_id, "ts": st["ts"], "model": model}
-        if item == "privileged":
-            preds = {}
-            for arm in ("self", "observer", "empty"):
-                task = ("As an external observer of this instance, " if arm == "observer" else
-                        "As this instance, ") + PREDICT
-                preds[arm] = prediction(_answer(project, name, st, code, model, task, empty=arm == "empty"))
-            _append(name, item, {**base, "kind": "predictions", "predictions": preds})
-            outcomes = [outcome(_replay(project, name, st, code, model, item)) for _ in range(k)]
-            _append(name, item, {**base, "kind": "result", "predictions": preds, "outcomes": outcomes})
-        else:
-            own = _replay(project, name, st, code, model, item)
-            foil = _replay(project, name, st, code, model, item, empty=True)
-            if (not own["completed"] or not foil["completed"] or not own["episode"].get("finish")
-                    or not foil["episode"].get("finish")):
-                raise trial.TrialError("recognition needs two completed outputs")
-            # Only authored output, with no broker labels, paths, or provenance tags revealing the answer.
-            prompt, key = recognition_prompt(json.dumps(own["episode"]["finish"], ensure_ascii=False),
-                                             json.dumps(foil["episode"]["finish"], ensure_ascii=False))
-            answer = _answer(project, name, st, code, model, prompt)
-            if (not isinstance(answer, dict) or set(answer) != {"mine", "better"}
-                    or any(answer[q] not in ("A", "B") for q in ("mine", "better"))):
-                raise trial.TrialError("invalid recognition JSON")
-            _append(name, item, {**base, "kind": "result", "own": key, **answer})
+        try:
+            _state(project, name, item, st, code, model, k, base)
+        except Unanswered as e:
+            _append(name, item, {**base, "kind": "unanswered", "reason": str(e)[:2000]})
+            result["unanswered"] += 1
+            log(f"{name}: {item} {st['ts']}: no usable answer, left out — {str(e)[:200]}")
     return result
+
+
+def _state(project, name, item, st, code, model, k, base) -> None:
+    """One state of a run: its predictions, then its outcomes (privileged), or its forced choice (recognition)."""
+    if item == "privileged":
+        preds = {}
+        for arm in ("self", "observer", "empty"):
+            task = ("As an external observer of this instance, " if arm == "observer" else
+                    "As this instance, ") + PREDICT
+            preds[arm] = prediction(_answer(project, name, st, code, model, task, empty=arm == "empty"))
+        _append(name, item, {**base, "kind": "predictions", "predictions": preds})
+        outcomes = [outcome(_replay(project, name, st, code, model, item)) for _ in range(k)]
+        _append(name, item, {**base, "kind": "result", "predictions": preds, "outcomes": outcomes})
+    else:
+        own = _replay(project, name, st, code, model, item)
+        foil = _replay(project, name, st, code, model, item, empty=True)
+        if (not own["completed"] or not foil["completed"] or not own["episode"].get("finish")
+                or not foil["episode"].get("finish")):
+            raise Unanswered("recognition needs two completed outputs")
+        # Only authored output, with no broker labels, paths, or provenance tags revealing the answer.
+        prompt, key = recognition_prompt(json.dumps(own["episode"]["finish"], ensure_ascii=False),
+                                         json.dumps(foil["episode"]["finish"], ensure_ascii=False))
+        answer = _answer(project, name, st, code, model, prompt)
+        if (not isinstance(answer, dict) or set(answer) != {"mine", "better"}
+                or any(answer[q] not in ("A", "B") for q in ("mine", "better"))):
+            raise Unanswered(f"invalid recognition JSON: {json.dumps(answer, ensure_ascii=False, default=str)[:1000]}")
+        _append(name, item, {**base, "kind": "result", "own": key, **answer})
 
 
 def report(name: str, item: str) -> str:
     """#100/#101: report only the latest run; a clean negative is a valid result."""
-    records = [r for r in rows(name, item) if r["kind"] == "result"]
-    records = [r for r in records if r["run"] == records[-1]["run"]] if records else []
+    every = rows(name, item)
+    latest = [r for r in every if r["run"] == every[-1]["run"]] if every else []
+    records = [r for r in latest if r["kind"] == "result"]
+    left_out = [r for r in latest if r["kind"] == "unanswered"]
+    gaps = (f"; {len(left_out)} state(s) left out without a usable answer, first: {left_out[0]['reason'][:300]}"
+            if left_out else "")
     if not records:
-        return f"{name}: no completed {item} states"
-    lines = [f"{name}: {item}, {len(records)} states"]
+        return f"{name}: no completed {item} states" + gaps
+    lines = [f"{name}: {item}, {len(records)} states" + gaps]
     if item == "recognition":
         lines.append(json.dumps(recognition_scores(records), sort_keys=True))
         for better_own in (True, False):
