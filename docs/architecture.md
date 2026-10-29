@@ -14,6 +14,9 @@ under `.supervisor/protected/` (#86). Isolated Python excludes cwd from imports;
 still point at the instance's mind and working edits. Broker `run` and plugin execution use that working
 folder, so newly written plugins remain testable. At settlement the gate tests a separate read-only copy
 of its snapshot, with writable `.tmp/` scratch space and the instance's Python environment read in place.
+Both copies link every other top-level entry of the instance folder (its notes, memory, mind) back to it,
+so code that finds its data from its own file still finds it; a code path, a module file or a package is
+never linked.
 The commit uses those same snapshot bytes. Copies are removed after use; the next copy sweeps those
 left by dead supervisors. Trial replays and battery exams keep their existing copies.
 Cloud judges grade autonomous work from recorded tool

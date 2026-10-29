@@ -190,7 +190,7 @@ class NeverTravelsTest(Fixture):
     def capture_gate(self):
         seen = []
 
-        def run_tests(scratch, home, env_root=None):
+        def run_tests(scratch, home, env_root=None, data_root=None):
             seen.append(sorted(p.relative_to(scratch).as_posix() for p in scratch.rglob("*")))
             return True, ""
         return seen, mock.patch("supervisor.gate.run_tests", side_effect=run_tests)

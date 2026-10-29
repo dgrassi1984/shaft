@@ -209,8 +209,15 @@ The broker call log includes the class, action id and disposition for classified
   mind, notes and working edits remain writable. Broker `run` and plugin execution still use the working folder,
   so a plugin written during a run can be tested before settlement. At settlement a separate protected copy of
   the gate's snapshot supplies both the supervisor invariants and the sandboxed plugin and instance tests;
-  only its `.tmp/` is writable. The copy also holds `config.env` for the trusted tests that read it, and reads the
-  instance's Python environment in place. The commit and approved-code record use the same snapshot bytes.
+  of the copy only its `.tmp/` is writable. The copy also holds `config.env` for the trusted tests that read it, and
+  reads the instance's Python environment in place. Both copies link every other top-level entry of the instance
+  folder back to it (`protected._link_data`), never a code path: code that finds its data from its own file
+  (wren's `Path(__file__).parent.parent / "notes/…"`) found nothing in a copy of the code alone, and on 2026-10-29
+  every change wren made was reverted for it. The copy leads the import path, so an entry that could supply an
+  import — a module file (`unittest.py` would replace the gate's runner) or a folder with an `__init__` — is never
+  linked; a plain folder can only be a namespace portion, which never shadows a module. The gate's tests run in the
+  instance's own sandbox, as a launch does: they read and write its folder as they did before #86, never its code
+  paths in either place nor its Python environment. The commit and approved-code record use the same snapshot bytes.
   This closes both check-to-use windows: a working file changed after reconciliation cannot supply a launched
   import, and a file swapped after the gate's snapshot cannot supply its tests. Copies are removed after the
   run or gate, including on exceptions; copies left by dead supervisor processes are swept before making the
