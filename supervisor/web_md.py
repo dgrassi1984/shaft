@@ -164,6 +164,23 @@ def _starts_block(line: str) -> bool:
     return bool(m and m[4].strip() and (not m[2][0].isdigit() or m[2][:-1] == "1"))
 
 
+def fenced(lines: list[str], i: int) -> tuple[int, str] | None:
+    """The fenced code block opening at lines[i] (``` or ~~~, with its language), to its closing fence or the end of
+    the text: (the line after it, its html). None when lines[i] opens none. The operator's own turns show their code
+    this way too (web_views._my_text)."""
+    if not (m := _FENCE.match(lines[i])):
+        return None
+    indent, fence, lang = len(m[1]), m[2], m[3]
+    close = re.compile(r"^ {0,3}" + re.escape(fence[0]) + "{" + str(len(fence)) + r",}\s*$")
+    body = []
+    i += 1
+    while i < len(lines) and not close.match(lines[i]):
+        body.append(lines[i][indent:] if lines[i][:indent].strip() == "" else lines[i])
+        i += 1
+    label = f' data-lang="{esc(lang)}"' if lang else ""
+    return i + 1, f'<pre class="code"{label}><code>{esc(chr(10).join(body))}</code></pre>'   # past the closing fence
+
+
 MAX_DEPTH = 16                     # quotes and lists nested deeper show as text: they never break the page
 
 
@@ -177,17 +194,9 @@ def _blocks(lines: list[str], tight: bool = False, depth: int = 0) -> str:
         if not line.strip():
             i += 1
             continue
-        if m := _FENCE.match(line):
-            indent, fence, lang = len(m[1]), m[2], m[3]
-            body = []
-            i += 1
-            while i < len(lines) and not re.match(r"^ {0,3}" + re.escape(fence[0]) + "{" + str(len(fence)) + r",}\s*$",
-                                                  lines[i]):
-                body.append(lines[i][indent:] if lines[i][:indent].strip() == "" else lines[i])
-                i += 1
-            i += 1                                          # the closing fence (or the end of the text)
-            label = f' data-lang="{esc(lang)}"' if lang else ""
-            out.append(f'<pre class="code"{label}><code>{esc(chr(10).join(body))}</code></pre>')
+        if code := fenced(lines, i):
+            i, rendered = code
+            out.append(rendered)
             continue
         if _HR.match(line):
             out.append("<hr>")

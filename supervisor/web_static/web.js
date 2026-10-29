@@ -1111,10 +1111,11 @@
     copyText(pre ? pre.querySelector("code, span.code")?.textContent ?? pre.textContent
                  : (b.closest("[data-raw]") || {}).dataset?.raw || "", b);
   });
-  // A copy button on each code block of an answer or a document: beside the block, in a wrapper, not inside it — the
-  // block scrolls sideways, and a button inside scrolled away with its first lines (W18, review 2026-10-24).
+  // A copy button on each code block of an answer, a document or the operator's own message: beside the block, in a
+  // wrapper, not inside it — the block scrolls sideways, and a button inside scrolled away with its first lines (W18,
+  // review 2026-10-24).
   function decorate(root) {
-    root.querySelectorAll(".turn.it pre, .docview pre").forEach(pre => {
+    root.querySelectorAll(".turn.it pre, .turn.me pre.code, .docview pre").forEach(pre => {
       if (pre.parentElement && pre.parentElement.classList.contains("prewrap")) return;
       const wrap = document.createElement("div");
       wrap.className = "prewrap";
@@ -1383,12 +1384,15 @@
     const first = back && turn.querySelector(".msgactions button");
     if (first && first.getClientRects().length) first.focus({ preventScroll: true });
   }
+  // The whole message: an answer is one .md; the operator's own is a run of parts (a quote, text, a code block).
   function selectText(turn) {
-    const body = turn.querySelector(".md, .wrap");
-    if (!body) return;
+    const md = turn.querySelector(".md");
+    const parts = md ? [md] : [...turn.querySelectorAll(".wrap, pre.code")].filter(e => !e.parentElement.closest(".wrap"));
+    if (!parts.length) return;
     turn.classList.add("selecting");
     const range = document.createRange();
-    range.selectNodeContents(body);
+    range.setStartBefore(parts[0]);
+    range.setEndAfter(parts[parts.length - 1]);
     const sel = window.getSelection();
     sel.removeAllRanges();
     sel.addRange(range);
