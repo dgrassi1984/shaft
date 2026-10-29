@@ -269,6 +269,62 @@ class RunTest(unittest.TestCase):
         self.assertEqual(p.rows("x", "privileged")[-1]["outcomes"], [{**PRED, "met": True}] * 3)
         self.assertIn("clean negative is a valid result", p.report("x", "privileged"))
 
+    def two_states(self):
+        states = [{**STATE, "ts": "2026-10-10T11:00:00"}, {**STATE, "ts": "2026-10-10T12:00:00"}]
+        for attr, options in (("live_episodes", {"return_value": [{"ts": s["ts"]} for s in states]}),
+                              ("state_of", {"side_effect": lambda project, name, ep, starts: next(
+                                  s for s in states if s["ts"] == ep["ts"])})):
+            patch = mock.patch.object(trial, attr, **options)
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def test_a_malformed_prediction_is_left_out_with_its_reply_and_the_run_goes_on(self):
+        """Regression (2026-10-29): one prediction with a wrong field ended thelos's paid privileged run with only
+        "refused: invalid prediction JSON" — no state saved, no trace of what the model returned."""
+        self.two_states()
+        calls = []
+
+        def answer(project, name, state, code, model, prompt, empty=False):
+            calls.append(state["ts"])
+            return {**PRED, "met": 80} if state["ts"].endswith("12:00:00") else PRED
+
+        with mock.patch.object(p, "_answer", side_effect=answer), \
+                mock.patch.object(p, "_replay", return_value=record()):
+            result = p.run("x", "privileged", n=2, project=self.project)
+        self.assertEqual(result["unanswered"], 1)
+        kinds = [(r["ts"][11:16], r["kind"]) for r in p.rows("x", "privileged")]
+        self.assertIn(("12:00", "unanswered"), kinds)
+        self.assertIn(("11:00", "result"), kinds)                       # the other state still completed
+        left = next(r for r in p.rows("x", "privileged") if r["kind"] == "unanswered")
+        self.assertIn('"met": 80', left["reason"])                       # the reply itself is kept
+        report = p.report("x", "privileged")
+        self.assertIn("1 states; 1 state(s) left out", report)
+        self.assertIn('"met": 80', report)
+
+    def test_a_cut_off_exam_is_left_out_and_recognition_goes_on(self):
+        """Regression (2026-10-29): an exam reply cut off at max_tokens twice ended thelos's recognition run."""
+        self.two_states()
+
+        def answer(project, name, state, code, model, prompt, empty=False):
+            if state["ts"].endswith("12:00:00"):
+                raise p.Unanswered("prediction exam failed: exam: reply cut off at max_tokens=32768 twice")
+            return {"mine": "A", "better": "A"}
+
+        with mock.patch.object(p, "_answer", side_effect=answer), \
+                mock.patch.object(p, "_replay", return_value=record()):
+            result = p.run("x", "recognition", n=2, project=self.project)
+        self.assertEqual(result["unanswered"], 1)
+        self.assertEqual([r["kind"] for r in p.rows("x", "recognition")].count("result"), 1)
+        self.assertIn("cut off at max_tokens", p.report("x", "recognition"))
+
+    def test_a_budget_stop_still_ends_the_run(self):
+        """Only a state's own answer is left out; the run's budget or a local-model demand still stops it."""
+        with mock.patch.object(p, "_answer", side_effect=trial.TrialError("this run's budget of $1.00 is spent")), \
+                self.assertRaises(trial.TrialError) as caught:
+            p.run("x", "privileged", n=1, project=self.project)
+        self.assertNotIsInstance(caught.exception, p.Unanswered)
+        self.assertEqual(p.rows("x", "privileged"), [])
+
     def test_dry_run_has_counts_and_no_spend_or_writes(self):
         with mock.patch.object(p, "_answer") as answer, mock.patch.object(p, "_replay") as replay, \
                 mock.patch.object(trial, "_ledger") as ledger:
