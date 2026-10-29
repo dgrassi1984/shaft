@@ -112,10 +112,11 @@ class ProxyTest(unittest.TestCase):
         return urllib.request.build_opener(urllib.request.ProxyHandler({"http": url, "https": url}))
 
     def rows(self) -> list[dict]:
-        """The log, once the proxy has written it: a connection is logged when it closes, which can be just after
-        the client has its answer."""
+        """The log, once the proxy has written a line of it: a connection is logged when it closes, which can be just
+        after the client has its answer. Waiting for the file was not enough: open("a") makes it before the line is
+        written, and a read in between found no row (the gate's parallel run, 2026-10-29)."""
         end = time.monotonic() + 3
-        while time.monotonic() < end and not self.log.exists():
+        while time.monotonic() < end and not (self.log.exists() and self.log.read_text().endswith("\n")):
             time.sleep(0.02)
         return [json.loads(l) for l in self.log.read_text().splitlines()] if self.log.exists() else []
 
