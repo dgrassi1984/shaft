@@ -851,8 +851,8 @@
     const form = document.querySelector("form[data-draft]");
     if (!form) return;
     const box = form.querySelector("textarea");
-    try { form._quote = localStorage.getItem(quoteKey(form)) || ""; } catch (e) { /* none kept */ }
-    if (form._quote) quoteChip(form);
+    form._quotes = keptQuotes(form);
+    if (form._quotes.length) quoteChips(form);
     try {
       if (!box.value) box.value = localStorage.getItem(draftKey(form)) || "";
       const attempt = JSON.parse(localStorage.getItem(pendingKey(form)) || "null");
@@ -1248,6 +1248,8 @@
     const q = quotable();
     if (!q) { b.hidden = true; return; }
     const r = q.range.getBoundingClientRect();
+    const form = q.composer.closest("form[data-draft]");
+    b.textContent = form && (form._quotes || []).length ? "+ Quote" : "↩ Reply";   // one more piece for the same reply
     b.hidden = false;
     // In the window (position: fixed), below the selection — a phone shows its own copy/paste menu above it — and
     // kept inside the window when the selection runs to its bottom edge.
@@ -1270,48 +1272,73 @@
       if (grid && grid.classList.contains("docfullscreen")) fullscreenDoc(false);
       if (sheet && sheet.kind === "docs") showDocs(false);
     }
-    quoteText(q.text, q.composer, q.doc);
+    // Not on a phone or tablet: its keyboard would cover half the chat just as the next piece to quote is looked for;
+    // a tap on the field brings it.
+    quoteText(q.text, q.composer, q.doc, !touchOnly());
   }
-  // A quote waits above the field as a chip, not as "> " lines typed into it (iPhone review I17). Sent, it goes first,
-  // as the same Markdown quote (web_views._my_text shows it quoted); it is kept with the draft (shaft.quote.<name>).
+  // A quote waits above the field as a chip, not as "> " lines typed into it (iPhone review I17). Several pieces can be
+  // quoted for one message, each its own chip that × takes out; sent, they go first, in order, each its own Markdown
+  // quote (web_views._my_text shows each quoted; messages.quoted_questions reads each on its own, so a quoted question
+  // is still answered when other pieces are quoted with it). They are kept with the draft (shaft.quote.<name>).
   const quoteKey = (form) => `shaft.quote.${form.dataset.draft}`;
-  function quoteChip(form) {
-    let chip = form.querySelector(".quotechip");
-    const quote = form._quote || "";
-    try { if (quote) localStorage.setItem(quoteKey(form), quote); else localStorage.removeItem(quoteKey(form)); }
-    catch (e) { /* no storage: the quote lives as long as the page */ }
-    if (!quote) { if (chip) chip.remove(); return; }
-    if (!chip) {
-      chip = document.createElement("div");
-      chip.className = "quotechip";
-      form.insertBefore(chip, form.querySelector(".cbox") || form.querySelector("textarea"));
-    }
-    const shown = document.createElement("span");
-    shown.textContent = quote.replace(/^> ?/gm, "").trim();
-    const x = document.createElement("button");
-    x.type = "button";
-    x.className = "unquote";
-    x.setAttribute("aria-label", "Remove the quote");
-    x.textContent = "×";
-    x.addEventListener("click", () => { form._quote = ""; quoteChip(form); form.querySelector("textarea").focus(); });
-    chip.replaceChildren(shown, x);
+  function keptQuotes(form) {
+    let kept = null;
+    try { kept = localStorage.getItem(quoteKey(form)); } catch (e) { /* none kept */ }
+    if (!kept) return [];
+    try {
+      const list = JSON.parse(kept);
+      if (Array.isArray(list)) return list.filter(q => typeof q === "string" && q);
+    } catch (e) { /* kept before several quotes: one quote's Markdown */ }
+    return [kept];
   }
-  function quoteText(text, box, doc = "") {
+  function quoteChips(form) {
+    const quotes = form._quotes || [];
+    try { if (quotes.length) localStorage.setItem(quoteKey(form), JSON.stringify(quotes)); else localStorage.removeItem(quoteKey(form)); }
+    catch (e) { /* no storage: the quotes live as long as the page */ }
+    let chips = form.querySelector(".quotechips");
+    if (!quotes.length) { if (chips) chips.remove(); return; }
+    if (!chips) {
+      chips = document.createElement("div");
+      chips.className = "quotechips";
+      form.insertBefore(chips, form.querySelector(".cbox") || form.querySelector("textarea"));
+    }
+    chips.replaceChildren(...quotes.map((quote, i) => {
+      const chip = document.createElement("div");
+      chip.className = "quotechip";
+      const shown = document.createElement("span");
+      shown.textContent = quote.replace(/^> ?/gm, "").trim();
+      const x = document.createElement("button");
+      x.type = "button";
+      x.className = "unquote";
+      x.setAttribute("aria-label", quotes.length > 1 ? `Remove quote ${i + 1} of ${quotes.length}` : "Remove the quote");
+      x.textContent = "×";
+      x.addEventListener("click", () => {
+        form._quotes = (form._quotes || []).filter((_, j) => j !== i);
+        quoteChips(form);
+        composerChanged(form);                                    // another message: a new id
+        if (!touchOnly()) form.querySelector("textarea").focus();
+      });
+      chip.append(shown, x);
+      return chip;
+    }));
+  }
+  function quoteText(text, box, doc = "", focus = true) {
     const from = doc ? `> (from notes/docs/${doc})\n` : "";     // a quote from a document names it
     const quoted = from + text.trim().split(/\r?\n/).map(l => `> ${l}`.trimEnd()).join("\n");
     const form = box.closest("form[data-draft]");
-    form._quote = form._quote ? `${form._quote}\n>\n${quoted}` : quoted;
-    quoteChip(form);
+    const quotes = form._quotes || [];
+    if (!quotes.includes(quoted)) form._quotes = [...quotes, quoted];     // the same piece twice is one quote
+    quoteChips(form);
     window.getSelection().removeAllRanges();
-    box.focus();
+    if (focus) box.focus();
     composerChanged(form);                                        // a new message: a new id
   }
-  function takeQuote(form) {                     // at Send: the quote goes before the text, and the chip goes
+  function takeQuote(form) {                     // at Send: the quotes go before the text, and their chips go
     const box = form.querySelector("textarea[name=text]");
-    if (!form._quote || !box) return;
-    box.value = `${form._quote}\n\n${box.value}`;
-    form._quote = "";
-    quoteChip(form);
+    if (!(form._quotes || []).length || !box) return;
+    box.value = `${form._quotes.join("\n\n")}\n\n${box.value}`;
+    form._quotes = [];
+    quoteChips(form);
   }
   document.addEventListener("click", (ev) => {
     const b = ev.target.closest && ev.target.closest("[data-reply-message]");
@@ -1334,9 +1361,9 @@
     // A quote waiting in the composer is part of the draft: it is asked about and dropped, never sent with the failed
     // message (Codex review of the branch). The composer's busy guard and the message id keep a second tap from a
     // second send; Retry is not disabled, so a resend that failed can be tried again.
-    if ((box.value && box.value !== text) || form._quote) {
+    if ((box.value && box.value !== text) || (form._quotes || []).length) {
       if (!confirm("Replace your draft with the failed message?")) return;
-      if (form._quote) { form._quote = ""; quoteChip(form); }
+      if ((form._quotes || []).length) { form._quotes = []; quoteChips(form); }
     }
     if (box.value !== text) {                  // a second click must not append a copy
       box.value = text;

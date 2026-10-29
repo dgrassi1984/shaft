@@ -242,6 +242,14 @@ class AnswerQuotedTest(Sandbox):
         self.assertEqual(messages.answer_quoted("wren", quoted), [q["file"]])
         self.assertEqual([m["kind"] for m in messages.pending()], ["note"])
 
+    def test_a_question_quoted_with_other_pieces_is_answered(self):
+        """The web composer sends several quotes as separate "> " blocks, a blank line apart: each block is matched on
+        its own. Glued into one block (as the composer once did), the question was not found and stayed open."""
+        q = self.message("wren", "Should I notify you once a day, or every time a label gets new mail?", kind="question")
+        self.message("wren", "A note you can quote.")
+        text = f"> A note you can quote.\n\n> {q['text']}\n\nOnce a day."
+        self.assertEqual(messages.answer_quoted("wren", text), [q["file"]])
+
 
 class ApiChannelTest(unittest.TestCase):
     setUp = test_api.ApiTest.setUp   # through the module: the class imported here was discovered and run again
