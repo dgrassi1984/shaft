@@ -16,10 +16,10 @@ from __future__ import annotations
 import json
 import random
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import judge
+from . import feedback, judge
 from .core import PROJECT, SUP_DIR, instance_root, knob, list_beneath, model_name, log, safe_read
 from .evolution import PROBES
 from . import metrics
@@ -62,18 +62,71 @@ def _identity(root: Path) -> str:
     return "\n\n".join(parts)[:6000]
 
 
+def _feedback_text(text: str) -> str:
+    # llm._move_leaked_thinking runs after streaming, before the episode is saved.
+    return text.rpartition("</think>")[2].strip() if "</think>" in text else text.strip()
+
+
+# A 👎 names a reply by its text and when it was said: the same short text ("Done.") in another conversation is no match.
+FEEDBACK_WINDOW = timedelta(hours=1)
+
+
+def _when(stamp: str) -> datetime | None:
+    try:
+        at = datetime.fromisoformat(stamp)
+    except (TypeError, ValueError):
+        return None
+    return at.astimezone().replace(tzinfo=None) if at.tzinfo else at
+
+
+def _thumbs_down(name: str) -> dict[str, list[datetime | None]]:
+    """reply hash -> when each 👎'd reply was said. The web stores the stripped streamed text; the episode also lost
+    any leaked thinking, so a chat reply's text is hashed again after the same normalisation."""
+    from . import web_chat
+    down: dict[str, list[datetime | None]] = {}
+    for item in feedback.items(name):
+        if item["thumb"] != "down":
+            continue
+        shas, target = {item["reply_sha"]}, item["target"]
+        if target["kind"] == "chat" and (chat := web_chat.load(target["chat"])) and chat["instance"] == name \
+                and target["k"] < len(chat["turns"]):
+            text = chat["turns"][target["k"]].get("content") or ""
+            if feedback.reply_sha(text) == item["reply_sha"]:
+                shas.add(feedback.reply_sha(_feedback_text(text)))
+        for sha in shas:
+            down.setdefault(sha, []).append(_when(item["reply_ts"]))
+    return down
+
+
+def _rated_down(down: dict[str, list[datetime | None]], content: str, ts: str) -> bool:
+    at = _when(ts)
+    whens = down.get(feedback.reply_sha(content), []) + down.get(feedback.reply_sha(_feedback_text(content)), [])
+    return any(w is not None and at is not None and abs(at - w) <= FEEDBACK_WINDOW for w in whens)
+
+
 def build_dataset(name: str) -> tuple[Path, int]:
     """Conversations (my side of every talk) and my judged-successful cycle reports."""
     root = instance_root(name)
     system = {"role": "system", "content": _identity(root)}
     eps = _episodes(root)
-    talks: dict[str, list[dict]] = {}
+    talks: dict[str, list[tuple[dict, str]]] = {}
     for e in eps:
         if e.get("kind") == "talk" and e.get("content"):
             talks.setdefault(e["talk_id"], []).append(
-                {"role": "user" if e["role"] == "user" else "assistant", "content": e["content"]})
-    examples = [{"messages": [system, *turns]} for turns in talks.values()
-                if any(t["role"] == "assistant" for t in turns)]
+                ({"role": "user" if e["role"] == "user" else "assistant", "content": e["content"]}, e.get("ts", "")))
+    down = _thumbs_down(name)
+    examples, cut, dropped = [], 0, 0
+    for said in talks.values():
+        turns = [t for t, _ in said]
+        for k, (turn, ts) in enumerate(said):
+            if turn["role"] == "assistant" and _rated_down(down, turn["content"], ts):
+                cut += 1
+                dropped += len(turns) - k
+                turns = turns[:k]
+                break
+        if any(t["role"] == "assistant" for t in turns):
+            examples.append({"messages": [system, *turns]})
+    print(f"Feedback: {cut} conversations cut, {dropped} turns dropped.")
     good = {j["episode_ts"] for j in metrics.judgments(name) if j["criterion_met"] == "yes"}
     for e in eps:
         if e.get("kind") == "live" and e["ts"] in good and e.get("finish"):

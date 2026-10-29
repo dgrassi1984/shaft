@@ -933,6 +933,41 @@ def cmd_trial(args) -> int:
     return 0
 
 
+def cmd_feedback(name: str | None, days: int | None) -> int:
+    """Show current operator ratings without delivering them to an instance."""
+    from . import feedback, web_chat
+    if name is not None and name not in instance_names():
+        print(f"no instance named {name!r}", file=sys.stderr)
+        return 1
+    rows = feedback.items(name)
+    if days is not None:
+        since = (datetime.now() - timedelta(days=days)).isoformat()
+        rows = [r for r in rows if r["ts"] >= since]
+    if not rows:
+        print("No feedback.")
+        return 0
+    logged = None
+    print("When | Instance | Thumb | Sent | Reply | Reason")
+    for row in rows:
+        target, text = row["target"], "(gone)"
+        if target["kind"] == "chat":
+            chat = web_chat.load(target["chat"])
+            if chat and chat["instance"] == row["instance"] and target["k"] < len(chat["turns"]):
+                text = chat["turns"][target["k"]].get("content") or "(gone)"
+        else:
+            if logged is None:
+                logged = messages.history()
+            text = next((m["text"] for m in reversed(logged)
+                         if m["file"] == target["file"] and m["from"] == row["instance"]), "(gone)")
+        sent = row["sent"]
+        delivery = f"{sent['via']} {sent['ts'][:19].replace('T', ' ')}" if sent else "kept"
+        thumb = "👍" if row["thumb"] == "up" else "👎"
+        reason = " ".join(row["reason"].splitlines())
+        first = text.splitlines()[0] if text else "(gone)"
+        print(f"{row['ts'][:19].replace('T', ' ')} | {row['instance']} | {thumb} | {delivery} | {first} | {reason}")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="shaft", description="SHAFT supervisor")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -1123,6 +1158,9 @@ def main(argv: list[str]) -> int:
     p.add_argument("--report", action="store_true", help="only print the result so far")
     p.add_argument("--channel", choices=["base_rate", "surprises", "envelope"],
                    help="monitors only: intervene on just this channel (default: each separately)")
+    p = sub.add_parser("feedback", help="current operator ratings, newest first")
+    p.add_argument("name", nargs="?")
+    p.add_argument("--days", type=int, help="only ratings from the last N days (default: all)")
     p = sub.add_parser("inbox", help="messages instances sent you")
     p.add_argument("--clear", action="store_true", help="archive notes (questions stay until answered)")
     p = sub.add_parser("reply", help="answer an instance's open question (or message it)")
@@ -1622,6 +1660,8 @@ def main(argv: list[str]) -> int:
             print(f"refused: {e}", file=sys.stderr)
             return 1
         return 0
+    if args.cmd == "feedback":
+        return cmd_feedback(args.name, args.days)
     if args.cmd == "inbox":
         return messages.clear_notes() if args.clear else messages.show_inbox()
     if args.cmd == "reply":

@@ -69,6 +69,7 @@ shaft battery off|on <name>      # no battery for this instance, scheduled or by
 shaft battery perturbation <name> on|off  # speculative #110; off by default, local Bonsai and night window only
 shaft battery run <name> --only perturbation  # paired blind temperature probe; report includes self/observer d-prime
 
+shaft feedback [name] [--days N] # current thumbs, newest first, with reply, reason and delivery; default: all
 shaft inbox [--clear]           # questions and notes instances sent you (you also get a notification)
 shaft reply <name> "…"          # answer its open question
 shaft send <name> "…"           # message it
