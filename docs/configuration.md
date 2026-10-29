@@ -225,6 +225,8 @@ new successful observations reset the count. A successful observation seen earli
 no new evidence. Counts require consecutive calls in the same tool/target family.
 See [effect-loop measurement](architecture.md#effect-loop-measurement) for target rules and replay reporting.
 `CONFIDENCE_MODE` accepts `confirm` (default), `clauses`, or `noconfirm`; the live prompt names the resolved mode.
+The gate's scripted cycles declare in a form every mode accepts, and the supervisor's own suite runs them once
+per mode, so an instance that changes the mode is judged on its code, not on tests pinned to `confirm`.
 `confirm` keeps the existing declare and base-rate confirmation flow. `clauses` asks for 1-4 success-criterion
 clauses, each with an integer confidence 0-100. The template records them with a null combined confidence;
 the supervisor multiplies their probabilities when it writes the judgment, assuming independence because
