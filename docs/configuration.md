@@ -243,7 +243,7 @@ values are bounded by the operator's wake floor (default 10 minutes). `CURIOSITY
 cycle in five, on average, a curiosity cycle while the instance has open surprises and no operator message waits
 (0 = never; [PLAN-surprise](plans/PLAN-surprise.md)).
 The six knobs after it switch the mechanisms of [PLAN-consciousness](plans/PLAN-consciousness.md), each on by default:
-`OUTCOME_CARDS` (on, off, shuffled, recall: before a kind of action that has been failing, the first such call in a
+`OUTCOME_CARDS` (on, off: before a kind of action that has been failing, the first such call in a
 cycle is held while the instance sees what comparable ones led to), `WORKSPACE` (competitive, relevance, off: what wins
 `WORKSPACE_K` places at the front of a live cycle, in automatic recall's place, broadcast after every step),
 `ATTENTION_SCHEMA` (declare_intent asks where it expects to look), `COMMITMENTS` (commit_to, settled in sleep against

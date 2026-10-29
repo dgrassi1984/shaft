@@ -5,8 +5,8 @@ past cycles of the instance with its committed code (the knob as shipped) agains
 to its control — a code change, since a trial refuses to change config.env — and measures the item's own endpoint on
 the replays, beside the trial's pairwise verdict:
 
-- cards (B1): on vs shuffled outcomes, and on vs equal-length ordinary recall; on past cycles that repeated a failing
-  kind of action, does the replay avoid failing at it again?
+- cards (B1): on vs off; on past cycles that repeated a failing kind of action, does the replay avoid failing at it
+  again? (The shuffled and recall controls were removed by operator decision after #136, 2026-10-29.)
 - attention (B3): the schema on vs off; repeats of the failing kind, and the pairwise verdict.
 - commitments (C2): on vs off, on cycles whose goal came from the operator; the pairwise verdict.
 - forecast (D1): forecasts vs the fixed reserve rule; replays that ran out of turns or time, and the pairwise verdict.
@@ -35,7 +35,7 @@ from . import trial
 from .core import PROJECT, SUP_DIR, log, safe_read, safe_write
 
 ALPHA = 0.1   # the trials' one-sided sign test (PLAN-trials decision D5)
-KNOBS = {"cards": [("OUTCOME_CARDS", "shuffled"), ("OUTCOME_CARDS", "recall")],
+KNOBS = {"cards": [("OUTCOME_CARDS", "off")],
          "attention": [("ATTENTION_SCHEMA", "off")],
          "commitments": [("COMMITMENTS", "off")],
          "forecast": [("FORECAST", "reserve")]}
