@@ -483,6 +483,48 @@ def _post(req: Request, dev: str) -> Response:
     if req.path == "/unpair":
         unpair(dev)
         return _html(200, web_pages.h('<p>This browser is unpaired.</p>'))
+    if m := re.fullmatch(r"/feedback/([A-Za-z0-9_-]+)", req.path):
+        from . import feedback, messages, web_chat
+        name = m[1]
+        if name not in _names():
+            return _not_found(req.path)
+        form = req.form()
+        login = (req.headers.get("tailscale-user-login") or "").lower()
+        try:
+            if form.get("op") == "clear":
+                item = next((r for r in feedback.items(name) if r["id"] == form.get("id")), None)
+                if not item:
+                    raise ValueError("That rating is no longer current for this instance.")
+                feedback.clear(item["id"], login)
+            elif form.get("op") == "rate":
+                if form.get("kind") == "chat":
+                    chat = web_chat.load(form.get("cid", ""))
+                    try:
+                        k = int(form.get("k", ""))
+                    except ValueError:
+                        raise ValueError("Choose an assistant reply in this chat.") from None
+                    if not chat or chat.get("instance") != name or not 0 <= k < len(chat.get("turns", [])):
+                        raise ValueError("That chat reply does not belong to this instance.")
+                    reply = chat["turns"][k]
+                    if reply.get("role") != "assistant":
+                        raise ValueError("Only an assistant reply can be rated.")
+                    target = {"kind": "chat", "chat": chat["id"], "k": k}
+                    text = reply.get("content", "")
+                elif form.get("kind") == "message":
+                    reply = next((r for r in messages.history() if r.get("file") == form.get("file")
+                                  and r.get("from") == name and r.get("to") == "operator"), None)
+                    if not reply:
+                        raise ValueError("That logged message is not from this instance to the operator.")
+                    target = {"kind": "message", "file": reply["file"]}
+                    text = reply["text"]
+                else:
+                    raise ValueError("Choose a chat reply or a logged message.")
+                feedback.rate(name, login, target, form.get("thumb", ""), form.get("reason", ""), reply["ts"], text)
+            else:
+                raise ValueError("Choose rate or clear.")
+        except ValueError as e:
+            return _html(409, web_pages.h("<p>{t}</p>", t=str(e)))
+        return _html(200, web_pages.h("<p>Feedback kept.</p>"))
     if m := re.match(r"^/chat/([A-Za-z0-9_-]+)/send$", req.path):
         from . import web_chat
         if m[1] not in _names():

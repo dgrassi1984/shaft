@@ -65,6 +65,8 @@ STATIC_VERSION = _static_version()      # read once at start: the service is res
 # The UI's one icon set (docs/plans/PLAN-pwa-market M1): line icons on a 24-unit grid, drawn in the text's colour. Colour
 # emoji as controls rendered as pale blobs in dark mode and read as disabled (iPhone review I10).
 ICON_PATHS = {
+    "thumb-up": '<path d="M7 10v11H3V10h4Zm0 0 5-8c3 0 3 3 2 7h5a2 2 0 0 1 2 2l-2 9a2 2 0 0 1-2 1H7"/>',
+    "thumb-down": '<path d="M7 14V3H3v11h4Zm0 0 5 8c3 0 3-3 2-7h5a2 2 0 0 0 2-2l-2-9a2 2 0 0 0-2-1H7"/>',
     "copy": '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H4v13h4"/>',
     "check": '<path d="m5 12 4 4L19 6"/>',
     "reply": '<path d="m9 4-6 6 6 6M3 10h10a8 8 0 0 1 8 8v2"/>',

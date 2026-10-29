@@ -939,3 +939,22 @@ main { container: page / inline-size; }
 .card footer button.act:not(:disabled):hover { border-color: var(--accent); }
 .earliermsgs { justify-self: center; margin: .2rem 0 .6rem; }
 .earliermsgs a.button { border-radius: 999px; font-size: .85rem; padding: .4rem .9rem; }
+
+/* Feedback uses the message's actions and a native dialog, like What's new. */
+.feedback { display: inline-flex; gap: 2px; }
+.feedback button[aria-pressed="true"], .msgactions .feedback button[aria-pressed="true"] {
+  color: var(--accent); background: var(--bg); opacity: 1;
+}
+.turn:has(.feedback button[aria-pressed="true"]) .msgactions { opacity: 1; }
+.feedback-sheet { width: calc(100% - 2rem); max-width: 28rem; max-height: 85dvh; overflow-y: auto;
+  border: 1px solid var(--line); border-radius: 10px; padding: 1rem; background: var(--panel); color: var(--text); }
+.feedback-sheet::backdrop { background: #0008; }
+.feedback-sheet label { display: block; margin-bottom: .6rem; }
+.feedback-sheet textarea { width: 100%; resize: vertical; }
+.feedback-actions { display: flex; flex-wrap: wrap; gap: .6rem; margin-top: .8rem; }
+.feedback-actions button { min-height: 44px; }
+@media (hover: none) {
+  .turn:has(.feedback button[aria-pressed="true"]) .msgactions {
+    position: static; width: auto; height: auto; overflow: visible; clip-path: none;
+  }
+}

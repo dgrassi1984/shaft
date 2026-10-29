@@ -377,3 +377,18 @@ Sources: [terminal selection](../supervisor/__main__.py),
 [Web Push](../supervisor/webpush.py).
 Browser and phone instructions describe the intended client workflow; device behavior
 has not been exercised as part of this documentation check.
+
+### Reply feedback (docs/plans/PLAN-feedback.md)
+
+Thumbs up and down beside a reply's Copy/Reply actions, and in its long-press or
+right-click menu, keep a rating in the supervisor. They also appear on messages an instance sent you and their
+`/messages/<file>` pages, including replies in ended chats. Thumbs up saves immediately; thumbs down opens
+"What was wrong? (optional)" with **Just keep it** and **Cancel**. The chosen thumb stays lit and its tooltip
+shows the reason. Tap it again to clear it. Kept feedback is never sent to the instance.
+
+`POST /feedback/<name>` uses the same pairing, origin and CSRF checks as chat posts. Form fields are `op=rate`
+or `clear`; rating takes `kind=chat`, `cid`, `k` (the zero-based assistant turn index), or `kind=message`, `file`,
+plus `thumb=up|down` and optional `reason` (at most 2000 characters). Clear takes the current rating's `id`.
+The server reads the reply text and timestamp from its own records. Unknown instances return 404, invalid
+targets return 409. Ratings and clears append to `.supervisor/feedback.jsonl`; the latest rating per target
+wins. This milestone stores feedback only and does not change fine-tuning or grades.
