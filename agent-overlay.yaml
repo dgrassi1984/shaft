@@ -36,7 +36,10 @@ issues:
 gate:                            # CONTRIBUTING.md; needs the worktree provisioned per docs/worktrees.md
   # the services' interpreter (launchd plists: python@3.12) on a clean PATH. sandbox-exec refuses one under ~/.cache/uv
   # (a runner's venv), and under 3.14 test_gate_suite's guarded-read test fails on main as well, 2026-10-28
-  - env -u VIRTUAL_ENV PATH=/opt/homebrew/bin:/usr/bin:/bin /opt/homebrew/opt/python@3.12/bin/python3.12 -m unittest discover -s supervisor/tests -t .
+  # `shaft gate budget` (docs/plans/PLAN-gate-5min.md): both parts of the suite on the last commit, as the live gate runs
+  # them; fails a failing test, a part over half the 300 s stage limit, a test over 10 s, or a test that runs twice.
+  # Commit first: uncommitted changes are not in what it runs.
+  - env -u VIRTUAL_ENV PATH=/opt/homebrew/bin:/usr/bin:/bin SHAFT_PYTHON=/opt/homebrew/opt/python@3.12/bin/python3.12 bin/shaft gate budget
 
 worktree:
   root: ../shaft-<slug>
