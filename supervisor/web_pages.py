@@ -145,7 +145,8 @@ def page(title: str, body: Html, nav: Html = Html(""), csrf: str = "") -> Html:
 
 # The pages used now and then, under the rail's chats: the one list of them (a second list, passed in and ignored,
 # would have dropped the Settings page from the nav when the two were merged).
-MANAGE = [("/overview", "Overview"), ("/messages", "Messages"), ("/calendar/proposals", "Calendar approvals"), ("/trials", "Trials"), ("/costs", "Costs"),
+MANAGE = [("/overview", "Overview"), ("/messages", "Messages"), ("/calendar/proposals", "Calendar approvals"), ("/trials", "Trials"),
+          ("/experiments", "Experiments"), ("/costs", "Costs"),
           ("/services", "Services"), ("/settings", "Settings")]
 
 
@@ -180,13 +181,16 @@ def nav(names: list[str], current: str = "overview") -> Html:
     from .web_actions import post_attrs
     cur = "/overview" if current == "overview" else current
     rec = version.service("web", stale=False)
-    checkout = version.shown_commit()
+    # Experiments is file-only, including its navigation's version label.
+    saved_version = current == "/experiments"
+    checkout = rec["commit"] if saved_version and rec else "" if saved_version else version.shown_commit()
     moved = h('<a href="/services">checked out: {v}</a>', v=version.commit_describe(checkout)) \
         if rec and rec["commit"].split("+")[0] != checkout.split("+")[0] else Html("")
     running = h('<div class="nav-version dim">web: <button type="button" data-changelog title="What&#39;s new" '
                 'aria-haspopup="dialog">{v}</button>{m}'
                 '<button type="button" data-hard-reload title="Clear the app cache and load the current version">'
-                'Reload / update</button></div>', v=version.service_version(rec), m=moved)
+                'Reload / update</button></div>', v=((rec.get("describe") or rec["commit"]) if rec else "unknown")
+                if saved_version else version.service_version(rec), m=moved)
     return h('<nav><a class="brand" href="/">SHAFT</a><button type="button" class="small closenav" data-toggle-nav '
              'aria-label="Close the chats">{x}</button><div class="rail" data-poll="/fragment/rail?c={c}" data-every="3000" '
              'data-now="1" data-hidden="1">{rail}</div>'

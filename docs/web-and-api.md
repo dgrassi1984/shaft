@@ -78,6 +78,21 @@ and [chat design](plans/PLAN-webui-chat.md).
   live yet" with the guarded restarts; ports and paths shown, set in a terminal). A service action that would kill
   or cut off runs in progress (a scheduler restart, autonomy off, api/model/embed while runs use them) shows as
   **Force …**, asks first naming those runs, and is logged as `web: operator forced … past the guard`.
+- **Experiments** (`/experiments`, next to Trials) shows saved results for each instance: Cards (both controls),
+  Attention, Commitments, Forecast, Workspace, Monitors, Choice blindness, Resource shock, Privileged prediction,
+  Recognition, and Battery perturbation. It defaults to the first instance with saved experiment records; the
+  instance links change the selection. Each card shows a description, status, last recorded run, recorded spend,
+  escaped report text and a terminal report command. Knob experiments link to their latest trial for each arm.
+  There are no paid-run buttons. The page and `/fragment/experiments` require a paired browser like Trials.
+  Reports refresh automatically and are cached per instance for five seconds. The page and fragment wait up to
+  three seconds total for readers. Unfinished cards show **loading** until polling picks up their results;
+  broken readers show an error in their own card. Reads never invoke git or a model; the navigation uses the saved web service version.
+  Trial records supply queue/progress/final status and saved failure reasons. Direct-run ledgers often record
+  individual results without a run completion marker or worker identity: the page says so rather than guessing
+  liveness or an unsaved failure. No records means **not run**; spend without a result means **no result**.
+  Spend is cumulative across recorded runs, limited to matching operator trial-ledger rows where available,
+  otherwise saved result dollars. Missing timestamps and costs say **not recorded**. Battery perturbation uses
+  the latest saved item's probes and recorded protocol/temperature, without mixing eras or reading instance config.
 - The navigation footer shows the web service's running version, including `+changes` for edits present at
   start-up. It is also visible in the phone's chat list sheet. After HEAD moves, the next page load shows
   `checked out: …` linking to Services. Services shows the checkout above the live table and a version for

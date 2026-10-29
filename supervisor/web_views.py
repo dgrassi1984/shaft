@@ -472,6 +472,31 @@ def trials_page(live: Html, only: str, names: list[str], csrf: str) -> Html:
     return frame("Trials", body, names, csrf, current="/trials")
 
 
+def experiments_live(cards: list[dict], name: str, names: list[str]) -> Html:
+    from .web_experiments import ITEMS
+    filt = join(h("{space}{x}", space=" · " if i else "",
+                  x=h("<b>{n}</b>", n=n) if n == name else link(f"/experiments?i={q(n)}", n))
+                for i, n in enumerate(names))
+    body = []
+    for card, (item, title, description) in zip(cards, ITEMS):
+        command = f"shaft experiment {item} {name} --report" if item != "perturbation" else f"shaft battery report {name}"
+        links = join(h(" {x}", x=link(f"/trials/{q(name)}/{q(tid)}", label)) for tid, label in card["links"])
+        body.append(h('<article class="card"><h2>{title}</h2><p>{description}</p>'
+                      '<p>Status: {status}<br>Last run: {last}<br>Spend: {spend}</p><p>{links}</p>'
+                      '<pre>{command}</pre><pre>{report}</pre></article>', title=title, description=description,
+                      status=card["status"], last=card["last"], spend=card["spend"], links=links,
+                      command=command, report=card["report"]))
+    return h('<section class="panel"><p>{filt}</p><p class="dim">Saved results only. Commands shown here never run '
+             'from this page. Direct runs may stop without saving an error or a completion marker.</p></section>'
+             '<div class="experiments">{cards}</div>', filt=filt, cards=join(body) if names else h("<p>No instances yet.</p>"))
+
+
+def experiments_page(live: Html, name: str, names: list[str], csrf: str) -> Html:
+    query = f"?i={q(name)}" if name else ""
+    body = h('<h1>Experiments</h1><div data-poll="/fragment/experiments{q}">{live}</div>', q=query, live=live)
+    return frame("Experiments", body, names, csrf, current="/experiments")
+
+
 def trial_report(report: str) -> Html:
     """The report text. Polled: trial.report formats the trial already loaded, and an unchanged one is a 304."""
     return section("Report (shaft trial show)", pre(report, "wrap"))
