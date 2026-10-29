@@ -263,6 +263,25 @@ class MarkdownTest(PagesTest):
         self.assertIn('<div class="wrap">why *that*?</div>', out)  # his own words as written, not as Markdown
         self.assertEqual(str(web_views._my_text("plain\ntext")), '<div class="wrap">plain\ntext</div>')
 
+    def test_the_operators_fenced_code_shows_as_code_not_as_backticks(self):
+        # The PWA showed the operator's own ``` blocks as raw backticks: _my_text printed them verbatim (2026-10-29).
+        out = web_views._my_text("Novità:\r\n```py\r\nx = 1 < 2\r\n  y\r\n```\r\nafter *that*")
+        self.assertNotIn("```", out)
+        self.assertIn('<div class="wrap">Novità:</div>', out)
+        self.assertIn('<pre class="code" data-lang="py"><code>x = 1 &lt; 2\n  y</code></pre>', out)
+        self.assertIn('<div class="wrap">after *that*</div>', out)      # the rest as written, still not Markdown
+        self.assertEqual(out, web_views._my_text("Novità:\n```py\nx = 1 < 2\n  y\n```\nafter *that*"))
+
+    def test_the_operators_fence_renders_as_the_instances_does(self):
+        text = "~~~~\n<b>a</b>\n```\nstill code\n~~~~"                # a shorter or other fence does not close it
+        self.assertIn(web_views._my_text(text).split("</pre>")[0] + "</pre>", str(web_views.markdown(text)))
+        self.assertIn("still code</code></pre>", web_views._my_text("```\nstill code"))   # unclosed: to the end
+
+    def test_a_quoted_fence_stays_code_inside_the_quote(self):
+        out = web_views._my_text("> ```\n> a\n> ```\nok")
+        self.assertIn('<blockquote class="wrap"><pre class="code"><code>a</code></pre></blockquote>', out)
+        self.assertIn('<div class="wrap">ok</div>', out)
+
     def test_a_list_item_wrapping_onto_the_next_line_stays_one_item(self):
         out = web_views.markdown("- one long item\n  that wraps\n- two")
         self.assertEqual(out.count("<li>"), 2)

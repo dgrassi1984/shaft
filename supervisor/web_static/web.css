@@ -453,7 +453,7 @@ form.docedit textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monosp
 .editchip { font-size: .78rem; margin-left: .3rem; }
 .pending-edits { font-size: .85rem; color: var(--accent); margin: 0; }
 /* room for a code block's Copy button: a one-line block grew a scrollbar for it */
-.turn.it pre, .docview pre { min-height: 2.1rem; padding: .35rem 3.8rem .35rem .5rem; }
+.turn.it pre, .turn.me pre.code, .docview pre { min-height: 2.1rem; padding: .35rem 3.8rem .35rem .5rem; }
 /* Markdown (web_md.py) */
 .md ol { margin: .2rem 0 .4rem; padding-left: 1.5rem; }
 .md li { margin: .1rem 0; }
@@ -465,10 +465,11 @@ form.docedit textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monosp
 .md hr { border: 0; border-top: 1px solid var(--line); margin: .8rem 0; }
 .md s { color: var(--dim); }
 .md a { overflow-wrap: anywhere; }
-.md pre.code { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; overflow-x: auto; }
-.md pre.code code { background: none; padding: 0; }
-.md pre.code[data-lang]::before { content: attr(data-lang); display: block; font-size: .7rem; color: var(--dim);
-                                  margin-bottom: .2rem; }
+.md pre.code, .turn.me pre.code { background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+                                  overflow-x: auto; }
+.md pre.code code, .turn.me pre.code code { background: none; padding: 0; }
+.md pre.code[data-lang]::before, .turn.me pre.code[data-lang]::before { content: attr(data-lang); display: block;
+                                  font-size: .7rem; color: var(--dim); margin-bottom: .2rem; }
 .md th.al-r, .md td.al-r { text-align: right; }
 .md th.al-c, .md td.al-c { text-align: center; }
 .md blockquote { margin: .4rem 0; }
@@ -741,7 +742,8 @@ details.earliermenu .earlier .lines a { display: block; padding: .35rem 0; }
   .turn[data-last] .msgactions { opacity: 1; }
   .msgactions button.icon { width: 44px; height: 44px; }
   .feed .turn:not(.selecting) { -webkit-touch-callout: none; }
-  .feed .turn:not(.selecting) .md, .feed .turn:not(.selecting) .wrap { -webkit-user-select: none; user-select: none; }
+  .feed .turn:not(.selecting) .md, .feed .turn:not(.selecting) .wrap,
+  .feed .turn:not(.selecting) pre.code { -webkit-user-select: none; user-select: none; }
 }
 /* the long-press / right-click menu */
 #msgmenu { position: fixed; z-index: 62; min-width: 12rem; background: var(--panel); border: 1px solid var(--line);

@@ -814,7 +814,8 @@ def _one_line(text: str, limit: int = 90) -> str:
 
 
 def _my_text(text: str) -> Html:
-    """What the operator wrote, as written — except the lines they quoted (Reply on a selection), shown as a quote."""
+    """What the operator wrote, as written — except the lines they quoted (Reply on a selection), shown as a quote,
+    and their fenced code (```), shown as code the way an answer shows it (the PWA showed the backticks)."""
     blocks: list[tuple[bool, list[str]]] = []               # (quoted, lines), runs of one kind
     for line in str(text).replace("\r\n", "\n").split("\n"):
         quoted = bool(_QUOTE.match(line))
@@ -823,10 +824,35 @@ def _my_text(text: str) -> Html:
         blocks[-1][1].append(_QUOTE.sub("", line, count=1) if quoted else line)
     out = []
     for quoted, b in blocks:
-        body = "\n".join(b).strip("\n")
-        if body:
-            out.append(h('<blockquote class="wrap">{t}</blockquote>' if quoted else '<div class="wrap">{t}</div>', t=body))
+        parts = _verbatim(b, Html("{t}") if quoted else Html('<div class="wrap">{t}</div>'))
+        if parts and quoted:
+            out.append(h('<blockquote class="wrap">{t}</blockquote>', t=join(parts)))
+        else:
+            out.extend(parts)
     return join(out)
+
+
+def _verbatim(lines: list[str], text_tag: Html) -> list[Html]:
+    """Lines as written, each run of text in text_tag; a fenced code block among them as code (web_md.fenced)."""
+    from .web_md import fenced
+    parts: list[Html] = []
+    run: list[str] = []
+
+    def flush() -> None:
+        if body := "\n".join(run).strip("\n"):
+            parts.append(h(text_tag, t=body))
+        run.clear()
+    i = 0
+    while i < len(lines):
+        if code := fenced(lines, i):
+            flush()
+            i, rendered = code
+            parts.append(Html(rendered))
+        else:
+            run.append(lines[i])
+            i += 1
+    flush()
+    return parts
 
 
 def doc_cards(made: list[dict] | None, current_chat: str = "") -> Html:
