@@ -384,6 +384,27 @@ console.log(JSON.stringify({ wrap: wrap.className, kids: wrap.children.map(c => 
         self.assertEqual(json.loads(out), {"wrap": "prewrap", "kids": ["pre", "button"], "inPre": 0})
         self.assertIn(".prewrap > .copy { position: absolute;", CSS)
         self.assertNotIn("pre > .copy", CSS)
+        self.assertIn('".turn.it pre, .turn.me pre.code, .docview pre"', JS)   # the operator's code gets one too
+
+    def test_select_text_takes_the_operators_whole_message_not_its_first_part(self):
+        """The operator's turn is a run of parts (a quote, text, a code block — 2026-10-29): Select text took the
+        first .wrap only, so a reply on a quote selected the quote and none of what they wrote."""
+        out = node(PRELUDE + r"""
+const turn = { classList: { add() {} }, matches: () => false, closest: () => null };
+const el = (name, parent) => ({ name, parentElement: parent, closest: q => parent.matches(q) ? parent : parent.closest(q),
+                                matches: q => q === ".wrap" && name.startsWith("wrap") });
+const quote = el("wrap-quote", turn), inQuote = el("pre-in-quote", quote), text = el("wrap-text", turn),
+      code = el("pre-code", el("prewrap", turn));
+turn.querySelector = () => null;                                  // no .md: the operator's own turn
+turn.querySelectorAll = () => [quote, inQuote, text, code];
+const range = {}, document = { createRange: () => ({ setStartBefore: n => range.start = n.name,
+                                                     setEndAfter: n => range.end = n.name }) };
+const window = { getSelection: () => ({ removeAllRanges() {}, addRange() {} }) };
+""" + function("selectText") + r"""
+selectText(turn);
+console.log(JSON.stringify(range));
+""")
+        self.assertEqual(json.loads(out), {"start": "wrap-quote", "end": "pre-code"})
 
     def test_w18_two_announcements_read_only_the_newer(self):
         """W18: announce() cleared the region and set it 50 ms later; two at once both fired, the older read last's
