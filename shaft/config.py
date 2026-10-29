@@ -45,7 +45,7 @@ FIELDS: dict[str, tuple[type, object]] = {
     "HANDOFF": (str, "on"),           # my last two live cycles: structured, raw tool log, or off
     "CURIOSITY_EVERY_CYCLES": (int, 5),   # one live cycle in this many, on average, takes its goal from my surprises; 0 = never
     # docs/plans/PLAN-consciousness.md: each mechanism on, behind a knob its kill test flips (shaft experiment …)
-    "OUTCOME_CARDS": (str, "on"),         # before a kind of action that has been failing, what comparable ones led to
+    "OUTCOME_CARDS": (str, "on"),         # on/off: before a failing kind of action, what comparable ones led to
     "WORKSPACE": (str, "competitive"),    # what wins a small space at the front of my live cycle
     "WORKSPACE_K": (int, 3),              # how many items it holds
     "ATTENTION_SCHEMA": (str, "on"),      # declare_intent asks where I expect to look
@@ -109,7 +109,7 @@ def parse_env_file(path: Path) -> dict[str, str]:
 # accepts (Bonsai's template raises on anything else, which would fail every call). The rest: PLAN-consciousness's knobs.
 CHOICES = {"LLM_REASONING_EFFORT": ("medium", "xhigh", "low"),
            "CONFIDENCE_MODE": ("confirm", "clauses", "noconfirm"),
-           "OUTCOME_CARDS": ("on", "off", "shuffled", "recall"), "WORKSPACE": ("competitive", "relevance", "off"),
+           "OUTCOME_CARDS": ("on", "off"), "WORKSPACE": ("competitive", "relevance", "off"),
            "ATTENTION_SCHEMA": ("on", "off"), "COMMITMENTS": ("on", "off"), "FORECAST": ("on", "reserve", "off"),
            "HANDOFF": ("on", "raw", "off"), "LOOP_GUARD": ("shadow", "on", "off")}
 

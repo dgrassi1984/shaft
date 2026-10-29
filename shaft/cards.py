@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import posixpath
-import random
 import re
 import shlex
 from datetime import datetime, timedelta
@@ -13,7 +12,7 @@ from urllib.parse import urlsplit
 from . import memory, surprises
 
 HELD = "(held, not run yet)"
-MODES = ("on", "off", "shuffled", "recall")
+MODES = ("on", "off")
 MAX_AGE_DAYS = 14
 SHOWN = 3
 AGAIN = "Call it again to run it anyway, or change course."
@@ -109,12 +108,11 @@ def load(root: Path, now: datetime) -> list[dict]:
 
 
 class Cards:
-    def __init__(self, root: Path, mode: str, seed: str, now: datetime):
-        self.root, self.seed, self.now = root, seed, now
+    def __init__(self, root: Path, mode: str, now: datetime):
+        self.root, self.now = root, now
         self.mode = mode if mode in MODES else "off"
         self.record: dict = {"mode": self.mode, "held": []}
         self._cards: list[dict] | None = None    # what happened: when to hold
-        self._shown: list[dict] | None = None    # what the hold shows: the same, or (shuffled) the outcomes permuted
         self._turns: dict[str, int] = {}         # family -> the reply in which it was held
 
     def check(self, tool: str, raw_args: str, goal: str, turn: int | None = None) -> str | None:
@@ -130,19 +128,11 @@ class Cards:
             return None
         if self._cards is None:
             self._cards = load(self.root, self.now)
-            self._shown = [dict(card) for card in self._cards]
-            if self.mode == "shuffled":
-                # the control holds at the same moments as `on` (the decision reads what happened) and shows the
-                # same form with the outcomes permuted across all cards: only the content differs (Grok's review)
-                outcomes = [(card["ok"], card["error"], card["verdict"]) for card in self._shown]
-                random.Random(self.seed).shuffle(outcomes)
-                for card, outcome in zip(self._shown, outcomes):
-                    card["ok"], card["error"], card["verdict"] = outcome
         if not any(card["family"] == kind for card in self._cards) or \
                 [card for card in self._cards if card["family"] == kind][-1]["ok"]:
             return None
         self._turns[kind] = turn
-        comparable = [card for card in self._shown if card["family"] == kind]
+        comparable = [card for card in self._cards if card["family"] == kind]
         failed = sum(not card["ok"] for card in comparable)
         succeeded = len(comparable) - failed
         words = set(memory._tokens(goal))
@@ -162,9 +152,4 @@ class Cards:
             text += (f"\n- {_at(card['ts']):%Y-%m-%d %H:%M} · goal \"{card['goal']}\" · "
                      f"{outcome}{took} · {judged}")
         text += "\n" + AGAIN
-        if self.mode == "recall":
-            recalled = memory.recall(self.root, goal + " " + kind, k=3, max_chars=len(text)) or "nothing recalled"
-            # Recall's budget counts pieces, not its header and sources; bound the whole control too.
-            room = len(text) - len(HELD) - len(AGAIN) - 2
-            return HELD + " " + recalled[:room] + "\n" + AGAIN
         return text
