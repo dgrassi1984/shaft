@@ -11,6 +11,8 @@ from unittest import mock
 
 from supervisor import api, web_chat, web_views
 
+from supervisor.tests.node_helpers import NODE_TIMEOUT_S
+
 
 class RecoveryTest(unittest.TestCase):
     def setUp(self):
@@ -237,7 +239,7 @@ console.log(JSON.stringify({ kept, sentFirst, value: box.value, inputs, prompts,
                              quoteKept, sendsAfterRefusal, quote: form._quote, chips, retryOf: retryOf.value }));
 '''
         result = subprocess.run([shutil.which("node"), "-e", script.replace("//HANDLER//", handler)],
-                                capture_output=True, text=True, timeout=10)
+                                capture_output=True, text=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(result.returncode, 0, result.stderr)
         # not disabled: a resend that failed can be retried (Codex review: it stayed off for good)
         self.assertEqual(json.loads(result.stdout), {"kept": "draft", "sentFirst": 0, "value": "original request",

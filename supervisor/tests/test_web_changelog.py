@@ -10,6 +10,8 @@ from unittest import mock
 from supervisor import core, version, web, web_pages
 from supervisor.tests.test_web import WebTest
 
+from supervisor.tests.node_helpers import NODE_TIMEOUT_S
+
 
 class ReleasesTest(unittest.TestCase):
     def setUp(self):
@@ -187,5 +189,5 @@ const open = () => Promise.all(handlers.click.map(f => f({ target: {
   assert.equal(dialogs[2].body.textContent, 'Could not load release notes. Close and try again.');
 })().catch(e => { console.error(e); process.exitCode = 1; });
 """
-        result = subprocess.run([shutil.which("node"), "-e", harness, str(source)], capture_output=True, text=True)
+        result = subprocess.run([shutil.which("node"), "-e", harness, str(source)], capture_output=True, text=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

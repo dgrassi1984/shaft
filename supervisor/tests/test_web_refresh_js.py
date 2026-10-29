@@ -7,6 +7,8 @@ from pathlib import Path
 
 from supervisor import web_pages, web_views
 
+from supervisor.tests.node_helpers import NODE_TIMEOUT_S
+
 JS = Path(__file__).resolve().parents[1] / "web_static" / "web.js"
 NODE = shutil.which("node")
 
@@ -92,7 +94,7 @@ function turn(k, v) { const n = new Node(k, 'turn me', v); n.top = 500; return n
 class LiveRefreshTest(unittest.TestCase):
     def run_js(self, script):
         result = subprocess.run([NODE, "-e", HARNESS.replace("//CASE//", script), str(JS)],
-                                capture_output=True, text=True, timeout=10)
+                                capture_output=True, text=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_issue_26_each_failed_panel_must_recover(self):

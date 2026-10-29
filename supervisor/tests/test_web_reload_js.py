@@ -4,6 +4,8 @@ import shutil
 import subprocess
 import unittest
 
+from supervisor.tests.node_helpers import NODE_TIMEOUT_S
+
 NODE = shutil.which("node")
 JS = Path(__file__).resolve().parents[1] / "web_static" / "web.js"
 
@@ -88,7 +90,7 @@ function page() {
 @unittest.skipUnless(NODE, "node is not installed")
 class HardReloadJsTest(unittest.TestCase):
     def run_mode(self, mode):
-        result = subprocess.run([NODE, "-e", HARNESS, mode, str(JS)], text=True, capture_output=True, timeout=10)
+        result = subprocess.run([NODE, "-e", HARNESS, mode, str(JS)], text=True, capture_output=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_b7_reload_preserves_the_active_offline_cache(self):
