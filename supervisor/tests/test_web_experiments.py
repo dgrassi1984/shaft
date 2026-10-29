@@ -192,16 +192,13 @@ class ExperimentsTest(WebTest):
             self.page()
             self.assertEqual(report.call_count, 3)
 
-    def test_both_card_controls_link_to_their_latest_trials(self):
+    def test_card_off_control_links_to_its_latest_trial(self):
         self.write("experiments/wren.jsonl", [
-            {"item": "cards", "value": value, "knob": "OUTCOME_CARDS", "trial": tid,
-             "targets": {}, "queued": "2026-10-28T10:00:00"}
-            for value, tid in (("shuffled", "t-a"), ("recall", "t-b"))])
-        for tid, status in (("t-a", "done"), ("t-b", "queued")):
-            path = self.sup / "trials" / "wren" / tid / "trial.json"
-            path.parent.mkdir(parents=True)
-            path.write_text(json.dumps({"id": tid, "status": status, "states": []}))
+            {"item": "cards", "value": "off", "knob": "OUTCOME_CARDS", "trial": "t-a",
+             "targets": {}, "queued": "2026-10-28T10:00:00"}])
+        path = self.sup / "trials" / "wren" / "t-a" / "trial.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"id": "t-a", "status": "done", "states": []}))
         body = self.page()
-        self.assertIn("shuffled: done; recall: queued", body)
-        for tid in ("t-a", "t-b"):
-            self.assertIn(f'href="/trials/wren/{tid}"', body)
+        self.assertIn("off: done", body)
+        self.assertIn('href="/trials/wren/t-a"', body)

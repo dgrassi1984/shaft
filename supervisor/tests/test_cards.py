@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "template"))
-from shaft import agent, cards, memory
+from shaft import agent, cards
 from shaft.llm import Client
 from shaft.tools import Toolbox
 from supervisor.tests.fakellm import FakeLLM
@@ -84,8 +84,8 @@ class CardsTest(unittest.TestCase):
         with (self.root / "memory/episodes/test.jsonl").open("a") as f:
             f.write(json.dumps(row) + "\n")
 
-    def make(self, mode="on", seed="test"):
-        return cards.Cards(self.root, mode, seed, self.now)
+    def make(self, mode="on"):
+        return cards.Cards(self.root, mode, self.now)
 
     def check(self, instance, goal="repair fence"):
         return instance.check("write_file", '{"path":"self/a"}', goal)
@@ -122,7 +122,7 @@ class CardsTest(unittest.TestCase):
         self.assertIsNone(self.check(self.make()))
         self.episode(22)
         self.assertTrue(self.check(self.make()).startswith(cards.HELD))
-        for mode in ("off", "bad mode"):
+        for mode in ("off", "shuffled", "recall", "bad mode"):
             instance = self.make(mode)
             with mock.patch.object(cards, "load", side_effect=AssertionError("must stay lazy")):
                 self.assertIsNone(self.check(instance))
@@ -167,23 +167,6 @@ class CardsTest(unittest.TestCase):
                          "tool": "write_file", "cards": ["2026-10-21T12:00:00#1", "2026-10-20T12:00:00#1",
                          "2026-10-23T12:00:00#1"], "failed": 4, "succeeded": 1}]})
 
-    def test_shuffled_holds_when_on_does_and_shows_permuted_outcomes(self):
-        """The control must differ from `on` in content only (Grok's review): it holds at the same moments — the
-        decision reads what happened — and shows the outcomes permuted across all cards."""
-        a = self.episode(20, "wrote")
-        b = self.episode(21, tool="delegate_coding")
-        (self.root / "memory/verdicts.jsonl").write_text(json.dumps({"episode_ts": a, "criterion_met": "yes"})
-                                                        + "\n" + json.dumps({"episode_ts": b,
-                                                        "criterion_met": "no"}) + "\n")
-        self.assertIsNone(self.check(self.make()))                 # write_file worked: no hold
-        self.assertIsNone(self.check(self.make("shuffled", "4")))  # nor in the control, whatever it would show
-        on = self.make().check("delegate_coding", "{}", "repair")
-        shuffled = self.make("shuffled", "4").check("delegate_coding", "{}", "repair")
-        self.assertIn("1 failed, 0 succeeded", on)
-        self.assertEqual(shuffled, self.make("shuffled", "4").check("delegate_coding", "{}", "repair"))   # seeded
-        self.assertIn("0 failed, 1 succeeded", shuffled)           # the outcomes swapped across the two cards
-        self.assertIn("ok · 2s · cycle judged yes", shuffled)
-
     def test_a_second_call_in_the_same_reply_is_held_too(self):
         """Regression (Grok's review): the second call of a held kind in the same reply ran before I read the cards."""
         self.episode(20)
@@ -200,23 +183,6 @@ class CardsTest(unittest.TestCase):
         for path in ("self/a.md", "./self/a.md", "self/x/../a.md"):
             self.assertEqual(cards.family("write_file", json.dumps({"path": path})), "write_file self/")
         self.assertIsNone(cards.family("write_file", json.dumps({"path": "../outside.md"})))
-
-    def test_recall_true_holds_payload_and_bound(self):
-        self.episode(20)
-        normal = self.check(self.make())
-        with mock.patch.object(memory, "recall", return_value="ordinary recalled evidence") as recall:
-            instance = self.make("recall")
-            text = self.check(instance)
-            self.assertEqual(text, cards.HELD + " ordinary recalled evidence\n" + cards.AGAIN)
-            recall.assert_called_once_with(self.root, "repair fence write_file self/", k=3, max_chars=len(normal))
-            self.assertIsNone(self.check(instance))
-        with mock.patch.object(memory, "recall", return_value="x" * 10000):
-            self.assertEqual(len(self.check(self.make("recall"))), len(normal))
-        with mock.patch.object(memory, "recall", return_value=""):
-            self.assertIn("nothing recalled", self.check(self.make("recall")))
-        self.episode(21, "wrote")
-        self.assertIsNone(self.check(self.make("recall")))
-        self.assertIsNone(self.check(self.make()))
 
     def test_held_call_can_run_on_identical_second_call(self):
         fake = FakeLLM([{"tool_calls": [("write_file", {"path": "self/a"})]},

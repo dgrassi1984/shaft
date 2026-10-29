@@ -10,7 +10,7 @@ from . import experiments, privileged, battery, trial
 from .core import SUP_DIR
 
 ITEMS = (
-    ("cards", "Cards", "Do reminders of past outcomes prevent repeated mistakes better than shuffled outcomes or ordinary recall?"),
+    ("cards", "Cards", "Do reminders of past outcomes prevent repeated mistakes compared with no reminders?"),
     ("attention", "Attention", "Does the attention checklist help avoid repeating a failed action?"),
     ("commitments", "Commitments", "Do saved commitments help carry out the operator's goals?"),
     ("forecast", "Forecast", "Do forecasts prevent running out of turns or time better than a fixed reserve?"),
