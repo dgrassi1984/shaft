@@ -203,9 +203,12 @@ and [chat design](plans/PLAN-webui-chat.md).
   visible and are marked **incomplete**. **Retry** sends the original message again, in one tap, in place: the failed
   try and its question fold into one line ("The first try failed and was sent again") and the instance no longer sees
   them (a repeated tap carries the same message id, so it is not sent twice; a quote waiting in the composer is asked
-  about, never sent along). It asks before replacing a different draft. Retry is offered only for a refused connection before sending, or a
-  known model HTTP 5xx failure with API evidence that no tools ran. Older records and uncertain outcomes link to
-  Activity and Services. Interjected requests need inspection rather than a one-message retry.
+  about, never sent along). It asks before replacing a different draft. That one-tap Retry is for a refused connection
+  before sending, or a known model HTTP 5xx failure with API evidence that no tools ran. Any other failure, older
+  records included, links to Activity and Services and still offers **Retry**, which first asks "Actions may already
+  have run. Send it again anyway?" and then sends a new message: the failed try stays in view and in the conversation,
+  since what it ran may matter. Interjected and attachment-only requests have no one message to send again, so they
+  get only the links.
 - **Documents**: a Markdown file an instance writes under its `notes/docs/` shows beside the chat, live, as it writes
   it; a reply's documents are cards under it. The drawer shows a vertical list with each entry's size (1.5 KB, exact
   bytes on hover), modified time (14:32 today, 4 Mar 14:32 this year, a date before), changed marks and comment

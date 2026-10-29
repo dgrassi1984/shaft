@@ -1125,23 +1125,38 @@ def _comment_chips(items: list[dict] | None, kind: str = "") -> Html:
                   u=q(item["doc"]), doc=item["doc"], id=item["id"], pre=pre) for item in items)
 
 
-def _reply_failure(name: str, turn: dict, archived: bool, k: int = -1) -> Html:
-    """Keep raw errors available without making the operator interpret them."""
+def _reply_failure(name: str, turn: dict, archived: bool, k: int = -1, asked: dict | None = None) -> Html:
+    """Keep raw errors available without making the operator interpret them. Retry is offered whenever there is a
+    message to send again: in one tap when the failed request ran no tools (note_retry), else after a confirm, and then
+    as a new message — the failed try stays in view and in the conversation, since what it ran may matter. `asked`: the
+    turn before, for a failure saved when retry_text was kept only for a safe retry."""
     note = turn.get("note") or ""
     if not note:
         return Html("")
     kind = turn.get("note_kind", "stopped" if note == "stopped by you" else "unknown")
     if kind == "stopped":
         return h('<p class="warn recovery">You stopped this reply.</p>')
-    offer = turn.get("note_retry") and turn.get("retry_text") and not archived
+    safe = bool(turn.get("note_retry") and turn.get("retry_text"))
+    # An interjection before the failure means one message cannot stand for the request: nothing to fall back on.
+    text = turn.get("retry_text") or (
+        asked.get("shown", asked.get("content", "")) if asked and asked.get("role") == "user"
+        and not asked.get("interjected") else "")
+    text = "" if archived else text
     why = {"connection": "The connection to the instance failed.",
            "service": "The service could not finish the reply.",
            "model": "The model could not finish the reply."}.get(kind, "The reply failed.")
-    action = ("No external actions ran: Retry sends it again." if offer else
-              "Actions may already have run. Check Activity and Services before sending again.")
-    recovery = (h('<button type="button" class="small" data-retry="{text}" data-retry-of="{k}">Retry</button>',
-                  text=turn["retry_text"], k=k)
-                if offer else h('<a href="/i/{n}/activity">Activity</a> · <a href="/services">Services</a>', n=q(name)))
+    links = h('<a href="/i/{n}/activity">Activity</a> · <a href="/services">Services</a>', n=q(name))
+    if safe and text:
+        action = "No external actions ran: Retry sends it again."
+        recovery = h('<button type="button" class="small" data-retry="{text}" data-retry-of="{k}">Retry</button>',
+                     text=text, k=k)
+    elif text.strip():
+        action = "Actions may already have run. Check Activity and Services before you retry."
+        recovery = join([h('<button type="button" class="small" data-retry="{text}" data-retry-confirm="Actions may '
+                           'already have run. Send it again anyway?">Retry</button> ', text=text), links])
+    else:
+        action = "Actions may already have run. Check Activity and Services before sending again."
+        recovery = links
     return h('<p class="warn recovery">{why} {action}</p><div class="actions">{recovery}</div>'
              '<details class="tech"><summary>Technical details</summary><pre>{raw}</pre></details>',
              why=why, action=action, recovery=recovery, raw=note)
@@ -1290,7 +1305,7 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
             body = markdown(t["content"]) if t.get("content") else Html("")
             if not t.get("content") and not t.get("note"):
                 body = Html('<p class="dim">(no answer)</p>')
-            recovery = _reply_failure(name, t, archived, k)
+            recovery = _reply_failure(name, t, archived, k, chat["turns"][k - 1] if k else None)
             cards = join([doc_cards(t.get("docs"), name if archived else ""), _comment_chips(t.get("answered"), "answered"),
                           _comment_chips(t.get("opened"), "opened")])
             seen = h(' data-seen-inst="{n}" data-seen-reply="{ts}"', n=name, ts=t["ts"]) if not archived else Html("")
