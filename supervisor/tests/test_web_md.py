@@ -96,6 +96,16 @@ class BlocksTest(unittest.TestCase):
         self.assertEqual(md("Steps:\n- a\n- b"), "<p>Steps:</p><ul><li>a</li><li>b</li></ul>")
         self.assertEqual(md("In 2026\n3. not a list"), "<p>In 2026 3. not a list</p>")   # only 1. interrupts
 
+    def test_bullet_character_lists_render_as_lists_not_one_paragraph(self):
+        out = md("Impegni:\n• 08:45 Valeriya\n• 09:00 Daniele/Martina")
+        self.assertEqual(out, "<p>Impegni:</p><ul><li>08:45 Valeriya</li><li>09:00 Daniele/Martina</li></ul>")
+        self.assertNotIn("<p>Impegni: • 08:45 Valeriya", out)
+        self.assertEqual(md("• top\n  • sub"), "<ul><li>top<ul><li>sub</li></ul></li></ul>")
+        self.assertEqual(md("a • b"), "<p>a • b</p>")
+        self.assertEqual(md("•x"), "<p>•x</p>")
+        self.assertEqual(web_md.plain("• x"), "x")
+        self.assertEqual(web_md.first_line("• x"), "x")
+
     def test_fenced_code_keeps_everything_and_names_its_language(self):
         out = md("```python\nif a < b:\n    print('**no**')\n```\nafter")
         self.assertEqual(out, '<pre class="code" data-lang="python"><code>if a &lt; b:\n    print(&#x27;**no**&#x27;)'
