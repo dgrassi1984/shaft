@@ -98,9 +98,8 @@ def run(cfg, state: State, client: Client) -> str:
     record: dict = {"intent": None, "finish": None, "confirm": None}   # confirm: set only when a base rate was shown
     mode = cfg.CONFIDENCE_MODE
     rates, rate_error = base_rate.load(state.root) if mode == "confirm" else (None, None)
-    started = clock.started()   # the draw's seed and the queue it draws from: the same in every replay of this cycle
-    seed = f"{cfg.NAME}|{started:%Y-%m-%dT%H:%M}"
-    held = cards.Cards(state.root, cfg.OUTCOME_CARDS, seed, clock.now())
+    started = clock.started()   # the curiosity draw's seed and queue below: the same in every replay of this cycle
+    held = cards.Cards(state.root, cfg.OUTCOME_CARDS, clock.now())
     ws = workspace.Workspace("off")   # built below, once the prompt's sources are read
     attention_on = cfg.ATTENTION_SCHEMA == "on"
 
