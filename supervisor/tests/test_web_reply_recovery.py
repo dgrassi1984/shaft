@@ -238,7 +238,7 @@ class RetryJsTest(unittest.TestCase):
 let listener = () => {}, inputs = 0, prompts = 0, allow = false, sends = 0, chips = 0;
 const retryOf = { value: "" };
 const form = { querySelector: q => q === "input[name=retry_of]" ? retryOf : null };
-const quoteChip = () => { chips += 1; };
+const quoteChips = () => { chips += 1; };
 const box = { value: "draft", focus() {}, setSelectionRange() {}, dispatchEvent() { inputs++; }, closest: () => form };
 const document = { addEventListener: (_, f) => listener = f, querySelector: () => box };
 const confirm = () => { prompts++; return allow; };
@@ -252,13 +252,13 @@ allow = true;
 listener(event);
 listener(event);
 // Codex review: a quote waiting in the composer went out with the failed message, unasked
-box.value = "original request"; form._quote = "> another message"; allow = false;
+box.value = "original request"; form._quotes = ["> another message"]; allow = false;
 listener(event);
-const quoteKept = form._quote, sendsAfterRefusal = sends;
+const quoteKept = form._quotes, sendsAfterRefusal = sends;
 allow = true;
 listener(event);
 console.log(JSON.stringify({ kept, sentFirst, value: box.value, inputs, prompts, sends, disabled: !!button.disabled,
-                             quoteKept, sendsAfterRefusal, quote: form._quote, chips, retryOf: retryOf.value }));
+                             quoteKept, sendsAfterRefusal, quotes: form._quotes, chips, retryOf: retryOf.value }));
 '''
         result = subprocess.run([shutil.which("node"), "-e", script.replace("//HANDLER//", handler)],
                                 capture_output=True, text=True, timeout=NODE_TIMEOUT_S)
@@ -266,8 +266,8 @@ console.log(JSON.stringify({ kept, sentFirst, value: box.value, inputs, prompts,
         # not disabled: a resend that failed can be retried (Codex review: it stayed off for good)
         self.assertEqual(json.loads(result.stdout), {"kept": "draft", "sentFirst": 0, "value": "original request",
                                                      "inputs": 1, "prompts": 4, "sends": 3, "disabled": False,
-                                                     "quoteKept": "> another message", "sendsAfterRefusal": 2,
-                                                     "quote": "", "chips": 1, "retryOf": "3"})
+                                                     "quoteKept": ["> another message"], "sendsAfterRefusal": 2,
+                                                     "quotes": [], "chips": 1, "retryOf": "3"})
 
     def test_a_retry_that_may_rerun_actions_asks_first_and_sends_unfolded(self):
         """Retry on "Actions may already have run" (2026-10-29): declined, nothing is sent and the draft is kept;
@@ -279,7 +279,7 @@ console.log(JSON.stringify({ kept, sentFirst, value: box.value, inputs, prompts,
 let listener = () => {}, asked = [], allow = false, sends = 0;
 const retryOf = { value: "stale" };
 const form = { querySelector: q => q === "input[name=retry_of]" ? retryOf : null };
-const quoteChip = () => {};
+const quoteChips = () => {};
 const box = { value: "", dispatchEvent() {}, closest: () => form };
 const document = { addEventListener: (_, f) => listener = f, querySelector: () => box };
 const confirm = (m) => { asked.push(m); return allow; };

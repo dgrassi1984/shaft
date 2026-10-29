@@ -44,7 +44,7 @@ class ReplyFromDocumentTest(unittest.TestCase):
 let sheet, full, calls, q;
 const grid = { classList: { contains: c => c === "docfullscreen" && full } };
 const document = { querySelector: s => s === ".chatgrid" ? grid : null };
-const quotable = () => q, quoteButton = () => ({ hidden: false });
+const quotable = () => q, quoteButton = () => ({ hidden: false }), touchOnly = () => false;
 const fullscreenDoc = on => { calls.push("full:" + on); full = on; if (!sheet.phone) sheet = null; };
 const showDocs = on => { calls.push("docs:" + on); sheet = null; };
 const quoteText = (text, box, doc) => calls.push(`quote:${text}:${doc}`);

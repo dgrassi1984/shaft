@@ -122,7 +122,9 @@ and [chat design](plans/PLAN-webui-chat.md).
 - The chat: files and images both ways (drop them anywhere on the page, paste or pick; each is a chip you can take
   out), the reply's activity and clock live, interject, Stop, End. Select text in a message or a document and
   **↩ Reply** quotes it: the quote waits in a chip above the field (× takes it out) and goes first when you send, as a
-  Markdown quote; from the documents sheet or full screen, the sheet closes first so the composer shows. Text left
+  Markdown quote. Select more and **+ Quote** adds another piece to the same message: each is its own chip and goes as
+  its own quote, in order (on a phone or tablet the keyboard stays down meanwhile; tap the field to type). From the
+  documents sheet or full screen, the sheet closes first so the composer shows. Text left
   selected in the chat does not stop it refreshing: the selected message waits until you let go. Each message with
   text has Copy and Reply for its whole Markdown source, your own messages too, under the message: on a computer they
   show on hover or when Tab reaches them, and right-click or the context-menu key opens them as a menu; on a phone or

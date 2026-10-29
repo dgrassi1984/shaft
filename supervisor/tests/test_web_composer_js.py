@@ -27,16 +27,18 @@ function page(mids=[], touch=false, feed=[], bubble=false) {   // feed: the mess
   const sendButton={dataset:{queue:''}}, queueButton={dataset:{queue:'1'}};
   const mid={value:''}, queue={value:''}, files={type:'file',files:[],closest:()=>form}, chips=node();
   const box={value:'',tagName:'TEXTAREA',name:'text',style:{},scrollHeight:120,selectionStart:0,selectionEnd:0,
-    closest:q=>['form[data-files]','form[data-draft]'].includes(q)?form:null,focus(){},
+    closest:q=>['form[data-files]','form[data-draft]'].includes(q)?form:null,focused:0,focus(){this.focused++;},
     setSelectionRange(a,b){this.selectionStart=a;this.selectionEnd=b;},
     dispatchEvent(ev){for(const fn of handlers[ev.type]||[]) fn({target:box});}};
   const form={dataset:{post:'/chat/wren/send',draft:'wren',files:'',multipart:'1',reset:'1',sentMids:JSON.stringify(mids)},
     closest:()=>null,querySelectorAll:()=>[sendButton,queueButton],querySelector:q=>({'textarea':box,'textarea[name=text]':box,'input[name=mid]':mid,'input[name=queue]':queue,
-      'input[type=file]':files,'[data-picked]':chips,'button[type=submit]':sendButton,'.quotechip':form.chip})[q]||null,
-    insertBefore(n){this.chip=n;},reset(){box.value='';mid.value='';files.files=[];}};
+      'input[type=file]':files,'[data-picked]':chips,'button[type=submit]':sendButton,'.quotechips':form.chip})[q]||null,
+    insertBefore(n){this.chip=n;n.remove=()=>{this.chip=null;};},reset(){box.value='';mid.value='';files.files=[];}};
   const feedNode={...node(),closest:()=>null};
-  const selection={isCollapsed:false,rangeCount:1,toString:()=> 'selected quote',removeAllRanges(){},
-    getRangeAt:()=>({commonAncestorContainer:{nodeType:1,closest:()=>({dataset:{}})}})};
+  const selection={text:'selected quote',isCollapsed:false,rangeCount:1,toString(){return this.text;},removeAllRanges(){},
+    getRangeAt:()=>({commonAncestorContainer:{nodeType:1,closest:()=>({dataset:{}})},
+      getBoundingClientRect:()=>({top:100,bottom:120,left:10})})};
+  const timers=[];
   const document={readyState:'loading',visibilityState:'hidden',body:node(),documentElement:{style:{setProperty(){}}},
     addEventListener(k,fn){(handlers[k]||=[]).push(fn);},dispatchEvent(){},
     querySelector:q=>q==='form.composer textarea'?box:['form[data-files]','form[data-draft]'].includes(q)?form
@@ -49,7 +51,7 @@ function page(mids=[], touch=false, feed=[], bubble=false) {   // feed: the mess
     window:{innerHeight:900,visualViewport:viewport,scrollTo(){},addEventListener(k,fn){(win[k]||=[]).push(fn);},getSelection:()=>selection,
       matchMedia:()=>({matches:touch})},
     localStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v),removeItem:k=>storage.delete(k)},
-    setTimeout(){},clearTimeout(){},setInterval(){},
+    setTimeout(fn){timers.push(fn);},clearTimeout(){},setInterval(){},
     DataTransfer:class {constructor(){this.files=[];this.items={add:f=>this.files.push(f)};}},
     FormData:class {constructor(){this.text=box.value;this.mid=mid.value;this.queue=queue.value;this.files=[...files.files];}},
     DOMParser:class {parseFromString(t){return {body:{textContent:t}};}},
@@ -57,7 +59,7 @@ function page(mids=[], touch=false, feed=[], bubble=false) {   // feed: the mess
   vm.runInNewContext(fs.readFileSync(process.argv[1],'utf8'),context);
   const emit=async(k,target,extra={})=>{for(const fn of handlers[k]||[]) await fn({target,preventDefault(){},...extra});};
   form.requestSubmit=()=>{form.sending=emit('submit',{closest:()=>form});};
-  return {box,mid,queue,files,form, chips, sendButton,queueButton, payload:()=>payload,
+  return {box,mid,queue,files,form, chips, sendButton,queueButton, selection, payload:()=>payload,
     key:extra=>emit('keydown',box,{key:'Enter',...extra}),
     async lineBreak(inputType='insertLineBreak'){let cancelled=false;await emit('beforeinput',box,{inputType,preventDefault(){cancelled=true;}});return cancelled;},
     resize:height=>{viewport.height=height;viewportHandlers.resize();},
@@ -67,7 +69,10 @@ function page(mids=[], touch=false, feed=[], bubble=false) {   // feed: the mess
     drop:(...fs)=>emit('drop',box,{dataTransfer:{types:['Files'],files:fs}}),
     remove:k=>emit('click',{closest:q=>q==='[data-unpick]'?{dataset:{unpick:String(k)},closest:()=>form}:null}),
     reply:()=>emit('click',{closest:q=>q==='[data-reply-message]'?{closest:()=>({dataset:{raw:'whole quote'}})}:null}),
-    async quote(){await emit('selectionchange');await emit('scroll',{});elements['quote-reply'].click();},
+    async quote(text){if(text) selection.text=text;const n=timers.length;await emit('selectionchange');
+      timers.splice(n).forEach(fn=>fn());   // the button placed once the selection settles
+      await emit('scroll',{});elements['quote-reply'].click();},
+    quoteButton:()=>elements['quote-reply'],
     send:(queued=false)=>emit('submit',{closest:()=>form},{submitter:queued?queueButton:sendButton}),
     answer:()=>resolve({ok:true,status:200,headers:{get:()=>null},text:async()=> 'sent'}),fail:()=>reject(new Error('lost')),
     unload(){const ev={preventDefault(){this.prevented=true;}};for(const fn of win.beforeunload||[])fn(ev);return !!ev.prevented;},
@@ -90,11 +95,39 @@ for(const kind of ['reply','quote']) {
  storage.clear();const p=page();p.mid.value='old';await p[kind]();
  assert.equal(p.mid.value,'');assert.equal(p.box.value,'');
  assert.ok(p.form.chip,'a chip shows the quote');assert.ok(storage.get('shaft.quote.wren').includes('quote'));
- const q=page();await q.load();assert.ok(q.form._quote.includes('quote'),'kept with the draft');
+ const q=page();await q.load();assert.ok(q.form._quotes[0].includes('quote'),'kept with the draft');
  await q.type('my answer');const sending=q.send();await Promise.resolve();
  const nl=String.fromCharCode(10),t=q.payload().text;assert.ok(/^> (whole|selected) quote/.test(t)&&t.endsWith('quote'+nl+nl+'my answer'),t);q.answer();await sending;
  assert.equal(storage.get('shaft.quote.wren'),undefined);
 }
+""")
+
+    def test_several_quotes_go_in_one_message_each_its_own_quote(self):
+        """Quoting a second piece glued it onto the first (one chip, one ×, one merged "> " block): the operator could
+        neither see nor drop one piece, and a quoted question merged with another piece no longer matched
+        messages.quoted_questions, so it went unanswered. Each piece is its own chip and its own quote."""
+        self.run_composer("""
+const nl=String.fromCharCode(10);
+const p=page();await p.quote('first piece');
+assert.equal(p.quoteButton().textContent,'↩ Reply');
+await p.quote('second piece');await p.reply();
+assert.equal(p.quoteButton().textContent,'+ Quote','the button says it adds to the reply');
+assert.deepEqual([...p.form._quotes],['> first piece','> second piece','> whole quote']);
+assert.equal(p.form.chip.children.length,3,'a chip for each quote');
+await p.quote('second piece');assert.equal(p.form._quotes.length,3,'the same piece twice is one quote');
+p.mid.value='old';p.form.chip.children[0].children[1].click();
+assert.deepEqual([...p.form._quotes],['> second piece','> whole quote'],'x takes out its own quote only');
+assert.equal(p.mid.value,'','another message: a new id');
+assert.deepEqual(JSON.parse(storage.get('shaft.quote.wren')),['> second piece','> whole quote']);
+const q=page();await q.load();assert.deepEqual([...q.form._quotes],['> second piece','> whole quote'],'kept with the draft');
+await q.type('my answer');const sending=q.send();await Promise.resolve();
+assert.equal(q.payload().text,'> second piece'+nl+nl+'> whole quote'+nl+nl+'my answer','each its own quote, in order');
+assert.equal(q.form.chip,null,'the chips go at Send');
+q.answer();await sending;assert.equal(storage.get('shaft.quote.wren'),undefined);
+storage.clear();storage.set('shaft.quote.wren','> kept before several quotes');
+const r=page();await r.load();assert.deepEqual([...r.form._quotes],['> kept before several quotes'],'a quote kept by the old page');
+const t=page([],true);await t.quote('on a phone');assert.equal(t.box.focused,0,'no keyboard over the chat on a phone');
+await t.reply();assert.equal(t.box.focused,1,'a whole-message Reply brings the keyboard, to answer');
 """)
 
     def test_p8_the_field_empties_as_the_bubble_appears_and_a_failure_puts_the_text_back(self):

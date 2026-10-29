@@ -863,6 +863,8 @@ button.closenav:hover, button.closedocs:not(:disabled):hover { background: var(-
 .chathead .sub details.busystate { min-width: 0; flex: 0 1 auto; }
 .chathead .sub details.busystate > summary { max-width: 100%; }
 .chathead .sub details.busystate > summary > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Several quotes for one reply: a chip each, the list scrolling past a few (the field stays in view) */
+.quotechips { display: grid; grid-template-columns: minmax(0, 1fr); gap: .3rem; max-height: 9.5rem; overflow-y: auto; }
 .quotechip { display: flex; align-items: flex-start; gap: .4rem; margin: 0 .2rem; padding: .35rem .3rem .35rem .7rem;
               border-left: 3px solid var(--accent); background: var(--panel); border-radius: 8px; font-size: .85rem;
               color: var(--dim); }
