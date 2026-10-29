@@ -1401,12 +1401,12 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
             if p["id"] not in current:
                 continue
             feed.append(h('<div class="turn me" data-k="queue-feedback-{id}">'
-                          '<span class="dim">👎 on reply {k} goes with your next message</span>'
+                          '<span class="dim">👎 on its reply of {k} goes with your next message</span>'
                           '<form class="act" data-post="/feedback/{n}"{a}>'
                           '<input type="hidden" name="op" value="unpend">'
                           '<input type="hidden" name="id" value="{id}">'
                           '<button type="submit" class="small" aria-label="Keep feedback without sending">×</button>'
-                          '</form></div>', id=p["id"], k=current[p["id"]]["target"]["k"], n=q(name),
+                          '</form></div>', id=p["id"], k=_turn_time(current[p["id"]]["reply_ts"]), n=q(name),
                           a=post_attrs("the feedback (is it still pending?)")))
     if chat.get("pending_edits") and not archived:
         feed.append(h('<p class="pending-edits" data-k="pend">✎ Your changes to {p} go to {n} with your next message.</p>',

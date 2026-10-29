@@ -204,20 +204,31 @@ class FeedbackRouteTest(WebTest):
     def inbox(self):
         return list((self.inst / "wren" / "inbox").glob("*.md"))
 
+    def test_feedback_note_reason_ending_in_a_full_stop_gets_no_second(self):
+        # The reason "Checked the archive too." was delivered as "...too.." (seen in the browser check, 2026-10-29).
+        item = {"target": {"kind": "chat", "chat": "web-abc", "k": 3}, "thumb": "up", "reply_ts": "2026-10-29T10:00:00",
+                "reason": "Checked the archive too."}
+        note = feedback.note(item, "answer")
+        self.assertIn("What was good: Checked the archive too.\n", note)
+        self.assertNotIn("..", note)
+        self.assertNotIn("reply 3", note)
+        self.assertIn("What was good: no reason given.\n", feedback.note({**item, "reason": ""}, "answer"))
+
     def test_feedback_send_rides_next_message_once(self):
         self.open()
         fid = self.rated(reason="check it")
         self.sent(fid)
         html = str(web_views.chat_feed("wren", web_chat.load("web-abc"), []))
         self.assertIn('data-k="queue-feedback-' + fid + '"', html)
-        self.assertIn("👎 on reply 1 goes with your next message", html)
+        self.assertIn("👎 on its reply of", html)   # named by its time, not the turn index
+        self.assertIn("goes with your next message", html)
         self.assertEqual(self.inbox(), [])
         with self.assertRaisesRegex(web_chat.Refused, "empty message"):
             web_chat.send("wren", "operator", "", [])
         chat, _ = web_chat.send("wren", "operator", "try again", [], mid="next")
         self.assertEqual(chat["turns"][-1]["feedback"], [fid])
         expected = ("try again\n\n[Operator feedback: 👎 on your reply of 2026-10-29 10:00 "
-                    "(web chat web-abc, reply 1):\n «server answer»\n What was wrong: check it.\n "
+                    "(web chat web-abc):\n «server answer»\n What was wrong: check it.\n "
                     "If it names something you got wrong, record it with record_correction.]")
         self.assertEqual(web_chat._api_messages(web_chat.load("web-abc"))[-1]["content"], expected)
         self.assertNotIn("pending_feedback", chat)
@@ -261,7 +272,7 @@ class FeedbackRouteTest(WebTest):
         self.assertEqual(chat["turns"][-1]["content"], "next")
         row = messages.history()[-1]
         self.assertEqual((row["kind"], row["via"], row["mid"]), ("feedback", messages.BACKGROUND, item["id"]))
-        expected = ("[Operator feedback: 👍 on your reply of 2026-10-29 10:00 (web chat web-abc, reply 1):\n"
+        expected = ("[Operator feedback: 👍 on your reply of 2026-10-29 10:00 (web chat web-abc):\n"
                     " «server answer»\n What was good: precise.\n This is information about what was useful to the "
                     "operator. It is not a score and changes no grade.]")
         self.assertEqual(row["text"], expected)

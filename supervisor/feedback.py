@@ -112,15 +112,20 @@ def down_shas(instance) -> set[str]:
 def note(item, reply_text) -> str:
     """The operator's feedback, quoting only the supervisor's recorded reply."""
     target = item["target"]
-    where = (f"web chat {target['chat']}, reply {target['k']}" if target["kind"] == "chat"
-             else f"message {target['file']}")
+    # The turn index counts the operator's turns too: the reply's time names it for both of them.
+    where = f"web chat {target['chat']}" if target["kind"] == "chat" else f"message {target['file']}"
     up = item["thumb"] == "up"
     ending = ("This is information about what was useful to the operator. It is not a score and changes no grade."
               if up else "If it names something you got wrong, record it with record_correction.")
     return (f"[Operator feedback: {'👍' if up else '👎'} on your reply of "
             f"{item['reply_ts'][:16].replace('T', ' ')} ({where}):\n"
             f" «{reply_text[:300]}{'…' if len(reply_text) > 300 else ''}»\n"
-            f" What was {'good' if up else 'wrong'}: {item['reason'] or 'no reason given'}.\n {ending}]")
+            f" What was {'good' if up else 'wrong'}: {_sentence(item['reason']) or 'no reason given.'}\n {ending}]")
+
+
+def _sentence(text: str) -> str:
+    text = " ".join(text.split())
+    return text + "." if text and text[-1] not in ".!?…" else text
 
 
 def deliver(item, text) -> None:

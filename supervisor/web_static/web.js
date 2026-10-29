@@ -1394,7 +1394,7 @@
     }
   }
   function feedbackSheet(button, group, sending = false) {
-    if (document.querySelector("dialog.feedback-sheet")) return;
+    if (document.querySelector("dialog.feedback-sheet[open]")) return;   // one closing is removed on its close event
     const dialog = document.createElement("dialog");
     dialog.className = "feedback-sheet";
     dialog.setAttribute("aria-labelledby", "feedback-label");
