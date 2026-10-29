@@ -13,6 +13,8 @@ from supervisor import actions, core, opconfig, web_config, web_settings
 from supervisor.tests.test_web_actions import ActionsTest
 from supervisor.tests.test_web_config import ACCESS
 
+from supervisor.tests.node_helpers import NODE_TIMEOUT_S
+
 
 class SavedRowsTest(ActionsTest):
     def post_row(self, verb, **form):
@@ -207,5 +209,5 @@ vm.runInNewContext(fs.readFileSync(process.argv[1], "utf8"), context);
 })().catch(e => { console.error(e); process.exitCode = 1; });
 """
         js = Path(__file__).resolve().parents[1] / "web_static" / "web.js"
-        result = subprocess.run(["node", "-e", script, str(js)], capture_output=True, text=True, timeout=10)
+        result = subprocess.run(["node", "-e", script, str(js)], capture_output=True, text=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(result.returncode, 0, result.stderr)

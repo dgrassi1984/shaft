@@ -8,6 +8,8 @@ from unittest import mock
 from supervisor import web, web_pages
 from supervisor.tests.test_web import WebTest
 
+from supervisor.tests.node_helpers import NODE_TIMEOUT_S
+
 STATIC = Path(web.__file__).parent / "web_static"
 NODE = shutil.which("node")
 
@@ -63,7 +65,7 @@ class RecoveryTest(WebTest):
 @unittest.skipUnless(NODE, "node is not installed")
 class RecoveryJsTest(unittest.TestCase):
     def node(self, script, *args):
-        r = subprocess.run([NODE, "-e", script, *args], capture_output=True, text=True, timeout=10)
+        r = subprocess.run([NODE, "-e", script, *args], capture_output=True, text=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_issue_30_gateway_navigation_uses_offline_cache_only(self):

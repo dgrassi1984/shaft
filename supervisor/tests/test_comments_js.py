@@ -5,6 +5,8 @@ import shutil
 import subprocess
 import unittest
 
+from supervisor.tests.node_helpers import NODE_TIMEOUT_S
+
 
 COMMENTS_JS = Path(__file__).resolve().parents[1] / "web_static" / "comments.js"
 NODE = shutil.which("node")
@@ -96,7 +98,7 @@ const submit = f => f.handlers.submit({ preventDefault() {} });
 })().catch(e => { console.error(e); process.exitCode = 1; });
 """
         result = subprocess.run([NODE, "-e", script, str(COMMENTS_JS)], text=True,
-                                capture_output=True, timeout=10)
+                                capture_output=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_issue_15_archive_selection_cannot_comment(self):
@@ -223,7 +225,7 @@ process.stdout.write(JSON.stringify(cases.map(([text, anchor]) =>
         result = subprocess.run(
             [NODE, "-e", script, str(COMMENTS_JS)],
             input=json.dumps([[text, anchor] for _, text, anchor, _ in cases]),
-            text=True, capture_output=True, timeout=10, check=True,
+            text=True, capture_output=True, timeout=NODE_TIMEOUT_S, check=True,
         )
         actual = json.loads(result.stdout)
         self.assertEqual(len(actual), len(cases))
@@ -248,7 +250,7 @@ const pre = el("PRE", el("SPAN", text("x = 1")), el("BUTTON", el("SVG", el("TITL
 const root = el("DIV", pre, el("P", text("after")));
 process.stdout.write(JSON.stringify(context.window.shaftComments.walk(root).text));
 """
-        result = subprocess.run([NODE, "-e", script, str(COMMENTS_JS)], text=True, capture_output=True, timeout=10,
+        result = subprocess.run([NODE, "-e", script, str(COMMENTS_JS)], text=True, capture_output=True, timeout=NODE_TIMEOUT_S,
                                 check=True)
         self.assertEqual(json.loads(result.stdout), "\nx = 1\nafter")
 

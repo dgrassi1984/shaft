@@ -10,6 +10,8 @@ from pathlib import Path
 from supervisor import web_actions, web_pages, web_views
 from supervisor.tests.test_web_touch import CSS, JS, block
 
+from supervisor.tests.node_helpers import NODE_TIMEOUT_S
+
 NODE = shutil.which("node")
 PHONE = "(max-width: 720px), (pointer: coarse) and (max-height: 520px)"
 LIVE = {"name": "wren", "model": "m", "state": "idle"}
@@ -154,7 +156,7 @@ assert.equal(asked, 1, "a long press on a link inside it is the link's");
 
     def test_a_tap_never_opens_the_send_menu(self):
         js = Path(web_pages.__file__).parent / "web_static" / "web.js"
-        result = subprocess.run([NODE, "-e", self.SCRIPT, str(js)], capture_output=True, text=True, timeout=10)
+        result = subprocess.run([NODE, "-e", self.SCRIPT, str(js)], capture_output=True, text=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(result.returncode, 0, result.stderr)
 
 

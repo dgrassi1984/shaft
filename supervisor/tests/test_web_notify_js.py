@@ -8,6 +8,8 @@ import shutil
 import subprocess
 import unittest
 
+from supervisor.tests.node_helpers import NODE_TIMEOUT_S
+
 
 NODE = shutil.which("node")
 JS = Path(__file__).resolve().parents[1] / "web_static" / "web.js"
@@ -104,7 +106,7 @@ const toast = () => (els.find((e) => e.id === "toast") || {}).textContent || "";
 @unittest.skipUnless(NODE, "node is not installed")
 class NotifyButtonJsTest(unittest.TestCase):
     def run_mode(self, mode: str) -> None:
-        result = subprocess.run([NODE, "-e", HARNESS, mode, str(JS)], text=True, capture_output=True, timeout=10)
+        result = subprocess.run([NODE, "-e", HARNESS, mode, str(JS)], text=True, capture_output=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
 
     def test_issue_23_a_refused_subscribe_leaves_the_button_off(self):

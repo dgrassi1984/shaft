@@ -11,6 +11,8 @@ from pathlib import Path
 
 from supervisor import web_views
 
+from supervisor.tests.node_helpers import NODE_TIMEOUT_S
+
 NODE = shutil.which("node")
 JS = Path(__file__).resolve().parents[1] / "web_static" / "web.js"
 SEEN, ASKED, SENT, LATEST = "2026-10-21T09:00:00", "2026-10-21T10:00:00", "2026-10-21T10:05:00", "2026-10-21T10:30:00"
@@ -117,7 +119,7 @@ class OpenAtLastMessageTest(unittest.TestCase):
     def opens(self, seen, archived=False, after=LATEST, height=250):
         result = subprocess.run([NODE, "-e", HARNESS, str(JS), json.dumps({
             "html": feed(archived), "seen": seen, "archived": archived, "after": after, "height": height})],
-            capture_output=True, text=True, timeout=10)
+            capture_output=True, text=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_opens_at_the_last_message_even_with_unread_ones_above(self):

@@ -10,6 +10,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from supervisor.tests.node_helpers import NODE_TIMEOUT_S
+
 WEB_JS = Path(__file__).resolve().parents[1] / "web_static" / "web.js"
 NODE = shutil.which("node")
 
@@ -131,7 +133,7 @@ class PollRefreshTest(unittest.TestCase):
         m = re.search(r"^  function poll\(el\) \{\n.*?^  \}\n", src, re.S | re.M)
         self.assertIsNotNone(m, "poll() not found in web.js")
         r = subprocess.run([NODE, "-e", HARNESS.replace("//POLL//", m.group(0))], capture_output=True, text=True,
-                           timeout=20)
+                           timeout=NODE_TIMEOUT_S)
         self.assertEqual(r.returncode, 0, r.stderr)
         return json.loads(r.stdout)
 
@@ -144,7 +146,7 @@ class PollRefreshTest(unittest.TestCase):
             self.assertIsNotNone(m)
             functions.append(m.group(0))
         r = subprocess.run([NODE, "-e", HEADER_HARNESS.replace("//POLL//", "\n".join(functions))],
-                           capture_output=True, text=True, timeout=10)
+                           capture_output=True, text=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(json.loads(r.stdout), {"focused": True, "open": True, "typing": True,
                                                "failed": True, "recovered": True, "shut": True})
@@ -166,7 +168,7 @@ chatHeaderState({ querySelector: () => null });
 console.log(JSON.stringify({ notifications, sheets, unread }));
 """
         r = subprocess.run([NODE, "-e", script.replace("//FUNCTION//", m.group(0))],
-                           capture_output=True, text=True, timeout=10)
+                           capture_output=True, text=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(json.loads(r.stdout), {"notifications": 1, "sheets": 1, "unread": 1})
 
@@ -213,7 +215,7 @@ class PageShowTest(unittest.TestCase):
         the load itself — so a chat was downloaded twice on every open. A page restored from the cache still refreshes."""
         m = re.search(r"^  function poll\(el\) \{\n.*?^  \}\n", WEB_JS.read_text(), re.S | re.M)
         r = subprocess.run([NODE, "-e", SHOW_HARNESS.replace("//POLL//", m.group(0))], capture_output=True, text=True,
-                           timeout=20)
+                           timeout=NODE_TIMEOUT_S)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(json.loads(r.stdout), {"onLoad": 0, "restored": 1})
 

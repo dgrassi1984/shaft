@@ -15,6 +15,8 @@ from supervisor import web, web_chat
 from supervisor.tests import test_web
 from supervisor.web_views import docs_panel, size_label, when_label
 
+from supervisor.tests.node_helpers import NODE_TIMEOUT_S
+
 NODE = shutil.which("node")
 JS = Path(__file__).resolve().parents[1] / "web_static" / "web.js"
 NOW = time.mktime((2026, 10, 25, 18, 0, 0, 0, 0, -1))
@@ -194,7 +196,7 @@ const target = { closest: q => q === "[data-sort-docs]" ? head : null };
   assert.equal(ticks, 1);
 })().catch(e => { console.error(e); process.exitCode = 1; });
 """
-        result = subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=10)
+        result = subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(result.returncode, 0, result.stderr)
 
 

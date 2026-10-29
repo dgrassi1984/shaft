@@ -5,6 +5,8 @@ import shutil
 import subprocess
 import unittest
 
+from supervisor.tests.node_helpers import NODE_TIMEOUT_S
+
 
 NODE = shutil.which("node")
 JS = Path(__file__).resolve().parents[1] / "web_static" / "web.js"
@@ -40,7 +42,7 @@ const target = { closest: q => q === "[data-open-doc]" && card.includes("data-op
 })().catch(e => { console.error(e); process.exitCode = 1; });
 """
         result = subprocess.run([NODE, "-e", script, str(JS), json.dumps(markup)], text=True,
-                                capture_output=True, timeout=10)
+                                capture_output=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_reply_copy_and_back(self):
@@ -105,7 +107,7 @@ const click = async (selector, button) => {
   assert.equal(form.hidden, true);
 })().catch(e => { console.error(e); process.exitCode = 1; });
 """
-        result = subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=10)
+        result = subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_folders_open_go_up_and_a_document_goes_back_to_its_folder(self):
@@ -148,7 +150,7 @@ const click = async (selector, el, extra = {}) => {
   assert.equal(panel.dataset.poll, "/fragment/docs/wren?list=1");
 })().catch(e => { console.error(e); process.exitCode = 1; });
 """
-        result = subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=10)
+        result = subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def run_editor(self, scenario):
@@ -203,7 +205,7 @@ function unload(){let prevented=false;if(win.beforeunload) win.beforeunload({pre
 """ + scenario + r"""
 })().catch(e=>{console.error(e);process.exitCode=1;});
 """
-        result = subprocess.run([NODE, '-e', script, str(JS)], capture_output=True, text=True, timeout=10)
+        result = subprocess.run([NODE, '-e', script, str(JS)], capture_output=True, text=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_a_new_document_opens_once_created(self):
@@ -320,7 +322,7 @@ assert.deepEqual(sheet, { showdocs: true, hidedocs: false, closedKey: null, expa
 const plain = runLoad("https://shaft.test/i/thelos/chat", true, false);
 assert.deepEqual(plain, { showdocs: false, hidedocs: true, closedKey: "1", expanded: "false", role: null });
 """
-        result = subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=10)
+        result = subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_issue_58_clicking_doc_card_opens_closed_panel_and_missing_doc_says_so(self):
@@ -416,7 +418,7 @@ const clickCard = async (openDoc, openThread) => {
   assert.equal(panel.dataset.poll, "/fragment/docs/thelos?doc=plan.md&thread=c1");
 })().catch(e => { console.error(e); process.exitCode = 1; });
 """
-        result = subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=10)
+        result = subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_text_attachment_opens_in_the_panel_and_back_returns_to_the_list(self):
@@ -483,5 +485,5 @@ function boot(href) {
   assert.equal(loaded.grid.classList.contains("hidedocs"), false);
 })().catch(e => { console.error(e); process.exitCode = 1; });
 """
-        result = subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=10)
+        result = subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(result.returncode, 0, result.stderr)
