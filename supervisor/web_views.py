@@ -1194,8 +1194,12 @@ def _feedback_buttons(name: str, target: dict, ratings: dict) -> Html:
     fields = ({"kind": "chat", "cid": target["chat"], "k": target["k"]} if target["kind"] == "chat"
               else {"kind": "message", "file": target["file"]})
     return h('<span class="feedback" data-feedback-name="{n}" data-feedback-target="{target}" '
-             'data-feedback-id="{id}" data-feedback-reason="{reason}">{buttons}</span>',
+             'data-feedback-id="{id}" data-feedback-reason="{reason}" data-feedback-thumb="{thumb}">{buttons}{send}</span>',
              n=name, target=json.dumps(fields), id=item.get("id", ""), reason=item.get("reason", ""),
+             thumb=item.get("thumb", ""),
+             send=(h('<span class="dim small">sent {time}</span>', time=_turn_time(item["sent"]["ts"]))
+                   if item.get("sent") else h('<button type="button" class="small" data-feedback-send>Send…</button>')
+                   if item else Html("")),
              buttons=join(h('<button type="button" class="small icon" data-thumb="{thumb}" aria-pressed="{pressed}" '
                             'aria-label="{label}" title="{title}" data-focus="feedback-{key}-{thumb}">{icon}</button>',
                             thumb=thumb, pressed="true" if item.get("thumb") == thumb else "false", label=label,
@@ -1316,6 +1320,8 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
                 tag = join([tag, join(h(' <span class="editchip">🗑 deleted {p}</span>', p=p) for p in t["deleted"])])
             if t.get("comments"):
                 tag = join([tag, _comment_chips(t["comments"])])
+            if t.get("feedback"):
+                tag = join([tag, h(' <span class="editchip">👎 feedback</span>')])
             # A comment-only turn's shown text is empty: the chips are the turn, not an empty bubble.
             shown = t.get("shown", t["content"])
             # data-mid: the page's id for the message, so the "sending" copy it shows goes once this one is here (W7)
@@ -1389,6 +1395,19 @@ def chat_feed(name: str, chat: dict | None, sent: list[dict], archived: bool = F
                       '<span class="dim">queued — sent when this reply ends</span></div>{text}{atts}{cancel}</div>',
                       mid=t["mid"], dm=_mid_attr(t["mid"]), text=_my_text(t["shown"]), cancel=cancel,
                       atts=join(h('<p class="dim">📎 {n}</p>', n=a["name"]) for a in t.get("attachments", []))))
+    if not archived:
+        current = {r["id"]: r for r in ratings.values() if not r["sent"]}
+        for p in chat.get("pending_feedback", []):
+            if p["id"] not in current:
+                continue
+            feed.append(h('<div class="turn me" data-k="queue-feedback-{id}">'
+                          '<span class="dim">👎 on reply {k} goes with your next message</span>'
+                          '<form class="act" data-post="/feedback/{n}"{a}>'
+                          '<input type="hidden" name="op" value="unpend">'
+                          '<input type="hidden" name="id" value="{id}">'
+                          '<button type="submit" class="small" aria-label="Keep feedback without sending">×</button>'
+                          '</form></div>', id=p["id"], k=current[p["id"]]["target"]["k"], n=q(name),
+                          a=post_attrs("the feedback (is it still pending?)")))
     if chat.get("pending_edits") and not archived:
         feed.append(h('<p class="pending-edits" data-k="pend">✎ Your changes to {p} go to {n} with your next message.</p>',
                       p=", ".join(sorted(chat["pending_edits"])), n=name))

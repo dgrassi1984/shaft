@@ -490,13 +490,21 @@ def _post(req: Request, dev: str) -> Response:
             return _not_found(req.path)
         form = req.form()
         login = (req.headers.get("tailscale-user-login") or "").lower()
-        try:
-            if form.get("op") == "clear":
-                item = next((r for r in feedback.items(name) if r["id"] == form.get("id")), None)
-                if not item:
-                    raise ValueError("That rating is no longer current for this instance.")
-                feedback.clear(item["id"], login)
-            elif form.get("op") == "rate":
+        with web_chat._inst_lock(name):
+            try:
+                op = form.get("op")
+                item = None
+                said = "Feedback kept."
+                if op in ("clear", "send", "unpend"):
+                    item = next((r for r in feedback.items(name) if r["id"] == form.get("id")), None)
+                    if not item:
+                        raise ValueError("That rating is no longer current for this instance.")
+                    target = item["target"]
+                    form.update({"kind": target["kind"], **(
+                        {"cid": target["chat"], "k": str(target["k"])} if target["kind"] == "chat"
+                        else {"file": target["file"]})})
+                if op not in ("rate", "clear", "send", "unpend"):
+                    raise ValueError("Choose rate, clear, send or unpend.")
                 if form.get("kind") == "chat":
                     chat = web_chat.load(form.get("cid", ""))
                     try:
@@ -519,12 +527,43 @@ def _post(req: Request, dev: str) -> Response:
                     text = reply["text"]
                 else:
                     raise ValueError("Choose a chat reply or a logged message.")
-                feedback.rate(name, login, target, form.get("thumb", ""), form.get("reason", ""), reply["ts"], text)
-            else:
-                raise ValueError("Choose rate or clear.")
-        except ValueError as e:
-            return _html(409, web_pages.h("<p>{t}</p>", t=str(e)))
-        return _html(200, web_pages.h("<p>Feedback kept.</p>"))
+                # Serialize ratings/clears with the relay taking pending feedback.
+                lock = web_chat._lock(target["chat"]) if target["kind"] == "chat" else web_chat._inst_lock(name)
+                with lock:
+                    if item:
+                        item = next((r for r in feedback.items(name) if r["id"] == item["id"]), None)
+                        if not item:
+                            raise ValueError("That rating is no longer current for this instance.")
+                    if item and target["kind"] == "chat" and not item["sent"]:
+                        chat = web_chat.load(target["chat"])
+                        if any(item["id"] in t.get("feedback", []) for t in chat["turns"]):
+                            feedback.mark_sent(item["id"], "chat", chat["id"])
+                            item = next(r for r in feedback.items(name) if r["id"] == item["id"])
+                    if op == "clear":
+                        feedback.clear(item["id"], login)
+                        said = ("Feedback cleared. The message was already delivered." if item["sent"]
+                                else "Feedback cleared.")
+                    elif op == "rate":
+                        item = feedback.rate(name, login, target, form.get("thumb", ""), form.get("reason", ""),
+                                             reply["ts"], text)
+                    elif op == "send":
+                        if item["sent"]:
+                            raise ValueError("That feedback was already delivered.")
+                        chat = web_chat.load(target["chat"]) if target["kind"] == "chat" else None
+                        if chat and any(p["id"] == item["id"] for p in web_chat.pending_feedback(chat)):
+                            raise ValueError("That feedback is already waiting for your next message.")
+                        reason = form.get("reason", item["reason"])[:2000]
+                        if reason != item["reason"]:
+                            item = feedback.rate(name, login, target, item["thumb"], reason, reply["ts"], text)
+                if op == "send":
+                    said = web_chat.send_feedback(name, item, feedback.note(item, text))
+                elif op == "unpend":
+                    web_chat.unpend_feedback(name, item)
+                    said = "Feedback kept; removed from your next message."
+            except ValueError as e:
+                return _html(409, web_pages.h("<p>{t}</p>", t=str(e)))
+        return _html(200, web_pages.h("<p>{t}</p>", t=said),
+                     {"X-Feedback-Id": item["id"]} if item else {})
     if m := re.match(r"^/chat/([A-Za-z0-9_-]+)/send$", req.path):
         from . import web_chat
         if m[1] not in _names():

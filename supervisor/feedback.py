@@ -1,4 +1,4 @@
-"""Keep operator feedback separately so rating a reply never contacts an instance."""
+"""Operator ratings and explicit delivery, kept in an append-only supervisor log."""
 from __future__ import annotations
 
 import copy
@@ -107,3 +107,28 @@ def by_target(instance) -> dict[str, dict]:
 
 def down_shas(instance) -> set[str]:
     return {r["reply_sha"] for r in items(instance) if r["thumb"] == "down"}
+
+
+def note(item, reply_text) -> str:
+    """The operator's feedback, quoting only the supervisor's recorded reply."""
+    target = item["target"]
+    where = (f"web chat {target['chat']}, reply {target['k']}" if target["kind"] == "chat"
+             else f"message {target['file']}")
+    up = item["thumb"] == "up"
+    ending = ("This is information about what was useful to the operator. It is not a score and changes no grade."
+              if up else "If it names something you got wrong, record it with record_correction.")
+    return (f"[Operator feedback: {'👍' if up else '👎'} on your reply of "
+            f"{item['reply_ts'][:16].replace('T', ' ')} ({where}):\n"
+            f" «{reply_text[:300]}{'…' if len(reply_text) > 300 else ''}»\n"
+            f" What was {'good' if up else 'wrong'}: {item['reason'] or 'no reason given'}.\n {ending}]")
+
+
+def deliver(item, text) -> None:
+    """Retry a logged delivery by rating id without creating a second inbox message."""
+    from . import messages
+    name, fid = item["instance"], item["id"]
+    sent = messages.sent_mid(name, fid)
+    file = sent["file"] if sent else messages.deliver_feedback(
+        name, text, shown=f"{'👍' if item['thumb'] == 'up' else '👎'} feedback on its reply of "
+                         f"{item['reply_ts'][11:16]}", mid=fid).name
+    mark_sent(fid, "inbox", file)

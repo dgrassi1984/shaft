@@ -1346,9 +1346,9 @@
     sendComposer(form, false);
   });
 
-  // Feedback stays in the supervisor. F2 adds delivery beside Just keep it in this sheet.
+  // Feedback stays in the supervisor. Only an explicit Send delivers it.
   const feedbackPending = new Set();
-  async function keepFeedback(group, thumb, reason, clear) {
+  async function keepFeedback(group, thumb, reason, clear, send = false) {
     const target = group.dataset.feedbackTarget;
     const name = group.dataset.feedbackName;
     const pending = name + ":" + target;
@@ -1357,14 +1357,26 @@
     const buttons = [...group.querySelectorAll("button")];
     buttons.forEach(b => { b.disabled = true; });
     try {
-      const body = new URLSearchParams(JSON.parse(target));
-      body.set("op", clear ? "clear" : "rate");
-      body.set("id", group.dataset.feedbackId);
-      body.set("thumb", thumb);
-      body.set("reason", reason);
-      const r = await fetch("/feedback/" + encodeURIComponent(name), {
-        method: "POST", credentials: "same-origin", body, headers: { "X-CSRF-Token": csrf() }
-      });
+      const post = async op => {
+        const body = new URLSearchParams(JSON.parse(target));
+        body.set("op", op);
+        body.set("id", group.dataset.feedbackId || "");
+        body.set("thumb", thumb);
+        body.set("reason", reason);
+        return fetch("/feedback/" + encodeURIComponent(name), {
+          method: "POST", credentials: "same-origin", body, headers: { "X-CSRF-Token": csrf() }
+        });
+      };
+      // A new down rating must exist before Send can name its current id.
+      if (send && group.dataset.feedbackThumb !== thumb) {
+        const kept = await post("rate");
+        if (pairAgain(kept)) return false;
+        if (!kept.ok) { toast(textOf(await kept.text()), true); return false; }
+        group.dataset.feedbackId = kept.headers.get("X-Feedback-Id");
+        group.dataset.feedbackThumb = thumb;
+        group.dataset.feedbackReason = reason;
+      }
+      const r = await post(clear ? "clear" : send ? "send" : "rate");
       if (pairAgain(r)) return false;
       toast(textOf(await r.text()) || `HTTP ${r.status}`, !r.ok);
       if (r.ok) {
@@ -1381,16 +1393,19 @@
       buttons.forEach(b => { b.disabled = false; });
     }
   }
-  function feedbackSheet(button, group) {
+  function feedbackSheet(button, group, sending = false) {
     if (document.querySelector("dialog.feedback-sheet")) return;
     const dialog = document.createElement("dialog");
     dialog.className = "feedback-sheet";
     dialog.setAttribute("aria-labelledby", "feedback-label");
-    dialog.innerHTML = '<form><label id="feedback-label" for="feedback-reason">What was wrong? (optional)</label>' +
+    const thumb = sending ? group.dataset.feedbackThumb : "down";
+    dialog.innerHTML = '<form><label id="feedback-label" for="feedback-reason">What was ' +
+      (thumb === "up" ? 'good' : 'wrong') + '? (optional)</label>' +
       '<textarea id="feedback-reason" name="reason" maxlength="2000" rows="4"></textarea>' +
-      '<div class="feedback-actions"><button type="submit">Just keep it</button>' +
+      '<div class="feedback-actions"><button type="submit" class="primary" value="send">Send to ' +
+      group.dataset.feedbackName + '</button>' +
+      (sending ? '' : '<button type="submit" value="keep">Just keep it</button>') +
       '<button type="button" data-feedback-cancel>Cancel</button></div></form>';
-    // F2: add "Send to <name>" here, with a separate explicit delivery action.
     const form = dialog.querySelector("form");
     const reason = dialog.querySelector("textarea");
     reason.value = group.dataset.feedbackReason || "";
@@ -1401,7 +1416,9 @@
       saving = true;
       const save = form.querySelector("button[type=submit]");
       save.disabled = true;
-      if (await keepFeedback(group, "down", reason.value, false)) dialog.close();
+      // Only the Send button sends: a submit with no known button (Enter, an extension) just keeps it.
+      if (await keepFeedback(group, thumb, reason.value, false, !!ev.submitter && ev.submitter.value === "send"))
+        dialog.close();
       saving = false;
       save.disabled = false;
     });
@@ -1417,11 +1434,12 @@
     reason.focus();
   }
   document.addEventListener("click", ev => {
-    const button = ev.target.closest && ev.target.closest("[data-thumb]");
+    const button = ev.target.closest && ev.target.closest("[data-thumb], [data-feedback-send]");
     if (!button || button.disabled) return;
     const group = button.closest("[data-feedback-target]");
     if (!group) return;
-    if (button.getAttribute("aria-pressed") === "true") keepFeedback(group, button.dataset.thumb, "", true);
+    if (button.dataset.feedbackSend !== undefined) feedbackSheet(button, group, true);
+    else if (button.getAttribute("aria-pressed") === "true") keepFeedback(group, button.dataset.thumb, "", true);
     else if (button.dataset.thumb === "down") feedbackSheet(button, group);
     else keepFeedback(group, "up", "", false);
   });
@@ -1474,12 +1492,12 @@
     sel.addRange(range);
   }
   function openMsgMenu(turn, x, y, keyboard) {
-    const acts = [...turn.querySelectorAll(".msgactions button, .who [data-reply-message], .who [data-thumb]")];
+    const acts = [...turn.querySelectorAll(".msgactions button, .who [data-reply-message], .who [data-thumb], .who [data-feedback-send]")];
     if (!acts.length) return false;
     const m = msgMenuBox();
     m.textContent = "";
-    const items = acts.map(b => [b.dataset.thumb ? (b.getAttribute("aria-pressed") === "true" ? "Clear " : "") +
-      (b.dataset.thumb === "up" ? "thumbs up" : "thumbs down") : b.dataset.copy !== undefined ? "Copy" : "Reply", b.innerHTML, () => b.click()]);
+    const items = acts.map(b => [b.dataset.feedbackSend !== undefined ? "Send feedback…" : b.dataset.thumb ? (b.getAttribute("aria-pressed") === "true" ? "Clear thumbs " : "Thumbs ") +
+      (b.dataset.thumb === "up" ? "up" : "down") : b.dataset.copy !== undefined ? "Copy" : "Reply", b.dataset.feedbackSend !== undefined ? "" : b.innerHTML, () => b.click()]);
     if (touchOnly()) items.push(["Select text", selectIcon, () => selectText(turn)]);
     for (const [label, svg, run] of items) {
       const b = document.createElement("button");

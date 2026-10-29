@@ -1,4 +1,4 @@
-"""Kept feedback survives refreshes without delivering anything to an instance."""
+"""Kept ratings stay local; explicit sends reach the next chat turn or the inbox once."""
 import json
 import tempfile
 import unittest
@@ -72,7 +72,8 @@ class FeedbackRouteTest(WebTest):
     def setUp(self):
         super().setUp()
         self.inst = self.sup / "test-instances"
-        (self.inst / "wren").mkdir(parents=True)
+        (self.inst / "wren" / "shaft").mkdir(parents=True)
+        (self.inst / "wren" / ".git").write_text("gitdir: test")
         for patch in (mock.patch.object(feedback, "FILE", self.sup / "feedback.jsonl"),
                       mock.patch.object(web_chat, "SUP_DIR", self.sup),
                       mock.patch.object(messages, "SUP_DIR", self.sup),
@@ -82,6 +83,14 @@ class FeedbackRouteTest(WebTest):
                       mock.patch.object(web, "_names", return_value=["wren", "other"])):
             patch.start()
             self.addCleanup(patch.stop)
+        for patch in (mock.patch.object(web_chat, "_docs_now", return_value={}),
+                      mock.patch.object(web_chat, "_start"),
+                      mock.patch.object(web_chat, "log"),
+                      mock.patch("supervisor.doc_comments.take_notices", return_value=[]),
+                      mock.patch("supervisor.doc_comments.waiting", return_value="")):
+            patch.start()
+            self.addCleanup(patch.stop)
+        messages._cache.update(key=None, rows=[])
         self.cookie = self.paired()
         self.chat = {"id": "web-abc", "instance": "wren", "state": "ended",
                      "created": "2026-10-29T10:00:00", "ended": "2026-10-29T10:00:03", "turns": [
@@ -154,7 +163,7 @@ class FeedbackRouteTest(WebTest):
         for kind, fields in [("chat", dict(cid="web-abc", k="1")), ("message", dict(file="note.md"))]:
             self.assertEqual(self.post(op="rate", kind=kind, thumb="down", reason="kept", **fields).status, 200)
         self.assertEqual(sorted(self.inst.rglob("*")), before)
-        self.assertEqual(list((self.inst / "wren").iterdir()), [])
+        self.assertEqual({p.name for p in (self.inst / "wren").iterdir()}, {"shaft", ".git"})
         self.assertEqual((self.sup / "messages.jsonl").read_bytes(), log)
         self.assertEqual(web_chat.load("web-abc"), self.chat)
         self.assertEqual(len(feedback.items()), 2)
@@ -173,3 +182,221 @@ class FeedbackRouteTest(WebTest):
         operator = {**self.message, "from": "operator", "to": "wren"}
         self.assertNotIn("data-thumb", str(web_views.message_page(operator, {}, ["wren"], "csrf")))
         self.assertNotIn("data-thumb", str(web_views._sent_cards("wren", [operator])[0]))
+
+
+    def open(self, state="idle"):
+        self.chat.pop("ended", None)
+        self.chat["state"] = state
+        self.chat["reply"] = {"interjections": 0} if state == "replying" else None
+        web_chat.save(self.chat)
+
+    def rated(self, thumb="down", **fields):
+        fields = {"kind": "chat", "cid": "web-abc", "k": "1", **fields}
+        r = self.post(op="rate", thumb=thumb, **fields)
+        self.assertEqual(r.status, 200, r.body)
+        return r.headers["X-Feedback-Id"]
+
+    def sent(self, fid, **fields):
+        r = self.post(op="send", id=fid, **fields)
+        self.assertEqual(r.status, 200, r.body)
+        return feedback.items("wren")[0]
+
+    def inbox(self):
+        return list((self.inst / "wren" / "inbox").glob("*.md"))
+
+    def test_feedback_send_rides_next_message_once(self):
+        self.open()
+        fid = self.rated(reason="check it")
+        self.sent(fid)
+        html = str(web_views.chat_feed("wren", web_chat.load("web-abc"), []))
+        self.assertIn('data-k="queue-feedback-' + fid + '"', html)
+        self.assertIn("👎 on reply 1 goes with your next message", html)
+        self.assertEqual(self.inbox(), [])
+        with self.assertRaisesRegex(web_chat.Refused, "empty message"):
+            web_chat.send("wren", "operator", "", [])
+        chat, _ = web_chat.send("wren", "operator", "try again", [], mid="next")
+        self.assertEqual(chat["turns"][-1]["feedback"], [fid])
+        expected = ("try again\n\n[Operator feedback: 👎 on your reply of 2026-10-29 10:00 "
+                    "(web chat web-abc, reply 1):\n «server answer»\n What was wrong: check it.\n "
+                    "If it names something you got wrong, record it with record_correction.]")
+        self.assertEqual(web_chat._api_messages(web_chat.load("web-abc"))[-1]["content"], expected)
+        self.assertNotIn("pending_feedback", chat)
+        self.assertEqual(feedback.items()[0]["sent"]["via"], "chat")
+        self.assertIn("👎 feedback", str(web_views.chat_feed("wren", chat, [])))
+        again, _ = web_chat.send("wren", "operator", "try again", [], mid="next")
+        self.assertEqual(again["turns"], chat["turns"])
+        chat["state"] = "idle"
+        web_chat.save(chat)
+        later, _ = web_chat.send("wren", "operator", "next question", [])
+        self.assertEqual(later["turns"][-1]["content"], "next question")
+        self.assertEqual(self.inbox(), [])
+
+    def test_feedback_pending_delivered_at_chat_end(self):
+        for clear in (False, True):
+            with self.subTest(clear=clear):
+                self.open()
+                fid = self.rated()
+                self.sent(fid)
+                with mock.patch.object(web_chat, "_post", return_value=(202, {})):
+                    if clear:
+                        web_chat.clear("wren", "web-abc")
+                    else:
+                        web_chat.end("web-abc")
+                item = feedback.items()[0]
+                self.assertEqual(item["sent"]["via"], "inbox")
+                self.assertNotIn("pending_feedback", web_chat.load("web-abc"))
+                self.assertEqual(self.post(op="send", id=fid).status, 409)
+        self.assertEqual(len(self.inbox()), 2)
+        self.assertEqual([m["kind"] for m in messages.history()[1:]], ["feedback", "feedback"])
+
+    def test_feedback_thumbs_up_send_goes_to_inbox_only(self):
+        self.open()
+        fid = self.rated("up")
+        item = self.sent(fid, reason="precise")
+        self.assertNotEqual(item["id"], fid)  # changed reasons create a new current rating
+        self.assertEqual(item["sent"]["via"], "inbox")
+        self.assertEqual(len(self.inbox()), 1)
+        self.assertNotIn("pending_feedback", web_chat.load("web-abc"))
+        chat, _ = web_chat.send("wren", "operator", "next", [])
+        self.assertEqual(chat["turns"][-1]["content"], "next")
+        row = messages.history()[-1]
+        self.assertEqual((row["kind"], row["via"], row["mid"]), ("feedback", messages.BACKGROUND, item["id"]))
+        expected = ("[Operator feedback: 👍 on your reply of 2026-10-29 10:00 (web chat web-abc, reply 1):\n"
+                    " «server answer»\n What was good: precise.\n This is information about what was useful to the "
+                    "operator. It is not a score and changes no grade.]")
+        self.assertEqual(row["text"], expected)
+        self.assertTrue(self.inbox()[0].read_text().endswith(expected + "\n"))
+        self.assertIn("👍 feedback on its reply of 10:00", str(web_views._later_card(row)))
+        self.assertIn("feedback", str(web_views.message_page(row, {}, ["wren"], "csrf")))
+
+    def test_feedback_send_ended_chat_and_card_to_inbox(self):
+        fid = self.rated()
+        self.sent(fid)
+        fid = self.rated(kind="message", file="note.md")
+        self.sent(fid)
+        self.assertEqual(len(self.inbox()), 2)
+        self.assertEqual([r["kind"] for r in messages.history()[1:]], ["feedback", "feedback"])
+        self.assertEqual(web_chat.load("web-abc"), self.chat)
+
+    def test_feedback_send_non_open_chat_to_inbox(self):
+        self.open()
+        web_chat.save({**self.chat, "id": "web-def", "created": "2026-10-29T11:00:00"})
+        self.sent(self.rated())
+        self.assertEqual(len(self.inbox()), 1)
+        self.assertNotIn("pending_feedback", web_chat.load("web-abc"))
+
+    def test_feedback_send_twice_refused(self):
+        for state in ("idle", "ended"):
+            with self.subTest(state=state):
+                self.open(state)
+                fid = self.rated()
+                self.sent(fid)
+                r = self.post(op="send", id=fid, reason="changed on retry")
+                self.assertEqual(r.status, 409, r.body)
+                self.assertIn(b"already", r.body)
+        self.assertEqual(len(self.inbox()), 1)
+
+    def test_feedback_rerated_pending_dropped(self):
+        self.open()
+        self.sent(self.rated())
+        self.rated("up")
+        chat, _ = web_chat.send("wren", "operator", "next", [])
+        self.assertEqual(chat["turns"][-1]["content"], "next")
+        self.assertNotIn("pending_feedback", chat)
+        self.assertIsNone(feedback.items()[0]["sent"])
+        self.assertEqual(self.inbox(), [])
+
+    def test_feedback_unpend_keeps_rating_and_clear_drops_pending(self):
+        self.open()
+        fid = self.rated()
+        self.sent(fid)
+        self.assertEqual(self.post(op="unpend", id=fid).status, 200)
+        self.assertEqual(web_chat.pending_feedback(web_chat.load("web-abc")), [])
+        self.assertEqual(feedback.items()[0]["id"], fid)
+        self.sent(fid)
+        self.post(op="clear", id=fid)
+        chat, _ = web_chat.send("wren", "operator", "next", [])
+        self.assertEqual(chat["turns"][-1]["content"], "next")
+        self.assertEqual(self.inbox(), [])
+
+    def test_feedback_waits_through_interjection_then_joins_queued_turn(self):
+        self.open("replying")
+        fid = self.rated()
+        self.sent(fid)
+        with mock.patch.object(web_chat, "_post", return_value=(202, {})) as post:
+            chat, _ = web_chat.send("wren", "operator", "meanwhile", [])
+        self.assertEqual(post.call_args.args[2]["messages"][-1]["content"], "meanwhile")
+        self.assertEqual([p["id"] for p in chat["pending_feedback"]], [fid])
+        web_chat.queue("wren", "operator", "afterwards", [], mid="q1")
+        chat = web_chat.load("web-abc")
+        self.assertTrue(web_chat._flush_queue(chat))
+        web_chat.save(chat)
+        self.assertEqual(chat["turns"][-1]["feedback"], [fid])
+        self.assertIn("Operator feedback: 👎", chat["turns"][-1]["content"])
+        self.assertFalse(web_chat._flush_queue(chat))
+        self.assertEqual(feedback.items()[0]["sent"]["via"], "chat")
+
+    def test_feedback_retry_after_inbox_receipt_avoids_second_delivery(self):
+        fid = self.rated()
+        with mock.patch.object(feedback, "mark_sent", side_effect=OSError("interrupted")):
+            with self.assertRaises(OSError):
+                self.post(op="send", id=fid)
+        self.sent(fid)
+        self.assertEqual(len(self.inbox()), 1)
+        self.assertEqual(len(messages.history()), 2)
+
+    def test_feedback_clear_sent_explains_already_delivered(self):
+        fid = self.rated()
+        self.sent(fid)
+        r = self.post(op="clear", id=fid)
+        self.assertIn(b"already delivered", r.body)
+        self.assertEqual(feedback.items(), [])
+        self.assertEqual(len(self.inbox()), 1)
+
+
+    def test_feedback_send_link_and_sent_time(self):
+        fid = self.rated("up", reason="helpful")
+        html = str(web_views._feedback_buttons("wren", {"kind": "chat", "chat": "web-abc", "k": 1},
+                                              feedback.by_target("wren")))
+        self.assertIn("data-feedback-send>Send…</button>", html)
+        self.assertIn('data-feedback-thumb="up"', html)
+        self.sent(fid)
+        html = str(web_views._feedback_buttons("wren", {"kind": "chat", "chat": "web-abc", "k": 1},
+                                              feedback.by_target("wren")))
+        self.assertNotIn("data-feedback-send", html)
+        self.assertRegex(html, r'sent <time[^>]*>\d\d:\d\d</time>')
+
+    def test_feedback_pending_at_end_retries_without_duplicate(self):
+        self.open()
+        fid = self.rated()
+        self.sent(fid)
+        with mock.patch.object(web_chat, "_post", return_value=(202, {})):
+            with mock.patch.object(feedback, "mark_sent", side_effect=OSError("interrupted")):
+                with self.assertRaises(OSError):
+                    web_chat.end("web-abc")
+            web_chat.end("web-abc")
+        self.assertEqual(len(self.inbox()), 1)
+        self.assertEqual(feedback.items()[0]["sent"]["via"], "inbox")
+
+    def test_feedback_note_quotes_only_first_300_characters(self):
+        item = feedback.rate("wren", "operator", {"kind": "message", "file": "note.md"}, "down", "",
+                             "2026-10-29T14:02:00", "x" * 301)
+        self.assertEqual(feedback.note(item, "x" * 300 + "SECRET"),
+                         "[Operator feedback: 👎 on your reply of 2026-10-29 14:02 (message note.md):\n «" +
+                         "x" * 300 + "…»\n What was wrong: no reason given.\n "
+                         "If it names something you got wrong, record it with record_correction.]")
+
+
+    def test_feedback_retry_after_chat_receipt_refused(self):
+        self.open()
+        fid = self.rated()
+        self.sent(fid)
+        with mock.patch.object(feedback, "mark_sent", side_effect=OSError("interrupted")):
+            with self.assertRaises(OSError):
+                web_chat.send("wren", "operator", "next", [])
+        self.assertIsNone(feedback.items()[0]["sent"])
+        r = self.post(op="send", id=fid, reason="changed on retry")
+        self.assertEqual(r.status, 409, r.body)
+        self.assertIn(b"already delivered", r.body)
+        self.assertEqual(feedback.items()[0]["sent"]["via"], "chat")
+        self.assertEqual(self.inbox(), [])

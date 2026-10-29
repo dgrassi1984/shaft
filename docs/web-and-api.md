@@ -382,13 +382,33 @@ has not been exercised as part of this documentation check.
 
 Thumbs up and down beside a reply's Copy/Reply actions, and in its long-press or
 right-click menu, keep a rating in the supervisor. They also appear on messages an instance sent you and their
-`/messages/<file>` pages, including replies in ended chats. Thumbs up saves immediately; thumbs down opens
-"What was wrong? (optional)" with **Just keep it** and **Cancel**. The chosen thumb stays lit and its tooltip
-shows the reason. Tap it again to clear it. Kept feedback is never sent to the instance.
+`/messages/<file>` pages, including replies in ended chats. Thumbs up saves immediately. Thumbs down opens
+"What was wrong? (optional)" with **Send to <name>**, **Just keep it**, and **Cancel**. Just keep it stores the rating
+without sending it. A lit, unsent thumb has a **Send…** link that opens the sheet with its reason filled in;
+thumbs up asks "What was good? (optional)". Sending is always an explicit action.
 
-`POST /feedback/<name>` uses the same pairing, origin and CSRF checks as chat posts. Form fields are `op=rate`
-or `clear`; rating takes `kind=chat`, `cid`, `k` (the zero-based assistant turn index), or `kind=message`, `file`,
-plus `thumb=up|down` and optional `reason` (at most 2000 characters). Clear takes the current rating's `id`.
+A sent thumbs up goes straight to the instance's inbox for its next cycle, never into a chat. A sent thumbs down
+on the instance's currently open web chat waits for your next message in that chat. A removable item in the feed
+shows which reply it concerns. Removing it keeps the rating without sending it. Feedback waits through
+interjections while the instance is replying; it joins the next ordinary or queued user turn, which shows a
+feedback chip. Pending feedback alone cannot send an empty message. Ending or clearing that chat delivers its
+pending feedback to the inbox. Thumbs down on ended or other chats, and on message cards or `/messages` pages,
+also goes straight to the inbox. Inbox deliveries are logged with `kind: "feedback"`.
+
+The chosen thumb stays lit and its tooltip shows the reason. Once delivered it shows "sent HH:MM". Tap a lit thumb
+to clear the rating. Clearing a sent rating records the clear and explains that the message was already delivered.
+The instance's note quotes the first 300 characters of its recorded reply and includes the optional reason.
+Thumbs down asks it to record a correction if appropriate; thumbs up states that this is information about what
+was useful, not a score, and changes no grade.
+
+`POST /feedback/<name>` uses the same pairing, origin and CSRF checks as chat posts. Form fields are `op=rate`,
+`clear`, `send`, or `unpend`. Rating takes `kind=chat`, `cid`, `k` (the zero-based assistant turn index), or
+`kind=message`, `file`, plus `thumb=up|down` and optional `reason` (at most 2000 characters). Clear, send and unpend
+take the current rating's `id`. Send can supply an updated reason, which creates a replacement rating before
+sending. Unpend removes feedback from the next chat message while keeping the rating. A successful response's
+`X-Feedback-Id` header identifies the current rating, including a replacement. Sending an already pending or
+delivered rating returns 409 with an explanation.
+
 The server reads the reply text and timestamp from its own records. Unknown instances return 404, invalid
-targets return 409. Ratings and clears append to `.supervisor/feedback.jsonl`; the latest rating per target
-wins. This milestone stores feedback only and does not change fine-tuning or grades.
+targets return 409. Ratings, deliveries and clears append to `.supervisor/feedback.jsonl`; the latest rating per
+target wins. Feedback changes no grades. Fine-tuning changes belong to milestone F3.

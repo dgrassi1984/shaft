@@ -227,6 +227,11 @@ def deliver_background(name: str, text: str, *, shown: str, in_reply_to: str | N
                     via=BACKGROUND, mid=mid, shown=shown, comments=comments)
 
 
+def deliver_feedback(name: str, text: str, *, shown: str, mid: str = "") -> Path:
+    """Explicit operator feedback, read in the next cycle and logged as feedback."""
+    return _deliver(name, text, "feedback", via=BACKGROUND, mid=mid, shown=shown)
+
+
 def sent_mid(name: str, mid: str) -> dict | None:
     """The logged message to `name` the page sent with this id, if it was delivered already."""
     return next((m for m in history() if m["to"] == name and m.get("mid") == mid), None) if mid else None
