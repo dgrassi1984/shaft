@@ -5,6 +5,8 @@ import shutil
 import subprocess
 import unittest
 
+from supervisor.tests.node_helpers import NODE_TIMEOUT_S
+
 NODE = shutil.which("node")
 JS = Path(__file__).resolve().parents[1] / "web_static" / "web.js"
 
@@ -77,7 +79,7 @@ const A={name:'a.txt',size:1,type:'text/plain'},B={name:'b.txt',size:1,type:'tex
 """ + scenario + r"""
 })().catch(e=>{console.error(e);process.exitCode=1;});
 """
-        result = subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=10)
+        result = subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_issue_21_quotes_save_grow_and_reset_identity(self):
@@ -309,7 +311,7 @@ const swap = () => { for (const f of handlers["shaft:swapped"]) f({ target: feed
 live = true; swap(); assert.equal(queue.hidden, false, "a reply started: offer to queue");
 live = false; swap(); assert.equal(queue.hidden, true, "the reply ended: only Send now");
 """
-        result = subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=10)
+        result = subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_opening_keyboard_shrinks_and_closing_restores_long_draft(self):

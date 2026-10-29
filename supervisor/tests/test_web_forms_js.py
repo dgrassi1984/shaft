@@ -11,6 +11,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from supervisor.tests.node_helpers import NODE_TIMEOUT_S
+
 NODE = shutil.which("node")
 JS = Path(__file__).resolve().parents[1] / "web_static" / "web.js"
 
@@ -107,7 +109,7 @@ async function submit(form, submitter) {
 class FormJsTest(unittest.TestCase):
     def run_js(self, body: str) -> subprocess.CompletedProcess:
         script = HARNESS.replace("//CASE//", body)
-        return subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=20)
+        return subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=NODE_TIMEOUT_S)
 
     def test_w17_cancelling_a_queued_message_never_says_it_is_safe_to_repeat(self):
         """W17: the queued message's Cancel carries the message's id (input[name=mid]), so a lost answer took it for a

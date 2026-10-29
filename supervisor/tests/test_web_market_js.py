@@ -7,6 +7,8 @@ from pathlib import Path
 from supervisor import web_pages
 from supervisor.tests.test_web_review_js import function
 
+from supervisor.tests.node_helpers import NODE_TIMEOUT_S
+
 NODE = shutil.which("node")
 STATIC = Path(__file__).resolve().parents[1] / "web_static"
 
@@ -14,7 +16,7 @@ STATIC = Path(__file__).resolve().parents[1] / "web_static"
 @unittest.skipUnless(NODE, "node is not installed")
 class MarketJsTest(unittest.TestCase):
     def node(self, script, source):
-        result = subprocess.run([NODE, "-e", script, source], capture_output=True, text=True, timeout=10)
+        result = subprocess.run([NODE, "-e", script, source], capture_output=True, text=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
         self.assertEqual(result.stdout.strip(), "ok", "the async assertions must finish")
 

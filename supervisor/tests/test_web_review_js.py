@@ -10,6 +10,8 @@ from pathlib import Path
 
 from supervisor import web_pages
 
+from supervisor.tests.node_helpers import NODE_TIMEOUT_S
+
 NODE = shutil.which("node")
 STATIC = Path(__file__).resolve().parents[1] / "web_static"
 JS = (STATIC / "web.js").read_text()
@@ -24,7 +26,7 @@ def function(name: str, src: str = JS) -> str:
 
 
 def node(script: str, *args: str) -> None:
-    result = subprocess.run([NODE, "-e", script, *args], capture_output=True, text=True, timeout=20)
+    result = subprocess.run([NODE, "-e", script, *args], capture_output=True, text=True, timeout=NODE_TIMEOUT_S)
     if result.returncode != 0:
         raise AssertionError(result.stderr or result.stdout)
     return result.stdout

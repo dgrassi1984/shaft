@@ -11,6 +11,8 @@ from supervisor import web_views
 from supervisor.tests.test_web_a11y import declarations
 from supervisor.tests.test_web_touch import CSS, block
 
+from supervisor.tests.node_helpers import NODE_TIMEOUT_S
+
 NODE = shutil.which("node")
 JS = Path(__file__).resolve().parents[1] / "web_static" / "web.js"
 PHONE = "(max-width: 720px), (pointer: coarse) and (max-height: 520px)"
@@ -170,7 +172,7 @@ const fire = async (type, ev) => {
   assert.equal(document.activeElement, summary);
 })().catch(e => { console.error(e); process.exitCode = 1; });
 """
-        result = subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=10)
+        result = subprocess.run([NODE, "-e", script, str(JS)], text=True, capture_output=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(result.returncode, 0, result.stderr)
 
 

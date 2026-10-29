@@ -4,6 +4,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from supervisor.tests.node_helpers import NODE_TIMEOUT_S
+
 NODE = shutil.which("node")
 JS = Path(__file__).resolve().parents[1] / "web_static" / "web.js"
 
@@ -83,7 +85,7 @@ class SheetsJsTest(unittest.TestCase):
     def run_sheet(self, scenario):
         result = subprocess.run([NODE, "-e", HARNESS + scenario +
                                  "\n})().catch(e=>{console.error(e);process.exitCode=1;});", str(JS)],
-                                text=True, capture_output=True, timeout=10)
+                                text=True, capture_output=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_m10_opening_a_sheet_unwatches_immediately(self):

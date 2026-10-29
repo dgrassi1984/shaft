@@ -7,6 +7,8 @@ from pathlib import Path
 
 from supervisor import web_views
 
+from supervisor.tests.node_helpers import NODE_TIMEOUT_S
+
 NODE = shutil.which("node")
 JS = Path(__file__).resolve().parents[1] / "web_static" / "web.js"
 
@@ -112,7 +114,7 @@ class UnreadTest(unittest.TestCase):
     def run_page(self, mode, html=""):
         result = subprocess.run([NODE, "-e", HARNESS, str(JS), json.dumps({
             "mode": mode, "html": html, "newHtml": feed(),
-        })], capture_output=True, text=True, timeout=10)
+        })], capture_output=True, text=True, timeout=NODE_TIMEOUT_S)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_issue_28_config_keeps_reply_unread(self):
