@@ -225,8 +225,7 @@ class ReplayEndToEndTest(Fixture):
 class ReplayLeavesTheMindStoreTest(ReplayEndToEndTest):
     """Project rule: trial replays never commit. The replay's copy has its own mind; the store is only read."""
 
-    def test_replay_has_no_side_effects(self):   # the parent's test, not run twice
-        pass
+    test_replay_has_no_side_effects = None   # the parent's test, not run twice: a `pass` override still paid its setup
 
     def test_replay_never_writes_mind_store(self):
         before = store_state(NAME, self.project)

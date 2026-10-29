@@ -54,12 +54,13 @@ class Tree:
     def tests(self) -> Path:
         return self.root / "supervisor" / "tests"
 
-    def run(self, part: str, under_test: Path | None = None, nonce: str | None = None) -> subprocess.CompletedProcess:
+    def run(self, part: str, under_test: Path | None = None, nonce: str | None = None, workers: int | None = None,
+            env: dict | None = None) -> subprocess.CompletedProcess:
         import os
-        env = {k: v for k, v in os.environ.items() if k != VAR}
+        env = {k: v for k, v in (env or os.environ).items() if k != VAR}
         if under_test:
             env[VAR] = str(under_test)
-        extra = ["--nonce-stdin"] if nonce is not None else []
+        extra = (["--nonce-stdin"] if nonce is not None else []) + (["--workers", str(workers)] if workers else [])
         return subprocess.run([sys.executable, "-E", "-s", "-m", "supervisor.gate_suite", part, *extra],
                               cwd=self.root, env=env, input=f"{nonce}\n" if nonce is not None else "",
                               capture_output=True, text=True, timeout=120)
@@ -370,6 +371,110 @@ class Run(unittest.TestCase):
         out = self.tree({}).run("both")
         self.assertEqual(out.returncode, 2)
         self.assertIsNone(gate_suite.report(out.stdout))
+
+
+class Workers(unittest.TestCase):
+    """A part across several processes (docs/plans/PLAN-gate-5min.md): the same tests, the same verdicts, the same
+    guards as one process."""
+
+    def tree(self, modules: dict[str, str]) -> Tree:
+        t = Tree(modules)
+        self.addCleanup(t.close)
+        return t
+
+    def test_every_module_runs_once_and_the_counts_add_up(self):
+        t = self.tree({f"test_m{i}.py": plain(f"M{i}") for i in range(6)})
+        out = t.run("shared", workers=3)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(gate_suite.report(out.stdout), {"part": "shared", "tests_run": 6, "ok": True})
+        times = gate_suite.times(out.stderr)
+        ran = [name for name, _ in times["slowest_modules"]]
+        self.assertEqual(sorted(ran), sorted(["supervisor.tests", *(f"supervisor.tests.test_m{i}" for i in range(6))]))
+        self.assertEqual(len(times["slowest_tests"]), 6)
+        self.assertEqual(times["run_twice"], [])
+
+    def test_a_test_case_imported_into_another_module_is_named_as_run_twice(self):
+        """test_operator_channel imported test_api's ApiTest: discover ran its tests a second time (2026-10-29)."""
+        importer = "import unittest\nfrom supervisor.tests.test_m0 import M0\n"
+        t = self.tree({"test_m0.py": plain("M0"), "test_importer.py": importer})
+        out = t.run("shared", workers=2)
+        self.assertEqual(gate_suite.times(out.stderr)["run_twice"],
+                         ["test_ok (supervisor.tests.test_m0.M0.test_ok)"])
+
+    def test_a_failure_in_one_worker_fails_the_part_and_is_named(self):
+        bad = "import unittest\n\nclass B(unittest.TestCase):\n    def test_bad(self):\n        self.fail('no')\n"
+        t = self.tree({"test_bad.py": bad, **{f"test_m{i}.py": plain(f"M{i}") for i in range(3)}})
+        out = t.run("shared", workers=2, nonce="n")
+        self.assertEqual(out.returncode, 1)
+        self.assertEqual(gate_suite.report(out.stdout, "n"), {"part": "shared", "tests_run": 4, "ok": False, "nonce": "n"})
+        self.assertIn("FAIL: test_bad (supervisor.tests.test_bad.B.test_bad)", out.stderr)
+
+    def test_a_worker_that_dies_fails_the_part(self):
+        dies = "import os, unittest\n\nclass D(unittest.TestCase):\n    def test_d(self):\n        os._exit(0)\n"
+        t = self.tree({"test_dies.py": dies, "test_fine.py": plain()})
+        out = t.run("shared", workers=2)
+        self.assertNotEqual(out.returncode, 0)
+        self.assertFalse(gate_suite.report(out.stdout)["ok"])
+        self.assertIn("test_dies did not finish: a worker died", out.stderr)
+
+    def test_a_worker_that_dies_after_its_results_fails_the_part(self):
+        """Codex review: a worker that returned every result, then died on its way out (here a finalizer), passed the
+        part; in one process that exit code was the runner's own, and failed it."""
+        late = ("import os, unittest\nfrom multiprocessing import util\n\nclass L(unittest.TestCase):\n"
+                "    def test_l(self):\n        util.Finalize(None, os._exit, args=(23,), exitpriority=0)\n")
+        t = self.tree({"test_late.py": late})
+        out = t.run("shared", workers=1, nonce="n")
+        self.assertEqual(out.returncode, 1, out.stderr)
+        self.assertEqual(gate_suite.report(out.stdout, "n"), {"part": "shared", "tests_run": 1, "ok": False, "nonce": "n"})
+        self.assertIn("exited with 23 after its modules ran", out.stderr)
+
+    def test_every_worker_start_makes_a_supervisor_folder_of_its_own(self):
+        """Codex review: two probes that each saw a folder other than the parent's did not show the workers' folders
+        differ. _worker_start is what every worker runs first."""
+        import os
+        from unittest import mock
+        t = self.tree({})
+        split = gate_suite.Split(t.tests(), t.root)
+        seen = []
+        with mock.patch.dict(os.environ, {"SHAFT_SUPERVISOR_DIR": "/parent"}):
+            for _ in range(3):
+                gate_suite._worker_start(split, "instance", None)          # no fence: nothing put on sys.meta_path
+                seen.append(os.environ["SHAFT_SUPERVISOR_DIR"])
+        self.addCleanup(lambda: [shutil.rmtree(d, ignore_errors=True) for d in seen])
+        self.assertEqual(len(set(seen)), 3)
+        self.assertNotIn("/parent", seen)
+        self.assertTrue(all(Path(d).is_dir() for d in seen))
+
+    def test_the_fence_holds_in_every_worker(self):
+        sneaky = ("import importlib, unittest\n"
+                  "harness = importlib.import_module('supervisor.tests.test_' + 'invariants')\n\n"
+                  "class S(harness.InstanceCase):\n    def test_s(self):\n        pass\n")
+        t = self.tree({"test_invariants.py": INVARIANTS, "test_sneaky.py": sneaky,
+                       **{f"test_m{i}.py": plain(f"M{i}") for i in range(4)}})
+        out = t.run("shared", t.instance, workers=3)
+        self.assertNotEqual(out.returncode, 0)
+        self.assertFalse(gate_suite.report(out.stdout)["ok"])
+        self.assertIn("test_sneaky", out.stderr)
+
+    def test_each_worker_has_its_own_supervisor_folder(self):
+        """Workers run at once: one folder for their locks and logs would let one test see another's."""
+        import os
+        shared = tempfile.mkdtemp(prefix="shaft-gate-suite-sup-")
+        self.addCleanup(shutil.rmtree, shared, True)
+        check = ("import os, unittest\n\nclass W(unittest.TestCase):\n    def test_w(self):\n"
+                 f"        self.assertNotEqual(os.environ['SHAFT_SUPERVISOR_DIR'], {shared!r})\n"
+                 "        self.assertTrue(os.path.isdir(os.environ['SHAFT_SUPERVISOR_DIR']))\n")
+        t = self.tree({"test_w1.py": check, "test_w2.py": check.replace("W(", "W2(")})
+        out = t.run("shared", workers=2, env={**os.environ, "SHAFT_SUPERVISOR_DIR": shared})
+        self.assertEqual(out.returncode, 0, out.stderr)
+
+    def test_a_worker_count_below_one_is_refused(self):
+        for bad in ("0", "x"):
+            with self.subTest(bad=bad):
+                out = subprocess.run([sys.executable, "-E", "-s", "-m", "supervisor.gate_suite", "shared", "--workers",
+                                      bad], cwd=self.tree({}).root, capture_output=True, text=True, timeout=60)
+                self.assertEqual(out.returncode, 2)
+                self.assertIsNone(gate_suite.report(out.stdout))
 
 
 if __name__ == "__main__":

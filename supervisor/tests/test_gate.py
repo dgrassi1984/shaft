@@ -334,7 +334,9 @@ class SharedRecordTest(SharedFixtureCase):
         git(self.project, "commit", "-qm", "a test that forges the runner's line and exits 0")
         ok, out = self.gate()
         self.assertFalse(ok, out)
-        self.assertIn("no report", out)
+        self.assertIn("supervisor.tests.test_forger did not finish: a worker died", out)   # the runner's own verdict
+        self.assertNotIn("9 tests", out)                                                    # never the forged one
+        self.assertNotIn("GATE_SUITE_TIMES", out)     # the cut output is for failures: timings stay in the full log
         self.assertFalse(self.record().exists())
 
     def test_no_shared_tests_is_a_pass_never_recorded(self):
@@ -600,8 +602,9 @@ class StageTimeoutTest(FakeProjectCase):
 
 LEAVES_A_WRITER = (   # a test that starts a background worker: it says it started, then writes the instance's code
     "import subprocess, sys, time, unittest\nfrom pathlib import Path\n\n"
-    "WORKER = (\"import time\\nfrom pathlib import Path\\nPath('started').write_text('x')\\ntime.sleep({late})\\n\"\n"
-    "          \"Path('shaft/late.py').write_text('WRITTEN_AFTER_THE_GATE = True\\\\n')\\n\")\n\n"
+    "WORKER = (\"import time\\nfrom pathlib import Path\\nPath('started').write_text(str(time.monotonic()))\\n\"\n"
+    "          \"time.sleep({late})\\n\"\n"
+    "          \"Path('{target}').write_text('WRITTEN_AFTER_THE_GATE = True\\\\n')\\n\")\n\n"
     "class T(unittest.TestCase):\n    def test_server(self):\n"
     "        subprocess.Popen([sys.executable, '-c', WORKER], stdin=subprocess.DEVNULL,\n"
     "                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL{session})\n"
@@ -615,18 +618,27 @@ class StageProcessGroupTest(FakeProjectCase):
     gate had failed and runner._settle had reverted the change, so it could write the instance's code after the
     revert. Nothing a stage started may outlive it."""
 
-    def assert_no_write_after_the_gate(self, then: str, timeout_s: int, late_s: int, session: str = "") -> str:
+    def assert_no_write_after_the_gate(self, then: str, timeout_s: int, late_s: int, session: str = "",
+                                       target: str = ".tmp/late.py") -> str:
+        """`target`: .tmp/ by default, which the stage's sandbox lets it write, so only the end of the stage's process
+        group stops the leftover. Under shaft/ the sandbox's code-write deny (#86) stopped it as well, and these
+        tests passed with the group never killed (2026-10-29)."""
         (self.inst / "shaft").mkdir()
         (self.inst / "tests").mkdir()
         (self.inst / "tests" / "test_server.py").write_text(LEAVES_A_WRITER.format(late=late_s, then=then,
-                                                                                             session=session))
+                                                                                   session=session, target=target))
         ok, out = self.gate(timeout_s)
-        returned = time.monotonic()
         self.assertFalse(ok, out)
         self.assertTrue((self.inst / "started").exists(), out)            # the worker did start: not a vacuous pass
-        while time.monotonic() - returned < late_s + 2:                    # past the moment it would have written
-            self.assertFalse((self.inst / "shaft" / "late.py").exists(),
-                             "a process the gate's stage started wrote the instance's code after run_tests returned")
+        # Watched past the moment it would have written: its own start (time.monotonic is the system's clock, the
+        # same in every process) + late_s, and 2 s more. Counted from the gate's return, it waited out the whole
+        # stage again: 10.8 s, over the suite's per-test budget (docs/plans/PLAN-gate-5min.md).
+        would_write = float((self.inst / "started").read_text()) + late_s
+        while True:
+            self.assertFalse((self.inst / target).exists(),
+                             "a process the gate's stage started wrote into the instance after run_tests returned")
+            if time.monotonic() > would_write + 2:
+                break
             time.sleep(0.2)
         return out
 
@@ -644,7 +656,7 @@ class StageProcessGroupTest(FakeProjectCase):
         # never reaches it, and it wrote shaft/late.py after run_tests had returned and the change was reverted (on
         # c313477). The gate's sandbox denies code writes and its tests run on a protected copy (#86): neither lets it.
         out = self.assert_no_write_after_the_gate("self.fail('broken')", timeout_s=60, late_s=3,
-                                                  session=", start_new_session=True")
+                                                  session=", start_new_session=True", target="shaft/late.py")
         self.assertIn("broken", out)
 
 

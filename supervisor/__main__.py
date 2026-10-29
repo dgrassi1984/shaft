@@ -1317,8 +1317,10 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("check", help="run the test gate against an instance's code")
     p.add_argument("name", nargs="?", default=DEFAULT_INSTANCE)
     p = sub.add_parser("gate", help="the test gate's upkeep: warm runs the supervisor's shared tests on the current "
-                                    "commit unless their pass is recorded (the scheduler does it after each merge)")
-    p.add_argument("action", choices=["warm"])
+                                    "commit unless their pass is recorded (the scheduler does it after each merge); "
+                                    "budget runs both parts on the last commit and fails one over its time budget "
+                                    "(the check before a merge)")
+    p.add_argument("action", choices=["warm", "budget"])
     args = parser.parse_args(argv)
 
     if args.cmd == "talk":
@@ -1713,11 +1715,13 @@ def main(argv: list[str]) -> int:
         print("PASS" if ok else "FAIL")
         return 0 if ok else 1
     if args.cmd == "gate":
+        gate.stop_stages_on_signal()        # stopped with the scheduler or a ^C: its test run goes too
+        if args.action == "budget":
+            return gate.budget()            # not niced: it measures the time a gate takes
         try:
             os.nice(10)                     # behind the instances' own work: nothing waits on it
         except OSError:
             pass
-        gate.stop_stages_on_signal()        # stopped with the scheduler: its test run goes too
         return gate.warm()
     return 2
 
