@@ -106,9 +106,11 @@ class LaunchTest(WebTest):
         self.assertNotIn("/launch/", js.split('const SHELL = [', 1)[1].split('];', 1)[0])
 
     def test_largest_ipad_render_is_under_two_seconds(self):
-        start = time.perf_counter()
+        # CPU time, not wall time: the render is pure Python in this process, and the gate runs on a shared Mac. On
+        # 2026-10-29 14:40 a wall-clock 2 s failed every instance's gate at load ~14 (it takes ~0.37 s of CPU).
+        start = time.process_time()
         body = web_icons.launch_png(2064, 2752, web_pages.THEME["light"])
-        elapsed = time.perf_counter() - start
+        elapsed = time.process_time() - start
         print(f"\nC17 largest render (2064x2752): {elapsed:.6f} s", flush=True)
         self.assertLess(elapsed, 2.0)
         self.png_rows(body, 2064, 2752)
