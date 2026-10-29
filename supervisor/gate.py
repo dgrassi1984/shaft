@@ -704,6 +704,11 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = GATE_TIMEOUT_S,
         prof = Path(prof_name)
         with os.fdopen(fd, "w") as f:
             f.write(sandbox.profile(instance_root, home, [], env_root=env_root))
+            # #86: tests may use scratch space, but cannot chmod, replace or rewrite the code they judge.
+            code_root = instance_root.resolve()
+            f.write(f"(deny file-write* (literal {sandbox._q(code_root)}))\n")
+            for name in CODE_PATHS:
+                f.write(f"(deny file-write* (subpath {sandbox._q(code_root / name)}))\n")
         sup_ok, section, sup_full = _supervisor_tests(instance_root, tree, label, timeout_s)
         outputs.append(f"== supervisor invariants ({label}) ==\n" + section)
         full.append(f"== supervisor invariants ({label}) ==\n" + sup_full)

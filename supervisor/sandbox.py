@@ -149,6 +149,12 @@ def profile(instance_root: Path, home: Path, llm_ports: list[int], shared: Path 
     return "\n".join(lines) + "\n"
 
 
+def protected_code(code: Path, home: Path) -> str:
+    """Read a supervisor-owned code copy, never write it, even by chmod or rename (#86)."""
+    code = Path(code).resolve()
+    return "\n".join([*_shared(code, home), f"(deny file-write* (subpath {_q(code)}))"]) + "\n"
+
+
 RUN_WRITABLE = ("notes", "plugins", "skills", "tests", "shaft", ".tmp", ".venv", ".uv", ".browser")
 
 

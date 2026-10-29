@@ -27,12 +27,12 @@ from contextlib import ExitStack, contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import gate, localmodel, sandbox
+from . import gate, localmodel, protected, sandbox
 from .broker import Broker
 from .core import (API_TALKS, BROKER_MAX_CALLS, err_text, DOCS_COPY, EMBED_PORT, CORE_MIN_HOURS, CYCLE_TIMEOUT_S, HOME, INSTANCES,
                    LLM_PORTS, PROJECT, PYTHON, SLEEP_TIMEOUT_S, SUP_DIR, TreeTooBig, UnsafePath,
                    commit_state, describe_knobs, git_wt, instance_config, instance_root, journal_note, list_beneath,
-                   log, safe_mkdir, safe_read, safe_write, safe_write_bytes, secrets_env, set_aside, unlink_beneath)
+                   log, safe_mkdir, safe_read, safe_read_bytes, safe_write, safe_write_bytes, secrets_env, set_aside, unlink_beneath)
 
 CORE_RE = re.compile(r"^## Core\n(.*?)(?=^## |\Z)", re.M | re.S)
 
@@ -540,8 +540,9 @@ def _refused(name: str, e: RunRefused) -> int:
     return REFUSED
 
 
-def _launch(name: str, root: Path, kind: str, agent_args: list[str], budget: int | None):
-    """Start the run's broker and return (broker, command, environment) for the agent."""
+def _launch(name: str, root: Path, kind: str, agent_args: list[str], budget: int | None, approved: dict | None = None):
+    """Start the broker and launch from _reconcile's approved bytes (#86), keeping root as cwd and mind.
+    Return (broker, command, environment); the caller removes SHAFT_CODE_ROOT after the agent ends."""
     if localmodel.is_service(instance_config(name).get("LLM_BASE_URL", "")):
         localmodel.ensure(f"{name}'s {kind}")   # it runs only while used (localmodel.py)
     broker = Broker(name, PROJECT, secrets_env(), SUP_DIR / "broker.log", max_calls=BROKER_MAX_CALLS)
@@ -555,7 +556,23 @@ def _launch(name: str, root: Path, kind: str, agent_args: list[str], budget: int
     extra["SHAFT_SCHEDULE"] = describe_schedule(name)
     extra["SHAFT_RUN_STARTED"] = broker.run_started   # the episode carries it: its consults are matched to it exactly
     extra["SHAFT_OPEN_TALKS"] = ",".join(open_conversations(name))   # not to be written up yet
-    cmd, env = agent_command(root, broker, agent_args, SUP_DIR / f"{name}.sb", LLM_PORTS, extra)
+    tree = None
+    try:
+        if approved is None:
+            raise RunRefused("no approved code for the launch")
+        try:
+            tree = protected.make(approved, SUP_DIR / "protected" / name, name)
+        except (OSError, TreeTooBig, ValueError) as e:
+            raise RunRefused(f"could not protect its approved code: {e}") from None
+        extra["SHAFT_CODE_ROOT"] = str(tree)
+        cmd, env = agent_command(root, broker, agent_args, SUP_DIR / f"{name}.sb", LLM_PORTS, extra)
+    except BaseException:
+        try:
+            broker.stop()
+        finally:
+            if tree is not None:
+                protected.remove(tree)
+        raise
     return broker, cmd, env
 
 
@@ -584,7 +601,8 @@ def agent_command(root: Path, broker: Broker, agent_args: list[str], profile: Pa
     proxy (the public internet); it may read the operator's shared folder if the broker carries one (shaft share),
     is told which of the operator's mail labels and calendars its broker serves it (SHAFT_MAIL, shaft mail;
     SHAFT_CALENDAR, shaft calendar), whether its model sees images (SHAFT_VISION, docs/plans/PLAN-vision.md),
-    and the instance's Python environment when `root` is a copy (trial replay)."""
+    and the instance's Python environment when `root` is a copy (trial replay). SHAFT_CODE_ROOT in `extra`
+    redirects live launches to their protected code; replay callers already own a copy and leave it unset."""
     ports = list(llm_ports) + [EMBED_PORT, broker.port, broker.egress.port]
     profile.write_text(sandbox.profile(root, HOME, ports, shared=broker.shared, env_root=broker.env_root))
     safe_mkdir(root, ".tmp")
@@ -593,6 +611,14 @@ def agent_command(root: Path, broker: Broker, agent_args: list[str], profile: Pa
     except (OSError, UnsafePath) as e:   # not fatal: the instance finds no docs and says so (its skill tells it to)
         log(f"{root.name}: {DOCS_COPY}/ NOT refreshed: {type(e).__name__}: {e}")
     cmd = sandbox.wrap(profile, [PYTHON, "-E", "-s", "-m", "shaft", *agent_args])
+    if (code := extra.get("SHAFT_CODE_ROOT")):
+        with profile.open("a") as f:
+            f.write(sandbox.protected_code(Path(code), HOME))
+        # #86: -I excludes cwd and Python environment overrides. Only the approved tree supplies shaft;
+        # cwd and SHAFT_ROOT remain the instance's mind and working edits. Trial replays use their own copies.
+        cmd = sandbox.wrap(profile, [PYTHON, "-I", "-c",
+                           "import runpy, sys; sys.path.insert(0, sys.argv.pop(1)); "
+                           "runpy.run_module('shaft', run_name='__main__', alter_sys=True)", code, *agent_args])
     env = sandbox.agent_env(os.environ, SHAFT_ROOT=str(root), TMPDIR=str(root / ".tmp"),
                             SHAFT_BROKER_URL=f"http://127.0.0.1:{broker.port}", SHAFT_BROKER_TOKEN=broker.token,
                             SHAFT_EMBED_URL=f"http://127.0.0.1:{EMBED_PORT}/v1/embeddings",
@@ -810,7 +836,7 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
     _clean_tmp(root)
     run = {"before": _snapshot(root, _reconcile(name, root)), "seen": 0, "cseen": 0}
     budget = None if interactive else (SLEEP_TIMEOUT_S if kind == "sleep" else CYCLE_TIMEOUT_S)
-    broker, cmd, env = _launch(name, root, kind, agent_args, budget)
+    broker, cmd, env = _launch(name, root, kind, agent_args, budget, run["before"].get("code"))
     run["deadline"] = float(env["SHAFT_DEADLINE"]) if env.get("SHAFT_DEADLINE") else None
     # In a conversation Ctrl-C belongs to the agent (it ends the talk and writes its journal
     # entry). If the supervisor took it too, subprocess.run would kill the agent mid-entry.
@@ -875,7 +901,11 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
             signal.signal(signal.SIGINT, old_sigint)
         for s, handler in old_stop.items():
             signal.signal(s, handler)
-        broker.stop()
+        try:
+            broker.stop()
+        finally:
+            if env.get("SHAFT_CODE_ROOT"):
+                protected.remove(Path(env["SHAFT_CODE_ROOT"]))
     if refused:
         return _refused(name, refused)
     if stopped:
@@ -939,7 +969,12 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
                                        f"{p} -> {after[p].target}" if isinstance(after[p], gate.Link)
                                        else f"{p}: {after[p].why}" for p in linked))
         else:
-            ok, test_log = gate.run_tests(root, HOME)
+            try:
+                with protected.copy(after, SUP_DIR / "protected" / name, name,
+                                    safe_read_bytes(root, "config.env", b"")) as tree:
+                    ok, test_log = gate.run_tests(tree, HOME, env_root=root)
+            except Exception as e:   # a failed copy is a failed gate, never an unchecked change kept
+                ok, test_log = False, f"== protected copy ==\n{type(e).__name__}: {e}"
         if ok:
             kept = touched + (["config.env"] if configured else [])
             log(f"{name}: code change passed tests: {touched} config: {configured}")
@@ -1268,7 +1303,7 @@ def _conversation(name: str, root: Path, kind: str, agent_args: list[str], talk_
     turn.begin()
     log(f"{name}: start {kind} {talk_id} {describe_knobs()}")
     try:
-        broker, cmd, env = _launch(name, root, kind, agent_args, None)
+        broker, cmd, env = _launch(name, root, kind, agent_args, None, turn.before.get("code"))
     except BaseException:
         turn.held.close()
         raise
@@ -1284,6 +1319,10 @@ def _conversation(name: str, root: Path, kind: str, agent_args: list[str], talk_
     except KeyboardInterrupt:
         code = 130
     finally:
-        broker.stop()
+        try:
+            broker.stop()
+        finally:
+            if env.get("SHAFT_CODE_ROOT"):
+                protected.remove(Path(env["SHAFT_CODE_ROOT"]))
     log(f"{name}: end {kind} {talk_id} exit={code} broker_calls={broker.counts or {}}")
     return code

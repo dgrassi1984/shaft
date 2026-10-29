@@ -61,7 +61,7 @@ class RunTransactionCase(unittest.TestCase):
         mind.commit("kant", "kant: created", self.root, self.project)
         self.gated: list[str] = []
 
-    def fake_gate(self, root: Path, home: Path):
+    def fake_gate(self, root: Path, home: Path, env_root: Path | None = None):
         """Fails while the plugin holds the edit nobody checked; records what it judged."""
         text = (root / "plugins" / "text_stats" / "main.py").read_text()
         self.gated.append(text)
@@ -393,7 +393,7 @@ class CommitTheGatedBytesTest(RunTransactionCase):
     def test_a_file_rewritten_after_the_gate_is_committed_as_gated_and_put_back(self):
         f = self.root / "plugins" / "text_stats" / "main.py"
 
-        def gate_then_tamper(root, home):
+        def gate_then_tamper(root, home, env_root=None):
             result = self.fake_gate(root, home)
             f.write_text(self.TAMPERED)                       # after the snapshot, before the commit
             return result

@@ -9,7 +9,14 @@ The broker gives each run a token and a limited set of tools. The gate tests cod
 changes before keeping them; the code it approved is recorded outside the instance's reach
 ([baseline](../supervisor/baseline.py)), anything else found at the next run's start is gated
 then, and a run's processes (it leads its own process group) are all gone before the gate
-looks. Cloud judges grade autonomous work from recorded tool
+looks. Each live launch imports from a supervisor-owned, read-only copy of the approved code snapshot
+under `.supervisor/protected/` (#86). Isolated Python excludes cwd from imports; cwd and `SHAFT_ROOT`
+still point at the instance's mind and working edits. Broker `run` and plugin execution use that working
+folder, so newly written plugins remain testable. At settlement the gate tests a separate read-only copy
+of its snapshot, with writable `.tmp/` scratch space and the instance's Python environment read in place.
+The commit uses those same snapshot bytes. Copies are removed after use; the next copy sweeps those
+left by dead supervisors. Trial replays and battery exams keep their existing copies.
+Cloud judges grade autonomous work from recorded tool
 activity, and probation can revert a kept change after later outcomes deteriorate.
 Sources: [run lifecycle](../supervisor/runner.py),
 [gate](../supervisor/gate.py), [judging](../supervisor/metrics.py),
