@@ -604,7 +604,7 @@ LEAVES_A_WRITER = (   # a test that starts a background worker: it says it start
     "          \"Path('shaft/late.py').write_text('WRITTEN_AFTER_THE_GATE = True\\\\n')\\n\")\n\n"
     "class T(unittest.TestCase):\n    def test_server(self):\n"
     "        subprocess.Popen([sys.executable, '-c', WORKER], stdin=subprocess.DEVNULL,\n"
-    "                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+    "                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL{session})\n"
     "        while not Path('started').exists():\n            time.sleep(0.05)\n"
     "        {then}\n")
 
@@ -615,10 +615,11 @@ class StageProcessGroupTest(FakeProjectCase):
     gate had failed and runner._settle had reverted the change, so it could write the instance's code after the
     revert. Nothing a stage started may outlive it."""
 
-    def assert_no_write_after_the_gate(self, then: str, timeout_s: int, late_s: int) -> str:
+    def assert_no_write_after_the_gate(self, then: str, timeout_s: int, late_s: int, session: str = "") -> str:
         (self.inst / "shaft").mkdir()
         (self.inst / "tests").mkdir()
-        (self.inst / "tests" / "test_server.py").write_text(LEAVES_A_WRITER.format(late=late_s, then=then))
+        (self.inst / "tests" / "test_server.py").write_text(LEAVES_A_WRITER.format(late=late_s, then=then,
+                                                                                             session=session))
         ok, out = self.gate(timeout_s)
         returned = time.monotonic()
         self.assertFalse(ok, out)
@@ -636,6 +637,14 @@ class StageProcessGroupTest(FakeProjectCase):
     def test_a_process_a_failing_test_left_behind_cannot_write_the_code_after_the_gate(self):
         # The same race without a timeout: the stage ends, the gate fails, _settle reverts, the worker writes.
         out = self.assert_no_write_after_the_gate("self.fail('broken')", timeout_s=60, late_s=3)
+        self.assertIn("broken", out)
+
+    def test_a_process_that_left_the_stage_group_cannot_write_the_code_after_the_gate_setsid_20261029(self):
+        # Regression: a worker started in a session of its own (setsid) leaves the stage's process group, so killpg
+        # never reaches it, and it wrote shaft/late.py after run_tests had returned and the change was reverted (on
+        # c313477). The gate's sandbox denies code writes and its tests run on a protected copy (#86): neither lets it.
+        out = self.assert_no_write_after_the_gate("self.fail('broken')", timeout_s=60, late_s=3,
+                                                  session=", start_new_session=True")
         self.assertIn("broken", out)
 
 
