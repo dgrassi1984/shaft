@@ -7,9 +7,9 @@ everything else is escaped whole before any emphasis is applied; links go only t
 links (the page's CSP loads no image from elsewhere); alignment is a class (the CSP allows no inline style).
 
 Blocks: ATX headings (# is the page's h2: the page has its own h1), paragraphs with hard breaks (two trailing spaces
-or a backslash), bullet, numbered and task lists — nested, tight or loose —, block quotes (nested), fenced code (``` or
-~~~, with its language), tables (with alignment), horizontal rules. Inline: `code`, **bold** / __bold__, *em* / _em_,
-~~strike~~, [links](https://…), <https://…> and bare https:// addresses, \\escapes.
+or a backslash), bullet (-, *, + or •), numbered and task lists — nested, tight or loose —, block quotes (nested),
+fenced code (``` or ~~~, with its language), tables (with alignment), horizontal rules. Inline: `code`, **bold** /
+__bold__, *em* / _em_, ~~strike~~, [links](https://…), <https://…> and bare https:// addresses, \\escapes.
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ _FENCE = re.compile(r"^( {0,3})(`{3,}|~{3,})\s*([^`\s]*)[^`]*$")
 _HR = re.compile(r"^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$")
 _HEAD = re.compile(r"^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$")
 _QUOTE = re.compile(r"^ {0,3}> ?")
-_ITEM = re.compile(r"^( *)([-*+]|\d{1,9}[.)])([ \t]+|$)(.*)$")
+_ITEM = re.compile(r"^( *)([-*+•]|\d{1,9}[.)])([ \t]+|$)(.*)$")
 _TASK = re.compile(r"^\[([ xX])\][ \t]+")
 _TABLE_SEP = re.compile(r"^ *\|? *:?-+:? *(\| *:?-+:? *)*\|? *$")
 
