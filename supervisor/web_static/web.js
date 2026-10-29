@@ -1317,8 +1317,9 @@
     const box = document.querySelector("form.composer textarea");
     if (b && box) quoteText(b.closest("[data-raw]").dataset.raw, box);
   });
-  // Retry sends the message that failed again, in one tap. The server offers it only when the failed request cannot
-  // have run anything (classify_reply: no tools ran); Retry then Send was two taps for one intent (iPhone review I14).
+  // Retry sends the message that failed again, in one tap when the failed request cannot have run anything
+  // (classify_reply: no tools ran); Retry then Send was two taps for one intent (iPhone review I14). When it may have
+  // run something, Retry asks first (data-retry-confirm) and sends a new message, the failed try kept (no retry_of).
   // A draft in the composer is not replaced without asking.
   document.addEventListener("click", (ev) => {
     const b = ev.target.closest && ev.target.closest("[data-retry]");
@@ -1328,6 +1329,7 @@
     const text = b.dataset.retry;
     if (!text) return;
     const form = box.closest("form");
+    if (b.dataset.retryConfirm && !confirm(b.dataset.retryConfirm)) return;
     // A quote waiting in the composer is part of the draft: it is asked about and dropped, never sent with the failed
     // message (Codex review of the branch). The composer's busy guard and the message id keep a second tap from a
     // second send; Retry is not disabled, so a resend that failed can be tried again.

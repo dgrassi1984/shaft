@@ -260,11 +260,13 @@ def reap() -> None:
             continue
         if c.get("state") == "replying":
             r = c.get("reply") or {}
-            # The request may have reached the API and run tools, so this is not a safe retry.
+            # The request may have reached the API and run tools, so this is not a safe retry: Retry asks first.
+            asked = next((t for t in reversed(c["turns"]) if t["role"] == "user"), {})
             c["turns"].append({"role": "assistant", "content": r.get("answer") or "", "ts": _now(),
                                "activity": r.get("activity", []),
                                "note": "interrupted: the web service restarted while it replied",
-                               "note_kind": "service", "note_retry": False})
+                               "note_kind": "service", "note_retry": False,
+                               "retry_text": "" if r.get("interjections") else asked.get("shown", asked.get("content", ""))})
             c["state"], c["reply"] = "idle", None
             if _flush_queue(c):                     # #70: what was queued for after that reply goes now
                 c["state"], c["reply"] = "replying", {"started": _now(), "activity": [], "answer": "",
@@ -482,8 +484,9 @@ def _finish(relay: Relay, answer: str, activity: list, error: str | None, heard:
             # Interjections and attachment-only requests cannot be faithfully retried by prefilling one message.
             original = next((t for t in reversed(chat["turns"]) if t["role"] == "user"), {})
             request = original.get("shown", original.get("content", ""))
+            # retry_text: what Retry sends again; note_retry: that it is safe to (no tools ran), else Retry asks first.
             cause = {"note_kind": kind, "note_retry": retry and not sent and bool(request),
-                     "retry_text": request if retry and not sent else ""}
+                     "retry_text": request if not sent else ""}
         from . import docs
         made = docs.changed(chat["reply"].get("docs_before") or {}, _docs_now(chat["instance"]))
         chat["turns"].append({"role": "assistant", "content": answer.strip(), "ts": _now(),

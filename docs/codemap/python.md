@@ -205,6 +205,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_web_config.py` | `ConfigActionsTest`, `ConfigPagesTest` | — |
 | `supervisor/tests/test_web_docs_js.py` | `DocumentControlsJsTest` | — |
 | `supervisor/tests/test_web_docs_sort.py` | `SizeLabelTest`, `WhenLabelTest`, `DocsSortViewTest`, `DocsSortRouteTest`, `DocsSortJsTest` | `order` |
+| `supervisor/tests/test_web_experiments.py` | `ExperimentsTest` | — |
 | `supervisor/tests/test_web_files.py` | `FilesTest` | — |
 | `supervisor/tests/test_web_forms_js.py` | `FormJsTest`, `AfterHandlersTest` | — |
 | `supervisor/tests/test_web_google_access.py` | `GoogleAccessTest` | — |
@@ -248,6 +249,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/web_alerts.py` | — | `event`, `forward_new`, `forward_pauses`, `start` |
 | `supervisor/web_chat.py` | `Refused`, `Relay` | `load`, `save`, `chats`, `open_chat`, `watching`, `unwatch`, `watchers`, `reply_event`, `summary`, `shown`, `new_chat`, `reap`, `mark_retried`, `classify_reply`, `replying`, `edit_diff`, `doc_saved`, `send_comment`, `background`, `send_comment_background`, `send`, `queue`, `unqueue`, `stop`, `end`, `clear`, `parse_multipart` |
 | `supervisor/web_config.py` | — | `run`, `config_row`, `config_page`, `drive_diff`, `drive_page`, `google_accounts`, `access_page`, `access` |
+| `supervisor/web_experiments.py` | — | `has_results`, `cards` |
 | `supervisor/web_google.py` | — | `setup`, `route` |
 | `supervisor/web_icons.py` | — | `png`, `launch_png`, `main` |
 | `supervisor/web_md.py` | — | `esc`, `render`, `inline`, `plain`, `first_line` |

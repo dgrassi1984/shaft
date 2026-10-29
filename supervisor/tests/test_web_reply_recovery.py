@@ -83,7 +83,10 @@ class RecoveryTest(unittest.TestCase):
                 self.assertEqual((turn.get("note_kind"), turn.get("note_retry")), (kind, retry))
                 self.assertEqual(chat["state"], "idle")
                 rendered = str(web_views.chat_feed("wren", chat, []))
-                self.assertEqual("data-retry=" in rendered, retry)
+                # Every failure but Stop offers Retry: in one tap when safe, after a confirm when tools may have run.
+                self.assertEqual("data-retry=" in rendered, kind != "stopped")
+                self.assertEqual("data-retry-of=" in rendered, retry)
+                self.assertEqual("data-retry-confirm=" in rendered, kind != "stopped" and not retry)
                 if kind == "stopped":
                     self.assertIn("You stopped this reply.", rendered)
                 else:
@@ -92,7 +95,6 @@ class RecoveryTest(unittest.TestCase):
                     if not retry:
                         self.assertIn('href="/i/wren/activity"', rendered)
                         self.assertIn('href="/services"', rendered)
-                if retry:
                     self.assertEqual(turn["retry_text"], 'original <request> "please"')
                     self.assertIn('data-retry="original &lt;request&gt; &quot;please&quot;"', rendered)
                     self.assertNotIn("data-retry=", str(web_views.chat_feed("wren", chat, [], archived=True)))
@@ -104,14 +106,31 @@ class RecoveryTest(unittest.TestCase):
         self.assertIn("Kept partial answer", rendered)
         self.assertIn("incomplete</span>", rendered)
         self.assertIn("&lt;bad&gt;", rendered)
-        self.assertNotIn("data-retry=", rendered)
+        self.assertNotIn("data-retry-of=", rendered)              # tools ran: never folded, Retry asks first
+        self.assertIn("data-retry-confirm=", rendered)
         turn = chat["turns"][-1]
         turn.clear()
         turn.update(role="assistant", content="", ts="", note="error: HTTP 503 <bad>")
         rendered = str(web_views.chat_feed("wren", chat, []))
         self.assertIn("Technical details", rendered)
         self.assertNotIn("(no answer)", rendered)
-        self.assertNotIn("data-retry=", rendered)
+        self.assertNotIn("data-retry-of=", rendered)
+
+    def test_a_failure_that_may_have_run_tools_offers_a_confirmed_retry(self):
+        """The operator asked for Retry on "Actions may already have run" (2026-10-29): it showed only Activity and
+        Services, and the message had to be typed again. Retry asks first and sends a new message, unfolded."""
+        chat = self.run_reply(exc=ConnectionResetError("reset"))
+        rendered = str(web_views.chat_feed("wren", chat, []))
+        self.assertIn("Actions may already have run", rendered)
+        self.assertIn('data-retry="original &lt;request&gt; &quot;please&quot;" data-retry-confirm="Actions may '
+                      'already have run. Send it again anyway?">Retry</button>', rendered)
+        self.assertNotIn("data-retry-of=", rendered)
+        self.assertFalse(web_chat.mark_retried(chat, len(chat["turns"]) - 1, 'original <request> "please"'))
+        # a failure saved before retry_text was kept for it (thelos 10:39): Retry sends the message it answered
+        turn = chat["turns"][-1]
+        turn["retry_text"] = ""
+        self.assertIn('data-retry="original &lt;request&gt; &quot;please&quot;" data-retry-confirm=',
+                      str(web_views.chat_feed("wren", chat, [])))
 
     def test_issue_9_stream_cut_short_preserves_partial_without_retry(self):
         """Reverting #9 treats an EOF before [DONE] as a successful answer, hiding uncertain external actions."""
@@ -128,6 +147,7 @@ class RecoveryTest(unittest.TestCase):
         turn = chat["turns"][-1]
         self.assertEqual(turn.get("note_kind"), "model")
         self.assertFalse(turn.get("note_retry"))
+        self.assertEqual(turn["retry_text"], "")
         self.assertNotIn("data-retry=", str(web_views.chat_feed("wren", web_chat.load(chat["id"]), [])))
 
     def test_issue_9_restart_is_service_failure(self):
@@ -139,7 +159,9 @@ class RecoveryTest(unittest.TestCase):
         chat = web_chat.load(chat["id"])
         self.assertEqual(chat["turns"][-1].get("note_kind"), "service")
         self.assertFalse(chat["turns"][-1].get("note_retry"))
-        self.assertIn("incomplete</span>", str(web_views.chat_feed("wren", chat, [])))
+        rendered = str(web_views.chat_feed("wren", chat, []))
+        self.assertIn("incomplete</span>", rendered)
+        self.assertIn("data-retry-confirm=", rendered)            # the restart may have cut it after tools ran
 
     def test_issue_11_end_requested_clear_retained_and_failures_preserved(self):
         """Reverting #11 claims journal completion as soon as End is accepted, before recovery finishes."""
@@ -246,3 +268,34 @@ console.log(JSON.stringify({ kept, sentFirst, value: box.value, inputs, prompts,
                                                      "inputs": 1, "prompts": 4, "sends": 3, "disabled": False,
                                                      "quoteKept": "> another message", "sendsAfterRefusal": 2,
                                                      "quote": "", "chips": 1, "retryOf": "3"})
+
+    def test_a_retry_that_may_rerun_actions_asks_first_and_sends_unfolded(self):
+        """Retry on "Actions may already have run" (2026-10-29): declined, nothing is sent and the draft is kept;
+        accepted, the message goes as a new one (no retry_of), so the failed try is not folded away."""
+        src = (Path(__file__).resolve().parents[1] / "web_static" / "web.js").read_text()
+        handlers = re.findall(r'  document.addEventListener\("click", \(ev\) => \{\n.*?^  \}\);', src, re.S | re.M)
+        handler = next((h for h in handlers if '[data-retry]' in h), "")
+        script = r'''
+let listener = () => {}, asked = [], allow = false, sends = 0;
+const retryOf = { value: "stale" };
+const form = { querySelector: q => q === "input[name=retry_of]" ? retryOf : null };
+const quoteChip = () => {};
+const box = { value: "", dispatchEvent() {}, closest: () => form };
+const document = { addEventListener: (_, f) => listener = f, querySelector: () => box };
+const confirm = (m) => { asked.push(m); return allow; };
+const sendComposer = () => { sends++; };
+//HANDLER//
+const button = { dataset: { retry: "what it did", retryConfirm: "Actions may already have run. Send it again anyway?" } };
+const event = { target: { closest: () => button } };
+listener(event);
+const declined = { sends, value: box.value };
+allow = true;
+listener(event);
+console.log(JSON.stringify({ declined, asked, sends, value: box.value, retryOf: retryOf.value }));
+'''
+        result = subprocess.run([shutil.which("node"), "-e", script.replace("//HANDLER//", handler)],
+                                capture_output=True, text=True, timeout=NODE_TIMEOUT_S)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), {
+            "declined": {"sends": 0, "value": ""}, "sends": 1, "value": "what it did", "retryOf": "",
+            "asked": ["Actions may already have run. Send it again anyway?"] * 2})
