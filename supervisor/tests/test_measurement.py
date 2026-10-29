@@ -329,7 +329,9 @@ class JudgeMixTest(unittest.TestCase):
     def test_a_retired_judges_verdicts_are_not_counted_in_success_or_claims(self):
         with mock.patch.object(metrics, "judgments", return_value=self.rows()):
             text = metrics.stats_text("m")
-        self.assertIn("Judged success rate: **100%**", text)                 # pooled, it read 50%
+        self.assertIn(f"{judge.JUDGE_MODELS[0].removeprefix('openrouter/').split('/')[-1]} **100%** of 10 vs none",
+                      text)                                                  # pooled, it read 50%
+        self.assertNotIn(self.RETIRED, text.split("## Success against my own criteria")[1])
         self.assertNotIn("Claims the tool log did not support", text)        # pooled, it read 10
         self.assertIn("Criteria the judge found vague or unverifiable: 0/10", text)
         self.assertIn(f"Not counted: 10 verdicts by judges no longer in it ({self.RETIRED} 10)", text)
@@ -343,7 +345,8 @@ class JudgeMixTest(unittest.TestCase):
         rows = self.rows()[10:]
         rows[-1] = {**rows[-1], "claim_supported": False}
         with mock.patch.object(metrics, "judgments", return_value=rows):
-            self.assertIn("Claims the tool log did not support: 1 of 10", metrics.stats_text("m"))
+            self.assertIn(f"{judge.JUDGE_MODELS[0].removeprefix('openrouter/').split('/')[-1]} 1 of 10 vs none",
+                          metrics.stats_text("m"))
 
     def test_only_retired_verdicts_say_so_instead_of_dividing_by_zero(self):
         with mock.patch.object(metrics, "judgments", return_value=self.rows()[:10]):
@@ -360,6 +363,77 @@ class JudgeMixTest(unittest.TestCase):
                   + [judgment(f"r{i}", "yes", 1, judge=self.RETIRED) for i in range(n)])
         after = [judgment(f"a{i}", "yes", 1) for i in range(n)]
         self.assertTrue(ProbationMeasureTest.check(self, before, after))
+
+
+class JudgeMixWithinRotationTest(unittest.TestCase):
+    """docs/plans/PLAN-judge-mix, 2026-10-29: today's judges are never pooled either. Bug: once Haiku left (10-16),
+    stats.md still pooled every judge in the rotation. On the same cycles DeepSeek V4.1 Flash called 10% of wren's
+    claims unsupported and GLM 5.3 Flash 2% (thelos 16% vs 3%), and on shaft MiMo 33% vs DeepSeek 20%. shaft's
+    "148 of 696" moved with the dice that picked its judge, not with its cycles."""
+    LENIENT, STRICT = "openrouter/z-ai/glm-5.3-flash", "openrouter/deepseek/deepseek-v4.1-flash"
+    LATEST = datetime(2026, 10, 29, 12, 0)
+
+    def setUp(self):
+        p = mock.patch.object(judge, "JUDGE_MODELS", [self.LENIENT, self.STRICT])
+        p.start()
+        self.addCleanup(p.stop)
+
+    def week(self, days_back: int, by: str, n: int, unsupported: int, met: str = "yes") -> list[dict]:
+        """n verdicts by one judge, spread over the 7 days that end `days_back` days before LATEST."""
+        end = self.LATEST - timedelta(days=days_back)
+        return [judgment((end - timedelta(hours=i * 160 // n)).isoformat(timespec="seconds"), met, 2,
+                         judge=by, claim_supported=i >= unsupported) for i in range(n)]
+
+    def text(self, rows: list[dict]) -> str:
+        rows = sorted(rows, key=lambda j: j["episode_ts"])
+        with mock.patch.object(metrics, "judgments", return_value=rows):
+            return metrics.stats_text("m")
+
+    def test_claims_never_pooled_across_current_judges(self):
+        text = self.text(self.week(0, self.LENIENT, 20, 2) + self.week(0, self.STRICT, 20, 10))
+        self.assertNotIn("12 of 40", text)                                   # pooled, it read 12 of 40
+        self.assertNotIn("Claims the tool log did not support: ", text)
+        line = next(l for l in text.splitlines() if l.startswith("- Claims the tool log did not support"))
+        self.assertIn("glm-5.3-flash 2 of 20", line)
+        self.assertIn("deepseek-v4.1-flash 10 of 20", line)
+
+    def test_a_change_of_mix_alone_leaves_each_judges_row_unchanged(self):
+        # Each judge grades the same way both weeks (GLM: all met, 1 in 10 unsupported; DeepSeek: all partial, half
+        # unsupported); only the dice moved, from mostly GLM to mostly DeepSeek. Pooled, unsupported claims doubled
+        # (8 of 40 -> 16 of 40) and success fell from 88% to 62%.
+        text = self.text(self.week(7, self.LENIENT, 30, 3) + self.week(7, self.STRICT, 10, 5, "partial")
+                         + self.week(0, self.LENIENT, 10, 1) + self.week(0, self.STRICT, 30, 15, "partial"))
+        self.assertIn("glm-5.3-flash 1 of 10 vs 3 of 30", text)
+        self.assertIn("deepseek-v4.1-flash 15 of 30 vs 5 of 10", text)
+        self.assertIn("glm-5.3-flash **100%** of 10 vs 100% of 30", text)
+        self.assertIn("deepseek-v4.1-flash **50%** of 30 vs 50% of 10", text)
+        self.assertNotIn("16 of 40", text)
+        self.assertNotIn("Judged success rate: **", text)                    # the pooled headline
+
+    def test_a_judge_with_few_verdicts_in_a_window_shows_no_rate(self):
+        text = self.text(self.week(0, self.LENIENT, 20, 1) + self.week(0, self.STRICT, 4, 2, "no"))
+        self.assertIn("deepseek-v4.1-flash too few (4) vs none", text)
+        self.assertNotIn("**0%**", text)
+
+    def test_verdicts_older_than_both_windows_are_not_in_the_rows(self):
+        text = self.text(self.week(20, self.STRICT, 20, 20) + self.week(0, self.LENIENT, 20, 1))
+        self.assertIn("glm-5.3-flash 1 of 20 vs none", text)
+        rows = [l for l in text.splitlines() if l.startswith(("- Judged success rate", "- Claims the tool log"))]
+        self.assertEqual(len(rows), 2)
+        self.assertFalse(any("deepseek-v4.1-flash" in l for l in rows))     # no entry from a judge idle all week
+
+    def test_the_header_says_to_read_each_judge_against_itself(self):
+        text = self.text(self.week(0, self.LENIENT, 20, 1) + self.week(0, self.STRICT, 20, 5))
+        self.assertIn("Judges, today's too, differ", text)
+        self.assertIn("each read against that judge's own earlier figure", text)
+
+    def test_the_success_line_stays_in_the_part_the_prompt_shows(self):
+        # The LIVE prompt shows stats.md's first 5000 characters (template shaft/prompts.py _head). Where the pooled
+        # line stood, the longer per-judge line started at character 4972 of wren's real stats.md and was cut off.
+        text = self.text(self.week(0, self.LENIENT, 20, 1) + self.week(0, self.STRICT, 20, 5))
+        at = text.index("- Judged success rate per judge")
+        self.assertLess(text.index("## What I achieved"), at)
+        self.assertLess(at, text.index("## What my cycles were worth"))
 
 
 class ModelTest(InstanceDirCase):

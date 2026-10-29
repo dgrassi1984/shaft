@@ -237,7 +237,7 @@ class StatsTest(unittest.TestCase):
               for i, (c, cl, m) in enumerate([(90, "yes", "no"), (90, "yes", "yes"), (20, "no", "no")])]
         with mock.patch.object(metrics, "judgments", return_value=js):
             text = metrics.stats_text("x")
-        self.assertIn("Judged success rate: **33%**", text)        # 1 of 3
+        self.assertIn("too few (3) vs none", text)        # 3 verdicts: no rate from so few (PLAN-judge-mix 2026-10-29)
         self.assertIn("My own claim matched the judge: 2/3", text)
         brier = ((0.9 - 0) ** 2 + (0.9 - 1) ** 2 + (0.2 - 0) ** 2) / 3
         self.assertIn(f"{brier:.2f}", text)

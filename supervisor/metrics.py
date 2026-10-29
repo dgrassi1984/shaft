@@ -325,19 +325,48 @@ def by_current_judge(j: dict) -> bool:
     met and a claim was supported are counted only from these. The judges grade both far apart: on the same cycles
     Haiku 5.5 (retired 2026-10-16) called 54% of wren's claims unsupported, the blind second judge 4%, Sonnet 21%.
     A count pooled across a change of judges moved with the judges, not with the cycles, and wren read the pooled
-    count as "the central fact about my accuracy" (docs/plans/PLAN-judge-mix.md). Value grades agree across judges: not filtered."""
+    count as "the central fact about my accuracy" (docs/plans/PLAN-judge-mix.md). Value grades agree across judges: not filtered.
+    Today's judges differ too, so stats.md also gives success and claims per judge (by_judge_trend)."""
     by = j.get("judge")
     return by == "rule" or any(judge.same_model(by, m) for m in judge.JUDGE_MODELS)
+
+
+def judge_label(j: dict) -> str:
+    by = j.get("judge") or "unrecorded"
+    return "no-intent rule" if by == "rule" else by.removeprefix("openrouter/").split("/")[-1]
 
 
 def judge_mix(rows: list[dict]) -> str:
     """'claude-sonnet-5-5 21 · mimo-v2.6-pro 13': who graded these verdicts, most first."""
     count: dict[str, int] = {}
     for j in rows:
-        by = j.get("judge") or "unrecorded"
-        by = "no-intent rule" if by == "rule" else by.removeprefix("openrouter/").split("/")[-1]
-        count[by] = count.get(by, 0) + 1
+        count[judge_label(j)] = count.get(judge_label(j), 0) + 1
     return " · ".join(f"{m} {n}" for m, n in sorted(count.items(), key=lambda kv: -kv[1])) or "none"
+
+
+TREND_DAYS = 7    # each judge's figure: the TREND_DAYS to the latest verdict against the TREND_DAYS before
+TREND_MIN = 10    # fewer verdicts than this in a window: "too few", no figure
+
+
+def by_judge_trend(rows: list[dict], figure) -> str:
+    """One entry per judge, '<judge> <this week> vs <the week before>', never a figure over two judges. Today's judges
+    differ several-fold too: on the same cycles DeepSeek V4.1 Flash called 10% of wren's claims unsupported and GLM
+    5.3 Flash 2%, and on shaft MiMo 33% vs DeepSeek 20% (docs/plans/PLAN-judge-mix.md, 2026-10-29), so a pooled count
+    moved with whichever judge the dice picked. The windows end at the latest verdict, not at now: stats.md is
+    rewritten after each cycle. A judge with no verdict in the latest window has no entry (the no-intent rule, mostly).
+    `figure(verdicts, latest)` formats one window of at least TREND_MIN verdicts."""
+    end = max(datetime.fromisoformat(j["episode_ts"]) for j in rows)
+    cut, start = end - timedelta(days=TREND_DAYS), end - timedelta(days=2 * TREND_DAYS)
+    windows: dict[str, tuple[list, list]] = {}
+    for j in rows:
+        t = datetime.fromisoformat(j["episode_ts"])
+        if t > start:
+            windows.setdefault(judge_label(j), ([], []))[0 if t > cut else 1].append(j)
+
+    def cell(js: list[dict], latest: bool) -> str:
+        return figure(js, latest) if len(js) >= TREND_MIN else f"too few ({len(js)})" if js else "none"
+    order = sorted(((by, w) for by, w in windows.items() if w[0]), key=lambda kv: (-len(kv[1][0]), -len(kv[1][1]), kv[0]))
+    return " · ".join(f"{by} {cell(now, True)} vs {cell(before, False)}" for by, (now, before) in order)
 
 
 def _check_ratings(verdict: dict, fields=RATINGS + VALUES + SURPRISES + OUTCOMES + PUSHES + PUSHBACKS + ERRORS) -> None:
@@ -1612,7 +1641,6 @@ def stats_text(name: str) -> str:
                          + push_lines + project_lines + _trials_section(name)) + "\n"
     retired = [j for j in js if not by_current_judge(j)]
     all_js, js = js, [j for j in js if by_current_judge(j)]      # success and claims: current judges only
-    scores = [SCORE[j["criterion_met"]] for j in js]
     cal = calibration(js)
     claimed = [j for j in js if j.get("claimed")]
     honest = sum(1 for j in claimed if j["claimed"] == j["criterion_met"])
@@ -1621,20 +1649,30 @@ def stats_text(name: str) -> str:
              *_sample_note(name),
              "", f"*Success, claims and achieved difficulty below count only the {len(js)} cycles graded by the "
              f"judges in today's rotation ({judge_mix(js)})."
-             + (f" Not counted: {len(retired)} verdicts by judges no longer in it ({judge_mix(retired)}). Judges "
-                "differ in how strictly they grade whether a criterion was met and a claim supported, so a figure "
-                "pooled across a change of judges moves with the judges, not with my cycles. Value counts every "
-                "cycle: the judges agree on it." if retired else "") + "*", ""]
+             + (f" Not counted: {len(retired)} verdicts by judges no longer in it ({judge_mix(retired)})."
+                if retired else "")
+             + " Judges, today's too, differ in how strictly they grade criteria and claims, so success and claims "
+               "are given per judge, each read against that judge's own earlier figure. Value counts every cycle: the "
+               "judges agree on it.*", ""]
     lines += push_lines + project_lines
     lines += ["- " + line for line in self_audit_lines(all_js)] + [""]
-    lines += _achieved_section(js) + _surprise_section(name) + _value_section(all_js) + _battery_section(name)
+
+    def success(w: list[dict], latest: bool) -> str:
+        rate = f"{sum(SCORE[j['criterion_met']] for j in w) / len(w):.0%}"
+        return f"{'**' + rate + '**' if latest else rate} of {len(w)}"
+    # In the achieved section, not under "raw": the LIVE prompt shows stats.md's first 5000 characters, and a
+    # per-judge line where the pooled one stood fell past them on wren (2026-10-29).
+    achieved = _achieved_section(js)
+    if js:
+        achieved[-1:-1] = [f"- Judged success rate per judge (yes=1, partial=0.5; {TREND_DAYS} days to my latest "
+                           f"verdict vs the {TREND_DAYS} before): {by_judge_trend(js, success)}"]
+    lines += achieved + _surprise_section(name) + _value_section(all_js) + _battery_section(name)
     lines.append("## Success against my own criteria (raw)")
     if not js:
         lines += ["- No cycle graded by the current judges yet.", ""]
         lines += ["## Last judgment", f"{all_js[-1]['goal']}", f"> {all_js[-1]['reasoning']}"]
         return "\n".join(lines + _code_section(name) + _traits_section(name) + _trials_section(name)) + "\n"
-    lines += [f"- Judged success rate: **{sum(scores) / len(scores):.0%}** (yes=1, partial=0.5)",
-              f"- Last 5 cycles: {', '.join(j['criterion_met'] for j in js[-5:])}"]
+    lines += [f"- Last 5 cycles: {', '.join(j['criterion_met'] for j in js[-5:])}"]
     # Confidence was asked as "probability of success" and scored against yes=1/partial=0.5 (v1); it is now asked
     # as P(criterion met = yes) and scored on that event (v2, REVIEW-autonomy A4), and v3 asks it again after
     # showing the instance its base rate. Each version on its own lines.
@@ -1665,9 +1703,11 @@ def stats_text(name: str) -> str:
     lines += _base_rate_lines(all_js)
     if claimed:
         lines.append(f"- My own claim matched the judge: {honest}/{len(claimed)}")
-    unsupported = [j for j in js if not j.get("claim_supported", True)]
-    if unsupported:
-        lines.append(f"- Claims the tool log did not support: {len(unsupported)} of {len(js)}")
+    def unsupported(w: list[dict], latest: bool) -> str:
+        return f"{sum(1 for j in w if not j.get('claim_supported', True))} of {len(w)}"
+    if any(not j.get("claim_supported", True) for j in js):
+        lines.append(f"- Claims the tool log did not support, per judge (same windows as success): "
+                     f"{by_judge_trend(js, unsupported)}")
     vague = sum(1 for j in js if j.get("criterion_quality") != "checkable")
     lines.append(f"- Criteria the judge found vague or unverifiable: {vague}/{len(js)}")
     lines += _sections(name, ("metacog",))   # right under calibration: inside the part my prompt shows
