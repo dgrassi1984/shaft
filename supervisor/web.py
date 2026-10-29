@@ -680,6 +680,15 @@ def _get(req: Request, csrf: str) -> Response | None:
                                       att=qs.get("att", ""), folder=qs.get("dir", ""), sort=_doc_sort(req))[1])
     if m := re.match(r"^/chatfiles/(web-[a-f0-9]+)/(\d+)/(\d+)$", path):
         return _chat_file(m[1], int(m[2]), int(m[3]))
+    if path in ("/experiments", "/fragment/experiments"):
+        from . import web_experiments
+        name = qs.get("i", "")
+        if name not in names:
+            name = next((n for n in names if web_experiments.has_results(n)), names[0] if names else "")
+        live = v.experiments_live(web_experiments.cards(name) if name else [], name, names)
+        if path == "/fragment/experiments":
+            return _html(200, live)
+        return _html(200, v.experiments_page(live, name, names, csrf))
     if path in ("/trials", "/fragment/trials"):
         only = qs.get("i", "")
         only = only if only in names else ""

@@ -60,6 +60,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/preferences.py` | — | `events`, `self_paused`, `pause`, `decline`, `prefer`, `lift`, `section`, `describe`, `review_lines`, `report` |
 | `supervisor/privileged.py` | — | `mind_ablated_copy`, `rows`, `item_id`, `prediction`, `outcome`, `scores`, `comparison`, `recognition_scores`, `recognition_prompt`, `run`, `report` |
 | `supervisor/projects.py` | — | `lines`, `section` |
+| `supervisor/protected.py` | — | `remove`, `sweep`, `make`, `copy` |
 | `supervisor/provenance.py` | — | `facts`, `check`, `checked`, `reliance`, `section`, `report` |
 | `supervisor/pushback.py` | — | `outcome`, `annoyance`, `lines` |
 | `supervisor/pushes.py` | — | `records`, `usage`, `reactions`, `lines` |
@@ -158,6 +159,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_personality.py` | `LayerWriterTest`, `CorePaceTest` | — |
 | `supervisor/tests/test_preferences.py` | `LedgerCase`, `PreferenceTest`, `BrokerPreferenceTest`, `SchedulingTest` | — |
 | `supervisor/tests/test_prompt_cache.py` | `PricingTest`, `InstanceLoopTest`, `CoderTest` | — |
+| `supervisor/tests/test_protected_snapshot.py` | `ProtectedSnapshotTest` | — |
 | `supervisor/tests/test_provenance.py` | `ProvenanceTest` | — |
 | `supervisor/tests/test_pyenv.py` | `ChoiceTest`, `SandboxTest`, `GateTest`, `TemplateTest` | `make_venv` |
 | `supervisor/tests/test_recap.py` | `RecapCase`, `Context`, `Ask`, `Store`, `Costs`, `Panel` | — |
@@ -251,5 +253,5 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/web_md.py` | — | `esc`, `render`, `inline`, `plain`, `first_line` |
 | `supervisor/web_pages.py` | `Html` | `esc`, `h`, `join`, `etag`, `icon`, `page`, `rail`, `nav`, `changelog_body`, `pagebar`, `message_page`, `manifest`, `service_worker`, `offline_page`, `unpaired_page`, `pair_page`, `state_class`, `instance_card`, `message_line`, `overview`, `overview_page` |
 | `supervisor/web_settings.py` | — | `listing`, `run`, `status`, `page_body` |
-| `supervisor/web_views.py` | — | `q`, `size_label`, `when_label`, `doc_sort`, `frame`, `instance_frame`, `files_page`, `chat_frame`, `earlier_chats`, `chat_header`, `section`, `lines`, `rows`, `table`, `pre`, `link`, `download_icon`, `when`, `clip`, `inline`, `markdown`, `spark`, `instance_live`, `instance_summary`, `judge_page`, `judge_detail_page`, `trials_live`, `trials_page`, `trial_report`, `trial_page`, `benchmarks_page`, `changes_page`, `journal_page`, `activity_page`, `transcripts_page`, `transcript_page`, `messages_page`, `text_view`, `message_page`, `costs_page`, `services_live`, `services_log`, `services_page`, `doc_cards`, `in_chat`, `threads_list`, `docs_panel`, `attachment_panel`, `live_activity`, `chat_feed`, `chat_page`, `calendar_proposals_body`, `calendar_proposals_page` |
+| `supervisor/web_views.py` | — | `q`, `size_label`, `when_label`, `doc_sort`, `frame`, `instance_frame`, `files_page`, `chat_frame`, `earlier_chats`, `chat_header`, `section`, `lines`, `rows`, `table`, `pre`, `link`, `download_icon`, `when`, `clip`, `inline`, `markdown`, `spark`, `instance_live`, `instance_summary`, `judge_page`, `judge_detail_page`, `trials_live`, `trials_page`, `experiments_live`, `experiments_page`, `trial_report`, `trial_page`, `benchmarks_page`, `changes_page`, `journal_page`, `activity_page`, `transcripts_page`, `transcript_page`, `messages_page`, `text_view`, `message_page`, `costs_page`, `services_live`, `services_log`, `services_page`, `doc_cards`, `in_chat`, `threads_list`, `docs_panel`, `attachment_panel`, `live_activity`, `chat_feed`, `chat_page`, `calendar_proposals_body`, `calendar_proposals_page` |
 | `supervisor/webpush.py` | `PushError` | `b64url`, `ensure_key`, `public_key`, `vapid_token`, `subscriptions`, `allowed_endpoint`, `subscribe`, `holds`, `status`, `unsubscribe`, `take`, `notify`, `fingerprint` |

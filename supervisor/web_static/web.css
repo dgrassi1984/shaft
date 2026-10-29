@@ -154,6 +154,10 @@ nav .unpair button { font-size: .8rem; color: var(--dim); width: 100%; }
 pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .8rem; margin: .3rem 0;
       overflow-x: auto; max-width: 100%; }
 pre.wrap { white-space: pre-wrap; }
+.experiments { display: grid; grid-template-columns: minmax(0, 1fr); gap: .8rem; }
+.experiments .card { overflow-wrap: anywhere; }
+.experiments h2 { font-size: 1.1rem; margin: 0; }
+.experiments pre { white-space: pre; overflow-wrap: normal; }
 .panel h3 { font-size: .9rem; margin: .8rem 0 .2rem; }
 .panel p { margin: .3rem 0; }
 .pager { margin: .8rem 0; }
