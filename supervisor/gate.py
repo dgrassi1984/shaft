@@ -594,7 +594,9 @@ def _part(part: str, tree: Path, env: dict, timeout_s: int, label: str) -> tuple
     ok = p.returncode == 0 and r is not None and r["ok"]
     head = (f"-- {part} part: {r['tests_run']} tests --\n" if r is not None else
             f"-- {part} part: no report from its runner (exit {p.returncode}), counted as failed --\n")
-    section = head + "".join(f"{t}\n" for t in failing_tests(p.stderr)) + p.stderr[-3000:]
+    # The cut section is for the failures: the timings line (kilobytes of test names) stays in the full log only.
+    err = "".join(l for l in p.stderr.splitlines(keepends=True) if not l.startswith(gate_suite.TIMES))
+    section = head + "".join(f"{t}\n" for t in failing_tests(err)) + err[-3000:]
     return ok, section, p.stderr, (r["tests_run"] if r is not None else None), seconds
 
 
@@ -673,7 +675,7 @@ def budget(timeout_s: int = GATE_TIMEOUT_S) -> int:
     """`shaft gate budget`, the check before a merge (agent-overlay.yaml's gate, docs/plans/PLAN-gate-5min.md): both
     parts of the supervisor's tests on the last commits, the way a gate runs them (committed_tree, _part), the
     instance part against the template. Fails when a part fails, takes more than 1/BUDGET_SHARE of the stage limit,
-    or holds a test slower than TEST_BUDGET_S; prints where the time went either way. Uncommitted changes are not in
+    holds a test slower than TEST_BUDGET_S, or runs a test twice; prints where the time went either way. Uncommitted changes are not in
     it. 0 within budget, 1 not."""
     from . import gate_suite
     tree, label = committed_tree()
@@ -690,12 +692,15 @@ def budget(timeout_s: int = GATE_TIMEOUT_S) -> int:
             continue
         times = gate_suite.times(full) or {}
         slow = [(n, s) for n, s in times.get("slowest_tests", []) if s > TEST_BUDGET_S]
+        twice = times.get("run_twice", [])
         over = seconds > timeout_s / BUDGET_SHARE
-        within &= ok and not over and not slow
+        within &= ok and not over and not slow and not twice
         print(f"\n{part} part: {ran} tests in {seconds:.0f}s"
               + ("" if ok else " FAILED") + (f", over its {timeout_s // BUDGET_SHARE}s budget" if over else ""))
         for n, s in slow:
             print(f"  over {TEST_BUDGET_S}s: {n} ({s:.1f}s)")
+        for n in twice:
+            print(f"  run twice (a TestCase imported into another module?): {n}")
         print("  slowest modules: " + ", ".join(f"{n.rpartition('.')[2]} {s:.0f}s"
                                                 for n, s in times.get("slowest_modules", [])[:5]))
         print("  slowest tests:   " + ", ".join(f"{n.split(' ')[0]} {s:.1f}s" for n, s in times.get("slowest_tests", [])[:5]))

@@ -391,6 +391,15 @@ class Workers(unittest.TestCase):
         ran = [name for name, _ in times["slowest_modules"]]
         self.assertEqual(sorted(ran), sorted(["supervisor.tests", *(f"supervisor.tests.test_m{i}" for i in range(6))]))
         self.assertEqual(len(times["slowest_tests"]), 6)
+        self.assertEqual(times["run_twice"], [])
+
+    def test_a_test_case_imported_into_another_module_is_named_as_run_twice(self):
+        """test_operator_channel imported test_api's ApiTest: discover ran its tests a second time (2026-10-29)."""
+        importer = "import unittest\nfrom supervisor.tests.test_m0 import M0\n"
+        t = self.tree({"test_m0.py": plain("M0"), "test_importer.py": importer})
+        out = t.run("shared", workers=2)
+        self.assertEqual(gate_suite.times(out.stderr)["run_twice"],
+                         ["test_ok (supervisor.tests.test_m0.M0.test_ok)"])
 
     def test_a_failure_in_one_worker_fails_the_part_and_is_named(self):
         bad = "import unittest\n\nclass B(unittest.TestCase):\n    def test_bad(self):\n        self.fail('no')\n"
@@ -406,7 +415,7 @@ class Workers(unittest.TestCase):
         out = t.run("shared", workers=2)
         self.assertNotEqual(out.returncode, 0)
         self.assertFalse(gate_suite.report(out.stdout)["ok"])
-        self.assertIn("died", out.stderr)
+        self.assertIn("test_dies did not finish: a worker died", out.stderr)
 
     def test_the_fence_holds_in_every_worker(self):
         sneaky = ("import importlib, unittest\n"

@@ -302,8 +302,8 @@ def run_part(split: Split, part: str, workers: int) -> tuple[int, bool, list[str
                 r = f.result()
             except BaseException as e:                   # the worker died (os._exit, a crash): fail closed
                 ok = False
-                print(f"gate_suite: the worker running {futures[f]} died ({type(e).__name__}: {e}), counted as "
-                      "failed", file=sys.stderr, flush=True)
+                print(f"gate_suite: {futures[f]} did not finish: a worker died while it ran or waited its turn "
+                      f"({type(e).__name__}), counted as failed", file=sys.stderr, flush=True)
                 continue
             run += r["tests_run"]
             ok &= r["ok"]
@@ -316,7 +316,10 @@ def run_part(split: Split, part: str, workers: int) -> tuple[int, bool, list[str
     seconds = round(time.monotonic() - t0, 1)
     print(f"Ran {run} tests of the {part} part in {seconds}s ({len(names)} modules, {workers} workers): "
           f"{'OK' if ok else 'FAILED'}", file=sys.stderr)
+    from collections import Counter
     times = {"seconds": seconds,
+             # a TestCase class imported into another module is discovered there too: the same test id runs twice
+             "run_twice": sorted(t for t, n in Counter(t for t, _ in durations).items() if n > 1),
              "slowest_tests": sorted(durations, key=lambda d: -d[1])[:SLOWEST_KEPT],
              "slowest_modules": sorted(modules.items(), key=lambda m: -m[1])[:SLOWEST_KEPT]}
     return run, ok, tried, times

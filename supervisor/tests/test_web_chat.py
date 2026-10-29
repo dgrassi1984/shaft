@@ -526,8 +526,9 @@ class ChatCentricTest(ChatRoutesTest):
         self.assertIn("script-src 'self';", csp)
 
 
-class DocsInChatTest(ChatTest):
-    """docs/plans/PLAN-webui-chat §3 D1: the instance is told about documents once per chat; a reply's documents get cards."""
+class DocsChatCase(ChatTest):
+    """A chat with documents to tell the instance about. DocEditsTest and ClearTest subclassed DocsInChatTest for this
+    setUp, so each of its tests ran three times."""
 
     def setUp(self):
         super().setUp()
@@ -536,6 +537,10 @@ class DocsInChatTest(ChatTest):
         p = mock.patch.object(docs, "instance_root", lambda n: self.dir / "instances" / n)
         p.start()
         self.addCleanup(p.stop)
+
+
+class DocsInChatTest(DocsChatCase):
+    """docs/plans/PLAN-webui-chat §3 D1: the instance is told about documents once per chat; a reply's documents get cards."""
 
     def test_only_the_first_message_carries_the_note_and_he_never_sees_it(self):
         chat, _ = web_chat.send("wren", ME, "one", [])
@@ -708,7 +713,7 @@ class DocsPanelTest(ChatRoutesTest):
         self.assertEqual(self.req("/fragment/docs/nobody", cookie=self.cookie).status, 404)
 
 
-class DocEditsTest(DocsInChatTest):
+class DocEditsTest(DocsChatCase):
     """docs/plans/PLAN-webui-chat §3 D2: what the instance is told of the operator's edits, and when."""
 
     def test_the_diff_says_what_changed_and_only_that(self):
@@ -972,7 +977,7 @@ class DocsButtonTest(DocsPanelTest):
         self.assertIn('data-post="/docs/wren/save"', body)                       # the New document form is there
 
 
-class ClearTest(DocsInChatTest):
+class ClearTest(DocsChatCase):
     """Clear the chat: the page and the rail start empty; nothing is deleted; an open conversation is ended first."""
 
     def test_an_open_chat_is_ended_then_cleared_and_kept(self):

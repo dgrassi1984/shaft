@@ -334,7 +334,9 @@ class SharedRecordTest(SharedFixtureCase):
         git(self.project, "commit", "-qm", "a test that forges the runner's line and exits 0")
         ok, out = self.gate()
         self.assertFalse(ok, out)
-        self.assertIn("no report", out)
+        self.assertIn("supervisor.tests.test_forger did not finish: a worker died", out)   # the runner's own verdict
+        self.assertNotIn("9 tests", out)                                                    # never the forged one
+        self.assertNotIn("GATE_SUITE_TIMES", out)     # the cut output is for failures: timings stay in the full log
         self.assertFalse(self.record().exists())
 
     def test_no_shared_tests_is_a_pass_never_recorded(self):

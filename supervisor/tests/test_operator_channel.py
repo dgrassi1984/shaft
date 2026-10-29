@@ -14,7 +14,8 @@ from pathlib import Path
 from unittest import mock
 
 from supervisor import api, channel, core, messages, web_alerts, web_chat, webpush
-from supervisor.tests.test_api import KEY, ME, ApiTest, fake_run_agent
+from supervisor.tests import test_api
+from supervisor.tests.test_api import KEY, ME, fake_run_agent
 
 
 class Sandbox(unittest.TestCase):
@@ -243,7 +244,7 @@ class AnswerQuotedTest(Sandbox):
 
 
 class ApiChannelTest(unittest.TestCase):
-    setUp = ApiTest.setUp
+    setUp = test_api.ApiTest.setUp   # through the module: the class imported here was discovered and run again
 
     def post(self, channel_header):
         headers = {"Content-Type": "application/json", "Authorization": f"Bearer {KEY}", "Tailscale-User-Login": ME,
