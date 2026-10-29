@@ -200,15 +200,23 @@ The broker call log includes the class, action id and disposition for classified
   later is caught as below). A kept change is committed with exactly the bytes the gate checked — written into
   git's object store and a separate index, never read again from the working tree — and if the file on disk differs
   from them by then, it is put back to them (logged as FAILED, with a journal note); the approved-code record is
-  made from the same bytes. **Still open** (residual risk): two races, because the working tree stays writable while
-  it is used. Between the start-of-run check (and its read-back) and the agent importing its code, a change runs
-  unchecked in that run. Between the gate's snapshot and its tests loading the code, a writer can swap a file so that
-  the tests pass on code other than the snapshot, which is then committed as checked. Closing both means testing and
-  launching from a protected snapshot, not the working tree, a redesign not done yet. What limits them: only a process the instance already has running can write there — the sandbox writes nothing
-  outside its folder, and a run's own processes are ended before the gate looks, so it takes one that escaped them
-  (above), or something of yours; a change slipped in before the launch is that run's own change, gated at its
-  settlement, and a file swapped back after the tests is put back to the snapshot's bytes (what is committed); and
-  every check reads through descriptors, never through a link. Stopping a service that starts runs (the API, the scheduler, a terminal
+  made from the same bytes. **Protected code (#86)**: the supervisor materializes the approved start-of-run
+  snapshot under `.supervisor/protected/<name>/<pid>-<random>/<name>/`. It copies exactly the code paths
+  `gate.snapshot` covers, from the bytes already read, within the snapshot's tree bounds and `SHAFT_COPY_MAX_GB`.
+  Code files are mode 444 and directories mode 555; the sandbox allows reading this copy and denies all writes
+  to it, including chmod and renames. The launched agent uses isolated Python with this copy first on its import
+  path, excluding the working directory. Its cwd and `SHAFT_ROOT` still point at its instance folder, where its
+  mind, notes and working edits remain writable. Broker `run` and plugin execution still use the working folder,
+  so a plugin written during a run can be tested before settlement. At settlement a separate protected copy of
+  the gate's snapshot supplies both the supervisor invariants and the sandboxed plugin and instance tests;
+  only its `.tmp/` is writable. The copy also holds `config.env` for the trusted tests that read it, and reads the
+  instance's Python environment in place. The commit and approved-code record use the same snapshot bytes.
+  This closes both check-to-use windows: a working file changed after reconciliation cannot supply a launched
+  import, and a file swapped after the gate's snapshot cannot supply its tests. Copies are removed after the
+  run or gate, including on exceptions; copies left by dead supervisor processes are swept before making the
+  next copy for that instance. Quiet conversations retain their launch copy; trial replays and battery exams
+  retain their own copies. Every check reads through descriptors, never through a link.
+  Stopping a service that starts runs (the API, the scheduler, a terminal
   conversation) ends its runs' processes first. **Approved code**: after every settlement the supervisor records
   the code it approved (`.supervisor/baselines/<name>.json`: the last commit, plus what the gate passed that git
   does not hold — an ignored or untracked file in a code path), where the instance cannot write. Before any run,
