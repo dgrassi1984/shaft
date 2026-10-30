@@ -84,6 +84,21 @@ class EmptyAnswerTest(unittest.TestCase):
         self.assertIn("empty answer twice", str(ctx.exception))
         self.assertIn("reasoning_chars=1 then 2", str(ctx.exception))
 
+    def test_cut_off_still_thinking_the_retry_answers_without_thinking_20261030(self):
+        # Regression (thelos and wren, every sleep from 2026-10-29): mimo thought through 16,384 and then 32,768
+        # tokens with no text; its provider ignores reasoning limits, so more room only bought more thinking.
+        for stream in (False, True):
+            reply, fake = self.run_with([{"content": "", "reasoning": "x" * 50, "finish_reason": "length"},
+                                         {"content": "The answer."}], stream)
+            self.assertEqual(reply.content, "The answer.")
+            first, second = fake.requests
+            self.assertNotIn("enable_thinking", first["chat_template_kwargs"])
+            self.assertIs(second["chat_template_kwargs"]["enable_thinking"], False)
+            self.assertEqual(second["max_tokens"], 200)
+        reply, fake = self.run_with([{"content": "half an ans", "finish_reason": "length"},   # cut while writing
+                                     {"content": "The whole answer."}], False)
+        self.assertNotIn("enable_thinking", fake.requests[1]["chat_template_kwargs"])
+
     def test_a_tool_call_alone_is_an_answer(self):
         reply, fake = self.run_with([{"tool_calls": [("read_file", {"path": "a"})]}], False)
         self.assertEqual((len(fake.requests), reply.tool_calls[0]["name"]), (1, "read_file"))
