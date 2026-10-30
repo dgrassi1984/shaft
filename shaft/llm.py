@@ -2,8 +2,9 @@
 
 Rules this module enforces:
 - `finish_reason == "length"` is *no answer yet*: the call is retried once
-  with twice the room; if it is still cut off, `Truncated` is raised and the
-  caller must not save anything.
+  with twice the room — without thinking when the cut came while it was still
+  thinking; if it is still cut off, `Truncated` is raised and the caller must
+  not save anything.
 - An empty answer (no text, no tool call) is asked once more, then an error — never a silent "".
 - Transient failures (backend restarting: 502/503/504, connection refused)
   are retried with backoff, but never after any text has already streamed.
@@ -119,7 +120,12 @@ class Client:
         if reply.finish_reason == "length":
             if on_retry:
                 on_retry(max_tokens, max_tokens * 2)
-            reply = self._resilient(messages, max_tokens * 2, purpose, stream, **callbacks)
+            # Cut off while still thinking (no text, no tool call): more room only bought more thinking. mimo spent all
+            # 32,768 tokens of a sleep step on it, twice, every night from 2026-10-29, and its provider ignores
+            # reasoning.effort and reasoning.max_tokens (probed 10-30). The retry answers without thinking.
+            thinking_only = not reply.content.strip() and not reply.tool_calls
+            retry = {**callbacks, "think": False} if thinking_only else callbacks
+            reply = self._resilient(messages, max_tokens * 2, purpose, stream, **retry)
             reply.attempts = 2
             if reply.finish_reason == "length":
                 raise Truncated(
