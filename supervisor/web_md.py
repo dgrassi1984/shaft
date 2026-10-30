@@ -8,7 +8,8 @@ links (the page's CSP loads no image from elsewhere); alignment is a class (the 
 
 Blocks: ATX headings (# is the page's h2: the page has its own h1), paragraphs with hard breaks (two trailing spaces
 or a backslash), bullet (-, *, + or •), numbered and task lists — nested, tight or loose —, block quotes (nested),
-fenced code (``` or ~~~, with its language), tables (with alignment), horizontal rules. Inline: `code`, **bold** /
+fenced code (``` or ~~~, with its language), tables (with alignment), horizontal rules; a paragraph or a list item
+written as one line of points, "Lead: a · b · c", is its lead over a bullet list of the points. Inline: `code`, **bold** /
 __bold__, *em* / _em_, ~~strike~~, [links](https://…), <https://…> and bare https:// addresses, \\escapes.
 """
 from __future__ import annotations
@@ -103,10 +104,39 @@ def inline(text: str, links: bool = True, kept: list[str] | None = None) -> str:
     return s
 
 
-def plain(text: str) -> str:
+_DOT = re.compile(r"[ \t]+·[ \t]+")
+_PAREN = re.compile(r"\([^()]*\)")
+MIN_POINTS = 3                     # "a · b" is a pair of facts on one line, not a list
+
+
+def points(text: str) -> tuple[str, list[str]] | None:
+    """A line of points, "Lead: a · b · c", as (lead with its colon, the points), else None: what the page shows as
+    the lead over a bullet list (the instances write their lists this way in chat and in documents alike). A · in a
+    code span, a link or (an aside) is its text; the lead is the first point's text up to its last ": "."""
+    shielded = list(text)
+    for rx in (_CODE, _LINK, _AUTOLINK):
+        for m in rx.finditer(text):
+            shielded[m.start():m.end()] = "x" * (m.end() - m.start())
+    s = "".join(shielded)
+    while m := _PAREN.search(s):                          # innermost first, so nested asides are shielded whole
+        s = s[:m.start()] + "x" * (m.end() - m.start()) + s[m.end():]
+    cuts = [m.span() for m in _DOT.finditer(s)]
+    if len(cuts) < MIN_POINTS - 1:
+        return None
+    if (colon := s[:cuts[0][0]].rfind(": ")) < 0:
+        return None
+    ends = [colon + 1] + [s for s, _ in cuts] + [len(text)]
+    starts = [0, colon + 2] + [e for _, e in cuts]
+    lead, *items = [text[a:b].strip() for a, b in zip(starts, ends)]
+    return (lead, items) if lead[:-1].strip() and all(items) else None
+
+
+def plain(text: str, page: bool = False) -> str:
     """One line of Markdown as the page shows its text: what an anchor quoting the rendered document must match. The
     line's block syntax goes as the page drops it (a quote's >, a heading's #, a list marker; a task box is its ☐ or
-    ☑; a table row's cells are tab-separated, as comments.js walks a table), then its inline Markdown."""
+    ☑; a table row's cells are tab-separated, as comments.js walks a table), then its inline Markdown. `page`: a line
+    of points (points()) as the page lays it out too, its lead and each point on a line of its own, as comments.js
+    walks a list; without it the line stays one line of text (a rail entry, the terminal panel)."""
     line = clean(str(text)).replace(OPEN, "").replace(CLOSE, "").strip()
     while _QUOTE.match(line):
         line = _QUOTE.sub("", line, count=1).strip()
@@ -118,6 +148,8 @@ def plain(text: str) -> str:
             line = ("☑ " if t[1] != " " else "☐ ") + line[t.end():]
     elif line.startswith("|") or line.endswith("|"):
         return "\t".join(plain(cell) for cell in _cells(line))
+    if page and (dotted := points(line)):
+        return "\n".join(plain(part) for part in [dotted[0], *dotted[1]])
     return html.unescape(re.sub(r"<[^>]*>", "", inline(line)))
 
 
@@ -233,6 +265,11 @@ def _blocks(lines: list[str], tight: bool = False, depth: int = 0) -> str:
                 "|" in lines[i] and i + 1 < len(lines) and _TABLE_SEP.match(lines[i + 1])):
             para.append(lines[i])
             i += 1
+        if dotted := points(" ".join(l.strip() for l in para)):
+            lead, items = dotted
+            out.append((inline(lead) if tight else f"<p>{inline(lead)}</p>") +
+                       "<ul>" + "".join(f"<li>{inline(x)}</li>" for x in items) + "</ul>")
+            continue
         out.append(_para(para) if tight else f"<p>{_para(para)}</p>")
     return "".join(out)
 

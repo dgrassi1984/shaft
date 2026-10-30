@@ -271,5 +271,46 @@ class PlaceholdersInLinksTest(unittest.TestCase):
                          "the bold x < y and a link <b>")
 
 
+class PointsTest(unittest.TestCase):
+    """Operator 2026-10-30: thelos's brief listed "I cinque punti: a · b · c · d · e" in one bullet, a wall of text in
+    the document where a list was meant. A line of points is its lead over a bullet list, in chat and documents."""
+
+    def test_a_line_of_points_in_a_list_item_is_a_nested_list(self):
+        """Without the fix the item is one <li> of text holding every ·: no nested list at all."""
+        out = md("- **Call**. I cinque punti: il testo è pronto · ci serve · i tempi\n- **Paolo**")
+        self.assertEqual(out, "<ul><li><b>Call</b>. I cinque punti:<ul><li>il testo è pronto</li><li>ci serve</li>"
+                              "<li>i tempi</li></ul></li><li><b>Paolo</b></li></ul>")
+        self.assertNotIn("·", out)
+
+    def test_a_paragraph_of_points_is_its_lead_over_a_list(self):
+        self.assertEqual(md("**Solo FYI**: 13:30 L&L · 14:00 Nebius · 18:00 poesia."),
+                         "<p><b>Solo FYI</b>:</p><ul><li>13:30 L&amp;L</li><li>14:00 Nebius</li>"
+                         "<li>18:00 poesia.</li></ul>")
+
+    def test_what_is_not_a_line_of_points_stays_text(self):
+        for text in ("Due: a · b",                                  # a pair of facts
+                     "a · b · c",                                   # no lead
+                     "Code: `x · y · z`",                           # the · are code
+                     "See: [a · b · c](https://a.example)",         # the · are a link's
+                     # an aside's, as thelos wrote in chat 2026-10-30: a split left "(testo pronto" and "tempi)"
+                     "In coda: i cinque punti nel documento (testo pronto · organi (nostri) · tempi).",
+                     "## Agenda: a · b · c",                        # a heading stays one line
+                     "| k: a · b · c |\n|---|"):                    # so does a table cell
+            self.assertNotIn("<li>", md(text), text)
+
+    def test_a_point_keeps_its_inline_markdown_and_its_escaping(self):
+        out = md("Links: [one](https://a.example) · `<b>` · **three**")
+        self.assertIn('<li><a href="https://a.example" rel="noopener noreferrer" target="_blank">one</a></li>', out)
+        self.assertIn("<li><code>&lt;b&gt;</code></li><li><b>three</b></li>", out)
+
+    def test_an_anchor_on_a_line_of_points_matches_the_page_text(self):
+        """comments.js walks each <li> as a line of its own: an instance's quote of the whole line must be laid out the
+        same way or it shows as detached; the terminal's plain() keeps the line whole."""
+        line = "- **Call**: a · b · `c`"
+        self.assertEqual(web_md.plain(line, page=True), "Call:\na\nb\nc")
+        self.assertEqual(web_md.plain(line), "Call: a · b · c")
+        self.assertEqual(web_md.first_line(line), "Call: a · b · c")
+
+
 if __name__ == "__main__":
     unittest.main()
