@@ -24,7 +24,7 @@ FIELDS: dict[str, tuple[type, object]] = {
     "MAX_TOKENS_TALK": (int, 16384),   # a cut-off reply is retried once with twice this (llm.py)
     "WAKE_INTERVAL_MINUTES": (int, 120),   # read by the supervisor's scheduler (floor 10; 0 = never)
     "LLM_CONTEXT_TOKENS": (int, 262144),   # the model's context window (Bonsai 2: 262,144), for the status bar
-    "LLM_REASONING_EFFORT": (str, "medium"),   # local server: medium thinks as much as a request needs; xhigh to the cap
+    "LLM_REASONING_EFFORT": (str, "medium"),   # medium thinks as much as a request needs; xhigh to the cap (OpenRouter: reasoning.effort)
     "LLM_THINK_FOLLOWUP": (int, 1024),   # reasoning tokens after a tool result (local server; 0 = its own budget)
     "LLM_PRESENCE_PENALTY": (int, 15),   # tenths: 15 = 1.5 (Qwen's advice against loops in quantized models)
     "MAX_TOKENS_STEP": (int, 16384),     # one model turn inside a tool loop (live, sleep)
