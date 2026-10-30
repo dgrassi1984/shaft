@@ -235,7 +235,7 @@ def _ask_openrouter(model, system, prompt, schema, purpose, max_tokens, effort, 
     fields = json.dumps(schema["properties"], ensure_ascii=False)
     instructions = (f"{system}\n\nAnswer with ONE JSON object and nothing else, with exactly these fields "
                     f"(JSON schema of each): {fields}")
-    retried_length, problem, unusable = False, "", ""
+    retried_length, problem, unusable, think = False, "", "", True
     for attempt in range(3):
         started = time.monotonic()
         messages = [{"role": "system", "content": instructions}, {"role": "user", "content": prompt}]
@@ -246,7 +246,9 @@ def _ask_openrouter(model, system, prompt, schema, purpose, max_tokens, effort, 
                                                         f"the whole JSON object, every one of these fields: "
                                                         f"{', '.join(schema['properties'])}."})
         body = {"model": model, "max_tokens": max_tokens, "messages": messages}
-        if effort:
+        if not think:
+            body["reasoning"] = {"enabled": False}
+        elif effort:
             body["reasoning"] = {"effort": effort}
         data, error = cloudllm._send(cloudllm._openrouter_request(body, key, stream=False))
         usage = (data or {}).get("usage") or {}
@@ -262,6 +264,9 @@ def _ask_openrouter(model, system, prompt, schema, purpose, max_tokens, effort, 
             if retried_length:
                 raise JudgeError(f"{label} ran out of room twice (max_tokens {max_tokens})")
             retried_length, max_tokens = True, max_tokens * 2
+            # Cut off still thinking (no text): more room only buys more thinking — mimo's provider ignores effort
+            # and reasoning.max_tokens (probed 2026-10-30) — so the retry answers without it.
+            think = bool(((choice.get("message") or {}).get("content") or "").strip())
             continue
         text = (choice.get("message") or {}).get("content") or ""
         try:

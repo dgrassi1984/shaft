@@ -299,9 +299,11 @@ def _openrouter_request(body: dict, key: str, stream: bool) -> urllib.request.Re
 
 def openrouter_reasoning(kwargs: dict) -> dict:
     """An instance's thinking settings, sent as template kwargs (its own server's form), in OpenRouter's form: no
-    thinking (think=False) is `reasoning.enabled` false, LLM_REASONING_EFFORT is `reasoning.effort`. Dropped with the
-    kwargs, thelos's and wren's "medium" never reached mimo, which spent all 32,768 tokens of a sleep step thinking,
-    twice, every night from 2026-10-29. thinking_budget (SHAFT's own server) and preserve_thinking have no equivalent."""
+    thinking (think=False) is `reasoning.enabled` false, LLM_REASONING_EFFORT is `reasoning.effort`; dropped with the
+    kwargs, thelos's and wren's "medium" never reached mimo. Novita accepts effort for mimo but does not enforce it (nor
+    reasoning.max_tokens: 16,000 reasoning tokens of 16,000 at every level, probed 2026-10-30); only enabled=false
+    stops its thinking, which is what the client's retry after a cut-off still thinking asks for (llm.py).
+    thinking_budget (SHAFT's own server) and preserve_thinking have no equivalent."""
     if kwargs.get("enable_thinking") is False:
         return {"reasoning": {"enabled": False}}
     if kwargs.get("reasoning_effort"):

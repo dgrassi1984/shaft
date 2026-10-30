@@ -140,6 +140,17 @@ class SecondJudgeTest(unittest.TestCase):
         self.assertTrue(first["seen"].endswith(json.dumps(dropped)[-60:]))   # what it ended with
         self.assertNotIn("seen", second)
 
+    def test_cut_off_still_thinking_the_retry_answers_without_thinking_20261030(self):
+        # Regression: mimo's provider ignores reasoning.effort and reasoning.max_tokens (probed 2026-10-30), so a cut
+        # with no text asked again with more room only thought longer ("ran out of room twice (max_tokens 32000)").
+        out = self.ask(_reply("", finish="length"), _reply(json.dumps(VERDICT)))
+        self.assertEqual(out["criterion_met"], "partial")
+        self.assertNotEqual(self.sent[0].get("reasoning"), {"enabled": False})
+        self.assertEqual(self.sent[1]["reasoning"], {"enabled": False})
+        self.sent.clear()                                                  # cut while writing: it keeps thinking
+        self.ask(_reply(json.dumps(VERDICT)[:40], finish="length"), _reply(json.dumps(VERDICT)))
+        self.assertNotEqual(self.sent[1].get("reasoning"), {"enabled": False})
+
     def test_a_cut_off_answer_is_never_shown_back(self):
         self.ask(_reply(json.dumps(VERDICT)[:40], finish="length"), _reply(json.dumps(VERDICT)))
         self.assertNotIn("assistant", [m["role"] for m in self.sent[1]["messages"]])
