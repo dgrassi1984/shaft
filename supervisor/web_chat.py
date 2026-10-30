@@ -171,11 +171,13 @@ def watchers(name: str) -> set[str]:
 
 
 def reply_event(chat: dict) -> dict:
-    """What the push for this chat's reply shows: its first line."""
+    """What the push for this chat's reply shows: its first line. A reply that failed says so (a stopped one is never
+    pushed): on 2026-10-29 thelos's upstream timeout reached the phone as "thelos replied"."""
     name = chat["instance"]
     t = next((t for t in reversed(chat.get("turns") or []) if t["role"] == "assistant"), {})
     first = first_line(t.get("content") or "") or (t.get("note") or "")          # the text, not its Markdown
-    return {"title": f"{name} replied", "body": first[:160], "url": f"/i/{name}/chat", "tag": name}
+    title = f"{name}'s reply failed" if t.get("note") else f"{name} replied"
+    return {"title": title, "body": first[:160], "url": f"/i/{name}/chat", "tag": name}
 
 
 def summary(name: str, history: list[dict] = ()) -> dict:

@@ -57,6 +57,38 @@ class LeakedThinkingTest(unittest.TestCase):
         self.assertTrue(reply.reasoning.startswith("plan A"))
 
 
+class EmptyAnswerTest(unittest.TestCase):
+    """Regression (shaft, 2026-10-30 03:09 and 08:15): Bonsai ended its thinking with no text and no tool call, and the
+    whole live cycle was thrown away ("model returned an empty answer") — 21 shaft cycles since 10-14."""
+
+    def run_with(self, replies, stream):
+        from supervisor.tests.fakellm import FakeLLM
+        fake = FakeLLM(replies)
+        self.addCleanup(fake.close)
+        client = Client(fake.url, "m", "", 30, Path(tempfile.mkdtemp()) / "u.jsonl")
+        msgs = [{"role": "user", "content": "x"}]
+        reply = client.stream(msgs, 100, "live") if stream else client.complete(msgs, 100, "live")
+        return reply, fake
+
+    def test_an_empty_answer_is_asked_once_more(self):
+        for stream in (False, True):
+            reply, fake = self.run_with([{"content": "", "reasoning": "thought, then nothing"},
+                                         {"content": "The answer."}], stream)
+            self.assertEqual(reply.content, "The answer.")
+            self.assertEqual((len(fake.requests), reply.attempts), (2, 2))
+
+    def test_empty_twice_is_still_an_error(self):
+        from shaft.llm import LLMError
+        with self.assertRaises(LLMError) as ctx:
+            self.run_with([{"content": "", "reasoning": "a"}, {"content": "", "reasoning": "bb"}], False)
+        self.assertIn("empty answer twice", str(ctx.exception))
+        self.assertIn("reasoning_chars=1 then 2", str(ctx.exception))
+
+    def test_a_tool_call_alone_is_an_answer(self):
+        reply, fake = self.run_with([{"tool_calls": [("read_file", {"path": "a"})]}], False)
+        self.assertEqual((len(fake.requests), reply.tool_calls[0]["name"]), (1, "read_file"))
+
+
 class FollowupBudgetTest(unittest.TestCase):
     """Bonsai used its whole 4,096-token thinking budget on every tool round (~4.5 min each, 30+ min for one
     reply); after a tool result the client asks SHAFT's server for a smaller budget."""
@@ -84,7 +116,7 @@ class FollowupBudgetTest(unittest.TestCase):
 
     def test_through_the_broker_the_settings_still_go_out(self):
         # gpu/bonsai2 is reached through the broker and reads the same template settings as the local server;
-        # the broker drops them for cloud models (test_openrouter, to_anthropic builds its own body).
+        # for OpenRouter the broker sends effort in its own form (test_openrouter); to_anthropic builds its own body.
         tool_last = [{"role": "tool", "tool_call_id": "1", "content": "r"}]
         body = self.bodies(tool_last, think_followup=1024, broker_token="t", reasoning_effort="medium")
         self.assertEqual(body["chat_template_kwargs"],
