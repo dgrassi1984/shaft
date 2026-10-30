@@ -165,6 +165,47 @@ class CopiesTest(unittest.TestCase):
 class PredictionCopyTest(unittest.TestCase):
     """#100: separate prediction copies get historical context and charge even a malformed answer."""
 
+    def episode_prompt(self, episodes, empty=False):
+        history = [json.dumps(ep) for ep in episodes]
+        with mock.patch.object(trial, "reconstruct", return_value=Path("unused")), \
+                mock.patch.object(trial, "_episode_files", side_effect=lambda root: [history]), \
+                mock.patch.object(p, "mind_ablated_copy", side_effect=lambda *args: history.clear()), \
+                mock.patch.object(trial, "link_env"), mock.patch.object(p, "ReplayBroker"), \
+                mock.patch.object(p, "secrets_env", return_value={}), \
+                mock.patch.object(p, "_exam", return_value={"exit": 0, "answer": json.dumps(PRED)}) as exam, \
+                mock.patch.object(p, "_stop", return_value=False), mock.patch.object(p, "_cap"), \
+                mock.patch.object(trial, "_cloud_usd", return_value=0), mock.patch.object(p, "_charge"):
+            p._answer(Path("unused"), "x", STATE, CODE, "fake", "predict", empty=empty)
+        return json.loads(exam.call_args.args[4].split("Last 50 episodes before this state:\n")[1])
+
+    def test_empty_mind_receives_the_same_episodes(self):
+        episodes = [{"ts": "2026-10-09T00:00:00", "intent": {"goal": "remember this"}}]
+        normal = self.episode_prompt(episodes)
+        self.assertEqual(len(normal), 1)
+        self.assertEqual(self.episode_prompt(episodes, empty=True), normal)
+
+    def test_prompt_compacts_episodes(self):
+        episode = {"ts": "2026-10-09T00:00:00", "kind": "cycle", "completed": True,
+                   "intent": {"goal": "keep whole", "origin": "self"},
+                   "tools": [{"tool": "read_file", "args": {"path": "large"}, "result": "large result"},
+                             {"tool": "finish_cycle", "args": {}, "result": "done"}],
+                   "finish": {"what_happened": "keep whole", "surprises": ["detail"]},
+                   "workspace": "large workspace", "cards": [], "inbox": [], "curiosity": {},
+                   "project_usage": {"tokens": 100}, "other": "discard"}
+        expected = {"ts": "2026-10-09T00:00:00", "kind": "cycle", "completed": True,
+                    "intent": {"goal": "keep whole", "origin": "self"},
+                    "tools": ["read_file", "finish_cycle"],
+                    "finish": {"what_happened": "keep whole", "surprises": ["detail"]}}
+        self.assertEqual(self.episode_prompt([episode]), [expected])
+
+    def test_compact_episodes_allow_missing_fields(self):
+        ts = "2026-10-09T00:00:00"
+        self.assertEqual(self.episode_prompt([{"ts": ts}]), [{"ts": ts}])
+        self.assertEqual(self.episode_prompt([{"ts": ts, "tools": [{}]}]),
+                         [{"ts": ts, "tools": [None]}])
+        self.assertEqual(self.episode_prompt([{"ts": ts, "tools": None}]),
+                         [{"ts": ts, "tools": []}])
+
     def test_predictors_get_the_same_pre_state_episodes_and_keep_config(self):
         captured = []
         charges = []
@@ -200,7 +241,8 @@ class PredictionCopyTest(unittest.TestCase):
         self.assertEqual([r[1] for r in captured], [CODE["config.env"]] * 2)
         self.assertEqual([r[2] for r in captured], ["historical mind"] * 2)
         episodes = [json.loads(r[3].split("Last 50 episodes before this state:\n")[1]) for r in captured]
-        self.assertEqual([[e["id"] for e in eps] for eps in episodes], [list(range(5, 55))] * 2)
+        self.assertEqual([[e["ts"] for e in eps] for eps in episodes],
+                         [[f"2026-10-09T00:{i:02d}:00" for i in range(5, 55)]] * 2)
         self.assertEqual([r[-1] for r in charges], [.1, .1])
 
     def test_one_turn_exam_against_fake_llm(self):
@@ -316,6 +358,59 @@ class RunTest(unittest.TestCase):
         self.assertEqual(result["unanswered"], 1)
         self.assertEqual([r["kind"] for r in p.rows("x", "recognition")].count("result"), 1)
         self.assertIn("cut off at max_tokens", p.report("x", "recognition"))
+
+    def run_reply(self, reply, item="privileged"):
+        with mock.patch.object(trial, "reconstruct", return_value=self.project), \
+                mock.patch.object(trial, "_episode_files", return_value=[]), \
+                mock.patch.object(trial, "link_env"), mock.patch.object(p, "mind_ablated_copy"), \
+                mock.patch.object(p, "ReplayBroker"), mock.patch.object(p, "secrets_env", return_value={}), \
+                mock.patch.object(p, "_exam", return_value={"exit": 0, "answer": reply}), \
+                mock.patch.object(p, "_stop", return_value=False), \
+                mock.patch.object(trial, "_cloud_usd", return_value=0), mock.patch.object(p, "_charge"), \
+                mock.patch.object(p, "_replay", return_value=record()):
+            return p.run("x", item, n=1, project=self.project)
+
+    def test_prediction_with_trailing_prose_is_scored(self):
+        result = self.run_reply(json.dumps(PRED) + "\n\nLOW CONFIDENCE: the episode history is empty")
+        self.assertEqual(result["unanswered"], 0)
+        row = p.rows("x", "privileged")[-1]
+        self.assertEqual(row["kind"], "result")
+        self.assertEqual(p.scores(row["predictions"]["self"], row["outcomes"]),
+                         {"origin": 1., "first_tool": 1., "delegate": 1., "met": .0625, "surprise": 1.})
+        self.assertIn("1 states", p.report("x", "privileged"))
+
+    def test_prediction_with_note_stores_only_questions(self):
+        result = self.run_reply(json.dumps({**PRED, "note": "Could not verify"}))
+        self.assertEqual(result["unanswered"], 0)
+        rows = p.rows("x", "privileged")
+        self.assertEqual([r["kind"] for r in rows], ["predictions", "result"])
+        for row in rows:
+            self.assertEqual(row["predictions"], {"self": PRED, "observer": PRED, "empty": PRED})
+
+    def test_recognition_with_note_stores_only_choices(self):
+        result = self.run_reply(json.dumps({"mine": "A", "better": "B", "note": "Could not verify"}),
+                                "recognition")
+        self.assertEqual(result["unanswered"], 0)
+        row, = p.rows("x", "recognition")
+        self.assertEqual(row["kind"], "result")
+        self.assertEqual((row["mine"], row["better"]), ("A", "B"))
+        self.assertEqual(set(row), {"run", "ts", "model", "kind", "own", "mine", "better"})
+
+    def test_prose_before_json_is_unanswered(self):
+        reply = "Here is my prediction: " + json.dumps(PRED)
+        result = self.run_reply(reply)
+        self.assertEqual(result["unanswered"], 1)
+        row, = p.rows("x", "privileged")
+        self.assertEqual(row["kind"], "unanswered")
+        self.assertTrue(row["reason"].startswith("invalid prediction answer: "))
+        self.assertTrue(row["reason"].endswith(f"; reply: {reply[:1000]!r}"))
+
+    def test_fenced_json_prediction_is_scored(self):
+        result = self.run_reply(" \n```json\n" + json.dumps(PRED) + "\n```\nLOW CONFIDENCE")
+        self.assertEqual(result["unanswered"], 0)
+        row = p.rows("x", "privileged")[-1]
+        self.assertEqual(row["kind"], "result")
+        self.assertEqual(row["predictions"]["self"], PRED)
 
     def test_a_budget_stop_still_ends_the_run(self):
         """Only a state's own answer is left out; the run's budget or a local-model demand still stops it."""
