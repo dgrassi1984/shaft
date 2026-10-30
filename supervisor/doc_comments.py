@@ -370,7 +370,7 @@ def parse_answer(name: str, answer: str, sent_ids: list, started_by: str | None 
                 continue
             # The quote is the instance's Markdown; the page matches the anchor against the rendered text, so a quote
             # with **bold** or `code` in it never matched and showed as detached (W10, review 2026-10-24).
-            anchor = {"exact": web_md.plain(opened[2]).strip(), "prefix": "", "suffix": "", "start": 0}
+            anchor = {"exact": web_md.plain(opened[2], page=True).strip(), "prefix": "", "suffix": "", "start": 0}
             try:
                 doc = _rel(opened[1])
                 _anchor(anchor)
