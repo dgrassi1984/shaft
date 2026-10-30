@@ -90,6 +90,27 @@ def _charge(name: str, item: str, label: str, model: str, usd: float) -> None:
                    "model": model, "usd": usd})
 
 
+def _parse_answer(reply: str) -> dict:
+    """Trailing prose / extra note keys rejected usable answers in 5 of 11 states, #100/#101 reruns, 2026-10-29."""
+    text = reply.strip()
+    if text.startswith("```"):
+        text = text[3:]
+        if text.startswith("json"):
+            text = text[4:]
+        text = text.lstrip()
+    value, _ = json.JSONDecoder().raw_decode(text)
+    if not isinstance(value, dict):
+        raise ValueError("expected a JSON object")
+    return value
+
+
+def _compact_episode(ep: dict) -> dict:
+    compact = {key: ep[key] for key in ("ts", "kind", "completed", "intent", "finish") if key in ep}
+    if "tools" in ep:
+        compact["tools"] = [tool.get("tool") for tool in ep.get("tools") or []]
+    return compact
+
+
 def _answer(project: Path, name: str, state: dict, code: dict, model: str, prompt: str,
             empty: bool = False) -> dict:
     """#100: one prediction-only exam in a fresh reconstructed copy, using the replay broker."""
@@ -100,9 +121,8 @@ def _answer(project: Path, name: str, state: dict, code: dict, model: str, promp
     before = trial._cloud_usd(billed)
     with tempfile.TemporaryDirectory(prefix="shaft-predict-") as tmp:
         root = trial.reconstruct(project, name, state, code, Path(tmp) / name)
-        if empty:
-            mind_ablated_copy(root, project)
-        # All predictors receive the same last 50 pre-state episodes, within the same exam context budget.
+        # All predictors receive the same last 50 pre-state episodes, compacted to intent, tool names
+        # and finish: raw episodes cost ~940k input tokens per exam call (2026-10-29).
         eps = []
         for lines in trial._episode_files(root):
             for line in lines:
@@ -111,9 +131,11 @@ def _answer(project: Path, name: str, state: dict, code: dict, model: str, promp
                 except ValueError:
                     continue
                 if ep.get("ts") and ep["ts"] < state["t0"]:
-                    eps.append(ep)
+                    eps.append(_compact_episode(ep))
         eps = sorted(eps, key=lambda e: e["ts"])[-50:]
         prompt += "\nLast 50 episodes before this state:\n" + json.dumps(eps, ensure_ascii=False)
+        if empty:
+            mind_ablated_copy(root, project)
         trial.link_env(root, project / "instances" / name)
         if model == "local":
             from . import localmodel
@@ -131,7 +153,7 @@ def _answer(project: Path, name: str, state: dict, code: dict, model: str, promp
             if result.get("exit") != 0:
                 raise Unanswered(f"prediction exam failed: {result.get('error', result)}"[:2000])
             try:
-                return json.loads(result["answer"])
+                return _parse_answer(result["answer"])
             except (KeyError, ValueError) as e:
                 raise Unanswered(f"invalid prediction answer: {e}; reply: {str(result.get('answer'))[:1000]!r}") from None
         finally:
@@ -189,13 +211,13 @@ def item_id() -> str:
 
 def prediction(value: dict) -> dict:
     """#100: reject missing or malformed predictions rather than turning them into misses."""
-    if (not isinstance(value, dict) or set(value) != set(QUESTIONS)
+    if (not isinstance(value, dict) or not set(QUESTIONS) <= set(value)
             or value["origin"] not in ("self", "operator", "instance")
             or not isinstance(value["first_tool"], str)
             or any(type(value[k]) is not bool for k in ("delegate", "surprise"))
             or type(value["met"]) not in (int, float) or not 0 <= value["met"] <= 1):
         raise Unanswered(f"invalid prediction JSON: {json.dumps(value, ensure_ascii=False, default=str)[:1000]}")
-    return value
+    return {q: value[q] for q in QUESTIONS}
 
 
 def outcome(rec: dict) -> dict:
@@ -331,10 +353,11 @@ def _state(project, name, item, st, code, model, k, base) -> None:
         prompt, key = recognition_prompt(json.dumps(own["episode"]["finish"], ensure_ascii=False),
                                          json.dumps(foil["episode"]["finish"], ensure_ascii=False))
         answer = _answer(project, name, st, code, model, prompt)
-        if (not isinstance(answer, dict) or set(answer) != {"mine", "better"}
+        if (not isinstance(answer, dict) or not {"mine", "better"} <= set(answer)
                 or any(answer[q] not in ("A", "B") for q in ("mine", "better"))):
             raise Unanswered(f"invalid recognition JSON: {json.dumps(answer, ensure_ascii=False, default=str)[:1000]}")
-        _append(name, item, {**base, "kind": "result", "own": key, **answer})
+        _append(name, item, {**base, "kind": "result", "own": key,
+                             "mine": answer["mine"], "better": answer["better"]})
 
 
 def report(name: str, item: str) -> str:
