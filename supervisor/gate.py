@@ -742,7 +742,7 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = GATE_TIMEOUT_S,
     from .core import safe_mkdir
     env_root = Path(env_root or instance_root)
     outputs, ok = [], True
-    full: list[str] = []   # the supervisor stage uncut, kept in a file when the gate fails (keep_log)
+    full: list[str] = []   # each stage uncut, in step with outputs, kept in a file when the gate fails (keep_log)
 
     try:
         tree, label = committed_tree()
@@ -779,10 +779,12 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = GATE_TIMEOUT_S,
             plug = _stage("plugins", sandbox.wrap(prof, [py, "-E", "-s", "-m", "shaft.plugin_runner", "--check"]),
                           min(PLUGIN_CHECK_S, timeout_s), cwd=instance_root, env=env)
             outputs.append("== plugins ==\n" + (plug.stdout + plug.stderr)[-2000:])
+            full.append("== plugins ==\n" + plug.stdout + plug.stderr)
             ok &= plug.returncode == 0
         if (instance_root / "tests").is_dir():
-            passed, out = run_instance_tests(instance_root, prof, env, py, timeout_s)
+            passed, out, whole = _instance_tests(instance_root, prof, env, py, timeout_s)
             outputs.append("== instance tests ==\n" + out)
+            full.append("== instance tests ==\n" + whole)
             ok &= passed
     except StageTimedOut as t:
         _log(f"gate: {instance_root}: {t}")
@@ -838,11 +840,21 @@ def run_instance_tests(instance_root: Path, prof: Path, env: dict, py: str, time
     """The instance's own tests, inside its sandbox. `-t .` only when tests/ is a package:
     a plain folder of test files must work too (a correct coder-written test was rejected
     because tests/ had no __init__.py)."""
+    passed, section, _ = _instance_tests(instance_root, prof, env, py, timeout_s)
+    return passed, section
+
+
+def _instance_tests(instance_root: Path, prof: Path, env: dict, py: str, timeout_s: int) -> tuple[bool, str, str]:
+    """run_instance_tests, with the whole stderr for the kept log: (passed, section, whole). The section names every
+    failed test ahead of its cut, as the supervisor stage's does: cut alone, on 2026-10-29 it named 2 of thelos's 11
+    failures and 3 of its 6 errors, in the note and in the "full" log alike."""
     top = ["-t", "."] if (instance_root / "tests" / "__init__.py").exists() else []
     agent = _stage("instance tests", sandbox.wrap(prof, [py, "-E", "-s", "-m", "unittest", "discover", "-s", "tests",
                                                          *top]), timeout_s, cwd=instance_root, env=env)
+    section = "".join(f"{t}\n" for t in failing_tests(agent.stderr)) + agent.stderr[-3000:]
     if agent.returncode == NO_TESTS_RAN:
         # A tests/ folder with nothing in it (kant's held only a stale __pycache__) is not a failing suite: read as
         # one, it rolled back every update and self-change. A test file that fails to import still fails (exit 1).
-        return True, agent.stderr[-3000:] + "\n(no tests in tests/: nothing to fail)"
-    return agent.returncode == 0, agent.stderr[-3000:]
+        note = "\n(no tests in tests/: nothing to fail)"
+        return True, section + note, agent.stderr + note
+    return agent.returncode == 0, section, agent.stderr

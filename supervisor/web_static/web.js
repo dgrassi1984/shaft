@@ -245,8 +245,11 @@
           });
         } else if (node.classList.contains("turn") && node.classList.contains("it") && !node.classList.contains("live")) {
           const who = (node.querySelector(".who") || {}).firstChild;
-          const first = (node.querySelector(".md p, .md li, .md h2, .md h3, p.warn") || {}).textContent || "";
-          announce(`${who ? who.textContent.trim() : "It"} replied: ${first.slice(0, 200)}`);
+          const name = who ? who.textContent.trim() : "It";
+          const text = node.querySelector(".md p, .md li, .md h2, .md h3");
+          const warn = node.querySelector("p.warn");   // a failed or stopped reply: not "replied" (2026-10-29)
+          announce(text || !warn ? `${name} replied: ${((text || {}).textContent || "").slice(0, 200)}`
+                                 : `${name}'s reply did not finish: ${warn.textContent.slice(0, 200)}`);
         }
       }
       if (node !== cursor) el.insertBefore(node, cursor);

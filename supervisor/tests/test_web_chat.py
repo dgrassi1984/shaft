@@ -1274,6 +1274,18 @@ class ResendTest(ChatTest):
 
 
 class PushWhenTest(ChatTest):
+    def test_a_failed_reply_is_not_pushed_as_replied_20261029(self):
+        # Regression (2026-10-29 10:39): thelos's reply ended on "stream error: Upstream idle timeout exceeded" and the
+        # phone was told "thelos replied".
+        failed = {"instance": "thelos", "turns": [
+            {"role": "user", "content": "q"},
+            {"role": "assistant", "content": "", "note": "error: stream error: Upstream idle timeout exceeded"}]}
+        event = web_chat.reply_event(failed)
+        self.assertEqual(event["title"], "thelos's reply failed")
+        self.assertIn("Upstream idle timeout", event["body"])
+        done = {"instance": "thelos", "turns": [{"role": "assistant", "content": "Done", "note": ""}]}
+        self.assertEqual(web_chat.reply_event(done)["title"], "thelos replied")
+
     def test_a_reply_that_ends_unwatched_wakes_the_phone_and_a_watched_one_does_not(self):
         web_chat._watched.clear()
         with mock.patch("supervisor.webpush.notify") as notify:

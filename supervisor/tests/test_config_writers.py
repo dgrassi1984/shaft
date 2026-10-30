@@ -168,6 +168,31 @@ class ConfigWritersTest(unittest.TestCase):
         listed = reverted.split("Failing tests:", 1)[1].split("Last lines", 1)[0]
         self.assertEqual([l[2:] for l in listed.strip().splitlines()], names)
 
+    def test_a_revert_names_every_failing_instance_test_20261029(self):
+        # Regression (thelos, 2026-10-29): the instance-tests stage kept only its last 3,000 characters and named
+        # nothing ahead of them; 11 failures were reported as 2 ("failing: ..." and the note alike), and the "full log"
+        # held the same cut, so thelos retried one change four times blind to the other nine.
+        names = [f"FAIL: test_{i} (tests.test_plugin_runner_args.T.test_{i})" for i in range(11)]
+        stderr = "".join(f"{'=' * 70}\n{n}\n{'-' * 70}\nAssertionError: {'x' * 800}\n\n" for n in names) \
+            + "Ran 1365 tests\n\nFAILED (failures=11)\n"
+
+        def stage(name, argv, timeout_s, **kw):
+            return subprocess.CompletedProcess(argv, 1 if name == "instance tests" else 0, "",
+                                               stderr if name == "instance tests" else "")
+        (self.root / "tests").mkdir(exist_ok=True)
+        tree = committed_copy(self)
+        with mock.patch.object(gate, "committed_tree", return_value=(tree, "abc")), \
+             mock.patch.object(gate, "_supervisor_tests", return_value=(True, "-- passed --\n", "-- passed --\n")), \
+             mock.patch.object(gate, "_stage", side_effect=stage), \
+             mock.patch.object(core, "SUP_DIR", self.project / ".supervisor"):
+            ok, out = REAL_RUN_TESTS(self.root, self.project)
+        self.assertFalse(ok)
+        self.assertNotIn(names[0], stderr[-3000:])                  # the old cut lost it...
+        self.assertEqual(gate.failing_tests(out), names)            # ...the output names every one, in order
+        kept = Path(out.rsplit("full log: ", 1)[1].strip()).read_text()
+        for n in names:                                             # and the kept log has every failure whole
+            self.assertIn(f"{n}\n{'-' * 70}\nAssertionError: {'x' * 800}", kept)
+
     def test_a_reverted_change_is_kept_in_the_instance_s_notes_and_named_20261027(self):
         # Regression (thelos, 2026-10-27): a mid-run revert deleted a failing test file it was building from; code
         # reverted before any commit has no history, and the gate kept a copy only on the interrupted-run path.

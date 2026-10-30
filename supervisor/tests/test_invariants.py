@@ -165,10 +165,13 @@ class ReflectInvariants(InstanceCase):
         self.assertNotIn("half", self.journal().split("— Reflection", 1)[1])
 
     def test_empty_answer_saves_nothing(self):
+        # An empty answer is asked once more (template llm.py, 2026-10-30); empty again, nothing is saved.
         before = self.journal()
-        r = self.run_agent([{"content": "", "reasoning": "I thought a lot"}], "reflect")
+        r = self.run_agent([{"content": "", "reasoning": "I thought a lot"},
+                            {"content": "", "reasoning": "and again"}], "reflect")
         self.assertNotEqual(r.returncode, 0)
         self.assertEqual(self.journal(), before)
+        self.assertEqual(len(self.fake.requests), 2)
 
 
 

@@ -27,16 +27,23 @@ COMMITTED = "def run(**args):\n    return 'stats'\n"
 UNGATED = "def run(**args):\n    return 'edited by a run that died before it was checked'\n"
 # A run that changes nothing, and one whose agent leaves a process behind that writes the code once the run is over.
 QUIET = "pass"
-ESCAPES_ITS_GROUP = r"""
+# The leftover writes once the test says the run is settled (SETTLED, outside the instance), never after a fixed delay:
+# with a 1.5 s sleep, a gate warm-up on a loaded machine (2026-10-29 12:17) ran the run past it, the write landed inside
+# the run, was gated and kept, and the test failed as if a leftover had outlived its run.
+SETTLED = "../settled"
+LATE_WRITER = ("import pathlib, time\n"
+               f"end = time.time() + 30\n"
+               f"while not pathlib.Path({SETTLED!r}).exists() and time.time() < end:\n"
+               "    time.sleep(0.02)\n"
+               "pathlib.Path('plugins/late.py').write_text('written after the gate')\n")
+ESCAPES_ITS_GROUP = f"""
 import subprocess, sys
-subprocess.Popen([sys.executable, "-c", "import pathlib, time; time.sleep(1.5); "
-                  "pathlib.Path('plugins/late.py').write_text('written after the gate')"],
+subprocess.Popen([sys.executable, "-c", {LATE_WRITER!r}],
                  stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 """
-LEAVES_A_WRITER = r"""
+LEAVES_A_WRITER = f"""
 import subprocess, sys
-subprocess.Popen([sys.executable, "-c", "import pathlib, time; time.sleep(1.5); "
-                  "pathlib.Path('plugins/late.py').write_text('written after the gate')"],
+subprocess.Popen([sys.executable, "-c", {LATE_WRITER!r}],
                  stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 """
 
@@ -502,15 +509,31 @@ class RunOutlivesItselfTest(RunTransactionCase):
 
     def test_a_process_the_agent_left_behind_cannot_write_the_code_after_the_gate(self):
         self.assertEqual(self.cycle(LEAVES_A_WRITER), 0)
-        time.sleep(2.5)                                       # past the moment the leftover would write
+        self.settle_and_wait()
         self.assertFalse((self.root / "plugins" / "late.py").exists(), "a leftover wrote the code after the gate")
         self.assertEqual(self.code_status(), "")
 
     def test_a_process_that_left_the_group_with_setsid_cannot_write_the_code_after_the_gate(self):
         """Codex on e77d5e5: a child in a session of its own escapes the run's process group."""
         self.assertEqual(self.cycle(ESCAPES_ITS_GROUP), 0)
-        time.sleep(2.5)
+        self.settle_and_wait()
         self.assertFalse((self.root / "plugins" / "late.py").exists(), "a setsid child wrote the code after the gate")
+
+    def test_the_leftover_writes_once_settled_when_nothing_ends_it(self):
+        """The two tests above prove something only if a leftover nobody ends does write: here _end_run is a no-op."""
+        with mock.patch.object(runner, "_end_run", lambda proc, root: runner._LIVE.pop(proc.pid, None)):
+            self.assertEqual(self.cycle(ESCAPES_ITS_GROUP), 0)
+        self.assertFalse((self.root / "plugins" / "late.py").exists(), "it wrote before the run was settled")
+        self.settle_and_wait()
+        self.assertTrue((self.root / "plugins" / "late.py").exists(), "a surviving leftover never wrote")
+
+    def settle_and_wait(self) -> None:
+        """Tell any leftover the run is settled, then give it time to write."""
+        (self.root / SETTLED).resolve().touch()
+        late = self.root / "plugins" / "late.py"
+        end = time.monotonic() + 2.5
+        while not late.exists() and time.monotonic() < end:
+            time.sleep(0.05)
 
     def test_a_stopped_conversation_client_ends_its_agent_first(self):
         """Codex on e77d5e5: the terminal client (and the API, driving runs from threads) had no SIGTERM handling:

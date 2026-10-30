@@ -286,6 +286,8 @@ def _send(req: urllib.request.Request) -> tuple[dict | None, str | None]:
 
 def _openrouter_request(body: dict, key: str, stream: bool) -> urllib.request.Request:
     req_body = {k: v for k, v in body.items() if k not in ("stream", "stream_options", "chat_template_kwargs")}
+    if "reasoning" not in req_body:   # the judge sets its own; an instance's settings come as template kwargs
+        req_body.update(openrouter_reasoning(body.get("chat_template_kwargs") or {}))
     req_body["model"] = body["model"].removeprefix("openrouter/")
     req_body["provider"] = OPENROUTER_PROVIDER
     if stream:
@@ -293,6 +295,18 @@ def _openrouter_request(body: dict, key: str, stream: bool) -> urllib.request.Re
     return urllib.request.Request(OPENROUTER_API, data=json.dumps(req_body).encode(), headers={
         "content-type": "application/json", "authorization": f"Bearer {key}",
         "x-title": "SHAFT", "http-referer": "https://github.com/dgrassi1984/shaft"})
+
+
+def openrouter_reasoning(kwargs: dict) -> dict:
+    """An instance's thinking settings, sent as template kwargs (its own server's form), in OpenRouter's form: no
+    thinking (think=False) is `reasoning.enabled` false, LLM_REASONING_EFFORT is `reasoning.effort`. Dropped with the
+    kwargs, thelos's and wren's "medium" never reached mimo, which spent all 32,768 tokens of a sleep step thinking,
+    twice, every night from 2026-10-29. thinking_budget (SHAFT's own server) and preserve_thinking have no equivalent."""
+    if kwargs.get("enable_thinking") is False:
+        return {"reasoning": {"enabled": False}}
+    if kwargs.get("reasoning_effort"):
+        return {"reasoning": {"effort": kwargs["reasoning_effort"]}}
+    return {}
 
 
 def _policy_hint(error: str, knob_name: str = "SHAFT_OPENROUTER_PROVIDER", policy: dict | None = None) -> str:

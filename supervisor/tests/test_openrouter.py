@@ -111,6 +111,25 @@ class OpenRouterTest(_Base):
         self.assertEqual((rec["usd"], rec["input_tokens"], rec["error"]), (0.0055, 12000, None))
         self.assertGreater(rec["usd"], 0)   # the daily cap counts real money, not a price-table guess
 
+    def test_the_instance_s_reasoning_settings_reach_openrouter_20261030(self):
+        # Regression (thelos and wren, 2026-10-29..30): LLM_REASONING_EFFORT went out only as template kwargs, which
+        # are dropped for OpenRouter; every sleep since 10-29 ended "cut off at max_tokens=32768 twice".
+        cases = (({"preserve_thinking": False, "reasoning_effort": "medium"}, {"effort": "medium"}),
+                 ({"preserve_thinking": False, "enable_thinking": False}, {"enabled": False}),
+                 ({"preserve_thinking": False}, None))
+        for kwargs, expected in cases:
+            f = self.fake()
+            cloudllm.complete("shaft", {**self.BODY, "chat_template_kwargs": kwargs}, {"OPENROUTER_API_KEY": "k"}, {})
+            self.assertEqual(f.requests[0].get("reasoning"), expected, kwargs)
+            self.assertNotIn("chat_template_kwargs", f.requests[0])
+        f = self.fake()                                               # streamed, as a live cycle calls it
+        list(cloudllm.openrouter_stream("shaft", {**self.BODY, "chat_template_kwargs": {"reasoning_effort": "low"}},
+                                        {"OPENROUTER_API_KEY": "k"}))
+        self.assertEqual(f.requests[0]["reasoning"], {"effort": "low"})
+        sent = cloudllm._openrouter_request({**self.BODY, "reasoning": {"effort": "high"},   # the judge's own wins
+                                             "chat_template_kwargs": {"reasoning_effort": "low"}}, "k", stream=False)
+        self.assertEqual(json.loads(sent.data)["reasoning"], {"effort": "high"})
+
     def test_no_key_is_said_plainly(self):
         with self.assertRaises(cloudllm.CloudError) as ctx:
             cloudllm.complete("shaft", dict(self.BODY), {}, {})

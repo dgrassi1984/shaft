@@ -187,7 +187,8 @@ class AccessibilityTest(unittest.TestCase):
         self.assertIn('region("toast", "status");', JS)                    # empty from the start: then it speaks
         self.assertIn('region("announce", "status");', JS)
         self.assertIn('box.setAttribute("role", bad ? "alert" : "status");', JS)
-        self.assertIn('announce(`${who ? who.textContent.trim() : "It"} replied:', JS)
+        self.assertIn('`${name} replied: ', JS)
+        self.assertIn("`${name}'s reply did not finish: ", JS)              # a failed reply is not "replied"
         self.assertIn('note.setAttribute("role", "status");', JS)            # a panel not refreshed
 
     def test_icon_only_controls_and_state_dots_have_names(self):
