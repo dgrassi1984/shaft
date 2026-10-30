@@ -4,7 +4,7 @@ Rules this module enforces:
 - `finish_reason == "length"` is *no answer yet*: the call is retried once
   with twice the room; if it is still cut off, `Truncated` is raised and the
   caller must not save anything.
-- An empty answer is an error, never a silent "".
+- An empty answer (no text, no tool call) is asked once more, then an error — never a silent "".
 - Transient failures (backend restarting: 502/503/504, connection refused)
   are retried with backoff, but never after any text has already streamed.
 - Every call — including failed ones — is recorded in logs/llm_usage.jsonl.
@@ -101,6 +101,20 @@ class Client:
 
     # -- internals ----------------------------------------------------------
     def _with_retry(self, messages, max_tokens, purpose, stream, on_retry=None, **callbacks) -> Reply:
+        reply = self._answer(messages, max_tokens, purpose, stream, on_retry, **callbacks)
+        if not reply.content.strip() and not reply.tool_calls:
+            # A model that ends its thinking with nothing after it (Bonsai: 21 shaft cycles lost 2026-10-14..30) has
+            # not answered yet, as a cut-off reply has not: asked once more, and only then an error.
+            first = reply
+            reply = self._answer(messages, max_tokens, purpose, stream, on_retry, **callbacks)
+            reply.attempts += first.attempts
+            if not reply.content.strip() and not reply.tool_calls:
+                raise LLMError(f"{purpose}: model returned an empty answer twice "
+                               f"(finish_reason={reply.finish_reason!r}, "
+                               f"reasoning_chars={len(first.reasoning)} then {len(reply.reasoning)})")
+        return reply
+
+    def _answer(self, messages, max_tokens, purpose, stream, on_retry=None, **callbacks) -> Reply:
         reply = self._resilient(messages, max_tokens, purpose, stream, **callbacks)
         if reply.finish_reason == "length":
             if on_retry:
@@ -111,10 +125,6 @@ class Client:
                 raise Truncated(
                     f"{purpose}: reply cut off at max_tokens={max_tokens * 2} twice "
                     f"(completion_tokens={reply.usage.get('completion_tokens')}); nothing saved")
-        if not reply.content.strip() and not reply.tool_calls:
-            raise LLMError(f"{purpose}: model returned an empty answer "
-                           f"(finish_reason={reply.finish_reason!r}, "
-                           f"reasoning_chars={len(reply.reasoning)})")
         return reply
 
     def _resilient(self, messages, max_tokens, purpose, stream, **callbacks) -> Reply:
@@ -132,8 +142,8 @@ class Client:
         body = {"model": self.model, "messages": images.for_model(messages), "max_tokens": max_tokens}
         if self.presence_penalty:   # Qwen's advice for quantized models: curbs endless repetition
             body["presence_penalty"] = self.presence_penalty
-        # Bonsai's template settings (my local server, or a self-hosted one through the broker); the broker drops
-        # them for cloud models, which have no such template.
+        # Bonsai's template settings (my local server, or a self-hosted one through the broker); for an OpenRouter
+        # model the broker sends my thinking settings in its own form (reasoning.effort, or none for think=False).
         # Earlier steps' thinking is shown only within the current reply, not for older turns: it keeps
         # the plan across tool rounds without carrying every past reply's reasoning in the context.
         kwargs = {"preserve_thinking": False}
