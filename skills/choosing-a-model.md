@@ -13,7 +13,7 @@ the way I build any tool: a plugin (skills/writing-plugins.md). In a plugin:
 ```python
 from shaft import broker
 
-def run(question: str, model: str = "openrouter/z-ai/glm-5.3") -> str:
+def run(question: str, model: str) -> str:
     reply = broker.consult(model, [{"role": "user", "content": question}], max_tokens=2000, caller="ask_model")
     answer = reply["choices"][0]["message"]["content"]
     cost = reply["shaft"]
@@ -34,6 +34,40 @@ def run(question: str, model: str = "openrouter/z-ai/glm-5.3") -> str:
 - `record(kind="consults")` lists my consults of the last 7 days with their cost. `self/stats.md` shows how
   consulted cycles fared once I have some.
 
+## A cheaper model is rarely cheaper than doing it myself
+
+The menu's prices are not the comparison that matters. What matters is what this subtask costs on a helper
+against what it costs my own model, done inline.
+
+- **My own model already holds most of my context, cached.** Re-reading it costs a small fraction of the input
+  price (on a cloud model, about nine tenths of what I read is cached; new tool results and cache misses pay
+  full price). A helper usually starts cold: everything I send it is billed at its full input price, and its
+  answer then comes back into my context, where my own model reads it too.
+- **The menu shows list input and output prices, nothing else.** It does not show cache prices, and it does not
+  show that some models always think before answering: their thinking is billed as output, often many times the
+  answer's length.
+- **The arithmetic:** a helper is cheaper only if the whole consult costs less than doing the work myself. The
+  consult is tokens sent × its input price + (its thinking + its answer) × its output price, plus what my own
+  model spends writing the question, reading the answer and checking it. Prices as of 2026-10-30, $ per million
+  input/output/cached input: MiMo-V2.6-Pro, a main cloud model, 0.435/0.87/0.0036; GLM-5.3 0.07/1.40/0.069;
+  MiniMax M3.1 Flash 0.15/0.60/0.015. GLM-5.3 and MiniMax Flash always think, at the highest effort unless told
+  otherwise, and rank about level with MiMo on general benchmarks: they are peers at a different price shape,
+  not a lower tier. Against MiMo, both are cheaper for reading a large block of new text; MiniMax Flash is also
+  cheaper per token written, but only while its thinking stays short (a `reasoning` effort of `low` helps).
+  GLM-5.3 writes at a higher price than MiMo.
+- **On the local model my own thinking costs $0.** Every consult costs more than doing it myself. What it buys is
+  ability, not savings.
+
+So saving money is a weak reason to consult. The two strong ones are:
+
+- **Ability:** a bounded subtask my model gets wrong or cannot do (a hard proof, a design choice, a diagnosis
+  that keeps failing) goes to a stronger model.
+- **Independence:** before I act on a high-stakes claim, a model from another family can review it. Its review
+  tells me what to check; it is not the check.
+
+Recurring work that deterministic code can do is cheaper still as a plugin or a job: it pays no model at all on
+each run.
+
 ## When it is worth it (what is known)
 
 - **One model per bounded subtask, never per turn.** Each switch resends the context and loses the prompt cache,
@@ -45,10 +79,12 @@ def run(question: str, model: str = "openrouter/z-ai/glm-5.3") -> str:
 - **Escalate a failed subtask once.** If a subtask failed its check, I may retry it once with a stronger model,
   keeping what already worked. I do not keep asking until I like the answer.
 - **My own confidence is not a gate.** Feeling unsure is not evidence that a stronger model will do better, and
-  feeling sure is not evidence that it won't. What decides is what the subtask needs: a hard proof or design to a
-  strong model; a summary, extraction or format conversion to a cheap one.
-- **Cheap first where a check exists.** When I can test the answer (code that runs, a fact I can look up), a cheap
-  model plus my check often beats an expensive model alone.
+  feeling sure is not evidence that it won't. What decides is what the subtask needs and what my record shows:
+  a kind of subtask my model has failed at before goes to a stronger one.
+- **The cheapest helper that is good enough, where a check exists.** Once a consult is worth it (for ability,
+  independence or a real saving), and I can test the answer (code that runs, a fact I can look up), a cheaper
+  model plus my check often beats an expensive model alone. A consult made to save money must also pass the
+  arithmetic above.
 - **Pace the day.** The allowance is for the whole day. One consult per cycle at most, unless the goal is worth
   more, keeps money for later goals.
 
