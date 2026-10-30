@@ -165,13 +165,14 @@ class ReflectInvariants(InstanceCase):
         self.assertNotIn("half", self.journal().split("— Reflection", 1)[1])
 
     def test_empty_answer_saves_nothing(self):
-        # An empty answer is asked once more (template llm.py, 2026-10-30); empty again, nothing is saved.
+        # Empty every time it is asked, nothing is saved. Two empty replies: the template asks once more (llm.py,
+        # 2026-10-30), an instance's own client may not. How often it asks is not this invariant: pinned here, it
+        # failed thelos's gate on 2026-10-30 09:59 (its llm.py not yet updated) and reverted a good plugin change.
         before = self.journal()
         r = self.run_agent([{"content": "", "reasoning": "I thought a lot"},
                             {"content": "", "reasoning": "and again"}], "reflect")
         self.assertNotEqual(r.returncode, 0)
         self.assertEqual(self.journal(), before)
-        self.assertEqual(len(self.fake.requests), 2)
 
 
 

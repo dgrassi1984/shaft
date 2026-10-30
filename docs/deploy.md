@@ -26,6 +26,10 @@ SHAFT runs from the primary checkout (`~/Development/shaft`, on `main`) and its 
    ```
 
    Stop if either is not on its branch, has tracked changes, or cannot fast-forward: that is someone's work.
+   A gate warm-up that starts between the two fast-forwards tests the new `main` against the old template and can fail
+   once (2026-10-30 09:49, a release whose tests and template changed together); the next warm-up, on the new pair,
+   records its pass. A test in the gate's instance part must never pin a template change: an instance not yet updated
+   runs it against its own code (that 09:59, a pinned call count reverted a good thelos change).
 2. **Update the instances** from the template: `bin/shaft update --all`. It is gate-tested per instance; a busy
    instance is queued and updated by the scheduler as soon as it is idle. A refused update (a merge conflict, a red
    gate) is a stop: report it, do not force it.
