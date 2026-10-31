@@ -410,29 +410,55 @@ def _skills(root: Path) -> str:
     return "\n".join(rows) or "(none yet)"
 
 
-def goals_text(text: str, budget: int) -> str:
-    """My goals whole when they fit; otherwise whole sections, with directions to what I left out."""
+def sections_text(text: str, budget: int, path: str, *, first: re.Pattern | None = None, base: int = 0,
+                  default_title: str = "Goals") -> str:
+    """A file whole when it fits; otherwise whole `## ` sections in file order under the budget, then one line per
+    section left out, saying where it starts for read_file's offset (`base`: where `text` starts in the file).
+
+    `first` (the briefing's Corrections): sections whose heading matches it come first, right after the lines
+    above the first heading, and are always shown — cut only at the budget if they alone exceed it. The briefing's
+    3,000-character head cut kept Thelos's corrections, at the end of a 67 KB file, out of every cycle (2026-10-31)."""
     if len(text) <= budget:
-        return text.strip() or "(none yet)"
+        return text.strip()
     headings = list(re.finditer(r"^## (.+)$", text, re.MULTILINE))
-    starts = [0] + [m.start() for m in headings[1:]]
-    ends = starts[1:] + [len(text)]
-    titles = [m.group(1).strip() for m in headings] or ["Goals"]
-    shown = [f"self/goals.md: {len(text)} characters; budget {budget} characters.\n"]
+    if first is not None and headings:   # the top lines stay on top, apart from the first section
+        starts = [0] + [m.start() for m in headings]
+        titles = ["(top)"] + [m.group(1).strip() for m in headings]
+    else:
+        starts = [0] + [m.start() for m in headings[1:]]
+        titles = [m.group(1).strip() for m in headings] or [default_title]
+    chunks = list(zip(starts, starts[1:] + [len(text)], titles))
+    pinned = 1   # the first chunk is always shown, cut at the budget if it is larger
+    if first is not None:
+        hoisted = [c for c in chunks[1:] if first.search(c[2])]
+        chunks = chunks[:1] + hoisted + [c for c in chunks[1:] if c not in hoisted]
+        pinned += len(hoisted)
+    shown = [f"{path}: {len(text) + base} characters; budget {budget} characters.\n"]
     used = 0
     omitted = False
-    for i, (start, end, title) in enumerate(zip(starts, ends, titles)):
+    for i, (start, end, title) in enumerate(chunks):
         section = text[start:end]
-        if i == 0 and len(section) > budget:
-            shown.append(section[:budget] + "\n[... first section cut at the budget ...]\n")
+        if i < pinned and used + len(section) > budget:
+            room = max(0, budget - used)
+            shown.append(section[:room] + f"\n[... {'first section' if i == 0 else title} cut at the budget ...] "
+                         f"(the rest: read_file {path} from offset {base + start + room})\n")
             used = budget
-        elif not omitted and used + len(section) <= budget:
+        elif (i < pinned or not omitted) and used + len(section) <= budget:
             shown.append(section)
             used += len(section)
         else:
             omitted = True
-            shown.append(f"\n[Left out: {title} ({len(section)} characters); read_file self/goals.md for it.]\n")
+            shown.append(f"\n[Left out: {title} ({len(section)} characters); read_file {path} for it, "
+                         f"from offset {base + start}.]\n")
     return "".join(shown).strip()
+
+
+def goals_text(text: str, budget: int) -> str:
+    """My goals whole when they fit; otherwise whole sections, with directions to what I left out."""
+    return sections_text(text, budget, "self/goals.md") or "(none yet)"
+
+
+CORRECTIONS_HEADING = re.compile(r"\bcorrections?\b", re.IGNORECASE)   # "## Corrections", "## Last corrections (…)"
 
 
 def system_prompt(state, cfg, mode_note: str, tools: str | None = None) -> str:
@@ -492,9 +518,10 @@ def briefing(root: Path, cfg) -> str:
         at = at.astimezone().replace(tzinfo=None) if at.tzinfo else at
         age = max(0.0, (now() - at).total_seconds() / 3600)
         content = body if generated else text
-        cut = f"\n[... read_file {name} for the rest]" if len(content) > 3000 else ""
+        rendered = sections_text(content, cfg.BRIEFING_CHARS, name, first=CORRECTIONS_HEADING,
+                                 base=len(text) - len(content), default_title="Briefing")
         shown = (f"generated: {generated or at.isoformat(timespec='seconds')} ({age:.1f} h old"
-                 f"{'; stale' if age > 24 else ''})\n{content[:3000].strip() or '(empty briefing)'}{cut}")
+                 f"{'; stale' if age > 24 else ''})\n{rendered or '(empty briefing)'}")
     except FileNotFoundError:
         shown = (f"No briefing yet at {name}. My own watchers should write it as a scheduled job: calendar next "
                  "48 h, actionable mail, open commitments to the operator, and his last corrections, each dated.")

@@ -42,6 +42,7 @@ FIELDS: dict[str, tuple[type, object]] = {
     "CONFIDENCE_MODE": (str, "confirm"),   # confirm after the base rate, per-clause, or without confirmation
     "GOALS_CHARS": (int, 12000),       # how much of my goals I carry into every prompt
     "BRIEFING": (str, "notes/briefing.md"),   # my watchers' view of the operator's next 48 hours; off disables
+    "BRIEFING_CHARS": (int, 6000),     # how much of it every live cycle carries: whole sections, Corrections first
     "HANDOFF": (str, "on"),           # my last two live cycles: structured, raw tool log, or off
     "CURIOSITY_EVERY_CYCLES": (int, 5),   # one live cycle in this many, on average, takes its goal from my surprises; 0 = never
     # docs/plans/PLAN-consciousness.md: each mechanism on, behind a knob its kill test flips (shaft experiment …)
