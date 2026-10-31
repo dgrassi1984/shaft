@@ -260,7 +260,8 @@ SPECS = {
         "playwright==$SHAFT_PLAYWRIGHT`, launched with p.chromium.launch_persistent_context($SHAFT_BROWSER_PROFILE, "
         "proxy={server, username, password from HTTPS_PROXY}) — see skills/writing-plugins.md. Use `run` to install "
         "packages, run your tests, "
-        "scripts and plugins, inspect files, or compute things. Returns the exit code and output (truncated). "
+        "scripts and plugins, inspect files, or compute things. Returns the exit code and output (each stream past "
+        "6,000 characters cut to its head and tail: write long output to a file and read that). "
         "Code you change is still tested by the supervisor. `git` cannot see your own repository here (it lives "
         "outside your folder): use `history`.",
         {"command": S, "timeout_s": {"type": "integer", "description": f"default 60, max {300}"},
@@ -529,7 +530,7 @@ MAX_COMMANDS_PER_RUN = 40
 # 100 MB until 2026-10-18, which killed `uv pip install playwright` (its bundled node is 122 MB) with SIGXFSZ, exit
 # 153 and no message — and with it any package shipping a bigger file (torch's libraries) (docs/plans/PLAN-browser.md).
 RUN_MAX_FILE_BYTES = 1024 ** 3
-RUN_OUTPUT_CHARS = 12000
+RUN_OUTPUT_CHARS = 12000   # each `run` stream keeps half: its head and tail (the "run" spec above says 6,000)
 
 
 def notify(title: str, text: str) -> None:
@@ -699,6 +700,7 @@ class Broker:
         self.run_kind = None
         self.run_started = None
         self.model_allowed = True              # False: /llm refuses (a scheduled job is a script, docs/plans/PLAN-jobs.md)
+        self.run_confined_to: Path | None = None   # a scheduled job's state folder: its `run` writes only the job's set
         self.bot = ""                           # set by tool_specs: its Telegram bot, if the operator can be reached there
         # The operator's folder this run may read (shaft share): the instance's own runs and its trial replays,
         # never a battery exam (its control arm has no such folder). Checked again here: a folder deleted or
@@ -1321,7 +1323,8 @@ class Broker:
         home = safe_mkdir(root, ".tmp/home")                 # tools that write to $HOME write here
         fd, prof = tempfile.mkstemp(prefix=f"shaft-run-{self.name}-", suffix=".sb")
         with os.fdopen(fd, "w") as f:
-            f.write(sandbox.run_profile(root, HOME, self.shared, egress_port=self.egress.port, env_root=self.env_root))
+            f.write(sandbox.run_profile(root, HOME, self.shared, egress_port=self.egress.port, env_root=self.env_root,
+                                        job_state=self.run_confined_to))
         bindir = Path(PYTHON).parent
         # The instance's own environment first; then the system Python as `python3` (a link in $HOME when the
         # interpreter's folder has no such name), then the system.
@@ -1362,11 +1365,18 @@ class Broker:
             stop_group(proc)   # and on every other way out: nothing it put in the background outlives it (B9)
             os.unlink(prof)
         half = RUN_OUTPUT_CHARS // 2
-        def cap(t):
-            return t if len(t) <= half else t[:half // 2] + f"\n[... {len(t) - half} chars cut ...]\n" + t[-half // 2:]
+
+        def cap(t, stream):
+            """The head and tail of a long stream, saying how long it was and how to read all of it: until 2026-10-31
+            the cut said only "[... N chars cut ...]", and a 20 KB report was lost past its first 3,000 characters."""
+            if len(t) <= half:
+                return t
+            return (t[:half // 2] + f"\n[... {stream} was {len(t):,} characters: {len(t) - half:,} cut, the first and "
+                    f"last {half // 2:,} shown. For all of it, write it to a file — `… > .tmp/out.txt 2>&1` — and "
+                    "read that with offsets (read_file(path, offset=…)) ...]\n" + t[-half // 2:])
         _shutil.rmtree(home / ".cache", ignore_errors=True)
-        return (f"{status} · {time.monotonic() - started:.1f} s\n--- stdout ---\n{cap(out or '')}"
-                + (f"\n--- stderr ---\n{cap(err)}" if err else ""))
+        return (f"{status} · {time.monotonic() - started:.1f} s\n--- stdout ---\n{cap(out or '', 'stdout')}"
+                + (f"\n--- stderr ---\n{cap(err, 'stderr')}" if err else ""))
 
     def _delegate_coding(self, task: str) -> str:
         from . import coder
