@@ -4,7 +4,9 @@ The supervisor never imports agent code. It snapshots the instance's code
 before a run; if the run changed it, the test suites run, and failing changes
 are restored byte-for-byte from the snapshot.
 The supervisor's own tests run in two parts; the shared part's pass is recorded
-per commit (docs/plans/PLAN-gate-cache.md).
+per commit (docs/plans/PLAN-gate-cache.md). A failed gate says whether the change
+or the supervisor's side (the baseline) failed it (Output); a baseline failure's
+change is held and re-gated once the baseline is green (gate_held, runner.regate_held).
 """
 from __future__ import annotations
 
@@ -712,16 +714,59 @@ def budget(timeout_s: int = GATE_TIMEOUT_S) -> int:
     return 0 if within else 1
 
 
-def _supervisor_tests(instance_root: Path, tree: Path, label: str, timeout_s: int) -> tuple[bool, str, str]:
+def _supervisor_tests(instance_root: Path, tree: Path, label: str,
+                      timeout_s: int) -> tuple[str, str, list[str] | None, list[str] | None]:
     """The supervisor's own tests against this instance (docs/plans/PLAN-gate-cache.md): the shared part from its
     record when this commit's passed already, else run (and recorded when it passes); then the instance part, every
-    time. (passed, the section for the output, the whole output for the kept log)."""
+    time. (the section for the output, the whole output for the kept log, the shared part's failing tests, the
+    instance part's): None for a part that passed, its failing names (maybe none) for one that failed."""
     if not (tree / SPLIT_RUNNER).is_file():
         raise RuntimeError(f"the committed tree {tree} has no {SPLIT_RUNNER}: the supervisor's tests cannot be split")
     env = {**os.environ, "SHAFT_UNDER_TEST": str(instance_root)}
     shared_ok, shared, shared_full, _ = _shared_part(tree, label, env, timeout_s, TREE_IDLE_S)
     inst_ok, inst, inst_full, _, _ = _part("instance", tree, env, timeout_s, label)
-    return shared_ok and inst_ok, shared + inst, shared_full + inst_full
+    return (shared + inst, shared_full + inst_full, None if shared_ok else failing_tests(shared_full),
+            None if inst_ok else failing_tests(inst_full))
+
+
+def instance_part_failures(instance_root: Path, timeout_s: int = GATE_TIMEOUT_S) -> list[str] | None:
+    """The supervisor's instance part alone, against `instance_root` (runner: the approved code's protected copy, to
+    tell whether tests that failed on a candidate fail on its baseline too): the failing tests' names, [] when it
+    passes, None when it cannot tell (it did not run, timed out, or failed naming no test)."""
+    try:
+        tree, label = committed_tree()
+        if not (tree / SPLIT_RUNNER).is_file():
+            return None
+        ok, _, full, _, _ = _part("instance", tree, {**os.environ, "SHAFT_UNDER_TEST": str(instance_root)},
+                                  timeout_s, label)
+    except Exception as e:   # StageTimedOut included: no answer, never a guess
+        _log(f"gate: the instance part on {instance_root} could not be run for comparison: {type(e).__name__}: {e}")
+        return None
+    names = failing_tests(full)
+    return [] if ok else (names or None)
+
+
+class Output(str):
+    """run_tests' output, carrying whose failure a failed gate is (docs/plans/PLAN-thelos-review-2.md M2, S2).
+    `cause`: None (passed); "baseline" — the supervisor's side failed, not the change: the shared supervisor tests
+    (they never read the instance), a stage of theirs that ran out of time, the gate's own machinery; or "candidate" —
+    a check that reads the change failed (the instance part, the plugins, the instance's own tests). `why`: one line
+    saying which. `failing`: the failing tests' names. `recheck`: when the supervisor's instance part is the only
+    check of the change that failed, its failing names, for the caller to run against the approved code (a test that
+    fails there too is the baseline's). Only the classification: whatever the cause, a failed gate keeps nothing."""
+    cause: str | None
+    why: str
+    failing: tuple[str, ...]
+    recheck: tuple[str, ...]
+
+    def __new__(cls, text: str, cause: str | None = None, why: str = "", failing=(), recheck=()):
+        out = super().__new__(cls, text)
+        out.cause, out.why, out.failing, out.recheck = cause, why, tuple(failing), tuple(recheck)
+        return out
+
+
+def _names(names: list[str], most: int = 5) -> str:
+    return "; ".join(names[:most]) + (f" and {len(names) - most} more" if len(names) > most else "")
 
 
 def run_tests(instance_root: Path, home: Path, timeout_s: int = GATE_TIMEOUT_S,
@@ -737,21 +782,30 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = GATE_TIMEOUT_S,
     Nothing left in a stage's process group outlives it (_stage), so no leftover there writes the instance's code after
     the caller's revert. `data_root`: the instance itself when `instance_root` is its protected code copy (#86, linked
     to its data by protected._link_data): the tests read and write its folder as they did before the copy, never its
-    code paths or its Python environment, and only read the copy but for its .tmp."""
+    code paths or its Python environment, and only read the copy but for its .tmp.
+    The output is an Output: a failed gate says whether the change failed it or the supervisor's side did (M2 of
+    docs/plans/PLAN-thelos-review-2.md); either way it failed."""
     from . import pyenv
     from .core import safe_mkdir
     env_root = Path(env_root or instance_root)
     outputs, ok = [], True
     full: list[str] = []   # each stage uncut, in step with outputs, kept in a file when the gate fails (keep_log)
+    baseline: list[str] = []      # the supervisor's side failed: why, one line each
+    candidate: list[str] = []     # a check that reads the change failed: which
+    failing: list[str] = []
+    recheck: list[str] = []
 
     try:
         tree, label = committed_tree()
     except Exception as e:   # fail closed: a change kept unsettled would pass ungated as the next run's baseline
-        return False, f"== supervisor invariants ==\nno committed copy of the supervisor to test with: {e!r}"
+        return False, Output(f"== supervisor invariants ==\nno committed copy of the supervisor to test with: {e!r}",
+                             "baseline", f"the gate has no committed copy of the supervisor to test with ({e})")
     prof = None
+    step = "the change's own setup"   # an error here is the change's (a link where .tmp should be); later, the gate's
     try:
         py = pyenv.python(env_root)
         tmp = safe_mkdir(instance_root, ".tmp")       # UnsafePath when the instance made .tmp a link: a failed gate
+        step = "the gate"
         fd, prof_name = tempfile.mkstemp(prefix="shaft-tests-", suffix=".sb")   # outside the instance
         prof = Path(prof_name)
         with os.fdopen(fd, "w") as f:
@@ -769,10 +823,17 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = GATE_TIMEOUT_S,
                     f.write(f"(deny file-write* (subpath {sandbox._q(code_root / name)}))\n")
             for name in CODE_PATHS:
                 f.write(f"(deny file-write* (subpath {sandbox._q(code_root / name)}))\n")
-        sup_ok, section, sup_full = _supervisor_tests(instance_root, tree, label, timeout_s)
+        section, sup_full, shared_bad, inst_bad = _supervisor_tests(instance_root, tree, label, timeout_s)
         outputs.append(f"== supervisor invariants ({label}) ==\n" + section)
         full.append(f"== supervisor invariants ({label}) ==\n" + sup_full)
-        ok &= sup_ok
+        if shared_bad is not None:   # they never read the instance (PLAN-gate-cache's guards): never the change's
+            baseline.append("the shared supervisor tests fail" + (f": {_names(shared_bad)}" if shared_bad else ""))
+            failing += shared_bad
+        if inst_bad is not None:
+            candidate.append("the supervisor's tests that read my code fail")
+            failing += inst_bad
+            recheck = inst_bad
+        ok &= shared_bad is None and inst_bad is None
 
         env = sandbox.agent_env(os.environ, TMPDIR=str(tmp), SHAFT_PYTHON=py)
         if (instance_root / "plugins").is_dir():
@@ -781,16 +842,25 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = GATE_TIMEOUT_S,
             outputs.append("== plugins ==\n" + (plug.stdout + plug.stderr)[-2000:])
             full.append("== plugins ==\n" + plug.stdout + plug.stderr)
             ok &= plug.returncode == 0
+            if plug.returncode:
+                candidate.append("the plugins check fails")
         if (instance_root / "tests").is_dir():
             passed, out, whole = _instance_tests(instance_root, prof, env, py, timeout_s)
             outputs.append("== instance tests ==\n" + out)
             full.append("== instance tests ==\n" + whole)
             ok &= passed
+            if not passed:
+                candidate.append("my own tests fail")
+                failing += failing_tests(whole)
     except StageTimedOut as t:
         _log(f"gate: {instance_root}: {t}")
         outputs.append(f"== {t.stage} ==\n" + (t.tail + "\n" if t.tail else "")
                        + f"{t}; the checks after it did not run")
         ok = False
+        if t.stage.endswith(", shared part"):   # tests that never read the change (or the wait for another gate's run)
+            baseline.append(f"the shared supervisor tests ran out of time ({t.seconds} s)")
+        else:
+            candidate.append(f"{t.stage} ran out of time ({t.seconds} s)")
     except Exception as e:
         # Fail closed, like a timeout: any failure of the gate's own machinery (no sandbox-exec, a link where .tmp
         # should be, a full disk) is a failed gate. Only StageTimedOut was caught, so anything else left settlement
@@ -799,15 +869,24 @@ def run_tests(instance_root: Path, home: Path, timeout_s: int = GATE_TIMEOUT_S,
         outputs.append(f"== gate error ==\n{type(e).__name__}: {e}\n(the gate could not run its checks: counted as "
                        "failed, the checks after it did not run)")
         ok = False
+        if step == "the gate":
+            baseline.append(f"the gate itself failed ({type(e).__name__}: {e})")
+        else:
+            candidate.append(f"{step} failed ({type(e).__name__}: {e})")
     finally:
         if prof is not None:
             prof.unlink(missing_ok=True)
-    if not ok:
-        try:
-            outputs.append(f"full log: {keep_log(instance_root, full + outputs[len(full):])}")
-        except OSError as e:
-            outputs.append(f"(the full log could not be kept: {e})")
-    return ok, "\n".join(outputs)
+    if ok:
+        return ok, Output("\n".join(outputs))
+    try:
+        outputs.append(f"full log: {keep_log(instance_root, full + outputs[len(full):])}")
+    except OSError as e:
+        outputs.append(f"(the full log could not be kept: {e})")
+    # A check of the change that failed makes it the change's, whatever else failed: the gate's verdict on it stands.
+    cause = "baseline" if baseline and not candidate else "candidate"
+    only_recheck = candidate == ["the supervisor's tests that read my code fail"]
+    return ok, Output("\n".join(outputs), cause, "; ".join(candidate or baseline), list(dict.fromkeys(failing)),
+                      recheck if only_recheck else ())
 
 
 GATE_LOGS_KEPT = 50

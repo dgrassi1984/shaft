@@ -157,7 +157,7 @@ class SchedulerTest(JobCase):
         self.assertEqual(jobs._outcome("plain text", job)[:2], ("plain text", False))
         self.assertEqual(jobs._outcome('{"message": "new mail", "wake": true}', job)[:2], ("new mail", True))
         no_wake = {**job, "can_wake": False}
-        msg, wake, note = jobs._outcome('{"message": "x", "wake": true}', no_wake)
+        msg, wake, note, _ = jobs._outcome('{"message": "x", "wake": true}', no_wake)
         self.assertFalse(wake)
         self.assertIn("does not say can_wake: true", note)
         jobs.request_wake("wren", "watch")

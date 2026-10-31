@@ -108,7 +108,13 @@ class TargetsTest(unittest.TestCase):
         held = {"episode": ep("t", [call("write_file", {"path": "self/x.md"}, "(held, not run yet) Before…")]),
                 "ended": "ok", "exit": 0, "completed": True}
         self.assertFalse(experiments.endpoint("cards", held, "write_file self/"))   # a hold is not a failure
-        self.assertTrue(experiments.endpoint("forecast", {"episode": ep("t", [], ended_by="steps"), "ended": "ok"}, ""))
+        # the template's forecast rule (review 2 M3): ran out = no finish, or a forced deadline wrap-up; a steps end
+        # that still finished did not run out
+        self.assertTrue(experiments.endpoint("forecast", {"episode": ep("t", [], ended_by="steps", finish=None),
+                                                          "ended": "ok"}, ""))
+        self.assertFalse(experiments.endpoint("forecast", {"episode": ep("t", [], ended_by="steps"), "ended": "ok"}, ""))
+        self.assertTrue(experiments.endpoint("forecast", {"episode": ep("t", [], wrapped_up="deadline"), "ended": "ok"},
+                                             ""))
         self.assertTrue(experiments.endpoint("forecast", {"episode": None, "ended": "timeout"}, ""))
         self.assertIsNone(experiments.endpoint("cards", None, "x"))
         # Regression (Codex review): an arm that crashed is no evidence — counted as "avoided", broken code would win

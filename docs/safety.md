@@ -186,6 +186,23 @@ The broker call log includes the class, action id and disposition for classified
   that residual case is accepted because supervisor tests are trusted committed code instances cannot edit. The
   unpaused scheduler warms the shared part after each merge (`shaft gate warm`), refreshing passes older than half a
   day on its hourly check. A warm-up failure is one panel alert, not retried on those commits during that scheduler run.
+  A failed gate is classified (`gate.Output`, docs/plans/PLAN-thelos-review-2.md M2), and either way the change is
+  reverted: the classification never lets a change through. **Baseline** — the supervisor's side: the shared part
+  failing or running out of time (it never reads the instance), the gate's own error, or a failed protected copy (not
+  one too big); and the supervisor's instance-part tests when they are the only check of the change that failed and
+  fail again, run once more against a protected copy of the approved code. **Candidate** — anything else: the instance
+  part failing only with the change, the plugin check, the instance's own tests, a stage of those out of time, a link
+  where `.tmp` belongs. A candidate failure wins over a baseline one. On a baseline failure the change's code files are
+  also **held** under `.supervisor/gate-held/<name>/<id>/` (the bytes it wrote, each file's base digest, the
+  instance's commit, a patch to read; the instance cannot write there), and the instance is told in its inbox and
+  journal; config lines it set are undone and not held. After a green warm-up the scheduler starts `shaft gate regate`:
+  for each instance not busy or paused, under its run lock (never waiting), each held change is written back only if
+  every file it touched is still as it was when held — else dropped with a message carrying its patch — and settled
+  like any run's change, through the same gate: kept and committed, reverted and dropped if a check of it fails, or
+  held again if the baseline is red again, up to three tries. Every outcome is an inbox message. Every gate an
+  instance's change went through is a row of `.supervisor/gate-runs/<name>.jsonl` (outcome, failing tests, the last
+  3,000 characters of a failed gate's output), which `record(kind="gate")` shows to that instance only, with its held
+  changes.
   The plugin check and the instance's own tests run in its sandbox with no network at
   all, like `run` without its proxy. A check that runs past its time counts as failed, and so does any error of the
   gate's own (it never lets a change through unjudged). Each run is settled whatever happens to it: the agent

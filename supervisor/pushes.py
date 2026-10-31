@@ -1,8 +1,11 @@
 """Operator pushes (#140), measured separately from value and operator reactions."""
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 import re
+import tempfile
 from bisect import bisect_left
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -10,8 +13,119 @@ from pathlib import Path
 from . import core
 
 PUSH_BUDGET, _ = core.knob(
-    "SHAFT_PUSH_BUDGET", "6", core.whole, "measured operator pushes per day (0: not shown); never blocks delivery",
-    group="Runs and conversations", services=("runs", "api", "web"))
+    "SHAFT_PUSH_BUDGET", "6", core.whole,
+    "operator pushes per instance per day before holding for a digest (0: unlimited, count hidden)",
+    group="Runs and conversations", services=("runs", "api", "web", "telegram"))
+
+
+def _quiet_hours(value: str) -> tuple[int, int] | None:
+    if not value:
+        return None
+    start, end = map(int, value.split("-"))
+    if not (0 <= start < 24 and 0 <= end < 24) or start == end:
+        raise ValueError("expected different hours 00-23, e.g. 22-07, or empty")
+    return start, end
+
+
+def _digest_at(value: str) -> int:
+    hour, minute = map(int, value.split(":"))
+    if not (0 <= hour < 24 and 0 <= minute < 60):
+        raise ValueError("expected HH:MM")
+    return hour * 60 + minute
+
+
+PUSH_HOLD, _ = core.knob(
+    "SHAFT_PUSH_HOLD", "1", core.whole, "hold non-urgent device notifications (0: off)",
+    group="Runs and conversations", services=("runs", "api", "web", "telegram"))
+QUIET_HOURS, _ = core.knob(
+    "SHAFT_QUIET_HOURS", "22-07", _quiet_hours, "local quiet hours for device notifications (empty: none)",
+    group="Runs and conversations", services=("runs", "api", "web", "telegram"))
+DIGEST_AT, _ = core.knob(
+    "SHAFT_DIGEST_AT", "07:15", _digest_at, "local digest time, or quiet hours' end if later",
+    group="Runs and conversations", services=("runs", "api", "web", "telegram"))
+
+
+def hold_until(row: dict, sup_dir: Path, now: datetime) -> str | None:
+    """Called under the message log's write lock: concurrent senders share one budget decision."""
+    if not PUSH_HOLD or row.get("urgent") or row.get("to") != "operator" or not row.get("alert"):
+        return None
+    from . import runner
+    if runner.open_conversations(row["from"]):
+        return None
+    rows = records(sup_dir)
+    if any(r.get("from") == "operator" and r.get("to") == row["from"]
+           and now - timedelta(hours=2) <= _time(r["ts"]) <= now for r in rows):
+        return None
+    quiet = False
+    if QUIET_HOURS:
+        start, end = QUIET_HOURS
+        quiet = start <= now.hour < end if start < end else now.hour >= start or now.hour < end
+    used = sum(_is_push(r, row["from"]) and _time(r["ts"]).date() == now.date()
+               and _time(r["ts"]) <= now for r in rows)
+    if not quiet and (not PUSH_BUDGET or used < PUSH_BUDGET):
+        return None
+    minute = max(DIGEST_AT, QUIET_HOURS[1] * 60 if QUIET_HOURS else 0)
+    if QUIET_HOURS and QUIET_HOURS[0] > QUIET_HOURS[1] and minute >= QUIET_HOURS[0] * 60:
+        minute = QUIET_HOURS[1] * 60  # a digest configured inside overnight quiet hours waits for their end
+    due = now.replace(hour=minute // 60, minute=minute % 60, second=0, microsecond=0)
+    if due <= now:
+        due += timedelta(days=1)
+    return due.isoformat(timespec="seconds")
+
+
+def _save_digest(path: Path, claimed: set[str]) -> None:
+    fd, tmp = tempfile.mkstemp(prefix=".push-digest-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(sorted(claimed), f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def digest(send, now: datetime | None = None) -> int:
+    """Claim due rows durably before sending one notification. Shared by both periodic forwarders.
+
+    Claims give at-most-once dispatch even after a restart. A crash between the claim and external send
+    can lose a notification; external push services do not support transactional exactly-once delivery.
+    The original messages always remain in the log and inbox.
+    """
+    now = now or datetime.now()
+    if QUIET_HOURS:
+        start, end = QUIET_HOURS
+        if (start <= now.hour < end if start < end else now.hour >= start or now.hour < end):
+            return 0  # overdue work must not wake the operator in a later quiet window
+    sup = core.SUP_DIR
+    sup.mkdir(parents=True, exist_ok=True)
+    with (sup / "push-digest.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        path = sup / "push-digest.json"
+        try:
+            sent = set(json.loads(path.read_text()))
+        except FileNotFoundError:
+            sent = set()
+        due = [r for r in records(sup) if r.get("push_due") and _time(r["push_due"]) <= now
+               and r["file"] not in sent]
+        if not due:
+            return 0
+        claimed = sent | {r["file"] for r in due}
+        _save_digest(path, claimed)
+        from .web_md import first_line
+        body = "\n".join(f"{r['from']}: {first_line(r['text']) or '(a file)'}" for r in due)
+        delivered = send({"title": f"SHAFT digest ({len(due)})", "body": body,
+                          "url": "/overview", "tag": "shaft-digest-" + due[-1]["file"]})
+        if not delivered:  # no paired destinations: keep these eligible for the next service/loop
+            _save_digest(path, sent)
+            return 0
+        return 1
 
 
 def _time(text: str) -> datetime | None:

@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from unittest import mock
 
-from supervisor import api, channel, core, messages, web_alerts, web_chat, webpush
+from supervisor import api, channel, core, messages, pushes, web_alerts, web_chat, webpush
 from supervisor.tests import test_api
 from supervisor.tests.test_api import KEY, ME, fake_run_agent
 
@@ -28,7 +28,8 @@ class Sandbox(unittest.TestCase):
         self.inbox = self.sup / "operator-inbox"
         self.alive = {"api": True, "web": True}
         self.reach = {"telegram": True, "web": True}
-        for p in (mock.patch.object(core, "SUP_DIR", self.sup), mock.patch.object(core, "API_TALKS", self.talks_file),
+        for p in (mock.patch.object(pushes, "PUSH_HOLD", 0),  # routing tests send immediately at any local hour
+                  mock.patch.object(core, "SUP_DIR", self.sup), mock.patch.object(core, "API_TALKS", self.talks_file),
                   mock.patch.object(messages, "SUP_DIR", self.sup), mock.patch.object(messages, "OPERATOR_INBOX", self.inbox),
                   mock.patch("supervisor.version.service", lambda n, stale=True: {"pid": 1} if self.alive.get(n) else None),
                   mock.patch.object(channel, "can_alert",

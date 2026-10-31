@@ -50,7 +50,7 @@ def forward_new() -> int:
     rows, end = messages.appended(_read_cursor())
     pushed = 0
     for m, after in rows:
-        if m.get("to") == "operator" and m.get("alert") == "web":
+        if m.get("to") == "operator" and m.get("alert") == "web" and not m.get("push_due"):
             looking = web_chat.watchers(m["from"])   # a device with its chat on screen sees the message there now
             if looking:
                 log(f"web: {m['from']}'s message {m['file']} not pushed to {', '.join(sorted(looking))}: its chat is "
@@ -59,6 +59,9 @@ def forward_new() -> int:
                 pushed += 1
         _write_cursor(after)
     _write_cursor(end)
+    from . import pushes
+    if webpush.subscriptions():
+        pushed += pushes.digest(webpush.notify)
     return pushed
 
 
@@ -87,6 +90,28 @@ def forward_pauses() -> int:
     return pushed
 
 
+def forward_providers() -> int:
+    """Like pause pushes, retry failed notifications and forget IDs when the provider recovers."""
+    from . import panel, webpush
+    path = core.SUP_DIR / "web" / "provider-alerts.json"
+    try:
+        saved = set(json.loads(path.read_text()))
+    except (OSError, ValueError):
+        saved = set()
+    alerts = panel.provider_alerts()
+    sent = saved & {a["id"] for a in alerts}
+    pushed = 0
+    for alert in alerts:
+        if alert["id"] not in sent and webpush.notify({"title": "Provider needs attention", "body": alert["text"],
+                                                     "url": "/overview", "tag": alert["id"]}):
+            sent.add(alert["id"])
+            pushed += 1
+    if sent != saved:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(sorted(sent)))
+    return pushed
+
+
 def start() -> threading.Event:
     """The forwarding thread, every EVERY_S seconds; set the returned event to stop it."""
     stop = threading.Event()
@@ -99,6 +124,10 @@ def start() -> threading.Event:
                 log(f"web: alerts: {type(e).__name__}: {e}")
             try:
                 forward_pauses()
+            except Exception as e:
+                log(f"web: alerts: {type(e).__name__}: {e}")
+            try:
+                forward_providers()
             except Exception as e:
                 log(f"web: alerts: {type(e).__name__}: {e}")
             stop.wait(EVERY_S)

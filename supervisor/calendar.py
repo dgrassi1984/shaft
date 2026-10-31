@@ -217,6 +217,56 @@ def series(acct: google.Account, cal_id: str, ev: dict) -> dict | None:
         return None
 
 
+# -- changes to a calendar, for the supervisor's calendar watch (supervisor/watch.py) --------------------------------
+SYNC_PAGES = 20                                   # pages per listing; a longer one starts over from now
+
+
+class SyncExpired(RuntimeError):
+    """Google no longer accepts the sync token (410 Gone), or the changes since it are more than SYNC_PAGES pages."""
+
+
+def _sync_page(acct: google.Account, cal_id: str, **params) -> dict:
+    try:
+        return _get(acct, _path(cal_id, "events"), **params)
+    except google.ApiError as e:
+        if e.status == 410:
+            raise SyncExpired(f"Google no longer accepts the sync token of {acct.alias!r}'s calendar") from None
+        if e.status == 404:
+            raise google.AccountError(f"account {acct.alias!r} can no longer read this calendar ({e}); if it was "
+                                      "deleted or unshared since the grant, the operator revokes or re-grants it") from None
+        raise
+
+
+def sync_now(acct: google.Account, cal_id: str) -> str:
+    """A sync token for the calendar as it is now. Google gives one only at the end of a full listing, so the listing
+    is paged through and its events dropped: a watch starts from now and never reports what already existed."""
+    page = None
+    for _ in range(SYNC_PAGES):
+        data = _sync_page(acct, cal_id, maxResults=2500, pageToken=page)
+        if data.get("nextSyncToken"):
+            return str(data["nextSyncToken"])
+        page = data.get("nextPageToken")
+        if not page:
+            break
+    raise google.ApiError(200, f"Google gave no sync token for {acct.alias!r}'s calendar after {SYNC_PAGES} pages")
+
+
+def changes(acct: google.Account, cal_id: str, sync_token: str) -> tuple[list[dict], str]:
+    """The calendar's events created, changed or cancelled since `sync_token` (events.list with the token, recurring
+    series as one item) and the token to go on from. An expired token, or more than SYNC_PAGES pages of changes,
+    raises SyncExpired."""
+    items, page = [], None
+    for _ in range(SYNC_PAGES):
+        data = _sync_page(acct, cal_id, syncToken=sync_token, maxResults=250, pageToken=page)
+        items += [ev for ev in data.get("items") or [] if isinstance(ev, dict)]
+        if data.get("nextSyncToken"):
+            return items, str(data["nextSyncToken"])
+        page = data.get("nextPageToken")
+        if not page:
+            raise google.ApiError(200, f"Google's last page of {acct.alias!r}'s calendar changes had no sync token")
+    raise SyncExpired(f"more than {SYNC_PAGES} pages of changes on {acct.alias!r}'s calendar")
+
+
 # -- rendering ---------------------------------------------------------------------------------------------------------
 def _who(person: dict) -> str:
     name, mail = (person.get("displayName") or "").strip(), (person.get("email") or "").strip()

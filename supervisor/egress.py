@@ -40,8 +40,8 @@ def log_path(name: str) -> Path:
     return SUP_DIR / "egress" / f"{name}.jsonl"
 
 
-def public_address(host: str, port: int) -> str:
-    """The address to connect to for host:port — refused unless every address the name resolves to is public."""
+def public_address(host: str, port: int) -> list[str]:
+    """The addresses to connect to for host:port — refused unless every address the name resolves to is public."""
     try:
         infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except socket.gaierror as e:
@@ -53,7 +53,7 @@ def public_address(host: str, port: int) -> str:
         if not ip.is_global:
             raise Refused(f"{host} is a non-public address ({ip}): localhost, your LAN and the tailnet are not "
                           f"reachable from your sandbox")
-    return infos[0][4][0]
+    return list(dict.fromkeys(info[4][0] for info in infos))
 
 
 class Egress:
@@ -121,18 +121,21 @@ class Egress:
                     why = egress.refuse(host, port)
                     if why:
                         raise Refused(why)
-                    address = public_address(host, port)
+                    addresses = public_address(host, port)
                 except Refused as e:
                     egress._record(host, port, refused=str(e))
                     egress.on_refused(host, port, str(e))
                     self._fail(403, f"refused: {e}")
                     return None
-                try:
-                    return socket.create_connection((address, port), timeout=CONNECT_TIMEOUT_S)
-                except OSError as e:
-                    egress._record(host, port, refused=f"connection failed: {e}")
-                    self._fail(502, f"cannot connect to {host}:{port}: {e}")
-                    return None
+                last_error = None
+                for address in addresses:
+                    try:
+                        return socket.create_connection((address, port), timeout=CONNECT_TIMEOUT_S)
+                    except OSError as e:
+                        last_error = e
+                egress._record(host, port, refused=f"connection failed: {last_error}")
+                self._fail(502, f"cannot connect to {host}:{port}: {last_error}")
+                return None
 
             def do_CONNECT(self):
                 if not self._authorised():

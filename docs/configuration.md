@@ -79,7 +79,10 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_BATTERY_CONTROL_REF` | `template` | the git branch a battery control instance is made from | [battery.py](../supervisor/battery.py) |
 | `SHAFT_BATTERY_RECALL_MIN_AGE_H` | `48` | hours old a journal entry must be to make a battery recall item | [battery.py](../supervisor/battery.py) |
 | `SHAFT_OPERATOR_PER_DAY` | `0` | messages per day one instance may send the operator (0: no limit) | [broker.py](../supervisor/broker.py) |
-| `SHAFT_PUSH_BUDGET` | `6` | measured operator pushes per day (0: not shown); never blocks delivery | [pushes.py](../supervisor/pushes.py) |
+| `SHAFT_PUSH_HOLD` | `1` | hold non-urgent device notifications (0: off) | [pushes.py](../supervisor/pushes.py) |
+| `SHAFT_QUIET_HOURS` | `22-07` | local quiet hours, may wrap midnight; empty disables | [pushes.py](../supervisor/pushes.py) |
+| `SHAFT_DIGEST_AT` | `07:15` | local digest time, or quiet hours' end if later | [pushes.py](../supervisor/pushes.py) |
+| `SHAFT_PUSH_BUDGET` | `6` | operator pushes per instance per day before holding for a digest (0: unlimited, count hidden) | [pushes.py](../supervisor/pushes.py) |
 | `SHAFT_DESCRIBE_MODEL` | `claude-haiku-5-5` | the model describe_image uses for an instance whose own model cannot see images | [broker.py](../supervisor/broker.py) |
 | `SHAFT_CLOUD_MODELS` | `claude-haiku-5-5,claude-opus-5-5,openrouter/xiaomi/mimo-v2.6-pro` | the cloud models an instance may run on (through the broker) | [cloudllm.py](../supervisor/cloudllm.py) |
 | `SHAFT_OPENROUTER_PROVIDER` | `{"only": ["novita", "deepinfra"], "order": ["novita", "deepinfra"], "allow_fallbacks": false, "data_collection": "deny", "zdr": true, "require_parameters": true}` | OpenRouter's provider routing for every openrouter/ call (JSON): which providers, and the data policy | [cloudllm.py](../supervisor/cloudllm.py) |
@@ -111,6 +114,13 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_GATE_WORKERS` | `4` | processes each part of the supervisor's tests runs in at a gate; positive integer | [gate.py](../supervisor/gate.py) |
 | `SHAFT_JOB_MIN_MINUTES` | `5` | the shortest interval an instance's own job (a plugin on a timer) may run at | [jobs.py](../supervisor/jobs.py) |
 | `SHAFT_JOBS_MAX` | `12` | scheduled plugins (jobs) an instance may run; beyond it, the rest by name are not run; positive integer | [jobs.py](../supervisor/jobs.py) |
+| `SHAFT_WATCH` | `on` | the supervisor's mail and calendar watch, for instances that opt in with WATCH_MAIL or WATCH_CALENDAR in their config.env (on or off) | [watch.py](../supervisor/watch.py) |
+| `SHAFT_WATCH_WAKE_MIN` | `15` | minutes between two wakes the mail and calendar watch gives one instance; a change sooner waits in its inbox | [watch.py](../supervisor/watch.py) |
+| `SHAFT_WATCH_EVERY_S` | `60` | seconds between two passes of the mail and calendar watch (the scheduler looks every 30 seconds) | [watch.py](../supervisor/watch.py) |
+| `SHAFT_JOB_LONG_TIMEOUT_S` | `900` | seconds one run of a long scheduled job (`"long": true` in its schedule) may take before it is stopped (and resumed if it wrote its checkpoint); positive integer | [jobs.py](../supervisor/jobs.py) |
+| `SHAFT_JOB_LONG_CALLS` | `200` | supervisor tool calls one run of a long scheduled job may make; positive integer | [jobs.py](../supervisor/jobs.py) |
+| `SHAFT_JOB_LONG_RESUMES` | `4` | times a long scheduled job that timed out after writing its checkpoint is resumed before it gives up (0: never resumed) | [jobs.py](../supervisor/jobs.py) |
+| `SHAFT_JOB_RUN_CONFINED` | `0` | 1: the broker's `run` inside a scheduled job writes only where the job may (`.jobs/<plugin>/`, `.tmp/`, `.browser/`); 0: where a cycle's `run` may (notes/, code). Turn it on once every instance's scheduled plugins publish through `publishes` | [jobs.py](../supervisor/jobs.py) |
 | `SHAFT_JUDGE_MODELS` | `openrouter/xiaomi/mimo-v2.6-pro,openrouter/z-ai/glm-5.3-flash,openrouter/deepseek/deepseek-v4.1-flash` | the judge pool: each judgment picks one at random, never the judged instance's own model | [judge.py](../supervisor/judge.py) |
 | `SHAFT_JUDGE_EVERY` | `2` | the main judge grades one live run in this many (1: every run) | [judge.py](../supervisor/judge.py) |
 | `SHAFT_JUDGE2_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | the second judge, which grades a sample of cycles again to measure the judges' agreement | [judge.py](../supervisor/judge.py) |
@@ -197,6 +207,7 @@ reviewed ref was `refs/heads/publish-prep-template`.
 | `CONFIDENCE_MODE` | `'confirm'` | uses built-in default |
 | `GOALS_CHARS` | `12000` | uses built-in default |
 | `BRIEFING` | `'notes/briefing.md'` | `notes/briefing.md` |
+| `BRIEFING_CHARS` | `6000` | uses built-in default |
 | `HANDOFF` | `'on'` | `on` |
 | `CURIOSITY_EVERY_CYCLES` | `5` | `5` |
 | `OUTCOME_CARDS` | `'on'` | uses built-in default |
@@ -252,11 +263,18 @@ these keeps the default with a warning. `shaft experiment` flips a knob's defaul
 refuses an instance whose config.env sets that knob.
 Sources: template `shaft/config.py:17`, [autonomy.py](../supervisor/autonomy.py).
 
+`WATCH_MAIL` and `WATCH_CALENDAR` (not in the template's defaults: unset is `off`) ask the supervisor's watch to report
+new mail under the instance's granted labels and changed events on its granted calendars: `inbox` puts one message
+per pass in its inbox, `wake` also wakes it (at most once per `SHAFT_WATCH_WAKE_MIN` minutes); any other value is
+`off`, logged once. Only what the operator granted is watched; see [integrations](integrations.md#mail-shaft-mail-).
+
 `BRIEFING` names a file inside the instance's repository, or `off` to hide the briefing. The instance's own
 watchers write it as a scheduled job with the next 48 hours of calendar, actionable mail, open commitments to the
 operator and his last corrections, each dated. Prompt construction only reads the file. A first line
 `generated: <ISO time>` dates the briefing; otherwise its mtime does. The prompt shows its age in hours, marks it
-stale after 24 hours, and caps its content at 3,000 characters with a `read_file` pointer. Missing, empty or
+stale after 24 hours, and shows it like goals.md under `BRIEFING_CHARS` (default 6,000): whole `## ` sections, a section
+whose heading names corrections first, then the rest in file order, and one line per section left out with the
+`read_file` offset where it starts. Missing, empty or
 unreadable files render a line explaining their state.
 
 `HANDOFF=on` shows the last two live episodes' completed calls, unfinished work and next action with its revision

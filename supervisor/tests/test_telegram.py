@@ -798,14 +798,14 @@ class ToldTheyCanReachOperatorTest(unittest.TestCase):
                 mock.patch.object(channel, "route", return_value=("telegram", "the operator last wrote to wren there")):
             spec = next(t for t in b.tool_specs() if t["function"]["name"] == "send_message")
         self.assertIn("Your own Telegram bot is @SampleAssistantBot", spec["function"]["description"])
-        self.assertIn("now would notify them on Telegram (the operator last wrote to wren there)",
+        self.assertIn("routes device notifications to them on Telegram (the operator last wrote to wren there)",
                       spec["function"]["description"])
         self.assertNotIn("@SampleAssistantBot", broker.SPECS["send_message"]["function"]["description"])   # not shared
         with mock.patch.object(telegram, "reachable", return_value=""), \
                 mock.patch.object(channel, "route", return_value=("web", "the operator set it for wren")):
             spec = next(t for t in b.tool_specs() if t["function"]["name"] == "send_message")
         self.assertNotIn("Telegram bot", spec["function"]["description"])
-        self.assertIn("now would notify them in the web UI (the operator set it for wren)", spec["function"]["description"])
+        self.assertIn("routes device notifications to them in the web UI (the operator set it for wren)", spec["function"]["description"])
 
     def test_a_bot_does_not_make_the_instance_think_its_messages_go_to_telegram(self):
         """The bug (2026-10-20): with a bot set up, send_message said every message to the operator reached them "at

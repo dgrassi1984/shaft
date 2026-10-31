@@ -937,10 +937,16 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
 
 
 def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict],
-            config_writes: list[dict] = (), rejected_to: Path | None = None) -> bool:
+            config_writes: list[dict] = (), rejected_to: Path | None = None, regating: dict | None = None,
+            outcome: dict | None = None) -> bool:
     """Everything enforced after the instance acted: append-only journal, core-personality pace, the
     test gate on code and on the config.env lines it set (revert on failure), the commit, probation and
-    the personality check. Returns False if the commit failed."""
+    the personality check. Returns False if the commit failed.
+    A failed gate is reverted whatever its cause; when the cause was the supervisor's side (the baseline: _cause), the
+    change is also held (gate_held) and re-gated once the baseline is green (regate_held). `regating`: the held change
+    this settle gates again — a red baseline then counts one more try instead of holding it twice. `outcome`, when
+    given: filled with how the gate ended ({"result": kept / candidate-failed / held / dropped / baseline-failed,
+    "why", "failing", "mine"}); left empty when there was nothing to gate. Every gate is a row of record(kind="gate")."""
     for note in (enforce_journal(root, before["journal"]), enforce_core(name, root, before["core"])):
         if note:
             log(f"{name}: {note}")
@@ -974,10 +980,20 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
                                     safe_read_bytes(root, "config.env", b""), instance=root) as tree:
                     ok, test_log = gate.run_tests(tree, HOME, env_root=root, data_root=root)
             except Exception as e:   # a failed copy is a failed gate, never an unchecked change kept
-                ok, test_log = False, f"== protected copy ==\n{type(e).__name__}: {e}"
+                # The copy is the supervisor's machinery (a protected-copy regression reverted thelos's changes):
+                # the baseline's, unless the change itself made it impossible (too big, an entry never copied).
+                ok, test_log = False, gate.Output(
+                    f"== protected copy ==\n{type(e).__name__}: {e}",
+                    "candidate" if isinstance(e, (TreeTooBig, ValueError)) else "baseline",
+                    f"the gate's protected copy of my code failed ({type(e).__name__}: {e})")
+        files = touched + (["config.env"] if configured else [])
         if ok:
-            kept = touched + (["config.env"] if configured else [])
+            kept = files
             log(f"{name}: code change passed tests: {touched} config: {configured}")
+            from . import gate_held
+            gate_held.log_run(name, "re-gated" if regating else "kept", files, result="kept" if regating else "")
+            if outcome is not None:
+                outcome.update(result="kept", why="", failing=[], mine="")
         else:
             approved = None   # a failed gate records nothing: the record before it is what was put back
             saved = _keep_rejected(name, rejected_to, after, touched) if rejected_to else ""
@@ -987,14 +1003,38 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
             undone = touched + ([f"config.env ({', '.join(back)})"] if back else [])
             names = gate.failing_tests(test_log)
             kept_at = next((l[len("full log: "):] for l in test_log.splitlines() if l.startswith("full log: ")), "")
+            cause, why = _cause(name, root, before["code"], test_log)   # after the put-back: nothing runs meanwhile
+            failing = list(getattr(test_log, "failing", ())) or names
+            held, result = "", "candidate-failed"
+            if cause == "baseline":
+                held, result = _hold(name, root, before["code"], after, touched, why, failing, regating)
             log(f"{name}: code change FAILED tests, reverted: {touched} config: {back}"
                 + (f"; failing: {'; '.join(names)}" if names else "") + (f"; full log {kept_at}" if kept_at else "")
                 + (f"; the rejected files are kept in {saved}" if saved else "")
                 + (f"; a copy for the instance in {mine}" if mine else "")
-                + (f"; no copy for the instance: {not_mine}" if not_mine else ""))
-            if undone:
+                + (f"; no copy for the instance: {not_mine}" if not_mine else "")
+                + (f"; not the change's failure: the gate's baseline is red ({why})"
+                   + (f", the change held as {held}" if held else f", {result}") if cause == "baseline" else ""))
+            from . import gate_held
+            gate_held.log_run(name, "re-gated" if regating else result, files, why, failing, test_log, held,
+                              result if regating else "")
+            if outcome is not None:
+                outcome.update(result=result, why=why, failing=failing, mine=mine)
+            if held and not regating:
+                text = (f"held: the gate's baseline is red — {why}. My change to {', '.join(touched)} did not fail "
+                        "it; it was taken off my code and held, not lost, and it will be re-gated automatically "
+                        "when the baseline is green (I will be told the outcome here)."
+                        + (f" The config lines I set ({', '.join(back)}) were undone and are not held: set them "
+                           "again then." if back else "")
+                        + (f" A copy of what I wrote is in {mine} (a copy, not code)." if mine else "")
+                        + ("\n\nFailing:\n" + "\n".join(f"- {n}" for n in failing) if failing else ""))
+                journal_note(root, "Supervisor: code change held", text)
+                _tell(name, root, f"code change held (the gate's baseline is red)", text)
+            elif undone and not regating:
                 journal_note(root, "Supervisor: code change reverted",
                              "My changes to " + ", ".join(undone) + " were reverted because the tests failed."
+                             + (f" The failure was not theirs — the gate's baseline is red ({why}) — but they "
+                                "could not be held." if cause == "baseline" else "")
                              + (f" The rejected files are kept in {saved}." if saved else "")
                              + (f" What I wrote is kept in {mine}, as it was when the tests ran (a copy, not code:"
                                 " nothing runs it)." if mine else "")
@@ -1040,6 +1080,164 @@ def _settle(name: str, root: Path, kind: str, before: dict, handoffs: list[dict]
         except Exception as e:   # measurement never breaks a run
             log(f"{name}: personality check failed: {type(e).__name__}: {e}")
     return True
+
+
+def _cause(name: str, root: Path, approved: dict | None, test_log: str) -> tuple[str, str]:
+    """Whose failure a failed gate was, and why (gate.Output): "baseline" — the supervisor's side — or "candidate".
+    When the only check of the change that failed is the supervisor's instance part, its failing tests are run once
+    more against the approved code (a protected copy, like the gate's): failing there too, they fail whatever the
+    change, so the failure is the baseline's — a test that fails only with the change is the change's. A gate that says
+    nothing of its cause (a plain text: the links check, a stand-in) is the change's, as every failure was before M2."""
+    cause = getattr(test_log, "cause", None) or "candidate"
+    why = getattr(test_log, "why", "") or "a check of the change failed"
+    recheck = list(getattr(test_log, "recheck", ()))
+    if cause != "candidate" or not recheck or not approved:
+        return cause, why
+    try:
+        with protected.copy(approved, SUP_DIR / "protected" / name, name, safe_read_bytes(root, "config.env", b""),
+                            instance=root) as tree:
+            base = gate.instance_part_failures(tree)
+    except Exception as e:   # no answer: the gate's verdict stands as the change's
+        log(f"{name}: the failing supervisor tests could not be run on its approved code: {type(e).__name__}: {e}")
+        return cause, why
+    if base is not None and set(recheck) <= set(base):
+        return "baseline", ("the supervisor's tests that read my code fail on my approved code too, so not because of "
+                            f"the change: {'; '.join(recheck[:5])}" + (" …" if len(recheck) > 5 else ""))
+    return cause, why
+
+
+def _hold(name: str, root: Path, before: dict, after: dict, touched: list[str], why: str, failing: list[str],
+          regating: dict | None) -> tuple[str, str]:
+    """Hold a change the baseline failed (gate_held): (its id or "", the result). A held change gated again counts one
+    more try, dropped after gate_held.TRIES. Nothing to hold (only config lines) or a hold that could not be written
+    is "baseline-failed": reverted, as before M2, and said so."""
+    from . import gate_held
+    if regating is not None:
+        if gate_held.retried(name, regating, why, failing):
+            return regating["id"], "held"
+        return "", "dropped"
+    code = [p for p in touched if isinstance(after.get(p), bytes) or p not in after]
+    if not code or code != touched:
+        return "", "baseline-failed"
+    try:
+        head = git_wt(root, "rev-parse", "HEAD", check=False).stdout.strip()
+    except Exception as e:   # the base digests are what re-applying checks; the commit is for reading
+        head = f"unknown ({type(e).__name__}: {e})"
+    try:
+        hid = gate_held.save(name, head, before, after, touched, why, failing)
+    except (OSError, ValueError) as e:
+        log(f"{name}: a code change the gate's baseline failed could NOT be held: {type(e).__name__}: {e}")
+        return "", "baseline-failed"
+    log(f"{name}: code change held as {hid} until the gate's baseline is green: {touched}")
+    return hid, "held"
+
+
+def _tell(name: str, root: Path, subject: str, text: str) -> None:
+    """A message from the gate in the instance's inbox (read at its next wake) and the message log. Best effort: a
+    message that cannot be written is logged, never a reason to leave a settle halfway."""
+    from . import messages
+    stamp = datetime.now()
+    try:
+        path = safe_write(root, f"inbox/{stamp:%Y%m%d-%H%M%S-%f}-from-supervisor-gate.md",
+                          f"From: supervisor (the test gate)\nTo: {name}\nKind: gate\nDate: {stamp:%Y-%m-%d %H:%M}\n"
+                          f"Subject: {subject}\n\n{text.strip()}\n")
+        messages.record(SUP_DIR, path, "supervisor", name, "gate", stamp, text)
+    except (OSError, UnsafePath) as e:
+        log(f"{name}: gate message NOT delivered ({subject}): {e}")
+
+
+def regate_held(name: str) -> None:
+    """Gate the instance's held changes again (gate_held), oldest first, once a warm-up found the gate's baseline green
+    (`shaft gate regate`, started by the scheduler after it). Each is put back on the code as it is now — only if every
+    file it touched is still as it was when held; otherwise it is dropped — and settled like any run's change: kept and
+    committed if the gate passes, reverted if a test of it fails, held for another try if the baseline is red again.
+    The instance is told each outcome in its inbox. Under its run lock, never waiting for it: a busy or paused instance
+    is tried after the next green warm-up."""
+    from . import gate_held
+    from .core import paused
+    if not gate_held.pending(name):
+        return
+    if paused(name):
+        log(f"{name}: held code changes not re-gated now: the instance is paused")
+        return
+    root = instance_root(name)
+    try:
+        with run_lock(name, wait=False, kind="re-gate"):
+            for meta in gate_held.pending(name):
+                approved = _reconcile(name, root)
+                files = sorted(meta["files"])
+                when = meta.get("held_at", "?").replace("T", " ")
+                if (moved := gate_held.applies(meta, approved)):
+                    patch = _held_patch(name, meta)
+                    gate_held.drop(name, meta["id"])
+                    gate_held.log_run(name, "re-gated", files, f"no longer applies: {', '.join(moved)} changed since "
+                                      "it was held", held=meta["id"], result="dropped")
+                    log(f"{name}: held code change {meta['id']} dropped: no longer applies ({', '.join(moved)} changed)")
+                    _tell(name, root, "held code change dropped (no longer applies)",
+                          f"re-gate: dropped — my change to {', '.join(files)}, held at {when} because the gate's "
+                          f"baseline was red, no longer applies: {', '.join(moved)} changed since. Nothing of it was "
+                          f"put back. What it changed is in the patch below, if I still want it.\n\n```diff\n"
+                          + patch + "```")
+                    continue
+                before = _snapshot(root, approved)
+                gate_held.apply(name, root, meta)
+                log(f"{name}: re-gating held code change {meta['id']}: {files}")
+                out: dict = {}
+                _settle(name, root, "re-gate", before, [], (), regating=meta, outcome=out)
+                result = out.get("result", "")
+                failing = "".join(f"\n- {n}" for n in out.get("failing") or [])
+                text = {
+                    "kept": f"re-gated: kept — my change to {', '.join(files)}, held at {when}, passed the gate on "
+                            "the green baseline and is committed.",
+                    "candidate-failed": f"re-gated: failed — my change to {', '.join(files)}, held at {when}, was "
+                                        f"gated again on the green baseline and a check of it fails ({out.get('why')}); "
+                                        "it was reverted and is no longer held."
+                                        + (f" What I wrote is in {out['mine']}." if out.get("mine") else "")
+                                        + (f"\n\nFailing:{failing}" if failing else ""),
+                    "held": f"re-gated: still held — the gate's baseline is red again ({out.get('why')}); my change to "
+                            f"{', '.join(files)} stays held and is tried again after the next green warm-up."
+                            + (f"\n\nFailing:{failing}" if failing else ""),
+                    "dropped": f"re-gated: dropped — my change to {', '.join(files)}, held at {when}, found the "
+                               f"gate's baseline red {gate_held.TRIES} times ({out.get('why')}); it is no longer held."
+                               + (f" What I wrote is in {out['mine']}." if out.get("mine") else "")
+                               + (f"\n\nFailing:{failing}" if failing else ""),
+                }.get(result)
+                if text is None:   # nothing gated (the files already as held): it is done either way
+                    gate_held.drop(name, meta["id"])
+                    gate_held.log_run(name, "re-gated", files, "nothing to gate: the code already holds it",
+                                      held=meta["id"], result="dropped")
+                    text = (f"re-gated: nothing to do — my change to {', '.join(files)}, held at {when}, is already "
+                            "in my code; it is no longer held.")
+                elif result in ("kept", "candidate-failed"):
+                    gate_held.drop(name, meta["id"])
+                _tell(name, root, f"held code change re-gated: {result or 'nothing to do'}", text)
+                if result in ("held", "dropped"):   # the baseline is red again: the others wait, their tries unspent
+                    break
+    except Busy:
+        log(f"{name}: held code changes not re-gated now: busy ({busy_with(name) or 'a run'}); tried after the next "
+            "green warm-up")
+    except RunRefused as e:
+        _refused(name, e)
+
+
+def _held_patch(name: str, meta: dict) -> str:
+    from . import gate_held
+    try:
+        text = (SUP_DIR / gate_held.HELD / name / meta["id"] / "candidate.patch").read_text(errors="replace")
+    except OSError:
+        return "(the patch could not be read)\n"
+    return text[:4000] + ("\n[… cut]\n" if len(text) > 4000 else "")
+
+
+def regate_all() -> int:
+    """`shaft gate regate`: every instance's held changes, re-gated (regate_held). 0."""
+    from . import gate_held
+    for name in gate_held.waiting():
+        try:
+            regate_held(name)
+        except Exception as e:   # one instance's trouble never keeps another's held changes waiting
+            log(f"{name}: re-gating its held code changes FAILED: {type(e).__name__}: {e}")
+    return 0
 
 
 def _keep_rejected(name: str, folder: Path, code: dict[str, bytes], paths: list[str]) -> str:
