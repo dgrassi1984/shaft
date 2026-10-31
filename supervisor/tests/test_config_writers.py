@@ -182,7 +182,7 @@ class ConfigWritersTest(unittest.TestCase):
         (self.root / "tests").mkdir(exist_ok=True)
         tree = committed_copy(self)
         with mock.patch.object(gate, "committed_tree", return_value=(tree, "abc")), \
-             mock.patch.object(gate, "_supervisor_tests", return_value=(True, "-- passed --\n", "-- passed --\n")), \
+             mock.patch.object(gate, "_supervisor_tests", return_value=("-- passed --\n", "-- passed --\n", None, None)), \
              mock.patch.object(gate, "_stage", side_effect=stage), \
              mock.patch.object(core, "SUP_DIR", self.project / ".supervisor"):
             ok, out = REAL_RUN_TESTS(self.root, self.project)
