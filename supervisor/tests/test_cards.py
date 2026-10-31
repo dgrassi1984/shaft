@@ -30,7 +30,7 @@ class FamilyTest(unittest.TestCase):
             ("run", {"command": "pytest -q"}, "run pytest"),
             ("run", {"command": "A=1 B='two words' pytest -q"}, "run pytest"),
             ("run", {"command": "cd x && pytest"}, "run pytest"),
-            ("run", {"command": 'A=1 cd "some dir" && B=2 python3 test.py'}, "run python3"),
+            ("run", {"command": 'A=1 cd "some dir" && B=2 python3 test.py'}, "run python3 test.py"),
             ("delegate_coding", {}, "delegate_coding"),
             ("send_message", {"to": "wren"}, "send_message → wren"),
             ("http_request", {"method": "post", "url": "https://example.org:443/path"},
@@ -47,6 +47,38 @@ class FamilyTest(unittest.TestCase):
         for tool, args, expected in cases:
             with self.subTest(tool=tool, args=args):
                 self.assertEqual(cards.family(tool, json.dumps(args)), expected)
+
+    def test_outcome_cards_grouped_every_run_by_first_word_cd_echo_wc(self):
+        cases = [
+            ("cd /a && python3 -m pytest -q", "run pytest"),
+            ("cd /a && python3 shaft/x.py", "run python3 shaft/x.py"),
+            ("VAR=1 env FOO=2 git commit", "run git"),
+            ('bash -lc "cd x && make test"', "run make"),
+            ("echo hi", None), ("wc -l f", None), ("cd /a && grep x f", None),
+            ("cd /a;cd /b; python -m pip install x", "run pip"),
+            ("A=1; exec env -u HOME nice -n 5 sudo -u root time -p git commit", "run git"),
+            ("sh -c 'make test | cat'", "run make"),
+            ("make test && git commit", "run make"),
+            ("echo hi && make test", None),
+            ("sed -n '1p' f", None), ("sed -i 's/a/b/' f", "run sed"),
+            ("python3 -W ignore -m pytest", "run pytest"),
+            ("python3 -c 'print(1)'", "run python3"),
+            ('make "unfinished', "run make"),
+        ]
+        for command, expected in cases:
+            with self.subTest(command=command):
+                self.assertEqual(cards.family("run", json.dumps({"command": command})), expected)
+
+    def test_inspection_allowlist_and_wrapped_programs(self):
+        for command in ("echo hi", "printf hi", "cat f", "ls", "head f", "tail f", "wc f",
+                        "grep x f", "rg x", "find .", "sed -n '1p' f", "pwd", "true", "test -f f", "which git"):
+            with self.subTest(command=command):
+                self.assertIsNone(cards.family("run", json.dumps({"command": command})))
+        for command in ("env -u HOME FOO=2 git commit", "nice --adjustment=5 git commit",
+                        "sudo -n -uroot git commit", "doas -u root git commit",
+                        "exec -a name git commit", "nohup git commit", "/usr/bin/git commit"):
+            with self.subTest(command=command):
+                self.assertEqual(cards.family("run", json.dumps({"command": command})), "run git")
 
     def test_cut_arguments(self):
         for tool, raw, expected in [
@@ -110,6 +142,17 @@ class CardsTest(unittest.TestCase):
         self.assertEqual(loaded[1]["error"], "exit code 1")
         self.assertEqual((loaded[2]["seconds"], loaded[2]["step"], loaded[2]["error"]), (2.5, 1, ""))
         self.assertEqual(cards.load(self.root, self.now.astimezone(timezone.utc)), loaded)
+
+    def test_old_episode_families_are_recomputed_and_inspections_never_hold(self):
+        self.episode(20, tool="run", args={"command": "cd /a && python3 -m pytest"}, family="run cd")
+        self.episode(21, tool="run", args={"command": "wc -l f"}, family="run wc")
+        self.episode(22, tool="run", args={"command": "cd /a && grep x f"},
+                     family="run cd", flag="command_failed")
+        self.assertEqual([c["family"] for c in cards.load(self.root, self.now)], ["run pytest"])
+        instance = self.make()
+        self.assertTrue(instance.check("run", '{"command":"pytest -q"}', "test").startswith(cards.HELD))
+        for command in ("echo hi", "wc -l f", "cd /a && grep x f"):
+            self.assertIsNone(instance.check("run", json.dumps({"command": command}), "inspect"))
 
     def test_latest_outcome_once_per_family_and_modes(self):
         self.episode(20)
