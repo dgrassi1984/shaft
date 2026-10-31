@@ -102,16 +102,16 @@ class AttentionTest(unittest.TestCase):
 
 class AttentionMissedTouchesTest(unittest.TestCase):
     """Bug: attention scoring missed touches made through task_queue/record/run/plugins. Thelos's declared sources were
-    'never touched' in most cycles (share 0-25%) while its calls went right there: the file a run command reads, the
-    queue file behind task_queue, a plugin's own code, the mail/calendar/drive/notion plugins, '.tmp' read as 'tmp',
+    'never touched' in most cycles (share 0-25%) while its calls went right there: the file a run command reads, a
+    plugin's own code, the mail/calendar/drive/notion plugins, '.tmp' read as 'tmp',
     and declarations written as 'notes/…', 'a / b' or 'mail_search/mail_read (a thread)'."""
 
     def cycle(self, sources, tools):
         return attention.score(ep("2026-10-31T09:00:00", [call("declare_intent", {}), *tools, call("finish_cycle", {})],
                                   intent={"goal": "g", "attention": [{"source": s, "why": "w"} for s in sources]}))
 
-    def test_task_queue_touches_its_queue_file(self):
-        s = self.cycle(["notes/queue.json"], [call("task_queue", {"action": "done", "id": 7})] * 3)
+    def test_a_plugin_touches_its_name_and_its_code(self):
+        s = self.cycle(["task_queue", "plugins/task_queue/"], [call("task_queue", {"action": "done", "id": 7})] * 3)
         self.assertEqual((s["untouched"], s["share"]), ([], 1.0))
 
     def test_record_and_history_are_the_record(self):

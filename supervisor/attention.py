@@ -6,11 +6,12 @@ prior for its workspace. Here the supervisor checks the declaration against what
 calls that went to a source it named, and the named sources it never touched. The score feeds nothing: no probation,
 no reward. Only the knob trial (`shaft experiment attention`) decides whether the field stays.
 
-A call touches its tool and what the tool reaches (TOOL_SOURCES: mail, calendar, drive, notion, record, memory, web and
-the host it asked), the files in its arguments, the files a run's command names (or that a script the cycle wrote and
-then ran names), a message's recipient, and a plugin's own code. A declared source is read as terms: free text split on
-' / ', '+', ','; a parenthesis is a comment; an ellipsis or a slash makes a folder, and a folder is a prefix. A source
-with no term it can read is reported unreadable, never as untouched. Deterministic, no model calls.
+A call touches its tool and what the tool reaches (TOOL_SOURCES: mail, calendar, record, memory, web and the host it
+asked; a plugin, what its name says: PLUGIN_SOURCES), the files in its arguments, the files a run's command names (or
+that a script the cycle wrote and then ran names), a message's recipient, and a plugin's own code. A declared source is
+read as terms: free text split on ' / ', '+', ','; a parenthesis is a comment; an ellipsis or a slash makes a folder,
+and a folder is a prefix. A source with no term it can read is reported unreadable, never as untouched.
+Deterministic, no model calls.
 """
 from __future__ import annotations
 
@@ -25,17 +26,17 @@ from . import metrics
 
 CONTROLS = ("declare_intent", "confirm_confidence", "finish_cycle")
 MEMORY_TOOLS = ("search_memory", "remember", "rewrite_facts", "write_digest", "update_self_model", "update_personality")
-# Where a tool looks when its arguments do not say: the supervisor's tools, and the plugins instances build for mail,
-# calendar, drive, notion and their task queue. A tool not named here still touches its own name.
+# Where a tool looks when its arguments do not say: the supervisor's own tools. A plugin an instance built reaches what
+# its name says (PLUGIN_SOURCES: gmail and mail_tail are mail, cal-watch calendar, gdrive drive). Every tool touches
+# its own name.
 TOOL_SOURCES = {
     "web_search": ("web",), "fetch_page": ("web",), "http_request": ("web",), "browse": ("web",),
     "web_research": ("web",), "mail_search": ("mail",), "mail_read": ("mail",), "mail_attachment": ("mail",),
-    "gmail": ("mail",), "mail_tail": ("mail",), "mail_dump": ("mail",), "mail-watch": ("mail",),
     "calendar_events": ("calendar",), "calendar_event": ("calendar",), "calendar_create": ("calendar",),
-    "calendar_move": ("calendar",), "calendar_respond": ("calendar",), "cal-watch": ("calendar",),
-    "gdrive": ("drive",), "notion": ("notion",), "record": ("record",), "history": ("record",),
-    "delegate_coding": ("coder",), "task_queue": ("notes/queue.json",),
-    **{t: ("memory",) for t in MEMORY_TOOLS}}
+    "calendar_move": ("calendar",), "calendar_respond": ("calendar",), "record": ("record",), "history": ("record",),
+    "delegate_coding": ("coder",), **{t: ("memory",) for t in MEMORY_TOOLS}}
+PLUGIN_SOURCES = ((re.compile(r"mail"), "mail"), (re.compile(r"(?:^|[-_])cal(?:endar)?(?:$|[-_])"), "calendar"),
+                  (re.compile(r"drive"), "drive"), (re.compile(r"notion"), "notion"))
 # The agent's own tools (a copy of shaft/tools.py's built-ins and the control and sleep tools): with the supervisor's
 # (broker.SPECS) they are the calls that are not a plugin. A plugin call also touches plugins/<name>/main.py.
 AGENT_TOOLS = frozenset({
@@ -120,7 +121,8 @@ def touches(entry: dict) -> set[str]:
     if tool == "run":
         out |= _in_command(str(args.get("command") or ""))
     if tool and tool not in AGENT_TOOLS and tool not in _supervisor_tools():
-        out |= {"plugin", f"plugins/{tool.lower()}/main.py"}
+        out |= {"plugin", f"plugins/{tool.lower()}/main.py",
+                *(source for word, source in PLUGIN_SOURCES if word.search(tool.lower()))}
     return out - {""}
 
 
