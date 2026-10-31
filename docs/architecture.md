@@ -352,7 +352,10 @@ lets deterministic codelets — memory hits, open surprises, inbox, improvement 
 due goals, open commitments — compete for `WORKSPACE_K` places in automatic recall's 1,800 characters; the winners are
 recorded in the episode and broadcast after every step; after `declare_intent` they compete again for the declared
 goal and, in competition, the declared **attention** (`attention`: up to four {source, why}, scored against the tool
-log by `supervisor/attention.py`). **Outcome cards** (`shaft/cards.py`) hold the first call of a kind of action that has
+log by `supervisor/attention.py`: a call touches its tool's source — mail, calendar, drive, notion, record, memory, web —
+the files in its arguments, in a run's command or in a script the cycle wrote and ran, a message's recipient and a
+plugin's code; free-text sources are split into paths and known sources, and one it cannot read is reported
+unreadable, not untouched). **Outcome cards** (`shaft/cards.py`) hold the first call of a kind of action that has
 failed since it last worked, showing the comparable calls and their counts; calling again runs it. **Commitments**
 (`commit_to`, finish_cycle's `commitments`, `memory/commitments.jsonl`) are settled in sleep, kept only with an
 episode as evidence; the supervisor re-checks it (`supervisor/commitments.py`).
