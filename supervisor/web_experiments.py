@@ -14,7 +14,7 @@ ITEMS = (
     ("attention", "Attention", "Does the attention checklist help avoid repeating a failed action?"),
     ("commitments", "Commitments", "Do saved commitments help carry out the operator's goals?"),
     ("forecast", "Forecast", "Do forecasts prevent running out of turns or time better than a fixed reserve?"),
-    ("workspace", "Workspace", "Does competitive selection bring a planted note forward more often than plain relevance?"),
+    ("workspace", "Workspace", "Is a planted request acted on more often with competitive selection than with plain relevance?"),
     ("monitors", "Monitors", "Does changing feedback about past performance change checking and decisions?"),
     ("choice-blindness", "Choice blindness", "Can the instance spot altered accounts of its actions, with and without access to records?"),
     ("resource-shock", "Resource shock", "Does tool use adapt when the turn allowance is cut and then restored?"),
@@ -140,6 +140,8 @@ def _card(name, item):
                 complete = all(required <= arms for arms in groups.values())
                 card["status"] = ("done (saved results; run completion not recorded)" if complete else
                                   "no result (incomplete saved states; liveness not recorded)")
+                if item == "workspace" and (instrument := experiments.workspace_instrument(name))["failed"]:
+                    card["status"] = f"instrument failed: {instrument['why']} — no verdict"
         if report:
             card["report"] = report(name)
             if item in ("privileged", "recognition") and latest and not any(

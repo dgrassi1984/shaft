@@ -1690,8 +1690,9 @@ def main(argv: list[str]) -> int:
             if args.item == "workspace":
                 if not args.report:
                     r = experiments.run_workspace(args.name, args.n, model=args.model, dry_run=args.dry_run)
-                    print(f"{args.name}: {r['states']} state(s), {r['replays']} replay(s) on {r['model']}"
-                          + (f", {r['done']} done" if not args.dry_run else " (dry run: nothing replayed)"))
+                    print(experiments.workspace_dry_run_text(args.name, r) if args.dry_run else
+                          f"{args.name}: {r['states']} state(s), {r['replays']} replay(s) on {r['model']}, "
+                          f"{r['done']} done")
                 if args.report or not args.dry_run:
                     print(experiments.workspace_report(args.name))
                 return 0

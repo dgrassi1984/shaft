@@ -213,6 +213,28 @@ class LiveCycleTest(Fixture, unittest.TestCase):
         self.assertNotIn("## In focus now", fake.requests[0]["messages"][1]["content"])
         self.assertNotIn("## My open commitments", fake.requests[0]["messages"][0]["content"])
 
+    def test_front_is_what_the_cycle_puts_in_front_of_me_without_a_model(self):
+        """`python -m shaft front` (the dry run of `shaft experiment workspace`) must show what the live cycle's first
+        prompt holds, mode by mode, or the dry run measures something other than the replays."""
+        message = self.root / "inbox" / "20261026-095000-000000-from-operator.md"
+        (self.root / "notes" / "orchard.md").write_text("# Orchard\n\nThe orchard rows, counted by survey.\n")
+        for mode in workspace.MODES:
+            with self.subTest(mode):
+                message.write_text("From: operator\nTo: wren\nKind: note\nDate: 2026-10-26 09:50\n\n"
+                                   "please survey the orchard rows")
+                self.cfg.values["WORKSPACE"] = mode
+                out = live.fronts(self.cfg, self.state)
+                self.assertTrue(message.exists())   # it only reads
+                self.assertEqual(set(out["modes"]), set(workspace.MODES))
+                self.assertIn("please survey the orchard rows", out["inbox"])
+                self.assertIn("## In focus now", out["modes"]["competitive"]["focus"])
+                self.assertIn("Recalled automatically", out["modes"]["off"]["focus"])
+                self.assertTrue(any(h["source"] == "notes/orchard.md" and not h["shown"] for h in out["hits"]))
+                fake = self.live([{"content": "nothing"}])
+                first = fake.requests[0]["messages"]
+                self.assertIn(out["modes"][mode]["focus"], first[1]["content"])
+                self.assertEqual(out["system"], first[0]["content"])
+
     def test_a_broken_workspace_falls_back_to_recall(self):
         with mock.patch.object(workspace, "build", side_effect=RuntimeError("boom")):
             self.live([{"tool_calls": [("declare_intent", DECLARE)]}, {"tool_calls": [("finish_cycle", FINISH)]}])

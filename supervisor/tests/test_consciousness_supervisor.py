@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -238,6 +240,15 @@ class KnobChangeTest(unittest.TestCase):
             self.change(b"WORKSPACE=off\n")
 
 
+def control_rows(n: int, acted: int, fp=None, shown: int | None = None) -> None:
+    """n positive-control replays of the workspace experiment, `acted` of them acted on, `shown` with the probe in
+    front (all, by default)."""
+    for i in range(n):
+        experiments._ws_append("wren", {"ts": f"2026-10-2{i}", "arm": experiments.CONTROL, "completed": True,
+                                        "acted": i < acted, "captured": 0, "fingerprint": fp,
+                                        "in_front": "inbox" if i < (n if shown is None else shown) else ""})
+
+
 class ProbeTest(unittest.TestCase):
     def test_plant_is_seeded_and_only_where_retrieval_alone_reaches(self):
         t0 = datetime(2026, 10, 26, 9)
@@ -274,35 +285,259 @@ class ProbeTest(unittest.TestCase):
     def test_report_and_kill_rule(self):
         with tempfile.TemporaryDirectory() as d, \
                 mock.patch.object(experiments, "workspace_path", return_value=Path(d) / "w.jsonl"):
+            control_rows(6, 6)
             for i in range(6):
                 for arm, acted in (("off", False), ("relevance", i == 0), ("competitive", i < 5)):
                     experiments._ws_append("wren", {"ts": f"2026-10-2{i}", "arm": arm, "completed": True,
-                                                    "acted": acted, "captured": 0})
+                                                    "acted": acted, "captured": 0, "in_front": "focus" if acted else ""})
             out = experiments.workspace_report("wren")
-        self.assertIn("competitive acted on the probe 5/6", out)
+        self.assertIn("positive control (probe in the inbox, shipped code): acted 6/6", out)
+        self.assertIn("acted on the probe 5/6 (5 of them in front)", out)
         self.assertIn("only competitive acted 4, only relevance 0", out)
         self.assertIn("competitive selection stays", out)
-
-    def test_wrote_reads_added_lines_of_the_probes_file_only(self):
-        diff = "--- a/notes/probes.md\n+++ b/notes/probes.md\n-probe old\n+probe abc123\n"
-        self.assertTrue(experiments._wrote(diff, "abc123"))
-        self.assertFalse(experiments._wrote(diff, "old"))
-        # Regression (Codex review): talking about it is not doing it
-        journal = "--- a/memory/journal.md\n+++ b/memory/journal.md\n+I did not append probe abc123 to notes/probes.md.\n"
-        self.assertFalse(experiments._wrote(journal, "abc123"))
 
     def test_report_pairs_only_rows_of_the_latest_code_and_model(self):
         """Regression (Codex review): a resumed run on other code or another model was paired with the first."""
         with tempfile.TemporaryDirectory() as d, \
                 mock.patch.object(experiments, "workspace_path", return_value=Path(d) / "w.jsonl"):
             for fp, acted in (("old", True), ("new", False)):
+                control_rows(1, 1, fp)
                 for arm in experiments.WORKSPACE_ARMS:
                     experiments._ws_append("wren", {"ts": "2026-10-20", "arm": arm, "completed": True, "acted": acted,
                                                     "captured": 0, "fingerprint": fp})
             out = experiments.workspace_report("wren")
-        self.assertIn("competitive acted on the probe 0/1", out)
+        self.assertIn("acted on the probe 0/1", out)
         self.assertNotEqual(experiments.fingerprint({"a": b"1"}, "m"), experiments.fingerprint({"a": b"2"}, "m"))
         self.assertNotEqual(experiments.fingerprint({"a": b"1"}, "m"), experiments.fingerprint({"a": b"1"}, "n"))
+
+
+class WorkspaceInstrumentTest(unittest.TestCase):
+    """Regression: workspace kill test could not separate arms: probe acted on 0/19 even in off (Thelos, 2026-10-28/29).
+    The probe ranked ~8,500th of ~13,800 chunks for the cycle's search, so no arm ever had it in front; the endpoint
+    read a diff cut at 16,000 characters; and with no positive control the report still said "delete it"."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory(prefix="shaft-ws-")
+        self.addCleanup(tmp.cleanup)
+        self.dir = Path(tmp.name)
+        self.enterContext(mock.patch.object(experiments, "workspace_path", return_value=self.dir / "w.jsonl"))
+
+    def copy(self) -> tuple[Path, dict, dict]:
+        dest = self.dir / f"copy{len(list(self.dir.glob('copy*')))}" / "wren"
+        for folder in ("memory", "notes", "inbox"):
+            (dest / folder).mkdir(parents=True)
+        (dest / "memory" / "journal.md").write_text("## 2026-10-25 09:00 — orchard\n\nCounted the rows.\n")
+        items = experiments.plant(dest, "seed", "Daniele", "orchard rows", datetime(2026, 10, 26, 9))["items"]
+        probe = next(it for it in items if it["kind"] == "probe")
+        before = experiments._counts(experiments._texts(dest), [it["nonce"] for it in items])
+        return dest, probe, {"items": items, "before": before}
+
+    def test_the_endpoint_detects_every_write_path(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "template"))
+        from shaft.tools import Toolbox
+
+        def toolbox(dest, tool, args):
+            Toolbox(dest).run(tool, json.dumps(args))
+
+        def shell(dest, command):
+            subprocess.run(["/bin/sh", "-c", command], cwd=dest, check=True)
+
+        writes = {
+            "write_file": lambda d, n: toolbox(d, "write_file", {"path": "notes/probes.md", "content": f"probe {n}\n"}),
+            "append_file": lambda d, n: toolbox(d, "append_file", {"path": "notes/probes.md", "content": f"probe {n}"}),
+            "append_file, as markdown": lambda d, n: toolbox(d, "append_file", {"path": "notes/probes.md",
+                                                                                "content": f"- `probe {n}`\n"}),
+            "run (the shell)": lambda d, n: shell(d, f"printf 'probe {n}\\n' >> notes/probes.md"),
+            "run, another case of the path": lambda d, n: shell(d, f"echo 'probe {n}' >> notes/Probes.md"),
+            "run, through ./": lambda d, n: shell(d, f"echo 'probe {n}' >> ./notes/../notes/probes.md"),
+        }
+        for how, write in writes.items():
+            with self.subTest(how):
+                dest, probe, planted = self.copy()
+                write(dest, probe["nonce"])
+                got = experiments.acts(dest, planted["items"], planted["before"])
+                self.assertTrue(got[probe["nonce"]]["acted"], how)
+                self.assertEqual(sum(v["acted"] for v in got.values()), 1)   # no distractor counted with it
+
+    def test_the_endpoint_reads_whole_files_not_the_judges_capped_diff(self):
+        dest, probe, planted = self.copy()
+        before = trial._files_now(dest)
+        (dest / "memory" / "journal.md").write_text("## long\n\n" + "a line of the cycle's journal\n" * 1000)
+        (dest / "notes" / "probes.md").write_text(f"probe {probe['nonce']}\n")
+        diff = trial.file_diff(before, trial._files_now(dest))
+        self.assertNotIn("+++ b/notes/probes.md", diff)   # what the old endpoint (`_wrote` on the diff) read: cut off
+        self.assertTrue(experiments.acts(dest, planted["items"], planted["before"])[probe["nonce"]]["acted"])
+
+    def test_talking_about_it_is_not_doing_it_but_is_recorded(self):
+        dest, probe, planted = self.copy()
+        with (dest / "memory" / "journal.md").open("a") as f:
+            f.write(f"\nI did not append probe {probe['nonce']} to notes/probes.md.\n")
+        got = experiments.acts(dest, planted["items"], planted["before"])[probe["nonce"]]
+        self.assertFalse(got["acted"])
+        self.assertEqual(got["wrote"], ["memory/journal.md"])   # where it went instead: the report can tell
+        self.assertFalse(experiments._line_in(f"I did not append probe {probe['nonce']}", probe["nonce"]))
+
+    def arms(self, acted=False, n=4):
+        for i in range(n):
+            for arm in experiments.WORKSPACE_ARMS:
+                experiments._ws_append("wren", {"ts": f"2026-10-2{i}", "arm": arm, "completed": True, "acted": acted,
+                                                "captured": 0, "in_front": ""})
+
+    def test_no_positive_control_gives_no_verdict(self):
+        self.arms()   # the 2026-10-28/29 run's shape: three arms, nothing acted on, no control
+        out = experiments.workspace_report("wren")
+        self.assertIn("no verdict: no positive control replayed yet", out)
+        self.assertNotIn("delete it", out)
+        self.assertNotIn("kill rule", out)
+
+    def test_a_failed_positive_control_reports_instrument_failure_not_a_verdict(self):
+        control_rows(4, 1)   # acted on once in four: not most
+        self.arms()
+        out = experiments.workspace_report("wren")
+        self.assertIn("INSTRUMENT FAILED: the probe in the inbox was acted on in only 1/4 control replays", out)
+        self.assertNotIn("delete it", out)
+        self.assertNotIn("kill rule", out)
+        self.assertTrue(experiments.workspace_instrument("wren")["failed"])
+
+    def test_a_control_whose_probe_was_not_in_front_is_a_broken_plant(self):
+        control_rows(4, 4, shown=3)
+        out = experiments.workspace_report("wren")
+        self.assertIn("INSTRUMENT FAILED: the probe planted in the inbox was in front of only 3/4", out)
+
+    def test_a_working_control_lets_the_arms_be_judged(self):
+        control_rows(4, 3)
+        self.arms()
+        out = experiments.workspace_report("wren")
+        self.assertNotIn("INSTRUMENT FAILED", out)
+        self.assertIn("kill rule:", out)
+
+    def fake_run(self, writes_probe: bool):
+        """run_workspace on one past state with every expensive step replaced: replay_arm prepares a real copy (plant,
+        `front`), lets the 'cycle' append the probe's line or not, and inspects it as the real one does."""
+        calls = []
+
+        def replay(project, name, st, code, *, prepare, inspect, **kw):
+            arm = kw["billed"].rsplit(":", 1)[1]   # the arms of a state run at once: a copy each
+            calls.append(arm)
+            dest = self.dir / f"replay-{arm}" / name
+            for folder in ("memory", "notes", "inbox"):
+                (dest / folder).mkdir(parents=True)
+            prepare(dest)
+            if writes_probe:
+                for p in dest.rglob("*.md"):   # the cycle acts on the probe wherever it is planted
+                    for line in p.read_text().splitlines():
+                        if "when I read this" in line:
+                            nonce = line.split("`probe ")[1].split("`")[0]
+                            with (dest / "notes" / "probes.md").open("a") as f:
+                                f.write(f"probe {nonce}\n")
+            return {"completed": True, "ended": "ok", "episode": {"tools": [], "steps": 3}, "trace": [], "usd": 0.01,
+                    "inspected": inspect(dest)}
+
+        def shown(project, name, dest, state, index=None):
+            inbox = "\n".join(p.read_text() for p in (dest / "inbox").glob("*.md"))
+            return {"system": "", "inbox": inbox, "modes": {m: {"focus": ""} for m in experiments.WORKSPACE_ARMS}}
+
+        st = {"ts": "2026-10-26T10:00:00", "t0": "2026-10-26T09:00:00", "start_commit": "x", "inbox": []}
+        config = b'"WORKSPACE": (str, "competitive"),\n'
+        with mock.patch.object(trial, "committed_code", return_value={"shaft/config.py": config, "config.env": b""}), \
+                mock.patch.object(trial, "live_episodes", return_value=[{"ts": st["ts"], "kind": "live"}]), \
+                mock.patch.object(trial, "state_of", return_value=st), mock.patch.object(trial, "_starts", return_value=[]), \
+                mock.patch.object(trial, "replay_arm", side_effect=replay), \
+                mock.patch.object(trial, "LEDGER", self.dir / "none.jsonl"), \
+                mock.patch.object(experiments, "_topic", return_value="orchard rows"), \
+                mock.patch.object(experiments, "state_hosts", return_value=[]), \
+                mock.patch.object(experiments, "front", side_effect=shown), \
+                mock.patch("supervisor.core.instance_config", return_value={}):
+            result = experiments.run_workspace("wren", 1, project=self.dir)
+        return result, calls
+
+    def test_a_run_whose_control_fails_replays_no_arm(self):
+        result, calls = self.fake_run(writes_probe=False)
+        self.assertEqual(calls, [experiments.CONTROL])   # the three arms were never paid for
+        self.assertTrue(result["instrument"]["failed"])
+        self.assertIn("INSTRUMENT FAILED", experiments.workspace_report("wren"))
+
+    def test_a_run_whose_control_works_replays_the_arms(self):
+        result, calls = self.fake_run(writes_probe=True)
+        self.assertEqual(calls[0], experiments.CONTROL)
+        self.assertEqual(sorted(calls[1:]), sorted(experiments.WORKSPACE_ARMS))
+        rows = experiments.workspace_rows("wren")
+        self.assertEqual([r["acted"] for r in rows], [True] * 4)
+        self.assertEqual(rows[0]["in_front"], "inbox")
+        self.assertIn("positive control (probe in the inbox, shipped code): acted 1/1", experiments.workspace_report("wren"))
+
+
+    def test_a_run_embeds_the_mind_once_and_hands_the_index_on(self):
+        """With no .tmp/memory-index.json in the instance (Thelos, 2026-10-31) every copy embedded all ~14,000 chunks
+        again and `shaft front` timed out: the first copy's vectors go to the next."""
+        seen = []
+
+        def verb(cmd, cwd, **kw):
+            index = Path(cwd) / ".tmp" / "memory-index.json"
+            seen.append(index.read_text() if index.exists() else None)
+            index.write_text(f'{{"copy": {len(seen)}}}')
+            return subprocess.CompletedProcess(cmd, 0, json.dumps({"modes": {}}), "")
+
+        held: dict = {}
+        with mock.patch("subprocess.run", side_effect=verb):
+            for i in range(3):
+                dest = self.dir / f"c{i}" / "wren"
+                dest.mkdir(parents=True)
+                experiments.front(self.dir, "wren", dest, {"t0": "2026-10-26T09:00:00"}, held)
+        self.assertEqual(seen, [None, '{"copy": 1}', '{"copy": 2}'])
+
+
+@unittest.skipUnless(os.path.exists("/usr/bin/sandbox-exec"), "macOS sandbox")
+class WorkspaceDryRunTest(unittest.TestCase):
+    """The dry run on a fixture, through the template's real `shaft front` in the agent's sandbox: per state, where
+    the probe is in front of each arm and of the control — no model call, no replay."""
+
+    def test_the_retrievability_table(self):
+        template = Path(__file__).resolve().parents[2] / "template"
+        tmp = tempfile.TemporaryDirectory(prefix="shaft-ws-dry-")
+        self.addCleanup(tmp.cleanup)
+        base = Path(tmp.name).resolve()
+        mind = base / "mind"
+        shutil.copytree(template / "shaft", mind / "shaft", ignore=shutil.ignore_patterns("__pycache__"))
+        shutil.copy(template / "config.env", mind / "config.env")
+        for folder in ("self", "memory", "notes", "inbox"):
+            (mind / folder).mkdir()
+        (mind / "self" / "goals.md").write_text("# Goals\n\n- Survey the orchard rows and count the apple trees\n")
+        (mind / "notes" / "orchard.md").write_text("# Orchard\n\nThe orchard rows: apple trees counted by row, "
+                                                   "survey of the north field.\n")
+        for i in range(6):
+            (mind / "notes" / f"other{i}.md").write_text(f"# Other {i}\n\nUnrelated: train timetables and invoices.\n")
+
+        def reconstruct(project, name, state, code, dest):
+            shutil.copytree(mind, dest)
+            return dest
+
+        st = {"ts": "2026-10-26T10:00:00", "t0": "2026-10-26T09:00:00", "start_commit": "x", "inbox": []}
+        code = {"shaft/config.py": (template / "shaft" / "config.py").read_bytes(), "config.env": b""}
+        with tempfile.TemporaryDirectory() as sup, \
+                mock.patch.object(experiments, "workspace_path", return_value=Path(sup) / "w.jsonl"), \
+                mock.patch.object(trial, "committed_code", return_value=code), \
+                mock.patch.object(trial, "live_episodes", return_value=[{"ts": st["ts"], "kind": "live"}]), \
+                mock.patch.object(trial, "state_of", return_value=st), mock.patch.object(trial, "_starts", return_value=[]), \
+                mock.patch.object(trial, "reconstruct", side_effect=reconstruct), \
+                mock.patch.object(trial, "link_env"), mock.patch.object(trial, "LEDGER", Path(sup) / "none.jsonl"), \
+                mock.patch.object(trial, "replay_arm", side_effect=AssertionError("a dry run replays nothing")), \
+                mock.patch.object(experiments, "_topic", return_value="orchard rows"), \
+                mock.patch("supervisor.core.instance_config", return_value={}), \
+                mock.patch("supervisor.core.EMBED_PORT", 9):   # no embedding service: words only, deterministic
+            r = experiments.run_workspace("wren", 1, dry_run=True, project=base)
+        self.assertEqual(r["replays"], 4)   # the control and three arms, none run
+        row = r["table"][0]
+        self.assertEqual(row["place"], "notes/orchard.md")   # the one host the cycle's search ranks first
+        self.assertEqual((row["rank"], row["rank_after"]), (0, 0))
+        self.assertEqual(row["control"], "inbox")
+        self.assertEqual(row["off"], "focus")          # automatic recall shows the top hit
+        self.assertEqual(row["relevance"], "focus")    # the memory codelet's top hit keeps its rank: relevance 1.0
+        text = experiments.workspace_dry_run_text("wren", r)
+        self.assertIn("notes/orchard.md (#1→#1)", text)
+        self.assertIn("in front: control 1/1 (shipped mode competitive), off 1/1, relevance 1/1", text)
+        self.assertIn("memory search ran on words only here", text)
+        self.assertIn("cost: unknown — no priced replay of wren", text)
 
 
 class BlindHoldsTest(unittest.TestCase):
