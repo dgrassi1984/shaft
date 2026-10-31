@@ -230,13 +230,16 @@ SPECS = {
                           "or Telegram (an open conversation's channel, else the one they chose for you, else where "
                           "they last wrote to you). Their reply arrives in your inbox. Make them count: they read "
                           "every one. You can attach files from your folder; files sent to you arrive in your "
-                          "attachments/ folder (the message says where).",
+                          "attachments/ folder (the message says where). Non-urgent device notifications may wait "
+                          "for a digest during quiet hours or after the daily push budget.",
                           {"to": S, "text": S,
                            "expect_reply": {"type": "object", "description": "optional: what you expect back — it is "
                                             "timestamped by the supervisor and scored against the reply",
                                             "properties": {"will_reply": {"type": "integer", "minimum": 0, "maximum": 100},
                                                            "within_hours": {"type": "integer", "minimum": 1, "maximum": 168},
                                                            "gist": S}, "required": ["will_reply", "within_hours", "gist"]},
+                           "urgent": {"type": "boolean", "default": False,
+                                      "description": "time-critical things only; bypasses quiet hours and push budget"},
                            "kind": {"type": "string", "enum": ["question", "note"],
                                     "description": "for the operator: question (wants an answer) or note"},
                            "attachments": {"type": "array", "items": {"type": "string"},
@@ -1085,8 +1088,10 @@ class Broker:
         return f"{title}\n{final}\n\n{text[:max_chars]}{cut}".strip()
 
     def _send_message(self, to: str, text: str, kind: str = "note", attachments: list | None = None,
-                      expect_reply: dict | None = None) -> str:
+                      expect_reply: dict | None = None, urgent: bool = False) -> str:
         from . import messages
+        if type(urgent) is not bool:
+            raise ValueError("urgent must be a boolean")
         if not text.strip():
             raise ValueError("empty message")
         if self.counts["send_message"] > 10:
@@ -1126,7 +1131,7 @@ class Broker:
             body = text.strip() + messages.attachment_lines(atts, "path")
             self._deliver("operator", f"{stem}.md",
                           f"From: {self.name}\nTo: operator\nKind: {kind}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{body}\n",
-                          kind, stamp, body, atts)
+                          kind, stamp, body, atts, urgent=urgent)
             record_expectation()
             self._envelope = None
             push = self._push_usage(stamp)
@@ -1245,7 +1250,7 @@ class Broker:
             where, why = channel.route(self.name)
         except Exception:                      # unreadable state: the tool still works, without the line
             return ""
-        line = (f" A message to 'operator' now would notify them {'in the web UI' if where == 'web' else 'on Telegram'}"
+        line = (f" A message to 'operator' routes device notifications to them {'in the web UI' if where == 'web' else 'on Telegram'}"
                 f" ({why}).")
         if self.bot:
             line += (f" Your own Telegram bot is {self.bot}: when your message goes there they can answer there, and "
@@ -1265,7 +1270,7 @@ class Broker:
             return None
 
     def _deliver(self, to: str, rel: str, content: str, kind: str, stamp: datetime, text: str,
-                 attachments: list[dict] | None = None) -> None:
+                 attachments: list[dict] | None = None, urgent: bool = False) -> None:
         """Put a message where its recipient reads it — the operator's inbox (with a notification), or another
         instance's inbox/ — and in the message log."""
         from . import messages
@@ -1282,8 +1287,12 @@ class Broker:
                 alert = ("web", f"the channel could not be chosen ({type(e).__name__}: {e})")
                 log(f"{self.name}: message to the operator: {alert[1]}")
             messages.record(self.project / ".supervisor", path, self.name, "operator", kind, stamp, text, attachments,
-                            alert)
-            notify(f"SHAFT · {self.name} {'asks' if kind == 'question' else 'says'}", text)
+                            alert, urgent=urgent)
+            from . import pushes
+            held = any(r["file"] == path.name and r.get("push_due")
+                       for r in pushes.records(self.project / ".supervisor"))
+            if not held:
+                notify(f"SHAFT · {self.name} {'asks' if kind == 'question' else 'says'}", text)
             self._answer_comments(path.name, text)
         else:
             from .core import safe_write   # the recipient's folder is instance-controlled: no symlinks followed
@@ -2431,7 +2440,7 @@ class ReplayBroker(Broker):
             where, why = channel.route(self.name)
         except Exception:                      # unreadable state: the tool still works, without the line
             return ""
-        line = (f" A message to 'operator' now would notify them {'in the web UI' if where == 'web' else 'on Telegram'}"
+        line = (f" A message to 'operator' routes device notifications to them {'in the web UI' if where == 'web' else 'on Telegram'}"
                 f" ({why}).")
         if self.bot:
             line += (f" Your own Telegram bot is {self.bot}: when your message goes there they can answer there, and "
@@ -2458,7 +2467,7 @@ class ReplayBroker(Broker):
                  "path": f"{rel_dir}/{messages.attachment_name(n)}", "bytes": len(d)} for n, d in files]
 
     def _deliver(self, to: str, rel: str, content: str, kind: str, stamp: datetime, text: str,
-                 attachments: list[dict] | None = None) -> None:
+                 attachments: list[dict] | None = None, urgent: bool = False) -> None:
         self._tag("simulated: not delivered")
         if to == "operator":
             self.operator_sent += 1
