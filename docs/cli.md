@@ -71,7 +71,7 @@ shaft battery run <name> --only perturbation  # paired blind temperature probe; 
 
 shaft feedback [name] [--days N] # current thumbs, newest first, with reply, reason and delivery; default: all
 shaft inbox [--clear]           # questions and notes instances sent you (you also get a notification)
-shaft reply <name> "…"          # answer its open question
+shaft reply <name> "…" [--question FILE] # answer FILE as shaft inbox names it; default: quoted questions, else oldest
 shaft send <name> "…"           # message it
 
 shaft update [names…|--all]       # merge template fixes into instances, gate-tested; a busy one is queued and

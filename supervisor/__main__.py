@@ -1195,9 +1195,11 @@ def main(argv: list[str]) -> int:
     p.add_argument("--days", type=int, help="only ratings from the last N days (default: all)")
     p = sub.add_parser("inbox", help="messages instances sent you")
     p.add_argument("--clear", action="store_true", help="archive notes (questions stay until answered)")
-    p = sub.add_parser("reply", help="answer an instance's open question (or message it)")
+    p = sub.add_parser("reply", help="answer an explicit, quoted, or oldest open question (or message it)")
     p.add_argument("name")
     p.add_argument("text")
+    p.add_argument("--question", metavar="FILE", help="which open question to answer, as shaft inbox names it; "
+                   "default: the one the text quotes, else the oldest")
     p = sub.add_parser("send", help="message an instance")
     p.add_argument("name")
     p.add_argument("text")
@@ -1717,7 +1719,7 @@ def main(argv: list[str]) -> int:
     if args.cmd == "inbox":
         return messages.clear_notes() if args.clear else messages.show_inbox()
     if args.cmd == "reply":
-        return messages.reply(args.name, args.text)
+        return messages.reply(args.name, args.text, question=args.question)
     if args.cmd == "send":
         return messages.send(args.name, args.text)
     if args.cmd == "drift":

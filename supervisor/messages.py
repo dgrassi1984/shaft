@@ -10,6 +10,7 @@ import fcntl
 import json
 import re
 import shutil
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -263,16 +264,29 @@ def deliver_external(name: str, text: str, source: str) -> Path:
     return path
 
 
-def reply(name: str, text: str) -> int:
-    """Answer the oldest open question from `name` (or just send, if none is open)."""
+def reply(name: str, text: str, question: str | None = None) -> int:
+    """Answer an explicit, quoted, or oldest open question (or just send)."""
     open_q = [m for m in pending() if m["from"] == name and m["kind"] == "question"]
-    ref = open_q[0]["path"].name if open_q else None
-    quoted = f"> {open_q[0]['body'][:600]}\n\n" if open_q else ""
+    quoted = ""
+    if question is not None:
+        targets = [m for m in open_q if m["path"].name == question]
+        if not targets:
+            available = ", ".join(m["path"].name for m in open_q) or "none"
+            print(f"{question}: not an open question from {name}; open questions: {available}", file=sys.stderr)
+            return 1
+        quoted = f"> {targets[0]['body'][:600]}\n\n"
+    else:
+        targets = quoted_questions(name, text)
+        if not targets:
+            targets = open_q[:1]
+            quoted = f"> {targets[0]['body'][:600]}\n\n" if targets else ""
+    ref = targets[0]["path"].name if targets else None
     path = _deliver(name, quoted + text, "reply" if ref else "message", ref)
-    if open_q:
-        _archive(open_q[0]["path"], "reply")
-    log(f"operator -> {name}: {'reply to ' + ref if ref else 'message'}")
-    print(f"delivered to {name} ({path.name}); it will read it in its next cycle or conversation.")
+    for m in targets:
+        _archive(m["path"], "reply")
+    answered = "reply to " + ", ".join(m["path"].name for m in targets) if targets else "message"
+    log(f"operator -> {name}: {answered}")
+    print(f"delivered to {name} ({path.name}); {answered}; it will read it in its next cycle or conversation.")
     return 0
 
 
