@@ -10,7 +10,7 @@ from typing import Callable
 
 from . import broker, cards, images, loopguard, pausing, surprises
 from .llm import Client, Reply
-from .tools import Toolbox, for_log
+from .tools import Toolbox, coerce_args, for_log
 
 
 @dataclass
@@ -262,7 +262,10 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
                 guard.last, guard.rounds = None, 0
                 try:
                     args = json.loads(c["arguments"] or "{}")
-                    result = controls[c["name"]].handler(args)
+                    if not isinstance(args, dict):
+                        raise ValueError("arguments must be a JSON object")
+                    # typed as the spec declares: mimo's reopens "null" left the corrections ledger empty (10-28..30)
+                    result = controls[c["name"]].handler(coerce_args(args, controls[c["name"]].spec))
                 except (ValueError, TypeError) as e:
                     result = f"ERROR: bad arguments for {c['name']}: {e}"
                 stop = stop or (controls[c["name"]].stops and not result.startswith("ERROR"))

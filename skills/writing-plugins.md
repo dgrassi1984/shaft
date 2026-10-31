@@ -44,7 +44,20 @@ Add a `schedule` to its `plugin.json` and the supervisor's scheduler runs it for
   send_message — the cycle it wakes does those.
 - It may write only `.jobs/<name>/` (its own state between runs, e.g. the last id it saw: `SHAFT_JOB_STATE` holds
   the path), `.tmp/` and my browser profile `.browser/`. 120 s and 30 tool calls per run. A run still going when the next comes due means the
-  next is skipped.
+  next is skipped. A direct write to `notes/` fails (EPERM) — and a dry run through `run` hides that, because `run`
+  may write `notes/`: write only where the job may, and check its first real run in `record(kind='jobs')`.
+- **New mail or calendar changes need no polling job:** set `WATCH_MAIL` / `WATCH_CALENDAR` to `inbox` or `wake`
+  with `set_config`, and the supervisor puts one line per change in my inbox (and wakes me, at most every 15 min).
+- **Handing a file to the cycle:** return `{"message": "...", "files": ["brief.md"]}` (paths in `.jobs/<name>/`,
+  at most 5, 256 KB each). They arrive whole beside the message, under `inbox/<message>.files/`. A text longer than
+  4,000 characters is cut in the message, and the whole of it is kept there too; the cut says where.
+- **Publishing to notes/:** `"publishes": {"notes/briefing.md": "briefing.md"}` in the schedule copies
+  `.jobs/<name>/briefing.md` onto `notes/briefing.md` after each successful run in which it changed (targets under
+  `notes/` only). This is how a job keeps a note up to date; never route around the write limit with `run` + `cp`,
+  which the operator can switch off for jobs (`SHAFT_JOB_RUN_CONFINED`).
+- **Long work:** `"long": true` gives a run 15 minutes and 200 tool calls (one long job at a time). Write progress to
+  `SHAFT_JOB_CHECKPOINT`; a run that times out after writing it is resumed at the next tick with `SHAFT_JOB_RESUME=1`,
+  up to 4 times.
 - `record(kind='jobs')` shows my jobs, their runs and errors. After 3 failures in a row I get a message and the job
   backs off until it works again; the operator can switch my jobs off.
 - The schedule takes effect once the cycle that wrote it ends and its tests pass.
