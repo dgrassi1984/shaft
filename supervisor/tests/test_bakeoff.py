@@ -269,9 +269,11 @@ class SubagentJudgeTest(BakeoffTest):
             for leak in ("deepseek", "mimo", "xiaomi/"):   # blind: no model name, not even the one a run printed
                 self.assertNotIn(leak, text.lower())
             self.assertIn(trial.JUDGE_SYSTEM[:60], text)
-        self.assertEqual(bakeoff.export_cases(b, out), todo, "exported twice")
+        self.assertEqual(sorted(bakeoff.export_cases(b, out)), sorted(todo), "exported twice")
         unknown = bakeoff._redactor({"arms": [{"model": "openrouter/acme/zephyr-9"}]})   # no family pattern knows it
         self.assertEqual(unknown("ran openrouter/acme/zephyr-9, i.e. zephyr-9"), "ran [model], i.e. [model]")
+        spelled = bakeoff._redactor({"arms": [{"model": "claude-haiku-5-5"}, {"model": "openrouter/google/gemini-4-argon"}]})
+        self.assertEqual(spelled("Claude Haiku 5.5; Gemini 4 Argon"), "[model]; [model]")   # review 2026-10-31
         self.write(out, mapping)
         with mock.patch.object(trial, "judge_pair", side_effect=AssertionError("the API judge was called")):
             self.assertEqual(bakeoff.import_verdicts(b, out), [])
@@ -302,6 +304,41 @@ class SubagentJudgeTest(BakeoffTest):
         nested = {**VERDICT, "first": {"criterion_met": "maybe", "claim_supported": True}}
         p.write_text(json.dumps(nested))
         self.assertIsNone(bakeoff.verdict(out, bad))
+
+    def test_a_verdict_on_runs_replayed_since_is_stale_and_the_pair_is_exported_again(self):
+        b, out = self.replayed(), self.tmp / "judging"
+        bakeoff.export_cases(b, out)
+        self.write(out, json.loads((out / "mapping.json").read_text()))
+        st = b["states"][0]   # replayed again after export (a resume replays a state cut off part-way in full)
+        st["arms"]["openrouter/deepseek/deepseek-v4.1-flash"] = {**_rec("x"), "usd": 0.07}
+        self.assertEqual(bakeoff.import_verdicts(b, out), [])
+        self.assertEqual(st["outcomes"]["openrouter/deepseek/deepseek-v4.1-flash"]["outcome"], "unjudged")
+        self.assertEqual(b["states"][1]["outcomes"]["openrouter/deepseek/deepseek-v4.1-flash"]["outcome"], "win")
+        todo = bakeoff.export_cases(b, out)
+        mapping = json.loads((out / "mapping.json").read_text())
+        self.assertEqual(sorted((mapping[c]["state"], mapping[c]["order"]) for c in todo), [(0, "AB"), (0, "BA")])
+
+    def test_another_instance_s_bake_off_with_the_same_id_never_shares_cases(self):
+        b, out = self.replayed(bid="same"), self.tmp / "judging"
+        bakeoff.export_cases(b, out)
+        self.write(out, json.loads((out / "mapping.json").read_text()))
+        other = {**json.loads(json.dumps(b)), "name": "wren"}
+        self.assertEqual(len(bakeoff.export_cases(other, out)), 4)
+        for st in other["states"]:
+            st["outcomes"] = {}
+        with mock.patch.object(bakeoff, "_save"):
+            bakeoff.import_verdicts(other, out)
+        self.assertEqual({o["outcome"] for s in other["states"] for o in s["outcomes"].values()}, {"unjudged"})
+
+    def test_a_verdict_with_a_field_the_schema_does_not_have_is_judged_again(self):
+        b, out = self.replayed(), self.tmp / "judging"
+        cid = bakeoff.export_cases(b, out)[0]
+        for extra in ({**VERDICT, "confidence": 0.9},
+                      {**VERDICT, "second": {**VERDICT["second"], "notes": "x"}}):
+            (out / "verdicts" / f"{cid}.json").write_text(json.dumps(extra))
+            self.assertIsNone(bakeoff.verdict(out, cid))
+        (out / "verdicts" / f"{cid}.json").write_text(json.dumps(VERDICT))
+        self.assertEqual(bakeoff.verdict(out, cid), VERDICT)
 
     def test_import_refuses_to_mix_with_the_api_judge_s_verdicts(self):
         b, out = self.replayed(), self.tmp / "judging"
