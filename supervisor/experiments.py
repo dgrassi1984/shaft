@@ -25,6 +25,7 @@ import json
 import posixpath
 import random
 import re
+import shlex
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
@@ -88,6 +89,57 @@ def _arg(args: str, key: str) -> str:
         return m.group(1) if m else ""
 
 
+# Read-only inspection: never held (a grep that matches nothing exits 1 without anything having failed).
+INSPECTION = frozenset({"echo", "printf", "cat", "ls", "head", "tail", "wc", "grep", "rg", "find", "pwd", "true",
+                        "test", "which"})
+WRAPPERS = frozenset({"env", "time", "nice", "exec", "command", "nohup", "sudo", "doas"})
+WRAPPER_VALUE_FLAGS = frozenset({"-u", "-n", "-a", "-o"})
+ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def _program(command: str, depth: int = 0) -> str | None:
+    """What a shell command runs: its first segment that is not a cd, past assignments and wrappers (env, nice,
+    time…), looking inside `bash -c`; `python -m X` is X and `python script` is "python3 script". None for an
+    inspection. Best effort: it parses the command, it does not evaluate it."""
+    try:
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|\n")
+        lexer.whitespace, lexer.whitespace_split = " \t\r", True
+        words = list(lexer)
+    except ValueError:
+        words = command.split()
+    segment: list[str] = []
+    for word in words + [";"]:
+        if word.strip(";&|\n"):
+            segment.append(word)
+            continue
+        while segment and (ASSIGNMENT.match(segment[0]) or segment[0].startswith("-")
+                           or posixpath.basename(segment[0]) in WRAPPERS):
+            del segment[:2 if segment[0] in WRAPPER_VALUE_FLAGS else 1]
+        if segment and segment[0] != "cd":
+            break
+        segment = []
+    if not segment:
+        return None
+    program, args = posixpath.basename(segment[0]), segment[1:]
+    if program in ("bash", "sh", "zsh") and depth < 3:
+        for i, flag in enumerate(args[:-1]):
+            if not flag.startswith("-"):
+                break
+            if not flag.startswith("--") and "c" in flag:
+                return _program(args[i + 1], depth + 1)
+    if program in INSPECTION or (program == "sed" and "-n" in args and not any(a.startswith("-i") for a in args)):
+        return None
+    if re.fullmatch(r"python[0-9.]*", program):
+        for i, arg in enumerate(args):
+            if arg == "-m" and i + 1 < len(args):
+                return args[i + 1]
+            if arg == "-c":
+                break
+            if not arg.startswith("-") and not (i and args[i - 1] in ("-W", "-X")):
+                return f"{program} {arg}"
+    return program
+
+
 def family(tool: str, args: str) -> str | None:
     """The kind of consequential action a call is — the supervisor's own copy of the agent's cards.family (it never
     imports agent code); the shared cases in test_experiments keep the two in step."""
@@ -98,15 +150,8 @@ def family(tool: str, args: str) -> str | None:
         depth = 2 if parts[0] in ("plugins", "skills", "notes", "tests") else 1
         return f"{tool} {'/'.join(parts[:depth])}/"
     if tool == "run":
-        words = _arg(args, "command").split()
-        while words:
-            if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", words[0]):
-                words.pop(0)
-            elif len(words) >= 3 and words[0] == "cd" and words[2] == "&&":
-                del words[:3]
-            else:
-                return "run " + words[0]
-        return None
+        program = _program(_arg(args, "command"))
+        return "run " + program if program else None
     if tool == "send_message":
         to = _arg(args, "to")
         return f"send_message → {to}" if to else None

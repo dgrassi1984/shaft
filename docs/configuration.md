@@ -250,6 +250,7 @@ cycle is held while the instance sees what comparable ones led to), `WORKSPACE` 
 the record) and `FORECAST` (on, reserve, off: what comparable goals cost, or a fixed reserve rule). A value outside
 these keeps the default with a warning. `shaft experiment` flips a knob's default in code to run its kill test, and
 refuses an instance whose config.env sets that knob.
+Outcome-card shell families and inspection exclusions are described in [architecture](architecture.md).
 Sources: template `shaft/config.py:17`, [autonomy.py](../supervisor/autonomy.py).
 
 `BRIEFING` names a file inside the instance's repository, or `off` to hide the briefing. The instance's own

@@ -353,7 +353,10 @@ due goals, open commitments — compete for `WORKSPACE_K` places in automatic re
 recorded in the episode and broadcast after every step; after `declare_intent` they compete again for the declared
 goal and, in competition, the declared **attention** (`attention`: up to four {source, why}, scored against the tool
 log by `supervisor/attention.py`). **Outcome cards** (`shaft/cards.py`) hold the first call of a kind of action that has
-failed since it last worked, showing the comparable calls and their counts; calling again runs it. **Commitments**
+failed since it last worked, showing the comparable calls and their counts; calling again runs it.
+A `run` call's kind is the program it actually runs (past a leading `cd`, assignments and wrappers like `env`;
+inside `bash -c`; `python -m pytest` is `run pytest`, `python3 shaft/x.py` is `run python3 shaft/x.py`). Read-only
+inspections (`echo`, `cat`, `ls`, `wc`, `grep`, `sed -n`, …) have no kind and are never held. **Commitments**
 (`commit_to`, finish_cycle's `commitments`, `memory/commitments.jsonl`) are settled in sleep, kept only with an
 episode as evidence; the supervisor re-checks it (`supervisor/commitments.py`).
 
