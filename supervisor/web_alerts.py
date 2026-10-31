@@ -50,7 +50,7 @@ def forward_new() -> int:
     rows, end = messages.appended(_read_cursor())
     pushed = 0
     for m, after in rows:
-        if m.get("to") == "operator" and m.get("alert") == "web":
+        if m.get("to") == "operator" and m.get("alert") == "web" and not m.get("push_due"):
             looking = web_chat.watchers(m["from"])   # a device with its chat on screen sees the message there now
             if looking:
                 log(f"web: {m['from']}'s message {m['file']} not pushed to {', '.join(sorted(looking))}: its chat is "
@@ -59,6 +59,9 @@ def forward_new() -> int:
                 pushed += 1
         _write_cursor(after)
     _write_cursor(end)
+    from . import pushes
+    if webpush.subscriptions():
+        pushed += pushes.digest(webpush.notify)
     return pushed
 
 

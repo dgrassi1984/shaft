@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import os
 import re
 import shutil
 import sys
@@ -22,7 +23,7 @@ LOG_NAME = "messages.jsonl"
 
 def record(sup_dir: Path, path: Path, sender: str, to: str, kind: str, at: datetime, text: str,
            attachments: list[dict] | None = None, alert: tuple[str, str] | None = None, via: str = "",
-           mid: str = "", shown: str | None = None, comments: list[dict] | None = None) -> None:
+           mid: str = "", shown: str | None = None, comments: list[dict] | None = None, urgent: bool = False) -> None:
     """Append one delivered message to the log. One locked write per line: brokers of several instances
     deliver concurrently. `attachments`: [{name, path (from the project root), bytes}]. `alert`: for a message to the
     operator, (channel, why) — where it alerts them (channel.route); the web and Telegram services send what names
@@ -44,11 +45,17 @@ def record(sup_dir: Path, path: Path, sender: str, to: str, kind: str, at: datet
         row["shown"] = shown.strip()
     if comments:
         row["comments"] = comments
-    line = json.dumps(row, ensure_ascii=False) + "\n"
     sup_dir.mkdir(parents=True, exist_ok=True)
     with (sup_dir / LOG_NAME).open("a") as f:
         fcntl.flock(f, fcntl.LOCK_EX)
-        f.write(line)
+        if to == "operator" and alert:
+            from . import pushes
+            row["urgent"] = urgent
+            if due := pushes.hold_until(row, sup_dir, at):
+                row["push_due"] = due
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+        f.flush()
+        os.fsync(f.fileno())
 
 
 # -- attachments ("attach files to their messages to each other and on Telegram") ----------

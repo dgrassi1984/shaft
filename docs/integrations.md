@@ -64,11 +64,23 @@ message would go now; each message's page in the web UI says where it notified y
 
 Source: [channel routing](../supervisor/channel.py), [the web UI's pushes](../supervisor/web_alerts.py).
 
-`SHAFT_PUSH_BUDGET` (default 6) measures daily pushes per instance without refusing sends.
-The instance sees its count in its operational envelope and after `send_message` to the operator.
-Stats report counts, judged push timing and recorded operator reactions separately. The instance's
-message-discipline skill and digest job own any quiet window; the operator chooses its hours.
-The supervisor does not hold pushes for a digest.
+`send_message(to="operator", ..., urgent=False)` always stores the message immediately in the
+operator inbox and web UI. Only device notifications wait. Use `urgent=True` for time-critical things only.
+Urgent messages, replies within two hours of an operator message, and messages during an open conversation
+notify immediately. Other notifications wait during local quiet hours (`SHAFT_QUIET_HOURS`, default `22-07`,
+may wrap midnight; empty disables) or after the per-instance daily budget (`SHAFT_PUSH_BUDGET`, default 6;
+0 means unlimited and hides the count). `SHAFT_PUSH_HOLD=0` turns holding off for new messages.
+
+Held messages produce one combined digest with each sender and first line, at `SHAFT_DIGEST_AT` (default `07:15`)
+or the end of quiet hours if later. The next running web or Telegram forwarding loop sends it, including any
+overdue messages after downtime. The supervisor persists hold decisions in the message log and digest claims
+under its directory. A durable claim prevents duplicate digest dispatch across restarts; a crash between claiming
+and sending can lose the notification. Messages remain in the inbox. Telegram digests use one available bot;
+open the web inbox to read or answer individual messages and access attachments.
+
+The instance sees its daily count in its operational envelope and after `send_message`. Counts include held
+notification requests. Stats report counts, judged push timing and recorded operator reactions separately.
+The message log records `urgent` and `push_due`; judges see urgency in the tool arguments and assess the content.
 
 ## Google accounts (`shaft google …`)
 
