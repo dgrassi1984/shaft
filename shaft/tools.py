@@ -19,6 +19,7 @@ MAX_RESULT_CHARS = 6000
 # My tool log is what the judge grades my cycles from: it keeps what I saw. It was once cut at 2,000
 # characters while I saw 6,000, and the judge marked my read-backs of self/self.md "cut off" — unsupported.
 LOG_CHARS = MAX_RESULT_CHARS
+READ_MARKER_ROOM = 400     # what a cut read_file leaves for its continuation marker (path included)
 FACTS_MAX_CHARS = 6000     # facts.md is shown in full: consolidation keeps it to this
 DIGEST_MAX_CHARS = 1500
 SOURCE = re.compile(r" \(src: (.+?)\)(?=\s*$| \(superseded by \[)", re.M)   # a fact line's source, as remember writes it (a URL may hold ")")
@@ -191,6 +192,9 @@ class Toolbox:
         shared = os.environ.get("SHAFT_SHARED")
         self.shared = Path(shared).resolve() if shared else None
         self.extra = extra or []          # control tools owned by the caller (e.g. finish_cycle)
+        # What discovery could not load, with why: shown in the tool list (describe) instead of dropped silently —
+        # a malformed manifest or a broker error once left a tool missing with no word of it (2026-10-31).
+        self.problems: list[str] = []
         self.plugins = self._discover_plugins()
         self.remote = self._discover_broker()
         self.log: list[dict] = []
@@ -203,15 +207,25 @@ class Toolbox:
         base = self.root / "plugins"
         taken = {t["function"]["name"] for t in BUILTINS}
         for manifest in sorted(base.glob("*/plugin.json")) if base.is_dir() else []:
+            where = f"plugins/{manifest.parent.name}"
             try:
                 spec = json.loads(manifest.read_text())
+                if not isinstance(spec, dict):
+                    raise ValueError("plugin.json must be a JSON object")
                 name = spec["name"]
-                if name in taken or name != manifest.parent.name:
-                    continue
-                found[name] = _spec(name, spec["description"], spec.get("parameters", {}).get("properties", {}),
-                                    spec.get("parameters", {}).get("required", []))
-            except (ValueError, KeyError):
-                continue
+                if name in taken:
+                    raise ValueError(f"name {name!r} is taken by a built-in tool")
+                if name != manifest.parent.name:
+                    raise ValueError(f"name {name!r} differs from its folder {manifest.parent.name!r}")
+                parameters = spec.get("parameters", {})
+                if not isinstance(parameters, dict):
+                    raise ValueError("parameters must be a JSON object")
+                found[name] = _spec(name, spec["description"], parameters.get("properties", {}),
+                                    parameters.get("required", []))
+            except KeyError as e:
+                self.problems.append(f"{where} (plugin.json has no {e.args[0]!r})")
+            except Exception as e:   # never a crash of the run, never silence
+                self.problems.append(f"{where} ({type(e).__name__}: {e})"[:300])
         return found
 
     def _discover_broker(self) -> dict[str, dict]:
@@ -219,7 +233,8 @@ class Toolbox:
             return {}
         try:
             return {t["function"]["name"]: t for t in broker.tools()}
-        except broker.BrokerError:
+        except Exception as e:
+            self.problems.append(f"the supervisor's tools ({type(e).__name__}: {e})"[:300])
             return {}
 
     def _builtins(self) -> list[dict]:
@@ -233,7 +248,10 @@ class Toolbox:
     def describe(self) -> str:
         groups = [("built-in", [t["function"]["name"] for t in self._builtins()]),
                   ("my plugins", list(self.plugins)), ("supervisor", list(self.remote))]
-        return "; ".join(f"{label}: {', '.join(names) or '(none)'}" for label, names in groups)
+        return "; ".join(f"{label}: {', '.join(names) or '(none)'}" for label, names in groups) + self.not_loaded()
+
+    def not_loaded(self) -> str:
+        return f"; not loaded: {'; '.join(self.problems)}" if self.problems else ""
 
     def spec_of(self, name: str) -> dict | None:
         return next((s for s in self.specs() if s["function"]["name"] == name), None)
@@ -303,8 +321,15 @@ class Toolbox:
         return f"{path}: shown below ({target.stat().st_size // 1024} KB)."
 
     def _t_read_file(self, path: str, offset: int = 0) -> str:
+        """A cut read says how much is left and the call that reads on: a plain cut at 6,000 characters read as
+        the whole file (2026-10-31). The marker fits within MAX_RESULT_CHARS, so run() never cuts it off."""
         text = self._path(path).read_text(errors="replace")
-        return text[offset:offset + MAX_RESULT_CHARS] or "(empty)"
+        offset = int(offset)
+        offset = max(0, len(text) + offset if offset < 0 else offset)   # a negative offset reads the tail
+        if len(text) - offset <= MAX_RESULT_CHARS:
+            return text[offset:] or "(empty)"
+        end = offset + MAX_RESULT_CHARS - READ_MARKER_ROOM
+        return (text[offset:end] + f"\n[… {len(text) - end} more characters; read_file({path!r}, offset={end})]")
 
     def _t_write_file(self, path: str, content: str, replace: bool = False) -> str:
         target = self._path(path, for_write=True)
