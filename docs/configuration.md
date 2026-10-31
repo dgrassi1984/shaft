@@ -111,6 +111,9 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_GATE_WORKERS` | `4` | processes each part of the supervisor's tests runs in at a gate; positive integer | [gate.py](../supervisor/gate.py) |
 | `SHAFT_JOB_MIN_MINUTES` | `5` | the shortest interval an instance's own job (a plugin on a timer) may run at | [jobs.py](../supervisor/jobs.py) |
 | `SHAFT_JOBS_MAX` | `12` | scheduled plugins (jobs) an instance may run; beyond it, the rest by name are not run; positive integer | [jobs.py](../supervisor/jobs.py) |
+| `SHAFT_WATCH` | `on` | the supervisor's mail and calendar watch, for instances that opt in with WATCH_MAIL or WATCH_CALENDAR in their config.env (on or off) | [watch.py](../supervisor/watch.py) |
+| `SHAFT_WATCH_WAKE_MIN` | `15` | minutes between two wakes the mail and calendar watch gives one instance; a change sooner waits in its inbox | [watch.py](../supervisor/watch.py) |
+| `SHAFT_WATCH_EVERY_S` | `60` | seconds between two passes of the mail and calendar watch (the scheduler looks every 30 seconds) | [watch.py](../supervisor/watch.py) |
 | `SHAFT_JUDGE_MODELS` | `openrouter/xiaomi/mimo-v2.6-pro,openrouter/z-ai/glm-5.3-flash,openrouter/deepseek/deepseek-v4.1-flash` | the judge pool: each judgment picks one at random, never the judged instance's own model | [judge.py](../supervisor/judge.py) |
 | `SHAFT_JUDGE_EVERY` | `2` | the main judge grades one live run in this many (1: every run) | [judge.py](../supervisor/judge.py) |
 | `SHAFT_JUDGE2_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | the second judge, which grades a sample of cycles again to measure the judges' agreement | [judge.py](../supervisor/judge.py) |
@@ -251,6 +254,11 @@ the record) and `FORECAST` (on, reserve, off: what comparable goals cost, or a f
 these keeps the default with a warning. `shaft experiment` flips a knob's default in code to run its kill test, and
 refuses an instance whose config.env sets that knob.
 Sources: template `shaft/config.py:17`, [autonomy.py](../supervisor/autonomy.py).
+
+`WATCH_MAIL` and `WATCH_CALENDAR` (not in the template's defaults: unset is `off`) ask the supervisor's watch to report
+new mail under the instance's granted labels and changed events on its granted calendars: `inbox` puts one message
+per pass in its inbox, `wake` also wakes it (at most once per `SHAFT_WATCH_WAKE_MIN` minutes); any other value is
+`off`, logged once. Only what the operator granted is watched; see [integrations](integrations.md#mail-shaft-mail-).
 
 `BRIEFING` names a file inside the instance's repository, or `off` to hide the briefing. The instance's own
 watchers write it as a scheduled job with the next 48 hours of calendar, actionable mail, open commitments to the

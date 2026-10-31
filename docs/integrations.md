@@ -146,6 +146,22 @@ Mail content reaches model providers (a cloud-brained instance, the judges). Sen
 mail (prompt injection). What the instance writes from it into its mind stays in its private mind store's history (never in the project's
 git), and downloads stay in `mail/`, after a revoke.
 
+**Watch (new mail, without polling).** An instance may ask the supervisor to tell it when new mail arrives under its
+granted labels, instead of polling with a scheduled plugin: `WATCH_MAIL` in its own `config.env` — `off` (default),
+`inbox` or `wake` — which it can set with `set_config`. The scheduler's watch ([watch.py](../supervisor/watch.py))
+reads Gmail's history from a stored history ID, filtered by the granted label's ID, every `SHAFT_WATCH_EVERY_S`
+seconds (default 60): one labels call per account and one history call per granted label per pass
+(per instance). Every thread the
+history names is checked with the same label check `mail_search` makes; one that fails is never mentioned, and a
+draft, trashed or spam message is not news. What it finds goes into the instance's inbox as one message per pass,
+`From: supervisor (mail watch)`: each thread's handle, sender and subject (at most 20 lines, the rest counted), never
+a body. With `wake` the instance is also woken through the jobs' wake path (`watch-mail`), at most once per
+`SHAFT_WATCH_WAKE_MIN` minutes (default 15); a change inside that window waits in the inbox and wakes it when the
+window ends, unless it has been read by then. The instance never holds the subscription or a token; nothing is public
+(no Gmail push, no Pub/Sub). A new grant, a watch switched on again and an expired history ID (Gmail keeps about a
+week) start from now, with one log line and no backlog. `SHAFT_WATCH=off` stops the watch for every instance. State:
+`.supervisor/watch/<name>/`.
+
 Source: [mail grants and reads](../supervisor/mail.py).
 
 ## An instance's own Gmail (`shaft secret <name> google …`)
@@ -230,6 +246,14 @@ Battery exams get none.
 The risks are mail's, plus other people's data: attendees' names and addresses, and invitations they wrote, reach
 the instance, its model providers and the judges.
 
+**Watch (changed events, without polling).** `WATCH_CALENDAR` in the instance's `config.env` (`off`, `inbox`,
+`wake`; set with `set_config`) works as the mail watch does: Calendar's `events.list` with a stored sync token, one
+call per granted calendar per pass (the first one pages through the whole calendar once to get the token, reporting
+nothing). Created, changed and cancelled events reach the inbox as one message per pass, `From: supervisor (calendar
+watch)`: each event's handle, time and title, never its description, location or attendees. `wake` uses the same
+wake path (`watch-calendar`) and the same per-instance limit; an expired token (410) starts from now. The instance's
+own `calendar_create` and `calendar_move` changes are reported too.
+
 Source: [calendar tools](../supervisor/calendar.py).
 
 ## Scheduled jobs (`shaft jobs …`)
@@ -250,6 +274,8 @@ Each run happens in the `run` sandbox, with its own broker and egress proxy:
 What a run returns lands in the instance's inbox, from "job <plugin>". An empty return delivers nothing. A job with
 `can_wake: true` whose run returns `{"message": …, "wake": true}` starts a cycle as soon as the instance is idle.
 Several requests while it is awake make one wake, there is no rate limit, and a paused instance is never woken.
+For new mail or calendar changes a job is not needed: the supervisor's watch (`WATCH_MAIL`, `WATCH_CALENDAR`, in the
+Mail and Calendar sections) checks every minute and wakes through the same path.
 
 A run still going when the next comes due means the next is skipped, and the skip is logged. After 3 failures in a
 row the instance gets one message and the job backs off (its interval doubles, up to a day). Every run is logged in
