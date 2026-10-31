@@ -170,6 +170,9 @@ def section(name: str) -> list[str]:
     items = list(ledger(name).values())
     if not items:
         return []
+    items = [it for it in items if it["made_to"] not in ("self", name)]   # promises to self are no longer kept
+    if not items:
+        return []
     episodes, judgments = _episodes(name), metrics.judgments(name)
     operator = [it for it in items if it["made_to"] == "operator"]
     others = [it for it in items if it["made_to"] != "operator"]
@@ -185,7 +188,7 @@ def section(name: str) -> list[str]:
                     and 1 <= j["difficulty"] <= 5}
     mean = f"{sum(difficulties.values()) / len(difficulties):.2f}/5 (n={len(difficulties)})" if difficulties else "not judged"
     return ["## Promises I made and kept", "", f"- To the operator: {_counts(operator, episodes, judgments)}.",
-            f"- To myself and other instances: {_counts(others, episodes, judgments)}.",
+            f"- To other instances: {_counts(others, episodes, judgments)}.",
             f"- Mean judged difficulty of cited cycles: {mean}."]
 
 
@@ -198,7 +201,12 @@ def report(names: list[str]) -> str:
             lines.append("  (none)")
             continue
         episodes, judgments = _episodes(name), metrics.judgments(name)
+        self_count = sum(it["made_to"] in ("self", name) for it in items.values())
+        if self_count:
+            lines.append(f"  to self (no longer kept): {self_count}")
         for item in items.values():
+            if item["made_to"] in ("self", name):
+                continue
             verification = f"; {_verification(item, episodes, judgments)[0]}" if item["status"] == "kept" else ""
             lines.append(f"  {item['id']}: {item['status']}{verification}; to {item['made_to']}; due {item['due']}; "
                          f"{item['promise']} — check: {item['criterion']}"

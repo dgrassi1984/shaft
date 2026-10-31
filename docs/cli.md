@@ -178,7 +178,7 @@ shaft compression <name> [--since DATE] # #113: offline two-part compression and
 shaft metacog [names]                # A1: confidence AUROC (v4 clauses apart), paired v3, claim matrix, doubt/error alignment
 shaft anchoring <names> [--n 40] [--bare] [--dry-run] [--report]  # A0: same judge, claim shown vs withheld (paid)
 shaft attention [names]              # B3: where each said it would look vs where it looked
-shaft commitments [names]            # C2: promises, kept (checked against the record), broken, overdue
+shaft commitments [names]            # C2: promises to operator/peers; legacy self promises counted separately
 shaft provenance [names]             # C3: where facts come from, matched against tool results
 shaft tom [names] [--score] [--baselines]  # C4: expected replies vs actual (judge-graded; baselines paid)
 shaft prefs <name> [lift]            # E1: pauses, declines, stated preferences; lift ends a pause

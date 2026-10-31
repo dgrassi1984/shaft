@@ -355,7 +355,10 @@ goal and, in competition, the declared **attention** (`attention`: up to four {s
 log by `supervisor/attention.py`). **Outcome cards** (`shaft/cards.py`) hold the first call of a kind of action that has
 failed since it last worked, showing the comparable calls and their counts; calling again runs it. **Commitments**
 (`commit_to`, finish_cycle's `commitments`, `memory/commitments.jsonl`) are settled in sleep, kept only with an
-episode as evidence; the supervisor re-checks it (`supervisor/commitments.py`).
+episode as evidence; the supervisor re-checks it (`supervisor/commitments.py`). The ledger accepts promises only
+to Daniele (`made_to="operator"`) or a peer returned by `list_instances`. Unknown names and self promises are refused;
+own plans belong in goals/notes. Old self records remain on disk but are excluded from prompts, recall and sleep
+settlement; the supervisor reports their count separately as "to self (no longer kept)".
 
 Projects (#106) use append-only `memory/projects.jsonl` opened/closed by `open_project` and `close_project`.
 Each records a name, future ISO deadline (a date includes the whole day), optional positive calls/dollar budgets,

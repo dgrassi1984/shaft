@@ -246,8 +246,9 @@ The six knobs after it switch the mechanisms of [PLAN-consciousness](plans/PLAN-
 `OUTCOME_CARDS` (on, off: before a kind of action that has been failing, the first such call in a
 cycle is held while the instance sees what comparable ones led to), `WORKSPACE` (competitive, relevance, off: what wins
 `WORKSPACE_K` places at the front of a live cycle, in automatic recall's place, broadcast after every step),
-`ATTENTION_SCHEMA` (declare_intent asks where it expects to look), `COMMITMENTS` (commit_to, settled in sleep against
-the record) and `FORECAST` (on, reserve, off: what comparable goals cost, or a fixed reserve rule). A value outside
+`ATTENTION_SCHEMA` (declare_intent asks where it expects to look), `COMMITMENTS` (commit_to for promises to
+Daniele (`operator`) or peers from `list_instances`, settled in sleep against the record; own plans belong in goals/notes)
+and `FORECAST` (on, reserve, off: what comparable goals cost, or a fixed reserve rule). A value outside
 these keeps the default with a warning. `shaft experiment` flips a knob's default in code to run its kill test, and
 refuses an instance whose config.env sets that knob.
 Sources: template `shaft/config.py:17`, [autonomy.py](../supervisor/autonomy.py).
