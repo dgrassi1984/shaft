@@ -197,6 +197,7 @@ reviewed ref was `refs/heads/publish-prep-template`.
 | `CONFIDENCE_MODE` | `'confirm'` | uses built-in default |
 | `GOALS_CHARS` | `12000` | uses built-in default |
 | `BRIEFING` | `'notes/briefing.md'` | `notes/briefing.md` |
+| `BRIEFING_CHARS` | `6000` | uses built-in default |
 | `HANDOFF` | `'on'` | `on` |
 | `CURIOSITY_EVERY_CYCLES` | `5` | `5` |
 | `OUTCOME_CARDS` | `'on'` | uses built-in default |
@@ -256,7 +257,9 @@ Sources: template `shaft/config.py:17`, [autonomy.py](../supervisor/autonomy.py)
 watchers write it as a scheduled job with the next 48 hours of calendar, actionable mail, open commitments to the
 operator and his last corrections, each dated. Prompt construction only reads the file. A first line
 `generated: <ISO time>` dates the briefing; otherwise its mtime does. The prompt shows its age in hours, marks it
-stale after 24 hours, and caps its content at 3,000 characters with a `read_file` pointer. Missing, empty or
+stale after 24 hours, and shows it like goals.md under `BRIEFING_CHARS` (default 6,000): whole `## ` sections, a section
+whose heading names corrections first, then the rest in file order, and one line per section left out with the
+`read_file` offset where it starts. Missing, empty or
 unreadable files render a line explaining their state.
 
 `HANDOFF=on` shows the last two live episodes' completed calls, unfinished work and next action with its revision
