@@ -137,6 +137,10 @@ class WorkspaceUnitTest(Fixture, unittest.TestCase):
         self.assertEqual(len(workspace.attention([{"source": f"s{i}"} for i in range(9)])), 4)
         self.assertEqual(workspace.attention([{"why": "no source"}, 7, {"source": "memory", "why": "w"}]),
                          [{"source": "memory", "why": "w"}])
+        # a list sent as a JSON string was kept as one source made of the whole string
+        sent = json.dumps([{"source": "notes/", "why": "the plan"}, {"source": "web"}])
+        self.assertEqual(workspace.attention(sent), [{"source": "notes/", "why": "the plan"}, {"source": "web", "why": ""}])
+        self.assertEqual(workspace.attention("[not json"), [{"source": "[not json", "why": ""}])
 
 
 class LiveCycleTest(Fixture, unittest.TestCase):

@@ -352,8 +352,11 @@ lets deterministic codelets — memory hits, open surprises, inbox, improvement 
 due goals, open commitments — compete for `WORKSPACE_K` places in automatic recall's 1,800 characters; the winners are
 recorded in the episode and broadcast after every step; after `declare_intent` they compete again for the declared
 goal and, in competition, the declared **attention** (`attention`: up to four {source, why}, scored against the tool
-log by `supervisor/attention.py`). **Outcome cards** (`shaft/cards.py`) hold the first call of a kind of action that has
-failed since it last worked, showing the comparable calls and their counts; calling again runs it.
+log by `supervisor/attention.py`: a call touches its tool's source — mail, calendar, record, memory, web, or what a
+plugin's name says — the files in its arguments, in a run's command or in a script the cycle wrote and ran, a
+message's recipient and a plugin's code; free-text sources are split into paths and known sources, and one it cannot
+read is reported unreadable, not untouched). **Outcome cards** (`shaft/cards.py`) hold the first call of a kind of
+action that has failed since it last worked, showing the comparable calls and their counts; calling again runs it.
 A `run` call's kind is the program it actually runs (past a leading `cd`, assignments and wrappers like `env`;
 inside `bash -c`; `python -m pytest` is `run pytest`, `python3 shaft/x.py` is `run python3 shaft/x.py`). Read-only
 inspections (`echo`, `cat`, `ls`, `wc`, `grep`, `sed -n`, …) have no kind and are never held. **Commitments**

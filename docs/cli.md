@@ -177,8 +177,8 @@ shaft consults [names]               # consults of other models: per model and r
 shaft compression <name> [--since DATE] # #113: offline two-part compression and held-out fact recall
 shaft metacog [names]                # A1: confidence AUROC (v4 clauses apart), paired v3, claim matrix, doubt/error alignment
 shaft anchoring <names> [--n 40] [--bare] [--dry-run] [--report]  # A0: same judge, claim shown vs withheld (paid)
-shaft attention [names]              # B3: where each said it would look vs where it looked
-shaft commitments [names]            # C2: promises to operator/peers; legacy self promises counted separately
+shaft attention [names]              # B3: where each said it would look vs where it looked (and what it could not read)
+shaft commitments [names]            # C2: promises to operator/peers, kept (checked against the record), broken, overdue
 shaft provenance [names]             # C3: where facts come from, matched against tool results
 shaft tom [names] [--score] [--baselines]  # C4: expected replies vs actual (judge-graded; baselines paid)
 shaft experiment <cards|attention|commitments|forecast|workspace> <name> [--n N] [--model M] [--dry-run] [--report]

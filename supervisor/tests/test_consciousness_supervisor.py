@@ -78,12 +78,105 @@ class AttentionTest(unittest.TestCase):
         self.assertEqual(s["unreadable"], 1)
         self.assertIsNone(attention.score(ep("t", [])))   # nothing declared, nothing scored
 
-    def test_synonyms_and_labels(self):
-        self.assertTrue(attention.matches("operator", "message operator"))
-        self.assertTrue(attention.matches("memory", attention.label(call("write_file", {"path": "memory/people/x.md"}))))
-        self.assertTrue(attention.matches("example.org", "web example.org"))
-        self.assertTrue(attention.matches("code", attention.label(call("write_file", {"path": "shaft/live.py"}))))
-        self.assertFalse(attention.matches("wren", "message thelos"))
+    def test_synonyms_and_touches(self):
+        self.assertTrue(attention.matches("operator", attention.touches(call("send_message", {"to": "operator"}))))
+        self.assertTrue(attention.matches("memory", attention.touches(call("write_file", {"path": "memory/people/x.md"}))))
+        self.assertTrue(attention.matches("example.org", attention.touches(call("fetch_page", {"url": "https://example.org/a"}))))
+        self.assertTrue(attention.matches("code", attention.touches(call("write_file", {"path": "shaft/live.py"}))))
+        self.assertTrue(attention.matches("another instance", attention.touches(call("send_message", {"to": "wren"}))))
+        self.assertFalse(attention.matches("wren", attention.touches(call("send_message", {"to": "thelos"}))))
+        self.assertFalse(attention.matches("another instance", attention.touches(call("send_message", {"to": "operator"}))))
+
+    def test_it_does_not_over_match(self):
+        heredoc = call("run", {"command": "python3 - <<'PY'\nclass T:\n    def go(self):\n        return self.root\nPY"})
+        self.assertFalse(attention.matches("self", attention.touches(heredoc)))             # python's self is no folder
+        curl = call("run", {"command": "curl -s https://example.org/notes/today.md"})
+        self.assertFalse(attention.matches("notes/", attention.touches(curl)))              # a URL's path is the web
+        self.assertTrue(attention.matches("web", attention.touches(call("http_request", {"url": "https://example.org"}))))
+        self.assertFalse(attention.matches("plugins/", attention.touches(call("read_file", {"path": "self/goals.md"}))))
+        self.assertFalse(attention.matches("record", attention.touches(call("read_file", {"path": "memory/episodes/a.jsonl"}))))
+        self.assertFalse(attention.matches("notes/queue.json", attention.touches(call("read_file", {"path": "notes/q.md"}))))
+
+    def test_supervisor_copy_of_the_agent_tools_covers_its_builtins(self):
+        try:
+            from shaft import commitments, tools
+        except ImportError:
+            self.skipTest("template/ is not checked out")
+        names = {t["function"]["name"] for t in tools.BUILTINS + [tools.VIEW_IMAGE, commitments.COMMIT_TO]}
+        self.assertEqual(names - attention.AGENT_TOOLS, set())   # a built-in mistaken for a plugin would touch plugins/
+
+
+class AttentionMissedTouchesTest(unittest.TestCase):
+    """Bug: attention scoring missed touches made through task_queue/record/run/plugins. Thelos's declared sources were
+    'never touched' in most cycles (share 0-25%) while its calls went right there: the file a run command reads, a
+    plugin's own code, the mail/calendar/drive/notion plugins, '.tmp' read as 'tmp',
+    and declarations written as 'notes/…', 'a / b' or 'mail_search/mail_read (a thread)'."""
+
+    def cycle(self, sources, tools):
+        return attention.score(ep("2026-10-31T09:00:00", [call("declare_intent", {}), *tools, call("finish_cycle", {})],
+                                  intent={"goal": "g", "attention": [{"source": s, "why": "w"} for s in sources]}))
+
+    def test_a_plugin_touches_its_name_and_its_code(self):
+        s = self.cycle(["task_queue", "plugins/task_queue/"], [call("task_queue", {"action": "done", "id": 7})] * 3)
+        self.assertEqual((s["untouched"], s["share"]), ([], 1.0))
+
+    def test_record_and_history_are_the_record(self):
+        s = self.cycle(["record", "history"], [call("record", {"kind": "jobs", "limit": 5}),
+                                               call("history", {"path": "shaft/kiln.py"})])
+        self.assertEqual((s["untouched"], s["share"]), ([], 1.0))
+
+    def test_run_touches_the_files_its_command_names(self):
+        s = self.cycle(["shaft/kiln_report.py", "notes/queue.json", "tests/", ".tmp"], [
+            call("run", {"command": "sed -n '40,80p' shaft/kiln_report.py; grep -n 'def ' shaft/kiln_report.py"}),
+            call("run", {"command": "python3 - <<'PY'\nimport json\nrows=json.load(open('notes/queue.json'))\nPY"}),
+            call("run", {"command": "python3 -m unittest tests.test_kiln_report -v > .tmp/kiln.txt 2>&1"}),
+            call("run", {"command": "date"})])
+        self.assertEqual(s["untouched"], [])
+        self.assertEqual(s["on_named"], 3)              # date names no file
+        self.assertNotEqual(s["share"], 0.0)            # the old scorer gave 0% here
+
+    def test_run_of_a_script_the_cycle_wrote(self):
+        s = self.cycle(["shaft/kiln_report.py"], [
+            call("write_file", {"path": ".tmp/patch_kiln.py", "content": "p='shaft/kiln_report.py'\nopen(p).read()\n"}),
+            call("run", {"command": "python3 .tmp/patch_kiln.py"})])
+        self.assertEqual((s["untouched"], s["on_named"]), ([], 1))
+
+    def test_plugins_touch_their_code_and_their_source(self):
+        s = self.cycle(["plugins/kiln-watch/main.py", "mail", "calendar", "drive"], [
+            call("kiln-watch", {"dry_run": True}), call("gmail", {"action": "search", "query": "q"}),
+            call("cal-watch", {"job": "x"}), call("gdrive", {"action": "list"})])
+        self.assertEqual((s["untouched"], s["share"]), ([], 1.0))
+        s = self.cycle(["notion", "plugins/"], [call("http_request", {"url": "https://api.notion.com/v1/pages/x"}),
+                                                call("kiln-watch", {})])
+        self.assertEqual((s["untouched"], s["share"]), ([], 1.0))
+
+    def test_dot_folders_and_save_paths(self):
+        s = self.cycle([".tmp/kiln-dump.txt", ".tmp/"], [call("read_file", {"path": ".tmp/kiln-dump.txt"}),
+                                                         call("mail_dump", {"id": "t1", "save_to": ".tmp/m.txt"})])
+        self.assertEqual((s["untouched"], s["share"]), ([], 1.0))
+
+    def test_declared_free_text_is_normalised(self):
+        s = self.cycle(["Notes/…", "shaft/kiln.py / tests/", "mail_search/mail_read (the orchard thread)",
+                        "plugins/kiln-watch + skills/"], [
+            call("append_file", {"path": "notes/log.md", "content": "x"}), call("read_file", {"path": "tests/test_k.py"}),
+            call("mail_read", {"id": "t1"}), call("read_file", {"path": "skills/kiln.md"})])
+        self.assertEqual((s["untouched"], s["share"]), ([], 1.0))
+        self.assertEqual(self.cycle(["mail_search"], [call("mail_read", {"id": "t1"})])["untouched"], [])  # mail is mail
+
+    def test_a_source_it_cannot_read_is_unreadable_not_untouched(self):
+        s = self.cycle(["supervisor source", "notes/"], [call("read_file", {"path": "notes/a.md"})])
+        self.assertEqual((s["untouched"], s["unreadable_sources"], s["unreadable"]), ([], ["supervisor source"], 1))
+        self.assertEqual(s["share"], 1.0)
+        s = self.cycle(["supervisor source / .jobs record"], [call("record", {"kind": "jobs"})])
+        self.assertEqual((s["untouched"], s["unreadable_sources"]), ([], []))   # one part it can read is enough
+
+    def test_untouched_still_untouched(self):
+        s = self.cycle(["record", "operator", "notes/queue.json"], [
+            call("mail_read", {"id": "t1"}), call("calendar_events", {"start": "a", "end": "b"}),
+            call("read_file", {"path": "memory/episodes/2026-10-30.jsonl"})])
+        self.assertEqual(s["untouched"], ["record", "operator", "notes/queue.json"])
+        self.assertEqual(s["share"], 0.0)
+
 
     def test_section(self):
         e = ep("2026-10-26T10:00:00", [call("read_file", {"path": "notes/a.md"}), call("web_search", {"query": "q"})],
