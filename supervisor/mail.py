@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import html
+import json
 import re
 from datetime import datetime
 from email.header import decode_header, make_header
@@ -80,26 +81,43 @@ def get_thread(acct: google.Account, label_ids: set[str], thread_id: str, before
     return msgs
 
 
-def search(acct: google.Account, label_id: str, query: str, limit: int, before: datetime | None = None) -> tuple[list[dict], int]:
-    """Threads under the label matching `query`, newest first: (rows, how many Gmail returned that failed the
-    label check and were dropped). Each row: handle, last, participants, subject, snippet, messages, attachments."""
+def search(acct: google.Account, label_id: str, query: str, limit: int, before: datetime | None = None,
+           page: str = "") -> tuple[list[dict], int, str]:
+    """Visible rows, dropped count and continuation. Cursors keep unconsumed IDs, never cached mail content."""
     q = (query or "").strip()
-    if before:   # only threads that had begun by then (the visibility check below cuts later messages too)
+    if before:
         q = (f"({q}) " if q else "") + f"before:{int(before.timestamp())}"
-    found = _get(acct, "threads", labelIds=label_id, q=q, maxResults=max(1, min(int(limit), 50))).get("threads") or []
-    rows, dropped = [], 0
-    for t in found:
+    state = json.loads(page) if page else {"pending": [], "token": ""}
+    pending, token = state["pending"], state["token"]
+    if not isinstance(pending, list) or not all(isinstance(t, str) for t in pending) or not isinstance(token, str):
+        raise ValueError("invalid mail_search cursor")
+    rows, dropped, first = [], 0, not page
+
+    while len(rows) < limit:
+        if not pending:
+            if not first and not token:
+                break
+            params = {"labelIds": label_id, "q": q, "maxResults": max(1, min(limit - len(rows), 50))}
+            if token:
+                params["pageToken"] = token
+            found = _get(acct, "threads", **params)
+            pending = [str(t.get("id")) for t in found.get("threads") or []]
+            token, first = found.get("nextPageToken") or "", False
+            if not pending:
+                continue
+        tid, pending = pending[0], pending[1:]
         try:
-            msgs = get_thread(acct, {label_id}, str(t.get("id")), before)
+            msgs = get_thread(acct, {label_id}, tid, before)
         except NotVisible:
             dropped += 1
             continue
         last = msgs[-1]
-        rows.append({"handle": f"{acct.alias}/{t['id']}", "last": _date(last), "subject": _header(msgs[0], "subject"),
+        rows.append({"handle": f"{acct.alias}/{tid}", "last": _date(last), "subject": _header(msgs[0], "subject"),
                      "participants": _participants(msgs), "snippet": html.unescape(last.get("snippet") or ""),
                      "messages": len(msgs), "attachments": sum(len(attachments(m)) for m in msgs)})
     rows.sort(key=lambda r: r["last"], reverse=True)
-    return rows, dropped
+    next_page = json.dumps({"pending": pending, "token": token}, separators=(",", ":")) if pending or token else ""
+    return rows, dropped, next_page
 
 
 # -- a message's parts -------------------------------------------------------------------------------------------------

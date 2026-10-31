@@ -5,6 +5,7 @@ import json
 import re
 import sys
 import threading
+import unittest
 from unittest import mock
 
 from supervisor import mail
@@ -159,3 +160,94 @@ class PagingTest(fixtures.MailCase):
         """#134: headers alone over budget must fail explicitly, never hide the paging footer."""
         self.gmail.add("abc123", [fixtures.msg("p1", "abc123", [fixtures.TAG], 9, "Alice", "S" * 6000, text="body")])
         self.assertIn("headers and paging footer exceed", self.refused(self.broker(), "mail_read", {"id": "work/abc123"}))
+
+
+class SearchPagingTest(unittest.TestCase):
+    def account(self, alias):
+        gmail = fixtures.FakeGmail()
+        account = mock.Mock(alias=alias)
+
+        def get(url, **params):
+            if url.endswith("/threads"):
+                ids = ["aaa111", "bbb222", "ccc333", "eee555"]
+                offset = int(params.get("pageToken", "0"))
+                end = min(len(ids), offset + min(2, params["maxResults"]))
+                return {"threads": [{"id": i} for i in ids[offset:end]],
+                        "nextPageToken": str(end) if end < len(ids) else ""}
+            request = fixtures.urllib.request.Request(url + "?" + fixtures.urllib.parse.urlencode(params))
+            return json.load(gmail(request))
+
+        account.get.side_effect = get
+        return account, gmail
+
+    def broker(self, accounts):
+        b = fixtures.broker.Broker.__new__(fixtures.broker.Broker)
+        b.name, b.as_of = "wren", None
+        b.mail_grants = lambda: [{"account": alias, "label": "AssistantAccess"} for alias in accounts]
+        b._mail_account = accounts.__getitem__
+        b._log = lambda text: None
+        return b
+
+    def next_page(self, out):
+        line = out.splitlines()[-1]
+        self.assertTrue(line.startswith("more: yes — mail_search("), out)
+        return json.loads(line.split("page=", 1)[1][:-1])
+
+    def test_search_first_page_loss_and_label_leak(self):
+        acct, _ = self.account("work")
+        rows, dropped, page = mail.search(acct, fixtures.TAG, "", 3)
+        self.assertEqual([r["handle"] for r in rows], ["work/aaa111", "work/ccc333", "work/eee555"])
+        self.assertEqual(dropped, 1)
+        self.assertEqual(page, "")
+        self.assertTrue(any(c.kwargs.get("pageToken") for c in acct.get.call_args_list))
+        self.assertTrue(all(c.kwargs["maxResults"] <= 50 for c in acct.get.call_args_list
+                            if "maxResults" in c.kwargs))
+
+    def test_search_merge_cut_keeps_each_accounts_continuation(self):
+        work, _ = self.account("work")
+        home, _ = self.account("home")
+        b = self.broker({"work": work, "home": home})
+        seen, page = [], ""
+        for _ in range(8):
+            out = b._mail_search(max=2, page=page)
+            seen.extend(re.findall(r"^(work|home)/([a-f0-9]+) ·", out, re.M))
+            if not out.splitlines()[-1].startswith("more:"):
+                break
+            page = self.next_page(out)
+            self.assertTrue(set(json.loads(page)["grants"]) <= {"work/AssistantAccess", "home/AssistantAccess"})
+        else:
+            self.fail("search continuation did not end")
+        self.assertCountEqual(seen, [(alias, tid) for alias in ("work", "home")
+                                     for tid in ("aaa111", "ccc333", "eee555")])
+
+    def test_search_continuation_rechecks_buffered_thread_label(self):
+        work, _ = self.account("work")
+        home, gmail = self.account("home")
+        b = self.broker({"work": work, "home": home})
+        page = self.next_page(b._mail_search(max=1))
+        for message in gmail.threads["aaa111"]:
+            message["labelIds"] = []
+        out = b._mail_search(max=1, page=page)
+        self.assertNotIn("home/aaa111 ·", out)
+        self.assertIn("work/ccc333 ·", out)
+
+    def test_search_continuation_refuses_changed_query(self):
+        work, _ = self.account("work")
+        b = self.broker({"work": work})
+        page = self.next_page(b._mail_search(max=1))
+        with self.assertRaisesRegex(ValueError, "query or account changed"):
+            b._mail_search(query="other", max=1, page=page)
+
+    def test_search_continuation_does_not_reuse_revoked_grant(self):
+        work, _ = self.account("work")
+        b = self.broker({"work": work})
+        page = self.next_page(b._mail_search(max=1))
+        b.mail_grants = lambda: [{"account": "home", "label": "AssistantAccess"}]
+        work.get.reset_mock()
+        with self.assertRaisesRegex(PermissionError, "no currently granted"):
+            b._mail_search(max=1, page=page)
+        work.get.assert_not_called()
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -127,6 +127,10 @@ reads or downloads from is checked again before anything of it is shown. A threa
 messages carries the label; then all its messages are, later replies included. Drafts, trash and spam are left out.
 
 One instance may read several accounts: grant a label on each; `mail_search` covers every grant unless told one.
+`mail_search(query=…, max=…)` returns up to 50 threads per call, following Gmail pages to fill the limit.
+When more remain, its final `more: yes` line gives the next `mail_search` call with a `page` handle.
+Keep the query and account selection on continuations. The handle tracks each account/label separately,
+including threads left over after merging accounts; every continuation checks the current grant and label again.
 `shaft mail example grant work AssistantAccess` checks that the label exists and saves the grant in
 `.supervisor/tools/example.json`. `shaft mail example revoke work AssistantAccess` or `shaft mail example off` holds from example's
 next mail call. A label renamed or deleted in Gmail is refused until you grant it again. Up to 30 mail calls per run; a continuation page of `mail_read` (message or offset past the start) counts as a call but not against those 30.

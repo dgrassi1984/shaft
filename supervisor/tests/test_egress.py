@@ -58,11 +58,11 @@ class Upstream:
 REAL_PUBLIC_ADDRESS = egress.public_address
 
 
-def pretend_public(host: str, port: int) -> str:
+def pretend_public(host: str, port: int) -> list[str]:
     """Any name resolves to the local stand-in; a literal local address is still refused, as in production."""
     if host in ("127.0.0.1", "localhost"):
         return REAL_PUBLIC_ADDRESS(host, port)
-    return "127.0.0.1"
+    return ["127.0.0.1"]
 
 
 class PublicAddressTest(unittest.TestCase):
@@ -83,7 +83,7 @@ class PublicAddressTest(unittest.TestCase):
     def test_a_public_address_is_returned(self):
         fake = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.215.14", 443))]
         with mock.patch.object(egress.socket, "getaddrinfo", return_value=fake):
-            self.assertEqual(egress.public_address("example.com", 443), "93.184.215.14")
+            self.assertEqual(egress.public_address("example.com", 443), ["93.184.215.14"])
 
 
 class SummaryTest(unittest.TestCase):
@@ -248,6 +248,48 @@ class ReplayEgressTest(unittest.TestCase):
         self.assertEqual(len(net), 1)
         self.assertIn("simulated: not sent", net[0]["tags"])
         self.assertFalse(egress.log_path(NAME).exists())   # the instance's own record is not the replay's
+
+
+class AddressFallbackTest(unittest.TestCase):
+    def handler(self):
+        with mock.patch.object(egress, "ThreadingHTTPServer") as server, \
+                mock.patch.object(egress.threading, "Thread"):
+            proxy = egress.Egress("wren", Path("unused"))
+            proxy.start()
+        handler = server.call_args.args[1].__new__(server.call_args.args[1])
+        handler._fail = mock.Mock()
+        proxy._record = mock.Mock()
+        return proxy, handler
+
+    def addresses(self, *ips):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, 443)) for ip in ips]
+
+    def test_first_public_address_refusal_tries_second(self):
+        proxy, handler = self.handler()
+        connection = mock.Mock()
+        with mock.patch.object(egress.socket, "getaddrinfo", return_value=self.addresses("1.1.1.1", "8.8.8.8")), \
+                mock.patch.object(egress.socket, "create_connection", side_effect=[OSError("no route"), connection]) as connect:
+            self.assertIs(handler._open("example.com", 443), connection)
+        self.assertEqual(connect.call_args_list, [mock.call((ip, 443), timeout=egress.CONNECT_TIMEOUT_S)
+                                                 for ip in ("1.1.1.1", "8.8.8.8")])
+        proxy._record.assert_not_called()
+        handler._fail.assert_not_called()
+
+    def test_mixed_public_private_dns_refuses_whole_host(self):
+        proxy, handler = self.handler()
+        with mock.patch.object(egress.socket, "getaddrinfo", return_value=self.addresses("1.1.1.1", "10.0.0.1")), \
+                mock.patch.object(egress.socket, "create_connection") as connect:
+            self.assertIsNone(handler._open("example.com", 443))
+        connect.assert_not_called()
+        self.assertEqual(handler._fail.call_args.args[0], 403)
+
+    def test_all_public_addresses_fail_records_only_last_error(self):
+        proxy, handler = self.handler()
+        with mock.patch.object(egress.socket, "getaddrinfo", return_value=self.addresses("1.1.1.1", "8.8.8.8")), \
+                mock.patch.object(egress.socket, "create_connection", side_effect=[OSError("first"), OSError("last")]):
+            self.assertIsNone(handler._open("example.com", 443))
+        proxy._record.assert_called_once_with("example.com", 443, refused="connection failed: last")
+        handler._fail.assert_called_once_with(502, "cannot connect to example.com:443: last")
 
 
 if __name__ == "__main__":
