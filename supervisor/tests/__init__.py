@@ -47,3 +47,10 @@ def _import_the_supervisor() -> None:
 
 
 _import_the_supervisor()
+
+# A test's outcome must not depend on the hour it runs at: with push holding on, every test that sends the operator a
+# message between 22:00 and 07:00 saw it held for the morning digest (seven Telegram and delivery tests failed at
+# 22:30, 2026-10-31). Holding is off for the run; test_push_hold turns it on with its own clock and quiet hours.
+from supervisor import pushes   # noqa: E402
+
+pushes.PUSH_HOLD = 0
