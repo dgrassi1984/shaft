@@ -72,7 +72,8 @@ def _median(values: list[float]) -> float | None:
 def summarise(eps: list[dict], root: Path) -> dict:
     """What a set of comparable cycles usually costs: the median turns, minutes and supervisor calls (their tool
     log minus the controls), how many ran out of turns or time, and how many of their judge's verdicts found the
-    criterion met. I count forced deadline and last-step wrap-ups as running out, but not a yield."""
+    criterion met. Ran out is a deadline wrap-up, or the step cap reached without a finish; a steps wrap-up that
+    still finished, a yield and the loop guard are not."""
     turns: list[float] = []
     minutes: list[float] = []
     calls: list[float] = []
@@ -87,8 +88,9 @@ def summarise(eps: list[dict], root: Path) -> dict:
         tools = ep.get("tools")
         if isinstance(tools, list):
             calls.append(sum(1 for e in tools if isinstance(e, dict) and e.get("tool") not in CONTROLS))
-        if (ep.get("ended_by") in ("steps", "repeating") or not ep.get("finish")
-                or ep.get("wrapped_up") in ("deadline", "steps")):
+        wrapped, ended = ep.get("wrapped_up"), ep.get("ended_by")
+        capped = "steps" in (ended, wrapped) and ended != "repeating" and wrapped != "yield"
+        if wrapped == "deadline" or (capped and not ep.get("finish")):
             ran_out += 1
     verdicts = {row["episode_ts"]: row for row in memory.verdict_rows(root)}
     met = judged = 0
