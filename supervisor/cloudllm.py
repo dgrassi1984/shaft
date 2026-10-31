@@ -294,18 +294,21 @@ def _record(instance: str, model: str, tokens_in, tokens_out, usd: float, starte
 
 def _send(req: urllib.request.Request) -> tuple[dict | None, str | None]:
     """POST with retries on overload and network errors; (data, None) or (None, error)."""
-    error = None
+    error, throttled = None, 0
     for wait in (0, 10, 30):
         time.sleep(wait)
         try:
             with urllib.request.urlopen(req, timeout=600) as resp:
                 return json.load(resp), None
         except urllib.error.HTTPError as e:
+            throttled += e.code == 429
             error = f"HTTP {e.code}: {e.read().decode(errors='replace')[:400]}"
             if e.code not in (429, 500, 502, 503, 504, 529):
                 break
         except NETWORK_ERRORS as e:
             error = f"network: {e}"
+    if throttled:   # the usage log must count retry refusals too
+        error += f" [HTTP 429 responses: {throttled}]"
     return None, error
 
 
@@ -381,19 +384,22 @@ def openrouter_stream(instance: str, body: dict, secrets: dict):
     key = secrets.get("OPENROUTER_API_KEY", "")
     if not key:
         raise CloudError(503, "no OPENROUTER_API_KEY in the supervisor's .env")
-    started, resp = time.monotonic(), None
+    started, resp, throttled = time.monotonic(), None, 0
     for wait in (0, 10, 30):   # retry only before the first byte: a started stream cannot be replayed
         time.sleep(wait)
         try:
             resp = urllib.request.urlopen(_openrouter_request(body, key, stream=True), timeout=600)
             break
         except urllib.error.HTTPError as e:
+            throttled += e.code == 429
             error = f"HTTP {e.code}: {e.read().decode(errors='replace')[:400]}"
             if e.code not in (429, 500, 502, 503, 504, 529):
                 break
         except NETWORK_ERRORS as e:
             error = f"network: {e}"
     if resp is None:
+        if throttled:
+            error += f" [HTTP 429 responses: {throttled}]"
         _record(instance, model, None, None, 0.0, started, None, error)
         raise CloudError(502, f"OpenRouter call for {model} failed: {error}{_policy_hint(error)}")
     return _relay(instance, model, resp, started)

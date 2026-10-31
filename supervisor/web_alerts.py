@@ -90,6 +90,28 @@ def forward_pauses() -> int:
     return pushed
 
 
+def forward_providers() -> int:
+    """Like pause pushes, retry failed notifications and forget IDs when the provider recovers."""
+    from . import panel, webpush
+    path = core.SUP_DIR / "web" / "provider-alerts.json"
+    try:
+        saved = set(json.loads(path.read_text()))
+    except (OSError, ValueError):
+        saved = set()
+    alerts = panel.provider_alerts()
+    sent = saved & {a["id"] for a in alerts}
+    pushed = 0
+    for alert in alerts:
+        if alert["id"] not in sent and webpush.notify({"title": "Provider needs attention", "body": alert["text"],
+                                                     "url": "/overview", "tag": alert["id"]}):
+            sent.add(alert["id"])
+            pushed += 1
+    if sent != saved:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(sorted(sent)))
+    return pushed
+
+
 def start() -> threading.Event:
     """The forwarding thread, every EVERY_S seconds; set the returned event to stop it."""
     stop = threading.Event()
@@ -102,6 +124,10 @@ def start() -> threading.Event:
                 log(f"web: alerts: {type(e).__name__}: {e}")
             try:
                 forward_pauses()
+            except Exception as e:
+                log(f"web: alerts: {type(e).__name__}: {e}")
+            try:
+                forward_providers()
             except Exception as e:
                 log(f"web: alerts: {type(e).__name__}: {e}")
             stop.wait(EVERY_S)

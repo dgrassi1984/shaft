@@ -432,7 +432,8 @@ SPECS["mail_search"] = _spec(
     {"query": {"type": "string", "description": "Gmail search syntax (optional; empty: the newest threads)"},
      "account": {"type": "string", "description": "one grant, as account (e.g. work) or account/label "
                                                    "(optional: default all)"},
-     "max": {"type": "integer", "description": "threads, default 20, max 50"}},
+     "max": {"type": "integer", "description": "threads, default 20, max 50"},
+     "page": {"type": "string", "description": "continuation handle from mail_search; keep query and account"}},
     [])
 SPECS["mail_read"] = _spec(
     "mail_read",
@@ -1890,7 +1891,7 @@ class Broker:
             return "the operator"
         return config_values(text).get("OPERATOR_NAME") or "the operator"
 
-    def _mail_search(self, query: str = "", account: str = "", max: int = 20) -> str:   # noqa: A002 — the tool's name
+    def _mail_search(self, query: str = "", account: str = "", max: int = 20, page: str = "") -> str:   # noqa: A002 — the tool's name
         from . import google, mail
         query, limit = str(query or ""), sorted((1, int(max), 50))[1]
         account = str(account or "").strip()   # an account alias, or one grant as account/label (as the grant is shown)
@@ -1898,23 +1899,49 @@ class Broker:
                   if not account or account in (g["account"], f"{g['account']}/{g['label']}")]
         if not grants:
             raise PermissionError(f"mail account {account!r} is not granted to you; yours: {self.mail_env()}")
-        rows, searched, failed = {}, [], []
+        states = None
+        if page:
+            try:
+                handle = json.loads(page)
+                if handle["query"] != query or handle["account"] != account:
+                    raise ValueError("query or account changed")
+                states = handle["grants"]
+                if not isinstance(states, dict) or not all(isinstance(v, str) for v in states.values()):
+                    raise ValueError("invalid grant cursors")
+            except (ValueError, KeyError, TypeError) as e:
+                raise ValueError(f"invalid mail_search page: {e}") from None
+        if states is not None and not any(f"{g['account']}/{g['label']}" in states for g in grants):
+            raise PermissionError("mail_search page has no currently granted accounts/labels")
+        rows, searched, failed, continuations, remaining = {}, [], [], {}, {}
         for g in grants:
             where = f"{g['account']}/{g['label']}"
+            if states is not None and where not in states:
+                continue
+            start = states[where] if states is not None else ""
             try:
                 acct = self._mail_account(g["account"])
-                found, dropped = mail.search(acct, mail.label_id(acct, g["label"]), query, limit, self.as_of)
+                found, dropped, next_page = mail.search(acct, mail.label_id(acct, g["label"]), query, limit,
+                                                       self.as_of, start)
             except (google.AccountError, google.ApiError) as e:
                 failed.append(f"{where}: {e}")
+                remaining[where] = start
                 continue
             if dropped:   # Gmail's label filter let through a thread the check refused: never shown, worth knowing
                 self._log(f"{self.name} mail_search {where}: {dropped} thread(s) failed the label check, dropped")
             searched.append(where)
+            continuations[where] = (found, next_page)
             for r in found:
                 rows.setdefault(r["handle"], r)
         if not searched:
             raise RuntimeError("; ".join(failed))
         ordered = sorted(rows.values(), key=lambda r: r["last"], reverse=True)[:limit]
+        shown = {r["handle"] for r in ordered}
+        for where, (found, next_page) in continuations.items():
+            state = json.loads(next_page) if next_page else {"pending": [], "token": ""}
+            # Keep IDs cut by the cross-account merge; the next call label-checks them again.
+            state["pending"] = [r["handle"].split("/", 1)[1] for r in found if r["handle"] not in shown] + state["pending"]
+            if state["pending"] or state["token"]:
+                remaining[where] = json.dumps(state, separators=(",", ":"))
         out = [f"searched {', '.join(searched)}" + (f" for {query.strip()!r}" if query.strip() else "")
                + (f": {len(ordered)} thread(s), newest first" if ordered else ": no threads")]
         out += [f"not searched: {f}" for f in failed]
@@ -1923,6 +1950,10 @@ class Broker:
                     + (f", {r['attachments']} attachment(s)" if r["attachments"] else ""),
                     f"  Subject: {r['subject'] or '(none)'}", f"  From: {r['participants'] or '?'}",
                     f"  {' '.join(r['snippet'].split())[:200]}"]
+        if remaining:
+            token = json.dumps({"query": query, "account": account, "grants": remaining}, separators=(",", ":"))
+            out.append(f"more: yes — mail_search(query={json.dumps(query)}, account={json.dumps(account)}, "
+                       f"max={limit}, page={json.dumps(token)})")
         return "\n".join(out)
 
     def _mail_read(self, id: str, message: int = 1, offset: int = 0) -> str:   # noqa: A002
@@ -2350,9 +2381,9 @@ class ReplayBroker(Broker):
 
     # The operator's mail as of the replayed cycle (Broker passes as_of: later threads and messages are hidden). The
     # grant is part of the key: a grant changed between the two runs is not answered from the first run's reads.
-    def _mail_search(self, query: str = "", account: str = "", max: int = 20) -> str:   # noqa: A002
-        return self._shared(["mail_search", self.mail_grants(), query, account, max, self.as_of],
-                            lambda: Broker._mail_search(self, query, account, max))
+    def _mail_search(self, query: str = "", account: str = "", max: int = 20, page: str = "") -> str:   # noqa: A002
+        return self._shared(["mail_search", self.mail_grants(), query, account, max, page, self.as_of],
+                            lambda: Broker._mail_search(self, query, account, max, page))
 
     def _mail_read(self, id: str, message: int = 1, offset: int = 0) -> str:   # noqa: A002
         from . import mail
