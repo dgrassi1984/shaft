@@ -42,9 +42,10 @@ ATTENTION = {"type": "array", "description": "optional, up to 4: where you expec
              "(web, memory, notes/…, shaft/…, operator, another instance, coder, record) and why; it focuses your "
              "workspace, and the supervisor compares it with the calls you make",
              "items": {"type": "object", "properties": {"source": S, "why": S}, "required": ["source"]}}
-PROMISES = {"type": "array", "description": "promises you made this cycle and will keep later: "
+PROMISES = {"type": "array", "description": "promises to Daniele (operator) or another agent you made this cycle "
+            "and will keep later: "
             "{promise, due (YYYY-MM-DD[ HH:MM], today, tomorrow), criterion (how someone else could check), made_to "
-            "(operator, self, or an instance's name)}; [] if none",
+            "(operator or a peer name from list_instances)}; own plans belong in goals/notes; [] if none",
             "items": {"type": "object", "properties": {"promise": S, "due": S, "criterion": S, "made_to": S},
                       "required": ["promise", "due", "criterion", "made_to"]}}
 

@@ -169,7 +169,7 @@ def _commitments(root: Path, now: datetime) -> list[Item]:
     from . import commitments
     out = []
     for it in commitments.fold(root, now).values():
-        if it.get("status") not in ("open", "overdue"):
+        if commitments._to_self(root, it) or it.get("status") not in ("open", "overdue"):
             continue
         due = _when(str(it.get("due") or ""))
         urgency = 1.0 if it["status"] == "overdue" else 0.7 if due and due - now <= timedelta(hours=24) else 0.3
