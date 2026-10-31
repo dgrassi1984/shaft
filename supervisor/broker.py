@@ -369,7 +369,9 @@ SPECS = {
         {"task": S}),
     "set_config": _spec(
         "set_config",
-        "Set one value in your config.env (your model, WAKE_INTERVAL_MINUTES, budgets...): this is the only way "
+        "Set one value in your config.env (your model, WAKE_INTERVAL_MINUTES, WATCH_MAIL / WATCH_CALENDAR = off, "
+        "inbox or wake — the supervisor tells you of new mail or calendar changes under your grants — budgets...): "
+        "this is the only way "
         "to change that file — it is not writable with write_file or run. Your own settings are read at the start "
         "of each run; the supervisor reads its schedule from the file as it is. Like a code change, it is tested "
         "at the end of the run and undone if the tests fail.",

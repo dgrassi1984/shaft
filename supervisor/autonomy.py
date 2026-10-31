@@ -346,6 +346,11 @@ def serve(poll_s: int = 30) -> int:
                       lambda n: "waking already" if f"wake {n}" in children else
                       "being updated" if updating(n, children) else
                       "paused at its own request" if preferences.self_paused(n, now) else _awake(n))
+            try:   # new mail and calendar changes for instances that opted in (a background pass, no model)
+                from . import watch
+                watch.tick(children, now, names)
+            except Exception as e:
+                log(f"scheduler: the mail and calendar watch did not start — {type(e).__name__}: {e}")
             gate_warm(children, warm, _start)   # the shared supervisor tests of a new commit, before a gate needs them
             if "trials" not in children:   # trials of proposed changes; on the local model only in its idle time
                 from . import trial
