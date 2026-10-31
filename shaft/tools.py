@@ -39,7 +39,7 @@ PROTECTED = {
     "drive.md": "only the operator edits my drive; propose_drive_amendment during sleep",
     "memory/projects.jsonl": "use open_project and close_project",
     "memory/corrections.jsonl": "use record_correction at conversation writeup; close_correction in sleep",
-    "memory/commitments.jsonl": "use commit_to for promises to Daniele/operator or another agent; "
+    "memory/commitments.jsonl": "use commit_to for promises to the operator or another agent; "
                                 "own plans go in goals/notes; sleep settles them",
     "config.env": "change a value with the supervisor's set_config(key, value) — the only way to change this "
                   "file, so the supervisor can tell my settings from the operator's",

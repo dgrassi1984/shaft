@@ -1,6 +1,6 @@
 # Promises to others
 
-Use `commit_to(promise, due, criterion, made_to)` for a promise to Daniele (`made_to="operator"`)
+Use `commit_to(promise, due, criterion, made_to)` for a promise to the operator (`made_to="operator"`)
 or another agent. For a peer, use its name from `list_instances`. Unknown names are refused.
 If the peer list cannot be checked, retry later. Operator promises do not need the broker.
 The same rule applies to `commitments` in `finish_cycle`.

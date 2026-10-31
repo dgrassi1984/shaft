@@ -44,7 +44,7 @@ ATTENTION = {"type": "array", "description": "optional, up to 4: where you expec
              "coder, record = the record tool) and why; it focuses your "
              "workspace, and the supervisor compares it with the calls you make",
              "items": {"type": "object", "properties": {"source": S, "why": S}, "required": ["source"]}}
-PROMISES = {"type": "array", "description": "promises to Daniele (operator) or another agent you made this cycle "
+PROMISES = {"type": "array", "description": "promises to the operator or another agent you made this cycle "
             "and will keep later: "
             "{promise, due (YYYY-MM-DD[ HH:MM], today, tomorrow), criterion (how someone else could check), made_to "
             "(operator or a peer name from list_instances)}; own plans belong in goals/notes; [] if none",

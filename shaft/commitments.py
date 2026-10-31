@@ -22,12 +22,12 @@ FIELDS = ("promise", "due", "criterion", "made_to")
 BOOKKEEPING = ("commit_to", "settle_commitment", "declare_intent", "confirm_confidence", "finish_cycle",
                "close_surprise")
 
-COMMIT_TO = _spec("commit_to", "Record a promise to Daniele (operator) or another agent. "
+COMMIT_TO = _spec("commit_to", "Record a promise to the operator or another agent. "
                   "My own plans belong in goals/notes.", {
     "promise": {"type": "string", "description": "What I will do."},
     "due": {"type": "string", "description": 'YYYY-MM-DD or YYYY-MM-DD HH:MM, or "today"/"tomorrow".'},
     "criterion": {"type": "string", "description": "How someone else could check it was done."},
-    "made_to": {"type": "string", "description": '"operator" (Daniele), or a peer name from list_instances. '
+    "made_to": {"type": "string", "description": '"operator", or a peer name from list_instances. '
                 "No promises to self."}})
 SETTLE = _spec("settle_commitment", "Settle one of my open commitments with evidence.", {
     "id": {"type": "string"}, "status": {"type": "string", "enum": list(STATUSES)},
@@ -135,7 +135,7 @@ def _to_self(root: Path, item: dict) -> bool:
 
 
 def _recipient_error(root: Path, item: dict) -> str:
-    rule = "the ledger is for promises to Daniele (operator) or another agent; my own plans belong in goals/notes"
+    rule = "the ledger is for promises to the operator or another agent; my own plans belong in goals/notes"
     if _to_self(root, item):
         return f"ERROR: {rule}"
     if item["made_to"] == "operator":

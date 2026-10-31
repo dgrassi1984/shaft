@@ -564,7 +564,7 @@ def _promises(root: Path, cfg) -> str:
         open_ = commitments.block(root, now())
     except Exception as e:   # every prompt shows this block: a record it cannot read must not stop the run
         open_ = f"(my commitments could not be read: {type(e).__name__}: {e})"
-    return ("\n## My open commitments (commit_to for Daniele/operator or other agents; "
+    return ("\n## My open commitments (commit_to for the operator or other agents; "
             f"my sleep settles the overdue ones)\n\n{open_}\n")
 
 
