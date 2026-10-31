@@ -37,13 +37,18 @@ def _get(acct: google.Account, path: str, **params) -> dict:
     return acct.get(f"{API}/{path}", **params)
 
 
-def label_id(acct: google.Account, name: str) -> str:
-    """The ID of the label named `name` now. A grant names a label; a label renamed or deleted since is refused,
-    never guessed."""
-    labels = _get(acct, "labels").get("labels") or []
-    for label in labels:
-        if label.get("name") == name:
-            return label["id"]
+def labels(acct: google.Account) -> dict[str, str]:
+    """The account's labels now, name -> ID, in one call."""
+    return {str(l["name"]): str(l["id"]) for l in _get(acct, "labels").get("labels") or []
+            if l.get("name") and l.get("id")}
+
+
+def label_id(acct: google.Account, name: str, known: dict[str, str] | None = None) -> str:
+    """The ID of the label named `name` now (`known`: the account's labels() read this pass). A grant names a label;
+    a label renamed or deleted since is refused, never guessed."""
+    found = labels(acct) if known is None else known
+    if name in found:
+        return found[name]
     raise google.AccountError(f"mail account {acct.alias!r} has no label {name!r} (if it was granted: renamed or "
                               "deleted since; nothing under it is visible until the operator grants it again)")
 
@@ -100,6 +105,57 @@ def search(acct: google.Account, label_id: str, query: str, limit: int, before: 
                      "messages": len(msgs), "attachments": sum(len(attachments(m)) for m in msgs)})
     rows.sort(key=lambda r: r["last"], reverse=True)
     return rows, dropped
+
+
+# -- changes under a label, for the supervisor's mail watch (supervisor/watch.py) -----------------------------------
+HISTORY_PAGES = 10                                  # pages of history read per label per pass; the rest next pass
+
+
+class HistoryExpired(RuntimeError):
+    """Gmail no longer keeps the history from that point (a history ID about a week old, or one it never gave): 404."""
+
+
+def history_now(acct: google.Account) -> str:
+    """The mailbox's current history ID (its profile's): where a watch starts, so nothing older is ever reported."""
+    hid = str(_get(acct, "profile").get("historyId") or "")
+    if not hid:
+        raise google.ApiError(200, f"Gmail's profile of {acct.alias!r} carried no historyId")
+    return hid
+
+
+def history(acct: google.Account, label_id: str, start: str) -> tuple[dict[str, set[str]], str]:
+    """What arrived under the label since history ID `start` (users.history.list filtered by labelId): {thread ID:
+    the IDs of its messages added, or given the label, since} and the history ID to go on from. Gmail's filter only
+    narrows the list: nothing here decides visibility — the watch checks every thread with get_thread, as
+    mail_search does, before anything of it is shown. More than HISTORY_PAGES pages: the rest is read next time, from
+    the last record read. A start Gmail no longer has raises HistoryExpired."""
+    out: dict[str, set[str]] = {}
+    token, last = None, start
+    for _ in range(HISTORY_PAGES):
+        try:
+            data = _get(acct, "history", startHistoryId=start, labelId=label_id,
+                        historyTypes=["messageAdded", "labelAdded"], maxResults=500, pageToken=token)
+        except google.ApiError as e:
+            if e.status == 404:
+                raise HistoryExpired(f"Gmail no longer has the history of {acct.alias!r} from {start}") from None
+            raise
+        for h in data.get("history") or []:
+            added = [a.get("message") or {} for a in h.get("messagesAdded") or []]
+            added += [a.get("message") or {} for a in h.get("labelsAdded") or [] if label_id in (a.get("labelIds") or [])]
+            for m in added:
+                if m.get("threadId") and m.get("id"):
+                    out.setdefault(str(m["threadId"]), set()).add(str(m["id"]))
+            if str(h.get("id") or "").isdigit() and int(h["id"]) > int(last if last.isdigit() else 0):
+                last = str(h["id"])
+        token = data.get("nextPageToken")
+        if not token:
+            return out, str(data.get("historyId") or last)
+    return out, last
+
+
+def header(msg: dict, name: str) -> str:
+    """One header of a message, decoded and on one line ("" if it has none)."""
+    return _header(msg, name.lower())
 
 
 # -- a message's parts -------------------------------------------------------------------------------------------------
