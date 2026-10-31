@@ -167,8 +167,8 @@ class WrapUpTest(InstanceFixture, unittest.TestCase):
                 else:
                     self.assertNotIn("wrapped_up", ep)
 
-    def test_a_finished_deadline_or_steps_wrap_up_counts_as_ran_out_but_yield_does_not(self):
-        for reason, expected in (("deadline", 1), ("steps", 1), ("yield", 0), ("", 0)):
+    def test_a_finished_deadline_wrap_up_counts_as_ran_out_but_steps_and_yield_do_not(self):
+        for reason, expected in (("deadline", 1), ("steps", 0), ("yield", 0), ("", 0)):
             with self.subTest(reason=reason):
                 ep = {"ended_by": "control", "finish": {"criterion_met": "yes"}}
                 if reason:

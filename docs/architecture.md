@@ -388,7 +388,9 @@ decision, proposal digest and predictions for the instance to read. Falsificatio
 (`log:<ts>[#step]`, `web:<url>` fetched this run, `operator`, `instance:<name>`, `inferred`), shown with the fact's age in
 search; `shaft provenance` matches observation claims against tool results by content. `declare_intent` answers with a
 **forecast** of what comparable goals cost (turns, minutes, calls, how many ran out) — costs only, never a success rate,
-which would be a second base rate before the v3 confirm. `send_message` takes `expect_reply`, timestamped by the
+which would be a second base rate before the v3 confirm. Ran out means a forced deadline wrap-up, even if it
+finished, or a step cap reached without `finish_cycle`; finished steps wrap-ups, yields and loop-guard stops
+do not count as step exhaustion. `send_message` takes `expect_reply`, timestamped by the
 broker in `.supervisor/expectations/` and scored when the reply comes (`supervisor/tom.py`; live traffic only).
 `request_pause` (1–24 h, 3 in 7 days; the scheduler skips wakes and battery nights, sleep still runs), `decline_task`
 and `state_preference` write `.supervisor/preferences/<name>.jsonl` and tell the operator (`shaft prefs`); exams and
