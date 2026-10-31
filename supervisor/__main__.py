@@ -888,6 +888,23 @@ def cmd_trial(args) -> int:
         return 0
     if args.action == "work":
         return trial.work()
+    if args.action == "models":
+        from . import bakeoff
+        instance_root(args.name)
+        try:
+            b = bakeoff.create(args.name, args.arm, args.episodes, judge=args.judge, bid=args.id)
+        except bakeoff.BakeoffError as e:
+            print(f"refused: {e}", file=sys.stderr)
+            return 1
+        if not args.report:
+            print(f"bake-off {b['id']}: {len(b['states'])} past cycles × {len(b['arms'])} models", flush=True)
+            try:
+                bakeoff.run(b, parallel=args.parallel, arm_parallel=args.arm_parallel, replay_only=args.replay_only)
+            except bakeoff.BakeoffError as e:
+                print(f"refused: {e}", file=sys.stderr)
+                return 1
+        print(bakeoff.report(b))
+        return 0
     if args.action == "replay":
         instance_root(args.name)
         ep = next((e for e in trial.live_episodes(INSTANCES / args.name) if e["ts"] == args.ts), None)
@@ -1286,7 +1303,7 @@ def main(argv: list[str]) -> int:
     p.add_argument("action", nargs="?", choices=["restore", "overreach", "approve", "reject"])
     p.add_argument("target", nargs="?", help="class to restore, or action/proposal id")
     p.add_argument("--reason", default="", help="reject reason; 'over-reach' demotes the class")
-    p = sub.add_parser("trial", help="trials of proposed changes: list, show, run (operator), replay, work")
+    p = sub.add_parser("trial", help="trials of proposed changes: list, show, run (operator), replay, models, work")
     tsub = p.add_subparsers(dest="action", required=True)
     q = tsub.add_parser("list", help="every trial, newest last")
     q.add_argument("name", nargs="?")
@@ -1313,6 +1330,19 @@ def main(argv: list[str]) -> int:
     q.add_argument("--keep", help="copy the replayed folder here")
     q.add_argument("--cycles", type=int, default=1, help="consecutive live cycles from one past state")
     q.add_argument("--sleep", action="store_true", help="sleep between each pair of replayed live cycles")
+    q = tsub.add_parser("models", help="bake-off: replay past cycles on each model and judge them against the first "
+                                       "(supervisor/bakeoff.py); the same --id again resumes or reports")
+    q.add_argument("name")
+    q.add_argument("--arm", action="append", default=[], metavar="MODEL[@EFFORT]",
+                   help="a cloud model, optionally with LLM_REASONING_EFFORT; the first is the baseline")
+    q.add_argument("--episodes", nargs="*", default=[], help="the past live cycles (episode ts)")
+    q.add_argument("--judge", default="claude-sonnet-5-5")
+    q.add_argument("--id", default="", help="a bake-off's id: resume it (its arms and cycles are kept)")
+    q.add_argument("--parallel", type=int, default=3, help="past cycles replayed at once")
+    q.add_argument("--arm-parallel", type=int, default=1, help="candidate models of one cycle replayed at once "
+                                                                "(after its baseline)")
+    q.add_argument("--replay-only", action="store_true", help="replay, do not judge yet (a later run judges)")
+    q.add_argument("--report", action="store_true", help="print the saved report only; run nothing")
     tsub.add_parser("work", help="run the queued trials' tests and replays that may run now (the scheduler does this)")
     p = sub.add_parser("check", help="run the test gate against an instance's code")
     p.add_argument("name", nargs="?", default=DEFAULT_INSTANCE)

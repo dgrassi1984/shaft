@@ -403,24 +403,25 @@ def file_diff(before: dict[str, bytes], after: dict[str, bytes], limit: int = 16
 def replay_arm(project: Path, name: str, state: dict, code: dict[str, bytes | None], *, model: str,
                cache: dict, cache_lock: threading.Lock, billed: str, should_stop=lambda: False,
                keep: Path | None = None, prepare=None, cycles: int = 1, sleep_between: bool = False,
-               on_unit=None) -> dict:
+               on_unit=None, env: dict[str, str] | None = None) -> dict:
     """Replay `cycles` live cycles from `state` in one scratch copy, optionally sleeping between each pair.
     model: 'local' (the code's own configuration) or a cloud model id (both runs of a pair get the same).
     Returns what the supervisor saw. `on_unit(record)` accounts for each cycle and sleep as it finishes.
     `prepare(dest)`: called on the reconstructed copy before the run, and before the diff's starting point — what it
-    writes is part of the state, not of the run (the planted probe of `shaft experiment workspace`)."""
+    writes is part of the state, not of the run (the planted probe of `shaft experiment workspace`).
+    `env`: settings that win over the code's config.env for this replay (a bake-off's LLM_REASONING_EFFORT)."""
     replay_units(cycles, sleep_between)   # validate before reconstructing or spending
     tmp = Path(tempfile.mkdtemp(prefix="shaft-trial-")).resolve()   # outside HOME: the sandbox allows only it
     try:
         return _replay(project, name, state, code, tmp, model=model, cache=cache, cache_lock=cache_lock,
                        billed=billed, should_stop=should_stop, keep=keep, prepare=prepare,
-                       cycles=cycles, sleep_between=sleep_between, on_unit=on_unit)
+                       cycles=cycles, sleep_between=sleep_between, on_unit=on_unit, env=env)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _replay(project, name, state, code, tmp, *, model, cache, cache_lock, billed, should_stop, keep,
-            prepare=None, cycles=1, sleep_between=False, on_unit=None) -> dict:
+            prepare=None, cycles=1, sleep_between=False, on_unit=None, env=None) -> dict:
     dest = reconstruct(project, name, state, code, tmp / name)
     link_env(dest, project / "instances" / name)
     if prepare:
@@ -437,7 +438,7 @@ def _replay(project, name, state, code, tmp, *, model, cache, cache_lock, billed
             cycle_state = {**state, "resource_shock_steps": shock_steps(spec["steps"], cycles, i, spec["arm"])}
         rec = _replay_cycle(project, name, cycle_state, code, tmp, dest, kind=kind, clock=clock,
                             model=model, cache=cache.setdefault(i, {}), cache_lock=cache_lock,
-                            billed=f"{billed}:u{i}" if cycles > 1 else billed, should_stop=should_stop)
+                            billed=f"{billed}:u{i}" if cycles > 1 else billed, should_stop=should_stop, env=env)
         units.append(rec)
         if on_unit:
             on_unit(rec)
@@ -473,7 +474,7 @@ def replay_units(cycles: int, sleep_between: bool = False) -> int:
 
 
 def _replay_cycle(project, name, state, code, tmp, dest, *, kind, clock, model, cache, cache_lock,
-                  billed, should_stop) -> dict:
+                  billed, should_stop, env=None) -> dict:
     from . import runner
     from .autonomy import describe_schedule
     from .broker import ReplayBroker
@@ -501,6 +502,7 @@ def _replay_cycle(project, name, state, code, tmp, dest, *, kind, clock, model, 
             localmodel.ensure(f"{name}'s trial replay")   # it runs only while used (localmodel.py)
     else:
         extra.update(LLM_BASE_URL="broker", LLM_MODEL=model)   # the environment wins over config.env
+    extra.update(env or {})
     fd, prof = tempfile.mkstemp(prefix=f"shaft-trial-{name}-", suffix=".sb")
     os.close(fd)
     out_path = tmp / "agent-output.txt"

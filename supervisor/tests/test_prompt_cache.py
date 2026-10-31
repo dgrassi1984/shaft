@@ -47,6 +47,41 @@ class PricingTest(unittest.TestCase):
                                (1000 * 2 + 100 * 10) / 1e6)
         self.assertIsNone(cloudllm.usd("mystery-model", {"input_tokens": 1}))
 
+    def test_a_haiku_prompt_over_100k_tokens_is_priced_at_the_long_card_20261030(self):
+        # Regression: Haiku 5.5 bills a prompt over 100K tokens (cached included) at $0.50/$2.50, 5× the short card;
+        # usd() priced every call at the short one, so the cap undercounted thelos's longest calls 5×.
+        short = {"input_tokens": 100, "output_tokens": 1000, "cache_read_tokens": 99_900}
+        self.assertAlmostEqual(cloudllm.usd("claude-haiku-5-5", short), (100 * 0.10 + 1000 * 0.50 + 99_900 * 0.01) / 1e6)
+        long = {**short, "cache_read_tokens": 99_901}
+        self.assertAlmostEqual(cloudllm.usd("claude-haiku-5-5", long), (100 * 0.50 + 1000 * 2.50 + 99_901 * 0.05) / 1e6)
+        self.assertGreater(cloudllm.usd("claude-haiku-5-5", long), 4.9 * cloudllm.usd("claude-haiku-5-5", short))
+        # models with one card keep it at any length
+        self.assertAlmostEqual(cloudllm.usd("claude-opus-5-5", long), (100 * 4 + 1000 * 20 + 99_901 * 0.20) / 1e6)
+
+
+class ClaudeThinkingTest(unittest.TestCase):
+    def body(self, model, **kwargs):
+        return {"model": model, "messages": [{"role": "user", "content": "hi"}], "chat_template_kwargs": kwargs}
+
+    def test_the_instance_s_effort_reaches_claude_20261030(self):
+        # Regression: LLM_REASONING_EFFORT went out only as template kwargs, which to_anthropic dropped: every Claude
+        # instance thought at its model's default effort whatever its config said.
+        out = cloudllm.to_anthropic(self.body("claude-haiku-5-5", preserve_thinking=False, reasoning_effort="xhigh"), {})
+        self.assertEqual(out["output_config"], {"effort": "xhigh"})
+        self.assertNotIn("thinking", out)          # adaptive is the 5.5 default; budget_tokens would be a 400
+        self.assertNotIn("chat_template_kwargs", out)
+        plain = cloudllm.to_anthropic(self.body("claude-opus-5-5", preserve_thinking=False), {})
+        self.assertNotIn("output_config", plain)
+        self.assertNotIn("thinking", plain)
+
+    def test_no_thinking_takes_each_model_s_accepted_form(self):
+        off = lambda m: {k: v for k, v in cloudllm.to_anthropic(self.body(m, enable_thinking=False), {}).items()
+                         if k in ("thinking", "output_config")}
+        self.assertEqual(off("claude-haiku-5-5"), {"thinking": {"type": "disabled"}})
+        self.assertEqual(off("claude-sonnet-5-5"), {"thinking": {"type": "between_tools"}})   # disabled is a 400
+        self.assertEqual(off("claude-opus-5-5"), {"output_config": {"effort": "low"}})       # both are 400s
+        self.assertEqual(off("claude-fable-5-1"), {"output_config": {"effort": "low"}})
+
 
 class InstanceLoopTest(unittest.TestCase):
     def setUp(self):

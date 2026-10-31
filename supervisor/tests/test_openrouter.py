@@ -130,6 +130,18 @@ class OpenRouterTest(_Base):
                                              "chat_template_kwargs": {"reasoning_effort": "low"}}, "k", stream=False)
         self.assertEqual(json.loads(sent.data)["reasoning"], {"effort": "high"})
 
+    def test_a_provider_error_without_an_error_object_is_recorded_20261030(self):
+        # Regression: a reply ended by finish_reason "error", with tokens and no cost, was booked as $0 with error
+        # None (12 of 42,000 mimo calls): neither the failure nor the unbooked spend was visible in the usage log.
+        self.fake(reply={"choices": [{"message": {"role": "assistant", "content": "half"}, "finish_reason": "error"}],
+                         "usage": {"prompt_tokens": 24754, "completion_tokens": 396}})
+        cloudllm.complete("thelos", dict(self.BODY, stream=False), {"OPENROUTER_API_KEY": "k"}, {})
+        rec = json.loads(self.usage.read_text())
+        self.assertEqual(rec["usd"], 0.0)
+        self.assertIn("finish_reason=error", rec["error"])
+        self.assertIn("no cost in its usage", rec["error"])
+        self.assertIsNone(cloudllm._unsaid({"prompt_tokens": 5, "cost": 0.001}, "stop"))   # a normal reply says nothing
+
     def test_no_key_is_said_plainly(self):
         with self.assertRaises(cloudllm.CloudError) as ctx:
             cloudllm.complete("shaft", dict(self.BODY), {}, {})

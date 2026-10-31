@@ -19,6 +19,7 @@ Rules:
 - Assistant turns are resent exactly as the model produced them (thinking blocks included):
   each reply's original content blocks are remembered and substituted when the instance
   sends that turn back, because altered history invalidates replayed thinking.
+- Claude models think adaptively; LLM_REASONING_EFFORT is their output_config.effort (claude_thinking).
 - Claude requests are prompt-cached for an hour (CACHE): each turn of a loop re-reads the turns before it at the
   cache price. The usage log keeps cache reads and writes apart from input_tokens, and the cap prices them (usd()).
 - Claude models: upstream is non-streaming; a streaming request gets the whole reply as one SSE burst.
@@ -80,6 +81,10 @@ DECISION_PROVIDER, _ = knob(
 # pays for: instances, the coder, the judges (usd() below).
 PRICES = {"claude-haiku-5-5": (0.10, 0.50, 0.01), "claude-sonnet-5-5": (2.0, 10.0, 0.20),
           "claude-opus-5-5": (4.0, 20.0, 0.20), "claude-fable-5-1": (10.0, 50.0, 0.25)}
+# Haiku 5.5 has a second rate card: a prompt over 100K tokens (cache reads and writes included) is billed at 5× for
+# the whole call. Priced at the short card, a thelos cycle's longest calls were undercounted 5× by the cap.
+LONG_PROMPT = 100_000
+PRICES_LONG = {"claude-haiku-5-5": (0.50, 2.50, 0.05)}
 # Prompt caching (1-hour entries). Each request marks its end; the next turn of the same loop
 # reads everything before its new tail at the cache price. An hour also carries a loop over a pause — a conversation
 # that takes the model, a long tool run — which a 5-minute entry would not survive.
@@ -115,7 +120,7 @@ def usd(model: str, r: dict) -> float | None:
     p = PRICES.get(model)
     if not p:
         return None
-    pin, pout, pread = p
+    pin, pout, pread = PRICES_LONG.get(model, p) if prompt_size(r) > LONG_PROMPT else p
     n = lambda k: r.get(k) or 0
     return (n("input_tokens") * pin + n("output_tokens") * pout + n("cache_read_tokens") * pread
             + n("cache_write_5m_tokens") * pin * 1.25 + n("cache_write_1h_tokens") * pin * 2) / 1e6
@@ -199,7 +204,27 @@ def to_anthropic(body: dict, remembered: dict[str, list]) -> dict:
              for t in body.get("tools") or [] if t.get("type") == "function"]
     if tools:
         out["tools"] = tools
+    out.update(claude_thinking(body["model"], body.get("chat_template_kwargs") or {}))
     return out
+
+
+# How each Claude model stops thinking when asked to (the client's retry after a reply cut off still thinking):
+# Haiku 5.5 turns it off; Sonnet 5.5 refuses `disabled` and thinks only between tool calls instead; Opus 5.5 and
+# Fable 5.1 refuse both, so they think as little as they can (effort low).
+NO_THINKING = {"claude-haiku-5-5": {"thinking": {"type": "disabled"}},
+               "claude-sonnet-5-5": {"thinking": {"type": "between_tools"}}}
+
+
+def claude_thinking(model: str, kwargs: dict) -> dict:
+    """An instance's thinking settings, sent as template kwargs (its own server's form), in the Claude API's form.
+    Claude 5.5 models think adaptively without being asked, at their default effort (medium for Haiku and Opus,
+    high for Sonnet): until 2026-10-30 LLM_REASONING_EFFORT never reached them, as it never reached mimo before
+    openrouter_reasoning. It is output_config.effort; no thinking (think=False) is NO_THINKING."""
+    if kwargs.get("enable_thinking") is False:
+        return NO_THINKING.get(model, {"output_config": {"effort": "low"}})
+    if kwargs.get("reasoning_effort"):
+        return {"output_config": {"effort": kwargs["reasoning_effort"]}}
+    return {}
 
 
 def from_anthropic(data: dict) -> dict:
@@ -396,7 +421,17 @@ def _relay(instance: str, model: str, resp, started: float):
         raise
     finally:
         _record(instance, model, usage.get("prompt_tokens"), usage.get("completion_tokens"),
-                float(usage.get("cost") or 0), started, finish, error)
+                float(usage.get("cost") or 0), started, finish, error or _unsaid(usage, finish))
+
+
+def _unsaid(usage: dict, finish) -> str | None:
+    """What went wrong with an OpenRouter reply that carried no error object: a provider error as finish_reason, or
+    tokens without a cost (booked at $0). Both were silent: 12 of 42,000 mimo calls to 2026-10-30, mostly a provider
+    error mid-stream, recorded as error None."""
+    said = ["the provider ended the reply with finish_reason=error"] if finish == "error" else []
+    if usage.get("cost") is None and (usage.get("prompt_tokens") or usage.get("completion_tokens")):
+        said.append("no cost in its usage: booked at $0")
+    return "; ".join(said) or None
 
 
 def _openrouter(instance: str, body: dict, key: str) -> dict:
@@ -409,8 +444,9 @@ def _openrouter(instance: str, body: dict, key: str) -> dict:
     if data is not None and not data.get("choices"):   # OpenRouter can answer 200 with an error object
         error, data = f"no reply: {json.dumps(data.get('error') or data)[:400]}", None
     usage = (data or {}).get("usage") or {}
+    finish = ((data or {}).get("choices") or [{}])[0].get("finish_reason")
     _record(instance, model, usage.get("prompt_tokens"), usage.get("completion_tokens"), float(usage.get("cost") or 0),
-            started, ((data or {}).get("choices") or [{}])[0].get("finish_reason"), error)
+            started, finish, error or _unsaid(usage, finish))
     if data is None:
         raise CloudError(502, f"OpenRouter call for {model} failed: {error}{_policy_hint(error or '')}")
     message = data["choices"][0].get("message") or {}
