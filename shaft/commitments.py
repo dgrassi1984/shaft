@@ -6,7 +6,7 @@ import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import surprises
+from . import broker, surprises
 from .tools import _spec
 
 FILE = "memory/commitments.jsonl"
@@ -22,11 +22,13 @@ FIELDS = ("promise", "due", "criterion", "made_to")
 BOOKKEEPING = ("commit_to", "settle_commitment", "declare_intent", "confirm_confidence", "finish_cycle",
                "close_surprise")
 
-COMMIT_TO = _spec("commit_to", "Record a commitment I will keep and someone else can check.", {
+COMMIT_TO = _spec("commit_to", "Record a promise to Daniele (operator) or another agent. "
+                  "My own plans belong in goals/notes.", {
     "promise": {"type": "string", "description": "What I will do."},
     "due": {"type": "string", "description": 'YYYY-MM-DD or YYYY-MM-DD HH:MM, or "today"/"tomorrow".'},
     "criterion": {"type": "string", "description": "How someone else could check it was done."},
-    "made_to": {"type": "string", "description": '"operator", "self", or another instance\'s name.'}})
+    "made_to": {"type": "string", "description": '"operator" (Daniele), or a peer name from list_instances. '
+                "No promises to self."}})
 SETTLE = _spec("settle_commitment", "Settle one of my open commitments with evidence.", {
     "id": {"type": "string"}, "status": {"type": "string", "enum": list(STATUSES)},
     "evidence": {"type": "string", "description": "For kept: an episode ts, optionally #step (1-based tool-log "
@@ -128,10 +130,31 @@ def _append(root: Path, event: dict) -> None:
         out.write(json.dumps(event, ensure_ascii=False) + "\n")
 
 
+def _to_self(root: Path, item: dict) -> bool:
+    return item["made_to"] in ("self", Path(root).name)
+
+
+def _recipient_error(root: Path, item: dict) -> str:
+    rule = "the ledger is for promises to Daniele (operator) or another agent; my own plans belong in goals/notes"
+    if _to_self(root, item):
+        return f"ERROR: {rule}"
+    if item["made_to"] == "operator":
+        return ""
+    try:
+        peers = broker.call("list_instances")
+    except broker.BrokerError:
+        return f"ERROR: cannot check peer names with list_instances; {rule}"
+    names = peers.removeprefix("instances: ").split(", ") if peers.startswith("instances: ") else []
+    return "" if item["made_to"] in names else f"ERROR: unknown peer; use list_instances; {rule}"
+
+
 def add(root: Path, args: dict, source: str, now: datetime) -> str:
     item = _entry(args)
     if item is None:
         return f"ERROR: need promise and criterion (at most {FIELD_CHARS} characters each), due and made_to (a name)"
+    error = _recipient_error(root, item)
+    if error:
+        return error
     due = parse_due(item["due"], now)
     if due is None:
         return 'ERROR: due must be YYYY-MM-DD, YYYY-MM-DD HH:MM, "today" or "tomorrow"'
@@ -192,7 +215,7 @@ def _evidence(episodes: list[dict], item: dict, evidence: str) -> tuple[str, dic
 def settle(root: Path, args: dict, now: datetime) -> str:
     cid, status = args.get("id"), args.get("status")
     item = fold(root, now).get(cid) if isinstance(cid, str) else None
-    if item is None or item["status"] not in ("open", "overdue"):
+    if item is None or _to_self(root, item) or item["status"] not in ("open", "overdue"):
         return "ERROR: id must name one of my open commitments"
     if status not in STATUSES:
         return f"ERROR: status must be one of {', '.join(STATUSES)}"
@@ -212,7 +235,8 @@ def settle(root: Path, args: dict, now: datetime) -> str:
 
 
 def _open(root: Path, now: datetime) -> list[dict]:
-    return sorted((it for it in fold(root, now).values() if it["status"] in ("open", "overdue")),
+    return sorted((it for it in fold(root, now).values()
+                   if not _to_self(root, it) and it["status"] in ("open", "overdue")),
                   key=lambda it: (it["status"] != "overdue", _at(it["due"]), it["id"]))
 
 
