@@ -178,17 +178,26 @@ def _ancestors_metadata(root: Path, home: Path) -> str:
 
 
 def run_profile(instance_root: Path, home: Path, shared: Path | None = None, egress_port: int = 0,
-                env_root: Path | None = None) -> str:
+                env_root: Path | None = None, job_state: Path | None = None) -> str:
     """Stricter than the agent's own sandbox, for commands the agent runs via the broker's `run`:
     writes only to its working areas, its Python environment and its browser profile (.browser/, docs/plans/PLAN-browser.md;
     never self/, memory/, inbox/, config.env, .git), reads only its own folder in the home directory (and the
     operator's shared folder, if any, and the shared Chromium), and no network but the run's egress proxy (the
-    public internet, nothing local)."""
+    public internet, nothing local). `job_state`: the `run` of a scheduled job confined to the job's own write set
+    (SHAFT_JOB_RUN_CONFINED, docs/plans/PLAN-thelos-review-2.md S1) — until then a job's plugin called `run` and wrote
+    notes/ through it, and the job's write limit protected nothing."""
     from .pyenv import DECLARED
     root = Path(instance_root).resolve()
-    writable = " ".join([*(f"(subpath {_q(root / d)})" for d in RUN_WRITABLE),
-                         *(f"(literal {_q(root / f)})" for f in DECLARED)])
+    writable = _job_writes(root, job_state) if job_state else \
+        " ".join([*(f"(subpath {_q(root / d)})" for d in RUN_WRITABLE), *(f"(literal {_q(root / f)})" for f in DECLARED)])
     return _command_profile(root, home, writable, shared, [egress_port] if egress_port else [], env_root)
+
+
+def _job_writes(root: Path, state_dir: Path) -> str:
+    """What a scheduled job may write: its own state folder (.jobs/<plugin>/), .tmp/ and its browser profile."""
+    from .browser import PROFILE
+    return (f"(subpath {_q(Path(state_dir).resolve())}) (subpath {_q(root / '.tmp')}) "
+            f"(subpath {_q(root / PROFILE)})")
 
 
 def job_profile(instance_root: Path, home: Path, state_dir: Path, shared: Path | None = None, egress_port: int = 0,
@@ -196,12 +205,11 @@ def job_profile(instance_root: Path, home: Path, state_dir: Path, shared: Path |
     """For a scheduled job (docs/plans/PLAN-jobs.md): the `run` sandbox, but writes only to the job's own state folder
     (.jobs/<plugin>/), .tmp/ and its browser profile — a cycle running at the same time works on the code, notes and
     mind, and nothing of the job's may be mistaken for its change (the profile is never code and never committed) —
-    and the network adds the job's own broker (its supervisor tools)."""
-    from .browser import PROFILE
+    and the network adds the job's own broker (its supervisor tools). What it means for notes/ goes through its
+    schedule's `publishes`, copied by the supervisor after a successful run (jobs.py)."""
     root = Path(instance_root).resolve()
-    writable = (f"(subpath {_q(Path(state_dir).resolve())}) (subpath {_q(root / '.tmp')}) "
-                f"(subpath {_q(root / PROFILE)})")
-    return _command_profile(root, home, writable, shared, [p for p in (egress_port, broker_port) if p], env_root)
+    return _command_profile(root, home, _job_writes(root, state_dir), shared,
+                            [p for p in (egress_port, broker_port) if p], env_root)
 
 
 def _command_profile(root: Path, home: Path, writable: str, shared: Path | None, ports: list[int],

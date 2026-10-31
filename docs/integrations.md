@@ -283,7 +283,9 @@ due jobs as children.
 Each run happens in the `run` sandbox, with its own broker and egress proxy:
 - supervisor tools, mail and calendar grants, the instance's keys, its Python environment and the internet;
 - no model, and no `delegate_coding`, `trial` or `send_message`;
-- writes only to `.jobs/<plugin>/` (gitignored state), `.tmp/` and its browser profile `.browser/`;
+- writes only to `.jobs/<plugin>/` (gitignored state), `.tmp/` and its browser profile `.browser/`. The broker's
+  `run` inside a job may still write notes/ and code as a cycle's does, until the operator sets
+  `SHAFT_JOB_RUN_CONFINED=1` (default `0`): then it writes only the job's own set too;
 - at most 120 s and 30 tool calls, at least 5 minutes apart (`SHAFT_JOB_MIN_MINUTES`), at most `SHAFT_JOBS_MAX`
   jobs per instance (default 12); beyond it, the rest by name are not run and are named in the problem report.
 
@@ -293,10 +295,29 @@ Several requests while it is awake make one wake, there is no rate limit, and a 
 For new mail or calendar changes a job is not needed: the supervisor's watch (`WATCH_MAIL`, `WATCH_CALENDAR`, in the
 Mail and Calendar sections) checks every minute and wakes through the same path.
 
+A job's work reaches the instance whole ([PLAN-thelos-review-2.md](plans/PLAN-thelos-review-2.md) M1):
+- **Hand-off.** `{"message": …, "files": ["brief.md", …]}`: up to 5 files of at most 256 KB from `.jobs/<plugin>/`
+  (a path relative to it, or starting with `.jobs/<plugin>/`; no link is followed) are copied beside the message,
+  into `inbox/<stamp>-from-job-<plugin>.files/`. The message lists each with its size and names each refused one
+  with why. The folder is removed once its message has been archived and the same job delivers again.
+- **Cut output.** A message over 4,000 characters is cut, and its whole text (up to 1 MB) is kept in that folder as
+  `output.txt`; the cut says so: `[… cut at 4000 of N characters; the whole text: inbox/….files/output.txt]`.
+- **Publish.** `"publishes": {"notes/briefing.md": "briefing.md"}` in the schedule (at most 5; each target under
+  `notes/`, each source in `.jobs/<plugin>/`, checked with the rest of the schedule). After a successful run, each
+  source that changed since it was last published (at most 256 KB) replaces its target in one rename; nothing is
+  published after a failed run. The instance's next notes commit records it. A problem (a source too big, a link on
+  the way) reaches its inbox once.
+- **Long jobs.** `"long": true`: `SHAFT_JOB_LONG_TIMEOUT_S` (900) and `SHAFT_JOB_LONG_CALLS` (200) per run, one long
+  job at a time per instance, and `SHAFT_JOB_CHECKPOINT=.jobs/<plugin>/checkpoint.json` in its environment. A run
+  stopped by the timeout that wrote that checkpoint since it started is resumed at the scheduler's next tick, with
+  `SHAFT_JOB_RESUME=1`, up to `SHAFT_JOB_LONG_RESUMES` (4) times; then it gives up, the instance gets one message,
+  and the job starts afresh at its next interval. Each run's log row carries `resumed: n`.
+
 A run still going when the next comes due means the next is skipped, and the skip is logged. After 3 failures in a
 row the instance gets one message and the job backs off (its interval doubles, up to a day). Every run is logged in
 `.supervisor/jobs/<name>.jsonl`. `shaft jobs`, the panel's and `shaft top`'s *jobs* row, and the instance's own
-`record(kind='jobs')` show them. Jobs are on by default; `shaft jobs <name> off` stops an instance's jobs. They
+`record(kind='jobs')` show them: each job's arguments, what it publishes, and its status (running, or for a long job
+done / resuming n of N / gave up). Jobs are on by default; `shaft jobs <name> off` stops an instance's jobs. They
 never run during a battery exam, nor in trial replays.
 
 Source: [jobs execution and scheduling](../supervisor/jobs.py).

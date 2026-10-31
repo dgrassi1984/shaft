@@ -117,6 +117,10 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_WATCH` | `on` | the supervisor's mail and calendar watch, for instances that opt in with WATCH_MAIL or WATCH_CALENDAR in their config.env (on or off) | [watch.py](../supervisor/watch.py) |
 | `SHAFT_WATCH_WAKE_MIN` | `15` | minutes between two wakes the mail and calendar watch gives one instance; a change sooner waits in its inbox | [watch.py](../supervisor/watch.py) |
 | `SHAFT_WATCH_EVERY_S` | `60` | seconds between two passes of the mail and calendar watch (the scheduler looks every 30 seconds) | [watch.py](../supervisor/watch.py) |
+| `SHAFT_JOB_LONG_TIMEOUT_S` | `900` | seconds one run of a long scheduled job (`"long": true` in its schedule) may take before it is stopped (and resumed if it wrote its checkpoint); positive integer | [jobs.py](../supervisor/jobs.py) |
+| `SHAFT_JOB_LONG_CALLS` | `200` | supervisor tool calls one run of a long scheduled job may make; positive integer | [jobs.py](../supervisor/jobs.py) |
+| `SHAFT_JOB_LONG_RESUMES` | `4` | times a long scheduled job that timed out after writing its checkpoint is resumed before it gives up (0: never resumed) | [jobs.py](../supervisor/jobs.py) |
+| `SHAFT_JOB_RUN_CONFINED` | `0` | 1: the broker's `run` inside a scheduled job writes only where the job may (`.jobs/<plugin>/`, `.tmp/`, `.browser/`); 0: where a cycle's `run` may (notes/, code). Turn it on once every instance's scheduled plugins publish through `publishes` | [jobs.py](../supervisor/jobs.py) |
 | `SHAFT_JUDGE_MODELS` | `openrouter/xiaomi/mimo-v2.6-pro,openrouter/z-ai/glm-5.3-flash,openrouter/deepseek/deepseek-v4.1-flash` | the judge pool: each judgment picks one at random, never the judged instance's own model | [judge.py](../supervisor/judge.py) |
 | `SHAFT_JUDGE_EVERY` | `2` | the main judge grades one live run in this many (1: every run) | [judge.py](../supervisor/judge.py) |
 | `SHAFT_JUDGE2_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | the second judge, which grades a sample of cycles again to measure the judges' agreement | [judge.py](../supervisor/judge.py) |
