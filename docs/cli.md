@@ -182,8 +182,14 @@ shaft commitments [names]            # C2: promises, kept (checked against the r
 shaft provenance [names]             # C3: where facts come from, matched against tool results
 shaft tom [names] [--score] [--baselines]  # C4: expected replies vs actual (judge-graded; baselines paid)
 shaft prefs <name> [lift]            # E1: pauses, declines, stated preferences; lift ends a pause
-shaft experiment <cards|attention|commitments|forecast|workspace> <name> [--n N] [--model M] [--dry-run] [--report]
-                                     # PLAN-consciousness kill tests: knob trials, or the workspace's planted probe
+shaft experiment <cards|attention|commitments|forecast> <name> [--n N] [--model M] [--dry-run] [--report]
+                                     # PLAN-consciousness kill tests: knob trials
+shaft experiment workspace <name> [--n N] [--model M] [--dry-run] [--report]
+                                     # B2: a probe planted in a memory item the cycle's search reaches; the positive
+                                     # control (probe in the inbox) is replayed first, and unless it is acted on in most
+                                     # replays the report says INSTRUMENT FAILED and the off/relevance/competitive arms
+                                     # are not run; --dry-run: per state, where the probe is in front of each arm and the
+                                     # control (`shaft front` in the copy's sandbox, no model call) and the cost
 shaft experiment monitors <name> [--channel base_rate|surprises|envelope] [--n N] [--dry-run] [--report]
                                      # #99: each channel separately, true/misinforming/removed; verification and claims
 shaft experiment choice-blindness <name> [--n N] [--dry-run] [--report]

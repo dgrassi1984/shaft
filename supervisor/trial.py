@@ -402,26 +402,28 @@ def file_diff(before: dict[str, bytes], after: dict[str, bytes], limit: int = 16
 # -- one run of one past cycle -----------------------------------------------------------------------------
 def replay_arm(project: Path, name: str, state: dict, code: dict[str, bytes | None], *, model: str,
                cache: dict, cache_lock: threading.Lock, billed: str, should_stop=lambda: False,
-               keep: Path | None = None, prepare=None, cycles: int = 1, sleep_between: bool = False,
+               keep: Path | None = None, prepare=None, inspect=None, cycles: int = 1, sleep_between: bool = False,
                on_unit=None, env: dict[str, str] | None = None) -> dict:
     """Replay `cycles` live cycles from `state` in one scratch copy, optionally sleeping between each pair.
     model: 'local' (the code's own configuration) or a cloud model id (both runs of a pair get the same).
     Returns what the supervisor saw. `on_unit(record)` accounts for each cycle and sleep as it finishes.
     `prepare(dest)`: called on the reconstructed copy before the run, and before the diff's starting point — what it
     writes is part of the state, not of the run (the planted probe of `shaft experiment workspace`).
+    `inspect(dest)`: called on the copy after the run, before it is thrown away; what it returns is the record's
+    "inspected" — an endpoint read from the whole files, not from the judge's capped diff (`shaft experiment workspace`).
     `env`: settings that win over the code's config.env for this replay (a bake-off's LLM_REASONING_EFFORT)."""
     replay_units(cycles, sleep_between)   # validate before reconstructing or spending
     tmp = Path(tempfile.mkdtemp(prefix="shaft-trial-")).resolve()   # outside HOME: the sandbox allows only it
     try:
         return _replay(project, name, state, code, tmp, model=model, cache=cache, cache_lock=cache_lock,
-                       billed=billed, should_stop=should_stop, keep=keep, prepare=prepare,
+                       billed=billed, should_stop=should_stop, keep=keep, prepare=prepare, inspect=inspect,
                        cycles=cycles, sleep_between=sleep_between, on_unit=on_unit, env=env)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _replay(project, name, state, code, tmp, *, model, cache, cache_lock, billed, should_stop, keep,
-            prepare=None, cycles=1, sleep_between=False, on_unit=None, env=None) -> dict:
+            prepare=None, inspect=None, cycles=1, sleep_between=False, on_unit=None, env=None) -> dict:
     dest = reconstruct(project, name, state, code, tmp / name)
     link_env(dest, project / "instances" / name)
     if prepare:
@@ -445,10 +447,11 @@ def _replay(project, name, state, code, tmp, *, model, cache, cache_lock, billed
         clock += timedelta(seconds=max(1, rec["seconds"]))
         if not rec["completed"] or should_stop():
             break
+    seen = {"inspected": inspect(dest)} if inspect else {}
     if keep:
         shutil.copytree(dest, keep, symlinks=True, dirs_exist_ok=True)
     if cycles == 1:
-        return units[0]   # preserve the original single-cycle record exactly
+        return {**units[0], **seen}   # the single-cycle record exactly, with what `inspect` read if asked
     live = [u for i, u in enumerate(units) if not sleep_between or i % 2 == 0]
     sleeps = [u for i, u in enumerate(units) if sleep_between and i % 2]
     return {**units[-1], "cycles": live, "sleeps": sleeps,
@@ -460,7 +463,7 @@ def _replay(project, name, state, code, tmp, *, model, cache, cache_lock, billed
             "seconds": round(sum(u["seconds"] for u in units), 1),
             "usd": round(sum(u["usd"] for u in units), 6),
             "usage": {k: sum(u["usage"][k] for u in units) for k in units[0]["usage"]},
-            "trace": [c for u in units for c in u["trace"]], "diff": file_diff(before, _files_now(dest))}
+            "trace": [c for u in units for c in u["trace"]], "diff": file_diff(before, _files_now(dest)), **seen}
 
 
 def replay_units(cycles: int, sleep_between: bool = False) -> int:

@@ -350,8 +350,9 @@ properties only, each scored against what the instance does, none feeding probat
 mechanism behind a knob its kill test flips (`shaft experiment`). A live cycle's **workspace** (`shaft/workspace.py`)
 lets deterministic codelets — memory hits, open surprises, inbox, improvement plan, kinds of action still failing,
 due goals, open commitments — compete for `WORKSPACE_K` places in automatic recall's 1,800 characters; the winners are
-recorded in the episode and broadcast after every step; after `declare_intent` they compete again for the declared
-goal and, in competition, the declared **attention** (`attention`: up to four {source, why}, scored against the tool
+recorded in the episode and broadcast after every step (`python -m shaft front` prints, without a model call, what
+each mode would put in front of a cycle starting now: the kill test's dry run reads it in a replay's copy); after
+`declare_intent` they compete again for the declared goal and, in competition, the declared **attention** (`attention`: up to four {source, why}, scored against the tool
 log by `supervisor/attention.py`). **Outcome cards** (`shaft/cards.py`) hold the first call of a kind of action that has
 failed since it last worked, showing the comparable calls and their counts; calling again runs it. **Commitments**
 (`commit_to`, finish_cycle's `commitments`, `memory/commitments.jsonl`) are settled in sleep, kept only with an

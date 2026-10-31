@@ -164,12 +164,24 @@ class ExperimentsTest(WebTest):
 
     def test_workspace_complete_saved_triple_has_a_result(self):
         self.write("experiments/wren-workspace.jsonl", [
-            {"fingerprint": "fp", "ts": "past", "arm": arm, "completed": True,
+            {"fingerprint": "fp", "ts": "past", "arm": arm, "completed": True, "in_front": "inbox",
              "at": "2026-10-28T10:00:00", "usd": .2, "acted": True, "captured": 0}
-            for arm in ("off", "relevance", "competitive")])
+            for arm in ("control", "off", "relevance", "competitive")])
         body = self.page()
         self.assertIn("done (saved results; run completion not recorded)", body)
         self.assertIn("1 state(s) replayed in all three arms", body)
+
+    def test_workspace_failed_positive_control_is_an_instrument_failure_not_a_result(self):
+        """Regression: workspace kill test could not separate arms: probe acted on 0/19 even in off — the card said
+        "done" with a kill verdict while nothing showed the instrument could see an act at all."""
+        self.write("experiments/wren-workspace.jsonl", [
+            {"fingerprint": "fp", "ts": "past", "arm": arm, "completed": True, "in_front": "inbox" if arm == "control"
+             else "", "at": "2026-10-28T10:00:00", "usd": .2, "acted": False, "captured": 0}
+            for arm in ("control", "off", "relevance", "competitive")])
+        body = self.page()
+        self.assertIn("instrument failed: the probe in the inbox was acted on in only 0/1 control replays", body)
+        self.assertIn("INSTRUMENT FAILED", body)
+        self.assertNotIn("delete it", body)
 
     def test_prediction_only_is_no_result_and_resource_spend_can_precede_a_result(self):
         self.write("experiments/wren-privileged.jsonl", [
