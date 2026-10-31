@@ -297,6 +297,8 @@ def serve(poll_s: int = 30) -> int:
             if proc.poll() is not None and job == "gate warm":      # it says how it ended itself (warm_ended)
                 warm_ended(warm, proc.returncode, time.monotonic() - started)
                 del children[job]
+                if proc.returncode == 0:                              # the baseline is green: held changes go again
+                    regate_after_warm(children, _start)
             elif proc.poll() is not None:
                 err = proc.stderr.read().strip()[-300:] if proc.stderr else ""
                 log(f"scheduler: {job} ended exit={proc.returncode} after {time.monotonic() - started:.0f}s"
@@ -331,6 +333,11 @@ def serve(poll_s: int = 30) -> int:
             jobs.tick(children, now, _start, instance_names(),
                       lambda n: "waking already" if f"wake {n}" in children else
                       "being updated" if updating(n, children) else _awake(n))
+            try:   # new mail and calendar changes for instances that opted in (a background pass, no model)
+                from . import watch
+                watch.tick(children, now, names)
+            except Exception as e:
+                log(f"scheduler: the mail and calendar watch did not start — {type(e).__name__}: {e}")
             gate_warm(children, warm, _start)   # the shared supervisor tests of a new commit, before a gate needs them
             if "trials" not in children:   # trials of proposed changes; on the local model only in its idle time
                 from . import trial
@@ -451,6 +458,23 @@ def warm_ended(st: WarmState, returncode: int, seconds: float = 0.0) -> None:
     else:
         log(f"scheduler: gate warm ended exit={returncode} after {seconds:.0f}s, before it could say why; not tried "
             f"again on {st.pair}")
+
+
+def regate_after_warm(children: dict, start) -> None:
+    """A warm-up found the gate's baseline green: start `shaft gate regate` (runner.regate_held) when an instance has a
+    code change held while it was red (docs/plans/PLAN-thelos-review-2.md M2). One at a time; nothing here raises into
+    the scheduler's loop."""
+    if "gate regate" in children:
+        return
+    try:
+        from . import gate_held
+        if gate_held.waiting():
+            children["gate regate"] = (start(["gate", "regate"]), time.monotonic())
+    except Exception as e:
+        try:
+            log(f"scheduler: the held code changes' re-gate could not start: {type(e).__name__}: {e}")
+        except Exception:
+            pass
 
 
 def _start(args: list[str]) -> subprocess.Popen:

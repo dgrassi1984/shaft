@@ -230,13 +230,16 @@ SPECS = {
                           "or Telegram (an open conversation's channel, else the one they chose for you, else where "
                           "they last wrote to you). Their reply arrives in your inbox. Make them count: they read "
                           "every one. You can attach files from your folder; files sent to you arrive in your "
-                          "attachments/ folder (the message says where).",
+                          "attachments/ folder (the message says where). Non-urgent device notifications may wait "
+                          "for a digest during quiet hours or after the daily push budget.",
                           {"to": S, "text": S,
                            "expect_reply": {"type": "object", "description": "optional: what you expect back — it is "
                                             "timestamped by the supervisor and scored against the reply",
                                             "properties": {"will_reply": {"type": "integer", "minimum": 0, "maximum": 100},
                                                            "within_hours": {"type": "integer", "minimum": 1, "maximum": 168},
                                                            "gist": S}, "required": ["will_reply", "within_hours", "gist"]},
+                           "urgent": {"type": "boolean", "default": False,
+                                      "description": "time-critical things only; bypasses quiet hours and push budget"},
                            "kind": {"type": "string", "enum": ["question", "note"],
                                     "description": "for the operator: question (wants an answer) or note"},
                            "attachments": {"type": "array", "items": {"type": "string"},
@@ -260,7 +263,8 @@ SPECS = {
         "playwright==$SHAFT_PLAYWRIGHT`, launched with p.chromium.launch_persistent_context($SHAFT_BROWSER_PROFILE, "
         "proxy={server, username, password from HTTPS_PROXY}) — see skills/writing-plugins.md. Use `run` to install "
         "packages, run your tests, "
-        "scripts and plugins, inspect files, or compute things. Returns the exit code and output (truncated). "
+        "scripts and plugins, inspect files, or compute things. Returns the exit code and output (each stream past "
+        "6,000 characters cut to its head and tail: write long output to a file and read that). "
         "Code you change is still tested by the supervisor. `git` cannot see your own repository here (it lives "
         "outside your folder): use `history`.",
         {"command": S, "timeout_s": {"type": "integer", "description": f"default 60, max {300}"},
@@ -291,13 +295,16 @@ SPECS = {
         "'trials' (your trials of proposed changes: progress and verdicts), 'egress' (every connection your "
         "sandbox made to the internet through the proxy, or why it was refused), 'jobs' (your scheduled plugins: "
         "their timers, recent runs, errors, wakes they asked for), 'consults' (your model consultations in "
-        "the last 7 days), 'calendar' (calendar write attempts: before/after, outcome and Google answer). "
+        "the last 7 days), 'calendar' (calendar write attempts: before/after, outcome and Google answer), 'gate' "
+        "(your last test-gate runs: time, outcome — kept, candidate-failed, baseline-failed, held, re-gated — failing "
+        "tests, the last 3,000 characters of a failed gate's output, and your code changes held while the gate's "
+        "baseline was red). "
         "Newest last — except judgments: whole verdicts, newest first, as many as fit, with every field (the "
         "reasons for the difficulty, origin and value ratings, and the second judge's blind verdict where there is "
         "one); page back with `before`, or ask for one cycle's verdict with `cycle`. Use it to check your claims "
         "about yourself. (Your own tool traces are also in memory/episodes/*.jsonl.)",
         {"kind": {"type": "string", "enum": ["judgments", "runs", "tools", "code_changes", "trials", "egress", "jobs",
-                                                    "consults", "calendar"]},
+                                                    "consults", "calendar", "gate"]},
          "limit": {"type": "integer", "description": "entries, default 20, max 200"},
          "cycle": {"type": "string", "description": "judgments: one cycle's verdict in full, by its time "
                                                     "('2026-10-13 17:42')"},
@@ -369,7 +376,9 @@ SPECS = {
         {"task": S}),
     "set_config": _spec(
         "set_config",
-        "Set one value in your config.env (your model, WAKE_INTERVAL_MINUTES, budgets...): this is the only way "
+        "Set one value in your config.env (your model, WAKE_INTERVAL_MINUTES, WATCH_MAIL / WATCH_CALENDAR = off, "
+        "inbox or wake — the supervisor tells you of new mail or calendar changes under your grants — budgets...): "
+        "this is the only way "
         "to change that file — it is not writable with write_file or run. Your own settings are read at the start "
         "of each run; the supervisor reads its schedule from the file as it is. Like a code change, it is tested "
         "at the end of the run and undone if the tests fail.",
@@ -416,7 +425,8 @@ SPECS["mail_search"] = _spec(
     {"query": {"type": "string", "description": "Gmail search syntax (optional; empty: the newest threads)"},
      "account": {"type": "string", "description": "one grant, as account (e.g. work) or account/label "
                                                    "(optional: default all)"},
-     "max": {"type": "integer", "description": "threads, default 20, max 50"}},
+     "max": {"type": "integer", "description": "threads, default 20, max 50"},
+     "page": {"type": "string", "description": "continuation handle from mail_search; keep query and account"}},
     [])
 SPECS["mail_read"] = _spec(
     "mail_read",
@@ -516,7 +526,7 @@ MAX_COMMANDS_PER_RUN = 40
 # 100 MB until 2026-10-18, which killed `uv pip install playwright` (its bundled node is 122 MB) with SIGXFSZ, exit
 # 153 and no message — and with it any package shipping a bigger file (torch's libraries) (docs/plans/PLAN-browser.md).
 RUN_MAX_FILE_BYTES = 1024 ** 3
-RUN_OUTPUT_CHARS = 12000
+RUN_OUTPUT_CHARS = 12000   # each `run` stream keeps half: its head and tail (the "run" spec above says 6,000)
 
 
 def notify(title: str, text: str) -> None:
@@ -686,6 +696,7 @@ class Broker:
         self.run_kind = None
         self.run_started = None
         self.model_allowed = True              # False: /llm refuses (a scheduled job is a script, docs/plans/PLAN-jobs.md)
+        self.run_confined_to: Path | None = None   # a scheduled job's state folder: its `run` writes only the job's set
         self.bot = ""                           # set by tool_specs: its Telegram bot, if the operator can be reached there
         # The operator's folder this run may read (shaft share): the instance's own runs and its trial replays,
         # never a battery exam (its control arm has no such folder). Checked again here: a folder deleted or
@@ -1072,8 +1083,10 @@ class Broker:
         return f"{title}\n{final}\n\n{text[:max_chars]}{cut}".strip()
 
     def _send_message(self, to: str, text: str, kind: str = "note", attachments: list | None = None,
-                      expect_reply: dict | None = None) -> str:
+                      expect_reply: dict | None = None, urgent: bool = False) -> str:
         from . import messages
+        if type(urgent) is not bool:
+            raise ValueError("urgent must be a boolean")
         if not text.strip():
             raise ValueError("empty message")
         if self.counts["send_message"] > 10:
@@ -1113,7 +1126,7 @@ class Broker:
             body = text.strip() + messages.attachment_lines(atts, "path")
             self._deliver("operator", f"{stem}.md",
                           f"From: {self.name}\nTo: operator\nKind: {kind}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{body}\n",
-                          kind, stamp, body, atts)
+                          kind, stamp, body, atts, urgent=urgent)
             record_expectation()
             self._envelope = None
             push = self._push_usage(stamp)
@@ -1198,7 +1211,7 @@ class Broker:
             where, why = channel.route(self.name)
         except Exception:                      # unreadable state: the tool still works, without the line
             return ""
-        line = (f" A message to 'operator' now would notify them {'in the web UI' if where == 'web' else 'on Telegram'}"
+        line = (f" A message to 'operator' routes device notifications to them {'in the web UI' if where == 'web' else 'on Telegram'}"
                 f" ({why}).")
         if self.bot:
             line += (f" Your own Telegram bot is {self.bot}: when your message goes there they can answer there, and "
@@ -1218,7 +1231,7 @@ class Broker:
             return None
 
     def _deliver(self, to: str, rel: str, content: str, kind: str, stamp: datetime, text: str,
-                 attachments: list[dict] | None = None) -> None:
+                 attachments: list[dict] | None = None, urgent: bool = False) -> None:
         """Put a message where its recipient reads it — the operator's inbox (with a notification), or another
         instance's inbox/ — and in the message log."""
         from . import messages
@@ -1235,8 +1248,12 @@ class Broker:
                 alert = ("web", f"the channel could not be chosen ({type(e).__name__}: {e})")
                 log(f"{self.name}: message to the operator: {alert[1]}")
             messages.record(self.project / ".supervisor", path, self.name, "operator", kind, stamp, text, attachments,
-                            alert)
-            notify(f"SHAFT · {self.name} {'asks' if kind == 'question' else 'says'}", text)
+                            alert, urgent=urgent)
+            from . import pushes
+            held = any(r["file"] == path.name and r.get("push_due")
+                       for r in pushes.records(self.project / ".supervisor"))
+            if not held:
+                notify(f"SHAFT · {self.name} {'asks' if kind == 'question' else 'says'}", text)
             self._answer_comments(path.name, text)
         else:
             from .core import safe_write   # the recipient's folder is instance-controlled: no symlinks followed
@@ -1274,7 +1291,8 @@ class Broker:
         home = safe_mkdir(root, ".tmp/home")                 # tools that write to $HOME write here
         fd, prof = tempfile.mkstemp(prefix=f"shaft-run-{self.name}-", suffix=".sb")
         with os.fdopen(fd, "w") as f:
-            f.write(sandbox.run_profile(root, HOME, self.shared, egress_port=self.egress.port, env_root=self.env_root))
+            f.write(sandbox.run_profile(root, HOME, self.shared, egress_port=self.egress.port, env_root=self.env_root,
+                                        job_state=self.run_confined_to))
         bindir = Path(PYTHON).parent
         # The instance's own environment first; then the system Python as `python3` (a link in $HOME when the
         # interpreter's folder has no such name), then the system.
@@ -1315,11 +1333,18 @@ class Broker:
             stop_group(proc)   # and on every other way out: nothing it put in the background outlives it (B9)
             os.unlink(prof)
         half = RUN_OUTPUT_CHARS // 2
-        def cap(t):
-            return t if len(t) <= half else t[:half // 2] + f"\n[... {len(t) - half} chars cut ...]\n" + t[-half // 2:]
+
+        def cap(t, stream):
+            """The head and tail of a long stream, saying how long it was and how to read all of it: until 2026-10-31
+            the cut said only "[... N chars cut ...]", and a 20 KB report was lost past its first 3,000 characters."""
+            if len(t) <= half:
+                return t
+            return (t[:half // 2] + f"\n[... {stream} was {len(t):,} characters: {len(t) - half:,} cut, the first and "
+                    f"last {half // 2:,} shown. For all of it, write it to a file — `… > .tmp/out.txt 2>&1` — and "
+                    "read that with offsets (read_file(path, offset=…)) ...]\n" + t[-half // 2:])
         _shutil.rmtree(home / ".cache", ignore_errors=True)
-        return (f"{status} · {time.monotonic() - started:.1f} s\n--- stdout ---\n{cap(out or '')}"
-                + (f"\n--- stderr ---\n{cap(err)}" if err else ""))
+        return (f"{status} · {time.monotonic() - started:.1f} s\n--- stdout ---\n{cap(out or '', 'stdout')}"
+                + (f"\n--- stderr ---\n{cap(err, 'stderr')}" if err else ""))
 
     def _delegate_coding(self, task: str) -> str:
         from . import coder
@@ -1577,8 +1602,14 @@ class Broker:
             from . import jobs
             # A replay sees the record as it stood when its cycle began, in a live answer's shape (never "a replay")
             text = jobs.describe(self.name, limit, as_of=self.as_of, root=self.root if self.as_of else None)
+        elif kind == "gate":
+            from . import gate_held
+            # Its own rows only (gate-runs/<its name>.jsonl), never another instance's; a replay sees the runs before
+            # its cycle began
+            text = gate_held.describe(self.name, limit, as_of=self.as_of)
         else:
-            raise ValueError("kind must be judgments, runs, tools, code_changes, trials, egress, jobs, consults or calendar")
+            raise ValueError("kind must be judgments, runs, tools, code_changes, trials, egress, jobs, consults, calendar "
+                             "or gate")
         text = text or "(nothing recorded yet)"
         return text if len(text) <= RUN_OUTPUT_CHARS else "[... older entries cut]\n" + text[-RUN_OUTPUT_CHARS:]
 
@@ -1834,7 +1865,7 @@ class Broker:
             return "the operator"
         return config_values(text).get("OPERATOR_NAME") or "the operator"
 
-    def _mail_search(self, query: str = "", account: str = "", max: int = 20) -> str:   # noqa: A002 — the tool's name
+    def _mail_search(self, query: str = "", account: str = "", max: int = 20, page: str = "") -> str:   # noqa: A002 — the tool's name
         from . import google, mail
         query, limit = str(query or ""), sorted((1, int(max), 50))[1]
         account = str(account or "").strip()   # an account alias, or one grant as account/label (as the grant is shown)
@@ -1842,23 +1873,49 @@ class Broker:
                   if not account or account in (g["account"], f"{g['account']}/{g['label']}")]
         if not grants:
             raise PermissionError(f"mail account {account!r} is not granted to you; yours: {self.mail_env()}")
-        rows, searched, failed = {}, [], []
+        states = None
+        if page:
+            try:
+                handle = json.loads(page)
+                if handle["query"] != query or handle["account"] != account:
+                    raise ValueError("query or account changed")
+                states = handle["grants"]
+                if not isinstance(states, dict) or not all(isinstance(v, str) for v in states.values()):
+                    raise ValueError("invalid grant cursors")
+            except (ValueError, KeyError, TypeError) as e:
+                raise ValueError(f"invalid mail_search page: {e}") from None
+        if states is not None and not any(f"{g['account']}/{g['label']}" in states for g in grants):
+            raise PermissionError("mail_search page has no currently granted accounts/labels")
+        rows, searched, failed, continuations, remaining = {}, [], [], {}, {}
         for g in grants:
             where = f"{g['account']}/{g['label']}"
+            if states is not None and where not in states:
+                continue
+            start = states[where] if states is not None else ""
             try:
                 acct = self._mail_account(g["account"])
-                found, dropped = mail.search(acct, mail.label_id(acct, g["label"]), query, limit, self.as_of)
+                found, dropped, next_page = mail.search(acct, mail.label_id(acct, g["label"]), query, limit,
+                                                       self.as_of, start)
             except (google.AccountError, google.ApiError) as e:
                 failed.append(f"{where}: {e}")
+                remaining[where] = start
                 continue
             if dropped:   # Gmail's label filter let through a thread the check refused: never shown, worth knowing
                 self._log(f"{self.name} mail_search {where}: {dropped} thread(s) failed the label check, dropped")
             searched.append(where)
+            continuations[where] = (found, next_page)
             for r in found:
                 rows.setdefault(r["handle"], r)
         if not searched:
             raise RuntimeError("; ".join(failed))
         ordered = sorted(rows.values(), key=lambda r: r["last"], reverse=True)[:limit]
+        shown = {r["handle"] for r in ordered}
+        for where, (found, next_page) in continuations.items():
+            state = json.loads(next_page) if next_page else {"pending": [], "token": ""}
+            # Keep IDs cut by the cross-account merge; the next call label-checks them again.
+            state["pending"] = [r["handle"].split("/", 1)[1] for r in found if r["handle"] not in shown] + state["pending"]
+            if state["pending"] or state["token"]:
+                remaining[where] = json.dumps(state, separators=(",", ":"))
         out = [f"searched {', '.join(searched)}" + (f" for {query.strip()!r}" if query.strip() else "")
                + (f": {len(ordered)} thread(s), newest first" if ordered else ": no threads")]
         out += [f"not searched: {f}" for f in failed]
@@ -1867,6 +1924,10 @@ class Broker:
                     + (f", {r['attachments']} attachment(s)" if r["attachments"] else ""),
                     f"  Subject: {r['subject'] or '(none)'}", f"  From: {r['participants'] or '?'}",
                     f"  {' '.join(r['snippet'].split())[:200]}"]
+        if remaining:
+            token = json.dumps({"query": query, "account": account, "grants": remaining}, separators=(",", ":"))
+            out.append(f"more: yes — mail_search(query={json.dumps(query)}, account={json.dumps(account)}, "
+                       f"max={limit}, page={json.dumps(token)})")
         return "\n".join(out)
 
     def _mail_read(self, id: str, message: int = 1, offset: int = 0) -> str:   # noqa: A002
@@ -2277,9 +2338,9 @@ class ReplayBroker(Broker):
 
     # The operator's mail as of the replayed cycle (Broker passes as_of: later threads and messages are hidden). The
     # grant is part of the key: a grant changed between the two runs is not answered from the first run's reads.
-    def _mail_search(self, query: str = "", account: str = "", max: int = 20) -> str:   # noqa: A002
-        return self._shared(["mail_search", self.mail_grants(), query, account, max, self.as_of],
-                            lambda: Broker._mail_search(self, query, account, max))
+    def _mail_search(self, query: str = "", account: str = "", max: int = 20, page: str = "") -> str:   # noqa: A002
+        return self._shared(["mail_search", self.mail_grants(), query, account, max, page, self.as_of],
+                            lambda: Broker._mail_search(self, query, account, max, page))
 
     def _mail_read(self, id: str, message: int = 1, offset: int = 0) -> str:   # noqa: A002
         from . import mail
@@ -2356,7 +2417,7 @@ class ReplayBroker(Broker):
             where, why = channel.route(self.name)
         except Exception:                      # unreadable state: the tool still works, without the line
             return ""
-        line = (f" A message to 'operator' now would notify them {'in the web UI' if where == 'web' else 'on Telegram'}"
+        line = (f" A message to 'operator' routes device notifications to them {'in the web UI' if where == 'web' else 'on Telegram'}"
                 f" ({why}).")
         if self.bot:
             line += (f" Your own Telegram bot is {self.bot}: when your message goes there they can answer there, and "
@@ -2383,7 +2444,7 @@ class ReplayBroker(Broker):
                  "path": f"{rel_dir}/{messages.attachment_name(n)}", "bytes": len(d)} for n, d in files]
 
     def _deliver(self, to: str, rel: str, content: str, kind: str, stamp: datetime, text: str,
-                 attachments: list[dict] | None = None) -> None:
+                 attachments: list[dict] | None = None, urgent: bool = False) -> None:
         self._tag("simulated: not delivered")
         if to == "operator":
             self.operator_sent += 1

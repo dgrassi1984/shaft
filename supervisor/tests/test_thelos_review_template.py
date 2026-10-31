@@ -168,6 +168,8 @@ class WrapUpTest(InstanceFixture, unittest.TestCase):
                     self.assertNotIn("wrapped_up", ep)
 
     def test_a_finished_deadline_wrap_up_counts_as_ran_out_but_steps_and_yield_do_not(self):
+        """Review 2 M3: a steps wrap-up that still finished was counted as running out (Thelos: 23% cut-offs against
+        5% its judge attributed, 2026-10-31); only a forced deadline wrap-up or a missing finish is."""
         for reason, expected in (("deadline", 1), ("steps", 0), ("yield", 0), ("", 0)):
             with self.subTest(reason=reason):
                 ep = {"ended_by": "control", "finish": {"criterion_met": "yes"}}

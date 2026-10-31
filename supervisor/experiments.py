@@ -194,7 +194,9 @@ def repeat_failures(eps: list[dict]) -> dict[str, str]:
 
 
 def _ran_out(ep: dict | None) -> bool:
-    return not ep or ep.get("ended_by") in ("steps", "repeating") or not ep.get("finish")
+    """The template's forecast rule (shaft/forecast.py summarise): no finish, or a forced deadline wrap-up. A steps or
+    repeating end that still finished did not run out."""
+    return not ep or not ep.get("finish") or ep.get("wrapped_up") == "deadline"
 
 
 def targets(name: str, item: str, project: Path = PROJECT) -> dict[str, str]:

@@ -395,6 +395,44 @@ def pause_alert(pause: dict) -> dict:
                     f"(since {since:%m-%d %H:%M}) — {resume}"}
 
 
+def provider_alerts() -> list[dict]:
+    """Provider faults persist until a successful call; rate limits need five refusals in ten minutes."""
+    active, throttled = {}, {}
+    since = (datetime.now() - timedelta(hours=24)).isoformat()   # a provider unused for a day raises nothing stale
+    for row in jsonl(SUP_DIR / "cloud_usage.jsonl"):
+        if str(row.get("ts", "")) < since:
+            continue
+        model, error = row.get("model", ""), row.get("error")
+        provider = "openrouter" if model.startswith("openrouter/") else "anthropic" if model.startswith("claude-") else ""
+        if not provider:
+            continue
+        if not error:
+            active.pop(provider, None)
+            throttled.pop(provider, None)
+            continue
+        causes = active.setdefault(provider, set())
+        if error.startswith("HTTP 402:"):
+            causes.add("credit")
+        elif error.startswith("HTTP 403:") and any(word in error.lower() for word in ("limit", "credit", "quota")):
+            causes.add("limit")
+        count = re.search(r"\[HTTP 429 responses: (\d+)\]$", error)
+        if count or error.startswith("HTTP 429:"):
+            try:
+                ts = datetime.fromisoformat(row["ts"])
+            except (KeyError, ValueError):
+                continue
+            recent = throttled.setdefault(provider, [])
+            recent.extend([ts] * (int(count[1]) if count else 1))
+            recent[:] = [t for t in recent if ts - timedelta(minutes=10) <= t <= ts]
+            if len(recent) >= 5:
+                causes.add("rate-limit")
+    descriptions = {"credit": "HTTP 402: payment or credits required",
+                    "limit": "HTTP 403: provider limit, credit or quota exhausted",
+                    "rate-limit": "at least five HTTP 429 refusals within ten minutes"}
+    return [{"id": f"provider:{provider}:{cause}", "text": f"{provider}: {descriptions[cause]}"}
+            for provider, causes in sorted(active.items()) for cause in sorted(causes)]
+
+
 def alerts(snap: dict | None = None, now: datetime | None = None, cost: dict | None = None) -> list[dict]:
     """What needs the operator: a service down, a cap at 80% or more, judge spend past its alert line, and
     failures in the supervisor log of the last ALERT_HOURS hours. Each has a stable id, so it can be dismissed.
@@ -425,6 +463,7 @@ def alerts(snap: dict | None = None, now: datetime | None = None, cost: dict | N
         if line[1:20] >= since:
             out.append({"id": log_alert_id(line), "text": line[12:20] + line[21:200]})
     out.extend(pause_alert(p) for p in core.long_pauses(now))
+    out.extend(provider_alerts())
     if CORRECTION_ALERT_CYCLES > 0:
         for name in instance_names():
             out.extend(corrections.alerts(name, CORRECTION_ALERT_CYCLES, now))

@@ -862,7 +862,7 @@ def forward_new(toks: dict[str, str] | None = None) -> int:
             update(lambda s: s.__setitem__("sent_offset", after))
             continue
         tok = toks.get(m["from"]) if m.get("alert") == "telegram" else None   # routed elsewhere: channel.py
-        if tok:
+        if tok and not m.get("push_due"):
             # it comes from the instance's own bot, so no "from <name>"; a question is marked: a reply answers it
             body = f"❓ **Question**\n\n{m['text']}" if m.get("kind") == "question" else m["text"]
             try:
@@ -885,6 +885,9 @@ def forward_new(toks: dict[str, str] | None = None) -> int:
             sent += 1
         update(lambda s: s.__setitem__("sent_offset", after))
     update(lambda s: s.__setitem__("sent_offset", end))
+    from . import pushes
+    sent += pushes.digest(lambda event: send(next(iter(toks.values())), owner,
+                                            event["title"] + "\n\n" + event["body"]))
     return sent
 
 

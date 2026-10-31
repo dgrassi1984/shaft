@@ -283,7 +283,7 @@ class ProtectedSnapshotTest(RunTransactionCase):
             f"                  pathlib.Path({str(self.root / '.uv/lib.py')!r})):\n"
             "            with self.assertRaises(PermissionError):\n"
             "                p.write_text('bad')\n")
-        with self.settings(), mock.patch.object(gate, "_supervisor_tests", return_value=(True, "", "")):
+        with self.settings(), mock.patch.object(gate, "_supervisor_tests", return_value=("", "", None, None)):
             kept = runner._settle("kant", self.root, "live", before, [])
             said = [c.args[0] for c in runner.log.call_args_list]
             self.assertEqual(list((runner.SUP_DIR / "protected/kant").iterdir()), [])

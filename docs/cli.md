@@ -114,6 +114,8 @@ shaft setup                          # recreate missing template/instance worktr
                                      # tool's pre-push hook is in the way (docs/migration.md)
 shaft gate warm                      # run the gate's shared supervisor tests on the current commit unless their
                                      # pass is recorded (fresh: under 12 h); the scheduler runs it after each merge
+shaft gate regate                    # gate again each code change held while the gate's baseline was red; the
+                                     # scheduler runs it after a green warm-up (busy or paused instances: next time)
 shaft kill <name> [--wait S]         # pause it AND stop what it runs now: a cycle, a reply, a job, the battery,
                                      # a trial replay; the run still settles (journal note, gate, commit). Waits up
                                      # to S s (120) for that; shaft resume <name> undoes the pause

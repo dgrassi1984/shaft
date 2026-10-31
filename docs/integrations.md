@@ -64,11 +64,23 @@ message would go now; each message's page in the web UI says where it notified y
 
 Source: [channel routing](../supervisor/channel.py), [the web UI's pushes](../supervisor/web_alerts.py).
 
-`SHAFT_PUSH_BUDGET` (default 6) measures daily pushes per instance without refusing sends.
-The instance sees its count in its operational envelope and after `send_message` to the operator.
-Stats report counts, judged push timing and recorded operator reactions separately. The instance's
-message-discipline skill and digest job own any quiet window; the operator chooses its hours.
-The supervisor does not hold pushes for a digest.
+`send_message(to="operator", ..., urgent=False)` always stores the message immediately in the
+operator inbox and web UI. Only device notifications wait. Use `urgent=True` for time-critical things only.
+Urgent messages, replies within two hours of an operator message, and messages during an open conversation
+notify immediately. Other notifications wait during local quiet hours (`SHAFT_QUIET_HOURS`, default `22-07`,
+may wrap midnight; empty disables) or after the per-instance daily budget (`SHAFT_PUSH_BUDGET`, default 6;
+0 means unlimited and hides the count). `SHAFT_PUSH_HOLD=0` turns holding off for new messages.
+
+Held messages produce one combined digest with each sender and first line, at `SHAFT_DIGEST_AT` (default `07:15`)
+or the end of quiet hours if later. The next running web or Telegram forwarding loop sends it, including any
+overdue messages after downtime. The supervisor persists hold decisions in the message log and digest claims
+under its directory. A durable claim prevents duplicate digest dispatch across restarts; a crash between claiming
+and sending can lose the notification. Messages remain in the inbox. Telegram digests use one available bot;
+open the web inbox to read or answer individual messages and access attachments.
+
+The instance sees its daily count in its operational envelope and after `send_message`. Counts include held
+notification requests. Stats report counts, judged push timing and recorded operator reactions separately.
+The message log records `urgent` and `push_due`; judges see urgency in the tool arguments and assess the content.
 
 ## Google accounts (`shaft google …`)
 
@@ -127,6 +139,10 @@ reads or downloads from is checked again before anything of it is shown. A threa
 messages carries the label; then all its messages are, later replies included. Drafts, trash and spam are left out.
 
 One instance may read several accounts: grant a label on each; `mail_search` covers every grant unless told one.
+`mail_search(query=…, max=…)` returns up to 50 threads per call, following Gmail pages to fill the limit.
+When more remain, its final `more: yes` line gives the next `mail_search` call with a `page` handle.
+Keep the query and account selection on continuations. The handle tracks each account/label separately,
+including threads left over after merging accounts; every continuation checks the current grant and label again.
 `shaft mail example grant work AssistantAccess` checks that the label exists and saves the grant in
 `.supervisor/tools/example.json`. `shaft mail example revoke work AssistantAccess` or `shaft mail example off` holds from example's
 next mail call. A label renamed or deleted in Gmail is refused until you grant it again. Up to 30 mail calls per run; a continuation page of `mail_read` (message or offset past the start) counts as a call but not against those 30.
@@ -145,6 +161,22 @@ The risks you accept by granting a label: anything an instance reads it can send
 Mail content reaches model providers (a cloud-brained instance, the judges). Senders can write instructions into
 mail (prompt injection). What the instance writes from it into its mind stays in its private mind store's history (never in the project's
 git), and downloads stay in `mail/`, after a revoke.
+
+**Watch (new mail, without polling).** An instance may ask the supervisor to tell it when new mail arrives under its
+granted labels, instead of polling with a scheduled plugin: `WATCH_MAIL` in its own `config.env` — `off` (default),
+`inbox` or `wake` — which it can set with `set_config`. The scheduler's watch ([watch.py](../supervisor/watch.py))
+reads Gmail's history from a stored history ID, filtered by the granted label's ID, every `SHAFT_WATCH_EVERY_S`
+seconds (default 60): one labels call per account and one history call per granted label per pass
+(per instance). Every thread the
+history names is checked with the same label check `mail_search` makes; one that fails is never mentioned, and a
+draft, trashed or spam message is not news. What it finds goes into the instance's inbox as one message per pass,
+`From: supervisor (mail watch)`: each thread's handle, sender and subject (at most 20 lines, the rest counted), never
+a body. With `wake` the instance is also woken through the jobs' wake path (`watch-mail`), at most once per
+`SHAFT_WATCH_WAKE_MIN` minutes (default 15); a change inside that window waits in the inbox and wakes it when the
+window ends, unless it has been read by then. The instance never holds the subscription or a token; nothing is public
+(no Gmail push, no Pub/Sub). A new grant, a watch switched on again and an expired history ID (Gmail keeps about a
+week) start from now, with one log line and no backlog. `SHAFT_WATCH=off` stops the watch for every instance. State:
+`.supervisor/watch/<name>/`.
 
 Source: [mail grants and reads](../supervisor/mail.py).
 
@@ -230,6 +262,14 @@ Battery exams get none.
 The risks are mail's, plus other people's data: attendees' names and addresses, and invitations they wrote, reach
 the instance, its model providers and the judges.
 
+**Watch (changed events, without polling).** `WATCH_CALENDAR` in the instance's `config.env` (`off`, `inbox`,
+`wake`; set with `set_config`) works as the mail watch does: Calendar's `events.list` with a stored sync token, one
+call per granted calendar per pass (the first one pages through the whole calendar once to get the token, reporting
+nothing). Created, changed and cancelled events reach the inbox as one message per pass, `From: supervisor (calendar
+watch)`: each event's handle, time and title, never its description, location or attendees. `wake` uses the same
+wake path (`watch-calendar`) and the same per-instance limit; an expired token (410) starts from now. The instance's
+own `calendar_create` and `calendar_move` changes are reported too.
+
 Source: [calendar tools](../supervisor/calendar.py).
 
 ## Scheduled jobs (`shaft jobs …`)
@@ -243,18 +283,41 @@ due jobs as children.
 Each run happens in the `run` sandbox, with its own broker and egress proxy:
 - supervisor tools, mail and calendar grants, the instance's keys, its Python environment and the internet;
 - no model, and no `delegate_coding`, `trial` or `send_message`;
-- writes only to `.jobs/<plugin>/` (gitignored state), `.tmp/` and its browser profile `.browser/`;
+- writes only to `.jobs/<plugin>/` (gitignored state), `.tmp/` and its browser profile `.browser/`. The broker's
+  `run` inside a job may still write notes/ and code as a cycle's does, until the operator sets
+  `SHAFT_JOB_RUN_CONFINED=1` (default `0`): then it writes only the job's own set too;
 - at most 120 s and 30 tool calls, at least 5 minutes apart (`SHAFT_JOB_MIN_MINUTES`), at most `SHAFT_JOBS_MAX`
   jobs per instance (default 12); beyond it, the rest by name are not run and are named in the problem report.
 
 What a run returns lands in the instance's inbox, from "job <plugin>". An empty return delivers nothing. A job with
 `can_wake: true` whose run returns `{"message": …, "wake": true}` starts a cycle as soon as the instance is idle.
 Several requests while it is awake make one wake, there is no rate limit, and a paused instance is never woken.
+For new mail or calendar changes a job is not needed: the supervisor's watch (`WATCH_MAIL`, `WATCH_CALENDAR`, in the
+Mail and Calendar sections) checks every minute and wakes through the same path.
+
+A job's work reaches the instance whole ([PLAN-thelos-review-2.md](plans/PLAN-thelos-review-2.md) M1):
+- **Hand-off.** `{"message": …, "files": ["brief.md", …]}`: up to 5 files of at most 256 KB from `.jobs/<plugin>/`
+  (a path relative to it, or starting with `.jobs/<plugin>/`; no link is followed) are copied beside the message,
+  into `inbox/<stamp>-from-job-<plugin>.files/`. The message lists each with its size and names each refused one
+  with why. The folder is removed once its message has been archived and the same job delivers again.
+- **Cut output.** A message over 4,000 characters is cut, and its whole text (up to 1 MB) is kept in that folder as
+  `output.txt`; the cut says so: `[… cut at 4000 of N characters; the whole text: inbox/….files/output.txt]`.
+- **Publish.** `"publishes": {"notes/briefing.md": "briefing.md"}` in the schedule (at most 5; each target under
+  `notes/`, each source in `.jobs/<plugin>/`, checked with the rest of the schedule). After a successful run, each
+  source that changed since it was last published (at most 256 KB) replaces its target in one rename; nothing is
+  published after a failed run. The instance's next notes commit records it. A problem (a source too big, a link on
+  the way) reaches its inbox once.
+- **Long jobs.** `"long": true`: `SHAFT_JOB_LONG_TIMEOUT_S` (900) and `SHAFT_JOB_LONG_CALLS` (200) per run, one long
+  job at a time per instance, and `SHAFT_JOB_CHECKPOINT=.jobs/<plugin>/checkpoint.json` in its environment. A run
+  stopped by the timeout that wrote that checkpoint since it started is resumed at the scheduler's next tick, with
+  `SHAFT_JOB_RESUME=1`, up to `SHAFT_JOB_LONG_RESUMES` (4) times; then it gives up, the instance gets one message,
+  and the job starts afresh at its next interval. Each run's log row carries `resumed: n`.
 
 A run still going when the next comes due means the next is skipped, and the skip is logged. After 3 failures in a
 row the instance gets one message and the job backs off (its interval doubles, up to a day). Every run is logged in
 `.supervisor/jobs/<name>.jsonl`. `shaft jobs`, the panel's and `shaft top`'s *jobs* row, and the instance's own
-`record(kind='jobs')` show them. Jobs are on by default; `shaft jobs <name> off` stops an instance's jobs. They
+`record(kind='jobs')` show them: each job's arguments, what it publishes, and its status (running, or for a long job
+done / resuming n of N / gave up). Jobs are on by default; `shaft jobs <name> off` stops an instance's jobs. They
 never run during a battery exam, nor in trial replays.
 
 Source: [jobs execution and scheduling](../supervisor/jobs.py).
