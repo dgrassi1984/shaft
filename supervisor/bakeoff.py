@@ -14,11 +14,19 @@ replay is billed as "<name>@bakeoff:<id>:…", under the default per-name cap, a
 Results are saved as they come (.supervisor/bakeoffs/<name>-<id>.json); the same id again resumes, with the code
 frozen at creation (code_rev). A state whose arms did not all finish is replayed again in full on resume (its shared
 web answers are not kept on disk), and a pair the judge failed on is judged again. One process at a time (a lock).
+
+The judge can also be Claude Code subagents instead of the API (no API cost): replay with --replay-only, export the
+blind cases (export_cases: model names redacted, both orders as separate cases), have one subagent judge each case
+into verdicts/<case>.json, then import_verdicts decides each pair as the API judge's would. Past bake-offs, what
+they found and what to reuse: docs/bakeoffs/README.md.
 """
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
+import random
+import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -29,6 +37,7 @@ from .core import INSTANCES, PROJECT, SUP_DIR, cloud_model, log
 
 DIR = SUP_DIR / "bakeoffs"
 DEFAULT_JUDGE = "claude-sonnet-5-5"   # not a candidate's: Haiku shares its family (said in the report)
+SUBAGENT = " (Claude Code subagent)"   # suffix of a judge that answered through import_verdicts, not the API
 
 
 class BakeoffError(Exception):
@@ -185,11 +194,132 @@ def run(b: dict, parallel: int = 3, project: Path = PROJECT, arm_parallel: int =
             raise BakeoffError(f"bake-off {b['id']} is already running in another process") from None
         with ThreadPoolExecutor(max_workers=parallel) as pool:
             list(pool.map(lambda i: _replay_state(project, b, i, lock, arm_parallel), todo))
-        if replay_only:
+        if replay_only or b["judge"].endswith(SUBAGENT):   # subagents judge it: import_verdicts, not the API
             return b
         with ThreadPoolExecutor(max_workers=parallel) as pool:
             list(pool.map(lambda i: _judge_state(project, b, i, lock), todo))
     return b
+
+
+# A model's name in a run's text (its config printed, its own logs) would tell the judge which run is which, or tilt
+# it: the arms' own ids, also as spelled out ("Claude Haiku 5.5" for claude-haiku-5-5), and these families are replaced
+# before a case is written. One DeepSeek run printed its config.
+_FAMILIES = (r"\b(?:openrouter/)?(?:[\w.-]+/)?(?:mimo|deepseek|haiku|sonnet|opus|minimax|nemotron|hy\d|hunyuan|"
+             r"step-3[\w.-]*|glm-[\w.-]+|claude-[\w.-]+|gemini|gpt-[\w.-]+)[\w.@/-]*")
+
+
+def _redactor(b: dict):
+    names = sorted({n for a in b["arms"] for n in (a["model"], a["model"].rsplit("/", 1)[-1])}, key=len, reverse=True)
+    spelled = [r"[\s._/-]*".join(map(re.escape, re.split(r"[\s._/-]+", n))) for n in names]
+    pattern = re.compile("|".join([*(rf"\b{n}\b" for n in spelled), _FAMILIES]), re.IGNORECASE)   # the arms first
+    return lambda text: pattern.sub("[model]", text)
+
+
+def _runs(A: dict, B: dict) -> str:
+    """The pair's two runs as exported: a case judged on other runs (the state replayed again since) is stale."""
+    return hashlib.sha256(json.dumps([A, B], sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
+
+
+def _pair_cases(mapping: dict, b: dict, i: int, label: str, runs: str) -> dict:
+    """{order: case id} of this pair's current runs in `mapping`."""
+    return {m["order"]: c for c, m in mapping.items() if (m.get("name"), m["bid"], m["state"], m["arm"], m.get("runs"))
+            == (b["name"], b["id"], i, label, runs)}
+
+
+_CASE = """# System prompt
+{system}
+
+# Instructions
+You are the judge. Read the whole case below, then write ONLY a JSON object matching this schema (no prose, no code \
+fence) to the output file named in your task:
+
+{schema}
+
+`first`/`second` mean Run 1 and Run 2 as they appear below. Judge effectiveness first, as the system prompt says.
+
+{case}"""
+
+
+def export_cases(b: dict, out: Path, project: Path = PROJECT) -> list[str]:
+    """Every judgeable pair of `b` in both orders as blind cases out/cases/<id>.md (random ids, model names redacted,
+    the order hidden), recorded in out/mapping.json (id -> instance, bake-off, state, arm, order, runs). Pairs already
+    exported on the same runs are kept; several bake-offs can share `out`. Returns, shuffled (their order would tell
+    AB from BA), the current cases still without a valid verdict in out/verdicts/."""
+    cases, verdicts, mapping_path = out / "cases", out / "verdicts", out / "mapping.json"
+    cases.mkdir(parents=True, exist_ok=True)
+    verdicts.mkdir(exist_ok=True)
+    mapping = json.loads(mapping_path.read_text()) if mapping_path.exists() else {}
+    current = []
+    redact, rng, base = _redactor(b), random.SystemRandom(), b["arms"][0]["label"]
+    schema = json.dumps(trial.JUDGE_SCHEMA, indent=1)
+    for i, st in enumerate(b["states"]):
+        context = None
+        for arm in b["arms"][1:]:
+            label = arm["label"]
+            if base not in st["arms"] or label not in st["arms"]:
+                continue
+            A, B = st["arms"][base], st["arms"][label]
+            if not (A["completed"] and B["completed"]):
+                continue   # decide() settles it without a judge
+            runs = _runs(A, B)
+            have = _pair_cases(mapping, b, i, label, runs)
+            current += have.values()
+            for order, (first, second) in (("AB", (A, B)), ("BA", (B, A))):
+                if order in have:
+                    continue
+                context = context or trial.state_context(project, b["name"], st)
+                cid = next(c for c in iter(lambda: f"c{rng.getrandbits(40):010x}", None) if c not in mapping)
+                text = _CASE.format(system=trial.JUDGE_SYSTEM, schema=schema,
+                                    case=redact(trial.judge_case(context, first, second)))
+                (cases / f"{cid}.md").write_text(text)
+                mapping[cid] = {"name": b["name"], "bid": b["id"], "state": i, "arm": label, "order": order,
+                                "runs": runs, "chars": len(text)}
+                current.append(cid)
+    mapping_path.write_text(json.dumps(mapping, indent=1))
+    todo = [c for c in current if verdict(out, c) is None]
+    rng.shuffle(todo)
+    return todo
+
+
+def verdict(out: Path, cid: str) -> dict | None:
+    """Case `cid`'s verdict, or None when it is missing or not exactly the judge's schema (text around the JSON or a
+    field it does not have included: such a case is judged again from scratch, never repaired)."""
+    from .judge import _valid
+    p = out / "verdicts" / f"{cid}.json"
+    try:
+        v = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return None
+    if _valid(v, trial.JUDGE_SCHEMA) or set(v) - set(trial.JUDGE_SCHEMA["properties"]):
+        return None
+    if any(_valid(v[side], trial._ARM) or set(v[side]) - set(trial._ARM["properties"]) for side in ("first", "second")):
+        return None
+    return v
+
+
+def import_verdicts(b: dict, out: Path, judge: str = "claude-opus-5-5") -> list[str]:
+    """Decide every pair of `b` from the verdicts in `out` (trial.decide: both orders must agree; a run that did not
+    complete loses without a judge) and save it with `judge` + SUBAGENT as its judge. Refused over another judge's
+    verdicts: one bake-off, one judge. Returns the cases whose verdict file is there but invalid (judge them again)."""
+    judged_by = judge + SUBAGENT
+    if b["judge"] != judged_by and any(j for s in b["states"] for o in s["outcomes"].values() for j in o["judgments"]):
+        raise BakeoffError(f"bake-off {b['id']} was judged by {b['judge']}: verdicts of {judged_by} would mix judges")
+    mapping = json.loads((out / "mapping.json").read_text())
+    b["judge"] = judged_by
+    base, bad = b["arms"][0]["label"], []
+    for i, st in enumerate(b["states"]):
+        for arm in b["arms"][1:]:
+            label = arm["label"]
+            if base not in st["arms"] or label not in st["arms"]:
+                continue
+            A, B = st["arms"][base], st["arms"][label]
+            cids = _pair_cases(mapping, b, i, label, _runs(A, B))   # never a verdict on runs replayed since
+            judgments = [verdict(out, cids[o]) if o in cids else None for o in ("AB", "BA")]
+            outcome, why = trial.decide({"A": A, "B": B}, judgments)
+            st["outcomes"][label] = {"outcome": outcome, "why": why, "judgments": judgments, "judge_usd": 0.0}
+            bad += [c for c in cids.values() if (out / "verdicts" / f"{c}.json").exists() and verdict(out, c) is None]
+    _save(b)
+    return bad
 
 
 def report(b: dict) -> str:
@@ -225,5 +355,12 @@ def report(b: dict) -> str:
         lines.append(f"| {arm['label']} | {v['W']} | {v['L']} | {v['T']} | {v['unjudged']} | {v['label']} | {v['p']} |")
     judge_usd = sum(o["judge_usd"] for s in b["states"] for o in s["outcomes"].values())
     replay_usd = sum(r["usd"] for s in b["states"] for r in s["arms"].values())
-    lines += ["", f"spent: replays ${replay_usd:.2f}, judging ${judge_usd:.2f}"]
+    lines += ["", f"spent: replays ${replay_usd:.2f}, judging ${judge_usd:.2f}", "",
+              "Per cycle, each candidate against the baseline (W win · L loss · T tie · ? unjudged · – not replayed):", "",
+              "| cycle (episode ts) | " + " | ".join(a["label"] for a in b["arms"][1:]) + " |",
+              "|---|" + "---|" * (len(b["arms"]) - 1)]
+    mark = {"win": "W", "loss": "L", "tie": "T", "unjudged": "?"}
+    for s in b["states"]:
+        lines.append(f"| {s['ts']} | " + " | ".join(mark[s["outcomes"][a["label"]]["outcome"]]
+                                                   if a["label"] in s["outcomes"] else "–" for a in b["arms"][1:]) + " |")
     return "\n".join(lines)

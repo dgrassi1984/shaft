@@ -131,6 +131,12 @@ shaft trial run <name> --cand PATH=FILE …  # an operator trial (planted tests;
 shaft trial replay <name> <episode-ts>     # replay one past cycle once with the current code (debug;
                                            #   --model local|<cloud id>, --keep DIR copies the folder, --cycles N, --sleep)
 shaft trial work                           # run what may run now (the scheduler does this)
+shaft trial models <name> --arm M[@EFFORT] …  # model bake-off: replay past cycles on each model (the first is the
+                                           #   baseline), judge blind against it (--episodes TS…, --judge M,
+                                           #   --parallel N, --arm-parallel N, --replay-only); --id ID resumes it,
+                                           #   --report prints it, --export-cases DIR / --import-verdicts DIR
+                                           #   [--judged-by M] judge it with Claude Code subagents instead of the API.
+                                           #   Ledger and reuse rules: docs/bakeoffs/README.md
 ```
 
 `--cycles N` replays N consecutive live cycles per arm from one reconstructed past state, default 1.
