@@ -896,6 +896,21 @@ def cmd_trial(args) -> int:
         except bakeoff.BakeoffError as e:
             print(f"refused: {e}", file=sys.stderr)
             return 1
+        if args.export_cases:
+            todo = bakeoff.export_cases(b, Path(args.export_cases))
+            print(f"bake-off {b['id']}: {len(todo)} cases without a verdict in {args.export_cases}/verdicts/")
+            print("\n".join(todo))
+            return 0
+        if args.import_verdicts:
+            try:
+                bad = bakeoff.import_verdicts(b, Path(args.import_verdicts), judge=args.judged_by)
+            except bakeoff.BakeoffError as e:
+                print(f"refused: {e}", file=sys.stderr)
+                return 1
+            print(bakeoff.report(b))
+            if bad:
+                print(f"\ninvalid verdict files, judge these cases again: {' '.join(bad)}")
+            return 0
         if not args.report:
             print(f"bake-off {b['id']}: {len(b['states'])} past cycles × {len(b['arms'])} models", flush=True)
             try:
@@ -1343,6 +1358,11 @@ def main(argv: list[str]) -> int:
                                                                 "(after its baseline)")
     q.add_argument("--replay-only", action="store_true", help="replay, do not judge yet (a later run judges)")
     q.add_argument("--report", action="store_true", help="print the saved report only; run nothing")
+    q.add_argument("--export-cases", metavar="DIR", help="write the blind judge cases for subagents to DIR/cases/ "
+                                                          "and list those still without a DIR/verdicts/<case>.json")
+    q.add_argument("--import-verdicts", metavar="DIR", help="decide every pair from DIR/verdicts/ and print the report")
+    q.add_argument("--judged-by", default="claude-opus-5-5", help="the model of the subagents whose verdicts are "
+                                                                  "imported")
     tsub.add_parser("work", help="run the queued trials' tests and replays that may run now (the scheduler does this)")
     p = sub.add_parser("check", help="run the test gate against an instance's code")
     p.add_argument("name", nargs="?", default=DEFAULT_INSTANCE)

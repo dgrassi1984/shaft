@@ -12,3 +12,6 @@
   a real cycle would and records them; a trial never takes an instance's time on the local model.
 - An instance reads the operator's mail only through the broker's mail tools: it never holds a mail credential, and the
   supervisor checks the granted label on every thread it returns, reads or downloads from (docs/plans/PLAN-mail.md).
+- Model choice for an instance (bake-offs, `shaft trial models`): read docs/bakeoffs/README.md first. Reuse its
+  results, cycle sets, candidate screen and subagent-judging path; re-run a settled model only when its version, the
+  instance's loop or the budget changed. Every new bake-off adds its report and ledger row there.

@@ -3,6 +3,7 @@ judged blind against the baseline in both orders. `shaft trial run` could not do
 gives both arms one model (docs/plans/REVIEW-thelos-model-2026-10-30.md)."""
 from __future__ import annotations
 
+import json
 import shutil
 import tempfile
 import threading
@@ -229,6 +230,87 @@ class BakeoffTest(unittest.TestCase):
                                     should_stop=lambda: False, env={"LLM_REASONING_EFFORT": "xhigh"})
         self.assertEqual((seen["LLM_MODEL"], seen["LLM_BASE_URL"], seen["LLM_REASONING_EFFORT"]),
                          ("claude-haiku-5-5", "broker", "xhigh"))
+
+
+VERDICT = {"winner": "second", "margin": "clear", "first": {"criterion_met": "partial", "claim_supported": True},
+           "second": {"criterion_met": "yes", "claim_supported": True}, "harm_first": "", "harm_second": "",
+           "reasoning": "r"}
+
+
+class SubagentJudgeTest(BakeoffTest):
+    """Bake-offs judged by Claude Code subagents (export_cases / import_verdicts), not the API judge: the path the
+    2026-10-30 bake-offs took through a scratch script that was never in the repo (docs/bakeoffs/README.md)."""
+
+    def replayed(self, arms=("openrouter/xiaomi/mimo-v2.6-pro", "openrouter/deepseek/deepseek-v4.1-flash"), **kw):
+        def replay(project, name, st, code, *, model, cache, cache_lock, billed, env):
+            rec = _rec(model)
+            rec["episode"] = {"intent": {"goal": f"config: LLM_MODEL={model}"}}   # one printed its config (10-30)
+            return rec
+        b = self.create(arms=arms, **kw)
+        with mock.patch.object(trial, "replay_arm", side_effect=replay):
+            bakeoff.run(b, parallel=1, project=self.tmp, replay_only=True)
+        return b
+
+    def write(self, out, mapping, winner_for_candidate="second"):
+        for cid, m in mapping.items():   # the candidate is the second run in AB, the first in BA
+            w = winner_for_candidate if m["order"] == "AB" else {"second": "first", "first": "second"}.get(
+                winner_for_candidate, winner_for_candidate)
+            (out / "verdicts" / f"{cid}.json").write_text(json.dumps({**VERDICT, "winner": w}))
+
+    def test_export_then_import_decides_each_pair_from_both_orders(self):
+        b, out = self.replayed(), self.tmp / "judging"
+        todo = bakeoff.export_cases(b, out)
+        mapping = json.loads((out / "mapping.json").read_text())
+        self.assertEqual(len(todo), 4)   # 2 cycles × 1 candidate × 2 orders
+        self.assertEqual(sorted(m["order"] for m in mapping.values()), ["AB", "AB", "BA", "BA"])
+        for cid in todo:
+            text = (out / "cases" / f"{cid}.md").read_text()
+            self.assertIn("[model]", text)
+            for leak in ("deepseek", "mimo", "xiaomi/"):   # blind: no model name, not even the one a run printed
+                self.assertNotIn(leak, text.lower())
+            self.assertIn(trial.JUDGE_SYSTEM[:60], text)
+        self.assertEqual(bakeoff.export_cases(b, out), todo, "exported twice")
+        unknown = bakeoff._redactor({"arms": [{"model": "openrouter/acme/zephyr-9"}]})   # no family pattern knows it
+        self.assertEqual(unknown("ran openrouter/acme/zephyr-9, i.e. zephyr-9"), "ran [model], i.e. [model]")
+        self.write(out, mapping)
+        with mock.patch.object(trial, "judge_pair", side_effect=AssertionError("the API judge was called")):
+            self.assertEqual(bakeoff.import_verdicts(b, out), [])
+            bakeoff.run(b, parallel=1, project=self.tmp)   # a resume never calls the API judge over subagents
+        self.assertEqual(b["judge"], "claude-opus-5-5 (Claude Code subagent)")
+        outcomes = [s["outcomes"]["openrouter/deepseek/deepseek-v4.1-flash"] for s in b["states"]]
+        self.assertEqual([o["outcome"] for o in outcomes], ["win", "win"])
+        self.assertEqual({o["judge_usd"] for o in outcomes}, {0.0})
+        saved = json.loads(bakeoff.path("thelos", b["id"]).read_text())
+        self.assertEqual(saved["states"][0]["outcomes"], b["states"][0]["outcomes"])
+        self.assertEqual(bakeoff.export_cases(b, out), [])
+        rep = bakeoff.report(b)
+        self.assertIn("| openrouter/deepseek/deepseek-v4.1-flash | 2 | 0 | 0 | 0 | ", rep)
+        self.assertIn(f"| {EPS[0]['ts']} | W |", rep)
+
+    def test_an_invalid_verdict_leaves_the_pair_unjudged_and_is_named(self):
+        b, out = self.replayed(), self.tmp / "judging"
+        bakeoff.export_cases(b, out)
+        mapping = json.loads((out / "mapping.json").read_text())
+        self.write(out, mapping)
+        bad = next(c for c, m in mapping.items() if m["state"] == 0)
+        p = out / "verdicts" / f"{bad}.json"
+        p.write_text(p.read_text() + "\nI also think…")   # text after the JSON (10-30): judged again, never repaired
+        self.assertEqual(bakeoff.import_verdicts(b, out), [bad])
+        self.assertEqual(b["states"][0]["outcomes"]["openrouter/deepseek/deepseek-v4.1-flash"]["outcome"], "unjudged")
+        self.assertEqual(b["states"][1]["outcomes"]["openrouter/deepseek/deepseek-v4.1-flash"]["outcome"], "win")
+        self.assertIn(bad, bakeoff.export_cases(b, out))
+        nested = {**VERDICT, "first": {"criterion_met": "maybe", "claim_supported": True}}
+        p.write_text(json.dumps(nested))
+        self.assertIsNone(bakeoff.verdict(out, bad))
+
+    def test_import_refuses_to_mix_with_the_api_judge_s_verdicts(self):
+        b, out = self.replayed(), self.tmp / "judging"
+        with mock.patch.object(trial, "judge_pair", return_value=VERDICT):
+            bakeoff.run(b, parallel=1, project=self.tmp)
+        bakeoff.export_cases(b, out)
+        with self.assertRaises(bakeoff.BakeoffError) as ctx:
+            bakeoff.import_verdicts(b, out)
+        self.assertIn("would mix judges", str(ctx.exception))
 
 
 if __name__ == "__main__":
