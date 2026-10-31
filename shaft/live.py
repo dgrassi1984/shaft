@@ -26,6 +26,7 @@ from .tools import Toolbox, _spec, completed, for_log
 
 S = {"type": "string"}
 ORIGINS = ("self", "operator", "instance")
+FRONT_HITS = 40   # `shaft front`: how much of the memory search behind recall and the workspace it shows
 # What my confidence is a probability of. It was asked as "success" but scored against yes=1/partial=0.5; the
 # supervisor now scores it against criterion_met == yes, and only for intents that carry this (A4).
 CONFIDENCE_OF = "criterion_met=yes"
@@ -88,6 +89,65 @@ def inbox_text(messages: list[tuple[str, str]]) -> str:
     body = "\n\n".join(f"### {name}\n{text.strip()}" for name, text in messages)
     return (f"You have {len(messages)} new message(s). Reply with send_message if you want to; "
             f"they will be archived in memory/messages/ after this cycle.\n\n{body}")
+
+
+def cycle_toolbox(cfg, state: State) -> Toolbox:
+    """My tools in a live cycle (the system prompt lists them)."""
+    toolbox = Toolbox(state.root)
+    toolbox.loop_guard = loopguard.Guard(cfg.LOOP_GUARD, cfg.LOOP_EFFECT_ROUNDS)
+    toolbox.commit_source = "cycle" if cfg.COMMITMENTS == "on" else ""
+    return toolbox
+
+
+def opening(cfg, state: State, toolbox: Toolbox) -> str:
+    """My live cycle's system prompt: my context, and the transcripts of conversations not written up yet."""
+    system = prompts.system_prompt(state, cfg, prompts.LIVE_MODE, toolbox.describe())
+    unwritten = recovery.unwritten_context(state, cfg.OPERATOR_NAME, max_chars=recovery.AUTONOMOUS_CONTEXT_CHARS)
+    if unwritten:
+        system += ("\n\n## Recent conversations I have not written up yet (transcripts)\n\n"
+                   "These may still be going on; they will be written up when they end.\n\n" + unwritten)
+    return system
+
+
+def sources(state: State, inbox: list[tuple[str, str]]) -> tuple[str, str, str]:
+    """My improvement plan, my goals, and what retrieval at a cycle's start is about: both, and my messages."""
+    plan, goals = prompts.improvement_plan(state), state.read(state.goals_md)
+    return plan, goals, "\n".join([goals, plan, inbox_text(inbox)])
+
+
+def front(cfg, state: State, inbox: list[tuple[str, str]], system: str) -> tuple[workspace.Workspace, str]:
+    """What is put in front of me at a live cycle's start beyond my context — what my memory holds about my goals, my
+    improvement plan and my messages: my workspace's winners (WORKSPACE competitive or relevance), which replace
+    automatic recall in the same room (workspace.BUDGET), or automatic recall itself (off). No model call."""
+    plan, goals, about = sources(state, inbox)
+    ws = workspace.Workspace("off")
+    if cfg.WORKSPACE != "off":
+        try:
+            ws = workspace.build(state.root, cfg.WORKSPACE, about=about, shown=system, now=clock.now(), inbox=inbox,
+                                 plan=plan, goals=goals, k=cfg.WORKSPACE_K)
+        except Exception as e:   # a workspace that cannot be built falls back to recall: it must never stop a cycle
+            ws = workspace.Workspace("off", errors=[f"{type(e).__name__}: {e}"[:200]])
+    return ws, ws.block() if ws.mode != "off" else memory.recall(state.root, about, shown=system)
+
+
+def fronts(cfg, state: State) -> dict:
+    """`python -m shaft front`: what a live cycle starting now would have in front of it under each WORKSPACE mode —
+    the system prompt, the inbox, briefing and hand-off as the cycle shows them, each mode's focus block with its
+    workspace record, and the memory search those start from (its first FRONT_HITS hits, best first; `shown`: already
+    in my context, so neither recall nor the workspace offers it). Reads only; no model call. The supervisor's `shaft
+    experiment workspace` runs it on a replay's copy: to plant its probe at a place this search reaches, and to see
+    which arm it reaches before any replay is paid for."""
+    from dataclasses import replace
+    inbox = read_inbox(state)
+    system = opening(cfg, state, cycle_toolbox(cfg, state))
+    hits = memory.search(state.root, sources(state, inbox)[2], k=FRONT_HITS)
+    out = {"system": system, "inbox": inbox_text(inbox), "briefing": prompts.briefing(state.root, cfg),
+           "handoff": prompts.handoff(state.root, cfg), "modes": {},
+           "hits": [{"source": h.source, "text": h.text, "shown": h.text.strip()[:120] in system} for h in hits]}
+    for mode in workspace.MODES:
+        ws, focus = front(replace(cfg, values={**cfg.values, "WORKSPACE": mode}), state, inbox, system)
+        out["modes"][mode] = {"focus": focus, "workspace": ws.record(), "memory": memory.mode}
+    return out
 
 
 def assistant_turns(messages: list[dict]) -> int:
@@ -282,9 +342,7 @@ def run(cfg, state: State, client: Client) -> str:
                             "will be fully met (criterion_met yes; partial counts as not met)"}},
             ["confidence"]), confirm, repeatable=True)   # the same number is refused in the declare's reply,
             # accepted on the next: the repeat guard must not block that retry
-    toolbox = Toolbox(state.root)
-    toolbox.loop_guard = loopguard.Guard(cfg.LOOP_GUARD, cfg.LOOP_EFFECT_ROUNDS)
-    toolbox.commit_source = "cycle" if cfg.COMMITMENTS == "on" else ""
+    toolbox = cycle_toolbox(cfg, state)
     real_run = toolbox.run
 
     def gated_run(name: str, raw_args: str) -> str:   # no acting before the intent is declared (and confirmed)
@@ -310,21 +368,8 @@ def run(cfg, state: State, client: Client) -> str:
     inbox = read_inbox(state)
     curiosity = surprises.draw(cfg.CURIOSITY_EVERY_CYCLES, bool(surprises.queue(state.root, started)),
                                [n for n, _ in inbox], f"{cfg.NAME}|{started:%Y-%m-%dT%H:%M}")
-    system = prompts.system_prompt(state, cfg, prompts.LIVE_MODE, toolbox.describe())
-    unwritten = recovery.unwritten_context(state, cfg.OPERATOR_NAME, max_chars=recovery.AUTONOMOUS_CONTEXT_CHARS)
-    if unwritten:
-        system += ("\n\n## Recent conversations I have not written up yet (transcripts)\n\n"
-                   "These may still be going on; they will be written up when they end.\n\n" + unwritten)
-    # what my memory holds about my goals, my improvement plan and my messages, beyond what my context shows
-    plan, goals = prompts.improvement_plan(state), state.read(state.goals_md)
-    about = "\n".join([goals, plan, inbox_text(inbox)])
-    if cfg.WORKSPACE != "off":   # its winners replace automatic recall, in the same room (workspace.BUDGET)
-        try:
-            ws = workspace.build(state.root, cfg.WORKSPACE, about=about, shown=system, now=clock.now(), inbox=inbox,
-                                 plan=plan, goals=goals, k=cfg.WORKSPACE_K)
-        except Exception as e:   # a workspace that cannot be built falls back to recall: it must never stop a cycle
-            ws = workspace.Workspace("off", errors=[f"{type(e).__name__}: {e}"[:200]])
-    focus = ws.block() if ws.mode != "off" else memory.recall(state.root, about, shown=system)
+    system = opening(cfg, state, toolbox)
+    ws, focus = front(cfg, state, inbox, system)
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": images.with_attached(   # images attached to my messages (PLAN-vision.md)
