@@ -61,6 +61,34 @@ def _spec(name: str, description: str, properties: dict, required: list[str] | N
                        "required": required if required is not None else list(properties)}}}
 
 
+def coerce_args(args: dict, spec: dict | None) -> dict:
+    """Arguments typed as the tool's schema declares them. Some models send every value as a string: on mimo
+    (2026-10-28..30) each record_correction carried reopens "null" — not JSON null — and every one of 44 calls was
+    refused, so the corrections ledger got no row; read_file's offset and finish_cycle's step came as "120" and "11".
+    Only a string whose declared types rule out that string is converted; anything else is left for the tool to
+    judge."""
+    props = (((spec or {}).get("function") or {}).get("parameters") or {}).get("properties") or {}
+    out = dict(args)
+    for key, value in args.items():
+        declared = props.get(key) if isinstance(props, dict) else None
+        if not isinstance(value, str) or not isinstance(declared, dict):
+            continue
+        kinds = declared.get("type")
+        kinds = [kinds] if isinstance(kinds, str) else list(kinds) if isinstance(kinds, list) else []
+        text = value.strip()
+        if "null" in kinds and text.lower() in ("null", "none"):
+            out[key] = None
+        elif "string" in kinds:
+            continue
+        elif "integer" in kinds and re.fullmatch(r"[+-]?\d+", text):
+            out[key] = int(text)
+        elif "number" in kinds and re.fullmatch(r"[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?", text):
+            out[key] = float(text)
+        elif "boolean" in kinds and text.lower() in ("true", "false"):
+            out[key] = text.lower() == "true"
+    return out
+
+
 S = {"type": "string"}
 BUILTINS = [
     _spec("read_file", "Read a text file inside my own folder (paths are relative to it), or under shared/ when "
@@ -207,6 +235,9 @@ class Toolbox:
                   ("my plugins", list(self.plugins)), ("supervisor", list(self.remote))]
         return "; ".join(f"{label}: {', '.join(names) or '(none)'}" for label, names in groups)
 
+    def spec_of(self, name: str) -> dict | None:
+        return next((s for s in self.specs() if s["function"]["name"] == name), None)
+
     # -- execution ---------------------------------------------------------------
     def run(self, name: str, raw_args: str) -> str:
         started = datetime.now()
@@ -214,7 +245,7 @@ class Toolbox:
             args = json.loads(raw_args or "{}")
             if not isinstance(args, dict):
                 raise ValueError("arguments must be a JSON object")
-            result = self._dispatch(name, args)
+            result = self._dispatch(name, coerce_args(args, self.spec_of(name)))
         except Exception as e:  # a tool failure must never kill the cycle
             result = f"ERROR: {type(e).__name__}: {e}"
         if len(result) > MAX_RESULT_CHARS:

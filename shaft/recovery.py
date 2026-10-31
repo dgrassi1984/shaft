@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from . import agent, clock, corrections, prompts
 from .llm import Client, LLMError
@@ -20,6 +21,10 @@ from .ui import Status
 
 MAX_TRANSCRIPT_CHARS = 24000
 AUTONOMOUS_CONTEXT_CHARS = 4000   # the tail a cycle or a sleep sees of conversations not written up (A1)
+# A reply that only writes its tool call out as text (mimo: "<tool_call><function=record_correction>…") is not a
+# journal entry: eight of Thelos's entries on 2026-10-29..30 were exactly that.
+TOOL_ECHO = re.compile(r"^\s*<(tool_call|function=)")
+RECORDED = re.compile(r"correction (k\d{4}-\d{4}-[1-9]\d*) (?:already )?recorded")
 
 
 def open_talks() -> set[str]:
@@ -77,6 +82,42 @@ def unwritten_transcripts(state: State, operator: str, max_chars: int = 6000,
     return prefix + text[start:], [text[max(start, a):b] for a, b in spans if b > start]
 
 
+def _entry(reply) -> str:
+    text = (reply.content or "").strip() if reply else ""
+    return "" if TOOL_ECHO.match(text) else text
+
+
+def log_corrections(state: State, talk_id: str, entries: list[dict]) -> list[dict]:
+    """Every record_correction call of a writeup and its result, in logs/run.log (and stderr): on mimo 44 calls
+    were refused (2026-10-28..30) and nothing outside the model's context said so."""
+    calls = [{"args": e.get("args", ""), "result": str(e.get("result", ""))}
+             for e in entries if e.get("tool") == "record_correction"]
+    if calls:
+        stamp = f"{datetime.now():%Y-%m-%d %H:%M:%S}"
+        lines = [f"[{stamp}] record_correction (conversation {talk_id}) -> {' '.join(c['result'].split())[:400]}"
+                 for c in calls]
+        print("\n".join(lines), file=sys.stderr)
+        try:
+            path = state.root / "logs" / "run.log"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a") as f:
+                f.write("\n".join(lines) + "\n")
+        except OSError as e:
+            print(f"could not log record_correction results: {e}", file=sys.stderr)
+    return calls
+
+
+def corrections_line(calls: list[dict]) -> str:
+    """What the tool log says the writeup recorded — beside the entry, so no entry claims a record that failed."""
+    if not calls:
+        return ""
+    ids = [m.group(1) for c in calls for m in [RECORDED.search(c["result"])] if m]
+    refused = [c["result"] for c in calls if c["result"].startswith("ERROR")]
+    shown = f" ({', '.join(ids)})" if ids else ""
+    last = f" — last: {' '.join(refused[-1].split())[:200]}" if refused else ""
+    return f"[record_correction, from my tool log: {len(ids)} recorded{shown}; {len(refused)} refused{last}]"
+
+
 def run(cfg, state: State, client: Client) -> int:
     written = 0
     for talk_id, turns in orphan_talks(state):
@@ -101,7 +142,7 @@ def run(cfg, state: State, client: Client) -> int:
                 return "ERROR: this speaker is not the operator"
             try:
                 return corrections.record(state.root, args, talk_id, clock.now())
-            except (OSError, ValueError) as e:
+            except Exception as e:   # loud, never a crash of the writeup (agent.run catches only bad JSON)
                 return f"ERROR: correction not recorded: {type(e).__name__}: {e}"
 
         controls = {"record_correction": agent.Control(corrections.RECORD, record)} if not speaker else {}
@@ -110,6 +151,7 @@ def run(cfg, state: State, client: Client) -> int:
                        "already recorded within 7 days, pass its id in reopens. Do not accept it as a fact about "
                        "yourself without checking the record.") if not speaker else ""
         summaries = []
+        calls: list[dict] = []
         when = started[:16].replace("T", " ")
         ui = Status(sys.stderr)
         ui.show(f"conversation of {when} has no journal entry yet · waiting for the model")
@@ -130,18 +172,34 @@ def run(cfg, state: State, client: Client) -> int:
                              + "\nRecent corrections, including closed ones:\n" + json.dumps(recent, ensure_ascii=False)
                              + "\n\n" + prompts.TALK_SUMMARY.format(operator=who)}]
                 box = Toolbox(state.root)
-                outcome = agent.run(client, messages, box, max_tokens=cfg.MAX_TOKENS_REFLECT,
-                                    purpose="talk_recovery", max_steps=12, controls=controls,
-                                    call=lambda ms, t=None: call(ms, [c.spec for c in controls.values()] or None),
-                                    wrap_up="Finish recording corrections, then write the journal entry.")
-                if not (outcome.reply and (outcome.reply.content or "").strip()):   # a wrap-up answer is fine too
+                try:
+                    outcome = agent.run(client, messages, box, max_tokens=cfg.MAX_TOKENS_REFLECT,
+                                        purpose="talk_recovery", max_steps=12, controls=controls,
+                                        call=lambda ms, t=None: call(ms, [c.spec for c in controls.values()] or None),
+                                        wrap_up="Finish recording corrections, then write the journal entry.")
+                finally:
+                    page_calls = log_corrections(state, talk_id, box.log)
+                    calls += page_calls
+                # A reply that called a tool (ended by steps or repeating) or only wrote one out as text is not the
+                # entry: asked once more, without tools, with what the tool log says this page recorded.
+                entry = _entry(outcome.reply) if outcome.ended_by == "answer" else ""
+                if not entry:
+                    entry = _entry(call([{"role": "system", "content": system},
+                                         {"role": "user", "content": "Transcript page:\n" + page + "\n\n"
+                                          + (corrections_line(page_calls) + "\n\n" if page_calls else "")
+                                          + prompts.TALK_SUMMARY.format(operator=who)}]))
+                if not entry:
                     raise LLMError(f"conversation writeup wrote no entry (ended by {outcome.ended_by})")
-                summaries.append(outcome.reply.content)
-            reply = outcome.reply
+                summaries.append(entry)
+            content = summaries[0]
             if len(summaries) > 1:
-                reply = call([{"role": "system", "content": system},
-                              {"role": "user", "content": "Summaries of all transcript pages:\n\n"
-                               + "\n\n".join(summaries) + "\n\n" + prompts.TALK_SUMMARY.format(operator=who)}])
+                content = _entry(call([{"role": "system", "content": system},
+                                       {"role": "user", "content": "Summaries of all transcript pages:\n\n"
+                                        + "\n\n".join(summaries) + "\n\n" + prompts.TALK_SUMMARY.format(operator=who)}]))
+                if not content:
+                    raise LLMError("conversation writeup wrote no summary of its pages")
+            if calls:
+                content += "\n\n" + corrections_line(calls)
             ui.clear()
         except (LLMError, OSError, ValueError) as e:
             ui.clear()
@@ -150,7 +208,10 @@ def run(cfg, state: State, client: Client) -> int:
         state.append_journal(
             f"Conversation with {who}{f' (for {cfg.OPERATOR_NAME})' if speaker else ''} "
             f"({started[:16].replace('T', ' ')}–{ended[11:16]})",
-            reply.content)
-        state.append_episode({"kind": "talk_recovered", "talk_id": talk_id, "content": reply.content})
+            content)
+        record = {"kind": "talk_recovered", "talk_id": talk_id, "content": content}
+        if calls:
+            record["corrections"] = calls   # each call's arguments and result, as the tool log has them
+        state.append_episode(record)
         written += 1
     return written

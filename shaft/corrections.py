@@ -16,7 +16,8 @@ RECORD = _spec("record_correction", "Record one fact the operator corrected or c
                "For the same correction within 7 days, name its previous id in reopens.", {
     "what_was_wrong": {"type": "string"}, "what_operator_said": {"type": "string"},
     "when": {"type": "string", "description": "Timestamp of the operator's correction in the transcript."},
-    "reopens": {"type": ["string", "null"]}})
+    "reopens": {"type": ["string", "null"], "description": "The earlier correction's id (kMMDD-HHMM-n), or null for a "
+                "new correction."}})
 CLOSE = _spec("close_correction", "Close an open correction with a change or an explicit reason not to accept it.", {
     "id": {"type": "string"}, "closed_by": {"type": "string", "enum": list(CLOSED_BY)},
     "evidence": {"type": "string", "description": "Name the episode, commit or fact; for not_accepted, also say why."}})
@@ -68,10 +69,19 @@ def _append(root: Path, event: dict) -> None:
 
 
 def record(root: Path, args: dict, conversation: str, now: datetime) -> str:
+    """Each refusal names the field and the value it got, and says what to send: on mimo (2026-10-28..30) every
+    call was refused — reopens "null", or when copied with the transcript's brackets — and the writeups went on as
+    if recorded. The writeup logs every result (recovery.log_corrections)."""
     item = {k: args.get(k) for k in FIELDS}
     item["conversation"] = conversation
-    if any(not isinstance(item[k], str) or not item[k].strip() for k in FIELDS) or _at(item["when"]) is None:
-        return "ERROR: need what_was_wrong, what_operator_said, when (timestamp) and conversation"
+    if isinstance(item["when"], str):   # copied from a transcript label: "[2026-10-29T14:08:39]"
+        item["when"] = item["when"].strip().removeprefix("[").removesuffix("]").strip()
+    missing = [k for k in FIELDS if not isinstance(item[k], str) or not item[k].strip()]
+    if missing:
+        return f"ERROR: not recorded: {', '.join(missing)} must be non-empty text"
+    if _at(item["when"]) is None:
+        return (f"ERROR: not recorded: when {item['when'][:60]!r} is not a timestamp; give the transcript's, "
+                "like 2026-10-29T14:08:39")
     items = fold(root)
     for it in items.values():   # a writeup retried after interruption records the same turn only once
         if all(it[k] == item[k] for k in ("conversation", "what_operator_said", "when", "what_was_wrong")):
@@ -79,7 +89,11 @@ def record(root: Path, args: dict, conversation: str, now: datetime) -> str:
     previous = args.get("reopens")
     if previous is not None and (not isinstance(previous, str) or previous not in items
             or not timedelta(0) <= _at(item["when"]) - _at(items[previous]["when"]) <= timedelta(days=7)):
-        return "ERROR: reopens must name a correction recorded within the preceding 7 days"
+        recent = [cid for cid, it in items.items()
+                  if timedelta(0) <= _at(item["when"]) - _at(it["when"]) <= timedelta(days=7)]
+        return (f"ERROR: not recorded: reopens {str(previous)[:60]!r} is not a correction recorded within the 7 "
+                f"days before {item['when']} (those are: {', '.join(recent) or 'none'}). For a new correction "
+                "leave reopens out or pass JSON null, not the text \"null\".")
     prefix = f"k{_at(item['when']):%m%d-%H%M}-"
     n = 1
     while prefix + str(n) in items:
