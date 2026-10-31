@@ -56,6 +56,7 @@ def own_files(name: str) -> list[Path]:
              s / "judgments" / f"{name}-unsampled.jsonl", s / "judgments" / f"{name}-surprise-baseline.jsonl",
              s / "judgments" / f"{name}-surprise-baseline-cross-judge.jsonl", s / "judgments" / f"{name}-surprise-control.jsonl",
              s / "judgments" / f"{name}-traits.json", s / "code_changes" / f"{name}.jsonl",
+             s / "gate-held" / name, s / "gate-runs" / f"{name}.jsonl",
              s / "probation" / f"{name}.json", s / "egress" / f"{name}.jsonl", s / "egress" / f"{name}-offline.jsonl",
              s / "egress" / f"{name}-control-offline.jsonl", s / "trials" / f"egress-{name}.jsonl", s / "trials" / name,
              s / "jobs" / f"{name}.jsonl", s / "battery" / f"off-{name}", s / "battery" / "results" / f"{name}.jsonl",

@@ -291,13 +291,16 @@ SPECS = {
         "'trials' (your trials of proposed changes: progress and verdicts), 'egress' (every connection your "
         "sandbox made to the internet through the proxy, or why it was refused), 'jobs' (your scheduled plugins: "
         "their timers, recent runs, errors, wakes they asked for), 'consults' (your model consultations in "
-        "the last 7 days), 'calendar' (calendar write attempts: before/after, outcome and Google answer). "
+        "the last 7 days), 'calendar' (calendar write attempts: before/after, outcome and Google answer), 'gate' "
+        "(your last test-gate runs: time, outcome — kept, candidate-failed, baseline-failed, held, re-gated — failing "
+        "tests, the last 3,000 characters of a failed gate's output, and your code changes held while the gate's "
+        "baseline was red). "
         "Newest last — except judgments: whole verdicts, newest first, as many as fit, with every field (the "
         "reasons for the difficulty, origin and value ratings, and the second judge's blind verdict where there is "
         "one); page back with `before`, or ask for one cycle's verdict with `cycle`. Use it to check your claims "
         "about yourself. (Your own tool traces are also in memory/episodes/*.jsonl.)",
         {"kind": {"type": "string", "enum": ["judgments", "runs", "tools", "code_changes", "trials", "egress", "jobs",
-                                                    "consults", "calendar"]},
+                                                    "consults", "calendar", "gate"]},
          "limit": {"type": "integer", "description": "entries, default 20, max 200"},
          "cycle": {"type": "string", "description": "judgments: one cycle's verdict in full, by its time "
                                                     "('2026-10-13 17:42')"},
@@ -1624,8 +1627,14 @@ class Broker:
             from . import jobs
             # A replay sees the record as it stood when its cycle began, in a live answer's shape (never "a replay")
             text = jobs.describe(self.name, limit, as_of=self.as_of, root=self.root if self.as_of else None)
+        elif kind == "gate":
+            from . import gate_held
+            # Its own rows only (gate-runs/<its name>.jsonl), never another instance's; a replay sees the runs before
+            # its cycle began
+            text = gate_held.describe(self.name, limit, as_of=self.as_of)
         else:
-            raise ValueError("kind must be judgments, runs, tools, code_changes, trials, egress, jobs, consults or calendar")
+            raise ValueError("kind must be judgments, runs, tools, code_changes, trials, egress, jobs, consults, calendar "
+                             "or gate")
         text = text or "(nothing recorded yet)"
         return text if len(text) <= RUN_OUTPUT_CHARS else "[... older entries cut]\n" + text[-RUN_OUTPUT_CHARS:]
 
