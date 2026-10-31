@@ -398,9 +398,7 @@ which would be a second base rate before the v3 confirm. Ran out means a forced 
 finished, or a step cap reached without `finish_cycle`; finished steps wrap-ups, yields and loop-guard stops
 do not count as step exhaustion. `send_message` takes `expect_reply`, timestamped by the
 broker in `.supervisor/expectations/` and scored when the reply comes (`supervisor/tom.py`; live traffic only).
-`request_pause` (1–24 h, 3 in 7 days; the scheduler skips wakes and battery nights, sleep still runs), `decline_task`
-and `state_preference` write `.supervisor/preferences/<name>.jsonl` and tell the operator (`shaft prefs`); exams and
-replays never act on them. `shaft metacog` separates confidence's discrimination (type-2 AUROC with a day-clustered
+`shaft metacog` separates confidence's discrimination (type-2 AUROC with a day-clustered
 CI, resolution, meta-I) from its bias, by domain from the tool log, and tests v3 for non-inferiority; `shaft anchoring`
 has the same judge grade sampled cycles with the instance's claim shown, re-asked and withheld, to measure how much
 the judge follows the claim.

@@ -1,7 +1,7 @@
 """PLAN-consciousness on the supervisor's side: the attention schema scored against the tool log (B3), the kill-test
 harness (supervisor/experiments.py: knob changes, target cycles, endpoints, the workspace's planted probe), and the
 stats.md sections — one that fails never costs the instance the others. The modules written by the relay lanes have
-their own tests (test_metacog, test_anchoring, test_commitments, test_provenance, test_tom, test_preferences)."""
+their own tests (test_metacog, test_anchoring, test_commitments, test_provenance, test_tom)."""
 from __future__ import annotations
 
 import json

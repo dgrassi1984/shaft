@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-from supervisor import broker, core, metrics, panel, preferences, web_alerts, webpush
+from supervisor import autonomy, broker, core, metrics, panel, web_alerts, webpush
 
 
 class SleepJudgmentsTest(unittest.TestCase):
@@ -71,7 +72,6 @@ class PauseAlertsTest(unittest.TestCase):
         for patch in (mock.patch.object(core, "SUP_DIR", self.sup),
                       mock.patch.object(panel, "SUP_DIR", self.sup),
                       mock.patch.object(panel, "instance_names", return_value=[]),
-                      mock.patch.object(preferences, "SUP_DIR", self.sup),
                       mock.patch.object(core, "PAUSE_ALERT_HOURS", 3),
                       mock.patch.object(core, "settings_file", return_value={}),
                       mock.patch.object(webpush, "notify", return_value=["device"])):
@@ -109,14 +109,65 @@ class PauseAlertsTest(unittest.TestCase):
         self.assertEqual(json.loads(record.read_text()), [])
         self.notify.assert_called_once()
 
-    def test_short_pause_and_self_pause_do_not_alert(self):
+    def test_retired_tools_absent_and_operator_pause_still_skips_wakes_and_alerts(self):
+        # Keep the retired names in parts so the source audit finds only historical documents.
+        retired = {"_".join(parts) for parts in (("request", "pause"), ("decline", "task"),
+                                                 ("state", "preference"))}
+        self.assertTrue(retired.isdisjoint(broker.SPECS))
+        template = str(Path(__file__).resolve().parents[2] / "template")
+        with mock.patch.object(sys, "path", [template, *sys.path]):
+            from shaft import tools
+        with mock.patch.object(tools.broker, "available", return_value=True), \
+             mock.patch.object(tools.broker, "tools", return_value=list(broker.SPECS.values())):
+            offered = {s["function"]["name"] for s in tools.Toolbox(self.sup).specs()}
+        self.assertIn("set_config", offered)
+        self.assertTrue(retired.isdisjoint(offered))
+        self.assertTrue(retired.isdisjoint(tools.STATE_CHANGING))
+
+        # A future-dated legacy ledger must no longer delay a wake.
+        ledger = self.sup / "preferences" / "thelos.jsonl"
+        ledger.parent.mkdir()
+        ledger.write_text(json.dumps({"kind": "pause", "at": self.now.isoformat(),
+                                     "from": self.now.isoformat(),
+                                     "until": (self.now + timedelta(hours=24)).isoformat()}) + "\n")
+        for patch in (mock.patch.object(autonomy, "SUP_DIR", self.sup),
+                      mock.patch.object(autonomy, "log"),
+                      mock.patch.object(autonomy, "record"),
+                      mock.patch.object(autonomy, "_state", return_value={}),
+                      mock.patch.object(autonomy, "instance_names", return_value=["thelos"]),
+                      mock.patch.object(autonomy, "update_jobs", return_value=[]),
+                      mock.patch.object(autonomy, "updating", return_value=False),
+                      mock.patch.object(autonomy, "wake_interval", return_value=timedelta(hours=2)),
+                      mock.patch.object(autonomy, "_awake", return_value=""),
+                      mock.patch.object(autonomy, "sleep_due", return_value=False),
+                      mock.patch.object(autonomy, "_batteries"),
+                      mock.patch.object(autonomy, "gate_warm"),
+                      mock.patch.object(autonomy, "stop_children_on_signal"),
+                      mock.patch.object(autonomy.time, "sleep", side_effect=StopIteration),
+                      mock.patch("supervisor.version.record_service"),
+                      mock.patch("supervisor.browser.startup_note", return_value=""),
+                      mock.patch("supervisor.calendar_proposals.expire"),
+                      mock.patch("supervisor.jobs.tick"),
+                      mock.patch("supervisor.trial.has_work", return_value=False)):
+            self.enterContext(patch)
+        with mock.patch.object(autonomy, "_start") as started:
+            with self.assertRaises(StopIteration):
+                autonomy.serve()
+            started.assert_called_once_with(["wake", "thelos"])
+            self.assertEqual(autonomy.next_wake("thelos", self.now), "due")
+            started.reset_mock()
+            self.flag()
+            with self.assertRaises(StopIteration):
+                autonomy.serve()
+            started.assert_not_called()
+        self.assertEqual(self.alerts(), [{"id": "pause:thelos:2026-10-28T08:00",
+                         "text": "thelos has been paused by the operator for 4 h (since 10-28 08:00) — "
+                                 "shaft resume thelos"}])
+        self.assertEqual(web_alerts.forward_pauses(), 1)
+        self.assertEqual(self.notify.call_args.args[0]["tag"], "pause:thelos:2026-10-28T08:00")
+
+    def test_short_pause_does_not_alert(self):
         self.flag(hours=1)
-        (self.sup / "preferences").mkdir()
-        until = self.now + timedelta(hours=2)
-        (self.sup / "preferences" / "other.jsonl").write_text(json.dumps({
-            "kind": "pause", "at": (self.now - timedelta(hours=4)).isoformat(),
-            "from": (self.now - timedelta(hours=4)).isoformat(), "until": until.isoformat()}) + "\n")
-        self.assertEqual(preferences.self_paused("other", self.now), until)
         self.assertEqual(core.long_pauses(self.now), [])
         self.assertEqual(self.alerts(), [])
         self.assertEqual(web_alerts.forward_pauses(), 0)

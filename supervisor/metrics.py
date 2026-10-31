@@ -1715,7 +1715,7 @@ def stats_text(name: str) -> str:
     if fails:
         lines += ["", "## Recent failure modes"] + [f"- {j['episode_ts'][:16]} — {j['failure_mode']}" for j in fails]
     lines += _second_section(js)
-    lines += _sections(name, ("attention", "commitments", "provenance", "tom", "preferences", "consultstats"))
+    lines += _sections(name, ("attention", "commitments", "provenance", "tom", "consultstats"))
     lines += ["", "## Last judgment", f"{js[-1]['goal']}", f"> {js[-1]['reasoning']}"]
     lines += _code_section(name) + _traits_section(name) + _trials_section(name)
     return "\n".join(lines) + "\n"
@@ -1764,8 +1764,7 @@ def review_text(names: list[str], hours: float = 24, now: datetime | None = None
         out += ["", f"■ {name}: {_summary(rows)}", f"  the {hours:g} h before: {_summary(prev)}"]
         from . import pushback, pushes
         out += [f"  {line}" for line in pushes.lines(name, js, now) + pushback.lines(name, js, now)]
-        from . import consultstats, preferences
-        out += [f"  {line}" for line in preferences.review_lines([name], start)]
+        from . import consultstats
         if (consults := consultstats.review_line(name)):
             out.append(f"  consults: {consults}")
         if not rows:

@@ -359,7 +359,7 @@ def paused(name: str) -> bool:
 
 
 def long_pauses(now: datetime | None = None) -> list[dict]:
-    """Operator flags past the alert threshold, excluding instance self-pauses (2026-10-28, A1): a forgotten
+    """Operator flags past the alert threshold (2026-10-28, A1): a forgotten
     operator pause has no expiry. Old or damaged flag contents fall back to their file's modification time."""
     if not PAUSE_ALERT_HOURS:
         return []
