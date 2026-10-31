@@ -4,7 +4,7 @@ import json
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -33,6 +33,9 @@ class PushbackTest(unittest.TestCase):
             clock = self.enterContext(mock.patch.object(module, "datetime", wraps=datetime))
             clock.now.return_value = NOW
             clock.min = datetime.min
+        # panel.dismiss forgets ids of days older than DISMISS_KEEP_DAYS by date.today(): unpinned, the 10-28 id below
+        # was dropped as soon as the real date passed 2026-10-31, and the test failed by the calendar alone.
+        self.enterContext(mock.patch.object(panel, "date", wraps=date)).today.return_value = NOW.date()
         self.ask = self.enterContext(mock.patch.object(judge, "ask", return_value={
             "borne_out": "yes", "reason": "The later test confirmed the cited error."}))
         self.enterContext(mock.patch.object(judge, "pick", return_value="test-judge"))
