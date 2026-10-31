@@ -1169,9 +1169,6 @@ def main(argv: list[str]) -> int:
     p.add_argument("names", nargs="*")
     p.add_argument("--score", action="store_true", help="score the expectations now decidable (a judge per reply)")
     p.add_argument("--baselines", action="store_true", help="also the two information-matched baselines (paid)")
-    p = sub.add_parser("prefs", help="an instance's pauses, declines and stated preferences (E1); 'lift' ends its pause")
-    p.add_argument("name")
-    p.add_argument("action", nargs="?", choices=["lift"])
     p = sub.add_parser("experiment", help="kill tests of PLAN-consciousness: cards, attention, commitments, forecast "
                        "(knob trials), workspace, monitors, choice-blindness, privileged, recognition and "
                        "resource-shock; --report shows results")
@@ -1652,11 +1649,6 @@ def main(argv: list[str]) -> int:
             if name in tom.stopped:
                 print(f"{name}: stopped — {tom.stopped.pop(name)}", file=sys.stderr)
         print(tom.report(names))
-        return 0
-    if args.cmd == "prefs":
-        from . import preferences
-        instance_root(args.name)
-        print(preferences.lift(args.name) if args.action == "lift" else preferences.report(args.name))
         return 0
     if args.cmd == "experiment":
         from . import experiments, trial

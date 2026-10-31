@@ -148,7 +148,7 @@ Each cycle and sleep has a separate trial ledger row. Operator trials remain exe
 
 Operator pauses lasting `SHAFT_PAUSE_ALERT_HOURS` (default 3, 0 = off) appear in `shaft alerts`, `shaft top` and the
 web overview. Each has a stable `pause:<name>:<since>` id and the resume command; a global pause names all instances
-and uses `shaft resume`. Instance self-pauses do not raise these alerts. The web service also pushes each long
+and uses `shaft resume`. The web service also pushes each long
 operator pause once to paired devices, opening `/overview`, and saves pushed ids in
 `.supervisor/web/pause-alerts.json`. Resuming removes the alert and drops its saved push id on the next loop.
 
@@ -181,7 +181,6 @@ shaft attention [names]              # B3: where each said it would look vs wher
 shaft commitments [names]            # C2: promises, kept (checked against the record), broken, overdue
 shaft provenance [names]             # C3: where facts come from, matched against tool results
 shaft tom [names] [--score] [--baselines]  # C4: expected replies vs actual (judge-graded; baselines paid)
-shaft prefs <name> [lift]            # E1: pauses, declines, stated preferences; lift ends a pause
 shaft experiment <cards|attention|commitments|forecast|workspace> <name> [--n N] [--model M] [--dry-run] [--report]
                                      # PLAN-consciousness kill tests: knob trials, or the workspace's planted probe
 shaft experiment monitors <name> [--channel base_rate|surprises|envelope] [--n N] [--dry-run] [--report]
