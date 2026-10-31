@@ -107,7 +107,9 @@ class SummariseTest(ForecastFixture):
         ]
         s = forecast.summarise(eps, self.root)
         self.assertEqual(s["tool_calls"], 1.5)   # [3, 2, 0, 1] -> (1 + 2) / 2
-        self.assertEqual(s["ran_out"], 3)        # steps, repeating, and the one without a finish
+        # Only the one without a finish: a steps or repeating end that still finished did not run out (the old rule
+        # counted all three, 23% cut-offs against Thelos's judge-attributed 5%, 2026-10-31).
+        self.assertEqual(s["ran_out"], 1)
 
     def test_met_and_judged_from_verdicts(self):
         eps = [{"ts": t, "kind": "live", "intent": {"goal": "g", "origin": "self"},
@@ -173,8 +175,9 @@ class TextTest(ForecastFixture):
     def test_warning_on_ran_out(self):
         self._cycles()
         for ts in ("2026-10-23T10:00:00", "2026-10-24T10:00:00", "2026-10-25T10:00:00"):
+            # cut off at the step limit with no finish: a steps end that still finished is not running out
             self.append(_ep(ts, "map the orchard", "self", steps=3, at=ts[:11] + "09:00:00",
-                            ended_by="steps", finish={"criterion_met": "no"}))
+                            ended_by="steps", finish=None))
         out = forecast.text("on", self.root, "map the orchard", "self", self.now,
                             turns_left=100, minutes_left=100, calls_left=100)
         self.assertIn("Size the goal", out)

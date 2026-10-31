@@ -43,6 +43,8 @@ class PagingTest(fixtures.MailCase):
         b = self.broker()
         toolbox = tools.Toolbox.__new__(tools.Toolbox)
         toolbox.log = []
+        # what run() reads besides the log: it types arguments by the tool's spec (review 2 M3), none found here
+        toolbox.plugins, toolbox.remote, toolbox.extra, toolbox.commit_source = {}, {}, [], ""
         args, recovered, pages = {"id": "work/abc123"}, ["", "", ""], 0
         with mock.patch.object(toolbox, "_dispatch", side_effect=lambda name, kw: self.ok(b, name, kw)):
             while True:

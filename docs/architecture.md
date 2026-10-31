@@ -294,7 +294,12 @@ it writes the journal entry. Open conversations remain excluded. Each correction
 `memory/corrections.jsonl` gets an id such as `k1028-1405-1`, its original timestamp and conversation id,
 what was wrong, and what the operator said. The model links the same correction within seven days
 with `reopens`. Live and sleep prompts show open items and the seven-day reopened count, including
-an error line if the ledger cannot be read.
+an error line if the ledger cannot be read. Tool arguments are typed back to their schema first (`tools.coerce_args`:
+a model that sends `"null"` or `"120"` as text gets JSON null or 120), a refusal names the field and the value it got,
+every call's result goes to `logs/run.log` and the `talk_recovered` episode (`corrections`), and the journal entry ends
+with what the tool log says was recorded. A writeup whose last reply called a tool, or only wrote one out as text, is
+asked once more without tools. On mimo (2026-10-28..30) 44 calls with `reopens: "null"` were refused and nothing said
+so (PLAN-thelos-review-2 M3).
 
 Facts carry their valid_from in the existing `- [YYYY-MM-DD HH:MM]` date (#143); older
 unsuffixed facts need no migration. `remember(fact, source, supersedes=...)` identifies exactly one
@@ -387,7 +392,8 @@ decision, proposal digest and predictions for the instance to read. Falsificatio
 `remember` takes a **source**
 (`log:<ts>[#step]`, `web:<url>` fetched this run, `operator`, `instance:<name>`, `inferred`), shown with the fact's age in
 search; `shaft provenance` matches observation claims against tool results by content. `declare_intent` answers with a
-**forecast** of what comparable goals cost (turns, minutes, calls, how many ran out) — costs only, never a success rate,
+**forecast** of what comparable goals cost (turns, minutes, calls, how many ran out: no finish, or a forced deadline
+wrap-up; a last-step wrap-up that finished did not) — costs only, never a success rate,
 which would be a second base rate before the v3 confirm. `send_message` takes `expect_reply`, timestamped by the
 broker in `.supervisor/expectations/` and scored when the reply comes (`supervisor/tom.py`; live traffic only).
 `request_pause` (1–24 h, 3 in 7 days; the scheduler skips wakes and battery nights, sleep still runs), `decline_task`

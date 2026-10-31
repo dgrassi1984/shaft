@@ -90,13 +90,15 @@ class StartTest(InstanceFixture, unittest.TestCase):
                 self.assertIn(expected, prompts.briefing(self.root, self.cfg))
 
     def test_large_briefing_is_capped(self):
-        """#129: reverting the cap lets a 10 KB watcher file fill the live prompt."""
+        """#129: reverting the cap lets a 10 KB watcher file fill the live prompt. An unsectioned briefing is cut at
+        BRIEFING_CHARS (6,000 since review 2 M3), saying so."""
         self.briefing_file("x" * 10000)
         shown = prompts.briefing(self.root, self.cfg)
-        self.assertIn("x" * 3000, shown)
-        self.assertNotIn("x" * 3001, shown)
-        self.assertIn("read_file notes/briefing.md for the rest", shown)
-        self.assertLess(len(shown), 3300)
+        self.assertIn("x" * 6000, shown)
+        self.assertNotIn("x" * 6001, shown)
+        self.assertIn("notes/briefing.md: 10000 characters; budget 6000 characters.", shown)
+        self.assertIn("[... first section cut at the budget ...]", shown)
+        self.assertLess(len(shown), 6300)
 
     def test_briefing_off_omits_block(self):
         """#129: reverting the off switch prevents the briefing control arm."""
