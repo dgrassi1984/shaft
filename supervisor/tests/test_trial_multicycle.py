@@ -137,6 +137,8 @@ class RunTest(unittest.TestCase):
     def test_experiment_endpoint_is_any_over_cycles(self):
         a, b = result(), result()
         b["episode"]["ended_by"] = "steps"
+        self.assertFalse(experiments.endpoint("forecast", {"cycles": [a, b]}, "ran out"))   # it still finished
+        b["episode"]["finish"] = None
         self.assertTrue(experiments.endpoint("forecast", {"cycles": [a, b]}, "ran out"))
 
 
