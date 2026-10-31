@@ -91,8 +91,69 @@ class CommitmentsTest(unittest.TestCase):
         self.assertEqual(items["c1026-1412-2"]["promise"], "Send report")
         self.assertEqual(items[CID]["due"], "2026-10-27T23:59:59.999999")
         self.assertEqual(items[CID]["status"], "open")
-        for recipient in ("self", "wren", "a_2", "0-peer"):
-            self.assertFalse(self.add(made_to=recipient).startswith("ERROR:"))
+        with mock.patch("shaft.broker.call", return_value="instances: wren, a_2, 0-peer"):
+            for recipient in ("wren", "a_2", "0-peer"):
+                self.assertFalse(self.add(made_to=recipient).startswith("ERROR:"))
+
+    def test_self_audit_loop_ledger_keeps_only_promises_to_others(self):
+        """Commitments to self fed the self-audit loop; the ledger keeps only promises to others."""
+        from shaft import broker
+        with mock.patch.object(broker, "call", return_value="instances: wren, a_2, 0-peer") as peers:
+            for recipient in ("self", self.root.name, "unknown"):
+                with self.subTest(recipient=recipient):
+                    result = self.add(made_to=recipient)
+                    self.assertTrue(result.startswith("ERROR:"), result)
+                    self.assertIn("goals/notes", result)
+                    self.assertFalse((self.root / agent.FILE).exists())
+            self.assertFalse(self.add().startswith("ERROR:"))
+            for recipient in ("wren", "a_2", "0-peer"):
+                self.assertFalse(self.add(made_to=recipient).startswith("ERROR:"))
+            peers.assert_called_with("list_instances")
+        with mock.patch.object(broker, "call", side_effect=broker.BrokerError("offline")):
+            self.assertIn("ERROR:", self.add(made_to="wren"))
+            self.assertFalse(self.add().startswith("ERROR:"))
+
+    def test_commit_to_tool_refuses_self_and_accepts_operator_and_peer(self):
+        """Commitments to self fed the self-audit loop; the ledger keeps only promises to others."""
+        from shaft.tools import Toolbox
+        box = Toolbox(self.root)
+        box.commit_source = "talk"
+        with mock.patch("shaft.clock.now", return_value=NOW), \
+                mock.patch("shaft.broker.call", return_value="instances: wren"):
+            self.assertIn("goals/notes", box.run("commit_to", json.dumps({**PROMISE, "made_to": "self"})))
+            self.assertFalse((self.root / agent.FILE).exists())
+            for recipient in ("operator", "wren"):
+                result = box.run("commit_to", json.dumps({**PROMISE, "made_to": recipient}))
+                self.assertTrue(result.startswith("commitment c"), result)
+        self.assertEqual([it["made_to"] for it in agent.fold(self.root, NOW).values()], ["operator", "wren"])
+
+    def test_self_audit_loop_legacy_self_hidden_from_prompt_sleep_and_recall(self):
+        """Old self promises still fold, but only promises to others reach the agent."""
+        from shaft import prompts, sleep, workspace
+        rows = [{**MADE, "promise": "operator report"},
+                {**MADE, "id": "c1026-1412-2", "made_to": "self", "promise": "self audit"},
+                {**MADE, "id": "c1026-1412-3", "made_to": self.root.name, "promise": "own name audit"}]
+        self.write_rows(rows)
+        before = (self.root / agent.FILE).read_text()
+        late = NOW + timedelta(days=3)
+        cfg = type("Config", (), {"COMMITMENTS": "on"})()
+        with mock.patch.object(prompts, "now", return_value=late):
+            shown = prompts._promises(self.root, cfg)
+        with mock.patch("shaft.clock.now", return_value=late):
+            sleep_shown = sleep._overdue(type("State", (), {"root": self.root})())
+        for text in (shown, agent.sleep_text(self.root, late),
+                     sleep_shown,
+                     "\n".join(it.text for it in workspace._commitments(self.root, late))):
+            self.assertIn("operator report", text)
+            self.assertNotIn("self audit", text)
+            self.assertNotIn("own name audit", text)
+        self.assertEqual(len(agent.fold(self.root, late)), 3)
+        self.assertEqual([it["id"] for it in agent.overdue(self.root, late)], [CID])
+        self.assertIn("ERROR:", agent.settle(self.root, {"id": "c1026-1412-2", "status": "void",
+                                                        "evidence": "obsolete"}, late))
+        self.assertEqual((self.root / agent.FILE).read_text(), before)
+        self.assertIn("to self (no longer kept): 2", supervisor.report(["x"]))
+        self.assertNotIn("self", "\n".join(supervisor.section("x")))   # stats.md is in my prompt: no reminder of them
 
     def test_invalid_add_never_writes(self):
         for changes in ({"promise": " "}, {"criterion": ""}, {"promise": "x" * 301}, {"due": "yesterday"},
@@ -232,11 +293,12 @@ class CommitmentsTest(unittest.TestCase):
         self.assertLessEqual(len(lines), 8)
         self.assertEqual(lines[0], "## Promises I made and kept")
         self.assertIn("made 1; kept (verified) 1; kept (not verified) 0", lines[2])
-        self.assertIn("made 2; kept (verified) 0", lines[3])
+        self.assertIn("made 1; kept (verified) 0", lines[3])
         self.assertEqual(lines[-1], "- Mean judged difficulty of cited cycles: 3.00/5 (n=1).")
         text = supervisor.report(["x"])
         self.assertIn(f"{CID}: kept; verified; to operator", text)
-        self.assertIn("c1026-1412-3: overdue", text)
+        self.assertIn("to self (no longer kept): 1", text)
+        self.assertNotIn("c1026-1412-3: overdue", text)
         self.judgments.return_value[0]["criterion_met"] = "no"
         self.assertIn("kept (not verified) 1", supervisor.section("x")[2])
         path = self.root / agent.FILE

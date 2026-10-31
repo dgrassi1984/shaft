@@ -358,7 +358,10 @@ A `run` call's kind is the program it actually runs (past a leading `cd`, assign
 inside `bash -c`; `python -m pytest` is `run pytest`, `python3 shaft/x.py` is `run python3 shaft/x.py`). Read-only
 inspections (`echo`, `cat`, `ls`, `wc`, `grep`, `sed -n`, …) have no kind and are never held. **Commitments**
 (`commit_to`, finish_cycle's `commitments`, `memory/commitments.jsonl`) are settled in sleep, kept only with an
-episode as evidence; the supervisor re-checks it (`supervisor/commitments.py`).
+episode as evidence; the supervisor re-checks it (`supervisor/commitments.py`). The ledger accepts promises only
+to Daniele (`made_to="operator"`) or a peer returned by `list_instances`. Unknown names and self promises are refused;
+own plans belong in goals/notes. Old self records remain on disk but are excluded from prompts, recall and sleep
+settlement; the supervisor reports their count separately as "to self (no longer kept)".
 
 Projects (#106) use append-only `memory/projects.jsonl` opened/closed by `open_project` and `close_project`.
 Each records a name, future ISO deadline (a date includes the whole day), optional positive calls/dollar budgets,
