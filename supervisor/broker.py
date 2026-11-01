@@ -3,11 +3,13 @@
 Instances have no internet and no secrets. While an instance runs, the supervisor
 serves this broker on a localhost port that only that instance's sandbox may reach,
 authenticated by a per-run token. It holds the API keys, refuses requests to private
-networks, delivers messages between instances, enforces a per-run call budget, and
-logs every call (.supervisor/broker.log).
+networks (save the tailnet hosts the operator grants an instance: SHAFT_TAILNET_GRANTS),
+delivers messages between instances, enforces a per-run call budget, and logs every call
+(.supervisor/broker.log).
 """
 from __future__ import annotations
 
+import contextvars
 import fcntl
 import hashlib
 import http.client
@@ -43,6 +45,41 @@ OPERATOR_DAILY_LIMIT, _ = knob(
     "SHAFT_OPERATOR_PER_DAY", "0", whole, "messages per day one instance may send the operator (0: no limit)",
     group="Runs and conversations", services=("runs", "api"))
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
+
+
+def tailnet_grants(s: str) -> dict[str, frozenset[tuple[str, int]]]:
+    """SHAFT_TAILNET_GRANTS: {"<instance>": ["<host>:<port>", …]} -> {instance: {(host, port), …}}."""
+    grants = json.loads(s)
+    if not isinstance(grants, dict):
+        raise ValueError('must be a JSON object: {"<instance>": ["<host>:<port>", …]}')
+    out = {}
+    for name, hosts in grants.items():
+        if not NAME_RE.match(str(name)) or not isinstance(hosts, list):
+            raise ValueError(f'must be {{"<instance>": ["<host>:<port>", …]}}, not {name!r}: {hosts!r}')
+        pairs = set()
+        for h in hosts:
+            if not isinstance(h, str):
+                raise ValueError(f"{h!r} is not host:port (e.g. box.tailnet-name.ts.net:443)")
+            host, _, port = h.rpartition(":")
+            host = host.removesuffix(".").lower()
+            if (not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*", host)
+                    or not port.isdigit() or not 0 < int(port) < 65536):
+                raise ValueError(f"{h!r} is not host:port (e.g. box.tailnet-name.ts.net:443)")
+            pairs.add((host, int(port)))
+        out[name] = frozenset(pairs)
+    return out
+
+
+# The one exception to "nothing of the operator's is reachable": a tailnet host:port the operator grants one instance,
+# reached only through http_request with one of its keys, never from the sandbox (the egress proxy still refuses it).
+TAILNET_GRANTS, _ = knob(
+    "SHAFT_TAILNET_GRANTS", "{}", tailnet_grants, "tailnet hosts an instance may call through http_request with one "
+    'of its keys (JSON: {"<instance>": ["<host>:<port>"]}); its sandbox still reaches none',
+    group="Runs and conversations", services=("runs", "api", "web"))
+TAILNET_NETS = (ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("fd7a:115c:a1e0::/48"))
+# The (host, port) the request in progress on this thread was granted: set by Broker._http_request around its own
+# request only, so fetch_page, redirects and other tools see none.
+_granted: contextvars.ContextVar[frozenset[tuple[str, int]]] = contextvars.ContextVar("granted", default=frozenset())
 
 
 SLEEP_JUDGMENTS_BUDGET = 24000   # the sleep's own read, from code: a 5,500 page held two of thelos's verdicts
@@ -332,7 +369,8 @@ SPECS = {
     "http_request": _spec(
         "http_request",
         "Call a web API: method, url, optional headers (object) and body (text, or a JSON object). Returns the "
-        "status, the useful response headers and the body. Any method, to any public address. auth: the name of one of "
+        "status, the useful response headers and the body. Any method, to any public address (and to a tailnet host "
+        "the operator granted you, with a key). auth: the name of one of "
         "your keys (secret_set) — the supervisor adds it to the request, only to the hosts that key is bound to; "
         "with a key, redirects are not followed but returned to you. A Google key (your own Google account, signed "
         "in by the operator) is refreshed by the supervisor: use it like any key. Errors from the API (4xx/5xx) come "
@@ -546,15 +584,19 @@ class BlockedAddress(Exception):
 
 
 def resolve_public(host: str, port: int) -> list[str]:
-    """The addresses host:port resolves to, in the resolver's order — BlockedAddress unless every one is public."""
+    """The addresses host:port resolves to, in the resolver's order — BlockedAddress unless every one is public, or
+    (for the host:port granted to the request in progress) a tailnet address."""
     try:
         infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except socket.gaierror as e:
         raise BlockedAddress(f"cannot resolve {host}: {e}") from e
     if not infos:
         raise BlockedAddress(f"cannot resolve {host}")
+    granted = (host.lower().rstrip("."), port) in _granted.get()
     for info in infos:
         ip = ipaddress.ip_address(info[4][0].split("%")[0])
+        if granted and any(ip.version == net.version and ip in net for net in TAILNET_NETS):
+            continue
         if not ip.is_global:
             raise BlockedAddress(f"{host} resolves to non-public address {ip}")
     return list(dict.fromkeys(info[4][0] for info in infos))
@@ -1627,6 +1669,22 @@ class Broker:
 
     def _http_request(self, url: str, method: str = "GET", headers: dict | None = None, body=None, auth: str = "",
                       timeout_s: int = 30, max_chars: int = 12000, body_file: str = "", save_to: str = "") -> str:
+        """http_request, with this instance's tailnet grant (SHAFT_TAILNET_GRANTS) open for its own host:port while
+        the request is made, and only if a key goes with it."""
+        parts = urllib.parse.urlsplit(url)
+        target = ((parts.hostname or "").rstrip("."), parts.port or (443 if parts.scheme == "https" else 80))
+        granted = target in TAILNET_GRANTS.get(self.name, ())
+        if granted and not auth:
+            raise PermissionError(f"{target[0]}:{target[1]} is a tailnet host the operator granted you only with one "
+                                  "of your keys: give auth")
+        token = _granted.set(frozenset({target}) if granted else frozenset())
+        try:
+            return self._http_call(url, method, headers, body, auth, timeout_s, max_chars, body_file, save_to)
+        finally:
+            _granted.reset(token)
+
+    def _http_call(self, url: str, method: str, headers: dict | None, body, auth: str, timeout_s: int,
+                   max_chars: int, body_file: str, save_to: str) -> str:
         from .core import is_google_key, read_secrets
         method = str(method or "GET").upper()
         if method not in {"GET", "HEAD"} | WRITE_METHODS:

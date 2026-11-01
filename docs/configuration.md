@@ -79,6 +79,7 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_BATTERY_CONTROL_REF` | `template` | the git branch a battery control instance is made from | [battery.py](../supervisor/battery.py) |
 | `SHAFT_BATTERY_RECALL_MIN_AGE_H` | `48` | hours old a journal entry must be to make a battery recall item | [battery.py](../supervisor/battery.py) |
 | `SHAFT_OPERATOR_PER_DAY` | `0` | messages per day one instance may send the operator (0: no limit) | [broker.py](../supervisor/broker.py) |
+| `SHAFT_TAILNET_GRANTS` | `{}` | tailnet hosts an instance may call through http_request with one of its keys (JSON: {"<instance>": ["<host>:<port>"]}); its sandbox still reaches none | [broker.py](../supervisor/broker.py) |
 | `SHAFT_PUSH_HOLD` | `1` | hold non-urgent device notifications (0: off) | [pushes.py](../supervisor/pushes.py) |
 | `SHAFT_QUIET_HOURS` | `22-07` | local quiet hours, may wrap midnight; empty disables | [pushes.py](../supervisor/pushes.py) |
 | `SHAFT_DIGEST_AT` | `07:15` | local digest time, or quiet hours' end if later | [pushes.py](../supervisor/pushes.py) |
