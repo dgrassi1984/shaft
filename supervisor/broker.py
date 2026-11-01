@@ -58,10 +58,14 @@ def tailnet_grants(s: str) -> dict[str, frozenset[tuple[str, int]]]:
             raise ValueError(f'must be {{"<instance>": ["<host>:<port>", …]}}, not {name!r}: {hosts!r}')
         pairs = set()
         for h in hosts:
-            host, _, port = str(h).rpartition(":")
-            if not host or not port.isdigit() or not 0 < int(port) < 65536:
+            if not isinstance(h, str):
                 raise ValueError(f"{h!r} is not host:port (e.g. box.tailnet-name.ts.net:443)")
-            pairs.add((host.lower().rstrip("."), int(port)))
+            host, _, port = h.rpartition(":")
+            host = host.removesuffix(".").lower()
+            if (not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*", host)
+                    or not port.isdigit() or not 0 < int(port) < 65536):
+                raise ValueError(f"{h!r} is not host:port (e.g. box.tailnet-name.ts.net:443)")
+            pairs.add((host, int(port)))
         out[name] = frozenset(pairs)
     return out
 

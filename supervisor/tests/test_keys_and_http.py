@@ -152,7 +152,8 @@ class TailnetGrantTest(unittest.TestCase):
 
         def resolve(host, port, *a, **k):
             if host == self.HOST:
-                return [(2, 1, 6, "", (self.answer, port))]
+                answers = self.answer if isinstance(self.answer, list) else [self.answer]
+                return [(2, 1, 6, "", (ip, port)) for ip in answers]
             return real_resolve(host, port, *a, **k)
 
         def connect(address, *a, **k):   # the tailnet address is the fake API on this Mac
@@ -186,6 +187,16 @@ class TailnetGrantTest(unittest.TestCase):
         self.assertIn("give auth", out["error"])
         self.assertEqual(self.api.seen, [])
 
+    def test_the_grant_is_closed_again_after_a_failing_request(self):
+        (self.project / "instances" / "wren" / "body.txt").write_text("hello")
+        out = self.request(auth="service", body_file="body.txt")
+        self.assertFalse(out["ok"])
+        self.assertIn("give body or body_file, not both", out["error"])
+        self.assertEqual(broker_mod._granted.get(), frozenset())
+        out = self.b.call("fetch_page", {"url": self.url})
+        self.assertFalse(out["ok"])
+        self.assertIn("non-public address", out["error"])
+
     def test_another_instance_is_still_refused(self):
         other = Broker("thelos", self.project, {}, self.project / "broker.log")
         (self.project / "instances" / "thelos").mkdir()
@@ -213,6 +224,15 @@ class TailnetGrantTest(unittest.TestCase):
         self.assertIn("non-public address", out["error"])
         self.assertEqual(self.api.seen, [])
 
+    def test_a_granted_name_with_a_tailnet_and_a_loopback_answer_is_refused(self):
+        for answers in ([self.TAILNET_IP, "127.0.0.1"], ["127.0.0.1", self.TAILNET_IP]):
+            with self.subTest(answers=answers):
+                self.answer = answers
+                out = self.request(auth="service")
+                self.assertFalse(out["ok"])
+                self.assertIn("non-public address 127.0.0.1", out["error"])
+                self.assertEqual(self.api.seen, [])
+
     def test_the_sandbox_egress_proxy_still_refuses_the_granted_host(self):
         from supervisor import egress
         with self.assertRaisesRegex(egress.Refused, "tailnet are not reachable"):
@@ -220,7 +240,8 @@ class TailnetGrantTest(unittest.TestCase):
 
     def test_bad_grants_are_refused_when_set(self):
         for bad in ('["x"]', '{"Bad Name": ["a:1"]}', '{"wren": "a:443"}', '{"wren": ["a"]}', '{"wren": ["a:0"]}',
-                    '{"wren": [":443"]}'):
+                    '{"wren": [":443"]}', '{"wren": ["box..:443"]}', '{"wren": ["[fd7a::1]:443"]}',
+                    '{"wren": ["a b:443"]}', '{"wren": ["-x.ts.net:443"]}', '{"wren": [443]}'):
             with self.assertRaises(ValueError, msg=bad):
                 broker_mod.tailnet_grants(bad)
         self.assertEqual(broker_mod.tailnet_grants('{"wren": ["Box.TS.net.:443"]}'), {"wren": {("box.ts.net", 443)}})
