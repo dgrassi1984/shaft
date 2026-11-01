@@ -149,12 +149,15 @@ class PushbackTest(unittest.TestCase):
         self.assertFalse((inbox / "note.md").exists())
         self.assertTrue((inbox / "read/note.md").exists())
         self.assertTrue((inbox / "question.md").exists())
-        panel.dismiss(["cap:m:cloud:2026-10-28"])
-        self.assertIn("cap:m:cloud:2026-10-28", panel.dismissed())
+        # The id's day is today's: dismiss() forgets ids older than DISMISS_KEEP_DAYS by the real date, so a fixed day
+        # (2026-10-28) went red on 2026-11-01 and held every instance's code change behind a red gate baseline.
+        cap = f"cap:m:cloud:{date.today().isoformat()}"
+        panel.dismiss([cap])
+        self.assertIn(cap, panel.dismissed())
         events = [json.loads(l) for l in (self.sup / "dismissals.jsonl").read_text().splitlines()]
         self.assertEqual([(r["action"], r["ref"], r["ts"]) for r in events],
                          [("archive", "note.md", NOW.isoformat()),
-                          ("dismiss", "cap:m:cloud:2026-10-28", NOW.isoformat())])
+                          ("dismiss", cap, NOW.isoformat())])
         self.assertEqual(events[1]["name"], "m")
         ref = "correction:m:test"
         def run_cli(args, **kwargs):
