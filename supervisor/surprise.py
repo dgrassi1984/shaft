@@ -503,7 +503,7 @@ def stats_lines(name) -> list[str]:
              + (f" ({recurring})" if rec["recurred"] else "")]
     if not any(_part(e, "intent").get("predictions") for e in live[-10:]):
         lines.append(f"- None of my last {min(10, len(live))} live cycles stated a prediction")
-    # Each line bounded: stats.md is cut at 5,000 characters in my prompt, and calibration comes after this section.
+    # Each line bounded: stats.md is cut at 5,500 characters in my prompt, and calibration comes after this section.
     return ["## My expectations vs what happened"] + [l if len(l) <= 110 else l[:109] + "…" for l in lines] + [""]
 
 

@@ -335,19 +335,20 @@ SPECS = {
         "the last 7 days), 'calendar' (calendar write attempts: before/after, outcome and Google answer), 'gate' "
         "(your last test-gate runs: time, outcome — kept, candidate-failed, baseline-failed, held, re-gated — failing "
         "tests, the last 3,000 characters of a failed gate's output, and your code changes held while the gate's "
-        "baseline was red). "
+        "baseline was red), 'expectations' (your reply predictions from send_message expect_reply, scored: "
+        "did they reply, did the gist match). "
         "Newest last — except judgments: whole verdicts, newest first, as many as fit, with every field (the "
         "reasons for the difficulty, origin and value ratings, and the second judge's blind verdict where there is "
         "one); page back with `before`, or ask for one cycle's verdict with `cycle`. Use it to check your claims "
         "about yourself. (Your own tool traces are also in memory/episodes/*.jsonl.)",
         {"kind": {"type": "string", "enum": ["judgments", "runs", "tools", "code_changes", "trials", "egress", "jobs",
-                                                    "consults", "calendar", "gate"]},
+                                                    "consults", "calendar", "gate", "expectations"]},
          "limit": {"type": "integer", "description": "entries, default 20, max 200"},
          "cycle": {"type": "string", "description": "judgments: one cycle's verdict in full, by its time "
                                                     "('2026-10-13 17:42')"},
          "before": {"type": "string", "description": "judgments: only cycles before this time (to page back)"},
-         "since": {"type": "string", "description": "judgments only: verdicts judged after this time, e.g. the time "
-                   "of my last review; oldest first. YYYY-MM-DD HH:MM[:SS] (T accepted); missing seconds mean :00"},
+         "since": {"type": "string", "description": "judgments or expectations: verdicts judged or predictions scored after this time, e.g. the time "
+                   "of my last review; judgments oldest first. YYYY-MM-DD HH:MM[:SS] (T accepted); missing seconds mean :00"},
          "format": {"type": "string", "enum": ["text", "json"], "description":
                     "judgments with since: text (default) or JSON with verdicts and next_since"}},
         ["kind"]),
@@ -1563,8 +1564,7 @@ class Broker:
         def jsonl(path: Path, field: str) -> list[dict]:
             rows = [json.loads(l) for l in _tail_lines(path, 100000)]
             return [r for r in rows if known(str(r.get(field, "")).replace("T", " "))][-limit:]
-        if kind == "judgments":
-            from .metrics import judgments, unsampled_rows
+        if kind in ("judgments", "expectations"):
             if since:
                 # A minute means its start: 10:00:30 is strictly after 10:00, not equal to it.
                 if not isinstance(since, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2})?", since):
@@ -1573,6 +1573,8 @@ class Broker:
                     since = datetime.fromisoformat(since).strftime("%Y-%m-%d %H:%M:%S")
                 except ValueError:
                     raise ValueError("since must be a valid YYYY-MM-DD HH:MM[:SS] timestamp") from None
+        if kind == "judgments":
+            from .metrics import judgments, unsampled_rows
             settled = cut or (datetime.now() - timedelta(seconds=2)).strftime("%Y-%m-%d %H:%M:%S")
             rows = [dict(r) for r in judgments(self.name, SUP_DIR) if known(_judged_at(r))]
             left_out = {r["episode_ts"] for r in unsampled_rows(self.name, SUP_DIR)
@@ -1604,6 +1606,23 @@ class Broker:
                      "second_criterion_met": (r.get("second") or {}).get("criterion_met")} for r in shown],
                     "left_out": sorted(left_out), "next_since": _reviewed_at(shown[-1]) if shown else None})
             return text
+        elif kind == "expectations":
+            from . import tom
+            rows = sorted((r for r in tom._rows(self.name, "-scored")
+                           if known(r["scored_at"].replace("T", " "))
+                           and (not since or r["scored_at"].replace("T", " ") > since)),
+                          key=lambda r: r["scored_at"].replace("T", " "))[-limit:]
+            entries = []
+            for r in rows:
+                gist = " ".join(r["gist"].split())[:200]
+                reason = " ".join(r.get("reason", "").split())[:200]
+                reply = r.get("reply")
+                outcome = (f"replied {reply['at'].replace('T', ' ')[:16]}; "
+                           f"gist match: {r.get('match', '?')} — {reason}." if reply
+                           else "no reply in the window.")
+                entries.append(f"{r['sent_at'].replace('T', ' ')[:16]} to {r['to']} — said will_reply "
+                               f"{r['will_reply']}% within {r['within_hours']}h; gist: \"{gist}\". Outcome: {outcome}")
+            text = "\n".join(entries)
         elif kind == "runs":
             mine = f"] {self.name}: "
             text = "\n".join(_tail_lines(SUP_DIR / "supervisor.log", 20000,
@@ -1650,7 +1669,7 @@ class Broker:
             # its cycle began
             text = gate_held.describe(self.name, limit, as_of=self.as_of)
         else:
-            raise ValueError("kind must be judgments, runs, tools, code_changes, trials, egress, jobs, consults, calendar "
+            raise ValueError("kind must be judgments, expectations, runs, tools, code_changes, trials, egress, jobs, consults, calendar "
                              "or gate")
         text = text or "(nothing recorded yet)"
         return text if len(text) <= RUN_OUTPUT_CHARS else "[... older entries cut]\n" + text[-RUN_OUTPUT_CHARS:]
