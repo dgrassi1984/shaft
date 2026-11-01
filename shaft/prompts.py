@@ -298,6 +298,12 @@ read at a glance or repeat each other, rewrite_facts: merge duplicates or trivia
 2. update memory/people/{operator_file}.md with what you have learned about {operator} \
 (write the whole file; keep what is still true): also how they answer — what they ask back, how \
 soon, what they say no to — so the file predicts them, not only describes them.
+For each scored prediction below, compare it with the person's file: a reply you put under 50% that came, \
+a reply you put over 50% that did not come, or a gist judged partial or no is a miss; write into that person's \
+file what it got wrong and what predicts them better. Also keep memory/people/<instance name>.md for each \
+other instance you exchanged messages with since your last sleep (their messages are in memory/messages/ \
+as *-from-<name>.md): what they work on, what they ask of you, how and how soon they answer; only peers, \
+not mail correspondents. Write the whole file; keep what is still true.
 3. update_personality: revise the surface layer from evidence. Change the core layer \
 only if several experiences point the same way — cite them.
 4. update self/goals.md if your goals changed; pass replace=true when deliberately dropping goals.{goals_budget}
@@ -484,7 +490,7 @@ def system_prompt(state, cfg, mode_note: str, tools: str | None = None) -> str:
         self_model=state.read(state.self_md).strip() or "(empty — I have not written one yet)",
         personality=personality.read(root).strip(),
         goals=goals_text(state.read(state.goals_md), cfg.GOALS_CHARS),
-        stats=_head(root / "self" / "stats.md", 5000, "(no measurements yet)"),   # headline first
+        stats=_head(root / "self" / "stats.md", 5500, "(no measurements yet)"),   # headline first
         facts=_tail(root / "memory" / "facts.md", 6000, "(none yet)"),   # kept to this by my sleep
         digests=_tail(root / "memory" / "digests.md", 3500, "(none yet — my sleeps will write them)"),
         skills=_skills(root),
