@@ -64,7 +64,8 @@ class InstanceFixture:
         self.enterContext(mock.patch.object(broker, "tools", return_value=specs))
         # Patch the transport, not envelope(), so these tests also import on the parent.
         self.enterContext(mock.patch.object(broker, "_request", return_value={"envelope": None}))
-        return self.enterContext(mock.patch.object(broker, "call", side_effect=call))
+        return self.enterContext(mock.patch.object(broker, "call", side_effect=lambda name, **args:
+            "(nothing recorded yet)" if args.get("kind") == "expectations" else call(name, **args)))
 
 
 class OpenTalkContextTest(InstanceFixture, unittest.TestCase):
@@ -171,6 +172,7 @@ class SleepRecordTest(InstanceFixture, unittest.TestCase):
         self.assertFalse((self.root / "notes/restored.md").exists())
         self.assertEqual(calls.call_args_list, [
             mock.call("record", kind="judgments", limit=20, since="1970-01-01 00:00:00", format="json"),
+            mock.call("record", kind="expectations", limit=50),
             mock.call("history", path="self/goals.md")])
         results = [m["content"] for m in fake.requests[2]["messages"] if m["role"] == "tool"]
         self.assertIn("VERDICT: orchard criterion not met", results[-1])
@@ -212,7 +214,7 @@ class SleepRecordTest(InstanceFixture, unittest.TestCase):
             fake, client = self.model([{"content": "Reviewed."}])
             sleep.run(self.cfg, self.state, client)
             self.assertIn("could not be read", fake.requests[0]["messages"][1]["content"])
-        self.assertEqual([c.kwargs["since"] for c in calls.call_args_list], ["2026-10-01 03:00:00"] * 2)
+        self.assertEqual([c.kwargs["since"] for c in calls.call_args_list if c.kwargs.get("kind") == "judgments"], ["2026-10-01 03:00:00"] * 2)
         self.assertEqual((self.root / sleep.VERDICTS_REVIEWED).read_text(), "2026-10-01 03:00:00\n")
         self.assertFalse((self.root / memory.VERDICTS).exists())
 
@@ -231,7 +233,7 @@ class SleepVerdictOverflowTest(InstanceFixture, unittest.TestCase):
             fake, client = self.model([{"content": "Reviewed."}])
             sleep.run(self.cfg, self.state, client)
         self.assertEqual(calls.call_args_list[0].kwargs["since"], "2026-10-01 03:00:00")
-        self.assertEqual(calls.call_args_list[1].kwargs["since"], "2026-10-01 03:30:00")
+        self.assertEqual(calls.call_args_list[2].kwargs["since"], "2026-10-01 03:30:00")
         self.assertEqual((self.root / sleep.VERDICTS_REVIEWED).read_text(), "2026-10-01 03:30:00\n")
         kept = memory.verdict_rows(self.root)
         self.assertEqual([(r["episode_ts"], r.get("left_out", False)) for r in kept],

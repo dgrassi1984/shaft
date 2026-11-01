@@ -1661,13 +1661,13 @@ def stats_text(name: str) -> str:
     def success(w: list[dict], latest: bool) -> str:
         rate = f"{sum(SCORE[j['criterion_met']] for j in w) / len(w):.0%}"
         return f"{'**' + rate + '**' if latest else rate} of {len(w)}"
-    # In the achieved section, not under "raw": the LIVE prompt shows stats.md's first 5000 characters, and a
+    # In the achieved section, not under "raw": the LIVE prompt shows stats.md's first 5500 characters, and a
     # per-judge line where the pooled one stood fell past them on wren (2026-10-29).
     achieved = _achieved_section(js)
     if js:
         achieved[-1:-1] = [f"- Judged success rate per judge (yes=1, partial=0.5; {TREND_DAYS} days to my latest "
                            f"verdict vs the {TREND_DAYS} before): {by_judge_trend(js, success)}"]
-    lines += achieved + _surprise_section(name) + _value_section(all_js) + _battery_section(name)
+    lines += achieved + _surprise_section(name) + _sections(name, ("tom",)) + _value_section(all_js) + _battery_section(name)
     lines.append("## Success against my own criteria (raw)")
     if not js:
         lines += ["- No cycle graded by the current judges yet.", ""]
@@ -1716,7 +1716,7 @@ def stats_text(name: str) -> str:
     if fails:
         lines += ["", "## Recent failure modes"] + [f"- {j['episode_ts'][:16]} — {j['failure_mode']}" for j in fails]
     lines += _second_section(js)
-    lines += _sections(name, ("attention", "commitments", "provenance", "tom", "consultstats"))
+    lines += _sections(name, ("attention", "commitments", "provenance", "consultstats"))
     lines += ["", "## Last judgment", f"{js[-1]['goal']}", f"> {js[-1]['reasoning']}"]
     lines += _code_section(name) + _traits_section(name) + _trials_section(name)
     return "\n".join(lines) + "\n"

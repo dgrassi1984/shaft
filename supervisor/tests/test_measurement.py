@@ -428,7 +428,7 @@ class JudgeMixWithinRotationTest(unittest.TestCase):
         self.assertIn("each read against that judge's own earlier figure", text)
 
     def test_the_success_line_stays_in_the_part_the_prompt_shows(self):
-        # The LIVE prompt shows stats.md's first 5000 characters (template shaft/prompts.py _head). Where the pooled
+        # The LIVE prompt shows stats.md's first 5500 characters (template shaft/prompts.py _head). Where the pooled
         # line stood, the longer per-judge line started at character 4972 of wren's real stats.md and was cut off.
         text = self.text(self.week(0, self.LENIENT, 20, 1) + self.week(0, self.STRICT, 20, 5))
         at = text.index("- Judged success rate per judge")

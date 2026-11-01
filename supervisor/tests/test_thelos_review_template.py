@@ -93,8 +93,8 @@ class SleepPagesTest(InstanceFixture, unittest.TestCase):
                                        [f"left-{i}"], cursors[i + 1]) for i in range(3)}
         calls = self.fake_broker(lambda name, **args: pages[args["since"]])
         shown = self.rest()
-        self.assertEqual([c.kwargs["since"] for c in calls.call_args_list], cursors[:3])
-        for call in calls.call_args_list:
+        self.assertEqual([c.kwargs["since"] for c in calls.call_args_list if c.kwargs.get("kind") == "judgments"], cursors[:3])
+        for call in (c for c in calls.call_args_list if c.kwargs.get("kind") == "judgments"):
             self.assertEqual((call.args, call.kwargs["kind"], call.kwargs["limit"], call.kwargs["format"]),
                              (("record",), "judgments", 20, "json"))
         self.assertIn("PAGE 0\n\nPAGE 1\n\nPAGE 2", shown)
@@ -109,7 +109,7 @@ class SleepPagesTest(InstanceFixture, unittest.TestCase):
         calls = self.fake_broker(mock.Mock(side_effect=[record_json("KEPT", [row], ["omitted"], row["reviewed_at"]),
                                                        broker.BrokerError("page two failed")]))
         shown = self.rest()
-        self.assertEqual(calls.call_count, 2)
+        self.assertEqual(calls.call_count, 3)
         self.assertIn("KEPT", shown)
         self.assertNotIn("could not be read", shown)
         self.assertEqual((self.root / sleep.VERDICTS_REVIEWED).read_text(), row["reviewed_at"] + "\n")
@@ -120,7 +120,7 @@ class SleepPagesTest(InstanceFixture, unittest.TestCase):
         invalid = json.dumps({"text": "BAD", "verdicts": [{}], "left_out": [], "next_since": "bad"})
         calls = self.fake_broker(mock.Mock(side_effect=[record_json("GOOD", [row], next_since=row["reviewed_at"]), invalid]))
         shown = self.rest()
-        self.assertEqual(calls.call_count, 2)
+        self.assertEqual(calls.call_count, 3)
         self.assertIn("GOOD", shown)
         self.assertNotIn("BAD", shown)
         self.assertEqual((self.root / sleep.VERDICTS_REVIEWED).read_text(), row["reviewed_at"] + "\n")
