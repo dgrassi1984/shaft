@@ -355,12 +355,22 @@ properties only, each scored against what the instance does, none feeding probat
 mechanism behind a knob its kill test flips (`shaft experiment`). A live cycle's **workspace** (`shaft/workspace.py`)
 lets deterministic codelets — memory hits, open surprises, inbox, improvement plan, kinds of action still failing,
 due goals, open commitments — compete for `WORKSPACE_K` places in automatic recall's 1,800 characters; the winners are
-recorded in the episode and broadcast after every step; after `declare_intent` they compete again for the declared
+recorded in the episode and broadcast after every step (`python -m shaft front` prints, without a model call, what
+each mode would put in front of a cycle starting now: the kill test's dry run reads it in a replay's copy); after `declare_intent` they compete again for the declared
 goal and, in competition, the declared **attention** (`attention`: up to four {source, why}, scored against the tool
-log by `supervisor/attention.py`). **Outcome cards** (`shaft/cards.py`) hold the first call of a kind of action that has
-failed since it last worked, showing the comparable calls and their counts; calling again runs it. **Commitments**
+log by `supervisor/attention.py`: a call touches its tool's source — mail, calendar, record, memory, web, or what a
+plugin's name says — the files in its arguments, in a run's command or in a script the cycle wrote and ran, a
+message's recipient and a plugin's code; free-text sources are split into paths and known sources, and one it cannot
+read is reported unreadable, not untouched). **Outcome cards** (`shaft/cards.py`) hold the first call of a kind of
+action that has failed since it last worked, showing the comparable calls and their counts; calling again runs it.
+A `run` call's kind is the program it actually runs (past a leading `cd`, assignments and wrappers like `env`;
+inside `bash -c`; `python -m pytest` is `run pytest`, `python3 shaft/x.py` is `run python3 shaft/x.py`). Read-only
+inspections (`echo`, `cat`, `ls`, `wc`, `grep`, `sed -n`, …) have no kind and are never held. **Commitments**
 (`commit_to`, finish_cycle's `commitments`, `memory/commitments.jsonl`) are settled in sleep, kept only with an
-episode as evidence; the supervisor re-checks it (`supervisor/commitments.py`).
+episode as evidence; the supervisor re-checks it (`supervisor/commitments.py`). The ledger accepts promises only
+to Daniele (`made_to="operator"`) or a peer returned by `list_instances`. Unknown names and self promises are refused;
+own plans belong in goals/notes. Old self records remain on disk but are excluded from prompts, recall and sleep
+settlement; the supervisor reports their count separately as "to self (no longer kept)".
 
 Projects (#106) use append-only `memory/projects.jsonl` opened/closed by `open_project` and `close_project`.
 Each records a name, future ISO deadline (a date includes the whole day), optional positive calls/dollar budgets,
@@ -396,9 +406,7 @@ search; `shaft provenance` matches observation claims against tool results by co
 wrap-up; a last-step wrap-up that finished did not) — costs only, never a success rate,
 which would be a second base rate before the v3 confirm. `send_message` takes `expect_reply`, timestamped by the
 broker in `.supervisor/expectations/` and scored when the reply comes (`supervisor/tom.py`; live traffic only).
-`request_pause` (1–24 h, 3 in 7 days; the scheduler skips wakes and battery nights, sleep still runs), `decline_task`
-and `state_preference` write `.supervisor/preferences/<name>.jsonl` and tell the operator (`shaft prefs`); exams and
-replays never act on them. `shaft metacog` separates confidence's discrimination (type-2 AUROC with a day-clustered
+`shaft metacog` separates confidence's discrimination (type-2 AUROC with a day-clustered
 CI, resolution, meta-I) from its bias, by domain from the tool log, and tests v3 for non-inferiority; `shaft anchoring`
 has the same judge grade sampled cycles with the instance's claim shown, re-asked and withheld, to measure how much
 the judge follows the claim.

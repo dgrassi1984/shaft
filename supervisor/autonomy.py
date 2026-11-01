@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import gate, localmodel, preferences
+from . import gate, localmodel
 from .core import (PROJECT, PYTHON, SUP_DIR, instance_config, instance_names, log, paused, set_update_queued,
                    update_queued)
 from .runner import Busy, is_busy, run_agent
@@ -125,26 +125,17 @@ def next_wake(name: str, now: datetime | None = None, interval: timedelta | None
     if interval is None:
         return "never"
     now = now or datetime.now()
-    until = preferences.self_paused(name, now)
     last = (_state().get("wakes") or {}).get(name)
-    if not last and not until:
+    if not last:
         return "due"
-    at = datetime.fromisoformat(last) + interval if last else now
-    at = max(at, until) if until else at
+    at = datetime.fromisoformat(last) + interval
     return "due" if at <= now else f"{at:%H:%M}"
-
-
-def _until(at: datetime, now: datetime | None = None) -> str:
-    """When a pause ends, as the operator reads it: the time, and the date when it is not today."""
-    return f"{at:%H:%M}" if at.date() == (now or datetime.now()).date() else f"{at:%Y-%m-%d %H:%M}"
 
 
 def next_cycle(name: str) -> str:
     """Where a message left for the instance's next cycle stands: what the web UI tells the operator who sends one."""
     if paused(name):
         return f"{name} is paused: it reads this in its first cycle after you resume it"
-    if (until := preferences.self_paused(name)):
-        return f"{name} asked for a pause until {_until(until)}: it reads this in its first cycle after that"
     interval = wake_interval(name)
     at = next_wake(name, interval=interval)
     if at == "never":
@@ -167,7 +158,7 @@ def describe_schedule(name: str, config: dict[str, str] | None = None) -> str:
     """What an instance should know about when it runs — from the scheduler and its own config.env."""
     if not (AGENTS / f"{SERVICES['scheduler']['label']}.plist").exists():
         return ("Your autonomous schedule is off: you run only when the operator talks to you or starts a cycle "
-                "by hand. You can ask for a pause of up to 24 hours with request_pause.")
+                "by hand.")
     interval = wake_interval(name, config)
     wakes = (f"wakes you for an autonomous cycle every {_every(interval)} (WAKE_INTERVAL_MINUTES in your "
              f"config.env — change it with set_config — at least {wake_floor(name)}; a wake that comes while you are already awake — a cycle, a "
@@ -178,8 +169,7 @@ def describe_schedule(name: str, config: dict[str, str] | None = None) -> str:
              f"runs its capability battery on you — fixed tasks, scored, nothing kept in your files — so a wake "
              f"in that window may be skipped." if battery.EVERY_DAYS > 0 else "")
     return (f"The supervisor {wakes}, and runs your sleep cycle every day at {SLEEP_AT[0]:02d}:{SLEEP_AT[1]:02d} "
-            f"(a missed sleep is made up later that day).{night} You can ask for a pause of up to 24 hours with "
-            "request_pause. Within a cycle, what you do is up to you.")
+            f"(a missed sleep is made up later that day).{night} Within a cycle, what you do is up to you.")
 
 
 def _state() -> dict:
@@ -241,8 +231,7 @@ def replay_next_wake(name: str, now: datetime) -> str:
     return f"{now + interval:%H:%M}" if interval is not None else "never"
 
 
-def decide_wakes(now: datetime, st: dict, names: list[str], interval_of, awake_of, *,
-                 self_paused_of=None) -> tuple[list[str], dict[str, str]]:
+def decide_wakes(now: datetime, st: dict, names: list[str], interval_of, awake_of) -> tuple[list[str], dict[str, str]]:
     """(instances to wake now, {instance: why its due wake is skipped}). Pure: the scheduler's rule."""
     start, skip = [], {}
     for name in names:
@@ -250,8 +239,7 @@ def decide_wakes(now: datetime, st: dict, names: list[str], interval_of, awake_o
         last = (st.get("wakes") or {}).get(name)
         if interval is None or (last and now - datetime.fromisoformat(last) < interval):
             continue
-        until = self_paused_of(name, now) if self_paused_of else None
-        why = f"paused at its own request until {_until(until, now)}" if until and until > now else awake_of(name)
+        why = awake_of(name)
         if why:
             skip[name] = why
         else:
@@ -334,20 +322,17 @@ def serve(poll_s: int = 30) -> int:
             names = [n for n in instance_names() if not paused(n) and not updating(n, children)]   # not skipped:
             # a wake due during an update starts right after it
             start, skip = decide_wakes(now, st, names, wake_interval,
-                                       lambda n: "waking already" if f"wake {n}" in children else _awake(n),
-                                       self_paused_of=preferences.self_paused)
+                                       lambda n: "waking already" if f"wake {n}" in children else _awake(n))
             for name, why in skip.items():
                 record("wake", name)   # skipped, not queued: the next wake is a full interval later
-                log(f"scheduler: {name}'s wake skipped — "
-                    + (why if why.startswith("paused at its own request") else f"already awake ({why})"))
+                log(f"scheduler: {name}'s wake skipped — already awake ({why})")
             for name in start:
                 record("wake", name)
                 children[f"wake {name}"] = (_start(["wake", name]), time.monotonic())
             from . import jobs   # the instances' own plugins on their timers, and the wakes those jobs asked for
             jobs.tick(children, now, _start, instance_names(),
                       lambda n: "waking already" if f"wake {n}" in children else
-                      "being updated" if updating(n, children) else
-                      "paused at its own request" if preferences.self_paused(n, now) else _awake(n))
+                      "being updated" if updating(n, children) else _awake(n))
             try:   # new mail and calendar changes for instances that opted in (a background pass, no model)
                 from . import watch
                 watch.tick(children, now, names)
@@ -500,10 +485,6 @@ def _start(args: list[str]) -> subprocess.Popen:
 
 def wake(name: str) -> int:
     """One scheduled wake: a life cycle, unless the instance is awake already (then it is skipped)."""
-    # Recheck in the child: a pause may have begun after the scheduler selected this wake.
-    if (until := preferences.self_paused(name)):
-        log(f"{name}: wake skipped — paused at its own request until {_until(until)}")
-        return 0
     record("wake", name)
     try:
         return run_agent(name, "live", ["live"], interactive=False, wait_lock=False)
@@ -518,8 +499,6 @@ def start_wake(name: str) -> str:
     the reason, an instance that is paused or already awake."""
     if paused(name):
         raise RuntimeError(f"{name} is paused (shaft resume {name})")
-    if (until := preferences.self_paused(name)):
-        raise RuntimeError(f"{name} is paused at its own request until {_until(until)} (shaft prefs {name} lift)")
     if (why := _awake(name)):
         raise RuntimeError(f"{name} is already awake ({why})")
     log(f"operator started a cycle for {name} (by hand: shaft top, the web UI or shaft cycle)")

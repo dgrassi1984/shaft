@@ -12,7 +12,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/actions.py` | — | `classify`, `status`, `overreach`, `restore`, `refuse`, `begin`, `say`, `log_name`, `run_now`, `run_detached`, `busy_instances`, `service_guard`, `guard_reason`, `force_question`, `log_forced`, `cli_guard`, `trial_cost_estimate`, `aa_trial_question`, `battery_refusal`, `update_question` |
 | `supervisor/anchoring.py` | — | `strip_claim`, `case`, `candidates`, `path`, `rows`, `run`, `report` |
 | `supervisor/api.py` | `Conversations`, `Answered`, `Live`, `Handler` | `allowed_logins`, `serve`, `url`, `command` |
-| `supervisor/attention.py` | — | `label`, `matches`, `score`, `section`, `report` |
+| `supervisor/attention.py` | — | `touches`, `terms`, `matches`, `score`, `section`, `report` |
 | `supervisor/autonomy.py` | `WarmState` | `running`, `service`, `wake_interval`, `wake_floor`, `next_wake`, `next_cycle`, `describe_schedule`, `record`, `sleep_due`, `scheduler_installed`, `next_sleep`, `replay_next_sleep`, `replay_next_wake`, `decide_wakes`, `update_jobs`, `updating`, `update_ended`, `serve`, `stop_children_on_signal`, `battery_jobs`, `gate_warm`, `warm_ended`, `regate_after_warm`, `wake`, `start_wake`, `tick`, `autonomy` |
 | `supervisor/baseline.py` | `BaselineError` | `record_path`, `committed`, `read`, `write`, `unapproved`, `update` |
 | `supervisor/battery.py` | `Interrupted`, `ExamBroker` | `base`, `items_dir`, `off_path`, `is_off`, `results_path`, `load_items`, `checksum`, `backup`, `exam_dir`, `make_exam_copy`, `make_control`, `run_hidden_tests`, `grade`, `headline`, `truth`, `recall_candidates`, `make_recall`, `results`, `era`, `order`, `run`, `window`, `due`, `stats_lines`, `report` |
@@ -58,7 +58,6 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/opconfig.py` | `Refused` | `model_choices`, `base_url_for`, `effort_choices`, `fields`, `coupled`, `set_values`, `drive`, `set_drive`, `config_command`, `drive_command` |
 | `supervisor/panel.py` | — | `cached`, `jsonl`, `judge_usd`, `costs`, `judgments`, `traits`, `template_merges`, `journal_heading`, `instance_detail`, `probation_events`, `changes`, `trials`, `trial_progress`, `battery_status`, `evals`, `surprise_summary`, `log_tail`, `services_detail`, `scheduled_runs`, `extras`, `pause_alert`, `alerts`, `model_down_problem`, `log_alert_id`, `transcripts`, `transcript_summary`, `transcript_lines`, `dismissed`, `dismiss` |
 | `supervisor/perturbation.py` | — | `enabled_path`, `check`, `request`, `chat`, `detection`, `run`, `adapter_swap`, `scores` |
-| `supervisor/preferences.py` | — | `events`, `self_paused`, `pause`, `decline`, `prefer`, `lift`, `section`, `describe`, `review_lines`, `report` |
 | `supervisor/privileged.py` | — | `mind_ablated_copy`, `rows`, `item_id`, `prediction`, `outcome`, `scores`, `comparison`, `recognition_scores`, `recognition_prompt`, `run`, `report` |
 | `supervisor/projects.py` | — | `lines`, `section` |
 | `supervisor/protected.py` | — | `remove`, `sweep`, `make`, `copy` |
@@ -101,7 +100,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_commitments.py` | `CommitmentsTest` | `episode` |
 | `supervisor/tests/test_compression.py` | `CompressionTest` | `noise` |
 | `supervisor/tests/test_config_writers.py` | `ConfigWritersTest`, `SetConfigTest`, `SandboxTest` | `git`, `instance_tests_only`, `committed_copy` |
-| `supervisor/tests/test_consciousness_supervisor.py` | `FamilyTest`, `AttentionTest`, `TargetsTest`, `KnobChangeTest`, `ProbeTest`, `BlindHoldsTest`, `SectionsTest` | `ep`, `call` |
+| `supervisor/tests/test_consciousness_supervisor.py` | `FamilyTest`, `AttentionTest`, `AttentionMissedTouchesTest`, `TargetsTest`, `KnobChangeTest`, `ProbeTest`, `BlindHoldsTest`, `SectionsTest` | `ep`, `call` |
 | `supervisor/tests/test_consciousness_template.py` | `Fixture`, `WorkspaceUnitTest`, `LiveCycleTest`, `CommitmentsElsewhereTest`, `ReviewRegressionTest`, `KnobTest` | `failing_write` |
 | `supervisor/tests/test_consult.py` | `ConsultTest`, `ConsultLimitsTest` | — |
 | `supervisor/tests/test_consult_template.py` | `EnvelopeLineTest`, `TransportTest`, `EpisodeRunStartedTest`, `SkillTest` | — |
@@ -159,7 +158,6 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_pause.py` | `SlowModel`, `AgentSideTest`, `SupervisorSideTest`, `CleanupTest`, `OldCodeTest`, `YieldOnlyForTheSameModelTest` | — |
 | `supervisor/tests/test_pause_notice.py` | `PauseNoticeTest` | — |
 | `supervisor/tests/test_personality.py` | `LayerWriterTest`, `CorePaceTest` | — |
-| `supervisor/tests/test_preferences.py` | `LedgerCase`, `PreferenceTest`, `BrokerPreferenceTest`, `SchedulingTest` | — |
 | `supervisor/tests/test_prompt_cache.py` | `PricingTest`, `InstanceLoopTest`, `CoderTest` | — |
 | `supervisor/tests/test_protected_snapshot.py` | `ProtectedSnapshotTest` | — |
 | `supervisor/tests/test_provenance.py` | `ProvenanceTest` | — |

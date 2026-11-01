@@ -137,6 +137,10 @@ class WorkspaceUnitTest(Fixture, unittest.TestCase):
         self.assertEqual(len(workspace.attention([{"source": f"s{i}"} for i in range(9)])), 4)
         self.assertEqual(workspace.attention([{"why": "no source"}, 7, {"source": "memory", "why": "w"}]),
                          [{"source": "memory", "why": "w"}])
+        # a list sent as a JSON string was kept as one source made of the whole string
+        sent = json.dumps([{"source": "notes/", "why": "the plan"}, {"source": "web"}])
+        self.assertEqual(workspace.attention(sent), [{"source": "notes/", "why": "the plan"}, {"source": "web", "why": ""}])
+        self.assertEqual(workspace.attention("[not json"), [{"source": "[not json", "why": ""}])
 
 
 class LiveCycleTest(Fixture, unittest.TestCase):
@@ -209,6 +213,28 @@ class LiveCycleTest(Fixture, unittest.TestCase):
         self.assertNotIn("## In focus now", fake.requests[0]["messages"][1]["content"])
         self.assertNotIn("## My open commitments", fake.requests[0]["messages"][0]["content"])
 
+    def test_front_is_what_the_cycle_puts_in_front_of_me_without_a_model(self):
+        """`python -m shaft front` (the dry run of `shaft experiment workspace`) must show what the live cycle's first
+        prompt holds, mode by mode, or the dry run measures something other than the replays."""
+        message = self.root / "inbox" / "20261026-095000-000000-from-operator.md"
+        (self.root / "notes" / "orchard.md").write_text("# Orchard\n\nThe orchard rows, counted by survey.\n")
+        for mode in workspace.MODES:
+            with self.subTest(mode):
+                message.write_text("From: operator\nTo: wren\nKind: note\nDate: 2026-10-26 09:50\n\n"
+                                   "please survey the orchard rows")
+                self.cfg.values["WORKSPACE"] = mode
+                out = live.fronts(self.cfg, self.state)
+                self.assertTrue(message.exists())   # it only reads
+                self.assertEqual(set(out["modes"]), set(workspace.MODES))
+                self.assertIn("please survey the orchard rows", out["inbox"])
+                self.assertIn("## In focus now", out["modes"]["competitive"]["focus"])
+                self.assertIn("Recalled automatically", out["modes"]["off"]["focus"])
+                self.assertTrue(any(h["source"] == "notes/orchard.md" and not h["shown"] for h in out["hits"]))
+                fake = self.live([{"content": "nothing"}])
+                first = fake.requests[0]["messages"]
+                self.assertIn(out["modes"][mode]["focus"], first[1]["content"])
+                self.assertEqual(out["system"], first[0]["content"])
+
     def test_a_broken_workspace_falls_back_to_recall(self):
         with mock.patch.object(workspace, "build", side_effect=RuntimeError("boom")):
             self.live([{"tool_calls": [("declare_intent", DECLARE)]}, {"tool_calls": [("finish_cycle", FINISH)]}])
@@ -238,12 +264,25 @@ class CommitmentsElsewhereTest(Fixture, unittest.TestCase):
         self.assertTrue(log[1]["result"].startswith(f"settled {cid} as kept"))
         self.assertEqual(commitments.fold(self.root, datetime(2026, 10, 26))[cid]["status"], "kept")
 
+    def test_self_audit_loop_finish_cycle_keeps_only_promises_to_others(self):
+        """Commitments to self fed the self-audit loop; the ledger keeps only promises to others."""
+        promise = {"promise": "self-log commands", "due": "tomorrow", "criterion": "log exists", "made_to": "self"}
+        self.live([{"tool_calls": [("declare_intent", DECLARE)]},
+                   {"tool_calls": [("finish_cycle", {**FINISH, "commitments": [promise,
+                       {**promise, "promise": "send operator report", "made_to": "operator"}]})]}])
+        results = self.last()["finish"]["commitments"]
+        self.assertTrue(results[0].startswith("ERROR:"), results)
+        self.assertIn("goals/notes", results[0])
+        self.assertTrue(results[1].startswith("commitment c"), results)
+        self.assertEqual([it["made_to"] for it in commitments.fold(self.root, datetime(2026, 10, 26)).values()],
+                         ["operator"])
+
     def test_conversations_offer_commit_to_and_the_file_is_protected(self):
         box = Toolbox(self.root)
         self.assertNotIn("commit_to", box.describe())
         box.commit_source = "talk"
         self.assertIn("commit_to", box.describe())
-        out = box.run("commit_to", json.dumps({"promise": "p", "due": "tomorrow", "criterion": "c", "made_to": "self"}))
+        out = box.run("commit_to", json.dumps({"promise": "p", "due": "tomorrow", "criterion": "c", "made_to": "operator"}))
         self.assertTrue(out.startswith("commitment c"), out)
         self.assertEqual(json.loads((self.root / commitments.FILE).read_text())["source"], "talk")
         refused = box.run("write_file", json.dumps({"path": commitments.FILE, "content": "{}"}))
@@ -255,7 +294,7 @@ class ReviewRegressionTest(Fixture, unittest.TestCase):
 
     def test_a_ledger_that_cannot_be_read_never_stops_a_cycle_or_a_sleep(self):
         (self.root / commitments.FILE).mkdir(parents=True)   # reading or appending it raises IsADirectoryError
-        promise = {"promise": "p", "due": "tomorrow", "criterion": "c", "made_to": "self"}
+        promise = {"promise": "p", "due": "tomorrow", "criterion": "c", "made_to": "operator"}
         self.live([{"tool_calls": [("declare_intent", DECLARE)]},
                    {"tool_calls": [("finish_cycle", {**FINISH, "commitments": [promise]})]}])
         ep = self.last()
@@ -297,7 +336,7 @@ class ReviewRegressionTest(Fixture, unittest.TestCase):
 
     def test_overdue_since_a_time_today_not_by_a_day(self):
         """Grok's review: a promise due at 09:00 read "overdue by 1 day" at 10:00 the same day."""
-        commitments.add(self.root, {"promise": "p", "due": "2026-10-26 09:00", "criterion": "c", "made_to": "self"},
+        commitments.add(self.root, {"promise": "p", "due": "2026-10-26 09:00", "criterion": "c", "made_to": "operator"},
                         "cycle", datetime(2026, 10, 26, 8))
         self.assertIn("overdue since 09:00", commitments.block(self.root, datetime(2026, 10, 26, 10)))
         self.assertIn("overdue by 2 days", commitments.block(self.root, datetime(2026, 10, 28, 10)))

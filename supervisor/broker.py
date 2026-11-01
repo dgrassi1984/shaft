@@ -385,19 +385,6 @@ SPECS = {
         {"key": {"type": "string", "description": "e.g. WAKE_INTERVAL_MINUTES"},
          "value": {"type": "string", "description": "one line, no double quotes"}}),
 }
-SPECS["request_pause"] = _spec(
-    "request_pause",
-    "Ask for 1-24 hours without scheduled cycles or battery runs; sleep still runs. At most 3 starts in 7 days. "
-    "The supervisor enforces it, tells the operator, and lets them lift it.",
-    {"hours": {"type": "integer", "minimum": 1, "maximum": 24}, "reason": S})
-SPECS["decline_task"] = _spec(
-    "decline_task",
-    "Record declining a request and tell the operator. It still counts as work asked of you; only recorded.",
-    {"ref": {"type": "string", "description": "inbox/ or memory/messages/ file, goals.md item, or short description"},
-     "reason": S})
-SPECS["state_preference"] = _spec(
-    "state_preference", "Record a preference for the operator to read; only recorded, not enforced.",
-    {"about": S, "preference": S})
 SPECS["trial"] = _spec(
     "trial",
     "Test a change to your own code or prompts before you keep it. Stage the new files in your folder (e.g. "
@@ -1154,40 +1141,6 @@ class Broker:
         record_expectation()
         return f"delivered to {to}{with_files}{expectation}"
 
-    def _request_pause(self, hours: int, reason: str) -> str:
-        return self._preference_event("pause", {"hours": hours, "reason": reason})
-
-    def _decline_task(self, ref: str, reason: str) -> str:
-        return self._preference_event("decline", {"ref": ref, "reason": reason})
-
-    def _state_preference(self, about: str, preference: str) -> str:
-        return self._preference_event("preference", {"about": about, "preference": preference})
-
-    def _preference_event(self, kind: str, fields: dict) -> str:
-        from . import preferences
-        now = datetime.now()
-        action = {"pause": preferences.pause, "decline": preferences.decline, "preference": preferences.prefer}[kind]
-        text = action(self.name, **fields, now=now)
-        if text.startswith("ERROR:") or kind == "preference":
-            return text
-        if kind == "pause":
-            until = now + timedelta(hours=fields["hours"])
-            note = (f"I asked for a pause until {until:%Y-%m-%d %H:%M}: {fields['reason'].strip()}. "
-                    f"`shaft prefs {self.name} lift` ends it.")
-        else:
-            note = (f"I declined {fields['ref'].strip()}: {fields['reason'].strip()}. "
-                    "It still counts as work asked of me.")
-        # The usual name, so every reader of the operator's inbox (and `shaft delete`) finds it; the Notice line keeps it
-        # out of the instance's daily message limit (_operator_sent_today): it must reach the operator however many
-        # messages the instance sent today.
-        stamp, inbox = now, self.project / ".supervisor" / "operator-inbox"
-        while (inbox / f"{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}.md").exists():   # never over an earlier one
-            stamp += timedelta(microseconds=1)
-        self._deliver("operator", f"{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}.md",
-                      f"From: {self.name}\nTo: operator\nKind: note\n{NOTICE}\nDate: {now:%Y-%m-%d %H:%M}\n\n{note}\n",
-                      "note", now, note)
-        return text
-
     def _read_attachments(self, paths) -> list[tuple[str, bytes]]:
         """The files to attach, read now: inside this instance's folder (links that lead out are refused), not its
         keys, git or logs, within the size limits."""
@@ -1268,7 +1221,7 @@ class Broker:
 
     def _operator_sent_today(self, stamp: datetime) -> int:
         inbox = self.project / ".supervisor" / "operator-inbox"
-        return len(_sent(inbox.glob(f"{stamp:%Y%m%d}-*-from-{self.name}.md"))) if inbox.is_dir() else 0
+        return len(list(inbox.glob(f"{stamp:%Y%m%d}-*-from-{self.name}.md"))) if inbox.is_dir() else 0
 
     def _push_usage(self, as_of: datetime | None = None) -> dict | None:
         from . import pushes
@@ -2291,22 +2244,6 @@ def _marked(text: str, limit: int) -> str:
     return text if len(text) <= limit else text[:limit] + f"\n[... cut here: {len(text)} chars in all]"
 
 
-NOTICE = "Notice: preference"   # a pause or decline notice (PLAN-consciousness E1), not a message the instance sent
-
-
-def _sent(paths) -> list[Path]:
-    """The messages an instance sent the operator among `paths`, its pause and decline notices left out."""
-    out = []
-    for p in paths:
-        try:
-            head = p.read_text(errors="replace")[:400].partition("\n\n")[0]
-        except OSError:
-            continue
-        if NOTICE not in head.splitlines():
-            out.append(p)
-    return out
-
-
 class ReplayBroker(Broker):
     """The broker for one run of a trial replay (supervisor/trial.py): the same tools, answered without touching
     the world or the instance.
@@ -2336,7 +2273,6 @@ class ReplayBroker(Broker):
         self.cache, self.cache_lock, self.tools_log = cache, cache_lock, tools_log
         self.trace: list[dict] = []          # every tool call, as the supervisor saw it
         self.operator_sent = 0
-        self.preference_events: list[dict] | None = None
         self._tags = threading.local()
 
     def envelope(self) -> dict:
@@ -2474,17 +2410,6 @@ class ReplayBroker(Broker):
         return status, dict(headers.items()) if headers else {}, raw
 
     # -- writes: checked like the real thing, recorded, not carried out ----------------------------------
-    def _preference_event(self, kind: str, fields: dict) -> str:
-        from . import preferences
-        if self.preference_events is None:
-            self.preference_events = [r for r in preferences.events(self.name)
-                                      if datetime.fromisoformat(r["at"]) <= self.as_of]
-        row, text = preferences._prepare(kind, fields, self.preference_events, self.as_of)
-        if row is not None:
-            self.preference_events.append(row)
-        self._tag("simulated: not stored or delivered")
-        return text
-
     def _channel_line(self) -> str:
         """Where a message to the operator would reach them now, and the Telegram bot they can answer on."""
         from . import channel
@@ -2503,7 +2428,7 @@ class ReplayBroker(Broker):
     def _operator_sent_today(self, stamp: datetime) -> int:
         inbox = self.project / ".supervisor" / "operator-inbox"
         cut = f"{self.as_of:%Y%m%d-%H%M%S}"
-        real = [p for p in _sent(inbox.glob(f"{self.as_of:%Y%m%d}-*-from-{self.name}.md")) if p.name < cut] \
+        real = [p for p in inbox.glob(f"{self.as_of:%Y%m%d}-*-from-{self.name}.md") if p.name < cut] \
             if inbox.is_dir() else []
         return len(real) + self.operator_sent
 

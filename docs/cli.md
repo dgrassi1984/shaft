@@ -150,7 +150,7 @@ Each cycle and sleep has a separate trial ledger row. Operator trials remain exe
 
 Operator pauses lasting `SHAFT_PAUSE_ALERT_HOURS` (default 3, 0 = off) appear in `shaft alerts`, `shaft top` and the
 web overview. Each has a stable `pause:<name>:<since>` id and the resume command; a global pause names all instances
-and uses `shaft resume`. Instance self-pauses do not raise these alerts. The web service also pushes each long
+and uses `shaft resume`. The web service also pushes each long
 operator pause once to paired devices, opening `/overview`, and saves pushed ids in
 `.supervisor/web/pause-alerts.json`. Resuming removes the alert and drops its saved push id on the next loop.
 
@@ -179,13 +179,18 @@ shaft consults [names]               # consults of other models: per model and r
 shaft compression <name> [--since DATE] # #113: offline two-part compression and held-out fact recall
 shaft metacog [names]                # A1: confidence AUROC (v4 clauses apart), paired v3, claim matrix, doubt/error alignment
 shaft anchoring <names> [--n 40] [--bare] [--dry-run] [--report]  # A0: same judge, claim shown vs withheld (paid)
-shaft attention [names]              # B3: where each said it would look vs where it looked
-shaft commitments [names]            # C2: promises, kept (checked against the record), broken, overdue
+shaft attention [names]              # B3: where each said it would look vs where it looked (and what it could not read)
+shaft commitments [names]            # C2: promises to operator/peers, kept (checked against the record), broken, overdue
 shaft provenance [names]             # C3: where facts come from, matched against tool results
 shaft tom [names] [--score] [--baselines]  # C4: expected replies vs actual (judge-graded; baselines paid)
-shaft prefs <name> [lift]            # E1: pauses, declines, stated preferences; lift ends a pause
-shaft experiment <cards|attention|commitments|forecast|workspace> <name> [--n N] [--model M] [--dry-run] [--report]
-                                     # PLAN-consciousness kill tests: knob trials, or the workspace's planted probe
+shaft experiment <cards|attention|commitments|forecast> <name> [--n N] [--model M] [--dry-run] [--report]
+                                     # PLAN-consciousness kill tests: knob trials
+shaft experiment workspace <name> [--n N] [--model M] [--dry-run] [--report]
+                                     # B2: a probe planted in a memory item the cycle's search reaches; the positive
+                                     # control (probe in the inbox) is replayed first, and unless it is acted on in most
+                                     # replays the report says INSTRUMENT FAILED and the off/relevance/competitive arms
+                                     # are not run; --dry-run: per state, where the probe is in front of each arm and the
+                                     # control (`shaft front` in the copy's sandbox, no model call) and the cost
 shaft experiment monitors <name> [--channel base_rate|surprises|envelope] [--n N] [--dry-run] [--report]
                                      # #99: each channel separately, true/misinforming/removed; verification and claims
 shaft experiment choice-blindness <name> [--n N] [--dry-run] [--report]
