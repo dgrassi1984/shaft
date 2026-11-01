@@ -132,6 +132,100 @@ class KeysAndHttpTest(unittest.TestCase):
         self.assertFalse((self.project / "elsewhere.json").exists())
 
 
+class TailnetGrantTest(unittest.TestCase):
+    """SHAFT_TAILNET_GRANTS (the operator, 2026-11-01: thelos needs a granted service on box, a tailnet host): a granted
+    host:port opens for that instance's keyed http_request only. Before it, every tailnet address was refused
+    (BlockedAddress 100.100.1.2) and nothing else may have changed: no other instance, port, tool, unkeyed request,
+    non-tailnet address or sandbox socket gets through."""
+    HOST, TAILNET_IP = "box.tailnet-name.ts.net", "100.100.1.2"
+
+    def setUp(self):
+        self.project = Path(tempfile.mkdtemp(prefix="shaft-proj-")).resolve()
+        self.addCleanup(shutil.rmtree, self.project, True)
+        (self.project / "instances" / "wren").mkdir(parents=True)
+        self.api = FakeAPI()
+        self.addCleanup(self.api.close)
+        self.port = self.api.server.server_address[1]
+        self.url = f"http://{self.HOST}:{self.port}/mcp"
+        self.answer = self.TAILNET_IP   # what the tailnet's DNS gives for HOST
+        real_resolve, real_connect = broker_mod.socket.getaddrinfo, broker_mod.socket.create_connection
+
+        def resolve(host, port, *a, **k):
+            if host == self.HOST:
+                return [(2, 1, 6, "", (self.answer, port))]
+            return real_resolve(host, port, *a, **k)
+
+        def connect(address, *a, **k):   # the tailnet address is the fake API on this Mac
+            return real_connect(("127.0.0.1", address[1]) if address[0] == self.TAILNET_IP else address, *a, **k)
+
+        for p in (mock.patch.object(core, "SUP_DIR", self.project / ".supervisor"),
+                  mock.patch.object(broker_mod.socket, "getaddrinfo", resolve),
+                  mock.patch.object(broker_mod.socket, "create_connection", connect),
+                  mock.patch.object(broker_mod, "TAILNET_GRANTS",
+                                    broker_mod.tailnet_grants(json.dumps({"wren": [f"{self.HOST}:{self.port}"]})))):
+            p.start()
+            self.addCleanup(p.stop)
+        self.b = Broker("wren", self.project, {}, self.project / "broker.log")
+        self.assertTrue(self.b.call("secret_set", {"name": "service", "value": TOKEN, "hosts": [self.HOST]})["ok"])
+
+    def request(self, url=None, **args):
+        return self.b.call("http_request", {"url": url or self.url, "method": "POST", "body": {"x": 1}, **args})
+
+    def test_granted_host_with_a_key_is_reached_and_the_key_is_masked(self):
+        out = self.request(auth="service")
+        self.assertTrue(out["ok"], out)
+        self.assertTrue(out["result"].startswith("HTTP 200"), out)
+        self.assertEqual(self.api.seen[-1]["headers"]["Authorization"], f"Bearer {TOKEN}")
+        self.assertEqual(self.api.seen[-1]["headers"]["Host"], f"{self.HOST}:{self.port}")
+        self.assertNotIn(TOKEN, out["result"])
+        self.assertEqual(broker_mod._granted.get(), frozenset())   # closed again after the request
+
+    def test_without_a_key_the_grant_is_refused_and_says_why(self):
+        out = self.request()
+        self.assertFalse(out["ok"])
+        self.assertIn("give auth", out["error"])
+        self.assertEqual(self.api.seen, [])
+
+    def test_another_instance_is_still_refused(self):
+        other = Broker("thelos", self.project, {}, self.project / "broker.log")
+        (self.project / "instances" / "thelos").mkdir()
+        other.call("secret_set", {"name": "service", "value": TOKEN, "hosts": [self.HOST]})
+        out = other.call("http_request", {"url": self.url, "auth": "service"})
+        self.assertFalse(out["ok"])
+        self.assertIn(f"non-public address {self.TAILNET_IP}", out["error"])
+        self.assertEqual(self.api.seen, [])
+
+    def test_another_port_on_the_granted_host_is_still_refused(self):
+        out = self.request(url=f"http://{self.HOST}:{self.port + 1}/mcp", auth="service")
+        self.assertFalse(out["ok"])
+        self.assertIn("non-public address", out["error"])
+
+    def test_a_granted_name_that_resolves_off_the_tailnet_is_still_refused(self):
+        self.answer = "127.0.0.1"   # a grant opens the tailnet, never this Mac or the LAN
+        out = self.request(auth="service")
+        self.assertFalse(out["ok"])
+        self.assertIn("non-public address 127.0.0.1", out["error"])
+        self.assertEqual(self.api.seen, [])
+
+    def test_fetch_page_never_uses_the_grant(self):
+        out = self.b.call("fetch_page", {"url": self.url})
+        self.assertFalse(out["ok"])
+        self.assertIn("non-public address", out["error"])
+        self.assertEqual(self.api.seen, [])
+
+    def test_the_sandbox_egress_proxy_still_refuses_the_granted_host(self):
+        from supervisor import egress
+        with self.assertRaisesRegex(egress.Refused, "tailnet are not reachable"):
+            egress.public_address(self.HOST, self.port)
+
+    def test_bad_grants_are_refused_when_set(self):
+        for bad in ('["x"]', '{"Bad Name": ["a:1"]}', '{"wren": "a:443"}', '{"wren": ["a"]}', '{"wren": ["a:0"]}',
+                    '{"wren": [":443"]}'):
+            with self.assertRaises(ValueError, msg=bad):
+                broker_mod.tailnet_grants(bad)
+        self.assertEqual(broker_mod.tailnet_grants('{"wren": ["Box.TS.net.:443"]}'), {"wren": {("box.ts.net", 443)}})
+
+
 class KeyStoreDurabilityTest(unittest.TestCase):
     """B10 (review 2026-10-24): read_secrets read an unparseable store as {}, _write_secrets truncated the file and
     wrote it in place, and store/delete were unlocked read-modify-writes: a torn write, then any `shaft secret set`,
