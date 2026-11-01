@@ -260,7 +260,7 @@ def run(cfg, state: State, client: Client, show_thinking: bool = False, input_fn
     talk_id = talk_id or uuid.uuid4().hex[:12]   # the supervisor names it, to know it is still going on
     toolbox = Toolbox(state.root)
     toolbox.conversation_when = clock.now()
-    toolbox.commit_source = "talk" if cfg.COMMITMENTS == "on" else ""   # promises made to whoever I talk with
+    toolbox.commit_source = "talk" if cfg.COMMITMENTS == "on" else ""   # promises to the operator or peer agents
     who = (f"{speaker} — not {cfg.OPERATOR_NAME}, but someone at {cfg.OPERATOR_NAME}'s terminal, acting for "
            f"them; what {speaker} says or does is not something {cfg.OPERATOR_NAME} said or did") if speaker \
         else cfg.OPERATOR_NAME

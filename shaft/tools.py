@@ -39,7 +39,8 @@ PROTECTED = {
     "drive.md": "only the operator edits my drive; propose_drive_amendment during sleep",
     "memory/projects.jsonl": "use open_project and close_project",
     "memory/corrections.jsonl": "use record_correction at conversation writeup; close_correction in sleep",
-    "memory/commitments.jsonl": "use commit_to to make a commitment; my sleep settles them (settle_commitment)",
+    "memory/commitments.jsonl": "use commit_to for promises to the operator or another agent; "
+                                "own plans go in goals/notes; sleep settles them",
     "config.env": "change a value with the supervisor's set_config(key, value) — the only way to change this "
                   "file, so the supervisor can tell my settings from the operator's",
 }
@@ -150,8 +151,8 @@ WEB_READS = ("fetch_page", "http_request", "run")   # the tools whose successful
 STATE_CHANGING = frozenset({
     "write_file", "append_file", "rewrite_facts", "write_digest", "remember", "update_self_model",
     "update_personality", "commit_to", "settle_commitment", "close_surprise", "send_message", "run",
-    "secret_set", "secret_delete", "delegate_coding", "set_config", "request_pause", "decline_task",
-    "state_preference", "trial", "mail_attachment", "calendar_create", "calendar_move", "calendar_respond",
+    "secret_set", "secret_delete", "delegate_coding", "set_config", "trial", "mail_attachment",
+    "calendar_create", "calendar_move", "calendar_respond",
 })
 
 

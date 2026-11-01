@@ -169,7 +169,7 @@ def _commitments(root: Path, now: datetime) -> list[Item]:
     from . import commitments
     out = []
     for it in commitments.fold(root, now).values():
-        if it.get("status") not in ("open", "overdue"):
+        if commitments._to_self(root, it) or it.get("status") not in ("open", "overdue"):
             continue
         due = _when(str(it.get("due") or ""))
         urgency = 1.0 if it["status"] == "overdue" else 0.7 if due and due - now <= timedelta(hours=24) else 0.3
@@ -327,7 +327,13 @@ def build(root: Path, mode: str, *, about: str, shown: str, now: datetime, inbox
 
 def attention(value) -> list[dict]:
     """declare_intent's attention (B3): up to four {source, why}, kept as far as they make sense — a malformed value is
-    trimmed, never an error (a cycle cannot fail for how it says where it will look)."""
+    trimmed, never an error (a cycle cannot fail for how it says where it will look). A list sent as a JSON string is
+    read as that list, not kept as one source."""
+    if isinstance(value, str) and value.strip()[:1] in ("[", "{"):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            pass
     items = value if isinstance(value, list) else [value] if isinstance(value, (dict, str)) else []
     out = []
     for a in items:
