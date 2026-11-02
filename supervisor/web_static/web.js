@@ -756,13 +756,13 @@
     dragDepth = 0;
     zone(false);
     addFiles(form, [...ev.dataTransfer.files]);
-    form.querySelector("textarea").focus();
+    form.querySelector("textarea[name=text]").focus();
   });
 
   // The text box grows with what is written in it (up to a third of the window), and keeps its draft.
   function grow(box, part = 1 / 3) {           // at most `part` of the window
     box.style.height = "auto";
-    box.style.height = `${Math.min(box.scrollHeight + 2, Math.round((window.visualViewport?.height || window.innerHeight) * part))}px`;
+    box.style.height = `${Math.min(box.scrollHeight + 2, box.className === "quoteanswer" ? 128 : Infinity, Math.round((window.visualViewport?.height || window.innerHeight) * part))}px`;
   }
   const draftKey = (form) => `shaft.draft.${form.dataset.draft}`;
   const pendingKey = (form) => `shaft.pending.${form.dataset.draft}`;
@@ -842,6 +842,11 @@
     const form = ev.target.closest && ev.target.closest("form[data-draft]");
     if (!form || ev.target.tagName !== "TEXTAREA") return;
     grow(ev.target);
+    if (ev.target.className === "quoteanswer") {
+      form._quotes[Number(ev.target.dataset.quote)].a = ev.target.value;
+      keepQuotes(form);
+      return;
+    }
     try { localStorage.setItem(draftKey(form), ev.target.value); } catch (e) { /* no storage: no draft kept */ }
   });
   // An attempt whose answer was lost: delivered if the chat has its id — the ids the page was drawn with
@@ -853,7 +858,7 @@
   function restoreDraft() {
     const form = document.querySelector("form[data-draft]");
     if (!form) return;
-    const box = form.querySelector("textarea");
+    const box = form.querySelector("textarea[name=text]");
     form._quotes = keptQuotes(form);
     if (form._quotes.length) quoteChips(form);
     try {
@@ -880,7 +885,7 @@
     const form = document.querySelector("form[data-draft]");
     const mid = form && form.querySelector("input[name=mid]");
     if (!mid || !mid.value || form.dataset.busy || !delivered(form, mid.value)) return;
-    const box = form.querySelector("textarea");
+    const box = form.querySelector("textarea[name=text]");
     let attempt = null;
     try { attempt = JSON.parse(localStorage.getItem(pendingKey(form)) || "null"); } catch (e) { /* none */ }
     if (attempt && attempt.mid === mid.value && attempt.text !== box.value) return;   // edited since: a new message
@@ -894,14 +899,14 @@
       localStorage.removeItem(draftKey(form));
       localStorage.removeItem(pendingKey(form));
     } catch (e) { /* none */ }
-    grow(form.querySelector("textarea"));
+    grow(form.querySelector("textarea[name=text]"));
   }
 
   // What you send shows in the feed at once, marked "sending", until the feed's next refresh replaces it with the
   // chat as the server saved it; if it fails, it goes and your text and files stay in the composer.
   function pending(form, mid) {
     const feed = document.querySelector(".feed[data-follow]");
-    const text = (form.querySelector("textarea") || {}).value || "";
+    const text = (form.querySelector("textarea[name=text]") || {}).value || "";
     const files = [...(form.querySelector("input[type=file]") || { files: [] }).files].map(f => f.name);
     if (!feed || (!text.trim() && !files.length)) return null;
     const turn = document.createElement("div");
@@ -953,8 +958,8 @@
   document.addEventListener("mousedown", (ev) => {
     const b = ev.target.closest && ev.target.closest("form.composer button.send, form.composer .sendmenu button, "
       + "form.composer .sendmenu > summary");
-    const box = b && b.closest("form.composer").querySelector("textarea");
-    if (b && box && document.activeElement === box) ev.preventDefault();
+    const box = document.activeElement;
+    if (b && box && box.tagName === "TEXTAREA" && box.closest("form.composer") === b.closest("form.composer")) ev.preventDefault();
   });
   // Long-press the send arrow: the other ways to send (the ⌃ beside it opens the same menu). Pointer events, and the
   // finger must still be down when the time is up: with touch events a plain tap opened the menu after sending.
@@ -1066,7 +1071,7 @@
     }
     if (ev.key === "/" && !typing && composer()) {
       ev.preventDefault();
-      composer().querySelector("textarea").focus();
+      composer().querySelector("textarea[name=text]").focus();
       return;
     }
     if (ev.altKey && (ev.key === "ArrowUp" || ev.key === "ArrowDown")) {
@@ -1241,7 +1246,7 @@
     const node = range.commonAncestorContainer;
     const host = (node.nodeType === 1 ? node : node.parentElement);
     const feed = host && host.closest(".feed, .docview");
-    const composer = document.querySelector("form.composer textarea");
+    const composer = document.querySelector("form.composer textarea[name=text]");
     if (!feed || !composer || !s.toString().trim()) return null;
     return { text: s.toString(), range, composer, doc: feed.dataset.doc || "" };
   }
@@ -1279,10 +1284,10 @@
     // a tap on the field brings it.
     quoteText(q.text, q.composer, q.doc, !touchOnly());
   }
-  // A quote waits above the field as a chip, not as "> " lines typed into it (iPhone review I17). Several pieces can be
-  // quoted for one message, each its own chip that × takes out; sent, they go first, in order, each its own Markdown
-  // quote (web_views._my_text shows each quoted; messages.quoted_questions reads each on its own, so a quoted question
-  // is still answered when other pieces are quoted with it). They are kept with the draft (shaft.quote.<name>).
+  // A quote waits above the field as a card, not as "> " lines typed into it (iPhone review I17), with its own answer
+  // field: several quotes in one message could not each be answered (one shared field after all of them). A quote is
+  // {q: its Markdown, a: its answer}, kept with the draft (shaft.quote.<name>). Sent, the blank lines between them keep
+  // each quote its own (web_views._my_text shows each; messages.quoted_questions matches each open question).
   const quoteKey = (form) => `shaft.quote.${form.dataset.draft}`;
   function keptQuotes(form) {
     let kept = null;
@@ -1290,26 +1295,42 @@
     if (!kept) return [];
     try {
       const list = JSON.parse(kept);
-      if (Array.isArray(list)) return list.filter(q => typeof q === "string" && q);
+      if (Array.isArray(list)) return list.map(q => typeof q === "string" ? {q, a: ""} : q)
+        .filter(q => q && typeof q.q === "string" && q.q)
+        .map(({q, a}) => ({q, a: typeof a === "string" ? a : ""}));
     } catch (e) { /* kept before several quotes: one quote's Markdown */ }
-    return [kept];
+    return [{q: kept, a: ""}];
   }
-  function quoteChips(form) {
+  function keepQuotes(form) {
     const quotes = form._quotes || [];
     try { if (quotes.length) localStorage.setItem(quoteKey(form), JSON.stringify(quotes)); else localStorage.removeItem(quoteKey(form)); }
     catch (e) { /* no storage: the quotes live as long as the page */ }
+  }
+  function quoteChips(form) {
+    const quotes = form._quotes || [];
+    keepQuotes(form);
+    const box = form.querySelector("textarea[name=text]");
+    if (box._quotePlaceholder === undefined) box._quotePlaceholder = box.placeholder;
+    box.placeholder = quotes.length ? "Anything else…" : box._quotePlaceholder;
     let chips = form.querySelector(".quotechips");
     if (!quotes.length) { if (chips) chips.remove(); return; }
     if (!chips) {
       chips = document.createElement("div");
       chips.className = "quotechips";
-      form.insertBefore(chips, form.querySelector(".cbox") || form.querySelector("textarea"));
+      form.insertBefore(chips, form.querySelector(".cbox") || box);
     }
     chips.replaceChildren(...quotes.map((quote, i) => {
       const chip = document.createElement("div");
       chip.className = "quotechip";
-      const shown = document.createElement("span");
-      shown.textContent = quote.replace(/^> ?/gm, "").trim();
+      const shown = document.createElement("button");
+      shown.type = "button";
+      shown.className = "quotetext";
+      shown.textContent = quote.q.replace(/^> ?/gm, "").trim();
+      shown.setAttribute("aria-expanded", "false");
+      shown.addEventListener("click", () => {
+        const expanded = shown.classList.toggle("expanded");
+        shown.setAttribute("aria-expanded", String(expanded));
+      });
       const x = document.createElement("button");
       x.type = "button";
       x.className = "unquote";
@@ -1319,34 +1340,52 @@
         form._quotes = (form._quotes || []).filter((_, j) => j !== i);
         quoteChips(form);
         composerChanged(form);                                    // another message: a new id
-        if (!touchOnly()) form.querySelector("textarea").focus();
+        if (!touchOnly()) box.focus();
       });
-      chip.append(shown, x);
+      const answer = document.createElement("textarea");
+      answer.className = "quoteanswer";
+      answer.dataset.quote = String(i);
+      answer.rows = 1;
+      answer.placeholder = "Your answer to this";
+      answer.setAttribute("aria-label", quotes.length > 1 ? `Your answer to quote ${i + 1} of ${quotes.length}` : "Your answer to the quote");
+      answer.value = quote.a;
+      answer.addEventListener("focus", () => answer.scrollIntoView({block: "nearest"}));
+      chip.append(shown, x, answer);
       return chip;
     }));
+    chips.querySelectorAll("textarea.quoteanswer").forEach(answer => grow(answer));
   }
   function quoteText(text, box, doc = "", focus = true) {
     const from = doc ? `> (from notes/docs/${doc})\n` : "";     // a quote from a document names it
     const quoted = from + text.trim().split(/\r?\n/).map(l => `> ${l}`.trimEnd()).join("\n");
     const form = box.closest("form[data-draft]");
     const quotes = form._quotes || [];
-    if (!quotes.includes(quoted)) form._quotes = [...quotes, quoted];     // the same piece twice is one quote
+    if (!quotes.some(q => q.q === quoted)) form._quotes = [...quotes, {q: quoted, a: ""}];     // the same piece twice is one quote
     quoteChips(form);
     window.getSelection().removeAllRanges();
-    if (focus) box.focus();
+    if (focus) {
+      const i = form._quotes.findIndex(q => q.q === quoted);
+      form.querySelectorAll("textarea.quoteanswer")[i].focus();
+    }
     composerChanged(form);                                        // a new message: a new id
   }
-  function takeQuote(form) {                     // at Send: the quotes go before the text, and their chips go
+  // At Send: each answer follows its quote. Text after the last answer would read as part of it (or, after a quote left
+  // unanswered, as its answer), so once any quote is answered, anything else goes first; with none answered it goes
+  // last, answering them all, as before per-quote answers.
+  function takeQuote(form) {
     const box = form.querySelector("textarea[name=text]");
     if (!(form._quotes || []).length || !box) return;
-    box.value = `${form._quotes.join("\n\n")}\n\n${box.value}`;
+    const pairs = form._quotes.map(({q, a}) => a.trim() ? `${q}\n\n${a.trim()}` : q);
+    const rest = box.value.trim();
+    const answered = form._quotes.some(({a}) => a.trim());
+    box.value = (answered ? [rest, ...pairs] : [...pairs, rest]).filter(Boolean).join("\n\n");
     form._quotes = [];
     quoteChips(form);
   }
   document.addEventListener("click", (ev) => {
     const b = ev.target.closest && ev.target.closest("[data-reply-message]");
-    const box = document.querySelector("form.composer textarea");
-    if (b && box) quoteText(b.closest("[data-raw]").dataset.raw, box);
+    const box = document.querySelector("form.composer textarea[name=text]");
+    if (b && box) quoteText(b.closest("[data-raw]").dataset.raw, box);   // one tap to answer it: the keyboard comes, on a phone too
   });
   // Retry sends the message that failed again, in one tap when the failed request cannot have run anything
   // (classify_reply: no tools ran); Retry then Send was two taps for one intent (iPhone review I14). When it may have
@@ -1355,7 +1394,7 @@
   document.addEventListener("click", (ev) => {
     const b = ev.target.closest && ev.target.closest("[data-retry]");
     if (!b) return;
-    const box = document.querySelector("form.composer textarea");
+    const box = document.querySelector("form.composer textarea[name=text]");
     if (!box) return;
     const text = b.dataset.retry;
     if (!text) return;
@@ -2255,7 +2294,7 @@
     const bottom = whole ? 0 : Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
     root.setProperty("--vvtop", `${top}px`);
     root.setProperty("--vvbottom", `${bottom}px`);
-    const box = document.querySelector("form.composer textarea");
+    const box = document.querySelector("form.composer textarea[name=text]");
     if (box) grow(box);
     document.body.classList.toggle("kbd", keyboardUp());
     if (keyboardUp()) { document.body.classList.toggle("hwkbd", false); hardwareKeys = false; }   // the on-screen keyboard now: its shortcuts are not true

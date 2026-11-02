@@ -58,6 +58,13 @@ class ReplyTargetTest(unittest.TestCase):
         self.assertEqual(messages.reply("a", text), 0)
         self.assert_answered(self.newer, self.older, text)
 
+    def test_interleaved_answers_match_each_quoted_question(self):
+        for answer in ("Yes, keep it.", ""):
+            with self.subTest(answer=answer):
+                text = f"> Should I keep the old plan?\n\n{answer}\n\n> Should I start the new plan?\n\nYes, start."
+                self.assertEqual([m["path"] for m in messages.quoted_questions("a", text)],
+                                 [self.older, self.newer])
+
     def test_explicit_newer_question_leaves_older_pending(self):
         self.assertEqual(messages.reply("a", "Yes, go ahead.", question=self.newer.name), 0)
         self.assert_answered(self.newer, self.older, "> Should I start the new plan?\n\nYes, go ahead.")

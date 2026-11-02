@@ -327,6 +327,8 @@ label.pick:focus-within { outline: 2px solid var(--accent); outline-offset: 2px;
 
 blockquote { margin: .3rem 0; padding: .1rem .6rem; border-left: 3px solid var(--line); color: var(--dim); }
 .turn.me blockquote { margin: 0 0 .3rem; }
+/* A quote after text starts the next quote-and-answer pair: more room above it than between a quote and its answer */
+.turn.me :not(blockquote) + blockquote { margin-top: .75rem; }
 
 /* chat-centric frame (docs/plans/PLAN-webui-chat §1) */
 .chathead { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .8rem; margin-bottom: .6rem;
@@ -786,7 +788,7 @@ form.composer .cbox textarea { flex: 1 1 auto; min-width: 0; border: 0; backgrou
 .composer button.send { width: 36px; height: 36px; min-width: 36px; min-height: 36px; margin: 2px; border-radius: 50%;
     background: var(--accent); color: #fff; }
 .composer button.send:not(:disabled):hover { background: color-mix(in srgb, var(--accent) 85%, #000); }
-form.composer:has(textarea:placeholder-shown):not(:has(.chip)) button.send { opacity: .4; }
+form.composer:has(textarea[name=text]:placeholder-shown):not(:has(.chip, .quotechip)) button.send { opacity: .4; }
 .composer .sendmenu > summary.iconbtn { width: 28px; min-width: 28px; border: 0; background: transparent; color: var(--dim);
     border-radius: 8px; font-size: inherit; padding: 0; }
 .composer .sendmenu .menubody, .chatpage .composer .sendmenu .menubody { position: absolute; top: auto; left: auto; right: 0;
@@ -863,16 +865,23 @@ button.closenav:hover, button.closedocs:not(:disabled):hover { background: var(-
 .chathead .sub details.busystate { min-width: 0; flex: 0 1 auto; }
 .chathead .sub details.busystate > summary { max-width: 100%; }
 .chathead .sub details.busystate > summary > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* Several quotes for one reply: a chip each, the list scrolling past a few (the field stays in view) */
-.quotechips { display: grid; grid-template-columns: minmax(0, 1fr); gap: .3rem; max-height: 9.5rem; overflow-y: auto; }
-.quotechip { display: flex; align-items: flex-start; gap: .4rem; margin: 0 .2rem; padding: .35rem .3rem .35rem .7rem;
+/* Each quote has its answer; the list scrolls so the main field stays in view. */
+.quotechips { display: grid; grid-template-columns: minmax(0, 1fr); gap: .3rem; max-height: 45vh; max-height: 45dvh; overflow-y: auto; }
+.quotechip { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; min-width: 0; gap: .4rem; margin: 0 .2rem; padding: .35rem .3rem .35rem .7rem;
               border-left: 3px solid var(--accent); background: var(--panel); border-radius: 8px; font-size: .85rem;
               color: var(--dim); }
-.quotechip > span { flex: 1 1 auto; min-width: 0; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2;
+.quotechip > .quotetext { min-width: 0; border: 0; background: none; color: var(--dim); text-align: left;
+                    font: inherit; padding: 0; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2;
                     -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; }
+.quotechip > .quotetext.expanded { display: block; -webkit-line-clamp: unset; line-clamp: unset; }
+form.composer .quoteanswer { grid-column: 1 / -1; width: 100%; min-width: 0; max-height: 8rem;
+    border: 1px solid var(--line); background: var(--panel); color: var(--text); overflow-wrap: anywhere; }
 .quotechip .unquote { flex: none; border: 0; background: none; padding: 0 .3rem; font-size: 1.1rem; line-height: 1;
                       color: var(--dim); min-width: 32px; min-height: 32px; }
-@media (pointer: coarse) { .quotechip .unquote { min-width: 44px; min-height: 44px; } }
+@media (pointer: coarse) {
+  .quotechip .unquote { min-width: 44px; min-height: 44px; }
+  form.composer .quoteanswer { font-size: max(16px, 1rem); }
+}
 /* Alerts: a red frame and mark, the words in the text's colour and weight (I15) */
 .alerts { font-weight: 400; color: var(--text); }
 .alerts li { display: grid; gap: .15rem; padding: .45rem 0; border-bottom: 1px solid var(--line); }
@@ -892,7 +901,7 @@ aside.docs.loading::before { content: ""; display: block; height: 2px; margin: -
 /* P1: a quote with a long URL widened the composer, then the page (1141 px on an 820 px iPad) */
 form.composer { grid-template-columns: minmax(0, 1fr); }
 form.composer > * { min-width: 0; }
-.quotechip > span { overflow-wrap: anywhere; }
+.quotechip > .quotetext { overflow-wrap: anywhere; }
 /* P2: the rail's toggle and ✕ showed beside a rail that is always there, and did nothing: only where it is a sheet */
 .navbtn.iconbtn, nav button.closenav { display: none; }
 @media (max-width: 720px), (pointer: coarse) and (max-height: 520px) {
