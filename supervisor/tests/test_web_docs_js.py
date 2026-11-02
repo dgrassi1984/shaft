@@ -51,19 +51,21 @@ const fs = require("node:fs"), vm = require("node:vm"), assert = require("node:a
 const handlers = {}, elements = {}, queries = {}, timers = new Map();
 let nextTimer = 0, copied = "", asked = "", allow = false, ticks = 0, replaced = "";
 const quoteForm = { dataset: { draft: "wren" }, insertBefore(n) { this.chip = n; },
-  querySelector: q => q === ".quotechips" ? quoteForm.chip || null : q === "input[name=mid]" ? { value: "" } : null };
+  querySelectorAll: () => [quoteForm.chip.children[0].children[2]],
+  querySelector: q => q === ".quotechips" ? quoteForm.chip || null : q === "input[name=mid]" ? { value: "" } : q === "textarea[name=text]" ? box : null };
 const box = { value: "beforeAFTER", selectionStart: 6, selectionEnd: 6, closest: () => quoteForm,
   focus() { this.focused = true; }, setSelectionRange(a, b) { this.selectionStart = a; this.selectionEnd = b; },
   dispatchEvent(ev) { assert.equal(ev.type, "input"); this.input = true; } };
-queries["form.composer textarea"] = box;
+queries["form.composer textarea[name=text]"] = box;
 const document = { readyState: "loading", addEventListener(k, fn) { (handlers[k] ||= []).push(fn); },
   querySelector: q => queries[q] || null, querySelectorAll: () => [], getElementById: id => elements[id] || null,
   createElement: () => ({ replaceChildren(...n) { this.children = n; }, append(...n) { this.children = n; },
+    style: {}, dataset: {}, querySelectorAll: () => [], focus() { this.focused = true; },
     addEventListener() {}, setAttribute() {} }) };
 const context = { document, navigator: { clipboard: { async writeText(t) { copied = t; } } }, URL, Event,
   location: { href: "https://shaft.test/i/wren/chat?doc=sub%2Fp.md&thread=c1&id=archive" },
   history: { replaceState(a, b, u) { replaced = String(u); } },
-  window: { addEventListener() {}, getSelection: () => ({ removeAllRanges() {} }),
+  window: { addEventListener() {}, matchMedia: () => ({matches: false}), getSelection: () => ({ removeAllRanges() {} }),
     confirm(t) { asked = t; return allow; } },
   setInterval() {}, setTimeout(fn) { timers.set(++nextTimer, fn); return nextTimer; },
   clearTimeout(id) { timers.delete(id); } };
@@ -77,8 +79,8 @@ const click = async (selector, button) => {
   await click("[data-reply-message]", { closest: () => message });
   // I17: the quote waits as a chip above the field; what is typed stays as it is
   assert.equal(box.value, "beforeAFTER");
-  assert.deepEqual([...quoteForm._quotes], ["> **hello**\n> second line"]);
-  assert.ok(box.focused && quoteForm.chip);
+  assert.deepEqual(JSON.parse(JSON.stringify(quoteForm._quotes)), [{q: "> **hello**\n> second line", a: ""}]);
+  assert.ok(quoteForm.chip.children[0].children[2].focused);
   const copy = { closest: q => q === "pre" || q === ".prewrap" ? null : message };   // a message's, not a code block's
   await click("[data-copy]", copy);
   assert.equal(copied, "**hello**\nsecond line");

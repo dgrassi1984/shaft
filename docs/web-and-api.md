@@ -121,9 +121,12 @@ and [chat design](plans/PLAN-webui-chat.md).
   carries the version of the chat and documents it drew, so their first refresh is a 304, not the whole chat again.
 - The chat: files and images both ways (drop them anywhere on the page, paste or pick; each is a chip you can take
   out), the reply's activity and clock live, interject, Stop, End. Select text in a message or a document and
-  **↩ Reply** quotes it: the quote waits in a chip above the field (× takes it out) and goes first when you send, as a
-  Markdown quote. Select more and **+ Quote** adds another piece to the same message: each is its own chip and goes as
-  its own quote, in order (on a phone or tablet the keyboard stays down meanwhile; tap the field to type). From the
+  **↩ Reply** quotes it: the quote waits in a card above the field (× takes it out), with its own answer field.
+  Tap the quoted text to expand or collapse it. Select more and **+ Quote** adds another card to the same message.
+  Send puts each Markdown quote before its answer, in order; unanswered quotes still go. The main field becomes
+  **Anything else…**: once any quote has an answer it is sent first, before the quotes, so it never reads as the last
+  answer; with no answers it goes after them and answers them all. On a computer, a new card focuses its answer; on a phone or tablet the
+  keyboard stays down meanwhile, until you tap an answer field (a message's own Reply brings it, to that answer). From the
   documents sheet or full screen, the sheet closes first so the composer shows. Text left
   selected in the chat does not stop it refreshing: the selected message waits until you let go. Each message with
   text has Copy and Reply for its whole Markdown source, your own messages too, under the message: on a computer they
@@ -132,9 +135,9 @@ and [chat design](plans/PLAN-webui-chat.md).
   last answer keeps its Copy and Reply in view. Code blocks and documents have Copy icons too (a code block's stays
   at its corner while the code scrolls sideways). Your draft survives a reload; `/` writes,
   Alt-↑/↓ changes chat; opt-in desktop notifications (⋯ menu) for a reply that lands while the tab is hidden.
-  The composer is one field: the paperclip attaches files, the arrow sends now (during a reply: an interjection), and
-  ⌃ beside it — or a long press on the arrow — offers **Queue after reply** (only while a reply runs) and **Next
-  cycle**. A tap on the arrow keeps the keyboard up and the text focused, as in Messages.
+  Below the quote cards, the composer keeps its main field: the paperclip attaches files, the arrow sends now
+  (during a reply: an interjection), and ⌃ beside it — or a long press on the arrow — offers **Queue after reply**
+  (only while a reply runs) and **Next cycle**. A tap on the arrow keeps the keyboard up and the text focused, as in Messages.
   Enter sends. Alt-Enter and Shift-Enter insert a new line. Cmd-Enter, or Ctrl-Enter off macOS, queues a message
   until the current reply ends, including a failed or stopped reply. While idle it sends now. Queued messages
   appear below the live reply with Cancel and survive a reload or closed tab. They become one next message,
@@ -154,8 +157,9 @@ and [chat design](plans/PLAN-webui-chat.md).
   `POST /chat/<name>/send` accepts multipart `queue=1` or `background=1`; `POST /chat/<name>/unqueue` cancels a
   queued `mid`.
   Both require the same CSRF token as other web posts.
-  Quotes are saved as drafts too. Picking files again adds them to the current attachments. Files added during
-  a send stay in the composer. Leaving with attachments asks for confirmation because files cannot survive a reload.
+  Quotes and their individual answers are saved as drafts too. Picking files again adds them to the current
+  attachments. Files added during a send stay in the composer. Leaving with attachments asks for confirmation
+  because files cannot survive a reload.
   An unchanged retry keeps its message ID, including after reload. A reload, or the next chat refresh, drops the saved
   draft if that ID is already in the chat. A restored attempt that had files says to attach them again (files cannot
   survive a reload). Editing text or changing attachments starts a new message ID. The "sending…" copy of a message

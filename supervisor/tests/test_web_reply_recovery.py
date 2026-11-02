@@ -252,7 +252,7 @@ allow = true;
 listener(event);
 listener(event);
 // Codex review: a quote waiting in the composer went out with the failed message, unasked
-box.value = "original request"; form._quotes = ["> another message"]; allow = false;
+box.value = "original request"; form._quotes = [{q: "> another message", a: "answer"}]; allow = false;
 listener(event);
 const quoteKept = form._quotes, sendsAfterRefusal = sends;
 allow = true;
@@ -266,7 +266,7 @@ console.log(JSON.stringify({ kept, sentFirst, value: box.value, inputs, prompts,
         # not disabled: a resend that failed can be retried (Codex review: it stayed off for good)
         self.assertEqual(json.loads(result.stdout), {"kept": "draft", "sentFirst": 0, "value": "original request",
                                                      "inputs": 1, "prompts": 4, "sends": 3, "disabled": False,
-                                                     "quoteKept": ["> another message"], "sendsAfterRefusal": 2,
+                                                     "quoteKept": [{"q": "> another message", "a": "answer"}], "sendsAfterRefusal": 2,
                                                      "quotes": [], "chips": 1, "retryOf": "3"})
 
     def test_a_retry_that_may_rerun_actions_asks_first_and_sends_unfolded(self):

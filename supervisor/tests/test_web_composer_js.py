@@ -17,21 +17,22 @@ class ComposerJsTest(unittest.TestCase):
         script = r"""
 const fs=require('node:fs'), vm=require('node:vm'), assert=require('node:assert/strict');
 const storage=new Map(); let serial=0;
+const plain=v=>JSON.parse(JSON.stringify(v));
 function page(mids=[], touch=false, feed=[], bubble=false) {   // feed: the message ids the feed shows (data-mid);
                                                                  // bubble: a feed the "sending…" copy goes in
   const handlers={}, win={}, elements={}, viewportHandlers={}, viewport={height:900,addEventListener(k,fn){viewportHandlers[k]=fn;}}; let resolve, reject, payload;
-  const node=()=>({dataset:{},style:{},children:[],setAttribute(){},querySelectorAll:()=>[],
+  const node=()=>({dataset:{},style:{},children:[],setAttribute(){},querySelectorAll(q){return this.children.flatMap(n=>[...(q==='textarea.quoteanswer'&&n.className==='quoteanswer'?[n]:[]),...n.querySelectorAll(q)]);},
     appendChild(n){this.children.push(n);},append(...ns){this.children.push(...ns);},remove(){},
     replaceChildren(...ns){this.children=ns;},
-    addEventListener(k,fn){this[k]=fn;},classList:{add(){},remove(){},toggle(){},contains(){return false;}}});
+    addEventListener(k,fn){if(k==='focus')this.onFocus=fn;else this[k]=fn;},classList:{add(){},remove(){},toggle(){},contains(){return false;}}});
   const sendButton={dataset:{queue:''}}, queueButton={dataset:{queue:'1'}};
   const mid={value:''}, queue={value:''}, files={type:'file',files:[],closest:()=>form}, chips=node();
-  const box={value:'',tagName:'TEXTAREA',name:'text',style:{},scrollHeight:120,selectionStart:0,selectionEnd:0,
+  const box={value:'',placeholder:'Write here',tagName:'TEXTAREA',name:'text',style:{},scrollHeight:120,selectionStart:0,selectionEnd:0,
     closest:q=>['form[data-files]','form[data-draft]'].includes(q)?form:null,focused:0,focus(){this.focused++;},
     setSelectionRange(a,b){this.selectionStart=a;this.selectionEnd=b;},
     dispatchEvent(ev){for(const fn of handlers[ev.type]||[]) fn({target:box});}};
   const form={dataset:{post:'/chat/wren/send',draft:'wren',files:'',multipart:'1',reset:'1',sentMids:JSON.stringify(mids)},
-    closest:()=>null,querySelectorAll:()=>[sendButton,queueButton],querySelector:q=>({'textarea':box,'textarea[name=text]':box,'input[name=mid]':mid,'input[name=queue]':queue,
+    closest:()=>null,querySelectorAll:q=>q==='textarea.quoteanswer'?(form.chip?.querySelectorAll(q)||[]):[sendButton,queueButton],querySelector:q=>({'textarea':box,'textarea[name=text]':box,'input[name=mid]':mid,'input[name=queue]':queue,
       'input[type=file]':files,'[data-picked]':chips,'button[type=submit]':sendButton,'.quotechips':form.chip})[q]||null,
     insertBefore(n){this.chip=n;n.remove=()=>{this.chip=null;};},reset(){box.value='';mid.value='';files.files=[];}};
   const feedNode={...node(),closest:()=>null};
@@ -41,11 +42,19 @@ function page(mids=[], touch=false, feed=[], bubble=false) {   // feed: the mess
   const timers=[];
   const document={readyState:'loading',visibilityState:'hidden',body:node(),documentElement:{style:{setProperty(){}}},
     addEventListener(k,fn){(handlers[k]||=[]).push(fn);},dispatchEvent(){},
-    querySelector:q=>q==='form.composer textarea'?box:['form[data-files]','form[data-draft]'].includes(q)?form
+    querySelector:q=>q==='form.composer textarea[name=text]'?box:['form[data-files]','form[data-draft]'].includes(q)?form
       :q==='.feed[data-follow]'&&bubble?feedNode:null,
     querySelectorAll:q=>q==='.feed [data-mid]'?feed.map(m=>({dataset:{mid:m},classList:{contains:()=>false}})):[],
     getElementById:id=>elements[id]||null,
-    createElement(){const n=node();Object.defineProperty(n,'id',{set(id){elements[id]=n;}});return n;}};
+    createElement(tag){const n=node();
+      n.tagName=tag.toUpperCase();n.focused=0;n.focus=function(){this.focused++;if(this.onFocus)this.onFocus();};
+      n.scrollIntoView=()=>{n.scrolled=true;};n.scrollHeight=120;
+      n.closest=q=>['form[data-files]','form[data-draft]','form.composer'].includes(q)?form:null;
+      n.setSelectionRange=(a,b)=>{n.selectionStart=a;n.selectionEnd=b;};
+      n.dispatchEvent=ev=>{for(const fn of handlers[ev.type]||[])fn({target:n});};
+      n.setAttribute=(k,v)=>{(n.attrs||={})[k]=v;};
+      const classes=new Set();n.classList.toggle=k=>{if(classes.has(k)){classes.delete(k);return false;}classes.add(k);return true;};
+      Object.defineProperty(n,'id',{set(id){elements[id]=n;}});return n;}};
   const context={document,URL,URLSearchParams,Event,AbortController,navigator:{},
     crypto:{randomUUID:()=>`m-${++serial}`},location:{href:'https://shaft.test/i/wren/chat'},
     window:{innerHeight:900,visualViewport:viewport,scrollTo(){},addEventListener(k,fn){(win[k]||=[]).push(fn);},getSelection:()=>selection,
@@ -60,8 +69,10 @@ function page(mids=[], touch=false, feed=[], bubble=false) {   // feed: the mess
   const emit=async(k,target,extra={})=>{for(const fn of handlers[k]||[]) await fn({target,preventDefault(){},...extra});};
   form.requestSubmit=()=>{form.sending=emit('submit',{closest:()=>form});};
   return {box,mid,queue,files,form, chips, sendButton,queueButton, selection, payload:()=>payload,
-    key:extra=>emit('keydown',box,{key:'Enter',...extra}),
-    async lineBreak(inputType='insertLineBreak'){let cancelled=false;await emit('beforeinput',box,{inputType,preventDefault(){cancelled=true;}});return cancelled;},
+    key:(extra,target=box)=>emit('keydown',target,{key:'Enter',...extra}),
+    answerBox:i=>form.chip.children[i].children[2],
+    typeAnswer:async(i,t)=>{const a=form.chip.children[i].children[2];a.value=t;await emit('input',a);},
+    async lineBreak(inputType='insertLineBreak',target=box){let cancelled=false;await emit('beforeinput',target,{inputType,preventDefault(){cancelled=true;}});return cancelled;},
     resize:height=>{viewport.height=height;viewportHandlers.resize();},
     load:()=>emit('DOMContentLoaded'),type:async t=>{box.value=t;await emit('input',box);},
     pick:async(...fs)=>{files.files=fs;await emit('change',files);},
@@ -95,7 +106,7 @@ for(const kind of ['reply','quote']) {
  storage.clear();const p=page();p.mid.value='old';await p[kind]();
  assert.equal(p.mid.value,'');assert.equal(p.box.value,'');
  assert.ok(p.form.chip,'a chip shows the quote');assert.ok(storage.get('shaft.quote.wren').includes('quote'));
- const q=page();await q.load();assert.ok(q.form._quotes[0].includes('quote'),'kept with the draft');
+ const q=page();await q.load();assert.ok(q.form._quotes[0].q.includes('quote'),'kept with the draft');
  await q.type('my answer');const sending=q.send();await Promise.resolve();
  const nl=String.fromCharCode(10),t=q.payload().text;assert.ok(/^> (whole|selected) quote/.test(t)&&t.endsWith('quote'+nl+nl+'my answer'),t);q.answer();await sending;
  assert.equal(storage.get('shaft.quote.wren'),undefined);
@@ -112,22 +123,86 @@ const p=page();await p.quote('first piece');
 assert.equal(p.quoteButton().textContent,'↩ Reply');
 await p.quote('second piece');await p.reply();
 assert.equal(p.quoteButton().textContent,'+ Quote','the button says it adds to the reply');
-assert.deepEqual([...p.form._quotes],['> first piece','> second piece','> whole quote']);
+assert.deepEqual(plain(p.form._quotes),[{q:'> first piece',a:''},{q:'> second piece',a:''},{q:'> whole quote',a:''}]);
 assert.equal(p.form.chip.children.length,3,'a chip for each quote');
 await p.quote('second piece');assert.equal(p.form._quotes.length,3,'the same piece twice is one quote');
 p.mid.value='old';p.form.chip.children[0].children[1].click();
-assert.deepEqual([...p.form._quotes],['> second piece','> whole quote'],'x takes out its own quote only');
+assert.deepEqual(plain(p.form._quotes),[{q:'> second piece',a:''},{q:'> whole quote',a:''}],'x takes out its own quote only');
 assert.equal(p.mid.value,'','another message: a new id');
-assert.deepEqual(JSON.parse(storage.get('shaft.quote.wren')),['> second piece','> whole quote']);
-const q=page();await q.load();assert.deepEqual([...q.form._quotes],['> second piece','> whole quote'],'kept with the draft');
+assert.deepEqual(plain(JSON.parse(storage.get('shaft.quote.wren'))),[{q:'> second piece',a:''},{q:'> whole quote',a:''}]);
+const q=page();await q.load();assert.deepEqual(plain(q.form._quotes),[{q:'> second piece',a:''},{q:'> whole quote',a:''}],'kept with the draft');
 await q.type('my answer');const sending=q.send();await Promise.resolve();
 assert.equal(q.payload().text,'> second piece'+nl+nl+'> whole quote'+nl+nl+'my answer','each its own quote, in order');
 assert.equal(q.form.chip,null,'the chips go at Send');
 q.answer();await sending;assert.equal(storage.get('shaft.quote.wren'),undefined);
 storage.clear();storage.set('shaft.quote.wren','> kept before several quotes');
-const r=page();await r.load();assert.deepEqual([...r.form._quotes],['> kept before several quotes'],'a quote kept by the old page');
+const r=page();await r.load();assert.deepEqual(plain(r.form._quotes),[{q:'> kept before several quotes',a:''}],'a quote kept by the old page');
 const t=page([],true);await t.quote('on a phone');assert.equal(t.box.focused,0,'no keyboard over the chat on a phone');
-await t.reply();assert.equal(t.box.focused,1,'a whole-message Reply brings the keyboard, to answer');
+await t.reply();assert.equal(t.answerBox(1).focused,1,'a whole-message Reply brings the keyboard, to its answer field');
+""")
+
+    def test_answers_could_not_be_tied_to_quotes(self):
+        self.run_composer(r"""
+const p=page();await p.quote('q1');await p.quote('q2');await p.quote('q3');
+assert.equal(p.box.placeholder,'Anything else…');
+assert.equal(p.answerBox(2).focused,1,'the new answer gets focus');
+assert.equal(p.answerBox(2).scrolled,true);
+assert.equal(p.answerBox(2).attrs['aria-label'],'Your answer to quote 3 of 3');
+p.mid.value='old';storage.set('shaft.pending.wren','old attempt');
+p.answerBox(0).scrollHeight=900;await p.typeAnswer(0,'  answer 1  ');
+assert.equal(p.mid.value,'');assert.equal(storage.get('shaft.pending.wren'),undefined);
+assert.equal(p.answerBox(0).style.height,'128px');
+await p.typeAnswer(2,'answer 3');await p.type('else');
+assert.equal(JSON.parse(storage.get('shaft.quote.wren'))[0].a,'  answer 1  ');
+assert.equal(storage.get('shaft.draft.wren'),'else','answers do not overwrite the main draft');
+const r=page();await r.load();assert.equal(r.answerBox(0).value,'  answer 1  ');
+assert.equal(r.answerBox(1).value,'');assert.equal(r.answerBox(2).value,'answer 3');
+let sending=r.send();await Promise.resolve();
+assert.equal(r.payload().text,'else\n\n> q1\n\nanswer 1\n\n> q2\n\n> q3\n\nanswer 3','anything else first: after the last answer it read as part of it');
+assert.equal(r.box.placeholder,'Write here');r.answer();await sending;
+storage.clear();const q=page();await q.quote('q1');await q.quote('q2');
+sending=q.send();await Promise.resolve();assert.equal(q.payload().text,'> q1\n\n> q2');q.answer();await sending;
+""")
+
+    def test_answers_could_not_be_tied_to_quotes_saved_formats(self):
+        self.run_composer(r"""
+for (const [saved,expected] of [
+ [JSON.stringify([{q:'> new',a:'answer'}]),[{q:'> new',a:'answer'}]],
+ [JSON.stringify(['> old','> older']),[{q:'> old',a:''},{q:'> older',a:''}]],
+ ['> bare',[{q:'> bare',a:''}]]]) {
+ storage.clear();storage.set('shaft.quote.wren',saved);const p=page();await p.load();
+ assert.deepEqual(plain(p.form._quotes),expected);
+ assert.equal(p.answerBox(0).value,expected[0].a);
+}
+""")
+
+    def test_answers_could_not_be_tied_to_quotes_keyboard(self):
+        self.run_composer(r"""
+for(const modifier of ['altKey','shiftKey']) {
+ storage.clear();const p=page();await p.quote('q');await p.typeAnswer(0,'abcd');
+ const a=p.answerBox(0);a.setSelectionRange(1,3);await p.key({[modifier]:true},a);
+ assert.equal(a.value,'a\nd');assert.equal(JSON.parse(storage.get('shaft.quote.wren'))[0].a,'a\nd');
+ assert.equal(p.payload(),undefined);
+}
+for(const modifier of ['metaKey','ctrlKey',null]) {
+ storage.clear();const p=page();await p.quote('q');await p.typeAnswer(0,'answer');
+ await p.key(modifier?{[modifier]:true}:{},p.answerBox(0));
+ assert.equal(p.payload().text,'> q\n\nanswer');assert.equal(p.payload().queue,modifier?'1':'');
+ p.answer();await p.form.sending;
+}
+storage.clear();let p=page([],true);await p.quote('q');await p.typeAnswer(0,'answer');
+let a=p.answerBox(0);await p.key({isComposing:true},a);assert.equal(await p.lineBreak('insertLineBreak',a),false);
+assert.equal(p.payload(),undefined);
+await p.key({code:'Enter'},a);assert.equal(p.payload(),undefined);
+assert.equal(await p.lineBreak('insertLineBreak',a),true);assert.equal(p.payload().text,'> q\n\nanswer');
+p.answer();await p.form.sending;
+storage.clear();p=page([],true);p.resize(600);await p.quote('q');a=p.answerBox(0);
+await p.key({},a);assert.equal(await p.lineBreak('insertParagraph',a),false);assert.equal(p.payload(),undefined);
+storage.clear();p=page();await p.quote('q');a=p.answerBox(0);
+assert.equal(a.attrs['aria-label'],'Your answer to the quote');
+const shown=p.form.chip.children[0].children[0];shown.click();assert.equal(shown.attrs['aria-expanded'],'true');
+shown.click();assert.equal(shown.attrs['aria-expanded'],'false');
+p.form.chip.children[0].children[1].click();assert.equal(p.box.placeholder,'Write here');
 """)
 
     def test_p8_the_field_empties_as_the_bubble_appears_and_a_failure_puts_the_text_back(self):

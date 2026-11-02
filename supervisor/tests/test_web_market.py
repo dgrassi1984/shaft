@@ -95,7 +95,7 @@ class ComposerTest(unittest.TestCase):
         """Review I2: the tap closed the keyboard, the button moved under the finger and nothing was sent (3/3)."""
         self.assertRegex(JS, r'document\.addEventListener\("mousedown", \(ev\) => \{\n\s+const b = ev\.target\.closest && '
                              r'ev\.target\.closest\("form\.composer button\.send')
-        self.assertIn("if (b && box && document.activeElement === box) ev.preventDefault();", JS)
+        self.assertIn('if (b && box && box.tagName === "TEXTAREA" && box.closest("form.composer") === b.closest("form.composer")) ev.preventDefault();', JS)
 
     def test_i18_empty_chat_is_a_welcome_not_a_grey_line(self):
         page = self.composer()
@@ -193,7 +193,7 @@ class IPadTest(unittest.TestCase):
         """P1: a quote with a long URL made the page 1141 px wide on an 820 px iPad."""
         self.assertIn("form.composer { grid-template-columns: minmax(0, 1fr); }", CSS)
         self.assertIn("form.composer > * { min-width: 0; }", CSS)
-        self.assertIn(".quotechip > span { overflow-wrap: anywhere; }", CSS)
+        self.assertIn(".quotechip > .quotetext { overflow-wrap: anywhere; }", CSS)
 
     def test_p2_the_rail_toggle_shows_only_where_the_rail_is_a_sheet(self):
         """P2: the toggle and ✕ showed beside the iPad's permanent rail, and did nothing."""

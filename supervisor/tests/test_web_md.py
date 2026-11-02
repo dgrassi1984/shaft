@@ -14,6 +14,16 @@ def md(text: str) -> str:
     return out[len('<div class="md">'):-len("</div>")]
 
 
+class QuoteAnswerTest(unittest.TestCase):
+    def test_answers_could_not_be_tied_to_quotes(self):
+        from supervisor.web_views import _my_text
+        text = "> q1\n\nanswer 1\n\n> q2\n\n> q3\n\nanswer 3\n\nelse"
+        self.assertEqual(str(_my_text(text)),
+                         '<blockquote class="wrap">q1</blockquote><div class="wrap">answer 1</div>'
+                         '<blockquote class="wrap">q2</blockquote><blockquote class="wrap">q3</blockquote>'
+                         '<div class="wrap">answer 3\n\nelse</div>')
+
+
 class NeverMarkupTest(unittest.TestCase):
     EVIL = [
         "<script>alert(1)</script>", "<img src=x onerror=alert(1)>", "[x](javascript:alert(1))",
