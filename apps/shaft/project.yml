@@ -49,8 +49,6 @@ targets:
         excludes: ["**/*.md"]
       - path: Shared
         excludes: ["**/*.md"]
-      - path: Scaffold
-        excludes: ["**/*.md"]
     dependencies:
       - package: SHAFTKit
       - package: MarkdownUI
@@ -70,6 +68,10 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         SHAFTKeychainAccessGroup: $(SHAFT_KEYCHAIN_GROUP)
         UIBackgroundModes: [remote-notification]
+        # shaft://chat/<instance> opens that chat, as a notification tap does (SHAFTApp.onOpenURL).
+        CFBundleURLTypes:
+          - CFBundleURLName: io.github.dgrassi1984.shaft
+            CFBundleURLSchemes: [shaft]
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true
@@ -78,6 +80,21 @@ targets:
         UISupportedInterfaceOrientations~ipad:
           [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown,
            UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+    postBuildScripts:
+      # Plain http to this machine (the fixture server on 127.0.0.1, apps/shaft/README.md) in Debug builds only: a
+      # Release build keeps App Transport Security whole. The processed Info.plist gets NSAllowsLocalNetworking; the
+      # stamp is the output the build system needs beside a file it changes in place.
+      - name: Allow local http in Debug
+        script: |
+          if [ "$CONFIGURATION" = "Debug" ]; then
+            plist="$TARGET_BUILD_DIR/$INFOPLIST_PATH"
+            /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" "$plist" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" "$plist"
+          fi
+          touch "$DERIVED_FILE_DIR/allow-local-http.stamp"
+        inputFiles: [$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)]
+        outputFiles: [$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH), $(DERIVED_FILE_DIR)/allow-local-http.stamp]
+        basedOnDependencyAnalysis: false
     entitlements:
       path: Generated/iOS.entitlements
       properties:
@@ -92,8 +109,6 @@ targets:
       - path: macOS
         excludes: ["**/*.md"]
       - path: Shared
-        excludes: ["**/*.md"]
-      - path: Scaffold
         excludes: ["**/*.md"]
     dependencies:
       - package: SHAFTKit
@@ -113,6 +128,23 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSApplicationCategoryType: public.app-category.productivity
         SHAFTKeychainAccessGroup: $(SHAFT_KEYCHAIN_GROUP)
+        # shaft://chat/<instance> opens that chat, as a notification click does (MacRoot.onOpenURL).
+        CFBundleURLTypes:
+          - CFBundleURLName: io.github.dgrassi1984.shaft
+            CFBundleURLSchemes: [shaft]
+    postBuildScripts:
+      # As for iOS: plain http to this machine (the fixture server) in Debug builds only.
+      - name: Allow local http in Debug
+        script: |
+          if [ "$CONFIGURATION" = "Debug" ]; then
+            plist="$TARGET_BUILD_DIR/$INFOPLIST_PATH"
+            /usr/libexec/PlistBuddy -c "Delete :NSAppTransportSecurity" "$plist" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Add :NSAppTransportSecurity dict" -c "Add :NSAppTransportSecurity:NSAllowsLocalNetworking bool true" "$plist"
+          fi
+          touch "$DERIVED_FILE_DIR/allow-local-http.stamp"
+        inputFiles: [$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)]
+        outputFiles: [$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH), $(DERIVED_FILE_DIR)/allow-local-http.stamp]
+        basedOnDependencyAnalysis: false
     entitlements:
       path: Generated/macOS.entitlements
       properties:
@@ -121,6 +153,22 @@ targets:
         com.apple.security.files.user-selected.read-write: true
         com.apple.developer.aps-environment: development
         keychain-access-groups: [$(SHAFT_KEYCHAIN_GROUP)]
+
+  # The Mac app's own logic that needs no window: its Markdown text and its text views' menu items. A plain test
+  # bundle with no host app, run by the SHAFT-macOS scheme's test action.
+  SHAFTMacTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: macOSTests
+      - path: macOS/MarkdownAttributed.swift
+      - path: macOS/MenuAction.swift
+    dependencies:
+      - package: SHAFTKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.dgrassi1984.shaft.MacTests
+        GENERATE_INFOPLIST_FILE: YES
 
   NotificationService-iOS:
     type: app-extension
@@ -196,3 +244,6 @@ schemes:
         SHAFT-macOS: all
     run:
       config: Debug
+    test:
+      config: Debug
+      targets: [SHAFTMacTests]
