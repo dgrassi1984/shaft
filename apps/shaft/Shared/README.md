@@ -15,6 +15,10 @@ stores. Everything here compiles for iOS and macOS; what differs per platform si
 | `Platform/` | the text seams: the composer's field and selectable text (`TextViews.swift`, iOS), a message's text (`MessageText.swift`) |
 | `Support/` | times, the clipboard, announcements, small view helpers |
 
+If the initial chat list cannot load, the chat area shows the error, Retry and Settings on all three devices.
+The store keeps trying every few seconds while active; Retry restarts that loop immediately. Settings offers Unpair
+and "Forget the pairing here only" when the server cannot be reached.
+
 ## Platform seams
 
 - **Text** (`Platform/TextViews.swift` for iOS, `../macOS/MacTextViews.swift` for the Mac): `ComposerTextView` (the

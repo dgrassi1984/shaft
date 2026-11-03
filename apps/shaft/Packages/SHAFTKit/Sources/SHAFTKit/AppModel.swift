@@ -19,6 +19,10 @@ public final class AppModel {
 
     public init() {
         do {
+            #if os(iOS)
+            // The app's defaults disappear on uninstall; the shared Keychain item does not.
+            try PairingStore(store: KeychainStore.forMainBundle()).forgetOnFirstLaunch(defaults: .standard)
+            #endif
             session = try SHAFTSession.standard()
         } catch {
             startupError = "SHAFT could not start: \(error.localizedDescription)"

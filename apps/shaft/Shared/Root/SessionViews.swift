@@ -196,6 +196,28 @@ struct SettingsView: View {
     }
 }
 
+/// A failed first load, with recovery available in the chat area on every platform.
+struct InstancesLoadFailure: View {
+    let error: APIError
+    var settings: () -> Void
+    @Environment(InstancesStore.self) private var store
+
+    var body: some View {
+        ContentUnavailableView {
+            Label("Could not load chats", systemImage: "exclamationmark.triangle")
+        } description: {
+            Text(error.message)
+            Text("Trying again every few seconds…")
+        } actions: {
+            Button("Retry") {
+                store.stop()
+                store.start()
+            }
+            Button("Settings", action: settings)
+        }
+    }
+}
+
 /// A chat in the list: its name, state, last line, the unread mark and whether it is replying.
 struct InstanceRowView: View {
     let row: InstanceRow

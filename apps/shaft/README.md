@@ -153,6 +153,11 @@ The apps and their extensions share one Keychain item (the server URL and the de
 Info.plist as `SHAFTKeychainAccessGroup`, which SHAFTKit reads. A target without the key refuses to start rather than
 keep the credential where the extension cannot read it.
 
+On the first iOS app launch after installation, the app deletes any pairing left in the Keychain before opening its
+session. An app-only UserDefaults flag keeps later launches paired; notification extensions never run this check.
+The first launch after updating an older version without the flag also requires pairing again. On macOS, deleting
+the app normally keeps its preferences as well as its Keychain item, so this install check is not applied there.
+
 ### Pair
 
 On the Mac: `shaft web pair --name iphone-app` prints a link that works once, for 10 minutes. Paste it into the app

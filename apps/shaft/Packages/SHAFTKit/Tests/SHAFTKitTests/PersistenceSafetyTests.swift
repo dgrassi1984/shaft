@@ -4,6 +4,52 @@ import Testing
 
 @MainActor
 struct PersistenceSafetyTests {
+    @Test func reinstallDoesNotReuseThePairingLeftInKeychain() throws {
+        let suite = "shaft-reinstall-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let server = StubServer { _ in throw StubServer.NetworkDown() }
+        let credentials = MemoryCredentialStore(server.credential)
+        let pairing = PairingStore(store: credentials)
+
+        try pairing.forgetOnFirstLaunch(defaults: defaults)
+        #expect(try pairing.current() == nil)
+
+        // Pairing survives ordinary launches, including a new defaults object for the same container.
+        try credentials.save(server.credential)
+        let nextLaunch = try #require(UserDefaults(suiteName: suite))
+        try pairing.forgetOnFirstLaunch(defaults: nextLaunch)
+        #expect(try pairing.current() == server.credential)
+
+        // Uninstall removes the container's defaults but leaves the Keychain item behind.
+        defaults.removePersistentDomain(forName: suite)
+        try pairing.forgetOnFirstLaunch(defaults: defaults)
+        #expect(try pairing.current() == nil)
+    }
+
+    @Test func failedFirstLaunchDeletionIsRetriedBeforeKeepingANewPairing() throws {
+        let suite = "shaft-install-failure-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let blocked = PairingStore(store: BlockedCredentialStore())
+        #expect(throws: KeychainError.self) { try blocked.forgetOnFirstLaunch(defaults: defaults) }
+
+        let server = StubServer { _ in throw StubServer.NetworkDown() }
+        let credentials = MemoryCredentialStore(server.credential)
+        let pairing = PairingStore(store: credentials)
+        try pairing.forgetOnFirstLaunch(defaults: defaults)
+        #expect(try pairing.current() == nil)
+        try credentials.save(server.credential)
+        try pairing.forgetOnFirstLaunch(defaults: defaults)
+        #expect(try pairing.current() == server.credential)
+    }
+
+    private struct BlockedCredentialStore: CredentialStore {
+        func load() throws -> ServerCredential? { nil }
+        func save(_ credential: ServerCredential) throws {}
+        func delete() throws { throw KeychainError(status: -25308, what: "removing the pairing") }
+    }
+
     @Test func enqueueWriteFailureKeepsTheDraftAndDoesNotSend() async throws {
         let folder = try temporaryFolder("enqueue-failure")
         defer { try? FileManager.default.removeItem(at: folder) }

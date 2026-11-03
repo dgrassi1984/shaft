@@ -141,7 +141,9 @@ struct MacChats: View {
 
     @ViewBuilder
     private var chat: some View {
-        if let selection = state.selection {
+        if !store.loaded, let error = store.error {
+            InstancesLoadFailure(error: error, settings: { openSettings() })
+        } else if let selection = state.selection {
             ChatScreen(chat: store.chat(selection), openArchived: { summary in
                 state.path.append(ArchivedRoute(instance: selection, cid: summary.id))
             })
