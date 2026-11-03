@@ -252,8 +252,11 @@ selects `noconfirm`, the operator sets it in Thelos's `config.env`. Invalid valu
 `LLM_PRESENCE_PENALTY` uses tenths (15 means 1.5). `MAX_STEPS_TALK=0` removes the
 conversation step limit. `WAKE_INTERVAL_MINUTES=0` disables periodic wakes; positive
 values are bounded by the operator's wake floor (default 10 minutes). `CURIOSITY_EVERY_CYCLES=5` makes one live
-cycle in five, on average, a curiosity cycle while the instance has open surprises and no operator message waits
+cycle in five, on average, a curiosity cycle while the instance has outward open surprises and no operator message waits
 (0 = never; [PLAN-surprise](plans/PLAN-surprise.md)).
+A drawn cycle follows one outward surprise, weighted by the content words it shares with the briefing, goals and
+inbox; surprises about the instance's own tools, plugins, jobs, ledgers, gate or code are never drawn, and with none
+outward the prompt says so and the goal is free (review I7 in [architecture](architecture.md)).
 The six knobs after it switch the mechanisms of [PLAN-consciousness](plans/PLAN-consciousness.md), each on by default:
 `OUTCOME_CARDS` (on, off: before a kind of action that has been failing, the first such call in a
 cycle is held while the instance sees what comparable ones led to), `WORKSPACE` (competitive, relevance, off: what wins
@@ -264,6 +267,9 @@ and `FORECAST` (on, reserve, off: what comparable goals cost, or a fixed reserve
 these keeps the default with a warning. `shaft experiment` flips a knob's default in code to run its kill test, and
 refuses an instance whose config.env sets that knob.
 Outcome-card shell families and inspection exclusions are described in [architecture](architecture.md).
+Under the same COMMITMENTS setting, an operator promise needs the conversation open now or a message delivered
+to the operator in the same live cycle; unsourced ones become self records with a note. Self records expire 24 hours after due and remain in history
+(review I10, [architecture](architecture.md)).
 Sources: template `shaft/config.py:17`, [autonomy.py](../supervisor/autonomy.py).
 
 `WATCH_MAIL` and `WATCH_CALENDAR` (not in the template's defaults: unset is `off`) ask the supervisor's watch to report

@@ -336,7 +336,8 @@ SPECS = {
         "(your last test-gate runs: time, outcome — kept, candidate-failed, baseline-failed, held, re-gated — failing "
         "tests, the last 3,000 characters of a failed gate's output, and your code changes held while the gate's "
         "baseline was red), 'expectations' (your reply predictions from send_message expect_reply, scored: "
-        "did they reply, did the gist match). "
+        "did they reply, did the gist match), 'commitment_source' (cycle: an operator message filename; "
+        "confirms it exists and was addressed by you to the operator). "
         "Newest last — except judgments: whole verdicts, newest first, as many as fit, with every field (the "
         "reasons for the difficulty, origin and value ratings, and the second judge's blind verdict where there is "
         "one); page back with `before`, or ask for one cycle's verdict with `cycle`. Use it to check your claims "
@@ -1135,7 +1136,7 @@ class Broker:
         if self.counts["send_message"] > 10:
             raise RuntimeError("at most 10 messages per run")
         text = text[:MAX_MESSAGE_CHARS]
-        stamp = datetime.now()
+        stamp = self._message_stamp()   # names the file the result cites (message_file): a replay's is on its clock
         kind = "question" if kind == "question" else "note"     # instance-chosen: only these two are logged
         is_instance = NAME_RE.match(to) and to != self.name and (self.project / "instances" / to / "shaft").is_dir()
         if to != "operator" and not is_instance:
@@ -1174,8 +1175,8 @@ class Broker:
             self._envelope = None
             push = self._push_usage(stamp)
             return (f"delivered to the operator ({kind}){with_files}; their reply, if any, will arrive in your inbox"
-                    + expectation + (f"; pushes to the operator today: {push['today']} of budget {push['budget']}"
-                                     if push else ""))
+                    f"; message_file {stem}.md" + expectation
+                    + (f"; pushes to the operator today: {push['today']} of budget {push['budget']}" if push else ""))
         atts = self._store(self.project / "instances" / to, f"attachments/from-{self.name}/{stamp:%Y%m%d-%H%M%S-%f}",
                            files)
         body = text.strip() + messages.attachment_lines(atts)
@@ -1552,9 +1553,19 @@ class Broker:
         self._envelope = (time.monotonic(), env)
         return env
 
+    def _message_stamp(self) -> datetime:
+        return datetime.now()
+
     def _record(self, kind: str, limit: int = 20, cycle: str = "", before: str = "", since: str = "",
                 format: str = "text") -> str:
         from .core import SUP_DIR
+        if kind == "commitment_source":   # review I10: did I deliver this message to the operator?
+            from . import commitments
+            if isinstance(self, ReplayBroker) and cycle in self.operator_files:   # sent in this replay, not written
+                return "To: operator\n\n"
+            if self.as_of and cycle >= f"{self.as_of:%Y%m%d-%H%M%S}":   # sent after the replayed cycle started
+                return ""
+            return "To: operator\n\n" if commitments.operator_message(self.name, cycle) else ""
         limit = max(1, min(int(limit), 200))
         # A trial replay sees the record as it stood when the replayed cycle started, never what came after.
         cut = f"{self.as_of:%Y-%m-%d %H:%M:%S}" if self.as_of else None
@@ -2341,6 +2352,8 @@ class ReplayBroker(Broker):
     cannot be reached fails the run instead of falling back: a trial never takes the local model unasked."""
 
     local_fallback = False
+    operator_files: frozenset[str] = frozenset()   # what this run's send_message "delivered" to the operator (I10)
+    _started: datetime | None = None
 
     def __init__(self, name: str, project: Path, secrets_env: dict[str, str], log_path: Path, *,
                  state_root: Path, start_commit: str, as_of: datetime, cache: dict, cache_lock: threading.Lock,
@@ -2352,6 +2365,7 @@ class ReplayBroker(Broker):
         self.cache, self.cache_lock, self.tools_log = cache, cache_lock, tools_log
         self.trace: list[dict] = []          # every tool call, as the supervisor saw it
         self.operator_sent = 0
+        self._started = datetime.now()
         self._tags = threading.local()
 
     def envelope(self) -> dict:
@@ -2504,6 +2518,11 @@ class ReplayBroker(Broker):
                      "chat and the terminal.")
         return line
 
+    def _message_stamp(self) -> datetime:
+        """The replayed cycle's clock (its start plus the time this run has taken), as the instance's own clock
+        reads in a replay: a message_file stamped today would tell the run it is a replay."""
+        return self.as_of + (datetime.now() - self._started) if self._started else self.as_of
+
     def _operator_sent_today(self, stamp: datetime) -> int:
         inbox = self.project / ".supervisor" / "operator-inbox"
         cut = f"{self.as_of:%Y%m%d-%H%M%S}"
@@ -2527,6 +2546,7 @@ class ReplayBroker(Broker):
         self._tag("simulated: not delivered")
         if to == "operator":
             self.operator_sent += 1
+            self.operator_files = self.operator_files | {rel}
 
     def _secret_set(self, name: str, value: str, hosts, header: str = "Authorization", scheme: str = "Bearer") -> str:
         from .core import SECRET_NAME_RE

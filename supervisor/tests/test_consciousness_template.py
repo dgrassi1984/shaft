@@ -63,6 +63,14 @@ class Fixture:
     def last(self):
         return self.state.last_episode()
 
+    def operator_message(self) -> str:
+        """Review I10: a message delivered to the operator earlier in this run (send_message's message_file), the
+        source an operator promise needs. There is no broker here, so its confirmation is stubbed to that file."""
+        sent = f"20261026-095000-000000-from-{self.root.name}.md"
+        self.enterContext(mock.patch.object(commitments, "message_source", return_value={"message_file": sent}))
+        self.enterContext(mock.patch.object(commitments, "_delivered", side_effect=lambda file: file == sent))
+        return sent
+
 
 def failing_write(path="self/stats.md"):
     return {"tool": "write_file", "args": json.dumps({"path": path, "content": "x"}),
@@ -145,6 +153,7 @@ class WorkspaceUnitTest(Fixture, unittest.TestCase):
 
 class LiveCycleTest(Fixture, unittest.TestCase):
     def test_every_mechanism_in_one_cycle(self):
+        self.operator_message()
         # a kind of action that failed two days ago and has not worked since; three comparable cycles for the forecast
         self.episode("2026-10-24T09:00:00", "Fix the orchard survey stats", [failing_write()])
         for d in ("21", "22", "23"):
@@ -247,7 +256,8 @@ class LiveCycleTest(Fixture, unittest.TestCase):
 class CommitmentsElsewhereTest(Fixture, unittest.TestCase):
     def test_sleep_settles_an_overdue_promise_only_with_evidence(self):
         made = commitments.add(self.root, {"promise": "count rows", "due": "2026-10-25", "criterion": "a note",
-                                           "made_to": "operator"}, "cycle", datetime(2026, 10, 24, 9))
+                                           "made_to": "operator", "message_file": self.operator_message()},
+                               "cycle", datetime(2026, 10, 24, 9))
         cid = made.split()[1]
         self.episode("2026-10-24T12:00:00", "count rows", [{"tool": "write_file", "args": "{}", "result": "wrote 4"}])
         fake, client = self.model([
@@ -266,6 +276,7 @@ class CommitmentsElsewhereTest(Fixture, unittest.TestCase):
 
     def test_self_audit_loop_finish_cycle_keeps_only_promises_to_others(self):
         """Commitments to self fed the self-audit loop; the ledger keeps only promises to others."""
+        self.operator_message()
         promise = {"promise": "self-log commands", "due": "tomorrow", "criterion": "log exists", "made_to": "self"}
         self.live([{"tool_calls": [("declare_intent", DECLARE)]},
                    {"tool_calls": [("finish_cycle", {**FINISH, "commitments": [promise,
@@ -280,13 +291,35 @@ class CommitmentsElsewhereTest(Fixture, unittest.TestCase):
     def test_conversations_offer_commit_to_and_the_file_is_protected(self):
         box = Toolbox(self.root)
         self.assertNotIn("commit_to", box.describe())
-        box.commit_source = "talk"
+        box.commit_source, box.commit_talk_id = "talk", "t1"   # the conversation open now (talk.run)
+        self.state.append_episode({"kind": "talk", "talk_id": "t1", "role": "user", "content": "will you?"})
         self.assertIn("commit_to", box.describe())
         out = box.run("commit_to", json.dumps({"promise": "p", "due": "tomorrow", "criterion": "c", "made_to": "operator"}))
         self.assertTrue(out.startswith("commitment c"), out)
-        self.assertEqual(json.loads((self.root / commitments.FILE).read_text())["source"], "talk")
+        row = json.loads((self.root / commitments.FILE).read_text())
+        self.assertEqual((row["source"], row["made_to"], row["talk_id"]), ("talk", "operator", "t1"))
         refused = box.run("write_file", json.dumps({"path": commitments.FILE, "content": "{}"}))
         self.assertIn("use commit_to", refused)
+
+
+    def test_I10_a_live_cycle_cannot_source_an_operator_promise_by_citing_a_past_conversation_or_a_note(self):
+        """Grok's review of I10: finish_cycle took a model-supplied talk_id (any past conversation), and a note the
+        instance wrote itself headed "To: operator" counted as a message to the operator."""
+        self.state.append_episode({"kind": "talk", "talk_id": "old-talk", "role": "user", "content": "hello"})
+        (self.root / "notes/operator-message.md").write_text("To: operator\n\nI will send the survey.\n")
+        promise = {"promise": "send operator report", "due": "tomorrow", "criterion": "a message",
+                   "made_to": "operator"}
+        self.live([{"tool_calls": [("declare_intent", {**DECLARE, "origin": "operator",
+                                                       "origin_ref": "notes/operator-message.md"})]},
+                   {"tool_calls": [("commit_to", promise)]},
+                   {"tool_calls": [("finish_cycle", {**FINISH, "commitments": [
+                       {**promise, "promise": "file it", "talk_id": "old-talk",
+                        "message_file": "notes/operator-message.md"}]})]}])
+        rows = [json.loads(line) for line in (self.root / commitments.FILE).read_text().splitlines()]
+        self.assertEqual([(r["made_to"], "talk_id" in r, "message_file" in r) for r in rows],
+                         [("self", False, False), ("self", False, False)])
+        self.assertTrue(all("recorded as self" in r for r in self.last()["finish"]["commitments"]))
+        self.assertEqual(commitments.block(self.root, datetime(2026, 10, 26, 10, 30)), "(none)")
 
 
 class ReviewRegressionTest(Fixture, unittest.TestCase):
@@ -336,8 +369,8 @@ class ReviewRegressionTest(Fixture, unittest.TestCase):
 
     def test_overdue_since_a_time_today_not_by_a_day(self):
         """Grok's review: a promise due at 09:00 read "overdue by 1 day" at 10:00 the same day."""
-        commitments.add(self.root, {"promise": "p", "due": "2026-10-26 09:00", "criterion": "c", "made_to": "operator"},
-                        "cycle", datetime(2026, 10, 26, 8))
+        commitments.add(self.root, {"promise": "p", "due": "2026-10-26 09:00", "criterion": "c", "made_to": "operator",
+                                    "message_file": self.operator_message()}, "cycle", datetime(2026, 10, 26, 8))
         self.assertIn("overdue since 09:00", commitments.block(self.root, datetime(2026, 10, 26, 10)))
         self.assertIn("overdue by 2 days", commitments.block(self.root, datetime(2026, 10, 28, 10)))
 

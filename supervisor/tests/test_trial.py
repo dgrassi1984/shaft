@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -317,6 +318,18 @@ class ReplayBrokerTest(Fixture):
         self.assertEqual(ra["result"], rb["result"])
         self.assertIn("same answer as the other run", b.trace[-1]["tags"])
 
+    def test_I10_a_replayed_send_sources_a_promise_in_that_run_only(self):
+        """Grok's review: the replay's send_message wrote no file, so a promise citing it fell to self in the replay
+        while the live cycle kept it as operator."""
+        replay, other = self.make(), self.make()
+        with mock.patch.object(broker, "notify"):
+            sent = replay.call("send_message", {"to": "operator", "text": "I will send the survey"})["result"]
+        file = re.search(r"message_file (\S+\.md)", sent)[1]
+        self.assertEqual(replay.call("record", {"kind": "commitment_source", "cycle": file}),
+                         {"ok": True, "result": "To: operator\n\n"})
+        self.assertEqual(other.call("record", {"kind": "commitment_source", "cycle": file})["result"], "")
+        self.assertFalse((replay.project / ".supervisor" / "operator-inbox" / file).exists())
+
     def test_writes_read_like_the_real_thing(self):
         """A run must not be able to tell it is a replay from what its writes return."""
         real = broker.Broker(NAME, self.project, {}, self.project / "real.log")
@@ -325,7 +338,13 @@ class ReplayBrokerTest(Fixture):
             for args in ({"to": "x", "text": "hi"}, {"to": "operator", "text": "hi", "kind": "question"},
                          {"to": "nobody", "text": "hi"}, {"to": "x", "text": " "}):
                 r1, r2 = real.call("send_message", args), replay.call("send_message", args)
-                self.assertEqual(r1, r2, args)
+                # the message_file (review I10) is stamped on each one's own clock: the replay's on the replayed day
+                stamp = re.compile(r"message_file (\d{8})-\d{6}-\d{6}-")
+                if args["to"] == "operator":
+                    self.assertEqual(stamp.search(r2["result"])[1], "20261010")
+                    self.assertEqual(stamp.search(r1["result"])[1], f"{datetime.now():%Y%m%d}")
+                self.assertEqual({**r1, "result": stamp.sub("", r1.get("result", ""))},
+                                 {**r2, "result": stamp.sub("", r2.get("result", ""))}, args)
         args = {"name": "gh", "value": "v", "hosts": ["api.github.com"]}
         self.assertEqual(real.call("secret_set", args), replay.call("secret_set", args))
         self.assertEqual(real.call("secret_delete", {"name": "nope"}), replay.call("secret_delete", {"name": "nope"}))

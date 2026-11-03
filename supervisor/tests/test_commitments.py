@@ -19,7 +19,9 @@ PROMISE = {"promise": "Send the checked report", "due": "tomorrow", "criterion":
            "made_to": "operator"}
 CID = "c1026-1412-1"
 MADE = {"event": "made", "id": CID, **PROMISE, "due": "2026-10-27T23:59:59.999999",
-        "source": "cycle", "at": NOW.isoformat()}
+        "source": "cycle", "at": NOW.isoformat(), "talk_id": "conversation-1"}
+TALK = {"kind": "talk", "role": "user", "talk_id": "conversation-1", "ts": "2026-10-26T14:00:00"}
+MSG = "20261026-140000-000000-from-x.md"   # a message x delivered to the operator (send_message's message_file)
 FOLD_ROWS = [
     MADE, None, [], {}, {**MADE, "id": "bad"}, {**MADE, "id": "c1026-1412-2", "due": "bad"},
     {**MADE, "promise": "duplicate must not replace the first"},
@@ -47,6 +49,14 @@ class CommitmentsTest(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name) / "x"
         (self.root / "memory/episodes").mkdir(parents=True)
+        (self.root / "notes").mkdir()
+        (self.root / "notes/operator-message.md").write_text("To: operator\n\nI will send the checked report.\n")
+        (self.root / "memory/episodes/talk.jsonl").write_text(json.dumps(TALK) + "\n")   # the conversation of MADE
+        self.sup = self.root.parent / "sup"
+        (self.sup / "operator-inbox").mkdir(parents=True)
+        (self.sup / "operator-inbox" / MSG).write_text(
+            "From: x\nTo: operator\nKind: note\nDate: 2026-10-26 14:00\n\nI will send the checked report.\n")
+        self.enterContext(mock.patch.object(supervisor, "SUP_DIR", self.sup))
         for module in (supervisor, metrics):
             patch = mock.patch.object(module, "INSTANCES", self.root.parent)
             patch.start()
@@ -65,7 +75,18 @@ class CommitmentsTest(unittest.TestCase):
         (self.root / "memory/episodes/day.jsonl").write_text("\n".join(json.dumps(ep) for ep in episodes) + "\n")
 
     def add(self, **changes):
-        return agent.add(self.root, {**PROMISE, **changes}, "cycle", NOW)
+        return agent.add(self.root, {**PROMISE, "talk_id": "conversation-1", **changes}, "cycle", NOW)
+
+    def broker(self, replay_files=()):
+        """The agent's broker.call answered by a real Broker's record (no socket); `replay_files`: a ReplayBroker's
+        simulated sends."""
+        from supervisor import broker
+        box = broker.ReplayBroker.__new__(broker.ReplayBroker) if replay_files else broker.Broker.__new__(broker.Broker)
+        box.name, box.as_of = "x", None
+        if replay_files:
+            box.operator_files = set(replay_files)
+            box.as_of = datetime(2026, 10, 26, 13)
+        return box, mock.patch.object(agent.broker, "call", side_effect=lambda tool, **args: box._record(**args))
 
     def test_due_parsing(self):
         end = datetime(2026, 10, 26, 23, 59, 59, 999999)
@@ -80,6 +101,176 @@ class CommitmentsTest(unittest.TestCase):
         aware = NOW.replace(tzinfo=timezone.utc)
         local = aware.astimezone().replace(tzinfo=None)
         self.assertEqual(agent.parse_due("today", aware), local.replace(hour=23, minute=59, second=59, microsecond=999999))
+
+    def test_I10_self_expires_at_due_plus_24_hours_in_both_folds(self):
+        due = NOW + timedelta(hours=1)
+        for recipient in ("self", "own", self.root.name):
+            with self.subTest(recipient=recipient):
+                self.write_rows([{**MADE, "made_to": recipient, "due": due.isoformat()}])
+                for at, status in ((due, "open"), (due + timedelta(hours=24, microseconds=-1), "overdue"),
+                                   (due + timedelta(hours=24), "expired"), (due + timedelta(days=7), "expired")):
+                    item = agent.fold(self.root, at)[CID]
+                    self.assertEqual(item["status"], status)
+                    self.assertEqual(supervisor.ledger("x", at), agent.fold(self.root, at))
+                self.assertEqual(item["settled_at"], (due + timedelta(hours=24)).isoformat())
+                self.assertIn(CID, agent.fold(self.root, due + timedelta(days=7)))
+
+    def test_I10_expiration_precedes_late_settlement_but_preserves_earlier_history(self):
+        due = NOW + timedelta(hours=1)
+        for at, status in ((due + timedelta(hours=23), "kept"), (due + timedelta(hours=24), "expired")):
+            self.write_rows([{**MADE, "made_to": "self", "due": due.isoformat()},
+                             {"event": "settled", "id": CID, "status": "kept", "evidence": "an episode",
+                              "at": at.isoformat()}])
+            self.assertEqual(agent.fold(self.root, due + timedelta(days=7))[CID]["status"], status)
+            self.assertEqual(supervisor.ledger("x", due + timedelta(days=7)),
+                             agent.fold(self.root, due + timedelta(days=7)))
+
+    def test_I10_operator_requires_existing_source_and_records_downgrade_note(self):
+        # Grok's review: a note the instance wrote itself, headed "To: operator", is not a message to the operator
+        for refs in ({}, {"talk_id": "missing"}, {"message_file": "notes/missing.md"},
+                     {"message_file": "notes/operator-message.md"},
+                     {"message_file": "../outside.md"}, {"message_file": "/outside.md"}):
+            with self.subTest(refs=refs):
+                (self.root / agent.FILE).unlink(missing_ok=True)
+                result = agent.add(self.root, {**PROMISE, **refs}, "cycle", NOW)
+                self.assertIn("operator source missing or invalid; recorded as self", result)
+                row = json.loads((self.root / agent.FILE).read_text())
+                self.assertEqual(row["made_to"], "self")
+                self.assertIn("source missing", row["note"])
+                self.assertEqual(agent.fold(self.root, NOW), supervisor.ledger("x", NOW))
+        _, stub = self.broker()
+        for refs in ({"talk_id": "conversation-1"}, {"message_file": MSG}):
+            (self.root / agent.FILE).unlink()
+            with stub:
+                result = agent.add(self.root, {**PROMISE, **refs}, "talk", NOW)
+            self.assertNotIn("recorded as self", result)
+            self.assertEqual(agent.fold(self.root, NOW)[CID]["made_to"], "operator")
+            self.assertEqual(supervisor.ledger("x", NOW), agent.fold(self.root, NOW))
+
+    def test_I10_peer_promises_never_expire_and_invalid_sourced_operator_is_self(self):
+        unsourced = {k: v for k, v in MADE.items() if k != "talk_id"}
+        self.write_rows([{**MADE, "made_to": "wren"},
+                         {**unsourced, "id": "c1026-1412-2", "message_file": "missing.md", "sourced": True},
+                         {**unsourced, "id": "c1026-1412-3", "sourced": True}])
+        late = NOW + timedelta(days=7)
+        items = agent.fold(self.root, late)
+        self.assertEqual(items[CID]["status"], "overdue")
+        for cid in ("c1026-1412-2", "c1026-1412-3"):
+            self.assertEqual(items[cid]["made_to"], "self")
+            self.assertEqual(items[cid]["status"], "expired")
+        self.assertEqual(supervisor.ledger("x", late), items)
+
+    def test_I10_operator_promise_made_before_the_source_rule_stays_the_operators(self):
+        """18 open operator promises (shaft 8, wren 6, thelos 4) predate the rule: reclassifying them as self would
+        expire them unseen (integration review, 2026-11-03)."""
+        legacy = {k: v for k, v in MADE.items() if k != "talk_id"}
+        self.write_rows([legacy])
+        late = NOW + timedelta(days=7)
+        items = agent.fold(self.root, late)
+        self.assertEqual(items[CID]["made_to"], "operator")
+        self.assertEqual(items[CID]["status"], "overdue")
+        self.assertEqual(supervisor.ledger("x", late), items)
+
+    def test_I10_delivered_message_source_is_checked_by_broker_without_delivery(self):
+        file, path = MSG, self.sup / "operator-inbox" / MSG
+        box, stub = self.broker()
+        with stub as call:
+            result = agent.add(self.root, {**PROMISE, "message_file": file}, "cycle", NOW)
+            self.assertNotIn("recorded as self", result)
+            self.assertEqual(agent.fold(self.root, NOW)[CID]["made_to"], "operator")
+            self.assertEqual(agent.fold(self.root, NOW), supervisor.ledger("x", NOW))
+            call.assert_called_with("record", kind="commitment_source", cycle=file)
+            box.as_of = datetime(2026, 10, 26, 13)
+            self.assertEqual(box._record("commitment_source", cycle=file), "")
+            box.as_of = None
+            self.assertEqual(box._record("commitment_source", cycle=file.replace("from-x", "from-wren")), "")
+            (self.sup / "operator-inbox/read").mkdir()
+            path.rename(self.sup / "operator-inbox/read" / file)   # messages._archive: the operator read or answered it
+            self.assertEqual(box._record("commitment_source", cycle=file), "To: operator\n\n")
+            self.assertEqual(supervisor.ledger("x", NOW)[CID]["made_to"], "operator")
+            (self.sup / "operator-inbox/read" / file).unlink()
+            self.assertEqual(box._record("commitment_source", cycle=file), "")
+            self.assertEqual(supervisor.ledger("x", NOW)[CID]["made_to"], "self")
+
+    def test_I10_archived_operator_message_still_sources_its_promise(self):
+        """An operator promise must not turn into an expiring self record once the operator reads the message."""
+        self.write_rows([{**{k: v for k, v in MADE.items() if k != "talk_id"}, "message_file": MSG}])
+        (self.sup / "operator-inbox/read").mkdir()
+        (self.sup / "operator-inbox" / MSG).rename(self.sup / "operator-inbox/read" / MSG)
+        late = NOW + timedelta(days=7)
+        self.assertEqual(supervisor.ledger("x", late)[CID]["made_to"], "operator")
+        self.assertEqual(supervisor.ledger("x", late)[CID]["status"], "overdue")
+        self.assertEqual(supervisor.ledger("x", late), agent.fold(self.root, late))
+
+    def test_I10_broker_outage_is_an_error_not_a_downgrade(self):
+        """Grok's review: a BrokerError read as "no source" wrote the promise as self."""
+        with mock.patch.object(agent.broker, "call", side_effect=agent.broker.BrokerError("offline")):
+            result = agent.add(self.root, {**PROMISE, "message_file": MSG}, "cycle", NOW)
+        self.assertTrue(result.startswith("ERROR: commitment not recorded"), result)
+        self.assertIn("offline", result)
+        self.assertFalse((self.root / agent.FILE).exists())
+
+    def test_I10_replay_send_is_a_source_inside_the_replay_only(self):
+        """Grok's review: a trial replay's simulated send_message wrote no file, so its promise became self in the
+        replay while the live cycle kept it as operator."""
+        simulated = "20261026-140500-000000-from-x.md"   # after the replay's as_of: only the replay's own send counts
+        box, stub = self.broker(replay_files=[simulated])
+        with stub:
+            self.assertNotIn("recorded as self", agent.add(self.root, {**PROMISE, "message_file": simulated}, "cycle", NOW))
+        self.assertEqual(agent.fold(self.root, NOW)[CID]["made_to"], "operator")
+        self.assertFalse((self.sup / "operator-inbox" / simulated).exists())
+        self.assertEqual(box._record("commitment_source", cycle=MSG), "")   # a real message newer than the replay
+        box.operator_files = set()
+        self.assertEqual(box._record("commitment_source", cycle=simulated), "")
+
+    def test_I10_model_cannot_cite_a_past_conversation_or_file_in_finish_cycle(self):
+        """Grok's review: finish_cycle took a model-supplied talk_id, so any past conversation sourced a promise."""
+        self.assertEqual(agent.clean([{**PROMISE, "talk_id": "conversation-1", "message_file": MSG}]), [PROMISE])
+
+    def test_I10_tools_attach_current_talk_or_delivered_message_source(self):
+        from shaft.tools import Toolbox
+        self.write_episodes([{"kind": "talk", "role": "user", "talk_id": "current-talk", "ts": NOW.isoformat()}])
+        box = Toolbox(self.root)
+        box.commit_source, box.commit_talk_id = "talk", "current-talk"
+        with mock.patch("shaft.clock.now", return_value=NOW):
+            self.assertNotIn("recorded as self", box.run("commit_to", json.dumps(PROMISE)))
+        self.assertEqual(json.loads((self.root / agent.FILE).read_text())["talk_id"], "current-talk")
+        file = MSG
+        log = [{"tool": "send_message", "result": f"delivered to the operator (note); message_file {file}"}]
+        self.assertEqual(agent.message_source(log), {"message_file": file})
+        self.assertEqual(agent.message_source([{"tool": "send_message", "result": "ERROR: refused"}]), {})
+
+    def test_I10_send_message_result_supplies_the_existing_commitment_source_path(self):
+        from supervisor import broker
+        box = broker.Broker.__new__(broker.Broker)
+        box.name, box.project, box.counts = "x", self.root.parent, {"send_message": 1}
+        with mock.patch.object(broker, "datetime", wraps=datetime) as clock, \
+                mock.patch.object(box, "_read_attachments", return_value=[]), \
+                mock.patch.object(box, "_operator_sent_today", return_value=0), \
+                mock.patch.object(box, "_store", return_value=[]), \
+                mock.patch.object(box, "_deliver") as deliver, \
+                mock.patch.object(box, "_push_usage", return_value=None):
+            clock.now.return_value = NOW
+            result = box._send_message("operator", "I will send the checked report.")
+        file = "20261026-141200-000000-from-x.md"
+        self.assertEqual(agent.message_source([{"tool": "send_message", "result": result}]), {"message_file": file})
+        self.assertEqual(deliver.call_args.args[:2], ("operator", file))
+
+    def test_I10_wrong_recipient_speaker_and_link_are_not_operator_sources(self):
+        (self.root / "notes/peer.md").write_text("To: wren\n\nTo: operator\n")
+        (self.root / "notes/link.md").symlink_to(self.root / "notes/operator-message.md")
+        forged = "20261026-140000-000000-from-x.md"
+        (self.root / forged).write_text("To: operator\n\nA local file is not a delivered message.\n")
+        self.write_episodes([{"kind": "talk", "role": "user", "talk_id": "coder", "speaker": "Claude",
+                              "ts": NOW.isoformat()}])
+        (self.sup / "operator-inbox" / MSG).unlink()   # only the local copy exists: never delivered
+        _, stub = self.broker()
+        for refs in ({"message_file": "notes/peer.md"}, {"message_file": "notes/link.md"}, {"talk_id": "coder"},
+                     {"message_file": forged}, {"message_file": forged.replace("from-x", "from-wren")}):
+            with self.subTest(refs=refs), stub:
+                (self.root / agent.FILE).unlink(missing_ok=True)
+                self.assertIn("recorded as self", agent.add(self.root, {**PROMISE, **refs}, "talk", NOW))
+                self.assertEqual(agent.fold(self.root, NOW), supervisor.ledger("x", NOW))
 
     def test_add_and_ids_and_append(self):
         self.assertEqual(self.add(), "commitment c1026-1412-1 recorded, due tomorrow")
@@ -111,13 +302,14 @@ class CommitmentsTest(unittest.TestCase):
             peers.assert_called_with("list_instances")
         with mock.patch.object(broker, "call", side_effect=broker.BrokerError("offline")):
             self.assertIn("ERROR:", self.add(made_to="wren"))
-            self.assertFalse(self.add().startswith("ERROR:"))
+            self.assertFalse(self.add().startswith("ERROR:"))   # a conversation source needs no broker
+            self.assertIn("ERROR:", self.add(talk_id="", message_file=MSG))
 
     def test_commit_to_tool_refuses_self_and_accepts_operator_and_peer(self):
         """Commitments to self fed the self-audit loop; the ledger keeps only promises to others."""
         from shaft.tools import Toolbox
         box = Toolbox(self.root)
-        box.commit_source = "talk"
+        box.commit_source, box.commit_talk_id = "talk", "conversation-1"
         with mock.patch("shaft.clock.now", return_value=NOW), \
                 mock.patch("shaft.broker.call", return_value="instances: wren"):
             self.assertIn("goals/notes", box.run("commit_to", json.dumps({**PROMISE, "made_to": "self"})))
@@ -181,10 +373,10 @@ class CommitmentsTest(unittest.TestCase):
         actual = agent.fold(self.root, now)
         self.assertEqual(supervisor.ledger("x", now), actual)
         self.assertEqual({cid: it["status"] for cid, it in actual.items()},
-                         {CID: "kept", "c1026-1412-3": "overdue", "c1026-1412-4": "open"})
+                         {CID: "kept", "c1026-1412-3": "expired", "c1026-1412-4": "open"})
         self.assertEqual(actual[CID], {"id": CID, **PROMISE, "due": MADE["due"], "source": "cycle",
                                       "made_at": NOW.isoformat(), "status": "kept", "settled_at": "2026-10-26T16:00:00",
-                                      "evidence": "2026-10-26T15:00:00#1"})
+                                      "evidence": "2026-10-26T15:00:00#1", "talk_id": "conversation-1"})
         self.assertEqual(FOLD_ROWS, original)
 
     def test_overdue_and_prompt_limit(self):

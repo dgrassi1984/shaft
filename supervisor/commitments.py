@@ -7,10 +7,10 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from . import metrics
-from .core import INSTANCES, safe_read
+from .core import INSTANCES, SUP_DIR, safe_read
 
 FILE = "memory/commitments.jsonl"
 STATUSES = ("kept", "broken", "superseded", "void")
@@ -62,7 +62,7 @@ def _rows(text: str) -> list[dict]:
 
 def _fold(rows: list[dict], now: datetime) -> dict[str, dict]:
     # The agent keeps its own copy; shared fixtures pin the event contract.
-    items = {}
+    items, self_ids = {}, set()
     for rec in rows:
         cid, at = rec.get("id"), _at(rec.get("at"))
         if not isinstance(cid, str) or not ID.fullmatch(cid) or at is None:
@@ -73,15 +73,45 @@ def _fold(rows: list[dict], now: datetime) -> dict[str, dict]:
                 continue
             items[cid] = {"id": cid, **item, "source": rec["source"], "made_at": rec["at"],
                           "status": "open", "settled_at": None, "evidence": None}
+            items[cid].update({k: rec[k] for k in ("talk_id", "message_file", "note") if k in rec})
+            if item["made_to"] in ("self", "own") or rec.get("self_commitment"):
+                self_ids.add(cid)
         elif rec.get("event") == "settled":
             item, evidence = items.get(cid), rec.get("evidence")
             if (item and item["status"] == "open" and rec.get("status") in STATUSES
+                    and not (cid in self_ids and at - _at(item["due"]) >= timedelta(hours=24))
                     and isinstance(evidence, str) and evidence.strip() and at >= _at(item["made_at"])):
                 item.update(status=rec["status"], settled_at=rec["at"], evidence=evidence)
     for item in items.values():
-        if item["status"] == "open" and _at(item["due"]) < _local(now):
-            item["status"] = "overdue"
+        if item["status"] == "open":
+            if item["id"] in self_ids and _local(now) - _at(item["due"]) >= timedelta(hours=24):
+                expires = _at(item["due"]) + timedelta(hours=24)
+                item.update(status="expired", settled_at=expires.isoformat(), evidence="self commitment expired 24h after due")
+            elif _at(item["due"]) < _local(now):
+                item["status"] = "overdue"
     return items
+
+
+def _source_rows(rows: list[dict], episodes: list[dict], delivered, own: str) -> list[dict]:
+    """An operator promise needs the conversation it was made in, or a message the instance delivered to the
+    operator (review I10); a note in its own folder is not one. The agent keeps its own copy."""
+    talks = {ep["talk_id"] for ep in episodes if ep.get("kind") == "talk" and ep.get("role") == "user"
+             and not ep.get("speaker") and isinstance(ep.get("talk_id"), str) and ep["talk_id"]}
+    out = []
+    for row in rows:
+        row = dict(row)
+        if row.get("event") == "made":
+            if row.get("made_to") == "operator" and row.get("sourced"):   # older rows predate the rule: kept as made
+                talk, message = row.get("talk_id"), row.get("message_file")
+                valid = isinstance(talk, str) and talk in talks
+                if not valid and isinstance(message, str) and _message_file(own).fullmatch(message):
+                    valid = delivered(message)
+                if not valid:
+                    row.update(made_to="self", note="operator source missing or invalid; recorded as self")
+            if row.get("made_to") == own:
+                row["self_commitment"] = True
+        out.append(row)
+    return out
 
 
 def _citation(evidence: str) -> tuple[str, int | None] | None:
@@ -127,7 +157,25 @@ def ledger(name: str, now: datetime | None = None) -> dict[str, dict]:
     if not NAME.fullmatch(name):
         return {}
     text = safe_read(INSTANCES / name, FILE, "", errors="replace")
-    return _fold(_rows(text), now if now is not None else datetime.now())
+    rows = _source_rows(_rows(text), _episodes(name), lambda file: bool(operator_message(name, file)), name)
+    return _fold(rows, now if now is not None else datetime.now())
+
+
+def _message_file(name: str) -> re.Pattern:
+    return re.compile(r"\d{8}-\d{6}-\d{6}-from-" + re.escape(name) + r"\.md")
+
+
+def operator_message(name: str, file: str) -> str:
+    """A message this instance delivered to the operator, still waiting or already read (messages._archive moves it
+    to operator-inbox/read/ under the same name), without following links."""
+    if not NAME.fullmatch(name) or not _message_file(name).fullmatch(file):
+        return ""
+    for folder in ("operator-inbox", "operator-inbox/read"):
+        text = safe_read(SUP_DIR, f"{folder}/{file}", "", errors="replace")
+        head = text.split("\n\n", 1)[0]
+        if re.search(r"(?m)^To: operator$", head) and re.search(r"(?m)^From: " + re.escape(name) + r"$", head):
+            return text
+    return ""
 
 
 def _episodes(name: str) -> list[dict]:
@@ -161,16 +209,16 @@ def verify(name: str, item: dict) -> str:
 
 def _counts(items: list[dict], episodes: list[dict], judgments: list[dict]) -> str:
     verified = sum(_verification(it, episodes, judgments)[0] == "verified" for it in items if it["status"] == "kept")
-    counts = {s: sum(it["status"] == s for it in items) for s in (*STATUSES, "overdue", "open")}
+    counts = {s: sum(it["status"] == s for it in items) for s in (*STATUSES, "expired", "overdue", "open")}
     return (f"made {len(items)}; kept (verified) {verified}; kept (not verified) {counts['kept'] - verified}; "
-            + "; ".join(f"{s} {counts[s]}" for s in ("broken", "superseded", "void", "overdue", "open")))
+            + "; ".join(f"{s} {counts[s]}" for s in ("broken", "superseded", "void", "expired", "overdue", "open")))
 
 
 def section(name: str) -> list[str]:
     items = list(ledger(name).values())
     if not items:
         return []
-    items = [it for it in items if it["made_to"] not in ("self", name)]   # promises to self are no longer kept
+    items = [it for it in items if it["made_to"] not in ("self", "own", name)]   # promises to self are no longer kept
     if not items:
         return []
     episodes, judgments = _episodes(name), metrics.judgments(name)
@@ -201,14 +249,16 @@ def report(names: list[str]) -> str:
             lines.append("  (none)")
             continue
         episodes, judgments = _episodes(name), metrics.judgments(name)
-        self_count = sum(it["made_to"] in ("self", name) for it in items.values())
+        self_count = sum(it["made_to"] in ("self", "own", name) for it in items.values())
         if self_count:
-            lines.append(f"  to self (no longer kept): {self_count}")
+            expired = sum(it["status"] == "expired" and it["made_to"] in ("self", "own", name) for it in items.values())
+            lines.append(f"  to self (no longer kept): {self_count}; expired {expired}")
         for item in items.values():
-            if item["made_to"] in ("self", name):
+            if item["made_to"] in ("self", "own", name):
                 continue
             verification = f"; {_verification(item, episodes, judgments)[0]}" if item["status"] == "kept" else ""
             lines.append(f"  {item['id']}: {item['status']}{verification}; to {item['made_to']}; due {item['due']}; "
                          f"{item['promise']} — check: {item['criterion']}"
-                         + (f"; evidence {item['evidence']}" if item["evidence"] else ""))
+                         + (f"; evidence {item['evidence']}" if item["evidence"] else "")
+                         + (f"; {item['note']}" if item.get("note") else ""))
     return "\n".join(lines)
