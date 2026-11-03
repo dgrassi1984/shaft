@@ -229,6 +229,7 @@ struct NewDocumentSheet: View {
                 }
             }
         }
+        .sheetFrame()
         .presentationDetents([.medium])
     }
 

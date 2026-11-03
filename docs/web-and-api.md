@@ -468,6 +468,16 @@ itself, same port, tailnet only. Its contract, every route, field, status code a
   rules), not-sent messages with Retry, documents with comments, and ratings. A notification tap, or
   `shaft://chat/<instance>`, opens that chat; the chat on screen shows no banner. To try it without the live service,
   `apps/shaft/DevServer/fixture_server.py` serves the real `/app/v1` over throwaway data.
+- **The Mac app** (the same codebase, a native macOS app) has one window: the instances in the sidebar (state, last
+  line, unread mark, replying), the chat, and its documents as an inspector. A message's text selects in place, across
+  paragraphs, tables and code, with **↩ Reply** (**+ Quote** once a card waits) beside the selection and in its
+  right-click menu, which also has Copy and Reply for the whole message, Copy code and the thumbs. Enter sends,
+  Shift-Enter and Option-Enter insert a new line, Cmd-Enter queues (sends now when idle); `/` focuses the composer;
+  files pasted or dropped are attached. The menu bar has New Message (⌘N), New Chat (⇧⌘N), Stop (⌘.), End (⇧⌘E),
+  Queue after reply (⌘↩), Next cycle, Documents (⌥⌘D), Earlier chats (⇧⌘Y), Next/Previous chat (⌥↓/⌥↑) and Reload
+  (⌘R); Settings (⌘,) shows the server and this device, with Unpair. The chat long-polls while the window shows it and
+  is marked seen only while the window is in front; the Dock icon carries the server's badge; a notification click
+  brings the window forward (opened again if it was closed: the app keeps running) on that chat.
 
 Sources: [the API](../supervisor/app_api.py), [the chat model](../supervisor/web_chat.py),
 [seen marks](../supervisor/web_seen.py), [authentication and pairing](../supervisor/web.py).

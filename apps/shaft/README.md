@@ -12,7 +12,8 @@ the web service's JSON API, `/app/v1` ([app-api.md](../../docs/app-api.md)), ove
 | `Packages/SHAFTKit/` | the local Swift package every target uses: the API models and client, the long-poll, pairing and the Keychain, drafts, the outbox, push registration, the notification body fetch, and the observable stores the UI reads |
 | `Shared/` | the SwiftUI views and view models both apps draw: the chat, feed, composer, documents, pairing and settings ([Shared/README.md](Shared/README.md)) |
 | `iOS/` | the iPhone and iPad app: its entry point (`SHAFTApp.swift`) and its layouts (`IOSRoot.swift`: the phone's full-screen chat with a chat switcher, the iPad's split view) |
-| `macOS/` | the Mac app: its entry point and, until the Mac lane (M5) builds its own, a plain split view over the shared views |
+| `macOS/` | the Mac app: its entry point, window, menu commands and Settings, and the AppKit text views of Shared's seams (a message's text selects in place with ↩ Reply; the composer's field) ([macOS/README.md](macOS/README.md)) |
+| `macOSTests/` | `SHAFTMacTests`: the Mac's Markdown text (`MarkdownAttributed`), with no window |
 | `NotificationService/` | the extension both platforms build: it fetches the notification's body |
 | `DevServer/` | `fixture_server.py`: the real `/app/v1` over throwaway data, to drive the apps without the live service (below) |
 
@@ -22,8 +23,9 @@ the web service's JSON API, `/app/v1` ([app-api.md](../../docs/app-api.md)), ove
 | `SHAFT-macOS` | macOS 26+ | `io.github.dgrassi1984.shaft` |
 | `NotificationService-iOS` | iOS 26+ | `io.github.dgrassi1984.shaft.NotificationService` |
 | `NotificationService-macOS` | macOS 26+ | `io.github.dgrassi1984.shaft.NotificationService` |
+| `SHAFTMacTests` | macOS 26+ | `io.github.dgrassi1984.shaft.MacTests` (unit tests, the `SHAFT-macOS` scheme's test action) |
 
-All four use Swift 6 with complete strict concurrency, team `<TEAM_ID>` and automatic signing. The apps depend on
+All of them use Swift 6 with complete strict concurrency, team `<TEAM_ID>` and automatic signing. The apps depend on
 [MarkdownUI](https://github.com/gonzalezreal/swift-markdown-ui), pinned to exactly 2.4.1.
 
 ## Generate and build
@@ -78,7 +80,29 @@ xcrun simctl install booted build/dd/Build/Products/Debug-iphonesimulator/SHAFT.
 xcrun simctl openurl booted shaft://chat/thelos      # opens that chat, as a notification tap does
 ```
 
-## Test the Kit
+### The Mac app against the fixture server
+
+A Debug build of the Mac app can run unsigned from a terminal. Such a build has no Keychain access group (that needs
+the team's signing), so `SHAFT_DEV_DIR` keeps its pairing, drafts and outbox in a folder instead, and
+`SHAFT_DEV_PAIR` pairs it at launch with the link `serve` printed (Debug builds only: `macOS/MacDevSession.swift`;
+a Release build, or a Debug build started from Xcode or Finder, uses the Keychain):
+
+```bash
+xcodebuild -project SHAFT.xcodeproj -scheme SHAFT-macOS -destination 'platform=macOS' \
+  -derivedDataPath build/dd CODE_SIGNING_ALLOWED=NO build
+cp -R build/dd/Build/Products/Debug/SHAFT.app /tmp/ && codesign --force --deep -s - /tmp/SHAFT.app
+SHAFT_DEV_DIR=/tmp/shaft-mac SHAFT_DEV_PAIR='http://127.0.0.1:8899/pair?t=…' /tmp/SHAFT.app/Contents/MacOS/SHAFT
+```
+
+`SHAFT_DEV_DRIVE=<script>` drives it from a script of steps (`macOS/MacDevDriver.swift` lists them: open a chat, keys
+such as `return`, `shift+return`, `cmd+return`, `option+down`, `cmd+.` and `slash`, typing, selecting text in a
+message, its right-click menu, menu bar items, pasting a file, closing the window, a notification click, snapshots of
+the window), logging each step and what it changed to stdout. The keys go through the app's own event queue, key
+equivalents in AppKit's order. On a locked or sleeping screen every window counts as covered, so the chat neither
+polls nor is marked seen there: `SHAFT_DEV_PRESENCE=front` (or `shown`) says the window is in front (or shown behind
+another app's) instead.
+
+## Tests
 
 ```bash
 cd apps/shaft/Packages/SHAFTKit
@@ -90,6 +114,13 @@ server's fixture folders `supervisor/tests/app_api_fixtures/` and `supervisor/te
 and in `$SHAFT_APP_API_FIXTURES` when it is set. Each one is matched to its model by its keys and must decode with
 every non-null field kept, so a new fixture needs no test code, and a field the server adds that the Kit does not
 read fails the test.
+
+The Mac app's own tests (`macOSTests/`, no window needed):
+
+```bash
+xcodebuild -project SHAFT.xcodeproj -scheme SHAFT-macOS -destination 'platform=macOS' \
+  -derivedDataPath build/dd CODE_SIGNING_ALLOWED=NO test
+```
 
 ## Sign and install on a device
 

@@ -43,6 +43,7 @@ struct SelectTextSheet: View {
                     }
                 }
         }
+        .sheetFrame()
     }
 
     private var selected: String? {
@@ -101,6 +102,7 @@ struct RatingSheet: View {
                 focused = true
             }
         }
+        .sheetFrame()
         .presentationDetents([.medium, .large])
     }
 
@@ -172,5 +174,6 @@ struct EarlierChatsSheet: View {
                 }
             }
         }
+        .sheetFrame()
     }
 }

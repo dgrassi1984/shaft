@@ -106,3 +106,27 @@ extension ServerCredential {
         URL(string: path, relativeTo: baseURL)?.absoluteURL
     }
 }
+
+extension View {
+    /// A sheet's size on the Mac, where a sheet is as small as its content allows (a form, a text view or a list
+    /// collapses); a phone or tablet sizes sheets itself.
+    func sheetFrame(minWidth: CGFloat = 520, minHeight: CGFloat = 420) -> some View {
+        #if os(macOS)
+        frame(minWidth: minWidth, idealWidth: minWidth + 80, minHeight: minHeight, idealHeight: minHeight + 80)
+        #else
+        self
+        #endif
+    }
+}
+
+extension View {
+    /// A composer's icon menu on the Mac: the icon alone, as on iOS (no bezel, no chevron beside it); a click on a
+    /// menu with a primary action runs it, a click and hold opens the menu.
+    func iconMenu() -> some View {
+        #if os(macOS)
+        menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
+        #else
+        self
+        #endif
+    }
+}

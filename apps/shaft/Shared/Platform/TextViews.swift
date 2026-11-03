@@ -5,8 +5,8 @@ import UIKit
 #endif
 
 // The platform seams of text: the composer's field and the selectable text Select text shows. iOS has its own UIKit
-// views here (the PWA's keyboard rules need key commands; a selection needs the edit menu). The Mac lane replaces the
-// macOS fallbacks below with AppKit views of the same shape.
+// views here (the PWA's keyboard rules need key commands; a selection needs the edit menu). The Mac app has AppKit
+// views of the same shape in macOS/MacTextViews.swift (ComposerTextView, SelectableTextView, HardwareKeyboard).
 
 /// What Return asks of the composer.
 enum ComposerKey {
@@ -14,7 +14,7 @@ enum ComposerKey {
     case queue
 }
 
-#if canImport(UIKit)
+#if os(iOS)
 
 /// Whether a hardware keyboard is attached (an iPad's): the composer's shortcuts line shows then.
 @MainActor
@@ -252,65 +252,6 @@ struct SelectableTextView: UIViewRepresentable {
             return UIMenu(children: mine + suggestedActions)
         }
     }
-}
-
-#else
-
-/// macOS fallback until the Mac lane's AppKit field: Return sends, Shift/Option-Return a new line, Cmd-Return queues.
-struct ComposerTextView: View {
-    @Binding var text: String
-    @Binding var height: CGFloat
-    @Binding var focused: Bool
-    var placeholder: String
-    var maxHeight: CGFloat
-    var focusRequest: Int
-    var onKey: (ComposerKey) -> Void
-    var onPaste: ([NSItemProvider]) -> Void
-    @FocusState private var hasFocus: Bool
-
-    var body: some View {
-        TextField(placeholder, text: $text, axis: .vertical)
-            .textFieldStyle(.plain)
-            .lineLimit(1...12)
-            .padding(8)
-            .focused($hasFocus)
-            .onKeyPress(.return, phases: .down) { press in
-                if press.modifiers.contains(.command) || press.modifiers.contains(.control) {
-                    onKey(.queue)
-                    return .handled
-                }
-                if press.modifiers.contains(.shift) || press.modifiers.contains(.option) {
-                    text += "\n"
-                    return .handled
-                }
-                onKey(.send)
-                return .handled
-            }
-            .onChange(of: focusRequest) { hasFocus = true }
-            .onChange(of: hasFocus) { focused = hasFocus }
-    }
-}
-
-/// macOS fallback: the text, selectable; the sheet's own button quotes the whole of it.
-struct SelectableTextView: View {
-    let text: String
-    @Binding var selection: NSRange
-    var quoteTitle: String
-    var onQuote: (String) -> Void
-    var onComment: ((String, NSRange) -> Void)?
-
-    var body: some View {
-        ScrollView {
-            Text(text).textSelection(.enabled).padding().frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-}
-
-@MainActor
-@Observable
-final class HardwareKeyboard {
-    static let shared = HardwareKeyboard()
-    let attached = true
 }
 
 #endif

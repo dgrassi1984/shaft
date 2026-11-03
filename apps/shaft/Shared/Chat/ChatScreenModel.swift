@@ -47,6 +47,11 @@ final class ChatScreenModel {
     var focusComposerRequest = 0
     /// A quote card's answer should take the keyboard (a message's own Reply).
     var focusQuoteRequest: Int?
+    /// A send asked for from outside the composer (the Mac's menu: Queue after reply, Next cycle): the composer sends
+    /// its draft in that mode, through its own send.
+    var sendRequest: SendMode?
+    /// New chat asks first (the header's button, the Mac's menu).
+    var confirmingNewChat = false
 
     init(chat: ChatStore) {
         self.chat = chat
@@ -64,13 +69,18 @@ final class ChatScreenModel {
         focusQuoteRequest = index
     }
 
-    /// ↩ Reply or + Quote on a selection: a card, the keyboard left as it is (a phone keeps it down until an answer
-    /// field is tapped).
+    /// ↩ Reply or + Quote on a selection: a card. On a computer the new card's answer takes the keyboard; a phone or
+    /// tablet keeps the keyboard as it is (down until an answer field is tapped).
     func quote(_ selection: String, doc: String = "") {
         guard !archived else { return }
         let text = selection.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        chat.addQuote(text, doc: doc)
+        let index = chat.addQuote(text, doc: doc)
+        #if os(macOS)
+        focusQuoteRequest = index
+        #else
+        _ = index
+        #endif
     }
 
     func select(_ text: String, doc: String = "") {

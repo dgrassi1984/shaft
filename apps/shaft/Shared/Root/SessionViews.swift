@@ -119,7 +119,7 @@ struct PairingView: View {
 }
 
 /// Settings: the server, this device, notifications, and Unpair (§2 `POST /app/v1/unpair`; Forget when the server
-/// cannot be reached, then `shaft web unpair` revokes it on the Mac).
+/// cannot be reached, then `shaft web unpair` revokes it on the Mac). A sheet on iOS; the Mac's Settings window.
 struct SettingsView: View {
     let session: SHAFTSession
     @Environment(AppModel.self) private var model
@@ -166,9 +166,14 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
+            #if os(iOS)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
+            #else
+            // The Mac's Settings window (⌘,) closes as any window does.
+            .formStyle(.grouped)
+            #endif
             .task {
                 do {
                     push = try await session.store?.client.pushStatus()

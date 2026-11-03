@@ -14,12 +14,6 @@ struct IOSRoot: View {
     }
 }
 
-/// An earlier chat pushed over the current one (§5).
-struct ArchivedRoute: Hashable {
-    let instance: String
-    let cid: String
-}
-
 struct ChatsLayout: View {
     let session: SHAFTSession
     let store: InstancesStore
@@ -128,26 +122,5 @@ struct ChatsLayout: View {
         guard selection == nil, !store.instances.isEmpty else { return }
         let names = store.instances.map(\.name)
         open(names.contains(last) ? last : names[0])
-    }
-}
-
-/// An earlier chat, read-only, holding its own store while it is on screen.
-struct ArchivedChatView: View {
-    let route: ArchivedRoute
-    var back: () -> Void
-    @Environment(InstancesStore.self) private var store
-    @State private var chat: ChatStore?
-
-    var body: some View {
-        Group {
-            if let chat {
-                ChatScreen(chat: chat, backToCurrent: back)
-            } else {
-                ProgressView()
-            }
-        }
-        .onAppear {
-            if chat == nil { chat = store.archivedChat(route.instance, cid: route.cid) }
-        }
     }
 }

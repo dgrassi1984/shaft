@@ -15,6 +15,7 @@ struct ChatScreen: View {
     @Environment(AppModel.self) private var model
     @Environment(InstancesStore.self) private var store
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.chatInFront) private var inFront
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
@@ -27,7 +28,6 @@ struct ChatScreen: View {
     @State private var newestOnScreen = false
     @State private var seenVersion: String?
     @State private var dropTargeted = false
-    @State private var clearing = false
 
     init(chat: ChatStore, openArchived: @escaping (ChatSummary) -> Void = { _ in }, backToCurrent: (() -> Void)? = nil) {
         self.chat = chat
@@ -99,7 +99,7 @@ struct ChatScreen: View {
                                                          set: { if !$0 { preview.error = nil } })) {
             Button("OK", role: .cancel) {}
         }
-        .confirmationDialog("Start a new chat with \(chat.instance)?", isPresented: $clearing, titleVisibility: .visible) {
+        .confirmationDialog("Start a new chat with \(chat.instance)?", isPresented: $screen.confirmingNewChat, titleVisibility: .visible) {
             Button("New chat") { Task { await chat.clear() } }
         } message: {
             Text("An open conversation is ended first. This one stays in Earlier chats.")
@@ -135,6 +135,7 @@ struct ChatScreen: View {
             follow()
         }
         .onChange(of: scenePhase) { follow() }
+        .onChange(of: inFront) { markSeen() }
         .onChange(of: screen.showDocuments) { _, open in chat.setWatching(!(open && covers)) }
         .onChange(of: covers) { _, covers in
             screen.documentsCover = covers
@@ -222,12 +223,18 @@ struct ChatScreen: View {
     private var header: some ToolbarContent {
         ToolbarItem(placement: .principal) {
             ChatTitle(instance: chat.instance, archived: chat.cid != nil)
+                #if os(macOS)
+                .fixedSize()                     // the Mac's toolbar squeezed a short name's state out of it
+                #endif
         }
+        #if os(macOS)
+        .sharedBackgroundVisibility(.hidden)     // its glass drew a short name as a circle, clipping the state
+        #endif
         ToolbarItemGroup(placement: .primaryAction) {
             Button { screen.showDocuments.toggle() } label: { Image(systemName: "doc.text") }
                 .accessibilityLabel("Documents")
             if chat.cid == nil {
-                Button { clearing = true } label: { Image(systemName: "square.and.pencil") }
+                Button { screen.confirmingNewChat = true } label: { Image(systemName: "square.and.pencil") }
                     .disabled(chat.content?.canClear != true)
                     .accessibilityLabel("New chat")
             }
@@ -268,12 +275,11 @@ struct ChatScreen: View {
         }
     }
 
-    /// The newest item is on screen and the app in front: mark the version shown seen (§7.5). A version the server
-    /// no longer has (409) is tried again when the new one is drawn.
+    /// The newest item is on screen and the app (on the Mac: its window) in front: mark the version shown seen (§7.5).
+    /// A version the server no longer has (409) is tried again when the new one is drawn.
     private func markSeen() {
-        guard chat.cid == nil, active, newestOnScreen, let version = chat.feed?.version, version != seenVersion else {
-            return
-        }
+        guard chat.cid == nil, active, inFront, newestOnScreen, let version = chat.feed?.version,
+              version != seenVersion else { return }
         seenVersion = version
         Task {
             if !(await chat.markSeen()) && seenVersion == version { seenVersion = nil }

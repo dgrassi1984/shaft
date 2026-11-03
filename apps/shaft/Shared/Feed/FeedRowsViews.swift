@@ -109,7 +109,7 @@ struct LiveReplyView: View {
                 TypingDots(animated: !reduceMotion)
             } else {
                 // Not a live region: VoiceOver would read it again at every refresh. The finished reply is announced.
-                MarkdownText(source: reply.answer)
+                MessageMarkdown(source: reply.answer)
                     .accessibilityAddTraits([])
             }
         }

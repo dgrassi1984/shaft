@@ -193,6 +193,7 @@ struct CommentComposer: View {
                 focused = true
             }
         }
+        .sheetFrame()
     }
 
     private func submit() {

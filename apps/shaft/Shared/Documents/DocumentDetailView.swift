@@ -250,6 +250,7 @@ struct DocumentEditor: View {
                                    })
                 }
         }
+        .sheetFrame()
         .interactiveDismissDisabled(text != original)
     }
 
@@ -317,6 +318,7 @@ struct StaleSaveSheet: View {
                 .background(.regularMaterial)
             }
         }
+        .sheetFrame()
     }
 }
 
@@ -354,6 +356,7 @@ struct DocumentSelectSheet: View {
                     }
                 }
         }
+        .sheetFrame()
     }
 
     private func reply(_ selected: String) {

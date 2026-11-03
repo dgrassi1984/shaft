@@ -2,8 +2,8 @@ import SHAFTKit
 import SwiftUI
 
 // One view per item kind of the contract (§4.4), each with what the HTML feed draws for it (§14). A message with text
-// has Copy, Reply (its whole Markdown source) and Select text in its long-press menu, and an answer or a message the
-// instance sent has its thumbs there too.
+// has Copy, Reply (its whole Markdown source) and Select text in its long-press menu (on the Mac: its right-click menu,
+// with ↩ Reply on a selection made in place), and an answer or a message the instance sent has its thumbs there too.
 
 struct FeedItemView: View {
     let item: FeedItem
@@ -34,28 +34,34 @@ struct MessageMenu: ViewModifier {
     @Environment(ChatScreenModel.self) private var screen
 
     func body(content: Content) -> some View {
-        content.contextMenu {
-            if !source.isEmpty {
-                Button { Clipboard.copy(source) } label: { Label("Copy", systemImage: "doc.on.doc") }
-                if !screen.archived {
-                    Button { screen.reply(with: source) } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") }
+        content
+            // The Mac's text view draws its own right-click menu from this (it selects in place: no Select text).
+            .environment(\.messageMenu, MessageMenuContext(source: source, rating: rating, k: k, file: file,
+                                                           rateable: rateable))
+            .contextMenu {
+                if !source.isEmpty {
+                    Button { Clipboard.copy(source) } label: { Label("Copy", systemImage: "doc.on.doc") }
+                    if !screen.archived {
+                        Button { screen.reply(with: source) } label: { Label("Reply", systemImage: "arrowshape.turn.up.left") }
+                    }
+                    #if os(iOS)
+                    Button { screen.select(RenderedText.plain(source)) } label: {
+                        Label("Select text", systemImage: "selection.pin.in.out")
+                    }
+                    #endif
                 }
-                Button { screen.select(RenderedText.plain(source)) } label: {
-                    Label("Select text", systemImage: "selection.pin.in.out")
+                if rateable {
+                    Divider()
+                    Button { screen.thumb("up", k: k, file: file, current: rating) } label: {
+                        Label(rating?.thumb == "up" ? "Remove thumbs up" : "Thumbs up",
+                              systemImage: rating?.thumb == "up" ? "hand.thumbsup.fill" : "hand.thumbsup")
+                    }
+                    Button { screen.thumb("down", k: k, file: file, current: rating) } label: {
+                        Label(rating?.thumb == "down" ? "Remove thumbs down" : "Thumbs down",
+                              systemImage: rating?.thumb == "down" ? "hand.thumbsdown.fill" : "hand.thumbsdown")
+                    }
                 }
             }
-            if rateable {
-                Divider()
-                Button { screen.thumb("up", k: k, file: file, current: rating) } label: {
-                    Label(rating?.thumb == "up" ? "Remove thumbs up" : "Thumbs up",
-                          systemImage: rating?.thumb == "up" ? "hand.thumbsup.fill" : "hand.thumbsup")
-                }
-                Button { screen.thumb("down", k: k, file: file, current: rating) } label: {
-                    Label(rating?.thumb == "down" ? "Remove thumbs down" : "Thumbs down",
-                          systemImage: rating?.thumb == "down" ? "hand.thumbsdown.fill" : "hand.thumbsdown")
-                }
-            }
-        }
     }
 }
 
@@ -75,7 +81,7 @@ struct UserItemView: View {
     var body: some View {
         VStack(alignment: .trailing, spacing: 4) {
             VStack(alignment: .leading, spacing: 8) {
-                if !turn.text.isEmpty { OperatorTextView(text: turn.text) }
+                if !turn.text.isEmpty { MessageOperatorText(text: turn.text) }
                 AttachmentsView(attachments: turn.attachments)
                 ChipRow(edits: turn.edits, deleted: turn.deleted, comments: turn.comments, feedback: turn.feedback)
             }
@@ -154,7 +160,7 @@ struct AssistantItemView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if !answer.content.isEmpty {
-                MarkdownText(source: answer.content)
+                MessageMarkdown(source: answer.content)
                     .messageMenu(answer.content, rating: answer.rating, k: answer.k, rateable: true)
             } else if answer.failure == nil {
                 Text("(no answer)").foregroundStyle(.secondary).italic()
@@ -398,7 +404,7 @@ struct SentItemView: View {
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(message.kind == "question" && !message.read ? Color.accentColor : Color.secondary)
             if !message.text.isEmpty {
-                MarkdownText(source: message.text)
+                MessageMarkdown(source: message.text)
                     .messageMenu(message.text, rating: message.rating, file: message.file, rateable: true)
             }
             AttachmentsView(attachments: message.attachments)
@@ -418,7 +424,7 @@ struct LaterItemView: View {
     var body: some View {
         VStack(alignment: .trailing, spacing: 4) {
             VStack(alignment: .leading, spacing: 8) {
-                if !message.text.isEmpty { OperatorTextView(text: message.text) }
+                if !message.text.isEmpty { MessageOperatorText(text: message.text) }
                 AttachmentsView(attachments: message.attachments)
                 ChipRow(comments: message.comments)
             }

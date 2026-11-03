@@ -35,7 +35,8 @@ struct ComposerView: View {
                         ForEach(Array(chat.draft.quotes.enumerated()), id: \.offset) { index, _ in
                             // A binding that tolerates the card being gone: a send clears the draft while the
                             // cards are still being drawn (an index binding crashed there).
-                            QuoteCard(quote: quoteBinding(index), index: index, focused: $focusedAnswer) {
+                            QuoteCard(quote: quoteBinding(index), index: index, focused: $focusedAnswer,
+                                      onKey: { key in send(key == .send ? .now : .queue) }) {
                                 chat.removeQuote(at: index)
                             }
                         }
@@ -96,6 +97,11 @@ struct ComposerView: View {
                 for url in urls { chat.attach(fileAt: url) }
             }
         }
+        .onChange(of: screen.sendRequest) { _, mode in
+            guard let mode else { return }
+            screen.sendRequest = nil
+            send(mode)
+        }
         .onChange(of: screen.focusQuoteRequest) { _, index in
             guard let index else { return }
             focusedAnswer = index
@@ -116,6 +122,7 @@ struct ComposerView: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 44, height: 44)
         }
+        .iconMenu()
         .accessibilityLabel("Attach files")
     }
 
@@ -131,6 +138,7 @@ struct ComposerView: View {
         } primaryAction: {
             send(.now)
         }
+        .iconMenu()
         .disabled(chat.draft.isEmpty || sending)
         .accessibilityLabel(replying ? "Send now, during its reply" : "Send")
         .accessibilityHint("Touch and hold for Queue after reply and Next cycle")
@@ -145,6 +153,7 @@ struct ComposerView: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 30, height: 44)
         }
+        .iconMenu()
         .disabled(chat.draft.isEmpty || sending)
         .accessibilityLabel("More ways to send")
     }
@@ -183,6 +192,8 @@ struct QuoteCard: View {
     @Binding var quote: Quote
     let index: Int
     var focused: FocusState<Int?>.Binding
+    /// Return in the answer (a computer's keyboard): sends, as in the main field.
+    var onKey: (ComposerKey) -> Void = { _ in }
     var remove: () -> Void
     @State private var expanded = false
 
@@ -219,6 +230,20 @@ struct QuoteCard: View {
             TextField("Your answer to this", text: $quote.answer, axis: .vertical)
                 .lineLimit(1...6)
                 .focused(focused, equals: index)
+                #if os(macOS)
+                // The main field's keys (web-and-api.md): Return sends, Shift- or Option-Return is a new line,
+                // Cmd-Return queues after the reply.
+                .onKeyPress(.return, phases: .down) { press in
+                    if press.modifiers.contains(.command) {
+                        onKey(.queue)
+                    } else if press.modifiers.contains(.shift) || press.modifiers.contains(.option) {
+                        quote.answer += "\n"
+                    } else {
+                        onKey(.send)
+                    }
+                    return .handled
+                }
+                #endif
                 .padding(8)
                 .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
                 .accessibilityLabel("Answer to quote \(index + 1)")
