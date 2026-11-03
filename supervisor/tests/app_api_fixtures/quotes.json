@@ -1,0 +1,64 @@
+{
+  "instance": "wren",
+  "partial": false,
+  "version": "bc78f129fdc27553",
+  "live": "",
+  "reply": null,
+  "chat": {
+    "id": "web-3f9a1c0d7e2b4a65",
+    "state": "idle",
+    "created": "2026-11-03T13:58:40+01:00",
+    "ended": null
+  },
+  "archived": false,
+  "earlier": 0,
+  "items": [
+    {
+      "key": "s20261103-140230-118204-from-wren.md",
+      "type": "sent",
+      "file": "20261103-140230-118204-from-wren.md",
+      "ts": "2026-11-03T14:02:30+01:00",
+      "kind": "question",
+      "read": false,
+      "text": "Should the nightly report keep the per-account lines?",
+      "attachments": [],
+      "rating": null
+    },
+    {
+      "key": "b20261103-140301-552019-from-operator.md",
+      "type": "later",
+      "file": "20261103-140301-552019-from-operator.md",
+      "ts": "2026-11-03T14:03:01+01:00",
+      "text": "Look at the March reconciliation when you have time.",
+      "mid": "5e2d9c1b-7a3f-4e60-8b2d-1c9f0a7e3d54",
+      "read": false,
+      "attachments": [],
+      "comments": []
+    },
+    {
+      "key": "u0",
+      "type": "user",
+      "k": 0,
+      "ts": "2026-11-03T14:10:00+01:00",
+      "text": "Thanks.\n\n> Should the nightly report keep the per-account lines?\n\nYes.\n\n> (from notes/docs/ledger.md)\n> Net daily totals are rounded once,\n> at the end.\n\nPer account.",
+      "mid": "c1a2b3c4-0000-4000-8000-000000000001",
+      "interjected": false,
+      "attachments": [],
+      "edits": [],
+      "deleted": [],
+      "comments": [],
+      "feedback": []
+    }
+  ],
+  "queued": [],
+  "pending_feedback": [],
+  "pending_edits": [],
+  "mids": [
+    "c1a2b3c4-0000-4000-8000-000000000001",
+    "5e2d9c1b-7a3f-4e60-8b2d-1c9f0a7e3d54"
+  ],
+  "last": "2026-11-03T14:02:30+01:00",
+  "can_stop": false,
+  "can_end": true,
+  "can_clear": true
+}

@@ -1,0 +1,992 @@
+"""The native apps' JSON API, /app/v1 (docs/app-api.md, PLAN-native-apps M1): who may use it (the tailnet login, the
+host, a paired device's bearer — never the cookie), the feed the HTML draws (same items, same keys), the long-poll,
+sending by `mid` once, unread marks and the badge, and every route. It also writes the JSON fixtures the Swift side
+decodes (supervisor/tests/app_api_fixtures/, SHAFT_UPDATE_FIXTURES=1 rewrites them)."""
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import socket
+import sys
+import tempfile
+import threading
+import time
+import unittest
+import urllib.parse
+from http.server import ThreadingHTTPServer
+from pathlib import Path
+from unittest import mock
+
+import supervisor
+from supervisor import app_api, autonomy, core, docs, feedback, messages, web, web_chat, web_seen, webpush
+from supervisor.tests.test_web import HOST, ME, WebTest, snap
+
+FIXTURES = Path(__file__).resolve().parent / "app_api_fixtures"
+CID = "web-3f9a1c0d7e2b4a65"
+PNG = b"\x89PNG\r\n\x1a\n" + b"\0" * 64
+NEXT = "for wren's next cycle, which this starts now"
+
+
+class StubApns:
+    """supervisor/apns.py as the APNs lane builds it (PLAN-native-apps M2), for this lane's tests."""
+
+    def __init__(self):
+        self.problem, self.tokens = None, {}
+
+    def configured(self):
+        return self.problem
+
+    def register(self, device, token, env, topic, platform):
+        if not re.fullmatch(r"[0-9a-f]{16,200}", token) or env not in ("sandbox", "production"):
+            raise ValueError(f"not an APNs token or env: {token!r} {env!r}")
+        self.tokens[device] = {"token": token, "env": env, "topic": topic, "platform": platform}
+
+    def unregister(self, device):
+        return self.tokens.pop(device, None) is not None
+
+    def status(self, device):
+        t = self.tokens.get(device)
+        return {"on": bool(t), "env": t["env"] if t else None, "reason": "" if t else "no APNs token from this device"}
+
+    def devices(self):
+        return dict(self.tokens)
+
+
+def turn(role: str, ts: str, content: str = "", **kw) -> dict:
+    return {"role": role, "ts": ts, "content": content, **kw}
+
+
+class AppTest(WebTest):
+    """A temporary SUP_DIR and instances folder (never the real ones), one instance, wren, and an app paired through
+    the API itself."""
+
+    def setUp(self):
+        super().setUp()
+        self.inst = Path(tempfile.mkdtemp(prefix="shaft-app-inst-")).resolve()
+        self.addCleanup(shutil.rmtree, self.inst, True)
+        for d in ("shaft", ".git", "notes/docs", "inbox"):
+            (self.inst / "wren" / d).mkdir(parents=True)
+        self.apns = StubApns()
+        self.ran = []
+
+        def run_now(args, timeout=60, who="top"):        # the docs CLI verb, in this process (with this test's folders)
+            self.ran.append(args)
+            name, action, path = args[1:4]
+            out = []
+            with mock.patch("builtins.print", side_effect=lambda *a, **k: out.append(" ".join(map(str, a)))):
+                code = docs.command(name, action, path, args[5] if action == "set" else None, args[-1])
+            return code == 0, out[-1] if out else ""
+        for p in (mock.patch.object(web, "_names", return_value=["wren"]),
+                  mock.patch.object(web, "_next_cycle", return_value=NEXT),
+                  mock.patch.object(web_chat, "SUP_DIR", self.sup), mock.patch.object(core, "SUP_DIR", self.sup),
+                  mock.patch.object(core, "INSTANCES", self.inst),
+                  mock.patch.object(messages, "SUP_DIR", self.sup), mock.patch.object(messages, "INSTANCES", self.inst),
+                  mock.patch.object(messages, "OPERATOR_INBOX", self.sup / "operator-inbox"),
+                  mock.patch.object(messages, "log", lambda *_: None),
+                  mock.patch.object(feedback, "FILE", self.sup / "feedback.jsonl"),
+                  mock.patch.object(docs, "instance_root", lambda n: self.inst / n), mock.patch.object(docs, "log"),
+                  mock.patch("supervisor.actions.run_now", side_effect=run_now),
+                  mock.patch.object(web_chat, "log"), mock.patch.object(app_api, "log"),
+                  mock.patch.object(web_chat, "_start", side_effect=lambda cid: None),      # no relay: no API
+                  mock.patch.object(web_chat, "_sync_copies"), mock.patch.object(web_chat, "_docs_now", return_value={}),
+                  mock.patch.object(autonomy, "next_cycle", lambda n: NEXT),
+                  mock.patch.object(autonomy, "event_wake", lambda *a, **k: None),
+                  mock.patch.object(webpush, "notify"),
+                  mock.patch.dict(sys.modules, {"supervisor.apns": self.apns}),
+                  mock.patch.object(supervisor, "apns", self.apns, create=True)):
+            p.start()
+            self.addCleanup(p.stop)
+        self.addCleanup(web_chat._watched.clear)
+        self.addCleanup(web_chat._away.clear)
+        self.device, self.secret = self.pair_app()
+
+    # -- requests -----------------------------------------------------------------------------------------------------
+    def pair_app(self, name="iphone-app", platform="ios") -> tuple[str, str]:
+        link = web.new_pairing(name)
+        r = self.api("/app/v1/pair", "POST", {"link": link, "platform": platform}, bearer=False)
+        self.assertEqual(r.status, 200, r.body)
+        got = json.loads(r.body)
+        return got["device"], got["secret"]
+
+    def api(self, path, method="GET", data=None, bearer=True, body=None, headers=None, **kw):
+        h = dict(headers or {})
+        if bearer is True:
+            h["authorization"] = f"Bearer {self.device}.{self.secret}"
+        elif bearer:
+            h["authorization"] = bearer
+        if data is not None:
+            body, h["content-type"] = json.dumps(data).encode(), "application/json"
+        return self.req(path, method, body=body or b"", headers=h, **kw)
+
+    def get(self, path, **kw) -> dict:
+        r = self.api(path, **kw)
+        self.assertEqual(r.status, 200, r.body)
+        self.assertEqual(r.headers["Content-Type"], "application/json; charset=utf-8")
+        return json.loads(r.body)
+
+    def send(self, mode="now", text="hi", mid="m-1", files=(), **fields):
+        parts = {"text": text, "mid": mid, "mode": mode, **fields}
+        body = b"".join(f'--B\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode()
+                        for k, v in parts.items() if v is not None)
+        for name, data in files:
+            body += (f'--B\r\nContent-Disposition: form-data; name="files"; filename="{name}"\r\n'
+                     f'Content-Type: application/octet-stream\r\n\r\n').encode() + data + b"\r\n"
+        return self.api("/app/v1/chat/wren/send", "POST", body=body + b"--B--\r\n",
+                        headers={"content-type": "multipart/form-data; boundary=B"})
+
+    def error(self, r, status: int, code: str) -> dict:
+        self.assertEqual(r.status, status, r.body)
+        err = json.loads(r.body)["error"]
+        self.assertEqual(err["code"], code, err)
+        self.assertTrue(err["message"])
+        return err
+
+    # -- data -----------------------------------------------------------------------------------------------------------
+    def chat(self, turns: list[dict], state: str = "idle", cid: str = CID, created="2026-11-03T13:58:40", **extra) -> dict:
+        chat = {"id": cid, "instance": "wren", "login": ME, "created": created, "state": state, "turns": turns,
+                "reply": None, **extra}
+        web_chat.save(chat)
+        return chat
+
+    def message(self, ts: str, file: str, text: str, frm="wren", to="operator", read=True, **extra) -> dict:
+        row = {"ts": ts, "from": frm, "to": to, "kind": extra.pop("kind", "message"), "file": file, "text": text, **extra}
+        with (self.sup / "messages.jsonl").open("a") as f:
+            f.write(json.dumps(row) + "\n")
+        if not read:
+            box = self.sup / "operator-inbox" if to == "operator" else self.inst / to / "inbox"
+            box.mkdir(parents=True, exist_ok=True)
+            (box / file).write_text(text)
+        return row
+
+    def rating(self, fid: str, target: dict, thumb: str, reply_ts: str, reason="", sent=None) -> None:
+        rows = [{"ts": "2026-11-03T14:02:00.000000", "event": "rated", "id": fid, "instance": "wren", "login": ME,
+                 "target": target, "thumb": thumb, "reason": reason, "reply_ts": reply_ts, "reply_sha": "0" * 64}]
+        if sent:
+            rows.append({"ts": sent, "event": "sent", "id": fid, "via": "inbox", "message": "f.md"})
+        with feedback.FILE.open("a") as f:
+            f.writelines(json.dumps(r) + "\n" for r in rows)
+
+    def paired_since(self, when: str) -> None:
+        ds = web.devices()
+        ds[self.device]["created"] = when
+        web._write("devices.json", ds)
+
+
+# -- who may use it (§1.2) -----------------------------------------------------------------------------------------------
+class AuthTest(AppTest):
+    def test_no_bearer_is_refused_unpaired(self):
+        self.error(self.api("/app/v1/instances", bearer=False), 401, "unpaired")
+
+    def test_a_wrong_secret_is_refused(self):
+        self.error(self.api("/app/v1/instances", bearer=f"Bearer {self.device}.{'x' * 43}"), 401, "unpaired")
+        self.error(self.api("/app/v1/instances", bearer=f"Bearer {self.device}"), 401, "unpaired")
+        self.error(self.api("/app/v1/instances", bearer=f"Basic {self.device}.{self.secret}"), 401, "unpaired")
+
+    def test_an_unpaired_device_is_refused_at_once(self):
+        self.assertEqual(web.unpair(self.device), 1)
+        self.error(self.api("/app/v1/instances"), 401, "unpaired")
+
+    def test_a_login_not_in_the_list_or_none_is_refused_first(self):
+        self.error(self.api("/app/v1/instances", login="someone@example.com"), 403, "login")
+        self.error(self.api("/app/v1/instances", login=None), 403, "login")
+        self.error(self.api("/app/v1/pair", "POST", {"token": "x", "platform": "ios"}, bearer=False, login=None),
+                   403, "login")
+
+    def test_another_host_is_refused(self):
+        self.error(self.api("/app/v1/instances", host="evil.example.com"), 403, "host")
+
+    def test_the_api_reads_no_cookie_and_the_web_routes_take_no_bearer(self):
+        cookie = self.paired()
+        self.error(self.api("/app/v1/instances", bearer=False, cookie=cookie), 401, "unpaired")
+        r = self.req("/overview", headers={"authorization": f"Bearer {self.device}.{self.secret}"})
+        self.assertEqual(r.status, 403)
+        self.assertEqual(r.headers.get("X-Shaft-Pair"), "required")
+
+    def test_last_seen_is_refreshed_as_the_cookie_refreshes_it(self):
+        ds = web.devices()
+        ds[self.device]["last_seen"] = "2026-01-01T00:00:00"
+        web._write("devices.json", ds)
+        self.get("/app/v1/instances")
+        self.assertGreater(web.devices()[self.device]["last_seen"], "2026-01-01T00:00:00")
+
+    def test_answers_carry_the_security_headers_and_no_store(self):
+        r = self.api("/app/v1/instances")
+        self.assertIn("Content-Security-Policy", r.headers)
+        self.assertEqual(r.headers["Cache-Control"], "no-store")
+        self.assertNotIn("Access-Control-Allow-Origin", r.headers)
+
+    def test_unknown_routes_methods_and_instances(self):
+        self.error(self.api("/app/v1/nothing"), 404, "not_found")
+        self.error(self.api("/app/v1/instances", "POST", {}), 405, "method")
+        self.error(self.api("/app/v1/chat/ghost"), 404, "not_found")
+        self.error(self.api("/app/v1/pair"), 405, "method")
+
+    def test_anything_that_breaks_is_said_never_an_empty_body(self):
+        with mock.patch.object(web_chat, "feed", side_effect=RuntimeError("boom")):
+            err = self.error(self.api("/app/v1/chat/wren"), 500, "internal")
+        self.assertEqual(err["message"], "/app/v1/chat/wren failed: RuntimeError: boom")
+
+
+class PairingTest(AppTest):
+    def test_pairing_spends_the_link_once_and_records_the_platform(self):
+        rec = web.devices()[self.device]
+        self.assertEqual((rec["name"], rec["platform"], rec["login"]), ("iphone-app", "ios", ME))
+        self.assertNotIn(self.secret, (self.sup / "web" / "devices.json").read_text())
+        link = web.new_pairing("mac-app")
+        token = link.split("t=")[1]
+        r = self.api("/app/v1/pair", "POST", {"token": token, "platform": "macos"}, bearer=False)
+        self.assertEqual(json.loads(r.body)["name"], "mac-app")
+        self.error(self.api("/app/v1/pair", "POST", {"link": link, "platform": "macos"}, bearer=False), 403,
+                   "pair_expired")
+
+    def test_an_expired_link_and_bad_requests(self):
+        link = web.new_pairing("phone")
+        self.error(self.api("/app/v1/pair", "POST", {"link": link, "platform": "android"}, bearer=False), 400,
+                   "bad_request")
+        self.error(self.api("/app/v1/pair", "POST", {"platform": "ios"}, bearer=False), 400, "bad_request")
+        self.error(self.api("/app/v1/pair", "POST", body=b"{nope", bearer=False), 400, "bad_request")
+        with mock.patch.object(web.time, "time", return_value=web.time.time() + web.PAIR_MINUTES * 60 + 1):
+            self.error(self.api("/app/v1/pair", "POST", {"link": link, "platform": "ios"}, bearer=False), 403,
+                       "pair_expired")
+
+    def test_unpair_from_the_app_drops_its_token_marks_and_bearer(self):
+        self.apns.register(self.device, "ab" * 16, "sandbox", "io.github.dgrassi1984.shaft", "ios")
+        web._write(web_seen.STORE, {self.device: {"wren": {"version": "x", "last": None, "at": "2026-11-03T14:00:00"}}})
+        self.assertEqual(self.get("/app/v1/unpair", method="POST", data={})["said"], "This device is unpaired.")
+        self.assertNotIn(self.device, self.apns.tokens)
+        self.assertNotIn(self.device, web._read(web_seen.STORE))
+        self.error(self.api("/app/v1/instances"), 401, "unpaired")
+
+    def test_web_status_lists_the_apps_with_their_push(self):
+        import contextlib
+        import io
+        self.apns.register(self.device, "ab" * 16, "sandbox", "io.github.dgrassi1984.shaft", "ios")
+        self.apns.problem = None
+        out = io.StringIO()
+        with mock.patch.object(autonomy, "service"), contextlib.redirect_stdout(out):
+            web.command("status")
+        self.assertIn("native apps: 1  ·  native push: ready", out.getvalue())
+        self.assertRegex(out.getvalue(), rf"{self.device}  iphone-app \(ios\).*push on \(sandbox\)")
+        self.apns.problem = "SHAFT_APNS_KEY_ID is not set"
+        out = io.StringIO()
+        with mock.patch.object(autonomy, "service"), contextlib.redirect_stdout(out):
+            web.command("status")
+        self.assertIn("native push: off: SHAFT_APNS_KEY_ID is not set", out.getvalue())
+
+
+# -- the feed (§4) and its parity with the HTML (§14) --------------------------------------------------------------------
+def html_keys(html: str) -> list[str]:
+    """The data-k of every item of an HTML feed, in order: not the day separators nor the feed's own furniture."""
+    return [k for k in re.findall(r'data-k="([^"]*)"', html)
+            if not k.startswith("day-") and k not in ("more", "empty", "live", "act", "wait", "ans", "acts", "pend")]
+
+
+def json_keys(feed: dict) -> list[str]:
+    return [i["key"] for i in feed["items"]] + [q["key"] for q in feed["queued"]] + \
+           [p["key"] for p in feed["pending_feedback"]]
+
+
+class FeedTest(AppTest):
+    def rich_chat(self, state="idle", **extra) -> dict:
+        turns = [
+            turn("user", "2026-11-03T13:58:40", "hi", shown="> a quote\n\nYes, look:", mid="m-0",
+                 attachments=[{"name": "ci-run.png", "path": "instances/wren/a/ci-run.png", "bytes": 72}]),
+            turn("assistant", "2026-11-03T14:01:12", "Fixed in **ledger.md**.", activity=["read_file x"],
+                 docs=[{"path": "ledger.md", "created": False}], answered=[{"id": "c3", "doc": "ledger.md"}]),
+            turn("user", "2026-11-03T14:04:00", "again", shown="again", retried=True),
+            turn("assistant", "2026-11-03T14:04:30", "", note="error: CloudError: OpenRouter HTTP 502",
+                 note_kind="model", note_retry=True, retry_text="again", retried=True),
+            turn("user", "2026-11-03T14:05:00", "again", shown="again"),
+            turn("user", "2026-11-03T14:05:50", "x", shown="Rerun it.", mid="m-1", edits=["ledger.md"],
+                 comments=[{"id": "c4", "doc": "ledger.md"}], interjected=True),
+            turn("assistant", "2026-11-03T14:06:40", "", note="error: ConnectionResetError: gone",
+                 note_kind="connection", note_retry=False, retry_text="Rerun it."),
+        ]
+        self.message("2026-11-03T14:02:30", "20261103-140230-118204-from-wren.md", "Keep the lines?", kind="question",
+                     read=False)
+        self.message("2026-11-03T14:03:01", "20261103-140301-552019-from-operator.md", "March, later.", frm="operator",
+                     to="wren", via=messages.BACKGROUND, mid="m-b", read=False)
+        return self.chat(turns, state, **extra)
+
+    def html(self, query="") -> str:
+        cookie = self.paired()
+        r = self.req(f"/fragment/chat/wren{query}", cookie=cookie)
+        self.assertEqual(r.status, 200, r.body)
+        return r.body.decode()
+
+    def test_the_json_and_the_html_show_the_same_items_with_the_same_keys(self):
+        self.rich_chat(pending_edits={"ledger.md": {"old": "a", "new": "b"}})
+        feed = self.get("/app/v1/chat/wren")
+        html = self.html()
+        self.assertEqual(html_keys(html), json_keys(feed))
+        self.assertEqual([i["type"] for i in feed["items"]],
+                         ["user", "assistant", "sent", "later", "retried", "user", "user", "assistant"])
+        self.assertEqual(re.findall(r'data-k="u\d+" data-raw="[^"]*" data-mid="([^"]+)"', html),
+                         [i["mid"] for i in feed["items"] if i["type"] == "user" and i["mid"]])
+        self.assertIn('data-k="acts"', html)
+        self.assertTrue(feed["can_end"])
+        self.assertIn('data-k="pend"', html)
+        self.assertEqual(feed["pending_edits"], ["ledger.md"])
+
+    def test_parity_while_replying_with_queued_messages_and_pending_feedback(self):
+        self.rating("f-" + "a" * 24, {"kind": "chat", "chat": CID, "k": 1}, "down", "2026-11-03T14:01:12")
+        self.rich_chat("replying", reply={"started": "2026-11-03T14:07:02", "activity": ["one"], "answer": "so"},
+                       queued=[{"role": "user", "mid": "q-1", "shown": "and then", "content": "and then",
+                                "attachments": [{"name": "x.png", "path": "p", "bytes": 3}]}],
+                       pending_feedback=[{"id": "f-" + "a" * 24, "note": "n"}])
+        feed = self.get("/app/v1/chat/wren")
+        html = self.html()
+        self.assertEqual(html_keys(html), json_keys(feed))
+        self.assertEqual(json_keys(feed)[-2:], ["queue-q-1", "queue-feedback-f-" + "a" * 24])
+        self.assertIn('data-k="live"', html)
+        self.assertTrue(feed["can_stop"])
+        self.assertEqual(feed["reply"]["activity"], ["one"])
+        self.assertEqual(feed["chat"]["state"], "replying")
+
+    def test_parity_of_an_ended_chat_read_as_a_past_one(self):
+        self.rich_chat("ended", ended="2026-11-03T14:10:00")
+        self.chat([turn("user", "2026-11-03T15:00:00", "new", shown="new")], cid="web-0000000000000001",
+                  created="2026-11-03T15:00:00")
+        feed = self.get(f"/app/v1/chat/wren/{CID}")
+        self.assertTrue(feed["archived"])
+        self.assertEqual(html_keys(self.html(f"?id={CID}")), json_keys(feed))
+        self.assertEqual(feed["items"][-1], {"key": "ended", "type": "ended", "ts": app_api.stamp("2026-11-03T14:10:00")})
+        self.assertEqual((feed["can_end"], feed["can_clear"], feed["can_stop"]), (False, False, False))
+        retry = [i for i in feed["items"] if i["type"] == "assistant"][-1]["failure"]["retry"]
+        self.assertIsNone(retry)                                  # an archived chat sends nothing again
+        self.error(self.api("/app/v1/chat/wren/web-ffffffffffffffff"), 404, "not_found")
+
+    def test_the_window_matches_the_html_and_all_shows_every_turn(self):
+        turns = [turn("user" if k % 2 == 0 else "assistant", f"2026-11-03T{10 + k // 60:02d}:{k % 60:02d}:00", f"t{k}",
+                      shown=f"t{k}") for k in range(90)]
+        self.chat(turns)
+        feed = self.get("/app/v1/chat/wren")
+        self.assertEqual((feed["earlier"], feed["items"][0]["key"]), (10, "u10"))
+        html = self.html()
+        self.assertIn("Show the 10 earlier messages", html)
+        self.assertEqual(html_keys(html), json_keys(feed))
+        whole = self.get("/app/v1/chat/wren?all=1")
+        self.assertEqual((whole["earlier"], len(whole["items"])), (0, 90))
+        self.assertEqual(html_keys(self.html("?all=1")), json_keys(whole))
+        self.assertEqual(whole["version"], feed["version"])      # the window changes neither revision
+
+    def test_no_chat_shows_what_the_instance_sent_since(self):
+        self.message("2026-11-03T14:02:30", "20261103-140230-1-from-wren.md", "Unread", read=False)
+        feed = self.get("/app/v1/chat/wren")
+        self.assertIsNone(feed["chat"])
+        self.assertEqual([i["type"] for i in feed["items"]], ["sent"])
+        self.assertEqual(html_keys(self.html()), json_keys(feed))
+
+    def test_times_carry_the_offset_in_effect_then(self):
+        with mock.patch.dict(os.environ, {"TZ": "Europe/Rome"}):
+            time.tzset()
+            try:
+                self.assertEqual(app_api.stamp("2026-11-03T14:02:11"), "2026-11-03T14:02:11+01:00")
+                self.assertEqual(app_api.stamp("2026-07-03T14:02:11.123456"), "2026-07-03T14:02:11+02:00")
+                self.assertIsNone(app_api.stamp(""))
+                self.assertIsNone(app_api.stamp(None))
+                self.assertEqual(app_api.stamp(0.0), "1970-01-01T01:00:00+01:00")
+            finally:
+                time.tzset()
+
+    def test_files_are_served_by_their_url_and_unknown_ones_are_not_found(self):
+        f = self.inst / "wren" / "a" / "ci-run.png"
+        f.parent.mkdir(parents=True)
+        f.write_bytes(PNG)
+        self.rich_chat()
+        att = self.get("/app/v1/chat/wren")["items"][0]["attachments"][0]
+        self.assertEqual(att, {"name": "ci-run.png", "bytes": 72, "image": True, "text": False,
+                               "url": f"/app/v1/file/chat/{CID}/0/0"})
+        r = self.api(att["url"])
+        self.assertEqual((r.status, r.body, r.headers["Content-Type"]), (200, PNG, "image/png"))
+        self.error(self.api(f"/app/v1/file/chat/{CID}/0/5"), 404, "not_found")
+        self.error(self.api("/app/v1/file/message/nothing.md/0"), 404, "not_found")
+        (self.inst / "wren" / "b.csv").write_text("a,b\n")
+        self.message("2026-11-03T14:02:30", "20261103-140230-1-from-wren.md", "csv", read=True,
+                     attachments=[{"name": "b.csv", "path": "instances/wren/b.csv", "bytes": 4}])
+        sent = next(i for i in self.get("/app/v1/chat/wren")["items"] if i.get("file") == "20261103-140230-1-from-wren.md")
+        self.assertEqual(sent["attachments"][0]["url"], "/app/v1/file/message/20261103-140230-1-from-wren.md/0")
+        r = self.api(sent["attachments"][0]["url"])
+        self.assertEqual((r.status, r.body), (200, b"a,b\n"))
+
+    def test_earlier_chats_newest_first(self):
+        self.chat([turn("user", "2026-11-02T21:40:03", "x", shown="What did October look like?\nmore")],
+                  state="ended", cid="web-77ab02c4e9d15f30", created="2026-11-02T21:40:03", ended="2026-11-02T22:12:44")
+        self.chat([turn("user", "2026-11-03T13:58:40", "now", shown="now")])
+        got = self.get("/app/v1/chats/wren")["chats"]
+        self.assertEqual(got, [{"id": "web-77ab02c4e9d15f30", "created": got[0]["created"], "ended": got[0]["ended"],
+                                "excerpt": "What did October look like?", "messages": 1}])
+
+
+class LongPollTest(AppTest):
+    def feed(self, **q) -> tuple[int, dict | None, float]:
+        start = time.monotonic()
+        r = self.api("/app/v1/chat/wren?" + urllib.parse.urlencode(q))
+        return r.status, (json.loads(r.body) if r.body else None), time.monotonic() - start
+
+    def test_nothing_new_answers_304_after_wait(self):
+        self.chat([turn("user", "2026-11-03T13:58:40", "hi", shown="hi")])
+        first = self.get("/app/v1/chat/wren")
+        status, body, took = self.feed(since=first["version"], live=first["live"], wait=1)
+        self.assertEqual((status, body), (304, None))
+        self.assertGreaterEqual(took, 0.9)
+        self.assertLess(took, 3)
+
+    def test_a_new_turn_answers_at_once_with_the_whole_feed(self):
+        chat = self.chat([turn("user", "2026-11-03T13:58:40", "hi", shown="hi")])
+        first = self.get("/app/v1/chat/wren")
+
+        def later():
+            time.sleep(0.3)
+            chat["turns"].append(turn("assistant", "2026-11-03T13:59:00", "hello"))
+            web_chat.save(chat)
+        threading.Thread(target=later, daemon=True).start()
+        status, body, took = self.feed(since=first["version"], live=first["live"], wait=10)
+        self.assertEqual(status, 200)
+        self.assertFalse(body["partial"])
+        self.assertNotEqual(body["version"], first["version"])
+        self.assertEqual(body["items"][-1]["content"], "hello")
+        self.assertLess(took, 3)
+
+    def test_only_the_reply_moving_answers_partial(self):
+        chat = self.chat([turn("user", "2026-11-03T13:58:40", "hi", shown="hi")], state="replying",
+                         reply={"started": "2026-11-03T13:58:41", "activity": ["one"], "answer": ""})
+        first = self.get("/app/v1/chat/wren")
+        self.assertTrue(first["live"])
+
+        def later():
+            time.sleep(0.3)
+            chat["reply"].update(activity=["one", "two"], answer="so far")
+            web_chat.save(chat)
+        threading.Thread(target=later, daemon=True).start()
+        status, body, _ = self.feed(since=first["version"], live=first["live"], wait=10)
+        self.assertEqual(status, 200)
+        self.assertEqual(body, {"instance": "wren", "partial": True, "version": first["version"],
+                                "live": body["live"], "reply": {"started": body["reply"]["started"],
+                                                                "activity": ["one", "two"], "answer": "so far"}})
+        self.assertNotEqual(body["live"], first["live"])
+
+    def test_since_without_live_and_a_wait_out_of_range_are_bad_requests(self):
+        self.error(self.api("/app/v1/chat/wren?since=abc"), 400, "bad_request")
+        self.error(self.api("/app/v1/chat/wren?wait=26"), 400, "bad_request")
+        self.error(self.api("/app/v1/chat/wren?wait=x"), 400, "bad_request")
+
+    def test_a_held_poll_marks_the_device_watching_and_watch_0_does_not(self):
+        self.chat([turn("user", "2026-11-03T13:58:40", "hi", shown="hi")])
+        self.get("/app/v1/chat/wren")
+        self.assertIn(self.device, web_chat.watchers("wren"))
+        self.get("/app/v1/chat/wren?watch=0")
+        self.assertNotIn(self.device, web_chat.watchers("wren"))
+        self.get(f"/app/v1/chat/wren/{CID}")                    # a chat named by id is not the one on screen
+        self.assertNotIn(self.device, web_chat.watchers("wren"))
+        self.get("/app/v1/chat/wren?at=2000")
+        self.assertEqual(self.get("/app/v1/chat/wren/away", method="POST", data={"at": 3000}), {"ok": True})
+        self.assertNotIn(self.device, web_chat.watchers("wren"))
+        self.get("/app/v1/chat/wren?at=2500")                  # sent before it went away: not watching again
+        self.assertNotIn(self.device, web_chat.watchers("wren"))
+
+
+# -- sending (§6) and the chat's actions (§7) ----------------------------------------------------------------------------
+class SendTest(AppTest):
+    def test_the_same_mid_is_sent_once_whatever_the_mode(self):
+        r = self.send(text="hello", mid="m-1")
+        got = json.loads(r.body)
+        self.assertEqual((r.status, got["said"], got["file"]), (200, "sent to wren", None))
+        chat = web_chat.load(got["chat"])
+        for mode in ("now", "queue", "background"):
+            again = json.loads(self.send(mode, text="hello", mid="m-1").body)
+            self.assertIn("already sent to wren", again["said"])
+        self.assertEqual([t["shown"] for t in web_chat.load(chat["id"])["turns"]], ["hello"])
+        self.assertEqual(list((self.inst / "wren" / "inbox").iterdir()), [])
+        self.assertIn("m-1", self.get("/app/v1/chat/wren")["mids"])
+
+    def test_next_cycle_goes_to_its_inbox(self):
+        got = json.loads(self.send("background", text="later please", mid="m-2").body)
+        self.assertEqual((got["said"], got["chat"]), (NEXT, None))
+        self.assertTrue((self.inst / "wren" / "inbox" / got["file"]).is_file())
+        later = [i for i in self.get("/app/v1/chat/wren")["items"] if i["type"] == "later"]
+        self.assertEqual([(i["file"], i["mid"], i["text"]) for i in later], [(got["file"], "m-2", "later please")])
+
+    def test_quotes_become_the_text_as_the_web_composer_writes_it(self):
+        q = app_api.quote_text
+        self.assertEqual(q("Rerun it", []), "Rerun it")
+        self.assertEqual(q(" and also ", [{"quote": " one\r\ntwo  \n", "answer": "", "doc": ""}]),
+                         "> one\n> two\n\nand also")
+        self.assertEqual(q("first", [{"quote": "a\n\nb", "answer": " yes ", "doc": "plan.md"},
+                                     {"quote": "c", "answer": "", "doc": ""}]),
+                         "first\n\n> (from notes/docs/plan.md)\n> a\n>\n> b\n\nyes\n\n> c")
+        self.assertEqual(q("", [{"quote": "only", "answer": "", "doc": ""}]), "> only")
+        r = self.send(text="Rerun it", mid="m-3",
+                      quotes=json.dumps([{"quote": "Keep the lines?", "answer": "Yes", "doc": ""}]))
+        self.assertEqual(r.status, 200, r.body)
+        chat = web_chat.load(json.loads(r.body)["chat"])
+        self.assertEqual(chat["turns"][-1]["shown"], "Rerun it\n\n> Keep the lines?\n\nYes")
+
+    def test_bad_sends_are_refused(self):
+        self.error(self.send(mid=""), 400, "bad_request")
+        self.error(self.send(mid="no spaces"), 400, "bad_request")
+        self.error(self.send(mode="later"), 400, "bad_request")
+        self.error(self.send(quotes="{}"), 400, "bad_request")
+        self.error(self.send(quotes='[{"answer": "x"}]'), 400, "bad_request")
+        self.error(self.send("queue", retry_of="3"), 400, "bad_request")
+        self.error(self.send(text="  ", mid="m-9"), 409, "refused")
+        r = self.api("/app/v1/chat/wren/send", "POST", {"text": "json"})
+        self.error(r, 400, "bad_request")
+
+    def test_retry_of_folds_the_failed_try(self):
+        self.chat([turn("user", "2026-11-03T13:58:40", "ask", shown="ask"),
+                   turn("assistant", "2026-11-03T13:59:00", "", note="error: CloudError: OpenRouter HTTP 502",
+                        note_kind="model", note_retry=True, retry_text="ask")])
+        failure = self.get("/app/v1/chat/wren")["items"][-1]["failure"]
+        self.assertEqual(failure["retry"], {"text": "ask", "retry_of": 1, "confirm": None})
+        r = self.send(text=failure["retry"]["text"], mid="m-4", retry_of=str(failure["retry"]["retry_of"]))
+        self.assertEqual(r.status, 200, r.body)
+        types = [i["type"] for i in self.get("/app/v1/chat/wren")["items"]]
+        self.assertEqual(types, ["retried", "user"])
+
+    def test_the_actions(self):
+        self.chat([turn("user", "2026-11-03T13:58:40", "hi", shown="hi"),
+                   turn("assistant", "2026-11-03T13:59:00", "hello")], state="replying",
+                  reply={"started": "2026-11-03T13:59:01", "activity": [], "answer": ""},
+                  queued=[{"role": "user", "mid": "q-1", "shown": "x", "content": "x", "attachments": []}])
+        self.assertEqual(self.get("/app/v1/chat/wren/unqueue", method="POST", data={"mid": "q-1"})["said"],
+                         "queued message cancelled")
+        self.assertEqual(web_chat.load(CID)["queued"], [])
+        self.error(self.api("/app/v1/chat/wren/stop", "POST", {"cid": CID}), 409, "refused")       # no relay runs
+        self.error(self.api("/app/v1/chat/wren/end", "POST", {"cid": CID}), 409, "refused")        # still replying
+        self.error(self.api("/app/v1/chat/wren/clear", "POST", {"cid": CID}), 409, "refused")
+        self.error(self.api("/app/v1/chat/wren/end", "POST", {"cid": "web-ffffffffffffffff"}), 404, "not_found")
+        self.error(self.api("/app/v1/chat/wren/stop", "POST", {}), 400, "bad_request")
+        self.error(self.api("/app/v1/chat/wren/stop", "POST", body=b"[1]"), 400, "bad_request")
+
+    def test_a_send_too_large_is_refused_in_json_before_it_is_read(self):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), web.Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        heads = {}
+        for path, size in (("/app/v1/chat/wren/send", messages.ATTACH_MAX_TOTAL + 2_000_000),
+                           ("/app/v1/chat/wren/seen", 2_000_000)):
+            with socket.create_connection(server.server_address, timeout=5) as s:
+                s.sendall(f"POST {path} HTTP/1.1\r\nHost: {HOST}\r\nContent-Length: {size}\r\n\r\n".encode())
+                raw = b""
+                while chunk := s.recv(65536):
+                    raw += chunk
+            head, _, body = raw.partition(b"\r\n\r\n")
+            self.assertIn(b" 413 ", head.split(b"\r\n")[0])
+            self.assertIn(b"Content-Type: application/json; charset=utf-8", head)
+            heads[path] = json.loads(body)["error"]
+        self.assertEqual(heads["/app/v1/chat/wren/send"],
+                         {"code": "too_large", "message": "Too large: at most 53 MB can be sent at once."})
+        self.assertEqual(heads["/app/v1/chat/wren/seen"]["message"], "Too large: at most 1 MB can be sent at once.")
+
+
+# -- unread marks and the badge (§12) ------------------------------------------------------------------------------------
+class SeenTest(AppTest):
+    def setUp(self):
+        super().setUp()
+        self.paired_since("2026-11-03T12:00:00")
+        self.c = self.chat([turn("user", "2026-11-03T13:58:40", "hi", shown="hi"),
+                            turn("assistant", "2026-11-03T14:00:00", "hello")])
+
+    def rail(self) -> tuple[bool, int]:
+        got = self.get("/app/v1/instances")
+        return got["instances"][0]["unread"], got["badge"]
+
+    def test_unread_follows_the_instances_own_last_and_seen_clears_it(self):
+        self.assertEqual(self.rail(), (True, 1))
+        self.assertEqual(web_seen.badge(self.device), 1)
+        feed = self.get("/app/v1/chat/wren")
+        self.assertEqual(self.get("/app/v1/chat/wren/seen", method="POST", data={"version": feed["version"]}),
+                         {"unread": False, "badge": 0})
+        self.assertEqual(self.rail(), (False, 0))
+        self.c["turns"].append(turn("user", "2026-11-03T14:05:00", "thanks", shown="thanks"))     # the operator's own
+        web_chat.save(self.c)
+        self.assertEqual(self.rail(), (False, 0))
+        self.message("2026-11-03T14:06:00", "20261103-140600-1-from-wren.md", "One more thing")     # the instance's
+        self.assertEqual(self.rail(), (True, 1))
+
+    def test_a_stale_version_is_refused_with_the_current_one(self):
+        feed = self.get("/app/v1/chat/wren")
+        self.c["turns"].append(turn("assistant", "2026-11-03T14:01:00", "and more"))
+        web_chat.save(self.c)
+        err = self.error(self.api("/app/v1/chat/wren/seen", "POST", {"version": feed["version"]}), 409,
+                         "stale_version")
+        self.assertEqual(err["version"], self.get("/app/v1/chat/wren")["version"])
+        self.assertEqual(self.rail(), (True, 1))
+
+    def test_what_came_before_pairing_is_not_unread(self):
+        self.paired_since("2026-11-03T15:00:00")
+        self.assertEqual(self.rail(), (False, 0))
+
+    def test_the_rail_and_the_feed_take_last_from_one_helper(self):
+        self.message("2026-11-03T14:03:00", "20261103-140300-1-from-wren.md", "a message after the answer")
+        self.message("2026-11-03T14:04:00", "20261103-140400-1-from-operator.md", "mine, for its next cycle",
+                     frm="operator", to="wren", via=messages.BACKGROUND)
+        last = web_chat.summary("wren", messages.history())["last"]
+        self.assertEqual(last, "2026-11-03T14:03:00")
+        self.assertEqual(web_chat.feed("wren")["last"], last)
+        self.assertEqual(self.get("/app/v1/instances")["instances"][0]["last"], app_api.stamp(last))
+
+
+# -- feedback (§9) ---------------------------------------------------------------------------------------------------------
+class FeedbackTest(AppTest):
+    def test_rate_send_and_clear(self):
+        self.chat([turn("user", "2026-11-03T13:58:40", "hi", shown="hi"),
+                   turn("assistant", "2026-11-03T14:00:00", "hello")])
+        got = self.get("/app/v1/feedback/wren", method="POST",
+                       data={"op": "rate", "kind": "chat", "cid": CID, "k": 1, "thumb": "down", "reason": "wrong"})
+        fid = got["id"]
+        rating = self.get("/app/v1/chat/wren")["items"][-1]["rating"]
+        self.assertEqual(rating, {"id": fid, "thumb": "down", "reason": "wrong", "sent": None, "pending": False})
+        got = self.get("/app/v1/feedback/wren", method="POST", data={"op": "send", "id": fid})
+        self.assertEqual(got, {"said": "Feedback goes with your next message.", "id": fid})
+        feed = self.get("/app/v1/chat/wren")
+        self.assertTrue(feed["items"][-1]["rating"]["pending"])
+        self.assertEqual([p["id"] for p in feed["pending_feedback"]], [fid])
+        self.assertEqual(self.get("/app/v1/feedback/wren", method="POST", data={"op": "clear", "id": fid}),
+                         {"said": "Feedback cleared.", "id": None})
+        self.error(self.api("/app/v1/feedback/wren", "POST", {"op": "rate", "kind": "chat", "cid": CID, "k": 0,
+                                                              "thumb": "up"}), 409, "refused")
+        self.error(self.api("/app/v1/feedback/wren", "POST", {"op": "like"}), 400, "bad_request")
+
+
+# -- documents and comments (§10) ----------------------------------------------------------------------------------------
+class DocsTest(AppTest):
+    def doc(self, path: str, text: str, mtime: float = 1793710800.0) -> str:
+        p = self.inst / "wren" / "notes" / "docs" / path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+        os.utime(p, (mtime, mtime))
+        return docs.sha(text.encode())
+
+    def test_list_read_and_download(self):
+        sha = self.doc("ledger.md", "# Ledger\n")
+        self.doc("big.md", "x" * (docs.MAX_BYTES + 1))
+        self.chat([turn("assistant", "2026-11-03T14:01:12", "made", docs=[{"path": "ledger.md", "created": True}])])
+        listing = self.get("/app/v1/docs/wren")
+        self.assertEqual((listing["dir"], listing["max_bytes"]), ("notes/docs", 262144))
+        rows = {d["path"]: d for d in listing["docs"]}
+        self.assertEqual((rows["ledger.md"]["sha"], rows["ledger.md"]["in_chat"], rows["ledger.md"]["too_big"]),
+                         (sha, True, False))
+        self.assertEqual((rows["big.md"]["sha"], rows["big.md"]["too_big"]), ("too-big", True))
+        doc = self.get("/app/v1/docs/wren/doc?path=ledger.md")
+        self.assertEqual((doc["text"], doc["sha"], doc["threads"], doc["overwritten"]), ("# Ledger\n", sha, [], None))
+        self.error(self.api("/app/v1/docs/wren/doc?path=big.md"), 409, "too_big")
+        self.error(self.api("/app/v1/docs/wren/doc?path=gone.md"), 404, "not_found")
+        self.error(self.api("/app/v1/docs/wren/doc?path=../x.md"), 409, "refused")
+        self.error(self.api("/app/v1/docs/wren/doc"), 400, "bad_request")
+        r = self.api("/app/v1/docs/wren/raw?path=big.md")
+        self.assertEqual((r.status, len(r.body), r.headers["Content-Type"]), (200, docs.MAX_BYTES + 1,
+                                                                             "text/markdown; charset=utf-8"))
+        self.assertIn("attachment; filename*=UTF-8''big.md", r.headers["Content-Disposition"])
+
+    def test_save_create_and_a_stale_save(self):
+        got = self.get("/app/v1/docs/wren/save", method="POST", data={"path": "plan", "text": "one\n", "sha": "none"})
+        self.assertEqual((got["path"], got["sha"]), ("plan.md", docs.sha(b"one\n")))
+        self.assertIn("wren gets the change with your next message", got["said"])
+        err = self.error(self.api("/app/v1/docs/wren/save", "POST", {"path": "plan.md", "text": "two\n", "sha": "old"}),
+                         409, "stale")
+        self.assertEqual(err["sha"], docs.sha(b"one\n"))
+        self.assertIn("+one", err["diff"])
+        err = self.error(self.api("/app/v1/docs/wren/save", "POST", {"path": "plan.md", "text": "x", "sha": "none"}),
+                         409, "stale")
+        self.assertEqual((err["sha"], err["diff"]), (None, None))
+        self.error(self.api("/app/v1/docs/wren/save", "POST", {"path": "../x", "text": "x", "sha": "none"}), 409,
+                   "refused")
+        self.assertEqual(self.get("/app/v1/docs/wren/save", method="POST",
+                                  data={"path": "plan.md", "text": "two\n", "sha": err["sha"] or got["sha"]})["sha"],
+                         docs.sha(b"two\n"))
+
+    def test_delete(self):
+        sha = self.doc("plan.md", "one")
+        err = self.error(self.api("/app/v1/docs/wren/delete", "POST", {"path": "plan.md", "sha": "old"}), 409, "stale")
+        self.assertEqual((err["sha"], err["diff"]), (sha, None))
+        self.assertIn("deleted", self.get("/app/v1/docs/wren/delete", method="POST",
+                                          data={"path": "plan.md", "sha": sha})["said"])
+        self.error(self.api("/app/v1/docs/wren/delete", "POST", {"path": "plan.md", "sha": sha}), 409, "refused")
+
+    def test_comments_threads_and_their_state(self):
+        sha = self.doc("plan.md", "Net totals are rounded once.\n")
+        anchor = {"exact": "rounded once", "prefix": "Net totals are ", "suffix": ".", "start": 15}
+        got = self.get("/app/v1/docs/wren/comment", method="POST",
+                       data={"pid": "p-0123456789abcdef", "doc": "plan.md", "anchor": anchor, "sha": sha,
+                             "text": "Per account?", "send": ""})
+        self.assertEqual(got["thread"], "c1")
+        self.assertIn("kept, not sent", got["said"])
+        again = self.get("/app/v1/docs/wren/comment", method="POST",
+                         data={"pid": "p-0123456789abcdef", "doc": "plan.md", "anchor": anchor, "sha": sha,
+                               "text": "Per account?", "send": ""})
+        self.assertEqual(again["thread"], "c1")                  # the same pid again: the thread that holds it
+        self.get("/app/v1/docs/wren/comment", method="POST",
+                 data={"pid": "p-1111111111111111", "thread": "c1", "text": "Or overall?", "send": ""})
+        self.get("/app/v1/docs/wren/comment/edit", method="POST", data={"pid": "p-1111111111111111", "text": "Overall?"})
+        self.get("/app/v1/docs/wren/comment/state", method="POST", data={"thread": "c1", "state": "resolved"})
+        thread = self.get("/app/v1/docs/wren/doc?path=plan.md")["threads"][0]
+        self.assertEqual((thread["state"], thread["anchor"], thread["doc_changed"]), ("resolved", anchor, False))
+        self.assertEqual([(p["text"], p["unsent"]) for p in thread["posts"]], [("Per account?", True), ("Overall?", True)])
+        self.get("/app/v1/docs/wren/comment/delete", method="POST", data={"pid": "p-1111111111111111"})
+        self.assertEqual(len(self.get("/app/v1/docs/wren/doc?path=plan.md")["threads"][0]["posts"]), 1)
+        self.error(self.api("/app/v1/docs/wren/comment", "POST", {"pid": "p-2222222222222222", "doc": "plan.md",
+                                                                  "anchor": "text", "sha": sha, "text": "x"}),
+                   400, "bad_request")
+        self.error(self.api("/app/v1/docs/wren/comment/send", "POST", {"pid": "p-0123456789abcdef", "when": "soon"}),
+                   400, "bad_request")
+        self.error(self.api("/app/v1/docs/wren/comment", "POST", {"pid": "bad", "doc": "plan.md", "anchor": None,
+                                                                  "sha": sha, "text": "x"}), 409, "refused")
+
+
+# -- push (§11) ------------------------------------------------------------------------------------------------------------
+class PushTest(AppTest):
+    def test_register_status_and_unregister(self):
+        data = {"token": "ab" * 32, "env": "sandbox", "topic": "io.github.dgrassi1984.shaft", "platform": "ios"}
+        self.assertEqual(self.get("/app/v1/push/register", method="POST", data=data),
+                         {"push": {"on": True, "env": "sandbox", "reason": ""}})
+        self.assertEqual(self.get("/app/v1/push/status"), {"on": True, "env": "sandbox", "reason": "", "problem": None})
+        self.error(self.api("/app/v1/push/register", "POST", {**data, "token": "not hex"}), 400, "bad_request")
+        self.assertEqual(self.get("/app/v1/push/register", method="DELETE"), {"removed": True})
+        self.assertEqual(self.get("/app/v1/push/register", method="DELETE"), {"removed": False})
+        self.apns.problem = "SHAFT_APNS_KEY_ID is not set (key: .supervisor/web/apns/AuthKey_<id>.p8)"
+        err = self.error(self.api("/app/v1/push/register", "POST", data), 503, "push_off")
+        self.assertEqual(err["message"], self.apns.problem)
+        self.assertEqual(self.get("/app/v1/push/status")["problem"], self.apns.problem)
+
+    def test_without_apns_installed_push_says_so(self):
+        with mock.patch.object(web, "apns_module", return_value=None):
+            self.error(self.api("/app/v1/push/register", "POST", {}), 503, "push_off")
+            self.assertEqual(self.get("/app/v1/push/status")["problem"], app_api.NOT_INSTALLED)
+            self.assertEqual(web.unpair(self.device), 1)          # nothing to drop: unpairing still works
+
+    def test_latest_takes_this_devices_events_with_the_chat_to_open(self):
+        webpush._save_queue({self.device: {"pending": [
+            {"title": "wren replied", "body": "Done.", "url": "/i/wren/chat", "tag": "wren", "at": time.time()}]}})
+        got = self.get("/app/v1/push/latest")
+        self.assertEqual(got["events"], [{"title": "wren replied", "body": "Done.", "url": "/i/wren/chat", "tag": "wren",
+                                          "instance": "wren"}])
+        self.assertEqual(got["badge"], 0)
+        self.assertEqual(self.get("/app/v1/push/latest")["events"][0]["title"], "wren replied")   # shown again
+        self.assertEqual(self.get("/app/v1/push/latest", method="GET")["events"][0]["instance"], "wren")
+        webpush._save_queue({})
+        self.assertEqual(self.get("/app/v1/push/latest")["events"], [{**webpush.NOTHING, "instance": None}])
+
+
+# -- the fixtures the Swift side decodes (§13.5) -------------------------------------------------------------------------
+class FixturesTest(AppTest):
+    """Representative answers, serialised by the server itself: SHAFTKit's tests decode every one. A checked-in
+    fixture that differs fails here; SHAFT_UPDATE_FIXTURES=1 rewrites them (then the Swift tests must decode them)."""
+
+    def setUp(self):
+        self._tz = os.environ.get("TZ")
+        os.environ["TZ"] = "Europe/Rome"
+        time.tzset()
+        self.addCleanup(self._restore_tz)
+        super().setUp()
+        self.paired_since("2026-11-03T12:00:00")
+        self.out: dict[str, object] = {}
+
+    def _restore_tz(self):
+        if self._tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = self._tz
+        time.tzset()
+
+    def keep(self, name: str, value) -> None:
+        self.out[name] = value
+
+    def scenario(self) -> None:
+        """The contract's own example chat (docs/app-api.md §4.9), with a few more of each kind."""
+        self.message("2026-11-03T14:02:30", "20261103-140230-118204-from-wren.md",
+                     "Should the nightly report keep the per-account lines?", kind="question", read=False)
+        self.message("2026-11-03T14:03:01", "20261103-140301-552019-from-operator.md",
+                     "Look at the March reconciliation when you have time.", frm="operator", to="wren",
+                     via=messages.BACKGROUND, mid="5e2d9c1b-7a3f-4e60-8b2d-1c9f0a7e3d54", read=False)
+        self.rating("f-6a0c2e4b8d1f3a5c7e9b0d2f", {"kind": "chat", "chat": CID, "k": 1}, "up", "2026-11-03T14:01:12")
+
+    def base_turns(self) -> list[dict]:
+        return [
+            turn("user", "2026-11-03T13:58:40", "...", shown=app_api.quote_text(
+                "Yes, once the tests pass. This is the failing run:",
+                [{"quote": "Ship the ledger fix today?", "answer": "", "doc": ""}]),
+                 mid="0b8e6c3a-5d1f-4c2e-9a7b-2f4d6e8a1c3b",
+                 attachments=[{"name": "ci-run.png", "path": "instances/wren/attachments/from-operator/x/ci-run.png",
+                               "bytes": 48213}]),
+            turn("assistant", "2026-11-03T14:01:12",
+                 "The failure is the rounding in `net_daily`. Fixed and pushed; the summary is in **ledger.md**.",
+                 activity=["read_file notes/docs/ledger.md", "run tests: 412 passed"],
+                 docs=[{"path": "ledger.md", "created": False}], answered=[{"id": "c3", "doc": "ledger.md"}]),
+            turn("user", "2026-11-03T14:05:50", "Rerun the report for October.", shown="Rerun the report for October.",
+                 mid="a41c7e09-3b2d-4f8e-9c61-0d5b7a2e4f13"),
+        ]
+
+    def test_write_or_check_the_fixtures(self):
+        self.scenario()
+        turns = self.base_turns()
+        mids = ["0b8e6c3a-5d1f-4c2e-9a7b-2f4d6e8a1c3b", "a41c7e09-3b2d-4f8e-9c61-0d5b7a2e4f13"]
+        # idle: a plain answered chat
+        idle = self.chat(turns + [turn("assistant", "2026-11-03T14:06:40", "October is done: 214 accounts.",
+                                       activity=["run report --month 2026-10"])], mids=mids)
+        self.keep("idle", self.get("/app/v1/chat/wren"))
+        # failed: the contract's failed reply with a safe Retry, a stopped one and an unsafe one
+        failed = turns + [
+            turn("assistant", "2026-11-03T14:06:40", "", note="error: CloudError: OpenRouter HTTP 502 (tools_ran=false)",
+                 note_kind="model", note_retry=True, retry_text="Rerun the report for October."),
+            turn("user", "2026-11-03T14:07:00", "Try the summary.", shown="Try the summary."),
+            turn("assistant", "2026-11-03T14:07:30", "Half an answer", note="error: ConnectionResetError: reset",
+                 note_kind="connection", note_retry=False, retry_text="Try the summary."),
+            turn("user", "2026-11-03T14:08:00", "Long job.", shown="Long job."),
+            turn("assistant", "2026-11-03T14:08:20", "", note="stopped by you", note_kind="stopped"),
+        ]
+        self.chat(failed, mids=mids)
+        self.keep("failed", self.get("/app/v1/chat/wren"))
+        # live, then a partial when only the reply moved; queued while it runs
+        live = self.chat(turns, state="replying", mids=mids,
+                         reply={"started": "2026-11-03T14:07:02", "activity": ["read_file notes/docs/ledger.md",
+                                                                                 "run report --month 2026-10"],
+                                "answer": "October's report is running; so far"})
+        first = self.get("/app/v1/chat/wren")
+        self.keep("live", first)
+        live["reply"].update(activity=live["reply"]["activity"] + ["write notes/docs/october.md"],
+                             answer="October's report is running; so far 214 accounts reconciled.")
+        web_chat.save(live)
+        self.keep("live-partial", self.get(f"/app/v1/chat/wren?since={first['version']}&live={first['live']}&wait=0"))
+        live["queued"] = [{"role": "user", "content": "And send me the totals.", "shown": "And send me the totals.",
+                           "mid": "9d3e0f2a-6b1c-4a7d-8e5f-3c2b1a0d9e8f", "attachments": [
+                               {"name": "totals.csv", "path": "instances/wren/attachments/from-operator/y/totals.csv",
+                                "bytes": 1200}]}]
+        live["mids"] = mids + ["9d3e0f2a-6b1c-4a7d-8e5f-3c2b1a0d9e8f"]
+        web_chat.save(live)
+        self.keep("queued", self.get("/app/v1/chat/wren"))
+        # quotes: several Reply cards, one from a document, made into the text on the server
+        self.chat([turn("user", "2026-11-03T14:10:00", "...", mid="c1a2b3c4-0000-4000-8000-000000000001",
+                        shown=app_api.quote_text("Thanks.", [
+                            {"quote": "Should the nightly report keep the per-account lines?", "answer": "Yes.",
+                             "doc": ""},
+                            {"quote": "Net daily totals are rounded once,\nat the end.", "answer": "Per account.",
+                             "doc": "ledger.md"}]))])
+        self.keep("quotes", self.get("/app/v1/chat/wren"))
+        # attachments both ways
+        self.message("2026-11-03T14:11:00", "20261103-141100-000001-from-wren.md", "The chart and the data.",
+                     attachments=[{"name": "chart.png", "path": "instances/wren/out/chart.png", "bytes": 20480},
+                                  {"name": "data.csv", "path": "instances/wren/out/data.csv", "bytes": 512},
+                                  {"name": "report.pdf", "path": "instances/wren/out/report.pdf", "bytes": 90000}])
+        self.chat([turn("user", "2026-11-03T14:10:30", "...", shown="Two files.", mid="c1a2b3c4-0000-4000-8000-000000000002",
+                        attachments=[{"name": "ci-run.png", "path": "instances/wren/a/ci-run.png", "bytes": 48213},
+                                     {"name": "notes.md", "path": "instances/wren/a/notes.md", "bytes": 300}])])
+        self.keep("attachments", self.get("/app/v1/chat/wren"))
+        # sent: what it sent (a message, an answered question), what was left for its next cycle
+        self.message("2026-11-03T14:12:00", "20261103-141200-000001-from-wren.md", "Answered question?",
+                      kind="question", read=True)
+        self.chat([turn("user", "2026-11-03T14:01:00", "hi", shown="hi")])
+        self.keep("sent", self.get("/app/v1/chat/wren"))
+        # feedback: a rating sent, one pending with the next message, one on a message; a turn that carried one
+        self.rating("f-111111111111111111111111", {"kind": "chat", "chat": CID, "k": 3}, "down", "2026-11-03T14:06:40",
+                    reason="Wrong month")
+        self.rating("f-222222222222222222222222", {"kind": "message", "file": "20261103-140230-118204-from-wren.md"},
+                    "up", "2026-11-03T14:02:30", reason="Good question", sent="2026-11-03T14:09:00")
+        self.chat(turns + [turn("assistant", "2026-11-03T14:06:40", "September's report."),
+                           turn("user", "2026-11-03T14:20:00", "...", shown="", feedback=["f-333333333333333333333333"])],
+                  mids=mids, pending_feedback=[{"id": "f-111111111111111111111111", "note": "n"}])
+        self.keep("feedback", self.get("/app/v1/chat/wren"))
+        # ended, and earlier: a long chat's window
+        self.chat(turns + [turn("assistant", "2026-11-03T14:06:40", "Done.")], state="ended", ended="2026-11-03T14:30:00",
+                  mids=mids)
+        self.keep("ended", self.get("/app/v1/chat/wren"))
+        many = [turn("user" if k % 2 == 0 else "assistant", f"2026-11-02T{9 + k // 60:02d}:{k % 60:02d}:00",
+                     f"Answer {k}." if k % 2 else "", shown=f"Message {k}.") for k in range(84)]
+        self.chat(many, cid="web-0000000000000084", created="2026-11-02T09:00:00")
+        self.keep("earlier", self.get("/app/v1/chat/wren/web-0000000000000084"))
+        # the chat list, documents and comments, push
+        self.chat(turns + [turn("assistant", "2026-11-03T14:06:40", "Done.")], mids=mids,
+                  saved_docs={"ledger.md": {"sha": "old", "text": "# Ledger\n\nRounded per account.\n",
+                                            "ts": "2026-11-03T13:40:00", "added": ["Rounded per account."]}})
+        self.keep("instances", self.get("/app/v1/instances"))
+        ledger = "# Ledger\n\nNet daily totals are rounded once, at the end.\n"
+        for path, text in (("ledger.md", ledger), ("reports/october.md", "# October\n")):
+            p = self.inst / "wren" / "notes" / "docs" / path
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(text)
+            os.utime(p, (1793710800.0, 1793710800.0))
+        store = {"next": 4, "notices": [], "threads": {
+            "c3": {"doc": "ledger.md", "by": "operator", "state": "open", "sha": "0" * 64,
+                   "anchor": {"exact": "rounded once, at the end", "prefix": "Net daily totals are ", "suffix": ".",
+                              "start": 30},
+                   "created": "2026-11-03T13:50:12", "unsectioned": [], "posts": [
+                       {"pid": "p-1e2d3c4b5a697887", "by": "operator", "text": "Per account or overall?",
+                        "ts": "2026-11-03T13:50:12", "sent": None, "seen": f"{CID}#1"},
+                       {"pid": "p-9a8b7c6d5e4f3021", "by": "wren", "text": "Per account, then summed.",
+                        "ts": "2026-11-03T14:01:12", "sent": None, "turn": f"{CID}#1"}]},
+            "c2": {"doc": "ledger.md", "by": "wren", "state": "resolved", "sha": docs.sha(ledger.encode()),
+                   "anchor": None, "created": "2026-11-03T13:00:00", "unsectioned": [f"{CID}#1"], "posts": [
+                       {"pid": "p-0000000000000002", "by": "wren", "text": "Is this the right place?",
+                        "ts": "2026-11-03T13:00:00", "sent": None, "turn": "message:20261103-130000-1-from-wren.md"}]},
+            "c1": {"doc": "reports/october.md", "by": "operator", "state": "open", "sha": "1" * 64, "anchor": None,
+                   "created": "2026-11-03T12:30:00", "unsectioned": [], "posts": [
+                       {"pid": "p-0000000000000001", "by": "operator", "text": "Add the totals.",
+                        "ts": "2026-11-03T12:30:00", "sent": "inbox/20261103-123000-1-from-operator.md"}]}}}
+        (self.sup / "web" / "comments").mkdir(parents=True, exist_ok=True)
+        (self.sup / "web" / "comments" / "wren.json").write_text(json.dumps(store))
+        self.keep("docs", self.get("/app/v1/docs/wren"))
+        self.keep("doc-comments", self.get("/app/v1/docs/wren/doc?path=ledger.md"))
+        webpush._save_queue({self.device: {"pending": [
+            {"title": "wren replied", "body": "Done.", "url": "/i/wren/chat", "tag": "wren", "at": time.time()},
+            {"title": "wren asks", "body": "Should the nightly report keep the per-account lines?",
+             "url": "/i/wren/chat", "tag": "wren-ask", "at": time.time()}]}})
+        self.keep("push-latest", self.get("/app/v1/push/latest"))
+        self.keep("errors", self.errors(first))
+        self.check()
+
+    def errors(self, feed: dict) -> dict:
+        """One answer of each error code, as the server gives it."""
+        out = {}
+
+        def grab(name, r):
+            self.assertGreaterEqual(r.status, 400, (name, r.body))
+            out[name] = {"status": r.status, "body": json.loads(r.body)}
+        grab("unpaired", self.api("/app/v1/instances", bearer=False))
+        grab("login", self.api("/app/v1/instances", login="someone@example.com"))
+        grab("host", self.api("/app/v1/instances", host="evil.example.com"))
+        grab("pair_expired", self.api("/app/v1/pair", "POST", {"token": "used", "platform": "ios"}, bearer=False))
+        grab("bad_request", self.api("/app/v1/chat/wren?wait=99"))
+        grab("not_found", self.api("/app/v1/chat/ghost"))
+        grab("method", self.api("/app/v1/instances", "POST", {}))
+        grab("refused", self.api("/app/v1/chat/wren/stop", "POST", {"cid": CID}))
+        grab("stale", self.api("/app/v1/docs/wren/save", "POST", {"path": "ledger.md", "text": "mine\n", "sha": "old"}))
+        p = self.inst / "wren" / "notes" / "docs" / "huge.md"
+        p.write_text("x" * (docs.MAX_BYTES + 1))
+        grab("too_big", self.api("/app/v1/docs/wren/doc?path=huge.md"))
+        grab("stale_version", self.api("/app/v1/chat/wren/seen", "POST", {"version": feed["version"]}))
+        out["too_large"] = {"status": 413, "body": json.loads(app_api.error(
+            413, "too_large", f"Too large: at most {(messages.ATTACH_MAX_TOTAL + 1_000_000) // 1_000_000} MB can be "
+                              "sent at once.").body)}
+        with mock.patch.object(web_chat, "feed", side_effect=RuntimeError("boom")):
+            grab("internal", self.api("/app/v1/chat/wren"))
+        self.apns.problem = "SHAFT_APNS_KEY_ID is not set"
+        grab("push_off", self.api("/app/v1/push/register", "POST", {"token": "ab", "env": "sandbox", "topic": "t",
+                                                                     "platform": "ios"}))
+        self.assertEqual({v["body"]["error"]["code"] for v in out.values()},
+                         {"unpaired", "login", "host", "pair_expired", "bad_request", "not_found", "method", "refused",
+                          "stale", "too_big", "stale_version", "too_large", "internal", "push_off"})
+        return out
+
+    def check(self) -> None:
+        names = {"idle", "live", "live-partial", "queued", "quotes", "attachments", "sent", "feedback", "failed",
+                 "earlier", "ended", "instances", "docs", "doc-comments", "push-latest", "errors"}
+        self.assertEqual(set(self.out), names)
+        if os.environ.get("SHAFT_UPDATE_FIXTURES") == "1":
+            FIXTURES.mkdir(exist_ok=True)
+            for name, value in self.out.items():
+                (FIXTURES / f"{name}.json").write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n")
+            return
+        for name, value in self.out.items():
+            path = FIXTURES / f"{name}.json"
+            self.assertTrue(path.is_file(), f"{path} is missing: SHAFT_UPDATE_FIXTURES=1 writes it")
+            self.assertEqual(json.loads(path.read_text()), value,
+                             f"{path.name} is not what the server answers now: if the change is meant, rewrite the "
+                             "fixtures (SHAFT_UPDATE_FIXTURES=1) and make the Swift side decode them")
+
+
+if __name__ == "__main__":
+    unittest.main()

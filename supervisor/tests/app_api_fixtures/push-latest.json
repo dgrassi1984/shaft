@@ -1,0 +1,19 @@
+{
+  "events": [
+    {
+      "title": "wren replied",
+      "body": "Done.",
+      "url": "/i/wren/chat",
+      "tag": "wren",
+      "instance": "wren"
+    },
+    {
+      "title": "wren asks",
+      "body": "Should the nightly report keep the per-account lines?",
+      "url": "/i/wren/chat",
+      "tag": "wren-ask",
+      "instance": "wren"
+    }
+  ],
+  "badge": 1
+}

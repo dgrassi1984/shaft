@@ -1,0 +1,24 @@
+{
+  "dir": "notes/docs",
+  "max_bytes": 262144,
+  "docs": [
+    {
+      "path": "ledger.md",
+      "bytes": 57,
+      "mtime": "2026-11-03T14:00:00+01:00",
+      "sha": "a908cc49a51a6a211a039ce1b714143309243f85de04db75bd772338dcd019e3",
+      "too_big": false,
+      "open_comments": 1,
+      "in_chat": true
+    },
+    {
+      "path": "reports/october.md",
+      "bytes": 10,
+      "mtime": "2026-11-03T14:00:00+01:00",
+      "sha": "9caf62befceeeb1303694bfbe6b941667632982184128a3c8732f9cbd107f031",
+      "too_big": false,
+      "open_comments": 1,
+      "in_chat": false
+    }
+  ]
+}

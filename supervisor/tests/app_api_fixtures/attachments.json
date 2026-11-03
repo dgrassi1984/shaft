@@ -1,0 +1,112 @@
+{
+  "instance": "wren",
+  "partial": false,
+  "version": "a0265d47b5465e0f",
+  "live": "",
+  "reply": null,
+  "chat": {
+    "id": "web-3f9a1c0d7e2b4a65",
+    "state": "idle",
+    "created": "2026-11-03T13:58:40+01:00",
+    "ended": null
+  },
+  "archived": false,
+  "earlier": 0,
+  "items": [
+    {
+      "key": "s20261103-140230-118204-from-wren.md",
+      "type": "sent",
+      "file": "20261103-140230-118204-from-wren.md",
+      "ts": "2026-11-03T14:02:30+01:00",
+      "kind": "question",
+      "read": false,
+      "text": "Should the nightly report keep the per-account lines?",
+      "attachments": [],
+      "rating": null
+    },
+    {
+      "key": "b20261103-140301-552019-from-operator.md",
+      "type": "later",
+      "file": "20261103-140301-552019-from-operator.md",
+      "ts": "2026-11-03T14:03:01+01:00",
+      "text": "Look at the March reconciliation when you have time.",
+      "mid": "5e2d9c1b-7a3f-4e60-8b2d-1c9f0a7e3d54",
+      "read": false,
+      "attachments": [],
+      "comments": []
+    },
+    {
+      "key": "u0",
+      "type": "user",
+      "k": 0,
+      "ts": "2026-11-03T14:10:30+01:00",
+      "text": "Two files.",
+      "mid": "c1a2b3c4-0000-4000-8000-000000000002",
+      "interjected": false,
+      "attachments": [
+        {
+          "name": "ci-run.png",
+          "bytes": 48213,
+          "image": true,
+          "text": false,
+          "url": "/app/v1/file/chat/web-3f9a1c0d7e2b4a65/0/0"
+        },
+        {
+          "name": "notes.md",
+          "bytes": 300,
+          "image": false,
+          "text": true,
+          "url": "/app/v1/file/chat/web-3f9a1c0d7e2b4a65/0/1"
+        }
+      ],
+      "edits": [],
+      "deleted": [],
+      "comments": [],
+      "feedback": []
+    },
+    {
+      "key": "s20261103-141100-000001-from-wren.md",
+      "type": "sent",
+      "file": "20261103-141100-000001-from-wren.md",
+      "ts": "2026-11-03T14:11:00+01:00",
+      "kind": "message",
+      "read": true,
+      "text": "The chart and the data.",
+      "attachments": [
+        {
+          "name": "chart.png",
+          "bytes": 20480,
+          "image": true,
+          "text": false,
+          "url": "/app/v1/file/message/20261103-141100-000001-from-wren.md/0"
+        },
+        {
+          "name": "data.csv",
+          "bytes": 512,
+          "image": false,
+          "text": true,
+          "url": "/app/v1/file/message/20261103-141100-000001-from-wren.md/1"
+        },
+        {
+          "name": "report.pdf",
+          "bytes": 90000,
+          "image": false,
+          "text": false,
+          "url": "/app/v1/file/message/20261103-141100-000001-from-wren.md/2"
+        }
+      ],
+      "rating": null
+    }
+  ],
+  "queued": [],
+  "pending_feedback": [],
+  "pending_edits": [],
+  "mids": [
+    "c1a2b3c4-0000-4000-8000-000000000002",
+    "5e2d9c1b-7a3f-4e60-8b2d-1c9f0a7e3d54"
+  ],
+  "last": "2026-11-03T14:11:00+01:00",
+  "can_stop": false,
+  "can_end": true,
+  "can_clear": true
+}

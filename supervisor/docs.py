@@ -80,6 +80,19 @@ def read(name: str, path: str) -> tuple[str | None, str]:
     return data.decode(errors="replace"), sha(data)
 
 
+def raw(name: str, path: str) -> bytes | None:
+    """A document's bytes, whatever its size up to SHAFT_FILE_READ_MAX_MB (the apps' download, the way to one too big
+    to show: /app/v1/docs/<n>/raw); None when there is no such document. TooBig past that."""
+    rel = _rel(path)
+    p = _path(name, rel)
+    if p.is_symlink() or not p.is_file():
+        return None
+    try:                                          # opened with no link followed: nothing swapped in after the check
+        return read_beneath(instance_root(name), Path(DIR, rel).parts)
+    except (UnsafePath, FileNotFoundError):
+        return None
+
+
 _digests: dict[str, tuple[tuple, str]] = {}      # file -> ((inode, mtime_ns, size), sha): read again only when it changes
 
 

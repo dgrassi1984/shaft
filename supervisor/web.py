@@ -158,8 +158,9 @@ def _pairing(token: str) -> dict | None:
     return p if p and p.get("expires", 0) > time.time() else None
 
 
-def _use_pairing(token: str, login: str) -> tuple[str, str] | None:
-    """Spend the link: (device id, secret) for the cookie, or None if it is unknown, used or expired."""
+def _use_pairing(token: str, login: str, platform: str = "") -> tuple[str, str] | None:
+    """Spend the link: (device id, secret) for the cookie — or the native app's bearer (app_api, `platform` "ios" or
+    "macos") — or None if it is unknown, used or expired."""
     with _lock:
         pending = _read("pairing.json")
         p = pending.pop(_digest(token), None)
@@ -170,9 +171,9 @@ def _use_pairing(token: str, login: str) -> tuple[str, str] | None:
         devices = _read("devices.json")
         now = datetime.now().isoformat(timespec="seconds")
         devices[dev] = {"name": p["device"], "login": login, "created": now, "last_seen": now,
-                        "hash": _digest(secret)}
+                        "hash": _digest(secret), **({"platform": platform} if platform else {})}
         _write("devices.json", devices)
-    log(f"web: browser paired as {p['device']!r} ({dev}, tailnet user {login})")
+    log(f"web: {f'{platform} app' if platform else 'browser'} paired as {p['device']!r} ({dev}, tailnet user {login})")
     return dev, secret
 
 
@@ -181,20 +182,37 @@ def devices() -> dict:
 
 
 def unpair(device: str | None = None) -> int:
-    """Revoke one paired browser (by id or name), or all with None. Returns how many were revoked. Its push
-    subscription goes with it: a revoked phone kept getting a lock-screen push and a badge for every reply (W1)."""
-    from . import webpush
+    """Revoke one paired browser or app (by id or name), or all with None. Returns how many were revoked. Its push
+    subscription goes with it — a revoked phone kept getting a lock-screen push and a badge for every reply (W1) — and
+    so do an app's APNs token and its seen marks (web_seen)."""
+    from . import web_seen, webpush
     with _lock:
         ds = _read("devices.json")
         gone = [k for k, v in ds.items() if device is None or device in (k, v.get("name"))]
         for k in gone:
             del ds[k]
         _write("devices.json", ds)
+    apns = apns_module()
     for k in gone:
         webpush.unsubscribe(k)
+        if apns:
+            apns.unregister(k)
+        web_seen.forget(k)
     if gone:
         log(f"web: unpaired {', '.join(gone)}")
     return len(gone)
+
+
+def apns_module():
+    """supervisor/apns.py (native push, PLAN-native-apps M2), or None while it is not installed: then there is no APNs
+    token to drop, and the apps' push routes say native push is not installed."""
+    import importlib
+    try:
+        return importlib.import_module(f"{__package__}.apns")
+    except ModuleNotFoundError as e:
+        if e.name != f"{__package__}.apns":
+            raise
+        return None
 
 
 def device_from_cookie(cookie_header: str) -> tuple[str, str] | None:
@@ -209,19 +227,22 @@ def device_from_cookie(cookie_header: str) -> tuple[str, str] | None:
 def _paired(cookie_header: str) -> tuple[str, str] | None:
     """(device id, secret) when the cookie is a paired browser's; its last_seen is refreshed every few minutes."""
     got = device_from_cookie(cookie_header)
-    if not got:
-        return None
-    dev, secret = got
+    return got if got and paired_device(*got) else None
+
+
+def paired_device(dev: str, secret: str) -> bool:
+    """`dev`.`secret` is a paired device's — a browser's cookie or an app's bearer (app_api.device): the secret's hash,
+    compared in constant time. Its last_seen is refreshed every few minutes, so `shaft web status` shows it in use."""
     rec = devices().get(dev)
     if not rec or not hmac.compare_digest(rec.get("hash", ""), _digest(secret)):
-        return None
+        return False
     if time.time() - _stamp(rec.get("last_seen", "")) > 300:
         with _lock:
             ds = _read("devices.json")
             if dev in ds:
                 ds[dev]["last_seen"] = datetime.now().isoformat(timespec="seconds")
                 _write("devices.json", ds)
-    return dev, secret
+    return True
 
 
 def _stamp(iso: str) -> float:
@@ -351,12 +372,22 @@ def respond(req: Request) -> Response:
 
 def _route(req: Request) -> Response:
     login = (req.headers.get("tailscale-user-login") or "").lower()
+    app = req.path == "/app/v1" or req.path.startswith("/app/v1/")     # the native apps' JSON API (app_api.py)
     if not login or login not in allowed_logins():
         log(f"web refused tailnet user {login or '(none)'} ({req.method} {req.path})")
+        if app:
+            from . import app_api
+            return app_api.error(403, "login", "This API is for the operator's tailnet login only.")
         return _refused("This page is for the operator's tailnet login only.")
     if req.headers.get("host", "").lower() not in allowed_hosts():
         log(f"web refused host {req.headers.get('host')!r} ({req.method} {req.path})")
+        if app:
+            from . import app_api
+            return app_api.error(403, "host", f"Use this Mac's tailnet address: {url()}")
         return _refused("Open this page at its tailnet address.", url())
+    if app:                                         # its own credential, the bearer: never the cookie (app_api.device)
+        from . import app_api
+        return app_api.route(req)
     if req.path.startswith("/static/"):
         return _static(urllib.parse.unquote(req.path.removeprefix("/static/")),
                        versioned=req.query.get("v") == web_pages.STATIC_VERSION)
@@ -479,89 +510,94 @@ def _renew_due(dev: str) -> bool:
     return True
 
 
+def feedback_action(name: str, login: str, form: dict) -> tuple[str, dict | None]:
+    """The thumbs on a chat reply or a logged message (POST /feedback/<n>, and the apps' /app/v1/feedback/<n>): `op`
+    rate, clear, send or unpend. (what to say, the rating it acted on); ValueError, in words, when it is refused."""
+    from . import feedback, messages, web_chat
+    with web_chat._inst_lock(name):
+        op = form.get("op")
+        item = None
+        said = "Feedback kept."
+        if op in ("clear", "send", "unpend"):
+            item = next((r for r in feedback.items(name) if r["id"] == form.get("id")), None)
+            if not item:
+                raise ValueError("That rating is no longer current for this instance.")
+            target = item["target"]
+            form.update({"kind": target["kind"], **(
+                {"cid": target["chat"], "k": str(target["k"])} if target["kind"] == "chat"
+                else {"file": target["file"]})})
+        if op not in ("rate", "clear", "send", "unpend"):
+            raise ValueError("Choose rate, clear, send or unpend.")
+        if form.get("kind") == "chat":
+            chat = web_chat.load(form.get("cid", ""))
+            try:
+                k = int(form.get("k", ""))
+            except ValueError:
+                raise ValueError("Choose an assistant reply in this chat.") from None
+            if not chat or chat.get("instance") != name or not 0 <= k < len(chat.get("turns", [])):
+                raise ValueError("That chat reply does not belong to this instance.")
+            reply = chat["turns"][k]
+            if reply.get("role") != "assistant":
+                raise ValueError("Only an assistant reply can be rated.")
+            target = {"kind": "chat", "chat": chat["id"], "k": k}
+            text = reply.get("content", "")
+        elif form.get("kind") == "message":
+            reply = next((r for r in messages.history() if r.get("file") == form.get("file")
+                          and r.get("from") == name and r.get("to") == "operator"), None)
+            if not reply:
+                raise ValueError("That logged message is not from this instance to the operator.")
+            target = {"kind": "message", "file": reply["file"]}
+            text = reply["text"]
+        else:
+            raise ValueError("Choose a chat reply or a logged message.")
+        # Serialize ratings/clears with the relay taking pending feedback.
+        lock = web_chat._lock(target["chat"]) if target["kind"] == "chat" else web_chat._inst_lock(name)
+        with lock:
+            if item:
+                item = next((r for r in feedback.items(name) if r["id"] == item["id"]), None)
+                if not item:
+                    raise ValueError("That rating is no longer current for this instance.")
+            if item and target["kind"] == "chat" and not item["sent"]:
+                chat = web_chat.load(target["chat"])
+                if any(item["id"] in t.get("feedback", []) for t in chat["turns"]):
+                    feedback.mark_sent(item["id"], "chat", chat["id"])
+                    item = next(r for r in feedback.items(name) if r["id"] == item["id"])
+            if op == "clear":
+                feedback.clear(item["id"], login)
+                said = ("Feedback cleared. The message was already delivered." if item["sent"]
+                        else "Feedback cleared.")
+            elif op == "rate":
+                item = feedback.rate(name, login, target, form.get("thumb", ""), form.get("reason", ""),
+                                     reply["ts"], text)
+            elif op == "send":
+                if item["sent"]:
+                    raise ValueError("That feedback was already delivered.")
+                chat = web_chat.load(target["chat"]) if target["kind"] == "chat" else None
+                if chat and any(p["id"] == item["id"] for p in web_chat.pending_feedback(chat)):
+                    raise ValueError("That feedback is already waiting for your next message.")
+                reason = form.get("reason", item["reason"])[:2000]
+                if reason != item["reason"]:
+                    item = feedback.rate(name, login, target, item["thumb"], reason, reply["ts"], text)
+        if op == "send":
+            said = web_chat.send_feedback(name, item, feedback.note(item, text))
+        elif op == "unpend":
+            web_chat.unpend_feedback(name, item)
+            said = "Feedback kept; removed from your next message."
+    return said, item
+
+
 def _post(req: Request, dev: str) -> Response:
     if req.path == "/unpair":
         unpair(dev)
         return _html(200, web_pages.h('<p>This browser is unpaired.</p>'))
     if m := re.fullmatch(r"/feedback/([A-Za-z0-9_-]+)", req.path):
-        from . import feedback, messages, web_chat
         name = m[1]
         if name not in _names():
             return _not_found(req.path)
-        form = req.form()
-        login = (req.headers.get("tailscale-user-login") or "").lower()
-        with web_chat._inst_lock(name):
-            try:
-                op = form.get("op")
-                item = None
-                said = "Feedback kept."
-                if op in ("clear", "send", "unpend"):
-                    item = next((r for r in feedback.items(name) if r["id"] == form.get("id")), None)
-                    if not item:
-                        raise ValueError("That rating is no longer current for this instance.")
-                    target = item["target"]
-                    form.update({"kind": target["kind"], **(
-                        {"cid": target["chat"], "k": str(target["k"])} if target["kind"] == "chat"
-                        else {"file": target["file"]})})
-                if op not in ("rate", "clear", "send", "unpend"):
-                    raise ValueError("Choose rate, clear, send or unpend.")
-                if form.get("kind") == "chat":
-                    chat = web_chat.load(form.get("cid", ""))
-                    try:
-                        k = int(form.get("k", ""))
-                    except ValueError:
-                        raise ValueError("Choose an assistant reply in this chat.") from None
-                    if not chat or chat.get("instance") != name or not 0 <= k < len(chat.get("turns", [])):
-                        raise ValueError("That chat reply does not belong to this instance.")
-                    reply = chat["turns"][k]
-                    if reply.get("role") != "assistant":
-                        raise ValueError("Only an assistant reply can be rated.")
-                    target = {"kind": "chat", "chat": chat["id"], "k": k}
-                    text = reply.get("content", "")
-                elif form.get("kind") == "message":
-                    reply = next((r for r in messages.history() if r.get("file") == form.get("file")
-                                  and r.get("from") == name and r.get("to") == "operator"), None)
-                    if not reply:
-                        raise ValueError("That logged message is not from this instance to the operator.")
-                    target = {"kind": "message", "file": reply["file"]}
-                    text = reply["text"]
-                else:
-                    raise ValueError("Choose a chat reply or a logged message.")
-                # Serialize ratings/clears with the relay taking pending feedback.
-                lock = web_chat._lock(target["chat"]) if target["kind"] == "chat" else web_chat._inst_lock(name)
-                with lock:
-                    if item:
-                        item = next((r for r in feedback.items(name) if r["id"] == item["id"]), None)
-                        if not item:
-                            raise ValueError("That rating is no longer current for this instance.")
-                    if item and target["kind"] == "chat" and not item["sent"]:
-                        chat = web_chat.load(target["chat"])
-                        if any(item["id"] in t.get("feedback", []) for t in chat["turns"]):
-                            feedback.mark_sent(item["id"], "chat", chat["id"])
-                            item = next(r for r in feedback.items(name) if r["id"] == item["id"])
-                    if op == "clear":
-                        feedback.clear(item["id"], login)
-                        said = ("Feedback cleared. The message was already delivered." if item["sent"]
-                                else "Feedback cleared.")
-                    elif op == "rate":
-                        item = feedback.rate(name, login, target, form.get("thumb", ""), form.get("reason", ""),
-                                             reply["ts"], text)
-                    elif op == "send":
-                        if item["sent"]:
-                            raise ValueError("That feedback was already delivered.")
-                        chat = web_chat.load(target["chat"]) if target["kind"] == "chat" else None
-                        if chat and any(p["id"] == item["id"] for p in web_chat.pending_feedback(chat)):
-                            raise ValueError("That feedback is already waiting for your next message.")
-                        reason = form.get("reason", item["reason"])[:2000]
-                        if reason != item["reason"]:
-                            item = feedback.rate(name, login, target, item["thumb"], reason, reply["ts"], text)
-                if op == "send":
-                    said = web_chat.send_feedback(name, item, feedback.note(item, text))
-                elif op == "unpend":
-                    web_chat.unpend_feedback(name, item)
-                    said = "Feedback kept; removed from your next message."
-            except ValueError as e:
-                return _html(409, web_pages.h("<p>{t}</p>", t=str(e)))
+        try:
+            said, item = feedback_action(name, (req.headers.get("tailscale-user-login") or "").lower(), req.form())
+        except ValueError as e:
+            return _html(409, web_pages.h("<p>{t}</p>", t=str(e)))
         return _html(200, web_pages.h("<p>{t}</p>", t=said),
                      {"X-Feedback-Id": item["id"]} if item else {})
     if m := re.match(r"^/chat/([A-Za-z0-9_-]+)/send$", req.path):
@@ -833,40 +869,44 @@ def _page_ms(value: str | None) -> float | None:
         return None
 
 
-def _save_doc(name: str, login: str, form: dict) -> Response:
+class DocStale(Exception):
+    """A document's save refused: it changed since the page read it (`changed`; on creating, it exists already), or
+    the CLI refused the text. `sha`: what it has now; `diff`: what it has that the text sent has not ("" when there is
+    nothing to compare: creating, or it is gone)."""
+
+    def __init__(self, message: str, sha: str, diff: str, changed: bool):
+        super().__init__(message)
+        self.sha, self.diff, self.changed = sha, diff, changed
+
+
+class DocRefused(Exception):
+    """The CLI refused a document's deletion: its own words."""
+
+
+def save_doc(name: str, login: str, form: dict) -> tuple[str, str, str]:
     """The operator's edit of a document (or a new one): through `shaft docs set` and its compare-and-set; then the
-    instance hears of it (web_chat.doc_saved). Refused: what the document has now that their text has not."""
+    instance hears of it (web_chat.doc_saved). (what to say, its path, its new sha). docs.Refused for a bad path or
+    folder; DocStale with what the document has now that their text has not."""
     import difflib
     import secrets as _secrets
     from . import actions, docs, web_chat
     path = form.get("path", "").strip()
     if path and not path.endswith(".md"):
         path += ".md"
-    try:                                          # New document in a folder: it names the file inside that folder
-        folder = docs.folder(form.get("dir", ""))
-    except docs.Refused as e:
-        return _html(409, web_pages.h("<p>refused: {e}</p>", e=str(e)))
+    folder = docs.folder(form.get("dir", ""))     # New document in a folder: it names the file inside that folder
     if folder and path:
         path = f"{folder}/{path}"
     text, sha = form.get("text", "").replace("\r\n", "\n"), form.get("sha", "")
 
-    def refused(last: str) -> Response:
+    def refused(last: str) -> DocStale:
         now, now_sha = docs.read(name, path)
         diff = "\n".join(difflib.unified_diff(text.splitlines(), (now or "").splitlines(), "yours", "now", lineterm="",
                                               n=1)) if now is not None and sha != "none" else ""
-        # The sha it has now goes back to the page: Save again replaces it with yours, knowingly (Cancel takes it).
-        return _html(409, web_pages.h('<p>{l}</p>{d}', l=last if last.startswith("refused") else f"refused: {last}",
-                                      d=web_pages.h('<p>What it has now that your text has not. Your text is kept in '
-                                                    'the box: Save again to replace it with yours, or Cancel to take '
-                                                    'its version.</p><pre class="diff">{x}</pre>', x=diff) if diff else ""),
-                     {"X-Doc-Sha": now_sha} if diff else {})
-    try:
-        old, old_sha = docs.read(name, path)
-    except docs.Refused as e:
-        return _html(409, web_pages.h("<p>refused: {e}</p>", e=str(e)))
+        return DocStale(last if last.startswith("refused") else f"refused: {last}", now_sha, diff, now_sha != sha)
+    old, old_sha = docs.read(name, path)
     if old_sha != sha:          # stale already: and from here, the CLI's --expect-sha makes `old` what it replaces
-        return refused(f"refused: notes/docs/{path} changed since you looked" if sha != "none" else
-                       f"refused: notes/docs/{path} exists already")
+        raise refused(f"refused: notes/docs/{path} changed since you looked" if sha != "none" else
+                      f"refused: notes/docs/{path} exists already")
     tmp = SUP_DIR / "web" / f"doc-{_secrets.token_hex(6)}.md"
     tmp.parent.mkdir(parents=True, exist_ok=True)
     tmp.write_text(text, encoding="utf-8")
@@ -875,82 +915,116 @@ def _save_doc(name: str, login: str, form: dict) -> Response:
     finally:
         tmp.unlink(missing_ok=True)
     if not ok:
-        return refused(last)
+        raise refused(last)
     new_sha = docs.sha(text.encode())             # what was written — never read again: the instance may write next
     rel = docs._rel(path)
     try:
         said = web_chat.doc_saved(name, login, rel, old, text, new_sha)
     except web_chat.Refused as e:                  # written: only telling the instance failed — say both
         said = f"saved, but {name} was not told yet: {e}"
+    return said, rel, new_sha
+
+
+def _save_doc(name: str, login: str, form: dict) -> Response:
+    """save_doc for the documents panel. Refused: what the document has now that their text has not, with the sha it
+    has now, so Save again replaces it with theirs, knowingly (Cancel takes it)."""
+    from . import docs
+    try:
+        said, rel, new_sha = save_doc(name, login, form)
+    except docs.Refused as e:
+        return _html(409, web_pages.h("<p>refused: {e}</p>", e=str(e)))
+    except DocStale as e:
+        return _html(409, web_pages.h('<p>{l}</p>{d}', l=str(e),
+                                      d=web_pages.h('<p>What it has now that your text has not. Your text is kept in '
+                                                    'the box: Save again to replace it with yours, or Cancel to take '
+                                                    'its version.</p><pre class="diff">{x}</pre>', x=e.diff) if e.diff else ""),
+                     {"X-Doc-Sha": e.sha} if e.diff else {})
     return _html(200, web_pages.h("<p>{t}</p>", t=said), {"X-Doc": rel, "X-Doc-Sha": new_sha})
 
 
-def _delete_doc(name: str, login: str, form: dict) -> Response:
-    """The CLI owns the deletion and its compare-and-set, just as it owns a save."""
+def delete_doc(name: str, login: str, form: dict) -> str:
+    """Delete a document: the CLI owns the deletion and its compare-and-set, just as it owns a save. (what to say);
+    docs.Refused when it is not there (any more), DocStale when it changed since the page read it, DocRefused when the
+    CLI refused."""
     from . import actions, docs, web_chat
+    path, sha = docs._rel(form.get("path", "")), form.get("sha", "")
+    old, now = docs.read(name, path)
+    if old is None:
+        raise docs.Refused(f"notes/docs/{path} is not there (any more)")
+    if sha != now:
+        raise DocStale(f"notes/docs/{path} changed since you looked", now, "", True)
+    ok, last = actions.run_now(["docs", name, "rm", path, "--expect-sha", sha], who="web")
+    if not ok:
+        raise DocRefused(last)
     try:
-        path, sha = docs._rel(form.get("path", "")), form.get("sha", "")
-        old, now = docs.read(name, path)
-        if old is None:
-            raise docs.Refused(f"notes/docs/{path} is not there (any more)")
-        if sha != now:
-            raise docs.Refused(f"notes/docs/{path} changed since you looked")
-        ok, last = actions.run_now(["docs", name, "rm", path, "--expect-sha", sha], who="web")
-        if not ok:
-            return _html(409, web_pages.h("<p>{t}</p>", t=last))
-    except docs.Refused as e:
-        return _html(409, web_pages.h("<p>refused: {e}</p>", e=str(e)))
-    try:
-        said = web_chat.doc_saved(name, login, path, old, None, "none")
+        return web_chat.doc_saved(name, login, path, old, None, "none")
     except web_chat.Refused as e:
-        said = f"deleted, but {name} was not told yet: {e}"
+        return f"deleted, but {name} was not told yet: {e}"
+
+
+def _delete_doc(name: str, login: str, form: dict) -> Response:
+    from . import docs
+    try:
+        said = delete_doc(name, login, form)
+    except DocRefused as e:
+        return _html(409, web_pages.h("<p>{t}</p>", t=str(e)))
+    except (docs.Refused, DocStale) as e:
+        return _html(409, web_pages.h("<p>refused: {e}</p>", e=str(e)))
     return _html(200, web_pages.h("<p>{t}</p>", t=said))
+
+
+def comment_action(name: str, login: str, action: str | None, form: dict) -> tuple[str, str]:
+    """A document comment (docs/plans/PLAN-comments.md): a new thread or a reply (`action` None), or edit, delete, send
+    or state. (what to say, the thread's id); doc_comments.Refused or web_chat.Refused, in words."""
+    from . import doc_comments, web_chat
+    pid, text = form.get("pid", ""), form.get("text", "")
+    if action is None:
+        if form.get("thread"):
+            tid = doc_comments.reply(name, pid, form["thread"], text, "operator")
+        else:
+            try:
+                anchor = json.loads(form["anchor"]) if form.get("anchor", "").strip() else None
+            except ValueError:
+                raise doc_comments.Refused("invalid anchor JSON") from None
+            tid = doc_comments.add_thread(name, pid, form.get("doc", ""), anchor,
+                                           form.get("sha", ""), text)
+        said = f"kept, not sent: {name} sees it in notes/comments/ and answers it when you ask"
+        if form.get("send") in ("1", "cycle"):     # cycle: for its next cycle (PLAN-background-messages.md)
+            try:
+                said = (web_chat.send_comment_background(name, login, pid) if form["send"] == "cycle"
+                        else web_chat.send_comment(name, login, pid)[1])
+            except (doc_comments.Refused, web_chat.Refused) as e:
+                said = f"saved, but not sent: {e}"
+        else:                                 # the instance's copy holds unsent comments too (sending syncs it)
+            web_chat._sync_copies(name, [doc_comments.get_post(name, pid)["doc"]])
+    elif action == "state":
+        tid = form.get("thread", "")
+        doc_comments.set_state(name, tid, form.get("state", ""))
+        thread = next(t for t in doc_comments.threads(name) if t["id"] == tid)
+        web_chat._sync_copies(name, [thread["doc"]])
+        said = f"{tid}: {form['state']}"
+    else:
+        post = doc_comments.get_post(name, pid)
+        tid = post["thread"]
+        if action == "edit":
+            doc_comments.edit(name, pid, text)
+            web_chat._sync_copies(name, [post["doc"]])
+            said = "comment edited"
+        elif action == "delete":
+            doc_comments.delete(name, pid)
+            web_chat._sync_copies(name, [post["doc"]])
+            said = "comment deleted"
+        elif form.get("when") == "cycle":
+            said = web_chat.send_comment_background(name, login, pid)
+        else:
+            _, said = web_chat.send_comment(name, login, pid)
+    return said, tid
 
 
 def _comment(name: str, login: str, action: str | None, form: dict) -> Response:
     from . import doc_comments, web_chat
-    pid, text = form.get("pid", ""), form.get("text", "")
     try:
-        if action is None:
-            if form.get("thread"):
-                tid = doc_comments.reply(name, pid, form["thread"], text, "operator")
-            else:
-                try:
-                    anchor = json.loads(form["anchor"]) if form.get("anchor", "").strip() else None
-                except ValueError:
-                    raise doc_comments.Refused("invalid anchor JSON") from None
-                tid = doc_comments.add_thread(name, pid, form.get("doc", ""), anchor,
-                                               form.get("sha", ""), text)
-            said = f"kept, not sent: {name} sees it in notes/comments/ and answers it when you ask"
-            if form.get("send") in ("1", "cycle"):     # cycle: for its next cycle (PLAN-background-messages.md)
-                try:
-                    said = (web_chat.send_comment_background(name, login, pid) if form["send"] == "cycle"
-                            else web_chat.send_comment(name, login, pid)[1])
-                except (doc_comments.Refused, web_chat.Refused) as e:
-                    said = f"saved, but not sent: {e}"
-            else:                                 # the instance's copy holds unsent comments too (sending syncs it)
-                web_chat._sync_copies(name, [doc_comments.get_post(name, pid)["doc"]])
-        elif action == "state":
-            tid = form.get("thread", "")
-            doc_comments.set_state(name, tid, form.get("state", ""))
-            thread = next(t for t in doc_comments.threads(name) if t["id"] == tid)
-            web_chat._sync_copies(name, [thread["doc"]])
-            said = f"{tid}: {form['state']}"
-        else:
-            post = doc_comments.get_post(name, pid)
-            tid = post["thread"]
-            if action == "edit":
-                doc_comments.edit(name, pid, text)
-                web_chat._sync_copies(name, [post["doc"]])
-                said = "comment edited"
-            elif action == "delete":
-                doc_comments.delete(name, pid)
-                web_chat._sync_copies(name, [post["doc"]])
-                said = "comment deleted"
-            elif form.get("when") == "cycle":
-                said = web_chat.send_comment_background(name, login, pid)
-            else:
-                _, said = web_chat.send_comment(name, login, pid)
+        said, tid = comment_action(name, login, action, form)
     except (doc_comments.Refused, web_chat.Refused) as e:
         return _html(409, web_pages.h("<p>refused: {e}</p>", e=str(e)))
     return _html(200, web_pages.h("<p>{t}</p>", t=said), {"X-Thread": tid})
@@ -1119,23 +1193,9 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str,
 
 
 def _sent_during(name: str, chat: dict | None, archived: bool = False) -> list[dict]:
-    """What the instance sent the operator (send_message), shown in its chat as a Telegram bot chat shows it: since the
-    chat on screen began — and after it ended too, until the operator's next message starts a new chat, so a message
-    a push points at (channel.py, web_alerts.py) is there to answer. A past chat (`archived`) keeps its own span. With
-    no chat on screen: since the last one was cleared or ended, or, if it never had one, those still unread.
-    With them, in the same span, what the operator left for its next cycle (messages.BACKGROUND): not a chat turn, its
-    `read` says whether a cycle has read it yet."""
-    from . import messages
-    if chat:
-        start, end = chat["created"], (chat.get("ended") or "9999") if archived else "9999"
-    else:
-        from . import web_chat
-        last = next(iter(web_chat.chats(name)), None)
-        start, end = (last.get("cleared") or last.get("ended") or last["created"]) if last else "", "9999"
-    rows = [m for m in messages.history() if start <= m["ts"] <= end and (
-        (m["from"] == name and m["to"] == "operator") or
-        (m["from"] == "operator" and m["to"] == name and m.get("via") == messages.BACKGROUND))]
-    return rows if start else [m for m in rows if not m["read"]]
+    """The messages a chat page shows over its span: web_chat.sent_during."""
+    from . import web_chat
+    return web_chat.sent_during(name, chat, archived)
 
 
 def _chat_file(cid: str, k: int, j: int) -> Response | None:
@@ -1406,12 +1466,19 @@ class Handler(BaseHTTPRequestHandler):
     def _serve(self, method: str) -> None:
         from .messages import ATTACH_MAX_TOTAL
         length = int(self.headers.get("Content-Length") or 0)
-        limit = ATTACH_MAX_TOTAL + 1_000_000 if self.path.startswith("/chat/") else 1_000_000   # files go with a chat
+        sends = self.path.startswith("/chat/") or re.match(r"/app/v1/chat/[^/?]+/send(\?|$)", self.path)
+        limit = ATTACH_MAX_TOTAL + 1_000_000 if sends else 1_000_000   # files go with a chat
         if length > limit:
             # Plain text, as a refusal the page shows: send_error's own HTML page landed whole in the document view
-            # (W15, review 2026-10-24). The body is never read, so the connection closes after it.
-            r = _secured(Response(413, f"Too large: at most {limit // 1_000_000} MB can be sent at once.".encode(),
-                                  {"Content-Type": "text/plain; charset=utf-8", "Connection": "close"}))
+            # (W15, review 2026-10-24); the apps get their JSON error. The body is never read, so the connection
+            # closes after it.
+            said = f"Too large: at most {limit // 1_000_000} MB can be sent at once."
+            if self.path.startswith("/app/v1/"):
+                from . import app_api
+                r = _secured(app_api.error(413, "too_large", said))
+            else:
+                r = _secured(Response(413, said.encode(), {"Content-Type": "text/plain; charset=utf-8"}))
+            r.headers["Connection"] = "close"
             self.close_connection = True
         else:
             body = self.rfile.read(length) if length else b""
@@ -1429,6 +1496,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         self._serve("POST")
+
+    def do_DELETE(self):                          # the apps' DELETE /app/v1/push/register
+        self._serve("DELETE")
 
 
 def serve() -> int:
@@ -1499,9 +1569,20 @@ def command(action: str, name: str | None = None, everything: bool = False) -> i
     autonomy.service("web", "status")
     print(f"url: {url()}  ·  allowed: {', '.join(sorted(allowed_logins())) or '(none)'}")
     ds = devices()
-    print(f"paired browsers: {len(ds)}")
+    apps = {k for k, v in ds.items() if v.get("platform")}
+    print(f"paired browsers: {len(ds) - len(apps)}")
     for k, v in sorted(ds.items(), key=lambda kv: kv[1].get("created", "")):
-        print(f"  {k}  {v.get('name')}  paired {v.get('created', '')[:16]}  last seen {v.get('last_seen', '')[:16]}")
+        if k not in apps:
+            print(f"  {k}  {v.get('name')}  paired {v.get('created', '')[:16]}  last seen {v.get('last_seen', '')[:16]}")
+    apns = apns_module()
+    problem = "supervisor/apns.py is not installed" if apns is None else apns.configured()
+    print(f"native apps: {len(apps)}  ·  native push: {'ready' if not problem else f'off: {problem}'}")
+    for k, v in sorted(ds.items(), key=lambda kv: kv[1].get("created", "")):
+        if k in apps:
+            push = apns.status(k) if apns else {"on": False, "reason": "native push is not installed"}
+            print(f"  {k}  {v.get('name')} ({v['platform']})  paired {v.get('created', '')[:16]}  last seen "
+                  f"{v.get('last_seen', '')[:16]}  push {'on' if push.get('on') else 'off'}"
+                  + (f" ({push['env']})" if push.get("env") else "") + (f": {push['reason']}" if push.get("reason") else ""))
     return 0
 
 

@@ -1,0 +1,75 @@
+{
+  "path": "ledger.md",
+  "text": "# Ledger\n\nNet daily totals are rounded once, at the end.\n",
+  "sha": "a908cc49a51a6a211a039ce1b714143309243f85de04db75bd772338dcd019e3",
+  "in_chat": true,
+  "overwritten": {
+    "lines": 1,
+    "ts": "2026-11-03T13:40:00+01:00",
+    "text": "# Ledger\n\nRounded per account.\n",
+    "diff": "--- yours\n+++ now\n@@ -2,2 +2,2 @@\n \n-Rounded per account.\n+Net daily totals are rounded once, at the end."
+  },
+  "threads": [
+    {
+      "id": "c3",
+      "doc": "ledger.md",
+      "by": "operator",
+      "state": "open",
+      "created": "2026-11-03T13:50:12+01:00",
+      "anchor": {
+        "exact": "rounded once, at the end",
+        "prefix": "Net daily totals are ",
+        "suffix": ".",
+        "start": 30
+      },
+      "doc_changed": true,
+      "unsectioned": [],
+      "posts": [
+        {
+          "pid": "p-1e2d3c4b5a697887",
+          "by": "operator",
+          "text": "Per account or overall?",
+          "ts": "2026-11-03T13:50:12+01:00",
+          "unsent": false,
+          "sent": null,
+          "turn": null,
+          "seen": "web-3f9a1c0d7e2b4a65#1"
+        },
+        {
+          "pid": "p-9a8b7c6d5e4f3021",
+          "by": "wren",
+          "text": "Per account, then summed.",
+          "ts": "2026-11-03T14:01:12+01:00",
+          "unsent": false,
+          "sent": null,
+          "turn": "web-3f9a1c0d7e2b4a65#1",
+          "seen": null
+        }
+      ]
+    },
+    {
+      "id": "c2",
+      "doc": "ledger.md",
+      "by": "wren",
+      "state": "resolved",
+      "created": "2026-11-03T13:00:00+01:00",
+      "anchor": null,
+      "doc_changed": false,
+      "unsectioned": [
+        "web-3f9a1c0d7e2b4a65#1"
+      ],
+      "posts": [
+        {
+          "pid": "p-0000000000000002",
+          "by": "wren",
+          "text": "Is this the right place?",
+          "ts": "2026-11-03T13:00:00+01:00",
+          "unsent": false,
+          "sent": null,
+          "turn": "message:20261103-130000-1-from-wren.md",
+          "seen": null
+        }
+      ]
+    }
+  ]
+}

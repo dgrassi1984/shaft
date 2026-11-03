@@ -1,0 +1,18 @@
+{
+  "instances": [
+    {
+      "name": "wren",
+      "state": "idle",
+      "since": "",
+      "busy_note": null,
+      "model": "cloud mimo-v2.6-pro",
+      "usd_today": 0.12,
+      "line": "Answered question?",
+      "last": "2026-11-03T14:12:00+01:00",
+      "replying": false,
+      "unread": true,
+      "next_cycle": "for wren's next cycle, which this starts now"
+    }
+  ],
+  "badge": 1
+}
