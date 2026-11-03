@@ -30,10 +30,11 @@ FIELDS: dict[str, tuple[type, object]] = {
     "MAX_TOKENS_STEP": (int, 16384),     # one model turn inside a tool loop (live, sleep)
     "MAX_STEPS_LIVE": (int, 12),
     "MAX_STEPS_SLEEP": (int, 30),
+    "SLEEP_VERDICT_CHARS": (int, 120000),   # judges' verdicts one sleep reads (~30k tokens); says when cut short
     "TALK_REPLY_CALLS": (int, 3),       # reply first, queue the rest; 0 disables each budget
     "TALK_REPLY_S": (int, 45),
     "MAX_STEPS_TALK": (int, 0),        # 0 = no limit (conversations)
-    "LOOP_GUARD": (str, "shadow"),     # #103: effect repeats, measured before showing a note
+    "LOOP_GUARD": (str, "on"),         # #103: repeated effects show a note
     "LOOP_EFFECT_ROUNDS": (int, 3),
     "CONTEXT_JOURNAL_CHARS": (int, 16000),
     "STALE_LINE_HOURS": (int, 24),     # sleep review; 0 disables each check
@@ -120,7 +121,7 @@ def _coerce(kind: type, raw: str, name: str = ""):
         raise ValueError(f"must be one of {', '.join(CHOICES[name])}")
     if kind is int:
         value = int(raw)
-        if name == "LOOP_EFFECT_ROUNDS" and value < 1:
+        if name in ("LOOP_EFFECT_ROUNDS", "SLEEP_VERDICT_CHARS") and value < 1:
             raise ValueError("must be positive")
         return value
     return raw
