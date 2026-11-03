@@ -316,6 +316,55 @@ def docs(root: Path) -> list[tuple[str, str]]:
 OPERATOR_MESSAGE = "-from-operator.md"
 
 
+# Review I7: forced curiosity draws only from surprises about the outside world or the operator. A surprise is inward
+# when its own text is about my machinery: a path in my tool folders, a builtin or bookkeeping tool by name, or an
+# ambiguous word (plugin, gate, ledger, broker, ...) that a possessive or a machinery verb ties to me. Plain English
+# senses ("the broker's margin rule", "the WordPress plugin", "the garden gate") stay outward. The goal the surprise
+# was met under is not read: a tooling cycle can still be surprised by the world.
+INWARD = re.compile(
+    r"(?:^|[\s`'\"(])(?:\./)?(?:shaft|plugins|jobs|\.jobs|ledgers?|gate|self|memory|logs|tests|\.venv|\.tmp)/"
+    r"|\b[\w-]+\.(?:py|jsonl)\b|\bplugin\.json\b"
+    r"|\b(?:read_file|write_file|append_file|list_files|search_memory|rewrite_facts|write_digest|retire_fact"
+    r"|update_self_model|update_personality|view_image|commit_to|settle_commitment|declare_intent|confirm_confidence"
+    r"|finish_cycle|close_surprise|open_project|close_project|list_instances|delegate_coding|set_config"
+    r"|secret_set|secret_list|secret_delete)\b"
+    r"|`(?:run|remember|record|history|decide|trial)`|\b(?:run|remember|record|history|decide|trial)\(|"
+    r"\bthe (?:run|remember|record|history|decide|trial) tool\b"
+    r"|\b(?:my|our|own|the instance'?s)\s+(?:[\w-]+\s+){0,2}"
+    r"(?:tools?|tooling|plugins?|jobs?|ledgers?|gate|code|scripts?|tests?|sandbox|broker|self-model)\b"
+    r"|\btest[- ]gate\b|\bthe gate (?:rejected|held|kept|ran|failed|passed|re-gated)\b|\bgate baseline\b"
+    r"|\bthe (?:plugin|sandbox|broker) (?:returned|crashed|failed|refused|timed out|raised|errored|rejected)\b")
+STOPWORDS = frozenset(
+    "about above after again against also because been before being below between both could does doing done down "
+    "during each even ever every from further have having here into just like made make many more most much must "
+    "only other ought over same shall should since some still such than that their theirs them then there these they "
+    "this those through under until upon very want were what when where which while whom whose will with within "
+    "without would your yours".split())
+
+
+def inward(item: dict) -> bool:
+    """Own machinery is not a source for forced curiosity (review I7); the supervisor keeps its own copy."""
+    return bool(INWARD.search(" ".join(str(item.get(k) or "") for k in FIELDS).lower()))
+
+
+def _words(text: str) -> set[str]:
+    return {w for w in re.findall(r"\w+", text.lower()) if len(w) > 3 and w not in STOPWORDS}
+
+
+def relevance(item: dict, context: str) -> int:
+    """One plus the content words a surprise shares with the briefing, goals and inbox; closed-class words do not
+    count, or a long briefing would weight every surprise alike."""
+    return 1 + len(_words(" ".join(str(item.get(k) or "") for k in FIELDS)) & _words(context))
+
+
+def choose(items: list[dict], context: str, seed: str) -> dict | None:
+    """One outward surprise, weighted by relevance; reproducible in a replay."""
+    outward = [it for it in items if not inward(it)]
+    if not outward:
+        return None
+    return random.Random(seed + "|surprise").choices(outward, weights=[relevance(it, context) for it in outward])[0]
+
+
 def draw(every: int, has_queue: bool, inbox: list[str], seed: str) -> dict:
     """Whether this cycle is a curiosity cycle: with probability 1/every while the queue is not empty and no message
     from the operator waits (his come first); 0 = never. The coin is seeded by the cycle's start, so a replay of this

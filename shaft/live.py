@@ -47,7 +47,9 @@ ATTENTION = {"type": "array", "description": "optional, up to 4: where you expec
 PROMISES = {"type": "array", "description": "promises to the operator or another agent you made this cycle "
             "and will keep later: "
             "{promise, due (YYYY-MM-DD[ HH:MM], today, tomorrow), criterion (how someone else could check), made_to "
-            "(operator or a peer name from list_instances)}; own plans belong in goals/notes; [] if none",
+            "(operator or a peer name from list_instances)}; a promise to the operator needs a message you delivered "
+            "to them with send_message this cycle, else it is recorded as self; own plans belong in goals/notes; "
+            "[] if none",
             "items": {"type": "object", "properties": {"promise": S, "due": S, "criterion": S, "made_to": S},
                       "required": ["promise", "due", "criterion", "made_to"]}}
 
@@ -188,6 +190,8 @@ def run(cfg, state: State, client: Client) -> str:
             return "ERROR: origin must be self, operator or instance — who chose this goal"
         if origin != "self" and not ref:
             return f"ERROR: origin {origin}: cite the message, conversation or goals.md item in origin_ref"
+        if curiosity["drawn"] and ref != f"surprise:{curiosity['selected']}":
+            return f"ERROR: this curiosity cycle must follow surprise:{curiosity['selected']}"
         if (m := surprises.REF.match(ref)) or ref.startswith("surprise:"):   # PLAN-measurement's one provenance field
             if origin != "self":
                 return "ERROR: a goal taken from one of my surprises has origin self (origin_ref surprise:<id>)"
@@ -225,7 +229,7 @@ def run(cfg, state: State, client: Client) -> str:
 
     def _promise(c: dict) -> str:
         try:
-            return commitments.add(state.root, c, "cycle", clock.now())
+            return commitments.add(state.root, {**c, **commitments.message_source(toolbox.log)}, "cycle", clock.now())
         except OSError as e:   # a ledger I cannot write must not cost me the finish
             return f"ERROR: commitment not recorded: {type(e).__name__}: {e}"
 
@@ -368,8 +372,20 @@ def run(cfg, state: State, client: Client) -> str:
     toolbox.run = gated_run
 
     inbox = read_inbox(state)
-    curiosity = surprises.draw(cfg.CURIOSITY_EVERY_CYCLES, bool(surprises.queue(state.root, started)),
-                               [n for n, _ in inbox], f"{cfg.NAME}|{started:%Y-%m-%dT%H:%M}")
+    seed = f"{cfg.NAME}|{started:%Y-%m-%dT%H:%M}"
+    queued = surprises.queue(state.root, started)
+    curiosity = surprises.draw(cfg.CURIOSITY_EVERY_CYCLES, bool(queued), [n for n, _ in inbox], seed)
+    curiosity_text = ""
+    if curiosity["drawn"]:   # review I7: a drawn cycle follows the world or the operator, never my own machinery
+        context = "\n".join([prompts.briefing(state.root, cfg), state.read(state.goals_md),
+                             *(text for _, text in inbox)])
+        selected = surprises.choose(queued, context, seed)
+        if selected is None:
+            curiosity.update(drawn=False, skipped_for="no_outward_surprise")
+            curiosity_text = prompts.NO_OUTWARD_SURPRISE
+        else:
+            curiosity["selected"] = selected["id"]
+            curiosity_text = prompts.CURIOSITY + "\n" + surprises._row(selected, started, surprises.QUEUE_CHARS)
     system = opening(cfg, state, toolbox)
     ws, focus = front(cfg, state, inbox, system)
     messages = [
@@ -382,7 +398,7 @@ def run(cfg, state: State, client: Client) -> str:
                 "clauses": "Declare 1-4 clauses with a confidence 0-100 for each. Do not combine them. "
                            "The supervisor multiplies their probabilities, assuming independence. No confirm step or base rate is shown.",
                 "noconfirm": "Declare confidence 0-100. No confirm step or base rate is shown."}[mode]
-            + (prompts.CURIOSITY if curiosity["drawn"] else "")
+            + curiosity_text
             + x_probes.envelope(state.root, broker.envelope(), agent.time_left())
             + focus, state.root, listed_in=inbox_text(inbox))},
     ]
@@ -451,7 +467,7 @@ def run(cfg, state: State, client: Client) -> str:
             lines.append("**Not resolved:** " + "; ".join(
                 f"{r['id']} ({'no how given' if not r['how'] else 'no open surprise by that id'})" for r in stale))
     if curiosity["drawn"]:
-        lines.append("**Curiosity cycle** (drawn): my goal was to come from my open surprises.")
+        lines.append(f"**Curiosity cycle** (drawn): selected outward surprise {curiosity['selected']}.")
     if inbox:
         lines.append(f"**Messages read:** {', '.join(n for n, _ in inbox)}")
     body = "\n\n".join(lines)

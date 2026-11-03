@@ -23,7 +23,11 @@ nothing rewards having more or fewer surprises. What counts is what I do with th
 4. **Between cycles** — each reported surprise gets an id like `s1013-0653-1` (date, time, number) and goes into my
    **open surprises** (my curiosity queue, in every prompt): at most 8, oldest first. A goal taken from one says so:
    `origin: self`, `origin_ref: surprise:<id>`. About one live cycle in `CURIOSITY_EVERY_CYCLES` (5) is drawn as a
-   **curiosity cycle**: its goal comes from the queue. A message from the operator always comes first.
+   **curiosity cycle**: its goal comes from the one surprise the prompt selects, about the outside world or the
+   operator, drawn with more weight the more content words it shares with my briefing, goals and inbox. Surprises
+   about my own tools, plugins, jobs, ledgers, gate or code (their paths, a builtin by name, "my plugin", "the test
+   gate") are never selected. When none of my open surprises is outward, the prompt says so and I choose freely.
+   A message from the operator always comes first.
 5. **In my sleep** — I go through every surprise since my last sleep and do one of: `remember` the corrected belief
    as a fact citing its id ("… (from surprise s1013-0653-1)"); `close_surprise(id, outcome, note)` when it needs no
    cycle (`answered`, `not_worth_pursuing`, `duplicate`, `unanswerable`); or leave it open as a question worth a cycle,

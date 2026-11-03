@@ -261,6 +261,7 @@ def run(cfg, state: State, client: Client, show_thinking: bool = False, input_fn
     toolbox = Toolbox(state.root)
     toolbox.conversation_when = clock.now()
     toolbox.commit_source = "talk" if cfg.COMMITMENTS == "on" else ""   # promises to the operator or peer agents
+    toolbox.commit_talk_id = talk_id if not speaker else ""
     who = (f"{speaker} — not {cfg.OPERATOR_NAME}, but someone at {cfg.OPERATOR_NAME}'s terminal, acting for "
            f"them; what {speaker} says or does is not something {cfg.OPERATOR_NAME} said or did") if speaker \
         else cfg.OPERATOR_NAME
@@ -354,6 +355,7 @@ def answer(cfg, state: State, client: Client, request: dict) -> None:
     toolbox = Toolbox(state.root)
     toolbox.conversation_when = clock.now()
     toolbox.commit_source = "talk" if cfg.COMMITMENTS == "on" else ""
+    toolbox.commit_talk_id = talk_id
     mode = prompts.API_MODE.format(operator=cfg.OPERATOR_NAME, app=app,
                                    since=since_last_talk(state, cfg.OPERATOR_NAME))
     mode += prompts.reply_budget(cfg)
