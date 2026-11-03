@@ -60,6 +60,7 @@ class ApiTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.roots, True)
         for n in ("shaft", "wren"):
             (self.roots / n).mkdir()
+        patches.append(mock.patch.object(api.tom, "SUP_DIR", self.roots / ".supervisor"))
         for p in patches:
             p.start()
             self.addCleanup(p.stop)
@@ -78,6 +79,31 @@ class ApiTest(unittest.TestCase):
             headers["Tailscale-User-Login"] = login
         r = urllib.request.Request(self.base + path, data=json.dumps(body).encode() if body else None, headers=headers)
         return urllib.request.urlopen(r, timeout=10)
+
+    def test_chat_and_interject_record_operator_text_and_channel(self):
+        for channel in ("web", "telegram", "api"):
+            with self.subTest(channel=channel):
+                body = {"model": "shaft", "messages": [{"role": "user", "content": "old"},
+                        {"role": "assistant", "content": "reply"}, {"role": "user", "content": [
+                            {"type": "text", "text": "Yes,"}, {"type": "image_url", "image_url": {}},
+                            {"type": "text", "text": "go ahead."}]}]}
+                headers = {"Content-Type": "application/json", "Authorization": f"Bearer {KEY}",
+                           "Tailscale-User-Login": ME, "X-Shaft-Channel": channel}
+                for route in ("/chat/completions", "/chat/interject"):
+                    with mock.patch.object(api.Handler.live, "interject", return_value=True):
+                        r = urllib.request.Request(self.base + route, data=json.dumps(body).encode(), headers=headers)
+                        json.load(urllib.request.urlopen(r, timeout=10))
+                rows = api.tom._rows("shaft", "-operator-said")
+                self.assertEqual([(r["text"], r["channel"]) for r in rows[-2:]],
+                                 [("Yes,\ngo ahead.", channel)] * 2)
+                self.assertEqual(len(rows), 2 * (("web", "telegram", "api").index(channel) + 1))
+
+    def test_empty_chat_and_rejected_interject_are_not_recorded(self):
+        self.req("/chat/completions", {"model": "shaft", "messages": [{"role": "user", "content": "  "}]}).read()
+        with self.assertRaises(urllib.error.HTTPError):
+            self.req("/chat/interject", {"model": "wren", "messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(api.tom._rows("shaft", "-operator-said"), [])
+        self.assertEqual(api.tom._rows("wren", "-operator-said"), [])
 
     def test_only_the_owner_with_the_key_gets_in(self):
         for key, login, code in ((None, ME, 401), ("wrong", ME, 401), (KEY, "someone@example.com", 403), (KEY, None, 403)):
@@ -121,12 +147,14 @@ class ApiTest(unittest.TestCase):
         def ask(rid):
             body = {"model": "shaft", "messages": [{"role": "user", "content": "what is teal?"}]}
             headers = {"Content-Type": "application/json", "Authorization": f"Bearer {KEY}",
-                       "Tailscale-User-Login": ME, "X-Shaft-Request-Id": rid}
+                       "Tailscale-User-Login": ME, "X-Shaft-Request-Id": rid, "X-Shaft-Channel": "telegram"}
             r = urllib.request.Request(self.base + "/chat/completions", data=json.dumps(body).encode(), headers=headers)
             return json.load(urllib.request.urlopen(r, timeout=10))
         with mock.patch.object(api, "run_agent", counting):
             first, again = ask("telegram-shaft-7"), ask("telegram-shaft-7")
             other = ask("telegram-shaft-8")
+        self.assertEqual([(r["text"], r["channel"]) for r in api.tom._rows("shaft", "-operator-said")],
+                         [("what is teal?", "telegram")] * 2)
         self.assertEqual(len(runs), 2, "the replayed request ran again")
         self.assertEqual(again["choices"][0]["message"]["content"], first["choices"][0]["message"]["content"])
         self.assertEqual(other["choices"][0]["message"]["content"], "Teal is blue-green.")

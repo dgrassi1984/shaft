@@ -121,6 +121,99 @@ class TomTest(unittest.TestCase):
         self.assertEqual(found["file"], "20261026-120200-000000-from-operator.md")
         self.assertEqual(found["text"], "Yes, go ahead.")
 
+    def heard(self, at, text="Yes.", channel="web"):
+        tom._append("a", {"at": at.isoformat(), "channel": channel, "text": text}, "-operator-said")
+
+    def test_chat_reply_window_sender_and_earliest_delivery(self):
+        receipt = self.receipt(to="operator")
+        for at in (self.start - timedelta(seconds=1), self.start, self.start + timedelta(hours=3)):
+            self.heard(at)
+        self.assertIsNone(tom.reply_for("a", receipt))
+        self.heard(self.start + timedelta(hours=2))
+        self.assertEqual(tom.reply_for("a", receipt)["at"], "2026-10-26T14:00:00")
+        self.heard(self.start + timedelta(minutes=2))
+        self.assertEqual(tom.reply_for("a", receipt), {
+            "file": "chat:web", "at": "2026-10-26T12:02:00", "text": "Yes."})
+        self.assertIsNone(tom.reply_for("a", self.receipt()))
+        path = self.reply(self.start + timedelta(minutes=1), sender="operator")
+        self.assertEqual(tom.reply_for("a", receipt)["file"], path.name)
+        self.heard(self.start + timedelta(seconds=1), channel="telegram")
+        self.assertEqual(tom.reply_for("a", receipt)["file"], "chat:telegram")
+
+    def test_reply_order_preserves_chat_microseconds_before_formatting(self):
+        at = self.start + timedelta(seconds=1)
+        path = self.reply(at + timedelta(microseconds=100), sender="operator")
+        self.heard(at + timedelta(microseconds=200))
+        self.assertEqual(tom.reply_for("a", self.receipt(to="operator"))["file"], path.name)
+        self.heard(at + timedelta(microseconds=50))
+        self.assertEqual(tom.reply_for("a", self.receipt(to="operator")), {
+            "file": "chat:web", "at": "2026-10-26T12:00:01", "text": "Yes."})
+
+    def test_scored_replaces_rows_in_first_seen_order(self):
+        for row in ({"id": "one", "outcome": 0}, {"id": "two", "outcome": 1}, {"id": "one", "outcome": 1}):
+            tom._append("a", row, "-scored")
+        self.assertEqual(tom.scored("a"), [{"id": "one", "outcome": 1}, {"id": "two", "outcome": 1}])
+        tom._append("a", {"outcome": 0}, "-scored")      # no id: kept, never a KeyError in stats (people-models test)
+        self.assertEqual(tom.scored("a")[-1], {"outcome": 0})
+
+    def test_heard_truncates_and_logs_write_failure(self):
+        with mock.patch.object(tom, "datetime") as clock:
+            clock.now.return_value = self.start
+            tom.heard("a", "x" * 2500, "api")
+        self.assertEqual(tom._rows("a", "-operator-said"), [
+            {"at": self.start.isoformat(), "channel": "api", "text": "x" * 2000}])
+        with mock.patch.object(tom, "_append", side_effect=OSError("full")):
+            tom.heard("a", "hello", "web")
+        tom.log.assert_called_once()
+        with mock.patch.object(tom, "_append", side_effect=OSError("full")), \
+                mock.patch.object(tom, "log", side_effect=OSError("full")):
+            tom.heard("a", "hello", "web")
+
+    def legacy(self):
+        receipt = self.receipt(to="operator")
+        tom.record("a", receipt)
+        old = {**receipt, "reply": None, "outcome": 0, "brier": .64,
+               "scored_at": (self.start + timedelta(hours=2)).isoformat()}
+        tom._append("a", old, "-scored")
+        return old
+
+    def test_i5_legacy_false_miss_is_corrected_from_chat(self):
+        old = self.legacy()
+        self.heard(self.start + timedelta(minutes=1))
+        with mock.patch.object(judge, "ask", return_value={"match": "yes", "reason": "Agrees"}):
+            self.assertEqual(tom.score("a", self.start + timedelta(hours=3)), 1)
+        row, = tom.scored("a")
+        self.assertEqual(row["outcome"], 1)
+        self.assertNotEqual(row["outcome"], 0)
+        self.assertEqual(row["rescored"], old["scored_at"])
+        self.assertEqual(row["scorer"], 2)
+        self.assertEqual(row["scored_at"], "2026-10-26T15:00:00")
+        self.assertIn("Predictions scored: 1.", tom.section("a"))
+        for arm in ("a", "b"):
+            tom._append("a", {"id": "one", "arm": arm, "brier": .25, "match": "partial"}, "-baselines")
+        self.assertIn("instance: n=1, Brier=0.040, gist=1.000", tom.report(["a"]))
+        result = self.make().call("record", {"kind": "expectations"})
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["result"].count("Outcome:"), 1)
+        self.assertIn("corrected (scored earlier as no reply; a chat reply was missed):", result["result"])
+
+    def test_legacy_no_reply_is_checked_once_without_new_scored_at(self):
+        old = self.legacy()
+        now = self.start + timedelta(hours=3)
+        self.assertEqual(tom.score("a", now), 1)
+        row, = tom.scored("a")
+        self.assertEqual(row, {**old, "scorer": 2})
+        self.assertEqual(tom.score("a", now), 0)
+        self.assertEqual(len(tom._rows("a", "-scored")), 2)
+
+    def test_legacy_correction_judge_failure_stops_and_can_retry(self):
+        self.legacy()
+        self.heard(self.start + timedelta(minutes=1))
+        with mock.patch.object(judge, "ask", side_effect=judge.JudgeError("offline")):
+            self.assertEqual(tom.score("a", self.start + timedelta(hours=3)), 0)
+        self.assertIn("offline", tom.stopped.pop("a"))
+        self.assertEqual(len(tom._rows("a", "-scored")), 1)
+
     def test_reply_never_follows_file_or_folder_links(self):
         path = self.reply()
         target = self.project / "plain.md"

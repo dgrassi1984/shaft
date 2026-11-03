@@ -1,6 +1,7 @@
-"""Supervisor-timestamped expectations of replies, scored only from live deliveries."""
+"""Supervisor-timestamped expectations of replies, scored from live deliveries and operator chat."""
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import json
 from datetime import datetime, timedelta
@@ -14,6 +15,9 @@ MATCH_SCHEMA = {"type": "object", "properties": {
 PREDICT_SCHEMA = {"type": "object", "properties": {
     "will_reply": {"type": "integer", "minimum": 0, "maximum": 100}, "gist": {"type": "string"}},
     "required": ["will_reply", "gist"], "additionalProperties": False}
+
+
+SCORER = 2   # 2: chat turns count as replies; a no-reply row without it is checked again once (I5)
 
 
 stopped: dict[str, str] = {}   # instance -> why its last score() or baselines() stopped early (a judge failed)
@@ -48,6 +52,21 @@ def record(name: str, receipt: dict) -> None:
     _append(name, {**receipt, "text": receipt["text"][:2000]})
 
 
+def heard(name: str, text: str, channel: str) -> None:
+    """A message the operator sent `name` in a chat (web, Telegram, API): a reply that leaves no inbox file. Never
+    raises: a chat must not fail because this record could not be written."""
+    try:
+        _append(name, {"at": datetime.now().isoformat(), "channel": channel, "text": text[:2000]}, "-operator-said")
+    except OSError as e:
+        with contextlib.suppress(OSError):     # the log is a file too: the same full disk fails it
+            log(f"{name}: could not record an operator chat message for reply scoring: {e}")
+
+
+def scored(name: str) -> list[dict]:
+    """The latest score per receipt, in first-seen order; a row with no id is kept as it is, never fatal."""
+    return list({r.get("id") or n: r for n, r in enumerate(_rows(name, "-scored"))}.values())
+
+
 RECEIPT = {"id": str, "sent_at": str, "to": str, "within_hours": int, "will_reply": int, "gist": str}
 
 
@@ -65,8 +84,8 @@ def receipts(name: str) -> list[dict]:
 
 
 def reply_for(name: str, receipt: dict) -> dict | None:
-    """The first message from the recipient after the send, within the window. Messages carry no thread id: any
-    message from that sender in the window counts as the reply — a known limit, stated in the plan."""
+    """The first delivery or operator chat turn from the recipient after the send, within the window.
+    No thread id: any message from that sender in the window counts as the reply, including chat turns."""
     start = datetime.fromisoformat(receipt["sent_at"])
     end = start + timedelta(hours=receipt["within_hours"])
     root, found = INSTANCES / name, []
@@ -83,8 +102,17 @@ def reply_for(name: str, receipt: dict) -> dict | None:
                 continue
             text = safe_read(root, f"{folder}/{file}", "", errors="replace")
             if text:
-                found.append({"file": file, "at": at.isoformat(), "text": text.partition("\n\n")[2].strip()})
-    return min(found, key=lambda r: (r["at"], r["file"])) if found else None
+                found.append((at, {"file": file, "at": at.isoformat(), "text": text.partition("\n\n")[2].strip()}))
+    if receipt["to"] == "operator":
+        for row in _rows(name, "-operator-said"):
+            try:
+                at = datetime.fromisoformat(row["at"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if start < at <= end:
+                found.append((at, {"file": f"chat:{row['channel']}", "at": at.isoformat(timespec="seconds"),
+                                  "text": row["text"]}))
+    return min(found, key=lambda r: (r[0], r[1]["file"]))[1] if found else None
 
 
 def _grade(name, gist, reply):
@@ -104,9 +132,10 @@ def _outcome(name, prediction, reply):
 
 def score(name: str, now: datetime | None = None) -> int:
     now, count = now or datetime.now(), 0
-    done = {r["id"] for r in _rows(name, "-scored")}
+    done = {r["id"]: r for r in scored(name)}
     for receipt in receipts(name):
-        if receipt["id"] in done:
+        old = done.get(receipt["id"])
+        if old is not None and (old.get("reply") is not None or "scorer" in old):
             continue
         reply = reply_for(name, receipt)
         if reply and datetime.fromisoformat(reply["at"]) > now:
@@ -119,8 +148,14 @@ def score(name: str, now: datetime | None = None) -> int:
             log(f"{name}: tom scoring stopped: {e}")
             stopped[name] = f"scoring: {e}"   # for the verb to say: a count of 0 alone hides why
             break
-        _append(name, {**receipt, **result, "reply": reply, "scored_at": now.isoformat(timespec="seconds")}, "-scored")
-        done.add(receipt["id"])
+        row = {**receipt, **result, "reply": reply, "scored_at": now.isoformat(timespec="seconds"), "scorer": SCORER}
+        if old is not None:
+            if reply is None:
+                row = {**old, "scorer": SCORER}
+            else:
+                row["rescored"] = old["scored_at"]
+        _append(name, row, "-scored")
+        done[receipt["id"]] = row
         count += 1
     return count
 
@@ -136,7 +171,7 @@ def _summary(rows):
 
 
 def section(name: str) -> list[str]:
-    rows = _rows(name, "-scored")
+    rows = scored(name)
     if not rows:
         return []
     lines = ["## What I expected others to answer, and what they did", f"Predictions scored: {len(rows)}."]
@@ -156,7 +191,7 @@ def _baseline_rows(name):
 
 def baselines(name: str) -> int:
     done, count = _baseline_rows(name), 0
-    for row in _rows(name, "-scored"):
+    for row in scored(name):
         if row.get("reply") is None:
             continue
         for arm in ("a", "b"):
@@ -197,7 +232,7 @@ def report(names: list[str]) -> str:
     lines = []
     for name in names:
         baseline = _baseline_rows(name)
-        rows = [r for r in _rows(name, "-scored")
+        rows = [r for r in scored(name)
                 if all("brier" in baseline.get((r["id"], arm), {}) for arm in ("a", "b"))]
         arms = [[baseline[(r["id"], arm)] for r in rows] for arm in ("a", "b")]
         lines.extend([name, "instance: " + _summary(rows), "baseline (a): " + _summary(arms[0]),

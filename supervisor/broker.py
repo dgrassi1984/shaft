@@ -1608,7 +1608,7 @@ class Broker:
             return text
         elif kind == "expectations":
             from . import tom
-            rows = sorted((r for r in tom._rows(self.name, "-scored")
+            rows = sorted((r for r in tom.scored(self.name)
                            if known(r["scored_at"].replace("T", " "))
                            and (not since or r["scored_at"].replace("T", " ") > since)),
                           key=lambda r: r["scored_at"].replace("T", " "))[-limit:]
@@ -1620,6 +1620,8 @@ class Broker:
                 outcome = (f"replied {reply['at'].replace('T', ' ')[:16]}; "
                            f"gist match: {r.get('match', '?')} — {reason}." if reply
                            else "no reply in the window.")
+                if r.get("rescored"):
+                    outcome = "corrected (scored earlier as no reply; a chat reply was missed): " + outcome
                 entries.append(f"{r['sent_at'].replace('T', ' ')[:16]} to {r['to']} — said will_reply "
                                f"{r['will_reply']}% within {r['within_hours']}h; gist: \"{gist}\". Outcome: {outcome}")
             text = "\n".join(entries)
