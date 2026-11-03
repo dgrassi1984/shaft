@@ -19,6 +19,7 @@ Chats are kept in .supervisor/web/chats/<id>.json, written only by this process.
 """
 from __future__ import annotations
 
+import hashlib
 import http.client
 import json
 import os
@@ -103,6 +104,8 @@ def save(chat: dict) -> None:
     tmp = d / f".{chat['id']}.{os.getpid()}.{threading.get_ident()}"
     tmp.write_text(json.dumps(chat, ensure_ascii=False, indent=1))
     os.replace(tmp, d / f"{chat['id']}.json")
+    with chat_saved:                                # a feed held by a long-poll answers now (app_api, wait_change)
+        chat_saved.notify_all()
     # The persisted user turn is the delivery receipt, including after a restart.
     ids = {fid for t in chat.get("turns", []) for fid in t.get("feedback", [])}
     if ids:
@@ -180,9 +183,18 @@ def reply_event(chat: dict) -> dict:
     return {"title": title, "body": first[:160], "url": f"/i/{name}/chat", "tag": name}
 
 
+def last_from(chat: dict | None, sent: list[dict]) -> str | None:
+    """The newest thing from the instance: an answer in `chat`, or a message to the operator among `sent` — what the
+    rail's `last` and a feed's `last` both are, so the apps' unread mark (web_seen) never drifts from the rail. None
+    when there is neither."""
+    stamps = [t["ts"] for t in (chat or {}).get("turns") or [] if t["role"] == "assistant"]
+    stamps += [m["ts"] for m in sent if m.get("to") == "operator"]
+    return max(stamps, default="") or None
+
+
 def summary(name: str, history: list[dict] = ()) -> dict:
     """For the rail: the newest chat's last line, when the instance last answered in it or sent the operator a message
-    (`history`: messages.history(); its send_message cards show in the chat over the span web._sent_during gives, and
+    (`history`: messages.history(); its send_message cards show in the chat over the span sent_during gives, and
     one never lit the rail: W8, review 2026-10-24), and whether it is replying."""
     c = next(iter(chats(name)), None)
     since = (c.get("cleared") or c["created"]) if c else ""
@@ -190,9 +202,8 @@ def summary(name: str, history: list[dict] = ()) -> dict:
                  and (since or not m.get("read"))), None)
     sent_line = first_line((sent or {}).get("text", ""))
     if not c or c.get("cleared"):
-        return {"line": sent_line[:80], "last": sent["ts"]} if sent else {}
+        return {"line": sent_line[:80], "last": last_from(None, [sent])} if sent else {}
     turns = c.get("turns") or []
-    last = next((t for t in reversed(turns) if t["role"] == "assistant"), None)
     text = (turns[-1].get("shown", turns[-1].get("content")) or "") if turns else ""
     who = "you: " if turns and turns[-1]["role"] == "user" else ""
     # The instance's reply as the page shows it, not its Markdown (the rail read "Finished the **smoke** reply.");
@@ -201,7 +212,7 @@ def summary(name: str, history: list[dict] = ()) -> dict:
              else first_line(text, quotes=False))
     if sent and sent["ts"] >= (turns[-1]["ts"] if turns else ""):
         who, first = "", sent_line
-    return {"line": (who + first)[:80], "last": max(last["ts"] if last else "", sent["ts"] if sent else ""),
+    return {"line": (who + first)[:80], "last": last_from(c, [sent] if sent else []) or "",
             "replying": c.get("state") == "replying"}
 
 
@@ -210,6 +221,229 @@ def shown(name: str) -> dict | None:
     the operator cleared it: then none, until they write again."""
     c = open_chat(name) or next(iter(chats(name)), None)
     return None if c and c.get("cleared") else c
+
+
+def sent_during(name: str, chat: dict | None, archived: bool = False) -> list[dict]:
+    """What the instance sent the operator (send_message), shown in its chat as a Telegram bot chat shows it: since the
+    chat on screen began — and after it ended too, until the operator's next message starts a new chat, so a message
+    a push points at (channel.py, web_alerts.py) is there to answer. A past chat (`archived`) keeps its own span. With
+    no chat on screen: since the last one was cleared or ended, or, if it never had one, those still unread.
+    With them, in the same span, what the operator left for its next cycle (messages.BACKGROUND): not a chat turn, its
+    `read` says whether a cycle has read it yet."""
+    from . import messages
+    if chat:
+        start, end = chat["created"], (chat.get("ended") or "9999") if archived else "9999"
+    else:
+        last = next(iter(chats(name)), None)
+        start, end = (last.get("cleared") or last.get("ended") or last["created"]) if last else "", "9999"
+    rows = [m for m in messages.history() if start <= m["ts"] <= end and (
+        (m["from"] == name and m["to"] == "operator") or
+        (m["from"] == "operator" and m["to"] == name and m.get("via") == messages.BACKGROUND))]
+    return rows if start else [m for m in rows if not m["read"]]
+
+
+def excerpt(chat: dict) -> tuple[str, int]:
+    """(the first line of the operator's first message, at most 80 characters; how many messages they sent in it): how
+    Earlier chats lists a chat."""
+    users = [t for t in chat["turns"] if t["role"] == "user"]
+    text = users[0].get("shown", users[0].get("content", "")) if users else ""
+    first = (text or "").splitlines()
+    line = first[0].strip() if first else ""
+    return line[:80] + ("…" if len(line) > 80 else ""), len(users)
+
+
+# -- what a chat shows (docs/app-api.md §13): one model for the HTML feed and the apps' JSON --------------------------
+# web_views.chat_feed renders build(); app_api serialises it. A fix to one cannot miss the other (PLAN-native-apps §1).
+CHAT_WINDOW = 80          # turns a chat shows (review C13/M21); "Show the N earlier messages" asks for them all
+
+# Feeds held by a long-poll (app_api) wait on this: every save() of a chat — a turn, a reply's activity as it streams
+# (the relay saves it every SAVE_EVERY_S) — wakes them at once. What changes elsewhere (a message it sent, a rating,
+# its inbox read) is found by looking again every half second.
+chat_saved = threading.Condition()
+
+
+def wait_change(timeout: float) -> None:
+    """Until a chat is saved, or `timeout` seconds."""
+    with chat_saved:
+        chat_saved.wait(timeout)
+
+
+def _rev(obj) -> str:
+    return hashlib.sha256(json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+                          .encode()).hexdigest()[:16]
+
+
+FAILURE_WHY = {"connection": "The connection to the instance failed.",
+               "service": "The service could not finish the reply.",
+               "model": "The model could not finish the reply."}
+RETRY_CONFIRM = "Actions may already have run. Send it again anyway?"
+
+
+def failure(name: str, turn: dict, archived: bool, k: int = -1, asked: dict | None = None) -> dict | None:
+    """Why a reply failed and how to recover, in words (raw errors stay available as `detail`). Retry is offered whenever
+    there is a message to send again: in one tap when the failed request ran no tools (note_retry), folding the failed
+    try (`retry_of`); else after a confirm, as a new message — the failed try stays in view and in the conversation,
+    since what it ran may matter. `asked`: the turn before, for a failure saved when retry_text was kept only for a safe
+    retry. None for a reply that ended normally."""
+    note = turn.get("note") or ""
+    if not note:
+        return None
+    kind = turn.get("note_kind", "stopped" if note == "stopped by you" else "unknown")
+    if kind == "stopped":
+        return {"kind": "stopped", "why": "You stopped this reply.", "action": None, "detail": note, "retry": None,
+                "links": []}
+    safe = bool(turn.get("note_retry") and turn.get("retry_text"))
+    # An interjection before the failure means one message cannot stand for the request: nothing to fall back on.
+    text = turn.get("retry_text") or (
+        asked.get("shown", asked.get("content", "")) if asked and asked.get("role") == "user"
+        and not asked.get("interjected") else "")
+    text = "" if archived else text
+    links = [{"label": "Activity", "url": f"/i/{name}/activity"}, {"label": "Services", "url": "/services"}]
+    if safe and text:
+        action, retry, links = "No external actions ran: Retry sends it again.", {
+            "text": text, "retry_of": k, "confirm": None}, []
+    elif text.strip():
+        action, retry = ("Actions may already have run. Check Activity and Services before you retry.",
+                         {"text": text, "retry_of": None, "confirm": RETRY_CONFIRM})
+    else:
+        action, retry = "Actions may already have run. Check Activity and Services before sending again.", None
+    return {"kind": kind, "why": FAILURE_WHY.get(kind, "The reply failed."), "action": action, "detail": note,
+            "retry": retry, "links": links}
+
+
+def _attachments(atts: list[dict] | None, where: str) -> list[dict]:
+    """A message's files: `path` names it for the HTML (/chatfiles/, /files/) and the apps (/app/v1/file/)."""
+    from .web_views import IMAGE_TYPES, TEXT_TYPES
+    return [{"name": a["name"], "bytes": a.get("bytes", 0), "image": a["name"].lower().endswith(IMAGE_TYPES),
+             "text": a["name"].lower().endswith(TEXT_TYPES), "path": f"{where}/{j}"} for j, a in enumerate(atts or [])]
+
+
+def _rating(item: dict | None, pending: set[str]) -> dict | None:
+    if not item:
+        return None
+    return {"id": item["id"], "thumb": item["thumb"], "reason": item.get("reason") or "", "sent": item.get("sent"),
+            "pending": item["id"] in pending}
+
+
+def message_item(name: str, m: dict, ratings: dict, pending: set[str] = frozenset()) -> dict:
+    """A logged message in the chat: one the instance sent the operator (`sent`), or one the operator left for its next
+    cycle (`later`, messages.BACKGROUND). `ratings`: feedback.by_target(name)."""
+    from urllib.parse import quote
+    from . import feedback
+    f = quote(m["file"], safe="")
+    atts = _attachments(m.get("attachments"), f"message/{m['file']}")
+    if m.get("from") == "operator":
+        return {"key": f"b{f}", "type": "later", "file": m["file"], "ts": m["ts"], "text": m.get("shown", m["text"]),
+                "mid": m.get("mid") or None, "read": bool(m.get("read")), "attachments": atts,
+                "comments": [{"id": c["id"], "doc": c["doc"]} for c in m.get("comments") or []]}
+    return {"key": f"s{f}", "type": "sent", "file": m["file"], "ts": m["ts"],
+            "kind": "question" if m.get("kind") == "question" else "message", "read": bool(m.get("read")),
+            "text": m["text"], "attachments": atts,
+            "rating": _rating(ratings.get(feedback.key({"kind": "message", "file": m["file"]})), pending)}
+
+
+def _turn_items(name: str, chat: dict, archived: bool, ratings: dict, pending: set[str]) -> list[dict]:
+    from . import feedback
+    turns = chat["turns"]
+    last_answer = max((k for k, t in enumerate(turns) if t["role"] != "user" and not t.get("retried")), default=-1)
+    items = []
+    for k, t in enumerate(turns):
+        if t.get("retried"):                     # a try that failed and was sent again (Retry): one quiet line
+            if t["role"] != "user":
+                items.append({"key": f"a{k}", "type": "retried", "k": k, "ts": t["ts"]})
+            continue
+        if t["role"] == "user":
+            items.append({"key": f"u{k}", "type": "user", "k": k, "ts": t["ts"],
+                          "text": t.get("shown", t.get("content", "")), "mid": t.get("mid") or None,
+                          "interjected": bool(t.get("interjected")),
+                          "attachments": _attachments(t.get("attachments"), f"chat/{chat['id']}/{k}"),
+                          "edits": list(t.get("edits") or []), "deleted": list(t.get("deleted") or []),
+                          "comments": [{"id": c["id"], "doc": c["doc"]} for c in t.get("comments") or []],
+                          "feedback": list(t.get("feedback") or [])})
+            continue
+        items.append({"key": f"a{k}", "type": "assistant", "k": k, "ts": t["ts"], "content": t.get("content") or "",
+                      "activity": list(t.get("activity") or []), "incomplete": bool(t.get("content") and t.get("note")),
+                      "failure": failure(name, t, archived, k, turns[k - 1] if k else None),
+                      "docs": [{"path": d["path"], "created": bool(d.get("created"))} for d in t.get("docs") or []],
+                      "answered": [{"id": c["id"], "doc": c["doc"]} for c in t.get("answered") or []],
+                      "opened": [{"id": c["id"], "doc": c["doc"]} for c in t.get("opened") or []],
+                      "rating": _rating(ratings.get(feedback.key({"kind": "chat", "chat": chat["id"], "k": k})), pending),
+                      "last": k == last_answer})
+    return items
+
+
+def reply_of(chat: dict | None) -> dict | None:
+    """The reply running now in `chat`: when it began, what it has done so far, the answer as it streams. None when
+    none runs."""
+    if not chat or chat.get("state") != "replying":
+        return None
+    r = chat.get("reply") or {}
+    return {"started": r.get("started") or "", "activity": list(r.get("activity") or []), "answer": r.get("answer") or ""}
+
+
+def sent_mids(chat: dict | None, sent: list[dict]) -> list[str]:
+    """Every message id this chat holds — its sent turns, its queued ones, the Next-cycle messages over its span: a
+    client's "sending" copy whose id is here has arrived."""
+    c = chat or {}
+    return list(dict.fromkeys(c.get("mids", []) + [t["mid"] for t in c.get("turns", []) + c.get("queued", [])
+                                                   if t.get("mid")]
+                              + [m["mid"] for m in sent if m.get("from") == "operator" and m.get("mid")]))
+
+
+def build(name: str, chat: dict | None, sent: list[dict], archived: bool = False, whole: bool = False) -> dict:
+    """What a chat shows (docs/app-api.md §4.2, before app_api.to_json stamps its times and turns each file's `path`
+    into a URL): its turns, the messages of its span (`sent`: sent_during), the reply running now, what is queued, the
+    thumbs down waiting for the next message. `archived`: a past chat's page, where nothing acts on the current chat.
+    The last CHAT_WINDOW turns unless `whole`; `version` and `live` are computed over every turn, before the window."""
+    from . import feedback
+    ratings = feedback.by_target(name)
+    current = {r["id"]: r for r in ratings.values() if not r["sent"]}
+    pending = [] if archived or not chat else [
+        {"key": f"queue-feedback-{p['id']}", "id": p["id"], "reply_ts": current[p["id"]]["reply_ts"]}
+        for p in chat.get("pending_feedback", []) if p["id"] in current]
+    ids = {p["id"] for p in pending}
+    items = [message_item(name, m, ratings, ids) for m in sent]
+    reply = reply_of(chat)
+    if chat:
+        items = _turn_items(name, chat, archived, ratings, ids) + items
+        if chat["state"] == "ended":         # in time order: what it sent you after the chat ended shows below the line
+            items.append({"key": "ended", "type": "ended", "ts": chat.get("ended", "")})
+        items.sort(key=lambda i: i["ts"])
+    model = {"instance": name, "partial": False, "version": "", "live": "", "reply": reply,
+             "chat": {"id": chat["id"], "state": chat["state"], "created": chat.get("created", ""),
+                      "ended": chat.get("ended") or None} if chat else None,
+             "archived": archived, "earlier": 0, "items": items,
+             "queued": [{"key": f"queue-{t['mid']}", "mid": t["mid"], "text": t.get("shown", ""),
+                         "attachments": [{"name": a["name"], "bytes": a.get("bytes", 0)} for a in t.get("attachments", [])]}
+                        for t in (chat or {}).get("queued", [])],
+             "pending_feedback": pending,
+             "pending_edits": sorted(chat.get("pending_edits") or {}) if chat and not archived else [],
+             "mids": sent_mids(chat, sent), "last": last_from(chat, sent),
+             "can_stop": reply is not None and not archived,
+             "can_end": bool(chat and not archived and chat["state"] not in ("replying", "ended") and chat["turns"]),
+             "can_clear": bool(chat) and not archived}
+    model["version"] = _rev({**model, "reply": reply and {"started": reply["started"]}})
+    model["live"] = _rev({"activity": reply["activity"], "answer": reply["answer"]}) if reply else ""
+    first = 0 if whole or not chat else max(0, len(chat["turns"]) - CHAT_WINDOW)
+    if first:
+        since = chat["turns"][first]["ts"]
+        model["earlier"] = first
+        model["items"] = [i for i in items if (i["k"] >= first if "k" in i else
+                                               i["type"] == "ended" or i["ts"] >= since)]
+    return model
+
+
+def feed(name: str, cid: str | None = None, whole: bool = False) -> dict | None:
+    """What `name`'s chat shows now (build): the current one (`shown`), or its chat `cid` — read-only when that one has
+    ended. None when `cid` is not a chat of `name`."""
+    if cid is None:
+        chat, archived = shown(name), False
+    else:
+        chat = load(cid)
+        if not chat or chat.get("instance") != name:
+            return None
+        archived = chat.get("state") == "ended"
+    return build(name, chat, sent_during(name, chat, archived), archived, whole)
 
 
 def new_chat(name: str, login: str) -> dict:
