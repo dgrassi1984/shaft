@@ -83,13 +83,14 @@ struct ChatsLayout: View {
                 .documentsInspector(shell, store: store)
             }
         }
+        .environment(shell)
+        .environment(\.chatCovered, switching || settings)
         .sheet(isPresented: $settings) { SettingsView(session: session) }
         .onAppear(perform: restore)
         .onChange(of: store.instances.map(\.name)) { restore() }
         .onChange(of: model.openChat) { _, name in
             guard let name else { return }
-            open(name)
-            switching = false
+            openNotification(name)
             model.openChat = nil
         }
     }
@@ -109,6 +110,14 @@ struct ChatsLayout: View {
         }
     }
 
+    private func openNotification(_ name: String) {
+        shell.screen?.dismissPresentations()
+        switching = false
+        settings = false
+        path.removeAll()
+        open(name)
+    }
+
     private func open(_ name: String) {
         if selection != name { path.removeAll() }
         selection = name
@@ -118,7 +127,7 @@ struct ChatsLayout: View {
     /// The chat open last time, else the first instance; a tap's chat wins.
     private func restore() {
         if let name = model.openChat {
-            open(name)
+            openNotification(name)
             model.openChat = nil
             return
         }

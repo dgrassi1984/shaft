@@ -159,6 +159,8 @@ struct MacChats: View {
     private func restore() {
         if let name = model.openChat {
             model.openChat = nil
+            state.screen?.dismissPresentations()
+            state.path.removeAll()
             state.open(name)
             state.bringForward()
             return

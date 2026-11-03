@@ -97,6 +97,12 @@ struct ComposerView: View {
                 for url in urls { chat.attach(fileAt: url) }
             }
         }
+        .onChange(of: picking || importing) { _, covered in screen.composerCovered = covered }
+        .onDisappear { screen.composerCovered = false }
+        .onChange(of: screen.dismissRequest) {
+            picking = false
+            importing = false
+        }
         .onChange(of: screen.sendRequest) { _, mode in
             guard let mode else { return }
             screen.sendRequest = nil
@@ -200,6 +206,12 @@ struct QuoteCard: View {
     var onKey: (ComposerKey) -> Void = { _ in }
     var remove: () -> Void
     @State private var expanded = false
+    #if os(iOS)
+    @Environment(ChatScreenModel.self) private var screen
+    @State private var answerHeight: CGFloat = 40
+    @State private var answerFocused = false
+    @State private var focusRequest = 0
+    #endif
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -231,6 +243,23 @@ struct QuoteCard: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("Remove this quote")
             }
+            #if os(iOS)
+            ComposerTextView(text: $quote.answer, height: $answerHeight, focused: $answerFocused,
+                             placeholder: String(localized: "Your answer to this"), maxHeight: 140,
+                             focusRequest: focusRequest, onKey: onKey,
+                             onPaste: { providers in Task { _ = await ItemImport.attach(providers, to: screen.chat) } })
+                .frame(height: answerHeight)
+                .onChange(of: focused.wrappedValue, initial: true) { _, value in
+                    if value == index { focusRequest += 1 }
+                }
+                .onChange(of: answerFocused) { _, value in
+                    if value { focused.wrappedValue = index }
+                    else if focused.wrappedValue == index { focused.wrappedValue = nil }
+                }
+                .padding(8)
+                .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                .accessibilityLabel("Answer to quote \(index + 1)")
+            #else
             TextField("Your answer to this", text: $quote.answer, axis: .vertical)
                 .lineLimit(1...6)
                 .focused(focused, equals: index)
@@ -251,6 +280,7 @@ struct QuoteCard: View {
                 .padding(8)
                 .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
                 .accessibilityLabel("Answer to quote \(index + 1)")
+            #endif
         }
         .padding(8)
         .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))

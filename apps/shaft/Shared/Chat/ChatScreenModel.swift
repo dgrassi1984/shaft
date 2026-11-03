@@ -58,6 +58,22 @@ final class ChatScreenModel {
         instance = chat.instance
     }
 
+    var composerCovered = false
+    var dismissRequest = 0
+
+    /// Return to the chat for notification and link navigation.
+    func dismissPresentations() {
+        selecting = nil
+        rating = nil
+        showDocuments = false
+        showEarlierChats = false
+        confirmRetry = nil
+        confirmingNewChat = false
+        preview.url = nil
+        preview.error = nil
+        dismissRequest += 1
+    }
+
     var archived: Bool { chat.cid != nil || chat.content?.archived == true }
 
     // MARK: Message actions

@@ -54,13 +54,24 @@ struct FileCredentialStore: CredentialStore {
 
     func load() throws -> ServerCredential? {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        return try JSONDecoder().decode(ServerCredential.self, from: Data(contentsOf: url))
+        let credential = try JSONDecoder().decode(ServerCredential.self, from: Data(contentsOf: url))
+        try checkLoopback(credential)
+        return credential
     }
 
     func save(_ credential: ServerCredential) throws {
+        try checkLoopback(credential)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONEncoder().encode(credential).write(to: url, options: [.atomic])
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+
+    private func checkLoopback(_ credential: ServerCredential) throws {
+        guard let host = credential.baseURL.host?.lowercased(),
+              ["127.0.0.1", "localhost", "::1", "[::1]"].contains(host) else {
+            throw APIError.decoding(path: "SHAFT_DEV_DIR",
+                                    message: "SHAFT_DEV_DIR only permits loopback servers (127.0.0.1, localhost, ::1). Use the Keychain for other servers.")
+        }
     }
 
     func delete() throws {

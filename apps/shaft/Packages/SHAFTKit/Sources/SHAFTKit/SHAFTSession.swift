@@ -25,7 +25,7 @@ public final class SHAFTSession {
         self.drafts = drafts
         self.session = session
         do {
-            if let credential = try pairing.current() { open(credential) }
+            if let credential = try pairing.current() { try open(credential) }
         } catch {
             problem = error.localizedDescription
         }
@@ -43,7 +43,7 @@ public final class SHAFTSession {
     @discardableResult
     public func pair(pasted: String) async -> Bool {
         do {
-            open(try await pairing.pair(pasted: pasted))
+            try open(try await pairing.pair(pasted: pasted))
             problem = nil
             if let deviceToken { await registerPush(token: deviceToken) }
             return true
@@ -82,7 +82,9 @@ public final class SHAFTSession {
         }
     }
 
-    private func open(_ credential: ServerCredential) {
+    private func open(_ credential: ServerCredential) throws {
+        let outbox = try Outbox(directory: LocalFiles.namespaced(self.outbox.directory, origin: credential.baseURL))
+        let drafts = try DraftStore(directory: LocalFiles.namespaced(self.drafts.directory, origin: credential.baseURL))
         store?.stop()
         self.credential = credential
         let store = InstancesStore(client: APIClient(credential: credential, session: session), outbox: outbox,
@@ -93,9 +95,9 @@ public final class SHAFTSession {
 
     private func close() {
         store?.stop()
+        store?.outbox.sender = nil
         store = nil
         credential = nil
-        outbox.sender = nil
     }
 
     /// The server no longer knows this device (`shaft web unpair`): forget it and show the pairing screen.

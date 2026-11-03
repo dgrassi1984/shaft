@@ -17,6 +17,7 @@ struct SessionRoot<Paired: View>: View {
             if let session = model.session {
                 if let store = session.store {
                     paired(session, store)
+                        .id(ObjectIdentifier(store))
                         .environment(store)
                         .onAppear { if scenePhase == .active { store.start() } }
                         .onChange(of: scenePhase) { _, phase in
@@ -32,6 +33,7 @@ struct SessionRoot<Paired: View>: View {
             }
         }
         .environment(model)
+        .onChange(of: model.session?.credential, initial: true) { AttachmentLoader.shared.clear() }
     }
 }
 
