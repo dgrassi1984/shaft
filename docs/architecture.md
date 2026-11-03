@@ -126,6 +126,12 @@ rotation, and are given **per judge**: each judge's 7 days to the latest verdict
 10 verdicts. Judges differ several-fold on claims, so no figure pools two of them (docs/plans/PLAN-judge-mix.md).
 The success line sits under achieved difficulty, inside the first 5500 characters the LIVE prompt shows.
 
+Stats rebuilds share parsed episode files, invalidated by file name, inode, nanosecond mtime and size;
+reads still refuse links. Provenance indexes citation times and URLs once per rebuild and shingles each
+needed result once per fact length. Confidence sections check their sample floors before bootstrapping;
+deterministic intervals are cached by judgment content. Reply scoring skips final receipts before listing
+message folders, lists each folder once for pending receipts, and reads the chat ledger once if needed.
+
 Judges grade effectiveness first. `declare_intent` takes a checkable `success_criterion`, limited by
 `CRITERION_CHARS` (default 600), and refuses longer criteria with their length and limit.
 The LIVE prompt allows at most one cycle in five on the instance's own records or checking tools.

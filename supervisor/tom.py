@@ -86,25 +86,34 @@ def receipts(name: str) -> list[dict]:
 def reply_for(name: str, receipt: dict) -> dict | None:
     """The first delivery or operator chat turn from the recipient after the send, within the window.
     No thread id: any message from that sender in the window counts as the reply, including chat turns."""
+    operator_said = _rows(name, "-operator-said") if receipt["to"] == "operator" else []
+    return _reply_for(name, receipt, _reply_files(name), operator_said)
+
+
+def _reply_files(name):
+    return [(folder, file) for folder in ("inbox", "memory/messages")
+            for file in list_beneath(INSTANCES / name, folder)]
+
+
+def _reply_for(name, receipt, files, operator_said):
     start = datetime.fromisoformat(receipt["sent_at"])
     end = start + timedelta(hours=receipt["within_hours"])
     root, found = INSTANCES / name, []
     suffix = f"-from-{receipt['to']}.md"
-    for folder in ("inbox", "memory/messages"):
-        for file in list_beneath(root, folder):
-            if not file.endswith(suffix):
-                continue
-            try:
-                at = datetime.strptime(file[:-len(suffix)], "%Y%m%d-%H%M%S-%f")
-            except ValueError:
-                continue
-            if not start < at <= end:
-                continue
-            text = safe_read(root, f"{folder}/{file}", "", errors="replace")
-            if text:
-                found.append((at, {"file": file, "at": at.isoformat(), "text": text.partition("\n\n")[2].strip()}))
+    for folder, file in files:
+        if not file.endswith(suffix):
+            continue
+        try:
+            at = datetime.strptime(file[:-len(suffix)], "%Y%m%d-%H%M%S-%f")
+        except ValueError:
+            continue
+        if not start < at <= end:
+            continue
+        text = safe_read(root, f"{folder}/{file}", "", errors="replace")
+        if text:
+            found.append((at, {"file": file, "at": at.isoformat(), "text": text.partition("\n\n")[2].strip()}))
     if receipt["to"] == "operator":
-        for row in _rows(name, "-operator-said"):
+        for row in operator_said:
             try:
                 at = datetime.fromisoformat(row["at"])
             except (KeyError, TypeError, ValueError):
@@ -133,11 +142,16 @@ def _outcome(name, prediction, reply):
 def score(name: str, now: datetime | None = None) -> int:
     now, count = now or datetime.now(), 0
     done = {r["id"]: r for r in scored(name)}
+    files = operator_said = None
     for receipt in receipts(name):
         old = done.get(receipt["id"])
         if old is not None and (old.get("reply") is not None or "scorer" in old):
             continue
-        reply = reply_for(name, receipt)
+        if files is None:
+            files = _reply_files(name)
+        if receipt["to"] == "operator" and operator_said is None:
+            operator_said = _rows(name, "-operator-said")
+        reply = _reply_for(name, receipt, files, operator_said)
         if reply and datetime.fromisoformat(reply["at"]) > now:
             reply = None
         if reply is None and now < datetime.fromisoformat(receipt["sent_at"]) + timedelta(hours=receipt["within_hours"]):

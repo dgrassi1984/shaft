@@ -6,8 +6,10 @@ seeded and clustered by day. These measurements make no claim about experience.
 from __future__ import annotations
 
 import math
+import json
 import random
 from bisect import bisect_left, bisect_right
+from functools import lru_cache
 
 from . import metrics
 
@@ -171,6 +173,20 @@ def doubt_alignment(rows: list[dict], episodes: dict[str, dict]) -> dict:
     return {"matched": matched, "n": n, "rate": matched / n if n else None}
 
 
+@lru_cache(maxsize=32)
+def _cached_ci(content: str, stat) -> tuple[float, float] | None:
+    return cluster_ci(json.loads(content), stat)
+
+
+def _ci(rows, stat):
+    return _cached_ci(json.dumps(rows, sort_keys=True), stat)
+
+
+def _difference(sample):
+    first, final = _auc(sample, "confidence_first"), _auc(sample)
+    return final - first if first is not None and final is not None else None
+
+
 def summary(rows: list[dict], episodes: dict[str, dict] | None = None, versions: tuple = ("v2", "v3")) -> dict:
     """Current-judge confidence of `versions` (v2/v3 by default: the question the scores use now; v1 asked "probability
     of success" and is reported apart); v4 clause confidence stays apart, claims cover known v1-v4 questions."""
@@ -182,7 +198,7 @@ def summary(rows: list[dict], episodes: dict[str, dict] | None = None, versions:
     n = len(scored)
     met = sum(r["criterion_met"] == "yes" for r in scored)
     mean = sum(r["confidence"] for r in scored) / n if n else None
-    ci = cluster_ci(scored, _auc)
+    ci = _ci(scored, _auc)
     both = [r for r in current if metrics.second_counted(r)]
     pairs = [(r["confidence"] / 100, float(r["criterion_met"] == "yes")) for r in scored]
     result = {"n": n, "met": met, "hit_rate": met / n if n else None, "mean_confidence": mean,
@@ -190,7 +206,7 @@ def summary(rows: list[dict], episodes: dict[str, dict] | None = None, versions:
               "bias": mean / 100 - met / n if n else None, "auroc": _auc(scored), "ci": ci,
               "h1": "above chance" if ci and ci[0] > 0.5 else "below chance" if ci and ci[1] < 0.5 else "not shown",
               "brier": brier_decomposition(pairs), "meta_i": meta_i(pairs),
-              "claim_auroc": _claim_auc(claims), "claim_ci": cluster_ci(claims, _claim_auc),
+              "claim_auroc": _claim_auc(claims), "claim_ci": _ci(claims, _claim_auc),
               "second_agreement": (sum(r["criterion_met"] == r["second"]["criterion_met"] for r in both), len(both))}
     if episodes is not None:
         groups = {}
@@ -213,18 +229,14 @@ def paired_v3(rows: list[dict]) -> dict:
               and metrics.VERSION_OF.get(r.get("confidence_of")) == "v3"
               and r.get("confidence_first") is not None and r.get("confidence") is not None]
 
-    def difference(sample):
-        first, final = _auc(sample, "confidence_first"), _auc(sample)
-        return final - first if first is not None and final is not None else None
-
     n = len(paired)
     failures = sum(r["criterion_met"] != "yes" for r in paired)
-    ci = cluster_ci(paired, difference)
+    ci = _ci(paired, _difference)
     verdict = "not enough data"
     if n >= MIN_V3 and failures >= MIN_FAILURES:
         verdict = "non-inferior" if ci and ci[0] > MARGIN else "worse" if ci and ci[1] < MARGIN else "inconclusive"
     return {"n": n, "failures": failures, "auroc_first": _auc(paired, "confidence_first"),
-            "auroc_final": _auc(paired), "diff": difference(paired), "ci": ci, "verdict": verdict}
+            "auroc_final": _auc(paired), "diff": _difference(paired), "ci": ci, "verdict": verdict}
 
 
 def _number(value, signed=False):
@@ -244,9 +256,13 @@ def _paired_line(p):
 def section(name: str) -> list[str]:
     """At most ten plain stats.md lines; no section below ten scored confidences."""
     rows = metrics.judgments(name)
-    s = summary(rows, {ep["ts"]: ep for ep in metrics.live_episodes(name)})
-    if s["n"] < 10 or min(s["met"], s["n"] - s["met"]) < MIN_CLASS:
+    scored = [r for r in rows if metrics.by_current_judge(r)
+              and metrics.VERSION_OF.get(r.get("confidence_of")) in ("v2", "v3")
+              and r.get("confidence") is not None]
+    met = sum(r["criterion_met"] == "yes" for r in scored)
+    if len(scored) < 10 or min(met, len(scored) - met) < MIN_CLASS:
         return []
+    s = summary(rows, {ep["ts"]: ep for ep in metrics.live_episodes(name)})
     b, mi = s["brier"], s["meta_i"]
     lines = ["## How well my confidence tells my met cycles from my missed ones",
              f"- Confidence AUROC {_number(s['auroc'])}{_interval(s['ci'])}; 0.5 means chance; n {s['n']}.",

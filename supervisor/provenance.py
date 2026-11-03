@@ -27,19 +27,7 @@ def facts(name: str) -> list[dict]:
 
 
 def _episodes(name: str) -> list[dict]:
-    root = core.INSTANCES / name
-    out = []
-    for file in core.list_beneath(root, "memory/episodes"):
-        if not file.endswith(".jsonl"):
-            continue
-        for line in core.safe_read(root, f"memory/episodes/{file}", "", errors="replace").splitlines():
-            try:
-                rec = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(rec, dict):
-                out.append(rec)
-    return out
+    return metrics._parsed_episodes(core.INSTANCES / name)
 
 
 def _date(stamp: str) -> datetime | None:
@@ -50,7 +38,7 @@ def _date(stamp: str) -> datetime | None:
         return None
 
 
-@lru_cache(maxsize=20000)   # every fact is checked against every tool result: each result is split once
+@lru_cache(maxsize=20000)   # reuse unchanged results across rebuilds
 def _shingles(text: str, n: int = SHINGLE) -> frozenset[tuple[str, ...]]:
     words = re.findall(r"\w+", text.lower())
     return frozenset(tuple(words[i:i + n]) for i in range(len(words) - n + 1))
@@ -71,68 +59,105 @@ def _urls(value) -> set[str]:
             for url in re.findall(r"https?://[^\s\"'<>]+", _text(value))}
 
 
+class _Result:
+    def __init__(self, text):
+        self.text, self.sizes = text, {}
+
+    def shingles(self, size):
+        if size not in self.sizes:
+            self.sizes[size] = _shingles(self.text, size)
+        return self.sizes[size]
+
+
+class _Evidence:
+    """Tool results by citation, earliest observation and prose dates by shingle."""
+    def __init__(self, episodes, journal):
+        self.logs, self.urls = {}, {}
+        self.results, self.prose = [], []
+        self.observed, self.written = {}, {}
+        for ep in episodes:
+            ts = ep.get("ts", "")
+            date = _date(ts)
+            # A malformed field in one episode must not stop the check of a fact another episode bears out.
+            intent, tools, finish = ep.get("intent"), ep.get("tools"), ep.get("finish")
+            started = _date(intent.get("at") if isinstance(intent, dict) else None) or date
+            for i, call in enumerate(tools if isinstance(tools, list) else [], 1):
+                if not isinstance(call, dict):
+                    continue
+                result = _Result(_text(call.get("result", "")))
+                self.results.append((started, result))
+                if isinstance(ts, str):
+                    for stamp in {ts.replace("T", " "), ts[:16].replace("T", " ")}:
+                        self.logs.setdefault(stamp, []).append((i, result))
+                if call.get("tool") in ("fetch_page", "http_request", "run"):
+                    for url in _urls(call.get("args", "")):
+                        self.urls.setdefault(url, []).append((started, result))
+            finish = finish if isinstance(finish, dict) else {}
+            for field in ("what_happened", "learned"):
+                self.prose.append((date, _Result(_text(finish.get(field, "")))))
+        blocks = re.split(r"(?m)^## (\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?)[^\n]*\n", journal)
+        for stamp, body in zip(blocks[1::2], blocks[2::2]):
+            self.prose.append((_date(stamp), _Result(body)))
+
+    def _earliest(self, index, results, size):
+        if size not in index:
+            dates = {}
+            for at, result in results:
+                if at is not None:
+                    for shingle in result.shingles(size):
+                        old = dates.get(shingle)
+                        if old is None or at < old:
+                            dates[shingle] = at
+            index[size] = dates
+        return index[size]
+
+    def check(self, fact):
+        source = fact.get("src") or ""
+        if not source.startswith(("log:", "web:")):
+            return "n/a"
+        at, size = _date(fact.get("date")), _size(fact.get("text", ""))
+        if size < MIN_WORDS:
+            return "n/a"
+        shingles = _shingles(fact.get("text", ""), size)
+        if at is None or not shingles:
+            return "unmatched"
+        before = at + timedelta(seconds=59)
+        if source.startswith("log:"):
+            stamp, sep, step = source[4:].partition("#")
+            if _date(stamp) is not None:
+                for i, result in self.logs.get(stamp.replace("T", " "), []):
+                    if (not sep or step == str(i)) and shingles & result.shingles(size):
+                        return "matched"
+        else:
+            url = re.sub(r"^https?://", "", source[4:]).rstrip("/")
+            for started, result in self.urls.get(url, []):
+                if started is not None and started <= before and shingles & result.shingles(size):
+                    return "matched"
+        observed = self._earliest(self.observed, self.results, size)
+        if any((seen := observed.get(s)) is not None and seen <= before for s in shingles):
+            return "unmatched"
+        written = self._earliest(self.written, self.prose, size)
+        if any((seen := written.get(s)) is not None and seen < at for s in shingles):
+            return "self-generated"
+        return "unmatched"
+
+
 def check(name: str, fact: dict, episodes: list[dict] | None = None, journal: str | None = None) -> str:
     """`episodes` and `journal`: read once by a caller checking many facts (they are read here otherwise)."""
-    source = fact.get("src") or ""
-    if not source.startswith(("log:", "web:")):
+    if not (fact.get("src") or "").startswith(("log:", "web:")) or _size(fact.get("text", "")) < MIN_WORDS:
         return "n/a"
-    at = _date(fact.get("date"))
-    size = _size(fact.get("text", ""))
-    if size < MIN_WORDS:
-        return "n/a"
-    shingles = _shingles(fact.get("text", ""), size)
-    if at is None or not shingles:
-        return "unmatched"
     episodes = _episodes(name) if episodes is None else episodes
-    earlier = []
-    stamp, sep, step = source[4:].partition("#") if source.startswith("log:") else ("", "", "")
-    observed = False
-    for ep in episodes:
-        ts = ep.get("ts", "")
-        date = _date(ts)
-        if date is not None and date < at:
-            earlier.append(ep)   # its report was written before the fact: prose the fact may have copied
-        # A cycle that had begun by the fact's minute may have fetched it — the cycle that remembered it included: its
-        # episode is written at its end, after the fact (Grok's review: it could never match its own fetch).
-        started = _date((ep.get("intent") or {}).get("at")) or date
-        before = started is not None and started <= at + timedelta(seconds=59)
-        cited = (source.startswith("log:") and _date(stamp) is not None and isinstance(ts, str)
-                 and (ts.replace("T", " ") == stamp.replace("T", " ") or
-                      len(stamp) == 16 and ts[:16].replace("T", " ") == stamp.replace("T", " ")))
-        for i, call in enumerate(ep.get("tools") or [], 1):
-            if not isinstance(call, dict):
-                continue
-            matches = bool(shingles & _shingles(_text(call.get("result", "")), size))
-            observed |= matches and before
-            if source.startswith("log:"):
-                eligible = cited and (not sep or step == str(i))
-            else:
-                eligible = (before and call.get("tool") in ("fetch_page", "http_request", "run")
-                            and re.sub(r"^https?://", "", source[4:]).rstrip("/") in _urls(call.get("args", "")))
-            if eligible and matches:
-                return "matched"
-    if observed:
-        return "unmatched"   # evidence elsewhere does not validate the cited source
-    for ep in earlier:
-        finish = ep.get("finish") or {}
-        for field in ("what_happened", "learned"):
-            if shingles & _shingles(_text(finish.get(field, "")), size):
-                return "self-generated"
     if journal is None:
         journal = core.safe_read(core.INSTANCES / name, "memory/journal.md", "", errors="replace")
-    blocks = re.split(r"(?m)^## (\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2}(?::\d{2})?)?)[^\n]*\n", journal)
-    for stamp, body in zip(blocks[1::2], blocks[2::2]):
-        date = _date(stamp)
-        if date is not None and date < at and shingles & _shingles(body, size):
-            return "self-generated"
-    return "unmatched"
+    return _Evidence(episodes, journal).check(fact)
 
 
 def checked(name: str) -> list[tuple[dict, str]]:
-    """Every fact with its check, the episodes and journal read once (stats.md is written after every cycle)."""
-    episodes = _episodes(name)
+    """Every fact with its check; index the episode results once for the whole rebuild (review C1)."""
+    rows = facts(name)
     journal = core.safe_read(core.INSTANCES / name, "memory/journal.md", "", errors="replace")
-    return [(row, check(name, row, episodes, journal)) for row in facts(name)]
+    evidence = _Evidence(_episodes(name), journal)
+    return [(row, evidence.check(row)) for row in rows]
 
 
 def _surfaced(ep: dict, suspect: set[str] = frozenset()) -> bool:
