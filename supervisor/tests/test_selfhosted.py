@@ -78,7 +78,7 @@ class HostedServerTest(_Base):
         self.assertEqual(sent["thinking_budget_tokens"], 4096)
         self.assertEqual(self.local.requests, [])
         rec = json.loads(self.usage.read_text().splitlines()[-1])
-        self.assertEqual((rec["model"], rec["usd"], rec["error"]), ("gpu/bonsai2", 0.0, None))
+        self.assertEqual((rec["model"], rec["usd"], rec["error"]), ("gpu/bonsai2", None, None))
 
     def test_after_a_tool_result_the_smaller_budget_reaches_gpu_and_no_thinking_means_no_budget(self):
         b, base = self.broker()

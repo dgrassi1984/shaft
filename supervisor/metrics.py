@@ -94,7 +94,9 @@ code, a capability gained and shown working; \
 5 = exceptional: an output most competent people could not have produced in one cycle. \
 Who would miss it: 'operator' = the operator; 'instance' = another SHAFT instance; 'own_capability' = a tool, \
 skill, fix or verified fact this agent will use again; 'own_record' = bookkeeping about itself (its stats, \
-judge verdicts, notes about its own cycles); 'nobody' = nothing was kept that anyone would miss.
+judge verdicts, notes about its own cycles). Work the operator does not read or act on, such as an internal \
+ledger or book, is 'own_record', even if it is described as being for the operator; \
+'nobody' = nothing was kept that anyone would miss.
 For every instance, value_for own_capability or own_record caps at 3 unless the same cycle's tool log \
 shows that work used in something delivered to the operator. When the cap applies, value_reason says so. \
 The operator-facing scale is unchanged.
@@ -779,6 +781,9 @@ def judge_pending(name: str) -> int:
                         log(f"{name}: no second judge on {ep['ts']}: it consulted {vendor(judge.JUDGE2_MODEL)}")
                     else:
                         stash_second(name, ep["ts"], case)   # judged after the run lets go of the instance
+            except judge.NoJudgeLeft as e:   # this run's own models cover the pool: the runs after it still get judged
+                log(f"{name}: judging {ep['ts']} skipped for now: {e}")
+                continue
             except judge.JudgeError as e:
                 log(f"{name}: judging {ep['ts']} failed: {e}")
                 break

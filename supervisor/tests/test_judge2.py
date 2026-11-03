@@ -350,7 +350,9 @@ class JudgeLessOftenTest(unittest.TestCase):
         rng = random.Random(0)
         picks = {judge.pick(exclude=[MIMO], rng=rng, avoid=(DEEPSEEK,)) for _ in range(200)}
         self.assertEqual(picks, {GLM})                             # wren on MiMo, DeepSeek to grade it second
-        self.assertEqual({judge.pick(exclude=[MIMO], rng=rng) for _ in range(200)}, {GLM, DEEPSEEK})
+        # Review row 20: out of the main rotation on every run, not only those it grades second (a saved pool that
+        # still lists it, as here).
+        self.assertEqual({judge.pick(exclude=[MIMO], rng=rng) for _ in range(200)}, {GLM})
         with mock.patch.object(judge, "JUDGE_EVERY", 1), mock.patch.object(metrics, "second_sampled", return_value=True):
             metrics.judge_pending("wren")
         self.assertEqual(set(self.asked), {GLM})
@@ -362,6 +364,17 @@ class JudgeLessOftenTest(unittest.TestCase):
             metrics.judge_pending("wren")
         self.assertEqual(set(self.asked), {DEEPSEEK})               # still judged: by the one judge left
         self.assertFalse((self.sup / "judgments" / "second-cases").exists())   # but never graded twice by it
+
+    def test_row20_a_run_no_judge_may_grade_does_not_stop_the_runs_after_it(self):
+        """With DeepSeek out of the default pool, a run whose own models are MiMo and GLM has no judge. judge_pending
+        used to `break` on it, every pass: no later run of that instance was ever judged again."""
+        own = lambda name, ep: [MIMO, GLM] if ep["ts"] == "2026-10-20T10:00:00" else [MIMO]
+        with mock.patch.object(judge, "JUDGE_EVERY", 1), mock.patch.object(judge, "JUDGE_MODELS", [MIMO, GLM]), \
+                mock.patch.object(metrics, "own_models", side_effect=own):
+            metrics.judge_pending("wren")
+        self.assertNotIn("2026-10-20T10:00:00", self.judged())     # left for a later pass, never guessed
+        self.assertIn("2026-10-20T10:01:00", self.judged())
+        self.assertEqual(set(self.asked), {GLM})
 
     def test_agreement_never_counts_a_model_agreeing_with_itself_or_a_former_second_judge(self):
         js = [dict(_judgment("2026-10-20T14:33:02", second={"judge": GLM, **VERDICT, "criterion_met": "yes"}), judge=GLM),

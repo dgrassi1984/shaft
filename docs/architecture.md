@@ -186,6 +186,15 @@ For every instance, `value_for=own_capability` or `own_record` caps at 3 unless 
 work used in something delivered to the operator. `value_reason` states when the cap applies; the operator-facing
 scale stays unchanged. `shaft judge value-regrade` re-asks only value fields on selected historical cycles and
 prints a comparison without changing stored verdicts. See [CLI](cli.md).
+An internal ledger or book the operator does not read or act on is `own_record`, even when described as for them.
+
+The main judge rotation leaves out `SHAFT_JUDGE2_MODEL`, keeping the cross-check independent; a pool that still
+lists it uses it only when no other judge may grade a run (that run gets no second judgment). A run whose own models
+cover the whole pool is skipped for now, and the runs after it are still judged. The judge owns length retries: one
+escalation to twice the initial token ceiling; trial pair judging adds no retry. Cloud usage rows retain OpenRouter
+cache reads and writes. Native Claude judge rows record dollars from the shared pricing table. Self-hosted calls have
+`usd=null` and `unpriced=true` and add nothing to a run's charges (they spend no dollars); spend reports count
+unpriced calls separately from their dollar totals.
 
 Calibration v2 measures P(criterion met = yes), identified by `confidence_of="criterion_met=yes"`.
 Its Brier score uses yes=1 and partial/no=0. Older v1 confidence asked for "probability of success" and
@@ -435,6 +444,12 @@ killed mid-item leaves at most a stale copy, which the next run removes. Items l
 `~/Library/Application Support/SHAFT/battery-backup/`; every result carries the item set's sha256, model
 and judge, and results from different eras are never compared. Results: `.supervisor/battery/results/`,
 `.supervisor/evals/battery-*.json`, and a section of `self/stats.md`.
+When grading fails, the result retains the full grading case and the chosen grader. The next attempt in the
+same era retries grading that case without rerunning the exam, up to three gradings of one case; then the exam runs
+afresh. A preempted trial pair reuses a completed arm only when its code, historical cycle, model, replay shape and
+token/tool time budgets match its saved fingerprint, and only with the pair's read cache saved beside it, loaded
+before the other arm runs so both runs get the same answers from the world; reused arms are not charged again.
+Arms and cache are written whole (temp file, then rename); an unreadable one is not reused, and both arms run again.
 
 Sources: [instance creation](../supervisor/__main__.py),
 [mind store and push guard](../supervisor/mind.py),

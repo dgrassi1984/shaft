@@ -60,7 +60,8 @@ RECALL_MIN_AGE_H, _ = knob(
     "SHAFT_BATTERY_RECALL_MIN_AGE_H", "48", whole, "hours old a journal entry must be to make a battery recall item",
     group="Inbox and benchmarks")
 RECALL_ITEMS = 6
-CATEGORIES = ("coding", "research", "recall", "self", "perturbation")
+GRADE_ATTEMPTS = 3   # gradings of one saved exam (one per run) before its exam runs afresh: an ungradable case never sticks
+CATEGORIES =("coding", "research", "recall", "self", "perturbation")
 CONTROLLED = ("coding", "research")          # a fresh mind cannot know an instance's memory or record
 EXAM_OFF = {"send_message", "list_instances", "delegate_coding", "secret_set", "secret_delete",
             "decide",   # added 2026-10-14: exams keep the tools they were calibrated with
@@ -622,6 +623,12 @@ def _one(name: str, item: dict, arm: str, real: Path, e: dict, until: float | No
          grader: str | None = None) -> dict:
     """One item for one arm, in a folder made for it and deleted after it: a copy of the instance (`real`, never
     written), or a fresh control."""
+    for previous in reversed(results(name)):
+        if previous.get("item") == item["id"] and previous.get("arm") == arm and _same_era(previous, e):
+            if previous.get("status") == "unjudged" and previous.get("grading_case") and \
+                    previous.get("grading_attempts", 1) < GRADE_ATTEMPTS:
+                return _grade_saved(name, previous)
+            break
     label = name if arm == "instance" else f"{name}-control"
     deadline = min(time.time() + ITEM_TIMEOUT_S, until or float("inf"))
 
@@ -715,16 +722,28 @@ def _one_in(name: str, item: dict, arm: str, root: Path, real: Path, label: str,
         _append(name, row)
         log(f"{name}: battery item {item['id']} ({arm}) failed to run: {res['error'][:300]}")
         return row
+    row["truth"] = truth(name, item["truth"]) if item["category"] == "self" else None
+    row["tests"] = tests
+    row["grader"] = grader
+    row["grading_case"] = {"item": item, "result": res}
+    row["status"] = "unjudged"
+    return _grade_saved(name, row)
+
+
+def _grade_saved(name: str, saved: dict) -> dict:
+    """Grade a finished exam from its saved case: the whole exam result and the grader picked for it. A grading that
+    fails keeps the case, and a later run grades it again without rerunning the exam (review C11), up to
+    GRADE_ATTEMPTS gradings; then the item's exam runs afresh."""
+    row = {**saved, "grading_attempts": saved.get("grading_attempts", 0) + 1}
+    case = row["grading_case"]
     try:
-        t = truth(name, item["truth"]) if item["category"] == "self" else None
-        row["truth"] = t
-        row["tests"] = tests
-        row["grade"] = grade(item, res, t, tests, model=grader)
-        row["grader"] = grader
+        row["grade"] = grade(case["item"], case["result"], row["truth"], row["tests"], model=row["grader"])
         row["status"] = "scored"
         row["score"] = round(headline(row), 2)
+        row.pop("error", None)
+        row.pop("grading_case")
     except judge.JudgeError as err:
-        row.update(status="unjudged", error=str(err))   # never guessed: retried as a new item next run
+        row.update(status="unjudged", error=str(err))
     _append(name, row)
     return row
 

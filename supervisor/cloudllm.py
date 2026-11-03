@@ -281,14 +281,21 @@ def complete(instance: str, body: dict, secrets: dict, remembered: dict[str, lis
     return out
 
 
-def _record(instance: str, model: str, tokens_in, tokens_out, usd: float, started: float, stop, error,
+def _record(instance: str, model: str, tokens_in, tokens_out, usd: float | None, started: float, stop, error,
             cache: dict | None = None) -> None:
-    ledger.record_charge(round(usd, 6))
+    """One cloud_usage row. `usd` None is unpriced: a self-hosted model (no price, never $0) or an OpenRouter reply
+    without a cost. A self-hosted call spends no dollars, so it adds nothing to the run's charges (Broker._run_usd):
+    the run's priced calls still sum. An OpenRouter call without a cost spent money nobody knows, so the run's
+    spend is unknown (None), never counted as none."""
+    from . import selfhosted
+    cost = round(usd, 6) if usd is not None else None
+    if cost is not None or not selfhosted.serves(model.split(" (", 1)[0]):
+        ledger.record_charge(cost)
     USAGE.parent.mkdir(parents=True, exist_ok=True)
     with USAGE.open("a") as f:
         f.write(json.dumps({"ts": datetime.now().isoformat(timespec="seconds"), "instance": instance, "model": model,
                             "input_tokens": tokens_in, "output_tokens": tokens_out, **(cache or {}),
-                            "usd": round(usd, 6), "seconds": round(time.monotonic() - started, 1),
+                            "usd": cost, "unpriced": cost is None, "seconds": round(time.monotonic() - started, 1),
                             "stop_reason": stop, "error": error}) + "\n")
 
 
@@ -426,17 +433,24 @@ def _relay(instance: str, model: str, resp, started: float):
         error = f"stream broken: {e!r}"
         raise
     finally:
+        from . import selfhosted
+        hosted = selfhosted.serves(model.split(" (", 1)[0])
+        cost = None if hosted else usage.get("cost")
+        details = usage.get("prompt_tokens_details") or {}
         _record(instance, model, usage.get("prompt_tokens"), usage.get("completion_tokens"),
-                float(usage.get("cost") or 0), started, finish, error or _unsaid(usage, finish))
+                float(cost) if cost is not None else None, started, finish,
+                error or _unsaid({} if hosted else usage, finish),
+                cache={"cache_read_tokens": details.get("cached_tokens"),
+                       "cache_write_tokens": details.get("cache_write_tokens", details.get("cache_write"))})
 
 
 def _unsaid(usage: dict, finish) -> str | None:
     """What went wrong with an OpenRouter reply that carried no error object: a provider error as finish_reason, or
-    tokens without a cost (booked at $0). Both were silent: 12 of 42,000 mimo calls to 2026-10-30, mostly a provider
+    tokens without a cost (unpriced). Both were silent: 12 of 42,000 mimo calls to 2026-10-30, mostly a provider
     error mid-stream, recorded as error None."""
     said = ["the provider ended the reply with finish_reason=error"] if finish == "error" else []
     if usage.get("cost") is None and (usage.get("prompt_tokens") or usage.get("completion_tokens")):
-        said.append("no cost in its usage: booked at $0")
+        said.append("no cost in its usage: unpriced")
     return "; ".join(said) or None
 
 
@@ -451,8 +465,12 @@ def _openrouter(instance: str, body: dict, key: str) -> dict:
         error, data = f"no reply: {json.dumps(data.get('error') or data)[:400]}", None
     usage = (data or {}).get("usage") or {}
     finish = ((data or {}).get("choices") or [{}])[0].get("finish_reason")
-    _record(instance, model, usage.get("prompt_tokens"), usage.get("completion_tokens"), float(usage.get("cost") or 0),
-            started, finish, error or _unsaid(usage, finish))
+    details = usage.get("prompt_tokens_details") or {}
+    cost = float(usage["cost"]) if usage.get("cost") is not None else None
+    _record(instance, model, usage.get("prompt_tokens"), usage.get("completion_tokens"), cost,
+            started, finish, error or _unsaid(usage, finish),
+            cache={"cache_read_tokens": details.get("cached_tokens"),
+                   "cache_write_tokens": details.get("cache_write_tokens", details.get("cache_write"))})
     if data is None:
         raise CloudError(502, f"OpenRouter call for {model} failed: {error}{_policy_hint(error or '')}")
     message = data["choices"][0].get("message") or {}
