@@ -98,8 +98,12 @@ does not establish the rate on real runs.
 
 ## Measuring improvement and autonomy
 
-Before a live cycle calls `declare_intent`, its prompt shows the inbox, the operator briefing (`BRIEFING`) and
-the handoff (`HANDOFF`). The briefing is a local file written by the instance's own scheduled watchers, with no
+Before a live cycle calls `declare_intent`, its prompt shows the inbox (one line per message, `INBOX_CHARS`), the
+operator briefing (`BRIEFING`), the handoff (`HANDOFF`) and a slate of up to six candidate goals from the instance's
+records, each with the judged value of a similar earlier goal (`GOAL_SLATE`); `declare_intent` answers with the judge's
+first error on the newest similar goal that fell short (`FIRST_ERROR`). Every section of the standing context has a
+budget, all within `CONTEXT_CHARS`, stable sections first; tool results older than `RESULTS_KEEP_TURNS` turns shrink to
+a reference whose whole the instance re-reads with `read_file` (see [template knobs](configuration.md#instance-configenv)). The briefing is a local file written by the instance's own scheduled watchers, with no
 mail or calendar call during prompt construction. The operator's world is a goal source beside the improvement
 plan and goals.md. A briefing item has origin `operator` only when a message or conversation backs the request;
 otherwise it has origin `self`. The judge still checks the cited origin.

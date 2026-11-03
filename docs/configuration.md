@@ -202,6 +202,9 @@ reviewed ref was `refs/heads/publish-prep-template`.
 | `LOOP_GUARD` | `'shadow'` | `shadow` |
 | `LOOP_EFFECT_ROUNDS` | `3` | `3` |
 | `CONTEXT_JOURNAL_CHARS` | `16000` | `16000` |
+| `CONTEXT_CHARS` | `48000` | `48000` |
+| `INBOX_CHARS` | `4000` | `4000` |
+| `RESULTS_KEEP_TURNS` | `4` | `4` |
 | `STALE_LINE_HOURS` | `24` | uses built-in default |
 | `STALE_GOAL_HOURS` | `48` | uses built-in default |
 | `CRITERION_CHARS` | `600` | uses built-in default |
@@ -217,6 +220,8 @@ reviewed ref was `refs/heads/publish-prep-template`.
 | `ATTENTION_SCHEMA` | `'on'` | uses built-in default |
 | `COMMITMENTS` | `'on'` | uses built-in default |
 | `FORECAST` | `'on'` | uses built-in default |
+| `GOAL_SLATE` | `'on'` | uses built-in default |
+| `FIRST_ERROR` | `'on'` | uses built-in default |
 | `OPERATOR_NAME` | `'the operator'` | empty |
 
 `STALE_LINE_HOURS` flags dates older than this many hours in self/goals.md and self/self.md
@@ -280,8 +285,46 @@ whose heading names corrections first, then the rest in file order, and one line
 `read_file` offset where it starts. Missing, empty or
 unreadable files render a line explaining their state.
 
+Every section of the standing context (the system prompt of every run) has a budget: the self-model 8,000
+characters, personality 4,000, the skill list 3,000, facts 6,000, digests 3,500, goals `GOALS_CHARS`, journal
+`CONTEXT_JOURNAL_CHARS`, the last sleep 3,000, the improvement plan 2,500, open commitments, projects and corrections
+3,000 each, stats 5,500 (template `shaft/prompts.py` `SECTIONS`). `CONTEXT_CHARS` (default 48,000, about what the
+standing slices came to before the self-model and the rest had any budget; 0 = no total) caps them together: when the
+sections want more, a section wanting less than its share keeps all of it and the others share the rest in proportion
+to their budgets. A cut section keeps its head (or, for facts and digests, its newest tail) and ends with a line saying
+how many characters were left out and how to read them (`read_file <file>`, `list_files skills`, `search_memory`).
+The open surprises keep their own cap (1,200 characters) and count against the total first; when they leave no room, every section shows only its cut line (the journal a pointer to `search_memory`), never everything. Sections run stable first: self-model, personality, skills,
+facts, digests, goals, journal, then the last sleep, improvement plan, surprises with commitments, projects,
+corrections, stats and the time, so a prompt cache keeps the longest prefix it can from one run to the next.
+
+`INBOX_CHARS` (default 4,000; 0 = no limit) bounds a live cycle's inbox: one line per message, the operator's first
+and then by time, with its header but `To` (`Trust` cut at 300 characters, other values at 100, the header at 600
+together) and the first 200 characters of its body; `read_file inbox/<file>` shows one whole. The budget keeps 200
+characters for the line that counts the messages past it (`list_files inbox` names them). Only the messages listed,
+and any the cycle read whole with `read_file`, are archived to `memory/messages/` and named under **Messages read**;
+the rest stay in the inbox for a later cycle, are named under **Left in my inbox** in the journal and in the episode's
+`inbox_deferred` (its `inbox` still lists every message found at the start, which a trial replay restores). Retrieval
+reads every message whole; attached images and the goal slate come from the listed ones.
+
+`RESULTS_KEEP_TURNS` (default 4; 0 = never) shrinks the tool results of model turns older than that many, in live
+cycles, sleeps and conversations, to one line: the tool, its arguments (120 characters), the result's first line, its
+length and `read_file .tmp/results/<pid>/<n>.txt`, where the whole result is kept. Results of 400 characters or less
+stay whole. The call ledger and the workspace's focus line stand under the newest step's last result only; the
+ledger's file writes are cut from their oldest end at 800 characters, each one left out still in its own result.
+
+`GOAL_SLATE` (on, off) shows a live cycle, before `declare_intent`, up to six candidate goals from the instance's own
+records: inbox messages (the operator's first), overdue commitments, projects at risk or past a boundary, its last live
+cycle's `next_action`, and its top open surprise — one of each kind first, in that order, then the rest — each with the
+judged value of the newest similar earlier goal (word overlap at least 0.2) that has one. In a trial replay whose
+monitor probe removes or replaces the open surprises (`x_probes`), the slate's surprise follows that arm. The model still chooses;
+how often similar goals were met is never shown, since declare_intent's base rate is what the confirm step measures.
+`FIRST_ERROR` (on, off) adds to `declare_intent`'s result at most two lines: the judge's `first_error` on the newest
+similar earlier goal judged `no` or `partial`. Both read `memory/verdicts.jsonl`, which the sleep fills from
+`record(kind='judgments', format='json')` (it carries `value` and `value_for` when the judge gave them).
+
 `HANDOFF=on` shows the last two live episodes' completed calls, unfinished work and next action with its revision
-condition. Other episode kinds do not age the handoff. `raw` shows those episodes' tool logs, cut to the character
+condition, each field cut at 600 characters and the block at 3,000, saying which episode file holds the whole.
+Other episode kinds do not age the handoff. `raw` shows those episodes' tool logs, cut to the character
 budget of their structured blocks; a shorter log stays shorter. `off` hides the block. Invalid modes keep the
 next source's value with a warning. These switches affect prompt display; live episodes still record handoffs.
 

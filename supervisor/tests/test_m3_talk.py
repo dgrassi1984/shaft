@@ -87,7 +87,13 @@ class ReplyFirstTest(InstanceFixture, unittest.TestCase):
         captured = []
         client.complete.side_effect = lambda ms, *a, **kw: (captured.append(copy.deepcopy(ms)) or Reply("Done."))
         live.run(self.cfg, self.state, client)
-        self.assertIn(body.strip(), captured[0][1]["content"])
+        # one line, its header but To and its opening (review E2/C4: the inbox was pasted whole), and the handle
+        shown = captured[0][1]["content"]
+        self.assertIn(live.inbox_line(inbox[0][0], body), shown)
+        self.assertIn("read_file inbox/<file> shows one whole", shown)
+        for text in (f"From: {self.cfg.NAME}", "Kind: queued from conversation", "Date: 2026-10-28 14:05",
+                     "Finish the orchard survey", "Why: Reply first"):
+            self.assertIn(text, shown.split("\n\n## ", 1)[0])
 
     def test_talk_and_api_prompts_show_budgets_and_zero_omits_them(self):
         self.assertEqual(config.FIELDS["TALK_REPLY_CALLS"], (int, 3))

@@ -1600,7 +1600,8 @@ class Broker:
                                                    "failure_mode", "difficulty", "deliverable_met",
                                                    "self_imposed_clauses", "self_audit", "delivery_supported",
                                                    "should_have_waited")},
-                     **{key: r[key] for key in ("first_error_step", "first_error") if key in r},
+                     # value: the goal slate shows what a similar earlier goal was worth (review G2), from my sleep's copy
+                     **{key: r[key] for key in ("first_error_step", "first_error", "value", "value_for") if key in r},
                      "followup_useful": r.get("followup_useful"),
                      "reviewed_at": _reviewed_at(r),
                      "second_criterion_met": (r.get("second") or {}).get("criterion_met")} for r in shown],
