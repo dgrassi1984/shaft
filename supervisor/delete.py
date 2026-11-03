@@ -64,6 +64,7 @@ def own_files(name: str) -> list[Path]:
              s / "battery" / "exam" / name, s / "web" / "comments" / f"{name}.json", s / "tools" / f"{name}.json",
              s / "baselines" / f"{name}.json", s / "baselines" / f"{name}.files",
              s / "judgments" / f"{name}-anchoring.jsonl", s / "expectations" / f"{name}.jsonl",
+             s / "expectations" / f"{name}-operator-said.jsonl",
              s / "expectations" / f"{name}-scored.jsonl", s / "expectations" / f"{name}-baselines.jsonl",
              s / "experiments" / f"{name}.jsonl",
              s / "experiments" / f"{name}-workspace.jsonl"]

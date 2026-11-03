@@ -52,6 +52,7 @@ import uuid
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from . import tom
 from .core import (API_TALKS as TALKS, IDLE_MINUTES, SUP_DIR, UnsafePath, instance_names, instance_root, knob, log,
                    port, safe_write, secrets_env, unlink_beneath, whole)
 from .runner import REFUSED, Reply, busy_with, request_yield, run_agent, spawn_recover, stop_runs_on_signal
@@ -81,6 +82,13 @@ LAST_STEP_NOTE = ("[SHAFT, about how your reply is delivered — not the app] On
 def allowed_logins() -> set[str]:
     raw = os.environ.get("SHAFT_API_LOGINS") or secrets_env().get("SHAFT_API_LOGINS", "")
     return {x.strip().lower() for x in raw.split(",") if x.strip()}
+
+
+def _last_text(messages: list[dict]) -> str:
+    """The text of the last message: a string, or the text parts of a content list."""
+    content = messages[-1].get("content")
+    return (content if isinstance(content, str) else "\n".join(
+        p.get("text", "") for p in content or [] if isinstance(p, dict) and p.get("type") == "text")).strip()
 
 
 class Conversations:
@@ -436,7 +444,7 @@ class Handler(BaseHTTPRequestHandler):
         if not messages or messages[-1].get("role") != "user":
             return self._error(400, "messages must end with a user message")
         if route == "/v1/chat/interject":
-            return self._interject(model, messages, cid)
+            return self._interject(model, messages, cid, channel)
         rid = self.headers.get("X-Shaft-Request-Id") or None
         if rid is not None and not CONVERSATION_ID.match(rid):
             return self._error(400, "X-Shaft-Request-Id is 1-64 letters, digits, - or _")
@@ -458,11 +466,9 @@ class Handler(BaseHTTPRequestHandler):
         log(f"api: conversation {talk_id} with {model} ended by its client")
         self._json(202, {"ended": talk_id})
 
-    def _interject(self, model: str, messages: list[dict], cid: str | None = None) -> None:
+    def _interject(self, model: str, messages: list[dict], cid: str | None = None, channel: str = "api") -> None:
         """The last user message joins the reply running in this conversation (same first user message)."""
-        content = messages[-1].get("content")
-        text = (content if isinstance(content, str) else "\n".join(
-            p.get("text", "") for p in content or [] if isinstance(p, dict) and p.get("type") == "text")).strip()
+        text = _last_text(messages)
         if not text:
             return self._error(400, "the message to add is empty")
         talk_id = self.conversations.current(model, messages, cid)
@@ -473,6 +479,7 @@ class Handler(BaseHTTPRequestHandler):
         if not ok:
             return self._error(409, f"{model} is not replying in this conversation now: send it as a new message",
                                "conflict")
+        tom.heard(model, text, channel)
         log(f"api: a message for {model}'s running reply ({talk_id})")
         self._json(202, {"interjected": True, "talk_id": talk_id})
 
@@ -494,6 +501,8 @@ class Handler(BaseHTTPRequestHandler):
             if (done := Handler.answered.get(model, rid)) is not None:
                 log(f"api: {model}: request {rid} was answered already — the same answer, not run again")
                 return self._json(200, {**done, "replayed": True})   # its client tells a kept answer from a new one
+        if text := _last_text(messages):
+            tom.heard(model, text, channel)         # what the operator said, for scoring reply predictions (tom.py)
         talk_id = self.conversations.talk_id(model, messages, cid, channel)
         live = self.live.begin(model, talk_id)
         request = {"messages": [*(m for m in messages if m.get("role") == "system"),
