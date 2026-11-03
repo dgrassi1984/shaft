@@ -10,12 +10,15 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
 from . import broker, clock, images, memory, personality, selfedit
 
 MAX_RESULT_CHARS = 6000
+MAX_OUTPUT_CHARS = 1_000_000
+MAX_OUTPUT_FILES = 32
 # My tool log is what the judge grades my cycles from: it keeps what I saw. It was once cut at 2,000
 # characters while I saw 6,000, and the judge marked my read-backs of self/self.md "cut off" — unsupported.
 LOG_CHARS = MAX_RESULT_CHARS
@@ -268,7 +271,27 @@ class Toolbox:
         except Exception as e:  # a tool failure must never kill the cycle
             result = f"ERROR: {type(e).__name__}: {e}"
         if len(result) > MAX_RESULT_CHARS:
-            result = result[:MAX_RESULT_CHARS] + f"\n[... truncated, {len(result)} chars total]"
+            total = len(result)
+            try:
+                folder = self._path(".tmp/outputs", for_write=True)
+                folder.mkdir(parents=True, exist_ok=True)
+                old = sorted(folder.glob("output-*.txt"), key=lambda p: p.lstat().st_mtime)
+                for index, path in enumerate(old):
+                    if index > len(old) - MAX_OUTPUT_FILES and datetime.now().timestamp() - path.lstat().st_mtime < 86400:
+                        continue
+                    path.unlink()
+                # errors="replace": a broker result decoded from JSON may hold a lone surrogate, which strict
+                # UTF-8 refuses (one character stays one character, so the offsets below still line up).
+                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", errors="replace", prefix="output-",
+                                                 suffix=".txt", dir=folder, delete=False) as saved:
+                    saved.write(result[:MAX_OUTPUT_CHARS])
+                rel = Path(saved.name).relative_to(self.root).as_posix()
+                cap = f"; storage cap: first {MAX_OUTPUT_CHARS} chars saved" if total > MAX_OUTPUT_CHARS else ""
+                marker = (f"\n[... truncated, {total} chars total{cap}; saved to {rel}. "
+                          f"Read the rest with read_file({rel!r}, offset={MAX_RESULT_CHARS - READ_MARKER_ROOM})]")
+            except Exception as e:   # outside the dispatch's own catch: a failed save must not kill the cycle
+                marker = f"\n[... truncated, {total} chars total; could not save output: {type(e).__name__}: {str(e)[:200]}]"
+            result = result[:MAX_RESULT_CHARS - READ_MARKER_ROOM] + marker
         self.log.append({"tool": name, "args": for_log(_loggable(name, raw_args)), "result": result,   # what I saw
                          "seconds": round((datetime.now() - started).total_seconds(), 2)})
         return result

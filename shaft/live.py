@@ -182,7 +182,9 @@ def run(cfg, state: State, client: Client) -> str:
         length = len(args["success_criterion"])
         if length > cfg.CRITERION_CHARS:
             return (f"ERROR: success_criterion has {length} characters; limit {cfg.CRITERION_CHARS}. "
-                    "Give the deliverable's check rather than ritual clauses.")
+                    f"Cut at least {length - cfg.CRITERION_CHARS} characters. "
+                    "Give the deliverable's check rather than ritual clauses.\n"
+                    f"Draft:\n{args['success_criterion']}")
         origin, ref = str(args.get("origin", "")).lower(), str(args.get("origin_ref", "")).strip()
         if origin not in ORIGINS:
             return "ERROR: origin must be self, operator or instance — who chose this goal"
