@@ -18,9 +18,11 @@ The operator can also authorise an instance-owned Google account. Its Gmail scop
 
 ## Network access to the supervisor
 
-The web UI and API bind to localhost and are exposed remotely through Tailscale Serve, for the tailnet only. Do not expose them through a public proxy or Tailscale Funnel (`supervisor/api.py:531`, `supervisor/api.py:609`, `supervisor/web.py:950`, `supervisor/web.py:989`).
+The web UI and API bind to localhost and are exposed remotely through Tailscale Serve, for the tailnet only. Do not expose them through a public proxy or Tailscale Funnel (`supervisor/api.py:531`, `supervisor/api.py:609`, `supervisor/web.py:1518`, `supervisor/web.py:1557`).
 
-The chat API requires a bearer key and an allowed Tailscale login. Private web UI pages require an allowed login and a paired browser cookie. The inbox endpoint is an explicit exception: its narrower `SHAFT_INBOX_KEY` works without a login, but the endpoint still has the same network boundary (`supervisor/api.py:223`, `supervisor/api.py:244`, `supervisor/web.py:322`, `supervisor/web.py:344`).
+The chat API requires a bearer key and an allowed Tailscale login. Private web UI pages require an allowed login and a paired browser cookie. The inbox endpoint is an explicit exception: its narrower `SHAFT_INBOX_KEY` works without a login, but the endpoint still has the same network boundary (`supervisor/api.py:223`, `supervisor/api.py:244`, `supervisor/web.py:376`, `supervisor/web.py:382`).
+
+The native apps' API (`/app/v1`, on the web UI's port) requires the same allowed login and host, and a paired device's `Authorization: Bearer <device>.<secret>` instead of the cookie: the same pair, checked against the same hash in `devices.json`. It reads no cookie and the web UI's pages accept no bearer, so a page in a browser can never reach the API with a credential the browser sends on its own; that is why it has no CSRF token, and it sends no CORS headers. The pairing link is the only way to a bearer; `shaft web unpair` revokes it (`supervisor/web.py:388`, `supervisor/app_api.py:112`, `supervisor/web.py:233`).
 
 ## Reporting a vulnerability
 

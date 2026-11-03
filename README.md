@@ -20,7 +20,8 @@ local models. On `main` today:
 
 - the supervisor, sandbox, broker, test gate with probation, and cloud judges;
 - private mind stores, kept out of the shared repository;
-- the terminal client, the web UI/PWA for iPhone and iPad, the API, and Telegram;
+- the terminal client, the web UI/PWA for iPhone and iPad, the native chat apps' API (`/app/v1`), the API, and
+  Telegram;
 - mail, calendar, and Drive grants, instance-owned Google accounts, a shared
   Chromium, scheduled jobs, and per-instance Python environments;
 - trials, the capability battery, consults with other models, and the measurement

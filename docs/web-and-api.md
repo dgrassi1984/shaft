@@ -64,9 +64,8 @@ curl -s https://<mac>.<tailnet>.ts.net:8443/v1/inbox/example -H "Authorization: 
 ## The web UI (`shaft web on`)
 
 `shaft top` in a browser, with a chat-first interface on the tailnet. See [web UI design](plans/PLAN-webui.md)
-and [chat design](plans/PLAN-webui-chat.md). The native chat apps' JSON API (`/app/v1`, on the same service) has its
-contract in [app-api.md](app-api.md); it is being built ([PLAN-native-apps.md](plans/PLAN-native-apps.md)) and does
-not answer yet.
+and [chat design](plans/PLAN-webui-chat.md). The native chat apps talk to the same service through a JSON API,
+`/app/v1` ([below](#the-native-chat-apps-api-appv1)).
 
 - `/` opens the chat with the instance you last talked to. The left rail lists every instance's chat (its state, its
   last line, as text rather than its Markdown, a mark when it answered while you were elsewhere; the tab title counts them), then **Manage**: Overview
@@ -424,3 +423,39 @@ delivered rating returns 409 with an explanation.
 The server reads the reply text and timestamp from its own records. Unknown instances return 404, invalid
 targets return 409. Ratings, deliveries and clears append to `.supervisor/feedback.jsonl`; the latest rating per
 target wins. Feedback changes no grades. Fine-tuning changes belong to milestone F3.
+
+## The native chat apps' API (`/app/v1`)
+
+The iPhone, iPad and Mac apps ([PLAN-native-apps.md](plans/PLAN-native-apps.md)) use a JSON API on the web service
+itself, same port, tailnet only. Its contract, every route, field, status code and example, is
+[app-api.md](app-api.md); the JSON the server gives for representative chats is checked in under
+`supervisor/tests/app_api_fixtures/`, and the apps' own tests decode those files.
+
+- **Who may use it.** As for the web UI, every request needs your tailnet login (`SHAFT_API_LOGINS`) and this Mac's
+  tailnet name as its host. Instead of the cookie it needs `Authorization: Bearer <device>.<secret>`, the same pair a
+  paired browser's cookie holds, checked the same way (`devices.json`, the secret's hash). `/app/v1` reads no cookie
+  and the web pages accept no bearer, so a web page can never reach the API with a credential the browser adds on
+  its own; there is no CSRF token and no CORS.
+- **Pairing.** `shaft web pair --name iphone-app` prints the link, as for a browser. Paste it into the app, which posts
+  it to `POST /app/v1/pair` and keeps the device's secret in its Keychain. The link still works once, for 10 minutes.
+  A paired app is a paired device: `shaft web status` lists it under **native apps**, with its platform and whether
+  native push reaches it (and the server's `native push: ready` or what is missing). `shaft web unpair` revokes it,
+  as does **Unpair** in the app (`POST /app/v1/unpair`). Unpairing also drops its push token and its seen marks.
+- **One chat model.** The JSON feed and the web page's feed are drawn from one function (`web_chat.build`), so the app
+  shows what the PWA shows: the same items with the same keys, the 80-message window, the reply running now, what is
+  queued, feedback waiting for your next message.
+- **Live updates.** `GET /app/v1/chat/<name>?since=…&live=…&wait=25` holds the request until the chat changes (a
+  long-poll, rather than the PWA's 1.5 s polling); while only the running reply moves it sends the reply alone. A held
+  request for the current chat counts as the chat being on screen, so no push for it reaches that device meanwhile.
+- **Sending** goes through the same paths as the web composer: **Send now**, **Queue after reply**, **Next cycle**,
+  Retry, quotes (made into the message text on the server, exactly as the web composer writes them), files. Each
+  message carries the app's id for it (`mid`): sent again while that chat is open, or after it went for the next
+  cycle, it is not sent twice.
+- **Unread and the badge.** The PWA keeps its unread marks in the browser. The apps need the server to know, for the
+  icon's badge: `.supervisor/web/seen.json` holds, per app and instance, what the app last showed. An instance is
+  unread when its own newest answer or message is newer than that; your own messages never make a chat unread.
+- Documents and comments, feedback, attachments and earlier chats are there too, each through the web UI's own
+  logic. Push to the apps (APNs) is set up separately ([PLAN-native-apps.md](plans/PLAN-native-apps.md) §2.2).
+
+Sources: [the API](../supervisor/app_api.py), [the chat model](../supervisor/web_chat.py),
+[seen marks](../supervisor/web_seen.py), [authentication and pairing](../supervisor/web.py).

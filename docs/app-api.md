@@ -1,9 +1,9 @@
 # The native apps' API: `/app/v1`
 
 The contract between the SHAFT web service and the native chat apps for iPhone, iPad and Mac
-([PLAN-native-apps.md](plans/PLAN-native-apps.md) M0). The server side is built in M1 (`supervisor/app_api.py`); until
-it lands, nothing here answers. Every field below is what the server sends; the Swift side (`SHAFTKit`) decodes the
-fixtures the server's own serialiser writes (§13.5), never a hand-written copy.
+([PLAN-native-apps.md](plans/PLAN-native-apps.md) M0). The server side is `supervisor/app_api.py` (M1). Every field
+below is what the server sends; the Swift side (`SHAFTKit`) decodes the fixtures the server's own serialiser writes
+(§13.5), never a hand-written copy.
 
 The API shows a chat exactly as the PWA's chat page shows it. One function says what a chat shows
 (`web_chat.feed`, §13.1); the HTML feed renders it and this API serialises it, so a fix to one cannot miss the other.
@@ -44,7 +44,9 @@ Every request passes three checks, in this order:
 - **Names:** `<n>` is an instance name (`[A-Za-z0-9_-]+`, one of `instance_names()`), `<cid>` a web chat id
   (`web-` + 16 hex). An unknown one, or a chat of another instance: `404 not_found`.
 - **Ids made by the app:**
-  - `mid`, a message's id: a lowercase UUID, 1–64 of `[A-Za-z0-9_-]`. Sent again (a retry), it is not delivered twice.
+  - `mid`, a message's id: a lowercase UUID, 1–64 of `[A-Za-z0-9_-]`. Sent again (a retry), it is not delivered twice
+    while the chat it went into is still open (its last 50 ids), or once it went for the next cycle (the message log).
+    A retry after that chat ended is a new message in a new chat, as the web's send is.
   - `pid`, a comment post's id: `p-` + 16 lowercase hex. Sent again, it is not stored twice.
 
 ### 1.4 Responses
@@ -207,7 +209,7 @@ operator cleared it (then none: `chat` is null). `<cid>` names any chat of `<n>`
   | Param | Type | |
   |---|---|---|
   | `since` | str | the `version` the app has (§4.3) |
-  | `live` | str | the `live` revision the app has. Send both, from the same response, or neither |
+  | `live` | str | the `live` revision the app has (`live=` when it is `""`). Send both, from the same response, or neither (`400`) |
   | `wait` | int | 0–25: how long to hold the request for a change (long-poll). Default 0. Out of range: `400` |
   | `all` | `1` | every turn instead of the last 80 (the HTML's "Show the N earlier messages") |
   | `at` | int | the device's clock in Unix ms when it sent the request (watching, below) |
@@ -859,12 +861,14 @@ returned when it is not one: the routes answer 404). `whole`: every turn (`?all=
 - `version` and `live` are computed in `build`, over the whole chat, before the window.
 - `last` and `web_chat.summary(name)["last"]` come from one helper (`web_chat.last_from(chat, sent)`), so unread never
   drifts from the rail; a test pins them equal.
-- `web._sent_during` moves to `web_chat.sent_during(name, chat, archived=False)`; `web.py` calls it there.
+- `web._sent_during` moves to `web_chat.sent_during(name, chat, archived=False)`; `web._sent_during` stays as the web
+  routes' one-line caller of it (the web tests patch it there).
 
 ### 13.2 The HTML views on the model
 
 - `web_views.chat_feed(name, chat, sent, archived=False, whole=False)` keeps its signature (the existing web tests stay
-  unchanged) and renders `web_chat.build(...)`: every `data-k` it writes is an item's `key`.
+  unchanged) and renders `web_chat.build(...)` (`web_views.feed_html(model)`): every `data-k` it writes is an item's
+  `key`. Its HTML is byte-identical to what it was before the model.
 - `web_views.live_activity(chat)` renders the model's `reply` (and, once it ended, the last answer's `activity`).
 - `_reply_failure`'s sentences and choices move into the model (`failure`, §4.4); the HTML renders them.
 - `_overwritten` splits into `web_views.overwritten(saved, sha, text) -> dict | None` (the §10.2 object) and its HTML.
@@ -891,6 +895,13 @@ returned when it is not one: the routes answer 404). `whole`: every turn (`?all=
   - `web.save_doc` / `web.delete_doc` / `web.comment_action`, returning data and raising `DocStale(sha, diff)` or the
     module's `Refused`, from `_save_doc`, `_delete_doc`, `_comment`.
 - `web.Handler._serve` allows a send's body size on `/app/v1/chat/<n>/send` too, and answers its 413 as JSON there.
+  The server takes `DELETE` (`do_DELETE`).
+- `web.paired_device(dev, secret) -> bool` is the one device check: the cookie's (`web._paired`) and the bearer's.
+- The document functions raise `web.DocStale(message, sha, diff, changed)` (a save or delete refused: `changed` when
+  the document is not what the app read, else the CLI refused the text) and `web.DocRefused` (the CLI refused a
+  deletion); `docs.Refused` for a bad path or folder. `docs.raw(name, path)` reads a document whatever its size.
+- `web.apns_module()` imports `supervisor/apns.py` (M2) when it is installed; without it the push routes answer
+  `503 push_off` "native push is not installed on this server" and unpairing has no token to drop.
 - `web.unpair` also calls `apns.unregister(device)` and `web_seen.forget(device)`.
 - Pairing reuses `web._use_pairing` and `web._token_from_link`; the device record gains `"platform"`.
 
@@ -899,7 +910,8 @@ returned when it is not one: the routes answer 404). `whole`: every turn (`?all=
 - `seen(device: str, name: str, version: str) -> bool`: True when `version` is the current feed's (`web_chat.feed(name)`);
   then it records `{version, last, at}` for the device and instance. False otherwise, recording nothing (the route
   answers `409 stale_version`).
-- `unread(device: str) -> dict[str, bool]`: per instance (§12).
+- `unread(device: str, summaries: dict | None = None) -> dict[str, bool]`: per instance (§12); `summaries` (each
+  instance's `web_chat.summary`) when the caller has them already (`/app/v1/instances`).
 - `badge(device: str) -> int`: how many are unread. The APNs lane calls it for each push.
 - `forget(device: str) -> None`: drops the device's marks.
 - The store `.supervisor/web/seen.json`, written atomically (mode 600) under a lock, as `web._write` does.
@@ -913,10 +925,11 @@ returned when it is not one: the routes answer 404). `whole`: every turn (`?all=
   - the HTML and the JSON of the same chat have the same keys in the same order;
   - the long-poll answers on a version move, on a live move (partial), and `304` after `wait`;
   - `seen` with a stale version is refused; unread follows `summary`'s `last`.
-- The same test writes the fixtures the Swift Kit decodes, from `app_api.to_json`, to
+- The same test writes the fixtures the Swift Kit decodes, from the API's own answers, to
   `supervisor/tests/app_api_fixtures/<name>.json`, and fails when a checked-in one differs (`SHAFT_UPDATE_FIXTURES=1`
   rewrites them): `idle`, `live`, `live-partial`, `queued`, `quotes`, `attachments`, `sent`, `feedback`, `failed`,
-  `earlier`, `instances`, `docs`, `doc-comments`, `push-latest`, `errors`.
+  `earlier`, `ended`, `instances`, `docs`, `doc-comments`, `push-latest`, `errors`. Their times are stamped in
+  `Europe/Rome` (the test sets `TZ`), so they carry `+01:00`. `errors` maps each code to `{status, body}`.
 
 ## 14. The HTML feed, piece by piece
 
