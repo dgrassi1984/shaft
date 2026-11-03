@@ -7,8 +7,12 @@ public enum PushEnvironment: String, Sendable, Equatable {
     case production
 
     /// This build's environment, read from the `aps-environment` its provisioning profile grants: `development` is
-    /// the sandbox. A build with no embedded profile (App Store) is production.
+    /// the sandbox. The simulator, which embeds no profile, is always the sandbox; any other build with no embedded
+    /// profile (App Store) is production.
     public static func current(bundle: Bundle = .main) -> PushEnvironment {
+        #if targetEnvironment(simulator)
+        return .sandbox
+        #else
         #if os(macOS)
         let url = bundle.bundleURL.appending(path: "Contents/embedded.provisionprofile")
         #else
@@ -16,6 +20,7 @@ public enum PushEnvironment: String, Sendable, Equatable {
         #endif
         guard let data = try? Data(contentsOf: url) else { return .production }
         return fromProfile(data) ?? .production
+        #endif
     }
 
     /// The environment a provisioning profile (CMS-signed plist) grants, nil when it grants none.
