@@ -405,7 +405,8 @@ search; `shaft provenance` matches observation claims against tool results by co
 **forecast** of what comparable goals cost (turns, minutes, calls, how many ran out: no finish, or a forced deadline
 wrap-up; a last-step wrap-up that finished did not) — costs only, never a success rate,
 which would be a second base rate before the v3 confirm. `send_message` takes `expect_reply`, timestamped by the
-broker in `.supervisor/expectations/` and scored when the reply comes (`supervisor/tom.py`; live traffic only).
+broker in `.supervisor/expectations/` and scored when the reply comes (`supervisor/tom.py`; live traffic only): an
+inbox file from the recipient, or, for the operator, a chat message the API logged (`<name>-operator-said.jsonl`).
 `shaft metacog` separates confidence's discrimination (type-2 AUROC with a day-clustered
 CI, resolution, meta-I) from its bias, by domain from the tool log, and tests v3 for non-inferiority; `shaft anchoring`
 has the same judge grade sampled cycles with the instance's claim shown, re-asked and withheld, to measure how much
