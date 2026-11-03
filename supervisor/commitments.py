@@ -130,6 +130,18 @@ def ledger(name: str, now: datetime | None = None) -> dict[str, dict]:
     return _fold(_rows(text), now if now is not None else datetime.now())
 
 
+def coming_due(name: str, since: datetime | None, until: datetime) -> list[dict]:
+    """Its unsettled commitments (open or overdue) due after `since` (None: any time) and by `until`, soonest first,
+    each with `due_at` (local): what wakes the instance (autonomy.wake_gate, autonomy.commitment_wakes)."""
+    out = []
+    for item in ledger(name, until).values():
+        at = _at(item["due"])
+        if item["status"] in ("open", "overdue") and at is not None and at <= _local(until) \
+                and (since is None or at > _local(since)):
+            out.append({**item, "due_at": at})
+    return sorted(out, key=lambda i: i["due_at"])
+
+
 def _episodes(name: str) -> list[dict]:
     return metrics.live_episodes(name) + metrics._episodes(name, "talk") + metrics._episodes(name, "sleep")
 

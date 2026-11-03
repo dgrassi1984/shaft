@@ -35,15 +35,15 @@ class WakeTest(unittest.TestCase):
         st = {"wakes": {"shaft": "2026-10-13T10:00:00", "wren": "2026-10-13T10:00:00"}}
         every = {"shaft": H2, "wren": timedelta(minutes=30)}
         start, skip = decide_wakes(D("2026-10-13T10:45:00"), st, ["shaft", "wren"], every.get, lambda n: "")
-        self.assertEqual((start, skip), (["wren"], {}))
+        self.assertEqual((list(start), skip), (["wren"], {}))
         start, _ = decide_wakes(D("2026-10-13T12:00:00"), st, ["shaft", "wren"], every.get, lambda n: "")
-        self.assertEqual(start, ["shaft", "wren"])
+        self.assertEqual(list(start), ["shaft", "wren"])
 
     def test_a_wake_while_already_awake_is_skipped_not_queued(self):
         st = {"wakes": {"shaft": "2026-10-13T10:00:00"}}
         start, skip = decide_wakes(D("2026-10-13T12:00:00"), st, ["shaft"], lambda n: H2,
                                    lambda n: "talk since 11:40")
-        self.assertEqual(start, [])
+        self.assertEqual(start, {})
         self.assertEqual(skip, {"shaft": "talk since 11:40"})
 
     def test_a_queued_update_starts_once_idle_and_holds_back_the_wake(self):
@@ -72,7 +72,7 @@ class WakeTest(unittest.TestCase):
     def test_never_woken_is_due_and_zero_means_never(self):
         start, _ = decide_wakes(D("2026-10-13T12:00:00"), {}, ["new", "off"],
                                 {"new": H2, "off": None}.get, lambda n: "")
-        self.assertEqual(start, ["new"])
+        self.assertEqual(list(start), ["new"])
 
     def test_interval_from_config_env_with_a_floor(self):
         def interval(value):

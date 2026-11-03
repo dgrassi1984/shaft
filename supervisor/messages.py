@@ -224,6 +224,8 @@ def _deliver(name: str, text: str, kind: str, in_reply_to: str | None = None, *,
                       f"{text.strip()}\n")
     record(SUP_DIR, path, "operator", name, kind, stamp, text, attachments, via=via, mid=mid, shown=shown,
            comments=comments)
+    from .autonomy import event_wake   # it wakes for this once idle, not at its next timed wake (review C15)
+    event_wake(name, "message from the operator")
     return path
 
 

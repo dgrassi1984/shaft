@@ -65,6 +65,23 @@ inbox/        messages waiting for it (from you or other instances)
 notes/        its own work
 ```
 
+## Wakes
+
+The scheduler ([autonomy.py](../supervisor/autonomy.py)) looks at each instance every `WAKE_INTERVAL_MINUTES`, and
+wakes it only with something to do (`wake_gate`, a pure rule with no model): an unread message in its inbox (a watch
+result is one), an open commitment coming due before it looks again, a job run that delivered or published something
+since its last cycle, or no cycle for `SHAFT_IDLE_WAKE_MINUTES` (default 30). Otherwise the wake is skipped and the
+reason (`nothing to do: …`) logged, kept in `.supervisor/schedule.json` until the next cycle, and shown by
+`shaft autonomy status`, `shaft top` and the web overview. What used to wait for that interval wakes the instance as
+soon as it is idle instead (event wakes, through the jobs' wake path, never while it is paused or has
+`WAKE_INTERVAL_MINUTES=0`): a message from the operator, a message from another instance (inside the recipient's
+wake floor since its last cycle it is queued for the floor's end, so two instances answering each other are paced,
+not looped), and a commitment falling due. A cycle is stamped when it starts under the instance's run lock — a
+scheduled wake, `shaft live` or `shaft tick` alike; a wake that finds the instance busy stamps none — and an asked
+wake whose last request came before a cycle began is dropped, since that cycle saw it. `schedule.json` and `battery/schedule.json` are rewritten under a lock and replaced whole: the scheduler
+and every wake, sleep and battery write them. A scheduler child's stderr is read while it runs, and a pause a running
+cycle does not acknowledge within five minutes (or by its budget's end) becomes a request to wrap up.
+
 ## Effect-loop measurement
 
 The shared template `shaft/agent.py` loop keeps its exact-call repeat guard and adds an effect guard (#103),

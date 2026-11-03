@@ -372,16 +372,22 @@ def _pid_alive(pid: int) -> bool:
         return True
 
 
-def _pause(name: str, root: Path, kind: str, proc, held: _Held, run: dict, broker) -> float:
+PAUSE_ACK_S = 300   # how long a paused run's current tool may take to finish before the pause is given up
+
+
+def _pause(name: str, root: Path, kind: str, proc, held: _Held, run: dict, broker, until: float | None = None) -> float:
     """A reply to the operator needs this instance during its autonomous run ("its background
     cycle should be immediately paused", and later "pause only while replying"): signal it — a model call in flight is cut off, freeing the
     model; a tool in progress finishes first — settle what it did so far, give the instance to the conversation,
-    and take it back when the conversation ends. Returns the seconds it was paused."""
+    and take it back when the conversation ends. Returns the seconds it was paused. A run that does not acknowledge
+    within PAUSE_ACK_S, or by `until` (its budget's end, monotonic), is asked to wrap up instead, once (review B13: the
+    wait had no deadline, and a run stuck before its acknowledgement held the reply, and its own budget, forever)."""
     t0 = time.monotonic()
     pid = proc.pid
     marker = root / ".tmp" / f"pausable-{pid}"
-    if not marker.is_file():
-        # Its code does not handle the signal (SIGUSR1 would kill it): ask it to wrap up instead, once.
+    if not marker.is_file() or run.get("pause_given_up"):
+        # Its code does not handle the signal (SIGUSR1 would kill it), or it did not acknowledge a pause in time: ask it
+        # to wrap up instead, once.
         if not run.get("asked_to_yield"):
             request_yield([name])
             run["asked_to_yield"] = True
@@ -392,10 +398,17 @@ def _pause(name: str, root: Path, kind: str, proc, held: _Held, run: dict, broke
     except ProcessLookupError:
         pass
     ack = root / ".tmp" / f"paused-{pid}"
+    give_up = min(t0 + PAUSE_ACK_S, until) if until is not None else t0 + PAUSE_ACK_S
     while not ack.exists():
         if proc.poll() is not None:   # it ended on its own meanwhile
             unlink_beneath(root, f".tmp/pause-{pid}")
             return 0.0
+        if time.monotonic() >= give_up:   # it resumes at once if it acknowledges later: no pause file is left
+            unlink_beneath(root, f".tmp/pause-{pid}")
+            run["pause_given_up"] = True
+            log(f"{name}: {kind} did not acknowledge its pause within {time.monotonic() - t0:.0f}s — asked to wrap "
+                f"up instead; the reply to the operator waits for it")
+            return _pause(name, root, kind, proc, held, run, broker)
         time.sleep(0.25)
     log(f"{name}: {kind} paused — a reply to the operator needs the instance")
     _settle(name, root, kind, run["before"], broker.handoffs[run["seen"]:], broker.config_writes[run["cseen"]:])
@@ -830,6 +843,20 @@ def stop_runs_on_signal() -> None:
     _trap_runs({})
 
 
+def _record_cycle(name: str) -> None:
+    """A live cycle starts: the scheduler's cycle clock (autonomy.record 'cycle': wake_gate's `since`, the commitment
+    wakes' cutoff, the shown skip cleared). Stamped here, under the run lock and once its launch is ready, so every live
+    cycle counts — a scheduled wake, `shaft live`, `shaft tick` — and a wake that found the instance busy or was refused
+    counts none (Codex on the C15 lane: wake() stamped it before taking the lock, and a Busy wake moved the commitment
+    cutoff past commitments no cycle saw). Trial replays never come here (trial.py). A failed stamp is logged, never
+    the run's end."""
+    from .autonomy import record
+    try:
+        record("cycle", name)
+    except OSError as e:
+        log(f"{name}: its cycle could not be recorded in schedule.json — {type(e).__name__}: {e}")
+
+
 def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: bool,
          output: list[str] | None = None, driver=None, held: _Held | None = None) -> int:
     log(f"{name}: start {kind} {describe_knobs()}")
@@ -846,6 +873,8 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
     err_tail: list[str] = []
     out_all: list[str] = []
     try:
+        if kind == "live":
+            _record_cycle(name)
         if not driver:
             _trap_stop(old_stop)
         if driver:
@@ -874,7 +903,7 @@ def _run(name: str, root: Path, kind: str, agent_args: list[str], interactive: b
                     if ends is not None and time.monotonic() > ends:
                         raise subprocess.TimeoutExpired(cmd, budget)
                     if pausable and replying(name):
-                        paused = _pause(name, root, kind, proc, held, run, broker)
+                        paused = _pause(name, root, kind, proc, held, run, broker, until=ends)
                         ends = ends + paused if ends is not None else None
             finally:
                 if take_back:

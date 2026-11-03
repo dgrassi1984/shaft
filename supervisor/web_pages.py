@@ -467,6 +467,8 @@ def instance_card(i: dict) -> Html:
              "no scheduled wakes")
     off = f" · off: {', '.join(i['tools_off'])}" if i.get("tools_off") else ""
     rows.append(_row("plan", f"{sched}{off}", "dim"))
+    if i.get("wake_skipped"):
+        rows.append(_row("skipped", i["wake_skipped"], "dim"))
     if i.get("trial"):
         rows.append(_row("trial", i["trial"], "trial-text"))
     from .web_actions import instance_buttons
