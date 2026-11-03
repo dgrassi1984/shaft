@@ -69,17 +69,19 @@ struct NotificationContentTests {
 
     @Test func theBodyIsFetchedWithTheSharedCredential() async throws {
         let server = StubServer { _ in
-            .json(200, String(decoding: try DecodingTests.fixture("contract-push-latest"), as: UTF8.self))
+            .json(200, String(decoding: try DecodingTests.fixture("push-latest"), as: UTF8.self))
         }
         let store = MemoryCredentialStore(server.credential)
-        let filled = try #require(await NotificationContent.fetch(instance: "thelos", store: store, session: server.session))
+        let instance = NotificationContent.instance(from: ["instance": "wren"])
+        let filled = try #require(await NotificationContent.fetch(instance: instance, store: store, session: server.session))
         let content = UNMutableNotificationContent()
-        content.title = "thelos replied"
+        content.title = "wren replied"
         filled.apply(to: content)
-        #expect(content.body == "October's report is ready: 214 accounts reconciled.")
+        #expect(content.body == "Should the nightly report keep the per-account lines?")
         #expect(content.badge == 1)
-        #expect(content.threadIdentifier == "thelos")
+        #expect(content.threadIdentifier == "wren")
         #expect(server.requests.first?.path == "/app/v1/push/latest")
+        #expect(server.requests.first?.query("instance") == "wren")
         #expect(server.requests.first?.header("Authorization") == "Bearer 8c1f4e2a9b07d3e5.s3cret")
     }
 

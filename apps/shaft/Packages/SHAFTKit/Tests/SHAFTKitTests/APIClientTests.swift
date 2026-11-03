@@ -3,12 +3,12 @@ import Testing
 @testable import SHAFTKit
 
 struct APIClientTests {
-    static let idle = try! DecodingTests.fixture("contract-idle")
-    static let live = try! DecodingTests.fixture("contract-live")
-    static let livePartial = try! DecodingTests.fixture("contract-live-partial")
+    static let idle = try! DecodingTests.fixture("idle")
+    static let live = try! DecodingTests.fixture("live")
+    static let livePartial = try! DecodingTests.fixture("live-partial")
 
     @Test func everyRequestCarriesTheBearer() async throws {
-        let server = StubServer { _ in .json(200, String(decoding: try DecodingTests.fixture("contract-instances"), as: UTF8.self)) }
+        let server = StubServer { _ in .json(200, String(decoding: try DecodingTests.fixture("instances"), as: UTF8.self)) }
         _ = try await server.client.instances()
         let request = try #require(server.requests.first)
         #expect(request.header("Authorization") == "Bearer 8c1f4e2a9b07d3e5.s3cret")
@@ -20,13 +20,13 @@ struct APIClientTests {
         let server = StubServer { request in
             request.header("If-None-Match") == "\"abc\""
                 ? .notModified
-                : .json(200, String(decoding: try DecodingTests.fixture("contract-instances"), as: UTF8.self),
+                : .json(200, String(decoding: try DecodingTests.fixture("instances"), as: UTF8.self),
                         headers: ["ETag": "\"abc\""])
         }
         guard case .value(let list, let etag) = try await server.client.instances() else {
             Issue.record("the first answer is not a value"); return
         }
-        #expect(list.instances.map(\.name) == ["thelos", "wren"])
+        #expect(list.instances.map(\.name) == ["wren"])
         #expect(etag == "\"abc\"")
         guard case .notModified = try await server.client.instances(etag: etag) else {
             Issue.record("a matching ETag did not answer 304"); return
@@ -79,6 +79,14 @@ struct APIClientTests {
         let error = await #expect(throws: APIError.self) { _ = try await server.client.pushLatest() }
         guard case .transport = error else { Issue.record("not a transport error: \(String(describing: error))"); return }
         #expect(error?.isRetryable == true)
+    }
+
+    @Test func latestWithoutAnInstanceOmitsTheQuery() async throws {
+        let server = StubServer { _ in .json(200, #"{"events": [], "badge": 0}"#) }
+        _ = try await server.client.pushLatest()
+        let request = try #require(server.requests.first)
+        #expect(request.path == "/app/v1/push/latest")
+        #expect(request.url.query == nil)
     }
 
     @Test func anAnswerThatBreaksTheContractIsADecodingError() async throws {

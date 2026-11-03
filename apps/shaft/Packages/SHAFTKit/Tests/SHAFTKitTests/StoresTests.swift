@@ -15,7 +15,7 @@ struct StoresTests {
         let server = StubServer { request in
             switch request.path {
             case "/app/v1/instances":
-                return .json(200, fixtureText(try DecodingTests.fixture("contract-instances")))
+                return .json(200, fixtureText(try DecodingTests.fixture("instances")))
             default:
                 return request.json?["version"] as? String == "9f2c4e1ab07d3c55"
                     ? .json(200, #"{"unread": false, "badge": 0}"#)
@@ -25,16 +25,16 @@ struct StoresTests {
         let store = try makeStore(server, folder: folder)
         await store.refresh()
         #expect(store.badge == 1)
-        #expect(store.row("thelos")?.unread == true)
+        #expect(store.row("wren")?.unread == true)
 
-        #expect(await store.markSeen("thelos", version: "old") == false)
+        #expect(await store.markSeen("wren", version: "old") == false)
         #expect(store.error == nil)
-        #expect(store.row("thelos")?.unread == true)
+        #expect(store.row("wren")?.unread == true)
 
-        #expect(await store.markSeen("thelos", version: "9f2c4e1ab07d3c55"))
+        #expect(await store.markSeen("wren", version: "9f2c4e1ab07d3c55"))
         #expect(store.badge == 0)
-        #expect(store.row("thelos")?.unread == false)
-        #expect(server.requests.last?.path == "/app/v1/chat/thelos/seen")
+        #expect(store.row("wren")?.unread == false)
+        #expect(server.requests.last?.path == "/app/v1/chat/wren/seen")
     }
 
     @Test func aSendClearsTheDraftAndAFailureStaysInTheChatAsNotSent() async throws {

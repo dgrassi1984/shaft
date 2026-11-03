@@ -1,0 +1,6 @@
+{
+  "device": "0123456789abcdef",
+  "secret": "fixture-secret",
+  "name": "fixture-app",
+  "login": "operator@example.com"
+}

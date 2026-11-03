@@ -25,8 +25,8 @@ import time
 import urllib.parse
 from datetime import datetime
 
-from . import web
-from .core import log
+from . import apns, web
+from .core import NAME_RE, log
 from .web import Request, Response
 
 PREFIX = "/app/v1"
@@ -542,19 +542,8 @@ def _comment(req: Request, n: str, act: str | None = None) -> Response:
 
 
 # -- push (§11) -------------------------------------------------------------------------------------------------------
-NOT_INSTALLED = "native push is not installed on this server (supervisor/apns.py)"
-
-
-def _apns():
-    apns = web.apns_module()
-    if apns is None:
-        raise Refusal(503, "push_off", NOT_INSTALLED)
-    return apns
-
-
 def _register(req: Request) -> Response:
     data = _body(req)
-    apns = _apns()
     if problem := apns.configured():
         raise Refusal(503, "push_off", problem)
     try:
@@ -565,21 +554,22 @@ def _register(req: Request) -> Response:
 
 
 def _unregister(req: Request) -> Response:
-    return _json(200, {"removed": bool(_apns().unregister(req.device))})
+    return _json(200, {"removed": bool(apns.unregister(req.device))})
 
 
 def _push_status(req: Request) -> Response:
-    apns = web.apns_module()
-    if apns is None:
-        return _json(200, {"on": False, "env": None, "reason": NOT_INSTALLED, "problem": NOT_INSTALLED})
     return _json(200, {**apns.status(req.device), "problem": apns.configured()})
 
 
 def _latest(req: Request) -> Response:
     """What the notification shows: the events queued for this device (webpush.take), with the chat each opens."""
     from . import web_seen, webpush
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(req.target).query, keep_blank_values=True)
+    instance = query.get("instance", [None])[0]
+    if instance is not None and not NAME_RE.fullmatch(instance):
+        raise Refusal(400, "bad_request", "instance must be an instance name.")
     events = [{**e, "instance": m[1] if (m := re.fullmatch(r"/i/([A-Za-z0-9_-]+)/chat", e.get("url", ""))) else None}
-              for e in webpush.take(req.device)]
+              for e in webpush.take(req.device, instance=instance)]
     return _json(200, {"events": events, "badge": web_seen.badge(req.device)})
 
 

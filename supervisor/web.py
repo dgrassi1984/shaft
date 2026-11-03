@@ -43,7 +43,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from . import web_icons, web_pages
+from . import apns, web_icons, web_pages
 from .web_views import TEXT_TYPES                  # files shown as text: Files, messages, the documents panel
 from .web_pages import Html
 from .core import EMBED_PORT, LLM_PORTS, SUP_DIR, UnsafePath, knob, port, log, read_beneath
@@ -192,27 +192,13 @@ def unpair(device: str | None = None) -> int:
         for k in gone:
             del ds[k]
         _write("devices.json", ds)
-    apns = apns_module()
     for k in gone:
         webpush.unsubscribe(k)
-        if apns:
-            apns.unregister(k)
+        apns.unregister(k)
         web_seen.forget(k)
     if gone:
         log(f"web: unpaired {', '.join(gone)}")
     return len(gone)
-
-
-def apns_module():
-    """supervisor/apns.py (native push, PLAN-native-apps M2), or None while it is not installed: then there is no APNs
-    token to drop, and the apps' push routes say native push is not installed."""
-    import importlib
-    try:
-        return importlib.import_module(f"{__package__}.apns")
-    except ModuleNotFoundError as e:
-        if e.name != f"{__package__}.apns":
-            raise
-        return None
 
 
 def device_from_cookie(cookie_header: str) -> tuple[str, str] | None:
@@ -1574,12 +1560,11 @@ def command(action: str, name: str | None = None, everything: bool = False) -> i
     for k, v in sorted(ds.items(), key=lambda kv: kv[1].get("created", "")):
         if k not in apps:
             print(f"  {k}  {v.get('name')}  paired {v.get('created', '')[:16]}  last seen {v.get('last_seen', '')[:16]}")
-    apns = apns_module()
-    problem = "supervisor/apns.py is not installed" if apns is None else apns.configured()
+    problem = apns.configured()
     print(f"native apps: {len(apps)}  ·  native push: {'ready' if not problem else f'off: {problem}'}")
     for k, v in sorted(ds.items(), key=lambda kv: kv[1].get("created", "")):
         if k in apps:
-            push = apns.status(k) if apns else {"on": False, "reason": "native push is not installed"}
+            push = apns.status(k)
             print(f"  {k}  {v.get('name')} ({v['platform']})  paired {v.get('created', '')[:16]}  last seen "
                   f"{v.get('last_seen', '')[:16]}  push {'on' if push.get('on') else 'off'}"
                   + (f" ({push['env']})" if push.get("env") else "") + (f": {push['reason']}" if push.get("reason") else ""))

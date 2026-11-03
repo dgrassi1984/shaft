@@ -301,7 +301,11 @@ public final class APIClient: Sendable {
 
     /// What the next notification shows (§11.4). It takes the events off the server's queue.
     public func pushLatest() async throws -> PushLatest {
-        try await get("/app/v1/push/latest")
+        try await pushLatest(instance: nil)
+    }
+
+    func pushLatest(instance: String?) async throws -> PushLatest {
+        try await get("/app/v1/push/latest", query: instance.map { [URLQueryItem(name: "instance", value: $0)] } ?? [])
     }
 
     // MARK: Plumbing

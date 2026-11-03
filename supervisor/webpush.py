@@ -231,20 +231,30 @@ def _fields(event: dict) -> dict:
     return {k: event[k] for k in ("title", "body", "url", "tag")}
 
 
-def take(device: str, now: float | None = None) -> list[dict]:
+def take(device: str, instance: str | None = None, now: float | None = None) -> list[dict]:
     """What this device shows for the push that woke it: every event still queued for it that its push service could
     still deliver (TTL_S), oldest first, taken off the queue. All of them, not one: a wake that failed (the network, a
     push service's error) left its event behind, and the next wake shows it too, beside its own (Codex review,
     2026-10-20). With nothing queued — an earlier wake showed it all — the last one shown again under its own tag
-    (it replaces itself), since iOS shows something for every push; with nothing ever, a plain one."""
+    (it replaces itself), since iOS shows something for every push; with nothing ever, a plain one. With an instance,
+    take only its chat URL and fall back only to its last event; other chats stay queued."""
     now = time.time() if now is None else now
     with _lock:
         queue = _queue()
         mine = queue.get(device) or {}
-        fresh = [e for e in mine.get("pending") or [] if now - e.get("at", 0) <= TTL_S]
-        last = fresh[-1] if fresh else mine.get("last")
+        pending = [e for e in mine.get("pending") or [] if now - e.get("at", 0) <= TTL_S]
+        url = f"/i/{instance}/chat" if instance is not None else None
+        fresh = [e for e in pending if url is None or e["url"] == url]
+        lasts = mine.get("last_by_url") or {}
+        if previous := mine.get("last"):
+            lasts.setdefault(previous["url"], previous)
+        for event in fresh:
+            lasts[event["url"]] = event
+        fallback = lasts.get(url) if url is not None else mine.get("last")
+        last = fresh[-1] if fresh else fallback
         if last:
-            queue[device] = {"pending": [], "last": last}
+            queue[device] = {"pending": [e for e in pending if url is not None and e["url"] != url],
+                             "last": fresh[-1] if fresh else mine.get("last"), "last_by_url": lasts}
             _save_queue(queue)
     return [_fields(e) for e in fresh] if fresh else [_fields(last)] if last else [dict(NOTHING)]
 

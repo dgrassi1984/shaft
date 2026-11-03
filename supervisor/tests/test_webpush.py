@@ -112,6 +112,37 @@ class SubscriptionsTest(PushTest):
 
 
 class QueueTest(PushTest):
+    def test_instance_takes_leave_other_chats_queued_and_remember_each_last_event(self):
+        from supervisor import web_alerts, web_chat
+        a = web_chat.reply_event({"instance": "wren", "turns": [{"role": "assistant", "content": "Done."}]})
+        b = web_alerts.event({"from": "wren-message", "file": "one.md", "text": "Which one?", "kind": "question"})
+        webpush.subscribe("phone", {"endpoint": APPLE})
+        with mock.patch.object(webpush, "_wake"):
+            webpush.notify(a)
+            webpush.notify(b)
+        self.assertEqual(webpush.take("phone", instance="wren"), [a])
+        self.assertEqual([e["body"] for e in webpush._queue()["phone"]["pending"]], ["Which one?"])
+        self.assertEqual(webpush.take("phone", instance="wren-message"), [b])
+        self.assertEqual(webpush.take("phone", instance="wren"), [a])
+        self.assertEqual(webpush.take("phone", instance="wren-message"), [b])
+        self.assertEqual(webpush.take("phone", instance="unknown"), [webpush.NOTHING])
+        self.assertEqual(webpush.take("phone"), [b])
+
+    def test_instance_fallback_uses_only_a_matching_legacy_last(self):
+        event = {"title": "wren replied", "body": "Done.", "url": "/i/wren/chat", "tag": "wren", "at": 100}
+        webpush._save_queue({"phone": {"pending": [], "last": event}})
+        self.assertEqual(webpush.take("phone", instance="other", now=100), [webpush.NOTHING])
+        self.assertEqual(webpush.take("phone", instance="wren", now=100),
+                         [{k: v for k, v in event.items() if k != "at"}])
+
+    def test_unscoped_take_remembers_every_instances_fallback(self):
+        a = {"title": "A", "body": "one", "url": "/i/a/chat", "tag": "a", "at": 100}
+        b = {"title": "B", "body": "two", "url": "/i/b/chat", "tag": "b-message", "at": 100}
+        webpush._save_queue({"phone": {"pending": [a, b]}})
+        self.assertEqual([e["body"] for e in webpush.take("phone", now=100)], ["one", "two"])
+        self.assertEqual(webpush.take("phone", instance="a", now=100)[0]["body"], "one")
+        self.assertEqual(webpush.take("phone")[0]["body"], "two")
+
     def test_each_device_gets_its_own_copy_old_ones_expire_and_unsubscribing_drops_them(self):
         for d in ("phone", "laptop"):
             webpush.subscribe(d, {"endpoint": APPLE})

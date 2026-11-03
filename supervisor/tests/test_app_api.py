@@ -9,7 +9,6 @@ import os
 import re
 import shutil
 import socket
-import sys
 import tempfile
 import threading
 import time
@@ -19,8 +18,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
-import supervisor
-from supervisor import app_api, autonomy, core, docs, feedback, messages, web, web_chat, web_seen, webpush
+from supervisor import apns, app_api, autonomy, core, docs, feedback, messages, web, web_chat, web_seen, webpush
 from supervisor.tests.test_web import HOST, ME, WebTest, snap
 
 FIXTURES = Path(__file__).resolve().parent / "app_api_fixtures"
@@ -30,7 +28,7 @@ NEXT = "for wren's next cycle, which this starts now"
 
 
 class StubApns:
-    """supervisor/apns.py as the APNs lane builds it (PLAN-native-apps M2), for this lane's tests."""
+    """The APNs functions used by the API, with tokens kept in memory."""
 
     def __init__(self):
         self.problem, self.tokens = None, {}
@@ -94,8 +92,8 @@ class AppTest(WebTest):
                   mock.patch.object(autonomy, "next_cycle", lambda n: NEXT),
                   mock.patch.object(autonomy, "event_wake", lambda *a, **k: None),
                   mock.patch.object(webpush, "notify"),
-                  mock.patch.dict(sys.modules, {"supervisor.apns": self.apns}),
-                  mock.patch.object(supervisor, "apns", self.apns, create=True)):
+                  *(mock.patch.object(apns, name, getattr(self.apns, name))
+                    for name in ("configured", "register", "unregister", "status", "devices"))):
             p.start()
             self.addCleanup(p.stop)
         self.addCleanup(web_chat._watched.clear)
@@ -753,12 +751,6 @@ class PushTest(AppTest):
         self.assertEqual(err["message"], self.apns.problem)
         self.assertEqual(self.get("/app/v1/push/status")["problem"], self.apns.problem)
 
-    def test_without_apns_installed_push_says_so(self):
-        with mock.patch.object(web, "apns_module", return_value=None):
-            self.error(self.api("/app/v1/push/register", "POST", {}), 503, "push_off")
-            self.assertEqual(self.get("/app/v1/push/status")["problem"], app_api.NOT_INSTALLED)
-            self.assertEqual(web.unpair(self.device), 1)          # nothing to drop: unpairing still works
-
     def test_latest_takes_this_devices_events_with_the_chat_to_open(self):
         webpush._save_queue({self.device: {"pending": [
             {"title": "wren replied", "body": "Done.", "url": "/i/wren/chat", "tag": "wren", "at": time.time()}]}})
@@ -770,6 +762,26 @@ class PushTest(AppTest):
         self.assertEqual(self.get("/app/v1/push/latest", method="GET")["events"][0]["instance"], "wren")
         webpush._save_queue({})
         self.assertEqual(self.get("/app/v1/push/latest")["events"], [{**webpush.NOTHING, "instance": None}])
+
+    def test_latest_takes_only_the_requested_instance_and_keeps_its_own_fallback(self):
+        webpush._save_queue({self.device: {"pending": [
+            {"title": "wren replied", "body": "Done.", "url": "/i/wren/chat", "tag": "wren", "at": time.time()},
+            {"title": "thelos asks", "body": "Which one?", "url": "/i/thelos/chat", "tag": "thelos-message",
+             "at": time.time()}]}})
+        self.assertEqual(self.get("/app/v1/push/latest?instance=wren")["events"][0]["body"], "Done.")
+        self.assertEqual(self.get("/app/v1/push/latest?instance=thelos")["events"][0]["body"], "Which one?")
+        self.assertEqual(self.get("/app/v1/push/latest?instance=wren")["events"][0]["body"], "Done.")
+        self.assertEqual(self.get("/app/v1/push/latest?instance=ghost")["events"],
+                         [{**webpush.NOTHING, "instance": None}])
+
+    def test_latest_rejects_an_invalid_instance_before_taking_events(self):
+        queued = {self.device: {"pending": [
+            {"title": "wren replied", "body": "Done.", "url": "/i/wren/chat", "tag": "wren", "at": time.time()}]}}
+        webpush._save_queue(queued)
+        for name in ("", "../wren", "wren/chat", "wren space", "Wren", "wren_name", "a" * 32):
+            self.error(self.api("/app/v1/push/latest?" + urllib.parse.urlencode({"instance": name})),
+                       400, "bad_request")
+        self.assertEqual(webpush._queue(), queued)
 
 
 # -- the fixtures the Swift side decodes (§13.5) -------------------------------------------------------------------------
@@ -894,6 +906,7 @@ class FixturesTest(AppTest):
         self.chat(turns + [turn("assistant", "2026-11-03T14:06:40", "Done.")], state="ended", ended="2026-11-03T14:30:00",
                   mids=mids)
         self.keep("ended", self.get("/app/v1/chat/wren"))
+        self.keep("chats", self.get("/app/v1/chats/wren"))
         many = [turn("user" if k % 2 == 0 else "assistant", f"2026-11-02T{9 + k // 60:02d}:{k % 60:02d}:00",
                      f"Answer {k}." if k % 2 else "", shown=f"Message {k}.") for k in range(84)]
         self.chat(many, cid="web-0000000000000084", created="2026-11-02T09:00:00")
@@ -936,6 +949,19 @@ class FixturesTest(AppTest):
              "url": "/i/wren/chat", "tag": "wren-ask", "at": time.time()}]}})
         self.keep("push-latest", self.get("/app/v1/push/latest"))
         self.keep("errors", self.errors(first))
+        link = web.new_pairing("fixture-app")
+        with mock.patch.object(web.secrets, "token_hex", return_value="0123456789abcdef"), \
+                mock.patch.object(web.secrets, "token_urlsafe", return_value="fixture-secret"):
+            self.keep("pair", self.get("/app/v1/pair", method="POST", bearer=False,
+                                       data={"link": link, "platform": "ios"}))
+        self.keep("send", json.loads(self.send(text="Fixture message.").body))
+        with mock.patch.object(feedback.secrets, "token_hex", return_value="0" * 24):
+            self.keep("feedback-response", self.get("/app/v1/feedback/wren", method="POST",
+                      data={"op": "rate", "kind": "chat", "cid": CID, "k": 1, "thumb": "up"}))
+        self.chat([turn("user", "2026-11-03T14:05:50", "Again.", shown="Again.", retried=True),
+                   turn("assistant", "2026-11-03T14:06:40", "", retried=True),
+                   turn("user", "2026-11-03T14:07:02", "Again.", shown="Again.")])
+        self.keep("retried", self.get("/app/v1/chat/wren"))
         self.check()
 
     def errors(self, feed: dict) -> dict:
@@ -973,7 +999,8 @@ class FixturesTest(AppTest):
 
     def check(self) -> None:
         names = {"idle", "live", "live-partial", "queued", "quotes", "attachments", "sent", "feedback", "failed",
-                 "earlier", "ended", "instances", "docs", "doc-comments", "push-latest", "errors"}
+                 "earlier", "ended", "instances", "docs", "doc-comments", "push-latest", "errors", "pair", "chats",
+                 "send", "feedback-response", "retried"}
         self.assertEqual(set(self.out), names)
         if os.environ.get("SHAFT_UPDATE_FIXTURES") == "1":
             FIXTURES.mkdir(exist_ok=True)

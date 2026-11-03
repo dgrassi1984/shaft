@@ -10,6 +10,6 @@ let package = Package(
     products: [.library(name: "SHAFTKit", targets: ["SHAFTKit"])],
     targets: [
         .target(name: "SHAFTKit"),
-        .testTarget(name: "SHAFTKitTests", dependencies: ["SHAFTKit"], resources: [.copy("Fixtures")]),
+        .testTarget(name: "SHAFTKitTests", dependencies: ["SHAFTKit"]),
     ]
 )

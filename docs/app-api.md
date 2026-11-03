@@ -814,6 +814,12 @@ Stop native push to this device. `{"removed": bool}`.
 What the notification shows: the events queued for this device (`webpush.take`), oldest first, taken off the queue.
 With nothing queued, the last one shown again; with nothing ever, a plain one.
 
+The notification extension sends `?instance=<n>` from the push payload. This takes only events whose URL is
+`/i/<n>/chat`, leaving other instances queued. With none queued for that instance, only its own last event is
+shown again, or the plain one if it has none. `instance` must be a valid instance name (a lowercase letter followed
+by at most 30 lowercase letters, digits or hyphens); otherwise `400 bad_request`. Without it, all queued events
+are taken as before.
+
 | Field | Type | |
 |---|---|---|
 | `events` | list | `{title, body, url, tag, instance}` |
@@ -900,8 +906,7 @@ returned when it is not one: the routes answer 404). `whole`: every turn (`?all=
 - The document functions raise `web.DocStale(message, sha, diff, changed)` (a save or delete refused: `changed` when
   the document is not what the app read, else the CLI refused the text) and `web.DocRefused` (the CLI refused a
   deletion); `docs.Refused` for a bad path or folder. `docs.raw(name, path)` reads a document whatever its size.
-- `web.apns_module()` imports `supervisor/apns.py` (M2) when it is installed; without it the push routes answer
-  `503 push_off` "native push is not installed on this server" and unpairing has no token to drop.
+- The push routes import `supervisor/apns.py` directly; `apns.configured()` reports missing settings or a key file.
 - `web.unpair` also calls `apns.unregister(device)` and `web_seen.forget(device)`.
 - Pairing reuses `web._use_pairing` and `web._token_from_link`; the device record gains `"platform"`.
 
@@ -928,7 +933,9 @@ returned when it is not one: the routes answer 404). `whole`: every turn (`?all=
 - The same test writes the fixtures the Swift Kit decodes, from the API's own answers, to
   `supervisor/tests/app_api_fixtures/<name>.json`, and fails when a checked-in one differs (`SHAFT_UPDATE_FIXTURES=1`
   rewrites them): `idle`, `live`, `live-partial`, `queued`, `quotes`, `attachments`, `sent`, `feedback`, `failed`,
-  `earlier`, `ended`, `instances`, `docs`, `doc-comments`, `push-latest`, `errors`. Their times are stamped in
+  `earlier`, `ended`, `instances`, `docs`, `doc-comments`, `push-latest`, `errors`, `pair`, `chats`, `send`,
+  `feedback-response`, `retried`. SHAFTKit reads only this folder, or `SHAFT_APP_API_FIXTURES` when set; it has no
+  copied contract fixtures. Their times are stamped in
   `Europe/Rome` (the test sets `TZ`), so they carry `+01:00`. `errors` maps each code to `{status, body}`.
 
 ## 14. The HTML feed, piece by piece

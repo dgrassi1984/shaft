@@ -55,9 +55,8 @@ cd apps/shaft/Packages/SHAFTKit
 swift test                                   # or: xcodebuild test -scheme SHAFTKit -destination 'platform=macOS'
 ```
 
-The fixture tests decode every `*.json` in `Tests/SHAFTKitTests/Fixtures/` (app-api.md's examples, copied), in the
-server's fixture folders `supervisor/tests/app_api_fixtures/` and `supervisor/tests/fixtures/app_api/` when they exist,
-and in `$SHAFT_APP_API_FIXTURES` when it is set. Each one is matched to its model by its keys and must decode with
+The fixture tests decode every `*.json` in the server's `supervisor/tests/app_api_fixtures/`, or in
+`$SHAFT_APP_API_FIXTURES` when it is set. Each one is matched to its model by its keys and must decode with
 every non-null field kept, so a new fixture needs no test code, and a field the server adds that the Kit does not
 read fails the test.
 

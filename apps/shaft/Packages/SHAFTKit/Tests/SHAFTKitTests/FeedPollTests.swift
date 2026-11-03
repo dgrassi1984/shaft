@@ -43,10 +43,10 @@ struct FeedPollTests {
               case .failed(let failure, let retryIn) = events[3] else {
             Issue.record("unexpected events: \(events)"); return
         }
-        #expect(idle.version == "9f2c4e1ab07d3c55")
-        #expect(live.version == "41d07be2c95a8f13")
+        #expect(idle.version == "109fd56053bf7c4d")
+        #expect(live.version == "b713d0c3dc0ad5b4")
         #expect(merged.partial == false)
-        #expect(merged.live == "7b19e4c0d2a65f38")
+        #expect(merged.live == "fb7597261efc6cb5")
         #expect(merged.content == live.content)
         #expect(merged.reply?.answer == "October's report is running; so far 214 accounts reconciled.")
         #expect(failure.code == "internal")
@@ -58,15 +58,15 @@ struct FeedPollTests {
         #expect(requests.count == 6)
         #expect(requests[0].query("since") == nil)
         #expect(requests[0].query("wait") == "0")
-        #expect(requests[1].query("since") == "9f2c4e1ab07d3c55")
+        #expect(requests[1].query("since") == "109fd56053bf7c4d")
         #expect(requests[1].query("live") == "")
         #expect(requests[1].query("wait") == "25")
-        #expect(requests[2].query("since") == "9f2c4e1ab07d3c55")
-        #expect(requests[3].query("since") == "41d07be2c95a8f13")
-        #expect(requests[3].query("live") == "c08e57f2a1b9d364")
+        #expect(requests[2].query("since") == "109fd56053bf7c4d")
+        #expect(requests[3].query("since") == "b713d0c3dc0ad5b4")
+        #expect(requests[3].query("live") == "cc72a715f5f61774")
         // After a failure the loop asks again with what it held.
-        #expect(requests[5].query("since") == "41d07be2c95a8f13")
-        #expect(requests[5].query("live") == "7b19e4c0d2a65f38")
+        #expect(requests[5].query("since") == "b713d0c3dc0ad5b4")
+        #expect(requests[5].query("live") == "fb7597261efc6cb5")
         for request in requests {
             #expect(request.path == "/app/v1/chat/thelos")
             #expect(request.query("watch") == "1")

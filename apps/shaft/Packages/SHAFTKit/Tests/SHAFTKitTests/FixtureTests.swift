@@ -4,18 +4,15 @@ import Testing
 
 /// Every JSON fixture decodes into the Kit's models, and the models keep every field the fixture has.
 ///
-/// The fixtures come from every `*.json` in:
-/// - `Tests/SHAFTKitTests/Fixtures/` — the examples of docs/app-api.md, copied;
-/// - the server's fixtures, written by its own serialiser (docs/app-api.md §13.5): `supervisor/tests/app_api_fixtures/`
-///   and `supervisor/tests/fixtures/app_api/` in this repository, when present;
-/// - `$SHAFT_APP_API_FIXTURES`, when set.
-///
+/// The fixtures are written by the server's own serialiser (docs/app-api.md §13.5) in
+/// `supervisor/tests/app_api_fixtures/`, or `$SHAFT_APP_API_FIXTURES` when set.
 /// A fixture is matched to its model by its shape (its top-level keys), so a new one needs no code here. A fixture
 /// that matches no model fails: either the contract grew or the fixture is not an /app/v1 answer.
 struct FixtureTests {
-    static func fixtureFiles() -> [URL] {
-        var folders = [URL]()
-        if let bundled = Bundle.module.url(forResource: "Fixtures", withExtension: nil) { folders.append(bundled) }
+    static var fixtureDirectory: URL {
+        if let folder = ProcessInfo.processInfo.environment["SHAFT_APP_API_FIXTURES"] {
+            return URL(filePath: folder)
+        }
         let repo = URL(filePath: #filePath)
             .deletingLastPathComponent()  // SHAFTKitTests
             .deletingLastPathComponent()  // Tests
@@ -23,23 +20,22 @@ struct FixtureTests {
             .deletingLastPathComponent()  // Packages
             .deletingLastPathComponent()  // shaft
             .deletingLastPathComponent()  // apps
-        folders.append(repo.appending(path: "supervisor/tests/app_api_fixtures"))
-        folders.append(repo.appending(path: "supervisor/tests/fixtures/app_api"))
-        if let extra = ProcessInfo.processInfo.environment["SHAFT_APP_API_FIXTURES"] {
-            folders.append(URL(filePath: extra))
-        }
-        return folders.flatMap { folder in
-            ((try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [])
-                .filter { $0.pathExtension == "json" }
-                .sorted { $0.lastPathComponent < $1.lastPathComponent }
-        }
+            .deletingLastPathComponent()  // repository
+        return repo.appending(path: "supervisor/tests/app_api_fixtures")
     }
 
-    @Test func theContractExamplesAreThere() {
+    static func fixtureFiles() -> [URL] {
+        ((try? FileManager.default.contentsOfDirectory(at: fixtureDirectory, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.pathExtension == "json" }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+    }
+
+    @Test func theServerFixturesAreThere() {
         let names = Set(Self.fixtureFiles().map(\.lastPathComponent))
-        for name in ["contract-idle.json", "contract-live.json", "contract-live-partial.json", "contract-instances.json",
-                     "contract-doc-comments.json", "contract-push-latest.json", "contract-errors.json"] {
-            #expect(names.contains(name), "missing fixture \(name)")
+        for name in ["idle", "failed", "live", "live-partial", "queued", "quotes", "attachments", "sent", "feedback",
+                     "earlier", "ended", "instances", "docs", "doc-comments", "push-latest", "errors", "pair", "chats",
+                     "send", "feedback-response", "retried"] {
+            #expect(names.contains("\(name).json"), "missing fixture \(name)")
         }
     }
 
@@ -70,7 +66,7 @@ enum FixtureShape {
             try decode(object, name)
             return 1
         }
-        // A map of named answers (`{"unpaired": {"error": …}, …}`).
+        // A map of named answers, including error fixtures wrapped in {status, body}.
         if !object.isEmpty, object.values.allSatisfy({ $0 is [String: Any] || $0 is [Any] }) {
             return try object.keys.sorted().reduce(0) { $0 + (try check(object[$1]!, name: "\(name).\($1)")) }
         }
@@ -87,6 +83,26 @@ enum FixtureShape {
         if has("dir", "max_bytes", "docs") { return roundTrip(DocsList.self) }
         if has("path", "text", "sha", "threads") { return roundTrip(DocumentDetail.self) }
         if has("events", "badge") { return roundTrip(PushLatest.self) }
+        if has("status", "body") {
+            return { object, name in
+                let status = try #require(object["status"] as? Int, "\(name): missing integer status")
+                let body = try #require(object["body"] as? [String: Any], "\(name): missing error body")
+                try roundTrip(ErrorBody.self)(body, "\(name).body")
+                let data = try JSONSerialization.data(withJSONObject: body)
+                let decoded = try SHAFTJSON.decoder().decode(ErrorBody.self, from: data)
+                // docs/app-api.md §1.5: the status belonging to each error code.
+                let statuses = [
+                    "bad_request": 400, "unpaired": 401,
+                    "login": 403, "host": 403, "pair_expired": 403,
+                    "not_found": 404, "method": 405,
+                    "refused": 409, "stale": 409, "too_big": 409, "stale_version": 409,
+                    "too_large": 413, "internal": 500, "push_off": 503,
+                ]
+                let expected = try #require(statuses[decoded.error.code], "\(name): undocumented error code")
+                let error = APIError.server(status: status, error: decoded.error)
+                #expect(error.status == expected, "\(name): wrong status for \(decoded.error.code)")
+            }
+        }
         if has("error") { return roundTrip(ErrorBody.self) }
         if has("device", "secret") { return roundTrip(PairResponse.self) }
         if has("push") { return roundTrip(PushRegisterResponse.self) }
@@ -149,7 +165,7 @@ enum FixtureShape {
 
 struct DecodingTests {
     static func fixture(_ name: String) throws -> Data {
-        let url = try #require(Bundle.module.url(forResource: "Fixtures/\(name)", withExtension: "json"))
+        let url = FixtureTests.fixtureDirectory.appending(path: "\(name).json")
         return try Data(contentsOf: url)
     }
 
@@ -170,12 +186,12 @@ struct DecodingTests {
         }
     }
 
-    @Test func theIdleFeedReadsAsTheContractSays() throws {
-        let feed = try SHAFTJSON.decoder().decode(Feed.self, from: Self.fixture("contract-idle"))
+    @Test func theFailedFeedReadsAsTheServerSendsIt() throws {
+        let feed = try SHAFTJSON.decoder().decode(Feed.self, from: Self.fixture("failed"))
         let content = try #require(feed.content)
         #expect(feed.partial == false)
-        #expect(content.items.map(\.key) == ["u0", "a1", "s20261103-140230-118204-from-thelos.md",
-                                             "b20261103-140301-552019-from-operator.md", "u2", "a3"])
+        #expect(content.items.map(\.key) == ["u0", "a1", "s20261103-140230-118204-from-wren.md",
+                                             "b20261103-140301-552019-from-operator.md", "u2", "a3", "u4", "a5", "u6", "a7"])
         guard case .assistant(let failed) = content.items[5] else { Issue.record("a3 is not an answer"); return }
         #expect(failed.failure?.retry?.retryOf == 3)
         #expect(failed.failure?.retry?.confirm == nil)
@@ -186,13 +202,13 @@ struct DecodingTests {
     }
 
     @Test func aPartialFeedKeepsWhatItLeavesOut() throws {
-        let full = try SHAFTJSON.decoder().decode(Feed.self, from: Self.fixture("contract-live"))
-        let partial = try SHAFTJSON.decoder().decode(Feed.self, from: Self.fixture("contract-live-partial"))
+        let full = try SHAFTJSON.decoder().decode(Feed.self, from: Self.fixture("queued"))
+        let partial = try SHAFTJSON.decoder().decode(Feed.self, from: Self.fixture("live-partial"))
         #expect(partial.partial)
         #expect(partial.content == nil)
         let merged = full.merging(partial)
-        #expect(merged.version == "41d07be2c95a8f13")
-        #expect(merged.live == "7b19e4c0d2a65f38")
+        #expect(merged.version == "b713d0c3dc0ad5b4")
+        #expect(merged.live == "fb7597261efc6cb5")
         #expect(merged.reply?.answer == "October's report is running; so far 214 accounts reconciled.")
         #expect(merged.content == full.content)
         #expect(merged.content?.queued.first?.mid == "9d3e0f2a-6b1c-4a7d-8e5f-3c2b1a0d9e8f")
