@@ -668,12 +668,24 @@ def _log_row(name: str, row: dict) -> None:
 
 
 # -- waking ----------------------------------------------------------------------------------------------------------------
-def request_wake(name: str, plugin: str) -> None:
-    """Kept once: several requests before the instance is idle make one wake, not a queue."""
+def request_wake(name: str, plugin: str, not_before: datetime | None = None) -> None:
+    """Kept once: several requests before the instance is idle make one wake, not a queue. `plugin`: the job that asked,
+    or an event (autonomy.event_wake: "message from wren", "commitment c… due") — an event's name has a space.
+    `not_before`: the wake may not start earlier (another instance's message inside the recipient's wake floor: paced,
+    not dropped); a request without one makes the wake due now. `last`: when the latest request came — a cycle that
+    began after it has seen what it asked for (tick)."""
+    now = datetime.now().isoformat(timespec="seconds")
     with _editing_state() as st:
-        st.setdefault("wake", {}).setdefault(name, {"since": datetime.now().isoformat(timespec="seconds"), "by": []})
-        if plugin not in st["wake"][name]["by"]:
-            st["wake"][name]["by"].append(plugin)
+        new = name not in st.setdefault("wake", {})
+        req = st["wake"].setdefault(name, {"since": now, "by": []})
+        req["last"] = now
+        if plugin not in req["by"]:
+            req["by"].append(plugin)
+        if not_before is None:
+            req.pop("not_before", None)
+        elif new or req.get("not_before"):
+            at = not_before.isoformat(timespec="seconds")
+            req["not_before"] = min(at, req.get("not_before") or at)
 
 
 def take_wake(name: str) -> dict | None:
@@ -684,6 +696,19 @@ def take_wake(name: str) -> dict | None:
 
 def pending_wakes() -> dict[str, dict]:
     return dict(_load_state().get("wake", {}))
+
+
+def _wakers(by: list[str]) -> str:
+    """'its job(s) watcher; message from wren': who asked for a wake, jobs and events (request_wake) apart."""
+    plugins, events = [b for b in by if " " not in b], [b for b in by if " " in b]
+    return "; ".join(([f"its job(s) {', '.join(plugins)}"] if plugins else []) + events)
+
+
+def results_since(name: str, since: datetime) -> int:
+    """Runs of the instance's jobs that delivered a message or published a file after `since` (its last cycle): a
+    timed wake has something to do (autonomy.wake_gate)."""
+    cut = since.isoformat(timespec="seconds")
+    return sum(1 for r in _rows(name, 500) if (r.get("delivered") or r.get("published")) and _known(r) > cut)
 
 
 # -- what the scheduler does each tick ---------------------------------------------------------------------------------
@@ -714,20 +739,30 @@ def tick(children: dict, now: datetime, start, names: list[str], awake_of) -> No
                 continue   # one long job at a time per instance: still due, it starts once the other has ended
             children[key] = (start(["job", "run", name, job["plugin"]]), time.monotonic())
             long_running = long_running or job["long"]
+    from .autonomy import _state as schedule
+    cycles = schedule().get("cycles") or {}
     for name, req in pending_wakes().items():
         if name not in names and not (INSTANCES / name / "shaft").is_dir():   # deleted (shaft delete)
             take_wake(name)
             continue
         if paused(name):
             take_wake(name)
-            log(f"{name}: wake asked by job(s) {', '.join(req['by'])} dropped — {name} is paused")
+            log(f"{name}: wake asked by {_wakers(req['by'])} dropped — {name} is paused")
             continue
         if f"wake {name}" in children or awake_of(name):
             continue   # kept: it starts a cycle once the instance is idle
+        if (cycles.get(name) or "") > req.get("last", req["since"]):
+            # A cycle began after the last request (a timed wake, `shaft live`): it saw what was asked for. Without
+            # this, a deferred request (not_before) or one kept while that cycle ran woke the instance again for it.
+            take_wake(name)
+            log(f"{name}: wake asked by {_wakers(req['by'])} dropped — its cycle at {cycles[name][11:16]} came after")
+            continue
+        if req.get("not_before") and now.isoformat(timespec="seconds") < req["not_before"]:
+            continue   # kept: paced (request_wake's not_before)
         take_wake(name)
         from .autonomy import record
         record("wake", name)   # counts as its wake: the next scheduled one is a full interval later
-        log(f"{name}: woken by its job(s) {', '.join(req['by'])} (asked since {req['since']})")
+        log(f"{name}: woken by {_wakers(req['by'])} (asked since {req['since']})")
         children[f"wake {name}"] = (start(["wake", name]), time.monotonic())
 
 
@@ -827,7 +862,8 @@ def describe(name: str, limit: int = 20, as_of: datetime | None = None, root: Pa
     if not jobs and not problems:
         lines.append("  (no plugin has a schedule)")
     if as_of is None and (req := pending_wakes().get(name)):
-        lines.append(f"  wake asked by {', '.join(req['by'])} since {req['since']} (starts once it is idle)")
+        lines.append(f"  wake asked by {_wakers(req['by'])} since {req['since']} (starts once it is idle"
+                     + (f", not before {req['not_before'][11:16]})" if req.get("not_before") else ")"))
     if rows:
         lines.append("  recent runs:")
         for r in rows[-limit:]:

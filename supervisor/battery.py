@@ -23,6 +23,8 @@ spend as <name>-battery. A conversation interrupts the battery at once; so does 
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -748,12 +750,25 @@ def _grade_saved(name: str, saved: dict) -> dict:
     return row
 
 
+@contextlib.contextmanager
+def schedule_lock():
+    """battery/schedule.json's lock, for anyone rewriting it (_record_run, and `shaft delete`: supervisor/delete.py)."""
+    base().mkdir(parents=True, exist_ok=True)
+    with open(base() / "schedule.lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
 def _record_run(name: str) -> None:
+    """Under schedule_lock, replaced whole (review B16): two instances' batteries end the same night, and an unlocked
+    rewrite lost one's record — so its battery ran again that night."""
     st_path = base() / "schedule.json"
-    st = json.loads(st_path.read_text()) if st_path.exists() else {}
-    st[name] = datetime.now().isoformat(timespec="seconds")
-    st_path.parent.mkdir(parents=True, exist_ok=True)
-    st_path.write_text(json.dumps(st, indent=1))
+    with schedule_lock():
+        st = json.loads(st_path.read_text()) if st_path.exists() else {}
+        st[name] = datetime.now().isoformat(timespec="seconds")
+        tmp = st_path.with_name(f"schedule.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(st, indent=1))
+        tmp.replace(st_path)
 
 
 # -- scheduling: night only, never in the sleep's way ------------------------------------

@@ -1325,6 +1325,8 @@ class Broker:
             from .core import safe_write   # the recipient's folder is instance-controlled: no symlinks followed
             path = safe_write(self.project / "instances" / to, rel, content)
             messages.record(self.project / ".supervisor", path, self.name, to, kind, stamp, text, attachments)
+            from . import autonomy         # it wakes for this once idle, not at its next timed wake (review C15)
+            autonomy.event_wake(to, f"message from {self.name}", from_instance=True)
 
     def _answer_comments(self, file: str, text: str) -> None:
         """A message to the operator that answers document comments under "### c<n>" lines — how a comment sent for

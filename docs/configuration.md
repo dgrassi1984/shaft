@@ -113,6 +113,7 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_BONSAI_PYTHON` | `str(PROJECT / ".venv-bonsai" / "bin" / "python")` | the interpreter Bonsai LoRA training runs with | [finetune.py](../supervisor/finetune.py) |
 | `SHAFT_GATE_TIMEOUT_S` | `300` | seconds each gate test stage may run before it times out; positive integer | [gate.py](../supervisor/gate.py) |
 | `SHAFT_GATE_WORKERS` | `4` | processes each part of the supervisor's tests runs in at a gate; positive integer | [gate.py](../supervisor/gate.py) |
+| `SHAFT_IDLE_WAKE_MINUTES` | `30` | minutes an instance may go without a cycle before a timed wake starts one with nothing new for it (no unread message, commitment coming due or job result) | [autonomy.py](../supervisor/autonomy.py) |
 | `SHAFT_JOB_MIN_MINUTES` | `5` | the shortest interval an instance's own job (a plugin on a timer) may run at | [jobs.py](../supervisor/jobs.py) |
 | `SHAFT_JOBS_MAX` | `12` | scheduled plugins (jobs) an instance may run; beyond it, the rest by name are not run; positive integer | [jobs.py](../supervisor/jobs.py) |
 | `SHAFT_WATCH` | `on` | the supervisor's mail and calendar watch, for instances that opt in with WATCH_MAIL or WATCH_CALENDAR in their config.env (on or off) | [watch.py](../supervisor/watch.py) |
@@ -258,8 +259,9 @@ These arms are available for a later trial. No instance configuration changes au
 selects `noconfirm`, the operator sets it in Thelos's `config.env`. Invalid values follow the usual warning and fallback.
 
 `LLM_PRESENCE_PENALTY` uses tenths (15 means 1.5). `MAX_STEPS_TALK=0` removes the
-conversation step limit. `WAKE_INTERVAL_MINUTES=0` disables periodic wakes; positive
-values are bounded by the operator's wake floor (default 10 minutes). `CURIOSITY_EVERY_CYCLES=5` makes one live
+conversation step limit. `WAKE_INTERVAL_MINUTES=0` disables periodic wakes (and event wakes); positive
+values are bounded by the operator's wake floor (default 10 minutes), and a wake at that interval runs only with
+something to do or after `SHAFT_IDLE_WAKE_MINUTES` without a cycle ([architecture](architecture.md#wakes)). `CURIOSITY_EVERY_CYCLES=5` makes one live
 cycle in five, on average, a curiosity cycle while the instance has outward open surprises and no operator message waits
 (0 = never; [PLAN-surprise](plans/PLAN-surprise.md)).
 A drawn cycle follows one outward surprise, weighted by the content words it shares with the briefing, goals and

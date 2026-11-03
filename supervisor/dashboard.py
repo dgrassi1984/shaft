@@ -156,7 +156,7 @@ def instance_state(name: str, now: float | None = None) -> dict:
             "goal": act.get("goal", "") if act else "",
             "model": ("cloud " if cfg.get("LLM_BASE_URL") == "broker" else "") + cfg.get("LLM_MODEL", "?").split("/")[-1],
             "every": f"{int(interval.total_seconds() // 60)} min" if interval else "no wakes",
-            "next_wake": next_wake, "conversations": len(convs), "calls_today": calls, "tokens_today": tokens,
+            "next_wake": next_wake, "wake_skipped": autonomy.last_skip(name), "conversations": len(convs), "calls_today": calls, "tokens_today": tokens,
             "usd_today": _usd_today(name), "judged": n_judged, "success": rate, "achieved": achieved,
             "value": _value(js),
             "tools_off": sorted(disabled_tools(name)), "trial": _trial_line(name)}

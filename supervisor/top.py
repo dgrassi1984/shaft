@@ -348,6 +348,8 @@ def render_main(snap: dict, ui: UI, width: int = 100):
         sched = f"wakes every {i['every']} · next {i['next_wake']}" if i["every"] != "no wakes" else "no scheduled wakes"
         off = f" · off: {', '.join(i['tools_off'])}" if i["tools_off"] else ""
         grid.add_row("plan", Text(f"{sched}{off}", style="dim"))
+        if i.get("wake_skipped"):
+            grid.add_row("skipped", Text(clean(i["wake_skipped"]), style="dim"))
         if i.get("trial"):
             grid.add_row("trial", Text(clean(i["trial"]), style="magenta"))
         mark = "▶ " if n == sel else ""
@@ -434,7 +436,9 @@ def plain(snap: dict) -> str:
     for i in snap["instances"]:
         lines.append(f"{i['name']:8} {i['state']}{' since ' + i['since'] if i['since'] else ''}"
                      f"{' · ' + i['doing'] if i['doing'] else ''}{' · goal: ' + i['goal'] if i['goal'] else ''}"
-                     f" · next wake {i['next_wake']}" + (f"\n{'':8} trial {i['trial']}" if i.get("trial") else "")
+                     f" · next wake {i['next_wake']}"
+                     + (f"\n{'':8} last wake skipped: {i['wake_skipped']}" if i.get("wake_skipped") else "")
+                     + (f"\n{'':8} trial {i['trial']}" if i.get("trial") else "")
                      + (f"\n{'':8} recap {(i.get('recap') or {})['text']} ({i['recap']['ts'][11:16]})"
                         if (i.get("recap") or {}).get("text") else ""))
     msgs = [f"{_when(m)} {m['from']} → {m['to']}{'' if m['read'] else ' (pending)'}: {_first_line(m['text'])[:120]}"

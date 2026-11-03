@@ -10,7 +10,8 @@ shaft talk [name] --as "NAME"   # you are not the operator: recorded as NAME, ne
 shaft live|reflect|sleep [names…|--all]   # one autonomous cycle / reflection / consolidation
 shaft autonomy on|off|status    # SHAFT's scheduler service: each instance wakes every WAKE_INTERVAL_MINUTES
                                 # (its config.env; default 120, at least 10, 0 = never; a wake while it is
-                                # already awake is skipped), sleep daily from 04:00 (made up later if missed)
+                                # already awake, or with nothing to do, is skipped — status says why), and at once
+                                # for a message or a commitment due; sleep daily from 04:00 (made up later if missed)
                                 # autonomy, api, model and embed on|off refuse while it would kill or cut off
                                 # runs in progress, naming them, as the panels do; --force does it anyway (logged)
 shaft top                       # control panel, tabs 0–9: overview (state, now, alerts, today's spend) · one
