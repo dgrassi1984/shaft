@@ -298,7 +298,7 @@ def run(cfg, state: State, client: Client) -> str:
          + prompts.envelope_text(broker.envelope(), agent.time_left())},
     ]
     outcome = agent.run(client, messages, toolbox, max_tokens=cfg.MAX_TOKENS_STEP, purpose="sleep",
-                        max_steps=cfg.MAX_STEPS_SLEEP,
+                        max_steps=cfg.MAX_STEPS_SLEEP, keep_turns=cfg.RESULTS_KEEP_TURNS,
                         wrap_up="Do not call any more tools: write your sleep journal entry now, "
                                 "including what you did not get to.")
     changes = [_action(e) for e in toolbox.log if not e["result"].startswith("ERROR")]

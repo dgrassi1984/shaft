@@ -1,9 +1,11 @@
 """The think → act → observe loop shared by autonomous cycles, sleep and conversations."""
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import re
+import shutil
 import time
 from dataclasses import dataclass, field
 from typing import Callable
@@ -42,7 +44,10 @@ REPEATED_STOP = "(stopped) The same call a third time in a row: this reply is en
 # The ledger distinguishes executed writes from plans by recording actual tool calls.
 FILE_WRITERS = ("write_file", "append_file", "remember", "rewrite_facts", "write_digest", "update_self_model",
                 "update_personality")
-LEDGER_CALLS_CHARS = 600   # the list of other calls is cut from its oldest end; file writes are never cut
+LEDGER_CALLS_CHARS = 600   # the list of other calls is cut from its oldest end
+# File writes too, at their own budget (review E2/C7: the list was never cut, and grew with every write of a long
+# sleep); each one left out is still in its own tool result, or in the reference that result shrank to.
+LEDGER_WRITES_CHARS = 800
 NOT_RUN = "(repeat: not run)"
 
 
@@ -79,6 +84,12 @@ def call_ledger(entries: list[dict], step: int, max_steps: int, purpose: str, *,
             path = _arg(e, "path")
             first = (str(e.get("result", "")).splitlines() or [""])[0][:120]
             writes.append(f"{e['tool']}{' ' + path if path else ''} → {first}")
+    earlier = 0
+    while len(writes) > 1 and len("; ".join(writes)) > LEDGER_WRITES_CHARS:
+        writes.pop(0)
+        earlier += 1
+    if earlier:
+        writes[0] = f"… {earlier} earlier, {writes[0]}"
     where = "this reply" if purpose == "talk" else "this cycle"
     of = f" of {max_steps}" if max_steps > 0 else ""
     limits = []
@@ -109,6 +120,75 @@ def _canonical(arguments: str) -> str:
         return arguments or ""
 
 
+# Tool results of turns older than the last few shrink to a reference I can re-read (review E2/C7): every turn re-sent
+# every earlier result whole, and a cycle's later calls carried its first ones twelve times over. The whole result is
+# kept in .tmp/results/<pid>/ for read_file; a short one is left as it is.
+SHRUNK = "[shrunk: "
+SHRINK_MIN = 400
+SHRUNK_ARGS_CHARS = 120
+SHRUNK_LINE_CHARS = 160
+RESULTS_DIR = os.path.join(".tmp", "results")
+_kept = itertools.count(1)
+
+
+def _keep_result(root, content: str) -> str:
+    """Write a result I am about to shrink where read_file finds it; returns its path in my folder. The folders of
+    runs that ended more than a day ago go at the first keep of a run."""
+    base = os.path.join(str(root), RESULTS_DIR)
+    mine = os.path.join(base, str(os.getpid()))
+    if not os.path.isdir(mine):
+        for old in os.listdir(base) if os.path.isdir(base) else []:
+            path = os.path.join(base, old)
+            if old != str(os.getpid()) and time.time() - os.path.getmtime(path) > 86400:
+                shutil.rmtree(path, ignore_errors=True)
+        os.makedirs(mine, exist_ok=True)
+    rel = os.path.join(RESULTS_DIR, str(os.getpid()), f"{next(_kept)}.txt")
+    with open(os.path.join(str(root), rel), "w") as f:
+        f.write(content)
+    return rel
+
+
+def shrink(messages: list[dict], keep_turns: int, root) -> None:
+    """Tool results of assistant turns older than the last `keep_turns` become one line: the tool, its arguments in
+    short, the result's first line, and where the whole is (0: none shrink). Done in place, once per result: a
+    shrunk one stays as it is, so the prompt's prefix changes only where a result first shrinks. A result whose whole
+    could not be kept is left whole."""
+    if keep_turns <= 0:
+        return
+    turns = sum(1 for m in messages if m["role"] == "assistant")
+    turn, calls = -1, {}
+    for m in messages:
+        if m["role"] == "assistant":
+            turn += 1
+            calls = {c["id"]: c["function"] for c in m.get("tool_calls") or []}
+            continue
+        if turn >= turns - keep_turns:
+            break
+        content = m.get("content")
+        if m["role"] != "tool" or not isinstance(content, str) or len(content) <= SHRINK_MIN \
+                or content.startswith(SHRUNK):
+            continue
+        fn = calls.get(m.get("tool_call_id")) or {}
+        args = " ".join(str(fn.get("arguments") or "").split())
+        args = args if len(args) <= SHRUNK_ARGS_CHARS else args[:SHRUNK_ARGS_CHARS - 1] + "…"
+        first = next((line.strip() for line in content.splitlines() if line.strip()), "")
+        first = first if len(first) <= SHRUNK_LINE_CHARS else first[:SHRUNK_LINE_CHARS - 1] + "…"
+        try:
+            where = f"read_file {_keep_result(root, content)} for all of it"
+        except OSError:   # not kept: the result stays whole. Calling the tool again to recover it could repeat what
+            continue      # it did (a message sent twice) or answer differently
+        m["content"] = (f"{SHRUNK}{fn.get('name') or '?'} {args} → {first} ({len(content)} characters, from a turn "
+                        f"more than {keep_turns} turns ago); {where}]")
+
+
+def _unsummarise(messages: list[dict], summary: list[tuple[int, str]]) -> None:
+    """Take the ledger and focus line off the result they stand under."""
+    while summary:
+        at, content = summary.pop()
+        if at < len(messages) and messages[at]["role"] == "tool":
+            messages[at]["content"] = content
+
+
 WRAP_UP_RESERVE_S = 900   # one heavy turn of a thinking model can take ~12 minutes
 
 
@@ -135,7 +215,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
         wrap_up: str | None = None, ledger: bool = True,
         interjections: Callable[[], list[dict]] | None = None,
         expected: Callable[[], list[str] | None] | None = None,
-        focus: Callable[[], str] | None = None) -> Outcome:
+        focus: Callable[[], str] | None = None, keep_turns: int = 0) -> Outcome:
     """Run until the model answers without calling tools, a stopping control is called,
     or max_steps model turns have been used (max_steps <= 0: no limit — conversations, where
     the operator stops a reply with Ctrl-C). `max_steps` may be a callable, read at the top of each turn: a live
@@ -161,19 +241,30 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
     one-line `[unexpected: …]` note, for the model only (PLAN-surprise §1.2).
 
     `focus` (live cycles): my workspace's winners in short form, added after each step's ledger — the broadcast that
-    keeps what won my attention in front of me for the whole cycle (PLAN-consciousness M4). For the model only."""
+    keeps what won my attention in front of me for the whole cycle (PLAN-consciousness M4). For the model only.
+
+    The ledger and the focus line are the current summary: they stand under the newest step's last result only, and
+    leave the one before when the next step adds its own (review E2/C7: every retained result carried its own copy),
+    and the last one when the run ends. `keep_turns` (RESULTS_KEEP_TURNS): tool results of turns older than that many
+    shrink to a reference I can re-read (shrink)."""
     controls = controls or {}
     tools = toolbox.specs() + [c.spec for c in controls.values()]
     final_tools = [c.spec for c in controls.values()] or None
     call = call or (lambda msgs, t=tools: client.complete(msgs, max_tokens, purpose, tools=t))
-    reply = None
-    step = 0
-    wrapped_up = ""
-    last_call, repeats = None, 0   # the previous tool call, and how many times in a row it came back unchanged
     first_logged = len(toolbox.log)   # a conversation's toolbox outlives one reply: the ledger counts this run's
     configured = getattr(toolbox, "loop_guard", None)
     guard = loopguard.Guard(configured.mode, configured.limit) if configured else loopguard.Guard()
     toolbox.loop_guard = guard
+    reply = None
+    step = 0
+    wrapped_up = ""
+    last_call, repeats = None, 0   # the previous tool call, and how many times in a row it came back unchanged
+    summary: list[tuple[int, str]] = []   # where the ledger and focus line stand now, and that result without them
+
+    def ended(how: str) -> Outcome:   # the last summary leaves too: a conversation keeps these messages
+        _unsummarise(messages, summary)
+        return Outcome(reply, how, step, toolbox.log, wrapped_up)
+
     while True:
         limit = max_steps() if callable(max_steps) else max_steps
         if 0 < limit <= step:
@@ -183,6 +274,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
             pausing.wait_while_paused()
         if interjections:   # before the mark: a step redone after a pause keeps them
             messages.extend(interjections())
+        shrink(messages, keep_turns, toolbox.root)
         step += 1
         left = time_left()
         yielding = step > 1 and yield_requested()
@@ -236,7 +328,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
                                   for c in reply.tool_calls]
         messages.append(turn)
         if not reply.tool_calls:
-            return Outcome(reply, "answer", step, toolbox.log, wrapped_up)
+            return ended("answer")
         stop = False
         for c in reply.tool_calls:
             call_key = (c["name"], _canonical(c["arguments"]))
@@ -249,7 +341,7 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
                 repeats += 1
                 if repeats >= REPEAT_LIMIT:
                     messages.append({"role": "tool", "tool_call_id": c["id"], "content": REPEATED_STOP})
-                    return Outcome(reply, "repeating", step, toolbox.log, wrapped_up)
+                    return ended("repeating")
                 messages.append({"role": "tool", "tool_call_id": c["id"], "content": REPEATED.format(name=c["name"])})
                 toolbox.log.append({"tool": c["name"], "args": for_log(c["arguments"]), "result": NOT_RUN})
                 _tag(toolbox.log[-1])
@@ -285,15 +377,19 @@ def run(client: Client, messages: list[dict], toolbox: Toolbox, *, max_tokens: i
                 on_tool(c["name"], c["arguments"], result)
             messages.append({"role": "tool", "tool_call_id": c["id"], "content": result})
         if stop:
-            return Outcome(reply, "control", step, toolbox.log, wrapped_up)
+            return ended("control")
+        _unsummarise(messages, summary)
+        before = messages[-1]["content"]
         if ledger:
             messages[-1]["content"] += "\n\n" + call_ledger(toolbox.log[first_logged:], step, limit, purpose,
                                                          envelope=broker.envelope(), left_s=time_left())
         if focus and (now_in_focus := focus()):
             messages[-1]["content"] += "\n" + now_in_focus
+        if messages[-1]["content"] != before:
+            summary.append((len(messages) - 1, before))
         if toolbox.shown:   # what view_image showed: after the tool results, as a tool result cannot carry an image
             messages.append(images.image_message(toolbox.shown))
             toolbox.shown = []
         if last and wrap_up:
             break
-    return Outcome(reply, "steps", step, toolbox.log, wrapped_up)
+    return ended("steps")

@@ -36,6 +36,9 @@ FIELDS: dict[str, tuple[type, object]] = {
     "LOOP_GUARD": (str, "shadow"),     # #103: effect repeats, measured before showing a note
     "LOOP_EFFECT_ROUNDS": (int, 3),
     "CONTEXT_JOURNAL_CHARS": (int, 16000),
+    "CONTEXT_CHARS": (int, 48000),     # every section of my standing context together (prompts.SECTIONS); 0 = no total
+    "INBOX_CHARS": (int, 4000),        # a live cycle's inbox: one line per message, read_file for the whole
+    "RESULTS_KEEP_TURNS": (int, 4),    # tool results of older turns shrink to a reference I can re-read; 0 = never
     "STALE_LINE_HOURS": (int, 24),     # sleep review; 0 disables each check
     "STALE_GOAL_HOURS": (int, 48),
     "CRITERION_CHARS": (int, 600),
@@ -52,6 +55,8 @@ FIELDS: dict[str, tuple[type, object]] = {
     "ATTENTION_SCHEMA": (str, "on"),      # declare_intent asks where I expect to look
     "COMMITMENTS": (str, "on"),           # commit_to, kept against my record
     "FORECAST": (str, "on"),              # what goals like mine have cost, when I declare one
+    "GOAL_SLATE": (str, "on"),            # live step 1: up to 6 candidate goals from my records, each with a judged value
+    "FIRST_ERROR": (str, "on"),           # declare_intent: the judge's first error on my newest similar unmet goal
     "OPERATOR_NAME": (str, "the operator"),
 }
 
@@ -112,7 +117,9 @@ CHOICES = {"LLM_REASONING_EFFORT": ("medium", "xhigh", "low"),
            "CONFIDENCE_MODE": ("confirm", "clauses", "noconfirm"),
            "OUTCOME_CARDS": ("on", "off"), "WORKSPACE": ("competitive", "relevance", "off"),
            "ATTENTION_SCHEMA": ("on", "off"), "COMMITMENTS": ("on", "off"), "FORECAST": ("on", "reserve", "off"),
-           "HANDOFF": ("on", "raw", "off"), "LOOP_GUARD": ("shadow", "on", "off")}
+           "HANDOFF": ("on", "raw", "off"), "LOOP_GUARD": ("shadow", "on", "off"),
+           "GOAL_SLATE": ("on", "off"), "FIRST_ERROR": ("on", "off")}
+NON_NEGATIVE = ("CONTEXT_CHARS", "INBOX_CHARS", "RESULTS_KEEP_TURNS")   # 0 switches each off; below 0 means nothing
 
 
 def _coerce(kind: type, raw: str, name: str = ""):
@@ -122,6 +129,8 @@ def _coerce(kind: type, raw: str, name: str = ""):
         value = int(raw)
         if name == "LOOP_EFFECT_ROUNDS" and value < 1:
             raise ValueError("must be positive")
+        if name in NON_NEGATIVE and value < 0:
+            raise ValueError("must be 0 or more")
         return value
     return raw
 
@@ -139,7 +148,7 @@ def load(root: Path | None = None, environ: dict[str, str] | None = None) -> Con
                 try:
                     chosen, source = _coerce(kind, src[name], name), src_name
                 except ValueError as e:
-                    why = str(e) if name in CHOICES else f"is not a valid {kind.__name__}"
+                    why = str(e) if name in CHOICES or str(e).startswith("must") else f"is not a valid {kind.__name__}"
                     print(f"warning: {name}={src[name]!r} from {src_name}: {why}; keeping {chosen!r} [{source}]",
                           file=sys.stderr)
         if chosen is None:

@@ -51,7 +51,8 @@ class State:
             if picked and used + len(entry) > max_chars:
                 break
             if not picked and len(entry) > max_chars:
-                entry = "[...start of entry cut for length...]\n" + entry[-max_chars:]
+                entry = "[...start of entry cut for length...]\n" + (entry[-max_chars:] if max_chars > 0 else "")
+                # (entry[-0:] is the whole entry: a budget of 0 kept everything)
             picked.append(entry)
             used += len(entry)
         picked.reverse()

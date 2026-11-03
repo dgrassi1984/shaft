@@ -140,6 +140,11 @@ NO_VISION = (" Your model cannot see images: describe_image asks a vision model 
              "had described.")
 ABILITIES_NONE = "In this mode you have no tools: you can only write text."
 
+# My context, stable sections first and volatile ones last (review E2/C5): what changes only in my sleep (self-model,
+# personality, skills, facts, digests) comes before what a cycle changes (goals, journal), and what changes between
+# any two prompts (the last sleep's age, improvement plan, surprises, projects, corrections, stats, the time) comes
+# last, so a model server's prompt cache keeps as long a prefix as it can. x_probes cuts from "## Open surprises" to
+# "\n## Operator corrections": they stay in this order, next to each other.
 CONTEXT = """\
 ## My self-model (self/self.md)
 
@@ -149,9 +154,31 @@ CONTEXT = """\
 
 {personality}
 
+## My skills (skills/)
+
+{skills}
+
+## Facts I have stored (newest last)
+
+Retired facts are in memory/facts-archive.md, found by search_memory.
+
+{facts}
+
+## Earlier days, as I digested them in my sleeps (newest last)
+
+{digests}
+
 ## My goals (self/goals.md)
 
 {goals}
+
+## My recent journal (newest last; {shown} of {total} entries)
+
+{journal}
+
+## My last sleep
+
+{sleep}
 
 ## My current improvement plan (from my last sleep)
 
@@ -174,28 +201,6 @@ A project at risk is re-planned, narrowed or abandoned honestly, never defended.
 ## My measured performance (self/stats.md, written by the supervisor)
 
 {stats}
-
-## Facts I have stored (newest last)
-
-Retired facts are in memory/facts-archive.md, found by search_memory.
-
-{facts}
-
-## My skills (skills/)
-
-{skills}
-
-## Earlier days, as I digested them in my sleeps (newest last)
-
-{digests}
-
-## My recent journal (newest last; {shown} of {total} entries)
-
-{journal}
-
-## My last sleep
-
-{sleep}
 
 ## Now
 
@@ -247,7 +252,7 @@ your stats show your self-audit share.
 
 {inbox}
 
-{briefing}{handoff}
+{briefing}{handoff}{slate}
 1. FIRST call declare_intent: pick ONE goal — from your current improvement plan or \
 self/goals.md (both in your context), from the operator's world (the briefing and his messages above), \
 or an open surprise: the one whose \
@@ -391,20 +396,67 @@ yourself, and anything you committed to or want to follow up on. Only what actua
 happened in the conversation above. Plain markdown, no heading, under 250 words.""" + SELF_CLAIMS
 
 
-def _tail(path: Path, chars: int, empty: str) -> str:
-    if not path.exists():
-        return empty
-    text = path.read_text().strip()
-    return ("[... older lines omitted ...]\n" + text[-chars:]) if len(text) > chars else (text or empty)
+# Every section of my context has a budget in characters, and CONTEXT_CHARS caps them together (review E2/C6): the
+# self-model, personality and skill list had none, and the standing slices alone came to ~49,000 characters. Each
+# entry: its budget (goals and journal: GOALS_CHARS and CONTEXT_JOURNAL_CHARS), the end a cut keeps — head where the
+# most important lines come first (a tail cut once dropped stats.md's headline, 2026-10-13), tail where the newest are
+# last — and where the whole is. The open surprises are not here: surprises.block keeps them to QUEUE_CHARS, and
+# x_probes finds that block verbatim.
+SECTIONS = {
+    "self_model": (8000, "head", "read_file self/self.md"),
+    "personality": (4000, "head", "read_file self/personality.md"),
+    "skills": (3000, "head", "list_files skills"),
+    "facts": (6000, "tail", "read_file memory/facts.md"),
+    "digests": (3500, "tail", "read_file memory/digests.md"),
+    "goals": (None, "sections", "read_file self/goals.md"),
+    "journal": (None, "entries", "search_memory, or read_file memory/journal.md"),
+    "sleep": (3000, "head", "search_memory, or read_file memory/journal.md"),
+    "improvement": (2500, "head", "read_file memory/journal.md (my last sleep's entry)"),
+    "promises": (3000, "head", "read_file memory/commitments.jsonl"),
+    "projects": (3000, "head", "read_file memory/projects.jsonl"),
+    "corrections": (3000, "head", "read_file memory/corrections.jsonl"),
+    "stats": (5500, "head", "read_file self/stats.md"),
+}
 
 
-def _head(path: Path, chars: int, empty: str) -> str:
-    """The start of a file whose most important lines come first (the supervisor's stats.md): a tail cut
-    dropped shaft's headline success rate once the file grew past the limit (2026-10-13)."""
-    if not path.exists():
-        return empty
-    text = path.read_text().strip()
-    return (text[:chars] + "\n[... later lines omitted ...]") if len(text) > chars else (text or empty)
+def cut(text: str, cap: int, where: str, keep: str = "head") -> str:
+    """`text` whole when it fits `cap`; otherwise the end `keep` names, at a line break when one falls in the last
+    fifth, and a line saying how much was left out and where the whole is."""
+    if len(text) <= cap:
+        return text
+    cap = max(0, cap)
+    if keep == "tail":
+        part = text[len(text) - cap:] if cap else ""
+        nl = part.find("\n")
+        part = part[nl + 1:] if 0 <= nl < cap // 5 else part
+        return (f"[... the first {len(text) - len(part)} of {len(text)} characters left out at this section's budget "
+                f"({cap}); {where} for them ...]\n{part}")
+    part = text[:cap]
+    nl = part.rfind("\n")
+    part = part[:nl] if nl > cap - cap // 5 else part
+    return (f"{part}\n[... the last {len(text) - len(part)} of {len(text)} characters left out at this section's "
+            f"budget ({cap}); {where} for them ...]")
+
+
+def allot(wanted: dict[str, int], budgets: dict[str, int], total: int | None) -> dict[str, int]:
+    """Each section's cap under `total` (None: no total): what it wants when all fit; otherwise a section wanting less
+    than its share keeps all of it, and the rest share what is left in proportion to their budgets (water-filling: no
+    section is cut to make room nobody uses). A total of 0 or less is no room at all, never no limit."""
+    caps = dict(wanted)
+    if total is None or sum(wanted.values()) <= total:
+        return caps
+    left, pending = max(0, total), set(wanted)
+    while pending:
+        weight = sum(budgets[k] for k in pending) or 1
+        fits = [k for k in pending if wanted[k] <= left * budgets[k] / weight]
+        if not fits:
+            for k in pending:
+                caps[k] = int(left * budgets[k] / weight)
+            break
+        for k in fits:
+            left -= wanted[k]
+            pending.discard(k)
+    return caps
 
 
 def _skills(root: Path) -> str:
@@ -414,6 +466,10 @@ def _skills(root: Path) -> str:
         first = next((l.strip("# ").strip() for l in p.read_text().splitlines() if l.strip()), "")
         rows.append(f"- skills/{p.name}: {first[:120]}")
     return "\n".join(rows) or "(none yet)"
+
+
+def _file(path: Path, empty: str) -> str:
+    return (path.read_text().strip() if path.exists() else "") or empty
 
 
 def sections_text(text: str, budget: int, path: str, *, first: re.Pattern | None = None, base: int = 0,
@@ -469,7 +525,6 @@ CORRECTIONS_HEADING = re.compile(r"\bcorrections?\b", re.IGNORECASE)   # "## Cor
 
 def system_prompt(state, cfg, mode_note: str, tools: str | None = None) -> str:
     root = state.root
-    journal, shown, total = state.recent_journal(cfg.CONTEXT_JOURNAL_CHARS)
     abilities = ABILITIES_TOOLS.format(tools=tools) if tools else ABILITIES_NONE
     if tools and "delegate_coding" in tools:   # the operator can switch the coder off for an instance
         abilities += DELEGATION
@@ -486,26 +541,54 @@ def system_prompt(state, cfg, mode_note: str, tools: str | None = None) -> str:
     schedule = os.environ.get("SHAFT_SCHEDULE") or "the supervisor did not say (you may be running outside it)."
     identity = IDENTITY.format(name=cfg.NAME, operator=cfg.OPERATOR_NAME, schedule=schedule, drive=drive(root),
                                abilities=abilities, mode_note=mode_note)
-    context = CONTEXT.format(
-        self_model=state.read(state.self_md).strip() or "(empty — I have not written one yet)",
-        personality=personality.read(root).strip(),
-        goals=goals_text(state.read(state.goals_md), cfg.GOALS_CHARS),
-        stats=_head(root / "self" / "stats.md", 5500, "(no measurements yet)"),   # headline first
-        facts=_tail(root / "memory" / "facts.md", 6000, "(none yet)"),   # kept to this by my sleep
-        digests=_tail(root / "memory" / "digests.md", 3500, "(none yet — my sleeps will write them)"),
-        skills=_skills(root),
-        journal=journal or "(empty)",
-        shown=shown,
-        total=total,
-        now=f"{now():%A %Y-%m-%d %H:%M}",
-        sleep=last_sleep(state, journal),
-        improvement=improvement_plan(state),
-        surprises=surprises.block(root),
-        promises=_promises(root, cfg),
-        projects=projects.block(root, now()),
-        corrections=corrections.block(root, now()),
-    )
+    context = CONTEXT.format(**context_sections(state, cfg))
     return x_probes.context(root, f"{identity}\n\n{context}")
+
+
+def budgets(cfg) -> dict[str, int]:
+    out = {name: budget for name, (budget, _, _) in SECTIONS.items()}
+    out["goals"], out["journal"] = cfg.GOALS_CHARS, cfg.CONTEXT_JOURNAL_CHARS
+    return out
+
+
+def context_sections(state, cfg) -> dict:
+    """CONTEXT's fields: each section within its budget, and all of them within CONTEXT_CHARS (0: no total). The open
+    surprises, never cut here, count against the total first."""
+    root, at = state.root, now()
+    raw = {"self_model": state.read(state.self_md).strip() or "(empty — I have not written one yet)",
+           "personality": personality.read(root).strip(), "skills": _skills(root),
+           "facts": _file(root / "memory" / "facts.md", "(none yet)"),   # kept to FACTS_MAX_CHARS by my sleep
+           "digests": _file(root / "memory" / "digests.md", "(none yet — my sleeps will write them)"),
+           "goals": state.read(state.goals_md), "improvement": improvement_plan(state),
+           "projects": projects.block(root, at), "corrections": corrections.block(root, at),
+           "stats": _file(root / "self" / "stats.md", "(no measurements yet)")}
+    queue = surprises.block(root)
+    full = budgets(cfg)
+    out = _render(state, cfg, raw, full)
+    total = getattr(cfg, "CONTEXT_CHARS", 0)
+    if isinstance(total, int) and total > 0:   # (a test's Mock config has no total)
+        wanted = {name: len(out[name]) for name in SECTIONS}
+        caps = allot(wanted, full, max(0, total - len(queue)))
+        if caps != wanted:
+            out = _render(state, cfg, raw, caps)
+    return {**out, "surprises": queue, "now": f"{at:%A %Y-%m-%d %H:%M}"}
+
+
+def _render(state, cfg, raw: dict, caps: dict[str, int]) -> dict:
+    if caps["journal"] > 0:
+        journal, shown, total = state.recent_journal(caps["journal"])
+    else:   # no room left for it: a pointer, never the whole newest entry (recent_journal always keeps one)
+        total = len(state.journal_entries())
+        journal = (f"[... left out at the context budget (CONTEXT_CHARS); {SECTIONS['journal'][2]} for it ...]"
+                   if total else "")
+        shown = 0
+    out = {"goals": goals_text(raw["goals"], caps["goals"]), "journal": journal or "(empty)", "shown": shown,
+           "total": total, "promises": _promises(state.root, cfg, caps["promises"])}
+    raw = {**raw, "sleep": last_sleep(state, journal)}
+    for name, (_, keep, where) in SECTIONS.items():
+        if name in raw and keep in ("head", "tail"):   # goals, journal and promises are cut above
+            out[name] = cut(raw[name], caps[name], where, keep)
+    return out
 
 
 def briefing(root: Path, cfg) -> str:
@@ -536,8 +619,13 @@ def briefing(root: Path, cfg) -> str:
     return f"## {cfg.OPERATOR_NAME}'s next 48 hours (my briefing)\n\n{shown}\n\n"
 
 
+HANDOFF_FIELD_CHARS = 600   # one field of one handed-over cycle (review E2/C6: they had no limit)
+HANDOFF_CHARS = 3000        # the whole block
+
+
 def handoff(root: Path, cfg) -> str:
-    """A handoff survives exactly two live cycles; other episode kinds do not age it (#104)."""
+    """A handoff survives exactly two live cycles; other episode kinds do not age it (#104). Each field within
+    HANDOFF_FIELD_CHARS, the block within HANDOFF_CHARS; a cut says where the whole episode is."""
     if cfg.HANDOFF == "off":
         return ""
     try:
@@ -550,19 +638,24 @@ def handoff(root: Path, cfg) -> str:
             for label, value in (("Completed", ep.get("completed", fin.get("completed"))),
                                  ("Unfinished", fin.get("unfinished")), ("Next action", fin.get("next_action"))):
                 if value:
-                    structured += f"{label}: {json.dumps(value, ensure_ascii=False)}\n"
+                    shown = json.dumps(value, ensure_ascii=False)
+                    if len(shown) > HANDOFF_FIELD_CHARS:
+                        shown = (shown[:HANDOFF_FIELD_CHARS] + f"… [{len(shown) - HANDOFF_FIELD_CHARS} more characters: "
+                                 f"read_file memory/episodes/{str(ep.get('ts', ''))[:10]}.jsonl, the episode of this ts]")
+                    structured += f"{label}: {shown}\n"
             if cfg.HANDOFF == "raw":
                 raw = json.dumps(ep.get("tools") or [], ensure_ascii=False)
                 blocks.append(heading + raw[:max(0, len(structured) - len(heading))])
             else:
                 blocks.append(structured)
-        shown = "\n".join(blocks) or "(no earlier live cycles yet)"
+        shown = cut("\n".join(blocks), HANDOFF_CHARS, "read_file memory/episodes/<date>.jsonl (by ts)") \
+            or "(no earlier live cycles yet)"
     except Exception as e:
         shown = f"(my handoffs could not be read: {type(e).__name__}: {e})"
     return f"## Handed over from my last cycles\n\n{shown}\n\n"
 
 
-def _promises(root: Path, cfg) -> str:
+def _promises(root: Path, cfg, cap: int | None = None) -> str:
     """My open commitments, overdue first (PLAN-consciousness C2): what I said I would do is part of who I am."""
     if getattr(cfg, "COMMITMENTS", "off") != "on":
         return ""
@@ -570,6 +663,9 @@ def _promises(root: Path, cfg) -> str:
         open_ = commitments.block(root, now())
     except Exception as e:   # every prompt shows this block: a record it cannot read must not stop the run
         open_ = f"(my commitments could not be read: {type(e).__name__}: {e})"
+    if cap is not None:
+        _, keep, where = SECTIONS["promises"]
+        open_ = cut(open_, cap, where, keep)
     return ("\n## My open commitments (commit_to for the operator or other agents; "
             f"my sleep settles the overdue ones)\n\n{open_}\n")
 

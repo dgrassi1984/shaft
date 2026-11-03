@@ -11,18 +11,24 @@ PLAN-consciousness, each behind its knob in config.py: my workspace picks what i
 answers with what goals like this one have cost me (forecast.py); before a kind of action that has been failing, the
 first such call is held while I see what comparable ones led to (cards.py); finish_cycle and commit_to record the
 promises I make (commitments.py).
+
+Before I choose, my inbox is one line per message (INBOX_CHARS) and a slate of up to six candidate goals from my
+records stands before step 1 (slate.py, GOAL_SLATE); declare_intent adds where the judge found my newest similar
+goal that fell short first went wrong (forecast.first_error, FIRST_ERROR).
 """
 from __future__ import annotations
 
+import json
 import os
+import re
 import shutil
 
 from . import (agent, base_rate, broker, cards, clock, commitments, forecast, images, loopguard, memory, pausing, projects,
-               prompts, recovery, surprises, workspace, x_probes)
+               prompts, recovery, slate, surprises, workspace, x_probes)
 from .agent import Control
 from .llm import Client
 from .state import State
-from .tools import Toolbox, _spec, completed, for_log
+from .tools import MAX_RESULT_CHARS, Toolbox, _spec, completed, for_log
 
 S = {"type": "string"}
 ORIGINS = ("self", "operator", "instance")
@@ -85,12 +91,108 @@ def archive_inbox(state: State, names: list[str]) -> None:
             shutil.move(src, dest / name)
 
 
-def inbox_text(messages: list[tuple[str, str]]) -> str:
+INBOX_LINE_CHARS = 200     # a message's opening, on its line; read_file shows it whole
+HEADER_CHARS = 100         # each header value but Trust: it says whose instructions they are not, so it gets more room
+TRUST_CHARS = 300          # the supervisor writes about 130; a longer one is cut, never the whole line's room
+HEAD_CHARS = 600           # a message's header on its line, all fields together
+MORE_RESERVE = 200         # room the budget keeps for the line that counts the messages past it
+
+
+def headers(text: str) -> tuple[list[tuple[str, str]], str]:
+    """A delivered message's header lines (From, Kind, Date, …: everything above the first blank line, when every
+    line there is one) and its body."""
+    head, sep, body = text.strip().partition("\n\n")
+    fields = []
+    for line in head.splitlines() if sep else []:
+        key, colon, value = line.partition(":")
+        if not colon or not re.fullmatch(r"[A-Za-z][A-Za-z-]*", key):
+            return [], text.strip()
+        fields.append((key, value.strip()))
+    return (fields, body.strip()) if fields else ([], text.strip())
+
+
+def _clip(text: str, n: int) -> str:
+    return text if len(text) <= n else text[:n] + "…"
+
+
+def inbox_line(name: str, text: str) -> str:
+    """One message as one line (review E2/C4): its header but To, and the first INBOX_LINE_CHARS of its body. Every
+    part is bounded, so one message's line can never take the inbox's whole room."""
+    fields, body = headers(text)
+    head = _clip(" · ".join(f"{key}: {_clip(value, TRUST_CHARS if key == 'Trust' else HEADER_CHARS)}"
+                            for key, value in fields if key != "To"), HEAD_CHARS)
+    flat = " ".join(body.split())
+    opening = flat if len(flat) <= INBOX_LINE_CHARS else f"{flat[:INBOX_LINE_CHARS]}… ({len(body)} characters)"
+    pictures = len(images.LISTED.findall(body))
+    return (f"- inbox/{name} — {head or '(no header)'}: {opening or '(empty)'}"
+            + (f" [{pictures} image(s) attached]" if pictures else ""))
+
+
+def inbox_view(messages: list[tuple[str, str]], budget: int = 0) -> tuple[str, list[str]]:
+    """My inbox as a live cycle shows it, and the names of the messages it lists: one line per message, the
+    operator's first, then by time, within `budget` characters (0: all), keeping room for the line that counts the
+    rest; read_file inbox/<file> shows one whole. It pasted every message whole, with no limit. A message past the
+    budget stays in my inbox for a later cycle unless I read it whole (read_whole): one I never saw is not handled."""
     if not messages:
-        return "Your inbox is empty."
-    body = "\n\n".join(f"### {name}\n{text.strip()}" for name, text in messages)
-    return (f"You have {len(messages)} new message(s). Reply with send_message if you want to; "
-            f"they will be archived in memory/messages/ after this cycle.\n\n{body}")
+        return "Your inbox is empty.", []
+    ordered = sorted(messages, key=lambda m: not m[0].endswith("-from-operator.md"))   # stable: by time within each
+    rows = [(name, inbox_line(name, text)) for name, text in ordered]
+    if budget > 0 and sum(len(row) + 1 for _, row in rows) > budget:
+        kept, used = [], 0
+        for name, row in rows:
+            if used + len(row) + 1 > budget - MORE_RESERVE:
+                break
+            kept.append((name, row))
+            used += len(row) + 1
+        rows = kept
+    lines = [row for _, row in rows]
+    if len(rows) < len(ordered):
+        lines.append(f"- … and {len(ordered) - len(rows)} more message(s), past my inbox budget of {budget} "
+                     "characters: list_files inbox names them; they stay in my inbox until a cycle shows them or I "
+                     "read one whole.")
+    return (f"You have {len(messages)} new message(s), one line each; read_file inbox/<file> shows one whole. Reply "
+            "with send_message if you want to; the ones listed here will be archived in memory/messages/ after this "
+            "cycle.\n\n" + "\n".join(lines)), [name for name, _ in rows]
+
+
+def inbox_text(messages: list[tuple[str, str]], budget: int = 0) -> str:
+    return inbox_view(messages, budget)[0]
+
+
+def read_whole(state: State, entries: list[dict]) -> list[str]:
+    """The inbox messages a run's tool log read whole with read_file: a message read only in part (read_file shows
+    MAX_RESULT_CHARS from its offset) is not handled."""
+    seen: dict[str, list[tuple[int, int]]] = {}
+    for entry in entries:
+        result = str(entry.get("result", ""))
+        if entry.get("tool") != "read_file" or result.startswith("ERROR") or result == agent.NOT_RUN:
+            continue
+        try:
+            args = json.loads(entry.get("args") or "{}")
+            path, offset = args.get("path", ""), int(args.get("offset") or 0)
+        except (ValueError, TypeError, AttributeError):
+            continue
+        if isinstance(path, str) and re.fullmatch(r"inbox/[^/]+\.md", path):
+            seen.setdefault(path.removeprefix("inbox/"), []).append((offset, offset + MAX_RESULT_CHARS))
+    names = []
+    for name, spans in seen.items():
+        try:
+            size = len((state.root / "inbox" / name).read_text(errors="replace"))
+        except OSError:
+            continue
+        reached = 0
+        for start, end, _ in sorted(slice(start, end).indices(size) for start, end in spans):
+            if start > reached:
+                break
+            reached = max(reached, end)
+        if reached >= size:
+            names.append(name)
+    return names
+
+
+def inbox_whole(messages: list[tuple[str, str]]) -> str:
+    """Every message whole: what retrieval at a cycle's start is about, and where its attached images are listed."""
+    return "\n\n".join(f"### {name}\n{text.strip()}" for name, text in messages)
 
 
 def cycle_toolbox(cfg, state: State) -> Toolbox:
@@ -114,7 +216,7 @@ def opening(cfg, state: State, toolbox: Toolbox) -> str:
 def sources(state: State, inbox: list[tuple[str, str]]) -> tuple[str, str, str]:
     """My improvement plan, my goals, and what retrieval at a cycle's start is about: both, and my messages."""
     plan, goals = prompts.improvement_plan(state), state.read(state.goals_md)
-    return plan, goals, "\n".join([goals, plan, inbox_text(inbox)])
+    return plan, goals, "\n".join([goals, plan, inbox_whole(inbox)])
 
 
 def front(cfg, state: State, inbox: list[tuple[str, str]], system: str) -> tuple[workspace.Workspace, str]:
@@ -143,13 +245,25 @@ def fronts(cfg, state: State) -> dict:
     inbox = read_inbox(state)
     system = opening(cfg, state, cycle_toolbox(cfg, state))
     hits = memory.search(state.root, sources(state, inbox)[2], k=FRONT_HITS)
-    out = {"system": system, "inbox": inbox_text(inbox), "briefing": prompts.briefing(state.root, cfg),
-           "handoff": prompts.handoff(state.root, cfg), "modes": {},
+    shown, listed = inbox_view(inbox, cfg.INBOX_CHARS)
+    out = {"system": system, "inbox": shown, "briefing": prompts.briefing(state.root, cfg),
+           "handoff": prompts.handoff(state.root, cfg),
+           "slate": goal_slate(cfg, state, [m for m in inbox if m[0] in listed]), "modes": {},
            "hits": [{"source": h.source, "text": h.text, "shown": h.text.strip()[:120] in system} for h in hits]}
     for mode in workspace.MODES:
         ws, focus = front(replace(cfg, values={**cfg.values, "WORKSPACE": mode}), state, inbox, system)
         out["modes"][mode] = {"focus": focus, "workspace": ws.record(), "memory": memory.mode}
     return out
+
+
+def goal_slate(cfg, state: State, inbox: list[tuple[str, str]]) -> str:
+    """Up to six candidate goals from my records before I choose (GOAL_SLATE); '' when off or empty."""
+    if cfg.GOAL_SLATE != "on":
+        return ""
+    try:
+        return slate.text(state.root, inbox, clock.now())
+    except Exception as e:   # a slate my records cannot give must never cost me the cycle
+        return f"(my candidate goals could not be listed: {type(e).__name__}: {e})\n\n"
 
 
 def assistant_turns(messages: list[dict]) -> int:
@@ -213,7 +327,7 @@ def run(cfg, state: State, client: Client) -> str:
         ws.refocus(f"{args['goal']}\n{args['success_criterion']}", record["intent"].get("attention") or [])
         if rate_error:
             record["intent"]["base_rate_error"] = rate_error
-        cost = costs(args["goal"], origin)
+        cost = costs(args["goal"], origin) + lesson(args["goal"])
         band = base_rate.band_for(rates, conf) if rates else None
         if not band:
             return "intent recorded — now act" + cost
@@ -240,6 +354,16 @@ def run(cfg, state: State, client: Client) -> str:
                                  calls_left=None if env is None else max(0, env["calls_max"] - env["calls_used"]))
         except Exception as e:   # a forecast my record cannot give must never cost me the declare
             text = f"(no forecast: {type(e).__name__}: {e})"
+        return f"\n\n{text}" if text else ""
+
+    def lesson(goal: str) -> str:
+        """Where the judge found my newest similar unmet goal first went wrong (FIRST_ERROR); '' when off or none."""
+        if cfg.FIRST_ERROR != "on":
+            return ""
+        try:
+            text = forecast.first_error(state.root, goal, clock.now())
+        except Exception as e:   # a record I cannot read must never cost me the declare
+            text = f"(no first error: {type(e).__name__}: {e})"
         return f"\n\n{text}" if text else ""
 
     def confirm(args: dict) -> str:
@@ -372,11 +496,14 @@ def run(cfg, state: State, client: Client) -> str:
                                [n for n, _ in inbox], f"{cfg.NAME}|{started:%Y-%m-%dT%H:%M}")
     system = opening(cfg, state, toolbox)
     ws, focus = front(cfg, state, inbox, system)
+    inbox_shown, listed = inbox_view(inbox, cfg.INBOX_CHARS)
+    seen = [m for m in inbox if m[0] in listed]   # what this cycle's prompt shows: its images, its slate
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": images.with_attached(   # images attached to my messages (PLAN-vision.md)
-            prompts.LIVE.format(steps=cfg.MAX_STEPS_LIVE, inbox=inbox_text(inbox),
-                                briefing=prompts.briefing(state.root, cfg), handoff=prompts.handoff(state.root, cfg))
+            prompts.LIVE.format(steps=cfg.MAX_STEPS_LIVE, inbox=inbox_shown,
+                                briefing=prompts.briefing(state.root, cfg), handoff=prompts.handoff(state.root, cfg),
+                                slate=goal_slate(cfg, state, seen))
             + f"\n\nConfidence mode: {mode}. " + {
                 "confirm": "Declare confidence 0-100; confirm it on a later turn if a base rate is shown.",
                 "clauses": "Declare 1-4 clauses with a confidence 0-100 for each. Do not combine them. "
@@ -384,7 +511,7 @@ def run(cfg, state: State, client: Client) -> str:
                 "noconfirm": "Declare confidence 0-100. No confirm step or base rate is shown."}[mode]
             + (prompts.CURIOSITY if curiosity["drawn"] else "")
             + x_probes.envelope(state.root, broker.envelope(), agent.time_left())
-            + focus, state.root, listed_in=inbox_text(inbox))},
+            + focus, state.root, listed_in=inbox_whole(seen))},
     ]
 
     def max_steps() -> int:   # a shown base rate adds a step for the confirm turn, so it takes none from the work
@@ -394,7 +521,7 @@ def run(cfg, state: State, client: Client) -> str:
     outcome = agent.run(client, messages, toolbox, max_tokens=cfg.MAX_TOKENS_STEP, purpose="live",
                         max_steps=max_steps, controls=controls,
                         expected=lambda: record["intent"]["predictions"] if record["intent"] else None,
-                        focus=ws.broadcast if ws.mode != "off" else None,
+                        focus=ws.broadcast if ws.mode != "off" else None, keep_turns=cfg.RESULTS_KEEP_TURNS,
                         wrap_up="Stop working now and call finish_cycle with an honest report "
                                 "(criterion_met: partial or no if you did not get there).")
 
@@ -429,6 +556,11 @@ def run(cfg, state: State, client: Client) -> str:
                "ended_by": outcome.ended_by, "steps": outcome.steps, "tools": toolbox.log,
                "completed": completed(toolbox.log, toolbox.plugins),
                "inbox": [n for n, _ in inbox], "curiosity": curiosity, "cards": held.record}
+    whole = set(read_whole(state, toolbox.log))
+    handled = [n for n, _ in inbox if n in listed or n in whole]
+    deferred = [n for n, _ in inbox if n not in handled]
+    if deferred:   # found at the start ("inbox", what a replay restores), but neither listed nor read: still pending
+        episode["inbox_deferred"] = deferred
     episode.update(toolbox.loop_guard.record())
     env = broker.envelope()
     episode["project_usage"] = {"calls": env.get("calls_used"), "usd": env.get("run_usd")} if env else None
@@ -452,10 +584,12 @@ def run(cfg, state: State, client: Client) -> str:
                 f"{r['id']} ({'no how given' if not r['how'] else 'no open surprise by that id'})" for r in stale))
     if curiosity["drawn"]:
         lines.append("**Curiosity cycle** (drawn): my goal was to come from my open surprises.")
-    if inbox:
-        lines.append(f"**Messages read:** {', '.join(n for n, _ in inbox)}")
+    if handled:
+        lines.append(f"**Messages read:** {', '.join(handled)}")
+    if deferred:
+        lines.append(f"**Left in my inbox** (past its budget, not read): {', '.join(deferred)}")
     body = "\n\n".join(lines)
     state.append_journal(title, body, when=ended)
     state.append_episode(episode)
-    archive_inbox(state, [n for n, _ in inbox])
+    archive_inbox(state, handled)
     return f"## {title}\n\n{body}"

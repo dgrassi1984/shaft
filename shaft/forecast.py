@@ -33,12 +33,11 @@ def _jaccard(a: set[str], b: set[str]) -> float:
     return len(a & b) / len(union) if union else 0.0
 
 
-def comparable(root: Path, goal: str, origin: str, now: datetime, k: int = COMPARABLE) -> list[dict]:
-    """My live episodes that ended before `now` and declared an intent, ranked by the word overlap of their goal
-    with `goal` (Jaccard over memory._tokens), the same origin breaking ties, then newest; the top `k` with any
-    overlap. A malformed episode is skipped, never an error."""
+def _scored(root: Path, goal: str, now: datetime) -> list[tuple[float, datetime, dict]]:
+    """My live episodes that ended before `now` and declared an intent, with the word overlap of their goal with
+    `goal` (Jaccard over memory._tokens), when there is any. A malformed episode is skipped, never an error."""
     goal_words = set(memory._tokens(goal))
-    scored: list[tuple[float, bool, datetime, dict]] = []
+    out: list[tuple[float, datetime, dict]] = []
     for ep in surprises.episodes(root):
         if not isinstance(ep, dict) or ep.get("kind") != "live":
             continue
@@ -52,11 +51,47 @@ def comparable(root: Path, goal: str, origin: str, now: datetime, k: int = COMPA
         if at is None or at >= now:
             continue
         overlap = _jaccard(goal_words, set(memory._tokens(past_goal)))
-        if overlap <= 0:
-            continue
-        scored.append((overlap, (intent.get("origin") or "") == origin, at, ep))
+        if overlap > 0:
+            out.append((overlap, at, ep))
+    return out
+
+
+def comparable(root: Path, goal: str, origin: str, now: datetime, k: int = COMPARABLE) -> list[dict]:
+    """My live episodes that ended before `now` and declared an intent, ranked by the word overlap of their goal
+    with `goal`, the same origin breaking ties, then newest; the top `k` with any overlap."""
+    scored = [(overlap, ((ep.get("intent") or {}).get("origin") or "") == origin, at, ep)
+              for overlap, at, ep in _scored(root, goal, now)]
     scored.sort(key=lambda t: (t[0], t[1], t[2]), reverse=True)
     return [t[3] for t in scored[:k]]
+
+
+# One earlier goal shown on its own (a judged value on the goal slate, a first error at declare_intent) must be
+# similar, not merely overlapping: at least a fifth of the words shared. The medians above take any overlap, as ten
+# of them average a weak match out; one shown alone does not.
+SIMILAR = 0.2
+FIRST_ERROR_CHARS = 300
+
+
+def judged_similar(root: Path, goal: str, now: datetime) -> list[tuple[dict, dict]]:
+    """My earlier live goals at least SIMILAR to `goal` that the judge graded, newest first, each with its verdict as
+    my sleeps received it (memory/verdicts.jsonl: the latest row of each cycle)."""
+    verdicts = {row["episode_ts"]: row for row in memory.verdict_rows(root) if not row.get("left_out")}
+    hits = sorted(((at, ep) for overlap, at, ep in _scored(root, goal, now)
+                   if overlap >= SIMILAR and ep.get("ts") in verdicts), key=lambda t: t[0], reverse=True)
+    return [(ep, verdicts[ep["ts"]]) for _, ep in hits]
+
+
+def first_error(root: Path, goal: str, now: datetime) -> str:
+    """At most two lines for declare_intent (review G5): where the judge found the newest similar goal that was not
+    met first went wrong (its first_error). Never how often such goals were met: see text() below."""
+    for ep, row in judged_similar(root, goal, now):
+        error = " ".join(str(row.get("first_error") or "").split())
+        if row.get("criterion_met") in ("no", "partial") and error:
+            goal_then = " ".join(str(ep["intent"]["goal"]).split())
+            return (f"The judge's first error on my newest similar goal that fell short ({str(ep['ts'])[:16]}: "
+                    f"{goal_then[:120]}{'…' if len(goal_then) > 120 else ''}):\n"
+                    f"{error[:FIRST_ERROR_CHARS]}{'…' if len(error) > FIRST_ERROR_CHARS else ''}")
+    return ""
 
 
 def _median(values: list[float]) -> float | None:
