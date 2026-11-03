@@ -51,8 +51,8 @@ def record(sup_dir: Path, path: Path, sender: str, to: str, kind: str, at: datet
         if to == "operator" and alert:
             from . import pushes
             row["urgent"] = urgent
-            if due := pushes.hold_until(row, sup_dir, at):
-                row["push_due"] = due
+            if held := pushes.hold_until(row, sup_dir, at):
+                row["push_due"], row["push_held"] = held
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
         f.flush()
         os.fsync(f.fileno())

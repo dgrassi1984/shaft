@@ -66,10 +66,13 @@ Source: [channel routing](../supervisor/channel.py), [the web UI's pushes](../su
 
 `send_message(to="operator", ..., urgent=False)` always stores the message immediately in the
 operator inbox and web UI. Only device notifications wait. Use `urgent=True` for time-critical things only.
-Urgent messages, replies within two hours of an operator message, and messages during an open conversation
-notify immediately. Other notifications wait during local quiet hours (`SHAFT_QUIET_HOURS`, default `22-07`,
-may wrap midnight; empty disables) or after the per-instance daily budget (`SHAFT_PUSH_BUDGET`, default 6;
-0 means unlimited and hides the count). `SHAFT_PUSH_HOLD=0` turns holding off for new messages.
+Urgent messages and messages during an open conversation notify immediately. Other notifications wait during local
+quiet hours (`SHAFT_QUIET_HOURS`, default `22-07`, may wrap midnight; empty disables) — except replies within two hours
+of an operator message — and once the instance's notifications that went out today reach the daily budget
+(`SHAFT_PUSH_BUDGET`, default 6; 0 means unlimited and hides the count), replies included (review I14: thelos sent 21
+against a budget of 6). Held messages do not use the budget. `SHAFT_PUSH_HOLD=0` turns holding off for new messages.
+`send_message`'s result says when a notification is held, until when and why, and gives the instance its
+`should_have_waited=yes` share of judged push cycles over the last 7 days.
 
 Held messages produce one combined digest with each sender and first line, at `SHAFT_DIGEST_AT` (default `07:15`)
 or the end of quiet hours if later. The next running web or Telegram forwarding loop sends it, including any

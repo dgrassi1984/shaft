@@ -97,6 +97,9 @@ shaft tools <name> [on|off <tool>]   # an instance's supervisor tools, e.g. off 
                                      # kept in .supervisor/, so the instance cannot switch it back on)
 shaft channel <name> [auto|web|telegram]   # where its messages to you notify you (integrations.md): auto = where
                                      # you last wrote to it; an open conversation's channel comes first
+shaft orders <name> [list|add TEXT|drop ID]   # standing orders (decisions that stay decided): shown to it verbatim
+                                     # every run and conversation; its messages to you are checked against them
+                                     # (architecture.md); it can record one it heard from you, only you drop one
 shaft google login <alias> <address> [--client <name>]   # log in a Google account: Gmail read + Calendar read/write
 shaft google [migrate]               # accounts, clients, granted scopes · migrate: move PLAN-mail's account files
 shaft mail <name> grant|revoke <alias> <label>   # the label's threads an instance may read · shaft mail <name> off

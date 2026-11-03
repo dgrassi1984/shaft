@@ -1535,6 +1535,7 @@ def _conversation(name: str, root: Path, kind: str, agent_args: list[str], talk_
         turn.held.close()
         raise
     turn.broker = broker
+    broker.talk_id = talk_id   # record_order: an order heard in this conversation names it as its source
     try:
         proc = _popen(cmd, root, env)
         try:

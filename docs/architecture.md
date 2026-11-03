@@ -423,6 +423,26 @@ The supervisor reads the ledger without importing template code. `panel.alerts` 
 `correction:<instance>:<id>` after more than `SHAFT_CORRECTION_ALERT_CYCLES` live cycles since the correction.
 The default is 6, and 0 disables the alert. A missing, unreadable or malformed ledger raises no alert.
 
+**Standing orders** (review I2, I4; [orders.py](../supervisor/orders.py)) keep the operator's decisions decided
+("Retire", "Drop", "the paper body has no process blocks"): shaft asked "continue or retire?" four times after "Retire",
+and closed corrections came back. The supervisor holds them in `.supervisor/orders/<name>.jsonl`, append-only rows
+`{id, text, added_at, by: operator|instance, source, dropped_at}` (the last row of an id is its state). The operator
+adds, lists and drops them with `shaft orders <name> [list|add TEXT|drop ID]` or on the web Config page; an instance
+records one it heard with the broker tool `record_order(text, source)` — source the operator's message file, or the
+conversation (its id, filled in during the conversation) — and never drops one. The orders in force are shown verbatim
+in every run and conversation, in the `record_order` tool's description (in `send_message`'s when record_order is
+switched off): supervisor-side, so no template change carries them. Every `send_message` to the operator is checked by
+a judge from the rotation (never the instance's own model) against the orders and the corrections still checked; one
+that goes against them is refused, quoting the order and the judge's reason, and the instance may rewrite it. A check
+with no verdict — none in time, or an answer that does not fit the check's schema — delivers the message and the result
+says it was not checked. **A correction stays checked** until the next `SHAFT_CORRECTION_PASSES` (default 3) messages
+to the operator after it pass the check against its text, whatever the instance's ledger says about closing it; a
+message refused for going against it starts the count again, an unchecked one does not count, and `not_accepted`
+corrections are left out. Each check is a row of `.supervisor/orders/<name>-checks.jsonl`, from which the passes are
+counted. Trial replays check as the live cycle would, against the orders, corrections and checks as of the replayed
+cycle (a later check never clears a correction in an earlier replay), and write nothing: an order the replay records
+and the checks it makes are kept in that replay's broker, so its later messages are checked against them.
+
 
 **Self-knowledge measured against the record** ([PLAN-consciousness](plans/PLAN-consciousness.md)). Functional
 properties only, each scored against what the instance does, none feeding probation or a reward, each agent-side

@@ -45,24 +45,31 @@ DIGEST_AT, _ = core.knob(
     group="Runs and conversations", services=("runs", "api", "web", "telegram"))
 
 
-def hold_until(row: dict, sup_dir: Path, now: datetime) -> str | None:
-    """Called under the message log's write lock: concurrent senders share one budget decision."""
+def hold_until(row: dict, sup_dir: Path, now: datetime, sent: int = 0, live: bool = True) -> tuple[str, str] | None:
+    """(when its device notification is due, why it waits), or None to notify now. Called under the message log's
+    write lock: concurrent senders share one budget decision.
+
+    The budget counts the notifications that went out today, not the ones held: a night's held messages go out as one
+    digest and leave the day's budget whole. Over the budget only urgent=true or an open conversation (the operator
+    is in it) notifies at once; a reply within 2 h of the operator's message waits no quiet hours but keeps to the
+    budget (review I14: thelos sent 21 pushes against a budget of 6). `sent`: notifications a trial replay simulated;
+    `live=False` (a replay) leaves out today's conversations."""
     if not PUSH_HOLD or row.get("urgent") or row.get("to") != "operator" or not row.get("alert"):
         return None
     from . import runner
-    if runner.open_conversations(row["from"]):
+    if live and runner.open_conversations(row["from"]):
         return None
     rows = records(sup_dir)
-    if any(r.get("from") == "operator" and r.get("to") == row["from"]
-           and now - timedelta(hours=2) <= _time(r["ts"]) <= now for r in rows):
-        return None
+    replying = any(r.get("from") == "operator" and r.get("to") == row["from"]
+                   and now - timedelta(hours=2) <= _time(r["ts"]) <= now for r in rows)
     quiet = False
-    if QUIET_HOURS:
+    if QUIET_HOURS and not replying:
         start, end = QUIET_HOURS
         quiet = start <= now.hour < end if start < end else now.hour >= start or now.hour < end
-    used = sum(_is_push(r, row["from"]) and _time(r["ts"]).date() == now.date()
-               and _time(r["ts"]) <= now for r in rows)
-    if not quiet and (not PUSH_BUDGET or used < PUSH_BUDGET):
+    used = sent + sum(_is_push(r, row["from"]) and not r.get("push_due") and _time(r["ts"]).date() == now.date()
+                      and _time(r["ts"]) <= now for r in rows)
+    over = bool(PUSH_BUDGET) and used >= PUSH_BUDGET
+    if not quiet and not over:
         return None
     minute = max(DIGEST_AT, QUIET_HOURS[1] * 60 if QUIET_HOURS else 0)
     if QUIET_HOURS and QUIET_HOURS[0] > QUIET_HOURS[1] and minute >= QUIET_HOURS[0] * 60:
@@ -70,7 +77,8 @@ def hold_until(row: dict, sup_dir: Path, now: datetime) -> str | None:
     due = now.replace(hour=minute // 60, minute=minute % 60, second=0, microsecond=0)
     if due <= now:
         due += timedelta(days=1)
-    return due.isoformat(timespec="seconds")
+    why = "quiet hours" if quiet else f"over today's budget ({used} of {PUSH_BUDGET} sent)"
+    return due.isoformat(timespec="seconds"), why
 
 
 def _save_digest(path: Path, claimed: set[str]) -> None:
@@ -194,6 +202,19 @@ def reactions(name: str, rows: list[dict], sup_dir: Path, now: datetime) -> list
     return out
 
 
+def recent_judgments(judgments: list[dict], now: datetime) -> list[dict]:
+    """The judged cycles of the last 7 days (today and the 6 before), none after `now`."""
+    first = (now - timedelta(days=6)).date()
+    return [j for j in judgments if (at := _time(j.get("episode_ts"))) and first <= at.date() and at <= now]
+
+
+def waited_share(recent: list[dict]) -> str:
+    """should_have_waited=yes among the judged cycles graded yes or no: "2/5 (40%)", or "not graded"."""
+    rated = [j for j in recent if j.get("should_have_waited") in ("yes", "no")]
+    yes = sum(j["should_have_waited"] == "yes" for j in rated)
+    return f"{yes}/{len(rated)} ({yes / len(rated):.0%})" if rated else "not graded"
+
+
 def lines(name: str, judgments: list[dict], now: datetime | None = None) -> list[str]:
     now = now or datetime.now()
     days = [(now - timedelta(days=d)).date() for d in range(6, -1, -1)]
@@ -203,11 +224,8 @@ def lines(name: str, judgments: list[dict], now: datetime | None = None) -> list
         if _is_push(row, name) and (at := _time(row["ts"])) <= now and at.date() in daily:
             daily[at.date()] += 1
     budget = f" of budget {PUSH_BUDGET}" if PUSH_BUDGET else ""
-    recent = [j for j in judgments if (at := _time(j.get("episode_ts"))) and days[0] <= at.date() <= days[-1]
-              and at <= now]
-    rated = [j for j in recent if j.get("should_have_waited") in ("yes", "no")]
-    yes = sum(j["should_have_waited"] == "yes" for j in rated)
-    share = f"{yes}/{len(rated)} ({yes / len(rated):.0%})" if rated else "not graded"
+    recent = recent_judgments(judgments, now)
+    share = waited_share(recent)
     counts = {k: 0 for k in ("within_1h", "within_24h", "no_response")}
     for row in reactions(name, rows, core.SUP_DIR, now):
         if _time(row["ts"]).date() in daily:

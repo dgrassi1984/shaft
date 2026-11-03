@@ -793,6 +793,7 @@ class ToldTheyCanReachOperatorTest(unittest.TestCase):
         from supervisor import broker
         b = broker.Broker.__new__(broker.Broker)
         b.name, b.disabled, b.grants_allowed = "wren", set(), False
+        b._orders_line = lambda: ""   # the standing orders' own block: test_orders
         from supervisor import channel
         with mock.patch.object(telegram, "reachable", return_value="@SampleAssistantBot"), \
                 mock.patch.object(channel, "route", return_value=("telegram", "the operator last wrote to wren there")):
@@ -813,6 +814,7 @@ class ToldTheyCanReachOperatorTest(unittest.TestCase):
         from supervisor import broker, channel
         b = broker.Broker.__new__(broker.Broker)
         b.name, b.disabled, b.grants_allowed = "wren", set(), False
+        b._orders_line = lambda: ""   # the standing orders' own block: test_orders
         with mock.patch.object(telegram, "reachable", return_value="@SampleAssistantBot"), \
                 mock.patch.object(channel, "route", return_value=("web", "the operator set it for wren")):
             text = next(t for t in b.tool_specs() if t["function"]["name"] == "send_message")["function"]["description"]
