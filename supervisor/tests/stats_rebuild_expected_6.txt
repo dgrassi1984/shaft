@@ -1,0 +1,68 @@
+# My measured performance
+
+*Written by the supervisor from 6 judged cycles. Updated 2026-11-03 12:00.*
+
+*The main judge grades one live run in 2, drawn after the run, so I cannot tell beforehand which. 0 of my runs were left out: they have no verdict, and are not counted as failures.*
+
+*Success, claims and achieved difficulty below count only the 6 cycles graded by the judges in today's rotation (fixture-judge 6). Judges, today's too, differ in how strictly they grade criteria and claims, so success and claims are given per judge, each read against that judge's own earlier figure. Value counts every cycle: the judges agree on it.*
+
+- pushes to the operator today: 0 of budget 6
+- pushes per day (last 7 days, budget 6/day): 10-28: 0, 10-29: 0, 10-30: 0, 10-31: 0, 11-01: 0, 11-02: 0, 11-03: 0
+- should_have_waited=yes (last 7 days, judged push cycles): not graded; na 0, ungraded 6
+- operator reactions (last 7 days' pushes, as of now): within 1 h 0, 1–24 h 0, no response within 24 h recorded yet 0
+- cited pushbacks per week (last 7 days): 0; uncited 0, ungraded 6
+- pushbacks borne out (of scored, all time): not scored; unclear 0
+- pushback annoyance (last 7 days, message archived within 60 s): 0
+
+
+## Projects
+Open projects: 1
+- p2026-1103-1 Tree report: at risk: deadline; deadline 2026-11-10T12:00:00, 168.0 h left (17% of span); calls 0/unbounded; USD 0.000000/unbounded; judged no/partial streak 0; usage unknown for calls 6, USD 6 cycles; done means: Trees counted
+- Self-audit share: 0/0 (unknown) among the last 6 judged cycles (6 unknown); since field existed 0/0 (6 older/unknown)
+- Non-yes verdicts with deliverable met (self-imposed clauses only): 0
+
+## What I achieved (success × how hard the goal was)
+- Achieved difficulty per cycle (0–5): **1.0** over my last 6 rated cycles on an unrecorded model
+- Difficulty of my goals (1–5, judged from the work): mean 2.0; success at 1–2: 50% of 6
+- Where my goals came from (judged): myself 6 · operator 0 · another instance 0 — achieved difficulty of my own goals: 1.0
+- Judged success rate per judge (yes=1, partial=0.5; 7 days to my latest verdict vs the 7 before): fixture-judge too few (6) vs none
+
+## My expectations vs what happened
+- Predictions I stated in judged cycles: 0; informative (judge): not measured; of those held: not measured
+- Failed results (last 20 live cycles) by tool: none
+- … by topic: none
+- Surprises the judge found I did not report, per judged cycle: not measured yet
+- My surprises: open 0 · resolved 0 · closed 0 · expired 0
+- Kinds of failed result that came back in a later cycle: 0 of 0
+- None of my last 6 live cycles stated a prediction
+
+## What my cycles were worth (what would be lost if each had not run)
+- No cycle has a value grade yet.
+
+## Success against my own criteria (raw)
+- Last 5 cycles: yes, no, yes, no, yes
+- Calibration v2 — P(criterion met = yes), Brier on met/not met: Brier 0.04 (n=6; 0 = perfect, 0.25 = coin flip)
+  - average confidence beforehand 50% vs criterion met (yes) 50% → underconfident
+  - when I said 0–40%: criterion met (yes) 0% of 3
+  - when I said 70–100%: criterion met (yes) 100% of 3
+- Base rates declare_intent shows me (self/calibration.json, judges in today's rotation):
+  - base rate shown at declare, when I said 0–40%: criterion fully met 0 of 3
+  - base rate shown at declare, when I said 70–100%: criterion fully met 3 of 3
+- My own claim matched the judge: 3/6
+- Criteria the judge found vague or unverifiable: 0/6
+
+## Where my facts come from
+
+Sources: log 6.
+Observation claims: 6 matched the record; 0 self-generated; 0 unmatched.
+
+## Consulting other models (last 7 days)
+- I spent $0.01 consulting in the last 7 days ($0.0014/day); today $0.01 of my $3.00 daily consult allowance.
+- fixture-model: 1 call(s), $0.01, ? each, 0 error(s)
+- Live cycles in the last 7 days: 1 consulted, 5 did not.
+- Consulted: success 100% (1 judged), mean value not judged yet; without consulting: success 40% (5 judged), mean value not judged yet.
+- Consult dollars per met consulted cycle: $0.01 (1 met).
+
+## Last judgment
+Inspect trees
+> Count checked

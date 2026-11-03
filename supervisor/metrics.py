@@ -20,6 +20,7 @@ import random
 import re
 import secrets
 import subprocess
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -451,12 +452,16 @@ _QUESTIONS: dict[str, tuple] = {}
 
 
 def _episode_files_key(name: str) -> tuple:
-    """(name, size, mtime) of each episode log (memory/episodes/*.jsonl), stat'ed through the folder's descriptor with
+    return _episode_key(INSTANCES / name)
+
+
+def _episode_key(root: Path) -> tuple:
+    """(name, inode, mtime, size) of each episode log (memory/episodes/*.jsonl), stat'ed through the folder's descriptor with
     no link followed (core.dir_beneath): a link there is never stat'ed through, nor counted. () if the folder is
     missing or reached through a link."""
     import stat
     try:
-        fd = dir_beneath(INSTANCES / name, ["memory", "episodes"])
+        fd = dir_beneath(root, ["memory", "episodes"])
     except (FileNotFoundError, UnsafePath):
         return ()
     try:
@@ -465,7 +470,7 @@ def _episode_files_key(name: str) -> tuple:
             if fname.endswith(".jsonl"):
                 st = os.stat(fname, dir_fd=fd, follow_symlinks=False)
                 if stat.S_ISREG(st.st_mode):
-                    out.append((fname, st.st_size, st.st_mtime_ns))
+                    out.append((fname, st.st_ino, st.st_mtime_ns, st.st_size))
         return tuple(out)
     finally:
         os.close(fd)
@@ -489,18 +494,37 @@ def _instance_text(name: str, rel: str) -> str:
     return safe_read(INSTANCES / name, rel, "", errors="replace")
 
 
+_REBUILD = threading.local()   # .episodes: parsed logs shared by one stats_text's sections, then dropped — the web
+                               # service imports this module, and parsed histories of every instance run to gigabytes
+
+
+def _parsed_episodes(root: Path) -> list[dict]:
+    """Parsed episode logs, read without following links; within one stats rebuild each file is parsed once."""
+    cache = getattr(_REBUILD, "episodes", None)
+    previous = cache.get(root, {}) if cache is not None else {}
+    current = {}
+    for stamp in _episode_key(root):
+        fname = stamp[0]
+        hit = previous.get(fname)
+        if hit is None or hit[0] != stamp:
+            rows = []
+            for line in safe_read(root, f"memory/episodes/{fname}", "", errors="replace").splitlines():
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(rec, dict):
+                    rows.append(rec)
+            hit = (stamp, rows)
+        current[fname] = hit
+    if cache is not None:
+        cache[root] = current
+    return [rec for _, rows in current.values() for rec in rows]
+
+
 def _episode_records(name: str):
     """Every record of the instance's episode logs (memory/episodes/*.jsonl), oldest file first."""
-    for fname in list_beneath(INSTANCES / name, "memory/episodes"):
-        if not fname.endswith(".jsonl"):
-            continue
-        for line in _instance_text(name, f"memory/episodes/{fname}").splitlines():
-            try:
-                rec = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(rec, dict):
-                yield rec
+    yield from _parsed_episodes(INSTANCES / name)
 
 
 def live_episodes(name: str) -> list[dict]:
@@ -1632,6 +1656,18 @@ def _base_rate_lines(rows: list[dict]) -> list[str]:
 
 
 def stats_text(name: str) -> str:
+    """self/stats.md's text. Its sections share one parse of the episode logs (review C3), kept only while it runs."""
+    outer = getattr(_REBUILD, "episodes", None)
+    if outer is None:
+        _REBUILD.episodes = {}
+    try:
+        return _stats_text(name)
+    finally:
+        if outer is None:
+            _REBUILD.episodes = None
+
+
+def _stats_text(name: str) -> str:
     from . import pushback, pushes
     js = judgments(name)
     push_lines = ["- " + line for line in pushes.lines(name, js) + pushback.lines(name, js)] + [""]
