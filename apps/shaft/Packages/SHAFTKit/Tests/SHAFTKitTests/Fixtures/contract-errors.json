@@ -1,0 +1,8 @@
+[
+  {
+    "error": {
+      "code": "refused",
+      "message": "it is still replying: stop the reply first"
+    }
+  }
+]

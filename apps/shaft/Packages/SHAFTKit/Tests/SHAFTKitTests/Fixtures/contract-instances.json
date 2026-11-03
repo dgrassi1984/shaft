@@ -1,0 +1,31 @@
+{
+  "instances": [
+    {
+      "name": "thelos",
+      "state": "in a cycle",
+      "since": "14:01",
+      "model": "cloud claude-sonnet-5",
+      "busy_note": "Your message pauses its cycle; the cycle resumes after the reply.",
+      "usd_today": 0.42,
+      "line": "Merged the ledger fix; the nightly report is in notes/docs/ledger.md.",
+      "last": "2026-11-03T14:06:40+01:00",
+      "replying": false,
+      "unread": true,
+      "next_cycle": "a cycle is running and read its inbox when it began: this starts the next one once it ends"
+    },
+    {
+      "name": "wren",
+      "state": "idle",
+      "since": "",
+      "model": "qwen3.6-35b",
+      "busy_note": null,
+      "usd_today": 0,
+      "line": "you: thanks",
+      "last": "2026-11-02T22:10:05+01:00",
+      "replying": false,
+      "unread": false,
+      "next_cycle": "for wren's next cycle, which this starts now"
+    }
+  ],
+  "badge": 1
+}

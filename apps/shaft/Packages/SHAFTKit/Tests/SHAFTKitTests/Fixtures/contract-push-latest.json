@@ -1,0 +1,12 @@
+{
+  "events": [
+    {
+      "title": "thelos replied",
+      "body": "October's report is ready: 214 accounts reconciled.",
+      "url": "/i/thelos/chat",
+      "tag": "thelos",
+      "instance": "thelos"
+    }
+  ],
+  "badge": 1
+}
