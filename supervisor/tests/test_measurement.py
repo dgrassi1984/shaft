@@ -904,6 +904,22 @@ class BatteryEndToEndTest(unittest.TestCase):
         self.assertIn("control 0.0", stats)
         self.assertEqual(len(list((self.sup / "evals").glob("battery-e-*.json"))), 1)
 
+    def test_a_draining_scheduler_s_battery_ends_after_its_running_arm_not_in_it(self):
+        # Codex on the drain-restart: SIGTERM, first used to stop a battery for a restart, interrupts the running exam
+        # (its arm is lost). The drain is asked between arms only: the arm under way is scored, the next never starts.
+        asked = []
+
+        def draining():
+            asked.append(1)
+            return len(asked) > 1                       # asked during the instance's arm, from the first check on
+        with mock.patch("supervisor.autonomy.parent_draining", side_effect=draining):
+            self.assertEqual(battery.run("e"), 1)
+        rows = battery.results("e")
+        self.assertEqual([(r["arm"], r["status"]) for r in rows], [("instance", "scored")])
+        self.assertEqual(len(asked), 2)                 # once per arm, never inside one
+        summary = json.loads(next((self.sup / "evals").glob("battery-e-*.json")).read_text())
+        self.assertEqual(summary["stopped"], "the scheduler is draining for a restart")
+
     def test_control_only_leaves_the_instance_alone(self):
         before = tree(self.root)
         self.assertEqual(battery.run("e", control_only=True), 1)

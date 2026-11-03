@@ -102,6 +102,8 @@ def _run(verb: str, form: dict, snap: dict, names: list[str], services: list[str
         return _ran(args, timeout=actions.SLOW_S)
     if verb == "autonomy":
         op = form.get("op", "")
+        if op in ("restart", "cancel-restart"):   # a drain-restart cuts no run: no guard (autonomy.restart)
+            return _ran(["autonomy", "restart"] + (["--cancel"] if op == "cancel-restart" else []))
         if op not in ("on", "off"):
             raise Refused(f"autonomy {op!r}?")
         args = _guard(form, ["autonomy", op], actions.service_guard("autonomy", op))
@@ -389,9 +391,19 @@ def service_buttons(name: str, running: bool, scheduled: list[str], busy: list[s
     stop = guarded("service", "Stop", f"stop {name}?", {"service": name, "op": "off"},
                    actions.force_question(name, "off", why_off) if why_off else "", cls="small") \
         if running else button("service", "Stop", "", {}, "not running", cls="small")
-    return join([guarded("service", verb, f"{verb.lower()} {name}?", {"service": name, "op": "on"},
-                         actions.force_question(name, "restart", why_restart) if why_restart else "", cls="small"),
-                 stop])
+    restart = guarded("service", verb, f"{verb.lower()} {name}?", {"service": name, "op": "on"},
+                      actions.force_question(name, "restart", why_restart) if why_restart else "", cls="small")
+    if name == "scheduler" and running:
+        from .autonomy import drain_line
+        if (pending := drain_line()):   # a drain-restart is under way: say what it waits for, and offer to withdraw
+            return join([h('<span class="warn">{t}</span>', t=pending),
+                         button("autonomy", "Cancel restart", "withdraw the scheduler's restart? It resumes "
+                                "scheduling at its next tick.", {"op": "cancel-restart"}, cls="small"), restart, stop])
+        if why_restart:                 # held back: a restart once the runs end cuts none (docs/deploy.md step 3)
+            return join([button("autonomy", "Restart when idle", "restart the scheduler once its runs end? Nothing "
+                                "new starts until then, and none is cut.", {"op": "restart"}, cls="small"),
+                         restart, stop])
+    return join([restart, stop])
 
 
 def guarded(verb: str, label: str, confirm: str, fields: dict, force: str, cls: str = "") -> Html:

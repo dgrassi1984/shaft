@@ -250,7 +250,10 @@ def cli_guard(cmd: str, action: str, force: bool) -> str:
     if why and force:
         log_forced("cli", [cmd, action], why)
         return ""
-    return why and f"not now: {why.removesuffix(LATER)} Try again when they end, or add {FORCE} (they end unfinished)."
+    drain = " Or `shaft autonomy restart`: it restarts once they end, cutting none." if service == "scheduler" \
+        and action == "on" else ""
+    return why and (f"not now: {why.removesuffix(LATER)} Try again when they end, or add {FORCE} (they end "
+                    f"unfinished).{drain}")
 
 
 def trial_cost_estimate() -> float | None:

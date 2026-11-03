@@ -330,6 +330,11 @@ def run_pass(now: datetime, names: list[str], secrets: dict | None = None) -> li
     return [name for name, _ in todo]
 
 
+def busy() -> bool:
+    """Whether a background pass is running now (a draining scheduler waits for it: autonomy.drain_step)."""
+    return _thread is not None and _thread.is_alive()
+
+
 def tick(children: dict, now: datetime, names: list[str], clock=time.monotonic, background: bool = True) -> bool:
     """The scheduler's hook, every poll: start a pass when SHAFT_WATCH is on, EVERY_S seconds have gone by since the
     last one began, and the last one has ended. Never an instance in a battery exam (its folder is the exam's).

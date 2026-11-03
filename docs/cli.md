@@ -14,6 +14,11 @@ shaft autonomy on|off|status    # SHAFT's scheduler service: each instance wakes
                                 # for a message or a commitment due; sleep daily from 04:00 (made up later if missed)
                                 # autonomy, api, model and embed on|off refuse while it would kill or cut off
                                 # runs in progress, naming them, as the panels do; --force does it anyway (logged)
+shaft autonomy restart [--within MIN] [--wait] [--cancel]
+                                # restart the scheduler without cutting a run (a deploy, docs/deploy.md step 3): it
+                                # starts nothing new, lets its runs end, then has launchd restart it on the code
+                                # checked out; past the deadline (default the sleep's + a cycle's budget) it gives up
+                                # and cuts nothing. --wait returns once the new scheduler runs; --cancel withdraws it
 shaft top                       # control panel, tabs 0–9: overview (state, now, alerts, today's spend) · one
                                 #   instance in full · judge verdicts · trials · benchmarks (battery, distinct,
                                 #   surprises) · self-changes and probation · messages · costs against the caps

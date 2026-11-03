@@ -33,19 +33,45 @@ SHAFT runs from the primary checkout (`~/Development/shaft`, on `main`) and its 
 2. **Update the instances** from the template: `bin/shaft update --all`. It is gate-tested per instance; a busy
    instance is queued and updated by the scheduler as soon as it is idle. A refused update (a merge conflict, a red
    gate) is a stop: report it, do not force it.
-3. **Restart the long-running services** so they load the new code, each only when nothing it runs is going on:
-   - `scheduler`: only when no instance is awake. On SIGTERM it stops its wakes on purpose ("live stopped with the
-     supervisor (signal 15); its changes are settled at its next run"), so a restart mid-cycle throws that cycle
-     away: on 2026-10-28 the v0.17.0 deploy cut three live cycles short this way. Check that no wake, sleep or
-     update is running (`ps -ax | grep -- '-m supervisor \(wake\|sleep\|update\)'`, or "live since" in
-     `bin/shaft update --all`'s answer); otherwise wait, or leave the scheduler for later. A queued update runs
-     either way: the running scheduler starts it when the instance is idle.
+3. **Restart the long-running services** so they load the new code:
+   - `scheduler`: with a drain-restart, never `kickstart -k`. On SIGTERM it stops its wakes on purpose ("live
+     stopped with the supervisor (signal 15)"), so a SIGTERM restart mid-cycle throws that cycle away (2026-10-28:
+     v0.17.0 cut three live cycles short). Waiting for a moment with no instance awake did not work either: on
+     2026-11-03 thelos and wren covered each other's cycles for 90 min without one.
+
+     ```bash
+     bin/shaft autonomy restart --wait
+     ```
+
+     From its next tick (≤ 30 s) the scheduler starts nothing new: no wake, sleep, update, job, trial or warm-up.
+     What is due stays due for the next scheduler, and a queued update stays queued. A battery ends after the arm it
+     is running, and the trial worker after the pairs it is running. Every other run ends on its own. Nothing is
+     signalled. Then the scheduler has launchd restart it (`launchctl kickstart -k` on its own
+     label), and `--wait` returns with the new PID and commit. That is usually within one cycle (≤ 40 min). It does
+     not have to block the deploy: drop `--wait`, then check `bin/shaft autonomy status`. It shows what the drain
+     waits for, and the line disappears once the scheduler has restarted. If the runs have not ended by the deadline
+     (default `SHAFT_SLEEP_TIMEOUT_S + SHAFT_CYCLE_TIMEOUT_S`, `--within MIN` to change it), the drain gives up:
+     scheduling resumes on the old code, nothing is cut, and the log raises an alert ("restart FAILED to drain").
+     Ask again, or force it with `bin/shaft autonomy on --force` (that one cuts the runs). `--cancel` withdraws a
+     pending restart. The web Services page offers the same: *Restart when idle*, then *Cancel restart*.
+
+     **Once, from a scheduler older than the drain** (one that started before this release): `autonomy restart`
+     refuses it, because such a scheduler cannot drain. Instead: `bin/shaft pause`. It then starts no wake, sleep,
+     job, battery, warm-up or trial, but a queued update still starts. Wait until nothing is left in the scheduler's
+     process group but the scheduler itself; this command must print nothing:
+
+     ```bash
+     pgrep -lf -g "$(ps -o pgid= -p "$(pgrep -f 'supervisor autonomy serve')" | tr -d ' ')" | grep -v 'autonomy serve'
+     ```
+
+     Then run `launchctl kickstart -k gui/$(id -u)/com.shaft.scheduler` and `bin/shaft resume`. Each instance gets a
+     pause and a resume note.
    - `api`, `web`, `telegram`: only when no conversation is open on them (`runner.open_conversations(name)` is
      empty for every instance, or `bin/shaft status`).
 
-   ```bash
-   launchctl kickstart -k gui/$(id -u)/com.shaft.<service>
-   ```
+     ```bash
+     launchctl kickstart -k gui/$(id -u)/com.shaft.<service>
+     ```
 
    Only services that are loaded (`launchctl list | grep com.shaft`) are restarted; `model` and `embed` do not
    run supervisor code that a release changes.
@@ -53,7 +79,10 @@ SHAFT runs from the primary checkout (`~/Development/shaft`, on `main`) and its 
 ## Verify
 
 - `git -C ~/Development/shaft rev-parse HEAD` equals the tag's commit; the same for `template`.
-- `launchctl list | grep com.shaft`: each restarted service has a new PID and exit status 0.
+- `launchctl list | grep com.shaft`: each restarted service has a new PID. Its exit status is 0, or -15 for the
+  scheduler: its drain ends with its own `kickstart -k`, which stops it with SIGTERM once no run is left.
+- The scheduler's log has `scheduler: drained after N min — restarting on <commit>`, and no run of it "stopped with
+  the supervisor (signal 15)".
 - `bin/shaft status`: "which code is running" names the new commit for each instance that has woken or updated,
   and `shaft update` reported each instance updated or queued.
 - `bin/shaft alerts`: no new alert from the restart.

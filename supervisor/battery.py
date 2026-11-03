@@ -597,6 +597,9 @@ def run(name: str, until: float | None = None, only: list[str] | None = None, co
             grader = judge.pick(exclude=[instance_config(name).get("LLM_MODEL")])
             for arm in arms:
                 why = interrupt()
+                from .autonomy import parent_draining
+                if not why and parent_draining():   # between arms only: its scheduler restarts once this run ends
+                    why = "the scheduler is draining for a restart"
                 if why:
                     raise Interrupted(why)
                 row = _one(name, item, arm, root, e, until, interrupt, grader)

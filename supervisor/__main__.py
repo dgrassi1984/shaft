@@ -312,6 +312,8 @@ def cmd_status(names: list[str]) -> int:
     print(f"SHAFT supervisor · {len(names)} instance(s) · "
           f"{'ALL PAUSED' if (SUP_DIR / 'paused').exists() else 'running'} · "
           f"operator inbox: {len(questions)} question(s), {len(pending) - len(questions)} note(s)")
+    if (line := autonomy.drain_line()):
+        print(line)
     today = date.today().isoformat()
     for name in names:
         root = INSTANCES / name
@@ -1120,9 +1122,14 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("embed", help="SHAFT's embedding service for memory search (launchd service)")
     p.add_argument("action", choices=["on", "off", "status"])
     p.add_argument("--force", action="store_true", help="on/off even if it would kill or cut off runs in progress")
-    p = sub.add_parser("autonomy", help="the autonomous schedule (SHAFT's scheduler service): on, off, status")
-    p.add_argument("action", choices=["on", "off", "status", "serve"])
+    p = sub.add_parser("autonomy", help="the autonomous schedule (SHAFT's scheduler service): on, off, status; "
+                                        "restart: once its runs end, cutting none (a deploy)")
+    p.add_argument("action", choices=["on", "off", "status", "serve", "restart"])
     p.add_argument("--force", action="store_true", help="on/off even if it would kill or cut off runs in progress")
+    p.add_argument("--within", type=int, metavar="MIN", help="restart: give up (cutting nothing) after MIN minutes "
+                   "(default: the sleep's and a cycle's budgets, SHAFT_SLEEP_TIMEOUT_S + SHAFT_CYCLE_TIMEOUT_S)")
+    p.add_argument("--wait", action="store_true", help="restart: return once the new scheduler runs (or it gave up)")
+    p.add_argument("--cancel", action="store_true", help="restart: withdraw a pending restart")
     p = sub.add_parser("top", help="live view of every instance, the services and the messages between instances; "
                                    "starts a cycle for an idle one (q quits)")
     p.add_argument("--once", action="store_true", help="print one snapshot as text and exit")
@@ -1565,6 +1572,8 @@ def main(argv: list[str]) -> int:
             print(str(e), file=sys.stderr)
             return 2
     if args.cmd == "autonomy":
+        if args.action == "restart":
+            return autonomy.restart(args.within, args.wait, args.cancel)
         return autonomy.autonomy(args.action)
     if args.cmd == "status":
         return cmd_status(args.names or instance_names())

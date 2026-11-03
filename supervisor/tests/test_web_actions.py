@@ -338,6 +338,45 @@ class AGuardTheOperatorForces(ActionsTest):
         self.assertIn('disabled title="not running"', str(web_actions.service_buttons("api", False, [], runs)))
 
 
+class ARestartOnceTheRunsEnd(ActionsTest):
+    """2026-11-03: Restart scheduler offered only Force (cut the runs) while thelos and wren covered each other's
+    cycles; a drain-restart (autonomy.restart) is offered beside it, and it needs no force."""
+
+    def setUp(self):
+        super().setUp()
+        runs = ["thelos (live since 14:06)"]
+        p = mock.patch.object(panel, "scheduled_runs", return_value=runs)
+        p.start()
+        self.addCleanup(p.stop)
+        self.runs = runs
+
+    def test_held_back_the_scheduler_row_offers_restart_when_idle(self):
+        with mock.patch("supervisor.autonomy.drain_line", return_value=""):
+            out = str(web_actions.service_buttons("scheduler", True, self.runs, []))
+            free = str(web_actions.service_buttons("scheduler", True, [], []))
+            api = str(web_actions.service_buttons("api", True, self.runs, self.runs))
+        self.assertIn(">Restart when idle</button>", out)
+        self.assertIn('name="op" value="restart"', out)
+        self.assertIn(">Force restart</button>", out)           # still there, for a run that will not end
+        self.assertNotIn("when idle", free)                     # nothing held back: the plain Restart
+        self.assertNotIn("when idle", api)
+
+    def test_a_pending_drain_shows_what_it_waits_for_and_can_be_withdrawn(self):
+        line = "scheduler restarting (asked 14:10): nothing new starts; waiting for wake thelos; by 16:20 at the latest"
+        with mock.patch("supervisor.autonomy.drain_line", return_value=line):
+            out = str(web_actions.service_buttons("scheduler", True, self.runs, []))
+        self.assertIn("waiting for wake thelos; by 16:20", out)
+        self.assertIn(">Cancel restart</button>", out)
+        self.assertIn('name="op" value="cancel-restart"', out)
+        self.assertNotIn("when idle", out)
+
+    def test_the_actions_run_unforced_while_runs_go_on(self):
+        self.assertEqual(self.act("autonomy", op="restart")[0], 200)
+        self.assertEqual(self.act("autonomy", op="cancel-restart")[0], 200)
+        self.assertEqual([r[1] for r in self.ran], [["autonomy", "restart"], ["autonomy", "restart", "--cancel"]])
+        self.assertEqual(self.act("autonomy", op="reboot")[0], 409)
+
+
 class PagesShowEachActionAsItRuns(ActionsTest):
     def page(self, path: str, s: dict | None = None) -> str:
         with mock.patch.object(web, "overview", return_value=s or snap()):
