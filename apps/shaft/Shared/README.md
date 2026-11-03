@@ -32,8 +32,9 @@ stores. Everything here compiles for iOS and macOS; what differs per platform si
   front; the Mac sets it from its window, and gives the chat a `scenePhase` that is active while the window shows it.
 - **Menus**: `ChatScreenModel.sendRequest` (a send in a mode, through the composer's own send) and
   `confirmingNewChat`.
-- **Pointer** (macOS only, `Feed/FeedItemViews.swift`): `HoverActions`, Copy and Reply under a message while the
-  pointer is over it; sending from a card's answer moves the keyboard to the main field.
+- **Pointer and keyboard on a computer** (macOS only): `HoverActions` (`Feed/FeedItemViews.swift`), Copy and Reply
+  under a message while the pointer is over it; Return in a card's answer sends, and the keyboard then moves to the
+  main field (`Composer/ComposerView.swift`).
 - **Size and keyboard**: `HardwareKeyboard` (the shortcuts line), `horizontalSizeClass` only under `#if os(iOS)`,
   `sheetFrame()` (a sheet's size on the Mac), `iconMenu()` (a composer menu drawn as its icon on the Mac).
 - **Clipboard**: `Clipboard.copy`.
