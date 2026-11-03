@@ -1478,6 +1478,21 @@ def _traits_section(name: str) -> list[str]:
 WINDOW = 20
 
 
+def ran_out_by_model(name: str, js: list[dict], last: int = 2 * WINDOW) -> list[str]:
+    """How often my latest judged cycles on each model ran out — no finish, or a forced deadline wrap-up (the template's
+    forecast rule, as experiments._ran_out) — so a model switch is judged on its cut-offs too (review I9: wren's
+    went from 13% to 54% after a switch at 16 steps, and nothing it read showed it)."""
+    model_of = {j.get("episode_ts"): j.get("model") or "unrecorded" for j in js if j.get("episode_ts")}
+    runs: dict[str, list[bool]] = {}
+    for ep in live_episodes(name):
+        if ep.get("ts") in model_of:
+            runs.setdefault(model_of[ep["ts"]], []).append(not ep.get("finish") or ep.get("wrapped_up") == "deadline")
+    if not runs:
+        return []
+    return ["- Cycles that ran out of steps or time, by model (my latest judged cycles on each): " + " · ".join(
+        f"{m} {sum(r[-last:]) / len(r[-last:]):.0%} of {len(r[-last:])}" for m, r in runs.items())]
+
+
 def _achieved_section(js: list[dict]) -> list[str]:
     """Difficulty-weighted results and where my goals came from — the measures a run of easy successes
     cannot max out."""
@@ -1708,6 +1723,7 @@ def _stats_text(name: str) -> str:
     if js:
         achieved[-1:-1] = [f"- Judged success rate per judge (yes=1, partial=0.5; {TREND_DAYS} days to my latest "
                            f"verdict vs the {TREND_DAYS} before): {by_judge_trend(js, success)}"]
+    achieved[-1:-1] = ran_out_by_model(name, all_js)
     lines += achieved + _surprise_section(name) + _sections(name, ("tom",)) + _value_section(all_js) + _battery_section(name)
     lines.append("## Success against my own criteria (raw)")
     if not js:

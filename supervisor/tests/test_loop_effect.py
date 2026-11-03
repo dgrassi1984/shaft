@@ -130,10 +130,10 @@ class EffectTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             env = {"LLM_BASE_URL": "http://localhost:1", "LLM_MODEL": "fake"}
             cfg = config.load(Path(directory), environ=env)
-            self.assertEqual((cfg.LOOP_GUARD, cfg.LOOP_EFFECT_ROUNDS), ("shadow", 3))
+            self.assertEqual((cfg.LOOP_GUARD, cfg.LOOP_EFFECT_ROUNDS), ("on", 3))
             with mock.patch("sys.stderr", new_callable=io.StringIO):
                 cfg = config.load(Path(directory), environ=dict(env, LOOP_GUARD="typo", LOOP_EFFECT_ROUNDS="0"))
-            self.assertEqual((cfg.LOOP_GUARD, cfg.LOOP_EFFECT_ROUNDS), ("shadow", 3))
+            self.assertEqual((cfg.LOOP_GUARD, cfg.LOOP_EFFECT_ROUNDS), ("on", 3))
 
 
 class AgentEffectTest(InstanceFixture, unittest.TestCase):

@@ -65,6 +65,20 @@ inbox/        messages waiting for it (from you or other instances)
 notes/        its own work
 ```
 
+Sleep reads judgment pages until the broker returns no next cursor, bounded by `SLEEP_VERDICT_CHARS`
+(default 120,000 characters, positive; the first page is always read). A page that would go over the budget is
+left for the next sleep, and a cut-short notice goes to the sleep prompt and stderr. A finished sleep keeps the last
+reviewed cursor even when the final page is empty. A model reply ending with `finish_reason` or `stop_reason` of
+`length` is discarded, a partial tool call included (never run), and retried once with twice the output room, with a
+retry notice on stderr and both attempts in the usage log. The retry turns thinking off only when the cut came
+while still thinking (no text, no tool call begun). A second truncation fails the sleep without advancing its
+review marker.
+
+Memory search keeps an in-process file index keyed by path, nanosecond mtime and size. Only changed files are
+parsed again; new verdicts refresh cycle annotations, and fact ages refresh each day. Surprise expiry also refreshes
+at its deadline. Decoded embeddings stay in memory; unchanged chunks reuse them. The existing on-disk chunk cache
+remains `.tmp/memory-index.json`. Switching instance roots discards the previous root's in-process caches.
+
 ## Effect-loop measurement
 
 The shared template `shaft/agent.py` loop keeps its exact-call repeat guard and adds an effect guard (#103),
@@ -80,7 +94,7 @@ whitespace, ISO timestamps, UUIDs and named ID fields. JSON key order is ignored
 so advancing pagination, changing status and successful retries can continue. Long unchanged polling can still
 cross the configured threshold; the guard cannot know that a future poll will change.
 
-Shadow mode, the default, adds no model-visible text. Executed tool-log entries store an `effect` signature and
+On mode is the default. Shadow mode adds no model-visible text. Executed tool-log entries store an `effect` signature and
 turn number, and episodes store would-fire events as `loop_shadow` entries with `turn`, `family`, `rounds` and
 `would_say`. On mode appends the advice to the executed result, offering another hypothesis, another source or
 an honest stop. It never blocks the call. Off mode stores neither signatures nor events.

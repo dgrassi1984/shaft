@@ -196,10 +196,11 @@ reviewed ref was `refs/heads/publish-prep-template`.
 | `MAX_TOKENS_STEP` | `16384` | `16384` |
 | `MAX_STEPS_LIVE` | `12` | `12` |
 | `MAX_STEPS_SLEEP` | `30` | `30` |
+| `SLEEP_VERDICT_CHARS` | `120000` | `120000` |
 | `TALK_REPLY_CALLS` | `3` | uses built-in default |
 | `TALK_REPLY_S` | `45` | uses built-in default |
 | `MAX_STEPS_TALK` | `0` | `0` |
-| `LOOP_GUARD` | `'shadow'` | `shadow` |
+| `LOOP_GUARD` | `'on'` | `on` |
 | `LOOP_EFFECT_ROUNDS` | `3` | `3` |
 | `CONTEXT_JOURNAL_CHARS` | `16000` | `16000` |
 | `STALE_LINE_HOURS` | `24` | uses built-in default |
@@ -230,6 +231,12 @@ call finishes normally. Set either knob to 0 to disable that budget.
 `queue_for_next_cycle(task, why)` puts unfinished work in the instance's own inbox for its next live cycle.
 `CRITERION_CHARS` limits `declare_intent.success_criterion` in characters. An overlong criterion is refused
 with its length and the limit, asking for the deliverable's check rather than ritual clauses.
+
+`SLEEP_VERDICT_CHARS` bounds sleep feedback reads, in the sleep feedback group in `template/config.env`.
+Sleep reads judgment pages (up to 24,000 characters each) until caught up or until the next page would take the
+verdict text past this positive character budget; the block is re-sent on every sleep step, so the default
+(~30k tokens) leaves the rest of a 262,144-token window free. At the budget it tells the model and stderr that
+feedback was cut short; the next finished sleep resumes from the last page it read.
 
 `LOOP_GUARD` controls the effect-loop guard (#103): `shadow` records would-fire events in the episode's
 `loop_shadow` array without changing model input; `on` also appends advice after the call executes;
