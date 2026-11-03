@@ -15,7 +15,7 @@ class GoalsBudgetTest(InstanceFixture, unittest.TestCase):
     def prompt_goals(self):
         text = prompts.system_prompt(self.state, self.cfg, prompts.SLEEP_MODE)
         return text.split("## My goals (self/goals.md)\n\n", 1)[1].split(
-            "\n\n## My current improvement plan", 1)[0]
+            "\n\n## My recent journal", 1)[0]   # the section after goals since review E2/C5's stable-first order
 
     def sleep_prompt(self):
         client = mock.Mock()

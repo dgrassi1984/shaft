@@ -637,7 +637,8 @@ def _provenance_evidence(name: str, ep: dict) -> str:
     other messages and the conversations of the EVIDENCE_HOURS before it, and the goals.md item it cites."""
     at = _ts(ep.get("ts", "")) or datetime.now()
     since = at - timedelta(hours=EVIDENCE_HOURS)
-    parts, read = [], set(ep.get("inbox") or [])
+    # a message past the cycle's inbox budget and never read stayed in the inbox (inbox_deferred): not read here
+    parts, read = [], set(ep.get("inbox") or []) - set(ep.get("inbox_deferred") or [])
     for fname in sorted(read):
         for where in ("memory/messages", "inbox"):
             if (text := _instance_text(name, f"{where}/{fname}")):
