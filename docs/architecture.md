@@ -25,6 +25,23 @@ Sources: [run lifecycle](../supervisor/runner.py),
 [gate](../supervisor/gate.py), [judging](../supervisor/metrics.py),
 [probation](../supervisor/metrics.py).
 
+`web_search` retries HTTP 502/503/504 and timeouts twice, logs each retry, and waits
+2 then 5 seconds. Each attempt has a 25-second timeout, keeping the three attempts
+and backoff below the former 90-second timeout budget. Other errors return immediately.
+
+The template shows at most 6,000 characters per tool result. Longer results are saved
+in the instance's `.tmp/outputs/output-*.txt` (at most 1,000,000 characters, 32 files, 24 hours); the preview ends
+with the path and a `read_file` offset, or says why the save failed. Shell `run` saves its own output in the broker,
+so an instance on an older `shaft/tools.py` gets it too: past 5,000 characters the result starts with the exit
+status and the saved path (`.tmp/outputs/run-*.txt`, same caps), then each stream's head and tail, each cut
+naming the `read_file` offset where it starts. A save the broker refuses (a link at `.tmp/outputs`) is logged and
+shown with the old write-it-to-a-file hint. These are scratch files in the current workspace, including replay
+workspaces, and do not settle or deliver anything.
+
+An over-limit `success_criterion` returns its draft, character count and required
+reduction with a hint to keep the deliverable's check. The instance revises the draft;
+the runtime does not silently change the criterion.
+
 ## Layout
 
 | Branch | Worktree | Holds |
@@ -147,7 +164,8 @@ deterministic intervals are cached by judgment content. Reply scoring skips fina
 message folders, lists each folder once for pending receipts, and reads the chat ledger once if needed.
 
 Judges grade effectiveness first. `declare_intent` takes a checkable `success_criterion`, limited by
-`CRITERION_CHARS` (default 600), and refuses longer criteria with their length and limit.
+`CRITERION_CHARS` (default 600), and refuses longer criteria with their length, the limit, how many
+characters to cut and the draft itself, so one retry can trim it.
 The LIVE prompt allows at most one cycle in five on the instance's own records or checking tools.
 `finish_cycle` requires `delivered_via`: `message`, `mail`, `notion`, `web_document` or `none`.
 It only records the report; delivery is a separate earlier tool call. Use `none` for journal or ordinary notes.
