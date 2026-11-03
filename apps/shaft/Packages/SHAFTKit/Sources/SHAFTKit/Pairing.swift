@@ -150,6 +150,14 @@ public struct PairingStore: Sendable {
         try store.load()
     }
 
+    /// On a new iOS install, discard the Keychain pairing left by an earlier install. Call only from the app.
+    public func forgetOnFirstLaunch(defaults: UserDefaults) throws {
+        let key = "pairing.installInitialized"
+        guard !defaults.bool(forKey: key) else { return }
+        try store.delete()
+        defaults.set(true, forKey: key)
+    }
+
     /// Pair with the link pasted (§2). On success the credential is stored and returned.
     @discardableResult
     public func pair(pasted: String, platform: String = Platform.current) async throws -> ServerCredential {

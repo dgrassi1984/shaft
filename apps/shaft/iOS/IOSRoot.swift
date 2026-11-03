@@ -97,7 +97,9 @@ struct ChatsLayout: View {
 
     @ViewBuilder
     private var chat: some View {
-        if let selection {
+        if !store.loaded, let error = store.error {
+            InstancesLoadFailure(error: error, settings: { settings = true })
+        } else if let selection {
             ChatScreen(chat: store.chat(selection), openArchived: { summary in
                 path.append(ArchivedRoute(instance: selection, cid: summary.id))
             })
