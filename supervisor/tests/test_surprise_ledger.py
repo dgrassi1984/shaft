@@ -191,7 +191,7 @@ class LedgerTest(unittest.TestCase):
         def replace_checked(source, dest):
             calls.append((source, dest))
             data = json.loads(source.read_text())
-            self.assertEqual(set(data), {"items", "events", "recurrence", "resolution_ages"})
+            self.assertEqual(set(data), {"items", "events", "recurrence", "resolution_ages", "outward_open"})
             self.assertFalse(target.exists())
             return replace(source, dest)
         with mock.patch.object(Path, "replace", replace_checked):

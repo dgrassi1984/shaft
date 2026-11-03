@@ -287,6 +287,29 @@ def command(names: list[str], freeze: bool) -> int:
     return 0
 
 
+# Review I7: the agent's rule for what forced curiosity may not draw from (shaft/surprises.py INWARD); the shared
+# test keeps the two copies in step. Inward: a path in the instance's tool folders, a builtin or bookkeeping tool by
+# name, or an ambiguous word that a possessive or a machinery verb ties to the instance.
+INWARD = re.compile(
+    r"(?:^|[\s`'\"(])(?:\./)?(?:shaft|plugins|jobs|\.jobs|ledgers?|gate|self|memory|logs|tests|\.venv|\.tmp)/"
+    r"|\b[\w-]+\.(?:py|jsonl)\b|\bplugin\.json\b"
+    r"|\b(?:read_file|write_file|append_file|list_files|search_memory|rewrite_facts|write_digest|retire_fact"
+    r"|update_self_model|update_personality|view_image|commit_to|settle_commitment|declare_intent|confirm_confidence"
+    r"|finish_cycle|close_surprise|open_project|close_project|list_instances|delegate_coding|set_config"
+    r"|secret_set|secret_list|secret_delete)\b"
+    r"|`(?:run|remember|record|history|decide|trial)`|\b(?:run|remember|record|history|decide|trial)\(|"
+    r"\bthe (?:run|remember|record|history|decide|trial) tool\b"
+    r"|\b(?:my|our|own|the instance'?s)\s+(?:[\w-]+\s+){0,2}"
+    r"(?:tools?|tooling|plugins?|jobs?|ledgers?|gate|code|scripts?|tests?|sandbox|broker|self-model)\b"
+    r"|\btest[- ]gate\b|\bthe gate (?:rejected|held|kept|ran|failed|passed|re-gated)\b|\bgate baseline\b"
+    r"|\bthe (?:plugin|sandbox|broker) (?:returned|crashed|failed|refused|timed out|raised|errored|rejected)\b")
+
+
+def inward(item: dict) -> bool:
+    """Own machinery is not a source for forced curiosity (review I7)."""
+    return bool(INWARD.search(" ".join(str(item.get(k) or "") for k in ("expected", "observed", "so_what")).lower()))
+
+
 def fold(episodes: list[dict], now: datetime) -> dict[str, dict]:
     """Rebuild the ledger in append order, including invisible follow-up surprises."""
     items = {}
@@ -526,6 +549,7 @@ def write_ledger(name):
     evts = events(name)
     times = _resolution_times(items, eps)
     data = {"items": items, "events": evts, "recurrence": _p2(evts),
+            "outward_open": [sid for sid, it in items.items() if it["status"] == "open" and not inward(it)],
             "resolution_ages": {sid: _age(items[sid]["opened"], datetime.fromisoformat(ts))
                                 for sid, ts in times.items()}}
     path = SUP_DIR / "surprises" / f"{name}.json"

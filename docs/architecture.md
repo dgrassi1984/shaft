@@ -293,9 +293,19 @@ and `base_rate_error` from its episode the same way; a value the judgment has is
 The agent tags each tool-log entry whose result has a known failure shape (`flag`) and, in live cycles, shows the model
 an `[unexpected …]` note when its predictions did not anticipate it. The open surprises are folded from the episodes
 (nothing stored; ids `s<MMDD>-<HHMM>-<n>`; at most 8 shown, 7-day expiry, one follow-up unless judged useful, depth-2
-hidden) and shown in every prompt; one live cycle in `CURIOSITY_EVERY_CYCLES` is drawn to take its goal from them
-(`origin_ref: surprise:<id>`), never while an operator message waits, seeded by the cycle's start so a trial replay
-draws the same. The sleep goes through every surprise since the last one (a fact citing its id, `close_surprise`, or
+hidden) and shown in every prompt; one live cycle in `CURIOSITY_EVERY_CYCLES` is drawn to follow an outward surprise
+(`origin_ref: surprise:<id>`), never while an operator message waits. Review I7: a drawn cycle then picks one
+outward surprise (`surprises.choose`); a surprise is inward, and never picked, when its expected/observed/so_what
+match `surprises.INWARD` — a path in the instance's tool folders (`shaft/`, `plugins/`, `jobs/`, `self/`, `memory/`,
+`*.py`, `*.jsonl`), a builtin or bookkeeping tool by name, or an ambiguous word (plugin, gate, ledger, broker,
+sandbox, code) tied to the instance by a possessive or a machinery verb; plain English senses ("the broker's margin
+rule", "the garden gate") stay outward, and the goal the surprise was met under is not read. The weight is one plus
+the content words (longer than three characters, closed-class words dropped) it shares with the briefing, goals and
+inbox. The cycle's start seeds both draws, so a trial replay draws the same. The prompt shows the selected surprise
+and declare_intent refuses another reference. When the coin falls but no open surprise is outward, the cycle is
+recorded `skipped_for: no_outward_surprise`, the prompt says so and the goal is free. The supervisor keeps the same
+pattern (`supervisor/surprise.py`, pinned equal by `test_curiosity_outward`) and records `outward_open` in its
+surprise snapshot. The sleep goes through every surprise since the last one (a fact citing its id, `close_surprise`, or
 left open with a reason). The judge adds `expectations`, `unreported_surprises`, `reported_surprises_supported` and
 `followup_useful`, which never change `criterion_met`; `supervisor/surprise.py` keeps its own copy of the rule and
 the fold (shared test fixtures keep the two in step), writes `.supervisor/surprises/<name>.json` and the stats.md
@@ -383,9 +393,23 @@ inside `bash -c`; `python -m pytest` is `run pytest`, `python3 shaft/x.py` is `r
 inspections (`echo`, `cat`, `ls`, `wc`, `grep`, `sed -n`, …) have no kind and are never held. **Commitments**
 (`commit_to`, finish_cycle's `commitments`, `memory/commitments.jsonl`) are settled in sleep, kept only with an
 episode as evidence; the supervisor re-checks it (`supervisor/commitments.py`). The ledger accepts promises only
-to Daniele (`made_to="operator"`) or a peer returned by `list_instances`. Unknown names and self promises are refused;
-own plans belong in goals/notes. Old self records remain on disk but are excluded from prompts, recall and sleep
-settlement; the supervisor reports their count separately as "to self (no longer kept)".
+to Daniele (`made_to="operator"`) or a peer returned by `list_instances`. Unknown names and explicit self promises are
+refused; own plans belong in goals/notes. Review I10: a promise to the operator needs a source the model does not
+name. In a conversation it is the conversation open now (`talk_id`, set by `talk.run`/`talk.answer`; not when
+someone else speaks for the operator). In a live cycle it is the last message delivered to the operator in that run:
+`send_message` returns its `message_file` (`<stamp>-from-<name>.md`) and commit_to and finish_cycle attach it. A
+note in the instance's own folder, or an earlier conversation, is not a source. `commitments.add` confirms a message
+through the broker's read-only `record(kind="commitment_source", cycle=<file>)`, which reads the operator inbox and
+its `read/` archive without exposing the folder; a broker failure returns an error and records nothing. A trial
+replay counts the messages its own run "delivered" (never written; their stamps on the replayed cycle's clock) and no
+real message newer than its start. Missing or invalid sources are recorded as `made_to="self"` with a note. The
+agent's fold trusts a source `add` checked; the supervisor's fold checks every one again against episodes and the
+inbox, so an operator promise survives the operator reading its message.
+Self/own records, including those addressed to the instance's own name, expire 24 hours after due, with status
+`expired` and the expiry time retained in history. Earlier settlements remain settled; a later settlement cannot
+revive an expired record. Self records remain excluded from prompts, recall and sleep settlement;
+the supervisor reports their count and expired count separately as "to self (no longer kept)". These rules use
+the existing COMMITMENTS knob in the consciousness group; there is no new expiry knob.
 
 Projects (#106) use append-only `memory/projects.jsonl` opened/closed by `open_project` and `close_project`.
 Each records a name, future ISO deadline (a date includes the whole day), optional positive calls/dollar budgets,
