@@ -109,10 +109,12 @@ extension ServerCredential {
 
 extension View {
     /// A sheet's size on the Mac, where a sheet is as small as its content allows (a form, a text view or a list
-    /// collapses); a phone or tablet sizes sheets itself.
+    /// collapses), and its forms grouped as in Settings (the Mac's default form put labels in a column cut at the
+    /// sheet's edge); a phone or tablet sizes sheets itself.
     func sheetFrame(minWidth: CGFloat = 520, minHeight: CGFloat = 420) -> some View {
         #if os(macOS)
-        frame(minWidth: minWidth, idealWidth: minWidth + 80, minHeight: minHeight, idealHeight: minHeight + 80)
+        formStyle(.grouped)
+            .frame(minWidth: minWidth, idealWidth: minWidth + 80, minHeight: minHeight, idealHeight: minHeight + 80)
         #else
         self
         #endif
@@ -127,6 +129,27 @@ extension View {
         menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
         #else
         self
+        #endif
+    }
+}
+
+extension ToolbarItemPlacement {
+    /// A sheet's own action (↩ Reply, Comment): in its bar on iOS; on the Mac, where a sheet shows only its confirm
+    /// and cancel buttons (a primary action was not drawn at all), on the confirm side.
+    static var sheetAction: ToolbarItemPlacement {
+        #if os(macOS)
+        .confirmationAction
+        #else
+        .primaryAction
+        #endif
+    }
+
+    /// Done on a sheet that has its own action: confirms on iOS; on the Mac the action takes the confirm side.
+    static var sheetDone: ToolbarItemPlacement {
+        #if os(macOS)
+        .cancellationAction
+        #else
+        .confirmationAction
         #endif
     }
 }

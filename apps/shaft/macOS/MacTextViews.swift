@@ -308,6 +308,7 @@ struct SelectableTextView: NSViewRepresentable {
         }
 
         func textView(_ view: NSTextView, menu: NSMenu, for event: NSEvent, at charIndex: Int) -> NSMenu? {
+            ReadOnlyTextMenu.trim(menu)
             let range = view.selectedRange()
             guard range.length > 0 else { return menu }
             let selected = (view.string as NSString).substring(with: range)
@@ -323,25 +324,5 @@ struct SelectableTextView: NSViewRepresentable {
             menu.insertItem(.separator(), at: mine.count)
             return menu
         }
-    }
-}
-
-/// An `NSMenuItem` that runs a closure: the text views' own menu items.
-final class MenuAction: NSObject {
-    private let run: () -> Void
-
-    private init(_ run: @escaping () -> Void) { self.run = run }
-
-    @objc private func perform(_ sender: Any?) { run() }
-
-    static func item(_ title: String, symbol: String? = nil, state: Bool = false,
-                     _ run: @escaping () -> Void) -> NSMenuItem {
-        let action = MenuAction(run)
-        let item = NSMenuItem(title: title, action: #selector(perform(_:)), keyEquivalent: "")
-        item.target = action
-        item.representedObject = action            // the item keeps its target alive
-        if let symbol { item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) }
-        if state { item.state = .on }
-        return item
     }
 }

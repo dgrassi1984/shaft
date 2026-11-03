@@ -70,7 +70,10 @@ struct ChatsLayout: View {
                     NavigationStack(path: $path) {
                         chat
                             .navigationDestination(for: ArchivedRoute.self) { route in
+                                // The stack's environment does not reach its pushed views (found on the Mac): an
+                                // earlier chat's screen needs the shell for its own documents.
                                 ArchivedChatView(route: route) { path.removeAll() }
+                                    .environment(shell)
                             }
                     }
                     .environment(shell)

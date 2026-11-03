@@ -108,7 +108,10 @@ struct MacChats: View {
             NavigationStack(path: $state.path) {
                 chat
                     .navigationDestination(for: ArchivedRoute.self) { route in
+                        // The stack's environment does not reach its pushed views: an earlier chat's screen needs the
+                        // shell too, or the documents and the menus stay on the current chat's.
                         ArchivedChatView(route: route) { state.path.removeAll() }
+                            .environment(state.shell)
                     }
             }
             .environment(state.shell)
@@ -122,6 +125,7 @@ struct MacChats: View {
         .background(WindowReader { window in presence.track(window) })
         .onAppear {
             state.store = store
+            presence.recheck()                   // a window opened again is the same window, its views kept
             restore()
             DockBadge.show(store.badge)
         }
@@ -176,7 +180,10 @@ final class MacPresence {
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
 
     func track(_ window: NSWindow?) {
-        guard let window, window !== self.window else { return }
+        guard let window else { return }
+        // A window closed and opened again is the same window: its observers stay, its state is read again.
+        defer { update(closing: false) }
+        guard window !== self.window else { return }
         self.window = window
         observers.forEach(NotificationCenter.default.removeObserver)
         let center = NotificationCenter.default
@@ -193,8 +200,10 @@ final class MacPresence {
                 MainActor.assumeIsolated { self?.update(closing: closing) }
             }
         }
-        update(closing: false)
     }
+
+    /// Read the window's state again (it was opened again: no notification says so when the app is behind).
+    func recheck() { update(closing: false) }
 
     private func update(closing: Bool) {
         #if DEBUG

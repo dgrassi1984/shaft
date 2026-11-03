@@ -125,7 +125,7 @@ struct MessageTextView: NSViewRepresentable {
         }
 
         func textView(_ view: NSTextView, menu: NSMenu, for event: NSEvent, at charIndex: Int) -> NSMenu? {
-            MessageNSTextView.trim(menu)
+            ReadOnlyTextMenu.trim(menu)
             var top: [NSMenuItem] = []
             // A selection made before the right-click (not the word the click itself selects, for Look Up).
             if !screen.archived, let message = view as? MessageNSTextView, message.selectedBeforeMenu,
@@ -199,27 +199,6 @@ final class MessageNSTextView: NSTextView {
     override func menu(for event: NSEvent) -> NSMenu? {
         selectedBeforeMenu = selectedText != nil
         return super.menu(for: event)
-    }
-
-    /// The text view's menu without what read-only text cannot use: Cut, Paste, Font, Spelling, Substitutions.
-    static func trim(_ menu: NSMenu) {
-        let editing: Set<Selector> = [#selector(cut(_:)), #selector(paste(_:)), #selector(pasteAsPlainText(_:)),
-                                      #selector(pasteAsRichText(_:)), #selector(NSFontManager.addFontTrait(_:)),
-                                      #selector(NSFontManager.modifyFont(_:)), #selector(underline(_:)),
-                                      #selector(copyFont(_:)), #selector(pasteFont(_:)),
-                                      #selector(NSApplication.orderFrontColorPanel(_:)),
-                                      #selector(showGuessPanel(_:)), #selector(orderFrontSubstitutionsPanel(_:)),
-                                      #selector(NSFontManager.orderFrontFontPanel(_:))]
-        for item in menu.items.reversed() {
-            let inSubmenu = item.submenu?.items.contains { $0.action.map(editing.contains) ?? false } ?? false
-            if (item.action.map(editing.contains) ?? false) || inSubmenu { menu.removeItem(item) }
-        }
-        // No separator first, last or twice.
-        var previousSeparator = true
-        for item in menu.items {
-            if item.isSeparatorItem && previousSeparator { menu.removeItem(item) } else { previousSeparator = item.isSeparatorItem }
-        }
-        if menu.items.last?.isSeparatorItem == true { menu.removeItem(menu.items.last!) }
     }
 
     override func resignFirstResponder() -> Bool {

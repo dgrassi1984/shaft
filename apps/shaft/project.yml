@@ -154,7 +154,7 @@ targets:
         com.apple.developer.aps-environment: development
         keychain-access-groups: [$(SHAFT_KEYCHAIN_GROUP)]
 
-  # The Mac app's own logic that needs no window: its Markdown text (macOS/MarkdownAttributed.swift). A plain test
+  # The Mac app's own logic that needs no window: its Markdown text and its text views' menu items. A plain test
   # bundle with no host app, run by the SHAFT-macOS scheme's test action.
   SHAFTMacTests:
     type: bundle.unit-test
@@ -162,6 +162,7 @@ targets:
     sources:
       - path: macOSTests
       - path: macOS/MarkdownAttributed.swift
+      - path: macOS/MenuAction.swift
     dependencies:
       - package: SHAFTKit
     settings:

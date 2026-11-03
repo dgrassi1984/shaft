@@ -180,6 +180,10 @@ struct ComposerView: View {
     private func send(_ mode: SendMode) {
         guard !chat.draft.isEmpty, !sending else { return }
         sending = true
+        #if os(macOS)
+        // Sent from a card's answer, whose card goes with the send: the keyboard stays in the composer.
+        if focusedAnswer != nil { screen.focusComposerRequest += 1 }
+        #endif
         Task {
             await chat.send(mode: mode)
             sending = false

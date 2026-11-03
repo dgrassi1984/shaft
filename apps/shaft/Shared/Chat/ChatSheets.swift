@@ -23,11 +23,11 @@ struct SelectTextSheet: View {
                 .navigationBarTitleDisplayMode(.inline)
                 #endif
                 .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
+                    ToolbarItem(placement: .sheetDone) {
                         Button("Done") { dismiss() }
                     }
                     if !screen.archived {
-                        ToolbarItem(placement: .primaryAction) {
+                        ToolbarItem(placement: .sheetAction) {
                             Button(quoteTitle) { quote(selected ?? selecting.text) }
                                 .accessibilityHint(selected == nil ? "Quotes the whole message" : "Quotes the selection")
                         }

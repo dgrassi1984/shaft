@@ -1,6 +1,7 @@
 #if DEBUG
 import AppKit
 import SHAFTKit
+import SwiftUI
 
 /// Debug builds only, with `SHAFT_DEV_DRIVE=<script>` (and `SHAFT_DEV_DIR`, MacDevSession): drives the app from a
 /// script of steps, through the app's own event queue — the key and mouse events a person makes go through the same
@@ -19,6 +20,16 @@ import SHAFTKit
 ///     menu <title>                  pick the menu bar item with that title
 ///     button <title>                click the button with that title (accessibility title) in the window
 ///     pastefile <path>              paste that file into the composer, as a file copied in Finder
+///     archived <cid>                open that earlier chat of the chat shown
+///     windows / shotwindow <title>  log the visible windows / draw the one with that title
+///     docs                          show or hide the documents, without animation
+///     doc <path>                    open that document in the documents
+///     contextpick <text> | <item>   pick an item of the right-click menu on <text>
+///     retryunsent                   what Retry on the first not-sent message does
+///     quicklook <path>              open a file as a file chip does (Quick Look)
+///     rows                          log the chat list's unread marks and the badge
+///     selecttext <doc> | <text>     open Select text over <text> (<doc>: the document it is from, or "")
+///     sheetpick <text> | <item>     in the sheet's text, select <text> and pick an item of its right-click menu
 ///     cleardraft                    empty the composer
 ///     layout                        log the width of each column
 ///     state                         log the chat's draft, quotes, selection and focus
@@ -95,6 +106,7 @@ enum MacDevDriver {
         case "menu":
             guard let item = menuItem(rest, in: NSApp.mainMenu) else { return log("no menu item \"\(rest)\"") }
             // As it stands, without opening the menu: what a key equivalent finds too.
+            log("menu item \"\(rest)\": key \(String(reflecting: item.keyEquivalent)) mask \(item.keyEquivalentModifierMask.rawValue) on \(item.isEnabled)")
             guard item.isEnabled else { return log("menu item \"\(rest)\" is off") }
             item.menu?.performActionForItem(at: item.menu?.index(of: item) ?? 0)
         case "button":
@@ -116,7 +128,7 @@ enum MacDevDriver {
             walk(root) { view in
                 guard let split = view as? NSSplitView else { return }
                 log("split \(split.isVertical ? "columns" : "rows"): " + split.arrangedSubviews
-                    .map { "\(Int($0.frame.width))x\(Int($0.frame.height))\($0.isHidden ? " hidden" : "")" }
+                    .map { "\(Int($0.frame.width))x\(Int($0.frame.height))\($0.isHidden ? " hidden" : "") \($0.effectiveAppearance.name.rawValue)" }
                     .joined(separator: ", "))
             }
         case "resize":
@@ -124,6 +136,70 @@ enum MacDevDriver {
             let size = rest.split(separator: " ").compactMap { Double($0) }
             guard let window, size.count == 2 else { return }
             window.setContentSize(NSSize(width: size[0], height: size[1]))
+        case "archived":
+            // An earlier chat of the chat shown, as Earlier chats opens it.
+            guard let name = state.selection else { return }
+            state.path.append(ArchivedRoute(instance: name, cid: rest))
+        case "windows":
+            log("windows: " + NSApp.windows.filter(\.isVisible).map { "\($0.title.isEmpty ? "-" : $0.title) (\(Int($0.frame.width))x\(Int($0.frame.height)))" }.joined(separator: ", "))
+        case "shotwindow":
+            // The visible window with that title (Settings), drawn as `shot` draws the main one.
+            guard let other = NSApp.windows.first(where: { $0.isVisible && $0.title == rest }),
+                  let view = other.contentView?.superview ?? other.contentView,
+                  let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return log("no window \(rest)") }
+            view.cacheDisplay(in: view.bounds, to: rep)
+            let url = dir.appending(path: "window-\(rest).png")
+            try? rep.representation(using: .png, properties: [:])?.write(to: url)
+            log("shot \(url.path)")
+        case "docs":
+            // The documents toggled with no animation (a locked screen runs none).
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { state.screen?.showDocuments.toggle() }
+        case "doc":
+            // A document opened in the documents, as a chip or a document card in the feed opens it.
+            state.screen?.openDocument(rest)
+        case "contextpick":
+            // `<text> | <item>`: pick that item of the right-click menu on <text> in a message.
+            let parts = rest.components(separatedBy: " | ")
+            guard parts.count == 2, let (view, range) = find(parts[0]) else { return log("no message shows \"\(rest)\"") }
+            guard let menu = contextMenuOf(view, range),
+                  let item = menu.items.first(where: { $0.title == parts[1] }), let action = item.action else {
+                return log("no item \"\(parts[1])\"")
+            }
+            NSApp.sendAction(action, to: item.target, from: item)
+        case "retryunsent":
+            // What a not-sent message's Retry does: the same message, with its mid, sent again.
+            guard let chat = state.screen?.chat, let entry = chat.unsent.first else { return log("nothing not sent") }
+            _ = await chat.retry(entry.mid)
+        case "quicklook":
+            // A file opened as a file chip opens it: Quick Look over the window.
+            state.screen?.preview.open(local: URL(fileURLWithPath: rest))
+            try? await Task.sleep(for: .seconds(2))
+            log("quick look shown: \(NSApp.windows.contains { $0.isVisible && $0.className.contains("QLPreviewPanel") })")
+        case "rows":
+            // The chat list as drawn: name, unread, replying.
+            log("rows: " + (state.store?.instances.map { "\($0.name)\($0.unread ? " (unread)" : "")\($0.replying ? " (replying)" : "")" } ?? []).joined(separator: ", ") + " badge \(state.store?.badge ?? -1)")
+        case "selecttext":
+            // `<doc> | <text>`: Select text over that text (as a message's or a document's Select text opens it).
+            let parts = rest.components(separatedBy: " | ")
+            guard parts.count == 2 else { return log("selecttext <doc> | <text>") }
+            state.screen?.select(parts[1], doc: parts[0])
+        case "sheetpick":
+            // `<text> | <item>`: in the sheet's text, select <text> and pick that item of its right-click menu.
+            let parts = rest.components(separatedBy: " | ")
+            guard parts.count == 2, let sheet = window?.attachedSheet,
+                  let view = textView(in: sheet.contentView) else { return log("no sheet with text") }
+            let range = (view.string as NSString).range(of: parts[0])
+            guard range.location != NSNotFound else { return log("the sheet does not show \"\(parts[0])\"") }
+            view.window?.makeFirstResponder(view)
+            view.setSelectedRange(range)
+            guard let menu = contextMenuOf(view, range) else { return log("no menu") }
+            log("sheet menu: " + menu.items.map { $0.isSeparatorItem ? "|" : $0.title }.joined(separator: " · "))
+            guard let item = menu.items.first(where: { $0.title == parts[1] }), let action = item.action else {
+                return log("no item \"\(parts[1])\"")
+            }
+            NSApp.sendAction(action, to: item.target, from: item)
         case "cleardraft":
             state.screen?.chat.draft = Draft()
         case "pastefile":
@@ -148,7 +224,8 @@ enum MacDevDriver {
 
     private static let codes: [String: (UInt16, String)] = [
         "return": (36, "\r"), "down": (125, "\u{F701}"), "up": (126, "\u{F700}"), ".": (47, "."), "slash": (44, "/"),
-        "escape": (53, "\u{1B}"), "a": (0, "a"), "n": (45, "n"), "d": (2, "d"), "r": (15, "r"),
+        "escape": (53, "\u{1B}"), "a": (0, "a"), "n": (45, "n"), "N": (45, "N"), "d": (2, "d"), "r": (15, "r"),
+        "e": (14, "e"), "E": (14, "E"), "y": (16, "y"), "Y": (16, "Y"),
     ]
 
     private static func key(_ combo: String, literal: Bool = false) {
@@ -212,11 +289,10 @@ enum MacDevDriver {
 
     /// The point in the window of the character at `index` in `view` (its middle, at the line's middle).
     private static func point(_ view: NSTextView, _ index: Int, end: Bool = false) -> NSPoint {
-        guard let layout = view.layoutManager, let container = view.textContainer else { return .zero }
-        let glyphs = layout.glyphRange(forCharacterRange: NSRange(location: index, length: 1), actualCharacterRange: nil)
-        let rect = layout.boundingRect(forGlyphRange: glyphs, in: container)
-        let local = NSPoint(x: end ? rect.maxX - 1 : rect.minX + 1, y: rect.midY)
-        return view.convert(local, to: nil)
+        let rect = view.firstRect(forCharacterRange: NSRange(location: index, length: 1), actualRange: nil)
+        guard let window = view.window, rect != .zero else { return .zero }
+        let inWindow = window.convertFromScreen(rect)
+        return NSPoint(x: end ? inWindow.maxX - 1 : inWindow.minX + 1, y: inWindow.midY)
     }
 
     private static func mouse(_ type: NSEvent.EventType, at point: NSPoint, clicks: Int = 1) {
@@ -234,12 +310,16 @@ enum MacDevDriver {
     }
 
     /// The menu a right-click there opens (NSTextView's own, then its delegate's items), without opening it.
-    private static func contextMenu(_ view: NSTextView, _ range: NSRange) {
+    private static func contextMenuOf(_ view: NSTextView, _ range: NSRange) -> NSMenu? {
         guard let event = NSEvent.mouseEvent(with: .rightMouseDown, location: point(view, range.location),
                                              modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                                              windowNumber: view.window?.windowNumber ?? 0, context: nil,
-                                             eventNumber: 0, clickCount: 1, pressure: 1),
-              let menu = view.menu(for: event) else { return log("no menu") }
+                                             eventNumber: 0, clickCount: 1, pressure: 1) else { return nil }
+        return view.menu(for: event)
+    }
+
+    private static func contextMenu(_ view: NSTextView, _ range: NSRange) {
+        guard let menu = contextMenuOf(view, range) else { return log("no menu") }
         log("context menu: " + menu.items.map { $0.isSeparatorItem ? "|" : $0.title }.joined(separator: " · "))
     }
 
@@ -284,6 +364,13 @@ enum MacDevDriver {
         return nil
     }
 
+    private static func textView(in view: NSView?) -> NSTextView? {
+        guard let view else { return nil }
+        if let text = view as? NSTextView { return text }
+        for sub in view.subviews { if let found = textView(in: sub) { return found } }
+        return nil
+    }
+
     private static func firstComposer(in view: NSView?) -> ComposerNSTextView? {
         guard let view else { return nil }
         if let field = view as? ComposerNSTextView { return field }
@@ -309,6 +396,14 @@ enum MacDevDriver {
         do {
             try rep.representation(using: .png, properties: [:])?.write(to: url)
             log("shot \(url.path)")
+            // A sheet is a window of its own: shot beside the window.
+            if let sheet = window.attachedSheet, let view = sheet.contentView?.superview ?? sheet.contentView,
+               let sheetRep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                view.cacheDisplay(in: view.bounds, to: sheetRep)
+                let sheetURL = dir.appending(path: "\(name)-sheet.png")
+                try sheetRep.representation(using: .png, properties: [:])?.write(to: sheetURL)
+                log("shot \(sheetURL.path)")
+            }
         } catch {
             log("shot failed: \(error)")
         }
@@ -317,7 +412,8 @@ enum MacDevDriver {
     // MARK: Keys, as AppKit routes them: the key window's views, then the menu bar, then the first responder
 
     private static func send(_ event: NSEvent) -> String {
-        guard let window else { return "no window" }
+        guard let main = window else { return "no window" }
+        let window = main.attachedSheet ?? main             // a sheet takes the keys while it is up
         if window.performKeyEquivalent(with: event) { return "view key equivalent" }
         if NSApp.mainMenu?.performKeyEquivalent(with: event) == true { return "menu key equivalent" }
         window.sendEvent(event)

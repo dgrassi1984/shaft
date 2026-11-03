@@ -346,7 +346,7 @@ struct DocumentSelectSheet: View {
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
                     if !screen.archived {
-                        ToolbarItemGroup(placement: .primaryAction) {
+                        ToolbarItemGroup(placement: .sheetAction) {
                             Button { commentOn(selection) } label: { Image(systemName: "text.bubble") }
                                 .disabled(selection.length == 0)
                                 .accessibilityLabel("Comment on the selection")
