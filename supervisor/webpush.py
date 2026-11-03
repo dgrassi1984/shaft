@@ -15,7 +15,7 @@ What goes out, and how:
     the system's LibreSSL command line offers; a push with no payload needs neither.)
   - Each push is signed for its push service (VAPID, RFC 8292): an ES256 JSON Web Token. The key pair is made once with
     /usr/bin/openssl (LibreSSL, on every Mac) and kept in .supervisor/web/vapid.pem (0600); signing also runs openssl.
-    This is the one place SHAFT's stdlib-only rule calls a system binary.
+    APNs also signs with openssl and sends through curl for HTTP/2 (apns.py).
   - Subscriptions are per paired device (.supervisor/web/push.json), only to the known push services' hosts; one a
     push service says is gone (404, 410) or refuses (401, 403: made with a key this server no longer signs with) is
     dropped, and so is a device's when it is unpaired. Each records the key it was made for (fingerprint): /push/status
@@ -282,27 +282,34 @@ def _paired() -> set[str] | None:
 
 
 def notify(event: dict, skip=frozenset()) -> list[str]:
-    """Queue `event` ({title, body, url, tag}: what the notification shows) for every subscribed device that is still
+    """Queue `event` ({title, body, url, tag}: what the notification shows) for every Web Push or APNs device that is still
     paired and not in `skip` (the devices that have the chat on screen: web_chat.watchers), and wake each (in a thread:
     a reply's end never waits on a push service). A subscription of a device no longer paired is dropped: a revoked
     phone kept getting a push for every reply (W1, review 2026-10-24). Returns the devices it woke."""
-    subs, paired = subscriptions(), _paired()
+    from . import apns
+    subs, native, paired = subscriptions(), apns.devices(), _paired()
     for device in [d for d in subs if paired is not None and d not in paired]:
         unsubscribe(device)
         log(f"web: dropped the push subscription of device {device}: it is no longer paired")
+    for device in [d for d in native if paired is not None and d not in paired]:
+        apns.unregister(device)
+        log(f"web: dropped the APNs token of device {device}: it is no longer paired")
     subs = {d: s for d, s in subs.items() if (paired is None or d in paired) and d not in skip}
-    if not subs:
+    native = {d: s for d, s in native.items() if (paired is None or d in paired) and d not in skip}
+    recipients = subs.keys() | native.keys()
+    if not recipients:
         return []
     why = event["title"]
     with _lock:
         queue = _queue()
-        for device in subs:
+        for device in recipients:
             mine = queue.get(device) or {}
             mine["pending"] = [*(mine.get("pending") or []), {**event, "at": time.time()}][-QUEUE_MAX:]
             queue[device] = mine
         _save_queue(queue)
     _wake(subs, why)
-    return sorted(subs)
+    apns._wake(native, event)
+    return sorted(recipients)
 
 
 RETRY_S = (20, 120)                           # a wake that failed is tried again after these

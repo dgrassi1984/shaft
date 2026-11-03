@@ -16,6 +16,8 @@ The operator can grant read access to Gmail threads with selected labels and to 
 
 The operator can also authorise an instance-owned Google account. Its Gmail scope allows reading, sending, labelling and trashing mail. Its Drive scope covers its files and files shared with it, and allows sharing, trashing and permanent deletion of its own files. This is broader authority than operator-mail label grants. The broker refuses an instance-owned Google key that belongs to a registered operator account (`supervisor/google.py:38`, `supervisor/google.py:47`, `supervisor/broker.py:1153`). Prompt injection can therefore lead to actions using the instance's granted authority even though the instance never sees the credential.
 
+Native push keeps the operator's APNs signing key at `.supervisor/web/apns/AuthKey_<KEY_ID>.p8` (mode `600`), outside instance sandboxes. APNs receives only the event title, instance name and badge, never the message body; the app fetches that over the tailnet. Signing uses `/usr/bin/openssl`; `/usr/bin/curl --http2` is the second stdlib-only exception because APNs requires HTTP/2 (`supervisor/apns.py`).
+
 ## Network access to the supervisor
 
 The web UI and API bind to localhost and are exposed remotely through Tailscale Serve, for the tailnet only. Do not expose them through a public proxy or Tailscale Funnel (`supervisor/api.py:531`, `supervisor/api.py:609`, `supervisor/web.py:1518`, `supervisor/web.py:1557`).

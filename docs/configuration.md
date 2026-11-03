@@ -50,6 +50,12 @@ Source: [supervisor/core.py](../supervisor/core.py).
 tokens and instance-owned keys are stored by their setup commands, not in instance
 `config.env`. See [integrations](integrations.md).
 
+Native push needs all three `SHAFT_APNS_*` settings and the operator-provided key at
+`.supervisor/web/apns/AuthKey_<KEY_ID>.p8` (mode `600`). A missing setting or unreadable key disables native push;
+APNs status reports the missing items and the actual key id, team, topic and key path. The key stays outside
+instance sandboxes. These settings use the same environment > settings file > default precedence as other knobs;
+restart the web service after changing them.
+
 ## Every supervisor knob
 
 `SHAFT_ACTION_INSTANCES` enables the conservative [operator action classes](safety.md#operator-action-classes-142)
@@ -68,6 +74,9 @@ Defaults below are source defaults, not values read from this checkout's private
 | Name | Default | Meaning | Declaration |
 |---|---|---|---|
 | `SHAFT_ACTION_INSTANCES` | `thelos` | Instances using conservative operator action classes; comma-separated, empty disables | [actions.py](../supervisor/actions.py) |
+| `SHAFT_APNS_KEY_ID` | empty | APNs signing key id; empty disables native push | [apns.py](../supervisor/apns.py) |
+| `SHAFT_APNS_TEAM_ID` | empty | Apple developer team id for native push | [apns.py](../supervisor/apns.py) |
+| `SHAFT_APNS_TOPIC` | empty | Native app bundle id used as the APNs topic | [apns.py](../supervisor/apns.py) |
 | `SHAFT_API_PORT` | `8781` | the API's local port (OpenAI-compatible; the web UI and Telegram chat through it) | [api.py](../supervisor/api.py) |
 | `SHAFT_INBOX_PER_HOUR` | `30` | messages per hour the API's inbox (doorbell) accepts for one instance | [api.py](../supervisor/api.py) |
 | `SHAFT_INBOX_WAKES_PER_HOUR` | `4` | wakes per hour inbox messages may start for one instance | [api.py](../supervisor/api.py) |

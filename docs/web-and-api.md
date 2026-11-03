@@ -349,6 +349,12 @@ next refresh or action opens the pairing page. Your chat draft stays in this bro
   visit's check is the one that counts). Unpairing a browser drops its subscription, and only paired browsers
   are pushed. A device that has the chat on screen gets no push for it; the others still do, and a page going to the
   background (the phone locked) or closing says so at once; a refresh sent before that cannot undo it.
+  Native iOS and macOS apps use APNs through the same per-device queue and watcher/pairing filters. APNs receives
+  only the event title, instance name and badge count; the notification extension fetches the message over the
+  tailnet from `/app/v1/push/latest`. The badge counts instances unseen by that device. Tokens record `sandbox`
+  or `production`, which selects the APNs host. A dead token (410, `BadDeviceToken`, `Unregistered`) is dropped;
+  a bad topic or signing key keeps it and logs the actual configuration. Native push needs the three
+  [APNs settings and key file](configuration.md#supervisor-secrets-and-identity).
 - **Typing:** on a phone, Return makes a new line and Send sends; with a hardware keyboard Return sends. Fields, including the Drive editor, use at least 16 px text.
   The reply's activity, a document's overwritten-lines disclosure, and each judge model have 44 px touch targets.
   Field borders have at least 3:1 contrast against the page and panel backgrounds in both themes.
