@@ -146,7 +146,7 @@ does not establish the rate on real runs.
 
 ## Measuring improvement and autonomy
 
-Before a live cycle calls `declare_intent`, its prompt shows the inbox (one line per message, `INBOX_CHARS`), the
+Before a live cycle calls `declare_intent`, its prompt shows the inbox (the operator's messages whole, every other one as one line, `INBOX_CHARS`), the
 operator briefing (`BRIEFING`), the handoff (`HANDOFF`) and a slate of up to six candidate goals from the instance's
 records, each with the judged value of a similar earlier goal (`GOAL_SLATE`); `declare_intent` answers with the judge's
 first error on the newest similar goal that fell short (`FIRST_ERROR`). Every section of the standing context has a

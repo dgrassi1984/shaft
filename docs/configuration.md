@@ -314,7 +314,7 @@ The open surprises keep their own cap (1,200 characters) and count against the t
 facts, digests, goals, journal, then the last sleep, improvement plan, surprises with commitments, projects,
 corrections, stats and the time, so a prompt cache keeps the longest prefix it can from one run to the next.
 
-`INBOX_CHARS` (default 4,000; 0 = no limit) bounds a live cycle's inbox: one line per message, the operator's first
+`INBOX_CHARS` (default 4,000; 0 = no limit) bounds a live cycle's inbox: the operator's messages whole and first (never cut), every other message as one line
 and then by time, with its header but `To` (`Trust` cut at 300 characters, other values at 100, the header at 600
 together) and the first 200 characters of its body; `read_file inbox/<file>` shows one whole. The budget keeps 200
 characters for the line that counts the messages past it (`list_files inbox` names them). Only the messages listed,
