@@ -1,0 +1,198 @@
+# The native chat apps (docs/plans/PLAN-native-apps.md §2.3). XcodeGen makes SHAFT.xcodeproj from this file
+# (`xcodegen generate`); the project, its Info.plists and entitlements (Generated/) are git-ignored and never edited
+# by hand. apps/shaft/README.md says how to build, sign and install.
+name: SHAFT
+
+options:
+  bundleIdPrefix: io.github.dgrassi1984
+  deploymentTarget:
+    iOS: "26.0"
+    macOS: "26.0"
+  createIntermediateGroups: true
+  groupSortPosition: top
+
+settings:
+  base:
+    DEVELOPMENT_TEAM: <TEAM_ID>
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    DEAD_CODE_STRIPPING: YES
+
+packages:
+  SHAFTKit:
+    path: Packages/SHAFTKit
+  MarkdownUI:
+    url: https://github.com/gonzalezreal/swift-markdown-ui
+    exactVersion: 2.4.1
+
+# The keychain group the apps and their notification extensions share: the pairing credential lives there, so an
+# extension fetches the notification's body with the app's bearer (SHAFTKit KeychainStore). Each target's Info.plist
+# names it as SHAFTKeychainAccessGroup. It is built from DEVELOPMENT_TEAM (the team's App ID prefix) rather than
+# $(AppIdentifierPrefix), which is empty in an unsigned build, so the entitlement and the Info.plist always agree.
+targetTemplates:
+  SHAFTTarget:
+    settings:
+      base:
+        SHAFT_KEYCHAIN_GROUP: $(DEVELOPMENT_TEAM).io.github.dgrassi1984.shaft
+
+targets:
+  SHAFT-iOS:
+    type: application
+    platform: iOS
+    templates: [SHAFTTarget]
+    sources:
+      - path: iOS
+        excludes: ["**/*.md"]
+      - path: Shared
+        excludes: ["**/*.md"]
+      - path: Scaffold
+        excludes: ["**/*.md"]
+    dependencies:
+      - package: SHAFTKit
+      - package: MarkdownUI
+      - target: NotificationService-iOS
+    settings:
+      base:
+        PRODUCT_NAME: SHAFT
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.dgrassi1984.shaft
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+    info:
+      path: Generated/iOS-Info.plist
+      properties:
+        CFBundleDisplayName: SHAFT
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        SHAFTKeychainAccessGroup: $(SHAFT_KEYCHAIN_GROUP)
+        UIBackgroundModes: [remote-notification]
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: true
+        UISupportedInterfaceOrientations:
+          [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UISupportedInterfaceOrientations~ipad:
+          [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown,
+           UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+    entitlements:
+      path: Generated/iOS.entitlements
+      properties:
+        aps-environment: development
+        keychain-access-groups: [$(SHAFT_KEYCHAIN_GROUP)]
+
+  SHAFT-macOS:
+    type: application
+    platform: macOS
+    templates: [SHAFTTarget]
+    sources:
+      - path: macOS
+        excludes: ["**/*.md"]
+      - path: Shared
+        excludes: ["**/*.md"]
+      - path: Scaffold
+        excludes: ["**/*.md"]
+    dependencies:
+      - package: SHAFTKit
+      - package: MarkdownUI
+      - target: NotificationService-macOS
+    settings:
+      base:
+        PRODUCT_NAME: SHAFT
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.dgrassi1984.shaft
+        ENABLE_HARDENED_RUNTIME: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+    info:
+      path: Generated/macOS-Info.plist
+      properties:
+        CFBundleDisplayName: SHAFT
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSApplicationCategoryType: public.app-category.productivity
+        SHAFTKeychainAccessGroup: $(SHAFT_KEYCHAIN_GROUP)
+    entitlements:
+      path: Generated/macOS.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        com.apple.security.files.user-selected.read-write: true
+        com.apple.developer.aps-environment: development
+        keychain-access-groups: [$(SHAFT_KEYCHAIN_GROUP)]
+
+  NotificationService-iOS:
+    type: app-extension
+    platform: iOS
+    templates: [SHAFTTarget]
+    sources:
+      - path: NotificationService
+        excludes: ["**/*.md"]
+    dependencies:
+      - package: SHAFTKit
+    settings:
+      base:
+        PRODUCT_NAME: NotificationService
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.dgrassi1984.shaft.NotificationService
+        TARGETED_DEVICE_FAMILY: "1,2"
+    info:
+      path: Generated/NotificationService-iOS-Info.plist
+      properties:
+        CFBundleDisplayName: SHAFT Notifications
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        SHAFTKeychainAccessGroup: $(SHAFT_KEYCHAIN_GROUP)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+    entitlements:
+      path: Generated/NotificationService-iOS.entitlements
+      properties:
+        keychain-access-groups: [$(SHAFT_KEYCHAIN_GROUP)]
+
+  NotificationService-macOS:
+    type: app-extension
+    platform: macOS
+    templates: [SHAFTTarget]
+    sources:
+      - path: NotificationService
+        excludes: ["**/*.md"]
+    dependencies:
+      - package: SHAFTKit
+    settings:
+      base:
+        PRODUCT_NAME: NotificationService
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.dgrassi1984.shaft.NotificationService
+        ENABLE_HARDENED_RUNTIME: YES
+    info:
+      path: Generated/NotificationService-macOS-Info.plist
+      properties:
+        CFBundleDisplayName: SHAFT Notifications
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        SHAFTKeychainAccessGroup: $(SHAFT_KEYCHAIN_GROUP)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.usernotifications.service
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).NotificationService
+    entitlements:
+      path: Generated/NotificationService-macOS.entitlements
+      properties:
+        # App extensions on macOS must run sandboxed.
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        keychain-access-groups: [$(SHAFT_KEYCHAIN_GROUP)]
+
+schemes:
+  SHAFT-iOS:
+    build:
+      targets:
+        SHAFT-iOS: all
+    run:
+      config: Debug
+  SHAFT-macOS:
+    build:
+      targets:
+        SHAFT-macOS: all
+    run:
+      config: Debug

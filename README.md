@@ -194,6 +194,9 @@ Run the supervisor tests from the repository root:
 python3 -m unittest discover -s supervisor/tests -t .
 ```
 
+The native apps' Swift package has its own tests (`cd apps/shaft/Packages/SHAFTKit && swift test`); building the apps
+is in [apps/shaft/README.md](apps/shaft/README.md).
+
 Read [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and review guidance.
 
 ## Documentation
