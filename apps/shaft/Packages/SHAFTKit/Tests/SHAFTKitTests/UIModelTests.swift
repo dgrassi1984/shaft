@@ -287,3 +287,30 @@ struct AppLinksTests {
         #expect(AppLinks.instance(in: URL(string: "shaft://docs/thelos")!) == nil)
     }
 }
+
+@MainActor
+struct ReconnectTests {
+    @Test func aSendThatGetsThroughEndsTheOfflineWaitAtOnce() async throws {
+        let folder = try temporaryFolder("ui")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let idle = fixtureText(try DecodingTests.fixture("contract-idle"))
+        let server = StubServer { _ in throw StubServer.NetworkDown() }
+        let store = InstancesStore(client: server.client, outbox: try Outbox(directory: folder.appending(path: "o")),
+                                   drafts: DraftStore(directory: folder.appending(path: "d")))
+        let chat = store.chat("thelos")
+        chat.start()
+        // Long enough into the backoff that the next try is seconds away.
+        try await waitUntil(timeout: .seconds(20)) {
+            if case .retrying(_, let at) = chat.connection { at.timeIntervalSinceNow > 2.5 } else { false }
+        }
+        // The server is back: the send gets through, and the feed is asked for now, not after the backoff.
+        server.setAnswer { request in
+            request.path.hasSuffix("/send") ? .json(200, #"{"said": "sent to thelos", "chat": "web-1", "file": null}"#)
+                                            : .json(200, idle)
+        }
+        chat.draft.text = "back online"
+        _ = await chat.send()
+        try await waitUntil(timeout: .seconds(1)) { chat.connection == .live }
+        chat.stop()
+    }
+}

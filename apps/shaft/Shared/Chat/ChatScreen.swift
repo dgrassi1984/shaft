@@ -122,7 +122,12 @@ struct ChatScreen: View {
         .onAppear {
             visible = true
             screen.documentsCover = covers
-            if chat.cid == nil || shell?.screen?.chat.instance != chat.instance { shell?.screen = screen }
+            // The shell's documents follow the chat on display (an earlier chat's are read-only); open stays open.
+            if let shell, shell.screen !== screen {
+                let open = shell.screen?.showDocuments ?? false
+                shell.screen = screen
+                if open { screen.showDocuments = true }
+            }
             follow()
         }
         .onDisappear {

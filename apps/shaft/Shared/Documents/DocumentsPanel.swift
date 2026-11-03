@@ -1,3 +1,4 @@
+import QuickLook
 import SHAFTKit
 import SwiftUI
 
@@ -11,7 +12,8 @@ struct DocumentsPanel: View {
     }
 
     @Environment(ChatScreenModel.self) private var screen
-    @Environment(FilePreview.self) private var preview
+    /// The panel's own Quick Look: as a sheet over the chat, the chat's could not present over it.
+    @State private var preview = FilePreview()
     @State private var docs: DocumentsStore
     @State private var path: [Route] = []
     @State private var creating = false
@@ -37,6 +39,8 @@ struct DocumentsPanel: View {
                 }
         }
         .environment(docs)
+        .environment(preview)
+        .quickLookPreview(Binding(get: { preview.url }, set: { preview.url = $0 }))
         .task {
             await docs.refresh()
             // Live while it shows: a document the instance writes, a comment it answers.

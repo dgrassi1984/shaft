@@ -456,10 +456,19 @@ public final class ChatStore {
         do {
             said = try await action(client).said
             actionError = nil
+            reconnectIfWaiting()
         } catch {
             actionError = APIError.from(error)
             owner?.report(APIError.from(error))
         }
+    }
+
+    /// The server answered an action while the feed loop waits out a backoff: ask for the feed now rather than
+    /// show "offline" over a chat that is reachable.
+    public func reconnectIfWaiting() {
+        guard pollTask != nil, case .retrying = connection else { return }
+        stop()
+        start()
     }
 
     private func finish(_ result: Result<SendResponse, APIError>) -> Result<SendResponse, APIError> {
@@ -467,6 +476,7 @@ public final class ChatStore {
         case .success(let answer):
             said = answer.said
             actionError = nil
+            reconnectIfWaiting()
         case .failure(let error):
             actionError = error
             if error.isUnpaired { owner?.report(error) }

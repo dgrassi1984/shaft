@@ -141,12 +141,13 @@ struct EarlierChatsSheet: View {
                                     Text(chat.excerpt.isEmpty ? String(localized: "(no message)") : chat.excerpt)
                                         .lineLimit(2)
                                         .foregroundStyle(.primary)
-                                    Text("\(Stamp.short(chat.created)) · \(chat.messages) messages")
+                                    Text("\(Stamp.short(chat.created)) · \(chat.messages == 1 ? String(localized: "1 message") : String(localized: "\(chat.messages) messages"))")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
                                 .frame(minHeight: 44)
                             }
+                            .tint(.primary)
                         }
                     }
                 } else if let error {

@@ -1,5 +1,8 @@
 import SHAFTKit
 import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// What every platform shell shows first: why SHAFT could not start, the pairing screen, or — paired — `paired` with
 /// the instances store in the environment. It keeps the app's badge on the server's count (§12) and polls the chat
@@ -47,7 +50,7 @@ struct PairingView: View {
                 Text("Pair with SHAFT").font(.largeTitle.bold())
                 Text("On the Mac, run this and copy the link it prints. It works once, for 10 minutes.")
                     .foregroundStyle(.secondary)
-                Text("shaft web pair --name iphone-app")
+                Text("shaft web pair --name \(Self.deviceName)")
                     .font(.callout.monospaced())
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -94,6 +97,15 @@ struct PairingView: View {
         .onChange(of: session.problem) { _, problem in
             if let problem { Announce.say(problem) }
         }
+    }
+
+    /// The name the pairing command suggests: what this device is.
+    static var deviceName: String {
+        #if os(macOS)
+        "mac-app"
+        #else
+        UIDevice.current.userInterfaceIdiom == .pad ? "ipad-app" : "iphone-app"
+        #endif
     }
 
     private func pair() {
