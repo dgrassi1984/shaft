@@ -35,13 +35,30 @@ def context(root: Path, text: str) -> str:
     return text[:start] + replacement + tail + text[end:]
 
 
+def donor_queue(root: Path, ts: str) -> list[dict]:
+    """The open surprises on another day, folded from the history already in this past-state copy."""
+    from . import surprises
+    at = datetime.fromisoformat(ts)
+    eps = [ep for ep in surprises.episodes(root) if ep.get("ts", "") <= ts]
+    return surprises.queue(root, at, surprises.fold(eps, at))
+
+
+def surprise_queue(root: Path, now: datetime) -> list[dict]:
+    """The open surprises as this run's probe arm shows them anywhere outside the system prompt (the goal slate):
+    the true queue, none (removed) or the donor day's (misinforming). Without this the slate showed the true top
+    surprise in an arm that had removed or replaced the queue."""
+    from . import surprises
+    probe = settings(root)
+    if probe.get("channel") != "surprises" or probe.get("arm") == "true":
+        return surprises.queue(root, now)
+    return [] if probe.get("arm") == "removed" else donor_queue(root, probe["donor_ts"])
+
+
 def donor_block(root: Path, ts: str) -> str:
     """The queue on another day, folded from the history already in this past-state copy."""
     from . import surprises
     at = datetime.fromisoformat(ts)
-    eps = [ep for ep in surprises.episodes(root) if ep.get("ts", "") <= ts]
-    items = surprises.fold(eps, at)
-    shown = surprises.queue(root, at, items)[:surprises.MAX_OPEN]
+    shown = donor_queue(root, ts)[:surprises.MAX_OPEN]
     rows, used = [], 0
     for i, it in enumerate(shown):
         room = (surprises.QUEUE_CHARS - used) // (len(shown) - i) - 1

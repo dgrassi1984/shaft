@@ -19,7 +19,7 @@ import urllib.request
 from array import array
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import clock, surprises
@@ -75,20 +75,42 @@ def verdict_rows(root: Path) -> list[dict]:
     return rows
 
 
-def corpus(root: Path) -> list[tuple[str, str]]:
-    docs: list[tuple[str, str]] = []
-    journal = root / "memory" / "journal.md"
-    if journal.exists():
-        for block in journal.read_text().split("\n---\n"):
+@dataclass
+class _File:
+    revision: tuple
+    docs: list[tuple[str, str]]
+    rows: list[dict]
+
+
+# One instance per process; changing roots drops the previous instance's derived state.
+_corpus_root: Path | None = None
+_files: dict[Path, _File] = {}
+_surprise_revision: tuple = ()
+_surprise_docs: list[tuple[str, str]] = []
+_surprise_expiry: datetime | None = None
+_vector_root: Path | None = None
+_vector_revision: tuple | None = None
+_encoded: dict[str, str] = {}
+_decoded: dict[str, array] = {}
+
+
+def _revision(path: Path) -> tuple:
+    stat = path.stat()
+    return path, stat.st_mtime_ns, stat.st_size
+
+
+def _file_docs(root: Path, path: Path, verdicts: dict, rows: list[dict]) -> list[tuple[str, str]]:
+    docs = []
+    rel = path.relative_to(root).as_posix()
+    name = path.name
+    if rel == "memory/journal.md":
+        for block in path.read_text().split("\n---\n"):
             block = block.strip()
             if block.startswith("## "):
                 head, _, body = block.partition("\n")
                 for chunk in _chunks(body) or [""]:
                     docs.append((f"journal {head[3:].strip()}", f"{head}\n{chunk}"))
-    for name in ("facts.md", "facts-archive.md"):
-        path = root / "memory" / name
-        if not path.exists():
-            continue
+    elif rel in ("memory/facts.md", "memory/facts-archive.md"):
         for line in path.read_text().splitlines():
             if not line.startswith("- "):
                 continue
@@ -103,27 +125,11 @@ def corpus(root: Path) -> list[tuple[str, str]]:
                 except ValueError:
                     pass
             docs.append((label, line[2:]))
-    path = root / "memory" / "digests.md"
-    if path.exists():
+    elif rel == "memory/digests.md":
         for chunk in _chunks(path.read_text(errors="replace")):
             docs.append(("memory/digests.md", chunk))
-    for folder in ("notes", "skills", "memory/people"):
-        base = root / folder
-        for path in sorted(base.rglob("*.md")) if base.is_dir() else []:
-            try:
-                text = path.read_text(errors="replace")
-            except OSError as e:   # an unreadable note (including my briefing) must not stop automatic recall
-                text = f"(could not be read: {type(e).__name__}: {e})"
-            for chunk in _chunks(text):
-                docs.append((path.relative_to(root).as_posix(), chunk))
-    verdicts = {row["episode_ts"]: row for row in verdict_rows(root)}
-    episodes = root / "memory" / "episodes"
-    for path in sorted(episodes.glob("*.jsonl")) if episodes.is_dir() else []:
-        for line in path.read_text().splitlines():
-            try:
-                rec = json.loads(line)
-            except ValueError:
-                continue
+    elif rel.startswith("memory/episodes/"):
+        for rec in rows:
             if rec.get("kind") == "talk" and rec.get("content"):
                 who = (rec.get("speaker") or "the operator") if rec.get("role") == "user" else "me"
                 docs.append((f"conversation {rec.get('ts', '')} ({who})", rec["content"][:CHUNK * 2]))
@@ -151,7 +157,71 @@ def corpus(root: Path) -> list[tuple[str, str]]:
                     if result.startswith("ERROR") or result == "(repeat: not run)":
                         lines.append(f"Flagged/refused call {entry.get('tool', '?')}: {result[:160]}")
                 docs.append((f"cycle {rec.get('ts', '')}", "\n".join(lines)[:CHUNK * 2]))
-    return docs + surprises.docs(root)   # what surprised me, and what became of it
+    else:
+        try:
+            text = path.read_text(errors="replace")
+        except OSError as e:   # an unreadable note (including my briefing) must not stop automatic recall
+            text = f"(could not be read: {type(e).__name__}: {e})"
+        for chunk in _chunks(text):
+            docs.append((path.relative_to(root).as_posix(), chunk))
+    return docs
+
+
+def corpus(root: Path) -> list[tuple[str, str]]:
+    global _corpus_root, _surprise_revision, _surprise_docs, _surprise_expiry
+    root = root.resolve()
+    if root != _corpus_root:
+        _files.clear()
+        _surprise_revision = ()
+        _corpus_root = root
+    paths = [root / "memory" / name for name in ("journal.md", "facts.md", "facts-archive.md", "digests.md")]
+    for folder in ("notes", "skills", "memory/people"):
+        paths.extend(sorted((root / folder).rglob("*.md")))
+    episodes = sorted((root / "memory" / "episodes").glob("*.jsonl"))
+    paths.extend(episodes)
+    episode_paths = set(episodes)
+    revisions = {path: _revision(path) for path in paths if path.exists()}
+    verdict_path = root / VERDICTS
+    verdict_revision = _revision(verdict_path) if verdict_path.exists() else None
+    now = clock.now()
+    day = now.date()
+    verdicts = None
+    docs = []
+    for path, revision in revisions.items():
+        is_episode = path in episode_paths
+        # Verdicts annotate cycles; fact ages and surprise expiry depend on the day as well as the files.
+        key = (revision, verdict_revision if is_episode else None,
+               day if path.name in ("facts.md", "facts-archive.md") else None)
+        cached = _files.get(path)
+        if cached is None or cached.revision != key:
+            rows = []
+            if is_episode:
+                if cached and cached.revision[0] == revision:
+                    rows = cached.rows
+                else:
+                    for line in path.read_text(errors="replace").splitlines():
+                        try:
+                            rec = json.loads(line)
+                        except ValueError:
+                            continue
+                        if isinstance(rec, dict):
+                            rows.append(rec)
+                if verdicts is None:
+                    verdicts = {row["episode_ts"]: row for row in verdict_rows(root)}
+            cached = _File(key, _file_docs(root, path, verdicts or {}, rows), rows)
+            _files[path] = cached
+        docs.extend(cached.docs)
+    for path in _files.keys() - revisions.keys():
+        del _files[path]
+    surprise_revision = (tuple(revisions[p] for p in episodes), day)
+    if (surprise_revision != _surprise_revision
+            or _surprise_expiry is not None and now > _surprise_expiry):
+        items = surprises.fold([row for p in episodes for row in _files[p].rows], now)
+        _surprise_docs = [(f"surprise {it['id']} ({it['opened'][:16]})", surprises.text(it)) for it in items.values()]
+        _surprise_revision = surprise_revision
+        _surprise_expiry = min((it["opened_at"] + timedelta(days=surprises.EXPIRE_DAYS)
+                                for it in items.values() if it["status"] == "open"), default=None)
+    return docs + _surprise_docs
 
 
 def _bm25(docs: list[tuple[str, str]], query: str) -> list[int]:
@@ -191,25 +261,37 @@ def _embed(texts: list[str], query: bool) -> list[list[float]]:
 
 def _vectors(root: Path, texts: list[str]) -> list[array]:
     """One vector per text, from the cache or the embedding service (only new texts are sent)."""
+    global _vector_root, _vector_revision, _encoded
+    root = root.resolve()
     path = root / INDEX
-    try:
-        cache = json.loads(path.read_text()) if path.exists() else {}
-    except (OSError, ValueError):
-        cache = {}
+    revision = _revision(path) if path.exists() else None
+    if root != _vector_root or revision != _vector_revision:
+        try:
+            _encoded = json.loads(path.read_text()) if revision else {}
+        except (OSError, ValueError):
+            _encoded = {}
+        _decoded.clear()
+        _vector_root, _vector_revision = root, revision
     keys = [hashlib.sha1(t.encode()).hexdigest() for t in texts]
-    missing = sorted({k: t for k, t in zip(keys, texts) if k not in cache}.items())
+    live = set(keys)
+    missing = sorted({k: t for k, t in zip(keys, texts) if k not in _encoded}.items())
     if missing:
         for (k, _), v in zip(missing, _embed([t for _, t in missing], query=False)):
-            cache[k] = base64.b64encode(array("f", v).tobytes()).decode()
+            vec = array("f", v)
+            _encoded[k] = base64.b64encode(vec.tobytes()).decode()
+            _decoded[k] = vec
+    if missing or _encoded.keys() - live:
+        _encoded = {k: v for k, v in _encoded.items() if k in live}
         path.parent.mkdir(parents=True, exist_ok=True)
-        live = set(keys)
-        path.write_text(json.dumps({k: v for k, v in cache.items() if k in live}))   # drop chunks gone
-    vecs = []
-    for k in keys:
-        a = array("f")
-        a.frombytes(base64.b64decode(cache[k]))
-        vecs.append(a)
-    return vecs
+        path.write_text(json.dumps(_encoded))
+        _vector_revision = _revision(path)
+    for k in _decoded.keys() - live:
+        del _decoded[k]
+    for k in live - _decoded.keys():
+        vec = array("f")
+        vec.frombytes(base64.b64decode(_encoded[k]))
+        _decoded[k] = vec
+    return [_decoded[k] for k in keys]
 
 
 def _semantic(root: Path, docs: list[tuple[str, str]], query: str, top: int) -> list[int]:

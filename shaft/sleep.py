@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from datetime import datetime
 
 from . import (agent, broker, clock, commitments, corrections, drive_proposals, loopguard, memory, projects, prompts,
@@ -13,7 +14,6 @@ from .tools import FACT_LINE, SOURCE, Toolbox, _spec, for_log
 
 # When my last finished sleep read the judge's verdicts: the next one asks only for those judged since (A2).
 VERDICTS_REVIEWED = "memory/verdicts-reviewed.md"
-SLEEP_VERDICT_PAGES = 3
 
 
 def _since(state: State) -> str:
@@ -137,8 +137,12 @@ def run(cfg, state: State, client: Client) -> str:
     fetched = None
     verdicts = "The supervisor's record could not be read: no broker available."
     if broker.available():
-        cursor = since
-        for _ in range(SLEEP_VERDICT_PAGES):
+        # Pages until caught up, within a character budget: the block is re-sent on every sleep step, and a backlog of
+        # full pages (24,000 characters each) would outgrow the model's window and fail every sleep, the marker never
+        # moving (Grok's review). A page that would go over is left for the next sleep, which resumes at the last page
+        # read; the first page is always read.
+        cursor, cut = since, False
+        while True:
             try:
                 page = _verdicts(broker.call("record", kind="judgments", limit=20, since=cursor, format="json"))
             except (broker.BrokerError, ValueError, TypeError) as e:
@@ -147,15 +151,23 @@ def run(cfg, state: State, client: Client) -> str:
                 break
             if fetched is None:
                 fetched = page
+            elif len(fetched["text"]) + len(page["text"]) > cfg.SLEEP_VERDICT_CHARS:
+                cut = True
+                break
             else:
                 fetched["text"] += "\n\n" + page["text"]
                 fetched["verdicts"].extend(page["verdicts"])
                 fetched["left_out"].extend(page["left_out"])
-                fetched["next_since"] = page["next_since"]
+                fetched["next_since"] = page["next_since"] or cursor
             verdicts = fetched["text"]
-            cursor = page["next_since"]
-            if cursor is None:
+            if page["next_since"] in (None, cursor):   # caught up; a cursor that stands still would loop forever
                 break
+            cursor = page["next_since"]
+        if cut:
+            note = (f"Sleep verdict feedback cut short at SLEEP_VERDICT_CHARS={cfg.SLEEP_VERDICT_CHARS}; "
+                    f"more verdicts remain after {cursor}. Next sleep resumes there.")
+            verdicts += "\n\n" + note
+            print(note, file=sys.stderr)
     expectations = "Reply predictions could not be read: no broker available."
     if broker.available():
         try:
@@ -298,7 +310,7 @@ def run(cfg, state: State, client: Client) -> str:
          + prompts.envelope_text(broker.envelope(), agent.time_left())},
     ]
     outcome = agent.run(client, messages, toolbox, max_tokens=cfg.MAX_TOKENS_STEP, purpose="sleep",
-                        max_steps=cfg.MAX_STEPS_SLEEP,
+                        max_steps=cfg.MAX_STEPS_SLEEP, keep_turns=cfg.RESULTS_KEEP_TURNS,
                         wrap_up="Do not call any more tools: write your sleep journal entry now, "
                                 "including what you did not get to.")
     changes = [_action(e) for e in toolbox.log if not e["result"].startswith("ERROR")]

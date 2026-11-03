@@ -23,7 +23,8 @@ BOOKKEEPING = ("commit_to", "settle_commitment", "declare_intent", "confirm_conf
                "close_surprise")
 
 COMMIT_TO = _spec("commit_to", "Record a promise to the operator or another agent. "
-                  "My own plans belong in goals/notes.", {
+                  "Operator promises need this conversation or a delivered operator message in this run; "
+                  "otherwise they are recorded as self with a note. My own plans belong in goals/notes.", {
     "promise": {"type": "string", "description": "What I will do."},
     "due": {"type": "string", "description": 'YYYY-MM-DD or YYYY-MM-DD HH:MM, or "today"/"tomorrow".'},
     "criterion": {"type": "string", "description": "How someone else could check it was done."},
@@ -96,7 +97,7 @@ def _rows(text: str) -> list[dict]:
 
 def _fold(rows: list[dict], now: datetime) -> dict[str, dict]:
     # The supervisor keeps its own copy; shared fixtures pin the event contract.
-    items = {}
+    items, self_ids = {}, set()
     for rec in rows:
         cid, at = rec.get("id"), _at(rec.get("at"))
         if not isinstance(cid, str) or not ID.fullmatch(cid) or at is None:
@@ -107,20 +108,73 @@ def _fold(rows: list[dict], now: datetime) -> dict[str, dict]:
                 continue
             items[cid] = {"id": cid, **item, "source": rec["source"], "made_at": rec["at"],
                           "status": "open", "settled_at": None, "evidence": None}
+            items[cid].update({k: rec[k] for k in ("talk_id", "message_file", "note") if k in rec})
+            if item["made_to"] in ("self", "own") or rec.get("self_commitment"):
+                self_ids.add(cid)
         elif rec.get("event") == "settled":
             item, evidence = items.get(cid), rec.get("evidence")
             if (item and item["status"] == "open" and rec.get("status") in STATUSES
+                    and not (cid in self_ids and at - _at(item["due"]) >= timedelta(hours=24))
                     and isinstance(evidence, str) and evidence.strip() and at >= _at(item["made_at"])):
                 item.update(status=rec["status"], settled_at=rec["at"], evidence=evidence)
     for item in items.values():
-        if item["status"] == "open" and _at(item["due"]) < _local(now):
-            item["status"] = "overdue"
+        if item["status"] == "open":
+            if item["id"] in self_ids and _local(now) - _at(item["due"]) >= timedelta(hours=24):
+                expires = _at(item["due"]) + timedelta(hours=24)
+                item.update(status="expired", settled_at=expires.isoformat(), evidence="self commitment expired 24h after due")
+            elif _at(item["due"]) < _local(now):
+                item["status"] = "overdue"
     return items
+
+
+def message_file(name: str) -> re.Pattern:
+    """The file name the broker gives a message I delivered to the operator (send_message's result)."""
+    return re.compile(r"\d{8}-\d{6}-\d{6}-from-" + re.escape(name) + r"\.md")
+
+
+def _source_rows(rows: list[dict], episodes: list[dict], delivered, own: str) -> list[dict]:
+    """An operator promise needs the conversation it was made in, or a message I delivered to the operator (review
+    I10). `delivered(file)` confirms a delivered message; a note in my own folder is not one."""
+    talks = {ep["talk_id"] for ep in episodes if ep.get("kind") == "talk" and ep.get("role") == "user"
+             and not ep.get("speaker") and isinstance(ep.get("talk_id"), str) and ep["talk_id"]}
+    out = []
+    for row in rows:
+        row = dict(row)
+        if row.get("event") == "made":
+            if row.get("made_to") == "operator" and row.get("sourced"):   # older rows predate the rule: kept as made
+                talk, message = row.get("talk_id"), row.get("message_file")
+                valid = isinstance(talk, str) and talk in talks
+                if not valid and isinstance(message, str) and message_file(own).fullmatch(message):
+                    valid = delivered(message)
+                if not valid:
+                    row.update(made_to="self", note="operator source missing or invalid; recorded as self")
+            if row.get("made_to") == own:
+                row["self_commitment"] = True
+        out.append(row)
+    return out
+
+
+def _delivered(message: str) -> bool:
+    """Asked of the broker, which sees the operator's inbox; a broker failure is raised, never read as "no"."""
+    return bool(re.search(r"(?m)^To: operator$", broker.call("record", kind="commitment_source", cycle=message)))
+
+
+def message_source(log: list[dict]) -> dict:
+    """The last message delivered to the operator in this run (this conversation or cycle), as send_message
+    reported it."""
+    for call in reversed(log):
+        if call.get("tool") == "send_message" and isinstance(call.get("result"), str):
+            match = re.search(r"; message_file (\d{8}-\d{6}-\d{6}-from-[a-z0-9_-]+\.md)", call["result"])
+            if match and call["result"].startswith("delivered to the operator"):
+                return {"message_file": match[1]}
+    return {}
 
 
 def fold(root: Path, now: datetime) -> dict[str, dict]:
     path = Path(root) / FILE
-    return _fold(_rows(path.read_text(errors="replace")) if path.is_file() else [], now)
+    rows = _rows(path.read_text(errors="replace")) if path.is_file() else []
+    # add() asked the broker before recording a message source; the supervisor's fold checks the inbox again.
+    return _fold(_source_rows(rows, surprises.episodes(root), lambda _: True, Path(root).name), now)
 
 
 def _append(root: Path, event: dict) -> None:
@@ -131,7 +185,7 @@ def _append(root: Path, event: dict) -> None:
 
 
 def _to_self(root: Path, item: dict) -> bool:
-    return item["made_to"] in ("self", Path(root).name)
+    return item["made_to"] in ("self", "own", Path(root).name)
 
 
 def _recipient_error(root: Path, item: dict) -> str:
@@ -162,15 +216,24 @@ def add(root: Path, args: dict, source: str, now: datetime) -> str:
         return "ERROR: due is in the past"
     if source not in ("cycle", "talk"):
         return "ERROR: source must be cycle or talk"
+    refs = {k: args[k] for k in ("talk_id", "message_file") if isinstance(args.get(k), str) and args[k]}
+    event = {"event": "made", **item, **refs, "sourced": True}
+    try:
+        checked = _source_rows([event], surprises.episodes(root), _delivered, Path(root).name)[0]
+    except broker.BrokerError as e:   # an outage is not a missing source: nothing is recorded
+        return f"ERROR: commitment not recorded: could not check the operator message ({e}); try again later"
+    item["made_to"] = checked["made_to"]
+    if "note" in checked:
+        refs["note"] = checked["note"]
     items = fold(root, now)
     prefix = f"c{_local(now):%m%d-%H%M}-"
     n = 1
     while prefix + str(n) in items:
         n += 1
     cid = prefix + str(n)
-    _append(root, {"event": "made", "id": cid, **item, "due": due.isoformat(),
-                   "source": source, "at": _local(now).isoformat()})
-    return f"commitment {cid} recorded, due {item['due']}"
+    _append(root, {"event": "made", "id": cid, **item, **refs, "due": due.isoformat(),
+                   "source": source, "at": _local(now).isoformat(), "sourced": True})
+    return f"commitment {cid} recorded, due {item['due']}" + (f"; {refs['note']}" if "note" in refs else "")
 
 
 def _citation(evidence: str) -> tuple[str, int | None] | None:

@@ -166,6 +166,16 @@ def lines(items: dict, episodes: list[dict], verdicts: list[dict], now: datetime
     return out
 
 
+def at_risk(root: Path, now: datetime) -> list[tuple[str, str]]:
+    """My open projects at risk or past a boundary, as my context lists them: (id, its line)."""
+    from . import memory, surprises
+    items = fold(root)
+    rows = lines(items, surprises.episodes(root), memory.verdict_rows(root), now)
+    open_ = [pid for pid, item in items.items() if item["status"] == "open"]   # lines() keeps this order
+    return [(pid, row) for pid, row in zip(open_, rows)
+            if row.removeprefix(f"- {pid} {items[pid]['name']}: ").startswith(("at risk", "past boundary"))]
+
+
 def block(root: Path, now: datetime, verdicts=()) -> str:
     from . import memory, surprises
     try:
