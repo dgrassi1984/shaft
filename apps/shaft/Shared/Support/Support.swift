@@ -1,0 +1,108 @@
+import SHAFTKit
+import SwiftUI
+#if canImport(UIKit)
+import UIKit
+#else
+import AppKit
+#endif
+
+// Small things every shared view uses: how times read, the clipboard, announcements, and the platform seams that are
+// one line each. The bigger seams (the composer's text view, selectable text) have their own files.
+
+enum Stamp {
+    /// "14:05": a message's time (the day is its separator's).
+    static func time(_ date: Date) -> String {
+        date.formatted(.dateTime.hour().minute())
+    }
+
+    /// "14:05" today, "Mon 2 Nov, 14:05" otherwise: a time that stands alone (a rating's "sent", a thread's post).
+    static func short(_ date: Date, calendar: Calendar = .current) -> String {
+        calendar.isDateInToday(date) ? time(date) : date.formatted(.dateTime.weekday(.abbreviated).day().month().hour().minute())
+    }
+
+    /// The full date and time, for VoiceOver and a long press.
+    static func full(_ date: Date) -> String {
+        date.formatted(date: .complete, time: .shortened)
+    }
+
+    /// A day separator: "Today", "Yesterday", or the date ("Monday 2 November 2026").
+    static func day(_ date: Date, calendar: Calendar = .current) -> String {
+        if calendar.isDateInToday(date) { return String(localized: "Today") }
+        if calendar.isDateInYesterday(date) { return String(localized: "Yesterday") }
+        return date.formatted(.dateTime.weekday(.wide).day().month(.wide).year())
+    }
+
+    /// How long a reply has run: "0:42", "12:05", "1:02:03".
+    static func elapsed(since start: Date, now: Date) -> String {
+        let seconds = max(0, Int(now.timeIntervalSince(start)))
+        let (h, m, s) = (seconds / 3600, seconds / 60 % 60, seconds % 60)
+        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%d:%02d", m, s)
+    }
+}
+
+enum Clipboard {
+    static func copy(_ text: String) {
+        #if canImport(UIKit)
+        UIPasteboard.general.string = text
+        #else
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        #endif
+    }
+}
+
+enum Announce {
+    /// Say `text` to VoiceOver (a new reply: the PWA's live region).
+    static func say(_ text: String) {
+        AccessibilityNotification.Announcement(text).post()
+    }
+}
+
+extension View {
+    /// At least 44 pt each way: the touch target the PWA and Apple ask for.
+    func touchTarget() -> some View {
+        frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+    }
+
+    /// An animation unless Reduce Motion is on.
+    func motion<V: Equatable>(_ animation: Animation?, value: V, reduce: Bool) -> some View {
+        self.animation(reduce ? nil : animation, value: value)
+    }
+}
+
+/// A short-lived status line under the composer (an action's `said`, or its failure).
+struct StatusLine: View {
+    let text: String
+    var isError = false
+    var dismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: isError ? "exclamationmark.triangle.fill" : "checkmark.circle")
+                .foregroundStyle(isError ? Color.red : Color.secondary)
+                .accessibilityHidden(true)
+            Text(text)
+                .font(.footnote)
+                .foregroundStyle(isError ? Color.red : Color.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button(action: dismiss) {
+                Image(systemName: "xmark")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .touchTarget()
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss")
+        }
+        .padding(.horizontal, 12)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(isError ? [] : .updatesFrequently)
+    }
+}
+
+/// The base URL's web page for a path (`/i/thelos/activity`, `/services`): failure links open in the browser.
+extension ServerCredential {
+    func webURL(_ path: String) -> URL? {
+        URL(string: path, relativeTo: baseURL)?.absoluteURL
+    }
+}

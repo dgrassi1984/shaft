@@ -58,7 +58,8 @@ public enum APIError: Error, Sendable, Equatable, LocalizedError {
 
     public var errorDescription: String? { message }
 
-    static func from(_ error: any Error) -> APIError {
+    /// Any error as an `APIError` (a cancelled or foreign one as `.transport`).
+    public static func from(_ error: any Error) -> APIError {
         if let error = error as? APIError { return error }
         if let error = error as? URLError {
             return .transport(code: error.errorCode, message: error.localizedDescription)

@@ -4,14 +4,14 @@ import UIKit
 import UserNotifications
 
 /// The iPhone and iPad app's entry point: the app delegate takes the push token and notification taps, and hands them
-/// to `AppModel`. The UI lane replaces `PlaceholderRoot` with the real root view.
+/// to `AppModel`; `IOSRoot` draws the chats.
 @main
 struct SHAFTApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
     var body: some Scene {
         WindowGroup {
-            PlaceholderRoot(model: delegate.model)
+            IOSRoot(model: delegate.model)
         }
     }
 }
@@ -38,10 +38,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         model.didFailToRegister(error)
     }
 
-    // The center calls these off the main actor: read what is needed there, then hop.
+    // The center calls these off the main actor: read what is needed there, then hop. The chat on screen shows its
+    // reply itself: no banner for it.
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification)
         async -> UNNotificationPresentationOptions {
-        [.banner, .list, .sound, .badge]
+        let instance = NotificationContent.instance(from: notification.request.content.userInfo)
+        let model = model
+        return await MainActor.run { AppModel.presentation(for: instance, visibleChat: model.visibleChat) }
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
