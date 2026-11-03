@@ -1091,7 +1091,8 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str,
     if tab in ("config", "drive", "access"):
         from . import opconfig, web_config
         if tab == "config":
-            body = web_config.config_page(name, opconfig.fields(name), _config_history(name))
+            body = web_pages.join([web_config.orders_panel(name),
+                                   web_config.config_page(name, opconfig.fields(name), _config_history(name))])
         elif tab == "drive":
             text, sha = opconfig.drive(name)
             body = web_config.drive_page(name, text, sha, v.markdown(text) if text is not None else Html(""))

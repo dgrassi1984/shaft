@@ -268,7 +268,8 @@ SPECS = {
                           "they last wrote to you). Their reply arrives in your inbox. Make them count: they read "
                           "every one. You can attach files from your folder; files sent to you arrive in your "
                           "attachments/ folder (the message says where). Non-urgent device notifications may wait "
-                          "for a digest during quiet hours or after the daily push budget.",
+                          "for a digest during quiet hours or after the daily push budget (the result says when). "
+                          "A message to the operator is checked against his standing orders (record_order).",
                           {"to": S, "text": S,
                            "expect_reply": {"type": "object", "description": "optional: what you expect back — it is "
                                             "timestamped by the supervisor and scored against the reply",
@@ -285,6 +286,15 @@ SPECS = {
                                                           "in the web UI, and gets them on Telegram when your message "
                                                           "goes there"}},
                           ["to", "text"]),
+    "record_order": _spec("record_order", "Record a standing order the operator gave you: a decision that stays "
+                          "decided ('Retire it', 'Drop the X', 'the paper body has no process blocks'). The supervisor "
+                          "holds it, not your memory: you are shown it in every run and conversation, and every "
+                          "message you send the operator is checked against it. Only the operator can drop one.",
+                          {"text": {"type": "string", "description": "the order in his own words, verbatim"},
+                           "source": {"type": "string", "description": "the file of his message it came in (e.g. "
+                                      "inbox/20261101-091500-123456-from-operator.md); leave it empty in a "
+                                      "conversation with him"}},
+                          ["text"]),
     "list_instances": _spec("list_instances", "List the other SHAFT instances you can message.", {}, []),
     "run": _spec(
         "run",
@@ -738,6 +748,7 @@ class Broker:
         self.unavailable: dict[str, str] = {}   # tool -> why it is refused in this kind of run (a scheduled job's)
         self.run_kind = None
         self.run_started = None
+        self.talk_id: str | None = None         # the conversation this run replies in (runner._conversation)
         self.model_allowed = True              # False: /llm refuses (a scheduled job is a script, docs/plans/PLAN-jobs.md)
         self.run_confined_to: Path | None = None   # a scheduled job's state folder: its `run` writes only the job's set
         self.bot = ""                           # set by tool_specs: its Telegram bot, if the operator can be reached there
@@ -1165,17 +1176,25 @@ class Broker:
                 raise RuntimeError(f"you already sent {sent} messages to the operator today "
                                    f"(limit {OPERATOR_DAILY_LIMIT}); keep it for tomorrow")
             stem = f"{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}"
+            check, checked = self._check_orders(text, f"{stem}.md", stamp)   # refused here when it goes against one
             atts = self._store(self.project / ".supervisor" / "operator-inbox", f"attachments/{stem}", files)
             body = text.strip() + messages.attachment_lines(atts, "path")
-            self._deliver("operator", f"{stem}.md",
-                          f"From: {self.name}\nTo: operator\nKind: {kind}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{body}\n",
-                          kind, stamp, body, atts, urgent=urgent)
+            held = self._deliver("operator", f"{stem}.md",
+                                 f"From: {self.name}\nTo: operator\nKind: {kind}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{body}\n",
+                                 kind, stamp, body, atts, urgent=urgent)
+            if check:
+                self._log_check(check)
             record_expectation()
             self._envelope = None
             push = self._push_usage(stamp)
+            waited = self._waited_share(self.as_of or stamp)
             return (f"delivered to the operator ({kind}){with_files}; their reply, if any, will arrive in your inbox"
                     + expectation + (f"; pushes to the operator today: {push['today']} of budget {push['budget']}"
-                                     if push else ""))
+                                     if push else "")
+                    + (f"; its notification is held for the operator's digest at {held[0][:16].replace('T', ' ')} "
+                       f"({held[1]}): it is in his inbox now, and only urgent=true notifies him at once" if held else "")
+                    + (f"; should_have_waited=yes in your judged push cycles of the last 7 days: {waited}"
+                       if waited else "") + checked)
         atts = self._store(self.project / "instances" / to, f"attachments/from-{self.name}/{stamp:%Y%m%d-%H%M%S-%f}",
                            files)
         body = text.strip() + messages.attachment_lines(atts)
@@ -1241,9 +1260,13 @@ class Broker:
             if tool == "calendar_events":
                 spec = json.loads(json.dumps(spec))
                 spec["function"]["description"] += " Granted to you: " + self.calendar_env() + " (account/name)."
-            if tool == "send_message":
+            if tool in ("send_message", "record_order"):
                 spec = json.loads(json.dumps(spec))
-                spec["function"]["description"] += self._channel_line()
+                if tool == "send_message":
+                    spec["function"]["description"] += self._channel_line()
+                # the standing orders, verbatim, in every run (review I2): on record_order, else where it is still seen
+                if tool == ("send_message" if "record_order" in self.disabled else "record_order"):
+                    spec["function"]["description"] += self._orders_line()
             out.append(spec)
         return out
 
@@ -1273,10 +1296,98 @@ class Broker:
         except OSError:   # measurement must not turn a delivered message into a failed tool call
             return None
 
+    def _waited_share(self, as_of: datetime) -> str | None:
+        """The judge's should_have_waited=yes share of this instance's push cycles, last 7 days (review G3)."""
+        from . import metrics, pushes
+        try:
+            js = metrics.judgments(self.name, self.project / ".supervisor")
+        except (OSError, ValueError):   # measurement must not turn a delivered message into a failed tool call
+            return None
+        return pushes.waited_share(pushes.recent_judgments(js, as_of))
+
+    def _check_orders(self, text: str, file: str, stamp: datetime) -> tuple[dict | None, str]:
+        """A message to the operator, checked against his standing orders and the corrections still checked
+        (orders.py): (the check's row, to log once it is delivered; what the result says). One that goes against an
+        order is refused with the order quoted. One the judge could not check is delivered, and the result says so."""
+        from . import metrics, orders
+        from .core import log
+        active, held = self._orders_in_force(), self._corrections_held()
+        if not active and not held:
+            return None, ""
+        row = {"ts": stamp.isoformat(timespec="seconds"), "message": file, "orders": [o["id"] for o in active],
+               "corrections": [c["id"] for c in held]}
+        try:
+            verdict = orders.check(self.name, text, active, held, exclude=metrics.own_models(self.name))
+        except Exception as e:                 # no verdict: the message goes, unchecked, and the instance is told
+            row["error"] = f"{type(e).__name__}: {e}"[:300]
+            log(f"{self.name}: message to the operator not checked against its standing orders: {row['error']}")
+            return row, f"; NOT checked against your standing orders (the judge gave no verdict: {row['error']})"
+        row.update(verdict)
+        if verdict["violates"]:
+            self._log_check(row)
+            raise PermissionError(orders.refusal(verdict, active, held))
+        return row, "; checked against your standing orders: it keeps to them"
+
+    def _orders_in_force(self) -> list[dict]:
+        from . import orders
+        return orders.listing(self.name, self.as_of)
+
+    def _corrections_held(self) -> list[dict]:
+        from . import orders
+        return orders.corrections(self.name, self.root, self.as_of)
+
+    def _log_check(self, row: dict) -> None:
+        from . import orders
+        orders.log_check(self.name, row)
+
+    def _orders_line(self) -> str:
+        """The standing orders and the corrections still checked, as the instance is shown them every run."""
+        from . import orders
+        try:
+            return orders.shown(self._orders_in_force(), self._corrections_held())
+        except (OSError, ValueError) as e:     # said, not hidden: it knows it is not seeing them
+            return f" Your standing orders could not be read ({type(e).__name__}: {e}); they still apply."
+
+    def _record_order(self, text: str, source: str = "") -> str:
+        """An order the instance heard from the operator, held by the supervisor (orders.py); only he drops it."""
+        from . import orders
+        order, new = orders.add(self.name, text, "instance", self._order_source(source))
+        return (f"recorded standing order {order['id']}" if new else f"already standing order {order['id']}") + (
+            ": you are shown it in every run and conversation, your messages to the operator are checked against "
+            "it, and only he can drop it")
+
+    def _order_source(self, source) -> str:
+        """Where the operator gave the order: this conversation (its id), an earlier one (its id, from the supervisor's
+        log), or a message he sent this instance (its file). Anything else is refused."""
+        from . import pushes
+        source = str(source or "").strip()
+        talk = self.talk_id
+        if talk and source in ("", "conversation", talk):
+            return talk
+        cut = self.as_of
+        file = Path(source).name
+        if file and any(r.get("from") == "operator" and r.get("to") == self.name and r.get("file") == file
+                        and (cut is None or pushes._time(r["ts"]) <= cut)
+                        for r in pushes.records(self.project / ".supervisor")):
+            return file
+        if source and re.fullmatch(r"[A-Za-z0-9_.-]+", source):
+            started = re.compile(r"^\[([^]]+)\] " + re.escape(self.name) + r": start (?:talk|api) "
+                                 + re.escape(source) + r"(?: |$)")
+            try:
+                lines = (self.project / ".supervisor" / "supervisor.log").read_text(errors="replace").splitlines()
+            except FileNotFoundError:
+                lines = []
+            if any((m := started.match(line)) and (cut is None or (pushes._time(m[1]) or cut) <= cut)
+                   for line in lines):
+                return source
+        raise ValueError(f"source {source!r}: name the file of the operator's message it came in "
+                         "(inbox/…-from-operator.md) or the id of the conversation"
+                         + (" — or leave it empty, in this conversation" if talk else ""))
+
     def _deliver(self, to: str, rel: str, content: str, kind: str, stamp: datetime, text: str,
-                 attachments: list[dict] | None = None, urgent: bool = False) -> None:
+                 attachments: list[dict] | None = None, urgent: bool = False) -> tuple[str, str] | None:
         """Put a message where its recipient reads it — the operator's inbox (with a notification), or another
-        instance's inbox/ — and in the message log."""
+        instance's inbox/ — and in the message log. Returns (when, why) when its notification waits for the digest."""
         from . import messages
         if to == "operator":
             inbox = self.project / ".supervisor" / "operator-inbox"
@@ -1293,15 +1404,16 @@ class Broker:
             messages.record(self.project / ".supervisor", path, self.name, "operator", kind, stamp, text, attachments,
                             alert, urgent=urgent)
             from . import pushes
-            held = any(r["file"] == path.name and r.get("push_due")
-                       for r in pushes.records(self.project / ".supervisor"))
+            row = next((r for r in pushes.records(self.project / ".supervisor") if r["file"] == path.name), {})
+            held = (row["push_due"], row.get("push_held") or "held") if row.get("push_due") else None
             if not held:
                 notify(f"SHAFT · {self.name} {'asks' if kind == 'question' else 'says'}", text)
             self._answer_comments(path.name, text)
-        else:
-            from .core import safe_write   # the recipient's folder is instance-controlled: no symlinks followed
-            path = safe_write(self.project / "instances" / to, rel, content)
-            messages.record(self.project / ".supervisor", path, self.name, to, kind, stamp, text, attachments)
+            return held
+        from .core import safe_write   # the recipient's folder is instance-controlled: no symlinks followed
+        path = safe_write(self.project / "instances" / to, rel, content)
+        messages.record(self.project / ".supervisor", path, self.name, to, kind, stamp, text, attachments)
+        return None
 
     def _answer_comments(self, file: str, text: str) -> None:
         """A message to the operator that answers document comments under "### c<n>" lines — how a comment sent for
@@ -2352,6 +2464,8 @@ class ReplayBroker(Broker):
         self.cache, self.cache_lock, self.tools_log = cache, cache_lock, tools_log
         self.trace: list[dict] = []          # every tool call, as the supervisor saw it
         self.operator_sent = 0
+        self.sim_orders: list[dict] = []     # orders recorded in this replay and its checks: never written, but seen
+        self.sim_checks: list[dict] = []     # by the rest of the replay as a live cycle sees its own (orders.py)
         self._tags = threading.local()
 
     def envelope(self) -> dict:
@@ -2523,10 +2637,39 @@ class ReplayBroker(Broker):
                  "path": f"{rel_dir}/{messages.attachment_name(n)}", "bytes": len(d)} for n, d in files]
 
     def _deliver(self, to: str, rel: str, content: str, kind: str, stamp: datetime, text: str,
-                 attachments: list[dict] | None = None, urgent: bool = False) -> None:
+                 attachments: list[dict] | None = None, urgent: bool = False) -> tuple[str, str] | None:
         self._tag("simulated: not delivered")
-        if to == "operator":
-            self.operator_sent += 1
+        if to != "operator":
+            return None
+        from . import pushes   # held as the real send would have been then (the simulated sends counted as notified)
+        held = pushes.hold_until({"from": self.name, "to": "operator", "alert": True, "urgent": urgent},
+                                 self.project / ".supervisor", self.as_of, sent=self.operator_sent, live=False)
+        self.operator_sent += 1
+        return held
+
+    def _orders_in_force(self) -> list[dict]:
+        from . import orders
+        return orders.listing(self.name, self.as_of, extra=self.sim_orders)
+
+    def _corrections_held(self) -> list[dict]:
+        from . import orders
+        return orders.corrections(self.name, self.root, self.as_of, extra=self.sim_checks)
+
+    def _log_check(self, row: dict) -> None:
+        self.sim_checks.append({**row, "ts": self.as_of.isoformat(timespec="seconds")})   # counted as of the replay
+
+    def _record_order(self, text: str, source: str = "") -> str:
+        from . import orders   # checked like the real thing, kept for the rest of this replay, nothing written
+        text = orders.clean(text)
+        source = str(self._order_source(source))[:orders.SOURCE_MAX]
+        every = {o["id"]: o for o in orders.listing(self.name, self.as_of, dropped=True, extra=self.sim_orders)}
+        order, new = orders.added(self.name, every, text, "instance", source, self.as_of)
+        if new:
+            self.sim_orders.append(order)
+        self._tag("simulated: not recorded")
+        return (f"recorded standing order {order['id']}" if new else f"already standing order {order['id']}") + (
+            ": you are shown it in every run and conversation, your messages to the operator are checked against "
+            "it, and only he can drop it")
 
     def _secret_set(self, name: str, value: str, hosts, header: str = "Authorization", scheme: str = "Bearer") -> str:
         from .core import SECRET_NAME_RE

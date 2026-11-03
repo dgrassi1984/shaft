@@ -96,7 +96,8 @@ OFF_IN_JOBS = {"delegate_coding": "in a scheduled job (it is a script; your next
                                "write to the operator",
                "secret_set": "in a scheduled job (keys are managed in a cycle)",
                "secret_delete": "in a scheduled job (keys are managed in a cycle)",
-               "set_config": "in a scheduled job (your config is changed in a cycle)"}
+               "set_config": "in a scheduled job (your config is changed in a cycle)",
+               "record_order": "in a scheduled job (an order is recorded by the cycle or conversation that heard it)"}
 
 
 def _dir() -> Path:

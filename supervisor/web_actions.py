@@ -173,7 +173,8 @@ CHECK = {"calendar-approve": "Action approvals", "calendar-decline": "Action app
          "autonomy": "Services", "config-set": "Config", "config-unset": "Config", "drive-set": "Drive",
          "drive-remove": "Drive", "limit": "Access", "jobs": "Access", "share": "Access", "mail": "Access",
          "calendar": "Access", "battery": "Access", "battery-switch": "Access", "settings-set": "Settings",
-         "settings-unset": "Settings", "chat-stop": "this chat", "chat-end": "this chat"}
+         "settings-unset": "Settings", "chat-stop": "this chat", "chat-end": "this chat", "orders-add": "Config",
+         "orders-drop": "Config"}
 
 
 def page_wait(server_s: float) -> int:
@@ -354,6 +355,8 @@ def saved_row(verb: str, form: dict) -> Html:
         return web_config.drive_page(name, text, sha, web_views.markdown(text) if text is not None else Html(""))
     if verb == "tool":
         return tool_row(name, form["tool"], disabled_tools(name))
+    if verb in ("orders-add", "orders-drop"):
+        return web_config.orders_panel(name)
     if verb in web_config.VERBS:
         row = form["limit"] if verb == "limit" else verb
         return web_config.access_page(name, web_config.access(name), row)

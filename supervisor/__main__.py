@@ -473,6 +473,43 @@ def cmd_channel(name: str, value: str | None) -> int:
     return 0
 
 
+def cmd_orders(name: str, action: str | None, value: list[str], via: str = "cli") -> int:
+    """The operator's standing orders for an instance (supervisor/orders.py, review I2): list them, add one (its text,
+    verbatim), drop one by id. The instance is shown the orders in force every run and conversation, and every message
+    it sends you is checked against them; it can record an order it heard from you, never drop one."""
+    from . import orders
+    root = instance_root(name)
+    try:
+        if action == "add":
+            order, new = orders.add(name, " ".join(value), "operator", via)
+            if new:
+                log(f"{name}: standing order {order['id']} added by the operator ({via}): {order['text'][:200]}")
+            print(f"{'added' if new else 'already in force:'} {orders.line(order)}")
+            return 0
+        if action == "drop":
+            if len(value) != 1:
+                print(f"which order? e.g. shaft orders {name} drop o3", file=sys.stderr)
+                return 2
+            order = orders.drop(name, value[0])
+            log(f"{name}: standing order {order['id']} dropped by the operator ({via}): {order['text'][:200]}")
+            print(f"dropped {order['id']}: {order['text']}")
+            return 0
+    except ValueError as e:
+        print(f"refused: {e}", file=sys.stderr)
+        return 1
+    every = orders.listing(name, dropped=True)
+    for o in every:
+        state = f"dropped {o['dropped_at'][:16].replace('T', ' ')}" if o.get("dropped_at") else "in force"
+        print(f"{o['id']:5} {state:22} by {o['by']:8} {o['added_at'][:16].replace('T', ' ')}"
+              + (f" ({o['source']})" if o.get("source") else "") + f": {o['text']}")
+    for c in orders.corrections(name, root):
+        print(f"{c['id']} still checked on its messages to you ({c['passes']} of {orders.CORRECTION_PASSES} passed): "
+              f"{c['what_operator_said']}")
+    if not every:
+        print(f"{name} has no standing orders")
+    return 0
+
+
 def cmd_secret(args) -> int:
     """Give an instance a key without it passing through a conversation (and so through transcripts, journal
     write-ups and, for a cloud-brained instance, the provider's prompt)."""
@@ -1270,6 +1307,13 @@ def main(argv: list[str]) -> int:
                                        "or telegram; alone shows it and where a message would go now")
     p.add_argument("name")
     p.add_argument("value", nargs="?", choices=["auto", "web", "telegram"])
+    p = sub.add_parser("orders", help="an instance's standing orders (decisions that stay decided): list them, add "
+                                      "TEXT, or drop ID; it is shown them every run and its messages to you are checked "
+                                      "against them")
+    p.add_argument("name")
+    p.add_argument("action", nargs="?", choices=["list", "add", "drop"])
+    p.add_argument("text", nargs="*", help="add: the order, verbatim; drop: its id (o3)")
+    p.add_argument("--via", choices=["cli", "web"], default="cli", help=argparse.SUPPRESS)
     p = sub.add_parser("secret", help="an instance's own keys: give it one (value read from your terminal), list, delete")
     p.add_argument("name")
     p.add_argument("action", choices=["set", "google", "list", "delete"],
@@ -1466,6 +1510,8 @@ def main(argv: list[str]) -> int:
         return cmd_tools(args.name, args.action, args.tool)
     if args.cmd == "channel":
         return cmd_channel(args.name, args.value)
+    if args.cmd == "orders":
+        return cmd_orders(args.name, args.action, args.text, args.via)
     if args.cmd == "secret":
         return cmd_secret(args)
     if args.cmd == "share":

@@ -71,14 +71,56 @@ class PushHoldTest(unittest.TestCase):
         self.assertEqual(self.forward(), 6)
         self.assertEqual(self.desktop.call_count, 6)
 
-    def test_recent_operator_reply_bypasses_quiet_hours_and_exhausted_budget(self):
+    def test_recent_operator_reply_bypasses_quiet_hours_and_held_pushes_leave_budget(self):
         with mock.patch.object(pushes, 'PUSH_BUDGET', 1):
-            self.send()
+            self.send()   # held by quiet hours: it is not one of the day's notifications
             messages.record(self.sup, self.sup / 'operator.md', 'operator', 'm', 'question',
                             self.at - timedelta(hours=2), 'What happened?')
             self.send('Here is the answer')
+        self.assertEqual(self.rows()[0]['push_held'], 'quiet hours')
         self.assertNotIn('push_due', self.rows()[-1])
         self.assertEqual(self.forward(), 1)
+
+    def test_i14_reply_within_two_hours_still_keeps_to_the_daily_budget(self):
+        """Review I14/G3 (thelos sent 21 pushes against a budget of 6): a reply window waived the budget too."""
+        self.at = datetime(2026, 10, 28, 12)
+        with mock.patch.object(pushes, 'PUSH_BUDGET', 2):
+            messages.record(self.sup, self.sup / 'operator.md', 'operator', 'm', 'question', self.at, 'Status?')
+            results = [self.send(f'Reply {i}') for i in range(4)]
+            urgent = self.send('Server down', urgent=True)
+        rows = [r for r in self.rows() if r['from'] == 'm']
+        self.assertEqual([bool(r.get('push_due')) for r in rows], [False, False, True, True, False])
+        self.assertTrue(rows[2]['push_held'].startswith("over today's budget (2 of 2 sent)"))
+        self.assertNotIn('held for', results[1])
+        self.assertIn("held for the operator's digest at 2026-10-29 07:15 (over today's budget (2 of 2 sent))",
+                      results[2])
+        self.assertNotIn('held for', urgent)
+        self.assertEqual(self.forward(), 3)
+
+    def test_g3_send_result_states_seven_day_should_have_waited_share(self):
+        """Review G3: the instance was told its push count, never how often the judge said a push could have waited."""
+        self.at = datetime(2026, 10, 28, 12)
+        folder = self.sup / 'judgments'
+        folder.mkdir()
+        rows = [{'episode_ts': (self.at - timedelta(days=d)).isoformat(), 'should_have_waited': v}
+                for d, v in ((0, 'yes'), (1, 'no'), (6, 'yes'), (2, 'na'), (7, 'yes'))]   # 7 days ago: outside
+        (folder / 'm.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in rows))
+        self.assertIn('should_have_waited=yes in your judged push cycles of the last 7 days: 2/3 (67%)', self.send())
+        (folder / 'm.jsonl').unlink()
+        self.assertIn('last 7 days: not graded', self.send())
+
+    def test_i14_replay_says_a_send_over_budget_would_be_held(self):
+        """Review I14: a trial replay answers send_message as the real cycle would, hold included, and stores nothing."""
+        self.at = datetime(2026, 10, 28, 12)
+        with mock.patch.object(pushes, 'PUSH_BUDGET', 1):
+            self.send('Real one')
+            replay = object.__new__(broker.ReplayBroker)
+            replay.name, replay.project, replay.as_of, replay.operator_sent = 'm', self.project, self.at, 0
+            replay.root, replay.counts, replay._tags = self.b.root, self.b.counts, threading.local()
+            replay.sim_orders, replay.sim_checks = [], []   # as ReplayBroker.__init__ sets them
+            result = replay._send_message('operator', 'Simulated one')
+        self.assertIn("held for the operator's digest", result)
+        self.assertEqual(len(self.rows()), 1)
 
     def test_open_conversation_bypasses_quiet_hours(self):
         self.open.return_value = {'talk-1': 'api'}
@@ -153,8 +195,9 @@ class PushHoldTest(unittest.TestCase):
     def test_replay_of_urgent_message_never_stores_or_notifies(self):
         replay = object.__new__(broker.ReplayBroker)
         replay.name, replay.project, replay.as_of, replay.operator_sent = 'm', self.project, self.at, 0
-        replay.counts = self.b.counts
+        replay.root, replay.counts = self.b.root, self.b.counts
         replay._tags = threading.local()
+        replay.sim_orders, replay.sim_checks = [], []   # as ReplayBroker.__init__ sets them
         replay._send_message('operator', 'Simulated emergency', urgent=True)
         self.assertEqual(self.rows(), [])
         self.desktop.assert_not_called()

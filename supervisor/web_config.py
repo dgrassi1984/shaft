@@ -21,7 +21,7 @@ from .web_pages import Html, h, join
 
 WHO = "web"
 VERBS = ("config-set", "config-unset", "drive-set", "drive-remove", "limit", "jobs", "share", "mail", "calendar",
-         "battery-switch", "channel")
+         "battery-switch", "channel", "orders-add", "orders-drop")
 DRIVE_MAX = 20000
 
 
@@ -41,6 +41,18 @@ def run(verb: str, name: str, form: dict) -> tuple[int, str]:
         if "saw" in form:                                   # what the page showed: refused if it changed since
             args += ["--expect", f"{key}={form['saw']}"] if form.get("saw_set") == "1" else ["--expect-unset", key]
         return _ran(args)
+    if verb == "orders-add":
+        from . import orders
+        try:
+            text = orders.clean(form.get("text", "").replace("\r\n", "\n"))
+        except ValueError as e:
+            raise Refused(str(e)) from None
+        return _ran(["orders", name, "add", "--via", "web", "--", text])
+    if verb == "orders-drop":
+        oid = form.get("id", "").strip()
+        if not oid:
+            raise Refused("which order?")
+        return _ran(["orders", name, "drop", "--via", "web", "--", oid])
     if verb == "drive-remove":
         return _ran(["drive", name, "remove", "--expect-sha", form.get("sha", "")])
     if verb == "drive-set":
@@ -151,6 +163,37 @@ def config_page(name: str, fs: list[dict], history: list[str]) -> Html:
                    n=name, t=table, a=add),
                  h('<section class="panel"><h2>Recent changes (git log of config.env: its own set_config lands '
                    'in its runs\' commits, yours in "changed from outside")</h2>{h}</section>', h=hist)])
+
+
+# -- standing orders -------------------------------------------------------------------------------------------------
+def orders_panel(name: str) -> Html:
+    """The standing orders (orders.py) on the Config page: each in force with its Drop, the corrections its messages
+    are still checked against, and a field to add one. Added and dropped through `shaft orders`."""
+    from . import core, orders
+    from .web_actions import button
+    rows = [h('<li><b>{i}</b> {t} <span class="dim">· {by}, {at}{src}</span> {drop}</li>', i=o["id"], t=o["text"],
+              by="yours" if o["by"] == "operator" else f"recorded by {name} from what you said",
+              at=o["added_at"][:16].replace("T", " "), src=f" · {o['source']}" if o.get("source") else "",
+              drop=button("orders-drop", "Drop", f"drop {name}'s standing order {o['id']}? It stops being shown to it "
+                          "and its messages stop being checked against it.", {"name": name, "id": o["id"]},
+                          cls="small")) for o in orders.listing(name)]
+    held = [h('<li><b>{i}</b> {said} <span class="dim">· {n} of {need} messages passed</span></li>', i=c["id"],
+              said=c["what_operator_said"], n=c["passes"], need=orders.CORRECTION_PASSES)
+            for c in orders.corrections(name, core.INSTANCES / name)]
+    add = h('<form class="act" data-post="/action/orders-add" data-reset="1" data-confirm="Add this standing order for '
+            '{n}? It is shown to it verbatim in every run and conversation, and every message it sends you is checked '
+            'against it."{a}><input type="hidden" name="name" value="{n}"><textarea name="text" rows="2" maxlength="{max}" '
+            'required aria-label="standing order for {n}" placeholder="e.g. Retire the paper: do not ask again">'
+            '</textarea><button type="submit" class="small">Add order</button></form>', n=name, max=orders.TEXT_MAX,
+            a=post_attrs("Config", actions.RUN_NOW_S))
+    return h('<section class="panel" data-row id="orders"><h2>Standing orders (shaft orders)</h2><p class="dim">'
+             'Decisions that stay decided. {n} is shown each one verbatim in every run and conversation; a message it '
+             'sends you that goes against one is refused by the judge with the order quoted. It can record an order it '
+             'heard from you; only you drop one.</p>{list}{held}{add}</section>', n=name,
+             list=h('<ul class="lines">{li}</ul>', li=join(rows)) if rows else h('<p class="dim">none</p>'),
+             held=h('<h3>Corrections still checked on its messages (each until {need} in a row pass)</h3>'
+                    '<ul class="lines">{li}</ul>', need=orders.CORRECTION_PASSES, li=join(held)) if held else Html(""),
+             add=add)
 
 
 # -- drive -----------------------------------------------------------------------------------------------------------
