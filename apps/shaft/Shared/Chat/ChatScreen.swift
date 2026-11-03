@@ -18,8 +18,11 @@ struct ChatScreen: View {
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
+    /// The shell that draws the documents beside the chat (an inspector outside its navigation stack); nil where
+    /// they cover it (a phone): then this screen presents them as a sheet.
+    @Environment(ChatShell.self) private var shell: ChatShell?
     @State private var screen: ChatScreenModel
-    @State private var preview = FilePreview()
+    private var preview: FilePreview { screen.preview }
     @State private var visible = false
     @State private var newestOnScreen = false
     @State private var seenVersion: String?
@@ -36,9 +39,9 @@ struct ChatScreen: View {
     private var active: Bool { visible && scenePhase == .active }
     private var covers: Bool {
         #if os(iOS)
-        sizeClass == .compact
+        shell == nil || sizeClass == .compact
         #else
-        false
+        shell == nil
         #endif
     }
 
@@ -69,15 +72,8 @@ struct ChatScreen: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .navigationTitle(chat.instance)
-        // Beside the chat where there is room (an inspector), over it on a phone (a sheet). The panel is built only
-        // while it shows: its toolbar must not reach the chat's bar.
-        .inspector(isPresented: Binding(get: { screen.showDocuments && !covers },
-                                        set: { screen.showDocuments = $0 })) {
-            if screen.showDocuments && !covers {
-                DocumentsPanel(store: store, instance: chat.instance, cid: chat.cid)
-                    .inspectorColumnWidth(min: 320, ideal: 400, max: 560)
-            }
-        }
+        // Over the chat on a phone (a sheet); beside it where there is room, drawn by the shell (ChatShell): an
+        // inspector inside the navigation stack took the chat's toolbar away.
         .sheet(isPresented: Binding(get: { screen.showDocuments && covers }, set: { screen.showDocuments = $0 })) {
             DocumentsPanel(store: store, instance: chat.instance, cid: chat.cid)
                 .environment(screen)
@@ -90,7 +86,7 @@ struct ChatScreen: View {
         .sheet(isPresented: $screen.showEarlierChats) {
             EarlierChatsSheet(instance: chat.instance, open: openArchived)
         }
-        .quickLookPreview($preview.url)
+        .quickLookPreview(Binding(get: { preview.url }, set: { preview.url = $0 }))
         .alert(screen.confirmRetry?.confirm ?? "", isPresented: Binding(
             get: { screen.confirmRetry != nil }, set: { if !$0 { screen.confirmRetry = nil } })) {
             Button("Send it again") {
@@ -126,6 +122,7 @@ struct ChatScreen: View {
         .onAppear {
             visible = true
             screen.documentsCover = covers
+            if chat.cid == nil || shell?.screen?.chat.instance != chat.instance { shell?.screen = screen }
             follow()
         }
         .onDisappear {

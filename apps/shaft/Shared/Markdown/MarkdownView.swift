@@ -205,6 +205,10 @@ enum RenderedText {
             if let block { lastBlock = block }
             out += String(parsed[run.range].characters)
         }
-        return out
+        // A task list's box is drawn, not text: "[x] " and "[ ] " are not part of what the page reads.
+        return out.split(separator: "\n", omittingEmptySubsequences: false).map { line -> String in
+            for box in ["[x] ", "[X] ", "[ ] "] where line.hasPrefix(box) { return String(line.dropFirst(box.count)) }
+            return String(line)
+        }.joined(separator: "\n")
     }
 }

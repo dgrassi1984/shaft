@@ -83,8 +83,11 @@ struct PostView: View {
     @Environment(ChatScreenModel.self) private var screen
     @State private var deleting = false
 
+    /// The operator's own post not delivered yet: only that one can be edited, deleted or sent (§10.2).
+    private var mineUnsent: Bool { post.unsent && post.by == "operator" }
+
     var status: String? {
-        if post.unsent { return String(localized: "not sent") }
+        if mineUnsent { return String(localized: "not sent") }
         if let sent = post.sent {
             if sent.hasPrefix("inbox/") { return String(localized: "for its next cycle") }
             if sent.hasPrefix("message:") { return String(localized: "in a message") }
@@ -100,11 +103,11 @@ struct PostView: View {
                 Text(post.by == "operator" ? String(localized: "You") : post.by).font(.caption.weight(.semibold))
                 Text(Stamp.short(post.ts)).font(.caption2).foregroundStyle(.secondary)
                 if let status {
-                    Text("· \(status)").font(.caption2).foregroundStyle(post.unsent ? Color.orange : Color.secondary)
+                    Text("· \(status)").font(.caption2).foregroundStyle(mineUnsent ? Color.orange : Color.secondary)
                 }
             }
             MarkdownText(source: post.text)
-            if post.unsent && !screen.archived {
+            if mineUnsent && !screen.archived {
                 HStack(spacing: 14) {
                     Button("Edit", action: edit)
                     Button("Delete", role: .destructive) { deleting = true }

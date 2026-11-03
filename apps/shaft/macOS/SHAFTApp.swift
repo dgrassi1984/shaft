@@ -70,6 +70,7 @@ struct MacChats: View {
     @Environment(AppModel.self) private var model
     @State private var selection: String?
     @State private var settings = false
+    @State private var shell = ChatShell()
 
     var body: some View {
         NavigationSplitView {
@@ -82,7 +83,9 @@ struct MacChats: View {
                     Text("Choose an instance to chat with.").foregroundStyle(.secondary)
                 }
             }
+            .environment(shell)
         }
+        .documentsInspector(shell, store: store)
         .sheet(isPresented: $settings) { SettingsView(session: session) }
         .onChange(of: model.openChat) { _, name in
             guard let name else { return }

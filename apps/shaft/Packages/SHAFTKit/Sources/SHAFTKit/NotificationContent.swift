@@ -94,3 +94,18 @@ public final class NotificationDelivery: @unchecked Sendable {
         deliver(nil)
     }
 }
+
+/// The app's own links: `shaft://chat/<instance>` opens that chat, as a notification tap does.
+public enum AppLinks {
+    public static func chat(_ instance: String) -> URL? {
+        URL(string: "shaft://chat/\(instance)")
+    }
+
+    /// The instance a link names, nil for any other link (or a name the server could not have: §1.3).
+    public static func instance(in url: URL) -> String? {
+        guard url.scheme == "shaft", url.host() == "chat" else { return nil }
+        let name = url.pathComponents.dropFirst().first ?? ""
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")
+        return !name.isEmpty && name.unicodeScalars.allSatisfy(allowed.contains) ? name : nil
+    }
+}

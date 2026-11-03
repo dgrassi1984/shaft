@@ -276,3 +276,14 @@ func waitUntil(timeout: Duration = .seconds(5), _ condition: @MainActor () -> Bo
         try await Task.sleep(for: .milliseconds(20))
     }
 }
+
+struct AppLinksTests {
+    @Test func aChatLinkNamesItsInstanceAndNothingElseDoes() throws {
+        #expect(AppLinks.instance(in: try #require(AppLinks.chat("thelos"))) == "thelos")
+        #expect(AppLinks.instance(in: URL(string: "shaft://chat/wren-2")!) == "wren-2")
+        #expect(AppLinks.instance(in: URL(string: "shaft://chat/")!) == nil)
+        #expect(AppLinks.instance(in: URL(string: "shaft://chat/../etc")!) == nil)
+        #expect(AppLinks.instance(in: URL(string: "https://chat/thelos")!) == nil)
+        #expect(AppLinks.instance(in: URL(string: "shaft://docs/thelos")!) == nil)
+    }
+}

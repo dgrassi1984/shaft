@@ -161,11 +161,18 @@ public final class DocumentsStore {
     }
 
     private func reload(_ path: String) async {
-        if let detail = try? await client.doc(instance, path: path, cid: cid) { open = detail }
+        if let detail = try? await client.doc(instance, path: path, cid: cid), detail != open { open = detail }
     }
 
     private func refreshQuietly() async {
-        if let list = try? await client.docs(instance, cid: cid) { self.list = list }
+        if let list = try? await client.docs(instance, cid: cid), list != self.list { self.list = list }
+    }
+
+    /// Read the list and the open document again without a spinner or an error on a failure: the panel follows the
+    /// instance's writes and answers while it is on screen, as the web's documents panel does.
+    public func follow() async {
+        await refreshQuietly()
+        if let path = open?.path { await reload(path) }
     }
 
     @discardableResult

@@ -12,6 +12,8 @@ struct SHAFTApp: App {
     var body: some Scene {
         WindowGroup {
             IOSRoot(model: delegate.model)
+                // shaft://chat/<instance>: the chat a notification tap opens, from a link or a shortcut.
+                .onOpenURL { url in delegate.model.notificationTapped(instance: AppLinks.instance(in: url)) }
         }
     }
 }

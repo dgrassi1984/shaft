@@ -11,6 +11,7 @@ struct DocumentsPanel: View {
     }
 
     @Environment(ChatScreenModel.self) private var screen
+    @Environment(FilePreview.self) private var preview
     @State private var docs: DocumentsStore
     @State private var path: [Route] = []
     @State private var creating = false
@@ -23,14 +24,27 @@ struct DocumentsPanel: View {
         NavigationStack(path: $path) {
             DocsListView(folder: "", newDocument: { creating = true })
                 .navigationDestination(for: Route.self) { route in
-                    switch route {
-                    case .folder(let folder): DocsListView(folder: folder, newDocument: { creating = true })
-                    case .doc(let doc): DocumentDetailView(path: doc)
+                    // Handed on explicitly: a pushed page in the iPad's inspector did not inherit them (a crash).
+                    Group {
+                        switch route {
+                        case .folder(let folder): DocsListView(folder: folder, newDocument: { creating = true })
+                        case .doc(let doc): DocumentDetailView(path: doc)
+                        }
                     }
+                    .environment(docs)
+                    .environment(screen)
+                    .environment(preview)
                 }
         }
         .environment(docs)
-        .task { await docs.refresh() }
+        .task {
+            await docs.refresh()
+            // Live while it shows: a document the instance writes, a comment it answers.
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(3))
+                await docs.follow()
+            }
+        }
         .onAppear(perform: openRequested)
         .onChange(of: screen.openDocument) { openRequested() }
         .sheet(isPresented: $creating) {
@@ -133,7 +147,7 @@ struct DocsListView: View {
                         Button { newDocument() } label: { Label("New document", systemImage: "doc.badge.plus") }
                     }
                 } label: {
-                    Image(systemName: "ellipsis.circle").touchTarget()
+                    Image(systemName: "arrow.up.arrow.down.circle").touchTarget()
                 }
                 .accessibilityLabel("Sort and new document")
             }
@@ -164,7 +178,7 @@ struct DocRow: View {
                     }
                 }
                 HStack(spacing: 6) {
-                    if let count { Text("\(count) documents") }
+                    if let count { Text(count == 1 ? String(localized: "1 document") : String(localized: "\(count) documents")) }
                     Text(DocsTree.size(bytes))
                     if let date { Text(Stamp.short(date)) }
                     if tooBig { Text("too big to show") }

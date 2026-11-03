@@ -22,7 +22,7 @@ struct FeedView: View {
     var body: some View {
         let newest = FeedRows.newestKey(feed)
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 14) {
                 if feed.content?.chat == nil && rows.allSatisfy({ if case .day = $0 { true } else { false } }) {
                     EmptyChat(instance: feed.instance).padding(.horizontal, 16)
                 }
@@ -39,12 +39,8 @@ struct FeedView: View {
                 Color.clear.frame(height: 1).id(bottomID)
             }
             .padding(.vertical, 12)
-            // As wide as the screen, never wider: a wide child (a table, a long code line) scrolls inside itself and
-            // must not let the whole feed drift sideways.
-            .containerRelativeFrame(.horizontal)
             .scrollTargetLayout()
         }
-        .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
         .scrollPosition($position)
         .defaultScrollAnchor(.bottom, for: .initialOffset)
         .scrollDismissesKeyboard(.interactively)

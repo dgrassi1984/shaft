@@ -68,6 +68,10 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         SHAFTKeychainAccessGroup: $(SHAFT_KEYCHAIN_GROUP)
         UIBackgroundModes: [remote-notification]
+        # shaft://chat/<instance> opens that chat, as a notification tap does (SHAFTApp.onOpenURL).
+        CFBundleURLTypes:
+          - CFBundleURLName: io.github.dgrassi1984.shaft
+            CFBundleURLSchemes: [shaft]
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true

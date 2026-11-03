@@ -31,6 +31,7 @@ struct ChatsLayout: View {
     @State private var switching = false
     @State private var settings = false
     @State private var columns = NavigationSplitViewVisibility.automatic
+    @State private var shell = ChatShell()
 
     var body: some View {
         Group {
@@ -78,7 +79,11 @@ struct ChatsLayout: View {
                                 ArchivedChatView(route: route) { path.removeAll() }
                             }
                     }
+                    .environment(shell)
                 }
+                // The documents beside the chat, outside its navigation stack (ChatShell): inside it, their own pages
+                // were pushed onto the chat's stack.
+                .documentsInspector(shell, store: store)
             }
         }
         .sheet(isPresented: $settings) { SettingsView(session: session) }
