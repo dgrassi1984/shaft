@@ -152,7 +152,7 @@ class RailTest(ChatRoutesTest):
         self.assertEqual(web_chat.summary("wren", [older])["last"], "2026-10-24T10:01:00")   # before it: not counted
         chat["cleared"] = "2026-10-24T10:30:00"
         web_chat.save(chat)
-        self.assertEqual(web_chat.summary("wren", [older, sent]), {"line": "A question?", "last": "2026-10-24T11:00:00"})
+        self.assertEqual(web_chat.summary("wren", [older, sent]), {"line": "A question?", "last": "2026-10-24T11:00:00", "last_count": 1})
         rail = self.get("/fragment/rail?c=i:wren")
         self.assertEqual(rail.status, 200)
 
