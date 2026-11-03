@@ -372,8 +372,12 @@ API_MODE = (
 
 REFLECT_MODE = "Right now you are running a reflection cycle on your own; nobody is present."
 LIVE_MODE = "Right now you are running an autonomous cycle; nobody is present."
-CURIOSITY = ("\n\nThis is a curiosity cycle: pick your goal from your open surprises (in your context, under "
-             "\"Open surprises\") — the one whose answer would most change what you do.")
+CURIOSITY = ("\n\nThis is a curiosity cycle: take your goal from the selected outward surprise below. "
+             "Investigate the outside world or the operator, using your tools as needed. "
+             "Use origin self and origin_ref surprise:<id>.")
+NO_OUTWARD_SURPRISE = ("\n\nThis would have been a curiosity cycle, but none of your open surprises is about the outside "
+                       "world or the operator (those about your own tools, plugins, jobs, ledgers, gate or code do not "
+                       "count). Choose your goal freely.")
 SLEEP_MODE = "Right now you are in your sleep (consolidation) cycle; nobody is present."
 RECOVERY_MODE = ("Right now you are writing the journal entry for a conversation you had with {operator} "
                  "from {started} to {ended}; its transcript follows." + SELF_CLAIMS)

@@ -44,7 +44,7 @@ FIELDS: dict[str, tuple[type, object]] = {
     "BRIEFING": (str, "notes/briefing.md"),   # my watchers' view of the operator's next 48 hours; off disables
     "BRIEFING_CHARS": (int, 6000),     # how much of it every live cycle carries: whole sections, Corrections first
     "HANDOFF": (str, "on"),           # my last two live cycles: structured, raw tool log, or off
-    "CURIOSITY_EVERY_CYCLES": (int, 5),   # one live cycle in this many, on average, takes its goal from my surprises; 0 = never
+    "CURIOSITY_EVERY_CYCLES": (int, 5),   # one live cycle in this many follows a relevant outward surprise; 0 = never
     # docs/plans/PLAN-consciousness.md: each mechanism on, behind a knob its kill test flips (shaft experiment …)
     "OUTCOME_CARDS": (str, "on"),         # on/off: before a failing kind of action, what comparable ones led to
     "WORKSPACE": (str, "competitive"),    # what wins a small space at the front of my live cycle
