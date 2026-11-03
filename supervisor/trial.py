@@ -1403,7 +1403,10 @@ def work(project: Path = PROJECT) -> int:
                             (all(s["status"] != "pending" for s in t["states"]) or _stale(t)):
                         conclude(project, t)
                 local_running = any(m == "local" for _, m in inflight.values())
-                for t, i, model in runnable(project):
+                # A draining scheduler (its restart, autonomy.drain_tick) waits for this worker: no new pair, the
+                # running ones end; the next scheduler's worker picks the rest up.
+                from .autonomy import parent_draining
+                for t, i, model in ([] if parent_draining() else runnable(project)):
                     if len(inflight) >= PARALLEL:
                         break
                     key = (t["instance"], t["id"])

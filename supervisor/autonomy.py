@@ -32,8 +32,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import gate, localmodel
-from .core import (INSTANCES, PROJECT, PYTHON, SUP_DIR, instance_config, instance_names, knob, list_beneath, log,
-                   paused, positive_int, set_update_queued, update_queued)
+from .core import (CYCLE_TIMEOUT_S, INSTANCES, PROJECT, PYTHON, SLEEP_TIMEOUT_S, SUP_DIR, instance_config,
+                   instance_names, knob, list_beneath, log, paused, positive_int, set_update_queued, update_queued)
 from .runner import Busy, is_busy, run_agent
 
 AGENTS = Path.home() / "Library" / "LaunchAgents"
@@ -71,6 +71,13 @@ def running(name: str) -> bool:
     """Whether launchd has the service's process up now (what `service(name, "status")` prints as its state)."""
     r = _launchctl("print", f"gui/{os.getuid()}/{SERVICES[name]['label']}")
     return any(l.strip() == "state = running" for l in r.stdout.splitlines())
+
+
+def launchd_pid(name: str) -> int | None:
+    """The PID launchd runs the service as (None if it runs none)."""
+    r = _launchctl("print", f"gui/{os.getuid()}/{SERVICES[name]['label']}")
+    pid = next((l.strip().removeprefix("pid = ") for l in r.stdout.splitlines() if l.strip().startswith("pid = ")), "")
+    return int(pid) if pid.isdigit() else None
 
 
 def service(name: str, action: str) -> int:
@@ -434,8 +441,8 @@ def serve(poll_s: int = 30) -> int:
     Also warm the gate's shared supervisor tests for new commits (gate_warm) while the scheduler is not paused."""
     log(f"scheduler started (wakes per instance, WAKE_INTERVAL_MINUTES, default {WAKE_DEFAULT_MIN}; "
         f"sleep daily from {SLEEP_AT[0]:02d}:{SLEEP_AT[1]:02d})")
-    from .version import record_service   # the settings it holds (settings.not_live)
-    record_service("scheduler", {})
+    from .version import record_service   # the settings it holds (settings.not_live); "drain": it can drain-restart
+    record_service("scheduler", {"drain": 1})
     from .browser import startup_note
     if (note := startup_note()):
         log(note)
@@ -443,12 +450,15 @@ def serve(poll_s: int = 30) -> int:
     warm = WarmState()
     commitment_errors: dict[str, str] = {}
     stop_children_on_signal(children)
+    drain: dict | None = None   # the drain-restart under way (drain_tick)
     while True:
         for job, (proc, started) in list(children.items()):
             if proc.poll() is not None and job == "gate warm":      # it says how it ended itself (warm_ended)
                 warm_ended(warm, proc.returncode, time.monotonic() - started)
                 del children[job]
-                if proc.returncode == 0:                              # the baseline is green: held changes go again
+                # The baseline is green: held changes go again — not while draining (Codex on the drain: it started
+                # new work); the next scheduler's own first warm-up re-gates them (gate_held keeps them waiting).
+                if proc.returncode == 0 and not (drain or ((r := restart_request()) and r["pid"] == os.getpid())):
                     regate_after_warm(children, _start)
             elif proc.poll() is not None:
                 err = stderr_tail(proc)
@@ -459,6 +469,14 @@ def serve(poll_s: int = 30) -> int:
                 if job.startswith("update "):
                     update_ended(job.removeprefix("update "), proc.returncode)
                 del children[job]
+        drain, what = drain_tick(children, drain)
+        if what == "drained":
+            return relaunch()
+        if what == "draining":   # nothing new starts: what is due stays due for the scheduler that comes next
+            from . import calendar_proposals
+            calendar_proposals.expire()   # not a child: the supervisor's own, as while paused
+            time.sleep(poll_s)
+            continue
         # Before the pause check, as `shaft update` itself runs while paused.
         for name in update_jobs(children, instance_names(), _awake):
             children[f"update {name}"] = (_start(["update", name]), time.monotonic())
@@ -528,6 +546,272 @@ def stop_children_on_signal(children: dict) -> None:
     for s in (signal.SIGTERM, signal.SIGHUP):
         if signal.getsignal(s) is not signal.SIG_IGN:
             signal.signal(s, on_signal)
+
+
+# -- drain-restart (docs/deploy.md step 3) ----------------------------------------------------------------------------
+# A SIGTERM stops the scheduler's live runs on purpose (above), so a deploy waited for a moment with no instance awake,
+# and with instances covering each other's cycles that never came (2026-11-03: 90 min, none). `shaft autonomy restart`
+# asks for a drain instead: the scheduler starts nothing new, lets what runs end, then restarts itself on the code
+# checked out now. The request is a file, not a signal: a user signal to a scheduler without a handler for it (one
+# that predates this) would kill it, and launchd its runs with it.
+RELAUNCH_WAIT_S = 30   # how long a drained scheduler waits for launchd's SIGTERM from its own kickstart -k
+
+
+def _restart_path() -> Path:
+    return SUP_DIR / "scheduler-restart.json"   # the request: {pid, at, requested, by, deadline}
+
+
+def _drain_path() -> Path:
+    return SUP_DIR / "scheduler-drain.json"     # what the drain is doing: the request, state, waiting, ended
+
+
+def default_drain_s() -> int:
+    """How long a drain may wait: the longest one child it waits for may run on its own budget (a sleep), and a
+    cycle's budget again for its settling. It follows those knobs."""
+    return SLEEP_TIMEOUT_S + CYCLE_TIMEOUT_S
+
+
+def _write_json(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(data, indent=1))
+    os.replace(tmp, path)                       # a reader never sees half of it
+
+
+@contextlib.contextmanager
+def _request_lock():
+    """One writer of the request at a time: a request made, withdrawn, dropped as stale or taken as done (Codex on the
+    drain: a stale drop unlinked a newer request written in between, and a cancel could land after the drain had
+    committed to its restart, reporting that scheduling resumes)."""
+    SUP_DIR.mkdir(parents=True, exist_ok=True)
+    with open(SUP_DIR / "scheduler-restart.lock", "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def request_restart(pid: int, within_s: int | None = None, by: str = "the operator") -> dict:
+    """Ask the scheduler running as `pid` for a drain-restart within `within_s` (default_drain_s)."""
+    now = time.time()
+    req = {"pid": pid, "at": now, "requested": datetime.fromtimestamp(now).isoformat(timespec="seconds"), "by": by,
+           "deadline": now + (within_s or default_drain_s())}
+    with _request_lock():
+        _write_json(_restart_path(), req)
+    return req
+
+
+def _drop_request() -> bool:
+    """Under _request_lock."""
+    try:
+        _restart_path().unlink()
+        return True
+    except FileNotFoundError:
+        return False
+
+
+def cancel_restart() -> bool:
+    """Withdraw a pending request (whether there was one): the scheduler resumes at its next tick. One the scheduler
+    has taken as done is gone already — it is restarting, and nothing withdraws that."""
+    with _request_lock():
+        return _drop_request()
+
+
+def restart_request(pid: int | None = None) -> dict | None:
+    """The pending request, None if there is none or it cannot be read. With `pid` (the scheduler asking, under
+    _request_lock): a request made of another scheduler process — the one this one replaced — is stale, so it is
+    dropped and never drains a scheduler that already runs the new code (no restart loop); an unreadable one is
+    dropped too, and said. Without it (a reader: status, a worker) nothing is dropped."""
+    try:
+        req = json.loads(_restart_path().read_text())
+        if not all(isinstance(req.get(k), (int, float)) for k in ("pid", "at", "deadline")):
+            raise ValueError("no pid, at or deadline")
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as e:
+        if pid is not None:
+            log(f"scheduler: the restart request {_restart_path()} is unreadable ({e}): dropped")
+            _drop_request()
+        return None
+    if pid is not None and req["pid"] != pid:
+        log(f"scheduler: a restart asked of scheduler {req['pid']} at {req.get('requested', '?')} is not for this one "
+            f"({pid}): dropped")
+        _drop_request()
+        return None
+    return req
+
+
+def parent_draining() -> bool:
+    """For a long worker the scheduler started (`shaft trial work`, `shaft battery run`): its scheduler is draining,
+    so it starts no new unit of work (a trial pair, a battery arm) and ends with the one it is running. One started by
+    hand is not the scheduler's: it goes on."""
+    req = restart_request()
+    return req is not None and req["pid"] == os.getppid()
+
+
+def drain_status() -> dict | None:
+    """The drain's own record (scheduler-drain.json): state draining, drained, abandoned or cancelled."""
+    try:
+        return json.loads(_drain_path().read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def draining_now() -> dict | None:
+    """The drain under way, None if none (its record says draining and its scheduler is still alive)."""
+    from .version import _alive
+    st = drain_status()
+    return st if st and st.get("state") == "draining" and _alive(st.get("pid", 0)) else None
+
+
+def drain_step(children: dict, now: float, deadline: float, watch_busy: bool) -> tuple[str, list[str]]:
+    """Pure: (what — 'wait', 'done' or 'abandon' —, what it still waits for). Every live child is waited for and
+    none is signalled: each ends on its own budget, and the scheduler's long workers (trials, a battery) end after
+    their current unit (parent_draining). Past the deadline the drain is abandoned: it never cuts a run."""
+    waiting = [job for job, (proc, _) in children.items() if proc.poll() is None] + \
+        (["the mail and calendar watch"] if watch_busy else [])
+    if not waiting:
+        return "done", []
+    return ("abandon" if now >= deadline else "wait"), waiting
+
+
+def drain_tick(children: dict, drain: dict | None) -> tuple[dict | None, str]:
+    """The scheduler's drain, every tick after its children are reaped: (the drain now, what — '' to schedule as usual,
+    'draining' to start nothing, 'drained' to restart now). Says each step in the log and in scheduler-drain.json.
+    Under _request_lock: a cancel lands either before the restart is committed (it resumes) or after (too late)."""
+    from . import watch
+    with _request_lock():
+        req = restart_request(os.getpid())
+        if req is None:
+            if drain:
+                log("scheduler: restart cancelled — scheduling resumes")
+                _write_json(_drain_path(), {**drain, "state": "cancelled", "ended": _now_iso()})
+            return None, ""
+        what, waiting = drain_step(children, time.time(), req["deadline"], watch.busy())
+        by = datetime.fromtimestamp(req["deadline"])
+        if drain is None or drain.get("at") != req["at"]:
+            drain = {**req, "state": "draining", "waiting": None}
+            log(f"scheduler: draining for a restart (asked by {req.get('by', '?')} at "
+                f"{req.get('requested', '?')[11:16]}): nothing new starts; waiting for {', '.join(waiting) or 'nothing'}; "
+                f"by {by:%H:%M} at the latest")
+        minutes = round((time.time() - req["at"]) / 60)
+        # The outcome is written before the request goes: `restart --wait` reads a request gone with no outcome as
+        # dropped.
+        if what == "done":
+            from .version import supervisor_commit
+            drain = {**drain, "state": "drained", "waiting": [], "ended": _now_iso()}
+            _write_json(_drain_path(), drain)
+            _drop_request()
+            log(f"scheduler: drained after {minutes} min — restarting on the code checked out now "
+                f"({supervisor_commit()})")
+            return drain, "drained"
+        if what == "abandon":
+            _write_json(_drain_path(), {**drain, "state": "abandoned", "waiting": waiting, "ended": _now_iso()})
+            _drop_request()
+            log(f"scheduler: restart FAILED to drain within {minutes} min (by {by:%H:%M}) — still running "
+                f"{', '.join(waiting)}; scheduling resumes on the code it started with. Nothing was cut: "
+                f"`shaft autonomy restart` asks again")
+            return None, ""
+        if waiting != drain["waiting"]:
+            drain = {**drain, "waiting": waiting}
+            _write_json(_drain_path(), drain)
+        return drain, "draining"
+
+
+def _now_iso() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
+def relaunch() -> int:
+    """A drained scheduler comes back on the code checked out now. Under launchd it does not just exit: an explicit
+    `launchctl kickstart -k` of its own label (from its own session, outside its process group) has launchd stop it —
+    no child is left for its SIGTERM to stop — and start the new one. An explicit start works in launchd's
+    on-demand-only mode, where KeepAlive's own restart may not (2026-10-13, autonomy.py `service`). One started by
+    hand only exits."""
+    if launchd_pid("scheduler") != os.getpid():
+        log("scheduler: drained; not launchd's scheduler (started by hand), so it only exits")
+        return 0
+    subprocess.Popen(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{SERVICES['scheduler']['label']}"],
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
+    time.sleep(RELAUNCH_WAIT_S)   # launchd's SIGTERM ends this process in here (stop_children_on_signal)
+    log(f"scheduler: launchctl kickstart -k did not stop it within {RELAUNCH_WAIT_S}s; it exits, and launchd's "
+        f"KeepAlive starts it again")
+    return 0
+
+
+FIRST_CUTOVER = (
+    "Without a drain, a restart now stops what it runs. To restart it without cutting a run: `shaft pause` (it starts "
+    "no wake, sleep, job, battery, warm-up or trial; a queued update still starts), wait until no process is left in "
+    "its process group but the scheduler itself — `pgrep -lf -g \"$(ps -o pgid= -p \"$(pgrep -f 'supervisor autonomy "
+    "serve')\" | tr -d ' ')\" | grep -v 'autonomy serve'` prints nothing —, then `launchctl kickstart -k "
+    "gui/$(id -u)/com.shaft.scheduler` and `shaft resume`. Each instance gets a pause and a resume note.")
+
+
+def restart(within_min: int | None = None, wait: bool = False, cancel: bool = False, poll_s: float = 5) -> int:
+    """`shaft autonomy restart`: a drain-restart of the running scheduler (drain_tick). It cuts no run, so it needs no
+    guard. --wait: until the new scheduler has recorded itself (0), or the drain was abandoned or cancelled (1)."""
+    from .version import service as service_record
+    if cancel:
+        if cancel_restart():
+            print("restart request withdrawn: the scheduler resumes at its next tick")
+            return 0
+        st = drain_status() or {}
+        if st.get("state") == "drained" and datetime.now() - datetime.fromisoformat(st["ended"]) < timedelta(minutes=10):
+            print(f"too late: the scheduler drained at {st['ended'][11:16]} and is restarting (or has)", file=sys.stderr)
+            return 1
+        print("no restart request is pending")
+        return 0
+    rec = service_record("scheduler", stale=False)
+    if not running("scheduler") or not rec:
+        print("the scheduler is not running: `shaft autonomy on` starts it", file=sys.stderr)
+        return 1
+    if not (rec.get("settings") or {}).get("drain"):
+        print(f"the running scheduler (pid {rec['pid']}, {rec.get('describe') or rec.get('commit')}, since "
+              f"{rec.get('started', '?')}) predates the drain-restart and cannot drain. {FIRST_CUTOVER}",
+              file=sys.stderr)
+        return 2
+    req = request_restart(rec["pid"], within_min * 60 if within_min else None)
+    log(f"operator asked the scheduler (pid {rec['pid']}) for a drain-restart, by "
+        f"{datetime.fromtimestamp(req['deadline']):%H:%M} at the latest")
+    print(f"asked scheduler {rec['pid']} to restart once its runs end: it starts nothing new from its next tick, and "
+          f"gives up (cutting nothing) at {datetime.fromtimestamp(req['deadline']):%H:%M}. `shaft autonomy status` shows "
+          f"what it waits for.")
+    if not wait:
+        return 0
+    said = None
+    while True:
+        new = service_record("scheduler", stale=False)
+        if new and new["pid"] != rec["pid"]:
+            print(f"restarted: scheduler {new['pid']} on {new.get('describe') or new.get('commit')}")
+            return 0
+        st = drain_status()
+        if st and st.get("at") == req["at"] and st.get("state") in ("abandoned", "cancelled"):
+            print(f"not restarted: the drain was {st['state']}"
+                  + (f" — still running {', '.join(st.get('waiting') or [])}" if st["state"] == "abandoned" else ""),
+                  file=sys.stderr)
+            return 1
+        if st and st.get("at") == req["at"] and st.get("waiting") != said and st.get("state") == "draining":
+            said = st.get("waiting")
+            print(f"waiting for {', '.join(said) or 'nothing'}")
+        if not restart_request() and not (st and st.get("at") == req["at"]):
+            print("not restarted: the request was dropped before the scheduler took it up (see the log)",
+                  file=sys.stderr)
+            return 1
+        if time.time() > req["deadline"] + RELAUNCH_WAIT_S + 60:
+            print("not restarted: no new scheduler by the deadline (see the log)", file=sys.stderr)
+            return 1
+        time.sleep(poll_s)
+
+
+def drain_line() -> str:
+    """One line on a pending or running drain-restart for `shaft status` and `shaft autonomy status` ('' if none)."""
+    if (st := draining_now()):
+        return (f"scheduler restarting (asked {st.get('requested', '?')[11:16]}): nothing new starts; waiting for "
+                f"{', '.join(st.get('waiting') or []) or 'its next tick'}; by "
+                f"{datetime.fromtimestamp(st['deadline']):%H:%M} at the latest")
+    if (req := restart_request()):
+        return (f"scheduler restart asked at {req.get('requested', '?')[11:16]}: taken up at its next tick (by "
+                f"{datetime.fromtimestamp(req['deadline']):%H:%M} at the latest)")
+    return ""
 
 
 def battery_jobs(children: dict, now: datetime, sleeping_due: bool, names: list[str], due, awake_of) \
@@ -750,6 +1034,8 @@ def autonomy(action: str) -> int:
               f"(SHAFT_IDLE_WAKE_MINUTES)")
         print(f"nightly sleep from {SLEEP_AT[0]:02d}:{SLEEP_AT[1]:02d} · last {st.get('sleep', 'never')}"
               + (" · due now" if sleep_due(now, st) else ""))
+        if (line := drain_line()):
+            print(line)
         return 0
     code = service("scheduler", "on" if action == "on" else "off")
     log(f"autonomy {action}")

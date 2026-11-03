@@ -58,6 +58,18 @@ class CliGuardTest(unittest.TestCase):
         self.assertEqual(self.calls, [("autonomy", "on"), ("model", "on"), ("autonomy", "on"), ("api", "on")])
         self.assertEqual(self.logged, [])
 
+    def test_the_refusal_points_at_the_restart_that_cuts_nothing(self):
+        # 2026-11-03: the deploy waited 90 min for an idle moment; the refusal now names the drain-restart.
+        self.assertIn("Or `shaft autonomy restart`: it restarts once they end, cutting none.",
+                      self.run_cli("autonomy", "on")[1])
+        self.assertNotIn("autonomy restart", self.run_cli("autonomy", "off")[1])   # off is no restart
+
+    def test_a_drain_restart_is_never_guarded(self):
+        with mock.patch.object(autonomy, "restart", lambda *a: self.calls.append(("restart",) + a) or 0):
+            self.assertEqual(self.run_cli("autonomy", "restart", "--within", "30", "--wait")[0], 0)
+            self.assertEqual(self.run_cli("autonomy", "restart", "--cancel")[0], 0)
+        self.assertEqual(self.calls, [("restart", 30, True, False), ("restart", None, False, True)])
+
     def test_status_is_never_guarded(self):
         self.assertEqual(self.run_cli("autonomy", "status")[0], 0)
         self.assertEqual(self.calls, [("autonomy", "status")])

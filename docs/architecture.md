@@ -113,6 +113,18 @@ wake whose last request came before a cycle began is dropped, since that cycle s
 and every wake, sleep and battery write them. A scheduler child's stderr is read while it runs, and a pause a running
 cycle does not acknowledge within five minutes (or by its budget's end) becomes a request to wrap up.
 
+The scheduler's children share its process group, and a SIGTERM to it stops them on purpose (a wake's cycle is
+thrown away). A deploy uses a **drain-restart** instead (`shaft autonomy restart`, docs/deploy.md step 3). The
+request is a file (`.supervisor/scheduler-restart.json`, naming the scheduler's PID), read on each tick. A user signal
+would kill a scheduler too old to handle it. While draining, the scheduler starts nothing new and signals nothing. A
+battery ends after its current arm, and the trial worker after its running pairs: both ask `autonomy.parent_draining`
+between units. Every other child ends on its own, and a green warm-up starts no re-gate. One lock serialises
+writing, withdrawing and taking up the request. The scheduler then has launchd restart it with an explicit `kickstart -k` of its own label, which still works
+in launchd's on-demand-only mode. Its deadline is the sleep's budget plus a cycle's. Past it, the drain is abandoned
+with an alert and nothing is cut. A request naming another PID is stale (left for the scheduler this one replaced) and
+is dropped, so a new scheduler never drains in a loop. `.supervisor/scheduler-drain.json` says what the drain waits
+for (`shaft status`, `shaft autonomy status`, the Services page).
+
 ## Effect-loop measurement
 
 The shared template `shaft/agent.py` loop keeps its exact-call repeat guard and adds an effect guard (#103),

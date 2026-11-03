@@ -77,7 +77,10 @@ and [chat design](plans/PLAN-webui-chat.md).
   [configuration reference](configuration.md): the judge pool as ticked models, every knob with its source and default, "saved, not
   live yet" with the guarded restarts; ports and paths shown, set in a terminal). A service action that would kill
   or cut off runs in progress (a scheduler restart, autonomy off, api/model/embed while runs use them) shows as
-  **Force …**, asks first naming those runs, and is logged as `web: operator forced … past the guard`.
+  **Force …**, asks first naming those runs, and is logged as `web: operator forced … past the guard`. Beside the
+  scheduler's *Force restart* is **Restart when idle** (`shaft autonomy restart`: nothing new starts, the runs end,
+  then it restarts, cutting none); while that drain is pending the row says what it waits for and offers **Cancel
+  restart**.
 - **Experiments** (`/experiments`, next to Trials) shows saved results for each instance: Cards (both controls),
   Attention, Commitments, Forecast, Workspace, Monitors, Choice blindness, Resource shock, Privileged prediction,
   Recognition, and Battery perturbation. It defaults to the first instance with saved experiment records; the
