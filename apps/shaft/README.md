@@ -10,11 +10,11 @@ the web service's JSON API, `/app/v1` ([app-api.md](../../docs/app-api.md)), ove
 |---|---|
 | `project.yml` | the XcodeGen spec: every target, setting, entitlement and Info.plist key. `SHAFT.xcodeproj` and `Generated/` are made from it and git-ignored; never edit them by hand |
 | `Packages/SHAFTKit/` | the local Swift package every target uses: the API models and client, the long-poll, pairing and the Keychain, drafts, the outbox, push registration, the notification body fetch, and the observable stores the UI reads |
-| `Shared/` | SwiftUI views both apps share (the UI lanes) |
-| `iOS/` | the iPhone and iPad app: its entry point (`SHAFTApp.swift`) and iOS-only UI |
-| `macOS/` | the Mac app: its entry point and Mac-only UI |
-| `Scaffold/` | the stand-in UI (pairing, the chat list, a plain-text feed) until the UI lanes replace it |
+| `Shared/` | the SwiftUI views and view models both apps draw: the chat, feed, composer, documents, pairing and settings ([Shared/README.md](Shared/README.md)) |
+| `iOS/` | the iPhone and iPad app: its entry point (`SHAFTApp.swift`) and its layouts (`IOSRoot.swift`: the phone's full-screen chat with a chat switcher, the iPad's split view) |
+| `macOS/` | the Mac app: its entry point and, until the Mac lane (M5) builds its own, a plain split view over the shared views |
 | `NotificationService/` | the extension both platforms build: it fetches the notification's body |
+| `DevServer/` | `fixture_server.py`: the real `/app/v1` over throwaway data, to drive the apps without the live service (below) |
 
 | Target | Platform | Bundle id |
 |---|---|---|
@@ -47,6 +47,36 @@ xcodebuild -project SHAFT.xcodeproj -scheme SHAFT-macOS -destination 'platform=m
 ```
 
 Each app scheme builds its notification extension too.
+
+## Try it against a fixture server
+
+`DevServer/fixture_server.py` runs the web service's own `/app/v1` (app_api, web_chat, documents, comments,
+feedback, the push fan-out) on `127.0.0.1` over a temporary folder it seeds: three instances, a chat with every item
+kind, an earlier chat, documents with comment threads. It fakes only what lies outside the web service: the tailnet
+login, the API a reply streams from (a scripted reply; "fail" in a message fails it, "slow" streams for a minute),
+APNs (each push is written to `<dir>/pushes/` with apns.py's payload, and handed to a simulator with `--simctl`) and
+the instances' live state. It refuses the real `.supervisor/` and the ports of the running services.
+
+```bash
+python3 apps/shaft/DevServer/fixture_server.py serve --dir /tmp/shaft-fixture --port 8899 --simctl <simulator udid>
+python3 apps/shaft/DevServer/fixture_server.py pair --dir /tmp/shaft-fixture --port 8899 --name iphone-app
+python3 apps/shaft/DevServer/fixture_server.py act --dir /tmp/shaft-fixture --port 8899 question thelos "Archive it?"
+```
+
+`serve` prints a pairing link; type or paste it into the app. `act` (with the same `--dir`, `--port` and `--simctl`)
+makes an instance send a message or a question (with its push), change its state, write a document, or have a chat
+past the 80-turn window (`long`). A Debug build may load plain `http://` from this machine (`NSAllowsLocalNetworking`,
+added to the built Info.plist by a Debug-only build step in `project.yml`); a Release build keeps App Transport
+Security whole.
+
+For a simulator build that keeps the Keychain entitlement, sign it locally (never registers anything with Apple):
+
+```bash
+xcodebuild -project SHAFT.xcodeproj -scheme SHAFT-iOS -destination 'platform=iOS Simulator,name=iPhone 17' \
+  -derivedDataPath build/dd CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual build
+xcrun simctl install booted build/dd/Build/Products/Debug-iphonesimulator/SHAFT.app
+xcrun simctl openurl booted shaft://chat/thelos      # opens that chat, as a notification tap does
+```
 
 ## Test the Kit
 

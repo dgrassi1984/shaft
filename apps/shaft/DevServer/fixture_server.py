@@ -18,7 +18,8 @@ fakes is what lies outside the web service, as supervisor/tests/test_app_api.py 
 
 `act` (run while `serve` runs, on the same folder; pass the same --simctl): `message <instance> [text]` and
 `question <instance> [text]` (the instance sends you one, with a push), `state <instance> <state>` (its state in the
-rail), `doc <instance> <path> [text]` (it writes a document).
+rail), `doc <instance> <path> [text]` (it writes a document), `long <instance> [turns]` (a chat past the 80-turn
+window).
 
 Run it from the repository root with the python the supervisor uses (3.12). Never point --dir at the real data.
 """
@@ -366,8 +367,15 @@ def act(base: Path, web, web_chat, messages, webpush, what: str, args: list[str]
         target = base / "instances" / name / "notes" / "docs" / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(body or f"# {path}\n\nWritten by {name} at {now}.\n")
+    elif what == "long":                               # a chat longer than the 80-turn window (Show the N earlier)
+        start = datetime.now().replace(microsecond=0) - timedelta(minutes=200)
+        turns = [{"role": "user" if k % 2 == 0 else "assistant",
+                  "ts": (start + timedelta(minutes=2 * k)).isoformat(), "content": f"turn {k}", "shown": f"turn {k}",
+                  **({"mid": f"long-{k}"} if k % 2 == 0 else {})} for k in range(int(text or 90))]
+        web_chat.save({"id": "web-" + os.urandom(8).hex(), "instance": name, "login": ME,
+                       "created": turns[0]["ts"], "state": "idle", "reply": None, "turns": turns})
     else:
-        raise SystemExit(f"unknown act {what!r}: message, question, state, doc")
+        raise SystemExit(f"unknown act {what!r}: message, question, state, doc, long")
 
 
 def main() -> int:

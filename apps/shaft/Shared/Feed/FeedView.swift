@@ -16,6 +16,8 @@ struct FeedView: View {
     @State private var distance: CGFloat = 0
     @State private var newBelow = false
     @State private var interacting = false
+    /// "Show the N earlier messages" was tapped: land on the first of them once they are there.
+    @State private var toTop = false
 
     private let bottomID = "feed-bottom"
 
@@ -65,6 +67,16 @@ struct FeedView: View {
             } else if phase == .interacting {
                 pinned = false
             }
+        }
+        .onChange(of: screen.chat.showingAll) { _, all in
+            guard all else { return }
+            pinned = false
+            toTop = true
+        }
+        .onChange(of: rows.first?.id) { _, _ in
+            guard toTop else { return }
+            toTop = false
+            position.scrollTo(edge: .top)
         }
         .onChange(of: rows.last?.id) { _, _ in
             if pinned {
