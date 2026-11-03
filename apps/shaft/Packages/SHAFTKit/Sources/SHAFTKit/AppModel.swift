@@ -14,6 +14,8 @@ public final class AppModel {
     public private(set) var pushError: String?
     /// The instance whose chat a notification tap asked for: the UI opens it, then sets this to nil.
     public var openChat: String?
+    /// The chat on screen while the app is in front, nil otherwise: a notification about it shows no banner.
+    public var visibleChat: String?
 
     public init() {
         do {
@@ -45,6 +47,14 @@ public final class AppModel {
 
     public func didFailToRegister(_ error: any Error) {
         pushError = "No push token: \(error.localizedDescription)"
+    }
+
+    /// How a notification that arrives while the app is open shows: nothing but the badge for the chat already on
+    /// screen (its feed shows the reply), a banner for any other.
+    nonisolated public static func presentation(for instance: String?, visibleChat: String?)
+        -> UNNotificationPresentationOptions {
+        if let instance, instance == visibleChat { return [.badge] }
+        return [.banner, .list, .sound, .badge]
     }
 
     /// A notification was tapped: open the chat it is about.

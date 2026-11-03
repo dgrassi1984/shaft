@@ -172,11 +172,27 @@ public final class ChatStore {
 
     public var content: FeedContent? { feed?.content }
 
-    /// Whether the chat is on screen now (`watch`, §4): false while a sheet covers it.
+    /// Whether the chat is on screen now (`watch`, §4): false while a sheet covers it. Read at each request; use
+    /// `setWatching` to have the change reach the server at once.
     public var watching: Bool {
         get { watchFlag.isOn }
         set { watchFlag.isOn = newValue }
     }
+
+    /// A sheet covers the chat (false) or left it (true). A held long-poll keeps marking the device as watching until
+    /// it answers, so the loop starts again now with the new `watch` (§4): the server stops skipping this device's
+    /// pushes for the chat at once, as the web's covering sheet does.
+    public func setWatching(_ on: Bool) {
+        guard watchFlag.isOn != on else { return }
+        watchFlag.isOn = on
+        if pollTask != nil {
+            stop()
+            start()
+        }
+    }
+
+    /// The long-poll is running (the chat is on screen and the app in front).
+    public var isPolling: Bool { pollTask != nil }
 
     // MARK: The feed loop
 
@@ -266,6 +282,134 @@ public final class ChatStore {
     public func retry(_ mid: String) async -> Result<SendResponse, APIError>? {
         guard let result = await owner?.outbox.retry(mid) else { return nil }
         return finish(result)
+    }
+
+    /// Put a not-sent message back in the composer to change it: it leaves the outbox, and sending it again makes a
+    /// new message (a new `mid`, PLAN §2.3). Its files come back as the draft's.
+    public func editUnsent(_ mid: String) {
+        guard let owner, let entry = owner.outbox.entries.first(where: { $0.mid == mid && $0.state == .notSent })
+        else { return }
+        var restored = draft
+        restored.text = [restored.text, entry.text].filter { !$0.isEmpty }.joined(separator: "\n\n")
+        restored.quotes += entry.quotes
+        for file in entry.files {
+            if let copy = try? owner.drafts.attach(owner.outbox.fileURL(of: file, in: entry), name: file.name,
+                                                   for: instance) {
+                restored.attachments.append(copy)
+            }
+        }
+        draft = restored
+        owner.outbox.discard(mid)
+    }
+
+    /// Drop a not-sent message.
+    public func discardUnsent(_ mid: String) {
+        owner?.outbox.discard(mid)
+    }
+
+    // MARK: The composer's draft
+
+    /// Copy a file into the draft (Files, a drop). Its copy is the app's, so the picker's loan can end.
+    @discardableResult
+    public func attach(fileAt url: URL, name: String? = nil) -> Bool {
+        guard let owner else { return false }
+        do {
+            let file = try owner.drafts.attach(url, name: name, for: instance)
+            draft.attachments.append(file)
+            return true
+        } catch {
+            actionError = .transport(code: (error as NSError).code,
+                                     message: "Could not attach \(name ?? url.lastPathComponent): \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    /// Attach bytes (a photo, a pasted image) as `name`.
+    @discardableResult
+    public func attach(data: Data, name: String) -> Bool {
+        guard let owner else { return false }
+        do {
+            draft.attachments.append(try owner.drafts.attach(data: data, name: name, for: instance))
+            return true
+        } catch {
+            actionError = .transport(code: (error as NSError).code,
+                                     message: "Could not attach \(name): \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    public func removeAttachment(_ id: String) {
+        draft.attachments.removeAll { $0.id == id }
+    }
+
+    /// Where a draft attachment's copy is, for a preview.
+    public func fileURL(of attachment: DraftAttachment) -> URL? {
+        owner?.drafts.fileURL(of: attachment, for: instance)
+    }
+
+    /// A ↩ Reply card: `quote` with an empty answer (`doc`: the document it came from). Returns its index.
+    @discardableResult
+    public func addQuote(_ quote: String, doc: String = "") -> Int {
+        draft.quotes.append(Quote(quote: quote, doc: doc))
+        return draft.quotes.count - 1
+    }
+
+    public func removeQuote(at index: Int) {
+        guard draft.quotes.indices.contains(index) else { return }
+        draft.quotes.remove(at: index)
+    }
+
+    // MARK: Feedback (§9)
+
+    /// Thumbs on an answer (`k` in this chat) or a message the instance sent (`file`). Returns the rating's id.
+    @discardableResult
+    public func rate(k: Int? = nil, file: String? = nil, thumb: String, reason: String? = nil) async -> String? {
+        let body: FeedbackRequest
+        if let file {
+            body = .rateMessage(file: file, thumb: thumb, reason: reason)
+        } else if let k, let cid = cid ?? feed?.content?.chat?.id {
+            body = .rateChat(cid: cid, k: k, thumb: thumb, reason: reason)
+        } else {
+            return nil
+        }
+        return await feedback(body)
+    }
+
+    /// Remove a rating.
+    public func clearRating(_ id: String) async {
+        await feedback(FeedbackRequest(op: "clear", id: id))
+    }
+
+    /// Deliver a rating (`reason`: an updated one makes a replacement first). Returns the current rating's id.
+    @discardableResult
+    public func sendRating(_ id: String, reason: String? = nil) async -> String? {
+        await feedback(FeedbackRequest(op: "send", reason: reason, id: id))
+    }
+
+    /// Keep a rating but take it off the next message.
+    public func unpend(_ id: String) async {
+        await feedback(FeedbackRequest(op: "unpend", id: id))
+    }
+
+    @discardableResult
+    private func feedback(_ body: FeedbackRequest) async -> String? {
+        guard let client else { return nil }
+        do {
+            let answer = try await client.feedback(instance, body)
+            said = answer.said
+            actionError = nil
+            return answer.id
+        } catch {
+            actionError = APIError.from(error)
+            owner?.report(APIError.from(error))
+            return nil
+        }
+    }
+
+    /// Clear the last action's answer and failure once shown.
+    public func dismissStatus() {
+        said = nil
+        actionError = nil
     }
 
     // MARK: Actions (§7)
