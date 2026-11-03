@@ -12,7 +12,7 @@ answers with what goals like this one have cost me (forecast.py); before a kind 
 first such call is held while I see what comparable ones led to (cards.py); finish_cycle and commit_to record the
 promises I make (commitments.py).
 
-Before I choose, my inbox is one line per message (INBOX_CHARS) and a slate of up to six candidate goals from my
+Before I choose, my inbox is the operator's messages whole and one line per other message (INBOX_CHARS) and a slate of up to six candidate goals from my
 records stands before step 1 (slate.py, GOAL_SLATE); declare_intent adds where the judge found my newest similar
 goal that fell short first went wrong (forecast.first_error, FIRST_ERROR).
 """
@@ -130,19 +130,31 @@ def inbox_line(name: str, text: str) -> str:
             + (f" [{pictures} image(s) attached]" if pictures else ""))
 
 
+def from_operator(name: str) -> bool:
+    return name.endswith("-from-operator.md")
+
+
+def operator_entry(name: str, text: str) -> str:
+    """The operator's message, whole and never past the budget: it is archived after the cycle like the rest, and a
+    one-line opening of an instruction is not the instruction (integration review, 2026-11-03)."""
+    fields, body = headers(text)
+    head = " · ".join(f"{key}: {value}" for key, value in fields if key != "To")
+    return f"- inbox/{name} — {head or '(no header)'}:\n{body.strip() or '(empty)'}"
+
+
 def inbox_view(messages: list[tuple[str, str]], budget: int = 0) -> tuple[str, list[str]]:
-    """My inbox as a live cycle shows it, and the names of the messages it lists: one line per message, the
-    operator's first, then by time, within `budget` characters (0: all), keeping room for the line that counts the
+    """My inbox as a live cycle shows it, and the names of the messages it lists: the operator's whole and first, then
+    one line per other message by time, within `budget` characters (0: all), keeping room for the line that counts the
     rest; read_file inbox/<file> shows one whole. It pasted every message whole, with no limit. A message past the
     budget stays in my inbox for a later cycle unless I read it whole (read_whole): one I never saw is not handled."""
     if not messages:
         return "Your inbox is empty.", []
-    ordered = sorted(messages, key=lambda m: not m[0].endswith("-from-operator.md"))   # stable: by time within each
-    rows = [(name, inbox_line(name, text)) for name, text in ordered]
+    ordered = sorted(messages, key=lambda m: not from_operator(m[0]))   # stable: by time within each
+    rows = [(name, operator_entry(name, text) if from_operator(name) else inbox_line(name, text)) for name, text in ordered]
     if budget > 0 and sum(len(row) + 1 for _, row in rows) > budget:
         kept, used = [], 0
         for name, row in rows:
-            if used + len(row) + 1 > budget - MORE_RESERVE:
+            if used + len(row) + 1 > budget - MORE_RESERVE and not from_operator(name):
                 break
             kept.append((name, row))
             used += len(row) + 1
@@ -152,7 +164,8 @@ def inbox_view(messages: list[tuple[str, str]], budget: int = 0) -> tuple[str, l
         lines.append(f"- … and {len(ordered) - len(rows)} more message(s), past my inbox budget of {budget} "
                      "characters: list_files inbox names them; they stay in my inbox until a cycle shows them or I "
                      "read one whole.")
-    return (f"You have {len(messages)} new message(s), one line each; read_file inbox/<file> shows one whole. Reply "
+    return (f"You have {len(messages)} new message(s): the operator's whole, the others one line each; read_file "
+            "inbox/<file> shows one whole. Reply "
             "with send_message if you want to; the ones listed here will be archived in memory/messages/ after this "
             "cycle.\n\n" + "\n".join(lines)), [name for name, _ in rows]
 

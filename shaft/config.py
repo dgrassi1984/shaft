@@ -38,7 +38,7 @@ FIELDS: dict[str, tuple[type, object]] = {
     "LOOP_EFFECT_ROUNDS": (int, 3),
     "CONTEXT_JOURNAL_CHARS": (int, 16000),
     "CONTEXT_CHARS": (int, 48000),     # every section of my standing context together (prompts.SECTIONS); 0 = no total
-    "INBOX_CHARS": (int, 4000),        # a live cycle's inbox: one line per message, read_file for the whole
+    "INBOX_CHARS": (int, 4000),        # a live cycle's inbox: the operator's whole, others one line
     "RESULTS_KEEP_TURNS": (int, 4),    # tool results of older turns shrink to a reference I can re-read; 0 = never
     "STALE_LINE_HOURS": (int, 24),     # sleep review; 0 disables each check
     "STALE_GOAL_HOURS": (int, 48),
