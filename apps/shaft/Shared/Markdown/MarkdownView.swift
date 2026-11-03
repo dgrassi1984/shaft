@@ -111,7 +111,6 @@ extension Theme {
 /// A fenced code block: monospaced, scrolling sideways, its Copy fixed at the top corner.
 struct CodeBlock: View {
     let configuration: CodeBlockConfiguration
-    @State private var copied = false
 
     var body: some View {
         ScrollView(.horizontal) {

@@ -269,7 +269,7 @@ struct DocumentEditor: View {
     }
 }
 
-extension DocumentsStore.Conflict: Identifiable {
+extension DocumentsStore.Conflict: @retroactive Identifiable {
     public var id: String { (sha ?? "new") + path }
 }
 

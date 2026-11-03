@@ -462,6 +462,12 @@ itself, same port, tailnet only. Its contract, every route, field, status code a
   unread when its own newest answer or message is newer than that; your own messages never make a chat unread.
 - Documents and comments, feedback, attachments and earlier chats are there too, each through the web UI's own
   logic. Push to the apps (APNs) is set up separately ([PLAN-native-apps.md](plans/PLAN-native-apps.md) §2.2).
+- **The iPhone and iPad app** ([apps/shaft/README.md](../apps/shaft/README.md)) is the PWA chat natively: the chat
+  full screen with a chat switcher on a phone, the instances beside it on an iPad with the documents as a third
+  column; the same feed, composer (quote cards with answers, Send now, Queue after reply, Next cycle, the keyboard
+  rules), not-sent messages with Retry, documents with comments, and ratings. A notification tap, or
+  `shaft://chat/<instance>`, opens that chat; the chat on screen shows no banner. To try it without the live service,
+  `apps/shaft/DevServer/fixture_server.py` serves the real `/app/v1` over throwaway data.
 
 Sources: [the API](../supervisor/app_api.py), [the chat model](../supervisor/web_chat.py),
 [seen marks](../supervisor/web_seen.py), [authentication and pairing](../supervisor/web.py).

@@ -89,7 +89,8 @@ struct UserItemView: View {
             }
             .font(.caption2)
             .foregroundStyle(.secondary)
-            .accessibilityLabel(Text("Sent \(Stamp.full(turn.ts))") + Text(turn.interjected ? ", during its reply" : ""))
+            .accessibilityLabel(turn.interjected ? "Sent \(Stamp.full(turn.ts)), during its reply"
+                                                 : "Sent \(Stamp.full(turn.ts))")
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.leading, 40)
