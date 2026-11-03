@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from supervisor import apns, core, webpush
+from supervisor import apns, core, web, web_alerts, webpush
 
 TOKEN = "ab" * 32
 TOPIC = "io.example.shaft"
@@ -127,6 +127,72 @@ class APNsTest(unittest.TestCase):
             for value in (reason, "KEY123", "TEAM456", TOPIC, str(self.key)):
                 self.assertIn(value, logged)
 
+    def test_provider_rejection_renews_jwt_but_keeps_device_token(self):
+        """ExpiredProviderToken and InvalidProviderToken retried the same cached JWT."""
+        sub = self.register()
+        for reason in ("ExpiredProviderToken", "InvalidProviderToken"):
+            with self.subTest(reason=reason):
+                token = apns.provider_token(now=1_800_000_000)
+                said, _ = self.send("403", reason, sub=sub)
+                self.assertIn(reason, said)
+                self.assertEqual(apns.devices()["phone"], sub)
+                renewed = apns.provider_token(now=1_800_000_001)
+                self.assertEqual(json.loads(unb64(renewed.split(".")[1]))["iat"], 1_800_000_001)
+                self.assertNotEqual(token, renewed)
+                apns._cached = ()
+
+    def test_device_token_not_for_topic_removes_only_matching_registration(self):
+        """DeviceTokenNotForTopic left a dead device token registered and retried it."""
+        said, _ = self.send("400", "DeviceTokenNotForTopic")
+        self.assertIn("removed", said)
+        self.assertEqual(apns.devices(), {})
+        old = self.register()
+        current = self.register(token="cd" * 32)
+        said, _ = self.send("400", "DeviceTokenNotForTopic", sub=old)
+        self.assertIn("stopped", said)
+        self.assertEqual(apns.devices(), {"phone": current})
+
+    def test_retry_stops_after_unpair_or_registration_change(self):
+        """APNs retries used a captured subscription after unpair, unregister, or token replacement."""
+        for change in ("unpair", "unregister", "replace", "already-unpaired"):
+            with self.subTest(change=change):
+                sub = self.register()
+                paired = {} if change == "already-unpaired" else {"phone": {}}
+                attempts = []
+                def send(device, subscription, event):
+                    attempts.append((device, subscription["token"], event["title"]))
+                    return "503: offline"
+                def sleep(seconds):
+                    if seconds:
+                        if change == "unpair":
+                            paired.clear()
+                        elif change == "unregister":
+                            apns.unregister("phone")
+                        elif change == "replace":
+                            self.register(token="cd" * 32)
+                def thread(**kw):
+                    return types.SimpleNamespace(start=lambda: kw["target"](*kw["args"]))
+                with mock.patch.object(web, "devices", side_effect=lambda: paired), \
+                        mock.patch.object(apns, "_send_one", side_effect=send), \
+                        mock.patch.object(apns.time, "sleep", side_effect=sleep), \
+                        mock.patch.object(apns.threading, "Thread", side_effect=thread):
+                    apns._wake({"phone": sub}, EVENT)
+                self.assertEqual(attempts, [] if change == "already-unpaired" else [("phone", TOKEN, "thelos replied")])
+
+    def test_digest_reaches_apns_only_operator(self):
+        """The alert loop skipped due digests for APNs-only operators."""
+        from supervisor import messages
+        self.register()
+        (self.sup / "messages.jsonl").write_text(json.dumps({"from": "thelos", "to": "operator", "text": "held",
+            "file": "held.md", "ts": "2020-01-01T00:00:00", "push_due": "2020-01-01T07:15:00"}) + "\n")
+        with mock.patch.object(messages, "appended", return_value=([], 0)), \
+                mock.patch.object(web, "devices", return_value={"phone": {}}), \
+                mock.patch.object(apns, "_wake"):
+            self.assertEqual(web_alerts.forward_new(), 1)
+            self.assertEqual(webpush.take("phone"), [{"title": "SHAFT digest (1)", "body": "thelos: held",
+                "url": "/overview", "tag": "shaft-digest-held.md"}])
+            self.assertEqual(web_alerts.forward_new(), 0)
+
     def test_missing_config_turns_push_off_and_logs_without_dropping_token(self):
         self.register()
         self.key.unlink()
@@ -192,7 +258,8 @@ class APNsTest(unittest.TestCase):
             thread = make_thread(**kwargs)
             threads.append(thread)
             return thread
-        with mock.patch.object(apns, "_send_one", side_effect=send), mock.patch.object(apns.time, "sleep") as sleep, \
+        with mock.patch.object(web, "devices", return_value={d: {} for d in subs}), \
+                mock.patch.object(apns, "_send_one", side_effect=send), mock.patch.object(apns.time, "sleep") as sleep, \
                 mock.patch.object(apns.threading, "Thread", side_effect=capture):
             apns._wake(subs, EVENT)
             for thread in threads:
@@ -200,7 +267,8 @@ class APNsTest(unittest.TestCase):
                 self.assertFalse(thread.is_alive())
         self.assertEqual(attempts, {"phone": 3, "mac": 3})
         self.assertCountEqual([call.args[0] for call in sleep.call_args_list], [0, 0, *webpush.RETRY_S, *webpush.RETRY_S])
-        with mock.patch.object(apns, "_send_one", return_value="410: removed") as send, \
+        with mock.patch.object(web, "devices", return_value={"phone": {}}), \
+                mock.patch.object(apns, "_send_one", return_value="410: removed") as send, \
                 mock.patch.object(apns.time, "sleep"):
             threads.clear()
             with mock.patch.object(apns.threading, "Thread", side_effect=capture):

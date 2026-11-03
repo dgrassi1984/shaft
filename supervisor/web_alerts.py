@@ -2,7 +2,8 @@
 that is routed to the web (`alert` "web" in .supervisor/messages.jsonl) wakes the operator's devices with a push that
 opens the instance's chat, where the message shows. Telegram's half is telegram.forward_new; both read the one log,
 each with its own cursor. Runs in the web service (a thread of web.serve): it is the process that knows which devices have the
-instance's chat on screen (web_chat.watchers), and the one a push is sent from.
+instance's chat on screen (web_chat.watchers), and the one a push is sent from. Digests reach Web Push and APNs
+subscribers, including operators with only native devices.
 """
 from __future__ import annotations
 
@@ -59,8 +60,8 @@ def forward_new() -> int:
                 pushed += 1
         _write_cursor(after)
     _write_cursor(end)
-    from . import pushes
-    if webpush.subscriptions():
+    from . import apns, pushes
+    if webpush.subscriptions() or apns.devices():
         pushed += pushes.digest(webpush.notify)
     return pushed
 

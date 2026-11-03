@@ -419,6 +419,27 @@ class FeedTest(AppTest):
 
 
 class LongPollTest(AppTest):
+    def test_held_poll_without_at_does_not_undo_away(self):
+        """A held poll without at re-marked watching after away and suppressed native push."""
+        self.chat([turn("assistant", "2026-11-03T14:00:00", "hello")])
+        first = self.get("/app/v1/chat/wren")
+        for at in (None, 100):
+            with self.subTest(at=at):
+                clock, observed = [0.0], []
+                def wait(seconds):
+                    if not observed:
+                        observed.append(web_chat.watchers("wren"))
+                        self.assertEqual(self.api("/app/v1/chat/wren/away", "POST", {"at": 200}).status, 200)
+                    clock[0] += seconds
+                web_chat._away.clear()
+                with mock.patch.object(app_api.time, "monotonic", side_effect=lambda: clock[0]), \
+                        mock.patch.object(web_chat, "wait_change", side_effect=wait):
+                    q = {} if at is None else {"at": at}
+                    status, body, _ = self.feed(since=first["version"], live=first["live"], wait=4, **q)
+                    self.assertEqual((status, body), (304, None))
+                    self.assertEqual(observed, [{self.device}])
+                    self.assertEqual(web_chat.watchers("wren"), set())
+
     def feed(self, **q) -> tuple[int, dict | None, float]:
         start = time.monotonic()
         r = self.api("/app/v1/chat/wren?" + urllib.parse.urlencode(q))
@@ -583,6 +604,26 @@ class SendTest(AppTest):
 
 # -- unread marks and the badge (§12) ------------------------------------------------------------------------------------
 class SeenTest(AppTest):
+    def test_same_second_instance_items_make_seen_chat_unread(self):
+        """Unread was lost when an assistant turn or operator-directed message shared the seen last stamp."""
+        for kind in ("assistant", "message", "message"):
+            feed = self.get("/app/v1/chat/wren")
+            self.assertEqual(self.get("/app/v1/chat/wren/seen", method="POST", data={"version": feed["version"]}),
+                             {"unread": False, "badge": 0})
+            if kind == "assistant":
+                self.c["turns"].append(turn("assistant", "2026-11-03T14:00:00", "another answer"))
+                web_chat.save(self.c)
+            else:
+                self.message("2026-11-03T14:00:00", f"same-second-{len(messages.history())}.md", "another message")
+            self.assertEqual(self.rail(), (True, 1))
+            self.assertEqual(web_seen.badge(self.device), 1)
+            self.assertEqual(web_chat.feed("wren")["last"], web_chat.summary("wren", messages.history())["last"])
+        # Old seen.json entries still use their stamp; a later second remains unread.
+        web._write(web_seen.STORE, {self.device: {"wren": {"last": "2026-11-03T14:00:00"}}})
+        self.assertEqual(self.rail(), (False, 0))
+        self.message("2026-11-03T14:00:01", "later.md", "later")
+        self.assertEqual(self.rail(), (True, 1))
+
     def setUp(self):
         super().setUp()
         self.paired_since("2026-11-03T12:00:00")

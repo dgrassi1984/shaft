@@ -3,10 +3,11 @@ badge on the app's icon and on every push. The PWA keeps its marks in the browse
 while the app is closed, so the server must know. Stdlib only.
 
 An instance is unread on a device when its `last` — web_chat.summary's, the newest answer or message it sent the
-operator — is newer than what the device marked seen. The operator's own messages never make a chat unread, and an
+operator — exceeds the seen stamp, or matches it with more instance items at that stamp. Old marks without a count
+keep the timestamp-only comparison. The operator's own messages never make a chat unread, and an
 instance the device never marked counts from the device's pairing: what came before it is not unread.
 
-Kept in .supervisor/web/seen.json ({device: {instance: {version, last, at}}}), beside devices.json, written as web.py
+Kept in .supervisor/web/seen.json ({device: {instance: {version, last, last_count, at}}}), beside devices.json, written as web.py
 writes its files (atomic, mode 600) under a lock.
 """
 from __future__ import annotations
@@ -29,6 +30,7 @@ def seen(device: str, name: str, version: str) -> bool:
     with _lock:
         data = web._read(STORE)
         data.setdefault(device, {})[name] = {"version": version, "last": model["last"],
+                                             "last_count": model["last_count"],
                                              "at": datetime.now().isoformat(timespec="seconds")}
         web._write(STORE, data)
     return True
@@ -48,7 +50,9 @@ def unread(device: str, summaries: dict[str, dict] | None = None) -> dict[str, b
     for name, s in summaries.items():
         mark = marks.get(name)
         since = (mark.get("last") or mark.get("at") or "") if mark else paired
-        out[name] = bool(s.get("last")) and s["last"] > since
+        out[name] = bool(s.get("last")) and (s["last"] > since or (
+            s["last"] == since and mark is not None and "last_count" in mark
+            and s.get("last_count", 0) > mark["last_count"]))
     return out
 
 

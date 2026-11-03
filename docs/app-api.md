@@ -792,6 +792,10 @@ the body from `/push/latest`, over the tailnet.
 ### 11.1 `POST /app/v1/push/register`
 
 This device's APNs token (the app sends it at every launch: APNs may change it).
+Retries stop when the device unpairs, unregisters or replaces its token. `BadDeviceToken`, `Unregistered`,
+`DeviceTokenNotForTopic` and HTTP 410 remove only the matching registration. `ExpiredProviderToken` and
+`InvalidProviderToken` clear the cached provider JWT for the next attempt, keeping the device token.
+Held-message digests reach APNs-only operators too.
 
 - **Request:** `{"token": str, "env": str, "topic": str, "platform": str}`: the token as hex, `env` `"sandbox"` (Xcode
   builds) or `"production"`, `topic` the bundle id, `platform` `"ios"` or `"macos"`.
@@ -842,9 +846,11 @@ reaches it, so no other page can spend them.
 
 - The PWA keeps its unread marks in the browser; the apps need the server to know, for the badge. The PWA keeps its own.
 - `.supervisor/web/seen.json` holds, per device and instance, the version it last marked seen and the instance's `last`
-  stamp at that version.
+  stamp and count of instance items at that stamp at that version.
 - An instance is **unread** on a device when the instance's `last` (`web_chat.summary(n)["last"]`: its newest answer or
-  message to the operator) is newer than the stamp the device marked. The operator's own messages never make it unread.
+  message to the operator) is newer than the stamp the device marked, or the same stamp has more instance items.
+  New answers and messages in the same second therefore make it unread again. Old marks without the count keep
+  their timestamp-only comparison until the next seen. The operator's own messages never make it unread.
 - An instance the device never marked counts from the device's pairing time: what came before it is not unread.
 - The badge is the number of unread instances (`web_seen.badge(device)`), sent with `/instances`, `seen`,
   `/push/latest` and every APNs push.
@@ -865,6 +871,8 @@ returned when it is not one: the routes answer 404). `whole`: every turn (`?all=
   - an attachment has `path` (`"chat/<cid>/<k>/<j>"` or `"message/<file>/<j>"`) instead of `url`. The HTML maps it to
     `/chatfiles/<cid>/<k>/<j>` and `/files/<file>/<j>`; the JSON to `/app/v1/file/<path>` (the file URL-encoded).
 - `version` and `live` are computed in `build`, over the whole chat, before the window.
+- Internal `last_count` counts instance items at `last` over the whole feed; `summary` counts the same span.
+  The serialiser removes it, and it does not enter the revisions.
 - `last` and `web_chat.summary(name)["last"]` come from one helper (`web_chat.last_from(chat, sent)`), so unread never
   drifts from the rail; a test pins them equal.
 - `web._sent_during` moves to `web_chat.sent_during(name, chat, archived=False)`; `web._sent_during` stays as the web
@@ -891,7 +899,8 @@ returned when it is not one: the routes answer 404). `whole`: every turn (`?all=
 - `device(req) -> str | None`: the paired device of the bearer (refreshing `last_seen`).
 - `stamp(ts: str | float | None) -> str | None` (§1.6) and `to_json(model: dict) -> dict` (stamps and URLs, §13.1).
 - `error(status: int, code: str, message: str, **extra) -> web.Response`.
-- The long-poll (§4): a loop on `web_chat.feed` every 0.5 s up to `wait`, refreshing `web_chat.watching` every 2 s;
+- The long-poll (§4): a loop on `web_chat.feed` every 0.5 s up to `wait`, refreshing `web_chat.watching` every 2 s only when `at` is supplied;
+  without `at`, only the initial watching mark is made, so a later `/away` stays effective;
   each held request is one thread of the web server's `ThreadingHTTPServer`.
 - It calls the same functions the web routes do (`web_chat.send/queue/background/unqueue/stop/end/clear`,
   `web._serve_attachment`, `doc_comments`, `apns`, `webpush.take`, `web_seen`). Where a web route builds its answer as
@@ -913,7 +922,7 @@ returned when it is not one: the routes answer 404). `whole`: every turn (`?all=
 ### 13.4 `supervisor/web_seen.py`
 
 - `seen(device: str, name: str, version: str) -> bool`: True when `version` is the current feed's (`web_chat.feed(name)`);
-  then it records `{version, last, at}` for the device and instance. False otherwise, recording nothing (the route
+  then it records `{version, last, last_count, at}` for the device and instance. False otherwise, recording nothing (the route
   answers `409 stale_version`).
 - `unread(device: str, summaries: dict | None = None) -> dict[str, bool]`: per instance (§12); `summaries` (each
   instance's `web_chat.summary`) when the caller has them already (`/app/v1/instances`).

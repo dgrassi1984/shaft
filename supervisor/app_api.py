@@ -14,7 +14,8 @@ of another site can neither send it nor read an answer (no route sends CORS head
 The long-poll (§4): GET /app/v1/chat/<n>?since=&live=&wait= holds the request — one thread of the web server's
 ThreadingHTTPServer — until either revision of the feed moves (web_chat.build: `version`, `live`), woken by every
 web_chat.save() and looking again every LOOK_S, or `wait` seconds pass (304). Held for the current chat, it marks the
-device as watching it (web_chat.watching): no push for that chat reaches it meanwhile.
+device as watching it (web_chat.watching). Only a poll with `at` refreshes that mark during the hold, so a later
+away cannot be undone by a held poll without `at`.
 """
 from __future__ import annotations
 
@@ -87,6 +88,7 @@ def to_json(model: dict) -> dict:
     """A chat's model (web_chat.build) as the apps get it (§4.2): its times stamped (stamp), each file's `path` made
     its URL (file_url)."""
     out = json.loads(json.dumps(model))           # a copy: the model is the HTML's too
+    out.pop("last_count", None)                  # server-only unread tie-breaker
     out["reply"] = _reply(out["reply"])
     out["last"] = stamp(out["last"])
     if out["chat"]:
@@ -271,7 +273,7 @@ def _feed(req: Request, n: str, cid: str | None = None) -> Response:
         left = end - time.monotonic()
         if left <= 0:
             return Response(304, b"", {"Cache-Control": "no-store"})
-        if watch and time.monotonic() - marked >= WATCH_EVERY_S:
+        if watch and at is not None and time.monotonic() - marked >= WATCH_EVERY_S:
             web_chat.watching(n, req.device, at)  # not after the app said it went away (`at` older than its away)
             marked = time.monotonic()
         web_chat.wait_change(min(LOOK_S, left))

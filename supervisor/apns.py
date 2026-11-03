@@ -1,4 +1,7 @@
-"""Native push: a title through APNs, the message fetched over the tailnet (/app/v1/push/latest)."""
+"""Native push: a title through APNs, the message fetched over the tailnet (/app/v1/push/latest).
+Retries stop after unpair or token replacement. Provider-token rejection clears the JWT cache; dead device tokens,
+including DeviceTokenNotForTopic, remove only the matching registration.
+"""
 from __future__ import annotations
 
 import json
@@ -118,6 +121,7 @@ def provider_token(now: float | None = None) -> str:
 
 
 def _send_one(device: str, sub: dict, event: dict) -> str:
+    global _cached
     try:
         reason = configured()
         if reason:
@@ -146,7 +150,10 @@ def _send_one(device: str, sub: dict, event: dict) -> str:
         except ValueError:
             reason = body[:200]
         said = f"{code}: {reason}"
-        if code == "410" or reason in {"BadDeviceToken", "Unregistered"}:
+        if reason in {"ExpiredProviderToken", "InvalidProviderToken"}:
+            with _token_lock:
+                _cached = ()                         # keep the device, mint a new provider JWT on the next attempt
+        if code == "410" or reason in {"BadDeviceToken", "DeviceTokenNotForTopic", "Unregistered"}:
             with _lock:
                 data = devices()
                 if data.get(device) != sub:           # a failure for an old token must not drop its replacement
@@ -166,6 +173,9 @@ def _wake(subs: dict, event: dict) -> None:
     def run(device: str, sub: dict):
         for wait in (0, *webpush.RETRY_S):
             time.sleep(wait)
+            from . import web
+            if devices().get(device) != sub or device not in web.devices():
+                return
             said = _send_one(device, sub, event)
             log(f"web: APNs to device {device} ({event['title']}): {said}")
             if said.startswith("2") or "removed" in said or "stopped" in said:

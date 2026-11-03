@@ -16,6 +16,8 @@ Files go in with a message: saved in the instance's folder by messages.from_oper
 message says where. Files it sends the operator meanwhile (send_message) are shown in the chat, as in Messages.
 
 Chats are kept in .supervisor/web/chats/<id>.json, written only by this process.
+
+The feed and rail share last_from; their internal last_count distinguishes instance items in the same second.
 """
 from __future__ import annotations
 
@@ -183,13 +185,21 @@ def reply_event(chat: dict) -> dict:
     return {"title": title, "body": first[:160], "url": f"/i/{name}/chat", "tag": name}
 
 
+def _instance_stamps(chat: dict | None, sent: list[dict]) -> list[str]:
+    return ([t["ts"] for t in (chat or {}).get("turns") or [] if t["role"] == "assistant"]
+            + [m["ts"] for m in sent if m.get("to") == "operator"])
+
+
+def last_count(chat: dict | None, sent: list[dict]) -> int:
+    """How many instance items share `last`: another in the same second must make the chat unread again."""
+    return _instance_stamps(chat, sent).count(last_from(chat, sent))
+
+
 def last_from(chat: dict | None, sent: list[dict]) -> str | None:
     """The newest thing from the instance: an answer in `chat`, or a message to the operator among `sent` — what the
     rail's `last` and a feed's `last` both are, so the apps' unread mark (web_seen) never drifts from the rail. None
     when there is neither."""
-    stamps = [t["ts"] for t in (chat or {}).get("turns") or [] if t["role"] == "assistant"]
-    stamps += [m["ts"] for m in sent if m.get("to") == "operator"]
-    return max(stamps, default="") or None
+    return max(_instance_stamps(chat, sent), default="") or None
 
 
 def summary(name: str, history: list[dict] = ()) -> dict:
@@ -198,11 +208,13 @@ def summary(name: str, history: list[dict] = ()) -> dict:
     one never lit the rail: W8, review 2026-10-24), and whether it is replying."""
     c = next(iter(chats(name)), None)
     since = (c.get("cleared") or c["created"]) if c else ""
-    sent = next((m for m in reversed(history) if m["from"] == name and m["to"] == "operator" and m["ts"] >= since
-                 and (since or not m.get("read"))), None)
+    sent_all = [m for m in history if m["from"] == name and m["to"] == "operator" and m["ts"] >= since
+                and (since or not m.get("read"))]
+    sent = next(iter(reversed(sent_all)), None)
     sent_line = first_line((sent or {}).get("text", ""))
     if not c or c.get("cleared"):
-        return {"line": sent_line[:80], "last": last_from(None, [sent])} if sent else {}
+        return {"line": sent_line[:80], "last": last_from(None, sent_all),
+                "last_count": last_count(None, sent_all)} if sent else {}
     turns = c.get("turns") or []
     text = (turns[-1].get("shown", turns[-1].get("content")) or "") if turns else ""
     who = "you: " if turns and turns[-1]["role"] == "user" else ""
@@ -212,7 +224,8 @@ def summary(name: str, history: list[dict] = ()) -> dict:
              else first_line(text, quotes=False))
     if sent and sent["ts"] >= (turns[-1]["ts"] if turns else ""):
         who, first = "", sent_line
-    return {"line": (who + first)[:80], "last": last_from(c, [sent] if sent else []) or "",
+    return {"line": (who + first)[:80], "last": last_from(c, sent_all) or "",
+            "last_count": last_count(c, sent_all),
             "replying": c.get("state") == "replying"}
 
 
@@ -424,6 +437,8 @@ def build(name: str, chat: dict | None, sent: list[dict], archived: bool = False
              "can_clear": bool(chat) and not archived}
     model["version"] = _rev({**model, "reply": reply and {"started": reply["started"]}})
     model["live"] = _rev({"activity": reply["activity"], "answer": reply["answer"]}) if reply else ""
+    # Internal seen tie-breaker, over the whole feed; keep it out of the public JSON and its revisions.
+    model["last_count"] = last_count(chat, sent)
     first = 0 if whole or not chat else max(0, len(chat["turns"]) - CHAT_WINDOW)
     if first:
         since = chat["turns"][first]["ts"]
