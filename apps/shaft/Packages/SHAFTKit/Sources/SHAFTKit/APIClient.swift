@@ -203,6 +203,9 @@ public final class APIClient: Sendable {
         guard let url = URL(string: relativeURL, relativeTo: credential.baseURL)?.absoluteURL else {
             throw APIError.decoding(path: relativeURL, message: "not a URL")
         }
+        guard LocalFiles.serverOrigin(url) == LocalFiles.serverOrigin(credential.baseURL) else {
+            throw APIError.decoding(path: relativeURL, message: "Attachment URL is outside the paired server origin.")
+        }
         var request = URLRequest(url: url)
         request.setValue(credential.bearer, forHTTPHeaderField: "Authorization")
         request.timeoutInterval = 300
@@ -378,11 +381,12 @@ public final class APIClient: Sendable {
                         upload: Data? = nil) async throws -> (Data, HTTPURLResponse) {
         let data: Data
         let response: URLResponse
+        let delegate = OriginRedirectDelegate(origin: request.url!)
         do {
             if let upload {
-                (data, response) = try await session.upload(for: request, from: upload)
+                (data, response) = try await session.upload(for: request, from: upload, delegate: delegate)
             } else {
-                (data, response) = try await session.data(for: request)
+                (data, response) = try await session.data(for: request, delegate: delegate)
             }
         } catch {
             if error is CancellationError || (error as? URLError)?.code == .cancelled || Task.isCancelled {
@@ -441,4 +445,20 @@ public enum Platform {
     #else
     public static let current = "ios"
     #endif
+}
+
+/// Refuse redirects to another origin before URLSession can send credentials there.
+final class OriginRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+    let origin: URL
+
+    init(origin: URL) { self.origin = origin }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+        guard let url = request.url, LocalFiles.serverOrigin(url) == LocalFiles.serverOrigin(origin) else {
+            completionHandler(nil)
+            return
+        }
+        completionHandler(request)
+    }
 }

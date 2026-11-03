@@ -13,7 +13,7 @@ struct FeedRowsTests {
     @Test func dayRowsGoBeforeTheFirstItemOfEachDayInTheDevicesZone() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "Europe/Rome")!
-        var feed = try feed("contract-idle")
+        var feed = try feed("idle")
         var content = try #require(feed.content)
         // Move the first item to the day before: two days, two separators.
         if case .user(var first) = content.items[0] {
@@ -31,7 +31,7 @@ struct FeedRowsTests {
     }
 
     @Test func theReplyQueuedMessagesAndNotSentOnesFollowTheItems() throws {
-        let feed = try feed("contract-live")
+        let feed = try feed("queued")                              // a reply going on, with a message queued after it
         let content = try #require(feed.content)
         let held = OutboxEntry(instance: "thelos", mid: content.mids[0], text: "arrived", mode: .now, quotes: [],
                                retryOf: nil, files: [], created: Date(), state: .sending, reason: nil)
@@ -47,7 +47,7 @@ struct FeedRowsTests {
     }
 
     @Test func anArchivedChatShowsNothingThatActs() throws {
-        var feed = try feed("contract-live")
+        var feed = try feed("live")
         feed.content?.archived = true
         feed.content?.canEnd = true
         let ids = FeedRows.rows(feed).map(\.id)
@@ -55,7 +55,7 @@ struct FeedRowsTests {
     }
 
     @Test func arrivalsAreTheInstancesNewAnswersNotTheFirstLoadNorTheOperatorsOwn() throws {
-        let idle = try feed("contract-idle")
+        let idle = try feed("idle")
         #expect(FeedRows.arrivals(from: nil, to: idle).isEmpty)
         var older = idle
         older.content?.items.removeLast()                           // a3, the failed answer
@@ -136,7 +136,7 @@ struct DocumentsStoreTests {
             case ("/app/v1/docs/thelos/save", "new"):
                 return .json(200, #"{"said": "saved · thelos gets the change with your next message", "path": "ledger.md", "sha": "newer"}"#)
             case ("/app/v1/docs/thelos/doc", _):
-                return .json(200, fixtureText(try DecodingTests.fixture("contract-doc-comments")))
+                return .json(200, fixtureText(try DecodingTests.fixture("doc-comments")))
             case ("/app/v1/docs/thelos", _):
                 return .json(200, #"{"dir": "notes/docs", "max_bytes": 262144, "docs": []}"#)
             default:
@@ -162,7 +162,7 @@ struct DocumentsStoreTests {
         let server = StubServer { request in
             switch request.path {
             case "/app/v1/docs/thelos/doc":
-                return .json(200, fixtureText(try DecodingTests.fixture("contract-doc-comments")))
+                return .json(200, fixtureText(try DecodingTests.fixture("doc-comments")))
             case "/app/v1/docs/thelos/comment":
                 return request.json?["text"] as? String == ""
                     ? .json(409, #"{"error": {"code": "refused", "message": "a comment needs text"}}"#)
@@ -240,7 +240,7 @@ struct ChatStoreUITests {
     @Test func coveringTheChatAsksAgainAtOnceWithWatch0() async throws {
         let folder = try temporaryFolder("ui")
         defer { try? FileManager.default.removeItem(at: folder) }
-        let idle = fixtureText(try DecodingTests.fixture("contract-idle"))
+        let idle = fixtureText(try DecodingTests.fixture("idle"))
         let server = StubServer { request in
             // The first answers at once; a long-poll is held (here: answered 304 after a moment).
             if request.query("since") != nil { Thread.sleep(forTimeInterval: 0.2); return .notModified }
@@ -293,7 +293,7 @@ struct ReconnectTests {
     @Test func aSendThatGetsThroughEndsTheOfflineWaitAtOnce() async throws {
         let folder = try temporaryFolder("ui")
         defer { try? FileManager.default.removeItem(at: folder) }
-        let idle = fixtureText(try DecodingTests.fixture("contract-idle"))
+        let idle = fixtureText(try DecodingTests.fixture("idle"))
         let server = StubServer { _ in throw StubServer.NetworkDown() }
         let store = InstancesStore(client: server.client, outbox: try Outbox(directory: folder.appending(path: "o")),
                                    drafts: DraftStore(directory: folder.appending(path: "d")))

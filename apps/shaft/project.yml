@@ -74,7 +74,7 @@ targets:
             CFBundleURLSchemes: [shaft]
         UILaunchScreen: {}
         UIApplicationSceneManifest:
-          UIApplicationSupportsMultipleScenes: true
+          UIApplicationSupportsMultipleScenes: false
         UISupportedInterfaceOrientations:
           [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         UISupportedInterfaceOrientations~ipad:
@@ -163,6 +163,8 @@ targets:
       - path: macOSTests
       - path: macOS/MarkdownAttributed.swift
       - path: macOS/MenuAction.swift
+      - path: macOS/MacDevSession.swift
+      - path: Shared/Attachments/AttachmentViews.swift
     dependencies:
       - package: SHAFTKit
     settings:

@@ -16,6 +16,7 @@ struct ChatScreen: View {
     @Environment(InstancesStore.self) private var store
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.chatInFront) private var inFront
+    @Environment(\.chatCovered) private var externallyCovered
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
@@ -36,7 +37,14 @@ struct ChatScreen: View {
         _screen = State(initialValue: ChatScreenModel(chat: chat))
     }
 
-    private var active: Bool { visible && scenePhase == .active }
+    private var active: Bool {
+        visible && scenePhase == .active && inFront && !externallyCovered && !covered
+    }
+    private var covered: Bool {
+        (screen.showDocuments && covers) || screen.selecting != nil || screen.rating != nil
+            || screen.showEarlierChats || preview.url != nil || preview.error != nil
+            || screen.confirmRetry != nil || screen.confirmingNewChat || screen.composerCovered
+    }
     private var covers: Bool {
         #if os(iOS)
         shell == nil || sizeClass == .compact
@@ -135,11 +143,10 @@ struct ChatScreen: View {
             follow()
         }
         .onChange(of: scenePhase) { follow() }
-        .onChange(of: inFront) { markSeen() }
-        .onChange(of: screen.showDocuments) { _, open in chat.setWatching(!(open && covers)) }
+        .onChange(of: active) { follow() }
         .onChange(of: covers) { _, covers in
             screen.documentsCover = covers
-            chat.setWatching(!(screen.showDocuments && covers))
+            follow()
         }
         .onChange(of: chat.feed) { old, new in
             guard let new else { return }
@@ -261,9 +268,13 @@ struct ChatScreen: View {
 
     /// The long-poll runs only while the chat is visible and the app in front (§4); leaving says `away` (§7.6).
     private func follow() {
-        if active {
+        chat.setWatching(active)
+        if chat.cid == nil {
+            if active { model.visibleChat = chat.instance }
+            else if model.visibleChat == chat.instance { model.visibleChat = nil }
+        }
+        if visible && scenePhase == .active {
             chat.start()
-            if chat.cid == nil { model.visibleChat = chat.instance }
             markSeen()
         } else {
             let wasPolling = chat.isPolling
@@ -282,6 +293,10 @@ struct ChatScreen: View {
               version != seenVersion else { return }
         seenVersion = version
         Task {
+            guard active, newestOnScreen else {
+                if seenVersion == version { seenVersion = nil }
+                return
+            }
             if !(await chat.markSeen()) && seenVersion == version { seenVersion = nil }
         }
     }

@@ -107,9 +107,19 @@ public final class Outbox {
             throw .transport(code: (error as NSError).code,
                              message: "Could not keep the message's files: \(error.localizedDescription)")
         }
+        let previous = entries
         entries.removeAll { $0.mid == entry.mid }
         entries.append(entry)
-        savePersisting()
+        do {
+            try persist()
+            persistError = nil
+        } catch {
+            entries = previous
+            try? FileManager.default.removeItem(at: filesURL(entry.mid))
+            let message = "Could not save the outbox: \(error.localizedDescription)"
+            persistError = message
+            throw .transport(code: (error as NSError).code, message: message)
+        }
     }
 
     /// Send an entry `enqueue` put in the outbox.

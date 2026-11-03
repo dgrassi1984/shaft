@@ -13,6 +13,28 @@ public enum LocalFiles {
     public static func drafts() throws -> URL { try root().appending(path: "drafts", directoryHint: .isDirectory) }
     public static func outbox() throws -> URL { try root().appending(path: "outbox", directoryHint: .isDirectory) }
 
+    /// Move legacy storage once; every origin keeps its own drafts and outbox.
+    static func namespaced(_ directory: URL, origin: URL) throws -> URL {
+        let key = Data(serverOrigin(origin).utf8).base64EncodedString()
+            .replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "+", with: "-")
+        let target = directory.deletingLastPathComponent().appending(path: "servers")
+            .appending(path: key).appending(path: directory.lastPathComponent)
+        let manager = FileManager.default
+        if manager.fileExists(atPath: directory.path), !manager.fileExists(atPath: target.path) {
+            try manager.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try manager.moveItem(at: directory, to: target)
+        }
+        return target
+    }
+
+    /// Canonical scheme, host and effective port, shared by storage and request checks.
+    static func serverOrigin(_ url: URL) -> String {
+        let scheme = url.scheme?.lowercased() ?? ""
+        let host = url.host?.lowercased() ?? ""
+        let port = url.port ?? (scheme == "https" ? 443 : 80)
+        return "\(scheme)://\(host):\(port)"
+    }
+
     /// Write `data` atomically, creating the folder.
     static func write(_ data: Data, to url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
