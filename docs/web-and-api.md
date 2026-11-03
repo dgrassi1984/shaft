@@ -64,7 +64,9 @@ curl -s https://<mac>.<tailnet>.ts.net:8443/v1/inbox/example -H "Authorization: 
 ## The web UI (`shaft web on`)
 
 `shaft top` in a browser, with a chat-first interface on the tailnet. See [web UI design](plans/PLAN-webui.md)
-and [chat design](plans/PLAN-webui-chat.md).
+and [chat design](plans/PLAN-webui-chat.md). The native chat apps' JSON API (`/app/v1`, on the same service) has its
+contract in [app-api.md](app-api.md); it is being built ([PLAN-native-apps.md](plans/PLAN-native-apps.md)) and does
+not answer yet.
 
 - `/` opens the chat with the instance you last talked to. The left rail lists every instance's chat (its state, its
   last line, as text rather than its Markdown, a mark when it answered while you were elsewhere; the tab title counts them), then **Manage**: Overview
