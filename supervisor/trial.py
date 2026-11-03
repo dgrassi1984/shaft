@@ -19,6 +19,7 @@ Plan, decisions and acceptance criteria: docs/plans/PLAN-trials.md.
 """
 from __future__ import annotations
 
+import base64
 import difflib
 import fcntl
 import hashlib
@@ -137,6 +138,45 @@ def _freeze(name: str, tid: str, which: str, files: dict[str, bytes | None]) -> 
 
 def _sha(data: bytes | None) -> str | None:
     return None if data is None else hashlib.sha256(data).hexdigest()
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    """Replace `path` whole: a pass killed mid-write leaves the previous copy, never a truncated one."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text)
+    os.replace(tmp, path)
+
+
+def _read_json(path: Path):
+    """A saved arm or pair cache; None when missing or unreadable (then it is not reused: both arms run again)."""
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError) as e:
+        if path.exists():
+            log(f"trial: {path} unreadable ({type(e).__name__}: {e}); not reused")
+        return None
+
+
+def _cache_json(value):
+    """The pair's read cache as JSON: bytes (an HTTP body, a mail attachment) as base64, tuples as lists."""
+    if isinstance(value, bytes):
+        return {"__b64__": base64.b64encode(value).decode()}
+    if isinstance(value, (list, tuple)):
+        return [_cache_json(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _cache_json(v) for k, v in value.items()}
+    return value
+
+
+def _cache_value(value):
+    if isinstance(value, dict):
+        if set(value) == {"__b64__"}:
+            return base64.b64decode(value["__b64__"])
+        return {k: _cache_value(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_cache_value(v) for v in value]
+    return value
 
 
 def _ledger(row: dict) -> None:
@@ -674,17 +714,10 @@ def state_context(project: Path, name: str, state: dict) -> str:
 
 
 def judge_pair(context: str, first: dict, second: dict, purpose: str, model: str | None = None) -> dict:
-    """One judgment of a pair in one order. `finish_reason='length'` is no answer yet: asked once more with
-    twice the room; then it fails (the state is reported unjudged, never guessed)."""
+    """One judgment of a pair in one order; the judge owns retries."""
     from . import judge
     case = judge_case(context, first, second)
-    for room in (16000, 32000):
-        try:
-            return judge.ask(JUDGE_SYSTEM, case, JUDGE_SCHEMA, purpose=purpose, max_tokens=room, model=model)
-        except judge.JudgeError as e:
-            if "max_tokens" not in str(e) or room == 32000:
-                raise
-    raise AssertionError("unreachable")
+    return judge.ask(JUDGE_SYSTEM, case, JUDGE_SCHEMA, purpose=purpose, model=model)
 
 
 def _judge_usd(purpose: str) -> float:
@@ -1083,6 +1116,29 @@ def run_pair(project: Path, t: dict, i: int, model: str) -> None:
 
     label = "local" if local else (t["llm"]["model"] if run_model == "local" else run_model)
     recorded = set()
+    from .core import BROKER_MAX_CALLS
+    fingerprints = {}
+    arm_dir = _dir(name, t["id"]) / "arms"
+    # A completed arm of an earlier, preempted pass is reused only with the pair's read cache it ran with, loaded
+    # before the other arm runs: both runs then get the same answers from the world, as the judge is told. Without a
+    # readable cache (or arm) both run again.
+    saved_cache = _read_json(arm_dir / f"{i:02d}cache.json")
+    reused = set()
+    for arm in order:
+        spec = {"state": {k: v for k, v in s.items() if k in ("ts", "t0", "start_commit", "mind_commit", "inbox",
+                "original_goal", "resource_shock", "resource_shock_steps")}, "llm": t["llm"], "model": label,
+                "cycles": t.get("cycles", 1), "sleep_between": t.get("sleep_between", False),
+                "budget": [CYCLE_TIMEOUT_S, SLEEP_TIMEOUT_S, BROKER_MAX_CALLS],
+                "code": {k: _sha(v) for k, v in sorted(arms_code[arm].items())}}
+        fingerprints[arm] = hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest()
+        rec = _read_json(arm_dir / f"{i:02d}{arm}.json") if isinstance(saved_cache, dict) else None
+        if isinstance(rec, dict) and rec.get("completed") and rec.get("ended") != "preempted" and \
+                rec.get("fingerprint") == fingerprints[arm]:
+            arms[arm] = rec
+            reused.add(arm)
+            recorded.add(arm)   # already charged when this arm ran
+    if reused:
+        cache.update({int(k): _cache_value(v) for k, v in saved_cache.items()})
 
     def charge(arm, rec):
         recorded.add(arm)
@@ -1095,6 +1151,8 @@ def run_pair(project: Path, t: dict, i: int, model: str) -> None:
                                   and "same answer as the other run" not in c.get("tags", []))})
 
     def one(arm: str) -> None:
+        if arm in arms:
+            return
         arms[arm] = replay_arm(project, name, s, arms_code[arm], model=run_model, cache=cache, cache_lock=lock,
                                billed=f"{name}@trial:{t['id']}:{i}{arm}",
                                should_stop=lambda: stop() or not _within_caps(t)
@@ -1102,6 +1160,7 @@ def run_pair(project: Path, t: dict, i: int, model: str) -> None:
                                    and usage_today(name)["local_units"] >= LOCAL_UNITS_PER_DAY),
                                cycles=t.get("cycles", 1), sleep_between=t.get("sleep_between", False),
                                on_unit=lambda rec: charge(arm, rec))
+        arms[arm]["fingerprint"] = fingerprints[arm]
     log(f"{name}: trial {t['id']} past cycle {i + 1}/{len(t['states'])} ({s['ts']}) on "
         f"{'the local model' if local else run_model if run_model != 'local' else t['llm']['model']}")
     if local:
@@ -1118,8 +1177,17 @@ def run_pair(project: Path, t: dict, i: int, model: str) -> None:
     for arm, rec in arms.items():
         if arm not in recorded:   # older replay adapters return a single record without calling on_unit
             charge(arm, rec)
-        (_dir(name, t["id"]) / "arms").mkdir(parents=True, exist_ok=True)
-        (_dir(name, t["id"]) / "arms" / f"{i:02d}{arm}.json").write_text(json.dumps(rec, indent=1, ensure_ascii=False))
+    # The cache before the arms: an arm saved without this pass's cache beside it is never reused with an older one.
+    cache_path = arm_dir / f"{i:02d}cache.json"
+    try:
+        with lock:
+            _write_atomic(cache_path, json.dumps(_cache_json(cache), ensure_ascii=False))
+    except (TypeError, ValueError) as e:
+        log(f"{name}: trial {t['id']} past cycle {i + 1}: read cache not saved ({e}); its arms will not be reused")
+        cache_path.unlink(missing_ok=True)
+    for arm, rec in arms.items():
+        if arm not in reused:   # a reused arm is already saved, unchanged
+            _write_atomic(arm_dir / f"{i:02d}{arm}.json", json.dumps(rec, indent=1, ensure_ascii=False))
     if any(a["ended"] == "preempted" for a in arms.values()) or len(arms) < 2:
         if paused(name):   # not the model's preemption: no step towards the fallback model
             log(f"{name}: trial {t['id']} past cycle {i + 1} stopped: {name} is paused (it runs again after resume)")
@@ -1165,6 +1233,7 @@ def run_pair(project: Path, t: dict, i: int, model: str) -> None:
                    for k, v in arms.items()})
     log(f"{name}: trial {t['id']} past cycle {i + 1}: {outcome} for the change ({why})")
     save(t)
+    cache_path.unlink(missing_ok=True)   # judged: no arm of this pair is run again, its reads are not needed
 
 
 def conclude(project: Path, t: dict) -> None:

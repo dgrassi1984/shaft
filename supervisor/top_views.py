@@ -463,7 +463,7 @@ def render_costs(snap, ui, width, height):
               style="red" if c["judge_today_total"] >= c["judge_alert"] else "")
     lines.append(jt)
     if c["unpriced"]:
-        lines.append(Text(f"   {c['unpriced']} judge call(s) on a model with no known price are not counted", style="yellow"))
+        lines.append(Text(f"   {c['unpriced']} unpriced model call(s) are not counted in dollar totals", style="yellow"))
     lines.append(Text(""))
     days = Table(box=None, padding=(0, 2), show_edge=False, header_style="bold", title_justify="left")
     for col in ("day", "total", "instances", "trials", "judge", "coder"):
