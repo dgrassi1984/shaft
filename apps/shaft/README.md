@@ -97,11 +97,12 @@ SHAFT_DEV_DIR=/tmp/shaft-mac SHAFT_DEV_PAIR='http://127.0.0.1:8899/pair?t=…' /
 `SHAFT_DEV_DRIVE=<script>` drives it from a script of steps (`macOS/MacDevDriver.swift` lists them: open a chat, keys
 such as `return`, `shift+return`, `cmd+return`, `option+down`, `cmd+.`, `cmd+shift+n` and `slash`, typing, selecting
 text in a message and picking from its right-click menu, Select text, menu bar items, pasting a file, Quick Look, the
-documents, an earlier chat, Retry on a message not sent, closing the window, a notification click, snapshots of the
-window and its sheet), logging each step and what it changed to stdout. Typing goes through the app's own event
+documents, an earlier chat, Retry on a message not sent, closing the window, a notification click, the time a chat
+takes to load, snapshots of the window and its sheet), logging each step and what it changed to stdout. Typing goes through the app's own event
 queue, and key combinations through the window, then the menu bar, then the first responder, as AppKit routes them.
 Snapshots are the window's own drawing: vibrant areas (the sidebar, the inspector's text) come out blank or dark.
-SwiftUI's own buttons cannot be pressed from a script; the steps call what they call instead. On a locked or sleeping screen every window counts as covered, so the chat neither
+SwiftUI's own buttons cannot be pressed from a script (the steps call what they call instead), and on a locked screen
+the window takes no mouse moves (hover) and runs no animations (an inspector opened with one stays 0 wide). On a locked or sleeping screen every window counts as covered, so the chat neither
 polls nor is marked seen there: `SHAFT_DEV_PRESENCE=front` (or `shown`) says the window is in front (or shown behind
 another app's) instead.
 

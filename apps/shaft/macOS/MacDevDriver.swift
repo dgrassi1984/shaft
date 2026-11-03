@@ -30,6 +30,8 @@ import SwiftUI
 ///     rows                          log the chat list's unread marks and the badge
 ///     selecttext <doc> | <text>     open Select text over <text> (<doc>: the document it is from, or "")
 ///     sheetpick <text> | <item>     in the sheet's text, select <text> and pick an item of its right-click menu
+///     hover <text>                  move the pointer over <text> in a message
+///     until                         wait for the chat shown to have its feed; log how long it took
 ///     cleardraft                    empty the composer
 ///     layout                        log the width of each column
 ///     state                         log the chat's draft, quotes, selection and focus
@@ -59,7 +61,7 @@ enum MacDevDriver {
     }
 
     static func log(_ text: String) {
-        print("drive: \(text)")
+        print("drive: \(Date().formatted(.dateTime.hour().minute().second().secondFraction(.fractional(2)))) \(text)")
         fflush(stdout)
     }
 
@@ -200,6 +202,18 @@ enum MacDevDriver {
                 return log("no item \"\(parts[1])\"")
             }
             NSApp.sendAction(action, to: item.target, from: item)
+        case "hover":
+            // The pointer moved over <text> in a message (the window must take mouse moves: in front).
+            guard let (view, range) = find(rest) else { return log("no message shows \"\(rest)\"") }
+            let at = point(view, range.location)
+            for dx in stride(from: -40.0, through: 0, by: 10) { mouse(.mouseMoved, at: NSPoint(x: at.x + dx, y: at.y)) }
+        case "until":
+            // Wait (up to 20 s) until the chat shown has its feed, then log how long that took.
+            let start = Date()
+            while state.screen?.chat.feed == nil, Date().timeIntervalSince(start) < 20 {
+                try? await Task.sleep(for: .milliseconds(20))
+            }
+            log("feed after \(Int(Date().timeIntervalSince(start) * 1000)) ms: \(state.screen?.chat.content?.items.count ?? -1) items, \(state.screen?.chat.content?.earlier ?? -1) earlier")
         case "cleardraft":
             state.screen?.chat.draft = Draft()
         case "pastefile":

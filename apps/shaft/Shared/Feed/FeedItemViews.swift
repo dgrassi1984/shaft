@@ -77,6 +77,7 @@ extension View {
 struct UserItemView: View {
     let turn: UserItem
     @Environment(ChatScreenModel.self) private var screen
+    @State private var hovering = false
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 4) {
@@ -90,6 +91,9 @@ struct UserItemView: View {
             .background(Color.accentColor.opacity(0.16), in: RoundedRectangle(cornerRadius: 16))
             .messageMenu(turn.text)
             HStack(spacing: 4) {
+                #if os(macOS)
+                if !turn.text.isEmpty { HoverActions(source: turn.text, shown: hovering).padding(.trailing, 6) }
+                #endif
                 Text(Stamp.time(turn.ts))
                 if turn.interjected { Text("· during its reply") }
             }
@@ -98,6 +102,9 @@ struct UserItemView: View {
             .accessibilityLabel(turn.interjected ? "Sent \(Stamp.full(turn.ts)), during its reply"
                                                  : "Sent \(Stamp.full(turn.ts))")
         }
+        #if os(macOS)
+        .onHover { hovering = $0 }
+        #endif
         .frame(maxWidth: .infinity, alignment: .trailing)
         .padding(.leading, 40)
         .accessibilityElement(children: .contain)
@@ -156,6 +163,7 @@ struct AssistantItemView: View {
     let archived: Bool
     @Environment(ChatScreenModel.self) private var screen
     @Environment(InstancesStore.self) private var store
+    @State private var hovering = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -193,15 +201,19 @@ struct AssistantItemView: View {
             }
             if !answer.activity.isEmpty { ActivityDisclosure(activity: answer.activity) }
             AnswerFooter(ts: answer.ts, source: answer.content, rating: answer.rating, k: answer.k, file: nil,
-                         keepActions: answer.last)
+                         keepActions: answer.last, hovering: hovering)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        #if os(macOS)
+        .onHover { hovering = $0 }
+        #endif
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(screen.instance)")
     }
 }
 
-/// An answer's time, its rating, and (on the last answer, kept in view) Copy, Reply and the thumbs.
+/// An answer's time, its rating, and (on the last answer, kept in view) Copy, Reply and the thumbs. On the Mac the
+/// other answers show Copy and Reply while the pointer is over them, as the web does on a computer.
 struct AnswerFooter: View {
     let ts: Date
     let source: String
@@ -209,6 +221,7 @@ struct AnswerFooter: View {
     let k: Int?
     let file: String?
     let keepActions: Bool
+    var hovering = false
     @Environment(ChatScreenModel.self) private var screen
 
     var body: some View {
@@ -217,6 +230,9 @@ struct AnswerFooter: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .accessibilityLabel(Stamp.full(ts))
+            #if os(macOS)
+            if !keepActions && !source.isEmpty { HoverActions(source: source, shown: hovering).padding(.leading, 8) }
+            #endif
             if keepActions && !source.isEmpty {
                 CopyButton(text: source)
                 if !screen.archived {
@@ -237,6 +253,34 @@ struct AnswerFooter: View {
         }
     }
 }
+
+#if os(macOS)
+/// Copy and Reply for a whole message, under it while the pointer is over it (the web on a computer). Always laid out,
+/// so the feed does not move as the pointer passes.
+struct HoverActions: View {
+    let source: String
+    let shown: Bool
+    @Environment(ChatScreenModel.self) private var screen
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button { Clipboard.copy(source) } label: { Image(systemName: "doc.on.doc") }
+                .help("Copy")
+                .accessibilityLabel("Copy")
+            if !screen.archived {
+                Button { screen.reply(with: source) } label: { Image(systemName: "arrowshape.turn.up.left") }
+                    .help("Reply")
+                    .accessibilityLabel("Reply")
+            }
+        }
+        .buttonStyle(.plain)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .opacity(shown ? 1 : 0)
+        .allowsHitTesting(shown)
+    }
+}
+#endif
 
 struct ThumbButton: View {
     let thumb: String
@@ -390,6 +434,7 @@ struct RetriedView: View {
 struct SentItemView: View {
     let message: SentItem
     @Environment(ChatScreenModel.self) private var screen
+    @State private var hovering = false
 
     var heading: String {
         if message.kind == "question" {
@@ -409,12 +454,15 @@ struct SentItemView: View {
             }
             AttachmentsView(attachments: message.attachments)
             AnswerFooter(ts: message.ts, source: message.text, rating: message.rating, k: nil, file: message.file,
-                         keepActions: message.kind == "question" && !message.read)
+                         keepActions: message.kind == "question" && !message.read, hovering: hovering)
         }
         .padding(12)
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.secondary.opacity(0.35)))
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .contain)
+        #if os(macOS)
+        .onHover { hovering = $0 }
+        #endif
     }
 }
 
