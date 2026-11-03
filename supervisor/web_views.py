@@ -735,7 +735,7 @@ def costs_page(c: dict, names: list[str], csrf: str) -> Html:
     jt = h('<p class="{cls}">{j}</p>', j=judge or "nothing yet",
            cls="bad" if c["judge_today_total"] >= c["judge_alert"] else "")
     if c["unpriced"]:
-        jt = join([jt, h('<p class="warn">{n} judge call(s) on a model with no known price are not counted</p>',
+        jt = join([jt, h('<p class="warn">{n} unpriced model call(s) are not counted in dollar totals</p>',
                          n=c["unpriced"])])
     days = table(["day", "total", "instances", "trials", "judge", "coder"],
                  [[d["day"], f"${d['total']:.2f}", f"${sum(d['instances'].values()):.2f}", f"${d['trials']:.2f}",

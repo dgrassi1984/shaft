@@ -51,8 +51,8 @@ def record(sup_dir: Path, path: Path, sender: str, to: str, kind: str, at: datet
         if to == "operator" and alert:
             from . import pushes
             row["urgent"] = urgent
-            if due := pushes.hold_until(row, sup_dir, at):
-                row["push_due"] = due
+            if held := pushes.hold_until(row, sup_dir, at):
+                row["push_due"], row["push_held"] = held
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
         f.flush()
         os.fsync(f.fileno())
@@ -224,6 +224,8 @@ def _deliver(name: str, text: str, kind: str, in_reply_to: str | None = None, *,
                       f"{text.strip()}\n")
     record(SUP_DIR, path, "operator", name, kind, stamp, text, attachments, via=via, mid=mid, shown=shown,
            comments=comments)
+    from .autonomy import event_wake   # it wakes for this once idle, not at its next timed wake (review C15)
+    event_wake(name, "message from the operator")
     return path
 
 

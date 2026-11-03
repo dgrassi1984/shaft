@@ -3,6 +3,12 @@ default 120), and all of them sleep daily from SLEEP_AT — kept by SHAFT's own 
 (com.shaft.scheduler, always running). A wake that comes due while the instance is already awake (a cycle,
 a conversation, its sleep) is skipped, not queued; the next one is a full interval later.
 
+A timed wake also needs something to do (wake_gate, review C15/G1/G4): an unread message, a commitment coming due
+before the next check, a job result since its last cycle, or no cycle for SHAFT_IDLE_WAKE_MINUTES; with none it is
+skipped, the reason kept in schedule.json and shown. What used to wait for that interval wakes the instance at once
+instead (event wakes, through the jobs' wake path): a message from the operator or another instance, and a commitment
+falling due.
+
 It used to be two timed launchd jobs. On 2026-10-13 macOS put the login session's launchd domain in
 "on-demand-only mode" while the Mac stayed awake: timed jobs stopped starting ("pending spawn"), and the
 03:25 cycle and the 04:00 sleep silently never happened. A running service starts its own children, so
@@ -10,20 +16,24 @@ the clock no longer depends on launchd timers; a missed sleep is caught up later
 """
 from __future__ import annotations
 
+import codecs
+import contextlib
+import fcntl
 import json
 import os
 import plistlib
 import signal
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from . import gate, localmodel
-from .core import (PROJECT, PYTHON, SUP_DIR, instance_config, instance_names, log, paused, set_update_queued,
-                   update_queued)
+from .core import (INSTANCES, PROJECT, PYTHON, SUP_DIR, instance_config, instance_names, knob, list_beneath, log,
+                   paused, positive_int, set_update_queued, update_queued)
 from .runner import Busy, is_busy, run_agent
 
 AGENTS = Path.home() / "Library" / "LaunchAgents"
@@ -33,6 +43,11 @@ SLEEP_AT = (4, 0)                       # hour, minute — daily; caught up late
 STATE = SUP_DIR / "schedule.json"       # last wake per instance / last nightly sleep, written by the runs
 LEGACY_JOBS = ("com.shaft.tick", "com.shaft.sleep")
 BOOTSTRAP_TRIES = 20                    # x 0.5 s: launchd lets go of a booted-out job a moment after bootout returns
+IDLE_WAKE_MIN, _ = knob(
+    "SHAFT_IDLE_WAKE_MINUTES", "30", positive_int, "minutes an instance may go without a cycle before a timed wake "
+    "starts one with nothing new for it (no unread message, commitment coming due or job result)",
+    group="Runs and conversations", services=("runs", "web", "scheduler"))
+NOTHING_TO_DO = "nothing to do"         # how a timed wake the gate skipped is said (log, schedule.json, status)
 
 
 # Long-running services (KeepAlive): SHAFT's own model server, the OpenAI-compatible API, the web UI, …. The model
@@ -133,20 +148,16 @@ def next_wake(name: str, now: datetime | None = None, interval: timedelta | None
 
 
 def next_cycle(name: str) -> str:
-    """Where a message left for the instance's next cycle stands: what the web UI tells the operator who sends one."""
+    """Where a message left for the instance's next cycle stands: what the web UI tells the operator who sends one.
+    The operator's message wakes it (event_wake) as soon as it is idle, not at its next timed wake."""
     if paused(name):
         return f"{name} is paused: it reads this in its first cycle after you resume it"
-    interval = wake_interval(name)
-    at = next_wake(name, interval=interval)
-    if at == "never":
+    if wake_interval(name) is None:
         return f"{name} has no scheduled cycles (WAKE_INTERVAL_MINUTES=0): it reads this when you next talk"
     why = _awake(name)
-    if at == "due" and why:              # a wake that comes due while it is awake is skipped, not queued (serve)
-        at = f"{datetime.now() + interval:%H:%M}"
-    when = "due now" if at == "due" else f"≈{at}"
     if why.startswith("live"):
-        return f"a cycle is running and read its inbox when it began: this waits for the next one ({when})"
-    return f"for {name}'s next cycle ({when})" + (f", after what it is doing now ({why})" if why else "")
+        return "a cycle is running and read its inbox when it began: this starts the next one once it ends"
+    return f"for {name}'s next cycle, which this starts " + (f"after what it is doing now ({why})" if why else "now")
 
 
 def _every(interval: timedelta) -> str:
@@ -160,10 +171,14 @@ def describe_schedule(name: str, config: dict[str, str] | None = None) -> str:
         return ("Your autonomous schedule is off: you run only when the operator talks to you or starts a cycle "
                 "by hand.")
     interval = wake_interval(name, config)
-    wakes = (f"wakes you for an autonomous cycle every {_every(interval)} (WAKE_INTERVAL_MINUTES in your "
-             f"config.env — change it with set_config — at least {wake_floor(name)}; a wake that comes while you are already awake — a cycle, a "
-             f"conversation, your sleep — is skipped)") if interval else \
-        "does not wake you for cycles (WAKE_INTERVAL_MINUTES=0 in your config.env; change it with set_config)"
+    wakes = (f"looks every {_every(interval)} whether to wake you for an autonomous cycle (WAKE_INTERVAL_MINUTES in "
+             f"your config.env — change it with set_config — at least {wake_floor(name)}): it wakes you when your "
+             f"inbox has an unread message, a commitment of yours comes due before it looks again, or a job of yours "
+             f"delivered or published something since your last cycle, and otherwise once you have had no cycle for "
+             f"{IDLE_WAKE_MIN} minutes; a wake that comes while you are already awake — a cycle, a conversation, your "
+             f"sleep — is skipped. A message from the operator, a message from another instance (at most once per "
+             f"{wake_floor(name)} minutes) and a commitment falling due wake you as soon as you are idle") if interval \
+        else "does not wake you for cycles (WAKE_INTERVAL_MINUTES=0 in your config.env; change it with set_config)"
     from . import battery
     night = (f" Some nights between {battery.WINDOW_START[0]:02d}:{battery.WINDOW_START[1]:02d} and your sleep it "
              f"runs its capability battery on you — fixed tasks, scored, nothing kept in your files — so a wake "
@@ -179,16 +194,44 @@ def _state() -> dict:
         return {}
 
 
-def record(event: str, name: str = "") -> None:
-    """Called by the runs themselves ('sleep'; 'wake' per instance), so a manual run counts too."""
-    st = _state()
+@contextlib.contextmanager
+def editing_lock():
+    """schedule.json's lock, for anyone rewriting it (record, and `shaft delete`: supervisor/delete.py)."""
+    STATE.parent.mkdir(parents=True, exist_ok=True)
+    with open(STATE.with_name("schedule.lock"), "a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def record(event: str, name: str = "", why: str = "") -> None:
+    """Called by the runs themselves ('sleep'; 'cycle' per instance: a live cycle as it starts, under its run lock —
+    runner._record_cycle, scheduled or by hand; 'wake': `shaft wake`) and by the scheduler ('wake': one it starts;
+    'skip': a due one it skipped, and `why`). Each per-instance event restarts the
+    instance's interval (wakes); 'cycle' is also its last cycle (cycles: wake_gate's clock), and a skip is shown until
+    the next cycle (skipped). Read, changed and replaced under editing_lock (review B16): the scheduler and every wake
+    and sleep run write this file, and an unlocked rewrite lost a concurrent one's stamp — or, read half-written, made
+    every wake and the night's sleep due at once."""
     now = datetime.now().isoformat(timespec="seconds")
-    if event == "wake":
-        st.setdefault("wakes", {})[name] = now
-    else:
-        st[event] = now
-    SUP_DIR.mkdir(exist_ok=True)
-    STATE.write_text(json.dumps(st, indent=1))
+    with editing_lock():
+        st = _state()
+        if event in ("wake", "cycle", "skip"):
+            st.setdefault("wakes", {})[name] = now
+            if event == "cycle":
+                st.setdefault("cycles", {})[name] = now
+                st.get("skipped", {}).pop(name, None)
+            elif event == "skip":
+                st.setdefault("skipped", {})[name] = {"at": now, "why": why}
+        else:
+            st[event] = now
+        tmp = STATE.with_name(f"schedule.{os.getpid()}.{threading.get_ident()}.tmp")
+        tmp.write_text(json.dumps(st, indent=1))
+        tmp.replace(STATE)
+
+
+def last_skip(name: str, st: dict | None = None) -> str:
+    """Why the instance's last due wake was skipped ('' when a cycle ran since): what status and the dashboard show."""
+    skip = ((_state() if st is None else st).get("skipped") or {}).get(name)
+    return f"{skip.get('why', '')} (at {skip.get('at', '?')[11:16]})" if isinstance(skip, dict) else ""
 
 
 def sleep_due(now: datetime, st: dict) -> bool:
@@ -231,9 +274,44 @@ def replay_next_wake(name: str, now: datetime) -> str:
     return f"{now + interval:%H:%M}" if interval is not None else "never"
 
 
-def decide_wakes(now: datetime, st: dict, names: list[str], interval_of, awake_of) -> tuple[list[str], dict[str, str]]:
-    """(instances to wake now, {instance: why its due wake is skipped}). Pure: the scheduler's rule."""
-    start, skip = [], {}
+@dataclass
+class WakeFacts:
+    """What a timed wake would find for the instance (wake_facts), for wake_gate."""
+    unread: int = 0         # messages in its inbox/
+    due: str = ""           # 'c1103-0001-1 due 14:30': its first open commitment coming due before the next check
+    results: int = 0        # job runs that delivered or published something since its last cycle
+    error: str = ""         # what could not be read: the wake goes ahead, saying so
+
+
+def wake_gate(now: datetime, since: datetime | None, until: datetime, idle_after: timedelta, facts) -> tuple[bool, str]:
+    """(wake?, why) for a due timed wake (review C15/G1/G4). Pure and model-free: an unread message, a commitment
+    due before `until` (the next check), a job result since `since` (its last cycle), or no cycle for `idle_after`.
+    `facts`: a callable returning WakeFacts, read only when the idle rule does not decide."""
+    if since is None:
+        return True, "no cycle on record"
+    if now - since >= idle_after:
+        return True, f"no cycle for {int((now - since).total_seconds() // 60)} min"
+    f = facts()
+    if f.error:
+        return True, f"what it has to do could not be read ({f.error})"
+    if f.unread:
+        return True, f"{f.unread} unread message(s) in its inbox"
+    if f.due:
+        return True, f"commitment {f.due}"
+    if f.results:
+        return True, f"{f.results} job result(s) since its last cycle"
+    return False, (f"{NOTHING_TO_DO}: inbox empty, no commitment due before {until:%H:%M}, no job result since its "
+                   f"last cycle at {since:%H:%M}; it wakes anyway after {int(idle_after.total_seconds() // 60)} min "
+                   f"without a cycle")
+
+
+def decide_wakes(now: datetime, st: dict, names: list[str], interval_of, awake_of, facts_of=None,
+                 idle_after: timedelta | None = None) -> tuple[dict[str, str], dict[str, str]]:
+    """({instance to wake now: why}, {instance: why its due wake is skipped}). Pure: the scheduler's rule. With
+    `facts_of(name, since, until)` -> WakeFacts, a due wake also passes wake_gate; one it stops is skipped with a reason
+    starting NOTHING_TO_DO."""
+    start, skip = {}, {}
+    idle_after = idle_after or timedelta(minutes=IDLE_WAKE_MIN)
     for name in names:
         interval = interval_of(name)
         last = (st.get("wakes") or {}).get(name)
@@ -242,9 +320,81 @@ def decide_wakes(now: datetime, st: dict, names: list[str], interval_of, awake_o
         why = awake_of(name)
         if why:
             skip[name] = why
-        else:
-            start.append(name)
+            continue
+        if facts_of is None:
+            start[name] = "its interval passed"
+            continue
+        cycle = (st.get("cycles") or {}).get(name)
+        since = datetime.fromisoformat(cycle) if cycle else None
+        until = now + interval
+        go, why = wake_gate(now, since, until, idle_after, lambda: facts_of(name, since, until))
+        (start if go else skip)[name] = why
     return start, skip
+
+
+def wake_facts(name: str, since: datetime | None, until: datetime) -> WakeFacts:
+    """The facts wake_gate reads, from the supervisor's own records and the instance's inbox listing; no model. A
+    watch result (watch.py) is an inbox message. Never raises: what fails is the facts' `error`."""
+    from . import commitments, jobs
+    try:
+        unread = sum(n.endswith(".md") for n in list_beneath(INSTANCES / name, "inbox"))
+        due = commitments.coming_due(name, since, until)
+        results = jobs.results_since(name, since) if since else 0
+    except (Exception, SystemExit) as e:
+        return WakeFacts(error=f"{type(e).__name__}: {e}")
+    return WakeFacts(unread=unread, results=results, due=f"{due[0]['id']} due {due[0]['due_at']:%H:%M}" if due else "")
+
+
+def event_wake(name: str, why: str, from_instance: bool = False) -> None:
+    """An event wake (review C15/G1): a message for the instance, or a commitment of its falling due, asks for a wake now
+    through the jobs' wake path (jobs.request_wake: it starts once the instance is idle, never while paused) instead of
+    waiting for the next timed one. Not for an instance with no scheduled wakes (WAKE_INTERVAL_MINUTES=0) or a paused one
+    (its unread inbox wakes it after the resume, wake_gate). Another instance's message wakes it at most once per its wake
+    floor since its last cycle — two instances answering each other are paced, not looped: one inside the floor is
+    queued for the floor's end (not_before), not dropped (Codex on the C15 lane). Never raises: what asked is delivered
+    already."""
+    try:
+        if paused(name) or wake_interval(name) is None:
+            return
+        from . import jobs
+        if why in (jobs.pending_wakes().get(name) or {}).get("by", []):
+            return
+        not_before = None
+        if from_instance:
+            cycle = (_state().get("cycles") or {}).get(name)
+            floor = wake_floor(name)
+            if cycle and datetime.now() < (at := datetime.fromisoformat(cycle) + timedelta(minutes=floor)):
+                not_before = at
+        jobs.request_wake(name, why, not_before)
+        log(f"{name}: wake asked — {why}" + (f" (not before {not_before:%H:%M}: a cycle began less than "
+                                            f"{floor} min ago)" if not_before else ""))
+    except (Exception, SystemExit) as e:   # SystemExit: instance_root of an instance with no folder (deleted since)
+        try:
+            log(f"{name}: could not ask a wake for {why}: {type(e).__name__}: {e}")
+        except Exception:
+            pass
+
+
+def commitment_wakes(now: datetime, st: dict, names: list[str], children: dict, errors: dict[str, str]) -> None:
+    """Event wakes for commitments: one that came due since the instance's last cycle (any open one due by now, for an
+    instance with no cycle on record yet) asks for a wake (event_wake). The cycle it starts begins after the due time,
+    so each asks once; while one is pending, event_wake does not ask again. One whose wake is starting waits for the
+    next tick. `errors`: the last read error per instance, logged once."""
+    from . import commitments
+    for name in names:
+        cycle = (st.get("cycles") or {}).get(name)
+        if f"wake {name}" in children:
+            continue
+        try:
+            due = commitments.coming_due(name, datetime.fromisoformat(cycle) if cycle else None, now)
+        except (Exception, SystemExit) as e:
+            if errors.get(name) != (err := f"{type(e).__name__}: {e}"):
+                errors[name] = err
+                log(f"scheduler: {name}'s commitments could not be read for its wakes — {err}")
+            continue
+        errors.pop(name, None)
+        for item in due:
+            event_wake(name, f"commitment {item['id']} due")
 
 
 def update_jobs(children: dict, names: list[str], awake_of) -> list[str]:
@@ -291,6 +441,7 @@ def serve(poll_s: int = 30) -> int:
         log(note)
     children: dict[str, tuple[subprocess.Popen, float]] = {}
     warm = WarmState()
+    commitment_errors: dict[str, str] = {}
     stop_children_on_signal(children)
     while True:
         for job, (proc, started) in list(children.items()):
@@ -300,7 +451,7 @@ def serve(poll_s: int = 30) -> int:
                 if proc.returncode == 0:                              # the baseline is green: held changes go again
                     regate_after_warm(children, _start)
             elif proc.poll() is not None:
-                err = proc.stderr.read().strip()[-300:] if proc.stderr else ""
+                err = stderr_tail(proc)
                 log(f"scheduler: {job} ended exit={proc.returncode} after {time.monotonic() - started:.0f}s"
                     + (f" — {err}" if proc.returncode and err else ""))
                 if job == "sleep" and proc.returncode not in (0, 3):   # 3: some paused; a crash must not loop
@@ -322,13 +473,17 @@ def serve(poll_s: int = 30) -> int:
             names = [n for n in instance_names() if not paused(n) and not updating(n, children)]   # not skipped:
             # a wake due during an update starts right after it
             start, skip = decide_wakes(now, st, names, wake_interval,
-                                       lambda n: "waking already" if f"wake {n}" in children else _awake(n))
+                                       lambda n: "waking already" if f"wake {n}" in children else _awake(n),
+                                       wake_facts, timedelta(minutes=IDLE_WAKE_MIN))
             for name, why in skip.items():
-                record("wake", name)   # skipped, not queued: the next wake is a full interval later
-                log(f"scheduler: {name}'s wake skipped — already awake ({why})")
-            for name in start:
+                why = why if why.startswith(NOTHING_TO_DO) else f"already awake ({why})"
+                record("skip", name, why)   # skipped, not queued: the next wake is a full interval later
+                log(f"scheduler: {name}'s wake skipped — {why}")
+            for name, why in start.items():
                 record("wake", name)
+                log(f"scheduler: waking {name} — {why}")
                 children[f"wake {name}"] = (_start(["wake", name]), time.monotonic())
+            commitment_wakes(now, st, names, children, commitment_errors)   # started by jobs.tick, once it is idle
             from . import jobs   # the instances' own plugins on their timers, and the wakes those jobs asked for
             jobs.tick(children, now, _start, instance_names(),
                       lambda n: "waking already" if f"wake {n}" in children else
@@ -477,14 +632,56 @@ def regate_after_warm(children: dict, start) -> None:
             pass
 
 
+STDERR_KEPT = 4000   # characters of a child's stderr kept: its tail says why it failed
+
+
 def _start(args: list[str]) -> subprocess.Popen:
     log(f"scheduler: starting {' '.join(args)}")
-    return subprocess.Popen([PYTHON, "-E", "-s", "-m", "supervisor", *args], cwd=PROJECT, stdin=subprocess.DEVNULL,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    proc = subprocess.Popen([PYTHON, "-E", "-s", "-m", "supervisor", *args], cwd=PROJECT, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    drain_stderr(proc)
+    return proc
+
+
+def drain_stderr(proc: subprocess.Popen) -> None:
+    """Read the child's stderr (a binary pipe) while it runs, keeping its last STDERR_KEPT characters (review B14).
+    Read only after it ended, a child that wrote more than the pipe holds blocked on the write and never ended (`gate
+    warm`'s was never read at all), and a grandchild still holding the pipe blocked the scheduler's loop in that read.
+    os.read returns what is there: an ended child's last line is kept even while a grandchild holds the pipe."""
+    tail: list[str] = []
+    decode = codecs.getincrementaldecoder("utf-8")(errors="replace").decode
+
+    def read():
+        try:
+            while (chunk := os.read(proc.stderr.fileno(), 4096)):
+                tail.append(decode(chunk))
+                if sum(map(len, tail)) > 2 * STDERR_KEPT:
+                    tail[:] = ["".join(tail)[-STDERR_KEPT:]]
+        except (OSError, ValueError):   # closed under it: what was read is kept
+            pass
+        with contextlib.suppress(OSError):
+            proc.stderr.close()
+    proc.stderr_tail = tail
+    proc.stderr_reader = threading.Thread(target=read, name=f"stderr-{proc.pid}", daemon=True)
+    proc.stderr_reader.start()
+
+
+STDERR_JOIN_S = 1.0   # how long an ended child's reader gets to finish: a grandchild holding the pipe never ends it
+
+
+def stderr_tail(proc) -> str:
+    """The last 300 characters an ended child wrote to stderr (drain_stderr); '' for one started without the reader."""
+    reader = getattr(proc, "stderr_reader", None)
+    if not isinstance(reader, threading.Thread):
+        return ""
+    reader.join(timeout=STDERR_JOIN_S)
+    return "".join(proc.stderr_tail).strip()[-300:]
 
 
 def wake(name: str) -> int:
-    """One scheduled wake: a life cycle, unless the instance is awake already (then it is skipped)."""
+    """One scheduled wake: a life cycle, unless the instance is awake already (then it is skipped). It restarts the
+    instance's interval; the cycle itself is stamped once it holds the instance (runner._record_cycle), so a skipped
+    one keeps the last cycle's stamp and its shown skip reason."""
     record("wake", name)
     try:
         return run_agent(name, "live", ["live"], interactive=False, wait_lock=False)
@@ -546,7 +743,11 @@ def autonomy(action: str) -> int:
                 "due now" if not last or now - datetime.fromisoformat(last) >= interval
                 else f"next {(datetime.fromisoformat(last) + interval):%H:%M}")
             every = f"every {_every(interval)}" if interval else "no wakes"
-            print(f"{name:10} {every:18} last wake {last or 'never'} · {nxt}")
+            cycle = (st.get("cycles") or {}).get(name)
+            print(f"{name:10} {every:18} last cycle {cycle or 'never'} · {nxt}"
+                  + (f"\n{'':10} last wake skipped: {skipped}" if (skipped := last_skip(name, st)) else ""))
+        print(f"a due wake runs only with something to do, or after {IDLE_WAKE_MIN} min without a cycle "
+              f"(SHAFT_IDLE_WAKE_MINUTES)")
         print(f"nightly sleep from {SLEEP_AT[0]:02d}:{SLEEP_AT[1]:02d} · last {st.get('sleep', 'never')}"
               + (" · due now" if sleep_due(now, st) else ""))
         return 0

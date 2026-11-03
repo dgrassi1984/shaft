@@ -4,8 +4,8 @@ A rotation (Opus 5.5 was too costly; "stochastic rotation I prefer"): every judg
 model at random from SHAFT_JUDGE_MODELS, never the model the judged instance runs on (no self-preference — wren runs
 on MiMo). Haiku 5.5 left on 2026-10-16: on the same cycles it called 54% of wren's claims unsupported where the blind
 GLM judge called 4%, Sonnet 21% and Opus 17% (docs/plans/PLAN-judge-mix.md). Sonnet 5.5 left on 2026-10-20 for cost
-($12-25 a day); MiMo, GLM 5.3 Flash and DeepSeek V4.1 Flash since, DeepSeek admitted after it matched GLM on 40 of
-wren's and thelos's runs (#45). The main judge grades one live run in SHAFT_JUDGE_EVERY. Every verdict records the model that gave it. Claude models go straight to the Claude Messages API with the
+($12-25 a day); MiMo and GLM 5.3 Flash since. DeepSeek V4.1 Flash is reserved for the independent second judge.
+The main judge grades one live run in SHAFT_JUDGE_EVERY. Every verdict records the model that gave it. Claude models go straight to the Claude Messages API with the
 supervisor's key (structured JSON output via output_config.format; refusals re-run server-side with
 `fallbacks: "default"`); "openrouter/…" models go through OpenRouter under the instances' data policy
 (cloudllm.OPENROUTER_PROVIDER: no data collection, zero retention), with the schema in the instructions and the
@@ -26,8 +26,8 @@ from .core import NETWORK_ERRORS, SUP_DIR, cloud_models, knob, openrouter_model,
 
 JUDGE_MODELS, JUDGE_SRC = knob(
     "SHAFT_JUDGE_MODELS",
-    "openrouter/xiaomi/mimo-v2.6-pro,openrouter/z-ai/glm-5.3-flash,openrouter/deepseek/deepseek-v4.1-flash",
-    cloud_models, "the judge pool: each judgment picks one at random, never the judged instance's own model",
+    "openrouter/xiaomi/mimo-v2.6-pro,openrouter/z-ai/glm-5.3-flash",
+    cloud_models, "the judge pool: picks at random, excluding the instance's model and the second judge",
     group="Judging", services=("runs", "api", "web"))   # web: its stats count verdicts by the judges in the pool
 # Every live run was judged: 250+ a day at ~$0.07 a Sonnet judgment cost $12-25 a day (2026-10-17/19, #45). Which
 # runs are judged is drawn at random when a run is first up for judging, and a run left out is recorded apart
@@ -53,20 +53,27 @@ def same_model(a: str | None, b: str | None) -> bool:
     return bool(a and b) and _norm(a) == _norm(b)
 
 
+class NoJudgeLeft(JudgeError):
+    """Every judge of the pool is one of the judged instance's own models: this judgment cannot be made, others can."""
+
+
 def pick(exclude=(), rng=random, avoid=()) -> str:
     """One judge for one judgment: at random from the pool, never one of `exclude` (the judged instance's models).
-    `avoid` (the second judge, on a run it will grade too) is left out as well while another judge is left."""
+    The second judge's model is left out of the main rotation, and `avoid` too, while another judge is left: the
+    cross-check stays independent. A pool that still lists it (a SHAFT_JUDGE_MODELS saved before 2026-11-03) uses it
+    only when no other judge may grade; that run then gets no second judgment (metrics.judge_pending)."""
     pool = [m for m in JUDGE_MODELS if not any(same_model(m, x) for x in exclude)]
-    pool = [m for m in pool if not any(same_model(m, x) for x in avoid)] or pool
+    main = [m for m in pool if not same_model(m, JUDGE2_MODEL)]
+    pool = [m for m in main if not any(same_model(m, x) for x in avoid)] or main or pool
     if not pool:
-        raise JudgeError(f"no judge left in SHAFT_JUDGE_MODELS={JUDGE_MODELS} once the instance's own model "
-                         f"{[x for x in exclude if x]} is left out: an instance is never judged by its own model")
+        raise NoJudgeLeft(f"no judge left in SHAFT_JUDGE_MODELS={JUDGE_MODELS} once the instance's own model "
+                          f"{[x for x in exclude if x]} is left out: an instance is never judged by its own model")
     return rng.choice(pool)
 
 
 def rotation() -> str:
     """The pool as one label: what a battery era is graded under."""
-    return "rotation:" + ",".join(JUDGE_MODELS)
+    return "rotation:" + ",".join(m for m in JUDGE_MODELS if not same_model(m, JUDGE2_MODEL))
 
 
 def _key_for(model: str) -> tuple[str, str]:
@@ -76,17 +83,25 @@ def _key_for(model: str) -> tuple[str, str]:
 
 def available() -> bool:
     """Every model of the rotation has its key (a missing one would fail a share of judgments at random)."""
-    return bool(JUDGE_MODELS) and all(_key_for(m)[1] for m in JUDGE_MODELS)
+    pool = [m for m in JUDGE_MODELS if not same_model(m, JUDGE2_MODEL)]
+    return bool(pool) and all(_key_for(m)[1] for m in pool)
 
 
 def ask(system: str, prompt: str, schema: dict, purpose: str, max_tokens: int = 16000,
         effort: str = "medium", model: str | None = None, exclude=()) -> dict:
     """One judgment by `model` (else one picked from the rotation, never one of `exclude`). Returns the parsed JSON
-    object matching `schema`. Callers that record who judged pick() first and pass the model."""
+    object matching `schema`. Callers that record who judged pick() first and pass the model. This layer owns the
+    length retries: an answer cut off at `max_tokens` is asked once more with twice the room, then fails; callers
+    add none of their own (a trial pair's judgment asked 16k+32k+32k+64k when both layers retried, review E5)."""
     model = model or pick(exclude)
     if model.startswith("openrouter/"):
         return _ask_openrouter(model, system, prompt, schema, purpose, max_tokens, effort)
-    return _ask_claude(model, system, prompt, schema, purpose, max_tokens, effort)
+    try:
+        return _ask_claude(model, system, prompt, schema, purpose, max_tokens, effort)
+    except JudgeError as e:
+        if "hit max_tokens=" not in str(e):
+            raise
+    return _ask_claude(model, system, prompt, schema, purpose, max_tokens * 2, effort)
 
 
 def _ask_claude(model, system, prompt, schema, purpose, max_tokens, effort) -> dict:
@@ -153,8 +168,13 @@ def _log(purpose, model, usage, seconds, error, usd=None, provider=None, reasoni
            "input_tokens": usage.get("input_tokens", usage.get("prompt_tokens")),
            "output_tokens": usage.get("output_tokens", usage.get("completion_tokens")),
            "seconds": round(seconds, 1), "error": error}
-    if usd is not None:
-        rec.update(usd=usd, provider=provider, reasoning_tokens=reasoning)
+    if model.startswith("openrouter/"):
+        rec.update(provider=provider, reasoning_tokens=reasoning)   # kept when OpenRouter's usage had no cost too
+    else:
+        from . import cloudllm
+        rec.update(cloudllm.billed(usage))
+        usd = cloudllm.usd(model, rec)
+    rec.update(usd=usd, unpriced=usd is None)
     if seen is not None:
         rec["seen"] = seen
     with (SUP_DIR / "judge_usage.jsonl").open("a") as f:
@@ -165,7 +185,8 @@ def _log(purpose, model, usage, seconds, error, usd=None, provider=None, reasoni
 # Another model family grades a sample of cycles blind, so an instance can tell the main judge's idiosyncrasies
 # from what its tool log shows (wren, 2026-10-13). GLM 5.3 Flash until 2026-10-20, when the operator made it a main
 # judge too and it graded four runs twice, agreeing with itself (#45); DeepSeek V4.1 Flash since, which no instance runs
-# on. A run the second judge will grade is never given its model as the main judge (pick's `avoid`), and the agreement
+# on. Its model is left out of the main rotation (pick: there only when no other judge may grade, then that run gets
+# no second judgment), so the cross-check stays an independent family; the agreement
 # in stats.md counts only the current second judge against another model (metrics._second_section). Through
 # OpenRouter, under the same data policy as the instances' cloud models (cloudllm.OPENROUTER_PROVIDER: Novita,
 # DeepInfra if Novita is down, no data collection or retention); the schema is in the instructions and the answer is
@@ -252,7 +273,7 @@ def _ask_openrouter(model, system, prompt, schema, purpose, max_tokens, effort, 
             body["reasoning"] = {"effort": effort}
         data, error = cloudllm._send(cloudllm._openrouter_request(body, key, stream=False))
         usage = (data or {}).get("usage") or {}
-        cost = float(usage.get("cost") or 0)
+        cost = float(usage["cost"]) if usage.get("cost") is not None else None
         reasoning = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
         if error or not data:
             _log(purpose, model, usage, time.monotonic() - started, error or "no response", cost, None, reasoning)

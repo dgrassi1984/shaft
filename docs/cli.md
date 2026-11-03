@@ -10,7 +10,8 @@ shaft talk [name] --as "NAME"   # you are not the operator: recorded as NAME, ne
 shaft live|reflect|sleep [names…|--all]   # one autonomous cycle / reflection / consolidation
 shaft autonomy on|off|status    # SHAFT's scheduler service: each instance wakes every WAKE_INTERVAL_MINUTES
                                 # (its config.env; default 120, at least 10, 0 = never; a wake while it is
-                                # already awake is skipped), sleep daily from 04:00 (made up later if missed)
+                                # already awake, or with nothing to do, is skipped — status says why), and at once
+                                # for a message or a commitment due; sleep daily from 04:00 (made up later if missed)
                                 # autonomy, api, model and embed on|off refuse while it would kill or cut off
                                 # runs in progress, naming them, as the panels do; --force does it anyway (logged)
 shaft top                       # control panel, tabs 0–9: overview (state, now, alerts, today's spend) · one
@@ -96,6 +97,9 @@ shaft tools <name> [on|off <tool>]   # an instance's supervisor tools, e.g. off 
                                      # kept in .supervisor/, so the instance cannot switch it back on)
 shaft channel <name> [auto|web|telegram]   # where its messages to you notify you (integrations.md): auto = where
                                      # you last wrote to it; an open conversation's channel comes first
+shaft orders <name> [list|add TEXT|drop ID]   # standing orders (decisions that stay decided): shown to it verbatim
+                                     # every run and conversation; its messages to you are checked against them
+                                     # (architecture.md); it can record one it heard from you, only you drop one
 shaft google login <alias> <address> [--client <name>]   # log in a Google account: Gmail read + Calendar read/write
 shaft google [migrate]               # accounts, clients, granted scopes · migrate: move PLAN-mail's account files
 shaft mail <name> grant|revoke <alias> <label>   # the label's threads an instance may read · shaft mail <name> off

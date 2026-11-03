@@ -137,7 +137,7 @@ class OpenRouterTest(_Base):
                          "usage": {"prompt_tokens": 24754, "completion_tokens": 396}})
         cloudllm.complete("thelos", dict(self.BODY, stream=False), {"OPENROUTER_API_KEY": "k"}, {})
         rec = json.loads(self.usage.read_text())
-        self.assertEqual(rec["usd"], 0.0)
+        self.assertIsNone(rec["usd"])
         self.assertIn("finish_reason=error", rec["error"])
         self.assertIn("no cost in its usage", rec["error"])
         self.assertIsNone(cloudllm._unsaid({"prompt_tokens": 5, "cost": 0.001}, "stop"))   # a normal reply says nothing

@@ -39,6 +39,15 @@ MAX_FETCH_BYTES = 3_000_000
 # http_request's binary bodies (docs/plans/PLAN-own-drive.md D3): a file sent whole, and an answer saved whole or not at all.
 MAX_BODY_FILE_BYTES = 50_000_000
 MAX_SAVE_BYTES = 50_000_000
+RUN_OUTPUT_CHARS = 12000   # what `history` and `record` return at most
+# A `run` result past RUN_SHOWN_CHARS shows each stream's head and tail and saves all of it (C8, 2026-11-03): the
+# template cuts any tool result at 6,000 characters, so a longer one lost its tail and stderr, and the instance
+# re-ran the command into a file. The broker saves it, not the template, so an instance whose own shaft/tools.py
+# predates the template's output saving gets the file too; what it shows stays under that 6,000 cut.
+RUN_SHOWN_CHARS = 5000
+RUN_SAVED_CHARS = 1_000_000   # a saved `run` output keeps at most this many characters
+RUN_SAVED_FILES = 32          # saved `run` outputs kept in .tmp/outputs/; the oldest go first,
+RUN_SAVED_HOURS = 24          # and any older than this
 MAX_MESSAGE_CHARS = 8000
 # Messages to the operator per instance per day; 0 = no limit.
 OPERATOR_DAILY_LIMIT, _ = knob(
@@ -268,7 +277,8 @@ SPECS = {
                           "they last wrote to you). Their reply arrives in your inbox. Make them count: they read "
                           "every one. You can attach files from your folder; files sent to you arrive in your "
                           "attachments/ folder (the message says where). Non-urgent device notifications may wait "
-                          "for a digest during quiet hours or after the daily push budget.",
+                          "for a digest during quiet hours or after the daily push budget (the result says when). "
+                          "A message to the operator is checked against his standing orders (record_order).",
                           {"to": S, "text": S,
                            "expect_reply": {"type": "object", "description": "optional: what you expect back — it is "
                                             "timestamped by the supervisor and scored against the reply",
@@ -285,6 +295,15 @@ SPECS = {
                                                           "in the web UI, and gets them on Telegram when your message "
                                                           "goes there"}},
                           ["to", "text"]),
+    "record_order": _spec("record_order", "Record a standing order the operator gave you: a decision that stays "
+                          "decided ('Retire it', 'Drop the X', 'the paper body has no process blocks'). The supervisor "
+                          "holds it, not your memory: you are shown it in every run and conversation, and every "
+                          "message you send the operator is checked against it. Only the operator can drop one.",
+                          {"text": {"type": "string", "description": "the order in his own words, verbatim"},
+                           "source": {"type": "string", "description": "the file of his message it came in (e.g. "
+                                      "inbox/20261101-091500-123456-from-operator.md); leave it empty in a "
+                                      "conversation with him"}},
+                          ["text"]),
     "list_instances": _spec("list_instances", "List the other SHAFT instances you can message.", {}, []),
     "run": _spec(
         "run",
@@ -300,8 +319,9 @@ SPECS = {
         "playwright==$SHAFT_PLAYWRIGHT`, launched with p.chromium.launch_persistent_context($SHAFT_BROWSER_PROFILE, "
         "proxy={server, username, password from HTTPS_PROXY}) — see skills/writing-plugins.md. Use `run` to install "
         "packages, run your tests, "
-        "scripts and plugins, inspect files, or compute things. Returns the exit code and output (each stream past "
-        "6,000 characters cut to its head and tail: write long output to a file and read that). "
+        "scripts and plugins, inspect files, or compute things. Returns the exit code and output; past "
+        f"{RUN_SHOWN_CHARS:,} characters, the head and tail of each stream, with all of it (up to "
+        f"{RUN_SAVED_CHARS:,} characters) saved under .tmp/outputs/ and the read_file call that reads the rest. "
         "Code you change is still tested by the supervisor. `git` cannot see your own repository here (it lives "
         "outside your folder): use `history`.",
         {"command": S, "timeout_s": {"type": "integer", "description": f"default 60, max {300}"},
@@ -336,7 +356,8 @@ SPECS = {
         "(your last test-gate runs: time, outcome — kept, candidate-failed, baseline-failed, held, re-gated — failing "
         "tests, the last 3,000 characters of a failed gate's output, and your code changes held while the gate's "
         "baseline was red), 'expectations' (your reply predictions from send_message expect_reply, scored: "
-        "did they reply, did the gist match). "
+        "did they reply, did the gist match), 'commitment_source' (cycle: an operator message filename; "
+        "confirms it exists and was addressed by you to the operator). "
         "Newest last — except judgments: whole verdicts, newest first, as many as fit, with every field (the "
         "reasons for the difficulty, origin and value ratings, and the second judge's blind verdict where there is "
         "one); page back with `before`, or ask for one cycle's verdict with `cycle`. Use it to check your claims "
@@ -565,7 +586,6 @@ MAX_COMMANDS_PER_RUN = 40
 # 100 MB until 2026-10-18, which killed `uv pip install playwright` (its bundled node is 122 MB) with SIGXFSZ, exit
 # 153 and no message — and with it any package shipping a bigger file (torch's libraries) (docs/plans/PLAN-browser.md).
 RUN_MAX_FILE_BYTES = 1024 ** 3
-RUN_OUTPUT_CHARS = 12000   # each `run` stream keeps half: its head and tail (the "run" spec above says 6,000)
 
 
 def notify(title: str, text: str) -> None:
@@ -738,6 +758,7 @@ class Broker:
         self.unavailable: dict[str, str] = {}   # tool -> why it is refused in this kind of run (a scheduled job's)
         self.run_kind = None
         self.run_started = None
+        self.talk_id: str | None = None         # the conversation this run replies in (runner._conversation)
         self.model_allowed = True              # False: /llm refuses (a scheduled job is a script, docs/plans/PLAN-jobs.md)
         self.run_confined_to: Path | None = None   # a scheduled job's state folder: its `run` writes only the job's set
         self.bot = ""                           # set by tool_specs: its Telegram bot, if the operator can be reached there
@@ -1084,8 +1105,21 @@ class Broker:
         params = urllib.parse.urlencode({"q": query, "mode": "fast", "start": max(0, (int(page) - 1) * 10)})
         req = urllib.request.Request(f"https://scrapebadger.com/v1/google/search?{params}",
                                      headers={"x-api-key": key, "User-Agent": "shaft-broker"})
-        with urllib.request.urlopen(req, timeout=90) as resp:
-            data = json.load(resp)
+        for attempt in range(3):
+            try:
+                # 35s covers the provider's p99 success (34s, 2,602 calls 10-27..11-03); three tries plus 2s/5s backoff
+                # stay under the instance's 120s call timeout (template broker._request)
+                with urllib.request.urlopen(req, timeout=35) as resp:
+                    data = json.load(resp)
+                break
+            except (urllib.error.URLError, TimeoutError) as e:
+                transient = (e.code in (502, 503, 504) if isinstance(e, urllib.error.HTTPError)
+                             else isinstance(e, TimeoutError) or isinstance(e.reason, TimeoutError))
+                if not transient or attempt == 2:
+                    raise
+                delay = (2, 5)[attempt]
+                self._log(f"{self.name} web_search retry {attempt + 1}/2 in {delay}s: {type(e).__name__}: {e}")
+                time.sleep(delay)
         rows = data.get("organic_results") or []
         if not rows:
             return f"no results for {query!r}"
@@ -1135,7 +1169,7 @@ class Broker:
         if self.counts["send_message"] > 10:
             raise RuntimeError("at most 10 messages per run")
         text = text[:MAX_MESSAGE_CHARS]
-        stamp = datetime.now()
+        stamp = self._message_stamp()   # names the file the result cites (message_file): a replay's is on its clock
         kind = "question" if kind == "question" else "note"     # instance-chosen: only these two are logged
         is_instance = NAME_RE.match(to) and to != self.name and (self.project / "instances" / to / "shaft").is_dir()
         if to != "operator" and not is_instance:
@@ -1165,17 +1199,25 @@ class Broker:
                 raise RuntimeError(f"you already sent {sent} messages to the operator today "
                                    f"(limit {OPERATOR_DAILY_LIMIT}); keep it for tomorrow")
             stem = f"{stamp:%Y%m%d-%H%M%S-%f}-from-{self.name}"
+            check, checked = self._check_orders(text, f"{stem}.md", stamp)   # refused here when it goes against one
             atts = self._store(self.project / ".supervisor" / "operator-inbox", f"attachments/{stem}", files)
             body = text.strip() + messages.attachment_lines(atts, "path")
-            self._deliver("operator", f"{stem}.md",
-                          f"From: {self.name}\nTo: operator\nKind: {kind}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{body}\n",
-                          kind, stamp, body, atts, urgent=urgent)
+            held = self._deliver("operator", f"{stem}.md",
+                                 f"From: {self.name}\nTo: operator\nKind: {kind}\nDate: {stamp:%Y-%m-%d %H:%M}\n\n{body}\n",
+                                 kind, stamp, body, atts, urgent=urgent)
+            if check:
+                self._log_check(check)
             record_expectation()
             self._envelope = None
             push = self._push_usage(stamp)
+            waited = self._waited_share(self.as_of or stamp)
             return (f"delivered to the operator ({kind}){with_files}; their reply, if any, will arrive in your inbox"
-                    + expectation + (f"; pushes to the operator today: {push['today']} of budget {push['budget']}"
-                                     if push else ""))
+                    f"; message_file {stem}.md" + expectation
+                    + (f"; pushes to the operator today: {push['today']} of budget {push['budget']}" if push else "")
+                    + (f"; its notification is held for the operator's digest at {held[0][:16].replace('T', ' ')} "
+                       f"({held[1]}): it is in his inbox now, and only urgent=true notifies him at once" if held else "")
+                    + (f"; should_have_waited=yes in your judged push cycles of the last 7 days: {waited}"
+                       if waited else "") + checked)
         atts = self._store(self.project / "instances" / to, f"attachments/from-{self.name}/{stamp:%Y%m%d-%H%M%S-%f}",
                            files)
         body = text.strip() + messages.attachment_lines(atts)
@@ -1241,9 +1283,13 @@ class Broker:
             if tool == "calendar_events":
                 spec = json.loads(json.dumps(spec))
                 spec["function"]["description"] += " Granted to you: " + self.calendar_env() + " (account/name)."
-            if tool == "send_message":
+            if tool in ("send_message", "record_order"):
                 spec = json.loads(json.dumps(spec))
-                spec["function"]["description"] += self._channel_line()
+                if tool == "send_message":
+                    spec["function"]["description"] += self._channel_line()
+                # the standing orders, verbatim, in every run (review I2): on record_order, else where it is still seen
+                if tool == ("send_message" if "record_order" in self.disabled else "record_order"):
+                    spec["function"]["description"] += self._orders_line()
             out.append(spec)
         return out
 
@@ -1273,10 +1319,98 @@ class Broker:
         except OSError:   # measurement must not turn a delivered message into a failed tool call
             return None
 
+    def _waited_share(self, as_of: datetime) -> str | None:
+        """The judge's should_have_waited=yes share of this instance's push cycles, last 7 days (review G3)."""
+        from . import metrics, pushes
+        try:
+            js = metrics.judgments(self.name, self.project / ".supervisor")
+        except (OSError, ValueError):   # measurement must not turn a delivered message into a failed tool call
+            return None
+        return pushes.waited_share(pushes.recent_judgments(js, as_of))
+
+    def _check_orders(self, text: str, file: str, stamp: datetime) -> tuple[dict | None, str]:
+        """A message to the operator, checked against his standing orders and the corrections still checked
+        (orders.py): (the check's row, to log once it is delivered; what the result says). One that goes against an
+        order is refused with the order quoted. One the judge could not check is delivered, and the result says so."""
+        from . import metrics, orders
+        from .core import log
+        active, held = self._orders_in_force(), self._corrections_held()
+        if not active and not held:
+            return None, ""
+        row = {"ts": stamp.isoformat(timespec="seconds"), "message": file, "orders": [o["id"] for o in active],
+               "corrections": [c["id"] for c in held]}
+        try:
+            verdict = orders.check(self.name, text, active, held, exclude=metrics.own_models(self.name))
+        except Exception as e:                 # no verdict: the message goes, unchecked, and the instance is told
+            row["error"] = f"{type(e).__name__}: {e}"[:300]
+            log(f"{self.name}: message to the operator not checked against its standing orders: {row['error']}")
+            return row, f"; NOT checked against your standing orders (the judge gave no verdict: {row['error']})"
+        row.update(verdict)
+        if verdict["violates"]:
+            self._log_check(row)
+            raise PermissionError(orders.refusal(verdict, active, held))
+        return row, "; checked against your standing orders: it keeps to them"
+
+    def _orders_in_force(self) -> list[dict]:
+        from . import orders
+        return orders.listing(self.name, self.as_of)
+
+    def _corrections_held(self) -> list[dict]:
+        from . import orders
+        return orders.corrections(self.name, self.root, self.as_of)
+
+    def _log_check(self, row: dict) -> None:
+        from . import orders
+        orders.log_check(self.name, row)
+
+    def _orders_line(self) -> str:
+        """The standing orders and the corrections still checked, as the instance is shown them every run."""
+        from . import orders
+        try:
+            return orders.shown(self._orders_in_force(), self._corrections_held())
+        except (OSError, ValueError) as e:     # said, not hidden: it knows it is not seeing them
+            return f" Your standing orders could not be read ({type(e).__name__}: {e}); they still apply."
+
+    def _record_order(self, text: str, source: str = "") -> str:
+        """An order the instance heard from the operator, held by the supervisor (orders.py); only he drops it."""
+        from . import orders
+        order, new = orders.add(self.name, text, "instance", self._order_source(source))
+        return (f"recorded standing order {order['id']}" if new else f"already standing order {order['id']}") + (
+            ": you are shown it in every run and conversation, your messages to the operator are checked against "
+            "it, and only he can drop it")
+
+    def _order_source(self, source) -> str:
+        """Where the operator gave the order: this conversation (its id), an earlier one (its id, from the supervisor's
+        log), or a message he sent this instance (its file). Anything else is refused."""
+        from . import pushes
+        source = str(source or "").strip()
+        talk = self.talk_id
+        if talk and source in ("", "conversation", talk):
+            return talk
+        cut = self.as_of
+        file = Path(source).name
+        if file and any(r.get("from") == "operator" and r.get("to") == self.name and r.get("file") == file
+                        and (cut is None or pushes._time(r["ts"]) <= cut)
+                        for r in pushes.records(self.project / ".supervisor")):
+            return file
+        if source and re.fullmatch(r"[A-Za-z0-9_.-]+", source):
+            started = re.compile(r"^\[([^]]+)\] " + re.escape(self.name) + r": start (?:talk|api) "
+                                 + re.escape(source) + r"(?: |$)")
+            try:
+                lines = (self.project / ".supervisor" / "supervisor.log").read_text(errors="replace").splitlines()
+            except FileNotFoundError:
+                lines = []
+            if any((m := started.match(line)) and (cut is None or (pushes._time(m[1]) or cut) <= cut)
+                   for line in lines):
+                return source
+        raise ValueError(f"source {source!r}: name the file of the operator's message it came in "
+                         "(inbox/…-from-operator.md) or the id of the conversation"
+                         + (" — or leave it empty, in this conversation" if talk else ""))
+
     def _deliver(self, to: str, rel: str, content: str, kind: str, stamp: datetime, text: str,
-                 attachments: list[dict] | None = None, urgent: bool = False) -> None:
+                 attachments: list[dict] | None = None, urgent: bool = False) -> tuple[str, str] | None:
         """Put a message where its recipient reads it — the operator's inbox (with a notification), or another
-        instance's inbox/ — and in the message log."""
+        instance's inbox/ — and in the message log. Returns (when, why) when its notification waits for the digest."""
         from . import messages
         if to == "operator":
             inbox = self.project / ".supervisor" / "operator-inbox"
@@ -1293,15 +1427,18 @@ class Broker:
             messages.record(self.project / ".supervisor", path, self.name, "operator", kind, stamp, text, attachments,
                             alert, urgent=urgent)
             from . import pushes
-            held = any(r["file"] == path.name and r.get("push_due")
-                       for r in pushes.records(self.project / ".supervisor"))
+            row = next((r for r in pushes.records(self.project / ".supervisor") if r["file"] == path.name), {})
+            held = (row["push_due"], row.get("push_held") or "held") if row.get("push_due") else None
             if not held:
                 notify(f"SHAFT · {self.name} {'asks' if kind == 'question' else 'says'}", text)
             self._answer_comments(path.name, text)
-        else:
-            from .core import safe_write   # the recipient's folder is instance-controlled: no symlinks followed
-            path = safe_write(self.project / "instances" / to, rel, content)
-            messages.record(self.project / ".supervisor", path, self.name, to, kind, stamp, text, attachments)
+            return held
+        from .core import safe_write   # the recipient's folder is instance-controlled: no symlinks followed
+        path = safe_write(self.project / "instances" / to, rel, content)
+        messages.record(self.project / ".supervisor", path, self.name, to, kind, stamp, text, attachments)
+        from . import autonomy         # it wakes for this once idle, not at its next timed wake (review C15)
+        autonomy.event_wake(to, f"message from {self.name}", from_instance=True)
+        return None
 
     def _answer_comments(self, file: str, text: str) -> None:
         """A message to the operator that answers document comments under "### c<n>" lines — how a comment sent for
@@ -1375,19 +1512,67 @@ class Broker:
             from .gate import stop_group
             stop_group(proc)   # and on every other way out: nothing it put in the background outlives it (B9)
             os.unlink(prof)
-        half = RUN_OUTPUT_CHARS // 2
-
-        def cap(t, stream):
-            """The head and tail of a long stream, saying how long it was and how to read all of it: until 2026-10-31
-            the cut said only "[... N chars cut ...]", and a 20 KB report was lost past its first 3,000 characters."""
-            if len(t) <= half:
-                return t
-            return (t[:half // 2] + f"\n[... {stream} was {len(t):,} characters: {len(t) - half:,} cut, the first and "
-                    f"last {half // 2:,} shown. For all of it, write it to a file — `… > .tmp/out.txt 2>&1` — and "
-                    "read that with offsets (read_file(path, offset=…)) ...]\n" + t[-half // 2:])
         _shutil.rmtree(home / ".cache", ignore_errors=True)
-        return (f"{status} · {time.monotonic() - started:.1f} s\n--- stdout ---\n{cap(out or '', 'stdout')}"
-                + (f"\n--- stderr ---\n{cap(err, 'stderr')}" if err else ""))
+        return self._run_result(root, f"{status} · {time.monotonic() - started:.1f} s",
+                                [("stdout", out or "")] + ([("stderr", err)] if err else []))
+
+    def _run_result(self, root: Path, status: str, streams: list[tuple[str, str]]) -> str:
+        """`run`'s result: all of it when short; otherwise the head and tail of each stream within RUN_SHOWN_CHARS,
+        all of it saved to .tmp/outputs/ and each cut naming the read_file call that reads the part left out."""
+        parts = [(label, f"\n--- {label} ---\n", body) for label, body in streams]
+        text = status + "".join(head + body for _, head, body in parts)
+        if len(text) <= RUN_SHOWN_CHARS:
+            return text
+        from .core import safe_write_bytes
+        saved = text[:RUN_SAVED_CHARS]
+        rel = f".tmp/outputs/run-{datetime.now():%Y%m%d-%H%M%S}-{secrets.token_hex(3)}.txt"
+        try:
+            self._prune_run_outputs(root)
+            safe_write_bytes(root, rel, saved.encode("utf-8", errors="replace"), exclusive=True)
+            cap = (f"; the first {RUN_SAVED_CHARS:,} kept (storage cap)" if len(text) > RUN_SAVED_CHARS else "")
+            note = f"[all {len(text):,} characters saved to {rel}{cap}]"
+        except Exception as e:   # the output is still shown: a save failure must not lose the command's result
+            rel = None
+            self._log(f"{self.name} run: could not save output: {type(e).__name__}: {e}")
+            note = (f"[{len(text):,} characters; could not save them ({type(e).__name__}: {str(e)[:200]}). For all "
+                    "of it, write it to a file — `… > .tmp/out.txt 2>&1` — and read that with read_file offsets]")
+        budget = RUN_SHOWN_CHARS - len(status) - len(note) - 1 - sum(len(h) + 260 for _, h, _ in parts)
+        shares, left = {}, max(0, budget)
+        for i, (label, _, body) in enumerate(sorted(parts, key=lambda p: len(p[2]))):   # short streams in full
+            shares[label] = min(len(body), left // (len(parts) - i))
+            left -= shares[label]
+        shown, at = [status, "\n", note], len(status)
+        for label, head, body in parts:
+            at += len(head)
+            share = shares[label]
+            if len(body) <= share:
+                shown.append(head + body)
+            else:
+                cut_from, cut_to = at + share // 2, at + len(body) - share // 2
+                where = (f"read_file({rel!r}, offset={cut_from}) reads it" if rel and cut_from < len(saved)
+                         else "past the storage cap, not saved" if rel else "not saved")
+                shown.append(f"{head}{body[:share // 2]}\n[... {label} was {len(body):,} "
+                             f"characters: {cut_to - cut_from:,} cut here; {where} ...]\n{body[len(body) - share // 2:]}")
+            at += len(body)
+        return "".join(shown)
+
+    def _prune_run_outputs(self, root: Path) -> None:
+        """Saved `run` outputs are scratch: at most RUN_SAVED_FILES - 1 kept before a new one, none past
+        RUN_SAVED_HOURS. Only names this broker writes are touched (their timestamp orders them)."""
+        from .core import list_beneath, unlink_beneath
+        oldest = datetime.now() - timedelta(hours=RUN_SAVED_HOURS)
+        mine = []
+        for name in list_beneath(root, ".tmp/outputs"):
+            if not re.fullmatch(r"run-\d{8}-\d{6}-[0-9a-f]{6}\.txt", name):
+                continue
+            try:
+                mine.append((datetime.strptime(name[4:19], "%Y%m%d-%H%M%S"), name))
+            except ValueError:
+                continue
+        mine.sort()
+        for index, (stamp, name) in enumerate(mine):
+            if index <= len(mine) - RUN_SAVED_FILES or stamp < oldest:
+                unlink_beneath(root, f".tmp/outputs/{name}")
 
     def _delegate_coding(self, task: str) -> str:
         from . import coder
@@ -1552,9 +1737,19 @@ class Broker:
         self._envelope = (time.monotonic(), env)
         return env
 
+    def _message_stamp(self) -> datetime:
+        return datetime.now()
+
     def _record(self, kind: str, limit: int = 20, cycle: str = "", before: str = "", since: str = "",
                 format: str = "text") -> str:
         from .core import SUP_DIR
+        if kind == "commitment_source":   # review I10: did I deliver this message to the operator?
+            from . import commitments
+            if isinstance(self, ReplayBroker) and cycle in self.operator_files:   # sent in this replay, not written
+                return "To: operator\n\n"
+            if self.as_of and cycle >= f"{self.as_of:%Y%m%d-%H%M%S}":   # sent after the replayed cycle started
+                return ""
+            return "To: operator\n\n" if commitments.operator_message(self.name, cycle) else ""
         limit = max(1, min(int(limit), 200))
         # A trial replay sees the record as it stood when the replayed cycle started, never what came after.
         cut = f"{self.as_of:%Y-%m-%d %H:%M:%S}" if self.as_of else None
@@ -1600,7 +1795,8 @@ class Broker:
                                                    "failure_mode", "difficulty", "deliverable_met",
                                                    "self_imposed_clauses", "self_audit", "delivery_supported",
                                                    "should_have_waited")},
-                     **{key: r[key] for key in ("first_error_step", "first_error") if key in r},
+                     # value: the goal slate shows what a similar earlier goal was worth (review G2), from my sleep's copy
+                     **{key: r[key] for key in ("first_error_step", "first_error", "value", "value_for") if key in r},
                      "followup_useful": r.get("followup_useful"),
                      "reviewed_at": _reviewed_at(r),
                      "second_criterion_met": (r.get("second") or {}).get("criterion_met")} for r in shown],
@@ -2341,6 +2537,8 @@ class ReplayBroker(Broker):
     cannot be reached fails the run instead of falling back: a trial never takes the local model unasked."""
 
     local_fallback = False
+    operator_files: frozenset[str] = frozenset()   # what this run's send_message "delivered" to the operator (I10)
+    _started: datetime | None = None
 
     def __init__(self, name: str, project: Path, secrets_env: dict[str, str], log_path: Path, *,
                  state_root: Path, start_commit: str, as_of: datetime, cache: dict, cache_lock: threading.Lock,
@@ -2352,6 +2550,9 @@ class ReplayBroker(Broker):
         self.cache, self.cache_lock, self.tools_log = cache, cache_lock, tools_log
         self.trace: list[dict] = []          # every tool call, as the supervisor saw it
         self.operator_sent = 0
+        self._started = datetime.now()
+        self.sim_orders: list[dict] = []     # orders recorded in this replay and its checks: never written, but seen
+        self.sim_checks: list[dict] = []     # by the rest of the replay as a live cycle sees its own (orders.py)
         self._tags = threading.local()
 
     def envelope(self) -> dict:
@@ -2504,6 +2705,11 @@ class ReplayBroker(Broker):
                      "chat and the terminal.")
         return line
 
+    def _message_stamp(self) -> datetime:
+        """The replayed cycle's clock (its start plus the time this run has taken), as the instance's own clock
+        reads in a replay: a message_file stamped today would tell the run it is a replay."""
+        return self.as_of + (datetime.now() - self._started) if self._started else self.as_of
+
     def _operator_sent_today(self, stamp: datetime) -> int:
         inbox = self.project / ".supervisor" / "operator-inbox"
         cut = f"{self.as_of:%Y%m%d-%H%M%S}"
@@ -2523,10 +2729,40 @@ class ReplayBroker(Broker):
                  "path": f"{rel_dir}/{messages.attachment_name(n)}", "bytes": len(d)} for n, d in files]
 
     def _deliver(self, to: str, rel: str, content: str, kind: str, stamp: datetime, text: str,
-                 attachments: list[dict] | None = None, urgent: bool = False) -> None:
+                 attachments: list[dict] | None = None, urgent: bool = False) -> tuple[str, str] | None:
         self._tag("simulated: not delivered")
-        if to == "operator":
-            self.operator_sent += 1
+        if to != "operator":
+            return None
+        from . import pushes   # held as the real send would have been then (the simulated sends counted as notified)
+        held = pushes.hold_until({"from": self.name, "to": "operator", "alert": True, "urgent": urgent},
+                                 self.project / ".supervisor", self.as_of, sent=self.operator_sent, live=False)
+        self.operator_sent += 1
+        self.operator_files = self.operator_files | {rel}
+        return held
+
+    def _orders_in_force(self) -> list[dict]:
+        from . import orders
+        return orders.listing(self.name, self.as_of, extra=self.sim_orders)
+
+    def _corrections_held(self) -> list[dict]:
+        from . import orders
+        return orders.corrections(self.name, self.root, self.as_of, extra=self.sim_checks)
+
+    def _log_check(self, row: dict) -> None:
+        self.sim_checks.append({**row, "ts": self.as_of.isoformat(timespec="seconds")})   # counted as of the replay
+
+    def _record_order(self, text: str, source: str = "") -> str:
+        from . import orders   # checked like the real thing, kept for the rest of this replay, nothing written
+        text = orders.clean(text)
+        source = str(self._order_source(source))[:orders.SOURCE_MAX]
+        every = {o["id"]: o for o in orders.listing(self.name, self.as_of, dropped=True, extra=self.sim_orders)}
+        order, new = orders.added(self.name, every, text, "instance", source, self.as_of)
+        if new:
+            self.sim_orders.append(order)
+        self._tag("simulated: not recorded")
+        return (f"recorded standing order {order['id']}" if new else f"already standing order {order['id']}") + (
+            ": you are shown it in every run and conversation, your messages to the operator are checked against "
+            "it, and only he can drop it")
 
     def _secret_set(self, name: str, value: str, hosts, header: str = "Authorization", scheme: str = "Bearer") -> str:
         from .core import SECRET_NAME_RE

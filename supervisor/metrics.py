@@ -20,6 +20,7 @@ import random
 import re
 import secrets
 import subprocess
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -94,7 +95,9 @@ code, a capability gained and shown working; \
 5 = exceptional: an output most competent people could not have produced in one cycle. \
 Who would miss it: 'operator' = the operator; 'instance' = another SHAFT instance; 'own_capability' = a tool, \
 skill, fix or verified fact this agent will use again; 'own_record' = bookkeeping about itself (its stats, \
-judge verdicts, notes about its own cycles); 'nobody' = nothing was kept that anyone would miss.
+judge verdicts, notes about its own cycles). Work the operator does not read or act on, such as an internal \
+ledger or book, is 'own_record', even if it is described as being for the operator; \
+'nobody' = nothing was kept that anyone would miss.
 For every instance, value_for own_capability or own_record caps at 3 unless the same cycle's tool log \
 shows that work used in something delivered to the operator. When the cap applies, value_reason says so. \
 The operator-facing scale is unchanged.
@@ -451,12 +454,16 @@ _QUESTIONS: dict[str, tuple] = {}
 
 
 def _episode_files_key(name: str) -> tuple:
-    """(name, size, mtime) of each episode log (memory/episodes/*.jsonl), stat'ed through the folder's descriptor with
+    return _episode_key(INSTANCES / name)
+
+
+def _episode_key(root: Path) -> tuple:
+    """(name, inode, mtime, size) of each episode log (memory/episodes/*.jsonl), stat'ed through the folder's descriptor with
     no link followed (core.dir_beneath): a link there is never stat'ed through, nor counted. () if the folder is
     missing or reached through a link."""
     import stat
     try:
-        fd = dir_beneath(INSTANCES / name, ["memory", "episodes"])
+        fd = dir_beneath(root, ["memory", "episodes"])
     except (FileNotFoundError, UnsafePath):
         return ()
     try:
@@ -465,7 +472,7 @@ def _episode_files_key(name: str) -> tuple:
             if fname.endswith(".jsonl"):
                 st = os.stat(fname, dir_fd=fd, follow_symlinks=False)
                 if stat.S_ISREG(st.st_mode):
-                    out.append((fname, st.st_size, st.st_mtime_ns))
+                    out.append((fname, st.st_ino, st.st_mtime_ns, st.st_size))
         return tuple(out)
     finally:
         os.close(fd)
@@ -489,18 +496,37 @@ def _instance_text(name: str, rel: str) -> str:
     return safe_read(INSTANCES / name, rel, "", errors="replace")
 
 
+_REBUILD = threading.local()   # .episodes: parsed logs shared by one stats_text's sections, then dropped — the web
+                               # service imports this module, and parsed histories of every instance run to gigabytes
+
+
+def _parsed_episodes(root: Path) -> list[dict]:
+    """Parsed episode logs, read without following links; within one stats rebuild each file is parsed once."""
+    cache = getattr(_REBUILD, "episodes", None)
+    previous = cache.get(root, {}) if cache is not None else {}
+    current = {}
+    for stamp in _episode_key(root):
+        fname = stamp[0]
+        hit = previous.get(fname)
+        if hit is None or hit[0] != stamp:
+            rows = []
+            for line in safe_read(root, f"memory/episodes/{fname}", "", errors="replace").splitlines():
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(rec, dict):
+                    rows.append(rec)
+            hit = (stamp, rows)
+        current[fname] = hit
+    if cache is not None:
+        cache[root] = current
+    return [rec for _, rows in current.values() for rec in rows]
+
+
 def _episode_records(name: str):
     """Every record of the instance's episode logs (memory/episodes/*.jsonl), oldest file first."""
-    for fname in list_beneath(INSTANCES / name, "memory/episodes"):
-        if not fname.endswith(".jsonl"):
-            continue
-        for line in _instance_text(name, f"memory/episodes/{fname}").splitlines():
-            try:
-                rec = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(rec, dict):
-                yield rec
+    yield from _parsed_episodes(INSTANCES / name)
 
 
 def live_episodes(name: str) -> list[dict]:
@@ -611,7 +637,8 @@ def _provenance_evidence(name: str, ep: dict) -> str:
     other messages and the conversations of the EVIDENCE_HOURS before it, and the goals.md item it cites."""
     at = _ts(ep.get("ts", "")) or datetime.now()
     since = at - timedelta(hours=EVIDENCE_HOURS)
-    parts, read = [], set(ep.get("inbox") or [])
+    # a message past the cycle's inbox budget and never read stayed in the inbox (inbox_deferred): not read here
+    parts, read = [], set(ep.get("inbox") or []) - set(ep.get("inbox_deferred") or [])
     for fname in sorted(read):
         for where in ("memory/messages", "inbox"):
             if (text := _instance_text(name, f"{where}/{fname}")):
@@ -779,6 +806,9 @@ def judge_pending(name: str) -> int:
                         log(f"{name}: no second judge on {ep['ts']}: it consulted {vendor(judge.JUDGE2_MODEL)}")
                     else:
                         stash_second(name, ep["ts"], case)   # judged after the run lets go of the instance
+            except judge.NoJudgeLeft as e:   # this run's own models cover the pool: the runs after it still get judged
+                log(f"{name}: judging {ep['ts']} skipped for now: {e}")
+                continue
             except judge.JudgeError as e:
                 log(f"{name}: judging {ep['ts']} failed: {e}")
                 break
@@ -1449,6 +1479,21 @@ def _traits_section(name: str) -> list[str]:
 WINDOW = 20
 
 
+def ran_out_by_model(name: str, js: list[dict], last: int = 2 * WINDOW) -> list[str]:
+    """How often my latest judged cycles on each model ran out — no finish, or a forced deadline wrap-up (the template's
+    forecast rule, as experiments._ran_out) — so a model switch is judged on its cut-offs too (review I9: wren's
+    went from 13% to 54% after a switch at 16 steps, and nothing it read showed it)."""
+    model_of = {j.get("episode_ts"): j.get("model") or "unrecorded" for j in js if j.get("episode_ts")}
+    runs: dict[str, list[bool]] = {}
+    for ep in live_episodes(name):
+        if ep.get("ts") in model_of:
+            runs.setdefault(model_of[ep["ts"]], []).append(not ep.get("finish") or ep.get("wrapped_up") == "deadline")
+    if not runs:
+        return []
+    return ["- Cycles that ran out of steps or time, by model (my latest judged cycles on each): " + " · ".join(
+        f"{m} {sum(r[-last:]) / len(r[-last:]):.0%} of {len(r[-last:])}" for m, r in runs.items())]
+
+
 def _achieved_section(js: list[dict]) -> list[str]:
     """Difficulty-weighted results and where my goals came from — the measures a run of easy successes
     cannot max out."""
@@ -1632,6 +1677,18 @@ def _base_rate_lines(rows: list[dict]) -> list[str]:
 
 
 def stats_text(name: str) -> str:
+    """self/stats.md's text. Its sections share one parse of the episode logs (review C3), kept only while it runs."""
+    outer = getattr(_REBUILD, "episodes", None)
+    if outer is None:
+        _REBUILD.episodes = {}
+    try:
+        return _stats_text(name)
+    finally:
+        if outer is None:
+            _REBUILD.episodes = None
+
+
+def _stats_text(name: str) -> str:
     from . import pushback, pushes
     js = judgments(name)
     push_lines = ["- " + line for line in pushes.lines(name, js) + pushback.lines(name, js)] + [""]
@@ -1667,6 +1724,7 @@ def stats_text(name: str) -> str:
     if js:
         achieved[-1:-1] = [f"- Judged success rate per judge (yes=1, partial=0.5; {TREND_DAYS} days to my latest "
                            f"verdict vs the {TREND_DAYS} before): {by_judge_trend(js, success)}"]
+    achieved[-1:-1] = ran_out_by_model(name, all_js)
     lines += achieved + _surprise_section(name) + _sections(name, ("tom",)) + _value_section(all_js) + _battery_section(name)
     lines.append("## Success against my own criteria (raw)")
     if not js:

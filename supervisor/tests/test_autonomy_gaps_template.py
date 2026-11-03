@@ -232,8 +232,9 @@ class SleepVerdictOverflowTest(InstanceFixture, unittest.TestCase):
         for _ in range(2):   # the same answer twice: nothing is stored twice
             fake, client = self.model([{"content": "Reviewed."}])
             sleep.run(self.cfg, self.state, client)
-        self.assertEqual(calls.call_args_list[0].kwargs["since"], "2026-10-01 03:00:00")
-        self.assertEqual(calls.call_args_list[2].kwargs["since"], "2026-10-01 03:30:00")
+        # Row 11: pages are read until caught up; this fake's cursor stands still at 03:30, which ends each read.
+        judgments = [c.kwargs["since"] for c in calls.call_args_list if c.kwargs.get("kind") == "judgments"]
+        self.assertEqual(judgments, ["2026-10-01 03:00:00", "2026-10-01 03:30:00", "2026-10-01 03:30:00"])
         self.assertEqual((self.root / sleep.VERDICTS_REVIEWED).read_text(), "2026-10-01 03:30:00\n")
         kept = memory.verdict_rows(self.root)
         self.assertEqual([(r["episode_ts"], r.get("left_out", False)) for r in kept],

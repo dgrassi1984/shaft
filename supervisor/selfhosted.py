@@ -112,7 +112,7 @@ def open_reply(instance: str, body: dict, fallback: bool = True, note: Callable[
         return resp, model, started
     target = FALLBACK if fallback else ""
     if not target:
-        _record(instance, model, None, None, 0.0, started, None, why)
+        _record(instance, model, None, None, None, started, None, why)
         raise CloudError(502, f"{model} at {srv['url']}: {why}; no local fallback"
                               f"{'' if fallback else ' for a trial (it never takes the local model)'}")
     note(f"{model} at {srv['url']}: {why} -> local fallback {target}")
@@ -125,7 +125,7 @@ def open_reply(instance: str, body: dict, fallback: bool = True, note: Callable[
     if why_local is None:
         resp, why_local = _open(target, {**body, "model": model.partition("/")[2]})
     if resp is None:
-        _record(instance, model, None, None, 0.0, started, None, f"{why}; fallback: {why_local}")
+        _record(instance, model, None, None, None, started, None, f"{why}; fallback: {why_local}")
         raise CloudError(502, f"{model} at {srv['url']}: {why}; local fallback {target}: {why_local}")
     return resp, f"{model} (local fallback)", started
 
@@ -136,11 +136,11 @@ def complete(instance: str, body: dict, fallback: bool = True, note: Callable[[s
         with resp:
             data = json.load(resp)
     except (OSError, ValueError) as e:
-        _record(instance, label, None, None, 0.0, started, None, f"reply broken: {e}")
+        _record(instance, label, None, None, None, started, None, f"reply broken: {e}")
         raise CloudError(502, f"{label}: reply broken: {e}") from e
     usage = data.get("usage") or {}
     finish = ((data.get("choices") or [{}])[0]).get("finish_reason")
-    _record(instance, label, usage.get("prompt_tokens"), usage.get("completion_tokens"), 0.0, started, finish, None)
+    _record(instance, label, usage.get("prompt_tokens"), usage.get("completion_tokens"), None, started, finish, None)
     if not data.get("choices"):
         raise CloudError(502, f"{label}: no reply: {json.dumps(data)[:400]}")
     data["model"] = label

@@ -274,8 +274,9 @@ and [chat design](plans/PLAN-webui-chat.md).
   message. The threads live in the supervisor (`.supervisor/web/comments/`), never in a file it could overwrite; a
   read-only copy in its `notes/comments/` holds every comment of an open thread, sent or not, and of a resolved one
   what was sent.
-- Each instance's other pages sit behind the chat's ⋯ menu: **Summary**, **Config** (`config.env`, a field per key;
-  each value is named for its key),
+- Each instance's other pages sit behind the chat's ⋯ menu: **Summary**, **Config** (its **standing orders** first — each in force
+  with its Drop, the corrections its messages are still checked against, a field to add one, all through `shaft orders`
+  ([architecture](architecture.md)) — then `config.env`, a field per key; each value is named for its key),
   **Drive** (`drive.md` for that instance: the diff is shown in full, then Apply saves it and Back keeps your text; an
   unsaved edit is kept in this browser and restored after a reload, and leaving asks first, as it does for an
   unsaved Config or Settings value),

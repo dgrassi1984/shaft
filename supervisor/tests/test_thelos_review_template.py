@@ -15,7 +15,7 @@ class GoalsBudgetTest(InstanceFixture, unittest.TestCase):
     def prompt_goals(self):
         text = prompts.system_prompt(self.state, self.cfg, prompts.SLEEP_MODE)
         return text.split("## My goals (self/goals.md)\n\n", 1)[1].split(
-            "\n\n## My current improvement plan", 1)[0]
+            "\n\n## My recent journal", 1)[0]   # the section after goals since review E2/C5's stable-first order
 
     def sleep_prompt(self):
         client = mock.Mock()
@@ -91,9 +91,10 @@ class SleepPagesTest(InstanceFixture, unittest.TestCase):
         cursors = [initial] + [rows[i]["reviewed_at"] for i in (19, 39, 49)]
         pages = {cursors[i]: record_json(f"PAGE {i}", rows[i * 20:(i + 1) * 20],
                                        [f"left-{i}"], cursors[i + 1]) for i in range(3)}
+        pages[cursors[3]] = record_json("")   # caught up: the broker's empty page has no next cursor (row 11)
         calls = self.fake_broker(lambda name, **args: pages[args["since"]])
         shown = self.rest()
-        self.assertEqual([c.kwargs["since"] for c in calls.call_args_list if c.kwargs.get("kind") == "judgments"], cursors[:3])
+        self.assertEqual([c.kwargs["since"] for c in calls.call_args_list if c.kwargs.get("kind") == "judgments"], cursors)
         for call in (c for c in calls.call_args_list if c.kwargs.get("kind") == "judgments"):
             self.assertEqual((call.args, call.kwargs["kind"], call.kwargs["limit"], call.kwargs["format"]),
                              (("record",), "judgments", 20, "json"))

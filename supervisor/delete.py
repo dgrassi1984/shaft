@@ -166,7 +166,7 @@ def _all(*fns):
 
 
 def shared_edits(name: str) -> list[Edit]:
-    from . import consult, jobs
+    from . import autonomy, battery, consult, jobs
     s = SUP_DIR
     mine = lambda v: v == name or (isinstance(v, str) and v.startswith(name + "@"))   # 'wren@trial:t-…:0A' too
 
@@ -205,8 +205,9 @@ def shared_edits(name: str) -> list[Edit]:
 
     edits = [Edit(s / "jobs" / "state.json", _json(jobs_state), jobs._editing_lock),
              Edit(s / "api-answered.json", _json(answered)),
-             Edit(s / "schedule.json", _json(_pop("wakes", name))),
-             Edit(s / "battery" / "schedule.json", _json(_pop(name))),
+             Edit(s / "schedule.json", _json(_all(_pop("wakes", name), _pop("cycles", name), _pop("skipped", name))),
+                  autonomy.editing_lock),
+             Edit(s / "battery" / "schedule.json", _json(_pop(name)), battery.schedule_lock),
              Edit(s / "recaps.json", _json(_pop(name))),
              Edit(s / "evals" / "surprise-baseline.json", _json(_pop("instances", name))),
              Edit(s / "telegram.json", _json(telegram_state)),

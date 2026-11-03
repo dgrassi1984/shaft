@@ -25,6 +25,23 @@ Sources: [run lifecycle](../supervisor/runner.py),
 [gate](../supervisor/gate.py), [judging](../supervisor/metrics.py),
 [probation](../supervisor/metrics.py).
 
+`web_search` retries HTTP 502/503/504 and timeouts twice, logs each retry, and waits
+2 then 5 seconds. Each attempt has a 25-second timeout, keeping the three attempts
+and backoff below the former 90-second timeout budget. Other errors return immediately.
+
+The template shows at most 6,000 characters per tool result. Longer results are saved
+in the instance's `.tmp/outputs/output-*.txt` (at most 1,000,000 characters, 32 files, 24 hours); the preview ends
+with the path and a `read_file` offset, or says why the save failed. Shell `run` saves its own output in the broker,
+so an instance on an older `shaft/tools.py` gets it too: past 5,000 characters the result starts with the exit
+status and the saved path (`.tmp/outputs/run-*.txt`, same caps), then each stream's head and tail, each cut
+naming the `read_file` offset where it starts. A save the broker refuses (a link at `.tmp/outputs`) is logged and
+shown with the old write-it-to-a-file hint. These are scratch files in the current workspace, including replay
+workspaces, and do not settle or deliver anything.
+
+An over-limit `success_criterion` returns its draft, character count and required
+reduction with a hint to keep the deliverable's check. The instance revises the draft;
+the runtime does not silently change the criterion.
+
 ## Layout
 
 | Branch | Worktree | Holds |
@@ -65,6 +82,37 @@ inbox/        messages waiting for it (from you or other instances)
 notes/        its own work
 ```
 
+Sleep reads judgment pages until the broker returns no next cursor, bounded by `SLEEP_VERDICT_CHARS`
+(default 120,000 characters, positive; the first page is always read). A page that would go over the budget is
+left for the next sleep, and a cut-short notice goes to the sleep prompt and stderr. A finished sleep keeps the last
+reviewed cursor even when the final page is empty. A model reply ending with `finish_reason` or `stop_reason` of
+`length` is discarded, a partial tool call included (never run), and retried once with twice the output room, with a
+retry notice on stderr and both attempts in the usage log. The retry turns thinking off only when the cut came
+while still thinking (no text, no tool call begun). A second truncation fails the sleep without advancing its
+review marker.
+
+Memory search keeps an in-process file index keyed by path, nanosecond mtime and size. Only changed files are
+parsed again; new verdicts refresh cycle annotations, and fact ages refresh each day. Surprise expiry also refreshes
+at its deadline. Decoded embeddings stay in memory; unchanged chunks reuse them. The existing on-disk chunk cache
+remains `.tmp/memory-index.json`. Switching instance roots discards the previous root's in-process caches.
+
+## Wakes
+
+The scheduler ([autonomy.py](../supervisor/autonomy.py)) looks at each instance every `WAKE_INTERVAL_MINUTES`, and
+wakes it only with something to do (`wake_gate`, a pure rule with no model): an unread message in its inbox (a watch
+result is one), an open commitment coming due before it looks again, a job run that delivered or published something
+since its last cycle, or no cycle for `SHAFT_IDLE_WAKE_MINUTES` (default 30). Otherwise the wake is skipped and the
+reason (`nothing to do: …`) logged, kept in `.supervisor/schedule.json` until the next cycle, and shown by
+`shaft autonomy status`, `shaft top` and the web overview. What used to wait for that interval wakes the instance as
+soon as it is idle instead (event wakes, through the jobs' wake path, never while it is paused or has
+`WAKE_INTERVAL_MINUTES=0`): a message from the operator, a message from another instance (inside the recipient's
+wake floor since its last cycle it is queued for the floor's end, so two instances answering each other are paced,
+not looped), and a commitment falling due. A cycle is stamped when it starts under the instance's run lock — a
+scheduled wake, `shaft live` or `shaft tick` alike; a wake that finds the instance busy stamps none — and an asked
+wake whose last request came before a cycle began is dropped, since that cycle saw it. `schedule.json` and `battery/schedule.json` are rewritten under a lock and replaced whole: the scheduler
+and every wake, sleep and battery write them. A scheduler child's stderr is read while it runs, and a pause a running
+cycle does not acknowledge within five minutes (or by its budget's end) becomes a request to wrap up.
+
 ## Effect-loop measurement
 
 The shared template `shaft/agent.py` loop keeps its exact-call repeat guard and adds an effect guard (#103),
@@ -80,7 +128,7 @@ whitespace, ISO timestamps, UUIDs and named ID fields. JSON key order is ignored
 so advancing pagination, changing status and successful retries can continue. Long unchanged polling can still
 cross the configured threshold; the guard cannot know that a future poll will change.
 
-Shadow mode, the default, adds no model-visible text. Executed tool-log entries store an `effect` signature and
+On mode is the default. Shadow mode adds no model-visible text. Executed tool-log entries store an `effect` signature and
 turn number, and episodes store would-fire events as `loop_shadow` entries with `turn`, `family`, `rounds` and
 `would_say`. On mode appends the advice to the executed result, offering another hypothesis, another source or
 an honest stop. It never blocks the call. Off mode stores neither signatures nor events.
@@ -98,8 +146,12 @@ does not establish the rate on real runs.
 
 ## Measuring improvement and autonomy
 
-Before a live cycle calls `declare_intent`, its prompt shows the inbox, the operator briefing (`BRIEFING`) and
-the handoff (`HANDOFF`). The briefing is a local file written by the instance's own scheduled watchers, with no
+Before a live cycle calls `declare_intent`, its prompt shows the inbox (the operator's messages whole, every other one as one line, `INBOX_CHARS`), the
+operator briefing (`BRIEFING`), the handoff (`HANDOFF`) and a slate of up to six candidate goals from the instance's
+records, each with the judged value of a similar earlier goal (`GOAL_SLATE`); `declare_intent` answers with the judge's
+first error on the newest similar goal that fell short (`FIRST_ERROR`). Every section of the standing context has a
+budget, all within `CONTEXT_CHARS`, stable sections first; tool results older than `RESULTS_KEEP_TURNS` turns shrink to
+a reference whose whole the instance re-reads with `read_file` (see [template knobs](configuration.md#instance-configenv)). The briefing is a local file written by the instance's own scheduled watchers, with no
 mail or calendar call during prompt construction. The operator's world is a goal source beside the improvement
 plan and goals.md. A briefing item has origin `operator` only when a message or conversation backs the request;
 otherwise it has origin `self`. The judge still checks the cited origin.
@@ -126,8 +178,15 @@ rotation, and are given **per judge**: each judge's 7 days to the latest verdict
 10 verdicts. Judges differ several-fold on claims, so no figure pools two of them (docs/plans/PLAN-judge-mix.md).
 The success line sits under achieved difficulty, inside the first 5500 characters the LIVE prompt shows.
 
+Stats rebuilds share parsed episode files, invalidated by file name, inode, nanosecond mtime and size;
+reads still refuse links. Provenance indexes citation times and URLs once per rebuild and shingles each
+needed result once per fact length. Confidence sections check their sample floors before bootstrapping;
+deterministic intervals are cached by judgment content. Reply scoring skips final receipts before listing
+message folders, lists each folder once for pending receipts, and reads the chat ledger once if needed.
+
 Judges grade effectiveness first. `declare_intent` takes a checkable `success_criterion`, limited by
-`CRITERION_CHARS` (default 600), and refuses longer criteria with their length and limit.
+`CRITERION_CHARS` (default 600), and refuses longer criteria with their length, the limit, how many
+characters to cut and the draft itself, so one retry can trim it.
 The LIVE prompt allows at most one cycle in five on the instance's own records or checking tools.
 `finish_cycle` requires `delivered_via`: `message`, `mail`, `notion`, `web_document` or `none`.
 It only records the report; delivery is a separate earlier tool call. Use `none` for journal or ordinary notes.
@@ -186,6 +245,15 @@ For every instance, `value_for=own_capability` or `own_record` caps at 3 unless 
 work used in something delivered to the operator. `value_reason` states when the cap applies; the operator-facing
 scale stays unchanged. `shaft judge value-regrade` re-asks only value fields on selected historical cycles and
 prints a comparison without changing stored verdicts. See [CLI](cli.md).
+An internal ledger or book the operator does not read or act on is `own_record`, even when described as for them.
+
+The main judge rotation leaves out `SHAFT_JUDGE2_MODEL`, keeping the cross-check independent; a pool that still
+lists it uses it only when no other judge may grade a run (that run gets no second judgment). A run whose own models
+cover the whole pool is skipped for now, and the runs after it are still judged. The judge owns length retries: one
+escalation to twice the initial token ceiling; trial pair judging adds no retry. Cloud usage rows retain OpenRouter
+cache reads and writes. Native Claude judge rows record dollars from the shared pricing table. Self-hosted calls have
+`usd=null` and `unpriced=true` and add nothing to a run's charges (they spend no dollars); spend reports count
+unpriced calls separately from their dollar totals.
 
 Calibration v2 measures P(criterion met = yes), identified by `confidence_of="criterion_met=yes"`.
 Its Brier score uses yes=1 and partial/no=0. Older v1 confidence asked for "probability of success" and
@@ -278,9 +346,19 @@ and `base_rate_error` from its episode the same way; a value the judgment has is
 The agent tags each tool-log entry whose result has a known failure shape (`flag`) and, in live cycles, shows the model
 an `[unexpected …]` note when its predictions did not anticipate it. The open surprises are folded from the episodes
 (nothing stored; ids `s<MMDD>-<HHMM>-<n>`; at most 8 shown, 7-day expiry, one follow-up unless judged useful, depth-2
-hidden) and shown in every prompt; one live cycle in `CURIOSITY_EVERY_CYCLES` is drawn to take its goal from them
-(`origin_ref: surprise:<id>`), never while an operator message waits, seeded by the cycle's start so a trial replay
-draws the same. The sleep goes through every surprise since the last one (a fact citing its id, `close_surprise`, or
+hidden) and shown in every prompt; one live cycle in `CURIOSITY_EVERY_CYCLES` is drawn to follow an outward surprise
+(`origin_ref: surprise:<id>`), never while an operator message waits. Review I7: a drawn cycle then picks one
+outward surprise (`surprises.choose`); a surprise is inward, and never picked, when its expected/observed/so_what
+match `surprises.INWARD` — a path in the instance's tool folders (`shaft/`, `plugins/`, `jobs/`, `self/`, `memory/`,
+`*.py`, `*.jsonl`), a builtin or bookkeeping tool by name, or an ambiguous word (plugin, gate, ledger, broker,
+sandbox, code) tied to the instance by a possessive or a machinery verb; plain English senses ("the broker's margin
+rule", "the garden gate") stay outward, and the goal the surprise was met under is not read. The weight is one plus
+the content words (longer than three characters, closed-class words dropped) it shares with the briefing, goals and
+inbox. The cycle's start seeds both draws, so a trial replay draws the same. The prompt shows the selected surprise
+and declare_intent refuses another reference. When the coin falls but no open surprise is outward, the cycle is
+recorded `skipped_for: no_outward_surprise`, the prompt says so and the goal is free. The supervisor keeps the same
+pattern (`supervisor/surprise.py`, pinned equal by `test_curiosity_outward`) and records `outward_open` in its
+surprise snapshot. The sleep goes through every surprise since the last one (a fact citing its id, `close_surprise`, or
 left open with a reason). The judge adds `expectations`, `unreported_surprises`, `reported_surprises_supported` and
 `followup_useful`, which never change `criterion_met`; `supervisor/surprise.py` keeps its own copy of the rule and
 the fold (shared test fixtures keep the two in step), writes `.supervisor/surprises/<name>.json` and the stats.md
@@ -349,6 +427,26 @@ The supervisor reads the ledger without importing template code. `panel.alerts` 
 `correction:<instance>:<id>` after more than `SHAFT_CORRECTION_ALERT_CYCLES` live cycles since the correction.
 The default is 6, and 0 disables the alert. A missing, unreadable or malformed ledger raises no alert.
 
+**Standing orders** (review I2, I4; [orders.py](../supervisor/orders.py)) keep the operator's decisions decided
+("Retire", "Drop", "the paper body has no process blocks"): shaft asked "continue or retire?" four times after "Retire",
+and closed corrections came back. The supervisor holds them in `.supervisor/orders/<name>.jsonl`, append-only rows
+`{id, text, added_at, by: operator|instance, source, dropped_at}` (the last row of an id is its state). The operator
+adds, lists and drops them with `shaft orders <name> [list|add TEXT|drop ID]` or on the web Config page; an instance
+records one it heard with the broker tool `record_order(text, source)` — source the operator's message file, or the
+conversation (its id, filled in during the conversation) — and never drops one. The orders in force are shown verbatim
+in every run and conversation, in the `record_order` tool's description (in `send_message`'s when record_order is
+switched off): supervisor-side, so no template change carries them. Every `send_message` to the operator is checked by
+a judge from the rotation (never the instance's own model) against the orders and the corrections still checked; one
+that goes against them is refused, quoting the order and the judge's reason, and the instance may rewrite it. A check
+with no verdict — none in time, or an answer that does not fit the check's schema — delivers the message and the result
+says it was not checked. **A correction stays checked** until the next `SHAFT_CORRECTION_PASSES` (default 3) messages
+to the operator after it pass the check against its text, whatever the instance's ledger says about closing it; a
+message refused for going against it starts the count again, an unchecked one does not count, and `not_accepted`
+corrections are left out. Each check is a row of `.supervisor/orders/<name>-checks.jsonl`, from which the passes are
+counted. Trial replays check as the live cycle would, against the orders, corrections and checks as of the replayed
+cycle (a later check never clears a correction in an earlier replay), and write nothing: an order the replay records
+and the checks it makes are kept in that replay's broker, so its later messages are checked against them.
+
 
 **Self-knowledge measured against the record** ([PLAN-consciousness](plans/PLAN-consciousness.md)). Functional
 properties only, each scored against what the instance does, none feeding probation or a reward, each agent-side
@@ -368,9 +466,23 @@ inside `bash -c`; `python -m pytest` is `run pytest`, `python3 shaft/x.py` is `r
 inspections (`echo`, `cat`, `ls`, `wc`, `grep`, `sed -n`, …) have no kind and are never held. **Commitments**
 (`commit_to`, finish_cycle's `commitments`, `memory/commitments.jsonl`) are settled in sleep, kept only with an
 episode as evidence; the supervisor re-checks it (`supervisor/commitments.py`). The ledger accepts promises only
-to Daniele (`made_to="operator"`) or a peer returned by `list_instances`. Unknown names and self promises are refused;
-own plans belong in goals/notes. Old self records remain on disk but are excluded from prompts, recall and sleep
-settlement; the supervisor reports their count separately as "to self (no longer kept)".
+to Daniele (`made_to="operator"`) or a peer returned by `list_instances`. Unknown names and explicit self promises are
+refused; own plans belong in goals/notes. Review I10: a promise to the operator needs a source the model does not
+name. In a conversation it is the conversation open now (`talk_id`, set by `talk.run`/`talk.answer`; not when
+someone else speaks for the operator). In a live cycle it is the last message delivered to the operator in that run:
+`send_message` returns its `message_file` (`<stamp>-from-<name>.md`) and commit_to and finish_cycle attach it. A
+note in the instance's own folder, or an earlier conversation, is not a source. `commitments.add` confirms a message
+through the broker's read-only `record(kind="commitment_source", cycle=<file>)`, which reads the operator inbox and
+its `read/` archive without exposing the folder; a broker failure returns an error and records nothing. A trial
+replay counts the messages its own run "delivered" (never written; their stamps on the replayed cycle's clock) and no
+real message newer than its start. Missing or invalid sources are recorded as `made_to="self"` with a note. The
+agent's fold trusts a source `add` checked; the supervisor's fold checks every one again against episodes and the
+inbox, so an operator promise survives the operator reading its message.
+Self/own records, including those addressed to the instance's own name, expire 24 hours after due, with status
+`expired` and the expiry time retained in history. Earlier settlements remain settled; a later settlement cannot
+revive an expired record. Self records remain excluded from prompts, recall and sleep settlement;
+the supervisor reports their count and expired count separately as "to self (no longer kept)". These rules use
+the existing COMMITMENTS knob in the consciousness group; there is no new expiry knob.
 
 Projects (#106) use append-only `memory/projects.jsonl` opened/closed by `open_project` and `close_project`.
 Each records a name, future ISO deadline (a date includes the whole day), optional positive calls/dollar budgets,
@@ -435,6 +547,12 @@ killed mid-item leaves at most a stale copy, which the next run removes. Items l
 `~/Library/Application Support/SHAFT/battery-backup/`; every result carries the item set's sha256, model
 and judge, and results from different eras are never compared. Results: `.supervisor/battery/results/`,
 `.supervisor/evals/battery-*.json`, and a section of `self/stats.md`.
+When grading fails, the result retains the full grading case and the chosen grader. The next attempt in the
+same era retries grading that case without rerunning the exam, up to three gradings of one case; then the exam runs
+afresh. A preempted trial pair reuses a completed arm only when its code, historical cycle, model, replay shape and
+token/tool time budgets match its saved fingerprint, and only with the pair's read cache saved beside it, loaded
+before the other arm runs so both runs get the same answers from the world; reused arms are not charged again.
+Arms and cache are written whole (temp file, then rename); an unreadable one is not reused, and both arms run again.
 
 Sources: [instance creation](../supervisor/__main__.py),
 [mind store and push guard](../supervisor/mind.py),

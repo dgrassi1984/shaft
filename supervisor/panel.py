@@ -115,7 +115,11 @@ def costs(days: int = 7, today: date | None = None) -> dict:
         else:
             d[comp] += usd
 
+    unpriced = 0
     for r in jsonl(SUP_DIR / "cloud_usage.jsonl"):
+        if r.get("usd") is None:
+            unpriced += 1
+            continue
         who = r.get("instance", "?")
         if "@trial" in who:
             continue                                    # in the trial ledger
@@ -123,7 +127,6 @@ def costs(days: int = 7, today: date | None = None) -> dict:
             who if who in names else "")
     for r in jsonl(trial.LEDGER):
         add(r["ts"][:10], "trials", r.get("usd") or 0.0)
-    unpriced = 0
     judge_today: dict[str, float] = {}
     for r in jsonl(SUP_DIR / "judge_usage.jsonl"):
         usd = judge_usd(r)

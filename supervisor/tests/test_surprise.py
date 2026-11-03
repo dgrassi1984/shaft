@@ -322,11 +322,11 @@ class CuriosityDrawTest(Fixture, unittest.TestCase):
 
     def test_drawn_cycle_is_told_and_recorded(self):
         self.seed(1)
-        with mock.patch.object(surprises.random, "Random") as rng:
-            rng.return_value.random.return_value = 0.0
+        with mock.patch.object(surprises, "draw", return_value={"drawn": True, "skipped_for": None}):
             fake = self.live([{"content": "ok"}], every=5)
         self.assertIn(prompts.CURIOSITY.strip(), fake.requests[0]["messages"][1]["content"])
-        self.assertEqual(self.state.last_episode()["curiosity"], {"drawn": True, "skipped_for": None})
+        self.assertEqual(self.state.last_episode()["curiosity"],
+                         {"drawn": True, "skipped_for": None, "selected": "s1012-0900-1"})
         self.assertIn("**Curiosity cycle** (drawn)", self.state.journal.read_text())
 
     def test_undrawn_and_operator_first(self):
@@ -362,8 +362,7 @@ class CuriosityDrawTest(Fixture, unittest.TestCase):
     def test_nothing_in_a_live_cycle_says_replay(self):
         self.seed(1)
         with mock.patch.dict(os.environ, {"SHAFT_NOW": "2026-10-13T08:15:20"}), \
-                mock.patch.object(surprises.random, "Random") as rng:
-            rng.return_value.random.return_value = 0.0
+                mock.patch.object(surprises, "draw", return_value={"drawn": True, "skipped_for": None}):
             fake = self.live([{"content": "ok"}], every=5)
         shown = json.dumps(fake.requests[0]).lower()
         for word in ("replay", "trial run", "simulat"):

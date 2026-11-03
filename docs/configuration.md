@@ -113,6 +113,7 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_BONSAI_PYTHON` | `str(PROJECT / ".venv-bonsai" / "bin" / "python")` | the interpreter Bonsai LoRA training runs with | [finetune.py](../supervisor/finetune.py) |
 | `SHAFT_GATE_TIMEOUT_S` | `300` | seconds each gate test stage may run before it times out; positive integer | [gate.py](../supervisor/gate.py) |
 | `SHAFT_GATE_WORKERS` | `4` | processes each part of the supervisor's tests runs in at a gate; positive integer | [gate.py](../supervisor/gate.py) |
+| `SHAFT_IDLE_WAKE_MINUTES` | `30` | minutes an instance may go without a cycle before a timed wake starts one with nothing new for it (no unread message, commitment coming due or job result) | [autonomy.py](../supervisor/autonomy.py) |
 | `SHAFT_JOB_MIN_MINUTES` | `5` | the shortest interval an instance's own job (a plugin on a timer) may run at | [jobs.py](../supervisor/jobs.py) |
 | `SHAFT_JOBS_MAX` | `12` | scheduled plugins (jobs) an instance may run; beyond it, the rest by name are not run; positive integer | [jobs.py](../supervisor/jobs.py) |
 | `SHAFT_WATCH` | `on` | the supervisor's mail and calendar watch, for instances that opt in with WATCH_MAIL or WATCH_CALENDAR in their config.env (on or off) | [watch.py](../supervisor/watch.py) |
@@ -122,7 +123,7 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_JOB_LONG_CALLS` | `200` | supervisor tool calls one run of a long scheduled job may make; positive integer | [jobs.py](../supervisor/jobs.py) |
 | `SHAFT_JOB_LONG_RESUMES` | `4` | times a long scheduled job that timed out after writing its checkpoint is resumed before it gives up (0: never resumed) | [jobs.py](../supervisor/jobs.py) |
 | `SHAFT_JOB_RUN_CONFINED` | `0` | 1: the broker's `run` inside a scheduled job writes only where the job may (`.jobs/<plugin>/`, `.tmp/`, `.browser/`); 0: where a cycle's `run` may (notes/, code). Turn it on once every instance's scheduled plugins publish through `publishes` | [jobs.py](../supervisor/jobs.py) |
-| `SHAFT_JUDGE_MODELS` | `openrouter/xiaomi/mimo-v2.6-pro,openrouter/z-ai/glm-5.3-flash,openrouter/deepseek/deepseek-v4.1-flash` | the judge pool: each judgment picks one at random, never the judged instance's own model | [judge.py](../supervisor/judge.py) |
+| `SHAFT_JUDGE_MODELS` | `openrouter/xiaomi/mimo-v2.6-pro,openrouter/z-ai/glm-5.3-flash` | the judge pool: picks at random, excluding the instance's model and the second judge | [judge.py](../supervisor/judge.py) |
 | `SHAFT_JUDGE_EVERY` | `2` | the main judge grades one live run in this many (1: every run) | [judge.py](../supervisor/judge.py) |
 | `SHAFT_JUDGE2_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | the second judge, which grades a sample of cycles again to measure the judges' agreement | [judge.py](../supervisor/judge.py) |
 | `SHAFT_JUDGE2_EVERY` | `4` | the second judge grades one cycle in this many (0: never) | [judge.py](../supervisor/judge.py) |
@@ -132,6 +133,7 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_MODEL_TEMP` | `0.6` | SHAFT's own model's sampling temperature | [localmodel.py](../supervisor/localmodel.py) |
 | `SHAFT_PROMPT_CACHE_GB` | `8` | gigabytes of prompt cache SHAFT's own model server keeps | [localmodel.py](../supervisor/localmodel.py) |
 | `SHAFT_PROBATION_CYCLES` | `6` | judged cycles a kept self-change stays on probation (reverted on a clear drop) | [metrics.py](../supervisor/metrics.py) |
+| `SHAFT_CORRECTION_PASSES` | `3` | messages to the operator that must pass the order check against a correction before it stops being checked (0: corrections are not checked) | [orders.py](../supervisor/orders.py) |
 | `SHAFT_CORRECTION_ALERT_CYCLES` | `6` | alert when an operator correction remains open for more than this many live cycles; 0 disables | [panel.py](../supervisor/panel.py) |
 | `SHAFT_JUDGE_ALERT_USD` | `3` | judge spend per day that raises an alert (the judge has no cap) | [panel.py](../supervisor/panel.py) |
 | `SHAFT_RECAP_MODEL` | `claude-haiku-5-5` | the model that writes the overview's one-line recap of each instance | [recap.py](../supervisor/recap.py) |
@@ -196,12 +198,16 @@ reviewed ref was `refs/heads/publish-prep-template`.
 | `MAX_TOKENS_STEP` | `16384` | `16384` |
 | `MAX_STEPS_LIVE` | `12` | `12` |
 | `MAX_STEPS_SLEEP` | `30` | `30` |
+| `SLEEP_VERDICT_CHARS` | `120000` | `120000` |
 | `TALK_REPLY_CALLS` | `3` | uses built-in default |
 | `TALK_REPLY_S` | `45` | uses built-in default |
 | `MAX_STEPS_TALK` | `0` | `0` |
-| `LOOP_GUARD` | `'shadow'` | `shadow` |
+| `LOOP_GUARD` | `'on'` | `on` |
 | `LOOP_EFFECT_ROUNDS` | `3` | `3` |
 | `CONTEXT_JOURNAL_CHARS` | `16000` | `16000` |
+| `CONTEXT_CHARS` | `48000` | `48000` |
+| `INBOX_CHARS` | `4000` | `4000` |
+| `RESULTS_KEEP_TURNS` | `4` | `4` |
 | `STALE_LINE_HOURS` | `24` | uses built-in default |
 | `STALE_GOAL_HOURS` | `48` | uses built-in default |
 | `CRITERION_CHARS` | `600` | uses built-in default |
@@ -217,6 +223,8 @@ reviewed ref was `refs/heads/publish-prep-template`.
 | `ATTENTION_SCHEMA` | `'on'` | uses built-in default |
 | `COMMITMENTS` | `'on'` | uses built-in default |
 | `FORECAST` | `'on'` | uses built-in default |
+| `GOAL_SLATE` | `'on'` | uses built-in default |
+| `FIRST_ERROR` | `'on'` | uses built-in default |
 | `OPERATOR_NAME` | `'the operator'` | empty |
 
 `STALE_LINE_HOURS` flags dates older than this many hours in self/goals.md and self/self.md
@@ -229,7 +237,14 @@ is used, the next model call is offered only `queue_for_next_cycle` and must ans
 call finishes normally. Set either knob to 0 to disable that budget.
 `queue_for_next_cycle(task, why)` puts unfinished work in the instance's own inbox for its next live cycle.
 `CRITERION_CHARS` limits `declare_intent.success_criterion` in characters. An overlong criterion is refused
-with its length and the limit, asking for the deliverable's check rather than ritual clauses.
+with its length, the limit and how many characters to cut, asking for the deliverable's check rather than ritual
+clauses, and ends with the draft so the instance can trim it in one retry (review I8; never trimmed silently).
+
+`SLEEP_VERDICT_CHARS` bounds sleep feedback reads, in the sleep feedback group in `template/config.env`.
+Sleep reads judgment pages (up to 24,000 characters each) until caught up or until the next page would take the
+verdict text past this positive character budget; the block is re-sent on every sleep step, so the default
+(~30k tokens) leaves the rest of a 262,144-token window free. At the budget it tells the model and stderr that
+feedback was cut short; the next finished sleep resumes from the last page it read.
 
 `LOOP_GUARD` controls the effect-loop guard (#103): `shadow` records would-fire events in the episode's
 `loop_shadow` array without changing model input; `on` also appends advice after the call executes;
@@ -250,10 +265,14 @@ These arms are available for a later trial. No instance configuration changes au
 selects `noconfirm`, the operator sets it in Thelos's `config.env`. Invalid values follow the usual warning and fallback.
 
 `LLM_PRESENCE_PENALTY` uses tenths (15 means 1.5). `MAX_STEPS_TALK=0` removes the
-conversation step limit. `WAKE_INTERVAL_MINUTES=0` disables periodic wakes; positive
-values are bounded by the operator's wake floor (default 10 minutes). `CURIOSITY_EVERY_CYCLES=5` makes one live
-cycle in five, on average, a curiosity cycle while the instance has open surprises and no operator message waits
+conversation step limit. `WAKE_INTERVAL_MINUTES=0` disables periodic wakes (and event wakes); positive
+values are bounded by the operator's wake floor (default 10 minutes), and a wake at that interval runs only with
+something to do or after `SHAFT_IDLE_WAKE_MINUTES` without a cycle ([architecture](architecture.md#wakes)). `CURIOSITY_EVERY_CYCLES=5` makes one live
+cycle in five, on average, a curiosity cycle while the instance has outward open surprises and no operator message waits
 (0 = never; [PLAN-surprise](plans/PLAN-surprise.md)).
+A drawn cycle follows one outward surprise, weighted by the content words it shares with the briefing, goals and
+inbox; surprises about the instance's own tools, plugins, jobs, ledgers, gate or code are never drawn, and with none
+outward the prompt says so and the goal is free (review I7 in [architecture](architecture.md)).
 The six knobs after it switch the mechanisms of [PLAN-consciousness](plans/PLAN-consciousness.md), each on by default:
 `OUTCOME_CARDS` (on, off: before a kind of action that has been failing, the first such call in a
 cycle is held while the instance sees what comparable ones led to), `WORKSPACE` (competitive, relevance, off: what wins
@@ -264,6 +283,9 @@ and `FORECAST` (on, reserve, off: what comparable goals cost, or a fixed reserve
 these keeps the default with a warning. `shaft experiment` flips a knob's default in code to run its kill test, and
 refuses an instance whose config.env sets that knob.
 Outcome-card shell families and inspection exclusions are described in [architecture](architecture.md).
+Under the same COMMITMENTS setting, an operator promise needs the conversation open now or a message delivered
+to the operator in the same live cycle; unsourced ones become self records with a note. Self records expire 24 hours after due and remain in history
+(review I10, [architecture](architecture.md)).
 Sources: template `shaft/config.py:17`, [autonomy.py](../supervisor/autonomy.py).
 
 `WATCH_MAIL` and `WATCH_CALENDAR` (not in the template's defaults: unset is `off`) ask the supervisor's watch to report
@@ -280,8 +302,46 @@ whose heading names corrections first, then the rest in file order, and one line
 `read_file` offset where it starts. Missing, empty or
 unreadable files render a line explaining their state.
 
+Every section of the standing context (the system prompt of every run) has a budget: the self-model 8,000
+characters, personality 4,000, the skill list 3,000, facts 6,000, digests 3,500, goals `GOALS_CHARS`, journal
+`CONTEXT_JOURNAL_CHARS`, the last sleep 3,000, the improvement plan 2,500, open commitments, projects and corrections
+3,000 each, stats 5,500 (template `shaft/prompts.py` `SECTIONS`). `CONTEXT_CHARS` (default 48,000, about what the
+standing slices came to before the self-model and the rest had any budget; 0 = no total) caps them together: when the
+sections want more, a section wanting less than its share keeps all of it and the others share the rest in proportion
+to their budgets. A cut section keeps its head (or, for facts and digests, its newest tail) and ends with a line saying
+how many characters were left out and how to read them (`read_file <file>`, `list_files skills`, `search_memory`).
+The open surprises keep their own cap (1,200 characters) and count against the total first; when they leave no room, every section shows only its cut line (the journal a pointer to `search_memory`), never everything. Sections run stable first: self-model, personality, skills,
+facts, digests, goals, journal, then the last sleep, improvement plan, surprises with commitments, projects,
+corrections, stats and the time, so a prompt cache keeps the longest prefix it can from one run to the next.
+
+`INBOX_CHARS` (default 4,000; 0 = no limit) bounds a live cycle's inbox: the operator's messages whole and first (never cut), every other message as one line
+and then by time, with its header but `To` (`Trust` cut at 300 characters, other values at 100, the header at 600
+together) and the first 200 characters of its body; `read_file inbox/<file>` shows one whole. The budget keeps 200
+characters for the line that counts the messages past it (`list_files inbox` names them). Only the messages listed,
+and any the cycle read whole with `read_file`, are archived to `memory/messages/` and named under **Messages read**;
+the rest stay in the inbox for a later cycle, are named under **Left in my inbox** in the journal and in the episode's
+`inbox_deferred` (its `inbox` still lists every message found at the start, which a trial replay restores). Retrieval
+reads every message whole; attached images and the goal slate come from the listed ones.
+
+`RESULTS_KEEP_TURNS` (default 4; 0 = never) shrinks the tool results of model turns older than that many, in live
+cycles, sleeps and conversations, to one line: the tool, its arguments (120 characters), the result's first line, its
+length and `read_file .tmp/results/<pid>/<n>.txt`, where the whole result is kept. Results of 400 characters or less
+stay whole. The call ledger and the workspace's focus line stand under the newest step's last result only; the
+ledger's file writes are cut from their oldest end at 800 characters, each one left out still in its own result.
+
+`GOAL_SLATE` (on, off) shows a live cycle, before `declare_intent`, up to six candidate goals from the instance's own
+records: inbox messages (the operator's first), overdue commitments, projects at risk or past a boundary, its last live
+cycle's `next_action`, and its top open surprise — one of each kind first, in that order, then the rest — each with the
+judged value of the newest similar earlier goal (word overlap at least 0.2) that has one. In a trial replay whose
+monitor probe removes or replaces the open surprises (`x_probes`), the slate's surprise follows that arm. The model still chooses;
+how often similar goals were met is never shown, since declare_intent's base rate is what the confirm step measures.
+`FIRST_ERROR` (on, off) adds to `declare_intent`'s result at most two lines: the judge's `first_error` on the newest
+similar earlier goal judged `no` or `partial`. Both read `memory/verdicts.jsonl`, which the sleep fills from
+`record(kind='judgments', format='json')` (it carries `value` and `value_for` when the judge gave them).
+
 `HANDOFF=on` shows the last two live episodes' completed calls, unfinished work and next action with its revision
-condition. Other episode kinds do not age the handoff. `raw` shows those episodes' tool logs, cut to the character
+condition, each field cut at 600 characters and the block at 3,000, saying which episode file holds the whole.
+Other episode kinds do not age the handoff. `raw` shows those episodes' tool logs, cut to the character
 budget of their structured blocks; a shorter log stays shorter. `off` hides the block. Invalid modes keep the
 next source's value with a warning. These switches affect prompt display; live episodes still record handoffs.
 

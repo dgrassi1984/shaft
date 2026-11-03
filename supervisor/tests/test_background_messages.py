@@ -311,20 +311,19 @@ class NextWakeTest(unittest.TestCase):
         self.assertEqual(autonomy.next_wake("wren", now + hour, hour), "due")
 
     def test_next_cycle_says_where_a_message_left_now_stands(self):
+        # The operator's message wakes the instance once it is idle (autonomy.event_wake, review C15), not at the next
+        # timed wake: what the page says follows that, whenever its last wake was.
         self.st["wakes"] = {"wren": (datetime.now() - timedelta(minutes=10)).isoformat(timespec="seconds")}
         with mock.patch.object(autonomy, "wake_interval", return_value=timedelta(minutes=60)):
-            self.assertRegex(autonomy.next_cycle("wren"), r"^for wren's next cycle \(≈\d\d:\d\d\)$")
+            self.assertEqual(autonomy.next_cycle("wren"), "for wren's next cycle, which this starts now")
             with mock.patch("supervisor.runner.busy_with", return_value="live since 12:58"):
-                self.assertIn("a cycle is running and read its inbox when it began", autonomy.next_cycle("wren"))
+                self.assertEqual(autonomy.next_cycle("wren"), "a cycle is running and read its inbox when it began: "
+                                                              "this starts the next one once it ends")
             with mock.patch.object(autonomy, "paused", return_value=True):
                 self.assertIn("wren is paused", autonomy.next_cycle("wren"))
-            # due now, but it is replying in a conversation: the scheduler skips that wake, it does not queue it
-            self.st["wakes"]["wren"] = (datetime.now() - timedelta(minutes=90)).isoformat(timespec="seconds")
             with mock.patch("supervisor.runner.busy_with", return_value="api since 13:00"):
-                said = autonomy.next_cycle("wren")
-            self.assertNotIn("due now", said)
-            self.assertRegex(said, r"^for wren's next cycle \(≈\d\d:\d\d\), after what it is doing now \(api since 13:00\)$")
-            self.assertIn("due now", autonomy.next_cycle("wren"))
+                self.assertEqual(autonomy.next_cycle("wren"), "for wren's next cycle, which this starts after what it "
+                                                              "is doing now (api since 13:00)")
         with mock.patch.object(autonomy, "wake_interval", return_value=None):
             self.assertIn("no scheduled cycles", autonomy.next_cycle("wren"))
 
