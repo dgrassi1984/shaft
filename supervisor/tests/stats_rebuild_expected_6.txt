@@ -26,6 +26,7 @@ Open projects: 1
 - Difficulty of my goals (1–5, judged from the work): mean 2.0; success at 1–2: 50% of 6
 - Where my goals came from (judged): myself 6 · operator 0 · another instance 0 — achieved difficulty of my own goals: 1.0
 - Judged success rate per judge (yes=1, partial=0.5; 7 days to my latest verdict vs the 7 before): fixture-judge too few (6) vs none
+- Cycles that ran out of steps or time, by model (my latest judged cycles on each): unrecorded 0% of 6
 
 ## My expectations vs what happened
 - Predictions I stated in judged cycles: 0; informative (judge): not measured; of those held: not measured

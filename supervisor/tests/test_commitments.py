@@ -244,6 +244,7 @@ class CommitmentsTest(unittest.TestCase):
         from supervisor import broker
         box = broker.Broker.__new__(broker.Broker)
         box.name, box.project, box.counts = "x", self.root.parent, {"send_message": 1}
+        box.as_of, box.root = None, self.root             # set by Broker.__init__; __new__ skips it
         with mock.patch.object(broker, "datetime", wraps=datetime) as clock, \
                 mock.patch.object(box, "_read_attachments", return_value=[]), \
                 mock.patch.object(box, "_operator_sent_today", return_value=0), \
