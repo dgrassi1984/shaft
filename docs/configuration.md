@@ -229,7 +229,8 @@ is used, the next model call is offered only `queue_for_next_cycle` and must ans
 call finishes normally. Set either knob to 0 to disable that budget.
 `queue_for_next_cycle(task, why)` puts unfinished work in the instance's own inbox for its next live cycle.
 `CRITERION_CHARS` limits `declare_intent.success_criterion` in characters. An overlong criterion is refused
-with its length and the limit, asking for the deliverable's check rather than ritual clauses.
+with its length, the limit and how many characters to cut, asking for the deliverable's check rather than ritual
+clauses, and ends with the draft so the instance can trim it in one retry (review I8; never trimmed silently).
 
 `LOOP_GUARD` controls the effect-loop guard (#103): `shadow` records would-fire events in the episode's
 `loop_shadow` array without changing model input; `on` also appends advice after the call executes;

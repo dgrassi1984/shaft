@@ -58,7 +58,7 @@ class CycleControlsTest(InstanceFixture, unittest.TestCase):
         self.assertEqual(self.cycle(exercise)["finish"]["delivered_via"], "none")
 
     def test_criterion_boundary_and_knob(self):
-        """#132: reverting accepts 601-character ritual criteria instead of refusing visibly."""
+        """I8 / row 7: return the rejected draft and exact reduction for one retry."""
         self.assertEqual(config.FIELDS["CRITERION_CHARS"], (int, 600))
         def exercise(controls):
             declare = controls["declare_intent"].handler
@@ -66,6 +66,8 @@ class CycleControlsTest(InstanceFixture, unittest.TestCase):
             error = declare(args)
             for part in ("ERROR", "601", "600", "deliverable's check", "ritual clauses"):
                 self.assertIn(part, error)
+            self.assertIn("Cut at least 1 characters.", error)
+            self.assertTrue(error.endswith("Draft:\n" + args["success_criterion"]))
             self.assertTrue(declare({**args, "success_criterion": "x" * 600}).startswith("intent recorded"))
         ep = self.cycle(exercise)
         self.assertEqual(len(ep["intent"]["success_criterion"]), 600)

@@ -39,6 +39,15 @@ MAX_FETCH_BYTES = 3_000_000
 # http_request's binary bodies (docs/plans/PLAN-own-drive.md D3): a file sent whole, and an answer saved whole or not at all.
 MAX_BODY_FILE_BYTES = 50_000_000
 MAX_SAVE_BYTES = 50_000_000
+RUN_OUTPUT_CHARS = 12000   # what `history` and `record` return at most
+# A `run` result past RUN_SHOWN_CHARS shows each stream's head and tail and saves all of it (C8, 2026-11-03): the
+# template cuts any tool result at 6,000 characters, so a longer one lost its tail and stderr, and the instance
+# re-ran the command into a file. The broker saves it, not the template, so an instance whose own shaft/tools.py
+# predates the template's output saving gets the file too; what it shows stays under that 6,000 cut.
+RUN_SHOWN_CHARS = 5000
+RUN_SAVED_CHARS = 1_000_000   # a saved `run` output keeps at most this many characters
+RUN_SAVED_FILES = 32          # saved `run` outputs kept in .tmp/outputs/; the oldest go first,
+RUN_SAVED_HOURS = 24          # and any older than this
 MAX_MESSAGE_CHARS = 8000
 # Messages to the operator per instance per day; 0 = no limit.
 OPERATOR_DAILY_LIMIT, _ = knob(
@@ -300,8 +309,9 @@ SPECS = {
         "playwright==$SHAFT_PLAYWRIGHT`, launched with p.chromium.launch_persistent_context($SHAFT_BROWSER_PROFILE, "
         "proxy={server, username, password from HTTPS_PROXY}) — see skills/writing-plugins.md. Use `run` to install "
         "packages, run your tests, "
-        "scripts and plugins, inspect files, or compute things. Returns the exit code and output (each stream past "
-        "6,000 characters cut to its head and tail: write long output to a file and read that). "
+        "scripts and plugins, inspect files, or compute things. Returns the exit code and output; past "
+        f"{RUN_SHOWN_CHARS:,} characters, the head and tail of each stream, with all of it (up to "
+        f"{RUN_SAVED_CHARS:,} characters) saved under .tmp/outputs/ and the read_file call that reads the rest. "
         "Code you change is still tested by the supervisor. `git` cannot see your own repository here (it lives "
         "outside your folder): use `history`.",
         {"command": S, "timeout_s": {"type": "integer", "description": f"default 60, max {300}"},
@@ -565,7 +575,6 @@ MAX_COMMANDS_PER_RUN = 40
 # 100 MB until 2026-10-18, which killed `uv pip install playwright` (its bundled node is 122 MB) with SIGXFSZ, exit
 # 153 and no message — and with it any package shipping a bigger file (torch's libraries) (docs/plans/PLAN-browser.md).
 RUN_MAX_FILE_BYTES = 1024 ** 3
-RUN_OUTPUT_CHARS = 12000   # each `run` stream keeps half: its head and tail (the "run" spec above says 6,000)
 
 
 def notify(title: str, text: str) -> None:
@@ -1084,8 +1093,21 @@ class Broker:
         params = urllib.parse.urlencode({"q": query, "mode": "fast", "start": max(0, (int(page) - 1) * 10)})
         req = urllib.request.Request(f"https://scrapebadger.com/v1/google/search?{params}",
                                      headers={"x-api-key": key, "User-Agent": "shaft-broker"})
-        with urllib.request.urlopen(req, timeout=90) as resp:
-            data = json.load(resp)
+        for attempt in range(3):
+            try:
+                # 35s covers the provider's p99 success (34s, 2,602 calls 10-27..11-03); three tries plus 2s/5s backoff
+                # stay under the instance's 120s call timeout (template broker._request)
+                with urllib.request.urlopen(req, timeout=35) as resp:
+                    data = json.load(resp)
+                break
+            except (urllib.error.URLError, TimeoutError) as e:
+                transient = (e.code in (502, 503, 504) if isinstance(e, urllib.error.HTTPError)
+                             else isinstance(e, TimeoutError) or isinstance(e.reason, TimeoutError))
+                if not transient or attempt == 2:
+                    raise
+                delay = (2, 5)[attempt]
+                self._log(f"{self.name} web_search retry {attempt + 1}/2 in {delay}s: {type(e).__name__}: {e}")
+                time.sleep(delay)
         rows = data.get("organic_results") or []
         if not rows:
             return f"no results for {query!r}"
@@ -1375,19 +1397,67 @@ class Broker:
             from .gate import stop_group
             stop_group(proc)   # and on every other way out: nothing it put in the background outlives it (B9)
             os.unlink(prof)
-        half = RUN_OUTPUT_CHARS // 2
-
-        def cap(t, stream):
-            """The head and tail of a long stream, saying how long it was and how to read all of it: until 2026-10-31
-            the cut said only "[... N chars cut ...]", and a 20 KB report was lost past its first 3,000 characters."""
-            if len(t) <= half:
-                return t
-            return (t[:half // 2] + f"\n[... {stream} was {len(t):,} characters: {len(t) - half:,} cut, the first and "
-                    f"last {half // 2:,} shown. For all of it, write it to a file — `… > .tmp/out.txt 2>&1` — and "
-                    "read that with offsets (read_file(path, offset=…)) ...]\n" + t[-half // 2:])
         _shutil.rmtree(home / ".cache", ignore_errors=True)
-        return (f"{status} · {time.monotonic() - started:.1f} s\n--- stdout ---\n{cap(out or '', 'stdout')}"
-                + (f"\n--- stderr ---\n{cap(err, 'stderr')}" if err else ""))
+        return self._run_result(root, f"{status} · {time.monotonic() - started:.1f} s",
+                                [("stdout", out or "")] + ([("stderr", err)] if err else []))
+
+    def _run_result(self, root: Path, status: str, streams: list[tuple[str, str]]) -> str:
+        """`run`'s result: all of it when short; otherwise the head and tail of each stream within RUN_SHOWN_CHARS,
+        all of it saved to .tmp/outputs/ and each cut naming the read_file call that reads the part left out."""
+        parts = [(label, f"\n--- {label} ---\n", body) for label, body in streams]
+        text = status + "".join(head + body for _, head, body in parts)
+        if len(text) <= RUN_SHOWN_CHARS:
+            return text
+        from .core import safe_write_bytes
+        saved = text[:RUN_SAVED_CHARS]
+        rel = f".tmp/outputs/run-{datetime.now():%Y%m%d-%H%M%S}-{secrets.token_hex(3)}.txt"
+        try:
+            self._prune_run_outputs(root)
+            safe_write_bytes(root, rel, saved.encode("utf-8", errors="replace"), exclusive=True)
+            cap = (f"; the first {RUN_SAVED_CHARS:,} kept (storage cap)" if len(text) > RUN_SAVED_CHARS else "")
+            note = f"[all {len(text):,} characters saved to {rel}{cap}]"
+        except Exception as e:   # the output is still shown: a save failure must not lose the command's result
+            rel = None
+            self._log(f"{self.name} run: could not save output: {type(e).__name__}: {e}")
+            note = (f"[{len(text):,} characters; could not save them ({type(e).__name__}: {str(e)[:200]}). For all "
+                    "of it, write it to a file — `… > .tmp/out.txt 2>&1` — and read that with read_file offsets]")
+        budget = RUN_SHOWN_CHARS - len(status) - len(note) - 1 - sum(len(h) + 260 for _, h, _ in parts)
+        shares, left = {}, max(0, budget)
+        for i, (label, _, body) in enumerate(sorted(parts, key=lambda p: len(p[2]))):   # short streams in full
+            shares[label] = min(len(body), left // (len(parts) - i))
+            left -= shares[label]
+        shown, at = [status, "\n", note], len(status)
+        for label, head, body in parts:
+            at += len(head)
+            share = shares[label]
+            if len(body) <= share:
+                shown.append(head + body)
+            else:
+                cut_from, cut_to = at + share // 2, at + len(body) - share // 2
+                where = (f"read_file({rel!r}, offset={cut_from}) reads it" if rel and cut_from < len(saved)
+                         else "past the storage cap, not saved" if rel else "not saved")
+                shown.append(f"{head}{body[:share // 2]}\n[... {label} was {len(body):,} "
+                             f"characters: {cut_to - cut_from:,} cut here; {where} ...]\n{body[len(body) - share // 2:]}")
+            at += len(body)
+        return "".join(shown)
+
+    def _prune_run_outputs(self, root: Path) -> None:
+        """Saved `run` outputs are scratch: at most RUN_SAVED_FILES - 1 kept before a new one, none past
+        RUN_SAVED_HOURS. Only names this broker writes are touched (their timestamp orders them)."""
+        from .core import list_beneath, unlink_beneath
+        oldest = datetime.now() - timedelta(hours=RUN_SAVED_HOURS)
+        mine = []
+        for name in list_beneath(root, ".tmp/outputs"):
+            if not re.fullmatch(r"run-\d{8}-\d{6}-[0-9a-f]{6}\.txt", name):
+                continue
+            try:
+                mine.append((datetime.strptime(name[4:19], "%Y%m%d-%H%M%S"), name))
+            except ValueError:
+                continue
+        mine.sort()
+        for index, (stamp, name) in enumerate(mine):
+            if index <= len(mine) - RUN_SAVED_FILES or stamp < oldest:
+                unlink_beneath(root, f".tmp/outputs/{name}")
 
     def _delegate_coding(self, task: str) -> str:
         from . import coder

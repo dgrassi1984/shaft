@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -230,18 +231,20 @@ class ConfinedRunTest(JobCase):
 
 class RunStreamCutTest(JobCase):
     def test_a_long_run_stream_says_its_length_and_how_to_read_it_all(self):
-        # Bug guarded (S8): run's 3,000+3,000-character cut said only "[... N chars cut ...]" — nothing of how long
-        # the stream was, nor how to get the rest.
+        # C8 / row 24: keep both streams for the template to save without rerunning the command.
         b = broker_mod.Broker("wren", self.project, {}, self.sup / "broker.log")
         b.egress = mock.Mock(port=0)
         with mock.patch.object(b, "sandbox_env", return_value={}), mock.patch.object(b, "mail_env", return_value=""), \
                 mock.patch.object(b, "calendar_env", return_value=""):
             out = b._run("python3 -c \"import sys; print('a' * 10000); print('e' * 7000, file=sys.stderr)\"")
-        self.assertIn("[... stdout was 10,001 characters: 4,001 cut, the first and last 3,000 shown.", out)
-        self.assertIn("[... stderr was 7,001 characters: 1,001 cut", out)
-        self.assertIn("> .tmp/out.txt 2>&1", out)
-        self.assertIn("read_file(path, offset=…)", out)
-        self.assertLess(len(out), broker_mod.RUN_OUTPUT_CHARS + 1000)
+        # Saved by the broker, so an instance on an older shaft/tools.py (6,000-character cut) keeps it too.
+        self.assertLessEqual(len(out), broker_mod.RUN_SHOWN_CHARS)
+        self.assertIn("[... stdout was 10,001 characters:", out)
+        self.assertIn("[... stderr was 7,001 characters:", out)
+        saved = re.search(r"saved to (\.tmp/outputs/run-[^\]]+\.txt)\]", out).group(1)
+        text = (b.root / saved).read_text()
+        self.assertIn("--- stdout ---\n" + "a" * 10000 + "\n", text)
+        self.assertIn("--- stderr ---\n" + "e" * 7000 + "\n", text)
 
 
 class LongJobTest(JobCase):
