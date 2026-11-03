@@ -48,7 +48,7 @@ public struct KeychainStore: CredentialStore {
     static let account = "server"
 
     /// `<team>.io.github.dgrassi1984.shaft`: each target's Info.plist names it (`SHAFTKeychainAccessGroup`, set from
-    /// `$(AppIdentifierPrefix)` in project.yml), so the team id is written once.
+    /// `$(DEVELOPMENT_TEAM)` in project.yml), so the team id is written once.
     public let accessGroup: String
 
     public init(accessGroup: String) {

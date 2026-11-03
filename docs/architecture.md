@@ -46,7 +46,7 @@ the runtime does not silently change the criterion.
 
 | Branch | Worktree | Holds |
 |---|---|---|
-| `main` | `./` | `supervisor/` (the part no instance can edit), `bin/shaft`, docs |
+| `main` | `./` | `supervisor/` (the part no instance can edit), `bin/shaft`, docs, `apps/shaft/` (the native chat apps for iPhone, iPad and Mac: [apps/shaft/README.md](../apps/shaft/README.md)) |
 | `template` | `template/` | the pristine agent new instances fork from |
 | `instance/<name>` | `instances/<name>/` | one agent: its code, plugins and skills; it may edit all of it |
 

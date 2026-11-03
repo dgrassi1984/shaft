@@ -39,7 +39,8 @@ public final class SHAFTSession {
 
     public var isPaired: Bool { credential != nil }
 
-    /// Pair with a pasted link (§2).
+    /// Pair with a pasted link (§2). False when it failed: `problem` says why.
+    @discardableResult
     public func pair(pasted: String) async -> Bool {
         do {
             open(try await pairing.pair(pasted: pasted))
