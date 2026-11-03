@@ -85,6 +85,7 @@ struct MacRoot: View {
         }
         .frame(minWidth: 720, minHeight: 480)
         .onAppear { state.openWindow = openWindow }
+        .onChange(of: model.session?.isPaired ?? false) { _, paired in if !paired { DockBadge.clear() } }
         // shaft://chat/<instance>: the chat a notification click opens, from a link too.
         .onOpenURL { url in model.notificationTapped(instance: AppLinks.instance(in: url)) }
     }
@@ -127,7 +128,7 @@ struct MacChats: View {
             state.store = store
             presence.recheck()                   // a window opened again is the same window, its views kept
             restore()
-            DockBadge.show(store.badge)
+            DockBadge.follow(store)
         }
         .onDisappear {
             if state.store === store { state.store = nil }
@@ -135,7 +136,6 @@ struct MacChats: View {
         }
         .onChange(of: MacMenu.snapshot(state), initial: true) { _, now in state.menu.publish(now) }
         .onChange(of: store.instances.map(\.name)) { restore() }
-        .onChange(of: store.badge) { _, badge in DockBadge.show(badge) }
         .onChange(of: model.openChat) { restore() }
     }
 
@@ -247,10 +247,31 @@ struct WindowReader: NSViewRepresentable {
     }
 }
 
-/// The Dock icon's badge: the server's count of chats with something unseen (§12), as the push's badge sets it.
+/// The Dock icon's badge: the server's count of chats with something unseen (§12), as the push's badge sets it. It
+/// follows the store's count with the window closed too (the chat list keeps polling then), for as long as that store
+/// is the session's.
 @MainActor
 enum DockBadge {
-    static func show(_ count: Int) {
-        NSApp.dockTile.badgeLabel = count > 0 ? "\(count)" : nil
+    private static weak var followed: InstancesStore?
+
+    static func follow(_ store: InstancesStore) {
+        guard followed !== store else { return }
+        followed = store
+        track(store)
+    }
+
+    /// Unpaired: no count to show.
+    static func clear() {
+        followed = nil
+        NSApp.dockTile.badgeLabel = nil
+    }
+
+    private static func track(_ store: InstancesStore) {
+        guard followed === store else { return }
+        withObservationTracking {
+            NSApp.dockTile.badgeLabel = store.badge > 0 ? "\(store.badge)" : nil
+        } onChange: { [weak store] in
+            Task { @MainActor in if let store { track(store) } }
+        }
     }
 }
