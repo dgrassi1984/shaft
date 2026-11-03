@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -118,11 +119,15 @@ class Client:
     def _answer(self, messages, max_tokens, purpose, stream, on_retry=None, **callbacks) -> Reply:
         reply = self._resilient(messages, max_tokens, purpose, stream, **callbacks)
         if reply.finish_reason == "length":
+            print(f"{purpose}: reply cut off at max_tokens={max_tokens}; retrying once with "
+                  f"max_tokens={max_tokens * 2}", file=sys.stderr)
             if on_retry:
                 on_retry(max_tokens, max_tokens * 2)
             # Cut off while still thinking (no text, no tool call): more room only bought more thinking. mimo spent all
             # 32,768 tokens of a sleep step on it, twice, every night from 2026-10-29, and its provider ignores
-            # reasoning.effort and reasoning.max_tokens (probed 10-30). The retry answers without thinking.
+            # reasoning.effort and reasoning.max_tokens (probed 10-30). The retry answers without thinking. Cut while
+            # writing text or a tool call, it had finished thinking: the retry thinks again. Either way the cut reply,
+            # its partial tool call included, is discarded here and never returned.
             thinking_only = not reply.content.strip() and not reply.tool_calls
             retry = {**callbacks, "think": False} if thinking_only else callbacks
             reply = self._resilient(messages, max_tokens * 2, purpose, stream, **retry)
@@ -193,12 +198,17 @@ class Client:
                     # llama.cpp says reasoning_content, mlx_lm says reasoning
                     reply.reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
                     _move_leaked_thinking(reply)
-                    reply.finish_reason = choice.get("finish_reason") or ""
+                    reply.finish_reason = _finish_reason(choice, data)
                     reply.usage = data.get("usage") or {}
-                    reply.tool_calls = [
-                        {"id": c.get("id") or f"call_{i}", "name": c["function"]["name"],
-                         "arguments": c["function"].get("arguments") or "{}"}
-                        for i, c in enumerate(message.get("tool_calls") or [])]
+                    # A cut-off call is kept, read leniently, only as the sign that the answer had begun (as the
+                    # stream keeps it): _answer never returns a cut reply, so it is never run.
+                    cut = reply.finish_reason == "length"
+                    reply.tool_calls = []
+                    for i, c in enumerate(message.get("tool_calls") or []):
+                        fn = (c.get("function") or {}) if cut else c["function"]
+                        reply.tool_calls.append({"id": c.get("id") or f"call_{i}",
+                                                 "name": fn.get("name") or "" if cut else fn["name"],
+                                                 "arguments": fn.get("arguments") or "{}"})
             return reply
         except urllib.error.HTTPError as e:
             detail = e.read().decode(errors="replace")[:500]
@@ -265,8 +275,9 @@ class Client:
                     fn = tc.get("function") or {}
                     slot["name"] += fn.get("name") or ""
                     slot["arguments"] += fn.get("arguments") or ""
-                if choice.get("finish_reason"):
-                    reply.finish_reason = choice["finish_reason"]
+                reason = _finish_reason(choice, chunk)
+                if reason:
+                    reply.finish_reason = reason
         reply.content = "".join(content)
         reply.reasoning = "".join(reasoning)
         _move_leaked_thinking(reply)
@@ -300,3 +311,8 @@ def _move_leaked_thinking(reply: Reply) -> None:
         thought, _, said = reply.content.rpartition("</think>")
         reply.reasoning = (reply.reasoning + "\n" + thought).strip()
         reply.content = said.lstrip()
+
+
+def _finish_reason(choice: dict, data: dict) -> str:
+    reasons = (choice.get("finish_reason"), choice.get("stop_reason"), data.get("stop_reason"))
+    return "length" if "length" in reasons else next((r for r in reasons if r), "")
