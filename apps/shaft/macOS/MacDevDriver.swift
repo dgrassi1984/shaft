@@ -32,6 +32,7 @@ import SwiftUI
 ///     sheetpick <text> | <item>     in the sheet's text, select <text> and pick an item of its right-click menu
 ///     hover <text>                  move the pointer over <text> in a message
 ///     until                         wait for the chat shown to have its feed; log how long it took
+///     selection                     log what is selected in the message that has the keyboard
 ///     cleardraft                    empty the composer
 ///     layout                        log the width of each column
 ///     state                         log the chat's draft, quotes, selection and focus
@@ -214,6 +215,10 @@ enum MacDevDriver {
                 try? await Task.sleep(for: .milliseconds(20))
             }
             log("feed after \(Int(Date().timeIntervalSince(start) * 1000)) ms: \(state.screen?.chat.content?.items.count ?? -1) items, \(state.screen?.chat.content?.earlier ?? -1) earlier")
+        case "selection":
+            // What is selected in the message that has the keyboard.
+            let view = window?.firstResponder as? MessageNSTextView
+            log("selection: \(view.map { String(reflecting: $0.selectedText ?? "") } ?? "no message has the keyboard")")
         case "cleardraft":
             state.screen?.chat.draft = Draft()
         case "pastefile":
