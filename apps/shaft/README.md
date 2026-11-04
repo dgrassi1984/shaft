@@ -104,7 +104,7 @@ takes to load, snapshots of the window and its sheet), logging each step and wha
 queue, and key combinations through the window, then the menu bar, then the first responder, as AppKit routes them.
 Snapshots are the window's own drawing: vibrant areas (the sidebar, the inspector's text) come out blank or dark.
 SwiftUI's own buttons cannot be pressed from a script (the steps call what they call instead), and on a locked screen
-the window takes no mouse moves (hover) and runs no animations (an inspector opened with one stays 0 wide). On a locked or sleeping screen every window counts as covered, so the chat neither
+the window takes no mouse moves (hover) and runs no animations (an inspector opened with one stays 0 wide: give the `docs` step before `doc`, or every word of the document is a line, and a `shot` of that takes tens of seconds of its own). On a locked or sleeping screen every window counts as covered, so the chat neither
 polls nor is marked seen there: `SHAFT_DEV_PRESENCE=front` (or `shown`) says the window is in front (or shown behind
 another app's) instead.
 

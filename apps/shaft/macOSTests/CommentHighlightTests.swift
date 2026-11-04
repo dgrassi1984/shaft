@@ -151,4 +151,18 @@ struct CommentHighlightTests {
         #expect(CommentHighlight.threads(in: URL(string: "https://example.com/c1")) == nil)
         #expect(CommentHighlight.threads(in: nil) == nil)
     }
+
+    /// A document is drawn a top-level block at a time (`DocumentBlocks`), so a passage across two paragraphs must mark
+    /// each on its own, or the cut between them would leave a link open and lose the thread's highlight and its tap.
+    @Test func aPassageAcrossParagraphsStaysMarkedInEachBlock() throws {
+        let source = "First **paragraph** ends here.\n\nSecond one starts here.\n\nThird."
+        let passage = try thread("c1", "paragraph ends here.\nSecond one", in: source)
+        let blocks = DocumentBlocks.split(CommentHighlight.marked(source, threads: [passage]))
+        #expect(blocks.count == 3)
+        #expect(blocks[0].text.contains("(shaft-comment:c1)"))
+        #expect(blocks[1].text.contains("(shaft-comment:c1)"))
+        #expect(!blocks[2].text.contains("shaft-comment"))
+        let drawn = blocks.map(\.text).joined(separator: "\n\n")
+        #expect(RenderedText.plain(drawn) == RenderedText.plain(source))
+    }
 }
