@@ -217,6 +217,7 @@ struct CommentThreadsSheet: View {
                 .readingColumn()
                 .padding(.vertical, Design.Space.s8)
             }
+            .background(Color.canvas.ignoresSafeArea())
             .navigationTitle(ids.count == 1 ? "Comment" : "Comments")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)

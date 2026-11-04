@@ -345,7 +345,7 @@ struct StaleSaveSheet: View {
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(Color.textSecondary)
                             ScrollView(.horizontal) {
-                                Text(diff)
+                                CodeColours().highlightCode(diff, language: "diff")
                                     .font(Design.Text.code)
                                     .foregroundStyle(Color.textPrimary)
                                     .textSelection(.enabled)
@@ -359,6 +359,7 @@ struct StaleSaveSheet: View {
                 .readingColumn()
                 .padding(.vertical, Design.Space.s16)
             }
+            .background(Color.canvas.ignoresSafeArea())
             .navigationTitle("It changed meanwhile")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -486,10 +487,7 @@ extension View {
 
     /// A thread's or a notice's one primary action: a small accent button with text that keeps its contrast.
     func compactPrimary() -> some View {
-        buttonStyle(.borderedProminent)
-            .controlSize(.small)
-            .tint(Color.brand)
-            .foregroundStyle(Color.onAccent)
+        buttonStyle(CompactAccentButton())
     }
 }
 

@@ -26,6 +26,11 @@ final class ChatScreenModel {
         var reason: String
     }
 
+    enum LatestPill: Equatable {
+        case latest
+        case newBelow
+    }
+
     let chat: ChatStore
     let instance: String
     /// Quick Look for the chat's files and the documents' downloads.
@@ -63,6 +68,10 @@ final class ChatScreenModel {
     }
 
     var composerCovered = false
+    /// The feed's "↓ Latest" pill, drawn in the bar with the composer, so it sits above it and the feed ends above it.
+    var latestPill: LatestPill?
+    /// The pill was tapped: the feed goes to its end.
+    var jumpToLatest = 0
     var dismissRequest = 0
 
     /// Return to the chat for notification and link navigation.

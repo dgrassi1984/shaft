@@ -4,6 +4,7 @@ import SwiftUI
 /// drawing, in the design's tokens so it holds in light and dark.
 struct ShaftMark: View {
     @ScaledMetric(relativeTo: .largeTitle) private var size: CGFloat = 56
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         let unit = size / 64
@@ -19,7 +20,8 @@ struct ShaftMark: View {
                 .frame(width: 12 * unit, height: 44 * unit)
                 .padding(.top, 10 * unit)
             Circle()
-                .fill(Color.textPrimary)
+                // Bone on the mark's bar in dark (spec §2.1); on the deeper light accent the dark dot failed 3:1.
+                .fill(colorScheme == .dark ? Color.textPrimary : Color.onAccent)
                 .frame(width: 8 * unit, height: 8 * unit)
                 .padding(.top, 14 * unit)
         }
@@ -50,6 +52,7 @@ struct MarkMessage<Actions: View>: View {
         } actions: {
             actions()
         }
+        .background(Color.canvas.ignoresSafeArea())
     }
 }
 

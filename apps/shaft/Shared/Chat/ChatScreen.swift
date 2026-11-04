@@ -17,6 +17,7 @@ struct ChatScreen: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.chatInFront) private var inFront
     @Environment(\.chatCovered) private var externallyCovered
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     /// The shell that draws the documents beside the chat (an inspector outside its navigation stack). Without one,
     /// or on a phone, this screen presents them as a sheet.
     @Environment(ChatShell.self) private var shell: ChatShell?
@@ -50,11 +51,16 @@ struct ChatScreen: View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
                 if chat.cid != nil { archivedBanner }
-                // The composer floats: the feed runs under it and fades there, as under the header.
+                // The feed fades out before the header and the composer: nothing is legible behind the glass.
                 content
                     .scrollEdgeEffectStyle(.soft, for: .all)
+                    .scrollEdgeEffectHidden(reduceTransparency, for: .all)
+                    .headerEdge()
                     .safeAreaBar(edge: .bottom, spacing: 0) {
                         VStack(spacing: 0) {
+                            if let pill = screen.latestPill {
+                                LatestPillButton(pill: pill) { screen.jumpToLatest += 1 }
+                            }
                             connectionNotice
                             if let said = chat.actionError?.message ?? chat.said {
                                 StatusLine(text: said, isError: chat.actionError != nil) { chat.dismissStatus() }
@@ -69,6 +75,7 @@ struct ChatScreen: View {
                                 ComposerView(maxHeight: max(80, geometry.size.height / 3))
                             }
                         }
+                        .footerEdge()
                     }
             }
         }
@@ -104,17 +111,6 @@ struct ChatScreen: View {
         .alert(preview.error ?? "", isPresented: Binding(get: { preview.error != nil },
                                                          set: { if !$0 { preview.error = nil } })) {
             Button("OK", role: .cancel) {}
-        }
-        .confirmationDialog("Start a new chat with \(chat.instance)?", isPresented: $screen.confirmingNewChat, titleVisibility: .visible) {
-            Button("New chat") { Task { await chat.clear() } }
-        } message: {
-            Text("An open conversation is ended first. This one stays in Earlier chats.")
-        }
-        .confirmationDialog("End the conversation with \(chat.instance)?", isPresented: $screen.confirmingEnd,
-                            titleVisibility: .visible) {
-            Button("End it") { Task { await chat.end() } }
-        } message: {
-            Text("It writes up its journal. Your next message starts a new conversation.")
         }
         .onDrop(of: [.item], isTargeted: $dropTargeted) { providers in
             guard !screen.archived else { return false }
@@ -188,8 +184,7 @@ struct ChatScreen: View {
         case .retrying(let error, let retryAt):
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 let seconds = max(0, Int(retryAt.timeIntervalSince(context.date)))
-                Label(seconds > 0 ? "Offline — retrying in \(seconds) s (\(error.message))" : "Offline — retrying…",
-                      systemImage: "wifi.exclamationmark")
+                Label(offlineNote(seconds: seconds, error: error), systemImage: "wifi.exclamationmark")
                     .font(.footnote)
                     .foregroundStyle(Color.warning)
                     .lineLimit(2)
@@ -210,6 +205,13 @@ struct ChatScreen: View {
         default:
             EmptyView()
         }
+    }
+
+    /// "Offline" is what a network failure's message would say again; anything else keeps its reason.
+    private func offlineNote(seconds: Int, error: APIError) -> String {
+        guard seconds > 0 else { return String(localized: "Offline — retrying…") }
+        if case .transport = error { return String(localized: "Offline — retrying in \(seconds) s") }
+        return String(localized: "Offline — retrying in \(seconds) s (\(error.message))")
     }
 
     private var archivedBanner: some View {
@@ -238,9 +240,7 @@ struct ChatScreen: View {
                 .fixedSize()                     // the Mac's toolbar squeezed a short name's state out of it
                 #endif
         }
-        #if os(macOS)
-        .sharedBackgroundVisibility(.hidden)     // its glass drew a short name as a circle, clipping the state
-        #endif
+        .sharedBackgroundVisibility(.hidden)     // its own capsule: the toolbar's drew a short name as a circle
         ToolbarItemGroup(placement: .primaryAction) {
             Button { screen.showDocuments.toggle() } label: { Image(systemName: "doc.text") }
                 .accessibilityLabel("Documents")
@@ -248,6 +248,12 @@ struct ChatScreen: View {
                 Button { screen.confirmingNewChat = true } label: { Image(systemName: "square.and.pencil") }
                     .disabled(chat.content?.canClear != true)
                     .accessibilityLabel("New chat")
+                    .confirmationDialog("Start a new chat with \(chat.instance)?",
+                                        isPresented: Bindable(screen).confirmingNewChat, titleVisibility: .visible) {
+                        Button("New chat") { Task { await chat.clear() } }
+                    } message: {
+                        Text("An open conversation is ended first. This one stays in Earlier chats.")
+                    }
             }
             Menu {
                 Button { screen.showEarlierChats = true } label: { Label("Earlier chats", systemImage: "clock") }
@@ -258,13 +264,19 @@ struct ChatScreen: View {
                 }
                 if chat.content?.canEnd == true {
                     Button { screen.confirmingEnd = true } label: {
-                        Label("End the conversation", systemImage: "flag.checkered")
+                        Label("End conversation", systemImage: "flag.checkered")      // the menu hyphenated a longer one
                     }
                 }
             } label: {
                 Image(systemName: "ellipsis")
             }
             .accessibilityLabel("More")
+            .confirmationDialog("End the conversation with \(chat.instance)?",
+                                isPresented: Bindable(screen).confirmingEnd, titleVisibility: .visible) {
+                Button("End it", role: .destructive) { Task { await chat.end() } }
+            } message: {
+                Text("It writes up its journal. Your next message starts a new conversation.")
+            }
         }
     }
 
@@ -306,7 +318,7 @@ struct ChatScreen: View {
     }
 }
 
-/// The header's title: the name, then one status line, which drops its optional parts (the model, then the time)
+/// The header's title, in a glass capsule: the name, then one status line, which drops its optional parts (the model, then the time)
 /// rather than truncate; behind a tap, what a message does now when it is busy, its model and its spend. Text stops
 /// growing at the largest size two lines fit in the bar.
 struct ChatTitle: View {
@@ -324,7 +336,7 @@ struct ChatTitle: View {
                     .font(.headline)
                     .foregroundStyle(Color.textPrimary)
                     .lineLimit(1)
-                if let row {
+                if let row, !archived {
                     ViewThatFits(in: .horizontal) {
                         status(row, time: true, model: true)
                         status(row, time: true, model: false)
@@ -335,9 +347,13 @@ struct ChatTitle: View {
                 }
             }
             .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-            .contentShape(Rectangle())
+            .padding(.horizontal, Design.Space.s12)
+            .frame(minHeight: Design.Header.height)
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        // A capsule of its own, as tall as the header's buttons: the name is never bare over the chat (2026-11-04).
+        .glassSurface(in: Capsule())
         .accessibilityElement(children: .combine)
         .accessibilityHint(row?.busyNote != nil ? "Says what a message does now" : "Shows its model")
         .popover(isPresented: $showNote) {

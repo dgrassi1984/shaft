@@ -3,7 +3,8 @@ import SwiftUI
 
 // One view per item kind of the contract (§4.4), each with what the HTML feed draws for it (§14). A message with text
 // has Copy, Reply (its whole Markdown source) and Select text in its long-press menu (on the Mac: its right-click menu,
-// with ↩ Reply on a selection made in place), and an answer or a message the instance sent has its thumbs there too.
+// with ↩ Reply on a selection made in place); an answer or a message the instance sent has its thumbs there too, and
+// always in its footer.
 
 struct FeedItemView: View {
     let item: FeedItem
@@ -200,6 +201,9 @@ struct Chip: View {
             .padding(.horizontal, Design.Space.s8)
             .padding(.vertical, Design.Space.s4)
             .pill()
+            .overlay {          // `elevated` is a hair from `operator`: the line keeps the chip a chip inside a message
+                RoundedRectangle(cornerRadius: Design.Radius.pill, style: .continuous).strokeBorder(Color.hairline)
+            }
             .quietHitArea()
     }
 }
@@ -218,7 +222,9 @@ struct AssistantItemView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Design.Space.inTurn) {
             if !answer.content.isEmpty {
-                MessageMarkdown(source: answer.content)
+                // A reply cut short ends mid-text: what it left open is closed, as while it streamed.
+                MessageMarkdown(source: answer.incomplete || answer.failure != nil
+                                ? PartialMarkdown.closed(answer.content) : answer.content)
                     .liftsOnCanvas()
                     .messageMenu(answer.content, rating: answer.rating, k: answer.k, rateable: true)
             } else if answer.failure == nil {
@@ -266,9 +272,9 @@ struct AssistantItemView: View {
     }
 }
 
-/// A message's footer, one 28 pt row: its time, "⚙ 4 steps", its rating, and (on the last answer, kept in view) Copy,
-/// Reply and the thumbs. On the Mac the other answers show Copy and Reply while the pointer is over them, as the web
-/// does on a computer. It wraps rather than overlap at the largest text sizes.
+/// A message's footer, one 28 pt row: its time, "⚙ 4 steps", Copy and Reply (on the last answer, kept in view) and the
+/// thumbs, on every message. On the Mac the other answers show Copy and Reply while the pointer is over them, as the
+/// web does on a computer. It wraps rather than overlap at the largest text sizes.
 struct AnswerFooter: View {
     let ts: Date
     let source: String
@@ -295,9 +301,6 @@ struct AnswerFooter: View {
                 if steps > 0 {
                     StepsPill(count: steps, open: stepsOpen).padding(.trailing, Design.Space.s4)
                 }
-                #if os(macOS)
-                if !keepActions && !source.isEmpty { HoverActions(source: source, shown: hovering).padding(.leading, 8) }
-                #endif
                 if keepActions && !source.isEmpty {
                     CopyButton(text: source)
                     if !screen.archived && !asksReply {
@@ -306,11 +309,14 @@ struct AnswerFooter: View {
                             .accessibilityLabel("Reply")
                     }
                 }
-                if keepActions || rating != nil {
-                    ThumbButton(thumb: "up", rating: rating, k: k, file: file)
-                    ThumbButton(thumb: "down", rating: rating, k: k, file: file)
-                }
+                // Always here, on every message and answer: never only on hover or in a menu (2026-11-04).
+                ThumbButton(thumb: "up", rating: rating, k: k, file: file)
+                ThumbButton(thumb: "down", rating: rating, k: k, file: file)
                 if let rating { RatingState(rating: rating, k: k, file: file).padding(.leading, Design.Space.s4) }
+                #if os(macOS)
+                // After the thumbs: hidden, they keep their room, which must not open a gap before the thumbs.
+                if !keepActions && !source.isEmpty { HoverActions(source: source, shown: hovering).padding(.leading, 8) }
+                #endif
             }
             Spacer(minLength: 0)
             if asksReply && !source.isEmpty && !screen.archived {
@@ -456,7 +462,6 @@ struct QuietDisclosure<Content: View>: View {
                 }
                 .font(.caption)
                 .foregroundStyle(Color.textSecondary)
-                .frame(minHeight: Design.Space.s24 + Design.Space.s4)
                 .quietHitArea()
             }
             .buttonStyle(.plain)

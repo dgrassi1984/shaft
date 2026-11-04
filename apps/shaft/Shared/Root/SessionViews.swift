@@ -149,10 +149,12 @@ struct SettingsView: View {
                         LabeledContent("Address", value: credential.baseURL.absoluteString)
                         LabeledContent("Tailnet login", value: credential.login)
                     }
+                    .listRowBackground(Color.elevated)
                     Section("This device") {
                         LabeledContent("Name", value: credential.name)
                         LabeledContent("Device", value: credential.device)
                     }
+                    .listRowBackground(Color.elevated)
                 }
                 Section("Notifications") {
                     if let push {
@@ -164,21 +166,32 @@ struct SettingsView: View {
                     } else {
                         ProgressView()
                     }
-                    if let said = session.pushStatus { Text(said).font(.footnote).foregroundStyle(Color.textSecondary) }
+                    // The server's "Push" line above says the same once it has answered.
+                    if let said = session.pushStatus, push == nil || !said.hasPrefix("Push") {
+                        Text(said).font(.footnote).foregroundStyle(Color.textSecondary)
+                    }
                     if let error = model.pushError { Text(error).font(.footnote).foregroundStyle(Color.warning) }
                 }
+                .listRowBackground(Color.elevated)
                 Section {
                     Button("Unpair this device", role: .destructive) { unpairing = true }
+                        .foregroundStyle(Color.danger)
                     Button("Forget the pairing here only") { forgetting = true }
+                        .foregroundStyle(Color.brand)
                 } footer: {
                     Text("Unpair tells the server; Forget is for when it cannot be reached (then run `shaft web unpair` on the Mac).")
+                        .foregroundStyle(Color.textSecondary)
                 }
+                .listRowBackground(Color.elevated)
                 if let problem = session.problem {
                     Text(problem).foregroundStyle(Color.danger)
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(Color.canvas.ignoresSafeArea())
             .navigationTitle("Settings")
             #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
@@ -262,7 +275,10 @@ struct InstanceRowView: View {
             .font(.caption)
             .foregroundStyle(row.replying ? Color.brand : Color.textSecondary)
             if !row.line.isEmpty {
-                Text(row.line).font(.subheadline).foregroundStyle(Color.textSecondary).lineLimit(2)
+                Text(RenderedText.plain(PartialMarkdown.closed(row.line)))
+                    .font(.subheadline)
+                    .foregroundStyle(Color.textSecondary)
+                    .lineLimit(2)
             }
         }
         .padding(.vertical, Design.Space.s4)
@@ -274,7 +290,7 @@ struct InstanceRowView: View {
 
 /// The chats, in the rail's order, with the list's own failure. On an iPhone and iPad it sits on `elevated`.
 struct InstancesList: View {
-    /// The phone's sheet of chats, whose rows draw their own selection (a plain list's fills the whole width).
+    /// The phone's sheet of chats.
     var switcher = false
     @Binding var selection: String?
     var settings: () -> Void
@@ -290,10 +306,8 @@ struct InstancesList: View {
             ForEach(store.instances) { row in
                 InstanceRowView(row: row)
                     .tag(row.name)
-                    .listRowSeparatorTint(Color.hairline)
-                    #if os(iOS)
-                    .listRowBackground(switcher ? switcherRow(row) : nil)
-                    #endif
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(rowFill(row))
             }
             if store.loaded && store.instances.isEmpty {
                 Text("No instances yet. They are created from the terminal with `shaft new <name>`.")
@@ -304,19 +318,41 @@ struct InstancesList: View {
         .scrollContentBackground(.hidden)
         .background(Color.elevated)
         #endif
+        // With a keyboard attached the system rings the row in focus in the tint: the fill says where it is already.
+        .focusEffectDisabled()
+        .tint(Color.rowSelected)
         .overlay { if !store.loaded && store.error == nil { ProgressView() } }
         .refreshable { await store.refresh() }
-        .navigationTitle(store.badge > 0 ? "SHAFT (\(store.badge))" : "SHAFT")
+        .navigationTitle(title)
         .toolbar {
+            #if os(iOS)
+            // The sidebar's bar centres an inline title in what its buttons leave: it sat against them, off the rows.
+            if !switcher {
+                ToolbarItem(placement: .topBarLeading) {
+                    Text(title)
+                        .font(.headline)
+                        .foregroundStyle(Color.textPrimary)
+                        .fixedSize()
+                        .padding(.leading, Design.Space.s8)
+                }
+                .sharedBackgroundVisibility(.hidden)
+            }
+            #endif
             ToolbarItem(placement: .primaryAction) {
                 Button(action: settings) { Image(systemName: "gearshape") }.accessibilityLabel("Settings")
             }
         }
+        #if os(iOS)
+        .toolbar(removing: switcher ? nil : .title)
+        #endif
     }
 
-    private func switcherRow(_ row: InstanceRow) -> some View {
+    private var title: String { store.badge > 0 ? "SHAFT (\(store.badge))" : "SHAFT" }
+
+    /// The selected row's quiet fill, in place of the system's accent selection (2026-11-04).
+    private func rowFill(_ row: InstanceRow) -> some View {
         RoundedRectangle(cornerRadius: Design.Radius.card, style: .continuous)
-            .fill(row.name == selection ? Color.hairline : Color.clear)
+            .fill(row.name == selection ? Color.rowSelected : Color.clear)
             .padding(.horizontal, Design.Space.s8)
     }
 }

@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The conversation, scrolled: it lands on the last message and stays there while what loads after grows the feed or
 /// moves it (pictures, the reply streaming, the keyboard), until the operator scrolls up. Scrolled up, a new message
-/// below shows "↓ New below". It reports when the newest item is on screen, which is when the chat may be marked seen.
+/// below shows "↓ New below" (drawn by the chat screen, in the bar above the composer). It reports when the newest item is on screen, which is when the chat may be marked seen.
 struct FeedView: View {
     let feed: Feed
     let rows: [FeedRow]
@@ -88,32 +88,45 @@ struct FeedView: View {
                 newBelow = true
             }
         }
-        .overlay(alignment: .bottom) {
-            if !pinned && distance > 200 {
-                Button {
-                    pinned = true
-                    newBelow = false
-                    withAnimation(reduceMotion ? nil : .default) { position.scrollTo(edge: .bottom) }
-                } label: {
-                    Label(newBelow ? "New below" : "Latest", systemImage: "arrow.down")
-                        .font(Design.Text.pill)
-                        .foregroundStyle(newBelow ? Color.brand : Color.textPrimary)
-                        .padding(.horizontal, Design.Space.s12)
-                        .frame(minHeight: Design.Space.s24 + Design.Space.s12)
-                        .quietHitArea()
-                }
-                .buttonStyle(.plain)
-                .floatingPill()
-                .padding(.bottom, Design.Space.s8)
-                .accessibilityLabel(newBelow ? "New messages below" : "Scroll to the latest message")
-            }
+        .onChange(of: pill, initial: true) { _, pill in screen.latestPill = pill }
+        .onChange(of: screen.jumpToLatest) {
+            pinned = true
+            newBelow = false
+            withAnimation(reduceMotion ? nil : .default) { position.scrollTo(edge: .bottom) }
         }
+    }
+
+    private var pill: ChatScreenModel.LatestPill? {
+        guard !pinned && distance > 200 else { return nil }
+        return newBelow ? .newBelow : .latest
     }
 
     private func stickToBottom() {
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) { position.scrollTo(edge: .bottom) }
+    }
+}
+
+/// "↓ Latest", or "↓ New below" with a message waiting: in the bar above the composer, so it covers nothing.
+struct LatestPillButton: View {
+    let pill: ChatScreenModel.LatestPill
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label(pill == .newBelow ? "New below" : "Latest", systemImage: "arrow.down")
+                .font(Design.Text.pill)
+                .foregroundStyle(pill == .newBelow ? Color.brand : Color.textPrimary)
+                .padding(.horizontal, Design.Space.s12)
+                .frame(minHeight: Design.Space.s24 + Design.Space.s12)
+                .quietHitArea()
+        }
+        .buttonStyle(.plain)
+        .floatingPill()
+        .frame(maxWidth: .infinity)
+        .padding(.top, Design.Space.s4)
+        .accessibilityLabel(pill == .newBelow ? "New messages below" : "Scroll to the latest message")
     }
 }
 

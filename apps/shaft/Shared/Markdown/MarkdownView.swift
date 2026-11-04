@@ -216,12 +216,10 @@ struct CodeBlock: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: Design.Space.s8) {
-                if let language = CodeColours.language(configuration.language) {
-                    Text(language)
-                        .font(Design.Text.pill)
-                        .foregroundStyle(Color.textSecondary)
-                        .lineLimit(1)
-                }
+                Text(CodeColours.language(configuration.language) ?? String(localized: "text"))
+                    .font(Design.Text.pill)
+                    .foregroundStyle(Color.textSecondary)
+                    .lineLimit(1)
                 Spacer(minLength: 0)
                 CopyButton(text: configuration.content, label: "Copy code")
             }
@@ -282,6 +280,7 @@ struct QuietIcon: View {
     var body: some View {
         Image(systemName: symbol)
             .font(.footnote)
+            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)   // past it the icons fill their 28 pt row and touch
             .foregroundStyle(colour)
             .frame(minWidth: Design.Space.s24 + Design.Space.s12, minHeight: Design.Space.s24 + Design.Space.s4)
             .quietHitArea()

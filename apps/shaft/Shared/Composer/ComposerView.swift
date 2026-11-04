@@ -72,7 +72,11 @@ struct ComposerView: View {
                 }
             }
             .motion(Design.Motion.spring, value: chat.draft.quotes.count, reduce: reduceMotion)
-            .glassSurface(in: RoundedRectangle(cornerRadius: Design.Radius.composer, style: .continuous))
+            // Behind the controls, not around them: a menu opens by morphing the glass it sits in, which took the
+            // whole composer with it.
+            .background {
+                Color.clear.glassSurface(in: RoundedRectangle(cornerRadius: Design.Radius.composer, style: .continuous))
+            }
             if HardwareKeyboard.shared.attached && fieldFocused {
                 ViewThatFits {
                     Text("Return sends · Shift-Return new line · ⌘-Return queues after the reply")
@@ -219,7 +223,7 @@ struct ComposerView: View {
         }
         Button { send(.background) } label: {
             Label("Next cycle", systemImage: "moon")
-            if !nextCycle.isEmpty { Text(nextCycle) }
+            if !nextCycle.isEmpty { Text(NextCycleHint.short(nextCycle)) }
         }
     }
 

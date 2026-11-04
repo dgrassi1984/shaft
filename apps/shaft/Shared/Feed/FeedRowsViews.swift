@@ -73,7 +73,7 @@ struct LiveReplyView: View {
             }
             if !reply.answer.isEmpty {
                 // Not a live region: VoiceOver would read it again at every refresh. The finished reply is announced.
-                MessageMarkdown(source: reply.answer)
+                MessageMarkdown(source: PartialMarkdown.closed(reply.answer))
                     .environment(\.markdownStreaming, true)
                     .accessibilityAddTraits([])
             }
@@ -106,7 +106,6 @@ struct LiveReplyView: View {
                 Text(large ? now : "· \(now)")
                     .lineLimit(1)
                     .layoutPriority(-1)
-                if !large { Spacer(minLength: 0) }
                 Text(large ? stepCount : "· \(stepCount)")
                     .foregroundStyle(Color.textTertiary)
                     .fixedSize()
@@ -216,7 +215,7 @@ struct UnsentRow: View {
                         .font(Design.Text.metadata)
                         .foregroundStyle(Color.warning)
                         .multilineTextAlignment(.trailing)
-                    HStack(spacing: Design.Space.s16) {
+                    FlowLayout(spacing: Design.Space.s16) {
                         textButton("Retry", colour: .brand) { Task { await screen.chat.retry(entry.mid) } }
                         textButton("Edit", colour: .brand) { screen.chat.editUnsent(entry.mid) }
                         textButton("Discard", colour: .danger) { screen.chat.discardUnsent(entry.mid) }
@@ -233,6 +232,7 @@ struct UnsentRow: View {
             Text(title).font(Design.Text.pill).foregroundStyle(colour).quietHitArea()
         }
         .buttonStyle(.plain)
+        .fixedSize()                 // at the largest text a word wraps to the next line whole, never mid-word
     }
 
     var mode: String {

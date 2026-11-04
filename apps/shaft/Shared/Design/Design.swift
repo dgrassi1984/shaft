@@ -21,6 +21,9 @@ extension Color {
     static let codeNumber = Color("codeNumber")
     /// A commented passage in a document: `accent` at low strength, behind `textPrimary` (spec §5).
     static let passage = Color("accent").opacity(0.18)
+    /// The selected row of a chat list: a quiet lift over `elevated`, never the system's accent. `textPrimary` and
+    /// `textSecondary` keep their full contrast on it (pinned by the contrast test); unread stays the accent dot.
+    static let rowSelected = Color("hairline")
 }
 
 /// The native apps' shared type, spacing and shape.
@@ -49,6 +52,19 @@ enum Design {
         static let verticalInset: CGFloat = 9
         static let horizontalInset: CGFloat = 12
         static let minimumHeight: CGFloat = 44
+    }
+
+    /// The header's controls: the height of the system's glass buttons, which the title's capsule matches, and how far
+    /// below the header and above the composer the feed fades out.
+    enum Header {
+        static let height: CGFloat = {
+            #if os(iOS)
+            44
+            #else
+            36
+            #endif
+        }()
+        static let fade: CGFloat = 16
     }
 
     enum Radius {
@@ -98,6 +114,41 @@ extension View {
     /// laid out at a compact 28 pt.
     func quietHitArea() -> some View {
         modifier(QuietHitArea())
+    }
+}
+
+/// Where the feed ends. The system's soft scroll edge only blurs what passes under it, which leaves text legible behind
+/// the header and in the gaps round the composer: the feed fades into `canvas` before it reaches either, and the glass
+/// sits on solid `canvas`. Decision of 2026-11-04 (goes beyond spec §2.4), on every platform.
+extension View {
+    /// Under the header: solid to the top of the screen, fading out below the bar.
+    func headerEdge() -> some View {
+        safeAreaInset(edge: .top, spacing: 0) {
+            LinearGradient(colors: [.canvas, .canvas.opacity(0)], startPoint: .top, endPoint: .bottom)
+                .frame(height: Design.Header.fade)
+                .background(alignment: .bottom) {
+                    Color.canvas
+                        .padding(.bottom, Design.Header.fade)
+                        .ignoresSafeArea(edges: .top)
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+    }
+
+    /// Behind a bar over the feed's foot: solid to the bottom of the screen, fading out above the bar.
+    func footerEdge() -> some View {
+        background(alignment: .top) {
+            VStack(spacing: 0) {
+                LinearGradient(colors: [.canvas.opacity(0), .canvas], startPoint: .top, endPoint: .bottom)
+                    .frame(height: Design.Header.fade)
+                Color.canvas
+            }
+            .padding(.top, -Design.Header.fade)
+            .ignoresSafeArea(edges: .bottom)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+        }
     }
 }
 

@@ -71,6 +71,8 @@ struct RatingSheet: View {
     @State private var reason = ""
     @State private var busy = false
     @FocusState private var focused: Bool
+    /// A compact sheet (spec §4): the field, its note and the two actions, with no dead space under them.
+    private static let compactHeight: CGFloat = 340
 
     var body: some View {
         NavigationStack {
@@ -116,7 +118,7 @@ struct RatingSheet: View {
             }
         }
         .sheetFrame(minWidth: 420, minHeight: 300)
-        .presentationDetents([.medium, .large])
+        .presentationDetents([.height(Self.compactHeight), .large])
     }
 
     private func finish(send: Bool) {

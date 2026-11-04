@@ -13,7 +13,10 @@ private struct GlassSurface<S: Shape>: ViewModifier {
 
     func body(content: Content) -> some View {
         if reduceTransparency {
-            content.background(Color.elevated, in: shape)
+            // It may sit on `elevated` itself (a block in the feed): the hairline keeps its edge.
+            content
+                .background(Color.elevated, in: shape)
+                .overlay { shape.stroke(Color.hairline, lineWidth: 1) }
         } else {
             content.glassEffect(.regular, in: shape)
         }
