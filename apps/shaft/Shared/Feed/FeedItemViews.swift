@@ -68,10 +68,14 @@ struct MessageMenu: ViewModifier {
 extension View {
     /// Flowing text has no surface of its own: a long press lifts it on `canvas`, not as bare words over the dimmed feed.
     func liftsOnCanvas() -> some View {
+        #if os(iOS)
         padding(Design.Space.s8)
             .background(Color.canvas, in: .rect(cornerRadius: Design.Radius.card, style: .continuous))
             .contentShape(.contextMenuPreview, .rect(cornerRadius: Design.Radius.card, style: .continuous))
             .padding(-Design.Space.s8)
+        #else
+        self
+        #endif
     }
 
     func messageMenu(_ source: String, rating: Rating? = nil, k: Int? = nil, file: String? = nil,
