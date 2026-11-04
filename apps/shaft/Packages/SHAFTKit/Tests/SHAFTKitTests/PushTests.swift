@@ -31,6 +31,18 @@ struct PushTests {
         #expect(error?.message == "native push is off: SHAFT_APNS_KEY_ID is not set")
     }
 
+    /// Bug: Settings said "Could not connect to the server." twice under Notifications, and "on (sandbox)" twice when on.
+    @Test func settingsSaysEachThingAboutPushOnce() {
+        let down = "Could not connect to the server."
+        #expect(PushStatus.notes(nil, loadProblem: down, registered: down) == [down])
+        #expect(PushStatus.notes(nil, loadProblem: nil, registered: nil).isEmpty)
+        let on = PushStatus(on: true, env: "sandbox", reason: "registered", problem: nil)
+        #expect(PushStatus.notes(on, loadProblem: nil, registered: "Notifications on (sandbox)").isEmpty)
+        let off = PushStatus(on: false, env: nil, reason: "no token", problem: nil)
+        #expect(PushStatus.notes(off, loadProblem: nil, registered: "no token") == ["no token"])
+        #expect(PushStatus.notes(off, loadProblem: nil, registered: "refused") == ["no token", "refused"])
+    }
+
     @Test func theEnvironmentComesFromTheProfile() {
         func profile(_ entitlements: String) -> Data {
             // A provisioning profile is a CMS envelope around a plist; the bytes around it are not text.

@@ -132,24 +132,3 @@ extension View {
         #endif
     }
 }
-
-extension ToolbarItemPlacement {
-    /// A sheet's own action (↩ Reply, Comment): in its bar on iOS; on the Mac, where a sheet shows only its confirm
-    /// and cancel buttons (a primary action was not drawn at all), on the confirm side.
-    static var sheetAction: ToolbarItemPlacement {
-        #if os(macOS)
-        .confirmationAction
-        #else
-        .primaryAction
-        #endif
-    }
-
-    /// Done on a sheet that has its own action: confirms on iOS; on the Mac the action takes the confirm side.
-    static var sheetDone: ToolbarItemPlacement {
-        #if os(macOS)
-        .cancellationAction
-        #else
-        .confirmationAction
-        #endif
-    }
-}

@@ -24,17 +24,16 @@ struct SelectTextSheet: View {
                 #else
                 .sheetTitle("Select text")
                 #endif
+                #if os(iOS)
                 .toolbar {
-                    ToolbarItem(placement: .sheetDone) {
+                    ToolbarItem(placement: .confirmationAction) {
                         Button("Done") { dismiss() }
                     }
                     if !screen.archived {
-                        ToolbarItem(placement: .sheetAction) {
-                            Button(quoteTitle) { quote(selected ?? selecting.text) }
-                                .accessibilityHint(selected == nil ? "Quotes the whole message" : "Quotes the selection")
-                        }
+                        ToolbarItem(placement: .primaryAction) { quoteButton }
                     }
                 }
+                #endif
                 .safeAreaInset(edge: .bottom) {
                     if added > 0 {
                         Text(added == 1 ? "1 quote added to your message" : "\(added) quotes added to your message")
@@ -47,8 +46,23 @@ struct SelectTextSheet: View {
                             .padding(.bottom, Design.Space.s8)
                     }
                 }
+                #if os(macOS)
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    SheetFooter {
+                        Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+                        if !screen.archived {
+                            quoteButton.compactPrimary().keyboardShortcut(.defaultAction)
+                        }
+                    }
+                }
+                #endif
         }
         .sheetFrame()
+    }
+
+    private var quoteButton: some View {
+        Button(quoteTitle) { quote(selected ?? selecting.text) }
+            .accessibilityHint(selected == nil ? "Quotes the whole message" : "Quotes the selection")
     }
 
     private var selected: String? {
@@ -185,6 +199,7 @@ struct EarlierChatsSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
             }
+            .background(Color.canvas.ignoresSafeArea())
             .task {
                 do {
                     chats = try await store.client.chats(instance).chats
@@ -195,5 +210,6 @@ struct EarlierChatsSheet: View {
         }
         .sheetFrame()
         .presentationDetents([.medium, .large])
+        .presentationBackground(Color.canvas)       // nothing of the chat behind it shows through
     }
 }
