@@ -15,7 +15,7 @@ final class HardwareKeyboard {
 
 /// The composer's main field (web-and-api.md, "The web UI"): Return sends, Shift- or Option-Return is a new line,
 /// Cmd-Return queues after the reply (sent now when idle). An input method's Return confirms what it composes, as
-/// typed. It grows with its text up to `maxHeight`, then scrolls. Pictures and files pasted or dropped on it go to
+/// typed. It grows with its text up to `maxHeight`, then scrolls; one line sits centred in the capsule. Pictures and files pasted or dropped on it go to
 /// `onPaste` (attachments); text pastes as text.
 struct ComposerTextView: NSViewRepresentable {
     @Binding var text: String
@@ -30,6 +30,8 @@ struct ComposerTextView: NSViewRepresentable {
     /// Spec §4: the text's insets in the field, so nothing clips.
     static let insetX: CGFloat = 12
     static let insetY: CGFloat = 9
+    /// The composer's capsule at one line, which sits centred in it.
+    static let minimumHeight: CGFloat = 44
 
     func makeNSView(context: Context) -> NSScrollView {
         let textView = ComposerNSTextView(usingTextLayoutManager: false)
@@ -134,8 +136,12 @@ struct ComposerTextView: NSViewRepresentable {
             }
             layout.ensureLayout(for: container)
             let line = textView.font.map(layout.defaultLineHeight(for:)) ?? 0
-            let used = max(layout.usedRect(for: container).height, line) + textView.textContainerInset.height * 2
-            let target = min(used.rounded(.up), parent.maxHeight)
+            let content = max(layout.usedRect(for: container).height, line)
+            let inset = max(ComposerTextView.insetY, ((ComposerTextView.minimumHeight - content) / 2).rounded(.down))
+            if textView.textContainerInset.height != inset {
+                textView.textContainerInset = NSSize(width: ComposerTextView.insetX, height: inset)
+            }
+            let target = min((content + inset * 2).rounded(.up), parent.maxHeight)
             if abs(parent.height - target) > 0.5 {
                 let binding = parent.$height
                 DispatchQueue.main.async { binding.wrappedValue = target }

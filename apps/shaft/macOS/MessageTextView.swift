@@ -442,7 +442,7 @@ final class MessageBlockScrollView: NSScrollView {
     var scrollsSideways = false {
         didSet { if scrollsSideways != oldValue { updateFade() } }
     }
-    private var passing = false
+    private(set) var passing = false
     private let fade = CAGradientLayer()
 
     override init(frame: NSRect) {
@@ -533,6 +533,9 @@ extension MessageBlockView {
         let document = clip?.documentView
         return "frame \(Int(frame.width))x\(Int(frame.height)) text \(Int(document?.frame.width ?? 0))x\(Int(document?.frame.height ?? 0)) at \(Int(clip?.contentView.bounds.minX ?? 0))"
     }
+
+    var drivePassing: Bool { subviews.compactMap { $0 as? MessageBlockScrollView }.first?.passing ?? false }
+    var driveText: NSView? { subviews.compactMap { ($0 as? NSScrollView)?.documentView }.first }
 
     func scrollSideways(to x: CGFloat) {
         guard let scroll = subviews.compactMap({ $0 as? NSScrollView }).first else { return }

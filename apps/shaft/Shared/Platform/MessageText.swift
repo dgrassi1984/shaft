@@ -2,7 +2,7 @@ import SHAFTKit
 import SwiftUI
 
 // The platform seam of a message's text in the feed. iOS draws it with MarkdownUI (MarkdownText, OperatorTextView) and
-// selects through the long-press menu's Select text; the Mac draws it in an AppKit text view that selects natively,
+// selects through the long-press menu's Select text; the Mac draws it in AppKit text views that select natively,
 // in place, with ↩ Reply / + Quote on the selection (macOS/MessageTextView.swift).
 
 /// What a message's menu offers: its whole Markdown source (Copy, Reply), and its thumbs where they apply. The

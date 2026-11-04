@@ -121,5 +121,7 @@ struct MacSettings: View {
         }
         .environment(model)
         .frame(width: 480, height: 520)
+        .scrollContentBackground(.hidden)
+        .containerBackground(Color.canvas, for: .window)
     }
 }

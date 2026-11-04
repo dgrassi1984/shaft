@@ -108,7 +108,6 @@ struct MacChats: View {
     @State private var columns = NavigationSplitViewVisibility.automatic
     /// The sidebar made room for the documents, and comes back when they go.
     @State private var sidebarYielded = false
-    @State private var width: CGFloat = .infinity
 
     var body: some View {
         @Bindable var state = state
@@ -137,8 +136,7 @@ struct MacChats: View {
         // The documents beside the chat, outside its navigation stack (ChatShell).
         .documentsInspector(state.shell, store: store)
         .background(WindowReader { window in presence.track(window) })
-        .onGeometryChange(for: CGFloat.self, of: \.size.width) { width = $0 }
-        .onChange(of: width) { fitColumns() }
+        .onChange(of: presence.width) { fitColumns() }
         .onChange(of: state.screen?.showDocuments ?? false) { fitColumns() }
         .onAppear {
             state.store = store
@@ -174,9 +172,10 @@ struct MacChats: View {
     }
 
     /// Sidebar, chat and documents need the window's width together: in a narrow one the sidebar gives way while the
-    /// documents are open, and only then (spec §5's rule, as on an iPad).
+    /// documents are open, and only then (spec §5's rule, as on an iPad). Left to the split view, three columns that do
+    /// not fit relaid themselves without end. The width is the window's: the split view's own swings with its columns.
     private func fitColumns() {
-        let tight = (state.screen?.showDocuments ?? false) && width < MacRoot.threeColumnWidth
+        let tight = (state.screen?.showDocuments ?? false) && presence.width < MacRoot.threeColumnWidth
         if tight, !sidebarYielded, columns != .detailOnly {
             sidebarYielded = true
             columns = .detailOnly
@@ -209,6 +208,8 @@ struct MacChats: View {
 @Observable
 final class MacPresence {
     private(set) var phase: ScenePhase = .active
+    /// The window's width.
+    private(set) var width: CGFloat = .infinity
     @ObservationIgnored private weak var window: NSWindow?
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
 
@@ -226,6 +227,7 @@ final class MacPresence {
             (NSWindow.didBecomeKeyNotification, window), (NSWindow.didResignKeyNotification, window),
             (NSWindow.didMiniaturizeNotification, window), (NSWindow.didDeminiaturizeNotification, window),
             (NSWindow.didChangeOcclusionStateNotification, window), (NSWindow.willCloseNotification, window),
+            (NSWindow.didResizeNotification, window),
         ]
         observers = names.map { name, object in
             center.addObserver(forName: name, object: object, queue: .main) { [weak self] note in
@@ -239,6 +241,7 @@ final class MacPresence {
     func recheck() { update(closing: false) }
 
     private func update(closing: Bool) {
+        if let window { width = window.frame.width }
         #if DEBUG
         // A dev run on a locked or sleeping screen (MacDevSession): every window there counts as covered.
         switch MacDevSession.directory != nil ? ProcessInfo.processInfo.environment["SHAFT_DEV_PRESENCE"] : nil {

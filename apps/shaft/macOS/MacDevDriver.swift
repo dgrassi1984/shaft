@@ -44,6 +44,7 @@ import SwiftUI
 ///     appearance light|dark         draw the app in that appearance (the system's stays as it is)
 ///     blocks                        log each code block and table: its frame and how wide its text is
 ///     scrollblock <n> <x>           scroll the n-th block sideways to x
+///     wheelblock <n> <dx> <dy>      a wheel gesture over the n-th block's text; logs where the block and the feed went
 ///     wait <seconds>
 ///     quit
 @MainActor
@@ -278,6 +279,26 @@ enum MacDevDriver {
             walk(root) { view in if let block = view as? MessageBlockView { blocks.append(block) } }
             guard Int(parts[0]) < blocks.count else { return log("no block \(rest)") }
             blocks[Int(parts[0])].scrollSideways(to: parts[1])
+        case "wheelblock":
+            let parts = rest.split(separator: " ").compactMap { Int32($0) }
+            guard parts.count == 3, let root = window?.contentView else { return log("wheelblock <n> <dx> <dy>") }
+            var blocks: [MessageBlockView] = []
+            walk(root) { view in if let block = view as? MessageBlockView { blocks.append(block) } }
+            guard Int(parts[0]) < blocks.count else { return log("no block \(rest)") }
+            let block = blocks[Int(parts[0])]
+            func feedY() -> CGFloat { block.enclosingScrollView?.enclosingScrollView?.contentView.bounds.minY
+                ?? sequence(first: block.superview) { $0?.superview }.compactMap { $0 as? NSScrollView }.first?.contentView.bounds.minY ?? -1 }
+            let before = (block.driveDescription, feedY())
+            for phase in [CGScrollPhase?.none, .none] {
+                guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: parts[2],
+                                       wheel2: parts[1], wheel3: 0) else { continue }
+                if let phase { cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase.rawValue)) }
+                guard let event = NSEvent(cgEvent: cg) else { continue }
+                block.driveText?.scrollWheel(with: event)
+                log("wheel: passes to the feed: \(block.drivePassing)")
+            }
+            try? await Task.sleep(for: .milliseconds(300))
+            log("wheel: block \(before.0) -> \(block.driveDescription); feed \(Int(before.1)) -> \(Int(feedY()))")
         case "quit":
             log("done")
             NSApp.terminate(nil)
