@@ -234,6 +234,37 @@ struct ChatStoreUITests {
         #expect(try store.drafts.load("thelos") == Draft(text: "also\n\nRerun it"))
     }
 
+    /// Bug: offline said the same thing three times: the not-sent row, the offline banner and a red status line.
+    @Test func aSendThatFailsIsSaidByItsRowNotAgainByTheStatusLine() async throws {
+        let folder = try temporaryFolder("ui")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let server = StubServer { _ in throw StubServer.NetworkDown() }
+        let store = try makeStore(server, folder: folder)
+        let chat = store.chat("thelos")
+        chat.draft.text = "Rerun it"
+        _ = await chat.send()
+        #expect(chat.unsent.first?.reason?.isEmpty == false)
+        #expect(chat.actionError == nil)
+    }
+
+    /// Bug: queued showed its wording twice: the toast and the row.
+    @Test func aQueuedMessageLeavesTheSayingToItsRow() async throws {
+        let folder = try temporaryFolder("ui")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let server = StubServer { request in
+            request.path.hasSuffix("/send") ? .json(200, #"{"said": "queued — sent when this reply ends", "chat": "web-1", "file": null}"#)
+                : .json(200, "{}")
+        }
+        let store = try makeStore(server, folder: folder)
+        let chat = store.chat("thelos")
+        chat.draft.text = "After that"
+        _ = await chat.send(mode: .queue)
+        #expect(chat.said == nil)
+        chat.draft.text = "Now"
+        _ = await chat.send(mode: .now)
+        #expect(chat.said != nil)
+    }
+
     @Test func coveringTheChatAsksAgainAtOnceWithWatch0() async throws {
         let folder = try temporaryFolder("ui")
         defer { try? FileManager.default.removeItem(at: folder) }

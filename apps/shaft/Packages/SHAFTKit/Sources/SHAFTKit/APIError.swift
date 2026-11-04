@@ -46,7 +46,7 @@ public enum APIError: Error, Sendable, Equatable, LocalizedError {
 
     public var message: String {
         switch self {
-        case .server(_, let error): error.message
+        case .server(_, let error): Self.spoken(error.message)
         case .http(let status, let body):
             if body.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("<") {
                 "The server answered HTTP \(status) with a web page, not the app API. It may not have /app/v1 yet: update its SHAFT web service."
@@ -61,6 +61,14 @@ public enum APIError: Error, Sendable, Equatable, LocalizedError {
     }
 
     public var errorDescription: String? { message }
+
+    /// The server's own words as a sentence on screen: the CLI verbs behind a refusal start with "refused: ", which the
+    /// screen around it already says.
+    static func spoken(_ words: String) -> String {
+        guard words.hasPrefix("refused: ") else { return words }
+        let rest = words.dropFirst("refused: ".count)
+        return rest.last?.isPunctuation == true ? String(rest) : rest + "."
+    }
 
     /// Any error as an `APIError` (a cancelled or foreign one as `.transport`).
     public static func from(_ error: any Error) -> APIError {
