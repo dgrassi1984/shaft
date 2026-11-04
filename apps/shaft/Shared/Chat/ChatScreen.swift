@@ -2,9 +2,6 @@ import QuickLook
 import SHAFTKit
 import SwiftUI
 import UniformTypeIdentifiers
-#if canImport(UIKit)
-import UIKit
-#endif
 
 /// One chat on screen: the header (name, state, Documents, New chat, ⋯), the feed and the composer, with the
 /// documents beside it or over it. It long-polls while it is visible, says `away` when it
@@ -180,12 +177,9 @@ struct ChatScreen: View {
         }
     }
 
-    /// What centres the feed's column at `Design.measure` of prose on an iPad or a Mac (its rows keep their gutter).
+    /// What centres the feed's column of prose (its rows keep their gutter).
     private func columnMargin(_ width: CGFloat) -> CGFloat {
-        #if os(iOS)
-        guard UIDevice.current.userInterfaceIdiom != .phone else { return 0 }
-        #endif
-        return max(0, (width - Design.measure) / 2 - Design.Space.gutter)
+        chatColumnWidth.isFinite ? max(0, (width - chatColumnWidth) / 2 - Design.Space.gutter) : 0
     }
 
     @ViewBuilder
@@ -348,7 +342,11 @@ struct ChatTitle: View {
         .accessibilityHint(row?.busyNote != nil ? "Says what a message does now" : "Shows its model")
         .popover(isPresented: $showNote) {
             VStack(alignment: .leading, spacing: Design.Space.s8) {
-                if let note = row?.busyNote { Text(note).foregroundStyle(Color.textPrimary) }
+                if let note = row?.busyNote {
+                    Text(note)
+                        .foregroundStyle(Color.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)   // a popover would cut it to one line
+                }
                 if let model = row?.model, !model.isEmpty {
                     Text("Model: \(model)").font(.footnote).foregroundStyle(Color.textSecondary)
                 }

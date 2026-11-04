@@ -66,7 +66,7 @@ struct ChatsLayout: View {
         }
         .sheet(isPresented: $switching) {
             NavigationStack {
-                InstancesList(selection: Binding(get: { selection }, set: { name in
+                InstancesList(switcher: true, selection: Binding(get: { selection }, set: { name in
                     if let name { open(name) }
                     switching = false
                 }), settings: {
@@ -74,6 +74,7 @@ struct ChatsLayout: View {
                     settings = true
                 })
                 .listStyle(.plain)
+                .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("Close") { switching = false } }
                 }
@@ -118,8 +119,8 @@ struct ChatsLayout: View {
                     }
             }
             .environment(shell)
+            .background(SidebarTiles())
         }
-        // Side by side at every width that holds both: an overlaid sidebar would cover the chat.
         .navigationSplitViewStyle(.balanced)
         // The documents beside the chat, outside its navigation stack (ChatShell): inside it, their own pages
         // were pushed onto the chat's stack.
@@ -133,8 +134,6 @@ struct ChatsLayout: View {
         // chat down to about 680 pt: under 700 there is no room for both (spec §5), so that band reads as compact.
         .environment(\.horizontalSizeClass, shell.documentsCover ? .compact : .regular)
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
-            // A window this narrow opens on the chat: the system would lay the sidebar over it, dimmed.
-            if !shell.width.isFinite && width < ChatShell.sidebarWidth { columns = .detailOnly }
             shell.width = width
             resized = .now
             fitColumns()
@@ -153,8 +152,8 @@ struct ChatsLayout: View {
     /// A new inspector waits for that collapse to end: presented during it, the split view drops it unseen.
     private func fitColumns() {
         if documentsTakeSidebar {
-            sidebarCollapsed = true
             if columns != .detailOnly {
+                sidebarCollapsed = true
                 columns = .detailOnly
                 sidebarLeaving = true
                 Task {
@@ -212,5 +211,26 @@ struct ChatsLayout: View {
         guard selection == nil, !store.instances.isEmpty else { return }
         let names = store.instances.map(\.name)
         open(names.contains(last) ? last : names[0])
+    }
+}
+
+/// The sidebar beside the chat at every width that holds both. `.balanced` alone left it to the system at launch, which
+/// by window shape often laid the sidebar over the chat, dimmed.
+private struct SidebarTiles: UIViewRepresentable {
+    func makeUIView(context: Context) -> Finder { Finder() }
+    func updateUIView(_ view: Finder, context: Context) {}
+
+    final class Finder: UIView {
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            var next: UIResponder? = self
+            while let responder = next {
+                if let split = responder as? UISplitViewController {
+                    split.preferredSplitBehavior = .tile
+                    return
+                }
+                next = responder.next
+            }
+        }
     }
 }

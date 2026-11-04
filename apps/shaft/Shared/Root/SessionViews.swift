@@ -271,6 +271,8 @@ struct InstanceRowView: View {
 
 /// The chats, in the rail's order, with the list's own failure. On an iPhone and iPad it sits on `elevated`.
 struct InstancesList: View {
+    /// The phone's sheet of chats, whose rows draw their own selection (a plain list's fills the whole width).
+    var switcher = false
     @Binding var selection: String?
     var settings: () -> Void
     @Environment(InstancesStore.self) private var store
@@ -286,6 +288,9 @@ struct InstancesList: View {
                 InstanceRowView(row: row)
                     .tag(row.name)
                     .listRowSeparatorTint(Color.hairline)
+                    #if os(iOS)
+                    .listRowBackground(switcher ? switcherRow(row) : nil)
+                    #endif
             }
             if store.loaded && store.instances.isEmpty {
                 Text("No instances yet. They are created from the terminal with `shaft new <name>`.")
@@ -304,5 +309,11 @@ struct InstancesList: View {
                 Button(action: settings) { Image(systemName: "gearshape") }.accessibilityLabel("Settings")
             }
         }
+    }
+
+    private func switcherRow(_ row: InstanceRow) -> some View {
+        RoundedRectangle(cornerRadius: Design.Radius.card, style: .continuous)
+            .fill(row.name == selection ? Color.hairline : Color.clear)
+            .padding(.horizontal, Design.Space.s8)
     }
 }

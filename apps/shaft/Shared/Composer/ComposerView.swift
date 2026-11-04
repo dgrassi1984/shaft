@@ -15,7 +15,7 @@ struct ComposerView: View {
     @Environment(InstancesStore.self) private var store
     @Environment(FilePreview.self) private var preview
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @ScaledMetric(relativeTo: .body) private var buttonSize: CGFloat = 32
+    @ScaledMetric(relativeTo: .body) private var scaledDisc: CGFloat = 32
     @State private var textHeight: CGFloat = 40
     @State private var fieldFocused = false
     @State private var picking = false
@@ -25,6 +25,9 @@ struct ComposerView: View {
     @State private var stopping = false
     @FocusState private var focusedAnswer: Int?
 
+    /// The button's disc grows with the text, up to what the capsule can hold beside the field at the largest sizes.
+    private var disc: CGFloat { min(scaledDisc, 48) }
+    private var control: CGFloat { max(44, disc + 12) }
     private var chat: ChatStore { screen.chat }
     private var replying: Bool { chat.feed?.reply != nil }
     private var nextCycle: String { store.row(screen.instance)?.nextCycle ?? "" }
@@ -82,7 +85,7 @@ struct ComposerView: View {
                 .accessibilityHidden(true)
             }
         }
-        .frame(maxWidth: Design.measure)
+        .frame(maxWidth: chatColumnWidth)
         .padding(.horizontal, Design.Space.gutter)
         .padding(.vertical, Design.Space.s8)
         .frame(maxWidth: .infinity)
@@ -128,6 +131,7 @@ struct ComposerView: View {
                              Task { _ = await ItemImport.attach(providers, to: chat) }
                          })
             .frame(height: textHeight)
+            .clipped()                           // a placeholder too long at the largest text stops at the button
             #if os(iOS)
             // The text view is at least 40 tall with its line at the top: one line sits centred in the 44 pt capsule,
             // and more keep 9 pt above and below.
@@ -148,8 +152,9 @@ struct ComposerView: View {
         } label: {
             Image(systemName: "plus")
                 .font(.body.weight(.medium))
+                .dynamicTypeSize(...DynamicTypeSize.accessibility1)
                 .foregroundStyle(Color.textSecondary)
-                .frame(width: 44, height: 44)
+                .frame(width: control, height: control)
                 .contentShape(Rectangle())
         }
         .iconMenu()
@@ -165,7 +170,7 @@ struct ComposerView: View {
             case .stop: stopButton
             }
         }
-        .frame(width: 44, height: 44)
+        .frame(width: control, height: control)
         .motion(Design.Motion.spring, value: action, reduce: reduceMotion)
     }
 
@@ -202,10 +207,11 @@ struct ComposerView: View {
     private func buttonFace(_ symbol: String, on: Bool) -> some View {
         Image(systemName: symbol)
             .font(.footnote.weight(.bold))
+            .dynamicTypeSize(...DynamicTypeSize.accessibility1)
             .foregroundStyle(on ? Color.onAccent : Color.textTertiary)
-            .frame(width: buttonSize, height: buttonSize)
+            .frame(width: disc, height: disc)
             .background(on ? Color.brand : Color.hairline, in: Circle())
-            .frame(width: 44, height: 44)
+            .frame(width: control, height: control)
             .contentShape(Rectangle())
     }
 
