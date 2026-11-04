@@ -37,6 +37,8 @@ class Case(unittest.TestCase):
             self.enterContext(mock.patch.object(module, "SUP_DIR", self.root))
         self.enterContext(mock.patch.object(core, "SETTINGS_FILE", self.root / "settings.env"))
         self.enterContext(mock.patch.object(cloudllm, "USAGE", self.root / "cloud_usage.jsonl"))
+        # panel.costs reads this import-time path independently of panel.SUP_DIR.
+        self.enterContext(mock.patch.object(trial, "LEDGER", self.root / "trial_usage.jsonl"))
         self.enterContext(mock.patch.object(codexcli, "_rate", None))
         self.enterContext(mock.patch.object(codexcli, "FALLBACK_MODEL", FALLBACK))
 
