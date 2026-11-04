@@ -125,7 +125,8 @@ private struct ShaftParagraph: View {
 /// only code is set smaller than the body, so a run's ascent tells it apart (bold, italics and links keep the body's).
 private struct InlineCodePills: TextRenderer {
     let bodySize: CGFloat
-    private let inset: CGFloat = 2
+    /// Into the gap either side of the run: more would slide under the comma that follows it.
+    private let inset: CGFloat = 1
 
     var displayPadding: EdgeInsets {
         EdgeInsets(top: 0, leading: inset, bottom: 0, trailing: inset)

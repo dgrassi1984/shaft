@@ -72,12 +72,11 @@ public enum PartialMarkdown {
             index += run
         }
         var out = paragraph
-        if let tick = openTick {
-            let end = out.trimmingCharacters(in: .whitespacesAndNewlines)
-            if tick.at + tick.length >= end.count { return String(end.dropLast(tick.length)) }
-            return end + String(repeating: "`", count: tick.length)
-        }
         while let last = out.last, last.isWhitespace { out.removeLast() }
+        if let tick = openTick {
+            if tick.at + tick.length >= out.count { return String(out.dropLast(tick.length)) }
+            return out + String(repeating: "`", count: tick.length)
+        }
         // A run of marks at the very end has nothing after it: not yet an opener, and not a closer of anything left open.
         if let last = out.last, "*_~".contains(last) {
             let run = out.reversed().prefix { $0 == last }.count

@@ -26,6 +26,20 @@ struct PartialMarkdownTests {
         #expect(PartialMarkdown.closed("***both") == "***both***")
     }
 
+    @Test func aParagraphsIndentStaysAndALoneTickGoes() {
+        #expect(PartialMarkdown.closed("  - run `ls") == "  - run `ls`")
+        #expect(PartialMarkdown.closed("run `") == "run ")
+    }
+
+    /// It runs on every refresh of a streaming reply: a long reply must stay cheap.
+    @Test func aLongReplyStaysCheap() {
+        let text = String(repeating: "A line of **bold** and `code` and more words here.\n\n", count: 4_000)
+        let start = ContinuousClock.now
+        for _ in 0..<10 { _ = PartialMarkdown.closed(text) }
+        print("PartialMarkdown: \(text.utf8.count) bytes, 10 runs in \(ContinuousClock.now - start)")
+        #expect(ContinuousClock.now - start < .seconds(2))
+    }
+
     @Test func balancedTextIsLeftAlone() {
         for text in ["**bold** and *em* and `code`", "2 ** 3 is 8", "a * b * c", "snake_case_name here", "no marks"] {
             #expect(PartialMarkdown.closed(text) == text)

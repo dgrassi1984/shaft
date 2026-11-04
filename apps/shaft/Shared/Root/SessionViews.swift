@@ -320,7 +320,7 @@ struct InstancesList: View {
         #endif
         // With a keyboard attached the system rings the row in focus in the tint: the fill says where it is already.
         .focusEffectDisabled()
-        .tint(Color.rowSelected)
+        .tint(.clear)
         #if os(macOS)
         .background(QuietListSelection())
         #endif

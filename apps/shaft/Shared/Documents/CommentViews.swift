@@ -101,7 +101,7 @@ struct CommentThreadView: View {
                 // Drawn at the row's height, as the footers are; the shape keeps the 44 pt target.
                 Image(systemName: "ellipsis")
                     .foregroundStyle(Color.textSecondary)
-                    .frame(width: 44, height: 28)
+                    .frame(width: 44, height: 28, alignment: .trailing)   // in line with the card's time above it
                     .contentShape(Rectangle().inset(by: -8))
             }
             .iconMenu()
