@@ -5,21 +5,14 @@ import SwiftUI
 /// A document as the chat draws Markdown, with its commented passages highlighted (`CommentHighlight`); a tap on one
 /// opens its threads. Marking waits for nothing: the page shows the plain text until the marks arrive, and the two read
 /// the same, so nothing moves.
-///
-/// It is drawn a top-level block at a time in a lazy stack (`DocumentBlocks`): only what is on screen is built, measured
-/// and drawn, whatever the document's size. `header` and `footer` sit in the same stack, so that a `ScrollViewProxy` can
-/// reach a row of theirs from anywhere in the page: a lazy stack finds its direct rows, drawn yet or not.
-struct DocumentMarkdown<Header: View, Footer: View>: View {
+struct DocumentMarkdown: View {
     let doc: DocumentDetail
     var opens: ([String]) -> Void
-    @ViewBuilder var header: Header
-    @ViewBuilder var footer: Footer
-    @State private var marked: (sha: String, blocks: [DocumentBlock])?
-    @ScaledMetric(relativeTo: .body) private var bodySize = FontProperties.defaultSize
+    @State private var marked: (sha: String, source: String)?
 
-    private var blocks: [DocumentBlock] {
-        if let marked, marked.sha == doc.sha { return marked.blocks }
-        return DocumentBlocks.split(doc.text)
+    private var source: String {
+        if let marked, marked.sha == doc.sha { return marked.source }
+        return doc.text
     }
 
     /// What the marks depend on: the text, and which threads are open on what.
@@ -28,49 +21,19 @@ struct DocumentMarkdown<Header: View, Footer: View>: View {
     }
 
     var body: some View {
-        let blocks = blocks
-        LazyVStack(alignment: .leading, spacing: 0) {
-            header
-            ForEach(Array(blocks.enumerated()), id: \.element.id) { index, block in
-                MarkdownText(source: block.text, theme: .document)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.top, index == 0 ? 0 : gap(after: blocks[index - 1], before: block))
+        MarkdownText(source: source, theme: .document)
+            .environment(\.openURL, OpenURLAction { url in
+                guard let threads = CommentHighlight.threads(in: url) else { return .systemAction }
+                opens(threads)
+                return .handled
+            })
+            .task(id: marks) {
+                let (sha, text, threads) = (doc.sha, doc.text, doc.threads)
+                let source = await Task.detached(priority: .userInitiated) {
+                    CommentHighlight.marked(TableColumns.aligned(text), threads: threads)
+                }.value
+                if !Task.isCancelled { marked = (sha, source) }
             }
-            footer
-        }
-        .environment(\.openURL, OpenURLAction { url in
-            guard let threads = CommentHighlight.threads(in: url) else { return .systemAction }
-            opens(threads)
-            return .handled
-        })
-        .task(id: marks) {
-            let (sha, text, threads) = (doc.sha, doc.text, doc.threads)
-            let marked = await Task.detached(priority: .userInitiated) {
-                DocumentBlocks.split(CommentHighlight.marked(TableColumns.aligned(text), threads: threads))
-            }.value
-            if !Task.isCancelled { self.marked = (sha, marked) }
-        }
-    }
-
-    /// What `markdownMargin` would have left between the two, were they in one Markdown view.
-    private func gap(after above: DocumentBlock, before below: DocumentBlock) -> CGFloat {
-        max(margins(above.last).bottom, margins(below.first).top)
-    }
-
-    private func margins(_ kind: DocumentBlock.Kind) -> (top: CGFloat, bottom: CGFloat) {
-        switch kind {
-        case .paragraph, .quote: BlockGap.paragraph
-        case .code, .table: BlockGap.panel
-        case .rule: BlockGap.rule
-        case .list: ((BlockGap.listItemTop * bodySize).rounded(), BlockGap.paragraph.bottom)
-        case .heading(let level):
-            ((Design.Text.headingSpaceAbove * headingSize(level)).rounded(),
-             (Design.Text.headingSpaceBelow * headingSize(level)).rounded())
-        }
-    }
-
-    private func headingSize(_ level: Int) -> CGFloat {
-        BlockGap.headingScale[level - 1] * bodySize
     }
 }
 
