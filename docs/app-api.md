@@ -795,7 +795,8 @@ This device's APNs token (the app sends it at every launch: APNs may change it).
 Retries stop when the device unpairs, unregisters or replaces its token. `BadDeviceToken`, `Unregistered`,
 `DeviceTokenNotForTopic` and HTTP 410 remove only the matching registration. `ExpiredProviderToken` and
 `InvalidProviderToken` clear the cached provider JWT for the next attempt, keeping the device token.
-Held-message digests reach APNs-only operators too.
+Held-message digests reach APNs-only operators too, when APNs is configured. While native push is off, stored APNs
+registrations do not count as recipients; digests with no Web Push recipients remain eligible once APNs is configured.
 
 - **Request:** `{"token": str, "env": str, "topic": str, "platform": str}`: the token as hex, `env` `"sandbox"` (Xcode
   builds) or `"production"`, `topic` the bundle id, `platform` `"ios"` or `"macos"`.

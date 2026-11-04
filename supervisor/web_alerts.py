@@ -61,7 +61,7 @@ def forward_new() -> int:
         _write_cursor(after)
     _write_cursor(end)
     from . import apns, pushes
-    if webpush.subscriptions() or apns.devices():
+    if webpush.subscriptions() or (apns.configured() is None and apns.devices()):
         pushed += pushes.digest(webpush.notify)
     return pushed
 

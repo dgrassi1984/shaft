@@ -292,8 +292,8 @@ def _paired() -> set[str] | None:
 
 
 def notify(event: dict, skip=frozenset()) -> list[str]:
-    """Queue `event` ({title, body, url, tag}: what the notification shows) for every Web Push or APNs device that is still
-    paired and not in `skip` (the devices that have the chat on screen: web_chat.watchers), and wake each (in a thread:
+    """Queue `event` ({title, body, url, tag}: what the notification shows) for every Web Push or configured APNs device
+    still paired and not in `skip` (the devices that have the chat on screen: web_chat.watchers), and wake each (in a thread:
     a reply's end never waits on a push service). A subscription of a device no longer paired is dropped: a revoked
     phone kept getting a push for every reply (W1, review 2026-10-24). Returns the devices it woke."""
     from . import apns
@@ -306,6 +306,11 @@ def notify(event: dict, skip=frozenset()) -> list[str]:
         log(f"web: dropped the APNs token of device {device}: it is no longer paired")
     subs = {d: s for d, s in subs.items() if (paired is None or d in paired) and d not in skip}
     native = {d: s for d, s in native.items() if (paired is None or d in paired) and d not in skip}
+    if native:
+        reason = apns.configured()
+        if reason is not None:
+            log(f"web: {reason}")
+            native = {}
     recipients = subs.keys() | native.keys()
     if not recipients:
         return []

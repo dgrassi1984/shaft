@@ -193,6 +193,60 @@ class APNsTest(unittest.TestCase):
                 "url": "/overview", "tag": "shaft-digest-held.md"}])
             self.assertEqual(web_alerts.forward_new(), 0)
 
+    def test_unconfigured_apns_without_registration_does_not_log(self):
+        (self.sup / "web" / "devices.json").write_text("{}")
+        with mock.patch.object(apns, "TEAM_ID", ""):
+            webpush.notify(EVENT)
+        webpush.log.assert_not_called()
+
+    def test_unconfigured_apns_registration_does_not_claim_digest(self):
+        """Stored APNs registrations claimed and lost digests while native push was off."""
+        from supervisor import messages, pushes
+        self.register()
+        (self.sup / "web" / "devices.json").write_text(json.dumps({"phone": {}}))
+        (self.sup / "messages.jsonl").write_text(json.dumps({"from": "thelos", "to": "operator", "text": "held",
+            "file": "held.md", "ts": "2020-01-01T00:00:00", "push_due": "2020-01-01T07:15:00"}) + "\n")
+        claim = self.sup / "push-digest.json"
+        for dispatch in (lambda: pushes.digest(webpush.notify), web_alerts.forward_new):
+            with self.subTest(dispatch=dispatch), mock.patch.object(pushes, "QUIET_HOURS", None), \
+                    mock.patch.object(messages, "appended", return_value=([], 0)), \
+                    mock.patch.object(apns, "_wake") as wake:
+                claim.unlink(missing_ok=True)
+                queue = webpush._queue()
+                webpush.log.reset_mock()
+                with mock.patch.object(apns, "TEAM_ID", ""):
+                    reason = apns.configured()
+                    self.assertEqual(webpush.subscriptions(), {})
+                    self.assertEqual(dispatch(), 0)
+                    self.assertEqual(json.loads(claim.read_text()) if claim.exists() else [], [])
+                    self.assertEqual(webpush._queue(), queue)
+                    wake.assert_not_called()
+                    if dispatch is not web_alerts.forward_new:
+                        webpush.log.assert_called_once_with(f"web: {reason}")
+                self.assertIsNone(apns.configured())
+                self.assertEqual(dispatch(), 1)
+                self.assertEqual(json.loads(claim.read_text()), ["held.md"])
+                self.assertEqual(webpush.take("phone")[0]["title"], "SHAFT digest (1)")
+                self.assertEqual(dispatch(), 0)
+
+    def test_unconfigured_apns_keeps_web_push_recipients(self):
+        for device in ("phone", "both"):
+            self.register(device)
+        (self.sup / "web" / "devices.json").write_text(json.dumps({d: {} for d in ("phone", "both", "web")}))
+        for device in ("both", "web"):
+            webpush.subscribe(device, {"endpoint": "https://web.push.apple.com/test"})
+        webpush.log.reset_mock()
+        with mock.patch.object(apns.os, "access", return_value=False), \
+                mock.patch.object(webpush, "_wake") as wake, mock.patch.object(apns, "_wake") as native:
+            reason = apns.configured()
+            self.assertEqual(webpush.notify(EVENT), ["both", "web"])
+        self.assertEqual(set(wake.call_args[0][0]), {"both", "web"})
+        self.assertEqual(native.call_args[0][0], {})
+        webpush.log.assert_called_once_with(f"web: {reason}")
+        self.assertNotIn("phone", webpush._queue())
+        for device in ("both", "web"):
+            self.assertEqual(webpush.take(device), [EVENT])
+
     def test_missing_config_turns_push_off_and_logs_without_dropping_token(self):
         self.register()
         self.key.unlink()
