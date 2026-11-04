@@ -43,6 +43,7 @@ struct ComposerTextView: NSViewRepresentable {
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
+        textView.writingToolsBehavior = .none    // see MacChrome.writingToolsAffordance
         textView.font = .preferredFont(forTextStyle: .body)
         textView.textColor = MacColor.textPrimary
         textView.insertionPointColor = MacColor.brand
@@ -287,7 +288,11 @@ struct SelectableTextView: NSViewRepresentable {
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSTextView.scrollableTextView()
         scroll.drawsBackground = false
+        scroll.autohidesScrollers = true         // no empty track beside a short text
+        scroll.scrollerStyle = .overlay
         guard let textView = scroll.documentView as? NSTextView else { return scroll }
+        textView.writingToolsBehavior = .none    // see MacChrome.writingToolsAffordance
+        textView.textContainer?.lineFragmentPadding = 0     // the text starts on the gutter, under the sheet's title
         textView.isEditable = false
         textView.isSelectable = true
         textView.isRichText = false

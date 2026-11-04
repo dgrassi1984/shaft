@@ -27,6 +27,9 @@ struct ChatScreen: View {
     @State private var newestOnScreen = false
     @State private var seenVersion: String?
     @State private var dropTargeted = false
+    #if os(macOS)
+    @State private var columnWidth: CGFloat = 700
+    #endif
 
     init(chat: ChatStore, openArchived: @escaping (ChatSummary) -> Void = { _ in }, backToCurrent: (() -> Void)? = nil) {
         self.chat = chat
@@ -83,6 +86,9 @@ struct ChatScreen: View {
         .toolbar { header }
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #else
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)     // no lighter band and line at the fade's foot
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { columnWidth = $0 }
         #endif
         .navigationTitle(chat.instance)
         // Over the chat on a phone (a sheet); beside it where there is room, drawn by the shell (ChatShell): an
@@ -237,7 +243,8 @@ struct ChatScreen: View {
         ToolbarItem(placement: .principal) {
             ChatTitle(instance: chat.instance, archived: chat.cid != nil)
                 #if os(macOS)
-                .fixedSize()                     // the Mac's toolbar squeezed a short name's state out of it
+                .titleWidth(limit: MacChrome.titleLimit(column: columnWidth, sidebar: shell?.sidebarWidth ?? 0,
+                                                        earlier: chat.cid != nil))
                 #endif
         }
         .sharedBackgroundVisibility(.hidden)     // its own capsule: the toolbar's drew a short name as a circle

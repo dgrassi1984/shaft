@@ -18,9 +18,11 @@ struct SelectTextSheet: View {
         NavigationStack {
             SelectableTextView(text: selecting.text, selection: $selection, quoteTitle: quoteTitle,
                                onQuote: quote, onComment: nil)
-                .navigationTitle("Select text")
                 #if os(iOS)
+                .navigationTitle("Select text")
                 .navigationBarTitleDisplayMode(.inline)
+                #else
+                .sheetTitle("Select text")
                 #endif
                 .toolbar {
                     ToolbarItem(placement: .sheetDone) {

@@ -51,7 +51,11 @@ struct DocumentDetailView: View {
                 .readingColumn()
                 .padding(.vertical, Design.Space.s16)
             }
+            #if os(macOS)
+            .background(Color.canvas.ignoresSafeArea())          // under the toolbar too: no seam at its foot
+            #else
             .background(Color.canvas)
+            #endif
             .onChange(of: screen.openThread) { _, thread in
                 guard let thread else { return }
                 reveal(thread)
@@ -72,6 +76,9 @@ struct DocumentDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .toolbar { toolbar }
+        #if os(macOS)
+        .inspectorPage()
+        #endif
         .task(id: path) { await docs.load(path) }
         .onChange(of: doc?.text, initial: true) { _, text in
             rendered = RenderedText.plain(text ?? "")
@@ -126,30 +133,38 @@ struct DocumentDetailView: View {
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
-        ToolbarItemGroup(placement: .primaryAction) {
-            if !screen.archived && doc != nil {
-                Button { editing = true } label: { Image(systemName: "pencil") }
-                    .accessibilityLabel("Edit")
-            }
-            Menu {
-                if doc != nil {
-                    Button { selecting = true } label: { Label("Select text", systemImage: "selection.pin.in.out") }
-                    if !screen.archived {
-                        Button { composing = CommentDraft(anchor: nil) } label: {
-                            Label("Comment on the whole document", systemImage: "text.bubble")
-                        }
+        #if os(macOS)
+        InspectorHeader(title: (path as NSString).lastPathComponent, symbol: "chevron.left", label: "Back",
+                        action: { dismiss() }) { toolbarActions }
+        #else
+        ToolbarItemGroup(placement: .primaryAction) { toolbarActions }
+        #endif
+    }
+
+    @ViewBuilder
+    private var toolbarActions: some View {
+        if !screen.archived && doc != nil {
+            Button { editing = true } label: { Image(systemName: "pencil") }
+                .accessibilityLabel("Edit")
+        }
+        Menu {
+            if doc != nil {
+                Button { selecting = true } label: { Label("Select text", systemImage: "selection.pin.in.out") }
+                if !screen.archived {
+                    Button { composing = CommentDraft(anchor: nil) } label: {
+                        Label("Comment on the whole document", systemImage: "text.bubble")
                     }
                 }
-                Button { download() } label: { Label("Download", systemImage: "arrow.down.doc") }
-                if !screen.archived && doc != nil {
-                    Divider()
-                    Button(role: .destructive) { deleting = true } label: { Label("Delete…", systemImage: "trash") }
-                }
-            } label: {
-                Image(systemName: "ellipsis")
             }
-            .accessibilityLabel("Document actions")
+            Button { download() } label: { Label("Download", systemImage: "arrow.down.doc") }
+            if !screen.archived && doc != nil {
+                Divider()
+                Button(role: .destructive) { deleting = true } label: { Label("Delete…", systemImage: "trash") }
+            }
+        } label: {
+            Image(systemName: "ellipsis")
         }
+        .accessibilityLabel("Document actions")
     }
 
     @ViewBuilder
@@ -419,9 +434,11 @@ struct DocumentSelectSheet: View {
                                onQuote: reply,
                                onComment: screen.archived ? nil : { _, range in commentOn(range) })
                 .background(Color.canvas)
-                .navigationTitle("Select text")
                 #if os(iOS)
+                .navigationTitle("Select text")
                 .navigationBarTitleDisplayMode(.inline)
+                #else
+                .sheetTitle("Select text")
                 #endif
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }

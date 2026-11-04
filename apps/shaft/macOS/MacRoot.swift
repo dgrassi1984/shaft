@@ -75,11 +75,16 @@ final class MacState {
 /// The Mac window: the instances in the sidebar, the chat, and the chat's documents as an inspector.
 struct MacRoot: View {
     static let windowID = "main"
-    /// The documents at their usual width beside the chat at its least (spec §5), the sidebar collapsed.
-    static let minimumWidth: CGFloat = 400 + chatMinimum
-    static let chatMinimum: CGFloat = 380
-    /// Under this, sidebar, chat and documents no longer fit together (spec §5).
-    static let threeColumnWidth: CGFloat = 1000
+    /// The window's least: with the sidebar collapsed it holds the chat beside the documents at up to 360 pt
+    /// (ChatShell.inspectorMaximum).
+    static let minimumWidth: CGFloat = 400 + ChatShell.chatMinimum
+    /// The chat column's minimum as the split views take it. They count an open inspector twice (the chat runs under it,
+    /// and its width is added again on the way out): what the window must hold is sidebar's minimum + this + 2 ×
+    /// inspector, and over the window's width all three columns ran off its edges. So this is the 380 the chat keeps
+    /// (ChatShell.chatMinimum) less the inspector's own 320, which leaves the sum at what the columns really take. The
+    /// chat keeps its 380 by the sidebar giving way and the inspector's maximum (ChatShell). It must stay a fixed number
+    /// (crash of 2026-11-04, below).
+    static let splitChatMinimum: CGFloat = ChatShell.chatMinimum - ChatShell.inspectorWidth
     let model: AppModel
     let state: MacState
     @Environment(\.openWindow) private var openWindow
@@ -108,6 +113,8 @@ struct MacChats: View {
     @State private var columns = NavigationSplitViewVisibility.automatic
     /// The sidebar made room for the documents, and comes back when they go.
     @State private var sidebarYielded = false
+    /// The sidebar's width as last shown: it can be dragged wider than its usual 260.
+    @State private var sidebarWidth: CGFloat = 260
 
     var body: some View {
         @Bindable var state = state
@@ -116,7 +123,8 @@ struct MacChats: View {
                           settings: { openSettings() })
                 .scrollContentBackground(.hidden)
                 .background(Color.elevated.ignoresSafeArea())
-                .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 360)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { sidebarWidth = $0 }
+                .navigationSplitViewColumnWidth(min: ChatShell.sidebarMinimum, ideal: 260, max: 360)
         } detail: {
             NavigationStack(path: $state.path) {
                 chat
@@ -125,6 +133,7 @@ struct MacChats: View {
                         // shell too, or the documents and the menus stay on the current chat's.
                         ArchivedChatView(route: route) { state.path.removeAll() }
                             .environment(state.shell)
+                            .toolbar(removing: .title)   // the header's own title is the name
                     }
             }
             .environment(state.shell)
@@ -135,7 +144,7 @@ struct MacChats: View {
             // A column width of its own: left to its content, the chat's minimum moved with what it shows while the
             // documents opened, and each new minimum asked the window for another constraints pass, until AppKit's
             // guard ended the app (crash of 2026-11-04, a document opened from the chat).
-            .navigationSplitViewColumnWidth(min: 380, ideal: 700)
+            .navigationSplitViewColumnWidth(min: MacRoot.splitChatMinimum, ideal: 700)
         }
         // The documents beside the chat, outside its navigation stack (ChatShell).
         .documentsInspector(state.shell, store: store)
@@ -144,10 +153,13 @@ struct MacChats: View {
             window?.titlebarSeparatorStyle = .none   // the feed fades under the header (spec §2.4), not at a line
         })
         .onChange(of: presence.width) { fitColumns() }
+        .onChange(of: sidebarWidth) { fitColumns() }
         .onChange(of: state.screen?.showDocuments ?? false) { fitColumns() }
+        .onChange(of: columns) { sidebarAsked() }
         .onAppear {
             state.store = store
             presence.recheck()                   // a window opened again is the same window, its views kept
+            fitColumns()
             restore()
             DockBadge.follow(store)
         }
@@ -177,11 +189,17 @@ struct MacChats: View {
         }
     }
 
+    /// Whether the sidebar has to leave room for the documents in this window.
+    private var tight: Bool {
+        (state.screen?.showDocuments ?? false) && presence.width < ChatShell.threeColumnWidth(sidebar: sidebarWidth)
+    }
+
     /// Sidebar, chat and documents need the window's width together: in a narrow one the sidebar gives way while the
     /// documents are open, and only then (spec §5's rule, as on an iPad). Left to the split view, three columns that do
     /// not fit relaid themselves without end. The width is the window's: the split view's own swings with its columns.
     private func fitColumns() {
-        let tight = (state.screen?.showDocuments ?? false) && presence.width < MacRoot.threeColumnWidth
+        state.shell.width = presence.width
+        state.shell.sidebarWidth = columns == .detailOnly ? 0 : sidebarWidth
         if tight, !sidebarYielded, columns != .detailOnly {
             sidebarYielded = true
             columns = .detailOnly
@@ -189,6 +207,16 @@ struct MacChats: View {
             sidebarYielded = false
             columns = .automatic
         }
+    }
+
+    /// The sidebar asked for where it does not fit beside the documents (its button, ⌃⌘S; only that shows it here, the
+    /// window's width having hidden it): the documents give way to it. They come back from the toolbar, and the sidebar
+    /// yields again then.
+    private func sidebarAsked() {
+        state.shell.sidebarWidth = columns == .detailOnly ? 0 : sidebarWidth
+        guard columns != .detailOnly, tight else { return }
+        sidebarYielded = false
+        state.screen?.showDocuments = false
     }
 
     /// A notification's chat first, then the chat open last time, else the first instance.
