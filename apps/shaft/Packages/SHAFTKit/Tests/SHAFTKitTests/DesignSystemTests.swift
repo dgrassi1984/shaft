@@ -21,7 +21,7 @@ struct DesignSystemTests {
         }
     }
 
-    /// The selected row of a chat list (`rowSelected`, the `hairline` set): bug of 2026-11-04, grey text on the system
+    /// The selected row of a chat list (`rowSelected`, the `hairline` set): bug of 2026-11-04, grey text on the system's
     /// periwinkle selection. Its text stays `textPrimary` and `textSecondary` at full contrast, in both modes.
     @Test func aSelectedRowKeepsItsTextReadable() throws {
         for dark in [false, true] {

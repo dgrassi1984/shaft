@@ -112,6 +112,10 @@ To check the document-opening crash, seed a long chat with `fixture_server.py ac
 Run the Release build with Debug conditions and `SHAFT_DEV_DRIVE=DevServer/mac-doc-open.drive` several times.
 The crash is intermittent (unfixed: 2 of 3 runs).
 
+A process started directly stays behind other apps: start the app with `open -n` (`--env` for the variables, `--stdout`
+for the log) when its window must be in front. The `activate` step then takes the front, and takes it again before each
+`capture`, since another app may take it back; `capture` logs whether the window has the keys and where the pointer is.
+
 ## Tests
 
 ```bash

@@ -123,24 +123,12 @@ struct DocsListView: View {
                     .listRowBackground(Color.clear)
                     .listRowSeparator(.hidden)
             }
-            Section {
-                ForEach(level.folders) { entry in
-                    NavigationLink(value: DocumentsPanel.Route.folder(entry.path)) {
-                        DocRow(name: entry.name, folder: true, bytes: entry.bytes, date: entry.latest,
-                               inChat: entry.inChat, comments: entry.openComments, count: entry.count, tooBig: false)
-                    }
-                    .docRow()
-                }
-                ForEach(level.docs) { entry in
-                    NavigationLink(value: DocumentsPanel.Route.doc(entry.path)) {
-                        DocRow(name: (entry.path as NSString).lastPathComponent, folder: false, bytes: entry.bytes,
-                               date: entry.mtime, inChat: entry.inChat, comments: entry.openComments, count: nil,
-                               tooBig: entry.tooBig)
-                    }
-                    .docRow()
-                }
-            }
-            .listSectionSeparator(.hidden)
+            #if os(macOS)
+            rows(level)     // a section there has a header's room and a line above its first row, empty or not
+            #else
+            Section { rows(level) }
+                .listSectionSeparator(.hidden)
+            #endif
         }
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
@@ -185,6 +173,25 @@ struct DocsListView: View {
         #if os(macOS)
         .inspectorPage()
         #endif
+    }
+
+    @ViewBuilder
+    private func rows(_ level: DocsTree.Level) -> some View {
+        ForEach(level.folders) { entry in
+            NavigationLink(value: DocumentsPanel.Route.folder(entry.path)) {
+                DocRow(name: entry.name, folder: true, bytes: entry.bytes, date: entry.latest,
+                       inChat: entry.inChat, comments: entry.openComments, count: entry.count, tooBig: false)
+            }
+            .docRow()
+        }
+        ForEach(level.docs) { entry in
+            NavigationLink(value: DocumentsPanel.Route.doc(entry.path)) {
+                DocRow(name: (entry.path as NSString).lastPathComponent, folder: false, bytes: entry.bytes,
+                       date: entry.mtime, inChat: entry.inChat, comments: entry.openComments, count: nil,
+                       tooBig: entry.tooBig)
+            }
+            .docRow()
+        }
     }
 
     private func sortMenu(_ order: DocsTree.Sort) -> some View {
