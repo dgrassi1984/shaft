@@ -11,15 +11,22 @@ struct FeedRowView: View {
         switch row {
         case .earlier(let count):
             Button { screen.chat.showEarlier() } label: {
-                Text("Show the \(count) earlier messages").frame(maxWidth: .infinity).frame(minHeight: 44)
+                Text("Show the \(count) earlier messages")
+                    .font(Design.Text.pill)
+                    .foregroundStyle(Color.brand)
+                    .padding(.horizontal, Design.Space.s12)
+                    .padding(.vertical, Design.Space.s8)
+                    .pill()
+                    .quietHitArea()
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.plain)
+            .frame(maxWidth: .infinity)
         case .day(let date):
             DaySeparator(date: date)
         case .item(let item):
             FeedItemView(item: item, archived: archived)
         case .live(let reply):
-            LiveReplyView(reply: reply, canStop: screen.chat.content?.canStop == true)
+            LiveReplyView(reply: reply)
         case .queued(let message):
             QueuedRow(message: message, archived: archived)
         case .pendingFeedback(let pending):
@@ -29,7 +36,7 @@ struct FeedRowView: View {
         case .unsent(let entry):
             UnsentRow(entry: entry)
         case .end:
-            EndRow()
+            EmptyView()                     // End the conversation lives in the ⋯ menu; FeedView leaves this row out
         }
     }
 }
@@ -38,111 +45,83 @@ struct DaySeparator: View {
     let date: Date
 
     var body: some View {
-        HStack(spacing: 8) {
-            Rectangle().fill(Color.secondary.opacity(0.25)).frame(height: 1)
-            Text(Stamp.day(date)).font(.caption.weight(.medium)).foregroundStyle(.secondary).fixedSize()
-            Rectangle().fill(Color.secondary.opacity(0.25)).frame(height: 1)
-        }
-        .padding(.vertical, 4)
-        .accessibilityElement(children: .combine)
-        .accessibilityAddTraits(.isHeader)
+        Text(Stamp.day(date))
+            .font(.caption)
+            .foregroundStyle(Color.textSecondary)
+            .frame(maxWidth: .infinity)
+            .accessibilityAddTraits(.isHeader)
     }
 }
 
-/// The reply running now (§4.6): "replying since 14:05" with its clock, what it is doing now (tap: every step),
-/// the dots before the first word, then the answer as it streams, and Stop.
+/// The reply running now (§4.6): flowing type as it streams, under one status line with its clock, what it is doing
+/// now and its steps (tap: every step). Stop is the composer's while a reply runs.
 struct LiveReplyView: View {
     let reply: Reply
-    let canStop: Bool
     @Environment(ChatScreenModel.self) private var screen
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var steps = false
-    @State private var stopping = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                TimelineView(.periodic(from: reply.started, by: 1)) { context in
-                    Text("replying since \(Stamp.time(reply.started)) · \(Stamp.elapsed(since: reply.started, now: context.date))")
-                        .font(.footnote.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 0)
-                if canStop {
-                    Button(role: .destructive) {
-                        stopping = true
-                        Task {
-                            await screen.chat.stopReply()
-                            stopping = false
-                        }
-                    } label: {
-                        Label("Stop", systemImage: "stop.fill").frame(minHeight: 44)
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(stopping)
-                    .accessibilityLabel("Stop the reply")
-                }
-            }
+        VStack(alignment: .leading, spacing: Design.Space.inTurn) {
             if let now = reply.activity.last {
-                Button { steps.toggle() } label: {
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Image(systemName: "gearshape").accessibilityHidden(true)
-                        Text(now).lineLimit(steps ? nil : 1)
-                        Text("· \(reply.activity.count) steps").foregroundStyle(.tertiary)
-                    }
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Now: \(now). \(reply.activity.count) steps")
-                .accessibilityHint(steps ? "Hides every step" : "Shows every step")
-                if steps {
-                    VStack(alignment: .leading, spacing: 3) {
-                        ForEach(Array(reply.activity.dropLast().enumerated()), id: \.offset) { _, line in
-                            Text(line).font(.caption.monospaced()).foregroundStyle(.tertiary)
-                        }
-                    }
-                }
-            }
-            if reply.answer.isEmpty {
-                TypingDots(animated: !reduceMotion)
+                Button { steps.toggle() } label: { status(now: now) }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Now: \(now). \(reply.activity.count) steps")
+                    .accessibilityHint(steps ? "Hides every step" : "Shows every step")
+                if steps { ActivityList(activity: reply.activity).transition(.opacity) }
             } else {
+                status(now: nil)
+            }
+            if !reply.answer.isEmpty {
                 // Not a live region: VoiceOver would read it again at every refresh. The finished reply is announced.
                 MessageMarkdown(source: reply.answer)
+                    .environment(\.markdownStreaming, true)
                     .accessibilityAddTraits([])
             }
         }
+        .motion(Design.Motion.spring, value: steps, reduce: reduceMotion)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 12))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(screen.instance) is replying")
     }
-}
 
-struct TypingDots: View {
-    let animated: Bool
-    @State private var phase = 0
-
-    var body: some View {
-        HStack(spacing: 5) {
-            ForEach(0..<3) { index in
-                Circle()
-                    .fill(Color.secondary)
-                    .frame(width: 7, height: 7)
-                    .opacity(animated ? (phase == index ? 1 : 0.35) : 0.6)
+    /// One line, where what it is doing gives way to the clock and the steps; at the accessibility text sizes, where
+    /// those alone would not fit, its parts stack.
+    private func status(now: String?) -> some View {
+        let large = dynamicTypeSize.isAccessibilitySize
+        let layout = large ? AnyLayout(VStackLayout(alignment: .leading, spacing: Design.Space.s4))
+                           : AnyLayout(HStackLayout(spacing: Design.Space.s4))
+        return layout {
+            HStack(spacing: Design.Space.s4) {
+                Image(systemName: StateIcon.symbol("", replying: true))
+                    .foregroundStyle(Color.brand)
+                    .symbolEffect(.pulse, isActive: !reduceMotion)
+                    .accessibilityHidden(true)
+                    .padding(.trailing, 2)
+                TimelineView(.periodic(from: reply.started, by: 1)) { context in
+                    Text("replying · \(Stamp.elapsed(since: reply.started, now: context.date))")
+                }
+            }
+            .fixedSize()
+            if let now {
+                Text(large ? now : "· \(now)")
+                    .lineLimit(1)
+                    .layoutPriority(-1)
+                if !large { Spacer(minLength: 0) }
+                Text(large ? stepCount : "· \(stepCount)")
+                    .foregroundStyle(Color.textTertiary)
+                    .fixedSize()
             }
         }
-        .padding(.vertical, 6)
-        .accessibilityLabel("Writing")
-        .task(id: animated) {
-            guard animated else { return }
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(350))
-                phase = (phase + 1) % 3
-            }
-        }
+        .font(Design.Text.pill.monospacedDigit())
+        .foregroundStyle(Color.textSecondary)
+        .frame(maxWidth: .infinity, minHeight: Design.Space.s24 + Design.Space.s4, alignment: .leading)
+        .contentShape(Rectangle())
+    }
+
+    private var stepCount: String {
+        reply.activity.count == 1 ? "1 step" : "\(reply.activity.count) steps"
     }
 }
 
@@ -153,28 +132,29 @@ struct QueuedRow: View {
     @Environment(ChatScreenModel.self) private var screen
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: 4) {
-            VStack(alignment: .leading, spacing: 6) {
-                if !message.text.isEmpty { OperatorTextView(text: message.text) }
-                ForEach(Array(message.attachments.enumerated()), id: \.offset) { _, file in
-                    FileChip(name: file.name, bytes: file.bytes)
+        ChipColumn {
+            VStack(alignment: .trailing, spacing: Design.Space.s4) {
+                VStack(alignment: .leading, spacing: Design.Space.inTurn) {
+                    if !message.text.isEmpty { OperatorTextView(text: message.text) }
+                    ForEach(Array(message.attachments.enumerated()), id: \.offset) { _, file in
+                        FileChip(name: file.name, bytes: file.bytes)
+                    }
                 }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
-            .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
-            HStack(spacing: 8) {
-                Text("queued — sent when this reply ends").font(.caption2).foregroundStyle(.secondary)
-                if !archived {
-                    Button("Cancel") { Task { await screen.chat.unqueue(message.mid) } }
-                        .font(.caption)
-                        .frame(minHeight: 44)
+                .waitingChip()
+                HStack(spacing: Design.Space.s12) {
+                    Label("queued — sent when this reply ends", systemImage: "clock")
+                        .font(Design.Text.metadata)
+                        .foregroundStyle(Color.textSecondary)
+                    if !archived {
+                        Button { Task { await screen.chat.unqueue(message.mid) } } label: {
+                            Text("Cancel").font(Design.Text.pill).foregroundStyle(Color.brand).quietHitArea()
+                        }
+                        .buttonStyle(.plain)
                         .accessibilityLabel("Cancel the queued message")
+                    }
                 }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .trailing)
-        .padding(.leading, 40)
     }
 }
 
@@ -188,16 +168,16 @@ struct PendingFeedbackRow: View {
             Image(systemName: "hand.thumbsdown").accessibilityHidden(true)
             Text("on its reply of \(Stamp.time(pending.replyTs)) goes with your next message")
             Spacer(minLength: 0)
-            Button { Task { await screen.chat.unpend(pending.id) } } label: {
-                Image(systemName: "xmark").touchTarget()
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Keep it, but not with the next message")
+            Button { Task { await screen.chat.unpend(pending.id) } } label: { QuietIcon(symbol: "xmark") }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Keep it, but not with the next message")
         }
         .font(.footnote)
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 10)
-        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+        .foregroundStyle(Color.textSecondary)
+        .padding(.leading, Design.Space.s12)
+        .padding(.trailing, Design.Space.s4)
+        .padding(.vertical, Design.Space.s4)
+        .elevatedBlock()
     }
 }
 
@@ -210,7 +190,7 @@ struct PendingEditsRow: View {
         Label("Your changes to \(paths.joined(separator: ", ")) go to \(screen.instance) with your next message",
               systemImage: "pencil")
             .font(.footnote)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(Color.textSecondary)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -221,38 +201,40 @@ struct UnsentRow: View {
     @Environment(ChatScreenModel.self) private var screen
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: 4) {
-            VStack(alignment: .leading, spacing: 6) {
-                let text = QuoteText.compose(entry.text, quotes: entry.quotes)
-                if !text.isEmpty { OperatorTextView(text: text) }
-                ForEach(entry.files) { file in FileChip(name: file.name, bytes: file.bytes) }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
-            .background(Color.accentColor.opacity(entry.state == .sending ? 0.1 : 0.05),
-                        in: RoundedRectangle(cornerRadius: 16))
-            .overlay {
-                if entry.state == .notSent {
-                    RoundedRectangle(cornerRadius: 16).strokeBorder(Color.red.opacity(0.6))
+        ChipColumn {
+            VStack(alignment: .trailing, spacing: Design.Space.s4) {
+                VStack(alignment: .leading, spacing: Design.Space.inTurn) {
+                    let text = QuoteText.compose(entry.text, quotes: entry.quotes)
+                    if !text.isEmpty { OperatorTextView(text: text) }
+                    ForEach(entry.files) { file in FileChip(name: file.name, bytes: file.bytes) }
                 }
-            }
-            if entry.state == .sending {
-                Label(mode, systemImage: "arrow.up.circle").font(.caption2).foregroundStyle(.secondary)
-            } else {
-                Text("not sent: \(entry.reason ?? "unknown")").font(.caption2).foregroundStyle(.red)
-                    .multilineTextAlignment(.trailing)
-                HStack(spacing: 14) {
-                    Button("Discard", role: .destructive) { screen.chat.discardUnsent(entry.mid) }
-                    Button("Edit") { screen.chat.editUnsent(entry.mid) }
-                    Button("Retry") { Task { await screen.chat.retry(entry.mid) } }.bold()
+                .operatorChip()
+                if entry.state == .sending {
+                    Label(mode, systemImage: "arrow.up.circle")
+                        .font(Design.Text.metadata)
+                        .foregroundStyle(Color.textSecondary)
+                } else {
+                    Text("not sent: \(entry.reason ?? "unknown")")
+                        .font(Design.Text.metadata)
+                        .foregroundStyle(Color.warning)
+                        .multilineTextAlignment(.trailing)
+                    HStack(spacing: Design.Space.s16) {
+                        textButton("Retry", colour: .brand) { Task { await screen.chat.retry(entry.mid) } }
+                        textButton("Edit", colour: .brand) { screen.chat.editUnsent(entry.mid) }
+                        textButton("Discard", colour: .danger) { screen.chat.discardUnsent(entry.mid) }
+                    }
+                    .frame(minHeight: Design.Space.s24 + Design.Space.s4)
                 }
-                .font(.footnote)
-                .frame(minHeight: 44)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .trailing)
-        .padding(.leading, 40)
         .accessibilityElement(children: .contain)
+    }
+
+    private func textButton(_ title: LocalizedStringKey, colour: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title).font(Design.Text.pill).foregroundStyle(colour).quietHitArea()
+        }
+        .buttonStyle(.plain)
     }
 
     var mode: String {
@@ -261,23 +243,5 @@ struct UnsentRow: View {
         case .queue: "queueing…"
         case .background: "sending for its next cycle…"
         }
-    }
-}
-
-/// End the conversation (§7.3): offered when the chat is open, idle and has turns.
-struct EndRow: View {
-    @Environment(ChatScreenModel.self) private var screen
-    @State private var asking = false
-
-    var body: some View {
-        Button("End the conversation") { asking = true }
-            .font(.footnote)
-            .frame(maxWidth: .infinity, minHeight: 44)
-            .confirmationDialog("End the conversation with \(screen.instance)?", isPresented: $asking,
-                                titleVisibility: .visible) {
-                Button("End it") { Task { await screen.chat.end() } }
-            } message: {
-                Text("It writes up its journal. Your next message starts a new conversation.")
-            }
     }
 }

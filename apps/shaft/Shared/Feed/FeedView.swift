@@ -21,18 +21,26 @@ struct FeedView: View {
 
     private let bottomID = "feed-bottom"
 
+    /// What the feed draws: End the conversation lives in the ⋯ menu, and as the last row it would hide every new
+    /// message from the check for one below.
+    private var shown: [FeedRow] {
+        rows.filter { if case .end = $0 { false } else { true } }
+    }
+
     var body: some View {
         let newest = FeedRows.newestKey(feed)
+        let shown = shown
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                if feed.content?.chat == nil && rows.allSatisfy({ if case .day = $0 { true } else { false } }) {
-                    EmptyChat(instance: feed.instance).padding(.horizontal, 16)
+            VStack(alignment: .leading, spacing: Design.Space.turn) {
+                if feed.content?.chat == nil && shown.allSatisfy({ if case .day = $0 { true } else { false } }) {
+                    EmptyChat(instance: feed.instance).padding(.horizontal, Design.Space.gutter)
                 }
-                ForEach(rows) { row in
-                    // Each row keeps its own margins: the rows the lazy stack lays out first, landing at the bottom,
-                    // were placed without the stack's own padding (shifted 16 pt left) until scrolled away.
+                ForEach(shown) { row in
+                    // Each row keeps its own margins, capped and centred on the column (spec §5).
                     FeedRowView(row: row, archived: screen.archived)
-                        .padding(.horizontal, 16)
+                        .frame(maxWidth: Design.measure, alignment: .leading)
+                        .frame(maxWidth: .infinity)
+                        .padding(.horizontal, Design.Space.gutter)
                         .id(row.id)
                         .onScrollVisibilityChange(threshold: 0.25) { visible in
                             if row.id == newest { newestVisible(visible) }
@@ -40,9 +48,11 @@ struct FeedView: View {
                 }
                 Color.clear.frame(height: 1).id(bottomID)
             }
-            .padding(.vertical, 12)
+            .padding(.vertical, Design.Space.s12)
             .scrollTargetLayout()
         }
+        .foregroundStyle(Color.textPrimary)
+        .background(Color.canvas)
         .scrollPosition($position)
         .defaultScrollAnchor(.bottom, for: .initialOffset)
         .scrollDismissesKeyboard(.interactively)
@@ -78,7 +88,7 @@ struct FeedView: View {
             toTop = false
             position.scrollTo(edge: .top)
         }
-        .onChange(of: rows.last?.id) { _, _ in
+        .onChange(of: shown.last?.id) { _, _ in
             if pinned {
                 stickToBottom()
             } else {
@@ -93,13 +103,15 @@ struct FeedView: View {
                     withAnimation(reduceMotion ? nil : .default) { position.scrollTo(edge: .bottom) }
                 } label: {
                     Label(newBelow ? "New below" : "Latest", systemImage: "arrow.down")
-                        .font(.footnote.weight(.semibold))
-                        .padding(.horizontal, 14)
-                        .frame(minHeight: 44)
-                        .background(.regularMaterial, in: Capsule())
+                        .font(Design.Text.pill)
+                        .foregroundStyle(newBelow ? Color.brand : Color.textPrimary)
+                        .padding(.horizontal, Design.Space.s12)
+                        .frame(minHeight: Design.Space.s24 + Design.Space.s12)
+                        .quietHitArea()
                 }
                 .buttonStyle(.plain)
-                .padding(.bottom, 8)
+                .floatingPill()
+                .padding(.bottom, Design.Space.s8)
                 .accessibilityLabel(newBelow ? "New messages below" : "Scroll to the latest message")
             }
         }
@@ -112,16 +124,35 @@ struct FeedView: View {
     }
 }
 
+private extension View {
+    /// The system's glass on a floating control; solid `elevated` under Reduce Transparency.
+    func floatingPill() -> some View { modifier(FloatingPill()) }
+}
+
+private struct FloatingPill: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    func body(content: Content) -> some View {
+        if reduceTransparency {
+            content
+                .background(Color.elevated, in: .capsule)
+                .overlay { Capsule().strokeBorder(Color.hairline) }     // it may float over an `elevated` block
+        } else {
+            content.glassEffect(.regular.interactive(), in: .capsule)
+        }
+    }
+}
+
 /// "Chat with <n>": no chat shown (§4.2 `chat` null).
 struct EmptyChat: View {
     let instance: String
 
     var body: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "bubble.left.and.bubble.right").font(.largeTitle).foregroundStyle(.tertiary)
+        VStack(spacing: Design.Space.inTurn) {
+            Image(systemName: "bubble.left.and.bubble.right").font(.largeTitle).foregroundStyle(Color.textTertiary)
                 .accessibilityHidden(true)
             Text("Chat with \(instance)").font(.title3.weight(.semibold))
-            Text("Your message starts a new conversation.").font(.callout).foregroundStyle(.secondary)
+            Text("Your message starts a new conversation.").font(.callout).foregroundStyle(Color.textSecondary)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 40)

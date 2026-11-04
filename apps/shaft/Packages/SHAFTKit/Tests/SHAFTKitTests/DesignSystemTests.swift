@@ -11,7 +11,8 @@ struct DesignSystemTests {
         for dark in [false, true] {
             for background in ["canvas", "elevated"] {
                 let base = try luminance(background, dark: dark)
-                for token in ["textPrimary", "textSecondary", "textTertiary"] {
+                for token in ["textPrimary", "textSecondary", "textTertiary",
+                              "codeKeyword", "codeString", "codeComment", "codeNumber"] {
                     let ink = try luminance(token, dark: dark)
                     let ratio = (max(ink, base) + 0.05) / (min(ink, base) + 0.05)
                     #expect(ratio >= 4.5, "\(token) on \(background), dark=\(dark): \(ratio)")
