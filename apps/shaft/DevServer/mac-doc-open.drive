@@ -1,0 +1,23 @@
+wait 3
+activate
+float
+wait 1
+open thelos
+wait 3
+state
+doc ledger.md
+wait 2
+menu Documents
+wait 2
+doc ledger.md
+wait 2
+menu Documents
+wait 2
+resize 900 650
+wait 1
+doc ledger.md
+wait 2
+menu Documents
+wait 2
+doc ledger.md
+wait 3

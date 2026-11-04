@@ -108,6 +108,10 @@ the window takes no mouse moves (hover) and runs no animations (an inspector ope
 polls nor is marked seen there: `SHAFT_DEV_PRESENCE=front` (or `shown`) says the window is in front (or shown behind
 another app's) instead.
 
+To check the document-opening crash, seed a long chat with `fixture_server.py act ... long thelos 120`.
+Run the Release build with Debug conditions and `SHAFT_DEV_DRIVE=DevServer/mac-doc-open.drive` several times.
+The crash is intermittent (unfixed: 2 of 3 runs).
+
 ## Tests
 
 ```bash
