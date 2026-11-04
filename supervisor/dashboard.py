@@ -147,6 +147,11 @@ def instance_state(name: str, now: float | None = None) -> dict:
             doing = "paused"
         doing = f"{doing} · {since:.0f}s" if doing else ""
     cfg = instance_config(name)
+    model = cfg.get("LLM_MODEL", "?")
+    channel = ""
+    if cfg.get("LLM_BASE_URL") == "broker":
+        from . import codexcli, selfhosted
+        channel = "Codex " if codexcli.serves(model) else "self-hosted " if selfhosted.serves(model) else "cloud "
     interval = autonomy.wake_interval(name)
     next_wake = autonomy.next_wake(name, datetime.fromtimestamp(now), interval)
     calls, tokens = _today_usage(root)
@@ -154,7 +159,7 @@ def instance_state(name: str, now: float | None = None) -> dict:
     n_judged, rate, achieved = _judged(js)
     return {"name": name, "state": state, "since": busy.partition(" since ")[2], "doing": doing,
             "goal": act.get("goal", "") if act else "",
-            "model": ("cloud " if cfg.get("LLM_BASE_URL") == "broker" else "") + cfg.get("LLM_MODEL", "?").split("/")[-1],
+            "model": channel + model.split("/")[-1],
             "every": f"{int(interval.total_seconds() // 60)} min" if interval else "no wakes",
             "next_wake": next_wake, "wake_skipped": autonomy.last_skip(name), "conversations": len(convs), "calls_today": calls, "tokens_today": tokens,
             "usd_today": _usd_today(name), "judged": n_judged, "success": rate, "achieved": achieved,

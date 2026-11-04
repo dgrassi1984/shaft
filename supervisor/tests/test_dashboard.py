@@ -43,6 +43,18 @@ class InstanceStateTest(unittest.TestCase):
         self.assertEqual(s["goal"], "Run the rogue-AI watch")
         self.assertEqual((s["model"], s["every"]), ("cloud mimo-v2.6-pro", "30 min"))
 
+    def test_codex_and_self_hosted_instances_are_not_labeled_cloud(self):
+        cases = [("broker", "codex/gpt-6.1-sol", "Codex gpt-6.1-sol"),
+                 ("broker", "racer/bonsai2", "self-hosted bonsai2"),
+                 ("broker", "openrouter/xiaomi/mimo-v2.6-pro", "cloud mimo-v2.6-pro"),
+                 ("http://127.0.0.1:8780/v1", "racer/bonsai2", "bonsai2")]
+        with mock.patch("supervisor.selfhosted.SERVERS", {"racer": {"url": "http://racer:8080/v1"}}):
+            for base_url, model, expected in cases:
+                with self.subTest(base_url=base_url, model=model):
+                    cfg = {"LLM_BASE_URL": base_url, "LLM_MODEL": model}
+                    with mock.patch.object(dashboard, "instance_config", return_value=cfg):
+                        self.assertEqual(dashboard.instance_state("wren")["model"], expected)
+
     def test_its_judgments_are_read_once_for_both_scores(self):
         """Regression (2026-10-26): _judged and _value each parsed the judgment ledgers — twice per instance on every
         overview the web service builds. One read feeds both, with the same scores."""
