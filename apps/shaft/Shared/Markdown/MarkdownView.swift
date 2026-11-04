@@ -23,6 +23,17 @@ extension EnvironmentValues {
     @Entry var markdownStreaming = false
 }
 
+/// The space a block keeps around it, as `markdownMargin` takes it: the two blocks beside a gap share it, the larger
+/// of the two sizes winning. In ems of the block's own type where it says so.
+enum BlockGap {
+    static let paragraph = (top: CGFloat(0), bottom: Design.Text.paragraphSpacing)
+    /// Code and tables.
+    static let panel = (top: Design.Space.s4, bottom: Design.Space.s12)
+    static let rule = (top: Design.Space.s12, bottom: Design.Space.s12)
+    static let listItemTop = 0.2
+    static let headingScale: [CGFloat] = [1.25, 1.12, 1.02, 1.02, 1.02, 1.02]
+}
+
 extension Theme {
     /// The feed's reading type: body text with its leading and paragraph gaps, headings that step down by level and
     /// stay at least as large as a paragraph, quotes on a hairline bar, tables and code in `elevated` blocks.
@@ -35,41 +46,41 @@ extension Theme {
             BackgroundColor(.elevated)
         }
         .heading1 { configuration in
-            ShaftHeading(configuration: configuration, size: 1.25, weight: .bold)
+            ShaftHeading(configuration: configuration, size: BlockGap.headingScale[0], weight: .bold)
         }
         .heading2 { configuration in
-            ShaftHeading(configuration: configuration, size: 1.12, weight: .semibold)
+            ShaftHeading(configuration: configuration, size: BlockGap.headingScale[1], weight: .semibold)
         }
         .heading3 { configuration in
-            ShaftHeading(configuration: configuration, size: 1.02, weight: .semibold)
+            ShaftHeading(configuration: configuration, size: BlockGap.headingScale[2], weight: .semibold)
         }
         .heading4 { configuration in
-            ShaftHeading(configuration: configuration, size: 1.02, weight: .semibold)
+            ShaftHeading(configuration: configuration, size: BlockGap.headingScale[3], weight: .semibold)
         }
         .heading5 { configuration in
-            ShaftHeading(configuration: configuration, size: 1.02, weight: .semibold)
+            ShaftHeading(configuration: configuration, size: BlockGap.headingScale[4], weight: .semibold)
         }
         .heading6 { configuration in
-            ShaftHeading(configuration: configuration, size: 1.02, weight: .semibold, colour: .textSecondary)
+            ShaftHeading(configuration: configuration, size: BlockGap.headingScale[5], weight: .semibold, colour: .textSecondary)
         }
         .paragraph { configuration in
             ShaftParagraph(configuration: configuration)
-                .markdownMargin(top: 0, bottom: Design.Text.paragraphSpacing)
+                .markdownMargin(top: BlockGap.paragraph.top, bottom: BlockGap.paragraph.bottom)
         }
         .blockquote { configuration in
             configuration.label
                 .markdownTextStyle { ForegroundColor(.textSecondary) }
                 .padding(.leading, Design.Space.s12)
                 .overlay(alignment: .leading) { AccentBar(color: .hairline) }
-                .markdownMargin(top: 0, bottom: Design.Text.paragraphSpacing)
+                .markdownMargin(top: BlockGap.paragraph.top, bottom: BlockGap.paragraph.bottom)
         }
         .codeBlock { configuration in
             CodeBlock(configuration: configuration)
-                .markdownMargin(top: Design.Space.s4, bottom: Design.Space.s12)
+                .markdownMargin(top: BlockGap.panel.top, bottom: BlockGap.panel.bottom)
         }
         .table { configuration in
             MarkdownTable(label: configuration.label)
-                .markdownMargin(top: Design.Space.s4, bottom: Design.Space.s12)
+                .markdownMargin(top: BlockGap.panel.top, bottom: BlockGap.panel.bottom)
         }
         .tableCell { configuration in
             configuration.label
@@ -87,11 +98,11 @@ extension Theme {
                 .padding(.vertical, Design.Space.s8)
         }
         .listItem { configuration in
-            configuration.label.markdownMargin(top: .em(0.2))
+            configuration.label.markdownMargin(top: .em(BlockGap.listItemTop))
         }
         .thematicBreak {
             Rectangle().fill(Color.hairline).frame(height: 1)
-                .markdownMargin(top: Design.Space.s12, bottom: Design.Space.s12)
+                .markdownMargin(top: BlockGap.rule.top, bottom: BlockGap.rule.bottom)
         }
 }
 

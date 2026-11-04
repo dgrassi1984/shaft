@@ -20,20 +20,23 @@ struct DocumentDetailView: View {
     @State private var tapped: TappedThreads?
     /// The answer of a write made on this page, while it shows.
     @State private var said: String?
+    @State private var rendered = RenderedDocument()
 
     private var doc: DocumentDetail? { docs.open?.path == path ? docs.open : nil }
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: Design.Space.turn) {
+                Group {
                     if let doc {
-                        if let overwritten = doc.overwritten, !screen.archived {
-                            OverwrittenNotice(path: path, overwritten: overwritten, sha: doc.sha)
+                        DocumentMarkdown(doc: doc, opens: { tapped = TappedThreads(ids: $0) }) {
+                            if let overwritten = doc.overwritten, !screen.archived {
+                                OverwrittenNotice(path: path, overwritten: overwritten, sha: doc.sha)
+                                    .padding(.bottom, Design.Space.turn)
+                            }
+                        } footer: {
+                            threads(doc)
                         }
-                        DocumentMarkdown(doc: doc) { tapped = TappedThreads(ids: $0) }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        threads(doc)
                     } else if let error = docs.error {
                         ContentUnavailableView {
                             Label(error.code == "too_big" ? "Too big to show" : "Could not open it",
@@ -78,7 +81,7 @@ struct DocumentDetailView: View {
         }
         .sheet(isPresented: $selecting) {
             if let doc {
-                DocumentSelectSheet(path: path, text: RenderedText.plain(doc.text)) { anchor in
+                DocumentSelectSheet(path: path, text: rendered.text(of: doc)) { anchor in
                     composing = CommentDraft(anchor: anchor)
                 }
             }
@@ -87,7 +90,7 @@ struct DocumentDetailView: View {
             CommentComposer(draft: draft).environment(docs)
         }
         .sheet(item: $tapped) { tapped in
-            CommentThreadsSheet(ids: tapped.ids, rendered: RenderedText.plain(doc?.text ?? ""))
+            CommentThreadsSheet(ids: tapped.ids, rendered: doc.map(rendered.text(of:)) ?? "")
                 .environment(docs)
                 .environment(screen)
         }
@@ -148,43 +151,49 @@ struct DocumentDetailView: View {
         }
     }
 
+    /// The threads under the document, each a row of its lazy stack, where `scrollTo` can reach it from anywhere.
     @ViewBuilder
     private func threads(_ doc: DocumentDetail) -> some View {
         let open = doc.threads.filter { $0.state == "open" }
         let resolved = doc.threads.filter { $0.state != "open" }
-        let rendered = RenderedText.plain(doc.text)
         if !open.isEmpty || !resolved.isEmpty {
-            VStack(alignment: .leading, spacing: Design.Space.s12) {
-                Rectangle().fill(Color.hairline).frame(height: 1)
-                Text("Comments")
-                    .font(Design.Text.heading(2))
-                    .foregroundStyle(Color.textPrimary)
-                    .accessibilityAddTraits(.isHeader)
-                ForEach(open) { thread in
-                    CommentThreadView(thread: thread, rendered: rendered,
-                                      reply: { composing = CommentDraft(thread: thread.id) },
-                                      edit: { post in composing = CommentDraft(editing: post) })
-                        .id(thread.id)
+            let rendered = rendered.text(of: doc)
+            Rectangle().fill(Color.hairline).frame(height: 1)
+                .padding(.top, Design.Space.turn)
+            Text("Comments")
+                .font(Design.Text.heading(2))
+                .foregroundStyle(Color.textPrimary)
+                .accessibilityAddTraits(.isHeader)
+                .padding(.top, Design.Space.s12)
+            ForEach(open) { thread in
+                threadRow(thread, rendered: rendered)
+                    .padding(.top, Design.Space.s12)
+                    .id(thread.id)
+            }
+            if !resolved.isEmpty {
+                DisclosureGroup(isExpanded: $showResolved) {
+                    EmptyView()
+                } label: {
+                    Text("Resolved (\(resolved.count))").font(.subheadline).foregroundStyle(Color.textSecondary)
                 }
-                if !resolved.isEmpty {
-                    DisclosureGroup(isExpanded: $showResolved) {
-                        VStack(spacing: Design.Space.s12) {
-                            ForEach(resolved) { thread in
-                                CommentThreadView(thread: thread, rendered: rendered,
-                                                  reply: { composing = CommentDraft(thread: thread.id) },
-                                                  edit: { post in composing = CommentDraft(editing: post) })
-                                    .id(thread.id)
-                            }
-                        }
-                        .padding(.top, Design.Space.s8)
-                    } label: {
-                        Text("Resolved (\(resolved.count))").font(.subheadline).foregroundStyle(Color.textSecondary)
+                .tint(Color.textSecondary)
+                .frame(minHeight: 44)
+                .padding(.top, Design.Space.s12)
+                if showResolved {
+                    ForEach(resolved) { thread in
+                        threadRow(thread, rendered: rendered)
+                            .padding(.top, thread.id == resolved.first?.id ? Design.Space.s8 : Design.Space.s12)
+                            .id(thread.id)
                     }
-                    .tint(Color.textSecondary)
-                    .frame(minHeight: 44)
                 }
             }
         }
+    }
+
+    private func threadRow(_ thread: CommentThread, rendered: String) -> some View {
+        CommentThreadView(thread: thread, rendered: rendered,
+                          reply: { composing = CommentDraft(thread: thread.id) },
+                          edit: { post in composing = CommentDraft(editing: post) })
     }
 
     private func download() {
@@ -195,6 +204,19 @@ struct DocumentDetailView: View {
                 preview.open(local: url)
             }
         }
+    }
+}
+
+/// A document's rendered text, parsed once per version: every use of it sits in a view's body, on the main thread.
+@MainActor
+private final class RenderedDocument {
+    private var cached: (sha: String, text: String)?
+
+    func text(of doc: DocumentDetail) -> String {
+        if let cached, cached.sha == doc.sha { return cached.text }
+        let text = RenderedText.plain(doc.text)
+        cached = (doc.sha, text)
+        return text
     }
 }
 
