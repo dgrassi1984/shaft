@@ -4,7 +4,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// One chat on screen: the header (name, state, Documents, New chat, ⋯), the feed and the composer, with the
-/// documents beside it or over it. It long-polls only while it is visible and the app is in front, says `away` when it
+/// documents beside it or over it. It long-polls while it is visible, says `away` when it
 /// leaves, marks the chat seen when the newest item is on screen, announces a new reply, and takes files dropped on it.
 struct ChatScreen: View {
     let chat: ChatStore
@@ -37,8 +37,8 @@ struct ChatScreen: View {
         _screen = State(initialValue: ChatScreenModel(chat: chat))
     }
 
-    private var active: Bool {
-        visible && scenePhase == .active && inFront && !externallyCovered && !covered
+    private var watched: Bool {
+        visible && scenePhase == .active && !externallyCovered && !covered
     }
     private var covered: Bool {
         (screen.showDocuments && covers) || screen.selecting != nil || screen.rating != nil
@@ -143,7 +143,8 @@ struct ChatScreen: View {
             follow()
         }
         .onChange(of: scenePhase) { follow() }
-        .onChange(of: active) { follow() }
+        .onChange(of: watched) { follow() }
+        .onChange(of: inFront) { follow() }
         .onChange(of: covers) { _, covers in
             screen.documentsCover = covers
             follow()
@@ -266,11 +267,11 @@ struct ChatScreen: View {
 
     // MARK: Lifecycle
 
-    /// The long-poll runs only while the chat is visible and the app in front (§4); leaving says `away` (§7.6).
+    /// The long-poll runs while the chat is visible (§4); leaving says `away` (§7.6).
     private func follow() {
-        chat.setWatching(active)
+        chat.setWatching(watched)
         if chat.cid == nil {
-            if active { model.visibleChat = chat.instance }
+            if watched { model.visibleChat = chat.instance }
             else if model.visibleChat == chat.instance { model.visibleChat = nil }
         }
         if visible && scenePhase == .active {
@@ -289,11 +290,11 @@ struct ChatScreen: View {
     /// The newest item is on screen and the app (on the Mac: its window) in front: mark the version shown seen (§7.5).
     /// A version the server no longer has (409) is tried again when the new one is drawn.
     private func markSeen() {
-        guard chat.cid == nil, active, inFront, newestOnScreen, let version = chat.feed?.version,
+        guard chat.cid == nil, watched, inFront, newestOnScreen, let version = chat.feed?.version,
               version != seenVersion else { return }
         seenVersion = version
         Task {
-            guard active, newestOnScreen else {
+            guard watched, inFront, newestOnScreen else {
                 if seenVersion == version { seenVersion = nil }
                 return
             }
