@@ -75,7 +75,8 @@ final class MacState {
 /// The Mac window: the instances in the sidebar, the chat, and the chat's documents as an inspector.
 struct MacRoot: View {
     static let windowID = "main"
-    /// The window's least: the documents at their widest there beside the chat at its least, the sidebar collapsed.
+    /// The window's least: with the sidebar collapsed it holds the chat beside the documents at up to 360 pt
+    /// (ChatShell.inspectorMaximum).
     static let minimumWidth: CGFloat = 400 + ChatShell.chatMinimum
     /// The chat column's minimum as the split views take it. They count an open inspector twice (the chat runs under it,
     /// and its width is added again on the way out): what the window must hold is sidebar's minimum + this + 2 ×
