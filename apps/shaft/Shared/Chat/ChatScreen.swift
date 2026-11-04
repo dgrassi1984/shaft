@@ -26,6 +26,9 @@ struct ChatScreen: View {
     @State private var newestOnScreen = false
     @State private var seenVersion: String?
     @State private var dropTargeted = false
+    #if os(macOS)
+    @State private var columnWidth: CGFloat = 700
+    #endif
 
     init(chat: ChatStore, openArchived: @escaping (ChatSummary) -> Void = { _ in }, backToCurrent: (() -> Void)? = nil) {
         self.chat = chat
@@ -50,9 +53,13 @@ struct ChatScreen: View {
         GeometryReader { geometry in
             VStack(spacing: 0) {
                 if chat.cid != nil { archivedBanner }
-                // The composer floats: the feed runs under it and fades there, as under the header.
+                // The feed fades out before the header and the composer: nothing is legible behind the glass.
                 content
                     .scrollEdgeEffectStyle(.soft, for: .all)
+                    #if os(macOS)
+                    .scrollEdgeEffectHidden(true, for: .all)    // it drew a hard line under a window not in front
+                    #endif
+                    .headerEdge()
                     .safeAreaBar(edge: .bottom, spacing: 0) {
                         VStack(spacing: 0) {
                             connectionNotice
@@ -69,6 +76,7 @@ struct ChatScreen: View {
                                 ComposerView(maxHeight: max(80, geometry.size.height / 3))
                             }
                         }
+                        .footerEdge()
                     }
             }
         }
@@ -76,6 +84,8 @@ struct ChatScreen: View {
         .toolbar { header }
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
+        #else
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { columnWidth = $0 }
         #endif
         .navigationTitle(chat.instance)
         // Over the chat on a phone (a sheet); beside it where there is room, drawn by the shell (ChatShell): an
@@ -235,7 +245,7 @@ struct ChatScreen: View {
         ToolbarItem(placement: .principal) {
             ChatTitle(instance: chat.instance, archived: chat.cid != nil)
                 #if os(macOS)
-                .fixedSize()                     // the Mac's toolbar squeezed a short name's state out of it
+                .titleCapsule(limit: columnWidth - 2 * MacChrome.trailingControls)
                 #endif
         }
         #if os(macOS)

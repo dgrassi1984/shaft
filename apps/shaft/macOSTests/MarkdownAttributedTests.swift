@@ -286,4 +286,17 @@ struct MarkdownAttributedTests {
         let quote = try #require(paragraphStyle(rendered.text, at: 0)?.textBlocks.first)
         #expect(quote.width(for: .border, edge: .minX) == 3)
     }
+
+    /// The bug: Foundation hands a rule over as "———", and the Mac drew those three dashes as text.
+    @Test @MainActor func aRuleIsALineNotThreeDashes() {
+        let rendered = MarkdownAttributed.render("Above\n\n---\n\nBelow")
+        #expect(!rendered.text.string.contains("\u{2014}"))
+        var rules = 0
+        rendered.text.enumerateAttribute(.thematicRule, in: NSRange(location: 0, length: rendered.text.length)) { value, _, _ in
+            if value != nil { rules += 1 }
+        }
+        #expect(rules == 1)
+        #expect(rendered.text.string.hasPrefix("Above"))
+        #expect(rendered.text.string.hasSuffix("Below"))
+    }
 }

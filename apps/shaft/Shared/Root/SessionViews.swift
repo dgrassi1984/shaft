@@ -169,7 +169,9 @@ struct SettingsView: View {
                 }
                 Section {
                     Button("Unpair this device", role: .destructive) { unpairing = true }
+                        .foregroundStyle(Color.danger)
                     Button("Forget the pairing here only") { forgetting = true }
+                        .foregroundStyle(Color.brand)
                 } footer: {
                     Text("Unpair tells the server; Forget is for when it cannot be reached (then run `shaft web unpair` on the Mac).")
                 }
@@ -274,7 +276,7 @@ struct InstanceRowView: View {
 
 /// The chats, in the rail's order, with the list's own failure. On an iPhone and iPad it sits on `elevated`.
 struct InstancesList: View {
-    /// The phone's sheet of chats, whose rows draw their own selection (a plain list's fills the whole width).
+    /// The phone's sheet of chats.
     var switcher = false
     @Binding var selection: String?
     var settings: () -> Void
@@ -290,9 +292,10 @@ struct InstancesList: View {
             ForEach(store.instances) { row in
                 InstanceRowView(row: row)
                     .tag(row.name)
-                    .listRowSeparatorTint(Color.hairline)
-                    #if os(iOS)
-                    .listRowBackground(switcher ? switcherRow(row) : nil)
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(rowFill(row))
+                    #if os(macOS)
+                    .background(QuietListSelection())
                     #endif
             }
             if store.loaded && store.instances.isEmpty {
@@ -314,9 +317,10 @@ struct InstancesList: View {
         }
     }
 
-    private func switcherRow(_ row: InstanceRow) -> some View {
+    /// The selected row's quiet fill, in place of the system's accent selection (2026-11-04).
+    private func rowFill(_ row: InstanceRow) -> some View {
         RoundedRectangle(cornerRadius: Design.Radius.card, style: .continuous)
-            .fill(row.name == selection ? Color.hairline : Color.clear)
+            .fill(row.name == selection ? Color.rowSelected : Color.clear)
             .padding(.horizontal, Design.Space.s8)
     }
 }

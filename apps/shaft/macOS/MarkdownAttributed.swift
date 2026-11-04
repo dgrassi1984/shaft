@@ -23,6 +23,8 @@ enum MacColor {
 extension NSAttributedString.Key {
     /// On inline code: the layout manager draws its background as a rounded pill.
     static let inlineCode = NSAttributedString.Key("io.github.dgrassi1984.shaft.inlineCode")
+    /// On a Markdown rule's paragraph: the layout manager draws it as a hairline across the column.
+    static let thematicRule = NSAttributedString.Key("io.github.dgrassi1984.shaft.thematicRule")
 }
 
 /// Markdown as AppKit text, for a message's text view on the Mac (MessageTextView): the same blocks as iOS
@@ -297,6 +299,11 @@ enum MarkdownAttributed {
                 attributes[.inlineCode] = true
             }
             if let link { attributes[.link] = link }
+            if style.rule {
+                // Foundation hands a rule over as three em-dashes: it is a line, not text.
+                text = " "
+                attributes[.thematicRule] = true
+            }
             if newBlock {
                 if let marker = style.marker {
                     // A task item's box is drawn before its text, as the web does.
@@ -466,6 +473,7 @@ enum MarkdownAttributed {
             var codeIdentity: Int?
             var language: String?
             var cell: (table: Int, row: Int, column: Int, block: NSTextTableBlock)?
+            var rule = false
         }
 
         static let cellPaddingX = Design.Space.s12
@@ -507,6 +515,11 @@ enum MarkdownAttributed {
                     style.language = language?.split(whereSeparator: \.isWhitespace).first.map(String.init)  // "python title=x"
                     paragraph.paragraphSpacing = 0
                     paragraph.lineSpacing = Design.Text.lineSpacing / 2
+                case .thematicBreak:
+                    style.rule = true
+                    paragraph.paragraphSpacingBefore = Design.Space.s4
+                    paragraph.paragraphSpacing = Design.Space.s8
+                    paragraph.lineSpacing = 0
                 case .blockQuote:
                     style.color = MacColor.textSecondary
                     let block = quoteBlocks[component.identity] ?? MarkdownAttributed.quoteBlock()

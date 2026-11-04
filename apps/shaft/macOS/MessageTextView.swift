@@ -212,6 +212,7 @@ final class MessageNSView: NSView {
         text.isEditable = false
         text.isSelectable = true
         text.isRichText = true
+        text.writingToolsBehavior = .none        // see MacChrome.writingToolsAffordance
         text.drawsBackground = false
         text.textContainerInset = .zero
         text.isVerticallyResizable = false
@@ -306,8 +307,22 @@ final class MessageNSView: NSView {
     }
 }
 
-/// The layout of a message: an inline code's background is a pill.
+/// The layout of a message: an inline code's background is a pill, a Markdown rule a hairline across the column.
 final class MessageLayoutManager: NSLayoutManager {
+    override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+        super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
+        guard let storage = textStorage else { return }
+        let characters = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+        storage.enumerateAttribute(.thematicRule, in: characters) { value, range, _ in
+            guard value != nil else { return }
+            let glyphs = glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+            enumerateLineFragments(forGlyphRange: glyphs) { rect, _, _, _, _ in
+                MacColor.hairline.setFill()
+                NSRect(x: origin.x + rect.minX, y: (origin.y + rect.midY).rounded(.down), width: rect.width, height: 1).fill()
+            }
+        }
+    }
+
     override func fillBackgroundRectArray(_ rectArray: UnsafePointer<NSRect>, count rectCount: Int,
                                           forCharacterRange charRange: NSRange, color: NSColor) {
         guard let storage = textStorage, charRange.location < storage.length,
@@ -345,6 +360,7 @@ final class MessageBlockView: NSView {
         layer?.cornerCurve = .continuous
         layer?.masksToBounds = true
         scroll.drawsBackground = false
+        scroll.automaticallyAdjustsContentInsets = false     // the window's insets are the feed's, not a block's
         scroll.hasHorizontalScroller = true
         scroll.hasVerticalScroller = false
         scroll.autohidesScrollers = true
@@ -399,6 +415,7 @@ final class MessageBlockView: NSView {
             scroll.frame = bounds
             text.frame = NSRect(x: 0, y: 0, width: max(content.width, bounds.width), height: content.height)
             scroll.scrollsSideways = content.width > bounds.width
+            keepScrollInside(width: content.width)
             return
         }
         let header = MarkdownAttributed.codeHeader
@@ -408,6 +425,7 @@ final class MessageBlockView: NSView {
         let wide = content.width + side * 2
         text.frame = NSRect(x: 0, y: 0, width: max(wide, bounds.width), height: scroll.frame.height)
         scroll.scrollsSideways = wide > bounds.width
+        keepScrollInside(width: wide)
         let button = NSSize(width: Design.Space.s24 + Design.Space.s12, height: header)
         copyButton.frame = NSRect(x: bounds.width - Design.Space.s4 - button.width, y: 0, width: button.width,
                                   height: button.height)
@@ -415,6 +433,16 @@ final class MessageBlockView: NSView {
         let height = language.frame.height
         language.frame = NSRect(x: side, y: (header - height) / 2, width: max(0, copyButton.frame.minX - side * 2),
                                 height: height)
+    }
+
+    /// A block that got narrower or wider (the documents opened beside the chat) keeps its text in view: never a scroll
+    /// past either end of it.
+    private func keepScrollInside(width: CGFloat) {
+        let clip = scroll.contentView
+        let x = min(max(clip.bounds.minX, 0), max(0, width - bounds.width))
+        guard clip.bounds.minX != x else { return }
+        clip.scroll(to: NSPoint(x: x, y: clip.bounds.minY))
+        scroll.reflectScrolledClipView(clip)
     }
 
     @objc private func copyClicked(_ sender: Any?) {
@@ -519,6 +547,18 @@ final class MessageNSTextView: NSTextView {
         let resigned = super.resignFirstResponder()
         if resigned { message?.keyboardLeft() }
         return resigned
+    }
+
+    /// At the end of a live resize (the documents sliding open) AppKit brings the selection into view, which scrolled a
+    /// code block by itself, past its first letters. Only the operator scrolls.
+    override func viewDidEndLiveResize() {
+        let clip = enclosingScrollView?.contentView
+        let origin = clip?.bounds.origin
+        super.viewDidEndLiveResize()
+        if let clip, let origin, clip.bounds.origin != origin {
+            clip.scroll(to: origin)
+            enclosingScrollView?.reflectScrolledClipView(clip)
+        }
     }
 
     // The feed scrolls, not the message: a wheel over the text goes on to the feed (or the block's sideways scroll).

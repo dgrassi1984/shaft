@@ -164,35 +164,50 @@ struct DocsListView: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .toolbar {
+            #if os(macOS)
+            if folder.isEmpty {
+                InspectorHeader(title: String(localized: "Documents"), symbol: "xmark", label: "Close the documents",
+                                action: { screen.showDocuments = false }) { sortMenu(order) }
+            } else {
+                InspectorHeader(title: (folder as NSString).lastPathComponent, symbol: "chevron.left", label: "Back",
+                                action: { dismiss() }) { sortMenu(order) }
+            }
+            #else
             if folder.isEmpty {
                 ToolbarItem(placement: .cancellationAction) {
                     Button { screen.showDocuments = false } label: { Image(systemName: "xmark") }
                         .accessibilityLabel("Close the documents")
                 }
             }
-            ToolbarItem(placement: .primaryAction) {
-                Menu {
-                    Picker("Sort by", selection: Binding(get: { order }, set: { new in
-                        if new == order { ascending.toggle() } else {
-                            sort = new.rawValue
-                            ascending = new.firstAscending
-                        }
-                    })) {
-                        Text("Name").tag(DocsTree.Sort.name)
-                        Text("Size").tag(DocsTree.Sort.size)
-                        Text("Modified").tag(DocsTree.Sort.modified)
-                    }
-                    Button(ascending ? "Reverse (now ascending)" : "Reverse (now descending)") { ascending.toggle() }
-                    if !screen.archived {
-                        Divider()
-                        Button { newDocument() } label: { Label("New document", systemImage: "doc.badge.plus") }
-                    }
-                } label: {
-                    Image(systemName: "arrow.up.arrow.down")
-                }
-                .accessibilityLabel("Sort and new document")
-            }
+            ToolbarItem(placement: .primaryAction) { sortMenu(order) }
+            #endif
         }
+        #if os(macOS)
+        .navigationBarBackButtonHidden(true)
+        #endif
+    }
+
+    private func sortMenu(_ order: DocsTree.Sort) -> some View {
+        Menu {
+            Picker("Sort by", selection: Binding(get: { order }, set: { new in
+                if new == order { ascending.toggle() } else {
+                    sort = new.rawValue
+                    ascending = new.firstAscending
+                }
+            })) {
+                Text("Name").tag(DocsTree.Sort.name)
+                Text("Size").tag(DocsTree.Sort.size)
+                Text("Modified").tag(DocsTree.Sort.modified)
+            }
+            Button(ascending ? "Reverse (now ascending)" : "Reverse (now descending)") { ascending.toggle() }
+            if !screen.archived {
+                Divider()
+                Button { newDocument() } label: { Label("New document", systemImage: "doc.badge.plus") }
+            }
+        } label: {
+            Image(systemName: "arrow.up.arrow.down")
+        }
+        .accessibilityLabel("Sort and new document")
     }
 }
 
