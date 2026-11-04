@@ -217,7 +217,7 @@ struct DocRow: View {
                 .foregroundStyle(Color.brand)
                 .frame(width: iconWidth)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: Design.Space.s4) {
                 HStack(spacing: Design.Space.s4) {
                     Text(name)
                         .foregroundStyle(Color.textPrimary)

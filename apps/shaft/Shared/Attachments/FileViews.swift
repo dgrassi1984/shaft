@@ -86,7 +86,7 @@ struct FileChip: View {
             } else {
                 Image(systemName: FileChip.symbol(for: name)).foregroundStyle(Color.brand).accessibilityHidden(true)
             }
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: Design.Space.s4) {
                 Text(name)
                     .font(.subheadline)
                     .foregroundStyle(Color.textPrimary)
