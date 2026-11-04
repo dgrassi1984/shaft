@@ -133,7 +133,8 @@ struct LatestPillButton: View {
 }
 
 private extension View {
-    /// The system's glass on a floating control; solid `elevated` under Reduce Transparency.
+    /// The system's glass on a floating control, on solid `canvas`: it stands on the feed's text, which would show through
+    /// as a ghost. Solid `elevated` under Reduce Transparency.
     func floatingPill() -> some View { modifier(FloatingPill()) }
 }
 
@@ -146,7 +147,9 @@ private struct FloatingPill: ViewModifier {
                 .background(Color.elevated, in: .capsule)
                 .overlay { Capsule().strokeBorder(Color.hairline) }     // it may float over an `elevated` block
         } else {
-            content.glassEffect(.regular.interactive(), in: .capsule)
+            content
+                .glassEffect(.regular.interactive(), in: .capsule)
+                .background(Color.canvas, in: .capsule)
         }
     }
 }
