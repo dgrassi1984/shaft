@@ -48,7 +48,11 @@ public enum APIError: Error, Sendable, Equatable, LocalizedError {
         switch self {
         case .server(_, let error): error.message
         case .http(let status, let body):
-            body.isEmpty ? "The server answered HTTP \(status)." : "The server answered HTTP \(status): \(body)"
+            if body.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("<") {
+                "The server answered HTTP \(status) with a web page, not the app API. It may not have /app/v1 yet: update its SHAFT web service."
+            } else {
+                body.isEmpty ? "The server answered HTTP \(status)." : "The server answered HTTP \(status): \(body)"
+            }
         case .transport(_, let message): message
         case .decoding(let path, let message): "Could not read the answer to \(path): \(message)"
         case .notPaired: "This device is not paired. Paste a pairing link from `shaft web pair`."
