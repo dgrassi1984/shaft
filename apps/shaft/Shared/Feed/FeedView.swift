@@ -3,7 +3,8 @@ import SwiftUI
 
 /// The conversation, scrolled: it lands on the last message and stays there while what loads after grows the feed or
 /// moves it (pictures, the reply streaming, the keyboard), until the operator scrolls up. Scrolled up, a new message
-/// below shows "↓ New below" (drawn by the chat screen, in the bar above the composer). It reports when the newest item is on screen, which is when the chat may be marked seen.
+/// below shows "↓ New below" (drawn by the chat screen, in the fade above the composer). It reports when the newest item
+/// is on screen, which is when the chat may be marked seen.
 struct FeedView: View {
     let feed: Feed
     let rows: [FeedRow]
@@ -41,7 +42,10 @@ struct FeedView: View {
                 }
                 Color.clear.frame(height: 1).id(bottomID)
             }
-            .padding(.vertical, Design.Space.s12)
+            // At rest at either end nothing lies in the fades (`feedEdges`): the turn's spacing and the 1 pt of
+            // `bottomID` count towards the foot.
+            .padding(.top, Design.Header.fade)
+            .padding(.bottom, Design.Header.fade - Design.Space.turn)
             .scrollTargetLayout()
         }
         .foregroundStyle(Color.textPrimary)
@@ -108,7 +112,7 @@ struct FeedView: View {
     }
 }
 
-/// "↓ Latest", or "↓ New below" with a message waiting: in the bar above the composer, so it covers nothing.
+/// "↓ Latest", or "↓ New below" with a message waiting: in the fade above the composer, with no band of its own.
 struct LatestPillButton: View {
     let pill: ChatScreenModel.LatestPill
     var action: () -> Void
@@ -124,8 +128,6 @@ struct LatestPillButton: View {
         }
         .buttonStyle(.plain)
         .floatingPill()
-        .frame(maxWidth: .infinity)
-        .padding(.top, Design.Space.s4)
         .accessibilityLabel(pill == .newBelow ? "New messages below" : "Scroll to the latest message")
     }
 }

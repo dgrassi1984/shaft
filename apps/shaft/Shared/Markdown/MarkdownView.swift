@@ -175,7 +175,7 @@ private struct MarkdownTable: View {
     var body: some View {
         ViewThatFits(in: .horizontal) {
             table
-            ScrollView(.horizontal) { table }
+            ScrollView(.horizontal) { table }.sidewaysFade()
         }
         .elevatedBlock()
         .clipShape(.rect(cornerRadius: Design.Radius.card, style: .continuous))
@@ -238,6 +238,7 @@ struct CodeBlock: View {
                     }
                     .padding(Design.Space.s12)
             }
+            .sidewaysFade()
         }
         .elevatedBlock()
         .clipShape(.rect(cornerRadius: Design.Radius.card, style: .continuous))
@@ -331,6 +332,7 @@ struct OperatorTextView: View {
                             .font(Design.Text.code)
                             .padding(Design.Space.s8)
                     }
+                    .sidewaysFade()
                     .elevatedBlock()
                     .clipShape(.rect(cornerRadius: Design.Radius.card, style: .continuous))
                 case .text(let body):

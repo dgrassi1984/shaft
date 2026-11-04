@@ -406,7 +406,8 @@ final class MessageBlockView: NSView {
 
     func show(code block: MarkdownAttributed.CodeBlock?) {
         code = block?.code ?? ""
-        language.stringValue = block?.language ?? ""
+        // The same header as iOS's `CodeBlock`: the fence's language, "text" when it names none.
+        language.stringValue = CodeColours.language(block?.language) ?? String(localized: "text")
     }
 
     /// Lays the block out inside its frame, for text of this size.

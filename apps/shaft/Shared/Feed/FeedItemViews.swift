@@ -257,7 +257,8 @@ struct AssistantItemView: View {
                 }
             }
             AnswerFooter(ts: answer.ts, source: answer.content, rating: answer.rating, k: answer.k, file: nil,
-                         keepActions: answer.last, hovering: hovering, steps: answer.activity.count, stepsOpen: $steps)
+                         keepActions: answer.last, hovering: hovering, steps: answer.activity.count, stepsOpen: $steps,
+                         rateable: !answer.content.isEmpty)
             if steps && !answer.activity.isEmpty {
                 ActivityList(activity: answer.activity).transition(.opacity)
             }
@@ -272,9 +273,10 @@ struct AssistantItemView: View {
     }
 }
 
-/// A message's footer, one 28 pt row: its time, "⚙ 4 steps", Copy and Reply (on the last answer, kept in view) and the
-/// thumbs, on every message. On the Mac the other answers show Copy and Reply while the pointer is over them, as the
-/// web does on a computer. It wraps rather than overlap at the largest text sizes.
+/// A message's footer, one 28 pt row: its time, "⚙ 4 steps", then the thumbs on every message with something to rate.
+/// On iOS Copy and Reply stand before the thumbs on the last answer, kept in view. On the Mac they follow the thumbs on
+/// every message, the last one too, while the pointer is over it, as the web does on a computer. It wraps rather than
+/// overlap at the largest text sizes.
 struct AnswerFooter: View {
     let ts: Date
     let source: String
@@ -288,6 +290,8 @@ struct AnswerFooter: View {
     var stepsOpen: Binding<Bool> = .constant(false)
     /// A question not answered yet: Reply stands out in `accent`, at the end of the row.
     var asksReply = false
+    /// A turn with no answer text, a failure and nothing else, has nothing to rate.
+    var rateable = true
     @Environment(ChatScreenModel.self) private var screen
 
     var body: some View {
@@ -301,21 +305,21 @@ struct AnswerFooter: View {
                 if steps > 0 {
                     StepsPill(count: steps, open: stepsOpen).padding(.trailing, Design.Space.s4)
                 }
+                #if os(iOS)
                 if keepActions && !source.isEmpty {
                     CopyButton(text: source)
-                    if !screen.archived && !asksReply {
-                        Button { screen.reply(with: source) } label: { QuietIcon(symbol: "arrowshape.turn.up.left") }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Reply")
-                    }
+                    if !screen.archived && !asksReply { ReplyIcon(source: source) }
                 }
-                // Always here, on every message and answer: never only on hover or in a menu (2026-11-04).
-                ThumbButton(thumb: "up", rating: rating, k: k, file: file)
-                ThumbButton(thumb: "down", rating: rating, k: k, file: file)
-                if let rating { RatingState(rating: rating, k: k, file: file).padding(.leading, Design.Space.s4) }
+                #endif
+                if rateable {
+                    // Always here, on every message and answer: never only on hover or in a menu (2026-11-04).
+                    ThumbButton(thumb: "up", rating: rating, k: k, file: file)
+                    ThumbButton(thumb: "down", rating: rating, k: k, file: file)
+                    if let rating { RatingState(rating: rating, k: k, file: file).padding(.leading, Design.Space.s4) }
+                }
                 #if os(macOS)
                 // After the thumbs: hidden, they keep their room, which must not open a gap before the thumbs.
-                if !keepActions && !source.isEmpty { HoverActions(source: source, shown: hovering).padding(.leading, 8) }
+                if !source.isEmpty { HoverActions(source: source, shown: hovering, reply: !asksReply) }
                 #endif
             }
             Spacer(minLength: 0)
@@ -335,28 +339,34 @@ struct AnswerFooter: View {
     }
 }
 
-#if os(macOS)
-/// Copy and Reply for a whole message, under it while the pointer is over it (the web on a computer). Always laid out,
-/// so the feed does not move as the pointer passes.
-struct HoverActions: View {
+/// Reply for a whole message.
+private struct ReplyIcon: View {
     let source: String
-    let shown: Bool
     @Environment(ChatScreenModel.self) private var screen
 
     var body: some View {
-        HStack(spacing: 10) {
-            Button { Clipboard.copy(source) } label: { Image(systemName: "doc.on.doc") }
-                .help("Copy")
-                .accessibilityLabel("Copy")
-            if !screen.archived {
-                Button { screen.reply(with: source) } label: { Image(systemName: "arrowshape.turn.up.left") }
-                    .help("Reply")
-                    .accessibilityLabel("Reply")
-            }
+        Button { screen.reply(with: source) } label: { QuietIcon(symbol: "arrowshape.turn.up.left") }
+            .buttonStyle(.plain)
+            .help("Reply")
+            .accessibilityLabel("Reply")
+    }
+}
+
+#if os(macOS)
+/// Copy and Reply for a whole message, after the thumbs while the pointer is over it (the web on a computer). Always laid
+/// out, so the feed does not move as the pointer passes.
+struct HoverActions: View {
+    let source: String
+    let shown: Bool
+    /// False where the footer's own Reply stands at the row's end (a question).
+    var reply = true
+    @Environment(ChatScreenModel.self) private var screen
+
+    var body: some View {
+        HStack(spacing: 0) {
+            CopyButton(text: source).help("Copy")
+            if reply && !screen.archived { ReplyIcon(source: source) }
         }
-        .buttonStyle(.plain)
-        .font(.caption)
-        .foregroundStyle(Color.textTertiary)
         .opacity(shown ? 1 : 0)
         .allowsHitTesting(shown)
     }
@@ -465,6 +475,9 @@ struct QuietDisclosure<Content: View>: View {
                 .quietHitArea()
             }
             .buttonStyle(.plain)
+            #if os(macOS)
+            .padding(.vertical, -Design.Footer.slack)      // the Mac's 28 pt target takes no layout: a bar stops at the text
+            #endif
             .accessibilityValue(open ? "Shown" : "Hidden")
             if open { content().transition(.opacity) }
         }
@@ -576,13 +589,15 @@ struct BarBlock<Content: View>: View {
 
 /// A small filled button in `accent`, for the one action a block offers.
 struct CompactAccentButton: ButtonStyle {
+    @Environment(\.isEnabled) private var enabled
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(Design.Text.pill)
-            .foregroundStyle(Color.onAccent)
+            .foregroundStyle(enabled ? Color.onAccent : Color.textTertiary)
             .padding(.horizontal, Design.Space.s12)
             .padding(.vertical, 5)
-            .background(Color.brand.opacity(configuration.isPressed ? 0.75 : 1),
+            .background(enabled ? Color.brand.opacity(configuration.isPressed ? 0.75 : 1) : Color.hairline,
                         in: RoundedRectangle(cornerRadius: Design.Radius.pill, style: .continuous))
             .quietHitArea()
     }
@@ -631,6 +646,7 @@ struct SentItemView: View {
                 AttachmentsView(attachments: message.attachments)
                 AnswerFooter(ts: message.ts, source: message.text, rating: message.rating, k: nil, file: message.file,
                              keepActions: asking, hovering: hovering, asksReply: asking)
+                    .padding(.bottom, -Design.Footer.slack)     // the bar stops at the time and icons, not their target
             }
         }
         .accessibilityElement(children: .contain)
