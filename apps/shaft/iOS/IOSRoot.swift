@@ -1,9 +1,10 @@
 import SHAFTKit
 import SwiftUI
 
-/// The iPhone and iPad layouts over the shared views. A phone (compact width) shows the chat full screen with a chat
-/// switcher; an iPad shows the instances in a sidebar beside the chat. The chat last open comes back at launch, and a
-/// notification tap opens its chat.
+/// The iPhone and iPad layouts over the shared views. A phone shows the chat full screen with a chat switcher. An iPad
+/// shows the instances in a sidebar beside the chat, at every window size: one layout, so a resize or a turn keeps the
+/// chat and the open document where they are (spec §5). The chat last open comes back at launch, and a notification tap
+/// opens its chat.
 struct IOSRoot: View {
     let model: AppModel
 
@@ -18,69 +19,27 @@ struct ChatsLayout: View {
     let session: SHAFTSession
     let store: InstancesStore
     @Environment(AppModel.self) private var model
-    @Environment(\.horizontalSizeClass) private var sizeClass
     @AppStorage("chat.last") private var last = ""
     @State private var selection: String?
     @State private var path: [ArchivedRoute] = []
     @State private var switching = false
     @State private var settings = false
-    @State private var columns = NavigationSplitViewVisibility.automatic
-    @State private var shell = ChatShell()
+    @State private var columns = NavigationSplitViewVisibility.all
+    @State private var compactColumn = NavigationSplitViewColumn.detail
+    /// The documents, not the operator, put the sidebar away: closing them brings it back.
+    @State private var sidebarCollapsed = false
+    /// The inspector on screen: a moment after `showDocuments` where the sidebar has to go first.
+    @State private var inspector = false
+    @State private var sidebarLeaving = false
+    @State private var resized = Date.distantPast
+    @State private var shell = ChatShell(sheetsDocuments: UIDevice.current.userInterfaceIdiom == .phone)
 
     var body: some View {
         Group {
-            if sizeClass == .compact {
-                NavigationStack(path: $path) {
-                    chat
-                        .toolbar {
-                            ToolbarItem(placement: .topBarLeading) {
-                                Button { switching = true } label: {
-                                    Image(systemName: store.badge > 0 ? "list.bullet.circle.fill" : "list.bullet")
-                                }
-                                .accessibilityLabel("Chats")
-                                .accessibilityValue(store.badge > 0 ? "\(store.badge) unread" : "")
-                            }
-                        }
-                        .navigationDestination(for: ArchivedRoute.self) { route in
-                            ArchivedChatView(route: route) { path.removeAll() }
-                        }
-                }
-                .sheet(isPresented: $switching) {
-                    NavigationStack {
-                        InstancesList(selection: Binding(get: { selection }, set: { name in
-                            if let name { open(name) }
-                            switching = false
-                        }), settings: {
-                            switching = false
-                            settings = true
-                        })
-                        .toolbar {
-                            ToolbarItem(placement: .cancellationAction) { Button("Close") { switching = false } }
-                        }
-                    }
-                    .environment(store)
-                    .presentationDetents([.medium, .large])
-                }
+            if shell.sheetsDocuments {
+                phone
             } else {
-                NavigationSplitView(columnVisibility: $columns) {
-                    InstancesList(selection: Binding(get: { selection }, set: { name in if let name { open(name) } }),
-                                  settings: { settings = true })
-                        .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 380)
-                } detail: {
-                    NavigationStack(path: $path) {
-                        chat
-                            .navigationDestination(for: ArchivedRoute.self) { route in
-                                // The stack's environment does not reach its pushed views (found on the Mac): an
-                                // earlier chat's screen needs the shell for its own documents.
-                                ArchivedChatView(route: route) { path.removeAll() }
-                                    .environment(shell)
-                            }
-                    }
-                    .environment(shell)
-                }
-                // The documents beside the chat, outside its navigation stack (ChatShell): inside it, their own pages
-                // were pushed onto the chat's stack.
-                .documentsInspector(shell, store: store)
+                pad
             }
         }
         .environment(shell)
@@ -95,6 +54,123 @@ struct ChatsLayout: View {
         }
     }
 
+    private var phone: some View {
+        NavigationStack(path: $path) {
+            chat
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) { chatsButton }
+                }
+                .navigationDestination(for: ArchivedRoute.self) { route in
+                    ArchivedChatView(route: route) { path.removeAll() }
+                }
+        }
+        .sheet(isPresented: $switching) {
+            NavigationStack {
+                InstancesList(selection: Binding(get: { selection }, set: { name in
+                    if let name { open(name) }
+                    switching = false
+                }), settings: {
+                    switching = false
+                    settings = true
+                })
+                .listStyle(.plain)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("Close") { switching = false } }
+                }
+            }
+            .environment(store)
+            .presentationDetents([.medium, .large])
+            .presentationBackground(Color.elevated)
+        }
+    }
+
+    private var chatsButton: some View {
+        Button { switching = true } label: {
+            Image(systemName: "list.bullet")
+                .overlay(alignment: .topTrailing) {
+                    if store.badge > 0 {
+                        Circle()
+                            .fill(Color.brand)
+                            .frame(width: Design.Space.s8, height: Design.Space.s8)
+                            .offset(x: Design.Space.s4, y: -Design.Space.s4)
+                            .accessibilityHidden(true)
+                    }
+                }
+        }
+        .accessibilityLabel("Chats")
+        .accessibilityValue(store.badge > 0 ? "\(store.badge) unread" : "")
+    }
+
+    private var pad: some View {
+        NavigationSplitView(columnVisibility: $columns, preferredCompactColumn: $compactColumn) {
+            InstancesList(selection: Binding(get: { selection }, set: { name in if let name { open(name) } }),
+                          settings: { settings = true })
+                .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 380)
+                .toolbar(removing: documentsTakeSidebar ? .sidebarToggle : nil)
+        } detail: {
+            NavigationStack(path: $path) {
+                chat
+                    .navigationDestination(for: ArchivedRoute.self) { route in
+                        // The stack's environment does not reach its pushed views (found on the Mac): an
+                        // earlier chat's screen needs the shell for its own documents.
+                        ArchivedChatView(route: route) { path.removeAll() }
+                            .environment(shell)
+                    }
+            }
+            .environment(shell)
+        }
+        // Side by side at every width that holds both: an overlaid sidebar would cover the chat.
+        .navigationSplitViewStyle(.balanced)
+        // The documents beside the chat, outside its navigation stack (ChatShell): inside it, their own pages
+        // were pushed onto the chat's stack.
+        .documentsInspector(shell, store: store,
+                            isPresented: Binding(get: { inspector }, set: { open in
+                                // Turning between column and sheet in a resize, the system closes and reopens the
+                                // inspector: that close is not the operator's.
+                                if !open && Date.now.timeIntervalSince(resized) > 0.5 { shell.screen?.showDocuments = false }
+                            }))
+        // The system turns an inspector into a sheet at compact width, keeping what it shows. It would stay beside the
+        // chat down to about 680 pt: under 700 there is no room for both (spec §5), so that band reads as compact.
+        .environment(\.horizontalSizeClass, shell.documentsCover ? .compact : .regular)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+            // A window this narrow opens on the chat: the system would lay the sidebar over it, dimmed.
+            if !shell.width.isFinite && width < ChatShell.sidebarWidth { columns = .detailOnly }
+            shell.width = width
+            resized = .now
+            fitColumns()
+        }
+        .onChange(of: shell.screen?.showDocuments) { fitColumns() }
+        .onChange(of: columns) { fitColumns() }
+    }
+
+    /// Under 1000 pt, sidebar, chat and documents do not fit together.
+    private var documentsTakeSidebar: Bool {
+        shell.screen?.showDocuments == true && shell.collapsesSidebar
+    }
+
+    /// Open documents put the sidebar away where all three do not fit; it comes back when they close or the window has
+    /// room again. Asked again when the split view changes its columns (leaving compact width shows the sidebar).
+    /// A new inspector waits for that collapse to end: presented during it, the split view drops it unseen.
+    private func fitColumns() {
+        if documentsTakeSidebar {
+            sidebarCollapsed = true
+            if columns != .detailOnly {
+                columns = .detailOnly
+                sidebarLeaving = true
+                Task {
+                    try? await Task.sleep(for: .seconds(0.4))
+                    sidebarLeaving = false
+                    fitColumns()
+                }
+            }
+        } else if sidebarCollapsed {
+            sidebarCollapsed = false
+            columns = .all
+        }
+        let open = shell.screen?.showDocuments == true
+        if !open || !sidebarLeaving { inspector = open }
+    }
+
     @ViewBuilder
     private var chat: some View {
         if !store.loaded, let error = store.error {
@@ -105,8 +181,7 @@ struct ChatsLayout: View {
             })
             .id(selection)
         } else if store.loaded {
-            ContentUnavailableView("No chat open", systemImage: "bubble.left.and.bubble.right",
-                                   description: Text("Choose an instance to chat with."))
+            MarkMessage("No chat open", message: Text("Choose an instance to chat with."))
         } else {
             ProgressView()
         }
@@ -124,6 +199,7 @@ struct ChatsLayout: View {
         if selection != name { path.removeAll() }
         selection = name
         last = name
+        compactColumn = .detail
     }
 
     /// The chat open last time, else the first instance; a tap's chat wins.

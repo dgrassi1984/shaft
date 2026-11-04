@@ -37,9 +37,12 @@ struct SelectTextSheet: View {
                     if added > 0 {
                         Text(added == 1 ? "1 quote added to your message" : "\(added) quotes added to your message")
                             .font(.footnote)
-                            .padding(10)
+                            .foregroundStyle(Color.textPrimary)
+                            .padding(Design.Space.s12)
                             .frame(maxWidth: .infinity)
-                            .background(.regularMaterial)
+                            .glassSurface(in: Capsule())
+                            .padding(.horizontal, Design.Space.gutter)
+                            .padding(.bottom, Design.Space.s8)
                     }
                 }
         }
@@ -71,25 +74,32 @@ struct RatingSheet: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
-                    TextField(target.thumb == "down" ? "What was wrong? (optional)" : "What was good? (optional)",
-                              text: $reason, axis: .vertical)
-                        .lineLimit(3...8)
-                        .focused($focused)
-                } footer: {
-                    Text(target.thumb == "down"
-                         ? "Sent, it goes with your next message in this chat (or to its inbox); kept, it stays with you."
-                         : "Sent, it goes to its inbox for its next cycle.")
+            VStack(spacing: Design.Space.s12) {
+                TextField(target.thumb == "down" ? "What was wrong? (optional)" : "What was good? (optional)",
+                          text: $reason, axis: .vertical)
+                    .lineLimit(3...8)
+                    .focused($focused)
+                    .padding(Design.Space.s12)
+                    .elevatedBlock()
+                Text(target.thumb == "down"
+                     ? "Sent, it goes with your next message in this chat (or to its inbox); kept, it stays with you."
+                     : "Sent, it goes to its inbox for its next cycle.")
+                    .font(.footnote)
+                    .foregroundStyle(Color.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button { finish(send: true) } label: {
+                    Text("Send to \(screen.instance)").frame(maxWidth: .infinity)
                 }
-                Section {
-                    Button("Send to \(screen.instance)") { finish(send: true) }.bold()
-                    if target.ratingID == nil {
-                        Button("Just keep it") { finish(send: false) }
-                    }
+                .buttonStyle(ProminentAction())
+                if target.ratingID == nil {
+                    Button("Just keep it") { finish(send: false) }
+                        .frame(minHeight: 44)
                 }
-                .disabled(busy)
             }
+            .disabled(busy)
+            .padding(.horizontal, Design.Space.gutter)
+            .padding(.vertical, Design.Space.s8)
+            .frame(maxHeight: .infinity, alignment: .top)
             .navigationTitle(target.thumb == "down" ? "Thumbs down" : "Thumbs up")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -102,7 +112,7 @@ struct RatingSheet: View {
                 focused = true
             }
         }
-        .sheetFrame()
+        .sheetFrame(minWidth: 420, minHeight: 300)
         .presentationDetents([.medium, .large])
     }
 
@@ -131,8 +141,7 @@ struct EarlierChatsSheet: View {
             Group {
                 if let chats {
                     if chats.isEmpty {
-                        ContentUnavailableView("No earlier chats", systemImage: "clock",
-                                               description: Text("Ended chats with \(instance) show here."))
+                        MarkMessage("No earlier chats", message: Text("Ended chats with \(instance) show here."))
                     } else {
                         List(chats) { chat in
                             Button {
@@ -142,19 +151,22 @@ struct EarlierChatsSheet: View {
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(chat.excerpt.isEmpty ? String(localized: "(no message)") : chat.excerpt)
                                         .lineLimit(2)
-                                        .foregroundStyle(.primary)
+                                        .foregroundStyle(Color.textPrimary)
                                     Text("\(Stamp.short(chat.created)) · \(chat.messages == 1 ? String(localized: "1 message") : String(localized: "\(chat.messages) messages"))")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
+                                        .font(Design.Text.metadata)
+                                        .foregroundStyle(Color.textSecondary)
                                 }
                                 .frame(minHeight: 44)
                             }
-                            .tint(.primary)
+                            .tint(Color.textPrimary)
+                            .listRowBackground(Color.clear)
+                            .listRowSeparatorTint(Color.hairline)
                         }
+                        .listStyle(.plain)
+                        .scrollContentBackground(.hidden)
                     }
                 } else if let error {
-                    ContentUnavailableView("Could not load the earlier chats", systemImage: "exclamationmark.triangle",
-                                           description: Text(error))
+                    MarkMessage("Could not load the earlier chats", message: Text(error))
                 } else {
                     ProgressView()
                 }
@@ -175,5 +187,6 @@ struct EarlierChatsSheet: View {
             }
         }
         .sheetFrame()
+        .presentationDetents([.medium, .large])
     }
 }

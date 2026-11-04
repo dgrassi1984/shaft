@@ -28,8 +28,7 @@ struct SessionRoot<Paired: View>: View {
                     PairingView(session: session)
                 }
             } else {
-                ContentUnavailableView("SHAFT could not start", systemImage: "exclamationmark.octagon",
-                                       description: Text(model.startupError ?? "No reason was given."))
+                MarkMessage("SHAFT could not start", message: Text(model.startupError ?? "No reason was given."))
             }
         }
         .environment(model)
@@ -46,22 +45,24 @@ struct PairingView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Image(systemName: "link.badge.plus").font(.system(size: 44)).foregroundStyle(Color.accentColor)
-                    .accessibilityHidden(true)
-                Text("Pair with SHAFT").font(.largeTitle.bold())
+            VStack(alignment: .leading, spacing: Design.Space.s16) {
+                ShaftMark()
+                    .padding(.top, Design.Space.s24)
+                    .padding(.bottom, Design.Space.s8)
+                Text("Pair with SHAFT").font(.largeTitle.bold()).foregroundStyle(Color.textPrimary)
                 Text("On the Mac, run this and copy the link it prints. It works once, for 10 minutes.")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.textSecondary)
                 Text("shaft web pair --name \(Self.deviceName)")
-                    .font(.callout.monospaced())
-                    .padding(10)
+                    .font(Design.Text.code)
+                    .foregroundStyle(Color.textPrimary)
+                    .padding(Design.Space.s12)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
+                    .elevatedBlock()
                     .textSelection(.enabled)
-                HStack(spacing: 8) {
+                HStack(alignment: .top, spacing: Design.Space.s8) {
                     TextField("https://…/pair?t=…", text: $link, axis: .vertical)
                         .lineLimit(1...4)
-                        .textFieldStyle(.roundedBorder)
+                        .textFieldStyle(.plain)
                         .autocorrectionDisabled()
                         #if os(iOS)
                         .textInputAutocapitalization(.never)
@@ -69,33 +70,39 @@ struct PairingView: View {
                         #endif
                         .accessibilityLabel("Pairing link")
                         .onSubmit(pair)
+                        .padding(.horizontal, Design.Space.s12)
+                        .padding(.vertical, Design.Space.s12)
+                        .frame(minHeight: 44)
+                        .elevatedBlock()
                     // The system's Paste button: it reads the clipboard (Universal Clipboard fills it from the Mac)
                     // without the "allow paste" prompt, and is only enabled when there is text to paste.
                     PasteButton(payloadType: String.self) { strings in
                         if let text = strings.first { link = text.trimmingCharacters(in: .whitespacesAndNewlines) }
                     }
                     .labelStyle(.titleAndIcon)
+                    .buttonBorderShape(.capsule)
                     .frame(minHeight: 44)
                 }
                 Button(action: pair) {
-                    HStack {
-                        if pairing { ProgressView().controlSize(.small) }
-                        Text(pairing ? "Pairing…" : "Pair").frame(maxWidth: .infinity)
+                    HStack(spacing: Design.Space.s8) {
+                        if pairing { ProgressView().controlSize(.small).tint(Color.onAccent) }
+                        Text(pairing ? "Pairing…" : "Pair")
                     }
-                    .frame(minHeight: 44)
+                    .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(ProminentAction())
                 .disabled(link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || pairing)
                 if let problem = session.problem {
                     Label(problem, systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.red)
+                        .foregroundStyle(Color.danger)
                         .accessibilityAddTraits(.isStaticText)
                 }
             }
-            .padding(24)
-            .frame(maxWidth: 560)
+            .padding(Design.Space.s24)
+            .frame(maxWidth: Design.measure)
             .frame(maxWidth: .infinity)
         }
+        .background(Color.canvas.ignoresSafeArea())
         .onChange(of: session.problem) { _, problem in
             if let problem { Announce.say(problem) }
         }
@@ -147,15 +154,15 @@ struct SettingsView: View {
                 Section("Notifications") {
                     if let push {
                         LabeledContent("Push", value: push.on ? "on (\(push.env ?? "?"))" : "off")
-                        if !push.reason.isEmpty { Text(push.reason).font(.footnote).foregroundStyle(.secondary) }
-                        if let problem = push.problem { Text(problem).font(.footnote).foregroundStyle(.orange) }
+                        if !push.reason.isEmpty { Text(push.reason).font(.footnote).foregroundStyle(Color.textSecondary) }
+                        if let problem = push.problem { Text(problem).font(.footnote).foregroundStyle(Color.warning) }
                     } else if let pushProblem {
-                        Text(pushProblem).font(.footnote).foregroundStyle(.secondary)
+                        Text(pushProblem).font(.footnote).foregroundStyle(Color.textSecondary)
                     } else {
                         ProgressView()
                     }
-                    if let said = session.pushStatus { Text(said).font(.footnote).foregroundStyle(.secondary) }
-                    if let error = model.pushError { Text(error).font(.footnote).foregroundStyle(.orange) }
+                    if let said = session.pushStatus { Text(said).font(.footnote).foregroundStyle(Color.textSecondary) }
+                    if let error = model.pushError { Text(error).font(.footnote).foregroundStyle(Color.warning) }
                 }
                 Section {
                     Button("Unpair this device", role: .destructive) { unpairing = true }
@@ -164,7 +171,7 @@ struct SettingsView: View {
                     Text("Unpair tells the server; Forget is for when it cannot be reached (then run `shaft web unpair` on the Mac).")
                 }
                 if let problem = session.problem {
-                    Text(problem).foregroundStyle(.red)
+                    Text(problem).foregroundStyle(Color.danger)
                 }
             }
             .navigationTitle("Settings")
@@ -203,63 +210,66 @@ struct InstancesLoadFailure: View {
     @Environment(InstancesStore.self) private var store
 
     var body: some View {
-        ContentUnavailableView {
-            Label("Could not load chats", systemImage: "exclamationmark.triangle")
-        } description: {
-            Text(error.message)
-            Text("Trying again every few seconds…")
-        } actions: {
+        MarkMessage("Could not load chats",
+                    message: Text("\(error.message)\n\(Text("Trying again every few seconds…"))")) {
             Button("Retry") {
                 store.stop()
                 store.start()
             }
+            .buttonStyle(ProminentAction())
             Button("Settings", action: settings)
         }
     }
 }
 
-/// A chat in the list: its name, state, last line, the unread mark and whether it is replying.
+/// A chat in the list: its name and time, its state, its last line. The unread dot sits in the margin, so read and
+/// unread rows align; a replying row, and one in a cycle, pulses its symbol.
 struct InstanceRowView: View {
     let row: InstanceRow
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Circle()
-                .fill(row.unread ? Color.accentColor : Color.clear)
-                .frame(width: 9, height: 9)
-                .padding(.top, 6)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(row.name).font(.headline).fontWeight(row.unread ? .bold : .semibold)
-                    Spacer(minLength: 4)
-                    if let last = row.last {
-                        Text(Stamp.short(last)).font(.caption2).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: Design.Space.s8) {
+                Text(row.name)
+                    .font(.headline)
+                    .fontWeight(row.unread ? .bold : .semibold)
+                    .foregroundStyle(Color.textPrimary)
+                    .overlay(alignment: .leading) {
+                        if row.unread {
+                            Circle()
+                                .fill(Color.brand)
+                                .frame(width: Design.Space.s8, height: Design.Space.s8)
+                                .offset(x: -Design.Space.s12)
+                                .accessibilityHidden(true)
+                        }
                     }
-                }
-                HStack(spacing: 4) {
-                    Image(systemName: StateIcon.symbol(row.state, replying: row.replying))
-                        .symbolEffect(.pulse, isActive: row.replying && !reduceMotion)
-                        .accessibilityHidden(true)
-                    Text(row.replying ? String(localized: "replying…") : row.state)
-                    if !row.since.isEmpty && !row.replying { Text("· \(row.since)") }
-                }
-                .font(.caption)
-                .foregroundStyle(row.replying ? Color.accentColor : Color.secondary)
-                if !row.line.isEmpty {
-                    Text(row.line).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
+                Spacer(minLength: Design.Space.s4)
+                if let last = row.last {
+                    Text(Stamp.short(last)).font(Design.Text.metadata).foregroundStyle(Color.textSecondary)
                 }
             }
+            HStack(spacing: Design.Space.s4) {
+                Image(systemName: StateIcon.symbol(row.state, replying: row.replying))
+                    .symbolEffect(.pulse, isActive: StateIcon.pulses(row.state, replying: row.replying) && !reduceMotion)
+                    .accessibilityHidden(true)
+                Text(row.replying ? String(localized: "replying…") : row.state)
+                if !row.since.isEmpty && !row.replying { Text("· \(row.since)") }
+            }
+            .font(.caption)
+            .foregroundStyle(row.replying ? Color.brand : Color.textSecondary)
+            if !row.line.isEmpty {
+                Text(row.line).font(.subheadline).foregroundStyle(Color.textSecondary).lineLimit(2)
+            }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, Design.Space.s4)
         .frame(minHeight: 44)
         .accessibilityElement(children: .combine)
         .accessibilityValue(row.unread ? String(localized: "unread") : "")
     }
 }
 
-/// The chats, in the rail's order, with the list's own failure.
+/// The chats, in the rail's order, with the list's own failure. On an iPhone and iPad it sits on `elevated`.
 struct InstancesList: View {
     @Binding var selection: String?
     var settings: () -> Void
@@ -268,16 +278,24 @@ struct InstancesList: View {
     var body: some View {
         List(selection: $selection) {
             if let error = store.error {
-                Label(error.message, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.orange)
+                Label(error.message, systemImage: "exclamationmark.triangle")
+                    .font(.footnote)
+                    .foregroundStyle(Color.warning)
             }
             ForEach(store.instances) { row in
-                InstanceRowView(row: row).tag(row.name)
+                InstanceRowView(row: row)
+                    .tag(row.name)
+                    .listRowSeparatorTint(Color.hairline)
             }
             if store.loaded && store.instances.isEmpty {
                 Text("No instances yet. They are created from the terminal with `shaft new <name>`.")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.textSecondary)
             }
         }
+        #if os(iOS)
+        .scrollContentBackground(.hidden)
+        .background(Color.elevated)
+        #endif
         .overlay { if !store.loaded && store.error == nil { ProgressView() } }
         .refreshable { await store.refresh() }
         .navigationTitle(store.badge > 0 ? "SHAFT (\(store.badge))" : "SHAFT")
