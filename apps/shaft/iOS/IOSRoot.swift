@@ -148,6 +148,7 @@ struct ChatsLayout: View {
         } else if shell.screen?.showDocuments != true {
             Task {
                 try? await Task.sleep(for: .seconds(0.3))        // a restored window's chat is not on screen yet
+                shell.screen?.openDocument = shell.screen?.shownDocument
                 shell.screen?.showDocuments = true
             }
         }
