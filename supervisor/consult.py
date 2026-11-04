@@ -145,6 +145,10 @@ def menu(instance: str, fetch: bool = True) -> list[dict]:
     models = {m["id"]: m for m in catalogue["models"]}
     result = []
     for name in MODELS:
+        if name.startswith("codex/"):
+            result.append({"model": name, "in_per_m": None, "out_per_m": None, "available": False,
+                           "why": "consults require an OpenRouter cloud model; codex/ is not supported"})
+            continue
         model = models.get(name.removeprefix("openrouter/"), {})
         ids = {model.get("id"), model.get("canonical_slug")} - {None}
         endpoints = [e for e in catalogue["endpoints"] if e.get("model_id") in ids]
@@ -215,6 +219,8 @@ def _send_once(req: urllib.request.Request) -> tuple[dict | None, str | None, in
 
 def complete(instance: str, body: dict, secrets: dict, caller, run, run_started) -> dict:
     model = body.get("model")
+    if isinstance(model, str) and model.startswith("codex/"):
+        raise ConsultError(403, "consults require an OpenRouter cloud model; codex/ is not supported")
     if model not in MODELS:
         raise ConsultError(403, f"model {model!r} is not on the consult menu (SHAFT_CONSULT_MODELS)")
     if body.get("stream"):

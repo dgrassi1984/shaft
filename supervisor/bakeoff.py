@@ -33,7 +33,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import trial
-from .core import INSTANCES, PROJECT, SUP_DIR, cloud_model, log
+from .core import INSTANCES, PROJECT, SUP_DIR, cloud_model, instance_model, log
 
 DIR = SUP_DIR / "bakeoffs"
 DEFAULT_JUDGE = "claude-sonnet-5-5"   # not a candidate's: Haiku shares its family (said in the report)
@@ -47,12 +47,13 @@ class BakeoffError(Exception):
 def parse_arm(spec: str, efforts: tuple[str, ...] | None) -> dict:
     """'claude-haiku-5-5@xhigh' -> {'label', 'model', 'env'}."""
     from .cloudllm import CLOUD_MODELS
+    from . import codexcli
     model, _, effort = spec.partition("@")
     try:
-        model = cloud_model(model)
+        model = instance_model(model)
     except ValueError as e:
         raise BakeoffError(f"{spec}: {e}") from None
-    if model not in CLOUD_MODELS:
+    if model not in CLOUD_MODELS and model not in codexcli.models():
         raise BakeoffError(f"{model} is not allowed for instances (SHAFT_CLOUD_MODELS={','.join(CLOUD_MODELS)})")
     if effort and efforts is not None and effort not in efforts:
         raise BakeoffError(f"{spec}: the instance's code accepts LLM_REASONING_EFFORT {', '.join(efforts)}, "
@@ -89,7 +90,8 @@ def create(name: str, arms: list[str], episodes: list[str], judge: str = DEFAULT
     if len({a["label"] for a in parsed}) != len(parsed):
         raise BakeoffError("the same arm twice")
     judge = cloud_model(judge)
-    if any(a["model"] == judge for a in parsed):
+    from .judge import same_model
+    if any(same_model(a["model"], judge) for a in parsed):
         raise BakeoffError(f"the judge {judge} is also a candidate: a model never judges its own runs")
     eps = {e["ts"]: e for e in trial.live_episodes(INSTANCES / name)}
     starts = trial._starts(name)
@@ -204,7 +206,7 @@ def run(b: dict, parallel: int = 3, project: Path = PROJECT, arm_parallel: int =
 # A model's name in a run's text (its config printed, its own logs) would tell the judge which run is which, or tilt
 # it: the arms' own ids, also as spelled out ("Claude Haiku 5.5" for claude-haiku-5-5), and these families are replaced
 # before a case is written. One DeepSeek run printed its config.
-_FAMILIES = (r"\b(?:openrouter/)?(?:[\w.-]+/)?(?:mimo|deepseek|haiku|sonnet|opus|minimax|nemotron|hy\d|hunyuan|"
+_FAMILIES = (r"\b(?:(?:openrouter|codex)/)?(?:[\w.-]+/)?(?:codex|mimo|deepseek|haiku|sonnet|opus|minimax|nemotron|hy\d|hunyuan|"
              r"step-3[\w.-]*|glm-[\w.-]+|claude-[\w.-]+|gemini|gpt-[\w.-]+)[\w.@/-]*")
 
 

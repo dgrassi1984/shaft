@@ -9,6 +9,7 @@ delivers messages between instances, enforces a per-run call budget, and logs ev
 """
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import fcntl
 import hashlib
@@ -21,6 +22,7 @@ import os
 import signal
 import socket
 import subprocess
+import tempfile
 import threading
 import time
 import urllib.error
@@ -777,6 +779,10 @@ class Broker:
         self._project_charges = []
         self.calls = 0
         self.counts: dict[str, int] = {}
+        self.codex = None
+        self.codex_down: str | None = None
+        self._codex_rate = None
+        self._codex_lock = threading.Lock()
         self.remembered: dict[str, list] = {}    # original cloud-model turns, resent verbatim
         self.handoffs: list[dict] = []           # coding tasks delegated during this run
         self.as_of: datetime | None = None       # record() shows only what was known before this (trial replays)
@@ -806,6 +812,40 @@ class Broker:
             log(f"{name}: shared folder {granted} left out of this run — {e} (shaft share {name} off, or share another)")
             return None
 
+    def _codex_notify(self, title: str, text: str) -> None:
+        # Either device path may fail independently; model replies must still reach the instance.
+        def phone():
+            from . import webpush
+            webpush.notify({"title": title, "body": text, "url": "/overview", "tag": "provider:codex"})
+        for send in (lambda: notify(title, text), phone):
+            try:
+                send()
+            except Exception as e:
+                self._log(f"Codex notification failed: {e}")
+
+    def _codex_report(self, exc=None) -> None:
+        from . import codexcli
+        from .core import SUP_DIR
+        if exc is not None:
+            if self.local_fallback:
+                self.codex_down = exc.reason
+            codexcli.report_failure(exc, self._codex_notify)
+        else:
+            codexcli.report_success(self._codex_notify)
+        # The panel runs in another process. Save the latest observed weekly window on change.
+        rate = codexcli.rate_limit()
+        if rate is not None and rate != self._codex_rate:
+            SUP_DIR.mkdir(parents=True, exist_ok=True)
+            fd, path = tempfile.mkstemp(prefix="codex-rate-", dir=SUP_DIR)
+            try:
+                with os.fdopen(fd, "w") as f:
+                    json.dump(rate, f)
+                os.replace(path, SUP_DIR / "codex_rate.json")
+                self._codex_rate = rate
+            finally:
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(path)
+
     # -- lifecycle -------------------------------------------------------------
     def start(self) -> str:
         broker = self
@@ -816,11 +856,14 @@ class Broker:
 
             def _reply(self, code: int, obj: dict):
                 body = json.dumps(obj).encode()
-                self.send_response(code)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+                try:
+                    self.send_response(code)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
 
             def _authorised(self) -> bool:
                 if secrets.compare_digest(self.headers.get("X-Shaft-Token", ""), broker.token):
@@ -891,7 +934,7 @@ class Broker:
                 self._reply(200, reply)
 
             def _llm(self):
-                from . import cloudllm, selfhosted, vision
+                from . import cloudllm, codexcli, selfhosted, vision
                 body: dict = {}
                 if not broker.model_allowed:
                     broker._log(f"{broker.name} llm -> REFUSED (a scheduled job has no model)")
@@ -902,16 +945,43 @@ class Broker:
                     if (images := vision.count(body)):   # checked and prepared before any provider sees them
                         body = vision.prepare(body)
                         broker._log(f"{broker.name} llm {body.get('model')} carries {images} image(s)")
-                    if selfhosted.serves(body.get("model")):
-                        how = {"fallback": broker.local_fallback, "note": lambda s: broker._log(f"{broker.name} llm {s}")}
-                        if body.get("stream"):
-                            return self._llm_stream(selfhosted.stream(broker.usage_name, body, **how), body["model"])
-                        reply = selfhosted.complete(broker.usage_name, body, **how)
-                    elif body.get("stream") and str(body.get("model", "")).startswith("openrouter/"):
-                        return self._llm_stream(cloudllm.openrouter_stream(broker.usage_name, body, broker.secrets),
-                                                body["model"])
-                    else:
-                        reply = cloudllm.complete(broker.usage_name, body, broker.secrets, broker.remembered)
+                    original = body.get("model")
+                    if codexcli.serves(original) and broker.codex_down is None:
+                        try:
+                            with broker._codex_lock:
+                                if broker.codex is None:
+                                    broker.codex = codexcli.Channel(broker.name, broker.usage_name, broker._log)
+                            reply = broker.codex.complete(body)
+                            broker._codex_report()
+                        except codexcli.CodexClosed as e:
+                            return self._reply(503, {"error": {"message": e.reason}})
+                        except codexcli.CodexFailure as e:
+                            broker._codex_report(e)
+                            if not broker.local_fallback:
+                                raise cloudllm.CloudError(502, f"Codex failed: {e.reason}") from None
+                        else:
+                            return self._llm_reply(body, reply)
+                    label = None
+                    if codexcli.serves(original):
+                        if not broker.local_fallback:
+                            raise cloudllm.CloudError(502, f"Codex failed: {broker.codex_down}")
+                        body = {**body, "model": codexcli.FALLBACK_MODEL}
+                        label = f"{original} (fallback {body['model']})"
+                    with cloudllm.fallback_label(label):
+                        if selfhosted.serves(body.get("model")):
+                            how = {"fallback": broker.local_fallback, "note": lambda s: broker._log(f"{broker.name} llm {s}")}
+                            if body.get("stream"):
+                                return self._llm_stream(selfhosted.stream(broker.usage_name, body, **how), body["model"])
+                            reply = selfhosted.complete(broker.usage_name, body, **how)
+                        elif body.get("stream") and str(body.get("model", "")).startswith("openrouter/"):
+                            return self._llm_stream(cloudllm.openrouter_stream(broker.usage_name, body, broker.secrets),
+                                                    label or body["model"])
+                        else:
+                            reply = cloudllm.complete(broker.usage_name, body, broker.secrets, broker.remembered)
+                            if label:
+                                reply = {**reply, "model": label}
+                except (BrokenPipeError, ConnectionResetError):
+                    return
                 except cloudllm.CloudError as e:
                     broker._log(f"{broker.name} llm {body.get('model', '?')} -> ERROR {e}")
                     return self._reply(e.status, {"error": {"message": str(e)}})
@@ -924,44 +994,48 @@ class Broker:
                     broker._log(f"{broker.name} llm {body.get('model', '?')} -> ERROR {type(e).__name__}: {e}")
                     return self._reply(502, {"error": {"message": f"the supervisor's model call failed: "
                                                                  f"{type(e).__name__}: {e}"}})
+                return self._llm_reply(body, reply)
+
+            def _llm_reply(self, body, reply):
+                from . import cloudllm
                 u = reply["usage"]
                 broker._log(f"{broker.name} llm {body.get('model')} -> {reply['choices'][0]['finish_reason']} "
                             f"(in {u['prompt_tokens']}, out {u['completion_tokens']})")
                 if body.get("stream"):
                     payload = cloudllm.as_sse(reply)
-                    self.send_response(200)
-                    self.send_header("Content-Type", "text/event-stream")
-                    self.send_header("Content-Length", str(len(payload)))
-                    self.end_headers()
-                    self.wfile.write(payload)
+                    with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/event-stream")
+                        self.send_header("Content-Length", str(len(payload)))
+                        self.end_headers()
+                        self.wfile.write(payload)
                 else:
                     self._reply(200, reply)
 
             def _llm_stream(self, lines, model: str):
-                """OpenRouter's or a self-hosted server's stream, relayed line by line as it arrives."""
-                self.send_response(200)
-                self.send_header("Content-Type", "text/event-stream")
-                self.send_header("Cache-Control", "no-cache")
-                self.end_headers()
+                """Relay an OpenRouter or self-hosted stream, closing it on every exit."""
                 n = 0
-                try:
-                    for line in lines:
-                        self.wfile.write(line)
-                        if not line.strip():   # end of an SSE event
-                            self.wfile.flush()
-                        n += 1
-                    self.wfile.flush()
-                    broker._log(f"{broker.name} llm {model} -> streamed ({n} lines)")
-                except (BrokenPipeError, ConnectionResetError):
-                    broker._log(f"{broker.name} llm {model} -> stream abandoned by the instance")
-                except NETWORK_ERRORS as e:   # the upstream stream broke: say so in-band (the instance's llm.py reads it)
-                    broker._log(f"{broker.name} llm {model} -> ERROR upstream stream broke after {n} lines: {e!r}")
+                with contextlib.closing(lines):
                     try:
-                        msg = {"error": {"message": f"the model's stream broke after {n} lines: {e!r}"}}
-                        self.wfile.write(b"data: " + json.dumps(msg).encode() + b"\n\n")
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/event-stream")
+                        self.send_header("Cache-Control", "no-cache")
+                        self.end_headers()
+                        for line in lines:
+                            self.wfile.write(line)
+                            if not line.strip():
+                                self.wfile.flush()
+                            n += 1
                         self.wfile.flush()
-                    except OSError:
-                        pass
+                        broker._log(f"{broker.name} llm {model} -> streamed ({n} lines)")
+                    except (BrokenPipeError, ConnectionResetError):
+                        broker._log(f"{broker.name} llm {model} -> stream abandoned by the instance")
+                    except NETWORK_ERRORS as e:
+                        broker._log(f"{broker.name} llm {model} -> ERROR upstream stream broke after {n} lines: {e!r}")
+                        with contextlib.suppress(OSError):
+                            msg = {"error": {"message": f"the model's stream broke after {n} lines: {e!r}"}}
+                            self.wfile.write(b"data: " + json.dumps(msg).encode() + b"\n\n")
+                            self.wfile.flush()
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -973,6 +1047,8 @@ class Broker:
         return self.server.server_address[1] if self.server else 0
 
     def stop(self) -> None:
+        if self.codex is not None:
+            self.codex.close()
         if self.server:
             self.server.shutdown()
             self.server.server_close()

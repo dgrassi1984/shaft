@@ -1267,6 +1267,8 @@ def resource_shock(name: str, cycles: int = 6, dry_run: bool = False, project: P
     # Like workspace probes, use cloud for a local instance: no competition for its model and no fallback.
     from . import selfhosted
     own = trial.model_of(code)
+    if own["model"].startswith("codex/"):
+        raise ExperimentError("resource-shock requires a cloud API model; codex/ is not supported")
     model = trial.FALLBACK_MODEL if own["local"] or selfhosted.serves(own["model"]) else "local"
     if selfhosted.serves(model) or not model:
         raise ExperimentError("resource-shock requires a cloud trial fallback, never a local server")

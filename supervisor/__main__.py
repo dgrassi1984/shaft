@@ -960,6 +960,13 @@ def cmd_trial(args) -> int:
         print(bakeoff.report(b))
         return 0
     if args.action == "replay":
+        from .core import instance_model
+        try:
+            if args.model != "local":
+                args.model = instance_model(args.model)
+        except ValueError as e:
+            print(f"refused: {e}", file=sys.stderr)
+            return 1
         instance_root(args.name)
         ep = next((e for e in trial.live_episodes(INSTANCES / args.name) if e["ts"] == args.ts), None)
         if not ep:
@@ -1036,6 +1043,26 @@ def cmd_feedback(name: str | None, days: int | None) -> int:
         reason = " ".join(row["reason"].splitlines())
         first = text.splitlines()[0] if text else "(gone)"
         print(f"{row['ts'][:19].replace('T', ' ')} | {row['instance']} | {thumb} | {delivery} | {first} | {reason}")
+    return 0
+
+
+def cmd_codex(action: str) -> int:
+    from . import codexcli, panel
+    home = Path(codexcli.HOME).expanduser().resolve()
+    if action == "login":
+        try:
+            home.mkdir(parents=True, exist_ok=True, mode=0o700)
+            home.chmod(0o700)
+            return subprocess.run([codexcli.BIN, "login"], env={**os.environ, "CODEX_HOME": str(home)}).returncode
+        except OSError as e:
+            print(f"Codex login failed: {e}", file=sys.stderr)
+            return 1
+    print("Codex login: " + ("present" if (home / "auth.json").is_file() else "missing; run shaft codex login"))
+    rate = panel.codex_rate()
+    print("Weekly allowance: " + (f"{rate['used_percent']}% used" if rate is not None else "not observed yet"))
+    print("Models: " + ", ".join(codexcli.models()))
+    if (fault := codexcli.outage()):
+        print(("Codex security event: " if fault.get("security") else "Codex unavailable: ") + fault["reason"])
     return 0
 
 
@@ -1116,6 +1143,8 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("telegram", help="talk with each instance from Telegram, one bot per instance, one paired account")
     p.add_argument("action", choices=["on", "off", "status", "token", "pair", "unpair", "serve"])
     p.add_argument("name", nargs="?", help="token: the instance the bot is for")
+    p = sub.add_parser("codex", help="Codex plan login and status")
+    p.add_argument("action", choices=["login", "status"])
     p = sub.add_parser("model", help="SHAFT's own Bonsai 2 model server (launchd service)")
     p.add_argument("action", choices=["on", "off", "status"])
     p.add_argument("--force", action="store_true", help="on/off even if it would kill or cut off runs in progress")
@@ -1387,11 +1416,11 @@ def main(argv: list[str]) -> int:
     q.add_argument("--sleep", action="store_true", help="sleep between each pair of replayed live cycles")
     q.add_argument("-n", type=int, default=0)
     q.add_argument("--episodes", nargs="*", default=[])
-    q.add_argument("--model", choices=["auto", "cloud", "local"], default="auto")
+    q.add_argument("--model", default="auto", help="auto, cloud, local, or an instance model id")
     q = tsub.add_parser("replay", help="replay one past cycle once with the current code (debug); keeps a copy")
     q.add_argument("name")
     q.add_argument("ts", help="the episode's ts")
-    q.add_argument("--model", default="local", help="'local' (its own configuration) or a cloud model id")
+    q.add_argument("--model", default="local", help="'local' (its own configuration) or an instance model id")
     q.add_argument("--keep", help="copy the replayed folder here")
     q.add_argument("--cycles", type=int, default=1, help="consecutive live cycles from one past state")
     q.add_argument("--sleep", action="store_true", help="sleep between each pair of replayed live cycles")
@@ -1399,7 +1428,7 @@ def main(argv: list[str]) -> int:
                                        "(supervisor/bakeoff.py); the same --id again resumes or reports")
     q.add_argument("name")
     q.add_argument("--arm", action="append", default=[], metavar="MODEL[@EFFORT]",
-                   help="a cloud model, optionally with LLM_REASONING_EFFORT; the first is the baseline")
+                   help="an instance model, optionally with LLM_REASONING_EFFORT; the first is the baseline")
     q.add_argument("--episodes", nargs="*", default=[], help="the past live cycles (episode ts)")
     q.add_argument("--judge", default="claude-sonnet-5-5")
     q.add_argument("--id", default="", help="a bake-off's id: resume it (its arms and cycles are kept)")
@@ -1423,6 +1452,8 @@ def main(argv: list[str]) -> int:
                                     "gate's baseline was red (the scheduler does it after a green warm-up)")
     p.add_argument("action", choices=["warm", "budget", "regate"])
     args = parser.parse_args(argv)
+    if args.cmd == "codex":
+        return cmd_codex(args.action)
 
     if args.cmd == "talk":
         extra = (["--show-thinking"] if args.show_thinking else []) + (["--as", args.speaker] if args.speaker else [])

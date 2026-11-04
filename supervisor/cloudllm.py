@@ -33,6 +33,8 @@ Rules:
 from __future__ import annotations
 
 import base64
+import contextlib
+import contextvars
 import hashlib
 import json
 import time
@@ -42,6 +44,17 @@ from datetime import date, datetime
 
 from . import ledger
 from .core import NETWORK_ERRORS, SUP_DIR, knob, dollars, model_names, cloud_models, json_object
+
+_fallback_label: contextvars.ContextVar[str | None] = contextvars.ContextVar("cloudllm_fallback_label", default=None)
+
+
+@contextlib.contextmanager
+def fallback_label(label: str | None):
+    token = _fallback_label.set(label)
+    try:
+        yield
+    finally:
+        _fallback_label.reset(token)
 
 API = "https://api.anthropic.com/v1/messages"
 OPENROUTER_API = "https://openrouter.ai/api/v1/chat/completions"
@@ -249,7 +262,7 @@ def complete(instance: str, body: dict, secrets: dict, remembered: dict[str, lis
     from . import selfhosted
     if selfhosted.serves(model):   # a self-hosted server (gpu/bonsai2): free, no cap, local fallback
         return selfhosted.complete(instance, body)
-    if model not in CLOUD_MODELS:
+    if model not in CLOUD_MODELS and not _fallback_label.get():
         raise CloudError(403, f"model {model!r} is not allowed for instances (SHAFT_CLOUD_MODELS={CLOUD_MODELS})")
     if not model.startswith("openrouter/") and model not in PRICES:   # unpriced = uncapped: refuse, never bill $0
         raise CloudError(403, f"model {model!r} has no price in cloudllm.PRICES ({sorted(PRICES)}), so the daily "
@@ -284,12 +297,16 @@ def complete(instance: str, body: dict, secrets: dict, remembered: dict[str, lis
 def _record(instance: str, model: str, tokens_in, tokens_out, usd: float | None, started: float, stop, error,
             cache: dict | None = None) -> None:
     """One cloud_usage row. `usd` None is unpriced: a self-hosted model (no price, never $0) or an OpenRouter reply
-    without a cost. A self-hosted call spends no dollars, so it adds nothing to the run's charges (Broker._run_usd):
+    without a cost. A self-hosted or Codex plan call spends no API dollars, so it adds nothing to the run's charges:
     the run's priced calls still sum. An OpenRouter call without a cost spent money nobody knows, so the run's
     spend is unknown (None), never counted as none."""
-    from . import selfhosted
+    from . import codexcli, selfhosted
+    if (label := _fallback_label.get()):
+        model = label
+    head = model.split(" (", 1)[0]
     cost = round(usd, 6) if usd is not None else None
-    if cost is not None or not selfhosted.serves(model.split(" (", 1)[0]):
+    plan_or_hosted = " (fallback " not in model and (codexcli.serves(head) or selfhosted.serves(head))
+    if cost is not None or not plan_or_hosted:
         ledger.record_charge(cost)
     USAGE.parent.mkdir(parents=True, exist_ok=True)
     with USAGE.open("a") as f:
@@ -383,7 +400,7 @@ def openrouter_stream(instance: str, body: dict, secrets: dict):
     """A streaming OpenRouter call, passed through to the instance as it arrives: yields SSE lines (bytes).
     Opening errors raise CloudError (nothing sent yet); usage and cost come from the final chunk."""
     model = body.get("model")
-    if model not in CLOUD_MODELS:
+    if model not in CLOUD_MODELS and not _fallback_label.get():
         raise CloudError(403, f"model {model!r} is not allowed for instances (SHAFT_CLOUD_MODELS={CLOUD_MODELS})")
     spent = spent_today(instance)
     if spent >= (cap := daily_cap(instance)):
@@ -409,7 +426,7 @@ def openrouter_stream(instance: str, body: dict, secrets: dict):
             error += f" [HTTP 429 responses: {throttled}]"
         _record(instance, model, None, None, 0.0, started, None, error)
         raise CloudError(502, f"OpenRouter call for {model} failed: {error}{_policy_hint(error)}")
-    return _relay(instance, model, resp, started)
+    return _relay(instance, _fallback_label.get() or model, resp, started)
 
 
 def _relay(instance: str, model: str, resp, started: float):
@@ -423,6 +440,9 @@ def _relay(instance: str, model: str, resp, started: float):
                         chunk = json.loads(line[5:])
                     except ValueError:
                         chunk = {}
+                    if _fallback_label.get():
+                        chunk["model"] = model
+                        line = b"data: " + json.dumps(chunk).encode()
                     usage = chunk.get("usage") or usage
                     if chunk.get("error"):
                         error = json.dumps(chunk["error"])[:400]
@@ -434,7 +454,7 @@ def _relay(instance: str, model: str, resp, started: float):
         raise
     finally:
         from . import selfhosted
-        hosted = selfhosted.serves(model.split(" (", 1)[0])
+        hosted = not _fallback_label.get() and selfhosted.serves(model.split(" (", 1)[0])
         cost = None if hosted else usage.get("cost")
         details = usage.get("prompt_tokens_details") or {}
         _record(instance, model, usage.get("prompt_tokens"), usage.get("completion_tokens"),
@@ -495,4 +515,7 @@ def as_sse(reply: dict) -> bytes:
         chunks.append({"choices": [{"index": 0, "delta": {"tool_calls": [{"index": i, **c}]}, "finish_reason": None}]})
     chunks.append({"choices": [{"index": 0, "delta": {}, "finish_reason": choice["finish_reason"]}]})
     chunks.append({"choices": [], "usage": reply["usage"]})
+    if (label := reply.get("model", "")).startswith("codex/") and " (fallback " in label:
+        for chunk in chunks:
+            chunk["model"] = label
     return b"".join(b"data: " + json.dumps(c).encode() + b"\n\n" for c in chunks) + b"data: [DONE]\n\n"

@@ -55,6 +55,7 @@ shaft drive <name> reject <id> --reason "…"      # record why; both decisions 
 shaft settings [set KEY=VALUE…|unset KEY…] [--expect KEY=VALUE] [--expect-unset KEY] [--json]   # the supervisor's own settings (configuration.md): every
                                 #   knob with its value, source and default; set/unset write .supervisor/settings.env
 shaft status [names…]           # how each instance is doing, open conversations, which code is running
+shaft codex login|status        # sign in to the private Codex home, or show login, weekly usage, models and outage
 shaft model on|off|status       # SHAFT's own Bonsai 2 server (launchd, :8780; started on demand, exits when idle)
 shaft api on|off|status|key|inbox-key   # OpenAI-compatible API + inbox doorbell on your tailnet (web-and-api.md)
 shaft telegram token <name>|pair|unpair|on|off|status   # talk with each instance from Telegram (integrations.md)
@@ -138,9 +139,9 @@ shaft delete <name> [--yes] [--no-archive]   # remove it and every trace of it: 
 shaft trial list [name]                    # trials of proposed changes (an instance asks with its `trial` tool)
 shaft trial show <name> <id>               # one trial: each replayed cycle, outcome, the report it was sent
 shaft trial run <name> --cand PATH=FILE …  # an operator trial (planted tests; --base PATH=FILE, --aa,
-                                           #   --model auto|cloud|local, --hypothesis T, -n N, --episodes TS…, --cycles N, --sleep)
+                                           #   --model auto|cloud|local|<instance model id>, --hypothesis T, -n N, --episodes TS…, --cycles N, --sleep)
 shaft trial replay <name> <episode-ts>     # replay one past cycle once with the current code (debug;
-                                           #   --model local|<cloud id>, --keep DIR copies the folder, --cycles N, --sleep)
+                                           #   --model local|<instance model id>, --keep DIR copies the folder, --cycles N, --sleep)
 shaft trial work                           # run what may run now (the scheduler does this)
 shaft trial models <name> --arm M[@EFFORT] …  # model bake-off: replay past cycles on each model (the first is the
                                            #   baseline), judge blind against it (--episodes TS…, --judge M,
@@ -307,3 +308,10 @@ and local-unit caps. Local runs refuse to start while needed and stop when deman
 `--dry-run` reports outcome replays, one-turn prediction calls, and estimated replay model calls without spending.
 The estimate uses `MAX_STEPS_LIVE`; confirmations, retries and early finishes can change the actual count.
 See [the experiment endpoints](plans/PLAN-consciousness.md#self-knowledge-experiments-100-and-101).
+
+For a Codex plan model, run `shaft codex login`, then
+`shaft config <name> set LLM_MODEL=codex/gpt-6-astra` (this also selects the broker).
+`shaft trial replay <name> <episode-ts> --model codex/gpt-6-astra` and
+`shaft trial models <name> --arm codex/gpt-6-astra --arm <other-model>` accept Codex models.
+Trials never fall back if Codex fails. See [the Codex settings](configuration.md) for the
+weekly ceiling, private home, executable, model list, timeout and live-run fallback.

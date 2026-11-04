@@ -93,6 +93,18 @@ def _purpose(r: dict) -> str:
     return (r.get("purpose") or "?").split()[0]
 
 
+def codex_rate() -> dict | None:
+    """Latest weekly window, including calls observed by another supervisor process."""
+    from . import codexcli
+    current = codexcli.rate_limit()
+    if current is not None:
+        return current
+    try:
+        return json.loads((SUP_DIR / "codex_rate.json").read_text())
+    except (OSError, ValueError):
+        return None
+
+
 def costs(days: int = 7, today: date | None = None) -> dict:
     """Spending per day for the last `days` days, by component, and today's spend against each cap.
 
@@ -118,6 +130,8 @@ def costs(days: int = 7, today: date | None = None) -> dict:
     unpriced = 0
     for r in jsonl(SUP_DIR / "cloud_usage.jsonl"):
         if r.get("usd") is None:
+            if str(r.get("model", "")).startswith("codex/") and " (fallback " not in r["model"]:
+                continue
             unpriced += 1
             continue
         who = r.get("instance", "?")
@@ -155,7 +169,8 @@ def costs(days: int = 7, today: date | None = None) -> dict:
                      "coder": (coder.spent_today(name), coder.DAILY_USD),
                      "trials": (used["usd"], trial.DAILY_USD), "trials_started": (used["started"], trial.TRIALS_PER_DAY)})
     return {"days": rows, "today": rows[-1], "caps": caps, "judge_today": judge_today,
-            "judge_today_total": sum(judge_today.values()), "judge_alert": JUDGE_ALERT_USD, "unpriced": unpriced}
+            "judge_today_total": sum(judge_today.values()), "judge_alert": JUDGE_ALERT_USD,
+            "unpriced": unpriced, "codex_rate": codex_rate()}
 
 
 # -- the judge's verdicts --------------------------------------------------------------------------------------
@@ -217,7 +232,8 @@ def instance_detail(name: str) -> dict:
         pass
     questions = [m for m in messages.pending() if m["from"] == name]
     return {"name": name, "paused": paused(name),
-            "model": cfg.get("LLM_MODEL", "?"), "via": ("broker (self-hosted)" if selfhosted.serves(cfg.get("LLM_MODEL")) else "broker (cloud)")
+            "model": cfg.get("LLM_MODEL", "?"), "via": ("broker (Codex plan)" if str(cfg.get("LLM_MODEL", "")).startswith("codex/") else
+             "broker (self-hosted)" if selfhosted.serves(cfg.get("LLM_MODEL")) else "broker (cloud)")
             if cfg.get("LLM_BASE_URL") == "broker" else cfg.get("LLM_BASE_URL", "?"),
             "wake": cfg.get("WAKE_INTERVAL_MINUTES", "120"), "effort": cfg.get("LLM_REASONING_EFFORT", "medium"),
             "tools_off": sorted(disabled_tools(name)),
@@ -406,7 +422,10 @@ def provider_alerts() -> list[dict]:
         if str(row.get("ts", "")) < since:
             continue
         model, error = row.get("model", ""), row.get("error")
-        provider = "openrouter" if model.startswith("openrouter/") else "anthropic" if model.startswith("claude-") else ""
+        if " (fallback " in model:
+            model = model.split(" (fallback ", 1)[1].removesuffix(")")
+        provider = ("openrouter" if model.startswith("openrouter/") else
+                    "anthropic" if model.startswith("claude-") else "codex" if model.startswith("codex/") else "")
         if not provider:
             continue
         if not error:
@@ -467,6 +486,10 @@ def alerts(snap: dict | None = None, now: datetime | None = None, cost: dict | N
             out.append({"id": log_alert_id(line), "text": line[12:20] + line[21:200]})
     out.extend(pause_alert(p) for p in core.long_pauses(now))
     out.extend(provider_alerts())
+    from . import codexcli
+    if (fault := codexcli.outage()):
+        title = "Codex security event" if fault.get("security") else "Codex unavailable"
+        out.append({"id": "provider:codex:outage", "text": f"{title}: {fault['reason']}"})
     if CORRECTION_ALERT_CYCLES > 0:
         for name in instance_names():
             out.extend(corrections.alerts(name, CORRECTION_ALERT_CYCLES, now))

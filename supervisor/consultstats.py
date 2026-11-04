@@ -73,6 +73,8 @@ def vendor(model: str | None) -> str | None:
     if not isinstance(model, str) or not model.strip():
         return None
     name = model.strip()
+    if name.startswith("codex/"):
+        return "openai"
     if name.startswith("openrouter/"):
         parts = name.split("/")
         return parts[1] if len(parts) > 1 and parts[1] else None

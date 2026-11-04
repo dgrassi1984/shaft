@@ -162,6 +162,9 @@ It is unrelated to the cloud-only setup above.
 
 ## Optional features
 
+[Codex plan models](docs/local-model.md#codex-plan-routing) use the broker without a local
+model server. Run `bin/shaft codex login` before selecting a `codex/` model.
+
 Use the [web UI/PWA and API](docs/web-and-api.md) for tailnet chat, phone access,
 and an inbox doorbell. [Integrations](docs/integrations.md) covers Telegram,
 Google mail/calendar/Drive grants, instance-owned Google accounts, scheduled jobs,

@@ -85,6 +85,22 @@ the Bonsai provider loads its adapter at startup only and ignores a per-request 
 2026-10-28 every adapter was DISCARDED. It needs per-request adapter loading in `bonsai_server.py` first. Steering is reserved for later. No model run was performed
 while building this hook. Source: [perturbation.py](../supervisor/perturbation.py).
 
+## Codex plan routing
+
+Run `bin/shaft codex login` to sign in using SHAFT's private Codex home, then
+`bin/shaft config <name> set LLM_MODEL=codex/gpt-6-astra`.
+The broker keeps one Codex session per run. It needs no local model server and accepts text only;
+`describe_image` remains available through its configured vision model.
+`bin/shaft codex status` shows login, models, any outage and the last observed weekly percentage.
+The costs views show the percentage too. The broker saves it in `.supervisor/codex_rate.json`
+so the panel can read it from another process.
+
+At the weekly ceiling (85% by default), or after another Codex failure, a live run
+uses the configured cloud fallback for the rest of that run. Fallback calls cost API dollars.
+The operator gets a desktop and phone notification on outage and recovery; security events
+are named explicitly. Trials and bake-offs fail instead of switching models.
+See [configuration](configuration.md) for all `SHAFT_CODEX_*` settings.
+
 ## Self-hosted routing
 
 Set `LLM_BASE_URL="broker"` and a model such as `gpu/bonsai2`. Configure the named

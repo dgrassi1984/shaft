@@ -462,6 +462,8 @@ def render_costs(snap, ui, width, height):
     jt.append(" · ".join(f"{k} ${v:.2f}" for k, v in sorted(c["judge_today"].items(), key=lambda kv: -kv[1])),
               style="red" if c["judge_today_total"] >= c["judge_alert"] else "")
     lines.append(jt)
+    if (rate := c.get("codex_rate")) is not None:
+        lines.append(Text(f"   Codex plan: {rate['used_percent']}% of weekly allowance used"))
     if c["unpriced"]:
         lines.append(Text(f"   {c['unpriced']} unpriced model call(s) are not counted in dollar totals", style="yellow"))
     lines.append(Text(""))

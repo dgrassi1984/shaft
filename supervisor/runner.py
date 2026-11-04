@@ -95,9 +95,11 @@ def model_server(name: str) -> str | None:
     """The model server the instance's calls go to ('127.0.0.1:8780', or a self-hosted one through the broker:
     'gpu-box.example:8080'), or None when it thinks with a cloud model. Two instances compete for the model only when
     both use the same server."""
-    from . import selfhosted
+    from . import codexcli, selfhosted
     cfg = instance_config(name)
     url = cfg.get("LLM_BASE_URL", "").strip()
+    if codexcli.serves(cfg.get("LLM_MODEL")):
+        return None
     if url == "broker" and selfhosted.serves(cfg.get("LLM_MODEL")):
         return selfhosted.host_port(cfg["LLM_MODEL"])
     return localmodel.server_of(url)
@@ -638,7 +640,7 @@ def agent_command(root: Path, broker: Broker, agent_args: list[str], profile: Pa
                             **({"SHAFT_SHARED": str(broker.shared)} if broker.shared else {}),
                             **({"SHAFT_MAIL": granted} if (granted := broker.mail_env()) else {}),
                             **({"SHAFT_CALENDAR": granted} if (granted := broker.calendar_env()) else {}),
-                            **({"SHAFT_VISION": "1"} if _sees_images(root) else {}),
+                            **({"SHAFT_VISION": "1"} if _sees_images(root, extra) else {}),
                             **broker.sandbox_env(), **extra)
     return cmd, env
 
@@ -673,10 +675,12 @@ def stage_docs(root: Path, project: Path = PROJECT) -> None:
             safe_write_bytes(root, f"{DOCS_COPY}/{name}", data)
 
 
-def _sees_images(root: Path) -> bool:
-    """Whether the model in `root`'s config.env accepts images (vision.py: learned, unknown counts as no)."""
+def _sees_images(root: Path, extra: dict[str, str] | None = None) -> bool:
+    """Whether the effective model accepts images: a replay override wins over config.env; unknown counts as no."""
     from . import vision
     from .core import config_values
+    if extra is not None and "LLM_MODEL" in extra:
+        return vision.sees_images_or_no(extra["LLM_MODEL"])
     try:
         model = config_values(safe_read(root, "config.env")).get("LLM_MODEL")
     except (OSError, UnsafePath, ValueError):

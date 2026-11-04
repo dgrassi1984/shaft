@@ -67,10 +67,12 @@ def pinned_by(port: int = PORT, names: list[str] | None = None, config_of=instan
     """The instances whose model calls go to the server: config.env straight on it, or a self-hosted model the
     broker sends to it (SHAFT_SELF_HOSTED). While there is one, it never idles out — and it being down is a fault
     (down_problem). The gpu -> local fallback does not pin it: that path starts it itself (ensure)."""
-    from . import selfhosted   # here: selfhosted imports this module
+    from . import codexcli, selfhosted   # here: selfhosted imports this module
 
     def url(cfg: dict) -> str:
         u, model = cfg.get("LLM_BASE_URL", "").strip(), cfg.get("LLM_MODEL")
+        if codexcli.serves(model):
+            return "broker"
         return selfhosted.server(model)["url"] if u == "broker" and selfhosted.serves(model) else u
     return [n for n in (instance_names() if names is None else names) if is_service(url(config_of(n)), port)]
 

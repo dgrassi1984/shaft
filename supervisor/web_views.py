@@ -726,6 +726,8 @@ def costs_page(c: dict, names: list[str], csrf: str) -> Html:
     today = c["today"]
     parts = [f"instances ${sum(today['instances'].values()):.2f}", f"trials ${today['trials']:.2f}",
              f"judge ${today['judge']:.2f}", f"coder ${today['coder']:.2f}"]
+    if (rate := c.get("codex_rate")) is not None:
+        parts.append(f"Codex plan: {rate['used_percent']}% of weekly allowance used")
     if today["recaps"]:
         parts.append(f"recaps ${today['recaps']:.2f}")
     if today["other"]:

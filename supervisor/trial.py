@@ -42,7 +42,7 @@ from pathlib import Path
 from . import gate, localmodel, mind
 from .core import (CYCLE_TIMEOUT_S, DOCS_COPY, HOME, LLM_PORTS, MIND_PATHS, PROJECT, SLEEP_TIMEOUT_S, SUP_DIR,
                    TreeTooBig, UnsafePath,
-                   cloud_model, contained, copy_beneath, dollars, hours, knob, list_beneath, log, positive_int,
+                   cloud_model, instance_model, contained, copy_beneath, dollars, hours, knob, list_beneath, log, positive_int,
                    read_tree, reserved, safe_read, safe_read_bytes, safe_write, secrets_env, whole)
 
 TRIALS_PER_DAY, TRIALS_PER_DAY_SRC = knob(
@@ -826,6 +826,11 @@ def create(name: str, change: dict[str, bytes | None], hypothesis: str, *, by: s
            allow_empty: bool = False, model: str = "auto", cycles: int = 1, sleep_between: bool = False) -> dict:
     """Queue a trial of `change` (path -> new bytes, None = delete) against the instance's committed code.
     Operator-only extras: `base` replaces A's files (planted tests), `allow_empty` (A/A calibration), `model`."""
+    if model not in ("auto", "cloud", "local"):
+        try:
+            model = instance_model(model)
+        except ValueError as e:
+            raise TrialError(str(e)) from None
     units = replay_units(cycles, sleep_between)
     root = project / "instances" / name
     a = committed_code(project, name)
@@ -1047,6 +1052,8 @@ def local_never_free(project: Path = PROJECT) -> str:
 def _pair_model(t: dict, s: dict, project: Path) -> str | None:
     """'local' (the code's own local model), 'own' (the code's own cloud model), a fallback cloud model id, or
     None (wait: the local model is busy now)."""
+    if t.get("model") not in (None, "auto", "cloud", "local"):
+        return t["model"]
     if t.get("model") == "cloud":
         return FALLBACK_MODEL
     if not t["llm"]["local"]:

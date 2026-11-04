@@ -94,6 +94,12 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_DIGEST_AT` | `07:15` | local digest time, or quiet hours' end if later | [pushes.py](../supervisor/pushes.py) |
 | `SHAFT_PUSH_BUDGET` | `6` | operator pushes per instance per day before holding for a digest (0: unlimited, count hidden) | [pushes.py](../supervisor/pushes.py) |
 | `SHAFT_DESCRIBE_MODEL` | `claude-haiku-5-5` | the model describe_image uses for an instance whose own model cannot see images | [broker.py](../supervisor/broker.py) |
+| `SHAFT_CODEX_HOME` | `.supervisor/codex-home` | private Codex login and configuration directory, mode 700 | [codexcli.py](../supervisor/codexcli.py) |
+| `SHAFT_CODEX_BIN` | `/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex` | Codex CLI executable | [codexcli.py](../supervisor/codexcli.py) |
+| `SHAFT_CODEX_MODELS` | `codex/gpt-6-astra,codex/gpt-6.1-sol` | Codex models offered to instances, comma separated | [codexcli.py](../supervisor/codexcli.py) |
+| `SHAFT_CODEX_WEEKLY_PCT` | `85` | stop Codex calls at this percentage of the weekly allowance | [codexcli.py](../supervisor/codexcli.py) |
+| `SHAFT_CODEX_FALLBACK_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | cloud model used for the rest of a run after a Codex failure | [codexcli.py](../supervisor/codexcli.py) |
+| `SHAFT_CODEX_TIMEOUT_S` | `900` | seconds allowed for a Codex model step; held tool calls are exempt | [codexcli.py](../supervisor/codexcli.py) |
 | `SHAFT_CLOUD_MODELS` | `claude-haiku-5-5,claude-opus-5-5,openrouter/xiaomi/mimo-v2.6-pro` | the cloud models an instance may run on (through the broker) | [cloudllm.py](../supervisor/cloudllm.py) |
 | `SHAFT_OPENROUTER_PROVIDER` | `{"only": ["novita", "deepinfra"], "order": ["novita", "deepinfra"], "allow_fallbacks": false, "data_collection": "deny", "zdr": true, "require_parameters": true}` | OpenRouter's provider routing for every openrouter/ call (JSON): which providers, and the data policy | [cloudllm.py](../supervisor/cloudllm.py) |
 | `SHAFT_CLOUD_DAILY_USD` | `8` | dollars per day an instance may spend on its cloud model (shaft limits can set one instance's own cap) | [cloudllm.py](../supervisor/cloudllm.py) |
@@ -361,3 +367,12 @@ is configured in `SHAFT_SELF_HOSTED`. Its fallback defaults to `:8780`; set
 Trial replays disable fallback. Sources: [cloudllm.py](../supervisor/cloudllm.py),
 [selfhosted.py](../supervisor/selfhosted.py),
 [selfhosted.py](../supervisor/selfhosted.py).
+
+Codex plan routing also uses `LLM_BASE_URL="broker"`, with `LLM_MODEL="codex/gpt-6-astra"`
+or another model in `SHAFT_CODEX_MODELS`. Run `shaft codex login` first; `shaft codex status`
+shows whether login is present, the last observed weekly usage, offered models and any outage.
+The allowance is shared with other Codex use. Calls use no API dollars; after a failure,
+the run uses `SHAFT_CODEX_FALLBACK_MODEL`, charged as usual and labelled
+`codex/x (fallback y)`. Trial replays and bake-offs fail instead of falling back.
+Judges, image descriptions, consults, coder hand-offs and recaps still require their API models.
+Source: [broker.py](../supervisor/broker.py).

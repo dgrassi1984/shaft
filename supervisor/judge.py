@@ -45,7 +45,8 @@ class JudgeError(Exception):
 
 def _norm(model: str) -> str:
     """'openrouter/xiaomi/mimo-v2.6-pro', 'xiaomi/mimo-v2.6-pro' and 'anthropic/claude-haiku-5.5' compare by model."""
-    m = (model or "").strip().lower().removeprefix("openrouter/").removeprefix("anthropic/")
+    m = ((model or "").strip().lower().removeprefix("openrouter/").removeprefix("codex/")
+         .removeprefix("openai/").removeprefix("anthropic/"))
     return m.replace(".", "-")
 
 

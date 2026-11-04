@@ -75,8 +75,9 @@ def _template_text() -> str:
 def model_choices() -> list[dict]:
     """The models an instance may run on: SHAFT_CLOUD_MODELS and the self-hosted servers through the broker, or SHAFT's
     own server — each with the LLM_BASE_URL it needs."""
-    from . import cloudllm, selfhosted
+    from . import cloudllm, codexcli, selfhosted
     out = [{"model": m, "base_url": "broker", "label": f"{m} (cloud)"} for m in cloudllm.CLOUD_MODELS]
+    out += [{"model": m, "base_url": "broker", "label": f"{m} (Codex plan)"} for m in codexcli.models()]
     out += [{"model": f"{s}/bonsai2", "base_url": "broker", "label": f"{s}/bonsai2 (self-hosted)"}
             for s in selfhosted.SERVERS]
     local = config_values(_template_text()).get("LLM_MODEL")
@@ -86,8 +87,8 @@ def model_choices() -> list[dict]:
 
 
 def base_url_for(model: str) -> str | None:
-    from . import cloudllm, selfhosted
-    if model in cloudllm.CLOUD_MODELS or selfhosted.serves(model):
+    from . import cloudllm, codexcli, selfhosted
+    if model in cloudllm.CLOUD_MODELS or model in codexcli.models() or selfhosted.serves(model):
         return "broker"
     if model == config_values(_template_text()).get("LLM_MODEL"):
         return LOCAL_URL
