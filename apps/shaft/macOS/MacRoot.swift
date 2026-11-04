@@ -133,6 +133,7 @@ struct MacChats: View {
                         // shell too, or the documents and the menus stay on the current chat's.
                         ArchivedChatView(route: route) { state.path.removeAll() }
                             .environment(state.shell)
+                            .toolbar(removing: .title)   // the header's own title is the name
                     }
             }
             .environment(state.shell)
