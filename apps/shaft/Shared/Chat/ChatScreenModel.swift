@@ -55,6 +55,7 @@ final class ChatScreenModel {
     var sendRequest: SendMode?
     /// New chat asks first (the header's button, the Mac's menu).
     var confirmingNewChat = false
+    var confirmingEnd = false
 
     init(chat: ChatStore) {
         self.chat = chat
@@ -72,6 +73,7 @@ final class ChatScreenModel {
         showEarlierChats = false
         confirmRetry = nil
         confirmingNewChat = false
+        confirmingEnd = false
         preview.url = nil
         preview.error = nil
         dismissRequest += 1

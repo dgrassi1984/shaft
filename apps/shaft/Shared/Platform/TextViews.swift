@@ -53,7 +53,10 @@ struct ComposerTextView: UIViewRepresentable {
         view.font = .preferredFont(forTextStyle: .body)
         view.adjustsFontForContentSizeCategory = true
         view.backgroundColor = .clear
-        view.textContainerInset = UIEdgeInsets(top: 8, left: 4, bottom: 8, right: 4)
+        view.textColor = UIColor(Color.textPrimary)
+        view.textContainerInset = UIEdgeInsets(top: Design.Composer.verticalInset, left: Design.Composer.horizontalInset,
+                                                 bottom: Design.Composer.verticalInset, right: Design.Composer.horizontalInset)
+        view.textContainer.lineFragmentPadding = 0
         view.isScrollEnabled = false
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         view.accessibilityLabel = placeholder
@@ -106,7 +109,7 @@ struct ComposerTextView: UIViewRepresentable {
         func measure(_ view: UITextView) {
             let width = view.bounds.width > 0 ? view.bounds.width : 300
             let fitting = view.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height
-            let target = min(max(fitting, 40), parent.maxHeight)
+            let target = min(max(fitting, Design.Composer.minimumHeight), parent.maxHeight)
             let scrolls = fitting > parent.maxHeight
             if view.isScrollEnabled != scrolls { view.isScrollEnabled = scrolls }
             if abs(parent.height - target) > 0.5 {
@@ -128,13 +131,14 @@ final class ComposerUITextView: UITextView {
         super.init(frame: frame, textContainer: textContainer)
         placeholder.font = .preferredFont(forTextStyle: .body)
         placeholder.adjustsFontForContentSizeCategory = true
-        placeholder.textColor = .placeholderText
+        placeholder.textColor = UIColor(Color.textTertiary)
         placeholder.isAccessibilityElement = false
         placeholder.translatesAutoresizingMaskIntoConstraints = false
         addSubview(placeholder)
         NSLayoutConstraint.activate([
-            placeholder.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 9),
-            placeholder.topAnchor.constraint(equalTo: topAnchor, constant: 8),
+            placeholder.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Design.Composer.horizontalInset),
+            placeholder.topAnchor.constraint(equalTo: topAnchor, constant: Design.Composer.verticalInset),
+            placeholder.trailingAnchor.constraint(lessThanOrEqualTo: frameLayoutGuide.trailingAnchor, constant: -Design.Composer.horizontalInset),
         ])
     }
 
@@ -210,6 +214,7 @@ struct SelectableTextView: UIViewRepresentable {
         view.font = .preferredFont(forTextStyle: .body)
         view.adjustsFontForContentSizeCategory = true
         view.backgroundColor = .clear
+        view.textColor = UIColor(Color.textPrimary)
         view.textContainerInset = UIEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
         view.delegate = context.coordinator
         view.text = text

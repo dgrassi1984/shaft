@@ -50,6 +50,11 @@ struct DocumentsPanel: View {
             }
         }
         .onAppear(perform: openRequested)
+        .onChange(of: path) {
+            screen.shownDocument = path.reversed().compactMap { route -> String? in
+                if case .doc(let doc) = route { doc } else { nil }
+            }.first
+        }
         .onChange(of: screen.openDocument) { openRequested() }
         .sheet(isPresented: $creating) {
             NewDocumentSheet(folder: currentFolder) { created in path.append(.doc(created)) }

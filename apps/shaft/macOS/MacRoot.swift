@@ -171,8 +171,7 @@ struct MacChats: View {
             .id(selection)
             .toolbar(removing: .title)           // the header's own title is the name with its state
         } else if store.loaded {
-            ContentUnavailableView("No chat open", systemImage: "bubble.left.and.bubble.right",
-                                   description: Text("Choose an instance to chat with."))
+            MarkMessage("No chat open", message: Text("Choose an instance to chat with."))
         } else {
             ProgressView()
         }

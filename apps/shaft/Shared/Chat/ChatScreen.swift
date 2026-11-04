@@ -40,7 +40,7 @@ struct ChatScreen: View {
     private var covered: Bool {
         (screen.showDocuments && covers) || screen.selecting != nil || screen.rating != nil
             || screen.showEarlierChats || preview.url != nil || preview.error != nil
-            || screen.confirmRetry != nil || screen.confirmingNewChat || screen.composerCovered
+            || screen.confirmRetry != nil || screen.confirmingNewChat || screen.confirmingEnd || screen.composerCovered
     }
     private var covers: Bool { shell?.documentsCover ?? true }
     private var sheetsDocuments: Bool { shell?.sheetsDocuments ?? true }
@@ -109,6 +109,12 @@ struct ChatScreen: View {
             Button("New chat") { Task { await chat.clear() } }
         } message: {
             Text("An open conversation is ended first. This one stays in Earlier chats.")
+        }
+        .confirmationDialog("End the conversation with \(chat.instance)?", isPresented: $screen.confirmingEnd,
+                            titleVisibility: .visible) {
+            Button("End it") { Task { await chat.end() } }
+        } message: {
+            Text("It writes up its journal. Your next message starts a new conversation.")
         }
         .onDrop(of: [.item], isTargeted: $dropTargeted) { providers in
             guard !screen.archived else { return false }
@@ -251,7 +257,7 @@ struct ChatScreen: View {
                     }
                 }
                 if chat.content?.canEnd == true {
-                    Button { Task { await chat.end() } } label: {
+                    Button { screen.confirmingEnd = true } label: {
                         Label("End the conversation", systemImage: "flag.checkered")
                     }
                 }

@@ -132,12 +132,6 @@ struct ComposerView: View {
                          })
             .frame(height: textHeight)
             .clipped()                           // a placeholder too long at the largest text stops at the button
-            #if os(iOS)
-            // The text view is at least 40 tall with its line at the top: one line sits centred in the 44 pt capsule,
-            // and more keep 9 pt above and below.
-            .padding(.top, textHeight > 40 ? 1 : 4)
-            .padding(.bottom, textHeight > 40 ? 1 : 0)
-            #endif
     }
 
     private var attachMenu: some View {

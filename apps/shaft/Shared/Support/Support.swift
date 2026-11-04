@@ -77,24 +77,24 @@ struct StatusLine: View {
     var dismiss: () -> Void
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: Design.Space.s8) {
             Image(systemName: isError ? "exclamationmark.triangle.fill" : "checkmark.circle")
-                .foregroundStyle(isError ? Color.red : Color.secondary)
+                .foregroundStyle(isError ? Color.danger : Color.textSecondary)
                 .accessibilityHidden(true)
             Text(text)
                 .font(.footnote)
-                .foregroundStyle(isError ? Color.red : Color.secondary)
+                .foregroundStyle(isError ? Color.danger : Color.textSecondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Button(action: dismiss) {
                 Image(systemName: "xmark")
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.textSecondary)
                     .touchTarget()
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Dismiss")
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, Design.Space.gutter)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isError ? [] : .updatesFrequently)
     }

@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import SHAFTKit
 
 /// The colour tokens as AppKit colours: the same catalog sets as `Color.canvas` and the rest (Shared/Design), which
@@ -13,11 +14,10 @@ enum MacColor {
     static let textSecondary = token("textSecondary", tests: .secondaryLabelColor)
     static let textTertiary = token("textTertiary", tests: .tertiaryLabelColor)
     static let brand = token("accent", tests: .linkColor)
-    // The feed lane's four syntax tokens; until they merge, the nearest token stands in (remove the second value then).
-    static let codeKeyword = token("codeKeyword", tests: brand)
-    static let codeString = token("codeString", tests: textSecondary)
-    static let codeComment = token("codeComment", tests: textTertiary)
-    static let codeNumber = token("codeNumber", tests: brand)
+    static let codeKeyword = NSColor(Color.codeKeyword)
+    static let codeString = NSColor(Color.codeString)
+    static let codeComment = NSColor(Color.codeComment)
+    static let codeNumber = NSColor(Color.codeNumber)
 }
 
 extension NSAttributedString.Key {
@@ -84,7 +84,7 @@ enum MarkdownAttributed {
     static func render(_ markdown: String, font: NSFont = .preferredFont(forTextStyle: .body)) -> Rendered {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .full,
                                                               failurePolicy: .returnPartiallyParsedIfPossible)
-        guard let parsed = try? AttributedString(markdown: markdown, options: options) else {
+        guard let parsed = try? AttributedString(markdown: TableColumns.aligned(markdown), options: options) else {
             let text = NSMutableAttributedString(string: markdown, attributes: [.font: font,
                                                                                 .foregroundColor: MacColor.textPrimary])
             return finish(text: text, codeBlocks: [], tables: [])

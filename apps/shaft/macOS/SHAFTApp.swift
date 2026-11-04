@@ -115,8 +115,7 @@ struct MacSettings: View {
             if let session = model.session, session.isPaired {
                 SettingsView(session: session)
             } else {
-                ContentUnavailableView("Not paired", systemImage: "link",
-                                       description: Text("Pair this Mac in the SHAFT window first."))
+                MarkMessage("Not paired", message: Text("Pair this Mac in the SHAFT window first."))
             }
         }
         .environment(model)

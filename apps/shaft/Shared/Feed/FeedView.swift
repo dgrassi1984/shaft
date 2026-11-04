@@ -21,21 +21,14 @@ struct FeedView: View {
 
     private let bottomID = "feed-bottom"
 
-    /// What the feed draws: End the conversation lives in the ⋯ menu, and as the last row it would hide every new
-    /// message from the check for one below.
-    private var shown: [FeedRow] {
-        rows.filter { if case .end = $0 { false } else { true } }
-    }
-
     var body: some View {
         let newest = FeedRows.newestKey(feed)
-        let shown = shown
         ScrollView {
             VStack(alignment: .leading, spacing: Design.Space.turn) {
-                if feed.content?.chat == nil && shown.allSatisfy({ if case .day = $0 { true } else { false } }) {
+                if feed.content?.chat == nil && rows.allSatisfy({ if case .day = $0 { true } else { false } }) {
                     EmptyChat(instance: feed.instance).padding(.horizontal, Design.Space.gutter)
                 }
-                ForEach(shown) { row in
+                ForEach(rows) { row in
                     // Each row keeps its own margins, capped and centred on the column (spec §5).
                     FeedRowView(row: row, archived: screen.archived)
                         .frame(maxWidth: Design.measure, alignment: .leading)
@@ -88,7 +81,7 @@ struct FeedView: View {
             toTop = false
             position.scrollTo(edge: .top)
         }
-        .onChange(of: shown.last?.id) { _, _ in
+        .onChange(of: rows.last?.id) { _, _ in
             if pinned {
                 stickToBottom()
             } else {
@@ -149,8 +142,7 @@ struct EmptyChat: View {
 
     var body: some View {
         VStack(spacing: Design.Space.inTurn) {
-            Image(systemName: "bubble.left.and.bubble.right").font(.largeTitle).foregroundStyle(Color.textTertiary)
-                .accessibilityHidden(true)
+            ShaftMark()
             Text("Chat with \(instance)").font(.title3.weight(.semibold))
             Text("Your message starts a new conversation.").font(.callout).foregroundStyle(Color.textSecondary)
         }

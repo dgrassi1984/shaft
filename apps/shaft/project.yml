@@ -163,6 +163,10 @@ targets:
     platform: macOS
     sources:
       - path: macOSTests
+      - path: Shared/Design/Design.swift
+      - path: Shared/Markdown/RenderedText.swift
+      - path: Shared/Markdown/TableColumns.swift
+      - path: Shared/Documents/CommentHighlight.swift
       - path: macOS/MarkdownAttributed.swift
       - path: macOS/MenuAction.swift
       - path: macOS/MacDevSession.swift

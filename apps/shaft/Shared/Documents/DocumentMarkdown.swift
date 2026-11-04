@@ -21,9 +21,7 @@ struct DocumentMarkdown: View {
     }
 
     var body: some View {
-        Markdown(source)
-            .markdownTheme(.document)
-            .markdownCodeSyntaxHighlighter(.plainText)
+        MarkdownText(source: source, theme: .document)
             .environment(\.openURL, OpenURLAction { url in
                 guard let threads = CommentHighlight.threads(in: url) else { return .systemAction }
                 opens(threads)
@@ -32,7 +30,7 @@ struct DocumentMarkdown: View {
             .task(id: marks) {
                 let (sha, text, threads) = (doc.sha, doc.text, doc.threads)
                 let source = await Task.detached(priority: .userInitiated) {
-                    CommentHighlight.marked(text, threads: threads)
+                    CommentHighlight.marked(TableColumns.aligned(text), threads: threads)
                 }.value
                 if !Task.isCancelled { marked = (sha, source) }
             }

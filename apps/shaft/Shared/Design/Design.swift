@@ -45,6 +45,12 @@ enum Design {
         static let s24: CGFloat = 24
     }
 
+    enum Composer {
+        static let verticalInset: CGFloat = 9
+        static let horizontalInset: CGFloat = 12
+        static let minimumHeight: CGFloat = 44
+    }
+
     enum Radius {
         static let chip: CGFloat = 18
         static let composer: CGFloat = 24

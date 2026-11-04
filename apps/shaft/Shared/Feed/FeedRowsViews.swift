@@ -35,8 +35,6 @@ struct FeedRowView: View {
             PendingEditsRow(paths: paths)
         case .unsent(let entry):
             UnsentRow(entry: entry)
-        case .end:
-            EmptyView()                     // End the conversation lives in the ⋯ menu; FeedView leaves this row out
         }
     }
 }
