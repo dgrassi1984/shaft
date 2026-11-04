@@ -20,6 +20,7 @@ struct DocumentDetailView: View {
     @State private var tapped: TappedThreads?
     /// The answer of a write made on this page, while it shows.
     @State private var said: String?
+    @State private var rendered = ""
 
     private var doc: DocumentDetail? { docs.open?.path == path ? docs.open : nil }
 
@@ -72,13 +73,16 @@ struct DocumentDetailView: View {
         #endif
         .toolbar { toolbar }
         .task(id: path) { await docs.load(path) }
+        .onChange(of: doc?.text, initial: true) { _, text in
+            rendered = RenderedText.plain(text ?? "")
+        }
         .refreshable { await docs.load(path) }
         .sheet(isPresented: $editing) {
             if let doc { DocumentEditor(path: path, text: doc.text, sha: doc.sha).environment(docs) }
         }
         .sheet(isPresented: $selecting) {
-            if let doc {
-                DocumentSelectSheet(path: path, text: RenderedText.plain(doc.text)) { anchor in
+            if doc != nil {
+                DocumentSelectSheet(path: path, text: rendered) { anchor in
                     composing = CommentDraft(anchor: anchor)
                 }
             }
@@ -87,7 +91,7 @@ struct DocumentDetailView: View {
             CommentComposer(draft: draft).environment(docs)
         }
         .sheet(item: $tapped) { tapped in
-            CommentThreadsSheet(ids: tapped.ids, rendered: RenderedText.plain(doc?.text ?? ""))
+            CommentThreadsSheet(ids: tapped.ids, rendered: rendered)
                 .environment(docs)
                 .environment(screen)
         }
@@ -152,7 +156,6 @@ struct DocumentDetailView: View {
     private func threads(_ doc: DocumentDetail) -> some View {
         let open = doc.threads.filter { $0.state == "open" }
         let resolved = doc.threads.filter { $0.state != "open" }
-        let rendered = RenderedText.plain(doc.text)
         if !open.isEmpty || !resolved.isEmpty {
             VStack(alignment: .leading, spacing: Design.Space.s12) {
                 Rectangle().fill(Color.hairline).frame(height: 1)
