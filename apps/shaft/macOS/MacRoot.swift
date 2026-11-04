@@ -135,7 +135,10 @@ struct MacChats: View {
         }
         // The documents beside the chat, outside its navigation stack (ChatShell).
         .documentsInspector(state.shell, store: store)
-        .background(WindowReader { window in presence.track(window) })
+        .background(WindowReader { window in
+            presence.track(window)
+            window?.titlebarSeparatorStyle = .none   // the feed fades under the header (spec §2.4), not at a line
+        })
         .onChange(of: presence.width) { fitColumns() }
         .onChange(of: state.screen?.showDocuments ?? false) { fitColumns() }
         .onAppear {
