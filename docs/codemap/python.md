@@ -8,10 +8,13 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 
 | Module | Classes | Functions |
 |---|---|---|
+| `apps/shaft/DevServer/fixture_server.py` | — | `setup`, `seed`, `act`, `main` |
+| `apps/shaft/Shared/make_icons.py` | — | `main` |
 | `supervisor/__main__.py` | — | `cmd_new`, `cmd_delete`, `cmd_update`, `cmd_setup`, `cmd_status`, `cmd_alerts`, `cmd_limits`, `cmd_jobs`, `cmd_tools`, `cmd_channel`, `cmd_orders`, `cmd_secret`, `cmd_share`, `cmd_google`, `cmd_mail`, `cmd_calendar`, `run_many`, `cmd_mind`, `cmd_battery`, `cmd_trial`, `cmd_feedback`, `main` |
 | `supervisor/actions.py` | — | `classify`, `status`, `overreach`, `restore`, `refuse`, `begin`, `say`, `log_name`, `run_now`, `run_detached`, `busy_instances`, `service_guard`, `guard_reason`, `force_question`, `log_forced`, `cli_guard`, `trial_cost_estimate`, `aa_trial_question`, `battery_refusal`, `update_question` |
 | `supervisor/anchoring.py` | — | `strip_claim`, `case`, `candidates`, `path`, `rows`, `run`, `report` |
 | `supervisor/api.py` | `Conversations`, `Answered`, `Live`, `Handler` | `allowed_logins`, `serve`, `url`, `command` |
+| `supervisor/apns.py` | — | `configured`, `devices`, `register`, `unregister`, `status`, `provider_token` |
 | `supervisor/app_api.py` | `Refusal` | `error`, `stamp`, `file_url`, `to_json`, `partial`, `device`, `route`, `quote_text` |
 | `supervisor/attention.py` | — | `touches`, `terms`, `matches`, `score`, `section`, `report` |
 | `supervisor/autonomy.py` | `WakeFacts`, `WarmState` | `running`, `launchd_pid`, `service`, `wake_interval`, `wake_floor`, `next_wake`, `next_cycle`, `describe_schedule`, `editing_lock`, `record`, `last_skip`, `sleep_due`, `scheduler_installed`, `next_sleep`, `replay_next_sleep`, `replay_next_wake`, `wake_gate`, `decide_wakes`, `wake_facts`, `event_wake`, `commitment_wakes`, `update_jobs`, `updating`, `update_ended`, `serve`, `stop_children_on_signal`, `default_drain_s`, `request_restart`, `cancel_restart`, `restart_request`, `parent_draining`, `drain_status`, `draining_now`, `drain_step`, `drain_tick`, `relaunch`, `restart`, `drain_line`, `battery_jobs`, `gate_warm`, `warm_ended`, `regate_after_warm`, `drain_stderr`, `stderr_tail`, `wake`, `start_wake`, `tick`, `autonomy` |
@@ -84,6 +87,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_actions.py` | `ClassificationTest`, `ActionTest` | — |
 | `supervisor/tests/test_anchoring.py` | `AnchoringTest` | `episode`, `judgment` |
 | `supervisor/tests/test_api.py` | `KeepingStringIO`, `FakeProc`, `ApiTest`, `InterjectTest`, `LongReplyTest`, `InboxDoorbellTest`, `ConversationIdTest`, `StreamHeardTest` | `fake_run_agent` |
+| `supervisor/tests/test_apns.py` | `APNsTest` | `unb64`, `raw_to_der` |
 | `supervisor/tests/test_app_api.py` | `StubApns`, `AppTest`, `AuthTest`, `PairingTest`, `FeedTest`, `LongPollTest`, `SendTest`, `SeenTest`, `FeedbackTest`, `DocsTest`, `PushTest`, `FixturesTest` | `turn`, `html_keys`, `json_keys` |
 | `supervisor/tests/test_attachments.py` | `BrokerAttachmentsTest`, `TelegramAttachmentsTest`, `SameSecondTest` | — |
 | `supervisor/tests/test_autonomy.py` | `SleepDueTest`, `WakeTest`, `GateWarmTest` | — |
@@ -272,10 +276,10 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/version.py` | — | `supervisor_commit`, `shown_commit`, `changelog`, `commit_describe`, `service_version`, `record_service`, `service`, `instance`, `describe` |
 | `supervisor/vision.py` | `VisionError` | `sees_images`, `sees_images_or_no`, `sniff`, `prepare_bytes`, `data_url`, `split_data_url`, `count`, `prepare`, `without_images` |
 | `supervisor/watch.py` | — | `on_off`, `mode`, `run_pass`, `busy`, `tick` |
-| `supervisor/web.py` | `Request`, `Response`, `DocStale`, `DocRefused`, `Handler` | `allowed_logins`, `tailnet_hosts`, `record_hosts`, `allowed_hosts`, `url`, `new_pairing`, `devices`, `unpair`, `apns_module`, `device_from_cookie`, `paired_device`, `csrf_token`, `overview`, `respond`, `feedback_action`, `save_doc`, `delete_doc`, `comment_action`, `activity`, `attachment_path`, `serve`, `command` |
+| `supervisor/web.py` | `Request`, `Response`, `DocStale`, `DocRefused`, `Handler` | `allowed_logins`, `tailnet_hosts`, `record_hosts`, `allowed_hosts`, `url`, `new_pairing`, `devices`, `unpair`, `device_from_cookie`, `paired_device`, `csrf_token`, `overview`, `respond`, `feedback_action`, `save_doc`, `delete_doc`, `comment_action`, `activity`, `attachment_path`, `serve`, `command` |
 | `supervisor/web_actions.py` | `Refused` | `run`, `page_wait`, `server_limit`, `post_attrs`, `button`, `instance_buttons`, `message_forms`, `tool_switches`, `alert_line`, `tool_row`, `saved_row`, `alert_buttons`, `service_buttons`, `guarded`, `autonomy_button` |
 | `supervisor/web_alerts.py` | — | `event`, `forward_new`, `forward_pauses`, `forward_providers`, `start` |
-| `supervisor/web_chat.py` | `Refused`, `Relay` | `load`, `save`, `chats`, `open_chat`, `watching`, `unwatch`, `watchers`, `reply_event`, `last_from`, `summary`, `shown`, `sent_during`, `excerpt`, `wait_change`, `failure`, `message_item`, `reply_of`, `sent_mids`, `build`, `feed`, `new_chat`, `pending_feedback`, `send_feedback`, `unpend_feedback`, `reap`, `mark_retried`, `classify_reply`, `replying`, `edit_diff`, `doc_saved`, `send_comment`, `background`, `send_comment_background`, `send`, `queue`, `unqueue`, `stop`, `end`, `clear`, `parse_multipart` |
+| `supervisor/web_chat.py` | `Refused`, `Relay` | `load`, `save`, `chats`, `open_chat`, `watching`, `unwatch`, `watchers`, `reply_event`, `last_count`, `last_from`, `summary`, `shown`, `sent_during`, `excerpt`, `wait_change`, `failure`, `message_item`, `reply_of`, `sent_mids`, `build`, `feed`, `new_chat`, `pending_feedback`, `send_feedback`, `unpend_feedback`, `reap`, `mark_retried`, `classify_reply`, `replying`, `edit_diff`, `doc_saved`, `send_comment`, `background`, `send_comment_background`, `send`, `queue`, `unqueue`, `stop`, `end`, `clear`, `parse_multipart` |
 | `supervisor/web_config.py` | — | `run`, `config_row`, `config_page`, `orders_panel`, `drive_diff`, `drive_page`, `google_accounts`, `access_page`, `access` |
 | `supervisor/web_experiments.py` | — | `has_results`, `cards` |
 | `supervisor/web_google.py` | — | `setup`, `route` |
