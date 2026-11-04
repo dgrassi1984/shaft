@@ -36,6 +36,9 @@ final class ChatScreenModel {
     /// The documents sheet (or inspector) and what it should open.
     var showDocuments = false
     var openDocument: String?
+    /// The document on show in the panel: what opens again when the system reopens a panel it dropped in a turn of the
+    /// device.
+    var shownDocument: String?
     var openThread: String?
     /// The documents cover the chat (a sheet on a phone) rather than sit beside it: then they close to show the
     /// composer after ↩ Reply, and the chat is not watched while they are open (`watch=0`, §4).

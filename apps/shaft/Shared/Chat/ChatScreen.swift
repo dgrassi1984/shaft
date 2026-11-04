@@ -17,11 +17,8 @@ struct ChatScreen: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.chatInFront) private var inFront
     @Environment(\.chatCovered) private var externallyCovered
-    #if os(iOS)
-    @Environment(\.horizontalSizeClass) private var sizeClass
-    #endif
-    /// The shell that draws the documents beside the chat (an inspector outside its navigation stack); nil where
-    /// they cover it (a phone): then this screen presents them as a sheet.
+    /// The shell that draws the documents beside the chat (an inspector outside its navigation stack). Without one,
+    /// or on a phone, this screen presents them as a sheet.
     @Environment(ChatShell.self) private var shell: ChatShell?
     @State private var screen: ChatScreenModel
     private var preview: FilePreview { screen.preview }
@@ -45,36 +42,37 @@ struct ChatScreen: View {
             || screen.showEarlierChats || preview.url != nil || preview.error != nil
             || screen.confirmRetry != nil || screen.confirmingNewChat || screen.composerCovered
     }
-    private var covers: Bool {
-        #if os(iOS)
-        shell == nil || sizeClass == .compact
-        #else
-        shell == nil
-        #endif
-    }
+    private var covers: Bool { shell?.documentsCover ?? true }
+    private var sheetsDocuments: Bool { shell?.sheetsDocuments ?? true }
 
     var body: some View {
         @Bindable var screen = screen
         GeometryReader { geometry in
             VStack(spacing: 0) {
                 if chat.cid != nil { archivedBanner }
+                // The composer floats: the feed runs under it and fades there, as under the header.
                 content
-                connectionNotice
-                if let said = chat.actionError?.message ?? chat.said {
-                    StatusLine(text: said, isError: chat.actionError != nil) { chat.dismissStatus() }
-                        .padding(.vertical, 2)
-                        .task(id: said) {
-                            guard chat.actionError == nil else { return }
-                            try? await Task.sleep(for: .seconds(5))
-                            if chat.said == said { chat.dismissStatus() }
+                    .scrollEdgeEffectStyle(.soft, for: .all)
+                    .safeAreaBar(edge: .bottom, spacing: 0) {
+                        VStack(spacing: 0) {
+                            connectionNotice
+                            if let said = chat.actionError?.message ?? chat.said {
+                                StatusLine(text: said, isError: chat.actionError != nil) { chat.dismissStatus() }
+                                    .padding(.vertical, 2)
+                                    .task(id: said) {
+                                        guard chat.actionError == nil else { return }
+                                        try? await Task.sleep(for: .seconds(5))
+                                        if chat.said == said { chat.dismissStatus() }
+                                    }
+                            }
+                            if !screen.archived {
+                                ComposerView(maxHeight: max(80, geometry.size.height / 3))
+                            }
                         }
-                }
-                if !screen.archived {
-                    Divider()
-                    ComposerView(maxHeight: max(80, geometry.size.height / 3))
-                }
+                    }
             }
         }
+        .background(Color.canvas.ignoresSafeArea())
         .toolbar { header }
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -82,7 +80,7 @@ struct ChatScreen: View {
         .navigationTitle(chat.instance)
         // Over the chat on a phone (a sheet); beside it where there is room, drawn by the shell (ChatShell): an
         // inspector inside the navigation stack took the chat's toolbar away.
-        .sheet(isPresented: Binding(get: { screen.showDocuments && covers }, set: { screen.showDocuments = $0 })) {
+        .sheet(isPresented: Binding(get: { screen.showDocuments && sheetsDocuments }, set: { screen.showDocuments = $0 })) {
             DocumentsPanel(store: store, instance: chat.instance, cid: chat.cid)
                 .environment(screen)
                 .environment(preview)
@@ -119,7 +117,8 @@ struct ChatScreen: View {
         }
         .overlay {
             if dropTargeted {
-                RoundedRectangle(cornerRadius: 16).strokeBorder(Color.accentColor, lineWidth: 3)
+                RoundedRectangle(cornerRadius: Design.Radius.chip, style: .continuous)
+                    .strokeBorder(Color.brand, lineWidth: 3)
                     .padding(4)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
@@ -168,12 +167,8 @@ struct ChatScreen: View {
                 markSeen()
             }
         } else if case .stopped(let error) = chat.connection {
-            ContentUnavailableView {
-                Label("Could not open the chat", systemImage: "exclamationmark.triangle")
-            } description: {
-                Text(error.message)
-            } actions: {
-                Button("Try again") { chat.start() }
+            MarkMessage("Could not open the chat", message: Text(error.message)) {
+                Button("Try again") { chat.start() }.buttonStyle(ProminentAction())
             }
             .frame(maxHeight: .infinity)
         } else {
@@ -190,20 +185,22 @@ struct ChatScreen: View {
                 Label(seconds > 0 ? "Offline — retrying in \(seconds) s (\(error.message))" : "Offline — retrying…",
                       systemImage: "wifi.exclamationmark")
                     .font(.footnote)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Color.warning)
                     .lineLimit(2)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
+                    .padding(.horizontal, Design.Space.gutter)
+                    .padding(.vertical, Design.Space.s4)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .accessibilityAddTraits(.updatesFrequently)
         case .stopped(let error) where chat.feed != nil:
             HStack {
-                Label(error.message, systemImage: "exclamationmark.triangle").font(.footnote).foregroundStyle(.red)
+                Label(error.message, systemImage: "exclamationmark.triangle")
+                    .font(.footnote)
+                    .foregroundStyle(Color.danger)
                 Spacer()
                 Button("Try again") { chat.start() }.font(.footnote).frame(minHeight: 44)
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, Design.Space.gutter)
         default:
             EmptyView()
         }
@@ -212,9 +209,9 @@ struct ChatScreen: View {
     private var archivedBanner: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Earlier chat").font(.footnote.weight(.semibold))
+                Text("Earlier chat").font(.footnote.weight(.semibold)).foregroundStyle(Color.textPrimary)
                 if let created = chat.content?.chat?.created {
-                    Text(Stamp.full(created)).font(.caption).foregroundStyle(.secondary)
+                    Text(Stamp.full(created)).font(Design.Text.metadata).foregroundStyle(Color.textSecondary)
                 }
             }
             Spacer()
@@ -222,9 +219,9 @@ struct ChatScreen: View {
                 Button("Back to the current chat", action: backToCurrent).font(.footnote).frame(minHeight: 44)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(Color.secondary.opacity(0.1))
+        .padding(.horizontal, Design.Space.gutter)
+        .padding(.vertical, Design.Space.s4)
+        .background(Color.elevated)
     }
 
     @ToolbarContentBuilder
@@ -259,7 +256,7 @@ struct ChatScreen: View {
                     }
                 }
             } label: {
-                Image(systemName: "ellipsis.circle")
+                Image(systemName: "ellipsis")
             }
             .accessibilityLabel("More")
         }
@@ -303,47 +300,69 @@ struct ChatScreen: View {
     }
 }
 
-/// The header's title: the name, then its state and model (with what a message does now behind a tap when it is busy
-/// and not replying).
+/// The header's title: the name, then one status line, which drops its optional parts (the model, then the time)
+/// rather than truncate; behind a tap, what a message does now when it is busy, its model and its spend. Text stops
+/// growing at the largest size two lines fit in the bar.
 struct ChatTitle: View {
     let instance: String
     let archived: Bool
     @Environment(InstancesStore.self) private var store
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showNote = false
 
     var body: some View {
         let row = store.row(instance)
         Button { if row != nil { showNote = true } } label: {
             VStack(spacing: 0) {
-                Text(instance).font(.headline)
-                if let row {
-                    HStack(spacing: 4) {
-                        Image(systemName: StateIcon.symbol(row.state, replying: row.replying)).accessibilityHidden(true)
-                        Text(row.replying ? String(localized: "replying") : row.state)
-                        if !row.since.isEmpty && !row.replying { Text("· \(row.since)") }
-                    }
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                Text(instance)
+                    .font(.headline)
+                    .foregroundStyle(Color.textPrimary)
                     .lineLimit(1)
+                if let row {
+                    ViewThatFits(in: .horizontal) {
+                        status(row, time: true, model: true)
+                        status(row, time: true, model: false)
+                        status(row, time: false, model: false)
+                    }
+                    .font(Design.Text.metadata)
+                    .foregroundStyle(Color.textSecondary)
                 }
             }
+            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
         .accessibilityHint(row?.busyNote != nil ? "Says what a message does now" : "Shows its model")
         .popover(isPresented: $showNote) {
-            VStack(alignment: .leading, spacing: 6) {
-                if let note = row?.busyNote { Text(note) }
+            VStack(alignment: .leading, spacing: Design.Space.s8) {
+                if let note = row?.busyNote {
+                    Text(note)
+                        .foregroundStyle(Color.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)   // a popover would cut it to one line
+                }
                 if let model = row?.model, !model.isEmpty {
-                    Text("Model: \(model)").font(.footnote).foregroundStyle(.secondary)
+                    Text("Model: \(model)").font(.footnote).foregroundStyle(Color.textSecondary)
                 }
                 if let usd = row?.usdToday, usd > 0 {
-                    Text("Cloud spend today: $\(usd, specifier: "%.2f")").font(.footnote).foregroundStyle(.secondary)
+                    Text("Cloud spend today: $\(usd, specifier: "%.2f")").font(.footnote).foregroundStyle(Color.textSecondary)
                 }
             }
-            .padding()
+            .padding(Design.Space.s16)
             .frame(maxWidth: 320)
             .presentationCompactAdaptation(.popover)
+        }
+    }
+
+    private func status(_ row: InstanceRow, time: Bool, model: Bool) -> some View {
+        var parts = [row.replying ? String(localized: "replying") : row.state]
+        if time && !row.since.isEmpty && !row.replying { parts.append(row.since) }
+        if model && !row.model.isEmpty { parts.append(row.model) }
+        return HStack(spacing: Design.Space.s4) {
+            Image(systemName: StateIcon.symbol(row.state, replying: row.replying))
+                .symbolEffect(.pulse, isActive: StateIcon.pulses(row.state, replying: row.replying) && !reduceMotion)
+                .accessibilityHidden(true)
+            Text(parts.joined(separator: " · ")).lineLimit(1)
         }
     }
 }
@@ -358,5 +377,10 @@ enum StateIcon {
         if state.contains("waiting for you") { return "person.wave.2" }
         if state.hasPrefix("in a conversation") { return "bubble.left.and.bubble.right" }
         return "circle"
+    }
+
+    /// The only pulse in the app (spec §2.4): replying, and in a cycle.
+    static func pulses(_ state: String, replying: Bool) -> Bool {
+        replying || state.hasPrefix("in a cycle")
     }
 }
