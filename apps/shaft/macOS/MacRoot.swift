@@ -120,6 +120,10 @@ struct MacChats: View {
             // (MacPresence): the scene's own phase says neither.
             .environment(\.scenePhase, presence.phase == .background ? .background : .active)
             .environment(\.chatInFront, presence.phase == .active)
+            // A column width of its own: left to its content, the chat's minimum moved with what it shows while the
+            // documents opened, and each new minimum asked the window for another constraints pass, until AppKit's
+            // guard ended the app (crash of 2026-11-04, a document opened from the chat).
+            .navigationSplitViewColumnWidth(min: 380, ideal: 700)
         }
         // The documents beside the chat, outside its navigation stack (ChatShell).
         .documentsInspector(state.shell, store: store)
