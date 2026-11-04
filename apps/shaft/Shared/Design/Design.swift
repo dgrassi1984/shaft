@@ -15,6 +15,10 @@ extension Color {
     static let onAccent = Color("onAccent")
     static let warning = Color("warning")
     static let danger = Color("danger")
+    static let codeKeyword = Color("codeKeyword")
+    static let codeString = Color("codeString")
+    static let codeComment = Color("codeComment")
+    static let codeNumber = Color("codeNumber")
 }
 
 /// The native apps' shared type, spacing and shape.
@@ -81,7 +85,9 @@ extension View {
         background(Color.elevated, in: RoundedRectangle(cornerRadius: Design.Radius.pill, style: .continuous))
     }
 
-    /// A 44 pt target. Compact layout still needs a solution for Button labels.
+    /// A 44 pt target that takes no layout (spec §2.5): put it on a Button's label, which keeps its own compact size.
+    /// On the Mac, where a pointer needs no finger's room and a click does not reach past a view's frame, the label is
+    /// laid out at a compact 28 pt.
     func quietHitArea() -> some View {
         modifier(QuietHitArea())
     }
@@ -97,7 +103,19 @@ struct AccentBar: View {
 
 private struct QuietHitArea: ViewModifier {
     func body(content: Content) -> some View {
-        // Preserve working targets until a compact region also passes the Button click probe.
-        content.frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+        #if os(iOS)
+        content.contentShape(QuietTarget())
+        #else
+        content.frame(minWidth: 28, minHeight: 28).contentShape(Rectangle())
+        #endif
     }
 }
+
+#if os(iOS)
+/// The view's own rectangle grown to 44 pt each way about its centre, however small the view is drawn.
+private struct QuietTarget: Shape {
+    func path(in rect: CGRect) -> Path {
+        Path(rect.insetBy(dx: min(0, (rect.width - 44) / 2), dy: min(0, (rect.height - 44) / 2)))
+    }
+}
+#endif

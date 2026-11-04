@@ -7,7 +7,8 @@ fakes is what lies outside the web service, as supervisor/tests/test_app_api.py 
 
 - the tailnet: every request gets the login `tailscale serve` would add, and the host is 127.0.0.1:<port>;
 - the API a reply streams from: a send starts a scripted reply here (activity, an answer streamed in pieces, then the
-  real `web_chat._finish`); a message containing "fail" fails as a model 502 does, "slow" streams for a minute;
+  real `web_chat._finish`); a message containing "fail" fails as a model 502 does, "slow" streams for a minute,
+  "wide" answers with a 12-column table and a 400-character line of code;
 - APNs: a push is written to <dir>/pushes/ with the payload supervisor/apns.py would send, and with `--simctl`
   delivered to that simulator by `xcrun simctl push`;
 - the instances' live state (`web._live`) and Next cycle's hint: from <dir>/state.json.
@@ -187,6 +188,70 @@ def net_daily(rows):
 The summary is in `notes/docs/ledger.md`."""
 
 
+# What must scroll and never widen the column (PLAN-native-design-build.md, Review Focus 1), and every language that gets
+# syntax colours, in one answer. Ask for "wide" to have it streamed; the seed has it as a finished answer too.
+WIDE_LINE = "totals = " + " + ".join(f"account_{i:02d}.net_daily(rounded=True)" for i in range(12))
+WIDE = f"""A table of twelve columns scrolls inside its block, and so does a long line of code.
+
+| Account | Jan | Feb | Mar | Apr | May | Jun | Jul | Aug | Sep | Oct | Note |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| Operating | 12,401.19 | 12,388.02 | 12,512.77 | 12,640.11 | 12,702.40 | 12,655.93 | 12,811.08 | 12,790.64 | 12,902.15 | 13,011.72 | rounded once, at the end |
+| Reserve | 3,050.00 | 3,050.00 | 3,050.00 | 3,100.00 | 3,100.00 | 3,100.00 | 3,150.00 | 3,150.00 | 3,150.00 | 3,200.00 | topped up each quarter |
+
+Short tables hug their text, and numbers line up on the right without being told to:
+
+| Run | Tests | Failed |
+|---|---|---|
+| nightly | 412 | 0 |
+| weekly | 1,208 | 3 |
+
+```python
+{WIDE_LINE}  # {len(WIDE_LINE)} characters
+```
+
+```swift
+struct Ledger {{
+    let name = "operating" // the main account
+    func net(_ rows: [Row]) -> Int {{ rows.reduce(0) {{ $0 + $1.amount }} }}
+}}
+```
+
+```bash
+# rerun the report
+for month in 09 10; do shaft report --month "2026-$month"; done
+```
+
+```sql
+SELECT account, SUM(amount) FROM ledger WHERE month = 10 GROUP BY account; -- the close
+```
+
+```diff
+@@ -1,2 +1,2 @@
+-rounded twice
++rounded once
+```
+
+```json
+{{"account": "reserve", "total": 3050.0, "closed": true}}
+```
+
+```
+no language: plain text stays plain
+```
+
+> A quoted line from the plan, with `inline code` in it.
+
+---
+
+#### A small heading
+
+Some `inline code`, a [link](https://example.com), **bold** and *emphasis* in one paragraph, which runs long enough to wrap across two lines at least on a phone.
+
+1. first
+2. second
+"""
+
+
 def _start(web_chat, cid: str) -> None:
     relay = web_chat.Relay(cid)
     web_chat._relays[cid] = relay
@@ -201,7 +266,7 @@ def _run(web_chat, relay) -> None:
     slow = "slow" in ask.lower()
     steps = ["read_file notes/docs/ledger.md", "run tests: 412 passed", "write notes/docs/ledger.md",
              "check the October totals"]
-    answer = ANSWER.format(ask=(ask.splitlines() or ["your message"])[-1][:60])
+    answer = WIDE if "wide" in ask.lower() else ANSWER.format(ask=(ask.splitlines() or ["your message"])[-1][:60])
     for c in chat["reply"].get("comment_ids", []):      # it answers the comments it was sent, as an instance does
         answer += f"\n\n### {c}\nDone: I reworded that passage."
     words = answer.split(" ")
@@ -301,6 +366,9 @@ def seed(base: Path, web, web_chat, messages) -> None:
          "shown": "Rerun the report for October.", "mid": "seed-2", "edits": ["ledger.md"]},
         {"role": "assistant", "ts": ts(18), "content": "Done: October is rerun and **214** accounts reconciled.",
          "activity": ["run report --month 2026-10"]},
+        {"role": "user", "ts": ts(11), "content": "Show me everything that has to scroll.",
+         "shown": "Show me everything that has to scroll.", "mid": "seed-w"},
+        {"role": "assistant", "ts": ts(10.5), "content": WIDE, "activity": ["read_file notes/docs/ledger.md"]},
         {"role": "user", "ts": ts(10), "content": "And November?", "shown": "And November?", "mid": "seed-3"},
         {"role": "assistant", "ts": ts(9.5), "content": "", "note": "error: CloudError: OpenRouter HTTP 502",
          "note_kind": "model", "note_retry": True, "retry_text": "And November?"},
@@ -329,7 +397,7 @@ def seed(base: Path, web, web_chat, messages) -> None:
     web_chat.save({"id": "web-00000000000000a1", "instance": "wren", "login": ME, "created": ts(90), "state": "idle",
                    "reply": None, "turns": [
                        {"role": "user", "ts": ts(90), "content": "Water the basil?", "shown": "Water the basil?",
-                        "mid": "seed-w"},
+                        "mid": "seed-wren"},
                        {"role": "assistant", "ts": ts(89), "content": "Watered. The soil was *dry*."}]})
     (base / "state.json").write_text(json.dumps({
         "thelos": {"state": "in a cycle", "since": now.strftime("%H:%M"), "model": "cloud claude-sonnet-5",
