@@ -59,6 +59,7 @@ struct LiveReplyView: View {
     let reply: Reply
     @Environment(ChatScreenModel.self) private var screen
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var steps = false
 
     var body: some View {
@@ -85,24 +86,30 @@ struct LiveReplyView: View {
         .accessibilityLabel("\(screen.instance) is replying")
     }
 
-    /// One line, whatever happens: what it is doing gives way to the clock and the steps.
+    /// One line, where what it is doing gives way to the clock and the steps; at the accessibility text sizes, where
+    /// those alone would not fit, its parts stack.
     private func status(now: String?) -> some View {
-        HStack(spacing: Design.Space.s4) {
-            Image(systemName: StateIcon.symbol("", replying: true))
-                .foregroundStyle(Color.brand)
-                .symbolEffect(.pulse, isActive: !reduceMotion)
-                .accessibilityHidden(true)
-                .padding(.trailing, 2)
-            TimelineView(.periodic(from: reply.started, by: 1)) { context in
-                Text("replying · \(Stamp.elapsed(since: reply.started, now: context.date))")
+        let large = dynamicTypeSize.isAccessibilitySize
+        let layout = large ? AnyLayout(VStackLayout(alignment: .leading, spacing: Design.Space.s4))
+                           : AnyLayout(HStackLayout(spacing: Design.Space.s4))
+        return layout {
+            HStack(spacing: Design.Space.s4) {
+                Image(systemName: StateIcon.symbol("", replying: true))
+                    .foregroundStyle(Color.brand)
+                    .symbolEffect(.pulse, isActive: !reduceMotion)
+                    .accessibilityHidden(true)
+                    .padding(.trailing, 2)
+                TimelineView(.periodic(from: reply.started, by: 1)) { context in
+                    Text("replying · \(Stamp.elapsed(since: reply.started, now: context.date))")
+                }
             }
             .fixedSize()
             if let now {
-                Text("· \(now)")
+                Text(large ? now : "· \(now)")
                     .lineLimit(1)
                     .layoutPriority(-1)
-                Spacer(minLength: 0)
-                Text(reply.activity.count == 1 ? "· 1 step" : "· \(reply.activity.count) steps")
+                if !large { Spacer(minLength: 0) }
+                Text(large ? stepCount : "· \(stepCount)")
                     .foregroundStyle(Color.textTertiary)
                     .fixedSize()
             }
@@ -111,6 +118,10 @@ struct LiveReplyView: View {
         .foregroundStyle(Color.textSecondary)
         .frame(maxWidth: .infinity, minHeight: Design.Space.s24 + Design.Space.s4, alignment: .leading)
         .contentShape(Rectangle())
+    }
+
+    private var stepCount: String {
+        reply.activity.count == 1 ? "1 step" : "\(reply.activity.count) steps"
     }
 }
 

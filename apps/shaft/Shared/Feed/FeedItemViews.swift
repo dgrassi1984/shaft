@@ -309,6 +309,8 @@ struct AnswerFooter: View {
                         .quietHitArea()
                 }
                 .buttonStyle(.plain)
+                .fixedSize()
+                .layoutPriority(1)
             }
         }
     }
@@ -670,7 +672,8 @@ struct FlowLayout: Layout {
         var lines = [Line()]
         var x: CGFloat = 0
         for view in subviews {
-            let size = view.sizeThatFits(.unspecified)
+            var size = view.sizeThatFits(.unspecified)
+            if size.width > width { size = view.sizeThatFits(ProposedViewSize(width: width, height: nil)) }
             if x > 0 && x + size.width > width {
                 lines.append(Line())
                 x = 0
