@@ -37,7 +37,7 @@ and "Forget the pairing here only" when the server cannot be reached.
 - **Menus**: `ChatScreenModel.sendRequest` (a send in a mode, through the composer's own send) and
   `confirmingNewChat` and `confirmingEnd`.
 - **Pointer and keyboard on a computer** (macOS only): `HoverActions` (`Feed/FeedItemViews.swift`), Copy and Reply
-  under a message while the pointer is over it; Return in a card's answer sends, and the keyboard then moves to the
+  after a message's thumbs while the pointer is over it; Return in a card's answer sends, and the keyboard then moves to the
   main field (`Composer/ComposerView.swift`).
 - **Size**: the shell's width rules (`horizontalSizeClass` is gone from `ChatScreen`),
   `sheetFrame()` (a sheet's size on the Mac), `iconMenu()` (a composer menu drawn as its icon on the Mac).
