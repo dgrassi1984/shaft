@@ -134,7 +134,9 @@ private struct FloatingPill: ViewModifier {
 
     func body(content: Content) -> some View {
         if reduceTransparency {
-            content.background(Color.elevated, in: .capsule)
+            content
+                .background(Color.elevated, in: .capsule)
+                .overlay { Capsule().strokeBorder(Color.hairline) }     // it may float over an `elevated` block
         } else {
             content.glassEffect(.regular.interactive(), in: .capsule)
         }

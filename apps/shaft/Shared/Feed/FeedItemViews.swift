@@ -66,6 +66,14 @@ struct MessageMenu: ViewModifier {
 }
 
 extension View {
+    /// Flowing text has no surface of its own: a long press lifts it on `canvas`, not as bare words over the dimmed feed.
+    func liftsOnCanvas() -> some View {
+        padding(Design.Space.s8)
+            .background(Color.canvas, in: .rect(cornerRadius: Design.Radius.card, style: .continuous))
+            .contentShape(.contextMenuPreview, .rect(cornerRadius: Design.Radius.card, style: .continuous))
+            .padding(-Design.Space.s8)
+    }
+
     func messageMenu(_ source: String, rating: Rating? = nil, k: Int? = nil, file: String? = nil,
                      rateable: Bool = false) -> some View {
         modifier(MessageMenu(source: source, rating: rating, k: k, file: file, rateable: rateable))
@@ -207,6 +215,7 @@ struct AssistantItemView: View {
         VStack(alignment: .leading, spacing: Design.Space.inTurn) {
             if !answer.content.isEmpty {
                 MessageMarkdown(source: answer.content)
+                    .liftsOnCanvas()
                     .messageMenu(answer.content, rating: answer.rating, k: answer.k, rateable: true)
             } else if answer.failure == nil {
                 Text("(no answer)").foregroundStyle(Color.textSecondary).italic()
@@ -607,6 +616,7 @@ struct SentItemView: View {
                     .foregroundStyle(asking ? Color.brand : Color.textSecondary)
                 if !message.text.isEmpty {
                     MessageMarkdown(source: message.text)
+                        .liftsOnCanvas()
                         .messageMenu(message.text, rating: message.rating, file: message.file, rateable: true)
                 }
                 AttachmentsView(attachments: message.attachments)

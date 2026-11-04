@@ -106,7 +106,8 @@ private struct ShaftParagraph: View {
         let text = configuration.label
             .fixedSize(horizontal: false, vertical: true)
             .lineSpacing(Design.Text.lineSpacing)
-        if streaming {
+        // Only the few paragraphs that have inline code leave the system's text drawing.
+        if streaming || !configuration.content.renderMarkdown().contains("`") {
             text
         } else {
             text
