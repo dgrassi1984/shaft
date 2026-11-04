@@ -90,6 +90,8 @@ enum MacDevDriver {
         case "activate":
             NSApp.activate(ignoringOtherApps: true)
             window?.makeKeyAndOrderFront(nil)
+            keepFront = true
+            await comeToFront()
         case "float":
             // Above other apps' windows (not in front: the operator keeps working), so the chat shows and polls.
             window?.level = .floating
@@ -153,6 +155,19 @@ enum MacDevDriver {
                 log("split \(split.isVertical ? "columns" : "rows"): " + split.arrangedSubviews
                     .map { "\(Int($0.frame.width))x\(Int($0.frame.height))\($0.isHidden ? " hidden" : "") \($0.effectiveAppearance.name.rawValue)" }
                     .joined(separator: ", "))
+                guard let controller = split.delegate as? NSSplitViewController else { return }
+                for item in controller.splitViewItems {
+                    log("  item \(item.behavior.rawValue) \(type(of: item.viewController)): min \(Int(item.minimumThickness)) max \(item.maximumThickness) hold \(item.holdingPriority.rawValue) collapsed \(item.isCollapsed) sep \(item.titlebarSeparatorStyle.rawValue) view \(Int(item.viewController.view.frame.width)) fit \(Int(item.viewController.view.fittingSize.width))")
+                }
+            }
+            log("window \(Int(window?.frame.width ?? 0))x\(Int(window?.frame.height ?? 0)) content \(Int(window?.contentView?.frame.width ?? 0)) min \(window?.minSize ?? .zero) contentMin \(window?.contentMinSize ?? .zero)")
+        case "divider":
+            // The divider of the split view that has an inspector, dragged so the inspector is <width> wide.
+            guard let width = Double(rest), let root = window?.contentView else { return }
+            walk(root) { view in
+                guard let split = view as? NSSplitView, let items = (split.delegate as? NSSplitViewController)?.splitViewItems,
+                      items.contains(where: { $0.behavior == .inspector }) else { return }
+                split.setPosition(split.bounds.width - width - split.dividerThickness, ofDividerAt: 0)
             }
         case "resize":
             // A new window size (`<width> <height>`), as dragging its corner does.
@@ -165,6 +180,10 @@ enum MacDevDriver {
             state.path.append(ArchivedRoute(instance: name, cid: rest))
         case "windows":
             log("windows: " + NSApp.windows.filter(\.isVisible).map { "\($0.title.isEmpty ? "-" : $0.title) \(type(of: $0)) (\(Int($0.frame.width))x\(Int($0.frame.height)))" }.joined(separator: ", "))
+            for other in NSApp.windows where other != window {
+                log("  \(type(of: other)) visible \(other.isVisible) level \(other.level.rawValue) frame \(other.frame) parent \(other.parent.map { "\(type(of: $0))" } ?? "-") alpha \(other.alphaValue): \(other.contentView.map { describe($0) } ?? "-")")
+            }
+            log("  children: \(window?.childWindows?.map { "\(type(of: $0))" } ?? [])")
         case "shotwindow":
             // The visible window with that title (Settings), drawn as `shot` draws the main one.
             guard let other = NSApp.windows.first(where: { $0.isVisible && $0.title == rest }),
@@ -257,6 +276,10 @@ enum MacDevDriver {
             // that runs this, which watches for this line and answers with `<name>.ack` (the app has no such right).
             let ack = dir.appending(path: "\(rest).ack")
             try? FileManager.default.removeItem(at: ack)
+            // Where the pointer is (a hover over the toolbar changes what it draws), and whether the window has the keys.
+            if keepFront { await comeToFront() }
+            let pointer = NSEvent.mouseLocation
+            log("window [key \(window?.isKeyWindow ?? false) occluded \(!(window?.occlusionState.contains(.visible) ?? false)) active \(NSApp.isActive)] pointer \(Int(pointer.x)),\(Int(pointer.y)) in window \(window?.frame.contains(pointer) ?? false)")
             log("CAPTURE \(rest) \(window?.windowNumber ?? 0)")
             let start = Date()
             while !FileManager.default.fileExists(atPath: ack.path), Date().timeIntervalSince(start) < 5 {
@@ -375,6 +398,25 @@ enum MacDevDriver {
             found = (owner ?? view, range)
         }
         return found
+    }
+
+    /// `activate` was asked for: each capture takes the front again first (another app may have taken it since).
+    private static var keepFront = false
+
+    /// Activates the app and waits for its window to have the keys, then for it to redraw as the window in front.
+    private static func comeToFront() async {
+        for attempt in 0..<60 where !(NSApp.isActive && window?.isKeyWindow == true) {
+            if attempt % 10 == 0 {
+                NSApp.activate(ignoringOtherApps: true)
+                window?.makeKeyAndOrderFront(nil)
+            }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        try? await Task.sleep(for: .milliseconds(250))
+    }
+
+    private static func describe(_ view: NSView) -> String {
+        "\(type(of: view))" + (view.subviews.isEmpty ? "" : "[" + view.subviews.map(describe).joined(separator: ", ") + "]")
     }
 
     private static func walk(_ view: NSView, _ visit: (NSView) -> Void) {

@@ -16,11 +16,25 @@ final class ChatShell {
     /// The system opens an inspector as an overlay dimming the chat unless about 450 pt stay for the chat beside its
     /// minimum: this much holds at `besideWidth`. Under about 770 pt it is narrower than `inspectorWidth`.
     static let inspectorMinimum: CGFloat = 240
+    #if os(macOS)
+    /// The sidebar's minimum on the Mac.
+    static let sidebarMinimum: CGFloat = 220
+
+    /// Sidebar, chat and documents no longer fit together under this window width: the spec's 1000 (§5), or more for a
+    /// sidebar dragged wider, so the chat keeps its minimum.
+    static func threeColumnWidth(sidebar: CGFloat) -> CGFloat {
+        max(threeColumnWidth, sidebar + chatMinimum + inspectorWidth)
+    }
+    #endif
 
     /// The chat screen showing now (set by the screen as it appears).
     var screen: ChatScreenModel?
     /// The chat's own window width, on a device whose windows resize.
     var width: CGFloat = .infinity
+    #if os(macOS)
+    /// The sidebar's width on the Mac, 0 while it is collapsed.
+    var sidebarWidth: CGFloat = 0
+    #endif
     /// A phone: no inspector, `ChatScreen` draws the documents as a sheet.
     let sheetsDocuments: Bool
 
@@ -35,7 +49,15 @@ final class ChatShell {
     /// The widest the inspector may be dragged and still leave the chat its minimum.
     var inspectorMaximum: CGFloat {
         guard width.isFinite else { return 560 }
+        #if os(macOS)
+        // The chat keeps its minimum, and the split view, which counts the inspector twice, stays inside the window
+        // (MacRoot.splitChatMinimum). A dragged inspector never leaves it.
+        let sidebarMinimum = sidebarWidth > 0 ? Self.sidebarMinimum : 0
+        let counted = (width - sidebarMinimum - Self.chatMinimum + Self.inspectorWidth) / 2
+        return max(Self.inspectorWidth, min(560, width - sidebarWidth - Self.chatMinimum, counted.rounded(.down)))
+        #else
         return max(Self.inspectorWidth, min(560, width - Self.chatMinimum - (collapsesSidebar ? 0 : 300)))
+        #endif
     }
 }
 
@@ -63,7 +85,8 @@ extension View {
                     .inspectorColumnWidth(min: ChatShell.inspectorMinimum, ideal: ChatShell.inspectorWidth,
                                           max: shell.inspectorMaximum)
                     #else
-                    .inspectorColumnWidth(min: 320, ideal: 400, max: 560)
+                    .inspectorColumnWidth(min: ChatShell.inspectorWidth, ideal: ChatShell.inspectorWidth,
+                                          max: shell.inspectorMaximum)
                     #endif
             }
         }
