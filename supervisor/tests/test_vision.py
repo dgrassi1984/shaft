@@ -68,6 +68,7 @@ class CapabilityTest(Case):
         self.assertFalse(vision.sees_images("openrouter/xiaomi/mimo-v2.5-pro"))
         self.assertFalse(vision.sees_images("openrouter/nobody/unknown"))
         self.assertTrue(vision.sees_images("claude-opus-5-5"))
+        self.assertTrue(vision.sees_images("codex/gpt-6-astra"))
         self.assertFalse(vision.sees_images("gpu/bonsai2"))
         self.assertEqual(self.models.calls, 1)                    # cached: one fetch for all of them
 
@@ -93,7 +94,7 @@ class CapabilityTest(Case):
     def test_agent_environment_says_whether_the_model_sees_images(self):
         root = Path(tempfile.mkdtemp(prefix="shaft-vision-inst-"))
         for model, seen in (("claude-opus-5-5", True), ("openrouter/xiaomi/mimo-v2.6-pro", True),
-                            ("gpu/bonsai2", False)):
+                            ("gpu/bonsai2", False), ("codex/gpt-6-astra", True)):
             (root / "config.env").write_text(f'LLM_MODEL="{model}"\n')
             self.assertEqual(runner._sees_images(root), seen, model)
 

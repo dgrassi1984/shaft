@@ -64,9 +64,9 @@ class BrokerTest(Case):
                 mock.patch.object(broker.threading, "Thread"):
             self.b.start()
 
-    def call(self, stream=False, writer=None):
+    def call(self, stream=False, writer=None, content="same body"):
         h = self.handler.__new__(self.handler)
-        body = {"model": MODEL, "messages": [{"role": "user", "content": "same body"}], "stream": stream}
+        body = {"model": MODEL, "messages": [{"role": "user", "content": content}], "stream": stream}
         data = json.dumps(body).encode()
         h.rfile, h.wfile = io.BytesIO(data), writer if writer is not None else io.BytesIO()
         h.headers = {"Content-Length": str(len(data))}
@@ -111,6 +111,64 @@ class BrokerTest(Case):
         self.assertTrue(codexcli.outage()["security"])
         self.desktop.assert_called_once_with("Codex security event", "native tool")
         self.phone.assert_called_once()
+
+    def test_fallback_without_vision_removes_images_and_stays_sticky(self):
+        self.channel.complete.side_effect = codexcli.CodexFailure("offline")
+        content = [{"type": "text", "text": "look"},
+                   {"type": "image_url", "image_url": {"url": "data:image/png;base64,cHJpdmF0ZQ=="}}]
+        with mock.patch.object(vision, "prepare_bytes", return_value=("image/png", b"private")), \
+                mock.patch.object(vision, "_openrouter_modalities", return_value={"test/fallback": ["text"]}), \
+                mock.patch.object(cloudllm, "complete", side_effect=self.cloud) as cloud:
+            for _ in range(2):
+                h, _ = self.call(content=content)
+                h.send_response.assert_called_once_with(200)
+                sent = cloud.call_args.args[1]
+                self.assertEqual(vision.count(sent), 0)
+                text = sent["messages"][0]["content"]
+                self.assertTrue(text.startswith("look[image]"))
+                self.assertIn("could not be shown on the fallback model " + FALLBACK, text)
+                self.assertIn("I have not seen it", text)
+        self.channel.complete.assert_called_once()
+        self.assertEqual(cloud.call_count, 2)
+        for output in (str(self.b._log.call_args_list), cloudllm.USAGE.read_text()):
+            self.assertNotIn("cHJpdmF0ZQ==", output)
+            self.assertNotIn("data:image", output)
+
+    def test_fallback_with_vision_preserves_images(self):
+        self.channel.complete.side_effect = codexcli.CodexFailure("offline")
+        content = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,cHJpdmF0ZQ=="}}]
+        with mock.patch.object(vision, "prepare_bytes", return_value=("image/png", b"private")), \
+                mock.patch.object(vision, "_openrouter_modalities", return_value={"test/fallback": ["text", "image"]}), \
+                mock.patch.object(cloudllm, "complete", side_effect=self.cloud) as cloud:
+            for _ in range(2):
+                h, original = self.call(content=content)
+                h.send_response.assert_called_once_with(200)
+                self.assertEqual(cloud.call_args.args[1], {**original, "model": FALLBACK})
+        self.channel.complete.assert_called_once()
+        for output in (str(self.b._log.call_args_list), cloudllm.USAGE.read_text()):
+            self.assertNotIn("cHJpdmF0ZQ==", output)
+            self.assertNotIn("data:image", output)
+
+    def test_fallback_unknown_vision_strips_images_in_stream_instead_of_http_400(self):
+        self.b.codex_down = "offline"
+        content = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,cHJpdmF0ZQ=="}}]
+        with mock.patch.object(vision, "prepare_bytes", return_value=("image/png", b"private")), \
+                mock.patch.object(vision, "_openrouter_modalities", side_effect=vision.VisionError("no cache")), \
+                mock.patch.object(cloudllm, "openrouter_stream", return_value=iter_stream(b"data: [DONE]\n\n")) as cloud:
+            h, _ = self.call(content=content, stream=True)
+        h.send_response.assert_called_once_with(200)
+        self.assertEqual(vision.count(cloud.call_args.args[1]), 0)
+        self.assertIn("could not be shown", cloud.call_args.args[1]["messages"][0]["content"])
+
+    def test_replay_with_images_fails_without_fallback(self):
+        self.b.local_fallback = broker.ReplayBroker.local_fallback
+        self.channel.complete.side_effect = codexcli.CodexFailure("offline")
+        content = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,cHJpdmF0ZQ=="}}]
+        with mock.patch.object(vision, "prepare_bytes", return_value=("image/png", b"private")), \
+                mock.patch.object(cloudllm, "complete") as cloud:
+            h, _ = self.call(content=content)
+        h.send_response.assert_called_once_with(502)
+        cloud.assert_not_called()
 
     def test_replay_failure_is_http_error_and_never_falls_back(self):
         self.b.local_fallback = broker.ReplayBroker.local_fallback
@@ -292,13 +350,13 @@ class ModelsTest(Case):
     def test_model_normalization_and_vendor(self):
         self.assertTrue(judge.same_model(MODEL, "openrouter/openai/gpt-6-astra"))
         self.assertEqual(consultstats.vendor(MODEL), "openai")
-        self.assertFalse(vision.sees_images(MODEL))
+        self.assertTrue(vision.sees_images(MODEL))
 
-    def test_replay_on_text_only_model_does_not_inherit_vision_from_config(self):
+    def test_replay_model_image_capability_overrides_config(self):
         # Regression: replay override used to advertise images from the original vision model.
         (self.root / "config.env").write_text('LLM_MODEL="claude-haiku-5-5"\n')
         self.assertTrue(runner._sees_images(self.root))
-        self.assertFalse(runner._sees_images(self.root, {"LLM_MODEL": MODEL}))
+        self.assertTrue(runner._sees_images(self.root, {"LLM_MODEL": MODEL}))
         with mock.patch.object(vision, "_openrouter_modalities", return_value={"test/text": ["text"]}):
             self.assertFalse(runner._sees_images(self.root, {"LLM_MODEL": "openrouter/test/text"}))
 
@@ -356,7 +414,7 @@ class ModelsTest(Case):
                 mock.patch.object(runner.sandbox, "wrap", side_effect=lambda profile, args: args), \
                 mock.patch.object(runner, "stage_docs"):
             _, env = runner.agent_command(self.root, b, ["live"], self.root / "profile.sb", [], {"LLM_MODEL": MODEL})
-        self.assertNotIn("SHAFT_VISION", env)
+        self.assertEqual(env["SHAFT_VISION"], "1")
         self.assertEqual(env["LLM_MODEL"], MODEL)
 
     def test_trial_budget_records_codex_as_cloud_without_local_units(self):

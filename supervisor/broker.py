@@ -966,6 +966,17 @@ class Broker:
                         if not broker.local_fallback:
                             raise cloudllm.CloudError(502, f"Codex failed: {broker.codex_down}")
                         body = {**body, "model": codexcli.FALLBACK_MODEL}
+                        try:
+                            fallback_vision = not images or vision.sees_images(body["model"])
+                        except vision.VisionError:
+                            fallback_vision = False
+                        if not fallback_vision:
+                            body["messages"] = [
+                                {**m, "content": vision.without_images(m.get("content")) +
+                                 f"\n[The image could not be shown on the fallback model {body['model']}; "
+                                 "I have not seen it.]"}
+                                if vision.count({"messages": [m]}) else m
+                                for m in body.get("messages", [])]
                         label = f"{original} (fallback {body['model']})"
                     with cloudllm.fallback_label(label):
                         if selfhosted.serves(body.get("model")):

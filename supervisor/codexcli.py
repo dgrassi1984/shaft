@@ -65,6 +65,10 @@ class CodexFailure(Exception):
         super().__init__(reason)
 
 
+class _NoActiveTurn(CodexFailure):
+    pass
+
+
 class CodexClosed(CodexFailure):
     pass
 
@@ -153,14 +157,32 @@ def _seatbelt(argv: list[str], folder: Path, home: Path, auth: Path) -> list[str
     return sandbox.wrap(path, argv)
 
 
-def _text(content) -> str:
+def _split(content) -> tuple[str, list[str]]:
     if content is None:
-        return ""
+        return "", []
     if isinstance(content, str):
-        return content
-    if isinstance(content, list) and all(isinstance(p, dict) and p.get("type") == "text" for p in content):
-        return "".join(p["text"] for p in content)
-    raise CodexFailure("Codex channel accepts text only; images are not supported")
+        return content, []
+    if not isinstance(content, list):
+        raise CodexFailure(f"unsupported Codex content type: {type(content).__name__}")
+    text, images = [], []
+    for part in content:
+        kind = part.get("type") if isinstance(part, dict) else type(part).__name__
+        if kind == "text":
+            text.append(part["text"])
+        elif kind == "image_url":
+            images.append(part["image_url"]["url"])
+        else:
+            raise CodexFailure(f"unsupported Codex content part type: {kind}")
+    return "".join(text), images
+
+
+def _text(content) -> str:
+    return _split(content)[0]
+
+
+def _user_key(content):
+    text, images = _split(content)
+    return [text, [hashlib.sha256(url.encode()).hexdigest() for url in images]]
 
 
 def _key(message: dict):
@@ -171,14 +193,26 @@ def _key(message: dict):
 def _anchor(messages: list[dict]) -> tuple[str, int]:
     index = next((i for i in range(len(messages) - 1, -1, -1) if messages[i]["role"] == "assistant"), -1)
     later = [{"role": m["role"], "tool_call_id": m.get("tool_call_id"),
-              **({"content": _text(m.get("content"))} if m["role"] == "user" else {})}
+              **({"content": _user_key(m.get("content"))} if m["role"] == "user" else {})}
              for m in messages[index + 1:]]
     value = [_key(messages[index]) if index >= 0 else None, later]
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest(), index
 
 
 def _transcript(messages: list[dict]) -> str:
-    return ("Prior messages (transcript):\n" + json.dumps(messages, ensure_ascii=False)
+    numbered, count = [], 0
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, list):
+            parts = []
+            for part in content:
+                if part["type"] == "image_url":
+                    count += 1
+                    part = {"type": "text", "text": f"[image {count}]"}
+                parts.append(part)
+            message = {**message, "content": parts}
+        numbered.append(message)
+    return ("Prior messages (transcript):\n" + json.dumps(numbered, ensure_ascii=False)
             + "\nContinue from the end of this transcript. Use your tools; don't write tool calls as text.")
 
 
@@ -295,7 +329,9 @@ class Channel:
             if "error" in reply:
                 error = reply["error"]
                 detail = error.get("message", "unknown") if isinstance(error, dict) else "unknown"
-                raise self._failure("Codex JSON-RPC error: " + str(detail))
+                cls = (_NoActiveTurn if method == "turn/steer" and isinstance(detail, str)
+                       and detail.lower().startswith("no active turn") else CodexFailure)
+                raise self._failure("Codex JSON-RPC error: " + str(detail), cls)
             result = reply.get("result")
             if not isinstance(result, dict):
                 raise self._failure("malformed Codex RPC result")
@@ -532,22 +568,40 @@ class Channel:
                 step = Step(body["model"], anchor)
                 self._step = step
                 delta = messages[index + 1:] if extend else messages
+                inputs = None
                 if extend and old.pending and not old.turn_ended:
                     results = {m.get("tool_call_id"): _text(m.get("content")) for m in delta if m["role"] == "tool"}
                     users = "\n".join("[message]\n" + _text(m.get("content")) for m in delta if m["role"] == "user")
+                    images = [url for m in delta if m["role"] == "user" for url in _split(m.get("content"))[1]]
                     step.turn = old.turn
-                    for n, (ident, call) in enumerate(old.pending):
-                        text = results.get(call, "not run")
-                        if n == len(old.pending) - 1 and users:
-                            text += "\n" + users
-                        self._send({"id": ident, "result": {"success": call in results,
-                            "contentItems": [{"type": "inputText", "text": text}]}})
+                    for ident, call in old.pending:
+                        self._send({"id": ident, "result": {"success": call in results, "contentItems": [
+                            {"type": "inputText", "text": results.get(call, "not run")}]}})
+                    if users or images:   # tool results reach the code host; a steer reaches the model
+                        steer = [{"type": "text", "text": users or "[message]"},
+                                 *({"type": "image", "url": url} for url in images)]
+                        try:
+                            self._request("turn/steer", {"threadId": self._thread,
+                                "expectedTurnId": old.turn, "input": steer})
+                        except CodexClosed:
+                            raise
+                        except _NoActiveTurn:
+                            # Completion may already have finished this step while the RPC was in flight.
+                            self._record(step)
+                            step = Step(body["model"], anchor)
+                            self._step = step
+                            inputs = steer
+                        except CodexFailure as exc:
+                            step.error = exc
+                            self._finish(step)
                 else:
                     text = ("\n".join(_text(m.get("content")) for m in delta)
                             if extend and delta and all(m["role"] == "user" for m in delta)
                             else _transcript(delta))
-                    params = {"threadId": self._thread, "input": [{"type": "text", "text": text}],
-                              "approvalPolicy": "never"}
+                    images = [url for m in delta for url in _split(m.get("content"))[1]]
+                    inputs = [{"type": "text", "text": text}, *({"type": "image", "url": url} for url in images)]
+                if inputs is not None:
+                    params = {"threadId": self._thread, "input": inputs, "approvalPolicy": "never"}
                     effort = body.get("reasoning_effort") or (body.get("chat_template_kwargs") or {}).get("reasoning_effort")
                     if effort:
                         params["effort"] = effort

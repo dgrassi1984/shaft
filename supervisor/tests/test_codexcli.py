@@ -115,9 +115,18 @@ for line in sys.stdin:
         send(dict(id=value['id'], result=dict(turn=dict(id=turn))))
         note('turn/started', dict(threadId=thread, turn=dict(id=turn)))
         actions()
+    elif method == 'turn/steer':
+        if scenario.get('steer_turn_ended'):
+            note('turn/completed', dict(threadId=thread, turn=dict(id=turn, status='completed')))
+        if 'steer_error' in scenario:
+            send(dict(id=value['id'], error=scenario['steer_error']))
+        else:
+            send(dict(id=value['id'], result=dict(turnId=turn)))
+            if scenario.get('wait_for_steer'):
+                actions()
     elif method is None and value.get('id') in calls:
         del calls[value['id']]
-        if not calls:
+        if not calls and not scenario.get('wait_for_steer'):
             actions()
 '''
 
@@ -240,14 +249,20 @@ class ChannelTest(unittest.TestCase):
         self.assertEqual(len(self.requests("thread/start")), 1)
         self.assertEqual(self.requests("turn/start")[1]["params"]["input"][0]["text"], "more\nand this")
 
-    def test_delta_user_goes_on_last_tool_result(self):
-        self.use([[{"call": 1}, {"call": 2}], [{"text": "done"}]])
+    def test_multiple_pending_calls_answer_before_user_delta_steer(self):
+        self.use([[{"call": 1}, {"call": 2}], [{"text": "done"}]], wait_for_steer=True)
         request = body()
         first = self.channel.complete(request)
         self.channel.complete(self.extend(request, first, [("call-1", "one"), ("call-2", "two")], ["also this"]))
         answers = [r for r in self.rows() if r.get("id") in (1001, 1002)]
         self.assertEqual(answers[0]["result"]["contentItems"][0]["text"], "one")
-        self.assertEqual(answers[1]["result"]["contentItems"][0]["text"], "two\n[message]\nalso this")
+        self.assertEqual(answers[1]["result"]["contentItems"][0]["text"], "two")
+        steer = self.requests("turn/steer")[0]
+        self.assertEqual(steer["params"], {"threadId": "thread-1", "expectedTurnId": "turn-1",
+            "input": [{"type": "text", "text": "[message]\nalso this"}]})
+        rows = self.rows()
+        self.assertLess(rows.index(answers[0]), rows.index(answers[1]))
+        self.assertLess(rows.index(answers[1]), rows.index(steer))
 
     def test_repeat_during_running_reuses_step_and_after_finish(self):
         self.use([[{"sleep": 0.3}, {"text": "once"}, {"usage": 7}]])
@@ -328,10 +343,144 @@ class ChannelTest(unittest.TestCase):
             self.channel.complete(body())
         self.assertEqual(self.channel._step.text, "partial reply")
 
-    def test_image_refused(self):
-        with self.assertRaisesRegex(codex.CodexFailure, "images"):
-            self.channel.complete(body([{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "x"}}]}]))
+    def test_image_in_a_new_turn(self):
+        url = "data:image/png;base64,bmV3"
+        request = body([{"role": "user", "content": [
+            {"type": "text", "text": "look"}, {"type": "image_url", "image_url": {"url": url}}]}])
+        self.channel.complete(request)
+        inputs = self.requests("turn/start")[0]["params"]["input"]
+        self.assertEqual(inputs[1:], [{"type": "image", "url": url}])
+        self.assertNotIn(url, inputs[0]["text"])
+        self.assertEqual(request["messages"][0]["content"][1]["image_url"]["url"], url)
+
+    def test_image_in_user_only_delta_keeps_plain_text(self):
+        self.use([[{"text": "hello"}], [{"text": "next"}]])
+        request = body()
+        first = self.channel.complete(request)
+        self.channel.complete(self.extend(request, first, users=[[
+            {"type": "text", "text": "look"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,bmV3"}}]]))
+        self.assertEqual(self.requests("turn/start")[1]["params"]["input"], [
+            {"type": "text", "text": "look"}, {"type": "image", "url": "data:image/png;base64,bmV3"}])
+
+    def test_user_delta_with_pending_call_goes_by_turn_steer_not_in_result(self):
+        self.use([[{"call": 1}, {"usage": 10}], [{"text": "done"}]], wait_for_steer=True)
+        request = body()
+        first = self.channel.complete(request)
+        self.channel.complete(self.extend(request, first, [("call-1", "shown")], [[
+            {"type": "text", "text": "[view_image: photo.png]"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,b25l"}},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,dHdv"}}]]))
+        answer = next(r for r in self.rows() if r.get("id") == 1001)
+        self.assertEqual(answer, {"id": 1001, "result": {"success": True, "contentItems": [
+            {"type": "inputText", "text": "shown"}]}})
+        steer = self.requests("turn/steer")[0]
+        self.assertEqual(steer["params"], {"threadId": "thread-1", "expectedTurnId": "turn-1", "input": [
+            {"type": "text", "text": "[message]\n[view_image: photo.png]"},
+            {"type": "image", "url": "data:image/png;base64,b25l"},
+            {"type": "image", "url": "data:image/png;base64,dHdv"}]})
+        self.assertLess(self.rows().index(answer), self.rows().index(steer))
+        self.assertEqual(len(self.requests("turn/start")), 1)
+
+    def test_steer_no_active_turn_starts_new_turn_with_user_delta(self):
+        self.use([[{"call": 1}, {"usage": 10}], [{"text": "continued"}]], wait_for_steer=True,
+                 steer_turn_ended=True, steer_error={"code": -32600, "message": "no active turn to steer"})
+        request = body()
+        first = self.channel.complete(request)
+        delta = self.extend(request, first, [("call-1", "shown")], [[
+            {"type": "text", "text": "look"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,b25l"}}]])
+        reply = self.channel.complete(delta)
+        self.assertEqual(assistant(reply)["content"], "continued")
+        starts = self.requests("turn/start")
+        self.assertEqual(len(starts), 2)
+        self.assertEqual(starts[1]["params"]["input"], [
+            {"type": "text", "text": "[message]\nlook"},
+            {"type": "image", "url": "data:image/png;base64,b25l"}])
+        self.assertEqual(self.channel._step.turn, "turn-2")
+        self.assertTrue(self.channel._step.event.is_set())
+        self.assertIsNone(self.channel._step.error)
+        self.assertEqual(self.channel.complete(delta), reply)
+        self.assertEqual(len(self.requests("thread/start")), 1)
+        self.assertEqual(len([r for r in self.rows() if r.get("id") == 1001]), 1)
+
+    def test_other_steer_error_marks_step_failed_and_repeat_fails(self):
+        self.use([[{"call": 1}, {"usage": 10}]], wait_for_steer=True,
+                 steer_error={"code": -32600, "message": "active turn cannot accept steering"})
+        request = body()
+        first = self.channel.complete(request)
+        delta = self.extend(request, first, [("call-1", "shown")], ["look"])
+        for _ in range(2):
+            with self.assertRaisesRegex(codex.CodexFailure, "active turn cannot accept steering"):
+                self.channel.complete(delta)
+        self.assertTrue(self.channel._step.event.is_set())
+        self.assertIsInstance(self.channel._step.error, codex.CodexFailure)
+        self.assertTrue(self.channel._step.recorded)
+        self.assertEqual(len(self.requests("turn/start")), 1)
+        self.assertEqual(len(self.requests("turn/steer")), 1)
+
+    def test_rebuild_carries_images_without_base64_in_text_and_numbers_markers(self):
+        self.channel.complete(body())
+        request = body([{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,b25l"}},
+            {"type": "text", "text": "first"}]},
+            {"role": "assistant", "content": "old reply"},
+            {"role": "user", "content": [
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,dHdv"}},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,dGhyZWU="}}]}])
+        self.channel.complete(request)
+        inputs = self.requests("turn/start")[1]["params"]["input"]
+        self.assertNotIn("base64", inputs[0]["text"])
+        transcript = json.loads(inputs[0]["text"].splitlines()[1])
+        self.assertEqual(transcript[0]["content"], [
+            {"type": "text", "text": "[image 1]"}, {"type": "text", "text": "first"}])
+        self.assertEqual(transcript[2]["content"], [
+            {"type": "text", "text": "[image 2]"}, {"type": "text", "text": "[image 3]"}])
+        self.assertEqual(inputs[1:], [
+            {"type": "image", "url": "data:image/png;base64,b25l"},
+            {"type": "image", "url": "data:image/png;base64,dHdv"},
+            {"type": "image", "url": "data:image/png;base64,dGhyZWU="}])
+        self.assertEqual(len(self.requests("thread/start")), 2)
+
+    def test_anchor_hashes_images_and_ignores_old_images_rewritten_to_text(self):
+        url = "data:image/png;base64," + "A" * 1_000_000
+        old = {"role": "user", "content": [{"type": "image_url", "image_url": {"url": url}}]}
+        messages = [old, {"role": "assistant", "content": "anchor"}, old]
+        real_hash = codex.hashlib.sha256
+        with mock.patch.object(codex.hashlib, "sha256", wraps=real_hash) as digest:
+            anchor = codex._anchor(messages)
+            self.assertEqual(digest.call_args_list[0].args[0], url.encode())
+            self.assertLess(len(digest.call_args_list[1].args[0]), 300)
+        messages[0] = {"role": "user", "content": "[image shown earlier, no longer in view: photo.png]"}
+        self.assertEqual(codex._anchor(messages), anchor)
+        changed_url = url[:-1] + "B"
+        self.assertEqual(len(changed_url), len(url))
+        messages[-1] = {"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": changed_url}}]}
+        self.assertNotEqual(codex._anchor(messages), anchor)
+
+    def test_old_image_rewritten_to_text_does_not_rebuild(self):
+        request = body([{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,b25l"}}]}])
+        first = self.channel.complete(request)
+        delta = self.extend(request, first, users=["more"])
+        delta["messages"][0]["content"] = "[image shown earlier, no longer in view: photo.png]"
+        self.channel.complete(delta)
+        self.assertEqual(len(self.requests("thread/start")), 1)
+
+    def test_unsupported_part_type_is_named(self):
+        with self.assertRaisesRegex(codex.CodexFailure, "input_audio"):
+            self.channel.complete(body([{"role": "user", "content": [{"type": "input_audio"}]}]))
         self.assertIsNone(self.channel._process)
+
+    def test_no_image_data_in_logs_or_usage_rows(self):
+        self.channel.complete(body([{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,cHJpdmF0ZQ=="}}]}]))
+        self.assertTrue(self.logs)
+        self.record.assert_called_once()
+        for output in (str(self.logs), str(self.record.call_args_list)):
+            self.assertNotIn("cHJpdmF0ZQ==", output)
+            self.assertNotIn("data:image", output)
 
     def test_native_item_fails_closed(self):
         self.use([[{"item": {"type": "commandExecution"}}]], hang=True)

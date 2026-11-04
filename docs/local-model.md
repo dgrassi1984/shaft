@@ -89,7 +89,7 @@ while building this hook. Source: [perturbation.py](../supervisor/perturbation.p
 
 Run `bin/shaft codex login` to sign in using SHAFT's private Codex home, then
 `bin/shaft config <name> set LLM_MODEL=codex/gpt-6-astra`.
-The broker keeps one Codex session per run. It needs no local model server and accepts text only;
+The broker keeps one Codex session per run. It needs no local model server and accepts text and images;
 `describe_image` remains available through its configured vision model.
 `bin/shaft codex status` shows login, models, any outage and the last observed weekly percentage.
 The costs views show the percentage too. The broker saves it in `.supervisor/codex_rate.json`
@@ -97,6 +97,7 @@ so the panel can read it from another process.
 
 At the weekly ceiling (85% by default), or after another Codex failure, a live run
 uses the configured cloud fallback for the rest of that run. Fallback calls cost API dollars.
+If the fallback cannot see images, it receives text placeholders and a note that the images could not be shown.
 The operator gets a desktop and phone notification on outage and recovery; security events
 are named explicitly. Trials and bake-offs fail instead of switching models.
 See [configuration](configuration.md) for all `SHAFT_CODEX_*` settings.

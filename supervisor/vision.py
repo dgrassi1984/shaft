@@ -10,7 +10,7 @@ An image travels in the OpenAI chat format, as a user message part {"type": "ima
   - at most MAX_IMAGES per call.
 `cloudllm.to_anthropic` turns the parts into Claude image blocks; OpenRouter takes them as they are.
 
-Which models see images is learned, not listed: Claude models do; an OpenRouter model does if OpenRouter's model
+Claude and Codex models see images; an OpenRouter model does if OpenRouter's model
 list says "image" among its input modalities (cached for a day in .supervisor/models.json); a self-hosted model
 (gpu/bonsai2) does not.
 """
@@ -81,7 +81,9 @@ def sees_images(model: str | None) -> bool:
     known (OpenRouter's list unreachable and never cached)."""
     from . import codexcli, selfhosted
     model = str(model or "")
-    if codexcli.serves(model) or selfhosted.serves(model):
+    if codexcli.serves(model):
+        return True
+    if selfhosted.serves(model):
         return False
     if model.startswith("openrouter/"):
         return "image" in _openrouter_modalities().get(model.removeprefix("openrouter/"), [])
