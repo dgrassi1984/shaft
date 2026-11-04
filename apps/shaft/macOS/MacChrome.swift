@@ -44,6 +44,7 @@ extension View {
         }
         .toolbar(removing: .title)
         .background(Color.canvas.ignoresSafeArea())
+        .presentationBackground(Color.canvas)    // its button bar too: the system's is white
     }
 }
 

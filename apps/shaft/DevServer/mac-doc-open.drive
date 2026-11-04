@@ -21,3 +21,28 @@ menu Documents
 wait 2
 doc ledger.md
 wait 3
+state
+# The narrow sizes: the sidebar yields first, the inspector stays in the window.
+resize 780 532
+wait 1
+menu Documents
+wait 2
+doc ledger.md
+wait 2
+layout
+resize 1000 600
+wait 1
+menu Documents
+wait 2
+doc ledger.md
+wait 2
+resize 960 600
+wait 1
+divider 360
+wait 1
+layout
+resize 780 532
+wait 1
+layout
+state
+quit
