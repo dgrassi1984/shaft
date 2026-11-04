@@ -75,6 +75,11 @@ final class MacState {
 /// The Mac window: the instances in the sidebar, the chat, and the chat's documents as an inspector.
 struct MacRoot: View {
     static let windowID = "main"
+    /// The documents at their usual width beside the chat at its least (spec §5), the sidebar collapsed.
+    static let minimumWidth: CGFloat = 400 + chatMinimum
+    static let chatMinimum: CGFloat = 380
+    /// Under this, sidebar, chat and documents no longer fit together (spec §5).
+    static let threeColumnWidth: CGFloat = 1000
     let model: AppModel
     let state: MacState
     @Environment(\.openWindow) private var openWindow
@@ -83,7 +88,9 @@ struct MacRoot: View {
         SessionRoot(model: model) { session, store in
             MacChats(session: session, store: store, state: state)
         }
-        .frame(minWidth: 720, minHeight: 480)
+        .frame(minWidth: Self.minimumWidth, minHeight: 480)
+        // The reading surface behind everything, the title bar's area too.
+        .containerBackground(Color.canvas, for: .window)
         .onAppear { state.openWindow = openWindow }
         .onChange(of: model.session?.isPaired ?? false) { _, paired in if !paired { DockBadge.clear() } }
         // shaft://chat/<instance>: the chat a notification click opens, from a link too.
@@ -98,13 +105,19 @@ struct MacChats: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openSettings) private var openSettings
     @State private var presence = MacPresence()
+    @State private var columns = NavigationSplitViewVisibility.automatic
+    /// The sidebar made room for the documents, and comes back when they go.
+    @State private var sidebarYielded = false
+    @State private var width: CGFloat = .infinity
 
     var body: some View {
         @Bindable var state = state
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columns) {
             InstancesList(selection: Binding(get: { state.selection }, set: { name in if let name { state.open(name) } }),
                           settings: { openSettings() })
-                .navigationSplitViewColumnWidth(min: 220, ideal: 270, max: 360)
+                .scrollContentBackground(.hidden)
+                .background(Color.elevated.ignoresSafeArea())
+                .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 360)
         } detail: {
             NavigationStack(path: $state.path) {
                 chat
@@ -124,6 +137,9 @@ struct MacChats: View {
         // The documents beside the chat, outside its navigation stack (ChatShell).
         .documentsInspector(state.shell, store: store)
         .background(WindowReader { window in presence.track(window) })
+        .onGeometryChange(for: CGFloat.self, of: \.size.width) { width = $0 }
+        .onChange(of: width) { fitColumns() }
+        .onChange(of: state.screen?.showDocuments ?? false) { fitColumns() }
         .onAppear {
             state.store = store
             presence.recheck()                   // a window opened again is the same window, its views kept
@@ -154,6 +170,19 @@ struct MacChats: View {
                                    description: Text("Choose an instance to chat with."))
         } else {
             ProgressView()
+        }
+    }
+
+    /// Sidebar, chat and documents need the window's width together: in a narrow one the sidebar gives way while the
+    /// documents are open, and only then (spec §5's rule, as on an iPad).
+    private func fitColumns() {
+        let tight = (state.screen?.showDocuments ?? false) && width < MacRoot.threeColumnWidth
+        if tight, !sidebarYielded, columns != .detailOnly {
+            sidebarYielded = true
+            columns = .detailOnly
+        } else if !tight, sidebarYielded {
+            sidebarYielded = false
+            columns = .automatic
         }
     }
 

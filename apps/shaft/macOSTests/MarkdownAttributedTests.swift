@@ -93,6 +93,17 @@ struct MarkdownAttributedTests {
         #expect(rendered.text.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor == MacColor.textPrimary)
     }
 
+    @Test func aLanguageIsTheFirstWordOfTheInfoString() {
+        #expect(render("```python title=x\nx = 1\n```").codeBlocks.first?.language == "python")
+        #expect(render("```\nx = 1\n```").codeBlocks.first?.language == nil)
+    }
+
+    @Test func aDiffsRemovedLinesAreNotKeywords() {
+        let rendered = render("```diff\n-old\n+new\n```")
+        #expect(rendered.text.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor == MacColor.codeNumber)
+        #expect(rendered.text.attribute(.foregroundColor, at: 5, effectiveRange: nil) as? NSColor == MacColor.codeString)
+    }
+
     @Test func anUnknownLanguageIsPlain() {
         let rendered = render("```brainfuck\ndef x\n```")
         #expect(rendered.text.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor == MacColor.textPrimary)

@@ -91,8 +91,7 @@ struct MessageTextView: NSViewRepresentable {
             ReadOnlyTextMenu.trim(menu)
             var top: [NSMenuItem] = []
             // A selection made before the right-click (not the word the click itself selects, for Look Up).
-            if !screen.archived, let message = view as? MessageNSTextView, message.selectedBeforeMenu,
-               message.selectedText != nil {
+            if !screen.archived, let message = self.view, message.selectedBeforeMenu, message.selectedText != nil {
                 top.append(MenuAction.item(quoteTitle, symbol: "arrowshape.turn.up.left") { [weak self] in
                     self?.quoteSelection()
                 })
@@ -247,6 +246,9 @@ final class MessageNSView: NSView {
     /// The selected text, trimmed; nil when nothing is selected.
     var selectedText: String? { parts.first?.text.selectedText }
 
+    /// Whether text was selected when the right-click came (a right-click on a word selects it, for Look Up).
+    var selectedBeforeMenu = false
+
     func collapseSelection() {
         guard let text = parts.first?.text else { return }
         text.setSelectedRange(NSRange(location: NSMaxRange(text.selectedRange()), length: 0))
@@ -321,12 +323,13 @@ final class MessageLayoutManager: NSLayoutManager {
 }
 
 /// A code block or a table: an `elevated` rounded block whose text scrolls sideways inside it, and for code a header
-/// row with the language at its left and Copy at its right (spec §3).
+/// row with the language at its left and Copy at its right (spec §3), which stay in place while the code scrolls.
 final class MessageBlockView: NSView {
     private let text: MessageNSTextView
     private let scroll = MessageBlockScrollView()
     private let language = NSTextField(labelWithString: "")
     private let copyButton = NSButton(title: "", target: nil, action: nil)
+    private let rule = NSBox()
     private let isCode: Bool
     private var code = ""
     private var copied: Task<Void, Never>?
@@ -350,20 +353,22 @@ final class MessageBlockView: NSView {
         scroll.documentView = text
         addSubview(scroll)
         guard code else { return }
-        text.textContainerInset = NSSize(width: MarkdownAttributed.blockPadding, height: 0)
+        let padding = MarkdownAttributed.blockPadding
+        text.textContainerInset = NSSize(width: padding, height: padding)
         language.font = .systemFont(ofSize: NSFont.preferredFont(forTextStyle: .caption1).pointSize, weight: .medium)
         language.textColor = MacColor.textSecondary
         language.lineBreakMode = .byTruncatingTail
         addSubview(language)
+        rule.boxType = .custom
+        rule.borderWidth = 0
+        rule.fillColor = MacColor.hairline
+        addSubview(rule)
         copyButton.isBordered = false
-        copyButton.imagePosition = .imageLeading
-        copyButton.imageHugsTitle = true
-        copyButton.font = language.font
-        copyButton.contentTintColor = MacColor.textSecondary
+        copyButton.imagePosition = .imageOnly
+        copyButton.contentTintColor = MacColor.textTertiary
         copyButton.refusesFirstResponder = true
         copyButton.target = self
         copyButton.action = #selector(copyClicked(_:))
-        copyButton.setAccessibilityLabel(String(localized: "Copy code"))
         copyButton.toolTip = String(localized: "Copy code")
         showCopy(done: false)
         addSubview(copyButton)
@@ -388,22 +393,26 @@ final class MessageBlockView: NSView {
 
     /// Lays the block out inside its frame, for text of this size.
     func place(content: CGSize) {
-        let top = isCode ? MarkdownAttributed.codeHeader : 0
-        let padding = isCode ? MarkdownAttributed.blockPadding : 0
-        let inset = isCode ? MarkdownAttributed.blockPadding * 2 : 0
-        scroll.frame = NSRect(x: 0, y: top, width: bounds.width, height: bounds.height - top)
-        text.frame = NSRect(x: 0, y: 0, width: max(content.width + inset, bounds.width), height: content.height + padding)
-        scroll.scrollsSideways = content.width + inset > bounds.width
-        guard isCode else { return }
-        copyButton.sizeToFit()
-        let height = copyButton.frame.height
+        guard isCode else {
+            scroll.frame = bounds
+            text.frame = NSRect(x: 0, y: 0, width: max(content.width, bounds.width), height: content.height)
+            scroll.scrollsSideways = content.width > bounds.width
+            return
+        }
+        let header = MarkdownAttributed.codeHeader
         let side = MarkdownAttributed.blockPadding
-        copyButton.frame = NSRect(x: bounds.width - side - copyButton.frame.width, y: (top - height) / 2,
-                                  width: copyButton.frame.width, height: height)
+        rule.frame = NSRect(x: 0, y: header, width: bounds.width, height: 1)
+        scroll.frame = NSRect(x: 0, y: header + 1, width: bounds.width, height: bounds.height - header - 1)
+        let wide = content.width + side * 2
+        text.frame = NSRect(x: 0, y: 0, width: max(wide, bounds.width), height: scroll.frame.height)
+        scroll.scrollsSideways = wide > bounds.width
+        let button = NSSize(width: Design.Space.s24 + Design.Space.s12, height: header)
+        copyButton.frame = NSRect(x: bounds.width - Design.Space.s4 - button.width, y: 0, width: button.width,
+                                  height: button.height)
         language.sizeToFit()
-        let labelHeight = language.frame.height
-        language.frame = NSRect(x: side, y: (top - labelHeight) / 2, width: max(0, copyButton.frame.minX - side * 2),
-                                height: labelHeight)
+        let height = language.frame.height
+        language.frame = NSRect(x: side, y: (header - height) / 2, width: max(0, copyButton.frame.minX - side * 2),
+                                height: height)
     }
 
     @objc private func copyClicked(_ sender: Any?) {
@@ -417,20 +426,37 @@ final class MessageBlockView: NSView {
         }
     }
 
-    /// Copy, or "Copied" for a moment.
+    /// Copy, or a check for a moment.
     private func showCopy(done: Bool) {
-        copyButton.title = done ? String(localized: "Copied") : String(localized: "Copy")
+        let size = NSFont.preferredFont(forTextStyle: .footnote).pointSize
         copyButton.image = NSImage(systemSymbolName: done ? "checkmark" : "doc.on.doc", accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: NSFont.preferredFont(forTextStyle: .caption1).pointSize, weight: .medium))
-        needsLayout = true
+            .withSymbolConfiguration(.init(pointSize: size, weight: .regular))
+        copyButton.setAccessibilityLabel(done ? String(localized: "Copied") : String(localized: "Copy code"))
     }
 }
 
 /// A block's sideways scroll. The wheel moves it only along its own axis: a gesture that starts up or down goes on to
-/// the feed, whole, so a long chat scrolls past a wide table without catching on it.
+/// the feed, whole, so a long chat scrolls past a wide table without catching on it. Its text fades at an edge with more
+/// beyond it, since an overlay scroller only shows while scrolling.
 final class MessageBlockScrollView: NSScrollView {
-    var scrollsSideways = false
+    var scrollsSideways = false {
+        didSet { if scrollsSideways != oldValue { updateFade() } }
+    }
     private var passing = false
+    private let fade = CAGradientLayer()
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        fade.startPoint = CGPoint(x: 0, y: 0.5)
+        fade.endPoint = CGPoint(x: 1, y: 0.5)
+        contentView.postsBoundsChangedNotifications = true
+        NotificationCenter.default.addObserver(self, selector: #selector(clipMoved(_:)),
+                                               name: NSView.boundsDidChangeNotification, object: contentView)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not from a nib") }
 
     override func scrollWheel(with event: NSEvent) {
         if event.phase == .began || (event.phase == [] && event.momentumPhase == []) {
@@ -441,6 +467,32 @@ final class MessageBlockScrollView: NSScrollView {
         } else {
             super.scrollWheel(with: event)
         }
+    }
+
+    override func layout() {
+        super.layout()
+        updateFade()
+    }
+
+    @objc private func clipMoved(_ note: Notification) {
+        updateFade()
+    }
+
+    private func updateFade() {
+        guard scrollsSideways, let width = documentView?.frame.width, bounds.width > 0 else {
+            layer?.mask = nil
+            return
+        }
+        let x = contentView.bounds.minX
+        let edge = min(Design.Space.s24 / bounds.width, 0.5)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        fade.frame = bounds
+        fade.locations = [0, NSNumber(value: Double(edge)), NSNumber(value: Double(1 - edge)), 1]
+        let opaque = CGColor(gray: 0, alpha: 1), clear = CGColor(gray: 0, alpha: 0)
+        fade.colors = [x > 1 ? clear : opaque, opaque, opaque, x + bounds.width < width - 1 ? clear : opaque]
+        layer?.mask = fade
+        CATransaction.commit()
     }
 }
 
@@ -456,11 +508,8 @@ final class MessageNSTextView: NSTextView {
         return text.isEmpty ? nil : text
     }
 
-    /// Whether text was selected when the right-click came (a right-click on a word selects it, for Look Up).
-    private(set) var selectedBeforeMenu = false
-
     override func menu(for event: NSEvent) -> NSMenu? {
-        selectedBeforeMenu = selectedText != nil
+        message?.selectedBeforeMenu = selectedText != nil
         return super.menu(for: event)
     }
 

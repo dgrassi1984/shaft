@@ -75,11 +75,11 @@ enum MarkdownAttributed {
     /// Between a block and the text around it, inside a block, and the height of a code block's header row.
     static let blockGap = Design.Space.s12
     static let blockPadding = Design.Space.s12
-    static let codeHeader: CGFloat = 28
+    static let codeHeader = Design.Space.s24 + Design.Space.s8
     /// Wider than any line a block lays out: its text wraps only at a real line break.
     static let unwrapped: CGFloat = 200_000
-    /// A column of a table wraps past this many ems rather than growing without end.
-    static let cellWidthCap: CGFloat = 26
+    /// A table's cell wraps here rather than make a line a screen wide (the same cap as iOS's).
+    static let widestCell: CGFloat = 280
 
     static func render(_ markdown: String, font: NSFont = .preferredFont(forTextStyle: .body)) -> Rendered {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .full,
@@ -114,7 +114,7 @@ enum MarkdownAttributed {
                     .font: font, .foregroundColor: MacColor.textPrimary, .paragraphStyle: style,
                 ]))
             case .quote(let body):
-                let block = quoteBlock(font: font)
+                let block = quoteBlock()
                 let style = NSMutableParagraphStyle()
                 style.textBlocks = [block]
                 style.lineSpacing = Design.Text.lineSpacing
@@ -146,12 +146,12 @@ enum MarkdownAttributed {
         return style
     }
 
-    static func quoteBlock(font: NSFont) -> NSTextBlock {
+    static func quoteBlock() -> NSTextBlock {
         let block = NSTextBlock()
         block.setValue(100, type: .percentageValueType, for: .width)     // without a width, only its first line is in it
         block.setWidth(3, type: .absoluteValueType, for: .border, edge: .minX)
-        block.setBorderColor(MacColor.textTertiary, for: .minX)
-        block.setWidth(font.pointSize * 0.8, type: .absoluteValueType, for: .padding, edge: .minX)
+        block.setBorderColor(MacColor.hairline, for: .minX)
+        block.setWidth(Design.Space.s12 - 3, type: .absoluteValueType, for: .padding, edge: .minX)
         block.setWidth(Design.Text.paragraphSpacing, type: .absoluteValueType, for: .margin, edge: .maxY)
         return block
     }
@@ -341,7 +341,7 @@ enum MarkdownAttributed {
             guard finished else { return }
             for token in CodeTokens.tokens(in: code, language: open.language) {
                 let color: NSColor? = switch token.kind {
-                case .keyword: MacColor.codeKeyword
+                case .keyword: open.language?.lowercased() == "diff" ? MacColor.codeNumber : MacColor.codeKeyword   // a removed line
                 case .string: MacColor.codeString
                 case .comment: MacColor.codeComment
                 case .number: MacColor.codeNumber
@@ -397,13 +397,12 @@ enum MarkdownAttributed {
                 var widths = [CGFloat](repeating: 0, count: columns)
                 var filled = [Bool](repeating: false, count: columns)
                 var numeric = [Bool](repeating: true, count: columns)
-                let cap = font.pointSize * cellWidthCap
                 for cell in table.cells {
                     let measured = NSMutableAttributedString(attributedString: out.attributedSubstring(from: cell.range))
                     measured.removeAttribute(.paragraphStyle, range: NSRange(location: 0, length: measured.length))
                     let width = measured.boundingRect(with: NSSize(width: unwrapped, height: unwrapped),
                                                       options: [.usesLineFragmentOrigin]).width
-                    widths[cell.column] = max(widths[cell.column], min(width.rounded(.up) + 1, cap))
+                    widths[cell.column] = max(widths[cell.column], min(width.rounded(.up) + 1, widestCell))
                     guard cell.row != header else { continue }
                     let text = (out.string as NSString).substring(with: cell.range)
                     guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
@@ -505,12 +504,12 @@ enum MarkdownAttributed {
                     style.font = codeFont(font)
                     style.code = true
                     style.codeIdentity = component.identity
-                    style.language = language?.trimmingCharacters(in: .whitespaces).nilIfEmpty
+                    style.language = language?.split(whereSeparator: \.isWhitespace).first.map(String.init)  // "python title=x"
                     paragraph.paragraphSpacing = 0
                     paragraph.lineSpacing = Design.Text.lineSpacing / 2
                 case .blockQuote:
                     style.color = MacColor.textSecondary
-                    let block = quoteBlocks[component.identity] ?? MarkdownAttributed.quoteBlock(font: font)
+                    let block = quoteBlocks[component.identity] ?? MarkdownAttributed.quoteBlock()
                     quoteBlocks[component.identity] = block
                     blocks.insert(block, at: 0)
                 case .listItem(let ordinal):
@@ -606,10 +605,6 @@ enum MarkdownAttributed {
     }
 }
 
-private extension String {
-    var nilIfEmpty: String? { isEmpty ? nil : self }
-}
-
 /// A segment's text container. It ends where its segment does, however much room it has, so what follows goes on in
 /// the next container. Its own width is always `MarkdownAttributed.unwrapped`: TextKit sizes a table against the
 /// container before it, then moves it on, so a narrow one squeezed the wide table after it. Running text wraps at
@@ -700,7 +695,7 @@ extension MarkdownAttributed {
                     widest = max(widest, size.width)
                 case .code:
                     let size = blockSize(index, segment)
-                    let height = codeHeader + size.height + blockPadding
+                    let height = codeHeader + 1 + blockPadding * 2 + size.height
                     placed = .init(frame: CGRect(x: 0, y: y, width: width, height: height), content: size)
                     widest = width
                 case .table:
