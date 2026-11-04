@@ -15,6 +15,7 @@ import SwiftUI
 ///     type <text>                   type the text, a key at a time
 ///     select <text>                 select <text> in the first message that shows it (as a selection made there)
 ///     drag <text>                   drag the mouse over it instead (the window must be in front to take it)
+///     dragacross <a> | <b>          drag from <a> to <b>, which may be in different blocks of one message
 ///     contextmenu <text>            log the right-click menu of a message, its selection kept
 ///     rightclick <text>             right-click on <text> (the window in front): logs the menu, then closes it
 ///     menu <title>                  pick the menu bar item with that title
@@ -38,7 +39,14 @@ import SwiftUI
 ///     state                         log the chat's draft, quotes, selection and focus
 ///     shot <name>                   screenshot of the window to $SHAFT_DEV_DIR/<name>.png
 ///     close / notify <instance>     close the window / act as a click on a notification about <instance>
+///     nofocus                       take the keyboard from whatever has it
+///     capture <name>                the window as the screen shows it (with a terminal that answers, see the step)
+///     appearance light|dark         draw the app in that appearance (the system's stays as it is)
+///     blocks                        log each code block and table: its frame and how wide its text is
+///     scrollblock <n> <x>           scroll the n-th block sideways to x
+///     wheelblock <n> <dx> <dy>      a wheel gesture over the n-th block's text; logs where the block and the feed went
 ///     wait <seconds>
+///     quit
 @MainActor
 enum MacDevDriver {
     /// The app's own key monitor ("/"), run before a combo is routed, as AppKit runs it for a queued event.
@@ -100,6 +108,18 @@ enum MacDevDriver {
         case "drag":
             guard let (view, range) = find(rest) else { return log("no message shows \"\(rest)\"") }
             drag(view, range)
+        case "dragacross":
+            let parts = rest.components(separatedBy: " | ")
+            guard parts.count == 2, let (from, a) = find(parts[0]), let (to, b) = find(parts[1]) else {
+                return log("no message shows \"\(rest)\"")
+            }
+            let (start, end) = (point(from, a.location), point(to, NSMaxRange(b) - 1, end: true))
+            mouse(.leftMouseDown, at: start)
+            for step in 1...6 {
+                let t = CGFloat(step) / 6
+                mouse(.leftMouseDragged, at: NSPoint(x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t))
+            }
+            mouse(.leftMouseUp, at: end)
         case "rightclick":
             guard let (view, range) = find(rest) else { return log("no message shows \"\(rest)\"") }
             rightClick(view, range)
@@ -144,7 +164,7 @@ enum MacDevDriver {
             guard let name = state.selection else { return }
             state.path.append(ArchivedRoute(instance: name, cid: rest))
         case "windows":
-            log("windows: " + NSApp.windows.filter(\.isVisible).map { "\($0.title.isEmpty ? "-" : $0.title) (\(Int($0.frame.width))x\(Int($0.frame.height)))" }.joined(separator: ", "))
+            log("windows: " + NSApp.windows.filter(\.isVisible).map { "\($0.title.isEmpty ? "-" : $0.title) \(type(of: $0)) (\(Int($0.frame.width))x\(Int($0.frame.height)))" }.joined(separator: ", "))
         case "shotwindow":
             // The visible window with that title (Settings), drawn as `shot` draws the main one.
             guard let other = NSApp.windows.first(where: { $0.isVisible && $0.title == rest }),
@@ -230,6 +250,58 @@ enum MacDevDriver {
             log("pasted files: \(field.pasteFiles(from: board))")
         case "close":
             window?.performClose(nil)
+        case "nofocus":
+            window?.makeFirstResponder(nil)
+        case "capture":
+            // The window as the screen shows it, vibrancy and glass included: a `screencapture -l` from the terminal
+            // that runs this, which watches for this line and answers with `<name>.ack` (the app has no such right).
+            let ack = dir.appending(path: "\(rest).ack")
+            try? FileManager.default.removeItem(at: ack)
+            log("CAPTURE \(rest) \(window?.windowNumber ?? 0)")
+            let start = Date()
+            while !FileManager.default.fileExists(atPath: ack.path), Date().timeIntervalSince(start) < 5 {
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+        case "appearance":
+            NSApp.appearance = NSAppearance(named: rest == "dark" ? .darkAqua : .aqua)
+        case "blocks":
+            guard let root = window?.contentView else { return }
+            var index = 0
+            walk(root) { view in
+                guard let block = view as? MessageBlockView else { return }
+                log("block \(index): \(block.driveDescription)")
+                index += 1
+            }
+        case "scrollblock":
+            let parts = rest.split(separator: " ").compactMap { Double($0) }
+            guard parts.count == 2, let root = window?.contentView else { return log("scrollblock <n> <x>") }
+            var blocks: [MessageBlockView] = []
+            walk(root) { view in if let block = view as? MessageBlockView { blocks.append(block) } }
+            guard Int(parts[0]) < blocks.count else { return log("no block \(rest)") }
+            blocks[Int(parts[0])].scrollSideways(to: parts[1])
+        case "wheelblock":
+            let parts = rest.split(separator: " ").compactMap { Int32($0) }
+            guard parts.count == 3, let root = window?.contentView else { return log("wheelblock <n> <dx> <dy>") }
+            var blocks: [MessageBlockView] = []
+            walk(root) { view in if let block = view as? MessageBlockView { blocks.append(block) } }
+            guard Int(parts[0]) < blocks.count else { return log("no block \(rest)") }
+            let block = blocks[Int(parts[0])]
+            func feedY() -> CGFloat { block.enclosingScrollView?.enclosingScrollView?.contentView.bounds.minY
+                ?? sequence(first: block.superview) { $0?.superview }.compactMap { $0 as? NSScrollView }.first?.contentView.bounds.minY ?? -1 }
+            let before = (block.driveDescription, feedY())
+            for phase in [CGScrollPhase?.none, .none] {
+                guard let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: parts[2],
+                                       wheel2: parts[1], wheel3: 0) else { continue }
+                if let phase { cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase.rawValue)) }
+                guard let event = NSEvent(cgEvent: cg) else { continue }
+                block.driveText?.scrollWheel(with: event)
+                log("wheel: passes to the feed: \(block.drivePassing)")
+            }
+            try? await Task.sleep(for: .milliseconds(300))
+            log("wheel: block \(before.0) -> \(block.driveDescription); feed \(Int(before.1)) -> \(Int(feedY()))")
+        case "quit":
+            log("done")
+            NSApp.terminate(nil)
         case "notify":
             // What `userNotificationCenter(_:didReceive:)` does with a click on a notification about `rest`.
             model.notificationTapped(instance: rest)
@@ -296,7 +368,11 @@ enum MacDevDriver {
         walk(root) { view in
             guard found == nil, let view = view as? MessageNSTextView else { return }
             let range = (view.string as NSString).range(of: text)
-            if range.location != NSNotFound { found = (view, range) }
+            guard range.location != NSNotFound, let layout = view.layoutManager else { return }
+            // A message's text views share their text: the one that lays this part of it out.
+            let glyph = layout.glyphIndexForCharacter(at: range.location)
+            let owner = layout.textContainer(forGlyphAt: glyph, effectiveRange: nil)?.textView as? MessageNSTextView
+            found = (owner ?? view, range)
         }
         return found
     }
@@ -323,7 +399,7 @@ enum MacDevDriver {
     }
 
     private static func select(_ view: NSTextView, _ range: NSRange) {
-        view.scrollToVisible(view.firstRect(forCharacterRange: range, actualRange: nil))
+        view.scrollRangeToVisible(range)
         view.window?.makeFirstResponder(view)
         view.setSelectedRange(range)
     }
@@ -343,7 +419,7 @@ enum MacDevDriver {
     }
 
     private static func drag(_ view: NSTextView, _ range: NSRange) {
-        view.scrollToVisible(view.firstRect(forCharacterRange: range, actualRange: nil))
+        view.scrollRangeToVisible(range)
         let start = point(view, range.location)
         let end = point(view, NSMaxRange(range) - 1, end: true)
         mouse(.leftMouseDown, at: start)
@@ -399,7 +475,8 @@ enum MacDevDriver {
 
     private static func control(_ title: String, in view: NSView?) -> NSView? {
         guard let view else { return nil }
-        if let button = view as? NSButton, button.title.contains(title) { return button }
+        if let button = view as? NSButton,
+           button.title.contains(title) || button.accessibilityLabel()?.contains(title) == true { return button }
         for sub in view.subviews { if let found = control(title, in: sub) { return found } }
         return nil
     }

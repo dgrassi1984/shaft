@@ -1,36 +1,95 @@
 import AppKit
 import SHAFTKit
 
-/// Markdown as AppKit text, for a message's text view on the Mac (MessageTextView): the same blocks MarkdownUI draws on
-/// iOS (Shared/Markdown), as one attributed string, so a selection runs across paragraphs, lists, tables and code.
+/// The colour tokens as AppKit colours: the same catalog sets as `Color.canvas` and the rest (Shared/Design), which
+/// follow the appearance as they draw. The unit tests' bundle has no asset catalog: the second value is for them.
+enum MacColor {
+    private static func token(_ name: String, tests: NSColor) -> NSColor { NSColor(named: name) ?? tests }
+
+    static let canvas = token("canvas", tests: .textBackgroundColor)
+    static let elevated = token("elevated", tests: .controlBackgroundColor)
+    static let hairline = token("hairline", tests: .separatorColor)
+    static let textPrimary = token("textPrimary", tests: .labelColor)
+    static let textSecondary = token("textSecondary", tests: .secondaryLabelColor)
+    static let textTertiary = token("textTertiary", tests: .tertiaryLabelColor)
+    static let brand = token("accent", tests: .linkColor)
+    // The feed lane's four syntax tokens; until they merge, the nearest token stands in (remove the second value then).
+    static let codeKeyword = token("codeKeyword", tests: brand)
+    static let codeString = token("codeString", tests: textSecondary)
+    static let codeComment = token("codeComment", tests: textTertiary)
+    static let codeNumber = token("codeNumber", tests: brand)
+}
+
+extension NSAttributedString.Key {
+    /// On inline code: the layout manager draws its background as a rounded pill.
+    static let inlineCode = NSAttributedString.Key("io.github.dgrassi1984.shaft.inlineCode")
+}
+
+/// Markdown as AppKit text, for a message's text view on the Mac (MessageTextView): the same blocks as iOS
+/// (Shared/Markdown), as one attributed string, so a selection runs across paragraphs, lists, tables and code.
 ///
+/// - Type is spec §2.2: `Design.Text`'s line and paragraph spacing, its heading scales, code at 0.88 em.
 /// - Headings step down by level and stay at least as large as a paragraph, with more space above than below.
 /// - Lists indent by level, with their bullet or number; a task item's `[ ]` / `[x]` becomes a box before its text.
-/// - Code blocks and inline code are monospaced on a tinted block; a quote has a bar at its left.
-/// - Tables keep their columns (an `NSTextTable`), the header row bold.
+/// - Code blocks are monospaced with their syntax colours; inline code is a pill; a quote has a bar at its left.
+/// - Tables keep their columns (an `NSTextTable`) at the width their text wants, in `.subheadline` with tabular
+///   figures, numeric columns to the right, the header in `textSecondary`, hairlines between rows only.
 /// - Links are links (a click opens them).
+///
+/// A code block and a table draw in a block of their own that scrolls sideways (`Segment`, MessageNSView); the text
+/// around them is laid out to the column. It stays one string in one layout: the segments are its text containers.
 ///
 /// It uses Foundation's own Markdown parser (`AttributedString(markdown:)`, full syntax): the blocks come from each
 /// run's `presentationIntent`, the inline styles from its `inlinePresentationIntent`.
 enum MarkdownAttributed {
-    /// The ranges of the code blocks in the result, so a right-click inside one offers Copy code.
-    struct Rendered {
-        let text: NSAttributedString
-        let codeBlocks: [(range: NSRange, code: String)]
+    /// A fenced block in the text. `range` is where it lies, so a right-click inside one offers Copy code.
+    struct CodeBlock {
+        let range: NSRange
+        let code: String
+        let language: String?
     }
 
-    static let codeBackground = NSColor.secondaryLabelColor.withAlphaComponent(0.12)
-    static let barColor = NSColor.secondaryLabelColor.withAlphaComponent(0.5)
+    /// A table in the text, and the width its columns want (it scrolls when that is wider than the column).
+    struct Table {
+        let range: NSRange
+        let width: CGFloat
+    }
+
+    /// A stretch of the text laid out on its own: running text at the column's width, or a block that scrolls.
+    struct Segment: Equatable {
+        enum Kind: Equatable { case prose, code, table }
+        let kind: Kind
+        let range: NSRange
+    }
+
+    struct Rendered {
+        let text: NSAttributedString
+        let codeBlocks: [CodeBlock]
+        let tables: [Table]
+        /// The text in order, end to end. Each but the last ends with its paragraph's break.
+        let segments: [Segment]
+
+        static var empty: Rendered { Rendered(text: NSAttributedString(), codeBlocks: [], tables: [], segments: []) }
+    }
+
+    /// Between a block and the text around it, inside a block, and the height of a code block's header row.
+    static let blockGap = Design.Space.s12
+    static let blockPadding = Design.Space.s12
+    static let codeHeader = Design.Space.s24 + Design.Space.s8
+    /// Wider than any line a block lays out: its text wraps only at a real line break.
+    static let unwrapped: CGFloat = 200_000
+    /// A table's cell wraps here rather than make a line a screen wide (the same cap as iOS's).
+    static let widestCell: CGFloat = 280
 
     static func render(_ markdown: String, font: NSFont = .preferredFont(forTextStyle: .body)) -> Rendered {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .full,
                                                               failurePolicy: .returnPartiallyParsedIfPossible)
         guard let parsed = try? AttributedString(markdown: markdown, options: options) else {
-            return Rendered(text: NSAttributedString(string: markdown, attributes: [.font: font,
-                                                                                   .foregroundColor: NSColor.labelColor]),
-                            codeBlocks: [])
+            let text = NSMutableAttributedString(string: markdown, attributes: [.font: font,
+                                                                                .foregroundColor: MacColor.textPrimary])
+            return finish(text: text, codeBlocks: [], tables: [])
         }
-        var builder = Builder(font: font)
+        var builder = Builder(font: font, streamingCode: endsInsideCodeFence(markdown))
         for run in parsed.runs {
             builder.add(String(parsed[run.range].characters), intent: run.presentationIntent,
                         inline: run.inlinePresentationIntent, link: run.link)
@@ -42,55 +101,126 @@ enum MarkdownAttributed {
     /// with its line breaks. Not Markdown (§4.4 `user.text`).
     static func operatorText(_ text: String, font: NSFont = .preferredFont(forTextStyle: .body)) -> Rendered {
         let out = NSMutableAttributedString()
-        var codeBlocks: [(NSRange, String)] = []
+        var codeBlocks: [CodeBlock] = []
         let blocks = OperatorText.blocks(text)
         for (index, block) in blocks.enumerated() {
             let last = index == blocks.count - 1
             switch block {
             case .text(let body):
                 let style = NSMutableParagraphStyle()
-                style.paragraphSpacing = last ? 0 : font.pointSize * 0.4
+                style.lineSpacing = Design.Text.lineSpacing
+                style.paragraphSpacing = last ? 0 : Design.Text.paragraphSpacing
                 out.append(NSAttributedString(string: body + (last ? "" : "\n"), attributes: [
-                    .font: font, .foregroundColor: NSColor.labelColor, .paragraphStyle: style,
+                    .font: font, .foregroundColor: MacColor.textPrimary, .paragraphStyle: style,
                 ]))
             case .quote(let body):
-                let block = quoteBlock(font: font)
+                let block = quoteBlock()
                 let style = NSMutableParagraphStyle()
                 style.textBlocks = [block]
+                style.lineSpacing = Design.Text.lineSpacing
                 out.append(NSAttributedString(string: body + "\n", attributes: [
-                    .font: font, .foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: style,
+                    .font: font, .foregroundColor: MacColor.textSecondary, .paragraphStyle: style,
                 ]))
             case .code(let body):
-                let mono = NSFont.monospacedSystemFont(ofSize: font.pointSize * 0.9, weight: .regular)
-                let style = NSMutableParagraphStyle()
-                style.textBlocks = [codeBlock(font: font)]
                 let start = out.length
                 out.append(NSAttributedString(string: body + "\n", attributes: [
-                    .font: mono, .foregroundColor: NSColor.labelColor, .paragraphStyle: style,
+                    .font: codeFont(font), .foregroundColor: MacColor.textPrimary, .paragraphStyle: codeParagraph(),
                 ]))
-                codeBlocks.append((NSRange(location: start, length: out.length - start), body))
+                codeBlocks.append(CodeBlock(range: NSRange(location: start, length: out.length - start), code: body,
+                                            language: nil))
             }
         }
-        trimTrailingNewline(out)
-        return Rendered(text: out, codeBlocks: codeBlocks)
+        return finish(text: out, codeBlocks: codeBlocks, tables: [])
     }
 
-    static func codeBlock(font: NSFont) -> NSTextBlock {
-        let block = NSTextBlock()
-        block.backgroundColor = codeBackground
-        block.setValue(100, type: .percentageValueType, for: .width)
-        block.setWidth(font.pointSize * 0.7, type: .absoluteValueType, for: .padding)
-        block.setWidth(font.pointSize * 0.5, type: .absoluteValueType, for: .margin, edge: .maxY)
-        return block
+    static func codeFont(_ font: NSFont) -> NSFont {
+        .monospacedSystemFont(ofSize: font.pointSize * codeScale, weight: .regular)
     }
 
-    static func quoteBlock(font: NSFont) -> NSTextBlock {
+    /// Spec §2.2: code is 0.88 em, fenced and inline.
+    private static let codeScale: CGFloat = 0.88
+
+    static func codeParagraph() -> NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = Design.Text.lineSpacing / 2
+        return style
+    }
+
+    static func quoteBlock() -> NSTextBlock {
         let block = NSTextBlock()
+        block.setValue(100, type: .percentageValueType, for: .width)     // without a width, only its first line is in it
         block.setWidth(3, type: .absoluteValueType, for: .border, edge: .minX)
-        block.setBorderColor(barColor, for: .minX)
-        block.setWidth(font.pointSize * 0.7, type: .absoluteValueType, for: .padding, edge: .minX)
-        block.setWidth(font.pointSize * 0.4, type: .absoluteValueType, for: .margin, edge: .maxY)
+        block.setBorderColor(MacColor.hairline, for: .minX)
+        block.setWidth(Design.Space.s12 - 3, type: .absoluteValueType, for: .padding, edge: .minX)
+        block.setWidth(Design.Text.paragraphSpacing, type: .absoluteValueType, for: .margin, edge: .maxY)
         return block
+    }
+
+    /// Whether the text stops inside a fenced block: a reply streaming through its code, whose colours wait for the
+    /// block to finish (spec §3.1).
+    static func endsInsideCodeFence(_ markdown: String) -> Bool {
+        var fence: (marker: Character, count: Int)?
+        for line in markdown.split(separator: "\n", omittingEmptySubsequences: false) {
+            let body = line.drop { $0 == " " }
+            guard line.count - body.count <= 3, let marker = body.first, marker == "`" || marker == "~" else { continue }
+            let count = body.prefix { $0 == marker }.count
+            guard count >= 3 else { continue }
+            if let open = fence {
+                if marker == open.marker, count >= open.count, body.dropFirst(count).allSatisfy(\.isWhitespace) {
+                    fence = nil
+                }
+            } else {
+                fence = (marker, count)
+            }
+        }
+        return fence != nil
+    }
+
+    /// A table cell that reads as a number: "12", "1,204.50", "-3", "$40", "12%", "(7)".
+    static func isNumeric(_ cell: String) -> Bool {
+        let trimmed = cell.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.contains(where: \.isNumber) else { return false }
+        let allowed = CharacterSet(charactersIn: "0123456789.,+-\u{2212}()%$\u{20AC}\u{00A3} ")
+        return trimmed.unicodeScalars.allSatisfy(allowed.contains)
+    }
+
+    /// The text ends without a break, its blocks are cut to it, and it is split into segments.
+    fileprivate static func finish(text: NSMutableAttributedString, codeBlocks: [CodeBlock],
+                                   tables: [Table]) -> Rendered {
+        trimTrailingNewline(text)
+        let all = NSRange(location: 0, length: text.length)
+        let code = codeBlocks.map { CodeBlock(range: NSIntersectionRange($0.range, all), code: $0.code,
+                                              language: $0.language) }
+        let tables = tables.map { Table(range: NSIntersectionRange($0.range, all), width: $0.width) }
+        let segments = split(length: text.length, code: code, tables: tables)
+        // Space before a paragraph applies at the top of a later container but not of the first: the gap is the block's.
+        for segment in segments.dropFirst() where segment.kind == .prose && segment.range.length > 0 {
+            let first = (text.string as NSString).paragraphRange(for: NSRange(location: segment.range.location, length: 0))
+            guard let style = text.attribute(.paragraphStyle, at: first.location, effectiveRange: nil) as? NSParagraphStyle,
+                  style.paragraphSpacingBefore > 0, let copy = style.mutableCopy() as? NSMutableParagraphStyle else { continue }
+            copy.paragraphSpacingBefore = 0
+            text.addAttribute(.paragraphStyle, value: copy, range: first)
+        }
+        return Rendered(text: text, codeBlocks: code, tables: tables, segments: segments)
+    }
+
+    private static func split(length: Int, code: [CodeBlock], tables: [Table]) -> [Segment] {
+        let blocks = (code.map { Segment(kind: .code, range: $0.range) } + tables.map { Segment(kind: .table, range: $0.range) })
+            .filter { $0.range.length > 0 }
+            .sorted { $0.range.location < $1.range.location }
+        var segments: [Segment] = []
+        var at = 0
+        for block in blocks {
+            if block.range.location > at {
+                segments.append(Segment(kind: .prose, range: NSRange(location: at, length: block.range.location - at)))
+            }
+            segments.append(block)
+            at = NSMaxRange(block.range)
+        }
+        if at < length || segments.isEmpty {
+            segments.append(Segment(kind: .prose, range: NSRange(location: at, length: length - at)))
+        }
+        return segments
     }
 
     /// No break after the last paragraph: TextKit would lay out an empty line there.
@@ -103,18 +233,37 @@ enum MarkdownAttributed {
     /// Lays the runs out block by block.
     private struct Builder {
         let font: NSFont
+        /// The source stops inside its last fenced block.
+        let streamingCode: Bool
         let out = NSMutableAttributedString()
-        var codeBlocks: [(NSRange, String)] = []
+        var codeBlocks: [CodeBlock] = []
         /// The leaf block the last run belonged to; a new one starts a new paragraph.
         var lastBlock: Int?
         /// The list items whose marker is drawn (an item's later paragraphs have none).
         var markedItems = Set<Int>()
-        var tables: [Int: (table: NSTextTable, rows: [Int: Int])] = [:]
+        var tables: [Int: TableBuild] = [:]
+        var tableOrder: [Int] = []
+        var openTable: Int?
+        var openCell: (table: Int, row: Int, column: Int, block: NSTextTableBlock, start: Int)?
         var quoteBlocks: [Int: NSTextBlock] = [:]
-        var codeBlockObjects: [Int: NSTextBlock] = [:]
-        var openCode: (identity: Int, start: Int)?
+        var openCode: (identity: Int, start: Int, language: String?)?
+        /// The outermost list of the last paragraph, while it was a list item.
+        var openList: Int?
 
-        init(font: NSFont) { self.font = font }
+        /// A table as it comes in, cell by cell.
+        struct TableBuild {
+            let table: NSTextTable
+            let alignments: [PresentationIntent.TableColumn.Alignment]
+            var rows: [Int: Int] = [:]
+            var cells: [(row: Int, column: Int, block: NSTextTableBlock, range: NSRange)] = []
+            var start: Int?
+            var end: Int?
+        }
+
+        init(font: NSFont, streamingCode: Bool) {
+            self.font = font
+            self.streamingCode = streamingCode
+        }
 
         mutating func add(_ text: String, intent: PresentationIntent?, inline: InlinePresentationIntent?, link: URL?) {
             let components = intent?.components ?? []
@@ -123,12 +272,17 @@ enum MarkdownAttributed {
             var newBlock = false
             if leaf != lastBlock {
                 newBlock = true
-                closeCode(unless: leaf)
+                closeCell()
                 // The break ends the paragraph before, in its style (a table cell is a paragraph of its own).
                 if out.length > 0, !out.string.hasSuffix("\n") {
                     let before = out.attributes(at: out.length - 1, effectiveRange: nil)
-                    out.append(NSAttributedString(string: "\n", attributes: before.filter { $0.key != .link }))
+                    out.append(NSAttributedString(string: "\n", attributes: before.filter {
+                        ![.link, .backgroundColor, .inlineCode].contains($0.key)
+                    }))
                 }
+                closeCode(unless: leaf)
+                closeTable(unless: components.first(where: { if case .table = $0.kind { true } else { false } })?.identity)
+                closeList(unless: components.last(where: Self.isList)?.identity)
                 lastBlock = leaf
             }
             let style = paragraphStyle(components)
@@ -139,7 +293,8 @@ enum MarkdownAttributed {
                 attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
             }
             if let inline, inline.contains(.code), !style.code {
-                attributes[.backgroundColor] = MarkdownAttributed.codeBackground
+                attributes[.backgroundColor] = MacColor.elevated
+                attributes[.inlineCode] = true
             }
             if let link { attributes[.link] = link }
             if newBlock {
@@ -154,36 +309,142 @@ enum MarkdownAttributed {
                     var markerAttributes = attributes
                     markerAttributes[.font] = style.font
                     markerAttributes.removeValue(forKey: .link)
+                    markerAttributes.removeValue(forKey: .backgroundColor)
+                    markerAttributes.removeValue(forKey: .inlineCode)
                     // A task item shows its box where the bullet was (full width, the box before the text).
                     let drawn = box.isEmpty || style.ordered ? marker : box.trimmingCharacters(in: .whitespaces)
                     out.append(NSAttributedString(string: drawn + "\t" + (drawn == marker ? box : ""),
                                                   attributes: markerAttributes))
                 }
-                if style.code, let identity = style.codeIdentity { openCode = (identity, out.length) }
+                if style.code, let identity = style.codeIdentity {
+                    openCode = (identity, out.length, style.language)
+                }
+                if let cell = style.cell { openCell = (cell.table, cell.row, cell.column, cell.block, out.length) }
             }
             out.append(NSAttributedString(string: text, attributes: attributes))
         }
 
         mutating func finish() -> Rendered {
-            closeCode(unless: nil)
-            MarkdownAttributed.trimTrailingNewline(out)
-            return Rendered(text: out, codeBlocks: codeBlocks)
+            closeCode(unless: nil, finished: !streamingCode)
+            closeCell()
+            closeTable(unless: nil)
+            return MarkdownAttributed.finish(text: out, codeBlocks: codeBlocks, tables: finishTables())
         }
 
-        private mutating func closeCode(unless leaf: Int?) {
+        private mutating func closeCode(unless leaf: Int?, finished: Bool = true) {
             guard let open = openCode, open.identity != leaf else { return }
             let range = NSRange(location: open.start, length: out.length - open.start)
             var code = (out.string as NSString).substring(with: range)
             if code.hasSuffix("\n") { code.removeLast() }
-            codeBlocks.append((range, code))
+            codeBlocks.append(CodeBlock(range: range, code: code, language: open.language))
             openCode = nil
+            guard finished else { return }
+            for token in CodeTokens.tokens(in: code, language: open.language) {
+                let color: NSColor? = switch token.kind {
+                case .keyword: open.language?.lowercased() == "diff" ? MacColor.codeNumber : MacColor.codeKeyword   // a removed line
+                case .string: MacColor.codeString
+                case .comment: MacColor.codeComment
+                case .number: MacColor.codeNumber
+                case .plain: nil
+                }
+                guard let color else { continue }
+                let local = NSRange(token.range, in: code)
+                out.addAttribute(.foregroundColor, value: color,
+                                 range: NSRange(location: open.start + local.location, length: local.length))
+            }
+        }
+
+        private mutating func closeCell() {
+            guard let cell = openCell else { return }
+            openCell = nil
+            let range = NSRange(location: cell.start, length: out.length - cell.start)
+            tables[cell.table]?.cells.append((cell.row, cell.column, cell.block, range))
+            if tables[cell.table]?.start == nil { tables[cell.table]?.start = cell.start }
+        }
+
+        private mutating func closeTable(unless identity: Int?) {
+            guard let table = openTable, table != identity else { return }
+            tables[table]?.end = out.length
+            openTable = nil
+        }
+
+        /// A list gives way to what follows it with a paragraph's space, not an item's.
+        private mutating func closeList(unless identity: Int?) {
+            guard let list = openList, list != identity else { return }
+            openList = nil
+            guard out.length > 0, let style = out.attribute(.paragraphStyle, at: out.length - 1, effectiveRange: nil)
+                as? NSParagraphStyle, let copy = style.mutableCopy() as? NSMutableParagraphStyle else { return }
+            copy.paragraphSpacing = Design.Text.paragraphSpacing
+            let last = (out.string as NSString).paragraphRange(for: NSRange(location: out.length - 1, length: 0))
+            out.addAttribute(.paragraphStyle, value: copy, range: last)
+        }
+
+        private static func isList(_ component: PresentationIntent.IntentType) -> Bool {
+            switch component.kind {
+            case .orderedList, .unorderedList: true
+            default: false
+            }
+        }
+
+        /// Each table's columns, now that all its text is in: as wide as their widest cell wants (up to the cap, past
+        /// which a cell wraps), numbers to the right, a hairline under every row but the last.
+        private func finishTables() -> [Table] {
+            tableOrder.compactMap { identity in
+                guard let table = tables[identity], let start = table.start else { return nil }
+                let columns = table.table.numberOfColumns
+                let header = table.cells.map(\.row).min() ?? 0
+                let lastRow = table.cells.map(\.row).max() ?? 0
+                var widths = [CGFloat](repeating: 0, count: columns)
+                var filled = [Bool](repeating: false, count: columns)
+                var numeric = [Bool](repeating: true, count: columns)
+                for cell in table.cells {
+                    let measured = NSMutableAttributedString(attributedString: out.attributedSubstring(from: cell.range))
+                    measured.removeAttribute(.paragraphStyle, range: NSRange(location: 0, length: measured.length))
+                    let width = measured.boundingRect(with: NSSize(width: unwrapped, height: unwrapped),
+                                                      options: [.usesLineFragmentOrigin]).width
+                    widths[cell.column] = max(widths[cell.column], min(width.rounded(.up) + 1, widestCell))
+                    guard cell.row != header else { continue }
+                    let text = (out.string as NSString).substring(with: cell.range)
+                    guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
+                    filled[cell.column] = true
+                    if !isNumeric(text) { numeric[cell.column] = false }
+                }
+                for cell in table.cells {
+                    cell.block.setContentWidth(widths[cell.column], type: .absoluteValueType)
+                    if cell.row != lastRow {
+                        cell.block.setWidth(1, type: .absoluteValueType, for: .border, edge: .maxY)
+                        cell.block.setBorderColor(MacColor.hairline, for: .maxY)
+                    }
+                    let alignment = alignment(column: cell.column, of: table, numeric: filled[cell.column] && numeric[cell.column])
+                    guard alignment != .left else { continue }
+                    let paragraph = (out.string as NSString).paragraphRange(for: cell.range)
+                    guard let style = out.attribute(.paragraphStyle, at: paragraph.location, effectiveRange: nil)
+                        as? NSParagraphStyle, let copy = style.mutableCopy() as? NSMutableParagraphStyle else { continue }
+                    copy.alignment = alignment
+                    out.addAttribute(.paragraphStyle, value: copy, range: paragraph)
+                }
+                let padding = Self.cellPaddingX * 2 * CGFloat(columns)
+                let width = (widths.reduce(0, +) + padding).rounded(.up) + 1
+                table.table.setContentWidth(width, type: .absoluteValueType)
+                let range = NSRange(location: start, length: (table.end ?? out.length) - start)
+                return Table(range: range, width: width)
+            }
+        }
+
+        private func alignment(column: Int, of table: TableBuild, numeric: Bool) -> NSTextAlignment {
+            let stated = column < table.alignments.count ? table.alignments[column] : .left
+            switch stated {
+            case .right: return .right
+            case .center: return .center
+            default: return numeric ? .right : .left
+            }
         }
 
         private func runFont(base: NSFont, inline: InlinePresentationIntent?, code: Bool) -> NSFont {
             guard let inline else { return base }
             var font = base
             if inline.contains(.code), !code {
-                font = .monospacedSystemFont(ofSize: base.pointSize * 0.92, weight: .regular)
+                font = codeFont(base)
             }
             var traits: NSFontDescriptor.SymbolicTraits = []
             if inline.contains(.stronglyEmphasized) { traits.insert(.bold) }
@@ -203,43 +464,52 @@ enum MarkdownAttributed {
             var ordered = false
             var code = false
             var codeIdentity: Int?
-            var cell = false
+            var language: String?
+            var cell: (table: Int, row: Int, column: Int, block: NSTextTableBlock)?
         }
+
+        static let cellPaddingX = Design.Space.s12
+        static let cellPaddingY = Design.Space.s8
 
         /// The paragraph a leaf block makes, from its components (innermost first).
         private mutating func paragraphStyle(_ components: [PresentationIntent.IntentType]) -> Style {
             let paragraph = NSMutableParagraphStyle()
             let size = font.pointSize
-            var style = Style(paragraph: paragraph, font: font, color: .labelColor)
-            paragraph.paragraphSpacing = size * 0.6
-            paragraph.lineSpacing = size * 0.12
+            var style = Style(paragraph: paragraph, font: font, color: MacColor.textPrimary)
+            paragraph.paragraphSpacing = Design.Text.paragraphSpacing
+            paragraph.lineSpacing = Design.Text.lineSpacing
             var blocks: [NSTextBlock] = []
             var listDepth = 0
             var markerFor: (item: Int, ordinal: Int)?
             var ordered = false
             var sawOrdered: Bool?
+            var cellColumn: Int?
+            var rowIdentity: Int?
+            var headerRow = false
 
             for component in components {
                 switch component.kind {
                 case .header(let level):
-                    let scale: CGFloat = [1.35, 1.2, 1.1, 1, 1, 1][min(max(level, 1), 6) - 1]
-                    let weight: NSFont.Weight = level <= 2 ? .bold : .semibold
-                    style.font = .systemFont(ofSize: (size * scale).rounded(), weight: weight)
-                    if level == 6 { style.color = .secondaryLabelColor }
-                    paragraph.paragraphSpacingBefore = size * (level <= 2 ? 0.9 : 0.7)
-                    paragraph.paragraphSpacing = size * 0.4
-                case .codeBlock:
-                    style.font = .monospacedSystemFont(ofSize: size * 0.88, weight: .regular)
+                    // Spec §2.2: 1.25, 1.12, 1.02 em; 1 em above, 0.35 em below.
+                    let (scale, weight): (CGFloat, NSFont.Weight) = switch level {
+                    case 1: (1.25, .bold)
+                    case 2: (1.12, .semibold)
+                    default: (1.02, .semibold)
+                    }
+                    let heading = (size * scale).rounded()
+                    style.font = .systemFont(ofSize: heading, weight: weight)
+                    paragraph.paragraphSpacingBefore = heading * Design.Text.headingSpaceAbove
+                    paragraph.paragraphSpacing = heading * Design.Text.headingSpaceBelow
+                case .codeBlock(let language):
+                    style.font = codeFont(font)
                     style.code = true
                     style.codeIdentity = component.identity
-                    let block = codeBlockObjects[component.identity] ?? MarkdownAttributed.codeBlock(font: font)
-                    codeBlockObjects[component.identity] = block
-                    blocks.insert(block, at: 0)
+                    style.language = language?.split(whereSeparator: \.isWhitespace).first.map(String.init)  // "python title=x"
                     paragraph.paragraphSpacing = 0
-                    paragraph.lineSpacing = size * 0.1
+                    paragraph.lineSpacing = Design.Text.lineSpacing / 2
                 case .blockQuote:
-                    style.color = .secondaryLabelColor
-                    let block = quoteBlocks[component.identity] ?? MarkdownAttributed.quoteBlock(font: font)
+                    style.color = MacColor.textSecondary
+                    let block = quoteBlocks[component.identity] ?? MarkdownAttributed.quoteBlock()
                     quoteBlocks[component.identity] = block
                     blocks.insert(block, at: 0)
                 case .listItem(let ordinal):
@@ -251,24 +521,28 @@ enum MarkdownAttributed {
                     }
                 case .orderedList:
                     if sawOrdered == nil { sawOrdered = true }
+                    openList = component.identity
                 case .unorderedList:
                     if sawOrdered == nil { sawOrdered = false }
+                    openList = component.identity
                 case .table(let columns):
                     if tables[component.identity] == nil {
                         let table = makeTable()
                         table.numberOfColumns = max(columns.count, 1)
-                        tables[component.identity] = (table, [:])
+                        tables[component.identity] = TableBuild(table: table, alignments: columns.map(\.alignment))
+                        tableOrder.append(component.identity)
                     }
+                    openTable = component.identity
                 case .tableCell(let column):
-                    style.cell = true
                     paragraph.paragraphSpacing = 0
+                    paragraph.lineSpacing = 0
                     // The row and the table are further out: found below, applied after the loop.
-                    tableCell = column
+                    cellColumn = column
                 case .tableHeaderRow:
-                    tableRowIdentity = component.identity
+                    rowIdentity = component.identity
                     headerRow = true
                 case .tableRow:
-                    tableRowIdentity = component.identity
+                    rowIdentity = component.identity
                 default:
                     break
                 }
@@ -276,27 +550,25 @@ enum MarkdownAttributed {
             ordered = sawOrdered ?? false
             style.ordered = ordered
 
-            if style.cell, let column = tableCell,
+            if let column = cellColumn,
                let tableID = components.first(where: { if case .table = $0.kind { true } else { false } })?.identity,
-               var entry = tables[tableID], let rowID = tableRowIdentity {
+               var entry = tables[tableID], let rowID = rowIdentity {
                 let row = entry.rows[rowID] ?? entry.rows.count
                 entry.rows[rowID] = row
                 entry.table.numberOfColumns = max(entry.table.numberOfColumns, column + 1)
                 tables[tableID] = entry
                 let cell = NSTextTableBlock(table: entry.table, startingRow: row, rowSpan: 1, startingColumn: column,
                                             columnSpan: 1)
-                cell.setWidth(1, type: .absoluteValueType, for: .border)
-                cell.setBorderColor(.separatorColor)
-                cell.setWidth(size * 0.35, type: .absoluteValueType, for: .padding)
-                if headerRow {
-                    style.font = .systemFont(ofSize: size, weight: .semibold)
-                    cell.backgroundColor = MarkdownAttributed.codeBackground.withAlphaComponent(0.06)
-                }
+                cell.setWidth(Self.cellPaddingX, type: .absoluteValueType, for: .padding, edge: .minX)
+                cell.setWidth(Self.cellPaddingX, type: .absoluteValueType, for: .padding, edge: .maxX)
+                cell.setWidth(Self.cellPaddingY, type: .absoluteValueType, for: .padding, edge: .minY)
+                cell.setWidth(Self.cellPaddingY, type: .absoluteValueType, for: .padding, edge: .maxY)
+                let tableSize = NSFont.preferredFont(forTextStyle: .subheadline).pointSize
+                style.font = .monospacedDigitSystemFont(ofSize: tableSize, weight: headerRow ? .semibold : .regular)
+                if headerRow { style.color = MacColor.textSecondary }
                 blocks.append(cell)
+                style.cell = (tableID, row, column, cell)
             }
-            tableCell = nil
-            tableRowIdentity = nil
-            headerRow = false
 
             if listDepth > 0 {
                 let step = size * 1.5
@@ -304,8 +576,13 @@ enum MarkdownAttributed {
                 paragraph.headIndent = indent
                 paragraph.firstLineHeadIndent = indent - step
                 paragraph.tabStops = [NSTextTab(textAlignment: .left, location: indent)]
-                paragraph.paragraphSpacing = size * 0.25
-                if let marker = markerFor, marker.item >= 0 {
+                paragraph.paragraphSpacing = Design.Space.s4
+                if style.code {
+                    // A block of its own: its first line carries no marker and its lines no indent.
+                    paragraph.headIndent = 0
+                    paragraph.firstLineHeadIndent = 0
+                    paragraph.tabStops = []
+                } else if let marker = markerFor, marker.item >= 0 {
                     markedItems.insert(marker.item)
                     style.marker = ordered ? "\(marker.ordinal)." : (listDepth > 1 ? "\u{25E6}" : "\u{2022}")
                 } else {
@@ -317,19 +594,162 @@ enum MarkdownAttributed {
             return style
         }
 
-        private var tableCell: Int?
-        private var tableRowIdentity: Int?
-        private var headerRow = false
-
         private func makeTable() -> NSTextTable {
             let table = NSTextTable()
             table.numberOfColumns = 1
-            table.layoutAlgorithm = .automaticLayoutAlgorithm
-            table.collapsesBorders = true
+            table.layoutAlgorithm = .fixedLayoutAlgorithm
+            table.collapsesBorders = false
             table.hidesEmptyCells = false
-            table.setWidth(font.pointSize * 0.3, type: .absoluteValueType, for: .margin, edge: .minY)
-            table.setWidth(font.pointSize * 0.7, type: .absoluteValueType, for: .margin, edge: .maxY)
             return table
+        }
+    }
+}
+
+/// A segment's text container. It ends where its segment does, however much room it has, so what follows goes on in
+/// the next container. Its own width is always `MarkdownAttributed.unwrapped`: TextKit sizes a table against the
+/// container before it, then moves it on, so a narrow one squeezed the wide table after it. Running text wraps at
+/// `limit` instead.
+final class MessageTextContainer: NSTextContainer {
+    /// The first character past the segment.
+    var end = Int.max
+    /// Where its lines wrap.
+    var limit = CGFloat.greatestFiniteMagnitude {
+        didSet { if limit != oldValue { layoutManager?.textContainerChangedGeometry(self) } }
+    }
+
+    init() {
+        super.init(size: NSSize(width: MarkdownAttributed.unwrapped, height: .greatestFiniteMagnitude))
+        lineFragmentPadding = 0
+    }
+
+    @available(*, unavailable)
+    required init(coder: NSCoder) { fatalError("not from a nib") }
+
+    override var isSimpleRectangularTextContainer: Bool { false }
+
+    override func lineFragmentRect(forProposedRect proposedRect: NSRect, at characterIndex: Int,
+                                   writingDirection baseWritingDirection: NSWritingDirection,
+                                   remaining remainingRect: UnsafeMutablePointer<NSRect>?) -> NSRect {
+        guard characterIndex < end else { return .zero }
+        var rect = super.lineFragmentRect(forProposedRect: proposedRect, at: characterIndex,
+                                          writingDirection: baseWritingDirection, remaining: remainingRect)
+        if rect.maxX > limit { rect.size.width = max(limit - rect.minX, 0) }
+        return rect
+    }
+}
+
+extension MarkdownAttributed {
+    /// Where each segment of a message sits at a width, and how big the message is: what the view lays out and what
+    /// SwiftUI is told. A block fills the column and scrolls when its text is wider; a table hugs its columns.
+    struct Layout: Equatable {
+        struct Placed: Equatable {
+            /// In the message.
+            var frame: CGRect
+            /// The text's own size: the block scrolls when this is wider than `frame`.
+            var content: CGSize
+        }
+        var placed: [Placed] = []
+        var size: CGSize = .zero
+    }
+
+    /// Measures a rendered message, keeping what it measured: the same text is asked for again and again as SwiftUI
+    /// settles a width, and a block's size does not depend on the width at all.
+    final class Measure {
+        let rendered: Rendered
+        private var prose: [Int: [CGFloat: CGSize]] = [:]
+        private var blocks: [Int: CGSize] = [:]
+        private var layouts: [CGFloat: Layout] = [:]
+
+        init(_ rendered: Rendered) { self.rendered = rendered }
+
+        /// A new render of the same message keeps the sizes of the segments that did not change: only a streaming
+        /// reply's tail does.
+        init(_ rendered: Rendered, after previous: Measure?) {
+            self.rendered = rendered
+            guard let previous else { return }
+            let count = min(rendered.segments.count, previous.rendered.segments.count) - 1
+            guard count > 0 else { return }
+            let new = rendered.text.string as NSString
+            let old = previous.rendered.text.string as NSString
+            for index in 0..<count {
+                let (a, b) = (rendered.segments[index], previous.rendered.segments[index])
+                guard a == b, new.substring(with: a.range) == old.substring(with: b.range) else { break }
+                prose[index] = previous.prose[index]
+                blocks[index] = previous.blocks[index]
+            }
+        }
+
+        func layout(width: CGFloat) -> Layout {
+            let width = width.rounded()
+            if let known = layouts[width] { return known }
+            var result = Layout()
+            var y: CGFloat = 0
+            var widest: CGFloat = 0
+            for (index, segment) in rendered.segments.enumerated() {
+                if index > 0 { y += blockGap }
+                var placed: Layout.Placed
+                switch segment.kind {
+                case .prose:
+                    let size = proseSize(index, segment, width: width)
+                    placed = .init(frame: CGRect(x: 0, y: y, width: width, height: size.height), content: size)
+                    widest = max(widest, size.width)
+                case .code:
+                    let size = blockSize(index, segment)
+                    let height = codeHeader + 1 + blockPadding * 2 + size.height
+                    placed = .init(frame: CGRect(x: 0, y: y, width: width, height: height), content: size)
+                    widest = width
+                case .table:
+                    let size = blockSize(index, segment)
+                    placed = .init(frame: CGRect(x: 0, y: y, width: min(size.width, width), height: size.height),
+                                   content: size)
+                    widest = max(widest, placed.frame.width)
+                }
+                placed.frame.size.height = placed.frame.height.rounded(.up)
+                y += placed.frame.height
+                result.placed.append(placed)
+            }
+            result.size = CGSize(width: min(width, (widest + 1).rounded(.up)), height: max(y, 1))
+            layouts[width] = result
+            return result
+        }
+
+        private func proseSize(_ index: Int, _ segment: Segment, width: CGFloat) -> CGSize {
+            if let size = prose[index]?[width] { return size }
+            let size = measure(segment, limit: width)
+            let fitted = CGSize(width: min(width, size.width), height: size.height)
+            prose[index, default: [:]][width] = fitted
+            return fitted
+        }
+
+        private func blockSize(_ index: Int, _ segment: Segment) -> CGSize {
+            if let size = blocks[index] { return size }
+            var size: CGSize
+            switch segment.kind {
+            case .table:
+                let width = rendered.tables.first { $0.range == segment.range }?.width ?? 0
+                size = CGSize(width: width, height: measure(segment, limit: .greatestFiniteMagnitude).height)
+            default:
+                size = measure(segment, limit: .greatestFiniteMagnitude)
+            }
+            size.width = size.width.rounded(.up)
+            size.height = size.height.rounded(.up)
+            blocks[index] = size
+            return size
+        }
+
+        /// The text of `segment` alone, in a layout of its own: as wide as its longest line, as tall as it needs.
+        private func measure(_ segment: Segment, limit: CGFloat) -> CGSize {
+            let text = NSMutableAttributedString(attributedString: rendered.text.attributedSubstring(from: segment.range))
+            trimTrailingNewline(text)
+            let storage = NSTextStorage(attributedString: text)
+            let layout = NSLayoutManager()
+            let container = MessageTextContainer()
+            container.limit = limit
+            layout.addTextContainer(container)
+            storage.addLayoutManager(layout)
+            layout.ensureLayout(for: container)
+            let used = layout.usedRect(for: container)
+            return CGSize(width: (used.maxX + 1).rounded(.up), height: max(used.maxY.rounded(.up), 1))
         }
     }
 }
