@@ -78,9 +78,12 @@ struct NativeChromePinTests {
         #expect(!source.contains("HardwareKeyboard"))
     }
 
-    /// Bug: a long draft sent left the shrunken field an offset, and the placeholder sliced in half at its top.
-    @Test func thePlaceholderStaysOnTheFieldsFrame() throws {
+    /// Bug: a change of text size with the keyboard up left an empty field's line at the old size: the capsule stayed tall,
+    /// or the placeholder and the caret stood sliced at its top. Reproduced by the frames in the 2026-11-04 polish.
+    @Test func anEmptyFieldFollowsTheTextSize() throws {
         let source = try shared("Shared/Platform/TextViews.swift")
+        #expect(source.contains("registerForTraitChanges([UITraitPreferredContentSizeCategory.self])"))
+        #expect(source.contains("guard let self, self.text.isEmpty else { return }"))
         #expect(source.contains("super.contentOffset = isScrollEnabled ? newValue : .zero"))
         #expect(source.contains("placeholder.topAnchor.constraint(equalTo: frameLayoutGuide.topAnchor"))
     }
@@ -93,7 +96,7 @@ struct NativeChromePinTests {
 
     /// Bugs: a sheet taller than its text; the chat showing through Earlier chats; the error twice on the iPad.
     @Test func sheetsFitAndCoverAndTheErrorShowsOnce() throws {
-        #expect(try shared("Shared/Documents/DocumentDetailView.swift").contains(".presentationDetents(fullHeight.map"))
+        #expect(try shared("Shared/Documents/DocumentDetailView.swift").contains(".presentationDetents(textHeight.map"))
         #expect(try shared("Shared/Chat/ChatSheets.swift").contains(".presentationBackground(Color.canvas)"))
         #expect(try shared("Shared/Root/SessionViews.swift").contains("if store.loaded, let error = store.error {"))
     }

@@ -350,8 +350,9 @@ struct StaleSaveSheet: View {
     var replace: () -> Void
     var takeTheirs: () -> Void
     @Environment(\.dismiss) private var dismiss
-    /// What the sheet needs: its text, the bar over it and the sheet's own insets.
-    @State private var fullHeight: CGFloat?
+    /// What the sheet's text takes, with its title bar, and what its buttons take: the sheet is as tall as both.
+    @State private var textHeight: CGFloat?
+    @State private var buttonsHeight: CGFloat = 0
 
     var body: some View {
         NavigationStack {
@@ -382,9 +383,9 @@ struct StaleSaveSheet: View {
             }
             .background(Color.canvas.ignoresSafeArea())
             .onScrollGeometryChange(for: CGFloat.self) { geometry in
-                geometry.contentSize.height + geometry.contentInsets.top + geometry.contentInsets.bottom
+                geometry.contentSize.height + geometry.contentInsets.top
             } action: { _, height in
-                fullHeight = height
+                textHeight = height
             }
             .navigationTitle("It changed meanwhile")
             #if os(iOS)
@@ -421,10 +422,11 @@ struct StaleSaveSheet: View {
                 .frame(maxWidth: Design.measure)
                 .padding(Design.Space.s16)
                 .frame(maxWidth: .infinity)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { buttonsHeight = $0 }
             }
         }
         .sheetFrame()
-        .presentationDetents(fullHeight.map { [.height($0)] } ?? [.medium])
+        .presentationDetents(textHeight.map { [.height($0 + buttonsHeight)] } ?? [.medium])
     }
 }
 

@@ -109,8 +109,7 @@ final class ComposerUITextView: UITextView {
     weak var coordinator: ComposerTextView.Coordinator?
     let placeholder = UILabel()
 
-    /// A field that does not scroll stays at the top. A long draft sent (bug of 2026-11-04) left UIKit an offset for the
-    /// height it had, and the shrunken field showed the caret and the placeholder sliced at its top edge.
+    /// A field that does not scroll stays at the top: UIKit keeps an offset for the height a shrinking field had.
     override var contentOffset: CGPoint {
         get { super.contentOffset }
         set { super.contentOffset = isScrollEnabled ? newValue : .zero }
@@ -129,6 +128,9 @@ final class ComposerUITextView: UITextView {
         placeholder.translatesAutoresizingMaskIntoConstraints = false
         contentInsetAdjustmentBehavior = .never
         addSubview(placeholder)
+        registerForTraitChanges([UITraitPreferredContentSizeCategory.self]) { (view: ComposerUITextView, _) in
+            view.followTextSize()
+        }
         // On the field's frame, where the first line sits: it never scrolls with the content.
         NSLayoutConstraint.activate([
             placeholder.leadingAnchor.constraint(equalTo: frameLayoutGuide.leadingAnchor, constant: Design.Composer.horizontalInset),
@@ -138,6 +140,19 @@ final class ComposerUITextView: UITextView {
     }
 
     required init?(coder: NSCoder) { fatalError("not from a storyboard") }
+
+    /// The system rescales the text, but an empty field keeps its line at the old size. With the keyboard up, a change of
+    /// text size (bug of 2026-11-04) left the capsule tall, or the placeholder and the caret sliced at its top: the empty
+    /// line is made again at the new size, once the system has set `font`.
+    private func followTextSize() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.text.isEmpty else { return }
+            self.font = .preferredFont(forTextStyle: .body, compatibleWith: self.traitCollection)
+            self.text = " "
+            self.text = ""
+            self.setNeedsLayout()
+        }
+    }
 
     override func layoutSubviews() {
         super.layoutSubviews()
