@@ -202,6 +202,10 @@ def last_from(chat: dict | None, sent: list[dict]) -> str | None:
     return max(_instance_stamps(chat, sent), default="") or None
 
 
+def _short_line(line: str) -> str:
+    return line[:80] + ("…" if len(line) > 80 else "")
+
+
 def summary(name: str, history: list[dict] = ()) -> dict:
     """For the rail: the newest chat's last line, when the instance last answered in it or sent the operator a message
     (`history`: messages.history(); its send_message cards show in the chat over the span sent_during gives, and
@@ -213,7 +217,7 @@ def summary(name: str, history: list[dict] = ()) -> dict:
     sent = next(iter(reversed(sent_all)), None)
     sent_line = first_line((sent or {}).get("text", ""))
     if not c or c.get("cleared"):
-        return {"line": sent_line[:80], "last": last_from(None, sent_all),
+        return {"line": _short_line(sent_line), "last": last_from(None, sent_all),
                 "last_count": last_count(None, sent_all)} if sent else {}
     turns = c.get("turns") or []
     text = (turns[-1].get("shown", turns[-1].get("content")) or "") if turns else ""
@@ -224,7 +228,7 @@ def summary(name: str, history: list[dict] = ()) -> dict:
              else first_line(text, quotes=False))
     if sent and sent["ts"] >= (turns[-1]["ts"] if turns else ""):
         who, first = "", sent_line
-    return {"line": (who + first)[:80], "last": last_from(c, sent_all) or "",
+    return {"line": _short_line(who + first), "last": last_from(c, sent_all) or "",
             "last_count": last_count(c, sent_all),
             "replying": c.get("state") == "replying"}
 
@@ -262,7 +266,7 @@ def excerpt(chat: dict) -> tuple[str, int]:
     text = users[0].get("shown", users[0].get("content", "")) if users else ""
     first = (text or "").splitlines()
     line = first[0].strip() if first else ""
-    return line[:80] + ("…" if len(line) > 80 else ""), len(users)
+    return _short_line(line), len(users)
 
 
 # -- what a chat shows (docs/app-api.md §13): one model for the HTML feed and the apps' JSON --------------------------

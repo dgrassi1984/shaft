@@ -49,6 +49,25 @@ class SummariesTest(unittest.TestCase):
                 "text": "## Question: **which** one?"}
         self.assertEqual(web_chat.summary("wren", [sent])["line"], "Question: which one?")
 
+    def test_rail_lines_cut_at_80_characters_end_in_an_ellipsis(self):
+        for count in (79, 80, 81):
+            with self.subTest(count=count):
+                text = "x" * count
+                expected = "x" * min(count, 80) + ("…" if count > 80 else "")
+                chat = self.chat(text)
+                self.assertEqual(web_chat.summary("wren")["line"], expected)
+                chat["turns"][-1].update(role="user", content=text)
+                web_chat.save(chat)
+                self.assertEqual(web_chat.summary("wren")["line"], ("you: " + text)[:80] + "…")
+                self.assertEqual(web_chat.excerpt({"turns": [{"role": "user", "content": text}]}), (expected, 1))
+                sent = {"ts": "2026-10-25T11:00:00", "from": "wren", "to": "operator", "read": False, "text": text}
+                self.assertEqual(web_chat.summary("wren", [sent])["line"], expected)
+                chat["cleared"] = "2026-10-25T10:30:00"
+                web_chat.save(chat)
+                self.assertEqual(web_chat.summary("wren", [sent])["line"], expected)
+                with mock.patch.object(web_chat, "chats", return_value=[]):
+                    self.assertEqual(web_chat.summary("wren", [sent])["line"], expected)
+
     def test_a_push_says_it_as_text(self):
         self.assertEqual(web_chat.reply_event(self.chat(REPLY))["body"], "x = 1")
         self.assertEqual(web_chat.reply_event(self.chat("**Done**: `3` files"))["body"], "Done: 3 files")

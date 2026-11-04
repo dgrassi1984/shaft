@@ -621,6 +621,23 @@ public struct PushStatus: Codable, Sendable, Equatable {
     public var env: String?
     public var reason: String
     public var problem: String?
+
+    /// What Settings says about push beside its Push row, each thing once and nothing the row says already: with the
+    /// server out of reach the status and the registration fail in the same words.
+    public static func notes(_ status: PushStatus?, loadProblem: String?, registered: String?) -> [String] {
+        guard let status else {
+            return [loadProblem, registered].compactMap { $0?.isEmpty == false ? $0 : nil }.uniqued()
+        }
+        guard !status.on else { return [] }
+        return [status.reason, registered].compactMap { $0?.isEmpty == false ? $0 : nil }.uniqued()
+    }
+}
+
+private extension Array where Element == String {
+    func uniqued() -> [String] {
+        var seen = Set<String>()
+        return filter { seen.insert($0).inserted }
+    }
 }
 
 public struct RemovedResponse: Codable, Sendable, Equatable {

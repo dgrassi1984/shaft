@@ -1,11 +1,12 @@
 # Shared: the chat both apps draw
 
 The SwiftUI views and view models of the iPhone, iPad and Mac apps (PLAN-native-apps.md M4/M5), over SHAFTKit's
-stores. Everything here compiles for iOS and macOS; what differs per platform sits behind small seams.
+stores. The session forwards badge confirmations to `AppModel.setBadge`, independently of these views.
+Everything here compiles for iOS and macOS; what differs per platform sits behind small seams.
 
 | Folder | What |
 |---|---|
-| `Root/` | `SessionRoot` (startup error, pairing, or the paired app with the instances store in the environment; the badge), `PairingView`, `SettingsView`, `InstancesList` and its rows |
+| `Root/` | `SessionRoot` (startup error, pairing, or the paired app with the instances store in the environment), `PairingView`, `SettingsView`, `InstancesList` and its rows |
 | `Chat/` | `ChatScreen` (header, feed, composer, sheets; the long-poll only while visible and in front, `away`, seen, the new-reply announcement, drops), `ChatScreenModel` (sheets, focus requests, message actions, a send asked for by a menu), `ChatShell` (documents beside the chat), the sheets (Select text, a thumb's reason, earlier chats), `ArchivedChatView` (an earlier chat pushed over the current one) |
 | `Feed/` | `FeedView` (pinned to the bottom until scrolled up, Latest and New below in the bar above the composer, Show the N earlier messages), a view per item kind (§4.4) and per row after them (live reply, queued, pending feedback and edits, not sent) |
 | `Composer/` | quote cards with their answers, attachment chips, the field, + with the send modes (Send now / Queue after reply / Next cycle), and Stop in the composer |
@@ -37,8 +38,8 @@ and "Forget the pairing here only" when the server cannot be reached.
 - **Menus**: `ChatScreenModel.sendRequest` (a send in a mode, through the composer's own send) and
   `confirmingNewChat` and `confirmingEnd`.
 - **Pointer and keyboard on a computer** (macOS only): `HoverActions` (`Feed/FeedItemViews.swift`), Copy and Reply
-  under a message while the pointer is over it; Return in a card's answer sends, and the keyboard then moves to the
+  after a message's thumbs while the pointer is over it; Return in a card's answer sends, and the keyboard then moves to the
   main field (`Composer/ComposerView.swift`).
-- **Size and keyboard**: `HardwareKeyboard` (the shortcuts line), the shell's width rules (`horizontalSizeClass` is gone from `ChatScreen`),
+- **Size**: the shell's width rules (`horizontalSizeClass` is gone from `ChatScreen`),
   `sheetFrame()` (a sheet's size on the Mac), `iconMenu()` (a composer menu drawn as its icon on the Mac).
 - **Clipboard**: `Clipboard.copy`.

@@ -49,7 +49,10 @@ struct ChatsLayout: View {
         .sheet(isPresented: $settings) { SettingsView(session: session) }
         .onAppear(perform: restore)
         .onDisappear { inspectorRestore?.cancel() }
-        .onChange(of: shell.screen.map(ObjectIdentifier.init)) { inspectorRestore?.cancel() }
+        .onChange(of: shell.screen.map(ObjectIdentifier.init)) {
+            inspectorRestore?.cancel()
+            fitColumns()
+        }
         .onChange(of: shell.screen?.openDocument) { inspectorRestore?.cancel() }
         .onChange(of: shell.screen?.showDocuments) { inspectorRestore?.cancel() }
         .onChange(of: store.instances.map(\.name)) { restore() }
@@ -122,7 +125,6 @@ struct ChatsLayout: View {
             InstancesList(selection: Binding(get: { selection }, set: { name in if let name { open(name) } }),
                           settings: { settings = true })
                 .navigationSplitViewColumnWidth(min: 260, ideal: 300, max: 380)
-                .toolbar(removing: documentsTakeSidebar ? .sidebarToggle : nil)
         } detail: {
             NavigationStack(path: $path) {
                 chat
@@ -134,7 +136,7 @@ struct ChatsLayout: View {
                     }
             }
             .environment(shell)
-            .background(SidebarTiles())
+            .background(SidebarTiles(overlays: documentsTakeSidebar))
         }
         .navigationSplitViewStyle(.balanced)
         // The documents beside the chat, outside its navigation stack (ChatShell): inside it, their own pages
@@ -150,7 +152,16 @@ struct ChatsLayout: View {
             fitColumns()
         }
         .onChange(of: shell.screen?.showDocuments) { fitColumns() }
-        .onChange(of: columns) { fitColumns() }
+        .onChange(of: columns) { columnsChanged() }
+    }
+
+    /// The sidebar's toggle stays in the header while the documents have its room: there the operator's tap lays the
+    /// sidebar over the chat (`SidebarTiles`), for a moment, and that is left alone. A change the resize made is asked
+    /// again: leaving compact width shows the sidebar.
+    private func columnsChanged() {
+        if documentsTakeSidebar && inspector && !sidebarLeaving && columns != .detailOnly
+            && Date.now.timeIntervalSince(resized) > 0.5 { return }
+        fitColumns()
     }
 
     /// The system's own changes to the inspector. In a resize that turns it between column and sheet, it closes it and
@@ -161,12 +172,14 @@ struct ChatsLayout: View {
         inspectorRestore?.cancel()
         if !open {
             if Date.now.timeIntervalSince(resized) > 0.5 { shell.screen?.showDocuments = false }
-        } else if let screen = shell.screen, !screen.showDocuments {
+        } else if let screen = shell.screen {
             inspectorRestore = Task { @MainActor in
                 do { try await Task.sleep(for: .seconds(0.3)) }
                 catch { return }
-                guard !Task.isCancelled, shell.screen === screen, !screen.showDocuments else { return }
+                guard !Task.isCancelled, shell.screen === screen else { return }
+                // A restored screen may already have documents open. Reconcile its columns just as a manual open does.
                 screen.showDocuments = true
+                fitColumns()
             }
         }
     }
@@ -229,6 +242,7 @@ struct ChatsLayout: View {
         selection = name
         last = name
         compactColumn = .detail
+        if documentsTakeSidebar { columns = .detailOnly }       // the sidebar laid over the chat goes with the choice
     }
 
     /// The chat open last time, else the first instance; a tap's chat wins.
@@ -245,18 +259,31 @@ struct ChatsLayout: View {
 }
 
 /// The sidebar beside the chat at every width that holds both. `.balanced` alone left it to the system at launch, which
-/// by window shape often laid the sidebar over the chat, dimmed. Asked at each layout: earlier, the split view resets it.
+/// by window shape often laid the sidebar over the chat, dimmed. With `overlays` (the documents have its room) it is laid
+/// over the chat when asked for. Asked at each layout: earlier, the split view resets it.
 private struct SidebarTiles: UIViewRepresentable {
+    let overlays: Bool
+
     func makeUIView(context: Context) -> Finder { Finder() }
-    func updateUIView(_ view: Finder, context: Context) {}
+
+    func updateUIView(_ view: Finder, context: Context) {
+        view.behavior = overlays ? .overlay : .tile
+        view.apply()
+    }
 
     final class Finder: UIView {
+        var behavior = UISplitViewController.SplitBehavior.tile
+
         override func layoutSubviews() {
             super.layoutSubviews()
+            apply()
+        }
+
+        func apply() {
             var next: UIResponder? = self
             while let responder = next {
                 if let split = responder as? UISplitViewController {
-                    if split.preferredSplitBehavior != .tile { split.preferredSplitBehavior = .tile }
+                    if split.preferredSplitBehavior != behavior { split.preferredSplitBehavior = behavior }
                     return
                 }
                 next = responder.next

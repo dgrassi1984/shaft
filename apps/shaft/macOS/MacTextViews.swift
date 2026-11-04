@@ -5,14 +5,6 @@ import UniformTypeIdentifiers
 // The Mac halves of Shared's text seams (Shared/Platform/TextViews.swift has the iOS ones): the composer's field and
 // the selectable text of Select text, as AppKit text views of the same shape.
 
-/// A Mac always has a hardware keyboard: the composer's shortcuts line shows while its field is focused.
-@MainActor
-@Observable
-final class HardwareKeyboard {
-    static let shared = HardwareKeyboard()
-    let attached = true
-}
-
 /// The composer's main field (web-and-api.md, "The web UI"): Return sends, Shift- or Option-Return is a new line,
 /// Cmd-Return queues after the reply (sent now when idle). An input method's Return confirms what it composes, as
 /// typed. It grows with its text up to `maxHeight`, then scrolls; one line sits centred in the capsule. Pictures and files pasted or dropped on it go to
@@ -20,7 +12,6 @@ final class HardwareKeyboard {
 struct ComposerTextView: NSViewRepresentable {
     @Binding var text: String
     @Binding var height: CGFloat
-    @Binding var focused: Bool
     var placeholder: String
     var maxHeight: CGFloat
     var focusRequest: Int
@@ -30,6 +21,9 @@ struct ComposerTextView: NSViewRepresentable {
     /// Spec §4: the text's insets in the field, so nothing clips.
     static let insetX: CGFloat = 12
     static let insetY: CGFloat = 9
+    /// How far in the placeholder starts: the caret stands on the text's first column, and its blue bar and glow lay over
+    /// the first letter (typed text starts on that column, as the caret then stands before it).
+    static let placeholderInset: CGFloat = 6
     /// The composer's capsule at one line, which sits centred in it.
     static let minimumHeight: CGFloat = 44
 
@@ -123,13 +117,6 @@ struct ComposerTextView: NSViewRepresentable {
             return true
         }
 
-        func focusChanged(_ focused: Bool) {
-            if parent.focused != focused {
-                let binding = parent.$focused
-                DispatchQueue.main.async { binding.wrappedValue = focused }
-            }
-        }
-
         /// Grow with the text, between one line and `maxHeight`, then scroll.
         func measure() {
             guard let textView, let container = textView.textContainer, let layout = textView.layoutManager else {
@@ -166,18 +153,6 @@ final class ComposerNSTextView: NSTextView {
         super.keyDown(with: event)
     }
 
-    override func becomeFirstResponder() -> Bool {
-        let became = super.becomeFirstResponder()
-        if became { coordinator?.focusChanged(true) }
-        return became
-    }
-
-    override func resignFirstResponder() -> Bool {
-        let resigned = super.resignFirstResponder()
-        if resigned { coordinator?.focusChanged(false) }
-        return resigned
-    }
-
     // Cmd-Return reaches the field only when the Chat menu's Queue after reply is off (nothing to send): it queues
     // then too, which does nothing.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
@@ -192,7 +167,8 @@ final class ComposerNSTextView: NSTextView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         guard string.isEmpty, !placeholder.isEmpty else { return }
-        let origin = NSPoint(x: textContainerInset.width + (textContainer?.lineFragmentPadding ?? 5),
+        let origin = NSPoint(x: textContainerInset.width + (textContainer?.lineFragmentPadding ?? 5)
+                                + ComposerTextView.placeholderInset,
                              y: textContainerInset.height)
         (placeholder as NSString).draw(at: origin, withAttributes: [
             .font: font ?? NSFont.preferredFont(forTextStyle: .body),

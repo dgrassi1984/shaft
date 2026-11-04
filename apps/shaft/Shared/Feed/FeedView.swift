@@ -3,7 +3,8 @@ import SwiftUI
 
 /// The conversation, scrolled: it lands on the last message and stays there while what loads after grows the feed or
 /// moves it (pictures, the reply streaming, the keyboard), until the operator scrolls up. Scrolled up, a new message
-/// below shows "↓ New below" (drawn by the chat screen, in the bar above the composer). It reports when the newest item is on screen, which is when the chat may be marked seen.
+/// below shows "↓ New below" (drawn by the chat screen, in the fade above the composer). It reports when the newest item
+/// is on screen, which is when the chat may be marked seen.
 struct FeedView: View {
     let feed: Feed
     let rows: [FeedRow]
@@ -18,6 +19,8 @@ struct FeedView: View {
     @State private var interacting = false
     /// "Show the N earlier messages" was tapped: land on the first of them once they are there.
     @State private var toTop = false
+
+    private var metrics = FeedMetrics()
 
     private let bottomID = "feed-bottom"
 
@@ -41,7 +44,10 @@ struct FeedView: View {
                 }
                 Color.clear.frame(height: 1).id(bottomID)
             }
-            .padding(.vertical, Design.Space.s12)
+            // At rest at either end nothing lies in the fades (`feedEdges`): the turn's spacing and the 1 pt of
+            // `bottomID` count towards the foot.
+            .padding(.top, metrics.fade)
+            .padding(.bottom, metrics.fade - Design.Space.turn)
             .scrollTargetLayout()
         }
         .foregroundStyle(Color.textPrimary)
@@ -108,10 +114,11 @@ struct FeedView: View {
     }
 }
 
-/// "↓ Latest", or "↓ New below" with a message waiting: in the bar above the composer, so it covers nothing.
+/// "↓ Latest", or "↓ New below" with a message waiting: above the composer, with the feed fading out above it.
 struct LatestPillButton: View {
     let pill: ChatScreenModel.LatestPill
     var action: () -> Void
+    private var metrics = FeedMetrics()
 
     var body: some View {
         Button(action: action) {
@@ -119,19 +126,17 @@ struct LatestPillButton: View {
                 .font(Design.Text.pill)
                 .foregroundStyle(pill == .newBelow ? Color.brand : Color.textPrimary)
                 .padding(.horizontal, Design.Space.s12)
-                .frame(minHeight: Design.Space.s24 + Design.Space.s12)
+                .frame(minHeight: metrics.pillHeight)
                 .quietHitArea()
         }
         .buttonStyle(.plain)
         .floatingPill()
-        .frame(maxWidth: .infinity)
-        .padding(.top, Design.Space.s4)
         .accessibilityLabel(pill == .newBelow ? "New messages below" : "Scroll to the latest message")
     }
 }
 
 private extension View {
-    /// The system's glass on a floating control; solid `elevated` under Reduce Transparency.
+    /// The system's glass on a floating control, on solid `canvas`. Solid `elevated` under Reduce Transparency.
     func floatingPill() -> some View { modifier(FloatingPill()) }
 }
 
@@ -144,7 +149,9 @@ private struct FloatingPill: ViewModifier {
                 .background(Color.elevated, in: .capsule)
                 .overlay { Capsule().strokeBorder(Color.hairline) }     // it may float over an `elevated` block
         } else {
-            content.glassEffect(.regular.interactive(), in: .capsule)
+            content
+                .glassEffect(.regular.interactive(), in: .capsule)
+                .background(Color.canvas, in: .capsule)
         }
     }
 }

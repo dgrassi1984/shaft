@@ -18,6 +18,9 @@ public final class InstancesStore {
     @ObservationIgnored public let drafts: DraftStore
     /// Called when the server says this device is not paired (`401 unpaired`): the app shows its pairing screen.
     @ObservationIgnored public var onUnpaired: (@MainActor () -> Void)?
+    /// Reapply the server's count to the icon even when a push changed the icon but not this store.
+    @ObservationIgnored public var onBadge: (@MainActor (Int) -> Void)?
+    @ObservationIgnored private var badgeKnown = false
     @ObservationIgnored private var etag: String?
     @ObservationIgnored private var chats: [String: ChatStore] = [:]
     @ObservationIgnored private var pollTask: Task<Void, Never>?
@@ -32,16 +35,16 @@ public final class InstancesStore {
         outbox.sender = client
     }
 
-    /// Load the list once (`If-None-Match`: a `304` changes nothing).
+    /// Load the list once (`If-None-Match`: a `304` confirms the known badge too).
     public func refresh() async {
         do {
             switch try await client.instances(etag: etag) {
             case .notModified:
-                break
+                if badgeKnown { onBadge?(badge) }
             case .value(let answer, let etag):
                 self.etag = etag
                 instances = answer.instances
-                badge = answer.badge
+                reportBadge(answer.badge)
             }
             loaded = true
             error = nil
@@ -92,7 +95,7 @@ public final class InstancesStore {
     public func markSeen(_ name: String, version: String) async -> Bool {
         do {
             let answer = try await client.seen(name, version: version)
-            badge = answer.badge
+            reportBadge(answer.badge)
             if let index = instances.firstIndex(where: { $0.name == name }) {
                 instances[index].unread = answer.unread
             }
@@ -102,6 +105,12 @@ public final class InstancesStore {
             if apiError.code != "stale_version" { report(apiError) }
             return false
         }
+    }
+
+    private func reportBadge(_ count: Int) {
+        badge = count
+        badgeKnown = true
+        onBadge?(count)
     }
 
     func report(_ error: APIError) {

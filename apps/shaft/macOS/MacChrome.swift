@@ -17,11 +17,11 @@ enum MacChrome {
     private static let collapsedLeadingControls: CGFloat = 180
     private static let backButton: CGFloat = 44
 
-    /// How wide the title may be in a chat column: it is centred, so the wider end counts twice. Past this the toolbar
-    /// hides the buttons behind its overflow.
+    /// How wide the title may be in a chat column: it is centred, so the wider end counts twice, and `titleGap` stays
+    /// clear at each end. Past this the toolbar hides the buttons behind its overflow.
     static func titleLimit(column: CGFloat, sidebar: CGFloat, earlier: Bool) -> CGFloat {
         let leading = (sidebar > 0 ? 0 : collapsedLeadingControls) + (earlier ? backButton : 0)
-        return column - 2 * max(leading, trailingControls)
+        return column - 2 * (max(leading, trailingControls) + Design.Header.titleGap)
     }
 
     // writingToolsAffordance: an `NSTextView` that takes Writing Tools draws AppKit's floating Siri tile for it
@@ -44,6 +44,22 @@ extension View {
         }
         .toolbar(removing: .title)
         .background(Color.canvas.ignoresSafeArea())
+    }
+}
+
+/// A sheet's buttons at its foot, on its `canvas`: the bar the Mac draws for a sheet's toolbar has a colour of its own and
+/// takes no background, so a sheet that reads on `canvas` keeps its buttons out of the toolbar.
+struct SheetFooter<Actions: View>: View {
+    @ViewBuilder var actions: () -> Actions
+
+    var body: some View {
+        HStack(spacing: Design.Space.s12) {
+            Spacer(minLength: 0)
+            actions()
+        }
+        .padding(.horizontal, Design.Space.gutter)
+        .padding(.vertical, Design.Space.s12)
+        .background(Color.canvas)
     }
 }
 

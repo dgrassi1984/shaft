@@ -56,14 +56,15 @@ struct ChatScreen: View {
                 if chat.cid != nil { archivedBanner }
                 // The feed fades out before the header and the composer: nothing is legible behind the glass.
                 content
-                    .scrollEdgeEffectStyle(.soft, for: .all)
-                    .scrollEdgeEffectHidden(reduceTransparency, for: .all)
-                    .headerEdge()
-                    .safeAreaBar(edge: .bottom, spacing: 0) {
+                    .scrollEdgeEffectHidden(true, for: .all)
+                    .feedEdges(pillVisible: screen.latestPill != nil) {
+                        if let pill = screen.latestPill {
+                            LatestPillButton(pill: pill) { screen.jumpToLatest += 1 }
+                                .transition(.opacity)
+                        }
+                    }
+                    .safeAreaInset(edge: .bottom, spacing: 0) {
                         VStack(spacing: 0) {
-                            if let pill = screen.latestPill {
-                                LatestPillButton(pill: pill) { screen.jumpToLatest += 1 }
-                            }
                             connectionNotice
                             if let said = chat.actionError?.message ?? chat.said {
                                 StatusLine(text: said, isError: chat.actionError != nil) { chat.dismissStatus() }
@@ -78,7 +79,7 @@ struct ChatScreen: View {
                                 ComposerView(maxHeight: max(80, geometry.size.height / 3))
                             }
                         }
-                        .footerEdge()
+                        .feedFloor()
                     }
             }
         }
@@ -338,9 +339,9 @@ struct ChatScreen: View {
     }
 }
 
-/// The header's title, in a glass capsule: the name, then one status line, which drops its optional parts (the model, then the time)
-/// rather than truncate; behind a tap, what a message does now when it is busy, its model and its spend. Text stops
-/// growing at the largest size two lines fit in the bar.
+/// The header's title, in a glass capsule: the name, then one status line, which drops its optional parts (the model,
+/// then the time, at the narrowest its icon) rather than crowd the capsule's curve; behind a tap, what a message does now
+/// when it is busy, its model and its spend. Text stops growing at the largest size two lines fit in the capsule.
 struct ChatTitle: View {
     let instance: String
     let archived: Bool
@@ -361,13 +362,14 @@ struct ChatTitle: View {
                         status(row, time: true, model: true)
                         status(row, time: true, model: false)
                         status(row, time: false, model: false)
+                        status(row, time: false, model: false, icon: false)
                     }
                     .font(Design.Text.metadata)
                     .foregroundStyle(Color.textSecondary)
                 }
             }
-            .dynamicTypeSize(...DynamicTypeSize.xxLarge)
-            .padding(.horizontal, Design.Space.s12)
+            .dynamicTypeSize(...DynamicTypeSize.xLarge)
+            .padding(.horizontal, Design.Header.titleInset)
             .frame(minHeight: Design.Header.height)
             .contentShape(Capsule())
         }
@@ -396,14 +398,16 @@ struct ChatTitle: View {
         }
     }
 
-    private func status(_ row: InstanceRow, time: Bool, model: Bool) -> some View {
+    private func status(_ row: InstanceRow, time: Bool, model: Bool, icon: Bool = true) -> some View {
         var parts = [row.replying ? String(localized: "replying") : row.state]
         if time && !row.since.isEmpty && !row.replying { parts.append(row.since) }
         if model && !row.model.isEmpty { parts.append(row.model) }
         return HStack(spacing: Design.Space.s4) {
-            Image(systemName: StateIcon.symbol(row.state, replying: row.replying))
-                .symbolEffect(.pulse, isActive: StateIcon.pulses(row.state, replying: row.replying) && !reduceMotion)
-                .accessibilityHidden(true)
+            if icon {
+                Image(systemName: StateIcon.symbol(row.state, replying: row.replying))
+                    .symbolEffect(.pulse, isActive: StateIcon.pulses(row.state, replying: row.replying) && !reduceMotion)
+                    .accessibilityHidden(true)
+            }
             Text(parts.joined(separator: " · ")).lineLimit(1)
         }
     }

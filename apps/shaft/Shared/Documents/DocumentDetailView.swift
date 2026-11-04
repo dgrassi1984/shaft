@@ -242,7 +242,9 @@ struct OverwrittenNotice: View {
                         .textSelection(.enabled)
                         .padding(Design.Space.s12)
                 }
+                .sidewaysFade()
                 .elevatedBlock()
+                .clipShape(.rect(cornerRadius: Design.Radius.card, style: .continuous))
                 .padding(.top, Design.Space.s8)
             } label: {
                 Text("What changed").font(.footnote).foregroundStyle(Color.textSecondary)
@@ -348,6 +350,9 @@ struct StaleSaveSheet: View {
     var replace: () -> Void
     var takeTheirs: () -> Void
     @Environment(\.dismiss) private var dismiss
+    /// What the sheet's text takes, with its title bar, and what its buttons take: the sheet is as tall as both.
+    @State private var textHeight: CGFloat?
+    @State private var buttonsHeight: CGFloat = 0
 
     var body: some View {
         NavigationStack {
@@ -366,8 +371,10 @@ struct StaleSaveSheet: View {
                                     .textSelection(.enabled)
                                     .padding(Design.Space.s12)
                             }
+                            .sidewaysFade()
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .elevatedBlock()
+                            .clipShape(.rect(cornerRadius: Design.Radius.card, style: .continuous))
                         }
                     }
                 }
@@ -375,6 +382,11 @@ struct StaleSaveSheet: View {
                 .padding(.vertical, Design.Space.s16)
             }
             .background(Color.canvas.ignoresSafeArea())
+            .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                geometry.contentSize.height + geometry.contentInsets.top
+            } action: { _, height in
+                textHeight = height
+            }
             .navigationTitle("It changed meanwhile")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -410,9 +422,11 @@ struct StaleSaveSheet: View {
                 .frame(maxWidth: Design.measure)
                 .padding(Design.Space.s16)
                 .frame(maxWidth: .infinity)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { buttonsHeight = $0 }
             }
         }
         .sheetFrame()
+        .presentationDetents(textHeight.map { [.height($0 + buttonsHeight)] } ?? [.medium])
     }
 }
 
@@ -440,20 +454,40 @@ struct DocumentSelectSheet: View {
                 #else
                 .sheetTitle("Select text")
                 #endif
+                #if os(iOS)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
                     if !screen.archived {
-                        ToolbarItemGroup(placement: .sheetAction) {
-                            Button { commentOn(selection) } label: { Image(systemName: "text.bubble") }
-                                .disabled(selection.length == 0)
-                                .accessibilityLabel("Comment on the selection")
-                            Button("\u{21A9}\u{FE0E} Reply") { reply((text as NSString).substring(with: selection)) }
-                                .disabled(selection.length == 0)
+                        ToolbarItemGroup(placement: .primaryAction) {
+                            commentButton
+                            replyButton
                         }
                     }
                 }
+                #else
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    SheetFooter {
+                        Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+                        if !screen.archived {
+                            commentButton
+                            replyButton.compactPrimary().keyboardShortcut(.defaultAction)
+                        }
+                    }
+                }
+                #endif
         }
         .sheetFrame()
+    }
+
+    private var commentButton: some View {
+        Button { commentOn(selection) } label: { Image(systemName: "text.bubble") }
+            .disabled(selection.length == 0)
+            .accessibilityLabel("Comment on the selection")
+    }
+
+    private var replyButton: some View {
+        Button("\u{21A9}\u{FE0E} Reply") { reply((text as NSString).substring(with: selection)) }
+            .disabled(selection.length == 0)
     }
 
     private func reply(_ selected: String) {

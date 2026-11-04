@@ -1,3 +1,4 @@
+import SHAFTKit
 import SwiftUI
 #if os(iOS)
 import UIKit
@@ -49,13 +50,15 @@ enum Design {
     }
 
     enum Composer {
-        static let verticalInset: CGFloat = 9
         static let horizontalInset: CGFloat = 12
-        static let minimumHeight: CGFloat = 44
+        /// Round the text inside its field, where a scrolled line dissolves (spec §4's 9 pt with `clipInset`).
+        static let textInset: CGFloat = 6
+        /// Between the field and the capsule: a scrolled line never reaches the capsule's edge.
+        static let clipInset: CGFloat = 3
     }
 
-    /// The header's controls: the height of the system's glass buttons, which the title's capsule matches, and how far
-    /// below the header and above the composer the feed fades out.
+    /// The header's controls: the height of the system's glass buttons, which the title's capsule matches, what that
+    /// capsule keeps inside its curve, and how far below the header and above the composer the feed fades out.
     enum Header {
         static let height: CGFloat = {
             #if os(iOS)
@@ -64,7 +67,22 @@ enum Design {
             36
             #endif
         }()
-        static let fade: CGFloat = 16
+        static let titleInset: CGFloat = 16
+        /// The least between the title's capsule and the toolbar items beside it.
+        static let titleGap: CGFloat = 8
+        static let fade: CGFloat = 32
+    }
+
+    enum Footer {
+        static let icon: CGFloat = {
+            #if os(iOS)
+            13
+            #else
+            10
+            #endif
+        }()
+        /// A footer's 28 pt row draws about 14 pt of time and icons: this much of it at each end is only target.
+        static let slack: CGFloat = 7
     }
 
     enum Radius {
@@ -100,6 +118,14 @@ enum Design {
     }
 }
 
+/// Shared scaling keeps the feed's resting margins and its overlays in agreement.
+struct FeedMetrics: DynamicProperty {
+    @ScaledMetric(relativeTo: .body) var fade = Design.Header.fade
+    @ScaledMetric(relativeTo: .caption) var pillHeight = Design.Space.s24 + Design.Space.s12
+
+    var pillClearance: CGFloat { pillHeight + Design.Space.s4 }
+}
+
 extension View {
     func elevatedBlock() -> some View {
         background(Color.elevated, in: RoundedRectangle(cornerRadius: Design.Radius.card, style: .continuous))
@@ -117,46 +143,93 @@ extension View {
     }
 }
 
-/// Where the feed ends. The system's soft scroll edge only blurs what passes under it, which leaves text legible behind
-/// the header and in the gaps round the composer: the feed fades into `canvas` before it reaches either, and the glass
-/// sits on solid `canvas`. Decision of 2026-11-04 (goes beyond spec §2.4), on every platform.
+/// Where the feed ends, the same on every platform and under Reduce Transparency: text fades into `canvas` over
+/// a body-scaled `Header.fade` under the header and above the composer, and the glass sits on solid `canvas` (operator's decision of
+/// 2026-11-04, beyond spec §2.4). It is one plain gradient over the feed, with the system's scroll edge hidden: that edge
+/// left a blurred, half-cut line under the bar. `FeedView` keeps a resting feed clear of both fades.
 extension View {
-    /// Under the header: solid to the top of the screen, fading out below the bar. On the Mac it lies over the feed: an
-    /// inset moves the system's scroll edge down with it, and its line came to rest across the text below the bar.
-    @ViewBuilder
-    func headerEdge() -> some View {
-        #if os(macOS)
+    /// `floating` (the Latest pill) sits on solid canvas, with the fade above it while it shows.
+    func feedEdges<Floating: View>(pillVisible: Bool, @ViewBuilder floating: () -> Floating) -> some View {
         overlay(alignment: .top) { HeaderFade() }
-        #else
-        safeAreaInset(edge: .top, spacing: 0) { HeaderFade() }
-        #endif
+            .overlay(alignment: .bottom) { FooterFade(pillVisible: pillVisible, floating: floating()) }
     }
 
-    /// Behind a bar over the feed's foot: solid to the bottom of the screen, fading out above the bar.
-    func footerEdge() -> some View {
-        background(alignment: .top) {
-            VStack(spacing: 0) {
-                LinearGradient(colors: [.canvas.opacity(0), .canvas], startPoint: .top, endPoint: .bottom)
-                    .frame(height: Design.Header.fade)
-                Color.canvas
-            }
-            .padding(.top, -Design.Header.fade)
-            .ignoresSafeArea(edges: .bottom)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
-        }
+    /// Behind a bar over the feed's foot: solid to the bottom of the screen.
+    func feedFloor() -> some View {
+        background(Color.canvas.ignoresSafeArea(edges: .bottom))
+    }
+
+    /// Text in a sideways scroll view on an `elevated` block fades at an edge with more beyond it (an overlay scroller
+    /// only shows while scrolling; the Mac's text blocks do the same in `MessageBlockScrollView`).
+    func sidewaysFade() -> some View {
+        modifier(SidewaysFade())
     }
 }
 
+/// `canvas`, eased out from the bar: a straight ramp shows a line where it starts.
+private func canvasFade(from start: UnitPoint, to end: UnitPoint) -> LinearGradient {
+    LinearGradient(stops: [
+        .init(color: .canvas, location: 0),
+        .init(color: .canvas.opacity(0.84), location: 0.25),
+        .init(color: .canvas.opacity(0.5), location: 0.5),
+        .init(color: .canvas.opacity(0.16), location: 0.75),
+        .init(color: .canvas.opacity(0), location: 1),
+    ], startPoint: start, endPoint: end)
+}
+
 private struct HeaderFade: View {
+    private var metrics = FeedMetrics()
+
     var body: some View {
-        LinearGradient(colors: [.canvas, .canvas.opacity(0)], startPoint: .top, endPoint: .bottom)
-            .frame(height: Design.Header.fade)
+        canvasFade(from: .top, to: .bottom)
+            .frame(height: metrics.fade)
             .background(alignment: .bottom) {
                 Color.canvas
-                    .padding(.bottom, Design.Header.fade)
+                    .padding(.bottom, metrics.fade)
                     .ignoresSafeArea(edges: .top)
             }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+}
+
+private struct FooterFade<Floating: View>: View {
+    let pillVisible: Bool
+    let floating: Floating
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private var metrics = FeedMetrics()
+
+    var body: some View {
+        VStack(spacing: 0) {
+            canvasFade(from: .bottom, to: .top)
+                .frame(height: metrics.fade)
+            Color.canvas.frame(height: pillVisible ? metrics.pillClearance : 0)
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+        .overlay(alignment: .bottom) { floating }
+        .animation(reduceMotion ? nil : Design.Motion.spring, value: pillVisible)
+    }
+}
+
+private struct SidewaysFade: ViewModifier {
+    @State private var more = ScrollEdges.more(offset: 0, container: 0, content: 0)
+
+    func body(content: Content) -> some View {
+        content
+            .onScrollGeometryChange(for: ScrollEdges.self) { geometry in
+                ScrollEdges.more(offset: Double(geometry.contentOffset.x),
+                            container: Double(geometry.containerSize.width), content: Double(geometry.contentSize.width))
+            } action: { _, new in
+                more = new
+            }
+            .overlay(alignment: .leading) { fade(.leading, to: .trailing).opacity(more.leading ? 1 : 0) }
+            .overlay(alignment: .trailing) { fade(.trailing, to: .leading).opacity(more.trailing ? 1 : 0) }
+    }
+
+    private func fade(_ start: UnitPoint, to end: UnitPoint) -> some View {
+        LinearGradient(colors: [.elevated, .elevated.opacity(0)], startPoint: start, endPoint: end)
+            .frame(width: Design.Space.s24)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
     }

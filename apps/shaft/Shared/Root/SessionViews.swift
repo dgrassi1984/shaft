@@ -5,8 +5,7 @@ import UIKit
 #endif
 
 /// What every platform shell shows first: why SHAFT could not start, the pairing screen, or — paired — `paired` with
-/// the instances store in the environment. It keeps the app's badge on the server's count (§12) and polls the chat
-/// list while the app is in front.
+/// the instances store in the environment. It polls the chat list while the app is in front.
 struct SessionRoot<Paired: View>: View {
     let model: AppModel
     @ViewBuilder var paired: (SHAFTSession, InstancesStore) -> Paired
@@ -23,7 +22,6 @@ struct SessionRoot<Paired: View>: View {
                         .onChange(of: scenePhase) { _, phase in
                             if phase == .active { store.start() } else { store.stop() }
                         }
-                        .onChange(of: store.badge) { _, badge in model.setBadge(badge) }
                 } else {
                     PairingView(session: session)
                 }
@@ -159,25 +157,23 @@ struct SettingsView: View {
                 Section("Notifications") {
                     if let push {
                         LabeledContent("Push", value: push.on ? "on (\(push.env ?? "?"))" : "off")
-                        if !push.reason.isEmpty { Text(push.reason).font(.footnote).foregroundStyle(Color.textSecondary) }
-                        if let problem = push.problem { Text(problem).font(.footnote).foregroundStyle(Color.warning) }
-                    } else if let pushProblem {
-                        Text(pushProblem).font(.footnote).foregroundStyle(Color.textSecondary)
-                    } else {
-                        ProgressView()
                     }
-                    // The Push line above says the same once the server has answered: only a failure to register is new.
-                    if let said = session.pushStatus, push == nil || !(push?.on == true || said == push?.reason) {
-                        Text(said).font(.footnote).foregroundStyle(Color.textSecondary)
+                    let notes = PushStatus.notes(push, loadProblem: pushProblem, registered: session.pushStatus)
+                    ForEach(notes, id: \.self) { note in
+                        Text(note).font(.footnote).foregroundStyle(Color.textSecondary)
                     }
+                    if push == nil && notes.isEmpty { ProgressView() }
+                    if let problem = push?.problem { Text(problem).font(.footnote).foregroundStyle(Color.warning) }
                     if let error = model.pushError { Text(error).font(.footnote).foregroundStyle(Color.warning) }
                 }
                 .listRowBackground(Color.elevated)
                 Section {
                     Button("Unpair this device", role: .destructive) { unpairing = true }
                         .foregroundStyle(Color.danger)
+                        .rowTextButton()
                     Button("Forget the pairing here only") { forgetting = true }
                         .foregroundStyle(Color.brand)
+                        .rowTextButton()
                 } footer: {
                     Text("Unpair tells the server; Forget is for when it cannot be reached (then run `shaft web unpair` on the Mac).")
                         .foregroundStyle(Color.textSecondary)
@@ -216,6 +212,18 @@ struct SettingsView: View {
                 Button("Forget", role: .destructive) { session.forget() }
             }
         }
+    }
+}
+
+private extension View {
+    /// An action that is a form's row: text, as on iOS, where the Mac would draw a tinted pill in the row.
+    @ViewBuilder
+    func rowTextButton() -> some View {
+        #if os(macOS)
+        buttonStyle(.plain)
+        #else
+        self
+        #endif
     }
 }
 
@@ -298,7 +306,8 @@ struct InstancesList: View {
 
     var body: some View {
         List(selection: $selection) {
-            if let error = store.error {
+            // A failed first load says so once, in the chat area (`InstancesLoadFailure`).
+            if store.loaded, let error = store.error {
                 Label(error.message, systemImage: "exclamationmark.triangle")
                     .font(.footnote)
                     .foregroundStyle(Color.warning)

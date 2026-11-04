@@ -38,4 +38,33 @@ struct MacLayoutPinTests {
     @Test func theTextViewsHaveNoFloatingWritingToolsTile() throws {
         #expect(try source("macOS/MacTextViews.swift").contains("textView.writingToolsBehavior = .none"))
     }
+
+    /// Bug: at 780 the title stood 4 to 6 pt from the buttons beside it.
+    @Test func theTitleKeepsItsGapFromTheToolbar() throws {
+        #expect(try source("macOS/MacChrome.swift").contains("column - 2 * (max(leading, trailingControls) + Design.Header.titleGap)"))
+        #expect(try source("Shared/Design/Design.swift").contains("static let titleGap: CGFloat = 8"))
+    }
+
+    /// Bug: the blue caret stood on the first letter of the placeholder.
+    @Test func thePlaceholderClearsTheCaret() throws {
+        #expect(try source("macOS/MacTextViews.swift").contains("+ ComposerTextView.placeholderInset"))
+    }
+
+    /// Bug: a fence with no language had an empty header on the Mac and "text" on iOS.
+    @Test func aCodeBlockHasTheSameHeaderEverywhere() throws {
+        #expect(try source("macOS/MessageTextView.swift").contains(#"CodeColours.language(block?.language) ?? String(localized: "text")"#))
+    }
+
+    /// Bug: Select text's buttons sat in the sheet's system bar, white on a `canvas` sheet.
+    @Test func selectTextHasItsOwnFooter() throws {
+        for path in ["Shared/Chat/ChatSheets.swift", "Shared/Documents/DocumentDetailView.swift"] {
+            #expect(try source(path).contains("SheetFooter {"), "\(path)")
+        }
+    }
+
+    /// Bug: Settings' Unpair and Forget were tinted pills inside a row.
+    @Test func settingsActionsAreText() throws {
+        let settings = try source("Shared/Root/SessionViews.swift")
+        #expect(settings.components(separatedBy: ".rowTextButton()").count == 3)
+    }
 }
