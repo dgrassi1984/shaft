@@ -75,6 +75,16 @@ final class MacState {
 /// The Mac window: the instances in the sidebar, the chat, and the chat's documents as an inspector.
 struct MacRoot: View {
     static let windowID = "main"
+    /// The window's least: with the sidebar collapsed it holds the chat beside the documents at up to 360 pt
+    /// (ChatShell.inspectorMaximum).
+    static let minimumWidth: CGFloat = 400 + ChatShell.chatMinimum
+    /// The chat column's minimum as the split views take it. They count an open inspector twice (the chat runs under it,
+    /// and its width is added again on the way out): what the window must hold is sidebar's minimum + this + 2 ×
+    /// inspector, and over the window's width all three columns ran off its edges. So this is the 380 the chat keeps
+    /// (ChatShell.chatMinimum) less the inspector's own 320, which leaves the sum at what the columns really take. The
+    /// chat keeps its 380 by the sidebar giving way and the inspector's maximum (ChatShell). It must stay a fixed number
+    /// (crash of 2026-11-04, below).
+    static let splitChatMinimum: CGFloat = ChatShell.chatMinimum - ChatShell.inspectorWidth
     let model: AppModel
     let state: MacState
     @Environment(\.openWindow) private var openWindow
@@ -83,7 +93,9 @@ struct MacRoot: View {
         SessionRoot(model: model) { session, store in
             MacChats(session: session, store: store, state: state)
         }
-        .frame(minWidth: 720, minHeight: 480)
+        .frame(minWidth: Self.minimumWidth, minHeight: 480)
+        // The reading surface behind everything, the title bar's area too.
+        .containerBackground(Color.canvas, for: .window)
         .onAppear { state.openWindow = openWindow }
         .onChange(of: model.session?.isPaired ?? false) { _, paired in if !paired { DockBadge.clear() } }
         // shaft://chat/<instance>: the chat a notification click opens, from a link too.
@@ -98,13 +110,21 @@ struct MacChats: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openSettings) private var openSettings
     @State private var presence = MacPresence()
+    @State private var columns = NavigationSplitViewVisibility.automatic
+    /// The sidebar made room for the documents, and comes back when they go.
+    @State private var sidebarYielded = false
+    /// The sidebar's width as last shown: it can be dragged wider than its usual 260.
+    @State private var sidebarWidth: CGFloat = 260
 
     var body: some View {
         @Bindable var state = state
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columns) {
             InstancesList(selection: Binding(get: { state.selection }, set: { name in if let name { state.open(name) } }),
                           settings: { openSettings() })
-                .navigationSplitViewColumnWidth(min: 220, ideal: 270, max: 360)
+                .scrollContentBackground(.hidden)
+                .background(Color.elevated.ignoresSafeArea())
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { sidebarWidth = $0 }
+                .navigationSplitViewColumnWidth(min: ChatShell.sidebarMinimum, ideal: 260, max: 360)
         } detail: {
             NavigationStack(path: $state.path) {
                 chat
@@ -113,6 +133,7 @@ struct MacChats: View {
                         // shell too, or the documents and the menus stay on the current chat's.
                         ArchivedChatView(route: route) { state.path.removeAll() }
                             .environment(state.shell)
+                            .toolbar(removing: .title)   // the header's own title is the name
                     }
             }
             .environment(state.shell)
@@ -123,14 +144,22 @@ struct MacChats: View {
             // A column width of its own: left to its content, the chat's minimum moved with what it shows while the
             // documents opened, and each new minimum asked the window for another constraints pass, until AppKit's
             // guard ended the app (crash of 2026-11-04, a document opened from the chat).
-            .navigationSplitViewColumnWidth(min: 380, ideal: 700)
+            .navigationSplitViewColumnWidth(min: MacRoot.splitChatMinimum, ideal: 700)
         }
         // The documents beside the chat, outside its navigation stack (ChatShell).
         .documentsInspector(state.shell, store: store)
-        .background(WindowReader { window in presence.track(window) })
+        .background(WindowReader { window in
+            presence.track(window)
+            window?.titlebarSeparatorStyle = .none   // the feed fades under the header (spec §2.4), not at a line
+        })
+        .onChange(of: presence.width) { fitColumns() }
+        .onChange(of: sidebarWidth) { fitColumns() }
+        .onChange(of: state.screen?.showDocuments ?? false) { fitColumns() }
+        .onChange(of: columns) { sidebarAsked() }
         .onAppear {
             state.store = store
             presence.recheck()                   // a window opened again is the same window, its views kept
+            fitColumns()
             restore()
             DockBadge.follow(store)
         }
@@ -154,11 +183,40 @@ struct MacChats: View {
             .id(selection)
             .toolbar(removing: .title)           // the header's own title is the name with its state
         } else if store.loaded {
-            ContentUnavailableView("No chat open", systemImage: "bubble.left.and.bubble.right",
-                                   description: Text("Choose an instance to chat with."))
+            MarkMessage("No chat open", message: Text("Choose an instance to chat with."))
         } else {
             ProgressView()
         }
+    }
+
+    /// Whether the sidebar has to leave room for the documents in this window.
+    private var tight: Bool {
+        (state.screen?.showDocuments ?? false) && presence.width < ChatShell.threeColumnWidth(sidebar: sidebarWidth)
+    }
+
+    /// Sidebar, chat and documents need the window's width together: in a narrow one the sidebar gives way while the
+    /// documents are open, and only then (spec §5's rule, as on an iPad). Left to the split view, three columns that do
+    /// not fit relaid themselves without end. The width is the window's: the split view's own swings with its columns.
+    private func fitColumns() {
+        state.shell.width = presence.width
+        state.shell.sidebarWidth = columns == .detailOnly ? 0 : sidebarWidth
+        if tight, !sidebarYielded, columns != .detailOnly {
+            sidebarYielded = true
+            columns = .detailOnly
+        } else if !tight, sidebarYielded {
+            sidebarYielded = false
+            columns = .automatic
+        }
+    }
+
+    /// The sidebar asked for where it does not fit beside the documents (its button, ⌃⌘S; only that shows it here, the
+    /// window's width having hidden it): the documents give way to it. They come back from the toolbar, and the sidebar
+    /// yields again then.
+    private func sidebarAsked() {
+        state.shell.sidebarWidth = columns == .detailOnly ? 0 : sidebarWidth
+        guard columns != .detailOnly, tight else { return }
+        sidebarYielded = false
+        state.screen?.showDocuments = false
     }
 
     /// A notification's chat first, then the chat open last time, else the first instance.
@@ -184,6 +242,8 @@ struct MacChats: View {
 @Observable
 final class MacPresence {
     private(set) var phase: ScenePhase = .active
+    /// The window's width.
+    private(set) var width: CGFloat = .infinity
     @ObservationIgnored private weak var window: NSWindow?
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
 
@@ -201,6 +261,7 @@ final class MacPresence {
             (NSWindow.didBecomeKeyNotification, window), (NSWindow.didResignKeyNotification, window),
             (NSWindow.didMiniaturizeNotification, window), (NSWindow.didDeminiaturizeNotification, window),
             (NSWindow.didChangeOcclusionStateNotification, window), (NSWindow.willCloseNotification, window),
+            (NSWindow.didResizeNotification, window),
         ]
         observers = names.map { name, object in
             center.addObserver(forName: name, object: object, queue: .main) { [weak self] note in
@@ -214,6 +275,7 @@ final class MacPresence {
     func recheck() { update(closing: false) }
 
     private func update(closing: Bool) {
+        if let window { width = window.frame.width }
         #if DEBUG
         // A dev run on a locked or sleeping screen (MacDevSession): every window there counts as covered.
         switch MacDevSession.directory != nil ? ProcessInfo.processInfo.environment["SHAFT_DEV_PRESENCE"] : nil {

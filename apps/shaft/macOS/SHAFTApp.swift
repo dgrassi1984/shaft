@@ -31,6 +31,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var keyMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        FrameMeter.startIfAsked()
+        #endif
         UNUserNotificationCenter.current().delegate = self
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.slashFocusesComposer(event) else { return event }
@@ -112,11 +115,12 @@ struct MacSettings: View {
             if let session = model.session, session.isPaired {
                 SettingsView(session: session)
             } else {
-                ContentUnavailableView("Not paired", systemImage: "link",
-                                       description: Text("Pair this Mac in the SHAFT window first."))
+                MarkMessage("Not paired", message: Text("Pair this Mac in the SHAFT window first."))
             }
         }
         .environment(model)
-        .frame(width: 480, height: 520)
+        .frame(width: 480, height: 556)
+        .scrollContentBackground(.hidden)
+        .containerBackground(Color.canvas, for: .window)
     }
 }

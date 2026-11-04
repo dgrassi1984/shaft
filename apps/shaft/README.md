@@ -57,7 +57,7 @@ Each app scheme builds its notification extension too.
 `DevServer/fixture_server.py` runs the web service's own `/app/v1` (app_api, web_chat, documents, comments,
 feedback, the push fan-out) on `127.0.0.1` over a temporary folder it seeds: three instances, a chat with every item
 kind, an earlier chat, documents with comment threads. It fakes only what lies outside the web service: the tailnet
-login, the API a reply streams from (a scripted reply; "fail" in a message fails it, "slow" streams for a minute),
+login, the API a reply streams from (a scripted reply; "fail" in a message fails it, "slow" streams for a minute, "wide" exercises wide tables and code),
 APNs (each push is written to `<dir>/pushes/` with apns.py's payload, and handed to a simulator with `--simctl`) and
 the instances' live state. It refuses the real `.supervisor/` and the ports of the running services.
 
@@ -111,6 +111,10 @@ another app's) instead.
 To check the document-opening crash, seed a long chat with `fixture_server.py act ... long thelos 120`.
 Run the Release build with Debug conditions and `SHAFT_DEV_DRIVE=DevServer/mac-doc-open.drive` several times.
 The crash is intermittent (unfixed: 2 of 3 runs).
+
+A process started directly stays behind other apps: start the app with `open -n` (`--env` for the variables, `--stdout`
+for the log) when its window must be in front. The `activate` step then takes the front, and takes it again before each
+`capture`, since another app may take it back; `capture` logs whether the window has the keys and where the pointer is.
 
 ## Tests
 

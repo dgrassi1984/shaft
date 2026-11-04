@@ -266,7 +266,10 @@ public final class ChatStore {
             return finish(.failure(error))
         }
         draft = Draft()
-        return finish(await owner.outbox.deliver(message.mid))
+        let result = finish(await owner.outbox.deliver(message.mid), inRow: true)
+        // Queued, its own row says the same words at once, with Cancel.
+        if mode == .queue, case .success = result { said = nil }
+        return result
     }
 
     /// Retry a failed reply (§4.4 `failure.retry`): its text, with `retry_of` when the server gave one.
@@ -274,14 +277,14 @@ public final class ChatStore {
     public func retryReply(_ retry: FailureRetry) async -> Result<SendResponse, APIError> {
         guard let owner else { return .failure(.notPaired) }
         let message = OutgoingMessage(text: retry.text, mode: .now, retryOf: retry.retryOf)
-        return finish(await owner.outbox.send(message, to: instance))
+        return finish(await owner.outbox.send(message, to: instance), inRow: true)
     }
 
     /// Send a not-sent message again with its `mid`.
     @discardableResult
     public func retry(_ mid: String) async -> Result<SendResponse, APIError>? {
         guard let result = await owner?.outbox.retry(mid) else { return nil }
-        return finish(result)
+        return finish(result, inRow: true)
     }
 
     /// Put a not-sent message back in the composer to change it: it leaves the outbox, and sending it again makes a
@@ -471,14 +474,15 @@ public final class ChatStore {
         start()
     }
 
-    private func finish(_ result: Result<SendResponse, APIError>) -> Result<SendResponse, APIError> {
+    /// `inRow`: the message stayed in the chat as not sent, and its row says why: a status line would say it again.
+    private func finish(_ result: Result<SendResponse, APIError>, inRow: Bool = false) -> Result<SendResponse, APIError> {
         switch result {
         case .success(let answer):
             said = answer.said
             actionError = nil
             reconnectIfWaiting()
         case .failure(let error):
-            actionError = error
+            actionError = inRow ? nil : error
             if error.isUnpaired { owner?.report(error) }
         }
         return result

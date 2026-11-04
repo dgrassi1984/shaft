@@ -2,7 +2,7 @@ import Foundation
 
 /// One row of a chat as the apps draw it, in order: the feed's items with the day separators the app draws itself
 /// (§1.6: they are not sent), then what follows the conversation in the HTML feed (§14): the reply running now, the
-/// queued messages, pending feedback, pending edits, the messages not sent yet and End.
+/// queued messages, pending feedback, pending edits and the messages not sent yet.
 public enum FeedRow: Sendable, Equatable, Identifiable {
     /// "Show the N earlier messages" (`more`).
     case earlier(Int)
@@ -17,8 +17,6 @@ public enum FeedRow: Sendable, Equatable, Identifiable {
     case pendingEdits([String])
     /// A message on its way or not sent (the outbox), shown after the chat's own.
     case unsent(OutboxEntry)
-    /// End the conversation (`acts`).
-    case end
 
     public var id: String {
         switch self {
@@ -30,7 +28,6 @@ public enum FeedRow: Sendable, Equatable, Identifiable {
         case .pendingFeedback(let feedback): feedback.key
         case .pendingEdits: "pend"
         case .unsent(let entry): "unsent-\(entry.mid)"
-        case .end: "acts"
         }
     }
 }
@@ -65,7 +62,6 @@ public enum FeedRows {
             if !content.pendingEdits.isEmpty { rows.append(.pendingEdits(content.pendingEdits)) }
             let held = Set(content.mids)
             rows += unsent.filter { !held.contains($0.mid) }.map(FeedRow.unsent)
-            if content.canEnd { rows.append(.end) }
         }
         return rows
     }

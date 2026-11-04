@@ -27,7 +27,6 @@ struct FeedRowsTests {
         #expect(rows.first?.id.hasPrefix("day-") == true)
         #expect(rows.dropFirst().first?.id == "u0")
         #expect(Set(rows.map(\.id)).count == rows.count)          // ids are unique: a list diffs on them
-        #expect(rows.last == .end)                                  // can_end
     }
 
     @Test func theReplyQueuedMessagesAndNotSentOnesFollowTheItems() throws {
@@ -42,16 +41,14 @@ struct FeedRowsTests {
         #expect(ids[live + 1].hasPrefix("queue-"))
         #expect(ids.contains("unsent-lost-1"))
         #expect(!ids.contains("unsent-\(content.mids[0])"))          // the feed holds its mid: it arrived
-        #expect(!ids.contains("acts"))                                // replying: no End
         #expect(FeedRows.newestKey(feed) == "live")
     }
 
     @Test func anArchivedChatShowsNothingThatActs() throws {
         var feed = try feed("live")
         feed.content?.archived = true
-        feed.content?.canEnd = true
         let ids = FeedRows.rows(feed).map(\.id)
-        #expect(!ids.contains { $0.hasPrefix("queue-") || $0 == "acts" })
+        #expect(!ids.contains { $0.hasPrefix("queue-") })
     }
 
     @Test func arrivalsAreTheInstancesNewAnswersNotTheFirstLoadNorTheOperatorsOwn() throws {
@@ -235,6 +232,37 @@ struct ChatStoreUITests {
         chat.removeAttachment(file.id)
         chat.removeQuote(at: 0)
         #expect(try store.drafts.load("thelos") == Draft(text: "also\n\nRerun it"))
+    }
+
+    /// Bug: offline said the same thing three times: the not-sent row, the offline banner and a red status line.
+    @Test func aSendThatFailsIsSaidByItsRowNotAgainByTheStatusLine() async throws {
+        let folder = try temporaryFolder("ui")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let server = StubServer { _ in throw StubServer.NetworkDown() }
+        let store = try makeStore(server, folder: folder)
+        let chat = store.chat("thelos")
+        chat.draft.text = "Rerun it"
+        _ = await chat.send()
+        #expect(chat.unsent.first?.reason?.isEmpty == false)
+        #expect(chat.actionError == nil)
+    }
+
+    /// Bug: queued showed its wording twice: the toast and the row.
+    @Test func aQueuedMessageLeavesTheSayingToItsRow() async throws {
+        let folder = try temporaryFolder("ui")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let server = StubServer { request in
+            request.path.hasSuffix("/send") ? .json(200, #"{"said": "queued — sent when this reply ends", "chat": "web-1", "file": null}"#)
+                : .json(200, "{}")
+        }
+        let store = try makeStore(server, folder: folder)
+        let chat = store.chat("thelos")
+        chat.draft.text = "After that"
+        _ = await chat.send(mode: .queue)
+        #expect(chat.said == nil)
+        chat.draft.text = "Now"
+        _ = await chat.send(mode: .now)
+        #expect(chat.said != nil)
     }
 
     @Test func coveringTheChatAsksAgainAtOnceWithWatch0() async throws {

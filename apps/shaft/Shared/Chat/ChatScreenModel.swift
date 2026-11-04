@@ -26,6 +26,11 @@ final class ChatScreenModel {
         var reason: String
     }
 
+    enum LatestPill: Equatable {
+        case latest
+        case newBelow
+    }
+
     let chat: ChatStore
     let instance: String
     /// Quick Look for the chat's files and the documents' downloads.
@@ -36,6 +41,9 @@ final class ChatScreenModel {
     /// The documents sheet (or inspector) and what it should open.
     var showDocuments = false
     var openDocument: String?
+    /// The document on show in the panel: what opens again when the system reopens a panel it dropped in a turn of the
+    /// device.
+    var shownDocument: String?
     var openThread: String?
     /// The documents cover the chat (a sheet on a phone) rather than sit beside it: then they close to show the
     /// composer after ↩ Reply, and the chat is not watched while they are open (`watch=0`, §4).
@@ -52,6 +60,7 @@ final class ChatScreenModel {
     var sendRequest: SendMode?
     /// New chat asks first (the header's button, the Mac's menu).
     var confirmingNewChat = false
+    var confirmingEnd = false
 
     init(chat: ChatStore) {
         self.chat = chat
@@ -59,6 +68,10 @@ final class ChatScreenModel {
     }
 
     var composerCovered = false
+    /// The feed's "↓ Latest" pill, drawn in the bar with the composer, so it sits above it and the feed ends above it.
+    var latestPill: LatestPill?
+    /// The pill was tapped: the feed goes to its end.
+    var jumpToLatest = 0
     var dismissRequest = 0
 
     /// Return to the chat for notification and link navigation.
@@ -69,6 +82,7 @@ final class ChatScreenModel {
         showEarlierChats = false
         confirmRetry = nil
         confirmingNewChat = false
+        confirmingEnd = false
         preview.url = nil
         preview.error = nil
         dismissRequest += 1

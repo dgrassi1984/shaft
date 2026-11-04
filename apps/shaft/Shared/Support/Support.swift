@@ -59,9 +59,9 @@ enum Announce {
 }
 
 extension View {
-    /// At least 44 pt each way: the touch target the PWA and Apple ask for.
+    /// The shared 44 pt hit area.
     func touchTarget() -> some View {
-        frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+        quietHitArea()
     }
 
     /// An animation unless Reduce Motion is on.
@@ -77,24 +77,24 @@ struct StatusLine: View {
     var dismiss: () -> Void
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: Design.Space.s8) {
             Image(systemName: isError ? "exclamationmark.triangle.fill" : "checkmark.circle")
-                .foregroundStyle(isError ? Color.red : Color.secondary)
+                .foregroundStyle(isError ? Color.danger : Color.textSecondary)
                 .accessibilityHidden(true)
             Text(text)
                 .font(.footnote)
-                .foregroundStyle(isError ? Color.red : Color.secondary)
+                .foregroundStyle(isError ? Color.danger : Color.textSecondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
             Button(action: dismiss) {
                 Image(systemName: "xmark")
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.textSecondary)
                     .touchTarget()
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Dismiss")
         }
-        .padding(.horizontal, 12)
+        .padding(.horizontal, Design.Space.gutter)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isError ? [] : .updatesFrequently)
     }

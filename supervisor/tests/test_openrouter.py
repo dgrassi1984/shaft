@@ -130,6 +130,24 @@ class OpenRouterTest(_Base):
                                              "chat_template_kwargs": {"reasoning_effort": "low"}}, "k", stream=False)
         self.assertEqual(json.loads(sent.data)["reasoning"], {"effort": "high"})
 
+    def test_mandatory_reasoning_uses_minimal_when_thinking_is_disabled_20261104(self):
+        # Sol rejects reasoning.enabled=false with HTTP 400 during recovery and cut-off retries; minimal works.
+        sol = "openrouter/openai/gpt-6.1-sol"
+        with mock.patch.object(cloudllm, "CLOUD_MODELS", [sol, self.BODY["model"]]):
+            for model, expected in ((sol, {"effort": "minimal"}), (self.BODY["model"], {"enabled": False})):
+                f = self.fake()
+                f.paused.set()
+                body = {**self.BODY, "model": model, "chat_template_kwargs": {"enable_thinking": False}}
+                cloudllm.complete("shaft", body, {"OPENROUTER_API_KEY": "k"}, {})
+                list(cloudllm.openrouter_stream("shaft", body, {"OPENROUTER_API_KEY": "k"}))
+                self.assertEqual(len(f.requests), 2)
+                for sent in f.requests:
+                    self.assertEqual(sent["reasoning"], expected, model)
+                    if model == sol:
+                        self.assertNotIn("enabled", sent["reasoning"])
+                sent = cloudllm._openrouter_request({**body, "reasoning": {"effort": "high"}}, "k", stream=False)
+                self.assertEqual(json.loads(sent.data)["reasoning"], {"effort": "high"})
+
     def test_a_provider_error_without_an_error_object_is_recorded_20261030(self):
         # Regression: a reply ended by finish_reason "error", with tokens and no cost, was booked as $0 with error
         # None (12 of 42,000 mimo calls): neither the failure nor the unbooked spend was visible in the usage log.

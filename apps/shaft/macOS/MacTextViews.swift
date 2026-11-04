@@ -15,7 +15,7 @@ final class HardwareKeyboard {
 
 /// The composer's main field (web-and-api.md, "The web UI"): Return sends, Shift- or Option-Return is a new line,
 /// Cmd-Return queues after the reply (sent now when idle). An input method's Return confirms what it composes, as
-/// typed. It grows with its text up to `maxHeight`, then scrolls. Pictures and files pasted or dropped on it go to
+/// typed. It grows with its text up to `maxHeight`, then scrolls; one line sits centred in the capsule. Pictures and files pasted or dropped on it go to
 /// `onPaste` (attachments); text pastes as text.
 struct ComposerTextView: NSViewRepresentable {
     @Binding var text: String
@@ -27,6 +27,12 @@ struct ComposerTextView: NSViewRepresentable {
     var onKey: (ComposerKey) -> Void
     var onPaste: ([NSItemProvider]) -> Void
 
+    /// Spec §4: the text's insets in the field, so nothing clips.
+    static let insetX: CGFloat = 12
+    static let insetY: CGFloat = 9
+    /// The composer's capsule at one line, which sits centred in it.
+    static let minimumHeight: CGFloat = 44
+
     func makeNSView(context: Context) -> NSScrollView {
         let textView = ComposerNSTextView(usingTextLayoutManager: false)
         textView.coordinator = context.coordinator
@@ -37,10 +43,13 @@ struct ComposerTextView: NSViewRepresentable {
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
+        textView.writingToolsBehavior = .none    // see MacChrome.writingToolsAffordance
         textView.font = .preferredFont(forTextStyle: .body)
-        textView.textColor = .labelColor
+        textView.textColor = MacColor.textPrimary
+        textView.insertionPointColor = MacColor.brand
         textView.drawsBackground = false
-        textView.textContainerInset = NSSize(width: 6, height: 8)
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainerInset = NSSize(width: Self.insetX, height: Self.insetY)
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
@@ -54,6 +63,7 @@ struct ComposerTextView: NSViewRepresentable {
         scroll.drawsBackground = false
         scroll.hasVerticalScroller = true
         scroll.autohidesScrollers = true
+        scroll.scrollerStyle = .overlay
         scroll.borderType = .noBorder
         scroll.documentView = textView
         context.coordinator.textView = textView
@@ -126,8 +136,13 @@ struct ComposerTextView: NSViewRepresentable {
                 return
             }
             layout.ensureLayout(for: container)
-            let used = layout.usedRect(for: container).height + textView.textContainerInset.height * 2
-            let target = min(max(used.rounded(.up), 36), parent.maxHeight)
+            let line = textView.font.map(layout.defaultLineHeight(for:)) ?? 0
+            let content = max(layout.usedRect(for: container).height, line)
+            let inset = max(ComposerTextView.insetY, ((ComposerTextView.minimumHeight - content) / 2).rounded(.down))
+            if textView.textContainerInset.height != inset {
+                textView.textContainerInset = NSSize(width: ComposerTextView.insetX, height: inset)
+            }
+            let target = min((content + inset * 2).rounded(.up), parent.maxHeight)
             if abs(parent.height - target) > 0.5 {
                 let binding = parent.$height
                 DispatchQueue.main.async { binding.wrappedValue = target }
@@ -181,7 +196,7 @@ final class ComposerNSTextView: NSTextView {
                              y: textContainerInset.height)
         (placeholder as NSString).draw(at: origin, withAttributes: [
             .font: font ?? NSFont.preferredFont(forTextStyle: .body),
-            .foregroundColor: NSColor.placeholderTextColor,
+            .foregroundColor: MacColor.textTertiary,
         ])
     }
 
@@ -273,14 +288,21 @@ struct SelectableTextView: NSViewRepresentable {
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSTextView.scrollableTextView()
         scroll.drawsBackground = false
+        scroll.autohidesScrollers = true         // no empty track beside a short text
+        scroll.scrollerStyle = .overlay
         guard let textView = scroll.documentView as? NSTextView else { return scroll }
+        textView.writingToolsBehavior = .none    // see MacChrome.writingToolsAffordance
+        textView.textContainer?.lineFragmentPadding = 0     // the text starts on the gutter, under the sheet's title
         textView.isEditable = false
         textView.isSelectable = true
         textView.isRichText = false
         textView.drawsBackground = false
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = Design.Text.lineSpacing
+        textView.defaultParagraphStyle = paragraph
         textView.font = .preferredFont(forTextStyle: .body)
-        textView.textColor = .labelColor
-        textView.textContainerInset = NSSize(width: 12, height: 12)
+        textView.textColor = MacColor.textPrimary
+        textView.textContainerInset = NSSize(width: Design.Space.gutter, height: Design.Space.s16)
         textView.delegate = context.coordinator
         textView.string = text
         return scroll

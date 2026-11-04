@@ -83,7 +83,7 @@ public final class DocumentsStore {
         } catch {
             let apiError = APIError.from(error)
             if case .server(_, let body) = apiError, body.code == "stale" {
-                return .stale(Conflict(path: path, text: text, sha: body.sha, diff: body.diff, message: body.message))
+                return .stale(Conflict(path: path, text: text, sha: body.sha, diff: body.diff, message: apiError.message))
             }
             self.error = apiError
             return .refused(apiError)

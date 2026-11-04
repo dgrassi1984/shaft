@@ -1,9 +1,35 @@
 import AppKit
 import Testing
+import SwiftUI
 
 /// The Mac's message text (macOS/MarkdownAttributed.swift): what a selection in a message reads and how its blocks are
 /// laid out. Each test names what it pins; the regressions are the bugs found driving the app.
 struct MarkdownAttributedTests {
+    @Test @MainActor func splitViewUpdateConstraintsCrashZeroProposalHasContentIndependentWidth() {
+        let short = MarkdownAttributed.Measure(MarkdownAttributed.operatorText("OK"))
+        let long = MarkdownAttributed.Measure(render(
+            String(repeating: "A long reply with **formatting** and many words. ", count: 80)))
+        for hugging in [false, true] {
+            for width in [CGFloat?(0), nil, -1] {
+                let proposal = ProposedViewSize(width: width, height: nil)
+                let a = short.size(for: proposal, hugging: hugging)
+                let b = long.size(for: proposal, hugging: hugging)
+                #expect(a.width == 1)
+                #expect(b.width == 1)
+                #expect(a.height == short.layout(width: 1).size.height)
+                #expect(b.height == long.layout(width: 1).size.height)
+            }
+        }
+    }
+
+    @Test @MainActor func positiveMessageProposalFillsAnswersAndHugsOperatorChips() {
+        let view = MarkdownAttributed.Measure(MarkdownAttributed.operatorText("OK"))
+        let proposal = ProposedViewSize(width: 300, height: nil)
+        #expect(view.size(for: proposal, hugging: false).width == 300)
+        #expect(view.size(for: proposal, hugging: true).width == view.layout(width: 300).size.width)
+        #expect(view.size(for: proposal, hugging: true).width < 100)
+    }
+
     func render(_ markdown: String) -> MarkdownAttributed.Rendered { MarkdownAttributed.render(markdown) }
 
     func paragraphStyle(_ text: NSAttributedString, at index: Int) -> NSParagraphStyle? {
@@ -49,23 +75,198 @@ struct MarkdownAttributedTests {
         #expect(header?.fontDescriptor.symbolicTraits.contains(.bold) == true)
     }
 
-    @Test func aCodeBlockIsOneTintedMonospacedBlockWithItsCodeForCopy() throws {
+    @Test func aCodeBlockIsOneMonospacedSegmentWithItsCodeForCopy() throws {
         let rendered = render("Before.\n\n```swift\nlet x = 1\nlet y = 2\n```\n\nAfter.")
         #expect(rendered.text.string == "Before.\nlet x = 1\nlet y = 2\nAfter.")
         let code = try #require(rendered.codeBlocks.first)
         #expect(code.code == "let x = 1\nlet y = 2")
-        let first = try #require(paragraphStyle(rendered.text, at: 8)?.textBlocks.first)
-        let second = try #require(paragraphStyle(rendered.text, at: 18)?.textBlocks.first)
-        #expect(first === second)                     // one block, not one per line
+        #expect(code.language == "swift")
+        #expect(rendered.segments.map(\.kind) == [.prose, .code, .prose])
+        #expect(rendered.segments[1].range == code.range)
         let font = rendered.text.attribute(.font, at: 8, effectiveRange: nil) as? NSFont
         #expect(font?.isFixedPitch == true)
-        #expect(paragraphStyle(rendered.text, at: 0)?.textBlocks.isEmpty == true)
+    }
+
+    @Test func segmentsCoverTheTextEndToEnd() {
+        let rendered = render("Para.\n\n```\na\n```\n\n| H |\n|---|\n| 1 |\n\n```\nb\n```")
+        #expect(rendered.segments.map(\.kind) == [.prose, .code, .table, .code])
+        var at = 0
+        for segment in rendered.segments {
+            #expect(segment.range.location == at)
+            at = NSMaxRange(segment.range)
+        }
+        #expect(at == rendered.text.length)
+    }
+
+    @Test func codeBlockCarriesTheTokenColours() throws {
+        let source = "def f():\n    return 'x' # note\n"
+        let rendered = render("```python\n\(source)```")
+        let text = rendered.text.string as NSString
+        func color(_ word: String) -> NSColor? {
+            rendered.text.attribute(.foregroundColor, at: text.range(of: word).location, effectiveRange: nil) as? NSColor
+        }
+        #expect(color("def") == MacColor.codeKeyword)
+        #expect(color("'x'") == MacColor.codeString)
+        #expect(color("# note") == MacColor.codeComment)
+        #expect(color("f()") == MacColor.textPrimary)
+    }
+
+    /// Spec §3.1: the tokeniser runs on finished blocks only, not on every token of a reply streaming through code.
+    @Test func aCodeBlockStillStreamingStaysPlain() {
+        let rendered = render("```python\ndef f():\n    return 1\n")
+        #expect(MarkdownAttributed.endsInsideCodeFence("```python\ndef f():\n"))
+        #expect(!MarkdownAttributed.endsInsideCodeFence("```python\ndef f():\n```\n"))
+        #expect(rendered.text.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor == MacColor.textPrimary)
+    }
+
+    @Test func aLanguageIsTheFirstWordOfTheInfoString() {
+        #expect(render("```python title=x\nx = 1\n```").codeBlocks.first?.language == "python")
+        #expect(render("```\nx = 1\n```").codeBlocks.first?.language == nil)
+    }
+
+    @Test func aDiffsRemovedLinesAreNotKeywords() {
+        let rendered = render("```diff\n-old\n+new\n```")
+        #expect(rendered.text.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor == MacColor.codeNumber)
+        #expect(rendered.text.attribute(.foregroundColor, at: 5, effectiveRange: nil) as? NSColor == MacColor.codeString)
+    }
+
+    @Test func anUnknownLanguageIsPlain() {
+        let rendered = render("```brainfuck\ndef x\n```")
+        #expect(rendered.text.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor == MacColor.textPrimary)
+    }
+
+    /// Review Focus 1: a very long code line scrolls inside its block, it never widens the column or clips.
+    @Test func aLongCodeLineStaysInsideTheColumn() throws {
+        let line = String(repeating: "x", count: 400)
+        let rendered = render("Before.\n\n```\n\(line)\n```")
+        let layout = MarkdownAttributed.Measure(rendered).layout(width: 620)
+        #expect(layout.size.width <= 620)
+        let code = try #require(layout.placed.last)
+        #expect(code.frame.width == 620)
+        #expect(code.content.width > 2000)        // one line, not wrapped: the block scrolls
+        #expect(code.content.height < 30)
+    }
+
+    /// Review Focus 1, and the plan's pin: twelve columns neither squeeze nor widen the column.
+    @Test func aWideTableStaysInsideTheColumn() throws {
+        let columns = (1...12).map { "Column \($0)" }
+        let row = "| " + columns.joined(separator: " | ") + " |"
+        let rule = "|" + String(repeating: "---|", count: 12)
+        let rendered = render("Before.\n\n\(row)\n\(rule)\n\(row)")
+        let layout = MarkdownAttributed.Measure(rendered).layout(width: 620)
+        #expect(layout.size.width <= 620)
+        let table = try #require(layout.placed.last)
+        #expect(table.frame.width == 620)
+        #expect(table.content.width > 620)
+        // Each cell on its one line: two rows' worth of height, however many columns.
+        let font = NSFont.preferredFont(forTextStyle: .subheadline)
+        #expect(table.content.height < 2 * (font.pointSize * 2 + 2 * Design.Space.s8))
+    }
+
+    @Test func aNarrowTableHugsItsColumns() throws {
+        let rendered = render("| A | B |\n|---|---|\n| 1 | 2 |")
+        let layout = MarkdownAttributed.Measure(rendered).layout(width: 620)
+        let table = try #require(layout.placed.first)
+        #expect(table.frame.width < 200)
+        #expect(table.frame.width == table.content.width)
+    }
+
+    /// Regression (driven 2026-11-04): TextKit sized a table against the narrow container before it, then moved it on
+    /// to its own: the first cell kept that squeezed line ("Col" / "A") and the block clipped its last row.
+    @Test func aTableAfterTextKeepsItsCellsOnOneLine() throws {
+        let columns = (1...12).map { "Col \($0)" }
+        let row = "| " + columns.joined(separator: " | ") + " |"
+        let rule = "|" + String(repeating: "---|", count: 12)
+        let rendered = render("Before.\n\n\(row)\n\(rule)\n\(row)")
+        let storage = NSTextStorage(attributedString: rendered.text)
+        let layout = NSLayoutManager()
+        storage.addLayoutManager(layout)
+        var containers: [MessageTextContainer] = []
+        for (index, segment) in rendered.segments.enumerated() {
+            let container = MessageTextContainer()
+            container.end = index == rendered.segments.count - 1 ? .max : NSMaxRange(segment.range)
+            if segment.kind == .prose { container.limit = 300 }
+            layout.addTextContainer(container)
+            containers.append(container)
+        }
+        layout.ensureLayout(for: containers[containers.count - 1])
+        let table = rendered.segments[1].range
+        #expect(layout.glyphRange(for: containers[0]).length == table.location)
+        let first = layout.glyphRange(forCharacterRange: NSRange(location: table.location, length: 5),
+                                      actualCharacterRange: nil)
+        var fragments = 0
+        layout.enumerateLineFragments(forGlyphRange: first) { _, _, _, _, _ in fragments += 1 }
+        #expect(fragments == 1)
+        let measured = MarkdownAttributed.Measure(rendered).layout(width: 300).placed[1].content.height
+        #expect(layout.usedRect(for: containers[1]).height.rounded(.up) == measured)
+    }
+
+    @Test func numericColumnsSitRightAndTheHeaderIsQuiet() throws {
+        let text = render("| Account | Total |\n|---|---|\n| Operating | 1,204.50 |\n| Reserve | -3% |").text
+        let string = text.string as NSString
+        #expect(paragraphStyle(text, at: string.range(of: "1,204.50").location)?.alignment == .right)
+        #expect(paragraphStyle(text, at: string.range(of: "Total").location)?.alignment == .right)
+        #expect(paragraphStyle(text, at: string.range(of: "Operating").location)?.alignment != .right)
+        let header = text.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor
+        #expect(header == MacColor.textSecondary)
+        let figure = text.attribute(.font, at: string.range(of: "1,204.50").location, effectiveRange: nil) as? NSFont
+        #expect(figure?.pointSize == NSFont.preferredFont(forTextStyle: .subheadline).pointSize)
+    }
+
+    @Test func hairlinesRunBetweenRowsOnly() throws {
+        let text = render("| A |\n|---|\n| 1 |\n| 2 |").text
+        let string = text.string as NSString
+        func cell(_ word: String) throws -> NSTextTableBlock {
+            try #require(paragraphStyle(text, at: string.range(of: word).location)?.textBlocks.last as? NSTextTableBlock)
+        }
+        #expect(try cell("A").width(for: .border, edge: .maxY) == 1)
+        #expect(try cell("A").width(for: .border, edge: .minX) == 0)
+        #expect(try cell("2").width(for: .border, edge: .maxY) == 0)
+    }
+
+    /// Regression (driven 2026-11-04): the paragraph's break took the last run's background, so inline code at the end
+    /// of a line painted to the column's edge.
+    @Test func inlineCodeIsAPillThatStopsWithItsText() throws {
+        let text = render("Run `make`\n\nThen stop.").text
+        #expect(text.attribute(.inlineCode, at: 4, effectiveRange: nil) != nil)
+        #expect(text.attribute(.backgroundColor, at: 4, effectiveRange: nil) as? NSColor == MacColor.elevated)
+        let end = (text.string as NSString).range(of: "\n").location
+        #expect(text.attribute(.backgroundColor, at: end, effectiveRange: nil) == nil)
+        #expect(text.attribute(.inlineCode, at: end, effectiveRange: nil) == nil)
+    }
+
+    @Test func typeFollowsTheSpec() throws {
+        let text = render("# One\n\n## Two\n\n### Three\n\nBody text.").text
+        let string = text.string as NSString
+        let body = try #require(text.attribute(.font, at: string.range(of: "Body").location, effectiveRange: nil) as? NSFont)
+        let sizes = try ["One", "Two", "Three"].map { word in
+            try #require(text.attribute(.font, at: string.range(of: word).location, effectiveRange: nil) as? NSFont).pointSize
+        }
+        #expect(sizes == [(body.pointSize * 1.25).rounded(), (body.pointSize * 1.12).rounded(),
+                          (body.pointSize * 1.02).rounded()])
+        let paragraph = try #require(paragraphStyle(text, at: string.range(of: "Body").location))
+        #expect(paragraph.lineSpacing == Design.Text.lineSpacing)
+        let two = try #require(paragraphStyle(text, at: string.range(of: "Two").location))
+        #expect(two.paragraphSpacingBefore == sizes[1])
+        #expect(abs(two.paragraphSpacing - sizes[1] * 0.35) < 0.01)
+        let code = render("Use `x`.").text
+        let mono = try #require(code.attribute(.font, at: 4, effectiveRange: nil) as? NSFont)
+        #expect(abs(mono.pointSize - body.pointSize * 0.88) < 0.01)
+    }
+
+    @Test func aListGivesWayWithAParagraphsSpace() {
+        let text = render("- one\n- two\n\nAfter.").text
+        let two = (text.string as NSString).range(of: "two").location
+        #expect(paragraphStyle(text, at: 0)?.paragraphSpacing == Design.Space.s4)
+        #expect(paragraphStyle(text, at: two)?.paragraphSpacing == Design.Text.paragraphSpacing)
     }
 
     @Test func aQuoteHasABarAndLinksStayLinks() throws {
         let quote = render("> quoted words").text
         let block = try #require(paragraphStyle(quote, at: 0)?.textBlocks.first)
         #expect(block.width(for: .border, edge: .minX) == 3)
+        // Regression (driven 2026-11-04): with no width of its own, the block held only the quote's first line.
+        #expect(block.value(for: .width) == 100)
         let link = render("See [the docs](https://example.com/docs).").text
         let index = (link.string as NSString).range(of: "the docs").location
         #expect(link.attribute(.link, at: index, effectiveRange: nil) as? URL == URL(string: "https://example.com/docs"))
@@ -84,5 +285,18 @@ struct MarkdownAttributedTests {
         #expect(rendered.codeBlocks.map(\.code) == ["make"])
         let quote = try #require(paragraphStyle(rendered.text, at: 0)?.textBlocks.first)
         #expect(quote.width(for: .border, edge: .minX) == 3)
+    }
+
+    /// The bug: Foundation hands a rule over as "———", and the Mac drew those three dashes as text.
+    @Test @MainActor func aRuleIsALineNotThreeDashes() {
+        let rendered = MarkdownAttributed.render("Above\n\n---\n\nBelow")
+        #expect(!rendered.text.string.contains("\u{2014}"))
+        var rules = 0
+        rendered.text.enumerateAttribute(.thematicRule, in: NSRange(location: 0, length: rendered.text.length)) { value, _, _ in
+            if value != nil { rules += 1 }
+        }
+        #expect(rules == 1)
+        #expect(rendered.text.string.hasPrefix("Above"))
+        #expect(rendered.text.string.hasSuffix("Below"))
     }
 }

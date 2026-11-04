@@ -24,6 +24,9 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
 
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        #if DEBUG
+        FrameMeter.startIfAsked()
+        #endif
         UNUserNotificationCenter.current().delegate = self
         Task {
             // APNs may change the token: register at every launch (§11.1).

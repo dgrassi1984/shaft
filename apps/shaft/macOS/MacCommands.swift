@@ -27,7 +27,7 @@ struct MacCommands: Commands {
             Button("Stop the Reply") { if let chat = screen?.chat { Task { await chat.stopReply() } } }
                 .keyboardShortcut(".")
                 .disabled(!now.canStop)
-            Button("End the Conversation") { if let chat = screen?.chat { Task { await chat.end() } } }
+            Button("End the Conversation") { screen?.confirmingEnd = true }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
                 .disabled(!now.canEnd)
             Divider()

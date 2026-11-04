@@ -3,7 +3,7 @@ import SwiftUI
 
 /// The conversation, scrolled: it lands on the last message and stays there while what loads after grows the feed or
 /// moves it (pictures, the reply streaming, the keyboard), until the operator scrolls up. Scrolled up, a new message
-/// below shows "↓ New below". It reports when the newest item is on screen, which is when the chat may be marked seen.
+/// below shows "↓ New below" (drawn by the chat screen, in the bar above the composer). It reports when the newest item is on screen, which is when the chat may be marked seen.
 struct FeedView: View {
     let feed: Feed
     let rows: [FeedRow]
@@ -24,15 +24,16 @@ struct FeedView: View {
     var body: some View {
         let newest = FeedRows.newestKey(feed)
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: Design.Space.turn) {
                 if feed.content?.chat == nil && rows.allSatisfy({ if case .day = $0 { true } else { false } }) {
-                    EmptyChat(instance: feed.instance).padding(.horizontal, 16)
+                    EmptyChat(instance: feed.instance).padding(.horizontal, Design.Space.gutter)
                 }
                 ForEach(rows) { row in
-                    // Each row keeps its own margins: the rows the lazy stack lays out first, landing at the bottom,
-                    // were placed without the stack's own padding (shifted 16 pt left) until scrolled away.
+                    // Each row keeps its own margins, capped and centred on the column (spec §5).
                     FeedRowView(row: row, archived: screen.archived)
-                        .padding(.horizontal, 16)
+                        .frame(maxWidth: Design.measure, alignment: .leading)
+                        .frame(maxWidth: .infinity)
+                        .padding(.horizontal, Design.Space.gutter)
                         .id(row.id)
                         .onScrollVisibilityChange(threshold: 0.25) { visible in
                             if row.id == newest { newestVisible(visible) }
@@ -40,9 +41,11 @@ struct FeedView: View {
                 }
                 Color.clear.frame(height: 1).id(bottomID)
             }
-            .padding(.vertical, 12)
+            .padding(.vertical, Design.Space.s12)
             .scrollTargetLayout()
         }
+        .foregroundStyle(Color.textPrimary)
+        .background(Color.canvas)
         .scrollPosition($position)
         .defaultScrollAnchor(.bottom, for: .initialOffset)
         .scrollDismissesKeyboard(.interactively)
@@ -85,24 +88,17 @@ struct FeedView: View {
                 newBelow = true
             }
         }
-        .overlay(alignment: .bottom) {
-            if !pinned && distance > 200 {
-                Button {
-                    pinned = true
-                    newBelow = false
-                    withAnimation(reduceMotion ? nil : .default) { position.scrollTo(edge: .bottom) }
-                } label: {
-                    Label(newBelow ? "New below" : "Latest", systemImage: "arrow.down")
-                        .font(.footnote.weight(.semibold))
-                        .padding(.horizontal, 14)
-                        .frame(minHeight: 44)
-                        .background(.regularMaterial, in: Capsule())
-                }
-                .buttonStyle(.plain)
-                .padding(.bottom, 8)
-                .accessibilityLabel(newBelow ? "New messages below" : "Scroll to the latest message")
-            }
+        .onChange(of: pill, initial: true) { _, pill in screen.latestPill = pill }
+        .onChange(of: screen.jumpToLatest) {
+            pinned = true
+            newBelow = false
+            withAnimation(reduceMotion ? nil : .default) { position.scrollTo(edge: .bottom) }
         }
+    }
+
+    private var pill: ChatScreenModel.LatestPill? {
+        guard !pinned && distance > 200 else { return nil }
+        return newBelow ? .newBelow : .latest
     }
 
     private func stickToBottom() {
@@ -112,16 +108,56 @@ struct FeedView: View {
     }
 }
 
+/// "↓ Latest", or "↓ New below" with a message waiting: in the bar above the composer, so it covers nothing.
+struct LatestPillButton: View {
+    let pill: ChatScreenModel.LatestPill
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label(pill == .newBelow ? "New below" : "Latest", systemImage: "arrow.down")
+                .font(Design.Text.pill)
+                .foregroundStyle(pill == .newBelow ? Color.brand : Color.textPrimary)
+                .padding(.horizontal, Design.Space.s12)
+                .frame(minHeight: Design.Space.s24 + Design.Space.s12)
+                .quietHitArea()
+        }
+        .buttonStyle(.plain)
+        .floatingPill()
+        .frame(maxWidth: .infinity)
+        .padding(.top, Design.Space.s4)
+        .accessibilityLabel(pill == .newBelow ? "New messages below" : "Scroll to the latest message")
+    }
+}
+
+private extension View {
+    /// The system's glass on a floating control; solid `elevated` under Reduce Transparency.
+    func floatingPill() -> some View { modifier(FloatingPill()) }
+}
+
+private struct FloatingPill: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    func body(content: Content) -> some View {
+        if reduceTransparency {
+            content
+                .background(Color.elevated, in: .capsule)
+                .overlay { Capsule().strokeBorder(Color.hairline) }     // it may float over an `elevated` block
+        } else {
+            content.glassEffect(.regular.interactive(), in: .capsule)
+        }
+    }
+}
+
 /// "Chat with <n>": no chat shown (§4.2 `chat` null).
 struct EmptyChat: View {
     let instance: String
 
     var body: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "bubble.left.and.bubble.right").font(.largeTitle).foregroundStyle(.tertiary)
-                .accessibilityHidden(true)
+        VStack(spacing: Design.Space.inTurn) {
+            ShaftMark()
             Text("Chat with \(instance)").font(.title3.weight(.semibold))
-            Text("Your message starts a new conversation.").font(.callout).foregroundStyle(.secondary)
+            Text("Your message starts a new conversation.").font(.callout).foregroundStyle(Color.textSecondary)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 40)
