@@ -19,6 +19,7 @@ struct ChatsLayout: View {
     let session: SHAFTSession
     let store: InstancesStore
     @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @AppStorage("chat.last") private var last = ""
     @State private var selection: String?
     @State private var path: [ArchivedRoute] = []
@@ -63,7 +64,16 @@ struct ChatsLayout: View {
         NavigationStack(path: $path) {
             chat
                 .toolbar {
-                    ToolbarItem(placement: .topBarLeading) { chatsButton }
+                    ToolbarItem(placement: .topBarLeading) {
+                        if reduceTransparency {
+                            chatsButton
+                                .frame(width: Design.Header.height, height: Design.Header.height)
+                                .glassSurface(in: Circle())
+                        } else {
+                            chatsButton
+                        }
+                    }
+                    .sharedBackgroundVisibility(reduceTransparency ? .hidden : .automatic)
                 }
                 .navigationDestination(for: ArchivedRoute.self) { route in
                     ArchivedChatView(route: route) { path.removeAll() }

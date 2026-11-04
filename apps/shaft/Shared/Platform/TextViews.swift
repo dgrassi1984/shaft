@@ -112,6 +112,8 @@ struct ComposerTextView: UIViewRepresentable {
             let target = min(max(fitting, Design.Composer.minimumHeight), parent.maxHeight)
             let scrolls = fitting > parent.maxHeight
             if view.isScrollEnabled != scrolls { view.isScrollEnabled = scrolls }
+            // A long text sent or cut left it scrolled, and the placeholder scrolls with it, out of the capsule.
+            if !scrolls && view.contentOffset != .zero { view.contentOffset = .zero }
             if abs(parent.height - target) > 0.5 {
                 let binding = parent.$height
                 DispatchQueue.main.async { binding.wrappedValue = target }
@@ -133,6 +135,9 @@ final class ComposerUITextView: UITextView {
         placeholder.adjustsFontForContentSizeCategory = true
         placeholder.textColor = UIColor(Color.textTertiary)
         placeholder.isAccessibilityElement = false
+        // At the largest text "Message thelos" is wider than the field: it shrinks to fit rather than cut to "Messag…".
+        placeholder.adjustsFontSizeToFitWidth = true
+        placeholder.minimumScaleFactor = 0.4
         placeholder.translatesAutoresizingMaskIntoConstraints = false
         addSubview(placeholder)
         NSLayoutConstraint.activate([

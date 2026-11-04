@@ -166,8 +166,8 @@ struct SettingsView: View {
                     } else {
                         ProgressView()
                     }
-                    // The server's "Push" line above says the same once it has answered.
-                    if let said = session.pushStatus, push == nil || !said.hasPrefix("Push") {
+                    // The Push line above says the same once the server has answered: only a failure to register is new.
+                    if let said = session.pushStatus, push == nil || !(push?.on == true || said == push?.reason) {
                         Text(said).font(.footnote).foregroundStyle(Color.textSecondary)
                     }
                     if let error = model.pushError { Text(error).font(.footnote).foregroundStyle(Color.warning) }

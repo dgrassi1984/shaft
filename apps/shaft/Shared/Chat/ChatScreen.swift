@@ -241,42 +241,55 @@ struct ChatScreen: View {
                 #endif
         }
         .sharedBackgroundVisibility(.hidden)     // its own capsule: the toolbar's drew a short name as a circle
-        ToolbarItemGroup(placement: .primaryAction) {
-            Button { screen.showDocuments.toggle() } label: { Image(systemName: "doc.text") }
-                .accessibilityLabel("Documents")
-            if chat.cid == nil {
-                Button { screen.confirmingNewChat = true } label: { Image(systemName: "square.and.pencil") }
-                    .disabled(chat.content?.canClear != true)
-                    .accessibilityLabel("New chat")
-                    .confirmationDialog("Start a new chat with \(chat.instance)?",
-                                        isPresented: Bindable(screen).confirmingNewChat, titleVisibility: .visible) {
-                        Button("New chat") { Task { await chat.clear() } }
-                    } message: {
-                        Text("An open conversation is ended first. This one stays in Earlier chats.")
-                    }
+        if reduceTransparency {
+            // The system's fallback for its glass is pure white or black: the group draws its own solid `elevated`.
+            ToolbarItem(placement: .primaryAction) {
+                HStack(spacing: 0) { headerButtons.frame(width: Design.Header.height) }
+                    .frame(height: Design.Header.height)
+                    .glassSurface(in: Capsule())
             }
-            Menu {
-                Button { screen.showEarlierChats = true } label: { Label("Earlier chats", systemImage: "clock") }
-                if chat.content?.canStop == true {
-                    Button(role: .destructive) { Task { await chat.stopReply() } } label: {
-                        Label("Stop the reply", systemImage: "stop")
-                    }
+            .sharedBackgroundVisibility(.hidden)
+        } else {
+            ToolbarItemGroup(placement: .primaryAction) { headerButtons }
+        }
+    }
+
+    @ViewBuilder
+    private var headerButtons: some View {
+        Button { screen.showDocuments.toggle() } label: { Image(systemName: "doc.text") }
+            .accessibilityLabel("Documents")
+        if chat.cid == nil {
+            Button { screen.confirmingNewChat = true } label: { Image(systemName: "square.and.pencil") }
+                .disabled(chat.content?.canClear != true)
+                .accessibilityLabel("New chat")
+                .confirmationDialog("Start a new chat with \(chat.instance)?",
+                                    isPresented: Bindable(screen).confirmingNewChat, titleVisibility: .visible) {
+                    Button("New chat") { Task { await chat.clear() } }
+                } message: {
+                    Text("An open conversation is ended first. This one stays in Earlier chats.")
                 }
-                if chat.content?.canEnd == true {
-                    Button { screen.confirmingEnd = true } label: {
-                        Label("End conversation", systemImage: "flag.checkered")      // the menu hyphenated a longer one
-                    }
+        }
+        Menu {
+            Button { screen.showEarlierChats = true } label: { Label("Earlier chats", systemImage: "clock") }
+            if chat.content?.canStop == true {
+                Button(role: .destructive) { Task { await chat.stopReply() } } label: {
+                    Label("Stop the reply", systemImage: "stop")
                 }
-            } label: {
-                Image(systemName: "ellipsis")
             }
-            .accessibilityLabel("More")
-            .confirmationDialog("End the conversation with \(chat.instance)?",
-                                isPresented: Bindable(screen).confirmingEnd, titleVisibility: .visible) {
-                Button("End it", role: .destructive) { Task { await chat.end() } }
-            } message: {
-                Text("It writes up its journal. Your next message starts a new conversation.")
+            if chat.content?.canEnd == true {
+                Button { screen.confirmingEnd = true } label: {
+                    Label("End conversation", systemImage: "flag.checkered")      // the menu hyphenated a longer one
+                }
             }
+        } label: {
+            Image(systemName: "ellipsis")
+        }
+        .accessibilityLabel("More")
+        .confirmationDialog("End the conversation with \(chat.instance)?",
+                            isPresented: Bindable(screen).confirmingEnd, titleVisibility: .visible) {
+            Button("End it", role: .destructive) { Task { await chat.end() } }
+        } message: {
+            Text("It writes up its journal. Your next message starts a new conversation.")
         }
     }
 
@@ -346,7 +359,7 @@ struct ChatTitle: View {
                     .foregroundStyle(Color.textSecondary)
                 }
             }
-            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+            .dynamicTypeSize(...DynamicTypeSize.xxLarge)
             .padding(.horizontal, Design.Space.s12)
             .frame(minHeight: Design.Header.height)
             .contentShape(Capsule())
