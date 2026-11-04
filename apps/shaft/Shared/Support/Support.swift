@@ -59,9 +59,9 @@ enum Announce {
 }
 
 extension View {
-    /// At least 44 pt each way: the touch target the PWA and Apple ask for.
+    /// The shared 44 pt hit area.
     func touchTarget() -> some View {
-        frame(minWidth: 44, minHeight: 44).contentShape(Rectangle())
+        quietHitArea()
     }
 
     /// An animation unless Reduce Motion is on.

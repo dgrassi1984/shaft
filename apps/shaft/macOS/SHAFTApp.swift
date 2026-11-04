@@ -31,6 +31,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var keyMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        FrameMeter.startIfAsked()
+        #endif
         UNUserNotificationCenter.current().delegate = self
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.slashFocusesComposer(event) else { return event }
