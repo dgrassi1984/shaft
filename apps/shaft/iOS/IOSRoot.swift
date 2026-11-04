@@ -125,11 +125,7 @@ struct ChatsLayout: View {
         // The documents beside the chat, outside its navigation stack (ChatShell): inside it, their own pages
         // were pushed onto the chat's stack.
         .documentsInspector(shell, store: store,
-                            isPresented: Binding(get: { inspector }, set: { open in
-                                // Turning between column and sheet in a resize, the system closes and reopens the
-                                // inspector: that close is not the operator's.
-                                if !open && Date.now.timeIntervalSince(resized) > 0.5 { shell.screen?.showDocuments = false }
-                            }))
+                            isPresented: Binding(get: { inspector }, set: inspectorChanged))
         // The system turns an inspector into a sheet at compact width, keeping what it shows. It would stay beside the
         // chat down to about 680 pt: under 700 there is no room for both (spec §5), so that band reads as compact.
         .environment(\.horizontalSizeClass, shell.documentsCover ? .compact : .regular)
@@ -140,6 +136,21 @@ struct ChatsLayout: View {
         }
         .onChange(of: shell.screen?.showDocuments) { fitColumns() }
         .onChange(of: columns) { fitColumns() }
+    }
+
+    /// The system's own changes to the inspector. In a resize that turns it between column and sheet, it closes it and
+    /// opens it again with what it held: that close is not the operator's, and acted on it would lose the open document.
+    /// It also opens it unasked, restoring a window whose documents were open or reopening them after a turn of the
+    /// device: left alone that is an empty column, so the documents follow.
+    private func inspectorChanged(_ open: Bool) {
+        if !open {
+            if Date.now.timeIntervalSince(resized) > 0.5 { shell.screen?.showDocuments = false }
+        } else if shell.screen?.showDocuments != true {
+            Task {
+                try? await Task.sleep(for: .seconds(0.3))        // a restored window's chat is not on screen yet
+                shell.screen?.showDocuments = true
+            }
+        }
     }
 
     /// Under 1000 pt, sidebar, chat and documents do not fit together.
