@@ -15,6 +15,8 @@ extension Color {
     static let onAccent = Color("onAccent")
     static let warning = Color("warning")
     static let danger = Color("danger")
+    /// A commented passage in a document: `accent` at low strength, behind `textPrimary` (spec §5).
+    static let passage = Color("accent").opacity(0.18)
 }
 
 /// The native apps' shared type, spacing and shape.

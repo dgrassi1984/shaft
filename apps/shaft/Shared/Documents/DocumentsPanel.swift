@@ -96,31 +96,49 @@ struct DocsListView: View {
         let level = DocsTree.level(docs.list?.docs ?? [], in: folder, sort: order, ascending: ascending)
         List {
             if screen.archived {
-                Section {
-                    Text("Current files — not as they were in this chat").font(.footnote).foregroundStyle(.secondary)
-                }
+                Text("Current files — not as they were in this chat")
+                    .font(.footnote)
+                    .foregroundStyle(Color.textSecondary)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
             }
             if let error = docs.error, docs.list == nil {
-                Text(error.message).foregroundStyle(.red)
+                Text(error.message)
+                    .foregroundStyle(Color.danger)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
             }
-            ForEach(level.folders) { entry in
-                NavigationLink(value: DocumentsPanel.Route.folder(entry.path)) {
-                    DocRow(name: entry.name, folder: true, bytes: entry.bytes, date: entry.latest, inChat: entry.inChat,
-                           comments: entry.openComments, count: entry.count, tooBig: false)
+            Section {
+                ForEach(level.folders) { entry in
+                    NavigationLink(value: DocumentsPanel.Route.folder(entry.path)) {
+                        DocRow(name: entry.name, folder: true, bytes: entry.bytes, date: entry.latest,
+                               inChat: entry.inChat, comments: entry.openComments, count: entry.count, tooBig: false)
+                    }
+                    .docRow()
+                }
+                ForEach(level.docs) { entry in
+                    NavigationLink(value: DocumentsPanel.Route.doc(entry.path)) {
+                        DocRow(name: (entry.path as NSString).lastPathComponent, folder: false, bytes: entry.bytes,
+                               date: entry.mtime, inChat: entry.inChat, comments: entry.openComments, count: nil,
+                               tooBig: entry.tooBig)
+                    }
+                    .docRow()
                 }
             }
-            ForEach(level.docs) { entry in
-                NavigationLink(value: DocumentsPanel.Route.doc(entry.path)) {
-                    DocRow(name: (entry.path as NSString).lastPathComponent, folder: false, bytes: entry.bytes,
-                           date: entry.mtime, inChat: entry.inChat, comments: entry.openComments, count: nil,
-                           tooBig: entry.tooBig)
+            .listSectionSeparator(.hidden)
+        }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .background(Color.elevated)
+        .overlay {
+            if docs.list == nil && docs.error == nil {
+                ProgressView()
+            } else if docs.list != nil && level.folders.isEmpty && level.docs.isEmpty {
+                ContentUnavailableView {
+                    Label(folder.isEmpty ? "No documents yet." : "This folder is empty.", systemImage: "doc.text")
                 }
-            }
-            if docs.list != nil && level.folders.isEmpty && level.docs.isEmpty {
-                Text(folder.isEmpty ? "No documents yet." : "This folder is empty.").foregroundStyle(.secondary)
             }
         }
-        .overlay { if docs.list == nil && docs.error == nil { ProgressView() } }
         .refreshable { await docs.refresh() }
         .navigationTitle(folder.isEmpty ? "Documents" : (folder as NSString).lastPathComponent)
         #if os(iOS)
@@ -151,11 +169,19 @@ struct DocsListView: View {
                         Button { newDocument() } label: { Label("New document", systemImage: "doc.badge.plus") }
                     }
                 } label: {
-                    Image(systemName: "arrow.up.arrow.down.circle").touchTarget()
+                    Image(systemName: "arrow.up.arrow.down")
                 }
                 .accessibilityLabel("Sort and new document")
             }
         }
+    }
+}
+
+extension View {
+    /// A row of the panel: on its surface, with the system's chevron, split by a hairline.
+    fileprivate func docRow() -> some View {
+        listRowBackground(Color.clear)
+            .listRowSeparatorTint(Color.hairline)
     }
 }
 
@@ -169,34 +195,51 @@ struct DocRow: View {
     let count: Int?
     let tooBig: Bool
 
+    private var details: String {
+        var parts: [String] = []
+        if let count { parts.append(count == 1 ? String(localized: "1 document") : String(localized: "\(count) documents")) }
+        parts.append(DocsTree.size(bytes))
+        if let date { parts.append(Stamp.short(date)) }
+        if tooBig { parts.append(String(localized: "too big to show")) }
+        return parts.joined(separator: " · ")
+    }
+
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: folder ? "folder" : "doc.text").foregroundStyle(folder ? Color.accentColor : .secondary)
+        HStack(spacing: Design.Space.s12) {
+            Image(systemName: folder ? "folder" : "doc.text")
+                .foregroundStyle(Color.brand)
+                .frame(width: Design.Space.s24)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 4) {
-                    Text(name).lineLimit(1)
+                HStack(spacing: Design.Space.s4) {
+                    Text(name)
+                        .foregroundStyle(Color.textPrimary)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
                     if inChat {
-                        Circle().fill(Color.accentColor).frame(width: 7, height: 7)
+                        Circle().fill(Color.brand).frame(width: 7, height: 7)
                             .accessibilityLabel("changed in this chat")
                     }
                 }
-                HStack(spacing: 6) {
-                    if let count { Text(count == 1 ? String(localized: "1 document") : String(localized: "\(count) documents")) }
-                    Text(DocsTree.size(bytes))
-                    if let date { Text(Stamp.short(date)) }
-                    if tooBig { Text("too big to show") }
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                Text(details)
+                    .font(Design.Text.metadata)
+                    .foregroundStyle(Color.textSecondary)
             }
             Spacer(minLength: 0)
             if comments > 0 {
-                Label("\(comments)", systemImage: "text.bubble").font(.caption).foregroundStyle(.secondary)
-                    .accessibilityLabel("\(comments) open comments")
+                HStack(spacing: Design.Space.s4) {
+                    Image(systemName: "text.bubble")
+                    Text("\(comments)")
+                }
+                .font(Design.Text.pill)
+                .foregroundStyle(Color.brand)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(comments) open comments")
             }
         }
         .frame(minHeight: 44)
+        // The hairline starts under the name, whatever else the row holds.
+        .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] + Design.Space.s24 + Design.Space.s12 }
         .accessibilityElement(children: .combine)
     }
 }
@@ -210,26 +253,36 @@ struct NewDocumentSheet: View {
     @State private var name = ""
     @State private var problem: String?
     @State private var busy = false
+    @FocusState private var focused: Bool
 
     var body: some View {
         NavigationStack {
-            Form {
+            VStack(alignment: .leading, spacing: Design.Space.s12) {
                 TextField(folder.isEmpty ? "Document name" : "Document name in \(folder)/", text: $name)
                     .autocorrectionDisabled()
                     #if os(iOS)
                     .textInputAutocapitalization(.never)
                     #endif
-                if let problem { Text(problem).foregroundStyle(.red) }
+                    .focused($focused)
+                    .padding(Design.Space.s12)
+                    .elevatedBlock()
+                if let problem { Text(problem).font(.footnote).foregroundStyle(Color.danger) }
+                Spacer(minLength: 0)
             }
+            .padding(Design.Space.gutter)
             .navigationTitle("New document")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Create") { create() }.disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || busy)
                 }
             }
+            .onAppear { focused = true }
         }
-        .sheetFrame()
+        .sheetFrame(minHeight: 220)
         .presentationDetents([.medium])
     }
 
