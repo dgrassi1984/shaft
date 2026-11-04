@@ -52,9 +52,7 @@ extension Theme {
             ShaftHeading(configuration: configuration, size: 1.02, weight: .semibold, colour: .textSecondary)
         }
         .paragraph { configuration in
-            configuration.label
-                .fixedSize(horizontal: false, vertical: true)
-                .lineSpacing(Design.Text.lineSpacing)
+            ShaftParagraph(configuration: configuration)
                 .markdownMargin(top: 0, bottom: Design.Text.paragraphSpacing)
         }
         .blockquote { configuration in
@@ -94,6 +92,53 @@ extension Theme {
             Rectangle().fill(Color.hairline).frame(height: 1)
                 .markdownMargin(top: Design.Space.s12, bottom: Design.Space.s12)
         }
+}
+
+/// A paragraph: body text with its leading, and inline code on rounded pills. Text attributes can only fill a square
+/// behind a run, so finished text draws the pills itself; a reply still streaming keeps the theme's square fill, as
+/// nothing per token may go through a custom renderer.
+private struct ShaftParagraph: View {
+    let configuration: BlockConfiguration
+    @Environment(\.markdownStreaming) private var streaming
+    @ScaledMetric(relativeTo: .body) private var bodySize = FontProperties.defaultSize
+
+    var body: some View {
+        let text = configuration.label
+            .fixedSize(horizontal: false, vertical: true)
+            .lineSpacing(Design.Text.lineSpacing)
+        if streaming {
+            text
+        } else {
+            text
+                .markdownTextStyle(\.code) {
+                    FontFamilyVariant(.monospaced)
+                    FontSize(.em(0.88))
+                }
+                .textRenderer(InlineCodePills(bodySize: bodySize))
+        }
+    }
+}
+
+/// Draws an `elevated` pill behind each run of inline code. A renderer is not told a run's attributes; in a paragraph
+/// only code is set smaller than the body, so a run's ascent tells it apart (bold, italics and links keep the body's).
+private struct InlineCodePills: TextRenderer {
+    let bodySize: CGFloat
+    private let inset: CGFloat = 2
+
+    var displayPadding: EdgeInsets {
+        EdgeInsets(top: 0, leading: inset, bottom: 0, trailing: inset)
+    }
+
+    func draw(layout: Text.Layout, in context: inout GraphicsContext) {
+        for line in layout {
+            for run in line where run.typographicBounds.ascent < bodySize * 0.92 {
+                let shape = run.typographicBounds.rect.insetBy(dx: -inset, dy: 0)
+                context.fill(Path(roundedRect: shape, cornerRadius: Design.Radius.pill, style: .continuous),
+                             with: .color(.elevated))
+            }
+        }
+        for line in layout { context.draw(line) }
+    }
 }
 
 /// A heading in prose (spec §2.2): 1 em above, 0.35 em below, a header to VoiceOver.
@@ -209,11 +254,13 @@ struct CodeColours: CodeSyntaxHighlighter {
 
     func highlightCode(_ code: String, language: String?) -> Text {
         guard !plain else { return Text(code) }
+        let language = Self.language(language)
+        let diff = language?.lowercased() == "diff"
         var out = AttributedString()
-        for token in CodeTokens.tokens(in: code, language: Self.language(language)) {
+        for token in CodeTokens.tokens(in: code, language: language) {
             var piece = AttributedString(code[token.range])
             switch token.kind {
-            case .keyword: piece.foregroundColor = .codeKeyword
+            case .keyword: piece.foregroundColor = diff ? .codeNumber : .codeKeyword   // a removed line, in a diff
             case .string: piece.foregroundColor = .codeString
             case .comment: piece.foregroundColor = .codeComment
             case .number: piece.foregroundColor = .codeNumber
