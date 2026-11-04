@@ -2,6 +2,9 @@ import PhotosUI
 import SHAFTKit
 import SwiftUI
 import UniformTypeIdentifiers
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// The composer (web-and-api.md, "The web UI"): one glass surface holding the ↩ Reply cards, each with its own answer,
 /// the files attached as chips, and the capsule of + (files, and the ways to send), the main field ("Anything else…"
@@ -17,7 +20,6 @@ struct ComposerView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ScaledMetric(relativeTo: .body) private var scaledDisc: CGFloat = 32
     @State private var textHeight: CGFloat = 40
-    @State private var fieldFocused = false
     @State private var picking = false
     @State private var photos: [PhotosPickerItem] = []
     @State private var importing = false
@@ -28,6 +30,17 @@ struct ComposerView: View {
     /// The button's disc grows with the text, up to what the capsule can hold beside the field at the largest sizes.
     private var disc: CGFloat { min(scaledDisc, 48) }
     private var control: CGFloat { max(44, disc + 12) }
+    #if os(iOS)
+    /// What keeps one line centred in the capsule: the field's distance from the capsule, and, at the largest text where
+    /// a line is taller than the buttons, how far they stand off the capsule's foot to centre on the last line.
+    private var lineBox: CGFloat {
+        UIFont.preferredFont(forTextStyle: .body).lineHeight + 2 * Design.Composer.textInset
+    }
+    private var fieldInset: CGFloat { max(Design.Composer.clipInset, (control - lineBox) / 2) }
+    private var controlLift: CGFloat { max(0, (lineBox + 2 * fieldInset - control) / 2) }
+    #else
+    private let controlLift: CGFloat = 0
+    #endif
     private var chat: ChatStore { screen.chat }
     private var replying: Bool { chat.feed?.reply != nil }
     private var nextCycle: String { store.row(screen.instance)?.nextCycle ?? "" }
@@ -38,7 +51,7 @@ struct ComposerView: View {
 
     var body: some View {
         @Bindable var chat = chat
-        VStack(spacing: Design.Space.s4) {
+        VStack(spacing: 0) {
             VStack(spacing: 0) {
                 if !chat.draft.quotes.isEmpty || !chat.draft.attachments.isEmpty {
                     ScrollView {
@@ -66,9 +79,9 @@ struct ComposerView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 }
                 HStack(alignment: .bottom, spacing: 0) {
-                    attachMenu
+                    attachMenu.padding(.bottom, controlLift)
                     field($chat.draft.text)
-                    primaryButton
+                    primaryButton.padding(.bottom, controlLift)
                 }
             }
             .motion(Design.Motion.spring, value: chat.draft.quotes.count, reduce: reduceMotion)
@@ -76,17 +89,6 @@ struct ComposerView: View {
             // whole composer with it.
             .background {
                 Color.clear.glassSurface(in: RoundedRectangle(cornerRadius: Design.Radius.composer, style: .continuous))
-            }
-            if HardwareKeyboard.shared.attached && fieldFocused {
-                ViewThatFits {
-                    Text("Return sends · Shift-Return new line · ⌘-Return queues after the reply")
-                    Text("")
-                }
-                .font(Design.Text.metadata)
-                .foregroundStyle(Color.textSecondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.leading, Design.Space.s16)
-                .accessibilityHidden(true)
             }
         }
         .frame(maxWidth: Design.measure)
@@ -126,7 +128,7 @@ struct ComposerView: View {
     }
 
     private func field(_ text: Binding<String>) -> some View {
-        ComposerTextView(text: text, height: $textHeight, focused: $fieldFocused,
+        ComposerTextView(text: text, height: $textHeight,
                          placeholder: chat.draft.quotes.isEmpty ? String(localized: "Message \(screen.instance)")
                                                                 : String(localized: "Anything else…"),
                          maxHeight: maxHeight, focusRequest: screen.focusComposerRequest,
@@ -135,7 +137,12 @@ struct ComposerView: View {
                              Task { _ = await ItemImport.attach(providers, to: chat) }
                          })
             .frame(height: textHeight)
-            .clipped()                           // a placeholder too long at the largest text stops at the button
+            #if os(iOS)
+            .composerFieldEdges()
+            .padding(.vertical, fieldInset)
+            #else
+            .clipped()
+            #endif
     }
 
     private var attachMenu: some View {
@@ -182,6 +189,7 @@ struct ComposerView: View {
         }
         .iconMenu()
         .disabled(chat.draft.isEmpty || sending)
+        .help("Return sends · Shift-Return new line · ⌘-Return queues after the reply")
         .accessibilityLabel(replying ? "Send now, during its reply" : "Send")
         .accessibilityHint("Touch and hold for Queue after reply and Next cycle")
     }
@@ -246,6 +254,24 @@ struct ComposerView: View {
     }
 }
 
+#if os(iOS)
+private extension View {
+    /// A field scrolled past its height: the line at its edge dissolves in `textInset`, which is empty at rest, and
+    /// stops short of the capsule.
+    func composerFieldEdges() -> some View {
+        mask {
+            VStack(spacing: 0) {
+                LinearGradient(colors: [.clear, .black], startPoint: .top, endPoint: .bottom)
+                    .frame(height: Design.Composer.textInset)
+                Color.black
+                LinearGradient(colors: [.black, .clear], startPoint: .top, endPoint: .bottom)
+                    .frame(height: Design.Composer.textInset)
+            }
+        }
+    }
+}
+#endif
+
 /// A ↩ Reply card: the quoted text (tap: expand or collapse), ×, and its own answer field.
 struct QuoteCard: View {
     @Binding var quote: Quote
@@ -299,6 +325,8 @@ struct QuoteCard: View {
                              focusRequest: focusRequest, onKey: onKey,
                              onPaste: { providers in Task { _ = await ItemImport.attach(providers, to: screen.chat) } })
                 .frame(height: answerHeight)
+                .composerFieldEdges()
+                .padding(.vertical, Design.Composer.clipInset)
                 .onChange(of: focused.wrappedValue, initial: true) { _, value in
                     if value == index { focusRequest += 1 }
                 }

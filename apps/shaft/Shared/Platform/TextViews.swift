@@ -1,12 +1,11 @@
 import SwiftUI
 #if canImport(UIKit)
-import GameController
 import UIKit
 #endif
 
 // The platform seams of text: the composer's field and the selectable text Select text shows. iOS has its own UIKit
 // views here (the PWA's keyboard rules need key commands; a selection needs the edit menu). The Mac app has AppKit
-// views of the same shape in macOS/MacTextViews.swift (ComposerTextView, SelectableTextView, HardwareKeyboard).
+// views of the same shape in macOS/MacTextViews.swift (ComposerTextView, SelectableTextView).
 
 /// What Return asks of the composer.
 enum ComposerKey {
@@ -16,23 +15,6 @@ enum ComposerKey {
 
 #if os(iOS)
 
-/// Whether a hardware keyboard is attached (an iPad's): the composer's shortcuts line shows then.
-@MainActor
-@Observable
-final class HardwareKeyboard {
-    static let shared = HardwareKeyboard()
-    private(set) var attached = GCKeyboard.coalesced != nil
-
-    private init() {
-        NotificationCenter.default.addObserver(forName: .GCKeyboardDidConnect, object: nil, queue: .main) { _ in
-            MainActor.assumeIsolated { HardwareKeyboard.shared.attached = true }
-        }
-        NotificationCenter.default.addObserver(forName: .GCKeyboardDidDisconnect, object: nil, queue: .main) { _ in
-            MainActor.assumeIsolated { HardwareKeyboard.shared.attached = GCKeyboard.coalesced != nil }
-        }
-    }
-}
-
 /// The composer's main field. The keyboard rules of the PWA: on the on-screen keyboard Return is a new line and the
 /// Send arrow sends; on a hardware keyboard Return sends (after its autocorrection), Shift- or Option-Return is a new
 /// line and Cmd-Return queues. It grows with its text up to `maxHeight`, then scrolls; a pasted picture or file goes to
@@ -40,7 +22,7 @@ final class HardwareKeyboard {
 struct ComposerTextView: UIViewRepresentable {
     @Binding var text: String
     @Binding var height: CGFloat
-    @Binding var focused: Bool
+    var focused: Binding<Bool> = .constant(false)
     var placeholder: String
     var maxHeight: CGFloat
     var focusRequest: Int
@@ -54,8 +36,8 @@ struct ComposerTextView: UIViewRepresentable {
         view.adjustsFontForContentSizeCategory = true
         view.backgroundColor = .clear
         view.textColor = UIColor(Color.textPrimary)
-        view.textContainerInset = UIEdgeInsets(top: Design.Composer.verticalInset, left: Design.Composer.horizontalInset,
-                                                 bottom: Design.Composer.verticalInset, right: Design.Composer.horizontalInset)
+        view.textContainerInset = UIEdgeInsets(top: Design.Composer.textInset, left: Design.Composer.horizontalInset,
+                                               bottom: Design.Composer.textInset, right: Design.Composer.horizontalInset)
         view.textContainer.lineFragmentPadding = 0
         view.isScrollEnabled = false
         view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -99,21 +81,19 @@ struct ComposerTextView: UIViewRepresentable {
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {
-            if !parent.focused { parent.focused = true }
+            if !parent.focused.wrappedValue { parent.focused.wrappedValue = true }
         }
 
         func textViewDidEndEditing(_ textView: UITextView) {
-            if parent.focused { parent.focused = false }
+            if parent.focused.wrappedValue { parent.focused.wrappedValue = false }
         }
 
         func measure(_ view: UITextView) {
             let width = view.bounds.width > 0 ? view.bounds.width : 300
             let fitting = view.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height
-            let target = min(max(fitting, Design.Composer.minimumHeight), parent.maxHeight)
+            let target = min(fitting, parent.maxHeight)
             let scrolls = fitting > parent.maxHeight
             if view.isScrollEnabled != scrolls { view.isScrollEnabled = scrolls }
-            // A long text sent or cut left it scrolled, and the placeholder scrolls with it, out of the capsule.
-            if !scrolls && view.contentOffset != .zero { view.contentOffset = .zero }
             if abs(parent.height - target) > 0.5 {
                 let binding = parent.$height
                 DispatchQueue.main.async { binding.wrappedValue = target }
@@ -129,6 +109,13 @@ final class ComposerUITextView: UITextView {
     weak var coordinator: ComposerTextView.Coordinator?
     let placeholder = UILabel()
 
+    /// A field that does not scroll stays at the top. A long draft sent (bug of 2026-11-04) left UIKit an offset for the
+    /// height it had, and the shrunken field showed the caret and the placeholder sliced at its top edge.
+    override var contentOffset: CGPoint {
+        get { super.contentOffset }
+        set { super.contentOffset = isScrollEnabled ? newValue : .zero }
+    }
+
     override init(frame: CGRect, textContainer: NSTextContainer?) {
         super.init(frame: frame, textContainer: textContainer)
         placeholder.font = .preferredFont(forTextStyle: .body)
@@ -138,11 +125,14 @@ final class ComposerUITextView: UITextView {
         // At the largest text "Message thelos" is wider than the field: it shrinks to fit rather than cut to "Messag…".
         placeholder.adjustsFontSizeToFitWidth = true
         placeholder.minimumScaleFactor = 0.4
+        placeholder.baselineAdjustment = .alignCenters
         placeholder.translatesAutoresizingMaskIntoConstraints = false
+        contentInsetAdjustmentBehavior = .never
         addSubview(placeholder)
+        // On the field's frame, where the first line sits: it never scrolls with the content.
         NSLayoutConstraint.activate([
-            placeholder.leadingAnchor.constraint(equalTo: leadingAnchor, constant: Design.Composer.horizontalInset),
-            placeholder.topAnchor.constraint(equalTo: topAnchor, constant: Design.Composer.verticalInset),
+            placeholder.leadingAnchor.constraint(equalTo: frameLayoutGuide.leadingAnchor, constant: Design.Composer.horizontalInset),
+            placeholder.topAnchor.constraint(equalTo: frameLayoutGuide.topAnchor, constant: Design.Composer.textInset),
             placeholder.trailingAnchor.constraint(lessThanOrEqualTo: frameLayoutGuide.trailingAnchor, constant: -Design.Composer.horizontalInset),
         ])
     }

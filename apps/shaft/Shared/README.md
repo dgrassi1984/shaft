@@ -39,6 +39,6 @@ and "Forget the pairing here only" when the server cannot be reached.
 - **Pointer and keyboard on a computer** (macOS only): `HoverActions` (`Feed/FeedItemViews.swift`), Copy and Reply
   under a message while the pointer is over it; Return in a card's answer sends, and the keyboard then moves to the
   main field (`Composer/ComposerView.swift`).
-- **Size and keyboard**: `HardwareKeyboard` (the shortcuts line), the shell's width rules (`horizontalSizeClass` is gone from `ChatScreen`),
+- **Size**: the shell's width rules (`horizontalSizeClass` is gone from `ChatScreen`),
   `sheetFrame()` (a sheet's size on the Mac), `iconMenu()` (a composer menu drawn as its icon on the Mac).
 - **Clipboard**: `Clipboard.copy`.
