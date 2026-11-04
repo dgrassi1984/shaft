@@ -19,6 +19,8 @@ extension Color {
     static let codeString = Color("codeString")
     static let codeComment = Color("codeComment")
     static let codeNumber = Color("codeNumber")
+    /// A commented passage in a document: `accent` at low strength, behind `textPrimary` (spec §5).
+    static let passage = Color("accent").opacity(0.18)
 }
 
 /// The native apps' shared type, spacing and shape.

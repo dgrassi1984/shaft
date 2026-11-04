@@ -10,23 +10,28 @@ struct DocumentDetailView: View {
     @Environment(ChatScreenModel.self) private var screen
     @Environment(FilePreview.self) private var preview
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var editing = false
     @State private var selecting = false
     @State private var composing: CommentDraft?
     @State private var deleting = false
     @State private var showResolved = false
+    /// The threads of a passage tapped in the document.
+    @State private var tapped: TappedThreads?
+    /// The answer of a write made on this page, while it shows.
+    @State private var said: String?
 
     private var doc: DocumentDetail? { docs.open?.path == path ? docs.open : nil }
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: Design.Space.turn) {
                     if let doc {
                         if let overwritten = doc.overwritten, !screen.archived {
                             OverwrittenNotice(path: path, overwritten: overwritten, sha: doc.sha)
                         }
-                        MarkdownText(source: doc.text)
+                        DocumentMarkdown(doc: doc) { tapped = TappedThreads(ids: $0) }
                             .frame(maxWidth: .infinity, alignment: .leading)
                         threads(doc)
                     } else if let error = docs.error {
@@ -39,18 +44,22 @@ struct DocumentDetailView: View {
                             Button("Download") { download() }
                         }
                     } else {
-                        ProgressView().frame(maxWidth: .infinity).padding(.top, 40)
+                        ProgressView().frame(maxWidth: .infinity).padding(.top, Design.Space.s24)
                     }
                 }
-                .padding(16)
+                .readingColumn()
+                .padding(.vertical, Design.Space.s16)
             }
+            .background(Color.canvas)
             .onChange(of: screen.openThread) { _, thread in
                 guard let thread else { return }
-                withAnimation { proxy.scrollTo(thread, anchor: .top) }
+                reveal(thread)
+                withAnimation(reduceMotion ? nil : Design.Motion.spring) { proxy.scrollTo(thread, anchor: .top) }
                 screen.openThread = nil
             }
             .task(id: doc?.sha) {
                 if let thread = screen.openThread, doc != nil {
+                    reveal(thread)
                     try? await Task.sleep(for: .milliseconds(200))
                     proxy.scrollTo(thread, anchor: .top)
                     screen.openThread = nil
@@ -77,6 +86,11 @@ struct DocumentDetailView: View {
         .sheet(item: $composing) { draft in
             CommentComposer(draft: draft).environment(docs)
         }
+        .sheet(item: $tapped) { tapped in
+            CommentThreadsSheet(ids: tapped.ids, rendered: RenderedText.plain(doc?.text ?? ""))
+                .environment(docs)
+                .environment(screen)
+        }
         .confirmationDialog("Delete \(path)?", isPresented: $deleting, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
                 guard let doc else { return }
@@ -85,15 +99,25 @@ struct DocumentDetailView: View {
         } message: {
             Text("\(screen.instance) hears of it with your next message. Earlier versions stay in its git history.")
         }
-        .safeAreaInset(edge: .bottom) {
-            if let said = docs.said {
-                Text(said).font(.footnote).foregroundStyle(.secondary).padding(8).frame(maxWidth: .infinity)
-                    .background(.regularMaterial)
+        .safeAreaBar(edge: .bottom) {
+            if let said {
+                DocumentStatus(text: said, color: Color.textSecondary)
             } else if let error = docs.error, doc != nil {
-                Text(error.message).font(.footnote).foregroundStyle(.red).padding(8).frame(maxWidth: .infinity)
-                    .background(.regularMaterial)
+                DocumentStatus(text: error.message, color: Color.danger)
             }
         }
+        .onChange(of: docs.said) { _, new in said = new }
+        .task(id: said) {
+            // A write's answer shows for a moment: left up it hid the page, and any failure after it.
+            guard said != nil else { return }
+            try? await Task.sleep(for: .seconds(6))
+            if !Task.isCancelled { said = nil }
+        }
+    }
+
+    /// A resolved thread sits in its fold: opening it from the chat opens the fold too.
+    private func reveal(_ thread: String) {
+        if doc?.threads.contains(where: { $0.id == thread && $0.state != "open" }) == true { showResolved = true }
     }
 
     @ToolbarContentBuilder
@@ -118,7 +142,7 @@ struct DocumentDetailView: View {
                     Button(role: .destructive) { deleting = true } label: { Label("Delete…", systemImage: "trash") }
                 }
             } label: {
-                Image(systemName: "ellipsis.circle").touchTarget()
+                Image(systemName: "ellipsis")
             }
             .accessibilityLabel("Document actions")
         }
@@ -130,24 +154,36 @@ struct DocumentDetailView: View {
         let resolved = doc.threads.filter { $0.state != "open" }
         let rendered = RenderedText.plain(doc.text)
         if !open.isEmpty || !resolved.isEmpty {
-            Divider()
-            Text("Comments").font(.headline).accessibilityAddTraits(.isHeader)
-        }
-        ForEach(open) { thread in
-            CommentThreadView(thread: thread, rendered: rendered, reply: { composing = CommentDraft(thread: thread.id) },
-                              edit: { post in composing = CommentDraft(editing: post) })
-                .id(thread.id)
-        }
-        if !resolved.isEmpty {
-            DisclosureGroup("Resolved (\(resolved.count))", isExpanded: $showResolved) {
-                ForEach(resolved) { thread in
+            VStack(alignment: .leading, spacing: Design.Space.s12) {
+                Rectangle().fill(Color.hairline).frame(height: 1)
+                Text("Comments")
+                    .font(Design.Text.heading(2))
+                    .foregroundStyle(Color.textPrimary)
+                    .accessibilityAddTraits(.isHeader)
+                ForEach(open) { thread in
                     CommentThreadView(thread: thread, rendered: rendered,
                                       reply: { composing = CommentDraft(thread: thread.id) },
                                       edit: { post in composing = CommentDraft(editing: post) })
                         .id(thread.id)
                 }
+                if !resolved.isEmpty {
+                    DisclosureGroup(isExpanded: $showResolved) {
+                        VStack(spacing: Design.Space.s12) {
+                            ForEach(resolved) { thread in
+                                CommentThreadView(thread: thread, rendered: rendered,
+                                                  reply: { composing = CommentDraft(thread: thread.id) },
+                                                  edit: { post in composing = CommentDraft(editing: post) })
+                                    .id(thread.id)
+                            }
+                        }
+                        .padding(.top, Design.Space.s8)
+                    } label: {
+                        Text("Resolved (\(resolved.count))").font(.subheadline).foregroundStyle(Color.textSecondary)
+                    }
+                    .tint(Color.textSecondary)
+                    .frame(minHeight: 44)
+                }
             }
-            .frame(minHeight: 44)
         }
     }
 
@@ -171,23 +207,34 @@ struct OverwrittenNotice: View {
     @State private var open = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("\(overwritten.lines) lines you saved at \(Stamp.short(overwritten.ts)) were dropped by a later write.",
-                  systemImage: "exclamationmark.triangle")
-                .foregroundStyle(.orange)
-            DisclosureGroup("What changed", isExpanded: $open) {
-                ScrollView(.horizontal) {
-                    Text(overwritten.diff).font(.caption.monospaced()).textSelection(.enabled)
-                }
-            }
-            .frame(minHeight: 44)
+        VStack(alignment: .leading, spacing: Design.Space.s8) {
+            Text(overwritten.lines == 1
+                 ? "1 line you saved at \(Stamp.short(overwritten.ts)) was dropped by a later write."
+                 : "\(overwritten.lines) lines you saved at \(Stamp.short(overwritten.ts)) were dropped by a later write.")
+                .foregroundStyle(Color.textPrimary)
             Button("Restore yours") {
                 Task { _ = await docs.save(path: path, text: overwritten.text, sha: sha) }
             }
-            .buttonStyle(.bordered)
+            .compactPrimary()
+            DisclosureGroup(isExpanded: $open) {
+                ScrollView(.horizontal) {
+                    Text(overwritten.diff)
+                        .font(Design.Text.code)
+                        .foregroundStyle(Color.textPrimary)
+                        .textSelection(.enabled)
+                        .padding(Design.Space.s12)
+                }
+                .elevatedBlock()
+                .padding(.top, Design.Space.s8)
+            } label: {
+                Text("What changed").font(.footnote).foregroundStyle(Color.textSecondary)
+            }
+            .tint(Color.textSecondary)
+            .frame(minHeight: 44)
         }
-        .padding(10)
-        .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 10))
+        .padding(.leading, Design.Space.s12)
+        .overlay(alignment: .leading) { AccentBar(color: .warning) }
+        .accessibilityElement(children: .contain)
     }
 }
 
@@ -215,8 +262,14 @@ struct DocumentEditor: View {
     var body: some View {
         NavigationStack {
             TextEditor(text: $text)
-                .font(.system(.body, design: .monospaced))
-                .padding(.horizontal, 8)
+                .font(Design.Text.code)
+                .lineSpacing(Design.Text.lineSpacing)
+                .foregroundStyle(Color.textPrimary)
+                .scrollContentBackground(.hidden)
+                .frame(maxWidth: Design.measure)
+                .padding(.horizontal, Design.Space.s12)
+                .frame(maxWidth: .infinity)
+                .background(Color.canvas)
                 .accessibilityLabel("Markdown of \(path)")
                 .navigationTitle(path)
                 #if os(iOS)
@@ -230,11 +283,8 @@ struct DocumentEditor: View {
                         Button("Save") { save(over: sha) }.disabled(saving || text == original)
                     }
                 }
-                .safeAreaInset(edge: .bottom) {
-                    if let problem {
-                        Text(problem).font(.footnote).foregroundStyle(.red).padding(8).frame(maxWidth: .infinity)
-                            .background(.regularMaterial)
-                    }
+                .safeAreaBar(edge: .bottom) {
+                    if let problem { DocumentStatus(text: problem, color: Color.danger) }
                 }
                 .confirmationDialog("Drop your changes to \(path)?", isPresented: $leaving, titleVisibility: .visible) {
                     Button("Discard changes", role: .destructive) { dismiss() }
@@ -284,38 +334,63 @@ struct StaleSaveSheet: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text(conflict.message)
+                VStack(alignment: .leading, spacing: Design.Space.s16) {
+                    Text(conflict.message).foregroundStyle(Color.textPrimary)
                     if let diff = conflict.diff, !diff.isEmpty {
-                        Text("What it has now that your text has not:").font(.subheadline.weight(.semibold))
-                        ScrollView(.horizontal) {
-                            Text(diff).font(.caption.monospaced()).textSelection(.enabled).padding(8)
+                        VStack(alignment: .leading, spacing: Design.Space.s8) {
+                            Text("What it has now that your text has not:")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(Color.textSecondary)
+                            ScrollView(.horizontal) {
+                                Text(diff)
+                                    .font(Design.Text.code)
+                                    .foregroundStyle(Color.textPrimary)
+                                    .textSelection(.enabled)
+                                    .padding(Design.Space.s12)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .elevatedBlock()
                         }
-                        .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
                     }
                 }
-                .padding()
+                .readingColumn()
+                .padding(.vertical, Design.Space.s16)
             }
             .navigationTitle("It changed meanwhile")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
-            .safeAreaInset(edge: .bottom) {
-                VStack(spacing: 8) {
-                    Button("Replace it with my text") {
+            .safeAreaBar(edge: .bottom) {
+                VStack(spacing: Design.Space.s8) {
+                    Button {
                         dismiss()
                         replace()
+                    } label: {
+                        Text("Replace it with my text").frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
-                    Button("Take its version (drop my edit)", role: .destructive) {
+                    .buttonStyle(.glassProminent)
+                    .tint(Color.brand)
+                    .foregroundStyle(Color.onAccent)
+                    Button(role: .destructive) {
                         dismiss()
                         takeTheirs()
+                    } label: {
+                        Text("Take its version (drop my edit)").frame(maxWidth: .infinity)
                     }
-                    Button("Keep editing") { dismiss() }
+                    .buttonStyle(.glass)
+                    .foregroundStyle(Color.danger)
+                    Button {
+                        dismiss()
+                    } label: {
+                        Text("Keep editing").frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.glass)
+                    .foregroundStyle(Color.brand)
                 }
+                .controlSize(.large)
+                .frame(maxWidth: Design.measure)
+                .padding(Design.Space.s16)
                 .frame(maxWidth: .infinity)
-                .padding()
-                .background(.regularMaterial)
             }
         }
         .sheetFrame()
@@ -339,6 +414,7 @@ struct DocumentSelectSheet: View {
                                                                             : String(localized: "+ Quote"),
                                onQuote: reply,
                                onComment: screen.archived ? nil : { _, range in commentOn(range) })
+                .background(Color.canvas)
                 .navigationTitle("Select text")
                 #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)
@@ -369,5 +445,59 @@ struct DocumentSelectSheet: View {
         guard let anchor = Anchoring.anchor(in: text, range: range) else { return }
         dismiss()
         comment(anchor)
+    }
+}
+
+/// The threads a tap on a commented passage opens.
+struct TappedThreads: Identifiable {
+    let ids: [String]
+    var id: String { ids.joined(separator: ",") }
+}
+
+/// What a write answered, or how it failed, floating over the bottom of the page.
+struct DocumentStatus: View {
+    let text: String
+    let color: Color
+
+    var body: some View {
+        Text(text)
+            .font(.footnote)
+            .foregroundStyle(color)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, Design.Space.s12)
+            .padding(.vertical, Design.Space.s8)
+            .glassEffect(.regular, in: .rect(cornerRadius: Design.Radius.chip, style: .continuous))
+            .padding(.horizontal, Design.Space.s16)
+            .padding(.bottom, Design.Space.s8)
+            .frame(maxWidth: .infinity)
+            .accessibilityAddTraits(.updatesFrequently)
+    }
+}
+
+extension View {
+    /// The document's column (spec §5): at most `Design.measure` wide and centred, with the screen's gutter, or the
+    /// phone's in the narrow inspector, where a wider one would take a sixth of the text.
+    func readingColumn() -> some View {
+        modifier(ReadingColumn())
+    }
+
+    /// A thread's or a notice's one primary action: a small accent button with text that keeps its contrast.
+    func compactPrimary() -> some View {
+        buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .tint(Color.brand)
+            .foregroundStyle(Color.onAccent)
+    }
+}
+
+private struct ReadingColumn: ViewModifier {
+    @State private var width: CGFloat = 0
+
+    func body(content: Content) -> some View {
+        content
+            .frame(maxWidth: Design.measure, alignment: .leading)
+            .padding(.horizontal, width > 0 && width < 400 ? Design.Space.s16 : Design.Space.gutter)
+            .frame(maxWidth: .infinity)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
     }
 }

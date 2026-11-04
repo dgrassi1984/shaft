@@ -1,7 +1,6 @@
 import ImageIO
 import SHAFTKit
 import SwiftUI
-import UniformTypeIdentifiers
 
 /// Files the chat shows (§4.4 attachments, §8): fetched once with the bearer, kept for the session, pictures downsized
 /// here (the server sends no thumbnails), and opened in Quick Look, whose share button saves or sends them on.
@@ -125,109 +124,5 @@ final class FilePreview {
 
     func open(local: URL) {
         url = local
-    }
-}
-
-/// A message's files: pictures as thumbnails (space kept while they load), the rest as chips. A tap opens Quick Look.
-struct AttachmentsView: View {
-    let attachments: [Attachment]
-    @Environment(InstancesStore.self) private var store
-    @Environment(FilePreview.self) private var preview
-
-    var body: some View {
-        if !attachments.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(Array(attachments.enumerated()), id: \.offset) { _, attachment in
-                    if attachment.image {
-                        Button { preview.open(attachment, client: store.client) } label: {
-                            Thumbnail(attachment: attachment)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Picture \(attachment.name)")
-                        .accessibilityHint("Opens it")
-                    } else {
-                        Button { preview.open(attachment, client: store.client) } label: {
-                            FileChip(name: attachment.name, bytes: attachment.bytes,
-                                     busy: preview.loading == attachment.name)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityHint("Opens it")
-                    }
-                }
-            }
-        }
-    }
-}
-
-struct Thumbnail: View {
-    let attachment: Attachment
-    @Environment(InstancesStore.self) private var store
-    @Environment(\.displayScale) private var scale
-    @State private var image: CGImage?
-    @State private var failed: String?
-    private let side: CGFloat = 220
-
-    var body: some View {
-        Group {
-            if let image {
-                Image(decorative: image, scale: scale)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: side, maxHeight: side)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-            } else if let failed {
-                FileChip(name: attachment.name, bytes: attachment.bytes, busy: false, note: failed)
-            } else {
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(Color.secondary.opacity(0.15))
-                    .frame(width: side, height: side * 0.62)
-                    .overlay { ProgressView() }
-            }
-        }
-        .task(id: attachment.url) {
-            do {
-                image = try await AttachmentLoader.shared.thumbnail(attachment.url, client: store.client, side: side,
-                                                                    scale: scale)
-            } catch is CancellationError {
-            } catch {
-                failed = APIError.from(error).message
-            }
-        }
-    }
-}
-
-/// A file as a chip: an icon by its kind, its name and size.
-struct FileChip: View {
-    let name: String
-    let bytes: Int
-    var busy = false
-    var note: String?
-
-    var body: some View {
-        HStack(spacing: 8) {
-            if busy {
-                ProgressView().controlSize(.small)
-            } else {
-                Image(systemName: FileChip.symbol(for: name)).foregroundStyle(.secondary).accessibilityHidden(true)
-            }
-            VStack(alignment: .leading, spacing: 1) {
-                Text(name).lineLimit(1).truncationMode(.middle)
-                Text(note ?? DocsTree.size(bytes)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-            }
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .frame(minHeight: 44)
-        .background(Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
-        .accessibilityElement(children: .combine)
-    }
-
-    static func symbol(for name: String) -> String {
-        let type = UTType(filenameExtension: (name as NSString).pathExtension)
-        if type?.conforms(to: .image) == true { return "photo" }
-        if type?.conforms(to: .pdf) == true { return "doc.richtext" }
-        if type?.conforms(to: .text) == true || type?.conforms(to: .sourceCode) == true { return "doc.text" }
-        if type?.conforms(to: .archive) == true { return "doc.zipper" }
-        return "doc"
     }
 }
