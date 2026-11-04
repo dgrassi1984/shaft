@@ -21,6 +21,19 @@ struct DesignSystemTests {
         }
     }
 
+    /// The selected row of a chat list (`rowSelected`, the `hairline` set): bug of 2026-11-04, grey text on the system
+    /// periwinkle selection. Its text stays `textPrimary` and `textSecondary` at full contrast, in both modes.
+    @Test func aSelectedRowKeepsItsTextReadable() throws {
+        for dark in [false, true] {
+            let base = try luminance("hairline", dark: dark)
+            for token in ["textPrimary", "textSecondary"] {
+                let ink = try luminance(token, dark: dark)
+                let ratio = (max(ink, base) + 0.05) / (min(ink, base) + 0.05)
+                #expect(ratio >= 4.5, "\(token) on the selected row, dark=\(dark): \(ratio)")
+            }
+        }
+    }
+
     @Test func screensUseOnlyTheDesignSystem() throws {
         let rules = [
             ("rgb", #"\bColor\s*\(\s*red\s*:"#),

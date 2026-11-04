@@ -56,9 +56,6 @@ struct ChatScreen: View {
                 // The feed fades out before the header and the composer: nothing is legible behind the glass.
                 content
                     .scrollEdgeEffectStyle(.soft, for: .all)
-                    #if os(macOS)
-                    .scrollEdgeEffectHidden(true, for: .all)    // it drew a hard line under a window not in front
-                    #endif
                     .headerEdge()
                     .safeAreaBar(edge: .bottom, spacing: 0) {
                         VStack(spacing: 0) {
@@ -85,6 +82,7 @@ struct ChatScreen: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #else
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)     // no lighter band and line at the fade's foot
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { columnWidth = $0 }
         #endif
         .navigationTitle(chat.instance)
@@ -245,12 +243,11 @@ struct ChatScreen: View {
         ToolbarItem(placement: .principal) {
             ChatTitle(instance: chat.instance, archived: chat.cid != nil)
                 #if os(macOS)
-                .titleCapsule(limit: columnWidth - 2 * MacChrome.trailingControls)
+                .titleWidth(limit: MacChrome.titleLimit(column: columnWidth, sidebar: shell?.sidebarWidth ?? 0,
+                                                        earlier: chat.cid != nil))
                 #endif
         }
-        #if os(macOS)
-        .sharedBackgroundVisibility(.hidden)     // its glass drew a short name as a circle, clipping the state
-        #endif
+        .sharedBackgroundVisibility(.hidden)     // its own capsule: the toolbar's drew a short name as a circle
         ToolbarItemGroup(placement: .primaryAction) {
             Button { screen.showDocuments.toggle() } label: { Image(systemName: "doc.text") }
                 .accessibilityLabel("Documents")
@@ -316,7 +313,7 @@ struct ChatScreen: View {
     }
 }
 
-/// The header's title: the name, then one status line, which drops its optional parts (the model, then the time)
+/// The header's title, in a glass capsule: the name, then one status line, which drops its optional parts (the model, then the time)
 /// rather than truncate; behind a tap, what a message does now when it is busy, its model and its spend. Text stops
 /// growing at the largest size two lines fit in the bar.
 struct ChatTitle: View {
@@ -334,7 +331,7 @@ struct ChatTitle: View {
                     .font(.headline)
                     .foregroundStyle(Color.textPrimary)
                     .lineLimit(1)
-                if let row {
+                if let row, !archived {
                     ViewThatFits(in: .horizontal) {
                         status(row, time: true, model: true)
                         status(row, time: true, model: false)
@@ -344,10 +341,14 @@ struct ChatTitle: View {
                     .foregroundStyle(Color.textSecondary)
                 }
             }
-            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-            .contentShape(Rectangle())
+            .dynamicTypeSize(...DynamicTypeSize.xxLarge)
+            .padding(.horizontal, Design.Space.s12)
+            .frame(minHeight: Design.Header.height)
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        // A capsule of its own, as tall as the header's buttons: the name is never bare over the chat (2026-11-04).
+        .glassSurface(in: Capsule())
         .accessibilityElement(children: .combine)
         .accessibilityHint(row?.busyNote != nil ? "Says what a message does now" : "Shows its model")
         .popover(isPresented: $showNote) {

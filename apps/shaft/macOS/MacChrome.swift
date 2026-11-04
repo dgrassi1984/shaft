@@ -1,25 +1,28 @@
 import AppKit
 import SwiftUI
 
-// The Mac's window chrome over Shared's views: the chat title's capsule, the inspector's toolbar, the sidebar's quiet
-// selection.
+// The Mac's window chrome over Shared's views: the room the chat's title has, the inspector's toolbar, a sheet's title.
 
 extension View {
-    /// The chat's title in the toolbar: a glass capsule of its own, as tall as the toolbar's glass buttons, so the name
-    /// never sits bare over the chat (decided 2026-11-04, beyond spec §2.4). `limit` is what the column leaves it.
-    func titleCapsule(limit: CGFloat) -> some View {
-        WidthLimit(limit: max(0, limit - Design.Space.s16 * 2)) { self }
-            .padding(.horizontal, Design.Space.s16)
-            .frame(height: Design.Header.height)
-            .glassEffect(.regular, in: .capsule)
-            .fixedSize()
+    /// The chat's title in the toolbar at its own width, up to `limit`.
+    func titleWidth(limit: CGFloat) -> some View {
+        WidthLimit(limit: max(0, limit)) { self }.fixedSize()
     }
 }
 
 enum MacChrome {
-    /// The toolbar's glass group of three buttons at the chat's right, with its gap: the title stays clear of it on
-    /// both sides, being centred.
-    static let trailingControls: CGFloat = 124
+    /// What the toolbar keeps at the chat's ends: the three buttons at its right, and at its left, with the sidebar
+    /// collapsed, the window's buttons and the sidebar's two; each with its gap.
+    private static let trailingControls: CGFloat = 132
+    private static let collapsedLeadingControls: CGFloat = 180
+    private static let backButton: CGFloat = 44
+
+    /// How wide the title may be in a chat column: it is centred, so the wider end counts twice. Past this the toolbar
+    /// hides the buttons behind its overflow.
+    static func titleLimit(column: CGFloat, sidebar: CGFloat, earlier: Bool) -> CGFloat {
+        let leading = (sidebar > 0 ? 0 : collapsedLeadingControls) + (earlier ? backButton : 0)
+        return column - 2 * max(leading, trailingControls)
+    }
 
     // writingToolsAffordance: an `NSTextView` that takes Writing Tools draws AppKit's floating Siri tile for it
     // (`NSCampoLightweightUIController`: a child window at the text's gutter, which stayed behind at stale places, on the
@@ -64,6 +67,14 @@ private struct WidthLimit: Layout {
     }
 }
 
+extension View {
+    /// A page in the inspector: `InspectorHeader` has its back button, and the toolbar draws no band or line over it.
+    func inspectorPage() -> some View {
+        navigationBarBackButtonHidden(true)
+            .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+    }
+}
+
 /// A page of the inspector's header, in its part of the window's toolbar: back (or close), the page's name, its actions
 /// at the right. A navigation stack in an inspector puts its back button in the toolbar's leading end, over the chat,
 /// and shows no title.
@@ -89,21 +100,5 @@ struct InspectorHeader<Actions: View>: ToolbarContent {
         .sharedBackgroundVisibility(.hidden)
         ToolbarSpacer(.flexible, placement: .primaryAction)
         ToolbarItemGroup(placement: .primaryAction) { actions() }
-    }
-}
-
-/// Put in a list row: the list's own selection stops drawing, since the row draws a quiet one of its own
-/// (`Color.rowSelected`). The selection, its keys and its accessibility stay the list's. Decided 2026-11-04: the
-/// system's fill is a solid block of the accent that greyed text cannot be read on.
-struct QuietListSelection: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView { Finder() }
-    func updateNSView(_ view: NSView, context: Context) {}
-
-    private final class Finder: NSView {
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            let list = sequence(first: superview) { $0?.superview }.compactMap { $0 as? NSTableView }.first
-            list?.selectionHighlightStyle = .none
-        }
     }
 }

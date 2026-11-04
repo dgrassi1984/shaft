@@ -183,7 +183,7 @@ struct DocsListView: View {
             #endif
         }
         #if os(macOS)
-        .navigationBarBackButtonHidden(true)
+        .inspectorPage()
         #endif
     }
 

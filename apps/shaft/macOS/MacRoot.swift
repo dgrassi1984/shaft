@@ -149,7 +149,6 @@ struct MacChats: View {
         .background(WindowReader { window in
             presence.track(window)
             window?.titlebarSeparatorStyle = .none   // the feed fades under the header (spec §2.4), not at a line
-            removeSeparators(in: window?.contentView)
         })
         .onChange(of: presence.width) { fitColumns() }
         .onChange(of: sidebarWidth) { fitColumns() }
@@ -188,15 +187,6 @@ struct MacChats: View {
         }
     }
 
-    /// Each column of a split view asks for its own title bar line: none of them.
-    private func removeSeparators(in view: NSView?) {
-        guard let view else { return }
-        if let split = view as? NSSplitView, let controller = split.delegate as? NSSplitViewController {
-            for item in controller.splitViewItems { item.titlebarSeparatorStyle = .none }
-        }
-        view.subviews.forEach(removeSeparators)
-    }
-
     /// Whether the sidebar has to leave room for the documents in this window.
     private var tight: Bool {
         (state.screen?.showDocuments ?? false) && presence.width < ChatShell.threeColumnWidth(sidebar: sidebarWidth)
@@ -217,11 +207,12 @@ struct MacChats: View {
         }
     }
 
-    /// The sidebar asked for while it has yielded (its button, ⌃⌘S): the three do not fit, so the documents give way
-    /// to it. They come back from the toolbar, and the sidebar yields again then.
+    /// The sidebar asked for where it does not fit beside the documents (its button, ⌃⌘S; only that shows it here, the
+    /// window's width having hidden it): the documents give way to it. They come back from the toolbar, and the sidebar
+    /// yields again then.
     private func sidebarAsked() {
         state.shell.sidebarWidth = columns == .detailOnly ? 0 : sidebarWidth
-        guard columns != .detailOnly, sidebarYielded, tight else { return }
+        guard columns != .detailOnly, tight else { return }
         sidebarYielded = false
         state.screen?.showDocuments = false
     }

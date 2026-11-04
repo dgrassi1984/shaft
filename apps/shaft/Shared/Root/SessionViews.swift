@@ -294,9 +294,6 @@ struct InstancesList: View {
                     .tag(row.name)
                     .listRowSeparator(.hidden)
                     .listRowBackground(rowFill(row))
-                    #if os(macOS)
-                    .background(QuietListSelection())
-                    #endif
             }
             if store.loaded && store.instances.isEmpty {
                 Text("No instances yet. They are created from the terminal with `shaft new <name>`.")
@@ -306,6 +303,12 @@ struct InstancesList: View {
         #if os(iOS)
         .scrollContentBackground(.hidden)
         .background(Color.elevated)
+        #endif
+        // With a keyboard attached the system rings the row in focus in the tint: the fill says where it is already.
+        .focusEffectDisabled()
+        .tint(.clear)
+        #if os(macOS)
+        .background(QuietListSelection())
         #endif
         .overlay { if !store.loaded && store.error == nil { ProgressView() } }
         .refreshable { await store.refresh() }
@@ -324,3 +327,39 @@ struct InstancesList: View {
             .padding(.horizontal, Design.Space.s8)
     }
 }
+
+#if os(macOS)
+/// A Mac sidebar paints the selected row itself, in the accent, with its text turned to the selection's colours, and no
+/// SwiftUI modifier turns that off: its table keeps the selection and the arrow keys, and `rowFill` is all that shows.
+private struct QuietListSelection: NSViewRepresentable {
+    func makeNSView(context: Context) -> Finder { Finder() }
+    func updateNSView(_ view: Finder, context: Context) { view.apply() }
+
+    final class Finder: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            apply()
+            DispatchQueue.main.async { [weak self] in self?.apply() }       // the table may be added after this view
+        }
+
+        func apply() {
+            var ancestor = superview
+            while let view = ancestor {
+                if let table = Self.table(in: view) {
+                    table.selectionHighlightStyle = .none
+                    return
+                }
+                ancestor = view.superview
+            }
+        }
+
+        private static func table(in view: NSView) -> NSTableView? {
+            if let table = view as? NSTableView { return table }
+            for child in view.subviews {
+                if let table = table(in: child) { return table }
+            }
+            return nil
+        }
+    }
+}
+#endif

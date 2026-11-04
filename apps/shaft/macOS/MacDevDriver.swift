@@ -8,7 +8,7 @@ import SwiftUI
 /// menus, key equivalents, monitors and text views — so the Mac UI can be checked from a terminal. Each step is
 /// logged to stdout ("drive: …"). One step per line, `#` for a comment:
 ///
-///     activate                      bring the app to the front
+///     activate                      bring the app to the front, and again before each capture
 ///     float                         keep the window above other apps' windows (shown, not in front)
 ///     open <instance>               show that chat
 ///     key <combo>                   return, shift+return, option+return, cmd+return, option+down, cmd+., slash, …
@@ -35,12 +35,14 @@ import SwiftUI
 ///     until                         wait for the chat shown to have its feed; log how long it took
 ///     selection                     log what is selected in the message that has the keyboard
 ///     cleardraft                    empty the composer
-///     layout                        log the width of each column
+///     layout                        log the width of each column, and what each split item is limited to
+///     divider <width>               drag the inspector's divider so the inspector is that wide
 ///     state                         log the chat's draft, quotes, selection and focus
 ///     shot <name>                   screenshot of the window to $SHAFT_DEV_DIR/<name>.png
 ///     close / notify <instance>     close the window / act as a click on a notification about <instance>
 ///     nofocus                       take the keyboard from whatever has it
 ///     capture <name>                the window as the screen shows it (with a terminal that answers, see the step)
+///     capturewindow <title> | <name>  the same for another window (Settings)
 ///     appearance light|dark         draw the app in that appearance (the system's stays as it is)
 ///     blocks                        log each code block and table: its frame and how wide its text is
 ///     scrollblock <n> <x>           scroll the n-th block sideways to x
@@ -281,6 +283,19 @@ enum MacDevDriver {
             let pointer = NSEvent.mouseLocation
             log("window [key \(window?.isKeyWindow ?? false) occluded \(!(window?.occlusionState.contains(.visible) ?? false)) active \(NSApp.isActive)] pointer \(Int(pointer.x)),\(Int(pointer.y)) in window \(window?.frame.contains(pointer) ?? false)")
             log("CAPTURE \(rest) \(window?.windowNumber ?? 0)")
+            let start = Date()
+            while !FileManager.default.fileExists(atPath: ack.path), Date().timeIntervalSince(start) < 5 {
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+        case "capturewindow":
+            // `<title> | <name>`: as `capture`, for the visible window with that title (Settings).
+            let parts = rest.components(separatedBy: " | ")
+            guard parts.count == 2, let other = NSApp.windows.first(where: { $0.isVisible && $0.title == parts[0] }) else {
+                return log("no window \(rest)")
+            }
+            let ack = dir.appending(path: "\(parts[1]).ack")
+            try? FileManager.default.removeItem(at: ack)
+            log("CAPTURE \(parts[1]) \(other.windowNumber)")
             let start = Date()
             while !FileManager.default.fileExists(atPath: ack.path), Date().timeIntervalSince(start) < 5 {
                 try? await Task.sleep(for: .milliseconds(50))

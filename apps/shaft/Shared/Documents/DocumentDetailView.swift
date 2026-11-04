@@ -77,7 +77,7 @@ struct DocumentDetailView: View {
         #endif
         .toolbar { toolbar }
         #if os(macOS)
-        .navigationBarBackButtonHidden(true)
+        .inspectorPage()
         #endif
         .task(id: path) { await docs.load(path) }
         .onChange(of: doc?.text, initial: true) { _, text in
@@ -433,9 +433,11 @@ struct DocumentSelectSheet: View {
                                onQuote: reply,
                                onComment: screen.archived ? nil : { _, range in commentOn(range) })
                 .background(Color.canvas)
-                .navigationTitle("Select text")
                 #if os(iOS)
+                .navigationTitle("Select text")
                 .navigationBarTitleDisplayMode(.inline)
+                #else
+                .sheetTitle("Select text")
                 #endif
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
