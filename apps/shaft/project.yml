@@ -48,7 +48,7 @@ targets:
       - path: iOS
         excludes: ["**/*.md"]
       - path: Shared
-        excludes: ["**/*.md"]
+        excludes: ["**/*.md", "**/*.py"]
     dependencies:
       - package: SHAFTKit
       - package: MarkdownUI
@@ -59,7 +59,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: io.github.dgrassi1984.shaft
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: NO
-        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
       path: Generated/iOS-Info.plist
       properties:
@@ -109,7 +109,7 @@ targets:
       - path: macOS
         excludes: ["**/*.md"]
       - path: Shared
-        excludes: ["**/*.md"]
+        excludes: ["**/*.md", "**/*.py"]
     dependencies:
       - package: SHAFTKit
       - package: MarkdownUI
@@ -119,7 +119,7 @@ targets:
         PRODUCT_NAME: SHAFT
         PRODUCT_BUNDLE_IDENTIFIER: io.github.dgrassi1984.shaft
         ENABLE_HARDENED_RUNTIME: YES
-        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     info:
       path: Generated/macOS-Info.plist
       properties:

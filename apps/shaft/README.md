@@ -39,6 +39,8 @@ xcodegen generate                       # makes SHAFT.xcodeproj and Generated/ f
 
 Run `xcodegen generate` again after any change to `project.yml` or after adding or removing a source file.
 
+Regenerate the shared app icon catalog from the PWA mark with `python3 apps/shaft/Shared/make_icons.py` from the repository root.
+
 Unsigned builds of every target (what agents and CI run):
 
 ```bash

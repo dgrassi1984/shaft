@@ -36,7 +36,9 @@ def _colour(x: float, y: float, bleed: bool, glyph: float) -> tuple[int, int, in
     return (0, 0, 0, 0)
 
 
-def png(size: int, bleed: bool = False, glyph: float = 1.0) -> bytes:
+def png(size: int, bleed: bool = False, glyph: float = 1.0, *, inset: float = 0.0) -> bytes:
+    """Draw the icon; inset shrinks the whole drawing by that fraction on each side."""
+    scale = 1 - 2 * inset
     rows = []
     for py in range(size):
         row = bytearray([0])
@@ -44,7 +46,10 @@ def png(size: int, bleed: bool = False, glyph: float = 1.0) -> bytes:
             acc = [0, 0, 0, 0]
             for sy in range(SS):
                 for sx in range(SS):
-                    c = _colour((px + (sx + .5) / SS) * 64 / size, (py + (sy + .5) / SS) * 64 / size, bleed, glyph)
+                    x, y = (px + (sx + .5) / SS) * 64 / size, (py + (sy + .5) / SS) * 64 / size
+                    if inset:
+                        x, y = 32 + (x - 32) / scale, 32 + (y - 32) / scale
+                    c = _colour(x, y, bleed, glyph)
                     for k in range(3):
                         acc[k] += c[k] * c[3]
                     acc[3] += c[3]
