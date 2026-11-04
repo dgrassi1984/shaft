@@ -38,7 +38,11 @@ import SwiftUI
 ///     state                         log the chat's draft, quotes, selection and focus
 ///     shot <name>                   screenshot of the window to $SHAFT_DEV_DIR/<name>.png
 ///     close / notify <instance>     close the window / act as a click on a notification about <instance>
+///     appearance light|dark         draw the app in that appearance (the system's stays as it is)
+///     blocks                        log each code block and table: its frame and how wide its text is
+///     scrollblock <n> <x>           scroll the n-th block sideways to x
 ///     wait <seconds>
+///     quit
 @MainActor
 enum MacDevDriver {
     /// The app's own key monitor ("/"), run before a combo is routed, as AppKit runs it for a queued event.
@@ -230,6 +234,26 @@ enum MacDevDriver {
             log("pasted files: \(field.pasteFiles(from: board))")
         case "close":
             window?.performClose(nil)
+        case "appearance":
+            NSApp.appearance = NSAppearance(named: rest == "dark" ? .darkAqua : .aqua)
+        case "blocks":
+            guard let root = window?.contentView else { return }
+            var index = 0
+            walk(root) { view in
+                guard let block = view as? MessageBlockView else { return }
+                log("block \(index): \(block.driveDescription)")
+                index += 1
+            }
+        case "scrollblock":
+            let parts = rest.split(separator: " ").compactMap { Double($0) }
+            guard parts.count == 2, let root = window?.contentView else { return log("scrollblock <n> <x>") }
+            var blocks: [MessageBlockView] = []
+            walk(root) { view in if let block = view as? MessageBlockView { blocks.append(block) } }
+            guard Int(parts[0]) < blocks.count else { return log("no block \(rest)") }
+            blocks[Int(parts[0])].scrollSideways(to: parts[1])
+        case "quit":
+            log("done")
+            NSApp.terminate(nil)
         case "notify":
             // What `userNotificationCenter(_:didReceive:)` does with a click on a notification about `rest`.
             model.notificationTapped(instance: rest)
@@ -296,7 +320,11 @@ enum MacDevDriver {
         walk(root) { view in
             guard found == nil, let view = view as? MessageNSTextView else { return }
             let range = (view.string as NSString).range(of: text)
-            if range.location != NSNotFound { found = (view, range) }
+            guard range.location != NSNotFound, let layout = view.layoutManager else { return }
+            // A message's text views share their text: the one that lays this part of it out.
+            let glyph = layout.glyphIndexForCharacter(at: range.location)
+            let owner = layout.textContainer(forGlyphAt: glyph, effectiveRange: nil)?.textView as? MessageNSTextView
+            found = (owner ?? view, range)
         }
         return found
     }
