@@ -18,6 +18,8 @@ struct DocumentDetailView: View {
     @State private var showResolved = false
     /// The threads of a passage tapped in the document.
     @State private var tapped: TappedThreads?
+    /// The answer of a write made on this page, while it shows.
+    @State private var said: String?
 
     private var doc: DocumentDetail? { docs.open?.path == path ? docs.open : nil }
 
@@ -98,11 +100,18 @@ struct DocumentDetailView: View {
             Text("\(screen.instance) hears of it with your next message. Earlier versions stay in its git history.")
         }
         .safeAreaBar(edge: .bottom) {
-            if let said = docs.said {
+            if let said {
                 DocumentStatus(text: said, color: Color.textSecondary)
             } else if let error = docs.error, doc != nil {
                 DocumentStatus(text: error.message, color: Color.danger)
             }
+        }
+        .onChange(of: docs.said) { _, new in said = new }
+        .task(id: said) {
+            // A write's answer shows for a moment: left up it hid the page, and any failure after it.
+            guard said != nil else { return }
+            try? await Task.sleep(for: .seconds(6))
+            if !Task.isCancelled { said = nil }
         }
     }
 
@@ -199,7 +208,9 @@ struct OverwrittenNotice: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Design.Space.s8) {
-            Text("\(overwritten.lines) lines you saved at \(Stamp.short(overwritten.ts)) were dropped by a later write.")
+            Text(overwritten.lines == 1
+                 ? "1 line you saved at \(Stamp.short(overwritten.ts)) was dropped by a later write."
+                 : "\(overwritten.lines) lines you saved at \(Stamp.short(overwritten.ts)) were dropped by a later write.")
                 .foregroundStyle(Color.textPrimary)
             Button("Restore yours") {
                 Task { _ = await docs.save(path: path, text: overwritten.text, sha: sha) }
@@ -443,7 +454,7 @@ struct TappedThreads: Identifiable {
     var id: String { ids.joined(separator: ",") }
 }
 
-/// What a write answered, or how it failed, in a line over the bottom of the page.
+/// What a write answered, or how it failed, floating over the bottom of the page.
 struct DocumentStatus: View {
     let text: String
     let color: Color
@@ -452,8 +463,14 @@ struct DocumentStatus: View {
         Text(text)
             .font(.footnote)
             .foregroundStyle(color)
-            .padding(Design.Space.s8)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, Design.Space.s12)
+            .padding(.vertical, Design.Space.s8)
+            .glassEffect(.regular, in: .rect(cornerRadius: Design.Radius.chip, style: .continuous))
+            .padding(.horizontal, Design.Space.s16)
+            .padding(.bottom, Design.Space.s8)
             .frame(maxWidth: .infinity)
+            .accessibilityAddTraits(.updatesFrequently)
     }
 }
 

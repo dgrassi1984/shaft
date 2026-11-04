@@ -164,21 +164,28 @@ struct PostView: View {
         return nil
     }
 
+    private var author: Text {
+        Text(post.by == "operator" ? String(localized: "You") : post.by)
+            .font(Design.Text.pill)
+            .foregroundStyle(Color.textPrimary)
+    }
+
+    private var time: Text {
+        Text(Stamp.short(post.ts))
+            .font(Design.Text.metadata)
+            .foregroundStyle(Color.textSecondary)
+    }
+
+    private var state: Text {
+        Text(status.map { " · \($0)" } ?? "")
+            .font(Design.Text.metadata)
+            .foregroundStyle(post.mineUnsent ? Color.warning : Color.textSecondary)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: Design.Space.s4) {
-            HStack(alignment: .firstTextBaseline, spacing: Design.Space.s4) {
-                Text(post.by == "operator" ? String(localized: "You") : post.by)
-                    .font(Design.Text.pill)
-                    .foregroundStyle(Color.textPrimary)
-                Text(Stamp.short(post.ts))
-                    .font(Design.Text.metadata)
-                    .foregroundStyle(Color.textSecondary)
-                if let status {
-                    Text("· \(status)")
-                        .font(Design.Text.metadata)
-                        .foregroundStyle(post.mineUnsent ? Color.warning : Color.textSecondary)
-                }
-            }
+            // One Text, so at the largest sizes it wraps as a line rather than as columns.
+            Text("\(author) \(time)\(state)")
             MarkdownText(source: post.text)
         }
         .accessibilityElement(children: .contain)
@@ -216,6 +223,9 @@ struct CommentThreadsSheet: View {
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
+            }
+            .safeAreaBar(edge: .bottom) {
+                if let error = docs.error { DocumentStatus(text: error.message, color: Color.danger) }
             }
         }
         .sheetFrame()

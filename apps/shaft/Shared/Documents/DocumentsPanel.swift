@@ -136,6 +136,10 @@ struct DocsListView: View {
             } else if docs.list != nil && level.folders.isEmpty && level.docs.isEmpty {
                 ContentUnavailableView {
                     Label(folder.isEmpty ? "No documents yet." : "This folder is empty.", systemImage: "doc.text")
+                } actions: {
+                    if !screen.archived {
+                        Button("New document", action: newDocument).compactPrimary()
+                    }
                 }
             }
         }
@@ -194,6 +198,8 @@ struct DocRow: View {
     let comments: Int
     let count: Int?
     let tooBig: Bool
+    @ScaledMetric(relativeTo: .body) private var iconWidth = Design.Space.s24
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     private var details: String {
         var parts: [String] = []
@@ -205,16 +211,17 @@ struct DocRow: View {
     }
 
     var body: some View {
-        HStack(spacing: Design.Space.s12) {
+        let large = typeSize.isAccessibilitySize
+        HStack(alignment: large ? .firstTextBaseline : .center, spacing: Design.Space.s12) {
             Image(systemName: folder ? "folder" : "doc.text")
                 .foregroundStyle(Color.brand)
-                .frame(width: Design.Space.s24)
+                .frame(width: iconWidth)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: Design.Space.s4) {
                     Text(name)
                         .foregroundStyle(Color.textPrimary)
-                        .lineLimit(2)
+                        .lineLimit(large ? nil : 1)
                         .truncationMode(.middle)
                     if inChat {
                         Circle().fill(Color.brand).frame(width: 7, height: 7)
@@ -224,23 +231,29 @@ struct DocRow: View {
                 Text(details)
                     .font(Design.Text.metadata)
                     .foregroundStyle(Color.textSecondary)
+                if large { commentCount }
             }
             Spacer(minLength: 0)
-            if comments > 0 {
-                HStack(spacing: Design.Space.s4) {
-                    Image(systemName: "text.bubble")
-                    Text("\(comments)")
-                }
-                .font(Design.Text.pill)
-                .foregroundStyle(Color.brand)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("\(comments) open comments")
-            }
+            if !large { commentCount }
         }
         .frame(minHeight: 44)
         // The hairline starts under the name, whatever else the row holds.
-        .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] + Design.Space.s24 + Design.Space.s12 }
+        .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] + iconWidth + Design.Space.s12 }
         .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private var commentCount: some View {
+        if comments > 0 {
+            HStack(spacing: Design.Space.s4) {
+                Image(systemName: "text.bubble")
+                Text("\(comments)")
+            }
+            .font(Design.Text.pill)
+            .foregroundStyle(Color.brand)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(comments) open comments")
+        }
     }
 }
 
