@@ -1,6 +1,9 @@
 import Foundation
 import Observation
 import UserNotifications
+#if os(macOS)
+import AppKit
+#endif
 
 /// What both app entry points hold: the session (or why it could not open), the push token's way to the server, and
 /// the chat a notification tap asked for. The platform delegates (UIKit, AppKit) feed it; the UI reads it.
@@ -24,6 +27,7 @@ public final class AppModel {
             try PairingStore(store: KeychainStore.forMainBundle()).forgetOnFirstLaunch(defaults: .standard)
             #endif
             session = try SHAFTSession.standard()
+            connectBadge()
         } catch {
             startupError = "SHAFT could not start: \(error.localizedDescription)"
         }
@@ -31,6 +35,11 @@ public final class AppModel {
 
     public init(session: SHAFTSession) {
         self.session = session
+        connectBadge()
+    }
+
+    private func connectBadge() {
+        session?.onBadge = { [weak self] count in self?.setBadge(count) }
     }
 
     /// Ask for alerts, badges and sounds. True when allowed; the caller then registers for remote notifications.
@@ -69,5 +78,8 @@ public final class AppModel {
     /// Show the server's badge (§12) on the app icon.
     public func setBadge(_ count: Int) {
         UNUserNotificationCenter.current().setBadgeCount(count) { _ in }
+        #if os(macOS)
+        NSApp.dockTile.badgeLabel = count > 0 ? "\(count)" : nil
+        #endif
     }
 }

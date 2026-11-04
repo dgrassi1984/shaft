@@ -9,6 +9,39 @@ struct StoresTests {
                        drafts: DraftStore(directory: folder.appending(path: "drafts")))
     }
 
+    /// Bug: a push left badge 1 on the icon while the app already had 0 unread.
+    @Test func aStalePushBadgeIsClearedByEveryAnswerEvenWhenZeroIsUnchanged() async throws {
+        let folder = try temporaryFolder("badge")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let server = StubServer { _ in .notModified }
+        let store = try makeStore(server, folder: folder)
+        var reported: [Int] = []
+        store.onBadge = { reported.append($0) }
+
+        // A 304 before any count is known cannot confirm the initial zero.
+        await store.refresh()
+        #expect(reported.isEmpty)
+
+        server.setAnswer { _ in
+            .json(200, #"{"instances": [], "badge": 0}"#, headers: ["ETag": "\"zero\""])
+        }
+        await store.refresh()
+        #expect(store.badge == 0)
+        #expect(reported == [0])
+        await store.refresh()
+        #expect(reported == [0, 0])
+
+        server.setAnswer { _ in .notModified }
+        await store.refresh()
+        #expect(server.requests.last?.header("If-None-Match") == "\"zero\"")
+        #expect(reported == [0, 0, 0])
+
+        server.setAnswer { _ in .json(200, #"{"unread": false, "badge": 0}"#) }
+        #expect(await store.markSeen("wren", version: "shown"))
+        #expect(store.badge == 0)
+        #expect(reported == [0, 0, 0, 0])
+    }
+
     @Test func seenPostsTheVersionShownAndAStaleOneIsNotAnError() async throws {
         let folder = try temporaryFolder("stores")
         defer { try? FileManager.default.removeItem(at: folder) }

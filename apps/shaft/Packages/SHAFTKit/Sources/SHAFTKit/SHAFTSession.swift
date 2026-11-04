@@ -14,6 +14,8 @@ public final class SHAFTSession {
     public private(set) var pushStatus: String?
 
     @ObservationIgnored public let pairing: PairingStore
+    /// The server's confirmed badge, or zero when unpaired, independent of the app's windows.
+    @ObservationIgnored public var onBadge: (@MainActor (Int) -> Void)?
     @ObservationIgnored private let outbox: Outbox
     @ObservationIgnored private let drafts: DraftStore
     @ObservationIgnored private let session: URLSession
@@ -85,19 +87,23 @@ public final class SHAFTSession {
     private func open(_ credential: ServerCredential) throws {
         let outbox = try Outbox(directory: LocalFiles.namespaced(self.outbox.directory, origin: credential.baseURL))
         let drafts = try DraftStore(directory: LocalFiles.namespaced(self.drafts.directory, origin: credential.baseURL))
+        store?.onBadge = nil
         store?.stop()
         self.credential = credential
         let store = InstancesStore(client: APIClient(credential: credential, session: session), outbox: outbox,
                                    drafts: drafts)
         store.onUnpaired = { [weak self] in self?.lostPairing() }
+        store.onBadge = { [weak self] count in self?.onBadge?(count) }
         self.store = store
     }
 
     private func close() {
+        store?.onBadge = nil
         store?.stop()
         store?.outbox.sender = nil
         store = nil
         credential = nil
+        onBadge?(0)
     }
 
     /// The server no longer knows this device (`shaft web unpair`): forget it and show the pairing screen.

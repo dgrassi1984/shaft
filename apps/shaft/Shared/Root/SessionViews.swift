@@ -5,8 +5,7 @@ import UIKit
 #endif
 
 /// What every platform shell shows first: why SHAFT could not start, the pairing screen, or — paired — `paired` with
-/// the instances store in the environment. It keeps the app's badge on the server's count (§12) and polls the chat
-/// list while the app is in front.
+/// the instances store in the environment. It polls the chat list while the app is in front.
 struct SessionRoot<Paired: View>: View {
     let model: AppModel
     @ViewBuilder var paired: (SHAFTSession, InstancesStore) -> Paired
@@ -23,7 +22,6 @@ struct SessionRoot<Paired: View>: View {
                         .onChange(of: scenePhase) { _, phase in
                             if phase == .active { store.start() } else { store.stop() }
                         }
-                        .onChange(of: store.badge) { _, badge in model.setBadge(badge) }
                 } else {
                     PairingView(session: session)
                 }
