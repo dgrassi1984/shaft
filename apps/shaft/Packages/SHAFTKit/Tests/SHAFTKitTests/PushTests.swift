@@ -36,6 +36,9 @@ struct PushTests {
         let down = "Could not connect to the server."
         #expect(PushStatus.notes(nil, loadProblem: down, registered: down) == [down])
         #expect(PushStatus.notes(nil, loadProblem: nil, registered: nil).isEmpty)
+        let registration = "native push is off: SHAFT_APNS_KEY_ID is not set"
+        #expect(PushStatus.notes(nil, loadProblem: down, registered: registration) == [down, registration])
+        #expect(PushStatus.notes(nil, loadProblem: "", registered: "").isEmpty)
         let on = PushStatus(on: true, env: "sandbox", reason: "registered", problem: nil)
         #expect(PushStatus.notes(on, loadProblem: nil, registered: "Notifications on (sandbox)").isEmpty)
         let off = PushStatus(on: false, env: nil, reason: "no token", problem: nil)

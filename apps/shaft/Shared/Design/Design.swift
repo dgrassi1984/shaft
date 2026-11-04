@@ -1,3 +1,4 @@
+import SHAFTKit
 import SwiftUI
 #if os(iOS)
 import UIKit
@@ -73,6 +74,13 @@ enum Design {
     }
 
     enum Footer {
+        static let icon: CGFloat = {
+            #if os(iOS)
+            13
+            #else
+            10
+            #endif
+        }()
         /// A footer's 28 pt row draws about 14 pt of time and icons: this much of it at each end is only target.
         static let slack: CGFloat = 7
     }
@@ -110,6 +118,14 @@ enum Design {
     }
 }
 
+/// Shared scaling keeps the feed's resting margins and its overlays in agreement.
+struct FeedMetrics: DynamicProperty {
+    @ScaledMetric(relativeTo: .body) var fade = Design.Header.fade
+    @ScaledMetric(relativeTo: .caption) var pillHeight = Design.Space.s24 + Design.Space.s12
+
+    var pillClearance: CGFloat { pillHeight + Design.Space.s4 }
+}
+
 extension View {
     func elevatedBlock() -> some View {
         background(Color.elevated, in: RoundedRectangle(cornerRadius: Design.Radius.card, style: .continuous))
@@ -128,14 +144,14 @@ extension View {
 }
 
 /// Where the feed ends, the same on every platform and under Reduce Transparency: text fades into `canvas` over
-/// `Header.fade` under the header and above the composer, and the glass sits on solid `canvas` (operator's decision of
+/// a body-scaled `Header.fade` under the header and above the composer, and the glass sits on solid `canvas` (operator's decision of
 /// 2026-11-04, beyond spec §2.4). It is one plain gradient over the feed, with the system's scroll edge hidden: that edge
 /// left a blurred, half-cut line under the bar. `FeedView` keeps a resting feed clear of both fades.
 extension View {
-    /// `floating` (the Latest pill) sits in the fade at the foot, on top of it, with no band of its own.
-    func feedEdges<Floating: View>(@ViewBuilder floating: () -> Floating) -> some View {
+    /// `floating` (the Latest pill) sits on solid canvas, with the fade above it while it shows.
+    func feedEdges<Floating: View>(pillVisible: Bool, @ViewBuilder floating: () -> Floating) -> some View {
         overlay(alignment: .top) { HeaderFade() }
-            .overlay(alignment: .bottom) { FooterFade().overlay(alignment: .bottom, content: floating) }
+            .overlay(alignment: .bottom) { FooterFade(pillVisible: pillVisible, floating: floating()) }
     }
 
     /// Behind a bar over the feed's foot: solid to the bottom of the screen.
@@ -162,12 +178,14 @@ private func canvasFade(from start: UnitPoint, to end: UnitPoint) -> LinearGradi
 }
 
 private struct HeaderFade: View {
+    private var metrics = FeedMetrics()
+
     var body: some View {
         canvasFade(from: .top, to: .bottom)
-            .frame(height: Design.Header.fade)
+            .frame(height: metrics.fade)
             .background(alignment: .bottom) {
                 Color.canvas
-                    .padding(.bottom, Design.Header.fade)
+                    .padding(.bottom, metrics.fade)
                     .ignoresSafeArea(edges: .top)
             }
             .allowsHitTesting(false)
@@ -175,28 +193,33 @@ private struct HeaderFade: View {
     }
 }
 
-private struct FooterFade: View {
+private struct FooterFade<Floating: View>: View {
+    let pillVisible: Bool
+    let floating: Floating
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private var metrics = FeedMetrics()
+
     var body: some View {
-        canvasFade(from: .bottom, to: .top)
-            .frame(height: Design.Header.fade)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
+        VStack(spacing: 0) {
+            canvasFade(from: .bottom, to: .top)
+                .frame(height: metrics.fade)
+            Color.canvas.frame(height: pillVisible ? metrics.pillClearance : 0)
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+        .overlay(alignment: .bottom) { floating }
+        .animation(reduceMotion ? nil : Design.Motion.spring, value: pillVisible)
     }
 }
 
 private struct SidewaysFade: ViewModifier {
-    private struct More: Equatable {
-        var leading = false
-        var trailing = false
-    }
-
-    @State private var more = More()
+    @State private var more = ScrollEdges.more(offset: 0, container: 0, content: 0)
 
     func body(content: Content) -> some View {
         content
-            .onScrollGeometryChange(for: More.self) { geometry in
-                More(leading: geometry.contentOffset.x > 1,
-                     trailing: geometry.contentOffset.x + geometry.containerSize.width < geometry.contentSize.width - 1)
+            .onScrollGeometryChange(for: ScrollEdges.self) { geometry in
+                ScrollEdges.more(offset: Double(geometry.contentOffset.x),
+                            container: Double(geometry.containerSize.width), content: Double(geometry.contentSize.width))
             } action: { _, new in
                 more = new
             }

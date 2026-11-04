@@ -2,7 +2,7 @@ import Foundation
 import Testing
 
 /// The operator's three decisions of 2026-11-04 live in view code a unit test cannot draw, so these pin the source: each
-/// one fails if the old behaviour comes back.
+/// one catches removal of the pinned source, not broken behaviour. The frames check how it behaves.
 struct NativeChromePinTests {
     private func shared(_ path: String) throws -> String {
         let app = URL(filePath: #filePath)
@@ -54,14 +54,14 @@ struct NativeChromePinTests {
         #expect(!screen.contains("scrollEdgeEffectStyle"))
         #expect(!screen.contains("scrollEdgeEffectHidden(reduceTransparency"))
         #expect(!screen.contains(".safeAreaBar"))
-        #expect(screen.contains(".feedEdges {"))
+        #expect(screen.contains(".feedEdges(pillVisible: screen.latestPill != nil) {"))
         #expect(screen.contains(".feedFloor()"))
         let design = try shared("Shared/Design/Design.swift")
         #expect(design.contains("static let fade: CGFloat = 32"))
         // At rest the last line stands clear of the fade.
         let feed = try shared("Shared/Feed/FeedView.swift")
-        #expect(feed.contains(".padding(.top, Design.Header.fade)"))
-        #expect(feed.contains(".padding(.bottom, Design.Header.fade - Design.Space.turn)"))
+        #expect(feed.contains(".padding(.top, metrics.fade)"))
+        #expect(feed.contains(".padding(.bottom, metrics.fade - Design.Space.turn)"))
     }
 
     /// Bug: the 3 pt bar ran past the time and icons to the end of their 28 pt target.
@@ -121,11 +121,11 @@ struct NativeChromePinTests {
     }
 
     /// Bug: the Latest pill was an overlay on the scroll view and covered table cells and footers; then, in the bar, it
-    /// raised an opaque band. It sits in the fade, at its own width.
+    /// raised an opaque band at rest. It keeps its own width; the foot clears behind it only while it shows.
     @Test func latestSitsInTheFade() throws {
         #expect(try !shared("Shared/Feed/FeedView.swift").contains(".overlay(alignment: .bottom)"))
         let screen = try shared("Shared/Chat/ChatScreen.swift")
-        let edges = try #require(screen.range(of: ".feedEdges {"))
+        let edges = try #require(screen.range(of: ".feedEdges(pillVisible: screen.latestPill != nil) {"))
         let pill = try #require(screen.range(of: "LatestPillButton(pill: pill)"))
         let bar = try #require(screen.range(of: ".safeAreaInset(edge: .bottom"))
         #expect(edges.lowerBound < pill.lowerBound && pill.lowerBound < bar.lowerBound)

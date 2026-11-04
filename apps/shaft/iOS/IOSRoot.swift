@@ -49,7 +49,10 @@ struct ChatsLayout: View {
         .sheet(isPresented: $settings) { SettingsView(session: session) }
         .onAppear(perform: restore)
         .onDisappear { inspectorRestore?.cancel() }
-        .onChange(of: shell.screen.map(ObjectIdentifier.init)) { inspectorRestore?.cancel() }
+        .onChange(of: shell.screen.map(ObjectIdentifier.init)) {
+            inspectorRestore?.cancel()
+            fitColumns()
+        }
         .onChange(of: shell.screen?.openDocument) { inspectorRestore?.cancel() }
         .onChange(of: shell.screen?.showDocuments) { inspectorRestore?.cancel() }
         .onChange(of: store.instances.map(\.name)) { restore() }
@@ -156,7 +159,8 @@ struct ChatsLayout: View {
     /// sidebar over the chat (`SidebarTiles`), for a moment, and that is left alone. A change the resize made is asked
     /// again: leaving compact width shows the sidebar.
     private func columnsChanged() {
-        if documentsTakeSidebar && columns != .detailOnly && Date.now.timeIntervalSince(resized) > 0.5 { return }
+        if documentsTakeSidebar && inspector && !sidebarLeaving && columns != .detailOnly
+            && Date.now.timeIntervalSince(resized) > 0.5 { return }
         fitColumns()
     }
 
@@ -168,12 +172,14 @@ struct ChatsLayout: View {
         inspectorRestore?.cancel()
         if !open {
             if Date.now.timeIntervalSince(resized) > 0.5 { shell.screen?.showDocuments = false }
-        } else if let screen = shell.screen, !screen.showDocuments {
+        } else if let screen = shell.screen {
             inspectorRestore = Task { @MainActor in
                 do { try await Task.sleep(for: .seconds(0.3)) }
                 catch { return }
-                guard !Task.isCancelled, shell.screen === screen, !screen.showDocuments else { return }
+                guard !Task.isCancelled, shell.screen === screen else { return }
+                // A restored screen may already have documents open. Reconcile its columns just as a manual open does.
                 screen.showDocuments = true
+                fitColumns()
             }
         }
     }

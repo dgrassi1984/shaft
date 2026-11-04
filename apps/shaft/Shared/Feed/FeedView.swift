@@ -20,6 +20,8 @@ struct FeedView: View {
     /// "Show the N earlier messages" was tapped: land on the first of them once they are there.
     @State private var toTop = false
 
+    private var metrics = FeedMetrics()
+
     private let bottomID = "feed-bottom"
 
     var body: some View {
@@ -44,8 +46,8 @@ struct FeedView: View {
             }
             // At rest at either end nothing lies in the fades (`feedEdges`): the turn's spacing and the 1 pt of
             // `bottomID` count towards the foot.
-            .padding(.top, Design.Header.fade)
-            .padding(.bottom, Design.Header.fade - Design.Space.turn)
+            .padding(.top, metrics.fade)
+            .padding(.bottom, metrics.fade - Design.Space.turn)
             .scrollTargetLayout()
         }
         .foregroundStyle(Color.textPrimary)
@@ -112,10 +114,11 @@ struct FeedView: View {
     }
 }
 
-/// "↓ Latest", or "↓ New below" with a message waiting: in the fade above the composer, with no band of its own.
+/// "↓ Latest", or "↓ New below" with a message waiting: above the composer, with the feed fading out above it.
 struct LatestPillButton: View {
     let pill: ChatScreenModel.LatestPill
     var action: () -> Void
+    private var metrics = FeedMetrics()
 
     var body: some View {
         Button(action: action) {
@@ -123,7 +126,7 @@ struct LatestPillButton: View {
                 .font(Design.Text.pill)
                 .foregroundStyle(pill == .newBelow ? Color.brand : Color.textPrimary)
                 .padding(.horizontal, Design.Space.s12)
-                .frame(minHeight: Design.Space.s24 + Design.Space.s12)
+                .frame(minHeight: metrics.pillHeight)
                 .quietHitArea()
         }
         .buttonStyle(.plain)
@@ -133,8 +136,7 @@ struct LatestPillButton: View {
 }
 
 private extension View {
-    /// The system's glass on a floating control, on solid `canvas`: it stands on the feed's text, which would show through
-    /// as a ghost. Solid `elevated` under Reduce Transparency.
+    /// The system's glass on a floating control, on solid `canvas`. Solid `elevated` under Reduce Transparency.
     func floatingPill() -> some View { modifier(FloatingPill()) }
 }
 

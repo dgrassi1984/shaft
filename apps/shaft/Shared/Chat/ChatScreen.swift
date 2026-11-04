@@ -57,9 +57,10 @@ struct ChatScreen: View {
                 // The feed fades out before the header and the composer: nothing is legible behind the glass.
                 content
                     .scrollEdgeEffectHidden(true, for: .all)
-                    .feedEdges {
+                    .feedEdges(pillVisible: screen.latestPill != nil) {
                         if let pill = screen.latestPill {
                             LatestPillButton(pill: pill) { screen.jumpToLatest += 1 }
+                                .transition(.opacity)
                         }
                     }
                     .safeAreaInset(edge: .bottom, spacing: 0) {

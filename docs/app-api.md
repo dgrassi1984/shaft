@@ -171,7 +171,7 @@ The rail: one row per instance, in the web rail's order (`instance_names()`).
   | `busy_note` | str or null | what a message does now, when it is busy and not replying ("Your message pauses its cycle; the cycle resumes after the reply."); null when idle or replying |
   | `model` | str | its model, as the header's facts show it |
   | `usd_today` | number | cloud spend today, 0 when none |
-  | `line` | str | the rail's last line: `"you: …"` for the operator's own, the instance's first line otherwise; `""` when none (`web_chat.summary`) |
+  | `line` | str | the rail's last line: `"you: …"` for the operator's own, the instance's first line otherwise; at most 80 characters plus "…" when cut; `""` when none (`web_chat.summary`) |
   | `last` | timestamp or null | when it last answered or sent the operator a message |
   | `replying` | bool | a reply is running in its web chat |
   | `unread` | bool | it has something this device has not seen (§12) |

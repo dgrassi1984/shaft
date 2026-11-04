@@ -274,15 +274,15 @@ struct CodeColours: CodeSyntaxHighlighter {
     }
 }
 
-/// A footer's icon: drawn at 13 pt in a compact box, its 44 pt target taking no layout (`quietHitArea`).
+/// A footer's icon: scales with the metadata from its footnote size, its 44 pt target taking no layout (`quietHitArea`).
 struct QuietIcon: View {
     let symbol: String
     var colour = Color.textTertiary
+    @ScaledMetric(relativeTo: .caption2) private var size = Design.Footer.icon
 
     var body: some View {
         Image(systemName: symbol)
-            .font(.footnote)
-            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)   // past it the icons fill their 28 pt row and touch
+            .font(.system(size: size))
             .foregroundStyle(colour)
             .frame(minWidth: Design.Space.s24 + Design.Space.s12, minHeight: Design.Space.s24 + Design.Space.s4)
             .quietHitArea()

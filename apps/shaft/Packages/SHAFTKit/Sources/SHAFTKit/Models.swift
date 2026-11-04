@@ -625,7 +625,9 @@ public struct PushStatus: Codable, Sendable, Equatable {
     /// What Settings says about push beside its Push row, each thing once and nothing the row says already: with the
     /// server out of reach the status and the registration fail in the same words.
     public static func notes(_ status: PushStatus?, loadProblem: String?, registered: String?) -> [String] {
-        guard let status else { return [loadProblem ?? registered].compactMap(\.self) }
+        guard let status else {
+            return [loadProblem, registered].compactMap { $0?.isEmpty == false ? $0 : nil }.uniqued()
+        }
         guard !status.on else { return [] }
         return [status.reason, registered].compactMap { $0?.isEmpty == false ? $0 : nil }.uniqued()
     }
