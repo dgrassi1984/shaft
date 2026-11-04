@@ -7,12 +7,14 @@ struct ShaftMark: View {
 
     var body: some View {
         let unit = size / 64
+        let tileRadius = 14 * unit
+        let barRadius = 6 * unit
         ZStack(alignment: .top) {
-            RoundedRectangle(cornerRadius: 14 * unit, style: .continuous)
+            RoundedRectangle(cornerRadius: tileRadius, style: .continuous)
                 .fill(Color.elevated)
                 .frame(width: 60 * unit, height: 60 * unit)
                 .frame(width: size, height: size)
-            RoundedRectangle(cornerRadius: 6 * unit, style: .continuous)
+            RoundedRectangle(cornerRadius: barRadius, style: .continuous)
                 .fill(Color.brand)
                 .frame(width: 12 * unit, height: 44 * unit)
                 .padding(.top, 10 * unit)

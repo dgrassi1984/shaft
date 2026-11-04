@@ -85,7 +85,7 @@ struct ComposerView: View {
                 .accessibilityHidden(true)
             }
         }
-        .frame(maxWidth: chatColumnWidth)
+        .frame(maxWidth: Design.measure)
         .padding(.horizontal, Design.Space.gutter)
         .padding(.vertical, Design.Space.s8)
         .frame(maxWidth: .infinity)

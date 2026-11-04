@@ -51,7 +51,7 @@ struct ChatScreen: View {
             VStack(spacing: 0) {
                 if chat.cid != nil { archivedBanner }
                 // The composer floats: the feed runs under it and fades there, as under the header.
-                content(width: geometry.size.width)
+                content
                     .scrollEdgeEffectStyle(.soft, for: .all)
                     .safeAreaBar(edge: .bottom, spacing: 0) {
                         VStack(spacing: 0) {
@@ -160,13 +160,12 @@ struct ChatScreen: View {
     // MARK: Parts
 
     @ViewBuilder
-    private func content(width: CGFloat) -> some View {
+    private var content: some View {
         if let feed = chat.feed {
             FeedView(feed: feed, rows: FeedRows.rows(feed, unsent: chat.cid == nil ? chat.unsent : [])) { visible in
                 newestOnScreen = visible
                 markSeen()
             }
-            .contentMargins(.horizontal, columnMargin(width), for: .scrollContent)
         } else if case .stopped(let error) = chat.connection {
             MarkMessage("Could not open the chat", message: Text(error.message)) {
                 Button("Try again") { chat.start() }.buttonStyle(ProminentAction())
@@ -175,11 +174,6 @@ struct ChatScreen: View {
         } else {
             ProgressView("Loading the chat…").frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-    }
-
-    /// What centres the feed's column of prose (its rows keep their gutter).
-    private func columnMargin(_ width: CGFloat) -> CGFloat {
-        chatColumnWidth.isFinite ? max(0, (width - chatColumnWidth) / 2 - Design.Space.gutter) : 0
     }
 
     @ViewBuilder

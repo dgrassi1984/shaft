@@ -1,17 +1,5 @@
 import SHAFTKit
 import SwiftUI
-#if canImport(UIKit)
-import UIKit
-#endif
-
-/// The chat's column on an iPad or a Mac, centred; a phone uses its whole width (spec §2.2).
-@MainActor var chatColumnWidth: CGFloat {
-    #if os(iOS)
-    UIDevice.current.userInterfaceIdiom == .phone ? .infinity : Design.measure
-    #else
-    Design.measure
-    #endif
-}
 
 /// What a platform shell needs to draw the chat's documents beside it: the chat screen on display. The shell puts
 /// `documentsInspector` outside its navigation stack (an inspector inside one hides the chat's toolbar); a phone says

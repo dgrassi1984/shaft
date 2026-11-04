@@ -40,6 +40,7 @@ struct SessionRoot<Paired: View>: View {
 /// Clipboard fills from the Mac), and the server's own refusal is shown as it says it.
 struct PairingView: View {
     let session: SHAFTSession
+    @Environment(\.colorScheme) private var colorScheme
     @State private var link = ""
     @State private var pairing = false
 
@@ -81,6 +82,8 @@ struct PairingView: View {
                     }
                     .labelStyle(.titleAndIcon)
                     .buttonBorderShape(.capsule)
+                    // Its text is the system's white, which the dark accent fails.
+                    .tint(colorScheme == .dark ? Color.operatorChip : Color.brand)
                     .frame(minHeight: 44)
                 }
                 Button(action: pair) {

@@ -215,18 +215,18 @@ struct ChatsLayout: View {
 }
 
 /// The sidebar beside the chat at every width that holds both. `.balanced` alone left it to the system at launch, which
-/// by window shape often laid the sidebar over the chat, dimmed.
+/// by window shape often laid the sidebar over the chat, dimmed. Asked at each layout: earlier, the split view resets it.
 private struct SidebarTiles: UIViewRepresentable {
     func makeUIView(context: Context) -> Finder { Finder() }
     func updateUIView(_ view: Finder, context: Context) {}
 
     final class Finder: UIView {
-        override func didMoveToWindow() {
-            super.didMoveToWindow()
+        override func layoutSubviews() {
+            super.layoutSubviews()
             var next: UIResponder? = self
             while let responder = next {
                 if let split = responder as? UISplitViewController {
-                    split.preferredSplitBehavior = .tile
+                    if split.preferredSplitBehavior != .tile { split.preferredSplitBehavior = .tile }
                     return
                 }
                 next = responder.next
