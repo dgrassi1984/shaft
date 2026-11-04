@@ -74,32 +74,35 @@ struct RatingSheet: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: Design.Space.s12) {
-                TextField(target.thumb == "down" ? "What was wrong? (optional)" : "What was good? (optional)",
-                          text: $reason, axis: .vertical)
-                    .lineLimit(3...8)
-                    .focused($focused)
-                    .padding(Design.Space.s12)
-                    .elevatedBlock()
-                Text(target.thumb == "down"
-                     ? "Sent, it goes with your next message in this chat (or to its inbox); kept, it stays with you."
-                     : "Sent, it goes to its inbox for its next cycle.")
-                    .font(.footnote)
-                    .foregroundStyle(Color.textSecondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Button { finish(send: true) } label: {
-                    Text("Send to \(screen.instance)").frame(maxWidth: .infinity)
+            ScrollView {
+                VStack(spacing: Design.Space.s12) {
+                    TextField(target.thumb == "down" ? "What was wrong? (optional)" : "What was good? (optional)",
+                              text: $reason, axis: .vertical)
+                        .lineLimit(3...8)
+                        .textFieldStyle(.plain)
+                        .foregroundStyle(Color.textPrimary)
+                        .focused($focused)
+                        .padding(Design.Space.s12)
+                        .elevatedBlock()
+                    Text(target.thumb == "down"
+                         ? "Sent, it goes with your next message in this chat (or to its inbox); kept, it stays with you."
+                         : "Sent, it goes to its inbox for its next cycle.")
+                        .font(.footnote)
+                        .foregroundStyle(Color.textSecondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button { finish(send: true) } label: {
+                        Text("Send to \(screen.instance)").frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(ProminentAction())
+                    if target.ratingID == nil {
+                        Button("Just keep it") { finish(send: false) }
+                            .frame(minHeight: 44)
+                    }
                 }
-                .buttonStyle(ProminentAction())
-                if target.ratingID == nil {
-                    Button("Just keep it") { finish(send: false) }
-                        .frame(minHeight: 44)
-                }
+                .disabled(busy)
+                .padding(.horizontal, Design.Space.gutter)
+                .padding(.vertical, Design.Space.s8)
             }
-            .disabled(busy)
-            .padding(.horizontal, Design.Space.gutter)
-            .padding(.vertical, Design.Space.s8)
-            .frame(maxHeight: .infinity, alignment: .top)
             .navigationTitle(target.thumb == "down" ? "Thumbs down" : "Thumbs up")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)

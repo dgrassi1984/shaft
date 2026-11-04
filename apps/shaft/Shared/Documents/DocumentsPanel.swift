@@ -49,7 +49,13 @@ struct DocumentsPanel: View {
                 await docs.follow()
             }
         }
-        .onAppear(perform: openRequested)
+        .onAppear {
+            if screen.openDocument == nil, path.isEmpty, let doc = screen.shownDocument {
+                open(doc)
+            } else {
+                openRequested()
+            }
+        }
         .onChange(of: path) {
             screen.shownDocument = path.reversed().compactMap { route -> String? in
                 if case .doc(let doc) = route { doc } else { nil }
@@ -72,6 +78,10 @@ struct DocumentsPanel: View {
     private func openRequested() {
         guard let doc = screen.openDocument else { return }
         screen.openDocument = nil
+        open(doc)
+    }
+
+    private func open(_ doc: String) {
         let folder = (doc as NSString).deletingLastPathComponent
         var route: [Route] = []
         if !folder.isEmpty {
@@ -278,6 +288,8 @@ struct NewDocumentSheet: View {
             VStack(alignment: .leading, spacing: Design.Space.s12) {
                 TextField(folder.isEmpty ? "Document name" : "Document name in \(folder)/", text: $name)
                     .autocorrectionDisabled()
+                    .textFieldStyle(.plain)
+                    .foregroundStyle(Color.textPrimary)
                     #if os(iOS)
                     .textInputAutocapitalization(.never)
                     #endif

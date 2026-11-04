@@ -30,6 +30,7 @@ struct ChatsLayout: View {
     @State private var sidebarCollapsed = false
     /// The inspector on screen: a moment after `showDocuments` where the sidebar has to go first.
     @State private var inspector = false
+    @State private var inspectorRestore: Task<Void, Never>?
     @State private var sidebarLeaving = false
     @State private var resized = Date.distantPast
     @State private var shell = ChatShell(sheetsDocuments: UIDevice.current.userInterfaceIdiom == .phone)
@@ -46,6 +47,10 @@ struct ChatsLayout: View {
         .environment(\.chatCovered, switching || settings)
         .sheet(isPresented: $settings) { SettingsView(session: session) }
         .onAppear(perform: restore)
+        .onDisappear { inspectorRestore?.cancel() }
+        .onChange(of: shell.screen.map(ObjectIdentifier.init)) { inspectorRestore?.cancel() }
+        .onChange(of: shell.screen?.openDocument) { inspectorRestore?.cancel() }
+        .onChange(of: shell.screen?.showDocuments) { inspectorRestore?.cancel() }
         .onChange(of: store.instances.map(\.name)) { restore() }
         .onChange(of: model.openChat) { _, name in
             guard let name else { return }
@@ -143,13 +148,15 @@ struct ChatsLayout: View {
     /// It also opens it unasked, restoring a window whose documents were open or reopening them after a turn of the
     /// device: left alone that is an empty column, so the documents follow.
     private func inspectorChanged(_ open: Bool) {
+        inspectorRestore?.cancel()
         if !open {
             if Date.now.timeIntervalSince(resized) > 0.5 { shell.screen?.showDocuments = false }
-        } else if shell.screen?.showDocuments != true {
-            Task {
-                try? await Task.sleep(for: .seconds(0.3))        // a restored window's chat is not on screen yet
-                shell.screen?.openDocument = shell.screen?.shownDocument
-                shell.screen?.showDocuments = true
+        } else if let screen = shell.screen, !screen.showDocuments {
+            inspectorRestore = Task { @MainActor in
+                do { try await Task.sleep(for: .seconds(0.3)) }
+                catch { return }
+                guard !Task.isCancelled, shell.screen === screen, !screen.showDocuments else { return }
+                screen.showDocuments = true
             }
         }
     }
@@ -207,6 +214,7 @@ struct ChatsLayout: View {
     }
 
     private func open(_ name: String) {
+        inspectorRestore?.cancel()
         if selection != name { path.removeAll() }
         selection = name
         last = name

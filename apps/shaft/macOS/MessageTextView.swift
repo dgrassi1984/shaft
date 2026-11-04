@@ -45,9 +45,7 @@ struct MessageTextView: NSViewRepresentable {
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: MessageNSView, context: Context) -> CGSize? {
-        var width = proposal.width ?? Design.measure
-        if !width.isFinite || width <= 0 { width = Design.measure }
-        return nsView.size(fitting: min(width, Design.measure))
+        nsView.size(for: proposal, hugging: !markdown)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(screen: screen) }
@@ -176,6 +174,10 @@ final class MessageNSView: NSView {
 
     func size(fitting width: CGFloat) -> CGSize {
         measure.layout(width: width).size
+    }
+
+    func size(for proposal: ProposedViewSize, hugging: Bool) -> CGSize {
+        measure.size(for: proposal, hugging: hugging)
     }
 
     func show(_ rendered: MarkdownAttributed.Rendered) {

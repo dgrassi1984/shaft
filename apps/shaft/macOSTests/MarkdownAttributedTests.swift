@@ -1,9 +1,35 @@
 import AppKit
 import Testing
+import SwiftUI
 
 /// The Mac's message text (macOS/MarkdownAttributed.swift): what a selection in a message reads and how its blocks are
 /// laid out. Each test names what it pins; the regressions are the bugs found driving the app.
 struct MarkdownAttributedTests {
+    @Test @MainActor func splitViewUpdateConstraintsCrashZeroProposalHasContentIndependentWidth() {
+        let short = MarkdownAttributed.Measure(MarkdownAttributed.operatorText("OK"))
+        let long = MarkdownAttributed.Measure(render(
+            String(repeating: "A long reply with **formatting** and many words. ", count: 80)))
+        for hugging in [false, true] {
+            for width in [CGFloat?(0), nil, -1] {
+                let proposal = ProposedViewSize(width: width, height: nil)
+                let a = short.size(for: proposal, hugging: hugging)
+                let b = long.size(for: proposal, hugging: hugging)
+                #expect(a.width == 1)
+                #expect(b.width == 1)
+                #expect(a.height == short.layout(width: 1).size.height)
+                #expect(b.height == long.layout(width: 1).size.height)
+            }
+        }
+    }
+
+    @Test @MainActor func positiveMessageProposalFillsAnswersAndHugsOperatorChips() {
+        let view = MarkdownAttributed.Measure(MarkdownAttributed.operatorText("OK"))
+        let proposal = ProposedViewSize(width: 300, height: nil)
+        #expect(view.size(for: proposal, hugging: false).width == 300)
+        #expect(view.size(for: proposal, hugging: true).width == view.layout(width: 300).size.width)
+        #expect(view.size(for: proposal, hugging: true).width < 100)
+    }
+
     func render(_ markdown: String) -> MarkdownAttributed.Rendered { MarkdownAttributed.render(markdown) }
 
     func paragraphStyle(_ text: NSAttributedString, at index: Int) -> NSParagraphStyle? {

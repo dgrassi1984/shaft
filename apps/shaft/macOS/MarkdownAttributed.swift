@@ -679,6 +679,16 @@ extension MarkdownAttributed {
             }
         }
 
+        /// Minimum probes must not feed a content-dependent minimum into AppKit's split-view constraints.
+        /// Operator chips hug at real widths; ChipColumn supplies their column's width.
+        func size(for proposal: ProposedViewSize, hugging: Bool) -> CGSize {
+            guard let width = proposal.width, width.isFinite, width > 0 else {
+                return CGSize(width: 1, height: layout(width: 1).size.height)
+            }
+            let measured = layout(width: min(width, Design.measure)).size
+            return CGSize(width: hugging ? measured.width : width, height: measured.height)
+        }
+
         func layout(width: CGFloat) -> Layout {
             let width = width.rounded()
             if let known = layouts[width] { return known }
