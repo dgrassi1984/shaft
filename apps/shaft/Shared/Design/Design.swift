@@ -121,19 +121,15 @@ extension View {
 /// the header and in the gaps round the composer: the feed fades into `canvas` before it reaches either, and the glass
 /// sits on solid `canvas`. Decision of 2026-11-04 (goes beyond spec §2.4), on every platform.
 extension View {
-    /// Under the header: solid to the top of the screen, fading out below the bar.
+    /// Under the header: solid to the top of the screen, fading out below the bar. On the Mac it lies over the feed: an
+    /// inset moves the system's scroll edge down with it, and its line came to rest across the text below the bar.
+    @ViewBuilder
     func headerEdge() -> some View {
-        safeAreaInset(edge: .top, spacing: 0) {
-            LinearGradient(colors: [.canvas, .canvas.opacity(0)], startPoint: .top, endPoint: .bottom)
-                .frame(height: Design.Header.fade)
-                .background(alignment: .bottom) {
-                    Color.canvas
-                        .padding(.bottom, Design.Header.fade)
-                        .ignoresSafeArea(edges: .top)
-                }
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-        }
+        #if os(macOS)
+        overlay(alignment: .top) { HeaderFade() }
+        #else
+        safeAreaInset(edge: .top, spacing: 0) { HeaderFade() }
+        #endif
     }
 
     /// Behind a bar over the feed's foot: solid to the bottom of the screen, fading out above the bar.
@@ -149,6 +145,20 @@ extension View {
             .allowsHitTesting(false)
             .accessibilityHidden(true)
         }
+    }
+}
+
+private struct HeaderFade: View {
+    var body: some View {
+        LinearGradient(colors: [.canvas, .canvas.opacity(0)], startPoint: .top, endPoint: .bottom)
+            .frame(height: Design.Header.fade)
+            .background(alignment: .bottom) {
+                Color.canvas
+                    .padding(.bottom, Design.Header.fade)
+                    .ignoresSafeArea(edges: .top)
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
 }
 
