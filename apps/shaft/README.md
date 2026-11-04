@@ -130,6 +130,7 @@ xcodebuild -project SHAFT.xcodeproj -scheme SHAFT-macOS -destination 'platform=m
 Xcode installs the apps directly, development-signed (no TestFlight or App Store).
 
 1. In Xcode → Settings → Accounts, sign in with the Apple ID of team `<TEAM_ID>`.
+   The team id is the `OU` of the Apple Development certificate, not the id in the certificate's name.
 2. Open `SHAFT.xcodeproj`. Automatic signing registers the two App IDs with Push Notifications and Keychain Sharing on
    the first signed build.
 3. **iPhone or iPad:** connect it once by cable, trust the Mac, turn on Developer Mode (Settings → Privacy & Security),
