@@ -51,6 +51,7 @@ struct DocumentDetailView: View {
                 .readingColumn()
                 .padding(.vertical, Design.Space.s16)
             }
+            .readingTextSize()
             #if os(macOS)
             .background(Color.canvas.ignoresSafeArea())          // under the toolbar too: no seam at its foot
             #else

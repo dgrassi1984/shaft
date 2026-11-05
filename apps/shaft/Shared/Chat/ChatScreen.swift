@@ -1,4 +1,3 @@
-import QuickLook
 import SHAFTKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -44,7 +43,7 @@ struct ChatScreen: View {
     }
     private var covered: Bool {
         (screen.showDocuments && covers) || screen.selecting != nil || screen.rating != nil
-            || screen.showEarlierChats || preview.url != nil || preview.error != nil
+            || screen.showEarlierChats || screen.showInstanceSettings || preview.url != nil || preview.error != nil
             || screen.confirmRetry != nil || screen.confirmingNewChat || screen.confirmingEnd || screen.composerCovered
     }
     private var covers: Bool { shell?.documentsCover ?? true }
@@ -102,12 +101,18 @@ struct ChatScreen: View {
                 .environment(store)
                 .environment(model)
         }
+        .sheet(isPresented: $screen.showInstanceSettings) {
+            InstanceSettingsView(store: store.settings(chat.instance), services: store.services)
+                #if os(macOS)
+                .frame(minWidth: 480, minHeight: 560)
+                #endif
+        }
         .sheet(item: $screen.selecting) { selecting in SelectTextSheet(selecting: selecting) }
         .sheet(item: $screen.rating) { target in RatingSheet(target: target) }
         .sheet(isPresented: $screen.showEarlierChats) {
             EarlierChatsSheet(instance: chat.instance, open: openArchived)
         }
-        .quickLookPreview(Binding(get: { preview.url }, set: { preview.url = $0 }))
+        .filePreview(Binding(get: { preview.url }, set: { preview.url = $0 }))
         .alert(screen.confirmRetry?.confirm ?? "", isPresented: Binding(
             get: { screen.confirmRetry != nil }, set: { if !$0 { screen.confirmRetry = nil } })) {
             Button("Send it again") {
@@ -244,7 +249,8 @@ struct ChatScreen: View {
     @ToolbarContentBuilder
     private var header: some ToolbarContent {
         ToolbarItem(placement: .principal) {
-            ChatTitle(instance: chat.instance, archived: chat.cid != nil)
+            ChatTitle(instance: chat.instance, archived: screen.archived)
+                .environment(screen)
                 #if os(macOS)
                 .titleWidth(limit: MacChrome.titleLimit(column: columnWidth, sidebar: shell?.sidebarWidth ?? 0,
                                                         earlier: chat.cid != nil))
@@ -280,6 +286,11 @@ struct ChatScreen: View {
                 }
         }
         Menu {
+            if !screen.archived {
+                Button { screen.showInstanceSettings = true } label: {
+                    Label("Settings for \(chat.instance)", systemImage: "gearshape")
+                }
+            }
             Button { screen.showEarlierChats = true } label: { Label("Earlier chats", systemImage: "clock") }
             if chat.content?.canStop == true {
                 Button(role: .destructive) { Task { await chat.stopReply() } } label: {
@@ -358,6 +369,7 @@ struct ChatTitle: View {
     let instance: String
     let archived: Bool
     @Environment(InstancesStore.self) private var store
+    @Environment(ChatScreenModel.self) private var screen
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showNote = false
 
@@ -402,6 +414,13 @@ struct ChatTitle: View {
                 }
                 if let usd = row?.usdToday, usd > 0 {
                     Text("Cloud spend today: $\(usd, specifier: "%.2f")").font(.footnote).foregroundStyle(Color.textSecondary)
+                }
+                if !screen.archived {
+                    Button("Settings for \(instance)") {
+                        showNote = false
+                        screen.showInstanceSettings = true
+                    }
+                    .foregroundStyle(Color.brand)
                 }
             }
             .padding(Design.Space.s16)

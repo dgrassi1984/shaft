@@ -35,10 +35,11 @@ def preference(name: str) -> str:
     return value if value in SETTINGS else "auto"
 
 
-def set_preference(name: str, value: str) -> None:
+def set_preference(name: str, value: str, *, expect: str | None = None) -> None:
     if value not in SETTINGS:
         raise ValueError(f"channel must be one of {', '.join(SETTINGS)}, not {value!r}")
-    core._update_tool_settings(name, channel=None if value == "auto" else value)
+    core._update_tool_settings(name, expect={"channel": None if expect == "auto" else expect}
+                               if expect is not None else None, channel=None if value == "auto" else value)
 
 
 def talks(name: str) -> list[dict]:

@@ -23,6 +23,8 @@ public final class InstancesStore {
     @ObservationIgnored private var badgeKnown = false
     @ObservationIgnored private var etag: String?
     @ObservationIgnored private var seenGeneration = 0
+    @ObservationIgnored private var settingsStores: [String: InstanceSettingsStore] = [:]
+    public let services: ServicesStore
     @ObservationIgnored private var chats: [String: ChatStore] = [:]
     @ObservationIgnored private var pollTask: Task<Void, Never>?
     @ObservationIgnored let sleep: @Sendable (Duration) async throws -> Void
@@ -33,6 +35,8 @@ public final class InstancesStore {
         self.outbox = outbox
         self.drafts = drafts
         self.sleep = sleep
+        self.services = ServicesStore(client: client, sleep: sleep)
+        self.services.attach(to: self)
         outbox.sender = client
     }
 
@@ -71,6 +75,7 @@ public final class InstancesStore {
     }
 
     public func stop() {
+        services.stop()
         pollTask?.cancel()
         pollTask = nil
     }
@@ -84,6 +89,14 @@ public final class InstancesStore {
         if let store = chats[name] { return store }
         let store = ChatStore(instance: name, owner: self)
         chats[name] = store
+        return store
+    }
+
+    /// One settings store per instance, shared by every screen in this session.
+    public func settings(_ name: String) -> InstanceSettingsStore {
+        if let store = settingsStores[name] { return store }
+        let store = InstanceSettingsStore(instance: name, owner: self)
+        settingsStores[name] = store
         return store
     }
 

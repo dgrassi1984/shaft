@@ -36,6 +36,12 @@ def _ran(args: list[str], timeout: float = actions.RUN_NOW_S) -> tuple[int, str]
     return (200, last) if ok else (409, last if last.startswith("refused") else f"refused: {last}")
 
 
+def pause_resume(verb: str, name: str, who: str = WHO) -> tuple[int, str]:
+    """The web and native apps share the pause/resume command path."""
+    ok, last = actions.run_now([verb, name], actions.RUN_NOW_S, who=who)
+    return (200, last) if ok else (409, last if last.startswith("refused") else f"refused: {last}")
+
+
 def _started(args: list[str]) -> tuple[int, str]:
     return 200, actions.run_detached(args, who=WHO)
 
@@ -99,6 +105,14 @@ def _run(verb: str, form: dict, snap: dict, names: list[str], services: list[str
         args = ["autonomy" if svc == "scheduler" else svc, op]
         running = any(s["name"] == svc and s["running"] for s in snap.get("services", []))
         args = _guard(form, args, actions.service_guard(svc, op if op == "off" else "restart") if running else "")
+        if svc in ("api", "scheduler"):
+            lock = actions.restart_lock(svc)
+            if not lock.acquire(blocking=False):
+                raise Refused(f"{svc} is already restarting")
+            try:
+                return _ran(args, timeout=actions.SLOW_S)
+            finally:
+                lock.release()
         return _ran(args, timeout=actions.SLOW_S)
     if verb == "autonomy":
         op = form.get("op", "")
@@ -121,7 +135,7 @@ def _run(verb: str, form: dict, snap: dict, names: list[str], services: list[str
             raise Refused(f"{name} is {state} — a cycle starts only when it is idle")
         return _ran(["cycle", name])
     if verb in ("pause", "resume"):
-        return _ran([verb, name])
+        return pause_resume(verb, name)
     if verb == "kill":
         ok, last = actions.run_now(["kill", name, "--wait", str(KILL_WAIT_S)], KILL_WAIT_S + 8, who=WHO)
         return 200, last   # still settling after the wait is no refusal: it is paused, and its runs end on their own

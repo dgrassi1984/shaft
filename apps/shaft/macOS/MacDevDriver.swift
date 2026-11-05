@@ -27,7 +27,7 @@ import SwiftUI
 ///     doc <path>                    open that document in the documents
 ///     contextpick <text> | <item>   pick an item of the right-click menu on <text>
 ///     retryunsent                   what Retry on the first not-sent message does
-///     quicklook <path>              open a file as a file chip does (Quick Look)
+///     quicklook <path>              open a file as a file chip does (file preview sheet)
 ///     rows                          log the chat list's unread marks and the badge
 ///     selecttext <doc> | <text>     open Select text over <text> (<doc>: the document it is from, or "")
 ///     sheetpick <text> | <item>     in the sheet's text, select <text> and pick an item of its right-click menu
@@ -217,10 +217,10 @@ enum MacDevDriver {
             guard let chat = state.screen?.chat, let entry = chat.unsent.first else { return log("nothing not sent") }
             _ = await chat.retry(entry.mid)
         case "quicklook":
-            // A file opened as a file chip opens it: Quick Look over the window.
+            // A file opened as a file chip opens it: the file preview sheet over the window.
             state.screen?.preview.open(local: URL(fileURLWithPath: rest))
             try? await Task.sleep(for: .seconds(2))
-            log("quick look shown: \(NSApp.windows.contains { $0.isVisible && $0.className.contains("QLPreviewPanel") })")
+            log("file preview sheet requested: \(state.screen?.preview.url != nil)")
         case "rows":
             // The chat list as drawn: name, unread, replying.
             log("rows: " + (state.store?.instances.map { "\($0.name)\($0.unread ? " (unread)" : "")\($0.replying ? " (replying)" : "")" } ?? []).joined(separator: ", ") + " badge \(state.store?.badge ?? -1)")

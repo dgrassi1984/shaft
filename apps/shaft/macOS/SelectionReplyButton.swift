@@ -1,7 +1,10 @@
 import AppKit
 
 /// Draws its own fill because the system push bezel is translucent on macOS 26 and this button floats on text.
+/// Its frame can run past its parent's bounds, so it takes its own clicks.
 final class SelectionReplyButton: NSButton {
+    private var clickMonitor: Any?
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         configure()
@@ -16,6 +19,28 @@ final class SelectionReplyButton: NSButton {
         isBordered = false
         refusesFirstResponder = true
         font = .systemFont(ofSize: NSFont.smallSystemFontSize, weight: .medium)
+    }
+
+    func accepts(_ locationInWindow: NSPoint) -> Bool {
+        window != nil && !isHiddenOrHasHiddenAncestor && bounds.contains(convert(locationInWindow, from: nil))
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let clickMonitor {
+            NSEvent.removeMonitor(clickMonitor)
+            self.clickMonitor = nil
+        }
+        guard window != nil else { return }
+        clickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+            nonisolated(unsafe) let click = event
+            let taken = MainActor.assumeIsolated { () -> Bool in
+                guard let self, click.window === self.window, self.accepts(click.locationInWindow) else { return false }
+                self.performClick(nil)
+                return true
+            }
+            return taken ? nil : event
+        }
     }
 
     override var intrinsicContentSize: NSSize {

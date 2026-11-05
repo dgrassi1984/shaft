@@ -72,8 +72,10 @@ what to do where it can; it is never empty. A few codes carry one or two more fi
 | 403 | `pair_expired` | The pairing token is unknown, used, or older than 10 minutes | — |
 | 404 | `not_found` | No such route, instance, chat, turn, attachment, document or rating | — |
 | 405 | `method` | The route exists, the method does not | — |
-| 409 | `refused` | The action was refused: `web_chat.Refused`, `doc_comments.Refused`, `docs.Refused`, a feedback `ValueError`. The message says why ("it is still replying: stop the reply first") | — |
-| 409 | `stale` | A document save or delete with a `sha` that is not the document's any more | `sha`: str or null, `diff`: str or null (§10.4) |
+| 409 | `refused` | A settings writer, service command, or action refused the request: `web_chat.Refused`, `doc_comments.Refused`, `docs.Refused`, a feedback `ValueError`. The message says why ("it is still replying: stop the reply first") | — |
+| 409 | `stale` | A document save or delete with an old `sha`, or a setting save with an old `expect` | Documents: `sha`, `diff` (§10.4). Settings: `settings`, the fresh settings (§15) |
+| 409 | `busy` | An API restart would interrupt a run or reply; the message is the service guard's reason | — |
+| 409 | `restarting` | Another restart of the same service is still running | — |
 | 409 | `too_big` | A document over `docs.MAX_BYTES` (256 KB) asked for as text | — |
 | 409 | `stale_version` | `seen` with a version that is no longer the feed's | `version`: str, the current one (§7.5) |
 | 413 | `too_large` | The body is over the limit (§1.3) | — |
@@ -998,3 +1000,82 @@ Every piece `web_views.chat_feed` and `live_activity` draw, and where it is in t
 | Earlier chats (header menu) | | §5 |
 | State and "what a message does now" (header) | | `/instances`: `state`, `since`, `busy_note` |
 | Next cycle's hint (composer) | | `/instances`: `next_cycle` |
+
+
+## 15. Instance settings and service restarts
+
+These routes use the same tailnet, host and device checks as the chat routes (§1.2). Writes log the paired
+device's name. Settings contain only the fields below. They never include secrets, base URLs, tool switches,
+plugin grants or global settings.
+
+| Method | Route under `/app/v1` | Success |
+|---|---|---|
+| GET | `/settings/<n>` | 200, the settings object below |
+| POST | `/settings/<n>` | 200, `{"settings": <fresh settings>, "applies": "next run" or "now"}` |
+| POST | `/settings/<n>/pause` | 200, `{"settings": <fresh settings>}` |
+| POST | `/settings/<n>/resume` | 200, `{"settings": <fresh settings>}` |
+| GET | `/services` | 200, `{"services": [<api>, <scheduler>]}` |
+| POST | `/services/api/restart` | 200, `{"services": [<api>, <scheduler>]}` |
+| POST | `/services/scheduler/restart` | 200, `{"services": [<api>, <scheduler>]}` |
+| POST | `/services/scheduler/cancel` | 200, `{"services": [<api>, <scheduler>]}` |
+
+### 15.1 Settings
+
+`GET /settings/<n>` returns these fields, all present:
+
+| Field | Value |
+|---|---|
+| `instance` | str, the instance name |
+| `paused` | bool, including a global operator pause |
+| `model` | `{"value": str, "choices": [{"model": str, "label": str}]}` |
+| `effort` | `{"value": str or null, "choices": [str] or null}` |
+| `wake_interval` | `{"value": int, "floor": int or null, "effective": int}`, in minutes |
+| `cloud_cap` | `{"value": float or null, "spent_today": float}`, in dollars |
+| `channel` | `{"value": str, "choices": ["auto", "web", "telegram"]}` |
+| `operator_name` | `{"value": str}` |
+
+Model choices come from `opconfig.model_choices()`. A current model absent from that list is appended with its
+model name as its label. Effort choices come from the instance's own `shaft/config.py`, parsed as text without
+importing or executing it. Unavailable choices are null. Wake `effective` comes from `autonomy.wake_interval`,
+including its floor and invalid-value fallback; zero means no scheduled wakes. `value` is the configured interval,
+or the scheduler default when missing or invalid.
+
+`POST /settings/<n>` takes exactly `{"field": str, "value": <new value>, "expect": <displayed value>}`.
+One field per request. Both values have the setting's type; booleans are not numbers. A missing field, extra field,
+unknown field, wrong type or non-finite number gives `400 bad_request`. Domain writers validate allowed values.
+
+| `field` | Writer | `applies` |
+|---|---|---|
+| `model` | `opconfig.set_values`, with `expect` covering `LLM_MODEL`; couples `LLM_BASE_URL` | `next run` |
+| `effort` | `opconfig.set_values`; null unsets the key | `next run` |
+| `wake_interval` | `opconfig.set_values`; the scheduler uses it on its next read | `now` |
+| `cloud_cap` | `core.limit_value` and `core._update_tool_settings` with `expect`; null removes the override | `now` |
+| `channel` | `channel.set_preference` with `expect`; only `auto`, `web`, `telegram` | `now` |
+| `operator_name` | `opconfig.set_values` | `next run` |
+
+Cloud-cap null means the per-instance override is off, matching `shaft limits ... off`. The configured supervisor
+default cap still applies. It does not mean unlimited cloud spending.
+
+A stale `expect` gives `409 stale` with `settings` inside `error`, containing the fresh settings. A writer refusal
+gives `409 refused` with its message. Config saves retain the domain writer's compare-and-set. Tool writers compare and atomically replace under the tools-file lock, shared with CLI and web writes.
+
+Pause and resume share the web action's command path. A pause applies now; a running cycle stops at its next turn.
+Their bodies may be empty.
+
+### 15.2 Services
+
+Each service has `name: str`, `running: bool`, `pid: int or null`, `started: str or null`, `commit: str or null`,
+and `busy: str`. The service record supplies its process and version fields, with timestamps as in §1.6. `busy`
+is `actions.service_guard(name, "restart")` verbatim, empty when free. API replies hold the run lock and are included.
+Only the scheduler also has `drain`, either null or `{"state": str, "waiting": [str], "deadline": str or null}`.
+A pending restart request appears as `draining` before the first drain tick only when its PID matches the running scheduler. Leftover requests for dead processes are ignored.
+
+API restart refuses with `409 busy` when its guard is nonempty. There is no force option. Otherwise it runs
+`api on` with `actions.SLOW_S`, as the web service action does. Scheduler restart runs `autonomy restart`.
+A pending drain is returned without requesting it again, preserving its deadline. Cancel runs
+`autonomy restart --cancel`. A second restart while the same service's command runs gives `409 restarting`. The web service action shares this lock.
+A failed command gives `409 refused` with the command's message. Successful commands return the fresh service list;
+the app confirms an actual restart by polling for a changed PID. A tracked `drained` state keeps polling for up to 90 seconds after first observation; timeout is unconfirmed and a later refresh can still confirm the new PID. An untracked old `drained` record is ignored.
+
+Only `api` and `scheduler` can be restarted here. Other service names, including `web`, `telegram`, `model` and
+`embed`, give `404 not_found`. Only the scheduler has a cancel route. Restart and cancel bodies may be empty.

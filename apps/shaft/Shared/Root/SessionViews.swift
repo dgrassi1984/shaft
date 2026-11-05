@@ -41,6 +41,7 @@ struct PairingView: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var link = ""
     @State private var pairing = false
+    @State private var settings = false
 
     var body: some View {
         ScrollView {
@@ -93,6 +94,10 @@ struct PairingView: View {
                 }
                 .buttonStyle(ProminentAction())
                 .disabled(link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || pairing)
+                #if os(iOS)
+                Button("Settings") { settings = true }
+                    .foregroundStyle(Color.brand)
+                #endif
                 if let problem = session.problem {
                     Label(problem, systemImage: "exclamationmark.triangle")
                         .foregroundStyle(Color.danger)
@@ -104,6 +109,9 @@ struct PairingView: View {
             .frame(maxWidth: .infinity)
         }
         .background(Color.canvas.ignoresSafeArea())
+        #if os(iOS)
+        .sheet(isPresented: $settings) { SettingsView(session: session) }
+        #endif
         .onChange(of: session.problem) { _, problem in
             if let problem { Announce.say(problem) }
         }
@@ -142,6 +150,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                AppearanceSection()
                 if let credential = session.credential {
                     Section("Server") {
                         LabeledContent("Address", value: credential.baseURL.absoluteString)
@@ -154,31 +163,36 @@ struct SettingsView: View {
                     }
                     .listRowBackground(Color.elevated)
                 }
-                Section("Notifications") {
-                    if let push {
-                        LabeledContent("Push", value: push.on ? "on (\(push.env ?? "?"))" : "off")
+                if session.isPaired {
+                    Section("Notifications") {
+                        if let push {
+                            LabeledContent("Push", value: push.on ? "on (\(push.env ?? "?"))" : "off")
+                        }
+                        let notes = PushStatus.notes(push, loadProblem: pushProblem, registered: session.pushStatus)
+                        ForEach(notes, id: \.self) { note in
+                            Text(note).font(.footnote).foregroundStyle(Color.textSecondary)
+                        }
+                        if push == nil && notes.isEmpty { ProgressView() }
+                        if let problem = push?.problem { Text(problem).font(.footnote).foregroundStyle(Color.warning) }
+                        if let error = model.pushError { Text(error).font(.footnote).foregroundStyle(Color.warning) }
                     }
-                    let notes = PushStatus.notes(push, loadProblem: pushProblem, registered: session.pushStatus)
-                    ForEach(notes, id: \.self) { note in
-                        Text(note).font(.footnote).foregroundStyle(Color.textSecondary)
+                    .listRowBackground(Color.elevated)
+                    if let store = session.store {
+                        ServerSection(store: store.services)
                     }
-                    if push == nil && notes.isEmpty { ProgressView() }
-                    if let problem = push?.problem { Text(problem).font(.footnote).foregroundStyle(Color.warning) }
-                    if let error = model.pushError { Text(error).font(.footnote).foregroundStyle(Color.warning) }
+                    Section {
+                        Button("Unpair this device", role: .destructive) { unpairing = true }
+                            .foregroundStyle(Color.danger)
+                            .rowTextButton()
+                        Button("Forget the pairing here only") { forgetting = true }
+                            .foregroundStyle(Color.brand)
+                            .rowTextButton()
+                    } footer: {
+                        Text("Unpair tells the server; Forget is for when it cannot be reached (then run `shaft web unpair` on the Mac).")
+                            .foregroundStyle(Color.textSecondary)
+                    }
+                    .listRowBackground(Color.elevated)
                 }
-                .listRowBackground(Color.elevated)
-                Section {
-                    Button("Unpair this device", role: .destructive) { unpairing = true }
-                        .foregroundStyle(Color.danger)
-                        .rowTextButton()
-                    Button("Forget the pairing here only") { forgetting = true }
-                        .foregroundStyle(Color.brand)
-                        .rowTextButton()
-                } footer: {
-                    Text("Unpair tells the server; Forget is for when it cannot be reached (then run `shaft web unpair` on the Mac).")
-                        .foregroundStyle(Color.textSecondary)
-                }
-                .listRowBackground(Color.elevated)
                 if let problem = session.problem {
                     Text(problem).foregroundStyle(Color.danger)
                 }
@@ -196,11 +210,16 @@ struct SettingsView: View {
             .formStyle(.grouped)
             #endif
             .task {
+                guard session.isPaired else { return }
                 do {
                     push = try await session.store?.client.pushStatus()
                 } catch {
                     pushProblem = APIError.from(error).message
                 }
+            }
+            .onDisappear {
+                if let services = session.store?.services, services.restarting.contains("scheduler"),
+                   !services.restarting.contains("api") { services.stop() }
             }
             .confirmationDialog("Unpair this device?", isPresented: $unpairing, titleVisibility: .visible) {
                 Button("Unpair", role: .destructive) { Task { await session.unpair() } }

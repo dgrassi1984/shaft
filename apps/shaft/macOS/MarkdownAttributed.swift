@@ -15,10 +15,10 @@ enum MacColor {
     static let textTertiary = token("textTertiary", tests: .tertiaryLabelColor)
     static let brand = token("accent", tests: .linkColor)
     static let onAccent = token("onAccent", tests: .white)
-    static let codeKeyword = NSColor(Color.codeKeyword)
-    static let codeString = NSColor(Color.codeString)
-    static let codeComment = NSColor(Color.codeComment)
-    static let codeNumber = NSColor(Color.codeNumber)
+    static var codeKeyword: NSColor { token("codeKeyword", tests: NSColor(Color.codeKeyword)) }
+    static var codeString: NSColor { token("codeString", tests: NSColor(Color.codeString)) }
+    static var codeComment: NSColor { token("codeComment", tests: NSColor(Color.codeComment)) }
+    static var codeNumber: NSColor { token("codeNumber", tests: NSColor(Color.codeNumber)) }
 }
 
 extension NSAttributedString.Key {
@@ -68,6 +68,7 @@ enum MarkdownAttributed {
 
     struct Rendered {
         let text: NSAttributedString
+        var textScale: CGFloat = 1
         let codeBlocks: [CodeBlock]
         let tables: [Table]
         /// The text in order, end to end. Each but the last ends with its paragraph's break.
@@ -85,15 +86,17 @@ enum MarkdownAttributed {
     /// A table's cell wraps here rather than make a line a screen wide (the same cap as iOS's).
     static let widestCell: CGFloat = 280
 
-    static func render(_ markdown: String, font: NSFont = .preferredFont(forTextStyle: .body)) -> Rendered {
+    static func render(_ markdown: String, font: NSFont = .preferredFont(forTextStyle: .body),
+                       scale: CGFloat = 1) -> Rendered {
+        let font = scale == 1 ? font : (NSFont(descriptor: font.fontDescriptor, size: font.pointSize * scale) ?? font)
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .full,
                                                               failurePolicy: .returnPartiallyParsedIfPossible)
         guard let parsed = try? AttributedString(markdown: TableColumns.aligned(AgentMarkdown.normalized(markdown)), options: options) else {
             let text = NSMutableAttributedString(string: markdown, attributes: [.font: font,
                                                                                 .foregroundColor: MacColor.textPrimary])
-            return finish(text: text, codeBlocks: [], tables: [])
+            return finish(text: text, codeBlocks: [], tables: [], scale: scale)
         }
-        var builder = Builder(font: font, streamingCode: endsInsideCodeFence(markdown))
+        var builder = Builder(font: font, scale: scale, streamingCode: endsInsideCodeFence(markdown))
         for run in parsed.runs {
             builder.add(String(parsed[run.range].characters), intent: run.presentationIntent,
                         inline: run.inlinePresentationIntent, link: run.link)
@@ -103,7 +106,9 @@ enum MarkdownAttributed {
 
     /// Plain text as the operator wrote it (`OperatorText`): quoted lines as a quote, fenced code as code, the rest
     /// with its line breaks. Not Markdown (§4.4 `user.text`).
-    static func operatorText(_ text: String, font: NSFont = .preferredFont(forTextStyle: .body)) -> Rendered {
+    static func operatorText(_ text: String, font: NSFont = .preferredFont(forTextStyle: .body),
+                             scale: CGFloat = 1) -> Rendered {
+        let font = scale == 1 ? font : (NSFont(descriptor: font.fontDescriptor, size: font.pointSize * scale) ?? font)
         let out = NSMutableAttributedString()
         var codeBlocks: [CodeBlock] = []
         let blocks = OperatorText.blocks(text)
@@ -134,7 +139,7 @@ enum MarkdownAttributed {
                                             language: nil))
             }
         }
-        return finish(text: out, codeBlocks: codeBlocks, tables: [])
+        return finish(text: out, codeBlocks: codeBlocks, tables: [], scale: scale)
     }
 
     static func codeFont(_ font: NSFont) -> NSFont {
@@ -190,7 +195,7 @@ enum MarkdownAttributed {
 
     /// The text ends without a break, its blocks are cut to it, and it is split into segments.
     fileprivate static func finish(text: NSMutableAttributedString, codeBlocks: [CodeBlock],
-                                   tables: [Table]) -> Rendered {
+                                   tables: [Table], scale: CGFloat = 1) -> Rendered {
         trimTrailingNewline(text)
         let all = NSRange(location: 0, length: text.length)
         let code = codeBlocks.map { CodeBlock(range: NSIntersectionRange($0.range, all), code: $0.code,
@@ -205,7 +210,7 @@ enum MarkdownAttributed {
             copy.paragraphSpacingBefore = 0
             text.addAttribute(.paragraphStyle, value: copy, range: first)
         }
-        return Rendered(text: text, codeBlocks: code, tables: tables, segments: segments)
+        return Rendered(text: text, textScale: scale, codeBlocks: code, tables: tables, segments: segments)
     }
 
     private static func split(length: Int, code: [CodeBlock], tables: [Table]) -> [Segment] {
@@ -237,6 +242,7 @@ enum MarkdownAttributed {
     /// Lays the runs out block by block.
     private struct Builder {
         let font: NSFont
+        let scale: CGFloat
         /// The source stops inside its last fenced block.
         let streamingCode: Bool
         let out = NSMutableAttributedString()
@@ -265,8 +271,9 @@ enum MarkdownAttributed {
             var end: Int?
         }
 
-        init(font: NSFont, streamingCode: Bool) {
+        init(font: NSFont, scale: CGFloat, streamingCode: Bool) {
             self.font = font
+            self.scale = scale
             self.streamingCode = streamingCode
         }
 
@@ -339,7 +346,7 @@ enum MarkdownAttributed {
             closeCode(unless: nil, finished: !streamingCode)
             closeCell()
             closeTable(unless: nil)
-            return MarkdownAttributed.finish(text: out, codeBlocks: codeBlocks, tables: finishTables())
+            return MarkdownAttributed.finish(text: out, codeBlocks: codeBlocks, tables: finishTables(), scale: scale)
         }
 
         private mutating func closeCode(unless leaf: Int?, finished: Bool = true) {
@@ -580,7 +587,7 @@ enum MarkdownAttributed {
                 cell.setWidth(Self.cellPaddingX, type: .absoluteValueType, for: .padding, edge: .maxX)
                 cell.setWidth(Self.cellPaddingY, type: .absoluteValueType, for: .padding, edge: .minY)
                 cell.setWidth(Self.cellPaddingY, type: .absoluteValueType, for: .padding, edge: .maxY)
-                let tableSize = NSFont.preferredFont(forTextStyle: .subheadline).pointSize
+                let tableSize = NSFont.preferredFont(forTextStyle: .subheadline).pointSize * scale
                 style.font = .monospacedDigitSystemFont(ofSize: tableSize, weight: headerRow ? .semibold : .regular)
                 if headerRow { style.color = MacColor.textSecondary }
                 blocks.append(cell)
@@ -683,7 +690,7 @@ extension MarkdownAttributed {
         /// reply's tail does.
         init(_ rendered: Rendered, after previous: Measure?) {
             self.rendered = rendered
-            guard let previous else { return }
+            guard let previous, rendered.textScale == previous.rendered.textScale else { return }
             let count = min(rendered.segments.count, previous.rendered.segments.count) - 1
             guard count > 0 else { return }
             let new = rendered.text.string as NSString

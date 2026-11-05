@@ -6,19 +6,34 @@ Everything here compiles for iOS and macOS; what differs per platform sits behin
 
 | Folder | What |
 |---|---|
+| `Design/` | tokens and `Appearance.swift`: per-device theme and reading text size, the Appearance settings section |
 | `Root/` | `SessionRoot` (startup error, pairing, or the paired app with the instances store in the environment), `PairingView`, `SettingsView`, `InstancesList` and its rows |
+| `Settings/` | `InstanceSettingsView` (server settings for one instance) and `ServerSection` (API restart and scheduler drain, shared with app settings through `session.store.services`) |
 | `Chat/` | `ChatScreen` (header, feed, composer, sheets; the long-poll only while visible and in front, `away`, seen, the new-reply announcement, drops), `ChatScreenModel` (sheets, focus requests, message actions, a send asked for by a menu), `ChatShell` (documents beside the chat), the sheets (Select text, a thumb's reason, earlier chats), `ArchivedChatView` (an earlier chat pushed over the current one) |
 | `Feed/` | `FeedView` (pinned to the bottom until scrolled up, Latest and New below in the bar above the composer, Show the N earlier messages), a view per item kind (§4.4) and per row after them (live reply, queued, pending feedback and edits, not sent) |
 | `Composer/` | quote cards with their answers, attachment chips, the field, Send or Stop, and a "More ways to send" chevron beside Send once there is text or other draft content (Queue after reply / Next cycle); these choices also stay in + and, on iOS, a long press on Send |
 | `Documents/` | the panel (folders, sort, new document), a document (rendered, threads, overwritten lines, Select text with Reply and Comment, Download, Delete), the editor with the stale-save choice, comments, `CommentHighlight.swift` and `DocumentMarkdown.swift` |
 | `Markdown/` | MarkdownUI with SHAFT's theme (tables that scroll, task lists, code with language, Copy and syntax colours), the operator's own text, Markdown as rendered text |
-| `Attachments/` | thumbnails and file chips through Quick Look (`FileViews.swift`); files coming in from Photos, a paste or a drop |
+| `Attachments/` | thumbnails and file chips (`FileViews.swift`); `FilePreviewView.swift` presents a sheet with `QLPreviewView` on macOS and Quick Look on iOS; files coming in from Photos, a paste or a drop |
 | `Platform/` | the text seams: the composer's field and selectable text (`TextViews.swift`, iOS), a message's text (`MessageText.swift`) |
 | `Support/` | times, the clipboard, announcements, small view helpers |
 
 If the initial chat list cannot load, the chat area shows the error, Retry and Settings on all three devices.
-The store keeps trying every few seconds while active; Retry restarts that loop immediately. Settings offers Unpair
+The store keeps trying every few seconds while active; Retry restarts that loop immediately. Settings offers Appearance before pairing, plus Unpair
 and "Forget the pairing here only" when the server cannot be reached.
+
+In a current chat, "Settings for <name>" is first in ⋯ and also in the title's model/spend popover. It opens a
+sheet on every platform; while it is open the chat is covered for read tracking. Archived chats omit both entries.
+The form reads values and choices from `InstanceSettingsStore`. Text edits save on submit, focus loss and disappearance.
+Successful saves show the server's value; refused saves preserve the draft. Pausing asks first; empty cloud cap
+removes the instance override, so the default cap still applies. Loading, load errors and older servers each have an explicit state.
+
+Both settings screens show the Services section (`ServerSection`) using the paired session's shared `ServicesStore`, including in the Mac
+Settings scene, which does not inherit the main window's store environment. API restarts ask first and retain the
+server's busy refusal; scheduler drains show their waiting list and Cancel. After `drained`, polling waits up to 90 seconds
+for a new PID; an unconfirmed result retains tracking for a later refresh. A screen leaving calls `stop()` only
+for a scheduler watch and only when no API restart is running, because `stop()` cancels all watchers. If both are
+running, both watches continue until completion or another settings screen closes without an API restart running.
 
 ## Platform seams
 
