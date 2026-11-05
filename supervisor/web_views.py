@@ -652,7 +652,7 @@ def _cycle_filters(name: str, filt: str) -> Html:
 def cycles_next(plan: dict) -> Html:
     now, check, step = plan["now"], plan["check"], plan["next_step"]
     current = rows([("State", _cycle_value(now["state"]))] +
-                   ([("Since", when(now["since"]))] if now["since"] else []) +
+                   ([("Since", now["since"])] if now["since"] else []) +
                    ([("Goal", _cycle_value(now["goal"]))] if now["goal"] is not None else []))
     checking = rows([("Next check", "paused" if check["paused"] else _cycle_value(check["next"]))] +
                     ([("Last skipped check", check["skipped"])] if check["skipped"] else []))

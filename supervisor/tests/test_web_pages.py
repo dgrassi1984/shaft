@@ -333,13 +333,13 @@ class TranscriptsTest(PagesTest):
         self.has("/i/shaft/transcripts?ts=" + self.record["ts"], '<h2>cycle 10-19 09:00</h2>',
                  '<ul class="lines wrap">')
 
-    def test_now_since_and_check_use_page_time_format(self):
+    def test_now_since_time_of_day_is_not_blank_after_timestamp_formatting(self):
         from supervisor import cycles
-        plan = cycles.plan("shaft", {"state": "idle", "since": "2026-10-19T08:00:00"})
+        plan = cycles.plan("shaft", {"state": "in a cycle", "since": "18:06"})
         plan["check"]["next"] = "12:30"
         plan["improvement"] = {"ts": "2026-10-18T14:20:00", "text": "improve"}
         with mock.patch.object(cycles, "plan", return_value=plan):
-            self.has("/fragment/i/shaft/cycles-next", ">Since</span>", "10-19 08:00", "12:30", "10-18 14:20")
+            self.has("/fragment/i/shaft/cycles-next", ">Since</span>", "18:06", "12:30", "10-18 14:20")
 
     def test_done_has_its_own_table_class(self):
         self.has("/i/shaft/transcripts", '<table class="cycles-done">', 'data-label="Goal"',
