@@ -22,7 +22,7 @@ FULLSCREEN = h('<button type="button" class="small icon" data-fullscreen-doc ari
                'aria-label="Full screen">{on}{off}</button>', on=ICONS["expand"], off=ICONS["collapse"])
 INSTANCE_TABS = [("chat", "Chat"), ("", "Summary"), ("config", "Config"), ("drive", "Drive"), ("files", "Files"), ("access", "Access"),
                  ("judge", "Judge"), ("changes", "Changes"), ("benchmarks", "Benchmarks"),
-                 ("transcripts", "Transcripts"), ("journal", "Journal"), ("activity", "Activity")]
+                 ("transcripts", "Cycles"), ("journal", "Journal"), ("activity", "Activity")]
 BUSY_ICONS = {"in a cycle": "busy", "working": "busy", "sleeping": "sleep", "paused by you": "pause",
               "in a conversation (waiting for you)": "waiting"}
 
@@ -617,24 +617,162 @@ def activity_page(name: str, a: dict, names: list[str], csrf: str) -> Html:
     return instance_frame(name, "activity", "activity", body, names, csrf)
 
 
-# -- instance › transcripts (TUI tab 0) ------------------------------------------------------------------------------
-TX_FILTERS = {"": "all", "cycles": "cycles", "conversations": "conversations"}
+# -- instance › cycles (the transcripts route and tab key) ----------------------------------------------------------
+TX_FILTERS = {"": "all", "yours": "for you", "short": "fell short", "delivered": "delivered",
+              "conversations": "conversations"}
 STYLE_CLASS = {"bold": "b", "dim": "dim", "bold green": "b good", "bold yellow": "b warn", "bold cyan": "b talk-text",
                "cyan": "talk-text", "bold underline": "b u"}
 
 
+def _cycle_value(value) -> str:
+    if value is None or value == "" or value == [] or value == {}:
+        return "unknown"
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+def _cycle_verdict(verdict) -> Html:
+    return h('<span class="badge {tone}">{v}</span>', tone=MARK.get(verdict, ("?", ""))[1],
+             v=_cycle_value(verdict))
+
+
+def _cycle_filters(name: str, filt: str) -> Html:
+    return h('<p>{tabs}</p>', tabs=join([
+        link(f"/i/{q(name)}/transcripts" + (f"?f={k}" if k else ""), label) if k != filt
+        else h("<b>{l}</b>", l=label) for k, label in TX_FILTERS.items()], " · "))
+
+
+def cycles_next(plan: dict) -> Html:
+    now, check, step = plan["now"], plan["check"], plan["next_step"]
+    current = rows([("State", _cycle_value(now["state"])), ("Since", _cycle_value(now["since"]))] +
+                   ([("Goal", _cycle_value(now["goal"]))] if now["goal"] is not None else []))
+    checking = rows([("Next check", "paused" if check["paused"] else _cycle_value(check["next"]))] +
+                    ([("Last skipped check", check["skipped"])] if check["skipped"] else []))
+    said = (rows([("From cycle", step["ts"]), ("Action", step["action"])] +
+                 ([("Revise if", step["revise_if"])] if step["revise_if"] else [])) if step else
+            h('<p class="dim">no next action recorded</p>'))
+    commitments = lines([h('{p} · due {d} · <span class="{c}">{s}</span>',
+                          p=it["promise"], d=_cycle_value(it["due"]), s=it["status"],
+                          c="warn" if it["status"] == "overdue" else "") for it in plan["commitments"]],
+                        "no open commitments")
+    if plan["commitments_error"]:
+        commitments = h('<p class="warn">{e}</p>', e=plan["commitments_error"])
+    queue = plan["queue"]
+    if queue["state"] == "unreadable":
+        tasks = h('<p class="warn">{e}</p>', e=queue["error"])
+    elif queue["state"] == "none":
+        tasks = h('<p class="dim">no task queue</p>')
+    else:
+        tasks = lines([h('{t} · {d}{late}', t=it["task"], d=it["due_at"] or "due now",
+                         late=" · overdue" if it["overdue"] else "") for it in queue["rows"]], "no open tasks")
+        if queue["open"] > len(queue["rows"]):
+            tasks = join([tasks, h('<p>{n} more</p>', n=queue["open"] - len(queue["rows"]))])
+    goals = (h('<p class="warn">{e}</p>', e=plan["goals_error"]) if plan["goals_error"] else
+             markdown(plan["goals"]) if plan["goals"].strip() else h('<p class="dim">goals file is empty</p>'))
+    improvement = plan["improvement"]
+    improve = (join([h('<p>{ts}</p>', ts=improvement["ts"]), markdown(improvement["text"])]) if improvement else
+               h('<p class="dim">no improvement plan recorded</p>'))
+    return join([h('<h3>Now</h3>{now}{check}<h3>Said it would do next</h3>{said}<h3>Unfinished</h3>{left}'
+                   '<h3>Commitments</h3>{commitments}<h3>Task queue</h3>{tasks}',
+                   now=current, check=checking, said=said, left=lines(plan["unfinished"], "nothing recorded"),
+                   commitments=commitments, tasks=tasks),
+                 h('<details><summary>Goals</summary>{goals}</details>'
+                   '<details><summary>Improvement plan</summary>{improve}</details>', goals=goals, improve=improve)])
+
+
+def cycles_page(name: str, plan: dict, days: dict, filt: str, names: list[str], csrf: str) -> Html:
+    done = []
+    if days["judge_error"]:
+        done.append(h('<p class="warn">{e}</p>', e=days["judge_error"]))
+    for day in days["days"]:
+        counts = day["counts"]
+        count_text = (f"{counts['cycles']} cycles · {counts['yes']} yes · {counts['partial']} partial · "
+                      f"{counts['no']} no (claimed) · {counts['judged']} judged · {counts['for_you']} for you")
+        done.append(h('<h3>{date}</h3><p>{counts}</p>', date=day["date"], counts=count_text))
+        if day["skipped_lines"]:
+            done.append(h('<p class="warn">{n} skipped lines</p>', n=day["skipped_lines"]))
+        body = []
+        for row in day["rows"]:
+            live = row["kind"] == "cycle"
+            claim = (f"claimed {row['claim']}" if row["claim"] is not None else "no finish") if live else ""
+            body.append([link(f"/i/{q(name)}/transcripts?ts={q(row['id'])}", when(row["ts"])), row["kind"],
+                         h('<span class="clip">{g}</span>',
+                           g=row["goal"] or ("no intent recorded" if live else row["kind"])),
+                         claim, _cycle_verdict(row["verdict"]) if row["verdict"] is not None else "",
+                         "delivered" if row["delivered"] else ""])
+        done.append(table(["End time", "Kind", "Goal", "Claim", "Judge", "Delivery"], body))
+    if not days["days"]:
+        done.append(h('<p class="dim">no cycles yet</p>'))
+    if days["next"]:
+        done.append(link(f"/i/{q(name)}/transcripts?before={q(days['next'])}" + (f"&f={q(filt)}" if filt else ""),
+                         "Earlier days"))
+    body = join([section("Next", h('<div data-poll="/fragment/i/{n}/cycles-next">{next}</div>',
+                                   n=q(name), next=cycles_next(plan))),
+                 section("Done", join([_cycle_filters(name, filt), *done]))])
+    return instance_frame(name, "transcripts", "cycles", body, names, csrf)
+
+
+def cycle_page(name: str, cycle: dict, names: list[str], csrf: str) -> Html:
+    back = link(f"/i/{q(name)}/transcripts", "← Cycles")
+    raw = link(f"/i/{q(name)}/transcript?id={q(cycle['where'])}", "Raw transcript")
+    body = [h('<p>{back} · {raw}</p><h2>{kind} {ts}</h2>', back=back, raw=raw, kind=cycle["kind"], ts=cycle["ts"])]
+    did = cycle["did"]
+    did_fields = [("What happened", "what_happened"), ("Duration (seconds)", "duration_s"), ("Cost (USD)", "usd"),
+                  ("Tool calls", "tool_calls"), ("Ended by", "ended_by"), ("Wrapped up", "wrapped_up"),
+                  ("Delivered via", "delivered_via")]
+    if cycle["kind"] != "cycle":
+        content = cycle["content"]
+        body += [section("Content", markdown(content) if content else h('<p class="dim">no content recorded</p>')),
+                 section("Did", rows([(label, _cycle_value(did[key])) for label, key in did_fields[3:5]]))]
+    else:
+        planned = cycle["planned"]
+        planned_fields = [("Goal", "goal"), ("Success criterion", "success_criterion"), ("Origin", "origin"),
+                          ("Origin reference", "origin_ref"), ("Confidence", "confidence"),
+                          ("Predictions", "predictions")]
+        body.append(section("Planned", rows([(label, _cycle_value(planned[key])) for label, key in planned_fields] +
+                                            ([("Attention", _cycle_value(planned["attention"]))]
+                                             if planned["attention"] is not None else [])) if planned else
+                            h('<p class="dim">no intent recorded</p>')))
+        body.append(section("Did", rows([(label, _cycle_value(did[key])) for label, key in did_fields])))
+        result = cycle["result"]
+        judgments = [h('<p>{claim}</p>',
+                       claim=f"claimed {result['claim']}" if result["claim"] is not None else "no finish")]
+        if result["judge_error"]:
+            judgments.append(h('<p class="warn">{e}</p>', e=result["judge_error"]))
+        for key, label in [("judge", "Judge"), ("second", "Second judge")]:
+            judge = result[key]
+            if judge is None:
+                if key == "judge":
+                    judgments.append(h('<p class="dim">not judged</p>'))
+                continue
+            judgments.append(h('<h3>{label}</h3><p>{verdict}</p>',
+                               label=label, verdict=_cycle_verdict(judge["verdict"])))
+            if judge["error"]:
+                judgments.append(h('<p class="warn">{e}</p>', e=judge["error"]))
+            judgments.append(rows([(label, _cycle_value(judge[key])) for label, key in
+                                   [("Claim supported", "claim_supported"), ("First error", "first_error"),
+                                    ("Reasoning", "reasoning"), ("Model", "model")]]))
+        judgments.append(rows([("Surprises", _cycle_value(result["surprises"])),
+                               ("Doubts", _cycle_value(result["doubts"]))]))
+        body.append(section("Result", join(judgments)))
+        left = cycle["left"]
+        nxt = left["next_action"]
+        remaining = [("Next action", _cycle_value(nxt.get("action") if nxt else None))]
+        if nxt and nxt.get("revise_if"):
+            remaining.append(("Revise if", nxt["revise_if"]))
+        remaining.append(("The next cycle's goal", _cycle_value(left["next_goal"])))
+        body.append(section("Left", join([h('<h3>Unfinished</h3>{items}',
+                                            items=lines(left["unfinished"], "nothing recorded")), rows(remaining)])))
+    return instance_frame(name, "transcripts", "cycle", join(body), names, csrf)
+
+
 def transcripts_page(name: str, es: list[dict], filt: str, summary, live: dict, names: list[str], csrf: str) -> Html:
-    tabs = join([link(f"/i/{q(name)}/transcripts" + (f"?f={k}" if k else ""), label) if k != filt
-                 else h("<b>{l}</b>", l=label) for k, label in TX_FILTERS.items()], " · ")
-    note = (h(' · <span class="warn">the cycle running now (since {s}) appears when it ends</span>',
-              s=live.get("since", "?")) if live.get("state") == "in a cycle" else Html(""))
-    head = h('<section class="panel"><p>{tabs}</p><p class="dim">{n} {what} · newest first{note}</p></section>',
-             tabs=tabs, n=len(es), what=TX_FILTERS[filt] if filt else "transcripts", note=note)
     body = [[link(f"/i/{q(name)}/transcript?id={q(e['id'])}", when(e["ts"])),
              h('<span class="kind-{k}">{k}</span>', k=e["kind"]), clip(summary(e))] for e in es]
-    listing = table(["when", "kind", "summary"], body) if body else h('<p class="dim">no {w} yet</p>',
-                                                                       w=TX_FILTERS[filt] if filt else "transcripts")
-    return instance_frame(name, "transcripts", "transcripts", join([head, section("Transcripts", listing)]), names, csrf)
+    listing = table(["when", "kind", "summary"], body) if body else h('<p class="dim">no conversations yet</p>')
+    return instance_frame(name, "transcripts", "cycles", join([_cycle_filters(name, filt),
+                                                               section("Conversations", listing)]), names, csrf)
 
 
 def transcript_page(name: str, e: dict, tx_lines: list[tuple[str, str]], thinking: bool, names: list[str],

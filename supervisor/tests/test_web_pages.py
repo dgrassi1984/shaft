@@ -23,6 +23,7 @@ class PagesTest(WebTest):
         self.inst = Path(tempfile.mkdtemp(prefix="shaft-web-inst-")).resolve()
         self.addCleanup(shutil.rmtree, self.inst, True)
         (self.inst / "shaft" / "shaft").mkdir(parents=True)
+        (self.inst / "shaft" / ".git").write_text("")
         for p in (mock.patch.object(web, "_names", return_value=["shaft", "wren"]),
                   mock.patch.object(panel, "instance_detail", return_value=DETAIL),
                   mock.patch.object(panel, "judgments", return_value=[JUDGMENT]),
@@ -45,6 +46,10 @@ class PagesTest(WebTest):
                       {"name": "scheduler", "running": False, "detail": "", "pid": None, "stale": False}]),
                   mock.patch.object(panel, "scheduled_runs", return_value=[]),
                   mock.patch.object(panel, "log_tail", return_value=["line one"]),
+                  mock.patch("supervisor.autonomy.next_wake", return_value="never"),
+                  mock.patch("supervisor.autonomy.last_skip", return_value=""),
+                  mock.patch("supervisor.autonomy.paused", return_value=False),
+                  mock.patch("supervisor.commitments.INSTANCES", self.inst),
                   mock.patch("supervisor.core.INSTANCES", self.inst),
                   mock.patch("supervisor.core.instance_root", side_effect=lambda n: self.inst / n)):
             p.start()
@@ -289,26 +294,102 @@ class MarkdownTest(PagesTest):
 
 
 class TranscriptsTest(PagesTest):
-    TALK = {"id": "talk:api-1", "kind": "conversation", "ts": "2026-10-19T10:00:00", "where": "memory/episodes/a.jsonl:3",
-            "turns": [{"role": "user", "content": "hi <b>", "ts": "2026-10-19T10:00:00"},
-                      {"role": "assistant", "content": "hello", "reasoning": "secret plan", "ts": "2026-10-19T10:00:05"}],
-            "writeups": [], "via": "api", "last": "2026-10-19T10:00:05"}
-    CYCLE = {"id": "memory/episodes/a.jsonl:1", "kind": "cycle", "ts": "2026-10-19T09:00:00",
-             "where": "memory/episodes/a.jsonl:1", "record": {"intent": {"goal": "tidy notes"}, "tools": [], "steps": 3,
-                                                              "ended_by": "answer", "finish": {"criterion_met": "yes"}}}
-
     def setUp(self):
         super().setUp()
-        p = mock.patch.object(panel, "transcripts", return_value=[self.TALK, self.CYCLE])
-        p.start()
-        self.addCleanup(p.stop)
-        (self.inst / "shaft" / "config.env").write_text('OPERATOR_NAME="the operator"\n')
+        self.root = self.inst / "shaft"
+        self.episodes = self.root / "memory" / "episodes"
+        self.episodes.mkdir(parents=True)
+        (self.root / "self").mkdir()
+        (self.root / "notes").mkdir()
+        self.record = {"kind": "live", "ts": "2026-10-19T09:00:00", "intent": {"goal": "tidy notes"},
+                       "finish": {"criterion_met": "yes", "next_action": {"action": "check notes",
+                                                                     "revise_if": "notes change"}}}
+        self.talks = [{"kind": "talk", "talk_id": "api-1", "via": "api", "role": role, "content": text,
+                       "reasoning": "secret plan" if role == "assistant" else "", "ts": ts}
+                      for role, text, ts in [("user", "hi <b>", "2026-10-19T10:00:00"),
+                                             ("assistant", "hello", "2026-10-19T10:00:05")]]
+        self.seed()
 
-    def test_the_list_and_its_filters(self):
-        self.has("/i/shaft/transcripts", "2 transcripts", "tidy notes", "via api")
-        only = self.get("/i/shaft/transcripts?f=cycles")
-        self.assertIn("tidy notes", only)
-        self.assertNotIn("via api", only)
+    def seed(self, extra=()):
+        (self.episodes / "2026-10-19.jsonl").write_text(
+            "\n".join(json.dumps(r) for r in [self.record, *self.talks, *extra]) + "\n")
+
+    def test_next_and_done_render(self):
+        self.has("/i/shaft/transcripts", "Next check", "Said it would do next", "tidy notes", "claimed yes",
+                 "notes change", "1 cycles · 1 yes · 0 partial · 0 no (claimed) · 0 judged · 0 for you")
+
+    def test_the_tab_says_cycles(self):
+        self.has("/i/shaft", ">Cycles<")
+
+    def test_a_claim_alone_says_not_judged_on_the_detail(self):
+        self.has("/i/shaft/transcripts?ts=2026-10-19T09:00:00", "not judged", "Planned", "Did", "Result", "Left",
+                 "unknown", "claimed yes", "/i/shaft/transcript?id=memory%2Fepisodes%2F2026-10-19.jsonl%3A1")
+
+    def test_the_filters(self):
+        self.assertNotIn("tidy notes", self.get("/i/shaft/transcripts?f=yours"))
+        self.has("/i/shaft/transcripts?f=conversations", "via api")
+        self.has("/i/shaft/transcripts?f=invalid", "tidy notes")
+
+    def test_instance_text_is_escaped(self):
+        self.record["intent"]["goal"] = "<script>x</script>"
+        self.record["finish"]["what_happened"] = "<script>x</script>"
+        self.seed()
+        (self.root / "self" / "goals.md").write_text("[x](javascript:alert(1))")
+        (self.root / "notes" / "queue.json").write_text(json.dumps([{"id": 1, "task": "<script>x</script>"}]))
+        body = self.get("/i/shaft/transcripts") + self.get("/i/shaft/transcripts?ts=2026-10-19T09:00:00")
+        self.assertNotIn("<script>x", body)
+        self.assertNotIn('href="javascript:', body)
+        self.assertIn("&lt;script&gt;x&lt;/script&gt;", body)
+
+    def test_no_queue_and_a_broken_queue_say_so(self):
+        self.has("/i/shaft/transcripts", "no task queue", "no goals file")
+        (self.root / "notes" / "queue.json").write_text("{}")
+        self.has("/i/shaft/transcripts", "could not read notes/queue.json: not a list of tasks")
+
+    def test_an_unknown_cycle_is_a_404(self):
+        self.get("/i/shaft/transcripts?ts=2026-10-19T08:00:00", 404)
+
+    def test_the_next_fragment_polls(self):
+        self.has("/i/shaft/transcripts", 'data-poll="/fragment/i/shaft/cycles-next"')
+        self.has("/fragment/i/shaft/cycles-next", "Next check", "check notes")
+        self.get("/fragment/i/absent/cycles-next", 404)
+
+    def test_bad_dates_are_ignored_and_earlier_days_keep_the_filter(self):
+        for date in ("bad", "20261019", "2026-02-30"):
+            self.has("/i/shaft/transcripts?before=" + date, "tidy notes")
+        for day in range(11, 19):
+            record = {**self.record, "ts": f"2026-10-{day}T09:00:00"}
+            (self.episodes / f"2026-10-{day}.jsonl").write_text(json.dumps(record))
+        self.has("/i/shaft/transcripts?f=short", "no cycles yet")
+        self.record["finish"]["criterion_met"] = "partial"
+        for day in range(11, 20):
+            record = {**self.record, "ts": f"2026-10-{day}T09:00:00"}
+            (self.episodes / f"2026-10-{day}.jsonl").write_text(json.dumps(record))
+        self.has("/i/shaft/transcripts?f=short", "Earlier days", "before=2026-10-12", "f=short")
+        self.has("/i/shaft/transcripts?f=short&before=2026-10-12", "2026-10-12", "2026-10-11")
+
+    def test_no_finish_sleep_and_reflection(self):
+        del self.record["finish"]
+        self.seed([{"kind": kind, "ts": ts, "content": "# rest", "ended_by": "answer"}
+                   for kind, ts in [("sleep", "2026-10-19T11:00:00"), ("reflect", "2026-10-19T12:00:00")]])
+        body = self.has("/i/shaft/transcripts", "no finish", "sleep", "reflection")
+        self.assertNotIn("claimed", body.split("<tbody>")[1].split("tidy notes")[0])
+        self.has("/i/shaft/transcripts?ts=2026-10-19T11:00:00", "<h2>rest</h2>", "answer", "Tool calls")
+
+    def test_claim_and_verdict_are_distinct(self):
+        judge = {"episode_ts": self.record["ts"], "criterion_met": "partial", "judge": "test model",
+                 "second": {"criterion_met": "no", "judge": "second model", "error": "second error"}}
+        with mock.patch.object(panel, "judgments", return_value=[judge]):
+            self.has("/i/shaft/transcripts", "claimed yes", 'class="badge warn">partial</span>')
+            self.has("/i/shaft/transcripts?ts=" + self.record["ts"], "claimed yes", "test model", "Second judge",
+                     'class="badge bad">no</span>', "second error")
+
+    def test_reader_errors_and_skipped_lines_are_visible(self):
+        with (self.episodes / "2026-10-19.jsonl").open("a") as f:
+            f.write("broken\n")
+        with mock.patch.object(panel, "judgments", side_effect=OSError("judge unavailable")):
+            self.has("/i/shaft/transcripts", "judge unavailable", "1 skipped lines")
+            self.has("/i/shaft/transcripts?ts=" + self.record["ts"], "judge unavailable")
 
     def test_a_conversation_hides_its_thinking_until_asked(self):
         url = "/i/shaft/transcript?id=talk%3Aapi-1"
