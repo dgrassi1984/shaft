@@ -1,6 +1,8 @@
 """The OpenAI-compatible API: who may use it, and that its output is what OpenAI clients expect."""
 from __future__ import annotations
 
+import contextlib
+import subprocess
 import io
 import json
 import threading
@@ -662,8 +664,6 @@ class InboxDoorbellTest(unittest.TestCase):
         self.assertEqual(oct((self.project / ".env").stat().st_mode & 0o777), "0o600")
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class ConversationIdTest(unittest.TestCase):
@@ -734,3 +734,74 @@ class StreamHeardTest(unittest.TestCase):
                       if l.startswith("data: {")]
         self.assertEqual(chunks[-1]["choices"][0]["finish_reason"], "stop")
         self.assertEqual(chunks[-1]["interjections_heard"], 0)
+
+
+class OutsideTheGuiSessionTest(unittest.TestCase):
+    """The Mac app's Tailscale CLI exits 0 and prints this on stdout outside the GUI session, where launchd jobs run."""
+    REFUSED = ("The Tailscale GUI failed to start: The operation couldn’t be completed. "
+               "(Tailscale.CLIError error 3.)\n")
+    STATUS = json.dumps({"Self": {"DNSName": "mac.example.ts.net."}})
+
+    def answers(self, *a):
+        return subprocess.CompletedProcess(a, 0, stdout=self.REFUSED, stderr="")
+
+    def test_api_on_outside_the_gui_session_does_not_crash_after_restarting_20261105(self):
+        """The app's Restart API restarted it, then `url()` died parsing this message: a working restart read as failed."""
+        out = io.StringIO()
+        with mock.patch.object(api, "_tailscale", side_effect=self.answers), \
+                mock.patch.object(api, "secrets_env", return_value={
+                    "SHAFT_API_KEY": "k", "SHAFT_INBOX_KEY": "i", "SHAFT_API_LOGINS": "me"}), \
+                mock.patch("supervisor.autonomy.service", return_value=0) as service, \
+                mock.patch("supervisor.autonomy.running", return_value=True), \
+                mock.patch.object(api, "log") as logged, contextlib.redirect_stdout(out):
+            self.assertEqual(api.command("on"), 0)
+        service.assert_called_once_with("api", "on")
+        said = " ".join(str(c.args[0]) for c in logged.call_args_list)
+        self.assertNotIn("api exposed", said)
+        self.assertIn("left as it was", said)
+        self.assertIn("API restarted", out.getvalue())
+
+    def test_a_first_start_outside_the_gui_session_is_not_reported_as_exposed(self):
+        err = io.StringIO()
+        with mock.patch.object(api, "_tailscale", side_effect=self.answers), \
+                mock.patch.object(api, "secrets_env", return_value={
+                    "SHAFT_API_KEY": "k", "SHAFT_INBOX_KEY": "i", "SHAFT_API_LOGINS": "me"}), \
+                mock.patch("supervisor.autonomy.running", return_value=False), \
+                mock.patch("supervisor.autonomy.service", return_value=0) as service, \
+                mock.patch.object(api, "log") as logged, \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
+            self.assertEqual(api.command("on"), 1)
+        service.assert_called_once_with("api", "on")
+        self.assertIn("API started but is not exposed on the tailnet", err.getvalue())
+        self.assertIn("CLI refuses to run outside the GUI session", err.getvalue())
+        self.assertIn("shaft api on", err.getvalue())
+        self.assertIn("terminal of the logged-in session", err.getvalue())
+        logged.assert_called_once_with(err.getvalue().strip())
+
+    def test_url_with_tailscales_refusal_says_so(self):
+        with mock.patch.object(api, "_tailscale", side_effect=self.answers):
+            self.assertEqual(api.url(), "(the tailnet address is not available from this session)")
+
+    def test_a_normal_status_still_gives_the_address_and_exposes_it(self):
+        def answers(*a):
+            return subprocess.CompletedProcess(a, 0, stdout=self.STATUS if "status" in a else "", stderr="")
+        with mock.patch.object(api, "_tailscale", side_effect=answers), \
+                mock.patch.object(api, "secrets_env", return_value={
+                    "SHAFT_API_KEY": "k", "SHAFT_INBOX_KEY": "i", "SHAFT_API_LOGINS": "me"}), \
+                mock.patch("supervisor.autonomy.service", return_value=0), \
+                mock.patch("supervisor.autonomy.running", return_value=False), \
+                mock.patch.object(api, "allowed_logins", return_value={"me"}), \
+                mock.patch.object(api, "log") as logged, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(api.command("on"), 0)
+            self.assertEqual(api.url(), f"https://mac.example.ts.net:{api.HTTPS_PORT}/v1")
+        self.assertIn("api exposed", " ".join(str(c.args[0]) for c in logged.call_args_list))
+
+    def test_garbage_that_is_not_the_refusal_is_not_swallowed(self):
+        def answers(*a):
+            return subprocess.CompletedProcess(a, 0, stdout="not json", stderr="")
+        with mock.patch.object(api, "_tailscale", side_effect=answers), self.assertRaises(ValueError):
+            api.url()
+
+
+if __name__ == "__main__":
+    unittest.main()
