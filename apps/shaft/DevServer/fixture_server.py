@@ -59,7 +59,8 @@ def setup(base: Path, port: int):
     os.environ["SHAFT_SUPERVISOR_DIR"] = str(base / "sup")       # before the supervisor is imported: SUP_DIR follows it
     sys.path.insert(0, str(ROOT))
     import supervisor
-    from supervisor import actions, autonomy, channel, cloudllm, core, dashboard, docs, messages, opconfig, version, web, web_chat, webpush, web_settings
+    from supervisor import (actions, autonomy, channel, cloudllm, commitments, core, dashboard, docs, messages, metrics,
+                            opconfig, version, web, web_chat, webpush, web_settings)
 
     inst = base / "instances"
     for name in INSTANCES:
@@ -166,8 +167,11 @@ def setup(base: Path, port: int):
               mock.patch.object(web, "_live", side_effect=lambda n: _state(base).get(n, {})),
               mock.patch.object(web, "_next_cycle", side_effect=lambda n: _next(base, n)),
               mock.patch.object(autonomy, "next_cycle", side_effect=lambda n: _next(base, n)),
+              mock.patch.object(autonomy, "next_wake",
+                                side_effect=lambda n, now=None: _state(base).get(n, {}).get("next_check", "never")),
               mock.patch.object(autonomy, "event_wake", lambda *a, **k: None),
               mock.patch.object(core, "INSTANCES", inst), mock.patch.object(messages, "INSTANCES", inst),
+              mock.patch.object(commitments, "INSTANCES", inst), mock.patch.object(metrics, "INSTANCES", inst),
               mock.patch.object(docs, "instance_root", lambda n: inst / n),
               mock.patch.object(actions, "run_now", side_effect=run_now),
               mock.patch.object(actions, "service_guard", side_effect=lambda name, action:
@@ -426,6 +430,66 @@ def _png(path: Path) -> int:
     return len(data)
 
 
+def _seed_cycles(base: Path, now: datetime) -> None:
+    """Only Thelos has cycle records; Wren keeps the Cycles empty states."""
+    root = base / "instances" / "thelos"
+    episodes = root / "memory" / "episodes"
+    episodes.mkdir(parents=True, exist_ok=True)
+    end = now.replace(hour=9, minute=0, second=0)
+    records = [
+        {"kind": "live", "ts": end.isoformat(),
+         "run_started": (end - timedelta(seconds=90)).isoformat(),
+         "intent": {"goal": "Riconciliare il registro", "success_criterion": "I totali coincidono",
+                    "origin": "operator", "confidence": 80, "predictions": ["Nessuna differenza"]},
+         "finish": {"criterion_met": "yes", "what_happened": "Ho corretto due arrotondamenti.",
+                    "delivered_via": "web_document",
+                    "doubts": [{"step": 1, "what": "Manca la verifica di novembre."}],
+                    "unfinished": ["Pubblicare novembre"],
+                    "next_action": {"action": "Controllare novembre", "revise_if": "Arrivano nuovi dati"}},
+         "project_usage": {"usd": 0.04}, "ended_by": "finish_cycle", "tools": []},
+        {"kind": "live", "ts": (end - timedelta(hours=1)).isoformat(),
+         "intent": {"goal": "Controllare i conti", "origin": "self"},
+         "finish": {"criterion_met": "partial", "what_happened": "Mancano due ricevute."}, "tools": []},
+        {"kind": "live", "ts": (end - timedelta(days=1)).isoformat(),
+         "intent": {"goal": "Leggere le ricevute"}, "ended_by": "limit", "tools": []},
+        {"kind": "sleep", "ts": (end - timedelta(days=1, hours=1)).isoformat(),
+         "content": "## Riposo\n\nHo rivisto il lavoro di ieri.", "ended_by": "sleep", "tools": []},
+    ]
+    for days_ago in range(2, 8):
+        records.append({
+            "kind": "live", "ts": (end - timedelta(days=days_ago)).isoformat(),
+            "intent": {"goal": f"Verificare il registro, giorno {days_ago}"},
+            "ended_by": "limit", "tools": [],
+        })
+    by_day = {}
+    for record in records:
+        by_day.setdefault(record["ts"][:10], []).append(record)
+    for day, rows in by_day.items():
+        (episodes / f"{day}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in reversed(rows)))
+    (root / "self").mkdir(exist_ok=True)
+    (root / "self" / "goals.md").write_text("# Obiettivi\n\nConsegnare un registro verificabile.\n")
+    (root / "notes" / "queue.json").write_text(json.dumps([
+        {"id": 1, "task": "Controllare novembre", "due_at": end.date().isoformat(), "status": "open"},
+        {"id": 2, "task": "Inviare il riepilogo", "due_at": "", "status": "open"},
+        {"id": 3, "task": "Rivedere le ricevute", "due_at": "dopo la revisione", "status": "open"},
+    ]))
+    (root / "memory" / "commitments.jsonl").write_text(json.dumps({
+        "event": "made", "id": "c1105-0900-1", "at": end.isoformat(), "source": "cycle",
+        "promise": "Inviare il registro", "criterion": "Registro consegnato", "made_to": "operator",
+        "due": (end + timedelta(days=1)).isoformat(),
+    }) + "\n")
+    (root / "memory" / "journal.md").write_text(
+        f"## {end:%Y-%m-%d %H:%M} — Sleep\n\n**How I will improve:** controllare prima i totali.\n\n"
+        "*Consolidation actions:* nessuna.\n")
+    judgments = base / "sup" / "judgments"
+    judgments.mkdir(exist_ok=True)
+    (judgments / "thelos.jsonl").write_text(json.dumps({
+        "episode_ts": end.isoformat(), "criterion_met": "partial", "claim_supported": False,
+        "first_error": "Manca la verifica di novembre.",
+        "reasoning": "Manca la verifica di novembre.", "judge": "fixture judge",
+    }) + "\n")
+
+
 def seed(base: Path, web, web_chat, messages) -> None:
     from supervisor import doc_comments, feedback
     if (base / "seeded").exists():
@@ -444,6 +508,8 @@ def seed(base: Path, web, web_chat, messages) -> None:
             box = base / "sup" / "operator-inbox" if to == "operator" else inst / to / "inbox"
             box.mkdir(parents=True, exist_ok=True)
             (box / file).write_text(text)
+
+    _seed_cycles(base, now)
 
     size = _png(inst / "thelos" / "attachments" / "ci-run.png")
     (inst / "thelos" / "attachments" / "totals.csv").write_text("account,total\noperating,12401.19\nreserve,3050.00\n")
@@ -517,7 +583,7 @@ def seed(base: Path, web, web_chat, messages) -> None:
                        {"role": "assistant", "ts": ts(89), "content": "Watered. The soil was *dry*."}]})
     (base / "state.json").write_text(json.dumps({
         "thelos": {"state": "in a cycle", "since": now.strftime("%H:%M"), "model": "cloud claude-sonnet-5",
-                   "usd_today": 0.42,
+                   "usd_today": 0.42, "goal": "Controllare novembre", "next_check": "18:30",
                    "next_cycle": "a cycle is running and read its inbox when it began: this starts the next one once it ends"},
         "wren": {"state": "idle", "model": "qwen3.6-35b", "next_cycle": "for wren's next cycle, which this starts now"},
         "ada": {"state": "sleeping", "since": "until 18:30", "model": "qwen3.6-35b"}}, indent=1))

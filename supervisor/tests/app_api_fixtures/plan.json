@@ -1,0 +1,53 @@
+{
+  "now": {
+    "state": "idle",
+    "since": null,
+    "goal": null
+  },
+  "check": {
+    "next": "12:05",
+    "skipped": "",
+    "paused": false
+  },
+  "next_step": {
+    "action": "Review totals",
+    "revise_if": "Already checked",
+    "at": "2026-11-03T13:58:40+01:00"
+  },
+  "unfinished": [
+    "Review"
+  ],
+  "commitments": [],
+  "commitments_error": "",
+  "queue": {
+    "state": "rows",
+    "open": 3,
+    "overdue": 0,
+    "error": "",
+    "rows": [
+      {
+        "id": 1,
+        "task": "Review report",
+        "due_at": "2099-11-04T12:00:00+01:00",
+        "overdue": false
+      },
+      {
+        "id": 3,
+        "task": "Check date",
+        "due_at": "2099-11-05",
+        "overdue": false
+      },
+      {
+        "id": 2,
+        "task": "Ask operator",
+        "due_at": null,
+        "overdue": false,
+        "due_at_text": "when ready"
+      }
+    ]
+  },
+  "goals": "",
+  "goals_error": "no goals file",
+  "improvement": null,
+  "improvement_error": ""
+}

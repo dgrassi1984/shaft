@@ -293,8 +293,18 @@ and [chat design](plans/PLAN-webui-chat.md). The native chat apps talk to the sa
   depth. Links, absolute paths and `..` are refused. Both routes require the tailnet login and paired browser.
   Folder zip downloads are not available),
   **Access** (tools, wake floor and cloud cap, jobs, shared folder,
-  mail and calendar read/write grants, Google accounts and re-login, battery, key names), **Judge**, **Changes**, **Benchmarks**, **Transcripts**,
+  mail and calendar read/write grants, Google accounts and re-login, battery, key names),
+  **Judge**, **Changes**, **Benchmarks**, **Cycles**,
   **Journal**, **Activity** (connections, plugins, jobs), with its actions and earlier chats.
+- **Cycles** keeps `/i/<name>/transcripts`. Next shows the current state, next check, the instance's next action
+  and unfinished work, commitments, task queue, and collapsed goals and improvement plan. Next refreshes through
+  `/fragment/i/<name>/cycles-next`. Done groups cycles by server date, newest first, three days at a time,
+  with Earlier days paging.
+  Filters are All, For you, Fell short, Delivered, and Conversations. The instance's claim is plain text;
+  the judge's verdict is a separate badge. Day counts count claims separately from judged cycles.
+  `?ts=<timestamp>` opens Planned, Did, Result, and Left, with separate second judgments and a raw transcript link.
+  Missing duration or cost says "unknown"; an absent judgment says "not judged". Conversations retain the raw
+  `/i/<name>/transcript?id=<id>` view.
 - **Access Google accounts** lists each alias, address, OAuth client, granted scopes, login date, and missing operator scopes.
   Missing scopes show the exact CLI login command and the client's Google Cloud Data Access setup steps.
   Calendar rows show whether they are writable. **Allow writing** and **Read only** change the stored grant by calendar ID.

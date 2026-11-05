@@ -681,3 +681,184 @@ public struct ServerError: Codable, Sendable, Equatable {
         self.version = version
     }
 }
+
+// MARK: - Cycles (§16)
+
+public struct CyclePlan: Codable, Sendable, Equatable {
+    public var now: Now
+    public var check: Check
+    public var nextStep: NextStep?
+    public var unfinished: [String]
+    public var commitments: [Commitment]
+    public var commitmentsError: String
+    public var queue: Queue
+    public var goals: String
+    public var goalsError: String
+    public var improvement: Improvement?
+    public var improvementError: String
+
+    public struct Now: Codable, Sendable, Equatable {
+        public var state: String?
+        public var since: String?
+        public var goal: String?
+    }
+
+    public struct Check: Codable, Sendable, Equatable {
+        public var next: String
+        public var skipped: String
+        public var paused: Bool
+    }
+
+    public struct NextStep: Codable, Sendable, Equatable {
+        public var at: Date?
+        public var action: String
+        public var reviseIf: String?
+    }
+
+    public struct Commitment: Codable, Sendable, Equatable {
+        public var id: String
+        public var promise: String
+        public var due: String?
+        public var status: String
+    }
+
+    public struct Queue: Codable, Sendable, Equatable {
+        public var state: String
+        public var open: Int
+        public var overdue: Int
+        public var error: String
+        public var rows: [Row]
+
+        public struct Row: Codable, Sendable, Equatable {
+            public var id: Int
+            public var task: String
+            public var dueAt: Date?
+            public var dueAtIsDate: Bool
+            public var dueAtText: String?
+            public var overdue: Bool
+
+            private enum CodingKeys: String, CodingKey { case id, task, dueAt, dueAtText, overdue }
+
+            public init(from decoder: any Decoder) throws {
+                let container = try decoder.container(keyedBy: CodingKeys.self)
+                id = try container.decode(Int.self, forKey: .id)
+                task = try container.decode(String.self, forKey: .task)
+                dueAtText = try container.decodeIfPresent(String.self, forKey: .dueAtText)
+                overdue = try container.decode(Bool.self, forKey: .overdue)
+                if let text = try container.decodeIfPresent(String.self, forKey: .dueAt) {
+                    dueAtIsDate = text.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil
+                    // A plain due date has no time zone. Represent it at midnight UTC, never in the device's zone.
+                    let stamp = dueAtIsDate ? text + "T00:00:00Z" : text
+                    guard let date = SHAFTJSON.parseStamp(stamp) else {
+                        throw DecodingError.dataCorruptedError(
+                            forKey: .dueAt, in: container, debugDescription: "Invalid queue due date: \(text)")
+                    }
+                    dueAt = date
+                } else {
+                    dueAt = nil
+                    dueAtIsDate = false
+                }
+            }
+        }
+    }
+
+    public struct Improvement: Codable, Sendable, Equatable {
+        public var at: Date?
+        public var text: String
+    }
+}
+
+public struct CycleDaysResponse: Codable, Sendable, Equatable {
+    public var days: [CycleDay]
+    public var next: String?
+    public var judgeError: String
+}
+
+public struct CycleDay: Codable, Sendable, Equatable {
+    public var date: String
+    public var skippedLines: Int
+    public var counts: Counts
+    public var rows: [CycleRow]
+
+    public struct Counts: Codable, Sendable, Equatable {
+        public var cycles: Int
+        public var yes: Int
+        public var partial: Int
+        public var no: Int
+        public var none: Int
+        public var judged: Int
+        public var forYou: Int
+    }
+}
+
+public struct CycleRow: Codable, Sendable, Equatable, Identifiable {
+    public var id: String
+    public var at: Date?
+    public var kind: String
+    public var goal: String?
+    public var claim: String?
+    public var verdict: String?
+    public var delivered: Bool
+    public var origin: String?
+    public var endedBy: String?
+}
+
+public struct CycleDetail: Codable, Sendable, Equatable {
+    public var id: String
+    public var at: Date?
+    public var kind: String
+    public var content: String?
+    public var planned: Planned?
+    public var did: Did
+    public var result: Result?
+    public var left: Left?
+
+    public struct Planned: Codable, Sendable, Equatable {
+        public var goal: String?
+        public var successCriterion: String?
+        public var origin: String?
+        public var originRef: String?
+        public var confidence: Double?
+        public var predictions: [String]
+        public var attention: [String]
+    }
+
+    public struct Did: Codable, Sendable, Equatable {
+        public var whatHappened: String?
+        public var durationS: Int?
+        public var usd: Double?
+        public var toolCalls: Int
+        public var endedBy: String?
+        public var wrappedUp: String?
+        public var deliveredVia: String?
+    }
+
+    public struct Result: Codable, Sendable, Equatable {
+        public var claim: String?
+        public var surprises: [String]
+        public var doubts: [String]
+        public var judgeError: String
+        public var judge: Judgment?
+        public var second: Judgment?
+    }
+
+    public struct Judgment: Codable, Sendable, Equatable {
+        public var verdict: String?
+        public var claimSupported: Bool?
+        public var firstError: String?
+        public var reasoning: String?
+        public var model: String?
+        public var error: String
+    }
+
+    public struct Left: Codable, Sendable, Equatable {
+        public var unfinished: [String]
+        public var nextAction: NextAction?
+        public var nextGoal: String?
+    }
+
+    public struct NextAction: Codable, Sendable, Equatable {
+        public var action: String?
+        public var reviseIf: String?
+    }
+}
