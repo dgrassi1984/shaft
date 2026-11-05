@@ -155,6 +155,7 @@ class CyclesDaysTest(unittest.TestCase):
                 project_usage={"usd": 0.25}, ended_by="finish", wrapped_up="normal",
                 finish={"what_happened": "did a", "delivered_via": "message"})
         out = cycles.cycle("wren", ts)
+        self.assertIsInstance(out["did"]["duration_s"], int)
         self.assertEqual((out["id"], out["ts"], out["kind"], out["where"], out["content"]),
                          (ts, ts, "cycle", "memory/episodes/2026-11-05.jsonl:1", None))
         self.assertEqual(out["planned"], {k: v for k, v in intent.items() if k != "extra"})
@@ -201,9 +202,18 @@ class CyclesDaysTest(unittest.TestCase):
         result = cycles.cycle("wren", ts)["result"]
         self.assertEqual(result, {"claim": "yes", "surprises": ["s"], "doubts": ["d"], "judge_error": "",
                                   "judge": {"verdict": "no", "claim_supported": False, "first_error": 1,
-                                            "reasoning": "first reason", "model": "first model"},
+                                            "reasoning": "first reason", "model": "first model", "error": ""},
                                   "second": {"verdict": "partial", "claim_supported": True, "first_error": 2,
-                                             "reasoning": "second reason", "model": "second model"}})
+                                             "reasoning": "second reason", "model": "second model", "error": ""}})
+
+    def test_failed_second_judge_keeps_its_error(self):
+        ts = "2026-11-05T09:00:00"
+        self.ep("2026-11-05", kind="live", ts=ts)
+        self.judge(episode_ts=ts, criterion_met="yes", second={"judge": "m", "error": "HTTP 503"})
+        result = cycles.cycle("wren", ts)["result"]
+        self.assertEqual(result["second"]["error"], "HTTP 503")
+        self.assertIsNone(result["second"]["verdict"])
+        self.assertEqual(result["judge"]["error"], "")
 
     def test_detail_carries_judge_errors_and_absent_judges(self):
         ts = "2026-11-05T09:00:00"

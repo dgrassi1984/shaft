@@ -152,7 +152,7 @@ def cycle(name: str, ts: str) -> dict | None:
         usage = record.get("project_usage")
         tools = record.get("tools")
         try:
-            duration = (end - datetime.fromisoformat(record.get("run_started"))).total_seconds()
+            duration = int((end - datetime.fromisoformat(record.get("run_started"))).total_seconds())
         except (TypeError, ValueError):
             duration = None
         out = {
@@ -190,7 +190,8 @@ def _judge_detail(row: dict | None) -> dict | None:
     if not isinstance(row, dict):
         return None
     return {"verdict": row.get("criterion_met"), "claim_supported": row.get("claim_supported"),
-            "first_error": row.get("first_error"), "reasoning": row.get("reasoning"), "model": row.get("judge")}
+            "first_error": row.get("first_error"), "reasoning": row.get("reasoning"), "model": row.get("judge"),
+            "error": row.get("error") if isinstance(row.get("error"), str) else ""}
 
 
 def _next_goal(name: str, date: str, line: int, lines: list[tuple[int, dict]]) -> str | None:
