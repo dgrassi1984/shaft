@@ -174,9 +174,14 @@ private struct SettingTextRow: View {
         VStack(alignment: .leading, spacing: Design.Space.s4) {
             HStack {
                 LabeledContent(label) {
-                    TextField(field == .cloudCap ? "Default" : label, text: Binding(get: { draft ?? serverText }, set: { draft = $0; inputError = nil }))
+                    TextField(label, text: Binding(get: { draft ?? serverText }, set: { draft = $0; inputError = nil }), prompt: Text(field == .cloudCap ? "Default" : field == .operatorName ? "Not set" : label))
+                        .labelsHidden()
                         .multilineTextAlignment(.trailing)
                         .focused($focused)
+                        #if os(macOS)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 220)
+                        #endif
                         #if os(iOS)
                         .keyboardType(field == .wakeInterval ? .numberPad : field == .cloudCap ? .decimalPad : .default)
                         #endif

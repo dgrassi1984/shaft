@@ -248,7 +248,14 @@ struct NativeChromePinTests {
 
     @Test func dailyCapPlaceholderDoesNotRepeatItsLabel() throws {
         let source = try shared("Shared/Settings/InstanceSettingsView.swift")
-        #expect(source.contains(#"TextField(field == .cloudCap ? "Default" : label"#))
+        #expect(source.contains(#"prompt: Text(field == .cloudCap ? "Default""#))
+    }
+
+    /// Bug: a Mac settings field repeated "Your name" as a label beside an unmarked blank field.
+    @Test func aSettingsFieldHidesItsOwnLabelOnTheMac() throws {
+        let source = try shared("Shared/Settings/InstanceSettingsView.swift")
+        #expect(source.contains(".labelsHidden()"))
+        #expect(source.contains("prompt:"))
     }
 
     @Test func servicesTitleAndPidAvoidAmbiguousServerAndLocalizedNumbers() throws {
