@@ -289,6 +289,18 @@ class SubagentJudgeTest(BakeoffTest):
         self.assertIn("| openrouter/deepseek/deepseek-v4.1-flash | 2 | 0 | 0 | 0 | ", rep)
         self.assertIn(f"| {EPS[0]['ts']} | W |", rep)
 
+    def test_grok_xai_muse_names_do_not_leak_when_arm_is_another_model(self):
+        redact = bakeoff._redactor({"arms": [{"model": "claude-haiku-5-5"}]})
+        for name in ("Grok", "grok-3", "x-ai/grok-4.7", "SpaceXAI", "xAI", "Muse Spark", "muse-spark-open",
+                     "Kimi", "kimi-k3.1-pro", "moonshotai/kimi-k3.1-pro", "Moonshot", "Mercury 3",
+                     "inception/mercury-3", "Particle-1", "particle-ai/particle-1", "Hy4"):
+            with self.subTest(name=name):
+                self.assertEqual(redact(name), "[model]")
+        for text in ("the muse of history", "muse", "spark", "Luna", "Astra", "xaither", "SpaceXAIfoo",
+                     "mercury", "particle", "the particle moved", "moonshots", "kimiko"):
+            with self.subTest(text=text):
+                self.assertEqual(redact(text), text)
+
     def test_an_invalid_verdict_leaves_the_pair_unjudged_and_is_named(self):
         b, out = self.replayed(), self.tmp / "judging"
         bakeoff.export_cases(b, out)
