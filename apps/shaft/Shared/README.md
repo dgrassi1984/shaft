@@ -14,7 +14,7 @@ Everything here compiles for iOS and macOS; what differs per platform sits behin
 | `Composer/` | quote cards with their answers, attachment chips, the field, Send or Stop, and a "More ways to send" chevron beside Send once there is text or other draft content (Queue after reply / Next cycle); these choices also stay in + and, on iOS, a long press on Send |
 | `Documents/` | the panel (folders, sort, new document), a document (rendered, threads, overwritten lines, Select text with Reply and Comment, Download, Delete), the editor with the stale-save choice, comments, `CommentHighlight.swift` and `DocumentMarkdown.swift` |
 | `Markdown/` | MarkdownUI with SHAFT's theme (tables that scroll, task lists, code with language, Copy and syntax colours), the operator's own text, Markdown as rendered text |
-| `Attachments/` | thumbnails and file chips through Quick Look (`FileViews.swift`); files coming in from Photos, a paste or a drop |
+| `Attachments/` | thumbnails and file chips (`FileViews.swift`); `FilePreviewView.swift` presents a sheet with `QLPreviewView` on macOS and Quick Look on iOS; files coming in from Photos, a paste or a drop |
 | `Platform/` | the text seams: the composer's field and selectable text (`TextViews.swift`, iOS), a message's text (`MessageText.swift`) |
 | `Support/` | times, the clipboard, announcements, small view helpers |
 

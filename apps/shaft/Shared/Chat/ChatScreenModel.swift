@@ -33,7 +33,7 @@ final class ChatScreenModel {
 
     let chat: ChatStore
     let instance: String
-    /// Quick Look for the chat's files and the documents' downloads.
+    /// File preview for the chat's files and the documents' downloads.
     let preview = FilePreview()
 
     var selecting: Selecting?

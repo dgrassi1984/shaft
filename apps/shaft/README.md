@@ -103,7 +103,7 @@ SHAFT_DEV_DIR=/tmp/shaft-mac SHAFT_DEV_PAIR='http://127.0.0.1:8899/pair?t=…' /
 
 `SHAFT_DEV_DRIVE=<script>` drives it from a script of steps (`macOS/MacDevDriver.swift` lists them: open a chat, keys
 such as `return`, `shift+return`, `cmd+return`, `option+down`, `cmd+.`, `cmd+shift+n` and `slash`, typing, selecting
-text in a message and picking from its right-click menu, Select text, menu bar items, pasting a file, Quick Look, the
+text in a message and picking from its right-click menu, Select text, menu bar items, pasting a file, the file preview sheet, the
 documents, an earlier chat, Retry on a message not sent, closing the window, a notification click, the time a chat
 takes to load, snapshots of the window and its sheet), logging each step and what it changed to stdout. Typing goes through the app's own event
 queue, and key combinations through the window, then the menu bar, then the first responder, as AppKit routes them.

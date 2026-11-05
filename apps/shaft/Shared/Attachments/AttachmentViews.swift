@@ -3,7 +3,7 @@ import SHAFTKit
 import SwiftUI
 
 /// Files the chat shows (§4.4 attachments, §8): fetched once with the bearer, kept for the session, pictures downsized
-/// here (the server sends no thumbnails), and opened in Quick Look, whose share button saves or sends them on.
+/// here (the server sends no thumbnails), and opened in the file preview sheet on macOS or Quick Look on iOS.
 @MainActor
 final class AttachmentLoader {
     static let shared = AttachmentLoader()
@@ -73,7 +73,7 @@ final class AttachmentLoader {
         return image
     }
 
-    /// A local copy under its own name, for Quick Look and Share.
+    /// A local copy under its own name, for file preview and Share.
     func file(_ url: String, name: String, client: APIClient) async throws -> URL {
         let generation = generation
         let key = key(url, client: client)
@@ -101,7 +101,7 @@ final class AttachmentLoader {
     }
 }
 
-/// Where the feed's file taps go: the Quick Look preview of the chat screen.
+/// Where the feed's file taps go: the file preview of the chat screen.
 @MainActor
 @Observable
 final class FilePreview {

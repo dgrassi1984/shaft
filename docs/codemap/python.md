@@ -110,7 +110,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_calibration_feedback_template.py` | `Fixture`, `BaseRateModuleTest`, `ConfirmStepTest`, `RunsAsV2Test`, `ExtraStepTest`, `AgentStepLimitTest` | `band`, `rates`, `declare`, `confirm`, `read` |
 | `supervisor/tests/test_cards.py` | `FamilyTest`, `CardsTest` | — |
 | `supervisor/tests/test_codex_wiring.py` | `Case`, `BrokerTest`, `ModelsTest`, `AccountingTest`, `CLITest` | `reply`, `iter_stream` |
-| `supervisor/tests/test_codexcli.py` | `ChannelTest` | `body`, `assistant` |
+| `supervisor/tests/test_codexcli.py` | `CodexLogRetentionTest`, `ChannelTest` | `body`, `assistant` |
 | `supervisor/tests/test_comments_js.py` | `CommentsJsTest` | — |
 | `supervisor/tests/test_commit.py` | `CommitStateTest`, `IgnoredFileTest`, `ConfigMergeTest`, `HistoryToolTest`, `RecordToolTest`, `UpdateCase`, `UpdateNoteTest`, `QueuedUpdateTest`, `UpdateKeepsUncommittedWorkTest` | `git` |
 | `supervisor/tests/test_commitments.py` | `CommitmentsTest` | `episode` |

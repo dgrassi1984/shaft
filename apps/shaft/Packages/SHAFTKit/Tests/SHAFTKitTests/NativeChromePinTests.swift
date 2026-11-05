@@ -11,6 +11,25 @@ struct NativeChromePinTests {
         return try String(contentsOf: app.appending(path: path), encoding: .utf8)
     }
 
+    /// Bug: an AppKit text view holding the keyboard left the Quick Look panel saying "No items selected".
+    @Test func theMacPreviewsFilesWithoutTheResponderChain() throws {
+        let preview = try shared("Shared/Attachments/FilePreviewView.swift")
+        #expect(preview.contains("QLPreviewView"))
+        let app = URL(filePath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+        for directory in ["Shared", "macOS", "iOS"] {
+            let files = try #require(FileManager.default.enumerator(
+                at: app.appending(path: directory), includingPropertiesForKeys: nil
+            ))
+            for case let file as URL in files where file.pathExtension == "swift" {
+                if file.lastPathComponent == "FilePreviewView.swift" { continue }
+                let source = try String(contentsOf: file, encoding: .utf8)
+                #expect(!source.contains(".quickLookPreview("), "Unexpected preview modifier in \(file.path)")
+            }
+        }
+    }
+
     /// A whole row taller than four screens never crossed the old visibility threshold.
     @Test func theDotClearsAtTheEndOfTheNewestRowHoweverLongItIs() throws {
         let source = try shared("Shared/Feed/FeedView.swift")

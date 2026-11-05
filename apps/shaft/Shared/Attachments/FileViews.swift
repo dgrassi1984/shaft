@@ -2,7 +2,7 @@ import SHAFTKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// A message's files: pictures as thumbnails (space kept while they load), the rest as chips. A tap opens Quick Look.
+/// A message's files: pictures as thumbnails (space kept while they load), the rest as chips. A tap opens the file preview sheet on macOS or Quick Look on iOS.
 struct AttachmentsView: View {
     let attachments: [Attachment]
     @Environment(InstancesStore.self) private var store

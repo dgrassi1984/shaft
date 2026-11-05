@@ -1,4 +1,3 @@
-import QuickLook
 import SHAFTKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -113,7 +112,7 @@ struct ChatScreen: View {
         .sheet(isPresented: $screen.showEarlierChats) {
             EarlierChatsSheet(instance: chat.instance, open: openArchived)
         }
-        .quickLookPreview(Binding(get: { preview.url }, set: { preview.url = $0 }))
+        .filePreview(Binding(get: { preview.url }, set: { preview.url = $0 }))
         .alert(screen.confirmRetry?.confirm ?? "", isPresented: Binding(
             get: { screen.confirmRetry != nil }, set: { if !$0 { screen.confirmRetry = nil } })) {
             Button("Send it again") {
