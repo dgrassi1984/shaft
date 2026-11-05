@@ -109,19 +109,33 @@ class SettingsTest(AppTest):
         (self.root / "shaft/config.py").unlink()
         self.assertEqual(self.get("/app/v1/settings/wren")["effort"], {"value": None, "choices": None})
 
-    def test_limits_and_channel_use_cli_args_and_null_removes_cap_override(self):
-        for field, value, expect, args in (
-                ("cloud_cap", 2.5, None, ["limits", "wren", "cloud-cap", "2.5"]),
-                ("cloud_cap", None, 2.5, ["limits", "wren", "cloud-cap", "off"]),
-                ("channel", "web", "auto", ["channel", "wren", "web"])):
+    def test_tool_settings_save_in_process_and_auto_removes_channel(self):
+        for field, value, expect in (("cloud_cap", 2.5, None), ("cloud_cap", None, 2.5),
+                                     ("channel", "web", "auto"), ("channel", "auto", "web")):
             r = self.save(field, value, expect)
             self.assertEqual(r.status, 200, r.body)
             self.assertEqual(json.loads(r.body)["settings"][field]["value"], value)
-            self.assertEqual(json.loads(r.body)["applies"], "now")
-            self.assertEqual(self.command.call_args.args[0], args)
-            self.assertEqual(self.command.call_args.kwargs["who"], "app iphone-app")
-            self.assertNotIn(self.fake.encode(), r.body)
-        self.assertEqual(cloudllm.daily_cap("wren"), cloudllm.DAILY_USD)
+        self.command.assert_not_called()
+        self.assertNotIn("channel", core._tool_settings("wren"))
+        app_api.log.assert_any_call("wren: cloud-cap set to 2.5 by the operator (app iphone-app)")
+
+    def test_cli_write_between_app_read_and_save_is_stale_not_lost(self):
+        real = core._update_tool_settings
+        for field, key, value, other, expect in (("channel", "channel", "web", "telegram", "auto"),
+                                                ("cloud_cap", "cloud_daily_usd", 2.5, 4.0, None)):
+            def raced(name, **kwargs):
+                real(name, **{key: other})  # the CLI-path writer commits after the app read
+                return real(name, **kwargs)
+            with mock.patch.object(core, "_update_tool_settings", side_effect=raced):
+                err = self.error(self.save(field, value, expect), 409, "stale")
+            self.assertEqual(err["settings"][field]["value"], other)
+            self.assertEqual(core._tool_settings("wren")[key], other)
+
+    def test_channel_help_is_refused_instead_of_silent_cli_success(self):
+        with mock.patch.object(actions, "run_now", return_value=(True, "usage: shaft channel")) as command:
+            self.error(self.save("channel", "--help", "auto"), 409, "refused")
+            command.assert_not_called()
+        self.assertEqual(channel.preference("wren"), "auto")
 
     def test_stale_for_every_field_returns_fresh_settings_without_writing(self):
         for field, value, expect in (("model", "new-model", "old"), ("effort", "low", "xhigh"),
@@ -151,10 +165,8 @@ class SettingsTest(AppTest):
                                                ("operator_name", "two\nlines", "the operator", "one line")):
             err = self.error(self.save(field, value, expect), 409, "refused")
             self.assertIn(message, err["message"])
-        with mock.patch.object(actions, "run_now", return_value=(False, "writer refused this value")):
-            for field, value, expect in (("channel", "unknown", "auto"), ("cloud_cap", -1, None)):
-                err = self.error(self.save(field, value, expect), 409, "refused")
-                self.assertEqual(err["message"], "writer refused this value")
+        for field, value, expect in (("channel", "unknown", "auto"), ("cloud_cap", -1, None)):
+            self.error(self.save(field, value, expect), 409, "refused")
 
     def test_wrong_shapes_are_bad_request(self):
         for data in ([], {}, {"field": "model", "value": "new-model"},
@@ -193,31 +205,35 @@ class SettingsTest(AppTest):
         self.error(self.api("/app/v1/settings/wren", "DELETE"), 405, "method")
         self.command.assert_not_called()
 
-    def test_two_tool_saves_cannot_both_replace_the_same_value(self):
-        entered, release = threading.Event(), threading.Event()
-        real = self.run_command
+    def test_dead_scheduler_leftover_request_does_not_block_restart(self):
+        pending = {"pid": 99999999, "at": 10, "deadline": 100}
+        with mock.patch.object(autonomy, "restart_request", return_value=pending), \
+                mock.patch.object(autonomy, "drain_status", return_value=None), \
+                mock.patch.object(version, "service", return_value=None):
+            self.assertIsNone(self.get("/app/v1/services")["services"][1]["drain"])
+            self.assertEqual(self.api("/app/v1/services/scheduler/restart", "POST").status, 200)
+        self.command.assert_called_once_with(["autonomy", "restart"], actions.RUN_NOW_S, who="app iphone-app")
 
-        def held(*args, **kw):
-            entered.set()
-            self.assertTrue(release.wait(3))
-            return real(*args, **kw)
-        answers = []
-        self.command.side_effect = held
-        first = threading.Thread(target=lambda: answers.append(self.save("channel", "web", "auto")))
-        second = threading.Thread(target=lambda: answers.append(self.save("channel", "telegram", "auto")))
-        first.start()
-        try:
-            self.assertTrue(entered.wait(3))
-            second.start()
-        finally:
-            release.set()
-            first.join(4)
-            if second.ident is not None:
-                second.join(4)
-        self.assertFalse(first.is_alive() or second.is_alive())
-        self.assertEqual(sorted(r.status for r in answers), [200, 409])
-        self.assertEqual(self.command.call_count, 1)
-        self.assertEqual(core._tool_settings("wren")["channel"], "web")
+    def test_web_and_app_restarts_exclude_each_other_in_both_directions(self):
+        for service in ("api", "scheduler"):
+            form = {"service": service, "op": "on"}
+            def web_restart():
+                return web_actions.run("service", form, {"services": []}, [], [service])
+            def app_restart():
+                return self.api(f"/app/v1/services/{service}/restart", "POST")
+            for first, second, app_second in ((web_restart, app_restart, True), (app_restart, web_restart, False)):
+                def overlap(*args, **kwargs):
+                    self.assertEqual(command.call_count, 1, "overlapping service command entered")
+                    answer = second()
+                    if app_second:
+                        self.error(answer, 409, "restarting")
+                    else:
+                        self.assertEqual(answer, (409, f"{service} is already restarting"))
+                    return True, "done"
+                with mock.patch.object(actions, "run_now", side_effect=overlap) as command:
+                    answer = first()
+                    self.assertEqual(answer[0] if isinstance(answer, tuple) else answer.status, 200)
+                    self.assertEqual(command.call_count, 1)
 
     def test_services_only_project_allowed_record_fields(self):
         rec = {"pid": 123, "started": "2026-11-05T10:00:00", "commit": "abc", "settings": {"key": self.fake}}
@@ -270,7 +286,8 @@ class SettingsTest(AppTest):
     def test_repeated_drain_is_not_requested_again_even_before_first_tick(self):
         req = {"pid": 123, "at": 10, "deadline": 100}
         for record in (None, {**req, "state": "draining", "waiting": ["wren live"]}):
-            with mock.patch.object(autonomy, "restart_request", return_value=req), \
+            with mock.patch.object(version, "service", return_value={"pid": 123}), \
+                    mock.patch.object(autonomy, "restart_request", return_value=req), \
                     mock.patch.object(autonomy, "drain_status", return_value=record):
                 r = self.api("/app/v1/services/scheduler/restart", "POST")
                 self.assertEqual(r.status, 200, r.body)

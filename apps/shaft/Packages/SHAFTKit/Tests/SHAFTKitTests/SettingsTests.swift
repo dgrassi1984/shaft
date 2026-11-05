@@ -378,6 +378,108 @@ struct SettingsTests {
         #expect(clock.sleeps == [.seconds(5), .seconds(5)])
     }
 
+    @Test func drainedOldPidKeepsPollingUntilReplacementAppears() async {
+        let steps = Steps()
+        let clock = RestartClock()
+        let drained = #"{"state":"drained","waiting":[],"deadline":null}"#
+        let server = StubServer { request in
+            if request.method == "POST" { return .json(200, serviceExample(drain: pendingDrain)) }
+            let step = steps.next()
+            return .json(200, serviceExample(pid: step < 4 ? 123 : 456,
+                drain: step == 1 ? "null" : drained))
+        }
+        let store = ServicesStore(client: server.client, sleep: { clock.sleep($0) }, now: { clock.now() })
+        await store.load()
+        await store.restart("scheduler")
+        #expect(store.outcome["scheduler"] == .restarted)
+        #expect(clock.sleeps == [.seconds(5), .seconds(5), .seconds(5)])
+    }
+
+    @Test func drainedTimeoutKeepsTrackingForReopeningAfterReplacement() async {
+        let clock = RestartClock()
+        let drained = #"{"state":"drained","waiting":[],"deadline":null}"#
+        let server = StubServer { request in
+            .json(200, serviceExample(drain: request.method == "POST" ? drained : "null"))
+        }
+        let store = ServicesStore(client: server.client, sleep: { clock.sleep($0) }, now: { clock.now() })
+        await store.load()
+        server.setAnswer { _ in .json(200, serviceExample(drain: drained)) }
+        await store.restart("scheduler")
+        #expect(store.outcome["scheduler"] == .unconfirmed)
+        #expect(clock.now() == Date(timeIntervalSince1970: 90))
+        #expect(store.restarting.isEmpty)
+        store.stop()
+        server.setAnswer { _ in .json(200, serviceExample(pid: 456, drain: drained)) }
+        await store.load()
+        #expect(store.outcome["scheduler"] == .restarted)
+    }
+
+    @Test func drainedDeadlineStillAppliesWhenLaterPollsFail() async {
+        let clock = RestartClock()
+        let drained = #"{"state":"drained","waiting":[],"deadline":null}"#
+        let server = StubServer { request in
+            .json(200, serviceExample(drain: request.method == "POST" ? drained : "null"))
+        }
+        let store = ServicesStore(client: server.client, sleep: { clock.sleep($0) }, now: { clock.now() })
+        await store.load()
+        server.setAnswer { request in
+            if request.method == "POST" { return .json(200, serviceExample(drain: drained)) }
+            throw StubServer.NetworkDown()
+        }
+        await store.restart("scheduler")
+        #expect(store.outcome["scheduler"] == .unconfirmed)
+        #expect(clock.now() == Date(timeIntervalSince1970: 90))
+        #expect(store.restarting.isEmpty)
+    }
+
+    @Test func untrackedOldDrainedRecordIsIgnored() async {
+        let server = StubServer { _ in .json(200, serviceExample(drain:
+            #"{"state":"drained","waiting":[],"deadline":null}"#)) }
+        let store = ServicesStore(client: server.client, sleep: { _ in Issue.record("must not poll") })
+        await store.load()
+        #expect(store.outcome["scheduler"] == nil)
+        #expect(store.restarting.isEmpty)
+    }
+
+    @Test func refusedSaveReturnsFalseSoTheTextDraftCanBeKept() async throws {
+        let folder = try temporaryFolder("settings-save-result")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let server = StubServer { request in
+            request.method == "GET" ? .json(200, settingsExample)
+                : .json(409, #"{"error":{"code":"refused","message":"Keep this edit"}}"#)
+        }
+        let store = try makeOwner(server, folder: folder).settings("wren")
+        await store.load()
+        let saved = await store.save(.operatorName, value: .string("Mine"))
+        #expect(!saved)
+        #expect(store.saveError == "Keep this edit")
+        #expect(store.settings?.operatorName.value == "the operator")
+    }
+
+    @Test func overlappingSaveReturnsFalseSoTheSecondDraftIsNotDropped() async throws {
+        let folder = try temporaryFolder("settings-overlapping-save")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let entered = AsyncStream<Void>.makeStream()
+        defer { entered.continuation.finish() }
+        let release = DispatchSemaphore(value: 0)
+        let server = StubServer { request in
+            if request.method == "GET" { return .json(200, settingsExample) }
+            entered.continuation.yield(())
+            _ = release.wait(timeout: .now() + 3)
+            return .json(200, #"{"settings":\#(settingsExample),"applies":"now"}"#)
+        }
+        let store = try makeOwner(server, folder: folder).settings("wren")
+        await store.load()
+        let first = Task { await store.save(.operatorName, value: .string("First")) }
+        var iterator = entered.stream.makeAsyncIterator()
+        _ = await iterator.next()
+        let second = await store.save(.operatorName, value: .string("Second"))
+        #expect(!second)
+        release.signal()
+        #expect(await first.value)
+        #expect(server.requests.filter { $0.method == "POST" }.count == 1)
+    }
+
     @Test func anAbandonedDrainFailsAndNamesWhatItWasWaitingFor() async {
         let steps = Steps()
         let server = StubServer { request in

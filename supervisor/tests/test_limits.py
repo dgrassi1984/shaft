@@ -31,6 +31,60 @@ class LimitsTest(unittest.TestCase):
             code = cli.main(["limits", *argv])
         return code, out.getvalue()
 
+    def test_tool_setting_cas_and_atomic_replace_preserve_other_keys(self):
+        core._update_tool_settings("wren", channel="web", cloud_daily_usd=5)
+        with self.assertRaises(core.StaleSetting):
+            core._update_tool_settings("wren", expect={"channel": "auto"}, channel="telegram")
+        real = core.os.replace
+        def replace(source, destination):
+            self.assertEqual(json.loads(destination.read_text())["channel"], "web")
+            self.assertEqual(json.loads(Path(source).read_text()), {"channel": "telegram", "cloud_daily_usd": 5})
+            real(source, destination)
+        with mock.patch.object(core.os, "replace", side_effect=replace) as replaced:
+            core._update_tool_settings("wren", expect={"channel": "web"}, channel="telegram")
+        replaced.assert_called_once()
+        self.assertEqual(core._tool_settings("wren"), {"channel": "telegram", "cloud_daily_usd": 5})
+
+    def test_tool_writers_serialize_read_modify_write(self):
+        import threading
+        entered, release = threading.Event(), threading.Event()
+        real = core._tool_settings
+        def read(name):
+            result = real(name)
+            if threading.current_thread().name == "first-writer":
+                entered.set()
+                self.assertTrue(release.wait(3))
+            return result
+        answers = []
+        def write(value):
+            try:
+                core._update_tool_settings("wren", expect={"channel": None}, channel=value)
+                answers.append("saved")
+            except core.StaleSetting:
+                answers.append("stale")
+        with mock.patch.object(core, "_tool_settings", side_effect=read):
+            first = threading.Thread(target=write, args=("web",), name="first-writer")
+            second = threading.Thread(target=write, args=("telegram",))
+            first.start()
+            try:
+                self.assertTrue(entered.wait(3))
+                second.start()
+            finally:
+                release.set()
+                first.join(4)
+                if second.ident is not None: second.join(4)
+        self.assertFalse(first.is_alive() or second.is_alive())
+        self.assertCountEqual(answers, ["saved", "stale"])
+
+    def test_shared_limit_validation_keeps_cli_refusal_wording_and_exit_code(self):
+        for limit, value, unit in (("wake-floor", "2.5", "whole number of minutes"),
+                                   ("cloud-cap", "-1", "amount")):
+            message = f"{limit} must be a positive {unit} (or off), not {value!r}"
+            with self.assertRaisesRegex(ValueError, "must be a positive") as raised:
+                core.limit_value(limit, value)
+            self.assertEqual(str(raised.exception), message)
+            self.assertEqual(self.cli("wren", limit, value), (2, message + "\n"))
+
     def test_the_operator_s_floor_lets_wren_wake_every_5_minutes(self):
         config = {"WAKE_INTERVAL_MINUTES": "5"}
         self.assertEqual(autonomy.wake_interval("wren", config), timedelta(minutes=autonomy.WAKE_FLOOR_MIN))

@@ -404,17 +404,12 @@ def cmd_limits(name: str | None, limit: str | None, value: str | None) -> int:
         instance_root(name)
         key = {"wake-floor": "wake_floor_minutes", "cloud-cap": "cloud_daily_usd",
                "consult-cap": "consult_daily_usd"}[limit]
-        if value == "off":
-            new = None
-        else:
-            try:
-                new = int(value) if limit == "wake-floor" else round(float(value), 2)
-            except ValueError:
-                new = 0
-            if new <= 0:
-                print(f"{limit} must be a positive {'whole number of minutes' if limit == 'wake-floor' else 'amount'}"
-                      f" (or off), not {value!r}", file=sys.stderr)
-                return 2
+        from .core import limit_value
+        try:
+            new = limit_value(limit, value)
+        except ValueError as e:
+            print(str(e), file=sys.stderr)
+            return 2
         _update_tool_settings(name, **{key: new})
         log(f"{name}: {limit} set to {value} by the operator")
     for n in ([name] if name else instance_names()):

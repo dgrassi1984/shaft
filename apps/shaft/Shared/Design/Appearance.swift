@@ -69,11 +69,12 @@ extension View {
 }
 
 private struct ReadingTextSize: ViewModifier {
+    @Environment(\.dynamicTypeSize) private var inheritedSize
     @AppStorage(ChatTextSize.storageKey) private var rawSize = ChatTextSize.system.rawValue
 
     @ViewBuilder func body(content: Content) -> some View {
         #if os(iOS)
-        if let size = ChatTextSize.stored(rawSize).dynamicTypeSize {
+        if !inheritedSize.isAccessibilitySize, let size = ChatTextSize.stored(rawSize).dynamicTypeSize {
             content.dynamicTypeSize(size)
         } else {
             content

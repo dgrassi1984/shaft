@@ -10,15 +10,28 @@ import fixture_server as fixture
 
 
 class FixtureSettingsTest(unittest.TestCase):
-    def test_settings_and_services_stay_in_the_fixture(self):
+    def test_fixture_refuses_repository_root_and_ancestors_before_writing(self):
+        for base in (fixture.ROOT, *fixture.ROOT.parents):
+            with self.subTest(base=base), mock.patch.object(Path, "mkdir", side_effect=AssertionError("wrote before refusal")), self.assertRaises(SystemExit):
+                fixture.setup(base, 8899)
+
+    def test_fixture_html_avoids_launchctl_and_real_secrets_and_settings_stay_isolated(self):
         with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as directory:
             base = Path(directory)
             previous = os.environ.get("SHAFT_SUPERVISOR_DIR")
             try:
                 web, chat, messages, push = fixture.setup(base, 8899)
-                from supervisor import actions, autonomy, core, opconfig, version
+                from supervisor import actions, autonomy, core, dashboard, opconfig, version, web_config, web_settings
                 for method in ("run", "Popen"):
                     mock.patch(f"subprocess.{method}", side_effect=AssertionError("fixture spawned a process")).start()
+
+                # These HTML dependencies must never query launchctl or load PROJECT/.env.
+                self.assertTrue(dashboard._scheduler_running())
+                self.assertEqual(core.secrets_env(), {})
+                self.assertEqual(web_settings.secrets_env(), {})
+                self.assertTrue(next(s for s in dashboard.services() if s["name"] == "scheduler")["running"])
+                html = str(web_settings.page_body({"settings": [], "file": "fixture"}, [], []))
+                self.assertIn("none", html)
 
                 def request(path, method="GET", data=None, token=None):
                     headers = {"host": "127.0.0.1:8899"}
@@ -51,6 +64,11 @@ class FixtureSettingsTest(unittest.TestCase):
                 self.assertEqual(opconfig.instance_root("thelos"), base / "instances" / "thelos")
                 self.assertEqual(core._tool_settings("thelos")["channel"], "telegram")
                 self.assertNotIn("cloud_daily_usd", core._tool_settings("thelos"))
+                # HTML access-page actions still need the limits/channel command stubs.
+                self.assertEqual(web_config.run("limit", "thelos", {"limit": "cloud-cap", "value": "3.5"})[0], 200)
+                self.assertEqual(core._tool_settings("thelos")["cloud_daily_usd"], 3.5)
+                self.assertEqual(web_config.run("channel", "thelos", {"value": "web"})[0], 200)
+                self.assertEqual(core._tool_settings("thelos")["channel"], "web")
                 self.assertTrue(api(path + "/pause", "POST")["settings"]["paused"])
                 self.assertFalse(api(path + "/resume", "POST")["settings"]["paused"])
 

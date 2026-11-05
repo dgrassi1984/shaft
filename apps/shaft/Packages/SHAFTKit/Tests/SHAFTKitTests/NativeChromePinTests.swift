@@ -216,4 +216,38 @@ struct NativeChromePinTests {
         #expect(source.contains("Restart the scheduler once its runs end? It starts nothing new until then, and cuts nothing."))
     }
 
+    @Test func textDraftSavesOnFocusLossAndDisappearanceWithoutClearingRefusals() throws {
+        let source = try shared("Shared/Settings/InstanceSettingsView.swift")
+        #expect(source.contains("@FocusState private var focused: Bool"))
+        #expect(source.contains(".onChange(of: focused) { if !focused { submit() } }"))
+        #expect(source.contains(".onDisappear(perform: submit)"))
+        #expect(source.contains("guard let text = draft, text != serverText else { return }"))
+        #expect(source.contains("if await store.save(field, value: value), draft == text { draft = nil }"))
+        #expect(!source.contains(".onChange(of: serverText) { draft = nil }"))
+        #expect(source.contains(".keyboardType(field == .wakeInterval ? .numberPad : field == .cloudCap ? .decimalPad : .default)"))
+    }
+
+    @Test func dailyCapPlaceholderDoesNotRepeatItsLabel() throws {
+        let source = try shared("Shared/Settings/InstanceSettingsView.swift")
+        #expect(source.contains(#"TextField(field == .cloudCap ? "Default" : label"#))
+    }
+
+    @Test func servicesTitleAndPidAvoidAmbiguousServerAndLocalizedNumbers() throws {
+        let source = try shared("Shared/Settings/ServerSection.swift")
+        #expect(source.contains(#"header: { Text("Services") }"#))
+        #expect(source.contains(#"Text("Restarted, new process \(String(pid))")"#))
+    }
+
+    @Test func unconfirmedTextDoesNotClaimAMinuteForSchedulerDrains() throws {
+        let source = try shared("Shared/Settings/ServerSection.swift")
+        #expect(source.contains("Asked, but no new process has appeared yet."))
+        #expect(!source.contains("within a minute"))
+    }
+
+    @Test func chosenReadingSizePreservesInheritedAccessibilitySize() throws {
+        let source = try shared("Shared/Design/Appearance.swift")
+        #expect(source.contains(#"@Environment(\.dynamicTypeSize) private var inheritedSize"#))
+        #expect(source.contains("if !inheritedSize.isAccessibilitySize, let size ="))
+    }
+
 }

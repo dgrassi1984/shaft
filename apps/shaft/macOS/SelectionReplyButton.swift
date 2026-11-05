@@ -22,7 +22,7 @@ final class SelectionReplyButton: NSButton {
     }
 
     func accepts(_ locationInWindow: NSPoint) -> Bool {
-        window != nil && !isHidden && bounds.contains(convert(locationInWindow, from: nil))
+        window != nil && !isHiddenOrHasHiddenAncestor && bounds.contains(convert(locationInWindow, from: nil))
     }
 
     override func viewDidMoveToWindow() {

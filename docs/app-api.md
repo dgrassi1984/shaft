@@ -1049,16 +1049,15 @@ unknown field, wrong type or non-finite number gives `400 bad_request`. Domain w
 | `model` | `opconfig.set_values`, with `expect` covering `LLM_MODEL`; couples `LLM_BASE_URL` | `next run` |
 | `effort` | `opconfig.set_values`; null unsets the key | `next run` |
 | `wake_interval` | `opconfig.set_values`; the scheduler uses it on its next read | `now` |
-| `cloud_cap` | `limits <n> cloud-cap <dollars>`; null sends `off` | `now` |
-| `channel` | `channel <n> <value>` | `now` |
+| `cloud_cap` | `core.limit_value` and `core._update_tool_settings` with `expect`; null removes the override | `now` |
+| `channel` | `channel.set_preference` with `expect`; only `auto`, `web`, `telegram` | `now` |
 | `operator_name` | `opconfig.set_values` | `next run` |
 
 Cloud-cap null means the per-instance override is off, matching `shaft limits ... off`. The configured supervisor
 default cap still applies. It does not mean unlimited cloud spending.
 
 A stale `expect` gives `409 stale` with `settings` inside `error`, containing the fresh settings. A writer refusal
-gives `409 refused` with its message. Config saves retain the domain writer's compare-and-set. The app's tool-setting
-check and command run under one per-instance file lock, so app saves cannot interleave.
+gives `409 refused` with its message. Config saves retain the domain writer's compare-and-set. Tool writers compare and atomically replace under the tools-file lock, shared with CLI and web writes.
 
 Pause and resume share the web action's command path. A pause applies now; a running cycle stops at its next turn.
 Their bodies may be empty.
@@ -1069,14 +1068,14 @@ Each service has `name: str`, `running: bool`, `pid: int or null`, `started: str
 and `busy: str`. The service record supplies its process and version fields, with timestamps as in §1.6. `busy`
 is `actions.service_guard(name, "restart")` verbatim, empty when free. API replies hold the run lock and are included.
 Only the scheduler also has `drain`, either null or `{"state": str, "waiting": [str], "deadline": str or null}`.
-The pending restart request appears as `draining` even before the scheduler's first drain tick records its status.
+A pending restart request appears as `draining` before the first drain tick only when its PID matches the running scheduler. Leftover requests for dead processes are ignored.
 
 API restart refuses with `409 busy` when its guard is nonempty. There is no force option. Otherwise it runs
 `api on` with `actions.SLOW_S`, as the web service action does. Scheduler restart runs `autonomy restart`.
 A pending drain is returned without requesting it again, preserving its deadline. Cancel runs
-`autonomy restart --cancel`. A second restart while the same service's command runs gives `409 restarting`.
+`autonomy restart --cancel`. A second restart while the same service's command runs gives `409 restarting`. The web service action shares this lock.
 A failed command gives `409 refused` with the command's message. Successful commands return the fresh service list;
-the app confirms an actual restart by polling for a changed PID.
+the app confirms an actual restart by polling for a changed PID. A tracked `drained` state keeps polling for up to 90 seconds after first observation; timeout is unconfirmed and a later refresh can still confirm the new PID. An untracked old `drained` record is ignored.
 
 Only `api` and `scheduler` can be restarted here. Other service names, including `web`, `telegram`, `model` and
 `embed`, give `404 not_found`. Only the scheduler has a cancel route. Restart and cancel bodies may be empty.

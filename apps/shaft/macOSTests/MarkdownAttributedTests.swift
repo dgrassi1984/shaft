@@ -39,6 +39,19 @@ struct MarkdownAttributedTests {
         #expect(!button.accepts(parent.convert(NSPoint(x: 90, y: -5), to: nil)))
     }
 
+    @Test @MainActor func selectionReplyRejectsClicksUnderAHiddenAncestor() {
+        let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: 100, height: 100),
+                              styleMask: .borderless, backing: .buffered, defer: true)
+        let parent = NSView(frame: NSRect(x: 0, y: 0, width: 100, height: 100))
+        window.contentView = parent
+        let button = SelectionReplyButton(frame: NSRect(x: 10, y: 10, width: 60, height: 20))
+        parent.addSubview(button)
+        let point = parent.convert(NSPoint(x: 20, y: 15), to: nil)
+        #expect(button.accepts(point))
+        parent.isHidden = true
+        #expect(!button.accepts(point))
+    }
+
     @Test @MainActor func splitViewUpdateConstraintsCrashZeroProposalHasContentIndependentWidth() {
         let short = MarkdownAttributed.Measure(MarkdownAttributed.operatorText("OK"))
         let long = MarkdownAttributed.Measure(render(

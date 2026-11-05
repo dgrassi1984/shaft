@@ -53,13 +53,13 @@ def setup(base: Path, port: int):
     """Import the supervisor over `base` and patch what lies outside the web service. Returns the modules."""
     base = base.resolve()
     real = (ROOT / ".supervisor").resolve()
-    if base == real or real in base.parents or base == (ROOT / "instances").resolve():
+    if base == ROOT or base in ROOT.parents or base == real or real in base.parents or base == (ROOT / "instances").resolve():
         raise SystemExit(f"refusing to use {base}: that is the real data")
     (base / "sup").mkdir(parents=True, exist_ok=True)
     os.environ["SHAFT_SUPERVISOR_DIR"] = str(base / "sup")       # before the supervisor is imported: SUP_DIR follows it
     sys.path.insert(0, str(ROOT))
     import supervisor
-    from supervisor import actions, autonomy, channel, cloudllm, core, docs, messages, opconfig, version, web, web_chat, webpush
+    from supervisor import actions, autonomy, channel, cloudllm, core, dashboard, docs, messages, opconfig, version, web, web_chat, webpush, web_settings
 
     inst = base / "instances"
     for name in INSTANCES:
@@ -98,19 +98,14 @@ def setup(base: Path, port: int):
             name = args[1]
             if name not in INSTANCES:
                 raise ValueError(f"unknown fixture instance: {name}")
+            # HTML web_config actions still use these commands; app settings write in process.
             if verb == "limits":
                 if len(args) != 4 or args[2] != "cloud-cap":
                     raise ValueError(f"unsupported fixture limits: {args}")
-                if args[3] == "off":
-                    amount = None
-                else:
-                    import math
-                    try:
-                        amount = round(float(args[3]), 2)
-                    except ValueError:
-                        return False, "cloud-cap must be a positive amount (or off)"
-                    if not math.isfinite(amount) or amount <= 0:
-                        return False, "cloud-cap must be a positive amount (or off)"
+                try:
+                    amount = core.limit_value("cloud-cap", args[3])
+                except ValueError as e:
+                    return False, str(e)
                 core._update_tool_settings(name, cloud_daily_usd=amount)
             elif verb == "channel":
                 try:
@@ -160,7 +155,10 @@ def setup(base: Path, port: int):
     else:
         raise AssertionError("unknown fixture commands must raise")
 
-    for p in (mock.patch.object(web, "respond", respond),
+    for p in (mock.patch.object(dashboard, "_scheduler_running", return_value=True),
+              mock.patch.object(core, "secrets_env", return_value={}),
+              mock.patch.object(web_settings, "secrets_env", return_value={}),
+              mock.patch.object(web, "respond", respond),
               mock.patch.object(web, "allowed_logins", return_value={ME}),
               mock.patch.object(web, "allowed_hosts", return_value=hosts),
               mock.patch.object(web, "url", return_value=f"http://127.0.0.1:{port}"),

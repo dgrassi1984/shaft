@@ -151,13 +151,14 @@ struct InstanceSettingsView: View {
     }
 }
 
-/// Keeps only the unfinished edit locally. Every submit returns to the server's value, including a refused save.
+/// Keep unfinished edits until the server accepts them.
 private struct SettingTextRow: View {
     let store: InstanceSettingsStore
     let field: SettingField
     let label: String
     @State private var draft: String?
     @State private var inputError: String?
+    @FocusState private var focused: Bool
 
     private var serverText: String {
         guard let settings = store.settings else { return "" }
@@ -173,20 +174,24 @@ private struct SettingTextRow: View {
         VStack(alignment: .leading, spacing: Design.Space.s4) {
             HStack {
                 LabeledContent(label) {
-                    TextField(label, text: Binding(get: { draft ?? serverText }, set: { draft = $0; inputError = nil }))
+                    TextField(field == .cloudCap ? "Default" : label, text: Binding(get: { draft ?? serverText }, set: { draft = $0; inputError = nil }))
                         .multilineTextAlignment(.trailing)
+                        .focused($focused)
+                        #if os(iOS)
+                        .keyboardType(field == .wakeInterval ? .numberPad : field == .cloudCap ? .decimalPad : .default)
+                        #endif
                         .onSubmit(submit)
                 }
                 if store.saving == field { ProgressView().controlSize(.small) }
             }
             if let inputError { Text(inputError).font(.footnote).foregroundStyle(Color.warning) }
         }
-        .onChange(of: serverText) { draft = nil }
+        .onChange(of: focused) { if !focused { submit() } }
+        .onDisappear(perform: submit)
     }
 
     private func submit() {
-        guard store.saving == nil else { return }
-        let text = draft ?? serverText
+        guard let text = draft, text != serverText else { return }
         let value: SettingValue
         switch field {
         case .wakeInterval:
@@ -208,8 +213,7 @@ private struct SettingTextRow: View {
         default: value = .string(text)
         }
         Task {
-            await store.save(field, value: value)
-            draft = nil
+            if await store.save(field, value: value), draft == text { draft = nil }
         }
     }
 }

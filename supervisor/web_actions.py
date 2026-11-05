@@ -105,6 +105,14 @@ def _run(verb: str, form: dict, snap: dict, names: list[str], services: list[str
         args = ["autonomy" if svc == "scheduler" else svc, op]
         running = any(s["name"] == svc and s["running"] for s in snap.get("services", []))
         args = _guard(form, args, actions.service_guard(svc, op if op == "off" else "restart") if running else "")
+        if svc in ("api", "scheduler"):
+            lock = actions.restart_lock(svc)
+            if not lock.acquire(blocking=False):
+                raise Refused(f"{svc} is already restarting")
+            try:
+                return _ran(args, timeout=actions.SLOW_S)
+            finally:
+                lock.release()
         return _ran(args, timeout=actions.SLOW_S)
     if verb == "autonomy":
         op = form.get("op", "")

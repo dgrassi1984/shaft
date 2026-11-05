@@ -7,6 +7,7 @@ in .supervisor/<who>-actions.log. The guards here are the ones taken from incide
 """
 from __future__ import annotations
 
+import threading
 import subprocess
 import fcntl
 import json
@@ -17,6 +18,14 @@ from datetime import datetime
 
 from . import core
 from .core import PROJECT, PYTHON, SUP_DIR, log
+
+
+_RESTART_LOCKS = {name: threading.Lock() for name in ("api", "scheduler")}
+
+
+def restart_lock(service: str):
+    """Shared command lock for app and web service restarts."""
+    return _RESTART_LOCKS[service]
 
 
 def _names(raw):

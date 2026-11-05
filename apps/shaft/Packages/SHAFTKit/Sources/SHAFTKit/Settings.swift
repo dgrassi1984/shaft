@@ -37,8 +37,9 @@ public final class InstanceSettingsStore {
         }
     }
 
-    public func save(_ field: SettingField, value: SettingValue) async {
-        guard saving == nil, !pausing, let settings else { return }
+    @discardableResult
+    public func save(_ field: SettingField, value: SettingValue) async -> Bool {
+        guard saving == nil, !pausing, let settings else { return false }
         saving = field
         saveError = nil
         notice = nil
@@ -50,8 +51,9 @@ public final class InstanceSettingsStore {
             unsupported = false
             loadError = nil
             notice = answer.applies == "next run" ? "Applies from the next run" : "Applies now"
+            return true
         } catch is CancellationError {
-            return
+            return false
         } catch {
             let error = APIError.from(error)
             if case .server(_, let body) = error, body.code == "stale" {
@@ -62,6 +64,7 @@ public final class InstanceSettingsStore {
             }
             unsupported = error.status == 404
             if error.isUnpaired { owner?.report(error) }
+            return false
         }
     }
 
@@ -104,6 +107,7 @@ public final class ServicesStore {
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var schedulerPID: Int?
     @ObservationIgnored private var schedulerTracked = false
+    @ObservationIgnored private var schedulerDrainedAt: Date?
 
     public init(client: APIClient,
                 sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
@@ -123,11 +127,15 @@ public final class ServicesStore {
             apply(answer)
             if let scheduler = service("scheduler"), scheduler.drain?.pending == true,
                !restarting.contains("scheduler") {
-                if !schedulerTracked { schedulerPID = scheduler.pid; schedulerTracked = true }
+                if !schedulerTracked {
+                    schedulerPID = scheduler.pid; schedulerTracked = true; schedulerDrainedAt = nil
+                }
                 outcome["scheduler"] = .waiting
                 startWatcher("scheduler", oldPID: schedulerPID)
             } else if schedulerTracked, !restarting.contains("scheduler"), let scheduler = service("scheduler") {
-                _ = finished(scheduler, oldPID: schedulerPID)
+                if !finished(scheduler, oldPID: schedulerPID) {
+                    startWatcher("scheduler", oldPID: schedulerPID)
+                }
             }
         } catch is CancellationError {
             return
@@ -137,7 +145,7 @@ public final class ServicesStore {
         }
     }
 
-    /// Returns when the restart is confirmed, fails, or monitoring stops. Scheduler drains have no local deadline.
+    /// Active scheduler drains have no local deadline. After drained, allow 90 seconds for replacement.
     public func restart(_ name: String) async {
         guard !restarting.contains(name) else { return }
         restarting.insert(name)
@@ -158,7 +166,9 @@ public final class ServicesStore {
             let answer = try await client.restart(service: name)
             guard generation == self.generation, !Task.isCancelled else { return }
             apply(answer)
-            if name == "scheduler" { schedulerPID = oldPID; schedulerTracked = true }
+            if name == "scheduler" {
+                schedulerPID = oldPID; schedulerTracked = true; schedulerDrainedAt = nil
+            }
             if let status = service(name), finished(status, oldPID: oldPID) {
                 restarting.remove(name)
                 return
@@ -222,7 +232,7 @@ public final class ServicesStore {
     private func finished(_ status: ServiceStatus, oldPID: Int?) -> Bool {
         if status.running, let pid = status.pid, pid != oldPID {
             outcome[status.name] = .restarted
-            if status.name == "scheduler" { schedulerTracked = false }
+            if status.name == "scheduler" { schedulerTracked = false; schedulerDrainedAt = nil }
             return true
         }
         if let drain = status.drain, ["abandoned", "cancelled"].contains(drain.state) {
@@ -231,10 +241,12 @@ public final class ServicesStore {
             schedulerTracked = false
             return true
         }
-        if status.name == "scheduler", let drain = status.drain, !drain.pending {
-            outcome[status.name] = .unconfirmed
-            schedulerTracked = false
-            return true
+        if status.name == "scheduler", schedulerTracked {
+            if status.drain?.state == "drained", schedulerDrainedAt == nil { schedulerDrainedAt = now() }
+            if let drainedAt = schedulerDrainedAt, now().timeIntervalSince(drainedAt) >= 90 {
+                outcome[status.name] = .unconfirmed
+                return true
+            }
         }
         return false
     }
@@ -273,6 +285,11 @@ public final class ServicesStore {
                     // A temporarily unreachable service does not disprove a restart.
                     let error = APIError.from(error)
                     if error.isUnpaired { self.report(error); break }
+                }
+                if name == "scheduler", let drainedAt = self.schedulerDrainedAt,
+                   now().timeIntervalSince(drainedAt) >= 90 {
+                    self.outcome[name] = .unconfirmed
+                    break
                 }
                 if name == "api", now() >= deadline {
                     self.outcome[name] = .unconfirmed

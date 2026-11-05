@@ -550,13 +550,42 @@ def _tool_settings(name: str) -> dict:
         return {}
 
 
-def _update_tool_settings(name: str, **changes) -> None:
-    """Change some keys and keep the rest: each setter owns its own key (one setter once rewrote the file with
-    only its own keys, which dropped the shared-folder grant)."""
-    data = {**_tool_settings(name), **changes}
-    (SUP_DIR / "tools").mkdir(parents=True, exist_ok=True)
-    (SUP_DIR / "tools" / f"{name}.json").write_text(json.dumps({k: v for k, v in data.items() if v is not None},
-                                                               indent=1))
+class StaleSetting(ValueError):
+    """The operator's setting changed since it was read."""
+
+
+def limit_value(limit: str, value: str):
+    """Parse the operator's CLI or app limit using the same validation."""
+    import math
+    if value == "off":
+        return None
+    try:
+        new = int(value) if limit == "wake-floor" else round(float(value), 2)
+        if math.isfinite(new) and new > 0:
+            return new
+    except (ValueError, OverflowError):
+        pass
+    raise ValueError(f"{limit} must be a positive {'whole number of minutes' if limit == 'wake-floor' else 'amount'}"
+                     f" (or off), not {value!r}")
+
+
+def _update_tool_settings(name: str, *, expect: dict | None = None, **changes) -> None:
+    """Compare and update owned keys without losing another operator writer's changes."""
+    import tempfile
+    path = SUP_DIR / "tools" / f"{name}.json"
+    with config_lock(path):
+        data = _tool_settings(name)
+        if expect is not None and any(data.get(k) != v for k, v in expect.items()):
+            raise StaleSetting(f"{name}'s tool settings changed")
+        data.update(changes)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{name}-")
+        try:
+            with os.fdopen(fd, "w") as stream:
+                json.dump({k: v for k, v in data.items() if v is not None}, stream, indent=1)
+            os.replace(tmp, path)
+        finally:
+            Path(tmp).unlink(missing_ok=True)
 
 
 def disabled_tools(name: str) -> set[str]:

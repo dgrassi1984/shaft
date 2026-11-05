@@ -19,7 +19,7 @@ struct ServerSection: View {
                     serviceRow(service)
                 }
             }
-        } header: { Text("Server") } footer: {
+        } header: { Text("Services") } footer: {
             Text("These restart a service for all instances.").foregroundStyle(Color.textSecondary)
         }
         .listRowBackground(Color.elevated)
@@ -65,10 +65,10 @@ struct ServerSection: View {
             if let outcome = store.outcome[service.name] {
                 switch outcome {
                 case .restarted:
-                    if let pid = service.pid { Text("Restarted, new process \(pid)").foregroundStyle(Color.textSecondary) }
+                    if let pid = service.pid { Text("Restarted, new process \(String(pid))").foregroundStyle(Color.textSecondary) }
                 case .failed(let text): Text(text).foregroundStyle(Color.warning)
                 case .unconfirmed:
-                    Text("Asked, but no new process appeared within a minute.").foregroundStyle(Color.textSecondary)
+                    Text("Asked, but no new process has appeared yet.").foregroundStyle(Color.textSecondary)
                     Button("Refresh") { Task { await store.load() } }.foregroundStyle(Color.brand)
                 case .waiting: EmptyView()
                 }

@@ -24,13 +24,14 @@ and "Forget the pairing here only" when the server cannot be reached.
 
 In a current chat, "Settings for <name>" is first in ⋯ and also in the title's model/spend popover. It opens a
 sheet on every platform; while it is open the chat is covered for read tracking. Archived chats omit both entries.
-The form reads values and choices from `InstanceSettingsStore`. Text edits save on submit and return to the server's
-value after either success or refusal. Pausing asks first; empty cloud cap removes the instance override, so the
-default cap still applies. Loading, load errors and older servers each have an explicit state.
+The form reads values and choices from `InstanceSettingsStore`. Text edits save on submit, focus loss and disappearance.
+Successful saves show the server's value; refused saves preserve the draft. Pausing asks first; empty cloud cap
+removes the instance override, so the default cap still applies. Loading, load errors and older servers each have an explicit state.
 
-Both settings screens show `ServerSection` using the paired session's shared `ServicesStore`, including in the Mac
+Both settings screens show the Services section (`ServerSection`) using the paired session's shared `ServicesStore`, including in the Mac
 Settings scene, which does not inherit the main window's store environment. API restarts ask first and retain the
-server's busy refusal; scheduler drains show their waiting list and Cancel. A screen leaving calls `stop()` only
+server's busy refusal; scheduler drains show their waiting list and Cancel. After `drained`, polling waits up to 90 seconds
+for a new PID; an unconfirmed result retains tracking for a later refresh. A screen leaving calls `stop()` only
 for a scheduler watch and only when no API restart is running, because `stop()` cancels all watchers. If both are
 running, both watches continue until completion or another settings screen closes without an API restart running.
 

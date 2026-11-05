@@ -23,7 +23,6 @@ import hashlib
 import json
 import math
 import re
-import threading
 import time
 import urllib.parse
 from datetime import datetime
@@ -580,7 +579,6 @@ def _latest(req: Request) -> Response:
 # -- instance settings and services (§15) -----------------------------------------------------------------------------
 CONFIG_FIELDS = {"model": "LLM_MODEL", "effort": "LLM_REASONING_EFFORT",
                  "wake_interval": "WAKE_INTERVAL_MINUTES", "operator_name": "OPERATOR_NAME"}
-_SERVICE_LOCKS = {name: threading.Lock() for name in ("api", "scheduler")}
 
 
 def _who(req: Request) -> str:
@@ -630,40 +628,51 @@ def _stale(n: str, settings: dict) -> None:
 
 
 def _set_settings(req: Request, n: str) -> Response:
-    from . import actions, core, opconfig
+    from . import core, opconfig
     data = _body(req)
     field = data.get("field")
     if (set(data) != {"field", "value", "expect"} or not isinstance(field, str)
             or field not in (*CONFIG_FIELDS, "cloud_cap", "channel")
             or not all(_setting_shape(field, data[k]) for k in ("value", "expect"))):
         raise Refusal(400, "bad_request", "Send one field, its value and its expect value, with the setting's type.")
-    # Separate from config.env's writer lock: set_values takes that itself. The CLI's tool-settings writer has
-    # no CAS, so the app's check and command must stay together, including saves to different tool fields.
-    with core.config_lock(core.SUP_DIR / "tools" / f"{n}.json"):
-        cfg = core.instance_config(n)
-        current = _settings(n, cfg)
-        if current[field]["value"] != data["expect"]:
-            _stale(n, current)
-        who = _who(req)
-        log(f"{who}: operator setting {field} for {n}")
+    cfg = core.instance_config(n)
+    current = _settings(n, cfg)
+    if current[field]["value"] != data["expect"]:
+        _stale(n, current)
+    who = _who(req)
+    log(f"{who}: operator setting {field} for {n}")
+    try:
         if field in CONFIG_FIELDS:
             key = CONFIG_FIELDS[field]
             value = data["value"]
-            try:
-                opconfig.set_values(n, {key: str(value) if value is not None else None}, {key: cfg.get(key)})
-            except opconfig.Refused as e:
-                fresh = _settings(n)
-                if fresh[field]["value"] != data["expect"]:
-                    _stale(n, fresh)
-                raise Refusal(409, "refused", str(e)) from None
+            opconfig.set_values(n, {key: str(value) if value is not None else None}, {key: cfg.get(key)})
+        elif field == "cloud_cap":
+            value = "off" if data["value"] is None else str(data["value"])
+            core._update_tool_settings(n, expect={"cloud_daily_usd": data["expect"]},
+                                       cloud_daily_usd=core.limit_value("cloud-cap", value))
+            log(f"{n}: cloud-cap set to {value} by the operator ({who})")
         else:
-            args = (["limits", n, "cloud-cap", "off" if data["value"] is None else str(data["value"])]
-                    if field == "cloud_cap" else ["channel", n, data["value"]])
-            ok, said = actions.run_now(args, who=who)
-            if not ok:
-                raise Refusal(409, "refused", said)
-        return _json(200, {"settings": _settings(n),
-                           "applies": "next run" if field in ("model", "effort", "operator_name") else "now"})
+            from . import channel
+            channel.set_preference(n, data["value"], expect=data["expect"])
+            log(f"{n}: channel set to {data['value']} by the operator ({who})")
+    except core.StaleSetting:
+        _stale(n, _settings(n))
+    except opconfig.Refused as e:
+        fresh = _settings(n)
+        if fresh[field]["value"] != data["expect"]:
+            _stale(n, fresh)
+        raise Refusal(409, "refused", str(e)) from None
+    except ValueError as e:
+        raise Refusal(409, "refused", str(e)) from None
+    return _json(200, {"settings": _settings(n),
+                       "applies": "next run" if field in ("model", "effort", "operator_name") else "now"})
+
+
+def _pending_drain() -> dict | None:
+    from . import autonomy, version
+    pending = autonomy.restart_request()
+    scheduler = version.service("scheduler", stale=False)
+    return pending if pending and scheduler and pending.get("pid") == scheduler.get("pid") else None
 
 
 def _pause_resume(req: Request, n: str, act: str) -> Response:
@@ -687,7 +696,7 @@ def _services() -> list[dict]:
         if name == "scheduler":
             drain = autonomy.drain_status()
             # A request is pending even before the scheduler's next tick writes its drain record.
-            pending = autonomy.restart_request()
+            pending = _pending_drain()
             if pending and (not drain or pending.get("at") != drain.get("at")):
                 drain = {**pending, "state": "draining", "waiting": []}
             row["drain"] = ({"state": drain["state"], "waiting": drain.get("waiting") or [],
@@ -702,7 +711,7 @@ def _get_services(req: Request) -> Response:
 
 def _service_action(req: Request, service: str, act: str) -> Response:
     from . import actions, autonomy
-    lock = _SERVICE_LOCKS[service]
+    lock = actions.restart_lock(service)
     if not lock.acquire(blocking=act == "cancel"):
         raise Refusal(409, "restarting", f"{service} is already restarting.")
     try:
@@ -713,16 +722,16 @@ def _service_action(req: Request, service: str, act: str) -> Response:
                 raise Refusal(409, "busy", why)
             args, timeout = ["api", "on"], actions.SLOW_S
         else:
-            if act == "restart" and (autonomy.restart_request() or autonomy.draining_now()):
+            if act == "restart" and (_pending_drain() or autonomy.draining_now()):
                 return _json(200, {"services": _services()})
             args = ["autonomy", "restart"] + (["--cancel"] if act == "cancel" else [])
             timeout = actions.RUN_NOW_S
         ok, said = actions.run_now(args, timeout, who=who)
-        if not ok:
-            raise Refusal(409, "refused", said)
-        return _json(200, {"services": _services()})
     finally:
         lock.release()
+    if not ok:
+        raise Refusal(409, "refused", said)
+    return _json(200, {"services": _services()})
 
 
 ROUTES: list[tuple[str, dict]] = [
