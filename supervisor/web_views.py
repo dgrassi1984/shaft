@@ -651,17 +651,18 @@ def _cycle_filters(name: str, filt: str) -> Html:
 
 def cycles_next(plan: dict) -> Html:
     now, check, step = plan["now"], plan["check"], plan["next_step"]
-    current = rows([("State", _cycle_value(now["state"])), ("Since", _cycle_value(now["since"]))] +
+    current = rows([("State", _cycle_value(now["state"]))] +
+                   ([("Since", when(now["since"]))] if now["since"] else []) +
                    ([("Goal", _cycle_value(now["goal"]))] if now["goal"] is not None else []))
     checking = rows([("Next check", "paused" if check["paused"] else _cycle_value(check["next"]))] +
                     ([("Last skipped check", check["skipped"])] if check["skipped"] else []))
-    said = (rows([("From cycle", step["ts"]), ("Action", step["action"])] +
+    said = (rows([("From cycle", when(step["ts"])), ("Action", step["action"])] +
                  ([("Revise if", step["revise_if"])] if step["revise_if"] else [])) if step else
             h('<p class="dim">no next action recorded</p>'))
     commitments = lines([h('{p} · due {d} · <span class="{c}">{s}</span>',
-                          p=it["promise"], d=_cycle_value(it["due"]), s=it["status"],
+                          p=it["promise"], d=when(it["due"]) if it["due"] else "unknown", s=it["status"],
                           c="warn" if it["status"] == "overdue" else "") for it in plan["commitments"]],
-                        "no open commitments")
+                        "no open commitments", cls="lines wrap")
     if plan["commitments_error"]:
         commitments = h('<p class="warn">{e}</p>', e=plan["commitments_error"])
     queue = plan["queue"]
@@ -670,18 +671,20 @@ def cycles_next(plan: dict) -> Html:
     elif queue["state"] == "none":
         tasks = h('<p class="dim">no task queue</p>')
     else:
-        tasks = lines([h('{t} · {d}{late}', t=it["task"], d=it["due_at"] or "due now",
-                         late=" · overdue" if it["overdue"] else "") for it in queue["rows"]], "no open tasks")
+        tasks = lines([h('{t} · {d}{late}', t=it["task"], d=when(it["due_at"]) if it["due_at"] else "due now",
+                         late=" · overdue" if it["overdue"] else "") for it in queue["rows"]],
+                      "no open tasks", cls="lines wrap")
         if queue["open"] > len(queue["rows"]):
             tasks = join([tasks, h('<p>{n} more</p>', n=queue["open"] - len(queue["rows"]))])
     goals = (h('<p class="warn">{e}</p>', e=plan["goals_error"]) if plan["goals_error"] else
              markdown(plan["goals"]) if plan["goals"].strip() else h('<p class="dim">goals file is empty</p>'))
     improvement = plan["improvement"]
-    improve = (join([h('<p>{ts}</p>', ts=improvement["ts"]), markdown(improvement["text"])]) if improvement else
+    improve = (join([h('<p>{ts}</p>', ts=when(improvement["ts"])), markdown(improvement["text"])]) if improvement else
                h('<p class="dim">no improvement plan recorded</p>'))
     return join([h('<h3>Now</h3>{now}{check}<h3>Said it would do next</h3>{said}<h3>Unfinished</h3>{left}'
                    '<h3>Commitments</h3>{commitments}<h3>Task queue</h3>{tasks}',
-                   now=current, check=checking, said=said, left=lines(plan["unfinished"], "nothing recorded"),
+                   now=current, check=checking, said=said,
+                   left=lines(plan["unfinished"], "nothing recorded", cls="lines wrap"),
                    commitments=commitments, tasks=tasks),
                  h('<details data-key="cycles-goals"><summary>Goals</summary>{goals}</details>'
                    '<details data-key="cycles-improvement"><summary>Improvement plan</summary>{improve}</details>',
@@ -708,7 +711,7 @@ def cycles_page(name: str, plan: dict, days: dict, filt: str, names: list[str], 
                            g=row["goal"] or ("no intent recorded" if live else row["kind"])),
                          claim, _cycle_verdict(row["verdict"]) if row["verdict"] is not None else "",
                          "delivered" if row["delivered"] else ""])
-        done.append(table(["End time", "Kind", "Goal", "Claim", "Judge", "Delivery"], body))
+        done.append(table(["End time", "Kind", "Goal", "Claim", "Judge", "Delivery"], body, cls="cycles-done"))
     if not days["days"]:
         done.append(h('<p class="dim">{empty}</p>',
                       empty="no cycles match this filter" if filt else "no cycles yet"))
@@ -724,7 +727,8 @@ def cycles_page(name: str, plan: dict, days: dict, filt: str, names: list[str], 
 def cycle_page(name: str, cycle: dict, names: list[str], csrf: str) -> Html:
     back = link(f"/i/{q(name)}/transcripts", "← Cycles")
     raw = link(f"/i/{q(name)}/transcript?id={q(cycle['where'])}", "Raw transcript")
-    body = [h('<p>{back} · {raw}</p><h2>{kind} {ts}</h2>', back=back, raw=raw, kind=cycle["kind"], ts=cycle["ts"])]
+    body = [h('<p>{back} · {raw}</p><h2>{kind} {ts}</h2>',
+              back=back, raw=raw, kind=cycle["kind"], ts=when(cycle["ts"]))]
     did = cycle["did"]
     did_fields = [("What happened", "what_happened"), ("Duration (seconds)", "duration_s"), ("Cost (USD)", "usd"),
                   ("Tool calls", "tool_calls"), ("Ended by", "ended_by"), ("Wrapped up", "wrapped_up"),
@@ -771,7 +775,8 @@ def cycle_page(name: str, cycle: dict, names: list[str], csrf: str) -> Html:
             remaining.append(("Revise if", nxt["revise_if"]))
         remaining.append(("The next cycle's goal", _cycle_value(left["next_goal"])))
         body.append(section("Left", join([h('<h3>Unfinished</h3>{items}',
-                                            items=lines(left["unfinished"], "nothing recorded")), rows(remaining)])))
+                                            items=lines(left["unfinished"], "nothing recorded", cls="lines wrap")),
+                                            rows(remaining)])))
     return instance_frame(name, "transcripts", "cycle", join(body), names, csrf)
 
 

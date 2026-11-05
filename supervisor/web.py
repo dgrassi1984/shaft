@@ -1185,7 +1185,7 @@ def _instance_page(name: str, tab: str, qs: dict, names: list[str], csrf: str,
             before = None
         filt = filt if filt in cycles.FILTERS else ""
         return _html(200, v.cycles_page(name, cycles.plan(name, _live(name)),
-                                        cycles.days(name, before=before, filt=filt), filt, names, csrf))
+                                        cycles.days(name, before=before, limit=3, filt=filt), filt, names, csrf))
     if tab == "transcript":
         e = next((e for e in panel.transcripts(name) if e["id"] == qs.get("id")), None)
         if not e:

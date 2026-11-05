@@ -318,6 +318,33 @@ class TranscriptsTest(PagesTest):
         self.has("/i/shaft/transcripts", "Next check", "Said it would do next", "tidy notes", "claimed yes",
                  "notes change", "1 cycles · 1 yes · 0 partial · 0 no (claimed) · 0 judged · 0 for you")
 
+    def test_cycles_lists_wrap_and_times_are_formatted(self):
+        self.record["finish"]["unfinished"] = ["finish the remaining work in full"]
+        self.seed()
+        (self.root / "notes" / "queue.json").write_text(json.dumps([
+            {"id": 1, "task": "queued work", "due_at": "2026-10-18T23:59:59.999999"}]))
+        ledger = {"one": {"id": "one", "promise": "promised work", "due": "2026-10-17T23:59:59.999999",
+                          "status": "overdue"}}
+        with mock.patch("supervisor.commitments.ledger", return_value=ledger):
+            body = self.has("/i/shaft/transcripts", "10-19 09:00", "10-18 23:59", "10-17 23:59", "overdue")
+            self.assertEqual(body.count('<ul class="lines wrap">'), 3)
+            self.assertNotIn("23:59:59.999999", body)
+            self.assertNotIn('>Since</span>', body)
+        self.has("/i/shaft/transcripts?ts=" + self.record["ts"], '<h2>cycle 10-19 09:00</h2>',
+                 '<ul class="lines wrap">')
+
+    def test_now_since_and_check_use_page_time_format(self):
+        from supervisor import cycles
+        plan = cycles.plan("shaft", {"state": "idle", "since": "2026-10-19T08:00:00"})
+        plan["check"]["next"] = "12:30"
+        plan["improvement"] = {"ts": "2026-10-18T14:20:00", "text": "improve"}
+        with mock.patch.object(cycles, "plan", return_value=plan):
+            self.has("/fragment/i/shaft/cycles-next", ">Since</span>", "10-19 08:00", "12:30", "10-18 14:20")
+
+    def test_done_has_its_own_table_class(self):
+        self.has("/i/shaft/transcripts", '<table class="cycles-done">', 'data-label="Goal"',
+                 'data-label="Kind"', 'data-label="Judge"', 'data-label="Delivery"')
+
     def test_the_tab_says_cycles(self):
         self.has("/i/shaft", ">Cycles<")
 
@@ -401,8 +428,12 @@ class TranscriptsTest(PagesTest):
         for day in range(11, 20):
             record = {**self.record, "ts": f"2026-10-{day}T09:00:00"}
             (self.episodes / f"2026-10-{day}.jsonl").write_text(json.dumps(record))
-        self.has("/i/shaft/transcripts?f=short", "Earlier days", "before=2026-10-12", "f=short")
-        self.has("/i/shaft/transcripts?f=short&before=2026-10-12", "2026-10-12", "2026-10-11")
+        self.has("/i/shaft/transcripts?f=short", "Earlier days", "before=2026-10-16", "f=short")
+        body = self.get("/i/shaft/transcripts?f=short")
+        self.assertIn("2026-10-17", body)
+        self.assertNotIn("<h3>2026-10-16</h3>", body)
+        self.has("/i/shaft/transcripts?f=short&before=2026-10-16", "2026-10-16", "2026-10-15",
+                 "2026-10-14", "before=2026-10-13")
 
     def test_no_finish_sleep_and_reflection(self):
         del self.record["finish"]
