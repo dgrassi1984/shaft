@@ -671,6 +671,7 @@ public struct ServerError: Codable, Sendable, Equatable {
     public var sha: String?
     public var diff: String?
     public var version: String?
+    public var settings: InstanceSettings? = nil
 
     public init(code: String, message: String, sha: String? = nil, diff: String? = nil, version: String? = nil) {
         self.code = code

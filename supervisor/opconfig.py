@@ -109,7 +109,7 @@ def effort_choices(root: Path) -> tuple[str, ...] | None:
                       and any(isinstance(target, ast.Name) and target.id == "CHOICES"
                               for target in (node.targets if isinstance(node, ast.Assign) else [node.target]))), None)
         choices = ast.literal_eval(value) if value is not None else {}
-    except (ValueError, SyntaxError):
+    except (ValueError, SyntaxError, RecursionError, MemoryError):
         return None
     got = choices.get("LLM_REASONING_EFFORT") if isinstance(choices, dict) else None
     return tuple(str(c) for c in got) if isinstance(got, (tuple, list)) else None

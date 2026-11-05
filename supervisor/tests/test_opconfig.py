@@ -76,6 +76,12 @@ class EffortChoicesTest(OpConfigTest):
                      'CHOICES = {"LLM_REASONING_EFFORT": "medium"}', 'X = {}'):
             (self.root / "shaft/config.py").write_text(text)
             self.assertIsNone(opconfig.effort_choices(self.root), text)
+        for operation in ("parse", "literal_eval"):
+            for failure in (RecursionError, MemoryError):
+                with self.subTest(operation=operation, failure=failure.__name__):
+                    (self.root / "shaft/config.py").write_text(AGENT_CONFIG)
+                    with mock.patch.object(opconfig.ast, operation, side_effect=failure):
+                        self.assertIsNone(opconfig.effort_choices(self.root))
         (self.root / "shaft/config.py").unlink()
         self.assertIsNone(opconfig.effort_choices(self.root))
         (self.root / "shaft/config.py").symlink_to(self.dir / "template/config.env")

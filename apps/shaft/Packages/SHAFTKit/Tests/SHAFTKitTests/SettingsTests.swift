@@ -1,0 +1,394 @@
+import Foundation
+import Testing
+@testable import SHAFTKit
+
+private let settingsExample = #"""
+{"instance":"wren","paused":false,
+ "model":{"value":"new-model","choices":[{"model":"new-model","label":"New model"}]},
+ "effort":{"value":"medium","choices":["medium","xhigh","low"]},
+ "wake_interval":{"value":5,"floor":10,"effective":10},
+ "cloud_cap":{"value":null,"spent_today":0.25},
+ "channel":{"value":"auto","choices":["auto","web","telegram"]},
+ "operator_name":{"value":"the operator"}}
+"""#
+
+private func serviceExample(pid: Int = 123, running: Bool = true, drain: String = "null") -> String {
+    #"{"services":[{"name":"api","running":\#(running),"pid":\#(pid),"started":"2026-11-05T10:00:00+01:00","commit":"abc","busy":""},{"name":"scheduler","running":true,"pid":\#(pid),"started":null,"commit":null,"busy":"","drain":\#(drain)}]}"#
+}
+
+private let pendingDrain = #"{"state":"draining","waiting":["wren is replying"],"deadline":"2026-11-05T11:00:00+01:00"}"#
+
+/// Virtual time advances only when the store calls its injected sleep.
+private final class RestartClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var seconds: TimeInterval = 0
+    private var durations: [Duration] = []
+    func sleep(_ duration: Duration) {
+        lock.withLock {
+            durations.append(duration)
+            seconds += Double(duration.components.seconds)
+        }
+    }
+    func now() -> Date { lock.withLock { Date(timeIntervalSince1970: seconds) } }
+    var sleeps: [Duration] { lock.withLock { durations } }
+}
+
+@MainActor
+struct SettingsTests {
+    private func makeOwner(_ server: StubServer, folder: URL) throws -> InstancesStore {
+        InstancesStore(client: server.client, outbox: try Outbox(directory: folder.appending(path: "outbox")),
+                       drafts: DraftStore(directory: folder.appending(path: "drafts")))
+    }
+
+    @Test func section15SettingsAndServicesDecodeWithTheirWireTypes() throws {
+        let settings = try SHAFTJSON.decoder().decode(InstanceSettings.self, from: Data(settingsExample.utf8))
+        #expect(settings.instance == "wren")
+        #expect(settings.paused == false)
+        #expect(settings.model.value == "new-model")
+        #expect(settings.model.choices.map(\.model) == ["new-model"])
+        #expect(settings.model.choices.map(\.label) == ["New model"])
+        #expect(settings.effort.value == "medium")
+        #expect(settings.effort.choices == ["medium", "xhigh", "low"])
+        #expect(settings.wakeInterval.value == 5)
+        #expect(settings.wakeInterval.floor == 10)
+        #expect(settings.wakeInterval.effective == 10)
+        #expect(settings.cloudCap.value == nil)
+        #expect(settings.cloudCap.spentToday == 0.25)
+        #expect(settings.channel.value == "auto")
+        #expect(settings.channel.choices == ["auto", "web", "telegram"])
+        #expect(settings.operatorName.value == "the operator")
+        let nullable = settingsExample.replacingOccurrences(of: #""value":"medium","choices":["medium","xhigh","low"]"#,
+                                                           with: #""value":null,"choices":null"#)
+            .replacingOccurrences(of: #""floor":10"#, with: #""floor":null"#)
+            .replacingOccurrences(of: #""value":null,"spent_today"#, with: #""value":2.5,"spent_today"#)
+        let other = try SHAFTJSON.decoder().decode(InstanceSettings.self, from: Data(nullable.utf8))
+        #expect(other.effort.value == nil)
+        #expect(other.effort.choices == nil)
+        #expect(other.wakeInterval.floor == nil)
+        #expect(other.cloudCap.value == 2.5)
+        let response = try SHAFTJSON.decoder().decode(ServicesResponse.self,
+            from: Data(serviceExample(drain: pendingDrain).utf8))
+        #expect(response.services.count == 2)
+        let api = response.services[0]
+        #expect(api.name == "api" && api.running && api.pid == 123)
+        #expect(api.started == SHAFTJSON.parseStamp("2026-11-05T10:00:00+01:00"))
+        #expect(api.commit == "abc" && api.busy == "" && api.drain == nil)
+        let scheduler = response.services[1]
+        #expect(scheduler.name == "scheduler" && scheduler.running && scheduler.pid == 123)
+        #expect(scheduler.started == nil && scheduler.commit == nil && scheduler.busy == "")
+        #expect(scheduler.drain?.pending == true)
+        #expect(scheduler.drain?.waiting == ["wren is replying"])
+        #expect(scheduler.drain?.deadline == SHAFTJSON.parseStamp("2026-11-05T11:00:00+01:00"))
+    }
+
+    @Test func oldDrainStatesAreNotPending() throws {
+        for state in ["drained", "abandoned", "cancelled"] {
+            let drain = try SHAFTJSON.decoder().decode(ServiceDrain.self,
+                from: Data(#"{"state":"\#(state)","waiting":[],"deadline":null}"#.utf8))
+            #expect(!drain.pending)
+        }
+    }
+
+    @Test func saveReplacesTheShownSettingsWithTheServersAnswer() async throws {
+        let folder = try temporaryFolder("settings-save")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let fresh = settingsExample.replacingOccurrences(of: "the operator", with: "Server spelling")
+        let server = StubServer { request in
+            request.method == "GET" ? .json(200, settingsExample)
+                : .json(200, #"{"settings":\#(fresh),"applies":"next run"}"#)
+        }
+        let owner = try makeOwner(server, folder: folder)
+        let store = owner.settings("wren")
+        #expect(store === owner.settings("wren"))
+        #expect(owner.services === owner.services)
+        await store.load()
+        await store.save(.operatorName, value: .string("typed spelling"))
+        #expect(store.settings?.operatorName.value == "Server spelling")
+        #expect(store.notice == "Applies from the next run")
+        #expect(store.saving == nil && store.saveError == nil)
+        let request = try #require(server.requests.last)
+        #expect(request.path == "/app/v1/settings/wren")
+        #expect(request.json?["field"] as? String == "operator_name")
+        #expect(request.json?["value"] as? String == "typed spelling")
+        #expect(request.json?["expect"] as? String == "the operator")
+    }
+
+    @Test func numericAndNullableSettingsSendTheShownValueAsExpect() async throws {
+        let folder = try temporaryFolder("settings-expect")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let server = StubServer { request in
+            request.method == "GET" ? .json(200, settingsExample)
+                : .json(200, #"{"settings":\#(settingsExample),"applies":"now"}"#)
+        }
+        let owner = try makeOwner(server, folder: folder)
+        let store = owner.settings("wren")
+        await store.load()
+        await store.save(.wakeInterval, value: .int(0))
+        #expect(server.requests.last?.json?["field"] as? String == "wake_interval")
+        #expect(server.requests.last?.json?["expect"] as? Int == 5)
+        #expect(server.requests.last?.json?["value"] as? Int == 0)
+        await store.save(.cloudCap, value: .double(2.5))
+        #expect(server.requests.last?.json?["field"] as? String == "cloud_cap")
+        #expect(server.requests.last?.json?["expect"] is NSNull)
+        #expect(server.requests.last?.json?["value"] as? Double == 2.5)
+        await store.save(.effort, value: .null)
+        #expect(server.requests.last?.json?["field"] as? String == "effort")
+        #expect(server.requests.last?.json?["expect"] as? String == "medium")
+        #expect(server.requests.last?.json?["value"] is NSNull)
+    }
+
+    @Test func staleShowsTheFreshValueAndNeverSendsAgain() async throws {
+        let folder = try temporaryFolder("settings-stale")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let fresh = settingsExample.replacingOccurrences(of: "the operator", with: "Elsewhere")
+        let server = StubServer { request in
+            request.method == "GET" ? .json(200, settingsExample)
+                : .json(409, #"{"error":{"code":"stale","message":"changed","settings":\#(fresh)}}"#)
+        }
+        let owner = try makeOwner(server, folder: folder)
+        let store = owner.settings("wren")
+        await store.load()
+        await store.save(.operatorName, value: .string("Mine"))
+        #expect(store.settings?.operatorName.value == "Elsewhere")
+        #expect(store.saveError?.contains("changed elsewhere") == true)
+        #expect(store.notice == nil)
+        #expect(server.requests.filter { $0.method == "POST" }.count == 1)
+    }
+
+    @Test func refusedKeepsTheOldValueAndShowsTheServersMessage() async throws {
+        let folder = try temporaryFolder("settings-refused")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let server = StubServer { request in
+            request.method == "GET" ? .json(200, settingsExample)
+                : .json(409, #"{"error":{"code":"refused","message":"Choose a listed model."}}"#)
+        }
+        let owner = try makeOwner(server, folder: folder)
+        let store = owner.settings("wren")
+        await store.load()
+        await store.save(.model, value: .string("invalid"))
+        #expect(store.settings?.model.value == "new-model")
+        #expect(store.saveError == "Choose a listed model.")
+        #expect(server.requests.count == 2)
+    }
+
+    @Test func a404MarksBothRoutesUnsupportedAndASuccessClearsIt() async throws {
+        let folder = try temporaryFolder("settings-404")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let server = StubServer { _ in .json(404, #"{"error":{"code":"not_found","message":"old server"}}"#) }
+        let owner = try makeOwner(server, folder: folder)
+        let settings = owner.settings("wren")
+        await settings.load()
+        await owner.services.load()
+        #expect(settings.unsupported && settings.loadError?.status == 404)
+        #expect(owner.services.unsupported && owner.services.loadError?.status == 404)
+        server.setAnswer { request in
+            .json(200, request.path == "/app/v1/services" ? serviceExample() : settingsExample)
+        }
+        await settings.load()
+        await owner.services.load()
+        #expect(!settings.unsupported && settings.loadError == nil)
+        #expect(!owner.services.unsupported && owner.services.loadError == nil)
+    }
+
+    @Test func nullIsSentExplicitlyAndPauseAndRestartCarryLongerTimeouts() async throws {
+        let server = StubServer { request in
+            if request.path.contains("/services") { return .json(200, serviceExample()) }
+            if request.path.hasSuffix("/pause") || request.path.hasSuffix("/resume") {
+                return .json(200, #"{"settings":\#(settingsExample)}"#)
+            }
+            return .json(200, #"{"settings":\#(settingsExample),"applies":"now"}"#)
+        }
+        let client = server.client
+        _ = try await client.saveSetting("wren", field: .cloudCap, value: .null, expect: .double(2.5))
+        let save = try #require(server.requests.last)
+        #expect(save.json?["value"] is NSNull)
+        #expect(save.json?["expect"] as? Double == 2.5)
+        #expect(save.timeout == URLRequest(url: server.baseURL).timeoutInterval)
+        _ = try await client.setPaused("wren", paused: true)
+        #expect(server.requests.last?.path == "/app/v1/settings/wren/pause")
+        #expect(server.requests.last?.timeout == 70)
+        _ = try await client.setPaused("wren", paused: false)
+        #expect(server.requests.last?.path == "/app/v1/settings/wren/resume")
+        #expect(server.requests.last?.timeout == 70)
+        _ = try await client.restart(service: "api")
+        #expect(server.requests.last?.timeout == 100)
+    }
+
+    @Test func pauseUsesOnlyTheReturnedSettingsAndARefusalKeepsThem() async throws {
+        let folder = try temporaryFolder("settings-pause")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let paused = settingsExample.replacingOccurrences(of: "false", with: "true")
+        let server = StubServer { request in
+            request.method == "GET" ? .json(200, settingsExample)
+                : .json(200, #"{"settings":\#(paused)}"#)
+        }
+        let owner = try makeOwner(server, folder: folder)
+        let store = owner.settings("wren")
+        await store.load()
+        await store.setPaused(true)
+        #expect(store.settings?.paused == true)
+        #expect(store.notice == "Applies now")
+        server.setAnswer { _ in .json(409, #"{"error":{"code":"refused","message":"Cannot resume."}}"#) }
+        await store.setPaused(false)
+        #expect(store.settings?.paused == true)
+        #expect(store.saveError == "Cannot resume.")
+        #expect(store.notice == nil)
+    }
+
+    @Test func stopEndsSchedulerPollingAndLoadResumesThePendingDrainWithoutAnotherPost() async {
+        let sleeps = AsyncStream<Void>.makeStream()
+        defer { sleeps.continuation.finish() }
+        let server = StubServer { request in
+            .json(200, serviceExample(drain: request.method == "POST" ? pendingDrain : "null"))
+        }
+        let store = ServicesStore(client: server.client, sleep: { duration in
+            #expect(duration == .seconds(5))
+            sleeps.continuation.yield(())
+            try await Task.sleep(for: .seconds(3600))
+        })
+        await store.load()
+        let restart = Task { await store.restart("scheduler") }
+        var iterator = sleeps.stream.makeAsyncIterator()
+        _ = await iterator.next()
+        #expect(store.outcome["scheduler"] == .waiting)
+        store.stop()
+        await restart.value
+        #expect(store.restarting.isEmpty)
+        let requestCount = server.requests.count
+        server.setAnswer { _ in .json(200, serviceExample(drain: pendingDrain)) }
+        await store.load()
+        _ = await iterator.next()
+        #expect(store.restarting == ["scheduler"])
+        #expect(server.requests.count == requestCount + 1)
+        store.stop()
+        server.setAnswer { _ in .json(200, serviceExample(pid: 456,
+            drain: #"{"state":"drained","waiting":[],"deadline":null}"#)) }
+        await store.load()
+        #expect(store.outcome["scheduler"] == .restarted)
+        #expect(server.requests.filter { $0.method == "POST" }.count == 1)
+    }
+
+    @Test func cancelPostsOnceAndReportsTheCancelledDrainWithItsWaiters() async {
+        let server = StubServer { request in
+            if request.method == "POST" {
+                return .json(200, serviceExample(drain:
+                    #"{"state":"cancelled","waiting":["wren"],"deadline":null}"#))
+            }
+            return .json(200, serviceExample())
+        }
+        let store = ServicesStore(client: server.client)
+        await store.load()
+        await store.cancel()
+        #expect(store.outcome["scheduler"] == .failed("Scheduler restart cancelled; waiting for wren."))
+        #expect(server.requests.last?.path == "/app/v1/services/scheduler/cancel")
+        #expect(server.requests.filter { $0.method == "POST" }.count == 1)
+    }
+
+    @Test func aRestartIsNotReportedUntilThePidChanges() async throws {
+        let steps = Steps()
+        let clock = RestartClock()
+        let server = StubServer { request in
+            if request.method == "POST" { return .json(200, serviceExample()) }
+            return .json(200, serviceExample(pid: steps.next() < 3 ? 123 : 456))
+        }
+        let store = ServicesStore(client: server.client, sleep: { clock.sleep($0) }, now: { clock.now() })
+        await store.load()
+        await store.restart("api")
+        #expect(store.outcome["api"] == .restarted)
+        #expect(store.services.first?.pid == 456)
+        #expect(clock.sleeps == [.seconds(2), .seconds(2)])
+        #expect(server.requests.filter { $0.method == "POST" }.count == 1)
+        #expect(store.restarting.isEmpty)
+    }
+
+    @Test func aNewPidMustAlsoBeRunningToConfirmARestart() async {
+        let steps = Steps()
+        let clock = RestartClock()
+        let server = StubServer { request in
+            if request.method == "POST" { return .json(200, serviceExample()) }
+            let step = steps.next()
+            return .json(200, serviceExample(pid: step == 1 ? 123 : 456, running: step != 2))
+        }
+        let store = ServicesStore(client: server.client, sleep: { clock.sleep($0) }, now: { clock.now() })
+        await store.load()
+        await store.restart("api")
+        #expect(store.outcome["api"] == .restarted)
+        #expect(clock.sleeps == [.seconds(2), .seconds(2)])
+    }
+
+    @Test func failedPollsDoNotFailARestartBeforeTheDeadline() async throws {
+        let steps = Steps()
+        let clock = RestartClock()
+        let server = StubServer { request in
+            if request.method == "POST" { return .json(200, serviceExample()) }
+            switch steps.next() {
+            case 1: return .json(200, serviceExample())
+            case 2: throw StubServer.NetworkDown()
+            case 3: return .json(503, #"{"error":{"code":"unavailable","message":"starting"}}"#)
+            default: return .json(200, serviceExample(pid: 456))
+            }
+        }
+        let store = ServicesStore(client: server.client, sleep: { clock.sleep($0) }, now: { clock.now() })
+        await store.load()
+        await store.restart("api")
+        #expect(store.outcome["api"] == .restarted)
+        #expect(clock.sleeps.count == 3)
+    }
+
+    @Test func sixtySecondsWithoutANewPidIsUnconfirmed() async {
+        let clock = RestartClock()
+        let server = StubServer { _ in .json(200, serviceExample()) }
+        let store = ServicesStore(client: server.client, sleep: { clock.sleep($0) }, now: { clock.now() })
+        await store.load()
+        await store.restart("api")
+        #expect(store.outcome["api"] == .unconfirmed)
+        #expect(clock.now() == Date(timeIntervalSince1970: 60))
+        #expect(server.requests.last?.timeout == 2)
+        #expect(store.restarting.isEmpty)
+    }
+
+    @Test func busyOrRestartingFailsWithTheServersWordsWithoutRetrying() async {
+        for code in ["busy", "restarting"] {
+            let server = StubServer { request in
+                request.method == "GET" ? .json(200, serviceExample())
+                    : .json(409, #"{"error":{"code":"\#(code)","message":"wren is replying"}}"#)
+            }
+            let store = ServicesStore(client: server.client, sleep: { _ in Issue.record("must not poll") })
+            await store.load()
+            await store.restart("api")
+            #expect(store.outcome["api"] == .failed("wren is replying"))
+            #expect(server.requests.count == 2)
+            #expect(store.restarting.isEmpty)
+        }
+    }
+
+    @Test func schedulerDrainRestartsOnlyOnANewPid() async {
+        let steps = Steps()
+        let clock = RestartClock()
+        let server = StubServer { request in
+            if request.method == "POST" { return .json(200, serviceExample(drain: pendingDrain)) }
+            let step = steps.next()
+            return .json(200, serviceExample(pid: step < 3 ? 123 : 456,
+                drain: step == 2 ? pendingDrain : "null"))
+        }
+        let store = ServicesStore(client: server.client, sleep: { clock.sleep($0) })
+        await store.load()
+        await store.restart("scheduler")
+        #expect(store.outcome["scheduler"] == .restarted)
+        #expect(clock.sleeps == [.seconds(5), .seconds(5)])
+    }
+
+    @Test func anAbandonedDrainFailsAndNamesWhatItWasWaitingFor() async {
+        let steps = Steps()
+        let server = StubServer { request in
+            if request.method == "POST" { return .json(200, serviceExample(drain: pendingDrain)) }
+            return .json(200, serviceExample(drain: steps.next() == 1 ? "null" :
+                #"{"state":"abandoned","waiting":["wren is replying"],"deadline":null}"#))
+        }
+        let store = ServicesStore(client: server.client, sleep: { _ in })
+        await store.load()
+        await store.restart("scheduler")
+        #expect(store.outcome["scheduler"] == .failed("Scheduler restart abandoned; waiting for wren is replying."))
+        #expect(store.restarting.isEmpty)
+    }
+}
