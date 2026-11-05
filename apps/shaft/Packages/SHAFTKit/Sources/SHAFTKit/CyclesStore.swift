@@ -21,6 +21,7 @@ public final class CyclesStore {
     @ObservationIgnored private var planETag: String?
     @ObservationIgnored private var pageETag: String?
     @ObservationIgnored private var generation = 0
+    @ObservationIgnored private var detailGeneration = 0
 
     public init(client: APIClient, instance: String) {
         self.client = client
@@ -74,14 +75,19 @@ public final class CyclesStore {
     }
 
     public func load(_ ts: String) async {
+        detailGeneration += 1
+        let requestedGeneration = detailGeneration
         detailLoading = true
-        defer { detailLoading = false }
+        defer { if detailGeneration == requestedGeneration { detailLoading = false } }
         do {
-            open = try await client.cycle(instance, ts: ts)
+            let detail = try await client.cycle(instance, ts: ts)
+            guard detailGeneration == requestedGeneration else { return }
+            open = detail
             detailError = nil
         } catch is CancellationError {
             // Cancellation is not a failure to show on screen.
         } catch {
+            guard detailGeneration == requestedGeneration else { return }
             detailError = APIError.from(error)
         }
     }

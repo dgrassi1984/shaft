@@ -135,9 +135,10 @@ struct CyclesPanel: View {
             if plan.queue.state == "none" { Text("no task queue") }
             else if plan.queue.state == "unreadable" {
                 Text(plan.queue.error).foregroundStyle(Color.danger)
+            } else if plan.queue.rows.isEmpty {
+                Text("no open tasks")
             } else {
                 DisclosureGroup("Task queue · \(plan.queue.open) open · \(plan.queue.overdue) overdue") {
-                    if plan.queue.rows.isEmpty { Text("no open tasks") }
                     ForEach(plan.queue.rows, id: \.id) { row in
                         VStack(alignment: .leading, spacing: Design.Space.s4) {
                             Text(row.task)

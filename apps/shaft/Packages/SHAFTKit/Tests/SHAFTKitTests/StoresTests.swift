@@ -351,6 +351,65 @@ struct CyclesStoresTests {
         #expect(server.requests.last?.header("If-None-Match") == "\"newest\"")
     }
 
+    @Test(arguments: [200, 500], [false, true])
+    func aStaleDetailLoadCannotChangeTheNewestSelection(_ status: Int, _ olderFinishesLast: Bool) async throws {
+        let server = try server()
+        let store = CyclesStore(client: server.client, instance: "wren")
+        server.setAnswer { _ in .json(500, #"{"error":{"code":"internal","message":"Initial failed"}}"#) }
+        await store.load("2026-11-03T13:00:00")
+        #expect(store.detailError?.message == "Initial failed")
+
+        let olderBegan = AsyncStream<Void>.makeStream()
+        let olderRelease = AsyncStream<Void>.makeStream()
+        let newerBegan = AsyncStream<Void>.makeStream()
+        let newerRelease = AsyncStream<Void>.makeStream()
+        defer {
+            olderBegan.continuation.finish(); olderRelease.continuation.finish()
+            newerBegan.continuation.finish(); newerRelease.continuation.finish()
+        }
+        let detail = fixtureText(try DecodingTests.fixture("cycle"))
+        var olderResponse = StubServer.Response.json(status, status == 200 ? detail
+            : #"{"error":{"code":"internal","message":"Older failed"}}"#)
+        olderResponse.beforeReply = {
+            olderBegan.continuation.yield(())
+            for await _ in olderRelease.stream { break }
+        }
+        var newerResponse = StubServer.Response.json(200,
+            detail.replacingOccurrences(of: "2026-11-03T13:58:40", with: "2026-11-03T14:00:00"))
+        newerResponse.beforeReply = {
+            newerBegan.continuation.yield(())
+            for await _ in newerRelease.stream { break }
+        }
+        let heldOlder = olderResponse
+        let heldNewer = newerResponse
+        server.setAnswer { request in
+            request.path.hasSuffix("2026-11-03T13:58:40") ? heldOlder : heldNewer
+        }
+        let older = Task { await store.load("2026-11-03T13:58:40") }
+        for await _ in olderBegan.stream { break }
+        let newer = Task { await store.load("2026-11-03T14:00:00") }
+        for await _ in newerBegan.stream { break }
+        #expect(store.detailLoading)
+        if olderFinishesLast {
+            newerRelease.continuation.yield(())
+            await newer.value
+            #expect(store.open?.id == "2026-11-03T14:00:00")
+            olderRelease.continuation.yield(())
+            await older.value
+        } else {
+            olderRelease.continuation.yield(())
+            await older.value
+            #expect(store.detailLoading)
+            #expect(store.open == nil)
+            #expect(store.detailError?.message == "Initial failed")
+            newerRelease.continuation.yield(())
+            await newer.value
+        }
+        #expect(store.open?.id == "2026-11-03T14:00:00")
+        #expect(store.detailLoading == false)
+        #expect(store.detailError == nil)
+    }
+
     @Test func aFailedDetailLoadDoesNotChangeListState() async throws {
         let server = try server()
         let store = CyclesStore(client: server.client, instance: "wren")
