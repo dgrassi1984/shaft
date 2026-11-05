@@ -102,9 +102,13 @@ def effort_choices(root: Path) -> tuple[str, ...] | None:
         text = safe_read(root, "shaft/config.py")   # the instance writes it: never read through a link
     except (OSError, UnsafePath, ValueError):
         return None
-    m = re.search(r"^CHOICES\s*=\s*(\{.*\})\s*$", text, re.M)
     try:
-        choices = ast.literal_eval(m[1]) if m else {}
+        tree = ast.parse(text)
+        value = next((node.value for node in tree.body
+                      if isinstance(node, (ast.Assign, ast.AnnAssign))
+                      and any(isinstance(target, ast.Name) and target.id == "CHOICES"
+                              for target in (node.targets if isinstance(node, ast.Assign) else [node.target]))), None)
+        choices = ast.literal_eval(value) if value is not None else {}
     except (ValueError, SyntaxError):
         return None
     got = choices.get("LLM_REASONING_EFFORT") if isinstance(choices, dict) else None

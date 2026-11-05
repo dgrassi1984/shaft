@@ -1,0 +1,312 @@
+"""Native settings and service routes over existing domain writers, with no live services."""
+from __future__ import annotations
+
+import contextlib
+import io
+import json
+import threading
+from unittest import mock
+
+from supervisor import actions, app_api, autonomy, channel, cloudllm, core, opconfig, runner, version, web_actions
+from supervisor.tests.test_app_api import AppTest
+from supervisor.tests.test_opconfig import CONFIG, TEMPLATE
+
+
+class SettingsTest(AppTest):
+    def setUp(self):
+        super().setUp()
+        self.root = self.inst / "wren"
+        self.fake = "fake-secret-never-send-7c9a"
+        (self.root / "config.env").write_text(CONFIG.replace("sk-secret-value", self.fake))
+        (self.root / "shaft/config.py").write_text(
+            'raise RuntimeError("never execute agent code")\n'
+            'CHOICES = {\n "LLM_REASONING_EFFORT": ("medium", "xhigh", "low"),\n "OTHER": ("on", "off"),\n}\n')
+        self.tmpl = self.inst / "template"
+        self.tmpl.mkdir()
+        (self.tmpl / "config.env").write_text(TEMPLATE)
+        self.command = mock.Mock(side_effect=self.run_command)
+        self.guard = mock.Mock(return_value="")
+        for p in (mock.patch.object(opconfig, "TEMPLATE", self.tmpl),
+                  mock.patch.object(opconfig, "_commit", return_value=False),
+                  mock.patch.object(opconfig, "log"),
+                  mock.patch.object(autonomy, "SUP_DIR", self.sup),
+                  mock.patch.object(runner, "SUP_DIR", self.sup),
+                  mock.patch.object(core, "instance_names", return_value=["wren"]),
+                  mock.patch.object(actions, "service_guard", self.guard),
+                  mock.patch.object(actions, "run_now", self.command),
+                  mock.patch.object(cloudllm, "spent_today", return_value=0.25),
+                  mock.patch.object(opconfig, "model_choices", return_value=[
+                      {"model": "new-model", "label": "New model", "base_url": self.fake}]),
+                  mock.patch.object(opconfig, "base_url_for", side_effect=lambda m: "broker" if m == "new-model" else None)):
+            p.start()
+            self.addCleanup(p.stop)
+
+    def run_command(self, args, timeout=actions.RUN_NOW_S, who="top"):
+        # Exercise the existing command's validation and writer, without spawning the CLI or any service.
+        from supervisor import __main__ as cli
+        if args[0] == "limits":
+            with contextlib.redirect_stdout(io.StringIO()), mock.patch.object(cli, "log"), \
+                    mock.patch("supervisor.consult.spent_today", return_value=0):
+                return cli.cmd_limits(*args[1:]) == 0, "limit result"
+        if args[0] == "channel":
+            try:
+                channel.set_preference(*args[1:])
+            except ValueError as e:
+                return False, str(e)
+        return True, "done"
+
+    def save(self, field, value, expect):
+        return self.api("/app/v1/settings/wren", "POST", {"field": field, "value": value, "expect": expect})
+
+    def test_get_exact_contract_and_no_secret_or_base_url(self):
+        r = self.api("/app/v1/settings/wren")
+        self.assertEqual(r.status, 200, r.body)
+        got = json.loads(r.body)
+        self.assertEqual(got, {
+            "instance": "wren", "paused": False,
+            "model": {"value": "openrouter/xiaomi/mimo-v2.6-pro", "choices": [
+                {"model": "new-model", "label": "New model"},
+                {"model": "openrouter/xiaomi/mimo-v2.6-pro", "label": "openrouter/xiaomi/mimo-v2.6-pro"}]},
+            "effort": {"value": "medium", "choices": ["medium", "xhigh", "low"]},
+            "wake_interval": {"value": 5, "floor": autonomy.WAKE_FLOOR_MIN, "effective": max(5, autonomy.WAKE_FLOOR_MIN)},
+            "cloud_cap": {"value": None, "spent_today": 0.25},
+            "channel": {"value": "auto", "choices": ["auto", "web", "telegram"]},
+            "operator_name": {"value": "the operator"}})
+        self.assertNotIn(self.fake.encode(), r.body)
+        self.assertNotIn(b"base_url", r.body)
+        self.assertNotIn(b"LLM_API_KEY", r.body)
+
+    def test_each_config_field_uses_writer_and_reports_when_it_applies(self):
+        for field, value, expect, key, applies in (
+                ("model", "new-model", "openrouter/xiaomi/mimo-v2.6-pro", "LLM_MODEL", "next run"),
+                ("effort", "low", "medium", "LLM_REASONING_EFFORT", "next run"),
+                ("operator_name", "Ada", "the operator", "OPERATOR_NAME", "next run"),
+                ("wake_interval", 0, 5, "WAKE_INTERVAL_MINUTES", "now")):
+            with self.subTest(field=field):
+                with mock.patch.object(opconfig, "set_values", wraps=opconfig.set_values) as writer:
+                    r = self.save(field, value, expect)
+                self.assertEqual(r.status, 200, r.body)
+                got = json.loads(r.body)
+                self.assertEqual((got["settings"][field]["value"], got["applies"]), (value, applies))
+                self.assertEqual(writer.call_args.args[2], {key: str(expect)})
+                self.assertNotIn(self.fake.encode(), r.body)
+        self.assertEqual(core.instance_config("wren")["LLM_BASE_URL"], "broker")
+        self.assertEqual(got["settings"]["wake_interval"]["effective"], 0)
+        app_api.log.assert_any_call("app iphone-app: operator setting model for wren")
+
+    def test_effective_wake_uses_scheduler_floor_and_fallback(self):
+        core._update_tool_settings("wren", wake_floor_minutes=20)
+        self.assertEqual(self.get("/app/v1/settings/wren")["wake_interval"],
+                         {"value": 5, "floor": 20, "effective": 20})
+        (self.root / "config.env").write_text('WAKE_INTERVAL_MINUTES="bad"\n')
+        with mock.patch.object(autonomy, "log"):
+            got = self.get("/app/v1/settings/wren")["wake_interval"]
+        self.assertEqual(got, {"value": autonomy.WAKE_DEFAULT_MIN, "floor": 20,
+                               "effective": max(autonomy.WAKE_DEFAULT_MIN, 20)})
+
+    def test_effort_can_be_unset_and_missing_choices_are_null(self):
+        self.assertEqual(json.loads(self.save("effort", None, "medium").body)["settings"]["effort"]["value"], None)
+        (self.root / "shaft/config.py").unlink()
+        self.assertEqual(self.get("/app/v1/settings/wren")["effort"], {"value": None, "choices": None})
+
+    def test_limits_and_channel_use_cli_args_and_null_removes_cap_override(self):
+        for field, value, expect, args in (
+                ("cloud_cap", 2.5, None, ["limits", "wren", "cloud-cap", "2.5"]),
+                ("cloud_cap", None, 2.5, ["limits", "wren", "cloud-cap", "off"]),
+                ("channel", "web", "auto", ["channel", "wren", "web"])):
+            r = self.save(field, value, expect)
+            self.assertEqual(r.status, 200, r.body)
+            self.assertEqual(json.loads(r.body)["settings"][field]["value"], value)
+            self.assertEqual(json.loads(r.body)["applies"], "now")
+            self.assertEqual(self.command.call_args.args[0], args)
+            self.assertEqual(self.command.call_args.kwargs["who"], "app iphone-app")
+            self.assertNotIn(self.fake.encode(), r.body)
+        self.assertEqual(cloudllm.daily_cap("wren"), cloudllm.DAILY_USD)
+
+    def test_stale_for_every_field_returns_fresh_settings_without_writing(self):
+        for field, value, expect in (("model", "new-model", "old"), ("effort", "low", "xhigh"),
+                                     ("wake_interval", 0, 99), ("operator_name", "Ada", "old"),
+                                     ("channel", "web", "telegram"), ("cloud_cap", 2.0, 9.0)):
+            with self.subTest(field=field), mock.patch.object(opconfig, "set_values") as writer:
+                r = self.save(field, value, expect)
+                err = self.error(r, 409, "stale")
+                self.assertEqual(err["settings"], self.get("/app/v1/settings/wren"))
+                self.assertNotIn(self.fake.encode(), r.body)
+                writer.assert_not_called()
+        self.command.assert_not_called()
+
+    def test_config_changed_between_read_and_writer_is_stale(self):
+        real = opconfig.set_values
+
+        def raced(*args):
+            real("wren", {"LLM_REASONING_EFFORT": "xhigh"})
+            return real(*args)
+        with mock.patch.object(opconfig, "set_values", side_effect=raced):
+            err = self.error(self.save("effort", "low", "medium"), 409, "stale")
+        self.assertEqual(err["settings"]["effort"]["value"], "xhigh")
+
+    def test_refused_values_keep_the_writers_message(self):
+        for field, value, expect, message in (("effort", "impossible", "medium", "must be one of"),
+                                               ("model", "unknown", "openrouter/xiaomi/mimo-v2.6-pro", "not a model"),
+                                               ("operator_name", "two\nlines", "the operator", "one line")):
+            err = self.error(self.save(field, value, expect), 409, "refused")
+            self.assertIn(message, err["message"])
+        with mock.patch.object(actions, "run_now", return_value=(False, "writer refused this value")):
+            for field, value, expect in (("channel", "unknown", "auto"), ("cloud_cap", -1, None)):
+                err = self.error(self.save(field, value, expect), 409, "refused")
+                self.assertEqual(err["message"], "writer refused this value")
+
+    def test_wrong_shapes_are_bad_request(self):
+        for data in ([], {}, {"field": "model", "value": "new-model"},
+                     {"field": [], "value": 1, "expect": 1},
+                     {"field": "LLM_API_KEY", "value": "x", "expect": "x"},
+                     {"field": "channel", "value": "web", "expect": "auto", "extra": 1}):
+            self.error(self.api("/app/v1/settings/wren", "POST", data), 400, "bad_request")
+        for field, value, expect in (("wake_interval", True, 5), ("wake_interval", 1.5, 5),
+                                     ("cloud_cap", True, None), ("cloud_cap", float("inf"), None),
+                                     ("model", None, "old"), ("operator_name", 2, "the operator"),
+                                     ("channel", "web", None), ("effort", [], "medium")):
+            self.error(self.save(field, value, expect), 400, "bad_request")
+        self.command.assert_not_called()
+
+    def test_pause_and_resume_share_web_action_and_device_logging(self):
+        for verb in ("pause", "resume"):
+            with mock.patch.object(web_actions, "pause_resume", wraps=web_actions.pause_resume) as shared:
+                r = self.api(f"/app/v1/settings/wren/{verb}", "POST")
+            self.assertEqual(r.status, 200, r.body)
+            self.assertEqual(json.loads(r.body), {"settings": self.get("/app/v1/settings/wren")})
+            shared.assert_called_once_with(verb, "wren", who="app iphone-app")
+            self.assertEqual(self.command.call_args.args[0], [verb, "wren"])
+        with mock.patch.object(actions, "run_now", return_value=(False, "paused refused")):
+            self.error(self.api("/app/v1/settings/wren/pause", "POST"), 409, "refused")
+
+    def test_routes_require_auth_and_reject_unknown_instances_and_methods(self):
+        routes = [("/settings/wren", "GET"), ("/settings/wren", "POST"),
+                  ("/settings/wren/pause", "POST"), ("/settings/wren/resume", "POST"),
+                  ("/services", "GET"), ("/services/api/restart", "POST"),
+                  ("/services/scheduler/restart", "POST"), ("/services/scheduler/cancel", "POST")]
+        for path, method in routes:
+            self.error(self.api("/app/v1" + path, method, bearer=False), 401, "unpaired")
+            self.error(self.api("/app/v1" + path, method, login="intruder"), 403, "login")
+            self.error(self.api("/app/v1" + path, method, host="intruder"), 403, "host")
+        self.error(self.api("/app/v1/settings/missing"), 404, "not_found")
+        self.error(self.api("/app/v1/settings/wren", "DELETE"), 405, "method")
+        self.command.assert_not_called()
+
+    def test_two_tool_saves_cannot_both_replace_the_same_value(self):
+        entered, release = threading.Event(), threading.Event()
+        real = self.run_command
+
+        def held(*args, **kw):
+            entered.set()
+            self.assertTrue(release.wait(3))
+            return real(*args, **kw)
+        answers = []
+        self.command.side_effect = held
+        first = threading.Thread(target=lambda: answers.append(self.save("channel", "web", "auto")))
+        second = threading.Thread(target=lambda: answers.append(self.save("channel", "telegram", "auto")))
+        first.start()
+        try:
+            self.assertTrue(entered.wait(3))
+            second.start()
+        finally:
+            release.set()
+            first.join(4)
+            if second.ident is not None:
+                second.join(4)
+        self.assertFalse(first.is_alive() or second.is_alive())
+        self.assertEqual(sorted(r.status for r in answers), [200, 409])
+        self.assertEqual(self.command.call_count, 1)
+        self.assertEqual(core._tool_settings("wren")["channel"], "web")
+
+    def test_services_only_project_allowed_record_fields(self):
+        rec = {"pid": 123, "started": "2026-11-05T10:00:00", "commit": "abc", "settings": {"key": self.fake}}
+        drain = {"state": "draining", "waiting": ["wren live"], "deadline": 1793876400, "secret": self.fake}
+        with mock.patch.object(version, "service", side_effect=lambda n, **kw: rec if n == "api" else None), \
+                mock.patch.object(autonomy, "drain_status", return_value=drain):
+            r = self.api("/app/v1/services")
+        self.assertEqual(r.status, 200, r.body)
+        self.assertEqual(json.loads(r.body), {"services": [
+            {"name": "api", "running": True, "pid": 123, "started": app_api.stamp(rec["started"]),
+             "commit": "abc", "busy": ""},
+            {"name": "scheduler", "running": False, "pid": None, "started": None, "commit": None, "busy": "",
+             "drain": {"state": "draining", "waiting": ["wren live"], "deadline": app_api.stamp(1793876400)}}]})
+        self.assertNotIn(self.fake.encode(), r.body)
+
+    def test_service_restart_and_cancel_use_existing_commands_and_timeouts(self):
+        for path, args, timeout in (("api/restart", ["api", "on"], actions.SLOW_S),
+                                    ("scheduler/restart", ["autonomy", "restart"], actions.RUN_NOW_S),
+                                    ("scheduler/cancel", ["autonomy", "restart", "--cancel"], actions.RUN_NOW_S)):
+            r = self.api("/app/v1/services/" + path, "POST")
+            self.assertEqual(r.status, 200, r.body)
+            self.assertEqual(json.loads(r.body), self.get("/app/v1/services"))
+            self.command.assert_called_with(args, timeout, who="app iphone-app")
+        with mock.patch.object(actions, "run_now", return_value=(False, "cannot restart")):
+            self.error(self.api("/app/v1/services/api/restart", "POST"), 409, "refused")
+
+    def test_busy_api_restart_refused_without_force(self):
+        self.guard.return_value = "wren is replying"
+        err = self.error(self.api("/app/v1/services/api/restart", "POST", {"force": True}), 409, "busy")
+        self.assertEqual(err["message"], "wren is replying")
+        self.command.assert_not_called()
+        self.assertEqual(self.get("/app/v1/services")["services"][0]["busy"], "wren is replying")
+
+    def test_run_lock_for_an_api_reply_makes_existing_service_guard_busy(self):
+        # Exercise API._chat's run entry point and its real lock, stubbing only the agent execution.
+        def reply(*args, **kw):
+            rows = self.get("/app/v1/services")["services"]
+            self.assertIn("wren (api since", rows[0]["busy"])
+            self.error(self.api("/app/v1/services/api/restart", "POST"), 409, "busy")
+            return 0
+
+        with mock.patch.object(actions, "service_guard", ORIGINAL_GUARD), \
+                mock.patch("supervisor.panel.scheduled_runs", return_value=[]), \
+                mock.patch.object(runner, "_run", side_effect=reply) as agent:
+            self.assertEqual(runner.run_agent("wren", "api", ["answer"], interactive=True), 0)
+            agent.assert_called_once()
+            self.assertEqual(self.get("/app/v1/services")["services"][0]["busy"], "")
+        self.command.assert_not_called()
+
+    def test_repeated_drain_is_not_requested_again_even_before_first_tick(self):
+        req = {"pid": 123, "at": 10, "deadline": 100}
+        for record in (None, {**req, "state": "draining", "waiting": ["wren live"]}):
+            with mock.patch.object(autonomy, "restart_request", return_value=req), \
+                    mock.patch.object(autonomy, "drain_status", return_value=record):
+                r = self.api("/app/v1/services/scheduler/restart", "POST")
+                self.assertEqual(r.status, 200, r.body)
+                drain = json.loads(r.body)["services"][1]["drain"]
+                self.assertEqual(drain["state"], "draining")
+                self.assertEqual(drain["deadline"], app_api.stamp(100))
+        self.command.assert_not_called()
+
+    def test_double_restart_of_each_service_is_refused_and_lock_is_released(self):
+        for service in ("api", "scheduler"):
+            entered, release = threading.Event(), threading.Event()
+            answers = []
+
+            def held(*args, **kw):
+                entered.set()
+                self.assertTrue(release.wait(3))
+                return True, "done"
+            self.command.side_effect = held
+            thread = threading.Thread(target=lambda: answers.append(
+                self.api(f"/app/v1/services/{service}/restart", "POST")))
+            thread.start()
+            try:
+                self.assertTrue(entered.wait(3))
+                self.error(self.api(f"/app/v1/services/{service}/restart", "POST"), 409, "restarting")
+            finally:
+                release.set()
+                thread.join(4)
+            self.assertFalse(thread.is_alive())
+            self.assertEqual([r.status for r in answers], [200])
+            self.command.side_effect = self.run_command
+            self.assertEqual(self.api(f"/app/v1/services/{service}/restart", "POST").status, 200)
+
+    def test_other_services_and_api_cancel_are_not_routes(self):
+        for path in ("web/restart", "telegram/restart", "model/restart", "embed/restart", "other/restart", "api/cancel"):
+            self.error(self.api("/app/v1/services/" + path, "POST"), 404, "not_found")
+        self.command.assert_not_called()
+
+
+ORIGINAL_GUARD = actions.service_guard

@@ -56,6 +56,37 @@ class OpConfigTest(unittest.TestCase):
         return (self.root / "config.env").read_text()
 
 
+class EffortChoicesTest(OpConfigTest):
+    def test_multiline_choices_are_read_and_effort_is_validated_without_executing_agent_code(self):
+        (self.root / "shaft/config.py").write_text(
+            'raise RuntimeError("must never run")\n'
+            'CHOICES = {\n'
+            '    "LLM_REASONING_EFFORT": ("medium", "xhigh", "low"),\n'
+            '    "OTHER": ("on", "off"),\n'
+            '}\n')
+        self.assertEqual(opconfig.effort_choices(self.root), ("medium", "xhigh", "low"))
+        field = next(f for f in opconfig.fields("wren") if f["key"] == "LLM_REASONING_EFFORT")
+        self.assertEqual(field["choices"], ["medium", "xhigh", "low"])
+        with self.assertRaisesRegex(opconfig.Refused, "must be one of medium, xhigh, low"):
+            opconfig.set_values("wren", {"LLM_REASONING_EFFORT": "invalid"})
+        self.assertEqual(self.text(), CONFIG)
+
+    def test_unreadable_invalid_or_nonliteral_choices_keep_none_fallback(self):
+        for text in ('CHOICES = {', 'CHOICES = make_choices()', 'CHOICES = []',
+                     'CHOICES = {"LLM_REASONING_EFFORT": "medium"}', 'X = {}'):
+            (self.root / "shaft/config.py").write_text(text)
+            self.assertIsNone(opconfig.effort_choices(self.root), text)
+        (self.root / "shaft/config.py").unlink()
+        self.assertIsNone(opconfig.effort_choices(self.root))
+        (self.root / "shaft/config.py").symlink_to(self.dir / "template/config.env")
+        self.assertIsNone(opconfig.effort_choices(self.root))
+
+    def test_annotated_choices_and_existing_single_line_choices(self):
+        self.assertEqual(opconfig.effort_choices(self.root), ("medium", "xhigh", "low"))
+        (self.root / "shaft/config.py").write_text('CHOICES: dict = {"LLM_REASONING_EFFORT": ["low"]}\n')
+        self.assertEqual(opconfig.effort_choices(self.root), ("low",))
+
+
 class SetTest(OpConfigTest):
     def test_only_the_named_line_changes_byte_for_byte(self):
         r = opconfig.set_values("wren", {"LLM_REASONING_EFFORT": "xhigh"})
