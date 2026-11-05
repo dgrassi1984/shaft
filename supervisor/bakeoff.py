@@ -47,13 +47,13 @@ class BakeoffError(Exception):
 def parse_arm(spec: str, efforts: tuple[str, ...] | None) -> dict:
     """'claude-haiku-5-5@xhigh' -> {'label', 'model', 'env'}."""
     from .cloudllm import CLOUD_MODELS
-    from . import codexcli
+    from . import planchannel
     model, _, effort = spec.partition("@")
     try:
         model = instance_model(model)
     except ValueError as e:
         raise BakeoffError(f"{spec}: {e}") from None
-    if model not in CLOUD_MODELS and model not in codexcli.models():
+    if model not in CLOUD_MODELS and model not in planchannel.models():
         raise BakeoffError(f"{model} is not allowed for instances (SHAFT_CLOUD_MODELS={','.join(CLOUD_MODELS)})")
     if effort and efforts is not None and effort not in efforts:
         raise BakeoffError(f"{spec}: the instance's code accepts LLM_REASONING_EFFORT {', '.join(efforts)}, "
@@ -211,9 +211,11 @@ _FAMILIES = (r"\b(?:(?:openrouter|codex)/)?(?:[\w.-]+/)?(?:codex|mimo|deepseek|h
 
 
 def _redactor(b: dict):
+    from . import planchannel
+    channels = r"\b(?:" + "|".join(map(re.escape, planchannel.PROVIDERS)) + r")[\w.@/-]*"
     names = sorted({n for a in b["arms"] for n in (a["model"], a["model"].rsplit("/", 1)[-1])}, key=len, reverse=True)
     spelled = [r"[\s._/-]*".join(map(re.escape, re.split(r"[\s._/-]+", n))) for n in names]
-    pattern = re.compile("|".join([*(rf"\b{n}\b" for n in spelled), _FAMILIES]), re.IGNORECASE)   # the arms first
+    pattern = re.compile("|".join([*(rf"\b{n}\b" for n in spelled), channels, _FAMILIES]), re.IGNORECASE)   # the arms first
     return lambda text: pattern.sub("[model]", text)
 
 

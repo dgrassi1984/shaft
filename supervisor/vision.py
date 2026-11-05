@@ -79,10 +79,10 @@ def _openrouter_modalities() -> dict[str, list[str]]:
 def sees_images(model: str | None) -> bool:
     """Whether `model`, as an instance's config.env names it, accepts images. Raises VisionError when it cannot be
     known (OpenRouter's list unreachable and never cached)."""
-    from . import codexcli, selfhosted
+    from . import planchannel, selfhosted
     model = str(model or "")
-    if codexcli.serves(model):
-        return True
+    if planchannel.serves(model):
+        return planchannel.sees_images(model)
     if selfhosted.serves(model):
         return False
     if model.startswith("openrouter/"):

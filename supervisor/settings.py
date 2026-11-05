@@ -20,12 +20,12 @@ import json
 import os
 import sys
 
-from . import core
+from . import core, planchannel
 from .core import KNOB_GROUPS, KNOBS, SERVICE_NAMES, config_lock, log, resolve
 
 # Every module that calls knob() at import (test_settings greps the code for knob(" calls and checks each is here).
 MODULES = ("core", "actions", "api", "apns", "autonomy", "battery", "broker", "calendar_proposals", "cloudllm", "codexcli", "coder", "consult",
-           "finetune", "gate", "jobs", "judge", "localmodel", "metrics", "orders", "panel", "pushes", "recap", "selfhosted", "telegram", "trial",
+           "finetune", "gate", "jobs", "judge", "localmodel", "metrics", "orders", "panel", "planchannel", "pushes", "recap", "selfhosted", "telegram", "trial",
            "vision", "watch", "web")
 VALUE_MAX = 4000
 HEADER = ("# SHAFT's supervisor settings — written by `shaft settings set|unset` (and the web UI's Settings page).\n"
@@ -189,9 +189,9 @@ def listing() -> list[dict]:
              "services": list(k.services), "web": k.web, "in_file": file.get(k.name), "not_live": late.get(k.name, []),
              "env": os.environ.get(k.name), "kind": "text", "choices": []}
         if k.parse is core.cloud_models:
-            f.update(kind="models", choices=[m for m in model_choices() if not m.startswith("codex/")])
+            f.update(kind="models", choices=[m for m in model_choices() if not planchannel.prefix(m)])
         elif k.parse in (core.cloud_model, core.claude_model, core.openrouter_model):
-            f.update(kind="model", choices=[m for m in model_choices() if not m.startswith("codex/")])
+            f.update(kind="model", choices=[m for m in model_choices() if not planchannel.prefix(m)])
         elif k.parse in (core.positive_int, core.whole, core.port):
             f["kind"] = "int"
         out.append(f)

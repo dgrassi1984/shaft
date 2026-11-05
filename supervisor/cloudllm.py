@@ -302,12 +302,12 @@ def _record(instance: str, model: str, tokens_in, tokens_out, usd: float | None,
     without a cost. A self-hosted or Codex plan call spends no API dollars, so it adds nothing to the run's charges:
     the run's priced calls still sum. An OpenRouter call without a cost spent money nobody knows, so the run's
     spend is unknown (None), never counted as none."""
-    from . import codexcli, selfhosted
+    from . import planchannel, selfhosted
     if (label := _fallback_label.get()):
         model = label
     head = model.split(" (", 1)[0]
     cost = round(usd, 6) if usd is not None else None
-    plan_or_hosted = " (fallback " not in model and (codexcli.serves(head) or selfhosted.serves(head))
+    plan_or_hosted = " (fallback " not in model and (planchannel.serves(head) or selfhosted.serves(head))
     if cost is not None or not plan_or_hosted:
         ledger.record_charge(cost)
     USAGE.parent.mkdir(parents=True, exist_ok=True)
@@ -520,7 +520,8 @@ def as_sse(reply: dict) -> bytes:
         chunks.append({"choices": [{"index": 0, "delta": {"tool_calls": [{"index": i, **c}]}, "finish_reason": None}]})
     chunks.append({"choices": [{"index": 0, "delta": {}, "finish_reason": choice["finish_reason"]}]})
     chunks.append({"choices": [], "usage": reply["usage"]})
-    if (label := reply.get("model", "")).startswith("codex/") and " (fallback " in label:
+    from . import planchannel
+    if planchannel.prefix(label := reply.get("model", "")) and " (fallback " in label:
         for chunk in chunks:
             chunk["model"] = label
     return b"".join(b"data: " + json.dumps(c).encode() + b"\n\n" for c in chunks) + b"data: [DONE]\n\n"

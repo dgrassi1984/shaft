@@ -1047,7 +1047,7 @@ def cmd_feedback(name: str | None, days: int | None) -> int:
 
 
 def cmd_codex(action: str) -> int:
-    from . import codexcli, panel
+    from . import codexcli, planchannel
     home = Path(codexcli.HOME).expanduser().resolve()
     if action == "login":
         try:
@@ -1058,10 +1058,10 @@ def cmd_codex(action: str) -> int:
             print(f"Codex login failed: {e}", file=sys.stderr)
             return 1
     print("Codex login: " + ("present" if (home / "auth.json").is_file() else "missing; run shaft codex login"))
-    rate = panel.codex_rate()
+    rate = planchannel.saved_rate("codex")
     print("Weekly allowance: " + (f"{rate['used_percent']}% used" if rate is not None else "not observed yet"))
     print("Models: " + ", ".join(codexcli.models()))
-    if (fault := codexcli.outage()):
+    if (fault := planchannel.outage("codex")):
         print(("Codex security event: " if fault.get("security") else "Codex unavailable: ") + fault["reason"])
     return 0
 

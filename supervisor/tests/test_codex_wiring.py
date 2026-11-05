@@ -14,7 +14,7 @@ from tempfile import TemporaryDirectory
 from unittest import mock
 
 from supervisor import (bakeoff, broker, cloudllm, codexcli, consult, consultstats, core, experiments,
-                        judge, ledger, localmodel, opconfig, panel, runner, settings, trial, version, vision)
+                        judge, ledger, localmodel, opconfig, panel, planchannel, runner, settings, trial, version, vision)
 from supervisor import __main__ as cli
 
 MODEL = "codex/gpt-6-astra"
@@ -33,13 +33,13 @@ class Case(unittest.TestCase):
         self.tmp = TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        for module in (core, codexcli, panel):
+        for module in (core, planchannel, panel):
             self.enterContext(mock.patch.object(module, "SUP_DIR", self.root))
         self.enterContext(mock.patch.object(core, "SETTINGS_FILE", self.root / "settings.env"))
         self.enterContext(mock.patch.object(cloudllm, "USAGE", self.root / "cloud_usage.jsonl"))
         # panel.costs reads this import-time path independently of panel.SUP_DIR.
         self.enterContext(mock.patch.object(trial, "LEDGER", self.root / "trial_usage.jsonl"))
-        self.enterContext(mock.patch.object(codexcli, "_rate", None))
+        self.enterContext(mock.patch.object(codexcli.STATE, "rate", None))
         self.enterContext(mock.patch.object(codexcli, "FALLBACK_MODEL", FALLBACK))
 
 
@@ -49,8 +49,8 @@ class BrokerTest(Case):
         # Capture the nested production Handler without binding any socket or reading instance configuration.
         self.b = broker.Broker.__new__(broker.Broker)
         self.b.name, self.b.usage_name = "bird", "bird@trial:test"
-        self.b.codex, self.b.codex_down, self.b._codex_rate = None, None, None
-        self.b._codex_lock = threading.Lock()
+        self.b.channel, self.b.channel_down, self.b._channel_rate = None, None, None
+        self.b._channel_lock = threading.Lock()
         self.b.root, self.b.egress = self.root, mock.Mock()
         self.b._log, self.b.secrets, self.b.remembered = mock.Mock(), {}, {}
         self.b.model_allowed = True
@@ -81,7 +81,7 @@ class BrokerTest(Case):
         return reply(body["model"])
 
     def test_lazy_one_channel_success_and_close_before_shutdown(self):
-        self.assertIsNone(self.b.codex)
+        self.assertIsNone(self.b.channel)
         (self.root / "codex_outage.json").write_text('{"reason":"offline","security":false}')
         h, body = self.call()
         self.call()
@@ -105,7 +105,7 @@ class BrokerTest(Case):
                     codexcli.CodexSecurity("Codex native item forbidden: mcpToolCall; tool: exec"),
                     codexcli.CodexFailure("later\nretry; stderr: private message")]
         for failure in failures:
-            self.b._codex_report(failure)
+            self.b._channel_report(failure)
         for path in (self.root / "supervisor.log", self.b.log_path):
             lines = path.read_text().splitlines()
             self.assertEqual(len(lines), 3)
@@ -127,7 +127,7 @@ class BrokerTest(Case):
         self.assertEqual(json.loads(h.wfile.getvalue())["model"], LABEL)
         row = json.loads(cloudllm.USAGE.read_text().splitlines()[-1])
         self.assertEqual((row["model"], row["usd"]), (LABEL, .125))
-        self.assertEqual(self.b.codex_down, "native tool")
+        self.assertEqual(self.b.channel_down, "native tool")
         self.assertTrue(codexcli.outage()["security"])
         self.desktop.assert_called_once_with("Codex security event", "native tool")
         self.phone.assert_called_once()
@@ -170,7 +170,7 @@ class BrokerTest(Case):
             self.assertNotIn("data:image", output)
 
     def test_fallback_unknown_vision_strips_images_in_stream_instead_of_http_400(self):
-        self.b.codex_down = "offline"
+        self.b.channel_down = "offline"
         content = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,cHJpdmF0ZQ=="}}]
         with mock.patch.object(vision, "prepare_bytes", return_value=("image/png", b"private")), \
                 mock.patch.object(vision, "_openrouter_modalities", side_effect=vision.VisionError("no cache")), \
@@ -212,8 +212,8 @@ class BrokerTest(Case):
         for streaming in (False, True):
             with self.subTest(stream=streaming):
                 self.channel.complete.side_effect = codexcli.CodexClosed("Codex channel closed")
-                with mock.patch.object(codexcli, "report_failure") as report, \
-                        mock.patch.object(codexcli, "report_success") as success, \
+                with mock.patch.object(planchannel, "report_failure") as report, \
+                        mock.patch.object(planchannel, "report_success") as success, \
                         mock.patch.object(cloudllm, "complete") as cloud, \
                         mock.patch.object(cloudllm, "openrouter_stream") as cloud_stream:
                     h, _ = self.call(stream=streaming)
@@ -223,7 +223,7 @@ class BrokerTest(Case):
                 success.assert_not_called()
                 cloud.assert_not_called()
                 cloud_stream.assert_not_called()
-                self.assertIsNone(self.b.codex_down)
+                self.assertIsNone(self.b.channel_down)
                 self.assertIsNone(codexcli.outage())
 
     def test_notifications_fail_independently_without_breaking_fallback(self):
@@ -267,10 +267,10 @@ class BrokerTest(Case):
         self.assertEqual(cloud.call_args.args[1], {**body, "model": FALLBACK})
         h.send_response.assert_called_once_with(200)
         self.assertEqual(h.wfile.getvalue(), b"data: [DONE]\n\n")
-        self.assertEqual(self.b.codex_down, "failed after internal text deltas")
+        self.assertEqual(self.b.channel_down, "failed after internal text deltas")
 
     def test_codex_stream_is_buffered_as_sse_and_reports_recovery(self):
-        with mock.patch.object(codexcli, "report_success") as success:
+        with mock.patch.object(planchannel, "report_success") as success:
             h, body = self.call(stream=True)
         self.channel.complete.assert_called_once_with(body)
         self.assertEqual(h.wfile.getvalue(), cloudllm.as_sse(reply()))
@@ -317,7 +317,7 @@ class BrokerTest(Case):
 
     def test_rate_is_persisted_on_change_for_other_processes(self):
         rate = {"used_percent": 42, "window_mins": 10080, "resets_at": 999}
-        with mock.patch.object(codexcli, "rate_limit", return_value=rate):
+        with mock.patch.object(planchannel, "rate_limit", return_value=rate):
             self.call()
             path = self.root / "codex_rate.json"
             before = path.stat().st_mtime_ns

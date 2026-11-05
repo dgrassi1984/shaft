@@ -17,7 +17,7 @@ import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-from . import browser, core, corrections, egress, pyenv
+from . import browser, core, corrections, egress, planchannel, pyenv
 from .core import (SUP_DIR, calendar_grants, disabled_tools, dollars, git, instance_config, instance_names,
                    instance_root, journal_entries, knob, list_beneath, mail_grants, paused, safe_read, shared_folder)
 from . import selfhosted
@@ -95,14 +95,7 @@ def _purpose(r: dict) -> str:
 
 def codex_rate() -> dict | None:
     """Latest weekly window, including calls observed by another supervisor process."""
-    from . import codexcli
-    current = codexcli.rate_limit()
-    if current is not None:
-        return current
-    try:
-        return json.loads((SUP_DIR / "codex_rate.json").read_text())
-    except (OSError, ValueError):
-        return None
+    return planchannel.saved_rate("codex")
 
 
 def costs(days: int = 7, today: date | None = None) -> dict:
@@ -130,7 +123,7 @@ def costs(days: int = 7, today: date | None = None) -> dict:
     unpriced = 0
     for r in jsonl(SUP_DIR / "cloud_usage.jsonl"):
         if r.get("usd") is None:
-            if str(r.get("model", "")).startswith("codex/") and " (fallback " not in r["model"]:
+            if planchannel.prefix(str(r.get("model", ""))) and " (fallback " not in r["model"]:
                 continue
             unpriced += 1
             continue
@@ -232,7 +225,7 @@ def instance_detail(name: str) -> dict:
         pass
     questions = [m for m in messages.pending() if m["from"] == name]
     return {"name": name, "paused": paused(name),
-            "model": cfg.get("LLM_MODEL", "?"), "via": ("broker (Codex plan)" if str(cfg.get("LLM_MODEL", "")).startswith("codex/") else
+            "model": cfg.get("LLM_MODEL", "?"), "via": (f"broker ({planchannel.label(cfg['LLM_MODEL'])} plan)" if planchannel.prefix(cfg.get("LLM_MODEL")) else
              "broker (self-hosted)" if selfhosted.serves(cfg.get("LLM_MODEL")) else "broker (cloud)")
             if cfg.get("LLM_BASE_URL") == "broker" else cfg.get("LLM_BASE_URL", "?"),
             "wake": cfg.get("WAKE_INTERVAL_MINUTES", "120"), "effort": cfg.get("LLM_REASONING_EFFORT", "medium"),
@@ -425,7 +418,7 @@ def provider_alerts() -> list[dict]:
         if " (fallback " in model:
             model = model.split(" (fallback ", 1)[1].removesuffix(")")
         provider = ("openrouter" if model.startswith("openrouter/") else
-                    "anthropic" if model.startswith("claude-") else "codex" if model.startswith("codex/") else "")
+                    "anthropic" if model.startswith("claude-") else model.partition("/")[0] if planchannel.prefix(model) else "")
         if not provider:
             continue
         if not error:
@@ -486,10 +479,11 @@ def alerts(snap: dict | None = None, now: datetime | None = None, cost: dict | N
             out.append({"id": log_alert_id(line), "text": line[12:20] + line[21:200]})
     out.extend(pause_alert(p) for p in core.long_pauses(now))
     out.extend(provider_alerts())
-    from . import codexcli
-    if (fault := codexcli.outage()):
-        title = "Codex security event" if fault.get("security") else "Codex unavailable"
-        out.append({"id": "provider:codex:outage", "text": f"{title}: {fault['reason']}"})
+    for provider in planchannel.PROVIDERS:
+        if (fault := planchannel.outage(provider)):
+            label = planchannel.label(provider)
+            title = f"{label} security event" if fault.get("security") else f"{label} unavailable"
+            out.append({"id": f"provider:{provider}:outage", "text": f"{title}: {fault['reason']}"})
     if CORRECTION_ALERT_CYCLES > 0:
         for name in instance_names():
             out.extend(corrections.alerts(name, CORRECTION_ALERT_CYCLES, now))
