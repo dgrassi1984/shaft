@@ -100,6 +100,7 @@ Defaults below are source defaults, not values read from this checkout's private
 | `SHAFT_CODEX_WEEKLY_PCT` | `85` | stop Codex calls at this percentage of the weekly allowance | [codexcli.py](../supervisor/codexcli.py) |
 | `SHAFT_CODEX_FALLBACK_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | cloud model used for the rest of a run after a Codex failure | [codexcli.py](../supervisor/codexcli.py) |
 | `SHAFT_CODEX_TIMEOUT_S` | `900` | seconds allowed for a Codex model step; held tool calls are exempt | [codexcli.py](../supervisor/codexcli.py) |
+| `SHAFT_CODEX_LOG_HOURS` | `24` | positive integer hours of Codex's own SQLite logs to keep; read by runs and api | [codexcli.py](../supervisor/codexcli.py) |
 | `SHAFT_CLOUD_MODELS` | `claude-haiku-5-5,claude-opus-5-5,openrouter/xiaomi/mimo-v2.6-pro` | the cloud models an instance may run on (through the broker) | [cloudllm.py](../supervisor/cloudllm.py) |
 | `SHAFT_OPENROUTER_PROVIDER` | `{"only": ["novita", "deepinfra"], "order": ["novita", "deepinfra"], "allow_fallbacks": false, "data_collection": "deny", "zdr": true, "require_parameters": true}` | OpenRouter's provider routing for every openrouter/ call (JSON): which providers, and the data policy | [cloudllm.py](../supervisor/cloudllm.py) |
 | `SHAFT_CLOUD_DAILY_USD` | `8` | dollars per day an instance may spend on its cloud model (shaft limits can set one instance's own cap) | [cloudllm.py](../supervisor/cloudllm.py) |
@@ -376,3 +377,15 @@ the run uses `SHAFT_CODEX_FALLBACK_MODEL`, charged as usual and labelled
 `codex/x (fallback y)`. Trial replays and bake-offs fail instead of falling back.
 Judges, image descriptions, consults, coder hand-offs and recaps still require their API models.
 Source: [broker.py](../supervisor/broker.py).
+
+Before starting a channel, retention deletes rows older than `SHAFT_CODEX_LOG_HOURS` from
+`SHAFT_CODEX_HOME/logs_2.sqlite` in batches of at most 1,000. A locked stamp file limits attempts
+to once per ten minutes across processes. SQLite secure deletion overwrites deleted text; a
+TRUNCATE checkpoint clears the WAL when other readers permit it. VACUUM reclaims free pages
+when they exceed both a quarter of the database and 8 MiB. SQLite waits at most three seconds
+per lock attempt. Missing files, missing tables and SQLite errors are logged without failing
+the model call. Active readers can defer WAL truncation and space reclamation until a later attempt.
+Secure deletion does not scrub historical slack bytes left before it was enabled; those can
+remain until the database qualifies for VACUUM.
+Retention runs on channel startup, so an already running channel does not prune periodically.
+Source: [codexcli.py](../supervisor/codexcli.py).

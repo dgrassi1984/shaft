@@ -5,11 +5,13 @@ import contextlib
 import fcntl
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import queue
 import shutil
 import signal
+import sqlite3
 import subprocess
 import tempfile
 import threading
@@ -51,6 +53,8 @@ FALLBACK_MODEL, _ = knob("SHAFT_CODEX_FALLBACK_MODEL", "openrouter/deepseek/deep
     "cloud model used for the run after a Codex failure", group="Codex", services=("runs", "api"))
 TIMEOUT_S, _ = knob("SHAFT_CODEX_TIMEOUT_S", "900", positive_int,
     "seconds Codex may take for one model step; held tool calls are exempt", group="Codex", services=("runs", "api"))
+LOG_HOURS, _ = knob("SHAFT_CODEX_LOG_HOURS", "24", positive_int,
+    "hours of Codex's own logs to keep", group="Codex", services=("runs", "api"))
 FEATURES = ("shell_tool", "unified_exec", "apps", "plugins", "multi_agent", "view_image",
             "image_generation", "memories", "hooks", "tool_suggest", "goals", "browser_use",
             "browser_use_external", "browser_use_full_cdp_access", "computer_use", "in_app_browser",
@@ -89,6 +93,53 @@ def models() -> list[str]:
 
 def rate_limit() -> dict | None:
     return dict(_rate) if _rate is not None else None
+
+
+def _prune_logs(home):
+    """Best-effort retention, coordinated by one persistent stamp/lock inode."""
+    logger = logging.getLogger(__name__)
+    try:
+        with (home / "logs-pruned.stamp").open("a+") as stamp:
+            try:
+                fcntl.flock(stamp, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return
+            now = time.time()
+            stat = os.fstat(stamp.fileno())
+            if stat.st_size and now - stat.st_mtime < 600:
+                return
+            # Stamp attempts too, so a busy or changed database does not delay every start.
+            stamp.seek(0)
+            stamp.truncate()
+            stamp.write("pruned\n")
+            stamp.flush()
+            os.utime(stamp.fileno(), (now, now))
+            path = home / "logs_2.sqlite"
+            if not path.is_file():
+                logger.warning("Codex log retention: logs_2.sqlite is missing; skipped")
+                return
+            # mode=rw avoids creating a replacement if the file disappears after the check.
+            with contextlib.closing(sqlite3.connect(path.as_uri() + "?mode=rw", uri=True,
+                                                   timeout=3, isolation_level=None)) as db:
+                db.execute("PRAGMA secure_delete=ON")
+                cutoff = now - LOG_HOURS * 3600
+                while db.execute("DELETE FROM logs WHERE rowid IN "
+                                 "(SELECT rowid FROM logs WHERE ts < ? LIMIT 1000)",
+                                 (cutoff,)).rowcount:
+                    pass
+                if db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]:
+                    logger.warning("Codex log retention: wal_checkpoint(TRUNCATE) busy; skipped")
+                    return
+                free = db.execute("PRAGMA freelist_count").fetchone()[0]
+                pages = db.execute("PRAGMA page_count").fetchone()[0]
+                size = db.execute("PRAGMA page_size").fetchone()[0]
+                if free > pages / 4 and free * size > 8 * 1024 * 1024:
+                    db.execute("VACUUM")
+                    # In WAL mode VACUUM's rebuilt database also needs checkpointing.
+                    if db.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]:
+                        logger.warning("Codex log retention: wal_checkpoint(TRUNCATE) busy; skipped")
+    except (sqlite3.Error, OSError) as exc:
+        logger.warning("Codex log retention: %s", str(exc).replace("\n", " "))
 
 
 def _limits(value: dict) -> bool:
@@ -284,6 +335,7 @@ class Channel:
         auth = home / "auth.json"
         if not auth.is_file():
             raise CodexFailure("Codex login missing; run shaft codex login")
+        _prune_logs(home)
         self._folder = Path(tempfile.mkdtemp(prefix="shaft-codex-")).resolve()
         argv = [BIN]
         for feature in FEATURES:
