@@ -98,6 +98,24 @@ class BrokerTest(Case):
             self.b.stop()
         self.assertEqual(order, ["close", "shutdown"])
 
+    def test_codex_failure_and_security_reasons_reach_both_logs_even_during_outage(self):
+        self.b.log_path = self.root / "broker.log"
+        self.b._log = broker.Broker._log.__get__(self.b)
+        failures = [codexcli.CodexFailure("RPC timeout"),
+                    codexcli.CodexSecurity("Codex native item forbidden: mcpToolCall; tool: exec"),
+                    codexcli.CodexFailure("later\nretry; stderr: private message")]
+        for failure in failures:
+            self.b._codex_report(failure)
+        for path in (self.root / "supervisor.log", self.b.log_path):
+            lines = path.read_text().splitlines()
+            self.assertEqual(len(lines), 3)
+            self.assertIn("bird: Codex failure: 'RPC timeout'", lines[0])
+            self.assertIn("bird: Codex security event: 'Codex native item forbidden: mcpToolCall; tool: exec'",
+                          lines[1])
+            self.assertIn("later\\nretry", lines[2])
+            self.assertNotIn("private message", path.read_text())
+        self.desktop.assert_called_once()
+
     def test_failure_falls_back_same_body_and_stays_down_priced_and_labelled(self):
         self.channel.complete.side_effect = codexcli.CodexSecurity("native tool")
         with mock.patch.object(cloudllm, "complete", side_effect=self.cloud) as cloud:

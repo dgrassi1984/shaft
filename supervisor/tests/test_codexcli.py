@@ -482,6 +482,39 @@ class ChannelTest(unittest.TestCase):
             self.assertNotIn("cHJpdmF0ZQ==", output)
             self.assertNotIn("data:image", output)
 
+    def test_benign_sleep_and_bookkeeping_items_do_not_trigger_security(self):
+        items = [
+            {"type": "sleep", "id": "s", "durationMs": 1000},
+            {"type": "contextCompaction", "id": "c"},
+            {"type": "plan", "id": "p", "text": "private plan"},
+            {"type": "functionCallOutput", "id": "f", "name": "clock.sleep", "output": "done"},
+            {"type": "userMessage"}, {"type": "agentMessage"},
+            {"type": "reasoning"}, {"type": "dynamicToolCall"},
+        ]
+        for item in items:
+            with self.subTest(kind=item["type"]):
+                self.channel._check_item(item)
+        self.use([[{"item": item} for item in items[:4]] + [{"text": "still running"}]])
+        self.assertEqual(assistant(self.channel.complete(body()))["content"], "still running")
+
+    def test_benign_item_allowlist_still_rejects_native_and_unknown_items(self):
+        for kind in ("commandExecution", "fileChange", "webSearch", "imageView",
+                     "imageGeneration", "collabAgentToolCall", "subAgentActivity",
+                     "hookPrompt", "enteredReviewMode", "exitedReviewMode", "mcpToolCall",
+                     "futureUnknownItem"):
+            with self.subTest(kind=kind):
+                with self.assertRaises(codex.CodexSecurity) as caught:
+                    self.channel._check_item({"type": kind, "text": "private message"})
+                self.assertEqual(caught.exception.reason, "Codex native item forbidden: " + kind)
+
+    def test_forbidden_item_reason_keeps_type_and_tool_with_stderr(self):
+        self.channel._stderr.extend(b"synthetic stderr")
+        with self.assertRaises(codex.CodexSecurity) as caught:
+            self.channel._check_item({"type": "mcpToolCall", "server": "codex", "tool": "exec",
+                                      "arguments": {"text": "private message"}})
+        self.assertEqual(caught.exception.reason,
+                         "Codex native item forbidden: mcpToolCall; tool: exec; stderr: synthetic stderr")
+
     def test_native_item_fails_closed(self):
         self.use([[{"item": {"type": "commandExecution"}}]], hang=True)
         with self.assertRaises(codex.CodexSecurity):

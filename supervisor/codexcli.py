@@ -57,6 +57,12 @@ FEATURES = ("shell_tool", "unified_exec", "apps", "plugins", "multi_agent", "vie
             "browser_annotation_api", "guardian_approval")
 _rate = None
 _outage_lock = threading.Lock()
+# 2026-11-05: display/bookkeeping items have no external effect; dynamic tools
+# are mediated separately by item/tool/call. Native actions still fail closed.
+ALLOWED_ITEM_TYPES = frozenset({
+    "agentMessage", "reasoning", "userMessage", "dynamicToolCall",
+    "sleep", "contextCompaction", "plan", "functionCallOutput",
+})
 
 
 class CodexFailure(Exception):
@@ -396,11 +402,15 @@ class Channel:
 
     def _check_item(self, item):
         kind = item["type"]
-        if kind in ("agentMessage", "reasoning", "userMessage", "dynamicToolCall"):
+        if kind in ALLOWED_ITEM_TYPES:
             return
         if kind == "mcpToolCall" and item.get("server") == "codex" and item.get("tool", "").startswith("list_mcp_"):
             return
-        raise self._failure("Codex native item forbidden: " + str(kind), CodexSecurity)
+        tool = item.get("tool")
+        reason = "Codex native item forbidden: " + str(kind)
+        if tool is not None:
+            reason += "; tool: " + str(tool)
+        raise self._failure(reason, CodexSecurity)
 
     def _dispatch(self, message):
         method, params = message["method"], message.get("params") or {}
