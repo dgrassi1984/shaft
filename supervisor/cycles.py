@@ -6,6 +6,8 @@ row fields per day file so tool logs do not stay in memory.
 from __future__ import annotations
 
 import json
+import re
+from datetime import datetime
 from pathlib import Path
 
 from . import core, panel
@@ -125,3 +127,153 @@ def days(name: str, before: str | None = None, limit: int = 7, filt: str = "") -
         }
         out.append({"date": day, "skipped_lines": skipped, "counts": counts, "rows": shown})
     return {"days": out, "next": next_day, "judge_error": judge_error}
+
+
+def plan(name: str, live: dict, now: datetime | None = None) -> dict:
+    """The Next block: what the instance is doing now, when it is next checked, what it said it would do next, its
+    open commitments and task queue, its goals, and its latest improvement plan."""
+    from . import autonomy, commitments
+
+    state = live.get("state")
+    now_block = {"state": state, "since": live.get("since") or None,
+                 "goal": (live.get("goal") or None) if state == "in a cycle" else None}
+
+    paused = autonomy.paused(name)
+    try:
+        nxt = "paused" if paused else autonomy.next_wake(name, now)
+        skipped = autonomy.last_skip(name)
+    except Exception as e:   # a schedule that cannot be read must not take the screen down
+        nxt, skipped = "unknown", f"{type(e).__name__}: {e}"
+    check = {"next": nxt, "skipped": skipped, "paused": paused}
+
+    next_step, unfinished = _next_step(name)
+
+    commitments_error = ""
+    try:
+        ledger = commitments.ledger(name, now)
+    except Exception as e:
+        ledger, commitments_error = {}, f"{type(e).__name__}: {e}"
+    items = [{"id": it["id"], "promise": it["promise"], "due": it["due"], "status": it["status"]}
+             for it in ledger.values()
+             if it["status"] in ("open", "overdue") and it.get("made_to") not in ("self", "own", name)]
+    items.sort(key=lambda it: it["due"])
+
+    root = core.instance_root(name)
+    queue = _queue(root, now)
+    goals = core.safe_read(root, "self/goals.md", "", errors="replace")
+    improvement = _improvement(core.journal_entries(root))
+
+    return {"now": now_block, "check": check, "next_step": next_step, "unfinished": unfinished,
+            "commitments": items, "commitments_error": commitments_error, "queue": queue, "goals": goals,
+            "improvement": improvement}
+
+
+def _next_step(name: str) -> tuple[dict | None, list[str]]:
+    """The newest live cycle with a next action, walking back over at most the two newest day files, and what that
+    cycle left unfinished. A next_action that is not an object, or with no action, is skipped."""
+    dates = sorted((f.stem for f in panel._episode_files(name)), reverse=True)[:2]
+    for date in dates:
+        for _, r in reversed(_lines(name, date)[0]):
+            if r.get("kind") != "live":
+                continue
+            fin = r.get("finish")
+            if not isinstance(fin, dict):
+                continue
+            nxt = fin.get("next_action")
+            if not isinstance(nxt, dict):
+                continue
+            action = str(nxt.get("action") or "").strip()
+            if not action:
+                continue
+            revise = str(nxt.get("revise_if") or "").strip() or None
+            unfinished = [str(s) for s in (fin.get("unfinished") or []) if isinstance(s, str)]
+            return {"ts": r.get("ts") or "", "action": action, "revise_if": revise}, unfinished
+    return None, []
+
+
+_IMPROVE = re.compile(r"how i will improve", re.I)
+
+
+def _improvement(entries: list[str]) -> dict | None:
+    """The newest Sleep or Reflection journal entry's "How I will improve" plan, up to its consolidation actions,
+    dated. Mirrors template/shaft/prompts.py improvement_plan (kept in step by hand: the supervisor never imports
+    agent code)."""
+    for entry in reversed(entries):
+        title = entry.splitlines()[0].lstrip("# ").strip()
+        what = title.partition(" — ")[2]
+        if not what.startswith(("Sleep", "Reflection")):
+            continue
+        m = _IMPROVE.search(entry)
+        if not m:
+            continue
+        start = entry.rfind("\n", 0, m.start()) + 1
+        plan = entry[start:].split("*Consolidation actions:*")[0].strip()
+        cut = f"{plan[:2000]} […]" if len(plan) > 2000 else plan
+        return {"ts": title[:16], "text": cut}
+    return None
+
+
+def _local_now(now: datetime | None) -> datetime:
+    now = now or datetime.now()
+    return now.astimezone().replace(tzinfo=None) if now.tzinfo else now
+
+
+def _queue(root: Path, now: datetime | None) -> dict:
+    """The instance's task queue (notes/queue.json): open rows, overdue first (an empty due_at is due now), then
+    soonest, at most 10; done rows are left out. Three states: rows, none (no queue), unreadable (a link, a bad
+    shape, or JSON that does not read)."""
+    text = core.safe_read(root, "notes/queue.json", "", errors="replace")
+    if not text.strip():
+        return {"state": "none", "open": 0, "overdue": 0, "error": "", "rows": []}
+    try:
+        data = json.loads(text)
+    except ValueError as e:
+        return {"state": "unreadable", "open": 0, "overdue": 0, "error": f"ValueError: {e}", "rows": []}
+    if not isinstance(data, list):
+        return {"state": "unreadable", "open": 0, "overdue": 0,
+                "error": "notes/queue.json is not a list of tasks", "rows": []}
+    try:
+        rows = [_queue_row(r) for r in data]
+    except (ValueError, TypeError) as e:
+        return {"state": "unreadable", "open": 0, "overdue": 0, "error": f"{type(e).__name__}: {e}", "rows": []}
+    now = _local_now(now)
+    open_rows = [r for r in rows if not r["done"]]
+    ordered = sorted(open_rows, key=lambda r: _due_key(r["due_at"], now))
+    return {"state": "rows", "open": len(open_rows),
+            "overdue": sum(1 for r in open_rows if _is_overdue(r["due_at"], now)), "error": "",
+            "rows": [{"id": r["id"], "task": r["task"][:200], "due_at": r["due_at"],
+                      "overdue": _is_overdue(r["due_at"], now)} for r in ordered[:10]]}
+
+
+def _queue_row(r) -> dict:
+    if not isinstance(r, dict):
+        raise ValueError("a queue row is an object")
+    rid, task = r.get("id"), r.get("task")
+    if not isinstance(rid, int) or isinstance(rid, bool) or not isinstance(task, str):
+        raise ValueError("a queue row needs an integer id and a string task")
+    due = r.get("due_at")
+    due = due if isinstance(due, str) and due.strip() else None
+    return {"id": rid, "task": task, "due_at": due, "done": bool(r.get("done"))}
+
+
+def _due_key(due: str | None, now: datetime) -> tuple:
+    """A sort key: overdue first (an empty due_at is due now), then soonest, and a due_at that does not parse last."""
+    if due is None:
+        return 0, now
+    try:
+        at = datetime.fromisoformat(due)
+    except ValueError:
+        return 2, due
+    at = at.astimezone().replace(tzinfo=None) if at.tzinfo else at
+    return (0, at) if at <= now else (1, at)
+
+
+def _is_overdue(due: str | None, now: datetime) -> bool:
+    if due is None:
+        return True
+    try:
+        at = datetime.fromisoformat(due)
+    except ValueError:
+        return False
+    at = at.astimezone().replace(tzinfo=None) if at.tzinfo else at
+    return at <= now
