@@ -197,3 +197,95 @@ struct StoresTests {
         #expect(store.error?.isUnpaired == true)
     }
 }
+
+@MainActor
+struct CyclesStoresTests {
+    func server(next: String? = nil) throws -> StubServer {
+        let plan = fixtureText(try DecodingTests.fixture("plan"))
+        var page = try #require(JSONSerialization.jsonObject(with: DecodingTests.fixture("cycles")) as? [String: Any])
+        page["next"] = next.map { $0 as Any } ?? NSNull()
+        let cycles = fixtureText(try JSONSerialization.data(withJSONObject: page))
+        return StubServer { request in
+            request.path == "/app/v1/plan/wren"
+                ? .json(200, plan, headers: ["ETag": "\"plan\""])
+                : .json(200, cycles, headers: ["ETag": "\"page\""])
+        }
+    }
+
+    @Test func refreshKeepsTheListOnA304() async throws {
+        let server = try server()
+        let store = CyclesStore(client: server.client, instance: "wren")
+        await store.refresh()
+        #expect(store.days.count == 1)
+        let days = store.days
+        let plan = store.plan
+        server.setAnswer { _ in .notModified }
+        await store.refresh()
+        #expect(store.days == days)
+        #expect(store.plan == plan)
+        #expect(store.error == nil)
+        #expect(store.loading == false)
+        #expect(server.requests.suffix(2).map { $0.header("If-None-Match") } == ["\"plan\"", "\"page\""])
+    }
+
+    @Test func loadEarlierAppendsAndAdvancesNext() async throws {
+        let server = try server(next: "2026-11-02")
+        let store = CyclesStore(client: server.client, instance: "wren")
+        await store.refresh()
+        let page = fixtureText(try DecodingTests.fixture("cycles"))
+            .replacingOccurrences(of: "2026-11-03", with: "2026-11-02")
+        server.setAnswer { _ in .json(200, page) }
+        await store.loadEarlier()
+        #expect(store.days.map(\.date) == ["2026-11-03", "2026-11-02"])
+        #expect(store.next == nil)
+        #expect(server.requests.last?.query("before") == "2026-11-02")
+        #expect(server.requests.last?.header("If-None-Match") == nil)
+        let count = server.requests.count
+        await store.loadEarlier()
+        #expect(server.requests.count == count)
+    }
+
+    @Test func setFilterSendsItAndClearsTheOldDays() async throws {
+        let server = try server(next: "2026-11-02")
+        let store = CyclesStore(client: server.client, instance: "wren")
+        await store.refresh()
+        server.setAnswer { _ in .notModified }
+        await store.setFilter("short")
+        #expect(store.filter == "short")
+        #expect(store.days.isEmpty)
+        #expect(store.next == nil)
+        #expect(store.error == nil)
+        #expect(server.requests.last?.query("filter") == "short")
+        #expect(server.requests.last?.header("If-None-Match") == nil)
+        #expect(server.requests.dropLast().last?.header("If-None-Match") == "\"plan\"")
+    }
+
+    @Test func aFailureKeepsWhatIsShownAndSetsError() async throws {
+        let server = try server(next: "2026-11-02")
+        let store = CyclesStore(client: server.client, instance: "wren")
+        await store.refresh()
+        let detail = fixtureText(try DecodingTests.fixture("cycle"))
+        server.setAnswer { _ in .json(200, detail) }
+        await store.load("2026-11-03T13:58:40")
+        #expect(store.open?.id == "2026-11-03T13:58:40")
+        #expect(server.requests.last?.path == "/app/v1/cycles/wren/2026-11-03T13:58:40")
+        #expect(server.requests.last?.header("If-None-Match") == nil)
+        let plan = store.plan
+        let days = store.days
+        let open = store.open
+        server.setAnswer { _ in .json(500, #"{"error":{"code":"internal","message":"Failed"}}"#) }
+        await store.refresh()
+        #expect(store.plan == plan)
+        #expect(store.days == days)
+        #expect(store.next == "2026-11-02")
+        #expect(store.error?.status == 500)
+        await store.loadEarlier()
+        #expect(store.days == days)
+        #expect(store.next == "2026-11-02")
+        #expect(store.error?.status == 500)
+        await store.load("2026-11-03T14:00:00")
+        #expect(store.open == open)
+        #expect(store.error?.status == 500)
+        #expect(store.loading == false)
+    }
+}

@@ -34,9 +34,32 @@ struct FixtureTests {
         let names = Set(Self.fixtureFiles().map(\.lastPathComponent))
         for name in ["idle", "failed", "live", "live-partial", "queued", "quotes", "attachments", "sent", "feedback",
                      "earlier", "ended", "instances", "docs", "doc-comments", "push-latest", "errors", "pair", "chats",
-                     "send", "feedback-response", "retried"] {
+                     "send", "feedback-response", "retried", "plan", "cycles", "cycle"] {
             #expect(names.contains("\(name).json"), "missing fixture \(name)")
         }
+    }
+
+    @Test func cycleFieldsKeepTheirWireMeaning() throws {
+        let planData = try DecodingTests.fixture("plan")
+        var object = try #require(JSONSerialization.jsonObject(with: planData) as? [String: Any])
+        object["now"] = ["state": "idle", "since": "12:05", "goal": NSNull()] as [String: Any]
+        let plan = try SHAFTJSON.decoder().decode(
+            CyclePlan.self, from: JSONSerialization.data(withJSONObject: object))
+        #expect(plan.now.since == "12:05")
+        #expect(plan.queue.rows[0].dueAt == SHAFTJSON.parseStamp("2099-11-04T12:00:00+01:00"))
+        #expect(plan.queue.rows[1].dueAt == SHAFTJSON.parseStamp("2099-11-05T00:00:00Z"))
+        #expect(plan.queue.rows[2].dueAt == nil)
+        #expect(plan.queue.rows[2].dueAtText == "when ready")
+        let page = try SHAFTJSON.decoder().decode(CycleDaysResponse.self, from: DecodingTests.fixture("cycles"))
+        #expect(page.days[0].date == "2026-11-03")
+        #expect(page.days[0].rows[2].id == "2026-11-03T13:58:40")
+        #expect(page.days[0].rows[2].at == SHAFTJSON.parseStamp("2026-11-03T13:58:40+01:00"))
+        #expect(page.days[0].rows[2].claim == "yes")
+        #expect(page.days[0].rows[2].verdict == "partial")
+        let detail = try SHAFTJSON.decoder().decode(CycleDetail.self, from: DecodingTests.fixture("cycle"))
+        #expect(detail.did.usd == nil)
+        #expect(detail.result?.claim == "yes")
+        #expect(detail.result?.judge?.verdict == "partial")
     }
 
     @Test(arguments: fixtureFiles())
@@ -79,6 +102,9 @@ enum FixtureShape {
         func has(_ wanted: String...) -> Bool { wanted.allSatisfy(keys.contains) }
         if has("instance", "partial", "version", "live") { return roundTrip(Feed.self) }
         if has("instances", "badge") { return roundTrip(InstancesResponse.self) }
+        if has("now", "check", "queue") { return roundTrip(CyclePlan.self) }
+        if has("days", "next", "judge_error") { return roundTrip(CycleDaysResponse.self) }
+        if has("id", "at", "did") { return roundTrip(CycleDetail.self) }
         if has("chats") { return roundTrip(ChatsResponse.self) }
         if has("dir", "max_bytes", "docs") { return roundTrip(DocsList.self) }
         if has("path", "text", "sha", "threads") { return roundTrip(DocumentDetail.self) }
