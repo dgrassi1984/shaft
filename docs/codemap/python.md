@@ -11,7 +11,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `apps/shaft/DevServer/fixture_server.py` | — | `setup`, `seed`, `act`, `main` |
 | `apps/shaft/DevServer/test_fixture_settings.py` | `FixtureSettingsTest` | — |
 | `apps/shaft/Shared/make_icons.py` | — | `main` |
-| `docs/bakeoffs/parity_score.py` | — | `solve`, `ols`, `edges`, `bt`, `indices`, `parity`, `quant`, `interval`, `order`, `names_order`, `run` |
+| `docs/bakeoffs/parity_score.py` | — | `solve`, `ols`, `edges`, `bt`, `indices`, `parity`, `quant`, `interval`, `order`, `names_order`, `unsupported`, `weighted`, `weighted_report`, `run` |
 | `supervisor/__main__.py` | — | `cmd_new`, `cmd_delete`, `cmd_update`, `cmd_setup`, `cmd_status`, `cmd_alerts`, `cmd_limits`, `cmd_jobs`, `cmd_tools`, `cmd_channel`, `cmd_orders`, `cmd_secret`, `cmd_share`, `cmd_google`, `cmd_mail`, `cmd_calendar`, `run_many`, `cmd_mind`, `cmd_battery`, `cmd_trial`, `cmd_feedback`, `cmd_codex`, `cmd_grok`, `main` |
 | `supervisor/actions.py` | — | `restart_lock`, `classify`, `status`, `overreach`, `restore`, `refuse`, `begin`, `say`, `log_name`, `run_now`, `run_detached`, `busy_instances`, `service_guard`, `guard_reason`, `force_question`, `log_forced`, `cli_guard`, `trial_cost_estimate`, `aa_trial_question`, `battery_refusal`, `update_question` |
 | `supervisor/anchoring.py` | — | `strip_claim`, `case`, `candidates`, `path`, `rows`, `run`, `report` |
