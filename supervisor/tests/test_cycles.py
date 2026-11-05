@@ -166,6 +166,13 @@ class CyclesDaysTest(unittest.TestCase):
         self.assertEqual(p["next_step"], {"ts": "2026-11-05T09:00:00", "action": "do b", "revise_if": None})
         self.assertEqual(p["unfinished"], ["b"])
 
+    def test_unfinished_that_is_not_a_list_does_not_break_the_plan(self):
+        self.ep("2026-11-05", kind="live", ts="2026-11-05T09:00:00", intent={"goal": "a"},
+                finish={"next_action": {"action": "do b"}, "unfinished": 7})
+        p = cycles.plan("wren", {})
+        self.assertEqual(p["unfinished"], [])
+        self.assertEqual(p["next_step"]["action"], "do b")
+
     def test_no_queue_says_none(self):
         self.assertEqual(cycles.plan("wren", {})["queue"]["state"], "none")
 
@@ -185,7 +192,9 @@ class CyclesDaysTest(unittest.TestCase):
         p = cycles.plan("wren", {})
         self.assertNotIn("SECRET", json.dumps(p))
         self.assertEqual(p["goals"], "")
-        self.assertEqual(p["queue"]["state"], "none")
+        self.assertTrue(p["goals_error"])
+        self.assertEqual(p["queue"]["state"], "unreadable")
+        self.assertTrue(p["queue"]["error"])
 
     def test_queue_rows_order_and_cap(self):
         now = datetime(2026, 11, 5, 12, 0, 0)
@@ -250,6 +259,7 @@ class CyclesDaysTest(unittest.TestCase):
         self.assertEqual(p["commitments"], [])
         self.assertEqual(p["queue"]["state"], "none")
         self.assertEqual(p["goals"], "")
+        self.assertEqual(p["goals_error"], "no goals file")
         self.assertIsNone(p["improvement"])
         self.assertEqual(p["now"], {"state": None, "since": None, "goal": None})
 

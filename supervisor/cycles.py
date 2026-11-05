@@ -160,12 +160,18 @@ def plan(name: str, live: dict, now: datetime | None = None) -> dict:
 
     root = core.instance_root(name)
     queue = _queue(root, now)
-    goals = core.safe_read(root, "self/goals.md", "", errors="replace")
+    try:
+        goals = core.safe_read(root, "self/goals.md", errors="replace")
+        goals_error = ""
+    except FileNotFoundError:
+        goals, goals_error = "", "no goals file"
+    except (core.UnsafePath, core.TooBig, OSError) as e:
+        goals, goals_error = "", f"could not read self/goals.md: {e}"
     improvement = _improvement(core.journal_entries(root))
 
     return {"now": now_block, "check": check, "next_step": next_step, "unfinished": unfinished,
             "commitments": items, "commitments_error": commitments_error, "queue": queue, "goals": goals,
-            "improvement": improvement}
+            "goals_error": goals_error, "improvement": improvement}
 
 
 def _next_step(name: str) -> tuple[dict | None, list[str]]:
@@ -186,7 +192,8 @@ def _next_step(name: str) -> tuple[dict | None, list[str]]:
             if not action:
                 continue
             revise = str(nxt.get("revise_if") or "").strip() or None
-            unfinished = [str(s) for s in (fin.get("unfinished") or []) if isinstance(s, str)]
+            raw = fin.get("unfinished")
+            unfinished = [str(s) for s in raw if isinstance(s, str)] if isinstance(raw, list) else []
             return {"ts": r.get("ts") or "", "action": action, "revise_if": revise}, unfinished
     return None, []
 
@@ -220,29 +227,38 @@ def _local_now(now: datetime | None) -> datetime:
 
 def _queue(root: Path, now: datetime | None) -> dict:
     """The instance's task queue (notes/queue.json): open rows, overdue first (an empty due_at is due now), then
-    soonest, at most 10; done rows are left out. Three states: rows, none (no queue), unreadable (a link, a bad
-    shape, or JSON that does not read)."""
-    text = core.safe_read(root, "notes/queue.json", "", errors="replace")
+    soonest, at most 10; done rows are left out. Three states: rows, none (no queue file), unreadable (a link, an
+    unreadable or oversized file, or a shape that is not a list of tasks)."""
+    try:
+        text = core.safe_read(root, "notes/queue.json", errors="replace")
+    except FileNotFoundError:
+        return _queue_state("none")
+    except (core.UnsafePath, core.TooBig, OSError) as e:
+        return _queue_state("unreadable", f"could not read notes/queue.json: {e}")
     if not text.strip():
-        return {"state": "none", "open": 0, "overdue": 0, "error": "", "rows": []}
+        return _queue_state("none")
     try:
         data = json.loads(text)
     except ValueError as e:
-        return {"state": "unreadable", "open": 0, "overdue": 0, "error": f"ValueError: {e}", "rows": []}
+        return _queue_state("unreadable", f"could not read notes/queue.json: {e}")
     if not isinstance(data, list):
-        return {"state": "unreadable", "open": 0, "overdue": 0,
-                "error": "notes/queue.json is not a list of tasks", "rows": []}
+        return _queue_state("unreadable", "could not read notes/queue.json: not a list of tasks")
     try:
         rows = [_queue_row(r) for r in data]
     except (ValueError, TypeError) as e:
-        return {"state": "unreadable", "open": 0, "overdue": 0, "error": f"{type(e).__name__}: {e}", "rows": []}
+        return _queue_state("unreadable", f"could not read notes/queue.json: {e}")
     now = _local_now(now)
     open_rows = [r for r in rows if not r["done"]]
-    ordered = sorted(open_rows, key=lambda r: _due_key(r["due_at"], now))
+    classified = [(r, _due(r["due_at"], now)) for r in open_rows]
+    ordered = sorted(classified, key=lambda pair: pair[1][0])
     return {"state": "rows", "open": len(open_rows),
-            "overdue": sum(1 for r in open_rows if _is_overdue(r["due_at"], now)), "error": "",
-            "rows": [{"id": r["id"], "task": r["task"][:200], "due_at": r["due_at"],
-                      "overdue": _is_overdue(r["due_at"], now)} for r in ordered[:10]]}
+            "overdue": sum(1 for _, (_, overdue) in classified if overdue), "error": "",
+            "rows": [{"id": r["id"], "task": r["task"][:200], "due_at": r["due_at"], "overdue": overdue}
+                     for r, (_, overdue) in ordered[:10]]}
+
+
+def _queue_state(state: str, error: str = "") -> dict:
+    return {"state": state, "open": 0, "overdue": 0, "error": error, "rows": []}
 
 
 def _queue_row(r) -> dict:
@@ -256,24 +272,14 @@ def _queue_row(r) -> dict:
     return {"id": rid, "task": task, "due_at": due, "done": bool(r.get("done"))}
 
 
-def _due_key(due: str | None, now: datetime) -> tuple:
-    """A sort key: overdue first (an empty due_at is due now), then soonest, and a due_at that does not parse last."""
+def _due(due: str | None, now: datetime) -> tuple[tuple, bool]:
+    """(sort key, overdue?) for one due_at, the single rule for ordering, counts and row flags: overdue first (an
+    empty due_at is due now), then soonest, and a due_at that does not parse last and is not overdue."""
     if due is None:
-        return 0, now
+        return (0, now), True
     try:
         at = datetime.fromisoformat(due)
     except ValueError:
-        return 2, due
+        return (2, due), False
     at = at.astimezone().replace(tzinfo=None) if at.tzinfo else at
-    return (0, at) if at <= now else (1, at)
-
-
-def _is_overdue(due: str | None, now: datetime) -> bool:
-    if due is None:
-        return True
-    try:
-        at = datetime.fromisoformat(due)
-    except ValueError:
-        return False
-    at = at.astimezone().replace(tzinfo=None) if at.tzinfo else at
-    return at <= now
+    return (0, at) if at <= now else (1, at), at <= now
