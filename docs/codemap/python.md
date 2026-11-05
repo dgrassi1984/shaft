@@ -11,7 +11,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `apps/shaft/DevServer/fixture_server.py` | — | `setup`, `seed`, `act`, `main` |
 | `apps/shaft/Shared/make_icons.py` | — | `main` |
 | `docs/bakeoffs/parity_score.py` | — | `solve`, `ols`, `edges`, `bt`, `indices`, `parity`, `quant`, `interval`, `order`, `names_order`, `run` |
-| `supervisor/__main__.py` | — | `cmd_new`, `cmd_delete`, `cmd_update`, `cmd_setup`, `cmd_status`, `cmd_alerts`, `cmd_limits`, `cmd_jobs`, `cmd_tools`, `cmd_channel`, `cmd_orders`, `cmd_secret`, `cmd_share`, `cmd_google`, `cmd_mail`, `cmd_calendar`, `run_many`, `cmd_mind`, `cmd_battery`, `cmd_trial`, `cmd_feedback`, `cmd_codex`, `main` |
+| `supervisor/__main__.py` | — | `cmd_new`, `cmd_delete`, `cmd_update`, `cmd_setup`, `cmd_status`, `cmd_alerts`, `cmd_limits`, `cmd_jobs`, `cmd_tools`, `cmd_channel`, `cmd_orders`, `cmd_secret`, `cmd_share`, `cmd_google`, `cmd_mail`, `cmd_calendar`, `run_many`, `cmd_mind`, `cmd_battery`, `cmd_trial`, `cmd_feedback`, `cmd_codex`, `cmd_grok`, `main` |
 | `supervisor/actions.py` | — | `classify`, `status`, `overreach`, `restore`, `refuse`, `begin`, `say`, `log_name`, `run_now`, `run_detached`, `busy_instances`, `service_guard`, `guard_reason`, `force_question`, `log_forced`, `cli_guard`, `trial_cost_estimate`, `aa_trial_question`, `battery_refusal`, `update_question` |
 | `supervisor/anchoring.py` | — | `strip_claim`, `case`, `candidates`, `path`, `rows`, `run`, `report` |
 | `supervisor/api.py` | `Conversations`, `Answered`, `Live`, `Handler` | `allowed_logins`, `serve`, `url`, `command` |
@@ -53,6 +53,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/gate_held.py` | — | `save`, `pending`, `waiting`, `applies`, `apply`, `retried`, `drop`, `log_run`, `rows`, `describe` |
 | `supervisor/gate_suite.py` | `Split`, `HookRefused` | `discover`, `partition`, `report`, `run_part`, `times`, `main` |
 | `supervisor/google.py` | `AccountError`, `ApiError`, `Account` | `accounts_dir`, `old_accounts_dir`, `unmigrated`, `account`, `accounts`, `scopes`, `scope_text`, `login_command`, `missing_scope_message`, `migrate`, `client_keys`, `refresh`, `operator_addresses`, `login`, `instance_key_login`, `consent` |
+| `supervisor/grokcli.py` | `Channel` | `serves`, `models`, `child_env` |
 | `supervisor/jobs.py` | — | `entry`, `jobs_off`, `set_jobs_off`, `uncommitted`, `declared`, `report_problems`, `interval`, `due`, `run`, `request_wake`, `take_wake`, `pending_wakes`, `results_since`, `tick`, `describe` |
 | `supervisor/judge.py` | `JudgeError`, `NoJudgeLeft` | `same_model`, `pick`, `rotation`, `available`, `ask`, `second_available`, `ask_second` |
 | `supervisor/kill.py` | `Proc` | `processes`, `talk_clients`, `targets`, `end_left_in`, `running`, `replaying`, `runner_busy`, `kill` |
@@ -67,6 +68,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/orders.py` | — | `path`, `checks_path`, `listing`, `clean`, `in_force`, `add`, `added`, `drop`, `line`, `corrections`, `case`, `check`, `log_check`, `refusal`, `shown` |
 | `supervisor/panel.py` | — | `cached`, `jsonl`, `judge_usd`, `codex_rate`, `costs`, `judgments`, `traits`, `template_merges`, `journal_heading`, `instance_detail`, `probation_events`, `changes`, `trials`, `trial_progress`, `battery_status`, `evals`, `surprise_summary`, `log_tail`, `services_detail`, `scheduled_runs`, `extras`, `pause_alert`, `provider_alerts`, `alerts`, `model_down_problem`, `log_alert_id`, `transcripts`, `transcript_summary`, `transcript_lines`, `dismissed`, `dismiss` |
 | `supervisor/perturbation.py` | — | `enabled_path`, `check`, `request`, `chat`, `detection`, `run`, `adapter_swap`, `scores` |
+| `supervisor/planbridge.py` | — | `relay`, `serve`, `main` |
 | `supervisor/planchannel.py` | `ChannelFailure`, `ChannelClosed`, `ChannelSecurity`, `ProviderState`, `Step`, `Channel` | `provider`, `prefix`, `serves`, `models`, `channel_for`, `label`, `fallback_model`, `sees_images`, `vendor`, `unprefix`, `outage`, `rate_limit`, `saved_rate`, `report_failure`, `report_success`, `save_rate` |
 | `supervisor/privileged.py` | `Unanswered` | `mind_ablated_copy`, `rows`, `item_id`, `prediction`, `outcome`, `scores`, `comparison`, `recognition_scores`, `recognition_prompt`, `run`, `report` |
 | `supervisor/projects.py` | — | `lines`, `section` |
@@ -145,6 +147,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_gate_suite.py` | `Tree`, `Partition`, `OnThisCommit`, `Run`, `Workers` | `plain`, `count` |
 | `supervisor/tests/test_gate_timeout.py` | `GateTimeoutTest` | — |
 | `supervisor/tests/test_google.py` | `FakeGoogle`, `GoogleCase`, `LoginTest`, `MigrateTest`, `CliTest` | — |
+| `supervisor/tests/test_grokcli.py` | `DummyBridge`, `ChannelTest`, `RetentionTest`, `WiringTest`, `MappingTest` | `body`, `assistant` |
 | `supervisor/tests/test_interject.py` | `AnswerHearsInterjectionsTest` | — |
 | `supervisor/tests/test_invariants.py` | `InstanceCase`, `ReflectInvariants`, `TalkInvariants`, `LiveInvariants`, `TemplateMeasurement`, `ExamInvariants`, `SandboxInvariants` | `intent`, `stated_confidence`, `in_every_confidence_mode` |
 | `supervisor/tests/test_isolation.py` | `TestRunIsolationTest` | — |
@@ -185,6 +188,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/test_pause_notice.py` | `PauseNoticeTest` | — |
 | `supervisor/tests/test_people_models.py` | `PredictionsTest`, `SleepPredictionsTest` | — |
 | `supervisor/tests/test_personality.py` | `LayerWriterTest`, `CorePaceTest` | — |
+| `supervisor/tests/test_planbridge.py` | `BridgeTest` | `require_sockets` |
 | `supervisor/tests/test_planchannel.py` | `MessageTest`, `OutageTest`, `BridgeChannel`, `SelectorTest` | — |
 | `supervisor/tests/test_prompt_budget_template.py` | `Fixture`, `InboxTest`, `ContextOrderTest`, `SectionBudgetTest`, `RuntimeSummaryTest`, `GoalSlateTest`, `FirstErrorTest`, `VerdictValueTest`, `DeferredProvenanceTest` | — |
 | `supervisor/tests/test_prompt_cache.py` | `PricingTest`, `ClaudeThinkingTest`, `InstanceLoopTest`, `CoderTest` | — |

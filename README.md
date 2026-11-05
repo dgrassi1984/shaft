@@ -164,6 +164,9 @@ It is unrelated to the cloud-only setup above.
 
 [Codex plan models](docs/local-model.md#codex-plan-routing) use the broker without a local
 model server. Run `bin/shaft codex login` before selecting a `codex/` model.
+[Grok plan models](docs/local-model.md#grok-plan-routing) work through the same broker:
+run `bin/shaft grok login`, then select `grok/grok-4.7`. Costs show API equivalent
+usage separately from money spent; the weekly Grok pool cannot be read.
 
 Use the [web UI/PWA and API](docs/web-and-api.md) for tailnet chat, phone access,
 and an inbox doorbell. [Integrations](docs/integrations.md) covers Telegram,

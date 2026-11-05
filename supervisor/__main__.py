@@ -1066,6 +1066,27 @@ def cmd_codex(action: str) -> int:
     return 0
 
 
+def cmd_grok(action: str) -> int:
+    from . import grokcli, planchannel
+    home = Path(grokcli.HOME).expanduser().resolve()
+    if action == "login":
+        try:
+            home.mkdir(parents=True, exist_ok=True, mode=0o700)
+            home.chmod(0o700)
+            env = grokcli.child_env(home, home)
+            env["HOME"] = str(home)
+            return subprocess.run([grokcli.BIN, "login"], env=env).returncode
+        except OSError as e:
+            print(f"Grok login failed: {e}", file=sys.stderr)
+            return 1
+    print("Grok login: " + ("present" if (home / "auth.json").is_file() else "missing; run shaft grok login"))
+    print("Weekly allowance: not available programmatically")
+    print("Models: " + ", ".join(grokcli.models()))
+    if (fault := planchannel.outage("grok")):
+        print(("Grok security event: " if fault.get("security") else "Grok unavailable: ") + fault["reason"])
+    return 0
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="shaft", description="SHAFT supervisor")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -1143,6 +1164,8 @@ def main(argv: list[str]) -> int:
     p = sub.add_parser("telegram", help="talk with each instance from Telegram, one bot per instance, one paired account")
     p.add_argument("action", choices=["on", "off", "status", "token", "pair", "unpair", "serve"])
     p.add_argument("name", nargs="?", help="token: the instance the bot is for")
+    p = sub.add_parser("grok", help="Grok plan login and status")
+    p.add_argument("action", choices=["login", "status"])
     p = sub.add_parser("codex", help="Codex plan login and status")
     p.add_argument("action", choices=["login", "status"])
     p = sub.add_parser("model", help="SHAFT's own Bonsai 2 model server (launchd service)")
@@ -1452,6 +1475,8 @@ def main(argv: list[str]) -> int:
                                     "gate's baseline was red (the scheduler does it after a green warm-up)")
     p.add_argument("action", choices=["warm", "budget", "regate"])
     args = parser.parse_args(argv)
+    if args.cmd == "grok":
+        return cmd_grok(args.action)
     if args.cmd == "codex":
         return cmd_codex(args.action)
 

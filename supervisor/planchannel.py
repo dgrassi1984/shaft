@@ -41,7 +41,7 @@ class ChannelSecurity(ChannelFailure):
 
 
 # Prefix -> backend module. Adding a backend needs no changes in callers.
-PROVIDERS = {"codex": ".codexcli"}
+PROVIDERS = {"codex": ".codexcli", "grok": ".grokcli"}
 
 
 def provider(model: str):
@@ -371,6 +371,9 @@ class Channel:
                     self._workers[2].join(timeout=0.2)
                 self._fail(self._failure(f"{self.label} process died"))
 
+    def _usage_cache(self, step):
+        return {"cached_input_tokens": step.cached}
+
     def _record(self, step):
         if step.recorded:
             return
@@ -380,7 +383,7 @@ class Channel:
         self.stats["tokens"] += sum(step.usage.values())
         cloudllm._record(self.usage_name, step.model, step.usage["prompt_tokens"], step.usage["completion_tokens"],
                          None, step.started, step.finish, type(step.error).__name__ if step.error else None,
-                         cache={"cached_input_tokens": step.cached})
+                         cache=self._usage_cache(step))
         self.log(f"{self.label} step " + " ".join(f"{k}={v:.3f}" if isinstance(v, float) else f"{k}={v}"
                                            for k, v in self.stats.items()))
 
@@ -444,12 +447,13 @@ class Channel:
                     if not extend and not old.event.is_set():
                         old.error = self._failure(f"{self.label} step abandoned on rebuild")
                         self._finish(old)
-                    self._record(old)
                 if not extend and self._session and old and old.turn and (old.pending or old.finish is None):
                     self._step = None
                     self._cancel_turn(old.turn)
                     if self._closed:
                         raise self.closed_error(f"{self.label} channel closed")
+                if old:
+                    self._record(old)
                 if not extend:
                     self._step = None
                     session = self._open_session(body["model"], system, tools, effort)

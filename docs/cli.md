@@ -55,6 +55,7 @@ shaft drive <name> reject <id> --reason "…"      # record why; both decisions 
 shaft settings [set KEY=VALUE…|unset KEY…] [--expect KEY=VALUE] [--expect-unset KEY] [--json]   # the supervisor's own settings (configuration.md): every
                                 #   knob with its value, source and default; set/unset write .supervisor/settings.env
 shaft status [names…]           # how each instance is doing, open conversations, which code is running
+shaft grok login|status         # sign in to the private Grok home, or show login, models and outage
 shaft codex login|status        # sign in to the private Codex home, or show login, weekly usage, models and outage
 shaft model on|off|status       # SHAFT's own Bonsai 2 server (launchd, :8780; started on demand, exits when idle)
 shaft api on|off|status|key|inbox-key   # OpenAI-compatible API + inbox doorbell on your tailnet (web-and-api.md)
@@ -315,3 +316,9 @@ For a Codex plan model, run `shaft codex login`, then
 `shaft trial models <name> --arm codex/gpt-6-astra --arm <other-model>` accept Codex models.
 Trials never fall back if Codex fails. See [the Codex settings](configuration.md) for the
 weekly ceiling, private home, executable, model list, timeout and live-run fallback.
+
+For a Grok plan model, run `shaft grok login`, then
+`shaft config <name> set LLM_MODEL=grok/grok-4.7`. Trial replay and bake-off arms
+accept `grok/` models, including reasoning effort (for example
+`--arm grok/grok-4.7@high`). Trials fail without fallback.
+`shaft grok status` does not start the model process; the weekly pool is unavailable.

@@ -121,7 +121,10 @@ def costs(days: int = 7, today: date | None = None) -> dict:
             d[comp] += usd
 
     unpriced = 0
+    grok_equivalent = 0.0
     for r in jsonl(SUP_DIR / "cloud_usage.jsonl"):
+        if r.get("ts", "")[:10] == today.isoformat() and str(r.get("model", "")).startswith("grok/"):
+            grok_equivalent += r.get("api_equivalent_usd", 0.0)
         if r.get("usd") is None:
             if planchannel.prefix(str(r.get("model", ""))) and " (fallback " not in r["model"]:
                 continue
@@ -163,7 +166,7 @@ def costs(days: int = 7, today: date | None = None) -> dict:
                      "trials": (used["usd"], trial.DAILY_USD), "trials_started": (used["started"], trial.TRIALS_PER_DAY)})
     return {"days": rows, "today": rows[-1], "caps": caps, "judge_today": judge_today,
             "judge_today_total": sum(judge_today.values()), "judge_alert": JUDGE_ALERT_USD,
-            "unpriced": unpriced, "codex_rate": codex_rate()}
+            "unpriced": unpriced, "codex_rate": codex_rate(), "grok_api_equivalent": grok_equivalent}
 
 
 # -- the judge's verdicts --------------------------------------------------------------------------------------
