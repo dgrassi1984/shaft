@@ -59,6 +59,10 @@ FEATURES = ("shell_tool", "unified_exec", "apps", "plugins", "multi_agent", "vie
             "image_generation", "memories", "hooks", "tool_suggest", "goals", "browser_use",
             "browser_use_external", "browser_use_full_cdp_access", "computer_use", "in_app_browser",
             "browser_annotation_api", "guardian_approval")
+# Codex appends its own permissions/environment text that says the session is read-only, so instances skip writes without trying.
+PROMPT_CONTEXT_FLAGS = ("include_permissions_instructions=false",
+                        "include_environment_context=false",
+                        "include_collaboration_mode_instructions=false")
 _rate = None
 _outage_lock = threading.Lock()
 # 2026-11-05: display/bookkeeping items have no external effect; dynamic tools
@@ -340,6 +344,8 @@ class Channel:
         argv = [BIN]
         for feature in FEATURES:
             argv += ["--disable", feature]
+        for flag in PROMPT_CONTEXT_FLAGS:
+            argv += ["-c", flag]
         argv += ["-c", 'web_search="disabled"', "-c", "agents.enabled=false", "-c", "mcp_servers={}", "app-server"]
         env = {"HOME": str(Path.home()), "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
                "TMPDIR": str(self._folder), "LANG": os.environ.get("LANG", "en_US.UTF-8"), "CODEX_HOME": str(home)}

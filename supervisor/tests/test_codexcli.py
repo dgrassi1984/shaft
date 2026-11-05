@@ -740,6 +740,21 @@ class ChannelTest(unittest.TestCase):
         self.assertNotIn("code_mode_host", argv)
         self.assertEqual([argv[i+1] for i, arg in enumerate(argv) if arg == "--disable"], list(codex.FEATURES))
 
+    def test_read_only_prompt_suppresses_dynamic_tool_writes(self):
+        self.channel.complete(body())
+        argv = next(r["argv"] for r in self.rows() if "argv" in r)
+        config = dict(argv[i+1].split("=", 1) for i, arg in enumerate(argv) if arg == "-c")
+        for key in ("include_permissions_instructions", "include_environment_context",
+                    "include_collaboration_mode_instructions"):
+            with self.subTest(key=key):
+                self.assertEqual(config.get(key), "false")
+        self.assertEqual([argv[i+1] for i, arg in enumerate(argv) if arg == "--disable"], list(codex.FEATURES))
+        self.assertEqual(config["web_search"], '"disabled"')
+        self.assertEqual(config["agents.enabled"], "false")
+        self.assertEqual(config["mcp_servers"], "{}")
+        self.assertEqual(argv[-1], "app-server")
+        self.assertEqual(self.requests("thread/start")[0]["params"]["sandbox"], "read-only")
+
     def test_usage_sums_last_and_records_once(self):
         self.use([[{"usage": 10}, {"usage": 20}, {"text": "answer"}]])
         reply = self.channel.complete(body())
