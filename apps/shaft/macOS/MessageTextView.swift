@@ -151,7 +151,7 @@ final class MessageNSView: NSView {
     private let storage = NSTextStorage()
     private let manager = MessageLayoutManager()
     private var parts: [Part] = []
-    private let replyButton = NSButton(title: "", target: nil, action: nil)
+    private let replyButton = SelectionReplyButton(title: "", target: nil, action: nil)
 
     /// A segment's view: the text alone, or the text inside a block.
     private struct Part {
@@ -286,8 +286,6 @@ final class MessageNSView: NSView {
             return
         }
         replyButton.title = coordinator.quoteTitle
-        replyButton.bezelStyle = .push
-        replyButton.controlSize = .small
         replyButton.refusesFirstResponder = true
         replyButton.target = self
         replyButton.action = #selector(replyClicked(_:))
