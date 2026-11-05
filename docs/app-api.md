@@ -91,8 +91,12 @@ what to do where it can; it is never empty. A few codes carry one or two more fi
   `+02:00`). `app_api.stamp` does it: `datetime.fromisoformat(ts).astimezone().isoformat(timespec="seconds")`.
 - Times stored as epoch seconds (a document's `mtime`) are sent the same way.
 - A missing time is `null`, never `""`.
-- Day separators ("Today", `2026-11-02`) are not sent: the app draws them from the items' times in the device's own
-  time zone.
+- Chat day separators ("Today", `2026-11-02`) are not sent: the app draws them from the items' times in the device's
+  own time zone. Cycles (§15) is an exception: `days[].date` and `next` are server dates in `YYYY-MM-DD` form.
+- Cycles keeps raw timestamp ids in `id`, and sends stored `ts` fields as offset timestamps named `at`.
+  `plan.now.since` is offset only when it contains a full date and time. A clock string such as `"12:34"` stays as given.
+  Commitment `due` and queue `due_at` keep plain dates as `YYYY-MM-DD`; values with a time receive an offset.
+  Unparseable queue text goes in `due_at_text`, with `due_at: null`.
 
 ### 1.7 Keys
 
@@ -953,8 +957,8 @@ returned when it is not one: the routes answer 404). `whole`: every turn (`?all=
   `supervisor/tests/app_api_fixtures/<name>.json`, and fails when a checked-in one differs (`SHAFT_UPDATE_FIXTURES=1`
   rewrites them): `idle`, `live`, `live-partial`, `queued`, `quotes`, `attachments`, `sent`, `feedback`, `failed`,
   `earlier`, `ended`, `instances`, `docs`, `doc-comments`, `push-latest`, `errors`, `pair`, `chats`, `send`,
-  `feedback-response`, `retried`. SHAFTKit reads only this folder, or `SHAFT_APP_API_FIXTURES` when set; it has no
-  copied contract fixtures. Their times are stamped in
+  `feedback-response`, `retried`, `plan`, `cycles`, `cycle`. SHAFTKit reads only this folder, or
+  `SHAFT_APP_API_FIXTURES` when set; it has no copied contract fixtures. Their times are stamped in
   `Europe/Rome` (the test sets `TZ`), so they carry `+01:00`. `errors` maps each code to `{status, body}`.
 
 ## 14. The HTML feed, piece by piece
@@ -998,3 +1002,119 @@ Every piece `web_views.chat_feed` and `live_activity` draw, and where it is in t
 | Earlier chats (header menu) | | §5 |
 | State and "what a message does now" (header) | | `/instances`: `state`, `since`, `busy_note` |
 | Next cycle's hint (composer) | | `/instances`: `next_cycle` |
+
+
+## 15. Cycles
+
+Three read-only routes use the same `supervisor.cycles` models as the web Cycles page. They need a paired bearer
+(§1.2). Each returns `200` with an `ETag`; a matching `If-None-Match` returns `304` with an empty body.
+An unknown instance returns `404 not_found`. Missing cost and duration stay `null`.
+Live `doing`, tool arguments, tool results, and the web-only `where` field do not enter these responses.
+
+### 15.1 `GET /app/v1/plan/<n>`
+
+| Field | Type | Meaning |
+|---|---|---|
+| `now` | object | `{state, since, goal}`, described below |
+| `check` | object | `{next, skipped, paused}`, described below |
+| `next_step` | object or null | Latest next action: `{at, action, revise_if}`, described below |
+| `unfinished` | list of str | What that cycle left unfinished |
+| `commitments` | list | Promises to others, sorted by due date: `{id, promise, due, status}`, described below |
+| `commitments_error` | str | Empty when read, otherwise why the ledger could not be read |
+| `queue` | object | Described below |
+| `goals` | str | The instance's goals Markdown |
+| `goals_error` | str | Empty when read, `"no goals file"` when missing, otherwise why it could not be read |
+| `improvement` | object or null | Latest Sleep or Reflection improvement plan: `{at, text}`, described below |
+
+`now.state`, `now.since`, and `now.goal` are strings or null. `since` follows §1.6.
+`goal` is non-null only in state `"in a cycle"`. `check.next` is next check text, and `check.skipped` is last skip text.
+`check.paused` is a bool. Next can be `"paused"` or `"unknown"`, with a reason in skipped.
+
+`next_step.at` is its cycle's offset timestamp or null. `action` is text, and `revise_if` is text or null.
+Commitment `id`, `promise`, `due`, and `status` are strings, except an unparseable due is null.
+Status is `"open"` or `"overdue"`. `improvement.at` is an offset timestamp or null, and `text` is the plan's text.
+
+Queue fields:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `state` | str | `"rows"`, `"none"`, or `"unreadable"` |
+| `open` | int | All open tasks |
+| `overdue` | int | All overdue tasks |
+| `error` | str | Empty when read or missing, otherwise why it could not be read |
+| `rows` | list | At most ten open tasks, overdue first, then earliest due, then unparseable dates |
+| `rows[].id` | int | Queue task id |
+| `rows[].task` | str | Task text, at most 200 characters |
+| `rows[].due_at` | str or null | Offset timestamp, plain date, or null (§1.6) |
+| `rows[].due_at_text` | str, optional | Original nonempty text when due_at cannot be parsed; otherwise omitted |
+| `rows[].overdue` | bool | Whether the task is overdue |
+
+### 15.2 `GET /app/v1/cycles/<n>?before=&filter=`
+
+`filter` is `""` (All), `"yours"` (For you), `"short"` (Fell short), or `"delivered"` (Delivered).
+`before` is an inclusive server date in `YYYY-MM-DD` form. Omitted or empty values start at the newest day.
+Any other filter, or an invalid nonempty date, returns `400 bad_request` in the §1.5 error form.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `days` | list | At most seven days with matching rows, newest first |
+| `next` | str or null | Next inclusive `before` cursor as a plain server date; null when there are no more days |
+| `judge_error` | str | Empty when read, otherwise why judgments could not be read |
+| `days[].date` | str | Plain server date, `YYYY-MM-DD`, never a timestamp |
+| `days[].skipped_lines` | int | Unparseable records skipped in that day's log |
+| `days[].counts` | object | Counts for all cycles in that day, before filtering; fields below |
+| `days[].rows` | list | Matching rows, newest first; fields below |
+
+Counts are integers: `cycles` is the number of live cycles; `yes`, `partial`, `no`, and `none` count the instance's
+claims, with `none` counting missing or unknown claims. `judged` counts cycles with a verdict, and `for_you` counts
+cycles with operator origin. Judge verdicts are separate and never added to claim counts.
+
+Each row:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | str | Raw stored timestamp, also the detail route's ts |
+| `at` | timestamp or null | Offset timestamp (§1.6) |
+| `kind` | str | `"cycle"`, `"sleep"`, or `"reflection"` |
+| `goal` | str or null | Goal, at most 300 characters |
+| `claim` | str or null | Instance's own claim, usually `"yes"`, `"partial"`, or `"no"` |
+| `verdict` | str or null | Judge's verdict, separate from the claim |
+| `delivered` | bool | A cycle delivered through a nonempty method other than `"none"` |
+| `origin` | str or null | Instance's recorded origin |
+| `ended_by` | str or null | How the cycle ended |
+
+### 15.3 `GET /app/v1/cycles/<n>/<ts>`
+
+`ts` must match `YYYY-MM-DDTHH:MM:SS` exactly, without an offset or fractional seconds.
+An unknown cycle, an invalid timestamp, or another path shape returns `404 not_found`.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `id` | str | Raw stored timestamp |
+| `at` | timestamp or null | Offset timestamp (§1.6) |
+| `kind` | str | `"cycle"`, `"sleep"`, or `"reflection"` |
+| `content` | str or null | Sleep or reflection text; null for a cycle |
+| `planned` | object or null | Recorded intent; null for sleep, reflection, or missing intent |
+| `did` | object | Recorded action and usage, fields below |
+| `result` | object or null | Claim and judgments; null for sleep or reflection |
+| `left` | object or null | Remainder; null for sleep or reflection |
+
+`planned` contains `goal`, `success_criterion`, `origin`, and `origin_ref` (strings or null), `confidence`
+(number or null), `predictions` (list containing only string predictions), and `attention` (list of strings).
+Missing predictions or notes are empty lists. Structured attention joins `source` and `why` as
+`"source: <source>; why: <why>"`.
+
+`did` contains `what_happened` (string or null), `duration_s` (integer or null), `usd` (number or null),
+`tool_calls` (integer count only), `ended_by`, `wrapped_up`, and `delivered_via` (strings or null).
+
+`result` contains `claim` (string or null), `surprises` and `doubts` (lists of strings), `judge_error`
+(string, empty when read), and `judge` and `second` (objects or null). Structured surprises join `expected`,
+`observed`, and `so_what` as `"expected: <expected>; observed: <observed>; so what: <so_what>"`.
+Structured doubts use their `text`. Other note shapes become strings, as on the web page.
+Each judgment contains `verdict`, `claim_supported`, `first_error`, `reasoning`, `model`, and `error`.
+`claim_supported` is a bool or null, and `first_error` is an integer or null. The remaining fields are strings
+or null, except `error` is always a string.
+A failed judge can have a null verdict and a nonempty error. The instance's claim remains separate.
+
+`left` contains `unfinished` (list of strings), `next_action` (the recorded object or null), and `next_goal`
+(string or null). A next action normally contains `action` and `revise_if` text.

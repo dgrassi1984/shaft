@@ -12,6 +12,18 @@ from unittest import mock
 from supervisor import autonomy, commitments, core, cycles, panel
 
 
+class NoteLinesTest(unittest.TestCase):
+    def test_instance_notes_keep_the_web_format(self):
+        for value in (None, "", [], {}):
+            self.assertEqual(cycles.note_lines(value, ("text",)), [])
+        self.assertEqual(cycles.note_lines("Check totals", ("text",)), ["Check totals"])
+        self.assertEqual(cycles.note_lines([{"text": "Check"}, "Again", 2], ("text",)),
+                         ["Check", "Again", "2"])
+        self.assertEqual(cycles.note_lines([{"source": "report", "why": "check"}], ("source", "why")),
+                         ["source: report; why: check"])
+        self.assertEqual(cycles.note_lines({"other": "value"}, ("text",)), ["{'other': 'value'}"])
+
+
 class CyclesDaysTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="shaft-cycles-")).resolve()

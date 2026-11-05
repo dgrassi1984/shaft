@@ -18,7 +18,8 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
-from supervisor import apns, app_api, autonomy, core, docs, feedback, messages, web, web_chat, web_seen, webpush
+from supervisor import apns, app_api, autonomy, commitments, core, docs, feedback, messages, panel, web
+from supervisor import web_chat, web_seen, webpush
 from supervisor.tests.test_web import HOST, ME, WebTest, snap
 
 FIXTURES = Path(__file__).resolve().parent / "app_api_fixtures"
@@ -166,10 +167,136 @@ class AppTest(WebTest):
         with feedback.FILE.open("a") as f:
             f.writelines(json.dumps(r) + "\n" for r in rows)
 
+    def cycles_scenario(self) -> None:
+        for p in (mock.patch.object(panel, "SUP_DIR", self.sup),
+                  mock.patch.object(commitments, "INSTANCES", self.inst),
+                  mock.patch.object(commitments, "SUP_DIR", self.sup),
+                  mock.patch.object(autonomy, "SUP_DIR", self.sup),
+                  mock.patch.object(autonomy, "next_wake", return_value="12:05"),
+                  mock.patch.object(autonomy, "last_skip", return_value="")):
+            p.start()
+            self.addCleanup(p.stop)
+        root = self.inst / "wren"
+        eps = root / "memory/episodes"
+        eps.mkdir(parents=True)
+        records = [
+            {"kind": "live", "ts": "2026-11-03T13:58:40", "run_started": "2026-11-03T13:50:00",
+             "intent": {"goal": "Ship report", "origin": "operator", "success_criterion": "Report sent",
+                        "predictions": ["It passes", 7], "attention": [{"source": "report", "why": "check totals"}]},
+             "finish": {"criterion_met": "yes", "what_happened": "Sent report", "delivered_via": "message",
+                        "surprises": [{"expected": "ten", "observed": "eleven", "so_what": "recount"}],
+                        "doubts": [{"text": "Check again"}], "unfinished": ["Review"],
+                        "next_action": {"action": "Review totals", "revise_if": "Already checked"}},
+             "tools": [{"tool": "run", "args": "SECRET", "result": "SECRET"}]},
+            {"kind": "live", "ts": "2026-11-03T14:00:00", "intent": {"goal": "Review"}},
+            {"kind": "sleep", "ts": "2026-11-03T15:00:00", "content": "Rested"},
+        ]
+        (eps / "2026-11-03.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records))
+        (self.sup / "judgments").mkdir()
+        (self.sup / "judgments/wren.jsonl").write_text(json.dumps(
+            {"episode_ts": "2026-11-03T13:58:40", "criterion_met": "partial", "judge": "test"}) + "\n")
+        (root / "notes/queue.json").write_text(json.dumps([
+            {"id": 1, "task": "Review report", "due_at": "2099-11-04T12:00:00"},
+            {"id": 2, "task": "Ask operator", "due_at": "when ready"},
+            {"id": 3, "task": "Check date", "due_at": "2099-11-05"}]))
+
     def paired_since(self, when: str) -> None:
         ds = web.devices()
         ds[self.device]["created"] = when
         web._write("devices.json", ds)
+
+
+class CyclesTest(AppTest):
+    def setUp(self):
+        super().setUp()
+        self.cycles_scenario()
+
+    def test_the_plan_cycles_and_a_cycle(self):
+        plan = self.get("/app/v1/plan/wren")
+        self.assertEqual(plan["now"], {"state": "idle", "since": None, "goal": None})
+        self.assertEqual(plan["check"], {"next": "12:05", "skipped": "", "paused": False})
+        self.assertEqual(plan["next_step"]["action"], "Review totals")
+        self.assertEqual(plan["next_step"]["at"], app_api.stamp("2026-11-03T13:58:40"))
+        self.assertEqual(plan["queue"]["rows"][2]["due_at_text"], "when ready")
+        self.assertIsNone(plan["queue"]["rows"][2]["due_at"])
+        self.assertEqual(plan["queue"]["rows"][0]["due_at"], app_api.stamp("2099-11-04T12:00:00"))
+        self.assertEqual(plan["queue"]["rows"][1]["due_at"], "2099-11-05")
+        days = self.get("/app/v1/cycles/wren")
+        self.assertEqual(days["days"][0]["date"], "2026-11-03")
+        self.assertIsNone(days["next"])
+        rows = days["days"][0]["rows"]
+        self.assertEqual([r["kind"] for r in rows], ["sleep", "cycle", "cycle"])
+        self.assertEqual((rows[2]["claim"], rows[2]["verdict"]), ("yes", "partial"))
+        self.assertEqual(rows[2]["id"], "2026-11-03T13:58:40")
+        self.assertEqual(rows[2]["at"], app_api.stamp(rows[2]["id"]))
+        detail = self.get("/app/v1/cycles/wren/2026-11-03T13:58:40")
+        self.assertNotIn("where", detail)
+        self.assertEqual(detail["id"], "2026-11-03T13:58:40")
+        self.assertEqual(detail["at"], app_api.stamp(detail["id"]))
+        self.assertEqual(detail["planned"]["predictions"], ["It passes"])
+        self.assertEqual(detail["planned"]["attention"], ["source: report; why: check totals"])
+        self.assertEqual(detail["result"]["surprises"], ["expected: ten; observed: eleven; so what: recount"])
+        self.assertEqual(detail["result"]["doubts"], ["Check again"])
+        unjudged = self.get("/app/v1/cycles/wren/2026-11-03T14:00:00")
+        self.assertEqual(unjudged["result"]["surprises"], [])
+        self.assertEqual(unjudged["planned"]["predictions"], [])
+        self.assertIsNone(unjudged["did"]["usd"])
+        self.assertEqual(len(self.get("/app/v1/cycles/wren?filter=short")["days"][0]["rows"]), 2)
+        self.assertEqual(self.get("/app/v1/cycles/wren?before=2026-11-02")["days"], [])
+        self.assertEqual(len(self.get("/app/v1/cycles/wren?before=2026-11-03")["days"]), 1)
+
+    def test_a_repeated_etag_is_a_304(self):
+        for path in ("/app/v1/plan/wren", "/app/v1/cycles/wren",
+                     "/app/v1/cycles/wren/2026-11-03T13:58:40"):
+            first = self.api(path)
+            self.assertEqual(first.status, 200, first.body)
+            again = self.api(path, headers={"if-none-match": first.headers["ETag"]})
+            self.assertEqual((again.status, again.body), (304, b""))
+            self.assertEqual(again.headers["ETag"], first.headers["ETag"])
+
+    def test_the_next_cursor_is_a_plain_inclusive_date(self):
+        eps = self.inst / "wren/memory/episodes"
+        for day in range(4, 11):
+            ts = f"2026-11-{day:02}T12:00:00"
+            (eps / f"{ts[:10]}.jsonl").write_text(json.dumps({"kind": "sleep", "ts": ts}) + "\n")
+        first = self.get("/app/v1/cycles/wren")
+        self.assertEqual(first["next"], "2026-11-03")
+        second = self.get("/app/v1/cycles/wren?before=" + first["next"])
+        self.assertEqual([day["date"] for day in second["days"]], ["2026-11-03"])
+        self.assertIsNone(second["next"])
+
+    def test_a_bad_filter_or_before_is_a_400(self):
+        for query in ("filter=x", "before=x", "before=2026-02-30", "before=20261103", "before=2026-1-03"):
+            self.error(self.api("/app/v1/cycles/wren?" + query), 400, "bad_request")
+
+    def test_an_unknown_cycle_or_instance_is_a_404(self):
+        for path in ("plan/ghost", "cycles/ghost", "cycles/ghost/2026-11-03T13:58:40",
+                     "cycles/wren/2026-11-03T00:00:00", "cycles/wren/2026-11-03",
+                     "cycles/wren/2026-11-03T13:58:40+01:00"):
+            self.error(self.api("/app/v1/" + path), 404, "not_found")
+
+    def test_no_payload_carries_tool_results_or_doing(self):
+        with mock.patch.object(web, "overview", return_value=snap(state="in a cycle", doing="run SECRET")):
+            for path in ("/app/v1/plan/wren", "/app/v1/cycles/wren",
+                         "/app/v1/cycles/wren/2026-11-03T13:58:40"):
+                self.assertNotIn("SECRET", json.dumps(self.get(path)))
+
+    def test_it_needs_a_paired_device(self):
+        for path in ("/app/v1/plan/wren", "/app/v1/cycles/wren",
+                     "/app/v1/cycles/wren/2026-11-03T13:58:40"):
+            self.error(self.api(path, bearer=False), 401, "unpaired")
+
+    def test_plan_times_and_due_dates(self):
+        ledger = {"c1": {"id": "c1", "promise": "Report", "due": "2099-11-04T12:00:00",
+                         "status": "open"},
+                  "c2": {"id": "c2", "promise": "Review", "due": "2099-11-05", "status": "open"}}
+        with mock.patch.object(commitments, "ledger", return_value=ledger):
+            for since in ("12:34", "2026-11-03T12:34:00"):
+                with mock.patch.object(web, "overview", return_value=snap(since=since)):
+                    plan = self.get("/app/v1/plan/wren")
+                self.assertEqual(plan["now"]["since"], since if since == "12:34" else app_api.stamp(since))
+                self.assertEqual([c["due"] for c in plan["commitments"]],
+                                 [app_api.stamp("2099-11-04T12:00:00"), "2099-11-05"])
 
 
 # -- who may use it (§1.2) -----------------------------------------------------------------------------------------------
@@ -1003,6 +1130,10 @@ class FixturesTest(AppTest):
                    turn("assistant", "2026-11-03T14:06:40", "", retried=True),
                    turn("user", "2026-11-03T14:07:02", "Again.", shown="Again.")])
         self.keep("retried", self.get("/app/v1/chat/wren"))
+        self.cycles_scenario()
+        self.keep("plan", self.get("/app/v1/plan/wren"))
+        self.keep("cycles", self.get("/app/v1/cycles/wren"))
+        self.keep("cycle", self.get("/app/v1/cycles/wren/2026-11-03T13:58:40"))
         self.check()
 
     def errors(self, feed: dict) -> dict:
@@ -1041,7 +1172,7 @@ class FixturesTest(AppTest):
     def check(self) -> None:
         names = {"idle", "live", "live-partial", "queued", "quotes", "attachments", "sent", "feedback", "failed",
                  "earlier", "ended", "instances", "docs", "doc-comments", "push-latest", "errors", "pair", "chats",
-                 "send", "feedback-response", "retried"}
+                 "send", "feedback-response", "retried", "plan", "cycles", "cycle"}
         self.assertEqual(set(self.out), names)
         if os.environ.get("SHAFT_UPDATE_FIXTURES") == "1":
             FIXTURES.mkdir(exist_ok=True)

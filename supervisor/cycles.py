@@ -16,6 +16,17 @@ FILTERS = ("", "yours", "short", "delivered")
 GOAL_CHARS = 300
 
 
+def note_lines(value, fields: tuple[str, ...]) -> list[str]:
+    """Instance-written notes in the same words for the web page and native apps."""
+    if value is None or value == "" or value == [] or value == {}:
+        return []
+    items = value if isinstance(value, list) else [value]
+    return [
+        "; ".join(f"{key.replace('_', ' ')}: {item[key]}" if len(fields) > 1 else str(item[key]) for key in fields)
+        if isinstance(item, dict) and all(key in item for key in fields) else str(item)
+        for item in items]
+
+
 def _day_path(name: str, date: str) -> Path:
     return core.instance_root(name) / "memory" / "episodes" / f"{date}.jsonl"
 

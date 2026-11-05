@@ -633,13 +633,9 @@ def _cycle_value(value) -> str:
 
 
 def _cycle_notes(value, fields: tuple[str, ...]) -> Html:
-    if value is None or value == "" or value == [] or value == {}:
-        return h("{v}", v="unknown")
-    items = value if isinstance(value, list) else [value]
-    return lines([
-        "; ".join(f"{key.replace('_', ' ')}: {item[key]}" if len(fields) > 1 else str(item[key]) for key in fields)
-        if isinstance(item, dict) and all(key in item for key in fields) else str(item)
-        for item in items])
+    from . import cycles
+    notes = cycles.note_lines(value, fields)
+    return lines(notes) if notes else h("{v}", v="unknown")
 
 
 def _cycle_verdict(verdict) -> Html:
