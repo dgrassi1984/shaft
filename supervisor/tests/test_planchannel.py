@@ -167,3 +167,49 @@ class SelectorTest(unittest.TestCase):
         self.assertFalse(planchannel.serves("bridge/"))
         self.assertFalse(planchannel.serves(None))
         self.assertFalse(planchannel.serves("unknown/model"))
+
+    def continuation(self):
+        first = self.channel.complete(self.body)
+        return {**self.body, 'messages': self.body['messages'] + [first['choices'][0]['message'],
+            {'role':'tool', 'tool_call_id':'call', 'content':'critical result'},
+            {'role':'user', 'content':'continue'}]}
+
+    def test_bug2_ended_held_grok_call_rebuilds_full_transcript_under_lock(self):
+        self.channel.calls_need_turn = True
+        continuation = self.continuation()
+        self.channel._step.turn_ended = True
+        self.channel.complete(continuation)
+        self.assertEqual(self.channel.answers, [])
+        self.assertEqual(self.channel.cancels, [])
+        self.assertEqual(len(self.channel.sessions), 2)
+        self.assertIn('critical result', self.channel.turns[-1][0])
+        self.assertIn('continue', self.channel.turns[-1][0])
+
+    def test_bug2_grok_nothing_delivered_rebuilds_but_codex_keeps_sent_results(self):
+        for needs_turn in (True, False):
+            with self.subTest(needs_turn=needs_turn):
+                self.channel.calls_need_turn = needs_turn
+                continuation = self.continuation()
+                count = len(self.channel.sessions)
+                with mock.patch.object(self.channel, '_answer_calls', return_value=False):
+                    self.channel.complete(continuation)
+                text = self.channel.turns[-1][0]
+                if needs_turn:
+                    self.assertEqual(len(self.channel.sessions), count + 1)
+                    self.assertIn('critical result', text)
+                else:
+                    self.assertEqual(len(self.channel.sessions), count)
+                    self.assertEqual(text, '[message]\ncontinue')
+                self.body = {**self.body, 'messages':[{'role':'user', 'content':'fresh'}]}
+
+    def test_bug3_held_step_recorded_exactly_once_even_if_cancel_raises(self):
+        self.channel.complete(self.body)
+        old = self.channel._step
+        self.assertFalse(old.recorded)
+        with mock.patch.object(self.channel, '_cancel_turn', side_effect=planchannel.ChannelFailure('cancel failed')):
+            with self.assertRaisesRegex(planchannel.ChannelFailure, 'cancel failed'):
+                self.channel.complete({**self.body, 'tools':[{'type':'function', 'function':{'name':'changed'}}]})
+        self.assertTrue(old.recorded)
+        self.assertEqual(self.record.call_count, 1)
+        self.channel.close()
+        self.assertEqual(self.record.call_count, 1)

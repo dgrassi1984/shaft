@@ -271,6 +271,7 @@ class Channel:
     failure = ChannelFailure
     closed_error = ChannelClosed
     effort_in_session = True
+    calls_need_turn = False
 
     def __init__(self, broker_name: str, usage_name: str, log: Callable[[str], None]):
         self.broker_name, self.usage_name, self.log = broker_name, usage_name, log
@@ -429,6 +430,7 @@ class Channel:
                     raise self.closed_error(f"{self.label} channel closed")
                 if self._fatal:
                     raise self._fatal
+            self._prepare(body["model"], effort)
             if self._process is None:
                 self._start(body["model"], effort)
             with self._cv:
@@ -442,18 +444,21 @@ class Channel:
                     return old
                 self._check_rate()
                 extend = (signature == self._signature and old and old.event.is_set() and not old.error
+                          and not (self.calls_need_turn and old.pending and old.turn_ended)
                           and index >= 0 and _key(messages[index]) == ([c["id"] for c in old.calls] if old.calls else old.text))
                 if old:
                     if not extend and not old.event.is_set():
                         old.error = self._failure(f"{self.label} step abandoned on rebuild")
                         self._finish(old)
-                if not extend and self._session and old and old.turn and (old.pending or old.finish is None):
+                if old:
+                    self._record(old)
+                if (not extend and self._session and old and old.turn
+                        and not (self.calls_need_turn and old.turn_ended)
+                        and (old.pending or old.finish is None)):
                     self._step = None
                     self._cancel_turn(old.turn)
                     if self._closed:
                         raise self.closed_error(f"{self.label} channel closed")
-                if old:
-                    self._record(old)
                 if not extend:
                     self._step = None
                     session = self._open_session(body["model"], system, tools, effort)
@@ -476,10 +481,28 @@ class Channel:
                     try:
                         if not self._answer_calls(old.pending, results, users, images):
                             # A turn can end while answers/user delta are in flight.
-                            self._record(step)
-                            step = Step(body["model"], anchor)
-                            self._step = step
-                            inputs = (users or "[message]", images)
+                            if self.calls_need_turn:
+                                if self._session and old.turn and not old.turn_ended:
+                                    self._step = None
+                                    self._cancel_turn(old.turn)
+                                    if self._closed:
+                                        raise self.closed_error(f"{self.label} channel closed")
+                                self._step = None
+                                session = self._open_session(body["model"], system, tools, effort)
+                                if self._closed:
+                                    raise self.closed_error(f"{self.label} channel closed")
+                                self._session = session
+                                self.stats["extends"] -= 1
+                                self.stats["rebuilds"] += 1
+                                step = Step(body["model"], anchor)
+                                self._step = step
+                                inputs = (_transcript(messages),
+                                          [url for m in messages for url in _split(m.get("content"))[1]])
+                            else:
+                                self._record(step)
+                                step = Step(body["model"], anchor)
+                                self._step = step
+                                inputs = (users or "[message]", images)
                     except ChannelClosed:
                         raise
                     except ChannelFailure as exc:
@@ -565,6 +588,9 @@ class Channel:
     def _check_rate(self):
         pass
 
+    def _prepare(self, model, effort):
+        pass
+
     @property
     def timeout_s(self):
         raise NotImplementedError
@@ -579,7 +605,11 @@ class Channel:
         raise NotImplementedError
 
     def _answer_calls(self, pending, results, text, images):
-        """Answer calls plus user delta; False means start a new turn with that delta.
+        """Answer calls plus user delta.
+
+        With calls_need_turn, False means nothing was sent: rebuild the full
+        transcript. Otherwise (Codex), results were sent before steering failed:
+        False means start a new turn with only the user delta.
 
         Pending handles belong to the backend. A bridge backend may include text
         and images in a tool result; the selector knows nothing about RPC steering.

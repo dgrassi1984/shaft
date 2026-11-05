@@ -55,7 +55,13 @@ def prompt(ident):
    bridge.stdin.write(json.dumps({'id':n+10,'method':'tools/call','params':{'name':'echo','arguments':{'n':n}}})+'\n')
   bridge.stdin.flush()
   time.sleep(scenario.get('usage_delay',.01)); usage()
-  if mode=='ended': finish(ident); return
+  if mode=='ended':
+   # End only once the supervisor has registered the held call.
+   marker=Path(scenario['held_marker'])
+   deadline=time.monotonic()+2
+   while (not marker.exists() or marker.read_text()!=str(session)) and time.monotonic()<deadline:
+    time.sleep(.005)
+   finish(ident); return
   for n in range(count):
    while not cancel.is_set():
     try: value=replies.get(timeout=.05); break
@@ -100,6 +106,15 @@ def body(messages=None, **kw):
     return {'model': 'grok/grok-4.7', 'messages': messages if messages is not None else [
         {'role': 'system', 'content': 'system'}, {'role': 'user', 'content': 'begin'}],
         'tools': [{'type': 'function', 'function': {'name': 'echo', 'parameters': {'type': 'object'}}}], **kw}
+
+
+def png_image(size):
+    import struct, zlib
+    def chunk(kind, data):
+        return struct.pack('!I',len(data))+kind+data+struct.pack('!I',zlib.crc32(kind+data))
+    width,height=size
+    raw=b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('!2I5B',width,height,8,2,0,0,0))+chunk(b'IDAT',zlib.compress((b'\0'+b'\0'*(width*3))*height))+chunk(b'IEND',b'')
+    return 'data:image/png;base64,'+base64.b64encode(raw).decode()
 
 
 def assistant(reply):
@@ -226,16 +241,9 @@ class ChannelTest(unittest.TestCase):
             self.channel.complete(body())
 
     def test_prompt_image_size_refusal_and_mapping(self):
-        import struct, zlib
-        def image(size):
-            def chunk(kind, data):
-                return struct.pack('!I',len(data))+kind+data+struct.pack('!I',zlib.crc32(kind+data))
-            width,height=size
-            raw=b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('!2I5B',width,height,8,2,0,0,0))+chunk(b'IDAT',zlib.compress((b'\0'+b'\0'*(width*3))*height))+chunk(b'IEND',b'')
-            return 'data:image/png;base64,'+base64.b64encode(raw).decode()
         with self.assertRaisesRegex(planchannel.ChannelFailure, '8x8'):
-            self.channel._images([image((7,8))])
-        url=image((8,8))
+            self.channel._images([png_image((7,8))])
+        url=png_image((8,8))
         self.assertEqual(self.channel._images([url]), [{'type':'image','mimeType':'image/png','data':url.split(',')[1]}])
 
     def test_empty_profile_never_unrestricted(self):
@@ -268,6 +276,23 @@ class ChannelTest(unittest.TestCase):
         self.assertEqual(len(results),2)
         self.assertIn({'type':'text','text':'[message]\ndelta'}, [p for r in results for p in r['result']['content']])
 
+    def test_bug10_tool_result_and_256px_image_finish_through_real_bridge(self):
+        self.real_bridge(mode='calls')
+        first = self.channel.complete(body())
+        call = assistant(first)['tool_calls'][0]
+        url = png_image((256, 256))
+        messages = body()['messages'] + [assistant(first),
+            {'role':'tool', 'tool_call_id':call['id'], 'content':'image ready'},
+            {'role':'user', 'content':[{'type':'text', 'text':'inspect this'},
+                {'type':'image_url', 'image_url':{'url':url}}]}]
+        reply = self.channel.complete(body(messages))
+        self.assertEqual(reply['choices'][0]['finish_reason'], 'stop')
+        self.assertEqual(assistant(reply)['content'], 'answered')
+        result = next(r['bridge_result']['result'] for r in self.wire() if 'bridge_result' in r)
+        self.assertEqual(result['content'], [{'type':'text', 'text':'image ready'},
+            {'type':'text', 'text':'[message]\ninspect this'},
+            {'type':'image', 'mimeType':'image/png', 'data':url.split(',')[1]}])
+
     def test_cancel_pending_on_rebuild(self):
         self.real_bridge(mode='calls')
         first = self.channel.complete(body())
@@ -277,7 +302,14 @@ class ChannelTest(unittest.TestCase):
         self.assertTrue(any(r.get('method')=='session/cancel' for r in self.wire()))
 
     def test_turn_ended_with_call_outstanding(self):
-        self.real_bridge(mode='ended')
+        marker = self.root / 'held'
+        register = self.channel._bridge_call
+        def registered(*args):
+            register(*args)
+            if self.channel._step.pending:
+                marker.write_text(self.channel._session)
+        self.enterContext(mock.patch.object(self.channel, '_bridge_call', side_effect=registered))
+        self.real_bridge(mode='ended', held_marker=str(marker))
         first = self.channel.complete(body())
         self.assertEqual(first['choices'][0]['finish_reason'],'tool_calls')
         old = self.channel._bridge
@@ -285,6 +317,8 @@ class ChannelTest(unittest.TestCase):
         self.channel.complete(body(messages))
         self.assertTrue(old.stopped.is_set())
         self.assertFalse(any('bridge_result' in r for r in self.wire()))
+        prompt = [r for r in self.wire() if r.get('method') == 'session/prompt'][-1]
+        self.assertIn('late answer', prompt['params']['prompt'][0]['text'])
 
     def test_bridge_death_with_held_call(self):
         self.real_bridge(mode='calls')
@@ -465,3 +499,175 @@ class MappingTest(unittest.TestCase):
                         '_meta':{'x.ai/tool':{'name':'bash','kind':'bash'}}}):
             with self.assertRaises(planchannel.ChannelSecurity):
                 self.channel._check_tool(update)
+
+    def test_bug1_subsession_native_tools_and_use_tool_names_are_checked(self):
+        for kind in ('tool_call', 'tool_call_update'):
+            for name in ('bash', 'shaft__unknown', 123):
+                with self.subTest(kind=kind, name=name), self.assertRaises(planchannel.ChannelSecurity):
+                    self.channel._dispatch({'method':'session/update','params':{'sessionId':'sub', 'update':{
+                        'sessionUpdate':kind, 'rawInput':{'tool_name':name},
+                        '_meta':{'x.ai/tool':{'name':'use_tool','kind':'use_tool'}}}}})
+            with self.assertRaises(planchannel.ChannelSecurity):
+                self.channel._dispatch({'method':'session/update','params':{'sessionId':'sub', 'update':{
+                    'sessionUpdate':kind, '_meta':{'x.ai/tool':{'name':'bash','kind':'bash'}}}}})
+        self.channel._check_tool({'rawInput':{'tool_name':'shaft__echo'},
+            '_meta':{'x.ai/tool':{'name':'use_tool','kind':'use_tool'}}})
+
+    def test_bug4_bridge_uses_resolved_isolated_python_and_profile_allows_it(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            python = root / 'venv-python'
+            python.symlink_to(sys.executable)
+            self.channel._folder = root
+            with mock.patch.object(grok.sys, 'executable', str(python)), \
+                    mock.patch.object(grok, '_Bridge', DummyBridge), \
+                    mock.patch.object(self.channel, '_request', return_value={'sessionId':'new'}) as request, \
+                    mock.patch.object(grok.sandbox, '_operator_places_closed', return_value=[]), \
+                    mock.patch.object(grok.sandbox, 'wrap', side_effect=lambda path, argv: argv):
+                self.channel._open_session('grok/grok-4.7', '', [], None)
+                server = request.call_args.args[1]['mcpServers'][0]
+                self.assertEqual(server['command'], str(Path(sys.executable).resolve()))
+                self.assertEqual(server['args'][:2], ['-I', '-B'])
+                grok._seatbelt([], root, root / 'home')
+                profile = (root / 'seatbelt.sb').read_text()
+                for reader in (Path(sys.executable).resolve().parent, Path(sys.base_prefix).resolve()):
+                    self.assertIn('(allow file-read* (subpath ' + json.dumps(str(reader)) + '))', profile)
+                self.assertIn('(allow file-read* (literal ' + json.dumps(str(grok.BRIDGE)) + '))', profile)
+
+    def test_bug5_image_dropped_is_a_clear_channel_failure(self):
+        with self.assertRaisesRegex(planchannel.ChannelFailure, 'dropped an image'):
+            self.update('image_dropped')
+
+    def test_bug6_invalid_closed_or_fatal_selection_does_not_restart(self):
+        self.channel._process = mock.Mock()
+        self.channel._launch = ('grok/old', None)
+        with mock.patch.object(self.channel, '_stop_process') as stop:
+            with self.assertRaises(planchannel.ChannelFailure):
+                self.channel._select(body(model='codex/model'))
+            self.channel._fatal = planchannel.ChannelFailure('fatal')
+            with self.assertRaisesRegex(planchannel.ChannelFailure, 'fatal'):
+                self.channel._select(body())
+            self.channel._closed = True
+            with self.assertRaises(planchannel.ChannelClosed):
+                self.channel._select(body())
+            stop.assert_not_called()
+
+    def test_bug6_bridge_close_snapshots_connections_under_lock(self):
+        bridge = object.__new__(REAL_BRIDGE)
+        bridge.channel = self.channel
+        bridge.stopped = threading.Event()
+        bridge.socket = mock.Mock()
+        bridge.address = '/unused/absent-socket'
+        channel = self.channel
+        class Connections:
+            def __iter__(self):
+                # A different thread must not acquire the condition during iteration.
+                acquired = []
+                def probe():
+                    success = channel._cv.acquire(blocking=False)
+                    acquired.append(success)
+                    if success:
+                        channel._cv.release()
+                thread = threading.Thread(target=probe)
+                thread.start(); thread.join()
+                self_case.assertEqual(acquired, [False])
+                return iter([connection])
+        self_case = self
+        connection = mock.Mock()
+        bridge.connections = Connections()
+        bridge.close()
+        connection.shutdown.assert_called_once()
+
+    def test_bug7_prompt_error_finishes_now_and_preserves_finished_error(self):
+        step = self.channel._step
+        with self.channel._cv:
+            self.channel._response({'id':1, 'error':{'code':-1}})
+        self.assertTrue(step.event.is_set())
+        self.assertIsInstance(step.error, planchannel.ChannelFailure)
+        error = step.error
+        with self.channel._cv:
+            self.channel._response({'id':1, 'error':{'code':-2}})
+        self.assertIs(step.error, error)
+        step.error = None
+        with self.channel._cv:
+            self.channel._response({'id':1, 'error':{'code':-3}})
+        self.assertIsNone(step.error)
+
+    def test_bug7_ended_step_waiting_for_grace_does_not_timeout(self):
+        step = self.channel._step
+        step.text = 'done'
+        step.started = time.monotonic() - 1000
+        step.turn_ended = True
+        step.items['_ended_at'] = time.monotonic()
+        self.run_watch_until_finished(step)
+        self.assertIsNone(step.error)
+        self.assertEqual(step.finish, 'stop')
+
+    def run_watch_until_finished(self, step):
+        worker = threading.Thread(target=self.channel._watch)
+        worker.start()
+        try:
+            self.assertTrue(step.event.wait(1), 'step did not finish')
+        finally:
+            with self.channel._cv:
+                self.channel._closed = True
+                self.channel._cv.notify_all()
+            worker.join(1)
+
+    def test_bug8_bridge_death_before_first_ping_is_detected(self):
+        with tempfile.TemporaryDirectory() as folder, \
+                mock.patch.object(grok.socket, 'socket') as socket_factory, \
+                mock.patch.object(grok.threading, 'Thread'):
+            socket_factory.return_value.accept.side_effect = grok.socket.timeout
+            with mock.patch.object(grok.time, 'monotonic', return_value=10):
+                bridge = REAL_BRIDGE(self.channel, [], Path(folder) / 'bridge')
+            self.assertEqual(bridge.last_ping, 10)
+            with mock.patch.object(grok.time, 'monotonic', return_value=14):
+                bridge._accept()
+            self.assertEqual(str(self.channel._fatal), 'Grok bridge died')
+            bridge.close()
+
+    def test_bug9_bridge_calls_before_prompt_or_after_end_get_clean_refusal(self):
+        for turn, ended in ((None, False), (1, True)):
+            self.channel._step.turn = turn
+            self.channel._step.turn_ended = ended
+            answer = self.call(1)
+            self.assertEqual(answer.get_nowait(), {'isError':True, 'content':[
+                {'type':'text', 'text':'Grok call outside turn'}]})
+            self.assertIsNone(self.channel._fatal)
+            self.assertEqual(self.channel._step.calls, [])
+
+    def test_bug9_prompt_is_registered_before_it_can_generate_bridge_calls(self):
+        self.channel._step.turn = None
+        def send(message):
+            answer = self.call(1)
+            self.assertTrue(answer.empty())
+            self.assertEqual(self.channel._step.turn, message['id'])
+        with mock.patch.object(self.channel, '_send', side_effect=send):
+            self.channel._start_turn('begin', [], None)
+        self.assertEqual(len(self.channel._step.calls), 1)
+
+    def test_bug10_answered_tool_final_text_finishes_extended_step_with_or_without_image(self):
+        for images in ([], ['data:image/png;base64,synthetic']):
+            with self.subTest(images=bool(images)):
+                self.channel._closed = False
+                old = planchannel.Step('grok/grok-4.7', 'old', turn=1)
+                self.channel._step = old
+                self.channel._turns[1]['step'] = old
+                answer = self.call(1)
+                with self.channel._cv:
+                    self.channel._finish(old, 'tool_calls')
+                step = planchannel.Step(old.model, 'next', turn=old.turn)
+                self.channel._step = step
+                image = {'type':'image', 'mimeType':'image/png', 'data':'synthetic'}
+                with self.channel._cv, mock.patch.object(self.channel, '_images', return_value=[image] if images else []):
+                    self.assertTrue(self.channel._answer_calls(old.pending, {old.calls[0]['id']:'result'}, 'look', images))
+                    expected = [{'type':'text','text':'result'}, {'type':'text','text':'look'}]
+                    self.assertEqual(answer.get_nowait()['content'], expected + ([image] if images else []))
+                    self.update('agent_message_chunk', content={'type':'text','text':'final answer'})
+                    self.channel._response({'id':1, 'result':{'stopReason':'end_turn'}})
+                self.run_watch_until_finished(step)
+                self.assertEqual(step.text, 'final answer')
+                self.assertEqual(step.finish, 'stop')
+                self.assertIsNone(step.error)
+                self.assertTrue(step.turn_ended)

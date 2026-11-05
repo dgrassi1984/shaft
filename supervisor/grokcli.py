@@ -127,7 +127,7 @@ class _Bridge:
         self.tools_path.write_text(json.dumps(tools))
         self.stopped = threading.Event()
         self.connections = set()
-        self.last_ping = None
+        self.last_ping = time.monotonic()
         self.socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             self.socket.bind(self.address)
@@ -144,7 +144,7 @@ class _Bridge:
             try:
                 connection, _ = self.socket.accept()
             except socket.timeout:
-                if self.last_ping is not None and time.monotonic() - self.last_ping > 3:
+                if time.monotonic() - self.last_ping > 3:
                     self.channel._fail(planchannel.ChannelFailure('Grok bridge died'))
                     return
                 continue
@@ -190,20 +190,22 @@ class _Bridge:
         self.socket.close()
         with contextlib.suppress(FileNotFoundError):
             Path(self.address).unlink()
-        for connection in list(self.connections):
+        with self.channel._cv:
+            connections = list(self.connections)
+        for connection in connections:
             with contextlib.suppress(OSError):
                 connection.shutdown(socket.SHUT_RDWR)
 
 
 class Channel(planchannel.Channel):
     prefix, label = 'grok', LABEL
+    calls_need_turn = True
 
     def __init__(self, broker_name, usage_name, log):
         super().__init__(broker_name, usage_name, log)
         self._bridge = None
         self._restarting = False
         self._launch = None
-        self._selection = threading.Lock()
         self._turns = {}
         self._tool_names = set()
         self._native_calls = set()
@@ -216,19 +218,15 @@ class Channel(planchannel.Channel):
         # Never append raw stderr: a CLI error may echo a prompt or image.
         return (cls or self.failure)(reason)
 
-    def _select(self, body):
-        with self._selection:
-            effort = body.get('reasoning_effort') or (body.get('chat_template_kwargs') or {}).get('reasoning_effort')
-            if self._process is not None and self._launch != (body.get('model'), effort):
-                if self._step and self._step.turn and not self._step.turn_ended:
-                    self._cancel_turn(self._step.turn)
-                self._stop_process()
-                self._session = self._signature = None
-            if self._step and self._step.turn_ended and self._step.pending:
-                anchor, _ = planchannel._anchor([m for m in body.get('messages', []) if m['role'] != 'system'])
-                if anchor != self._step.anchor:
-                    self._signature = None
-            return super()._select(body)
+    def _prepare(self, model, effort):
+        if self._process is not None and self._launch != (model, effort):
+            with self._cv:
+                if self._step:
+                    self._record(self._step)
+                    if self._step.turn and not self._step.turn_ended:
+                        self._cancel_turn(self._step.turn)
+            self._stop_process()
+            self._session = self._signature = None
 
     def _start(self, model, effort):
         home = Path(HOME).expanduser().resolve()
@@ -294,7 +292,7 @@ class Channel(planchannel.Channel):
         except OSError as exc:
             raise self.failure('cannot start Grok bridge: ' + type(exc).__name__) from exc
         return self._request('session/new', {'cwd': str(self._folder), 'mcpServers': [{
-            'name': 'shaft', 'command': sys.executable, 'args': ['-B', str(BRIDGE), '--tools',
+            'name': 'shaft', 'command': str(Path(sys.executable).resolve()), 'args': ['-I', '-B', str(BRIDGE), '--tools',
             str(self._bridge.tools_path), '--socket', self._bridge.address], 'env': []}],
             '_meta': {'systemPromptOverride': system, 'agentProfile': {'name': 'shaft',
                 'tools': ['mcp__shaft__' + n for n in sorted(self._tool_names)] or ['mcp__shaft__' + RESERVED]},
@@ -331,6 +329,7 @@ class Channel(planchannel.Channel):
         self._seq += 1
         ident = self._seq
         self._turns[ident] = {'step': self._step, 'input': 0, 'output': 0, 'cached': 0, 'reasoning': 0, 'ticks': 0}
+        self._step.turn = ident
         self._send({'id': ident, 'method': 'session/prompt', 'params': {'sessionId': self._session, 'prompt': prompt}})
         return ident
 
@@ -366,7 +365,9 @@ class Channel(planchannel.Channel):
             if result.get('stopReason') not in ('end_turn', 'cancelled'):
                 raise self.failure('Grok turn did not complete')
         except planchannel.ChannelFailure as exc:
-            step.error = exc
+            if not step.event.is_set():
+                step.error = exc
+                self._finish(step)
         step.turn_ended = True
         step.items['_ended_at'] = time.monotonic()
         self._responses[message['id']] = message  # cancellation waits for the prompt reply
@@ -382,6 +383,11 @@ class Channel(planchannel.Channel):
             return
         if name not in ('search_tool', 'use_tool') or kind != name:
             raise planchannel.ChannelSecurity(f'Grok native tool forbidden: tool={name} kind={kind}')
+        raw = update.get('rawInput')
+        if name == 'use_tool' and isinstance(raw, dict) and 'tool_name' in raw:
+            target = raw['tool_name']
+            if not isinstance(target, str) or not target.startswith('shaft__') or target[7:] not in self._tool_names:
+                raise planchannel.ChannelSecurity('Grok native tool forbidden: tool=' + str(target))
         if isinstance(ident, str):
             self._native_calls.add(ident)
 
@@ -407,12 +413,14 @@ class Channel(planchannel.Channel):
                 self._send({'id': message['id'], 'error': {'code': -32601, 'message': 'Native client tools denied'}})
                 raise planchannel.ChannelSecurity('Grok requested native client method=' + method)
             return
-        if params.get('sessionId') != self._session:
-            return
         update = params.get('update') or {}
         kind = update.get('sessionUpdate')
         if kind in ('tool_call', 'tool_call_update'):
             self._check_tool(update)
+        if params.get('sessionId') != self._session:
+            return
+        if kind == 'image_dropped':
+            raise self.failure('Grok dropped an image; image input was not delivered')
         step = self._step
         if step is None:
             return
@@ -435,8 +443,9 @@ class Channel(planchannel.Channel):
             if name not in self._tool_names or not isinstance(arguments, dict):
                 raise planchannel.ChannelSecurity('Grok invalid bridge tool=' + str(name))
             step = self._step
-            if step is None or step.turn_ended:
-                raise self.failure('Grok call outside turn')
+            if step is None or step.turn is None or step.turn_ended:
+                answer.put({'isError': True, 'content': [{'type': 'text', 'text': 'Grok call outside turn'}]})
+                return
             if step.event.is_set():
                 answer.put({'isError': True, 'content': [{'type': 'text', 'text': 'Repeat after other results arrive'}]})
                 self.stats['late_calls'] += 1
@@ -542,7 +551,7 @@ class Channel(planchannel.Channel):
                         self._finish(step, 'tool_calls' if step.calls else 'stop')
                     elif self._calls_ready(step, now):
                         self._finish(step, 'tool_calls')
-                    elif not step.calls and now - step.started >= self.timeout_s:
+                    elif not step.calls and not step.turn_ended and now - step.started >= self.timeout_s:
                         self._fail(self.failure('Grok step timeout'))
                         self._kill()
                 self._cv.wait(.025)
