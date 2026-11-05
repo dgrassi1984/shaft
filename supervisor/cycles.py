@@ -129,6 +129,94 @@ def days(name: str, before: str | None = None, limit: int = 7, filt: str = "") -
     return {"days": out, "next": next_day, "judge_error": judge_error}
 
 
+def cycle(name: str, ts: str) -> dict | None:
+    """One finished cycle's plan, action, result and remainder, without its tool log."""
+    if not isinstance(ts, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}", ts):
+        return None
+    try:
+        end = datetime.fromisoformat(ts)
+    except ValueError:
+        return None
+    date = ts[:10]
+    lines, _ = _lines(name, date)
+    for line, record in lines:
+        if record.get("ts") != ts:
+            continue
+        raw_kind = record.get("kind")
+        kind = panel.CYCLE_KINDS.get(raw_kind) if isinstance(raw_kind, str) else None
+        if not kind:
+            continue
+        intent = record.get("intent")
+        finish = record.get("finish")
+        finish = finish if isinstance(finish, dict) else {}
+        usage = record.get("project_usage")
+        tools = record.get("tools")
+        try:
+            duration = (end - datetime.fromisoformat(record.get("run_started"))).total_seconds()
+        except (TypeError, ValueError):
+            duration = None
+        out = {
+            "id": ts, "ts": ts, "kind": kind, "where": f"memory/episodes/{date}.jsonl:{line}",
+            "content": record.get("content") if kind != "cycle" else None,
+            "planned": None,
+            "did": {"what_happened": finish.get("what_happened"), "duration_s": duration,
+                    "usd": usage.get("usd") if isinstance(usage, dict) else None,
+                    "tool_calls": len(tools) if isinstance(tools, list) else 0,
+                    "ended_by": record.get("ended_by"), "wrapped_up": record.get("wrapped_up"),
+                    "delivered_via": finish.get("delivered_via")},
+            "result": None, "left": None,
+        }
+        if kind == "cycle":
+            out["planned"] = {k: intent.get(k) for k in (
+                "goal", "success_criterion", "origin", "origin_ref", "confidence", "predictions", "attention"
+            )} if isinstance(intent, dict) else None
+            verdicts, judge_error = _verdicts(name)
+            judge = verdicts.get(ts)
+            second = judge.get("second") if isinstance(judge, dict) else None
+            out["result"] = {"claim": finish.get("criterion_met"), "surprises": finish.get("surprises"),
+                             "doubts": finish.get("doubts"), "judge_error": judge_error,
+                             "judge": _judge_detail(judge), "second": _judge_detail(second)}
+            unfinished = finish.get("unfinished")
+            nxt = finish.get("next_action")
+            out["left"] = {"unfinished": [s for s in unfinished if isinstance(s, str)]
+                           if isinstance(unfinished, list) else [],
+                           "next_action": nxt if isinstance(nxt, dict) else None,
+                           "next_goal": _next_goal(name, date, line, lines)}
+        return out
+    return None
+
+
+def _judge_detail(row: dict | None) -> dict | None:
+    if not isinstance(row, dict):
+        return None
+    return {"verdict": row.get("criterion_met"), "claim_supported": row.get("claim_supported"),
+            "first_error": row.get("first_error"), "reasoning": row.get("reasoning"), "model": row.get("judge")}
+
+
+def _next_goal(name: str, date: str, line: int, lines: list[tuple[int, dict]]) -> str | None:
+    """The first later live goal, walking onward in this file and then across later day files."""
+    def goal_after(rows: list[tuple[int, dict]], after: int) -> str | None:
+        for n, record in rows:
+            if n <= after or record.get("kind") != "live":
+                continue
+            intent = record.get("intent")
+            goal = intent.get("goal") if isinstance(intent, dict) else None
+            if isinstance(goal, str) and goal.strip():
+                return goal
+        return None
+
+    goal = goal_after(lines, line)
+    if goal is not None:
+        return goal
+    for path in sorted(panel._episode_files(name), key=lambda p: p.name):
+        if path.stem <= date:
+            continue
+        goal = goal_after(_lines(name, path.stem)[0], 0)
+        if goal is not None:
+            return goal
+    return None
+
+
 def plan(name: str, live: dict, now: datetime | None = None) -> dict:
     """The Next block: what the instance is doing now, when it is next checked, what it said it would do next, its
     open commitments and task queue, its goals, and its latest improvement plan."""

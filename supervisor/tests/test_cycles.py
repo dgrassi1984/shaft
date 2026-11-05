@@ -141,6 +141,114 @@ class CyclesDaysTest(unittest.TestCase):
     def test_an_instance_with_no_episodes_has_no_days(self):
         self.assertEqual(cycles.days("wren")["days"], [])
 
+    def test_unknown_cost_and_duration_stay_unknown(self):
+        self.ep("2026-11-05", kind="live", ts="2026-11-05T09:00:00", intent={"goal": "a"}, project_usage=None)
+        did = cycles.cycle("wren", "2026-11-05T09:00:00")["did"]
+        self.assertIsNone(did["usd"])
+        self.assertIsNone(did["duration_s"])
+
+    def test_duration_is_end_minus_run_started(self):
+        ts = "2026-11-05T13:53:00"
+        intent = {"goal": "a", "success_criterion": "done", "origin": "operator", "origin_ref": "m1",
+                  "confidence": 0.8, "predictions": ["b"], "attention": "c", "extra": "SECRET"}
+        self.ep("2026-11-05", kind="live", ts=ts, intent=intent, run_started="2026-11-05T13:25:13",
+                project_usage={"usd": 0.25}, ended_by="finish", wrapped_up="normal",
+                finish={"what_happened": "did a", "delivered_via": "message"})
+        out = cycles.cycle("wren", ts)
+        self.assertEqual((out["id"], out["ts"], out["kind"], out["where"], out["content"]),
+                         (ts, ts, "cycle", "memory/episodes/2026-11-05.jsonl:1", None))
+        self.assertEqual(out["planned"], {k: v for k, v in intent.items() if k != "extra"})
+        self.assertEqual(out["did"], {"what_happened": "did a", "duration_s": 1667, "usd": 0.25,
+                                     "tool_calls": 0, "ended_by": "finish", "wrapped_up": "normal",
+                                     "delivered_via": "message"})
+
+    def test_the_next_goal_crosses_midnight(self):
+        self.ep("2026-11-04", kind="live", ts="2026-11-04T23:59:00", intent={"goal": "a"})
+        self.ep("2026-11-05", kind="sleep", ts="2026-11-05T04:00:00", content="slept")
+        self.ep("2026-11-05", kind="live", ts="2026-11-05T09:00:00", intent={"goal": "b"})
+        self.assertEqual(cycles.cycle("wren", "2026-11-04T23:59:00")["left"]["next_goal"], "b")
+
+    def test_next_goal_uses_the_first_later_live_goal(self):
+        self.ep("2026-11-05", kind="live", ts="2026-11-05T08:00:00", intent={"goal": "before"})
+        self.ep("2026-11-05", kind="live", ts="2026-11-05T09:00:00", intent={"goal": "a"})
+        self.ep("2026-11-05", kind="live", ts="2026-11-05T10:00:00", intent=[])
+        self.ep("2026-11-05", kind="live", ts="2026-11-05T11:00:00", intent={"goal": "b"})
+        self.ep("2026-11-06", kind="live", ts="2026-11-06T09:00:00", intent={"goal": "c"})
+        self.assertEqual(cycles.cycle("wren", "2026-11-05T09:00:00")["left"]["next_goal"], "b")
+
+    def test_the_newest_cycle_has_no_next_goal(self):
+        self.ep("2026-11-05", kind="live", ts="2026-11-05T09:00:00", intent={"goal": "a"})
+        self.assertIsNone(cycles.cycle("wren", "2026-11-05T09:00:00")["left"]["next_goal"])
+
+    def test_a_sleep_has_content_and_no_plan(self):
+        for kind, expected in (("sleep", "sleep"), ("reflect", "reflection")):
+            with self.subTest(kind=kind):
+                ts = "2026-11-05T04:00:00" if kind == "sleep" else "2026-11-05T05:00:00"
+                self.ep("2026-11-05", kind=kind, ts=ts, content="slept")
+                out = cycles.cycle("wren", ts)
+                self.assertEqual((out["kind"], out["content"]), (expected, "slept"))
+                for key in ("planned", "result", "left"):
+                    self.assertIsNone(out[key])
+
+    def test_claim_and_verdict_are_kept_apart_and_a_second_judge_too(self):
+        ts = "2026-11-05T09:00:00"
+        self.ep("2026-11-05", kind="live", ts=ts,
+                finish={"criterion_met": "yes", "surprises": ["s"], "doubts": ["d"]})
+        second = {"criterion_met": "partial", "claim_supported": True, "first_error": 2,
+                  "reasoning": "second reason", "judge": "second model"}
+        self.judge(episode_ts=ts, criterion_met="no", claim_supported=False, first_error=1,
+                   reasoning="first reason", judge="first model", second=second)
+        result = cycles.cycle("wren", ts)["result"]
+        self.assertEqual(result, {"claim": "yes", "surprises": ["s"], "doubts": ["d"], "judge_error": "",
+                                  "judge": {"verdict": "no", "claim_supported": False, "first_error": 1,
+                                            "reasoning": "first reason", "model": "first model"},
+                                  "second": {"verdict": "partial", "claim_supported": True, "first_error": 2,
+                                             "reasoning": "second reason", "model": "second model"}})
+
+    def test_detail_carries_judge_errors_and_absent_judges(self):
+        ts = "2026-11-05T09:00:00"
+        self.ep("2026-11-05", kind="live", ts=ts)
+        with mock.patch.object(panel, "judgments", side_effect=ValueError("bad line")):
+            result = cycles.cycle("wren", ts)["result"]
+        self.assertEqual(result["judge_error"], "ValueError: bad line")
+        self.assertIsNone(result["judge"])
+        self.assertIsNone(result["second"])
+
+    def test_a_malformed_ts_is_none_not_a_path(self):
+        with mock.patch.object(cycles, "_lines") as lines:
+            for ts in ("../../x", "2026-11-05", "2026-11-05T09:00:00Z", "2026-02-30T09:00:00"):
+                self.assertIsNone(cycles.cycle("wren", ts))
+            lines.assert_not_called()
+        self.assertIsNone(cycles.cycle("wren", "2026-11-05T09:00:00"))
+
+    def test_no_tool_log_reaches_the_detail(self):
+        ts = "2026-11-05T09:00:00"
+        self.ep("2026-11-05", kind="live", ts=ts, doing="SECRET",
+                tools=[{"tool": "run", "args": "SECRET", "result": "SECRET"}])
+        out = cycles.cycle("wren", ts)
+        self.assertEqual(out["did"]["tool_calls"], 1)
+        self.assertNotIn("SECRET", json.dumps(out))
+
+    def test_detail_shape_checks_instance_fields_and_bad_times(self):
+        for hour, start in enumerate((None, "bad time", 7, "2026-11-05T08:00:00+00:00"), 9):
+            with self.subTest(start=start):
+                ts = f"2026-11-05T{hour:02}:00:00"
+                self.ep("2026-11-05", kind="live", ts=ts, intent=[], finish=[],
+                        project_usage="bad", tools="bad", run_started=start)
+                out = cycles.cycle("wren", ts)
+                self.assertIsNone(out["planned"])
+                self.assertIsNone(out["did"]["usd"])
+                self.assertIsNone(out["did"]["duration_s"])
+                self.assertEqual(out["did"]["tool_calls"], 0)
+        self.ep("2026-11-05", kind="live", ts="2026-11-05T15:00:00",
+                finish={"unfinished": ["b", 7, None], "next_action": "bad"})
+        self.assertEqual(cycles.cycle("wren", "2026-11-05T15:00:00")["left"],
+                         {"unfinished": ["b"], "next_action": None, "next_goal": None})
+        self.ep("2026-11-05", kind="live", ts="2026-11-05T16:00:00",
+                finish={"unfinished": 7, "next_action": {"action": "do b", "revise_if": "x"}})
+        self.assertEqual(cycles.cycle("wren", "2026-11-05T16:00:00")["left"],
+                         {"unfinished": [], "next_action": {"action": "do b", "revise_if": "x"}, "next_goal": None})
+
     def test_now_never_carries_doing(self):
         p = cycles.plan("wren", {"state": "in a cycle", "since": "09:00", "goal": "g", "doing": "run SECRET"})
         self.assertEqual(p["now"], {"state": "in a cycle", "since": "09:00", "goal": "g"})
