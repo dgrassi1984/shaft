@@ -5,6 +5,8 @@ import copy
 import json
 import os
 from pathlib import Path
+import sqlite3
+import subprocess
 import sys
 import tempfile
 import threading
@@ -142,6 +144,106 @@ def assistant(reply):
     return reply["choices"][0]["message"]
 
 
+class CodexLogRetentionTest(unittest.TestCase):
+    """Codex's unbounded INFO log retains private instance tool results."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="test-codex-logs-")
+        self.addCleanup(self.temp.cleanup)
+        self.home = Path(self.temp.name)
+        self.path = self.home / "logs_2.sqlite"
+        self.now = time.time()
+        patch = mock.patch.object(codex, "LOG_HOURS", 24)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def database(self, count=1, text="private mail retention marker"):
+        db = sqlite3.connect(self.path, isolation_level=None)
+        self.addCleanup(db.close)
+        db.execute("PRAGMA journal_mode=WAL")
+        # No Codex-specific columns except ts are needed by retention.
+        db.execute("CREATE TABLE logs (ts INTEGER, feedback_log_body TEXT)")
+        db.executemany("INSERT INTO logs VALUES (?, ?)",
+                       [(int(self.now - 90000), text)] * count)
+        db.execute("INSERT INTO logs VALUES (?, ?)", (int(self.now), "recent"))
+        db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        return db
+
+    def test_unbounded_codex_log_old_rows_go_recent_stay_and_raw_text_is_erased(self):
+        secret = b"private mail retention marker"
+        db = self.database()
+        self.assertIn(secret, self.path.read_bytes())
+        codex._prune_logs(self.home)
+        self.assertEqual(db.execute("SELECT feedback_log_body FROM logs").fetchall(), [("recent",)])
+        self.assertFalse(secret in self.path.read_bytes(), "deleted mail remains in the database file")
+        wal = self.path.with_name(self.path.name + "-wal")
+        self.assertFalse(secret in wal.read_bytes(), "deleted mail remains in the WAL")
+        self.assertEqual(wal.stat().st_size, 0)
+
+    def test_unbounded_codex_log_prunes_more_than_one_batch(self):
+        db = self.database(count=2005)
+        codex._prune_logs(self.home)
+        self.assertEqual(db.execute("SELECT feedback_log_body FROM logs").fetchall(), [("recent",)])
+
+    def test_unbounded_codex_log_stamp_limits_frequency_across_processes(self):
+        db = self.database()
+        codex._prune_logs(self.home)
+        db.execute("INSERT INTO logs VALUES (?, 'added after prune')", (int(self.now - 90000),))
+        result = subprocess.run([sys.executable, "-B", "-c",
+            "from pathlib import Path; from supervisor import codexcli; "
+            "import sys; codexcli._prune_logs(Path(sys.argv[1]))", str(self.home)],
+            capture_output=True, text=True, timeout=10,
+            env={**os.environ, "SHAFT_SUPERVISOR_DIR": str(self.home)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM logs").fetchone(), (2,))
+        stamp = self.home / "logs-pruned.stamp"
+        os.utime(stamp, (self.now - 601, self.now - 601))
+        codex._prune_logs(self.home)
+        self.assertEqual(db.execute("SELECT feedback_log_body FROM logs").fetchall(), [("recent",)])
+
+    def test_unbounded_codex_log_missing_table_is_logged(self):
+        sqlite3.connect(self.path).close()
+        with self.assertLogs("supervisor.codexcli", level="WARNING") as logs:
+            codex._prune_logs(self.home)
+        self.assertEqual(len(logs.output), 1)
+        self.assertIn("no such table: logs", logs.output[0])
+
+    def test_unbounded_codex_log_missing_file_is_logged_without_creating_database(self):
+        with self.assertLogs("supervisor.codexcli", level="WARNING") as logs:
+            codex._prune_logs(self.home)
+        self.assertIn("logs_2.sqlite is missing", logs.output[0])
+        self.assertFalse(self.path.exists())
+
+    def test_unbounded_codex_log_concurrent_reader_does_not_break_pruning(self):
+        db = self.database()
+        # A separate process keeps a real WAL read transaction open during deletion.
+        child = subprocess.Popen([sys.executable, "-B", "-c",
+            "import sqlite3, sys; db = sqlite3.connect(sys.argv[1]); "
+            "db.execute('BEGIN'); db.execute('SELECT * FROM logs').fetchall(); "
+            "print('ready', flush=True); sys.stdin.readline(); db.close()", str(self.path)],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        try:
+            self.assertEqual(child.stdout.readline().strip(), "ready")
+            with self.assertLogs("supervisor.codexcli", level="WARNING") as logs:
+                codex._prune_logs(self.home)
+            self.assertIn("wal_checkpoint(TRUNCATE) busy", logs.output[0])
+            self.assertEqual(db.execute("SELECT feedback_log_body FROM logs").fetchall(), [("recent",)])
+        finally:
+            child.communicate("release\n", timeout=10)
+        stamp = self.home / "logs-pruned.stamp"
+        os.utime(stamp, (self.now - 601, self.now - 601))
+        codex._prune_logs(self.home)
+        self.assertEqual(self.path.with_name(self.path.name + "-wal").stat().st_size, 0)
+
+    def test_unbounded_codex_log_vacuum_reclaims_large_free_space(self):
+        db = self.database(count=12, text="old private mail" * 70000)
+        before = self.path.stat().st_size
+        self.assertGreater(before, 8 * 1024 * 1024)
+        codex._prune_logs(self.home)
+        self.assertLess(self.path.stat().st_size, before // 4)
+        self.assertEqual(db.execute("SELECT feedback_log_body FROM logs").fetchall(), [("recent",)])
+
+
 class ChannelTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="test-codex-")
@@ -179,6 +281,21 @@ class ChannelTest(unittest.TestCase):
 
     def requests(self, method):
         return [r for r in self.rows() if r.get("method") == method]
+
+    def test_unbounded_codex_log_locked_database_does_not_fail_channel(self):
+        db = sqlite3.connect(self.home / "logs_2.sqlite", isolation_level=None)
+        self.addCleanup(db.close)
+        db.execute("PRAGMA journal_mode=WAL")
+        db.execute("CREATE TABLE logs (ts INTEGER)")
+        db.execute("BEGIN IMMEDIATE")
+        try:
+            with self.assertLogs("supervisor.codexcli", level="WARNING") as logs:
+                reply = self.channel.complete(body())
+            self.assertEqual(assistant(reply)["content"], "hello")
+            self.assertEqual(len(logs.output), 1)
+            self.assertIn("database is locked", logs.output[0])
+        finally:
+            db.execute("ROLLBACK")
 
     def extend(self, request, reply, results=(), users=()):
         new = copy.deepcopy(request)
@@ -481,6 +598,39 @@ class ChannelTest(unittest.TestCase):
         for output in (str(self.logs), str(self.record.call_args_list)):
             self.assertNotIn("cHJpdmF0ZQ==", output)
             self.assertNotIn("data:image", output)
+
+    def test_benign_sleep_and_bookkeeping_items_do_not_trigger_security(self):
+        items = [
+            {"type": "sleep", "id": "s", "durationMs": 1000},
+            {"type": "contextCompaction", "id": "c"},
+            {"type": "plan", "id": "p", "text": "private plan"},
+            {"type": "functionCallOutput", "id": "f", "name": "clock.sleep", "output": "done"},
+            {"type": "userMessage"}, {"type": "agentMessage"},
+            {"type": "reasoning"}, {"type": "dynamicToolCall"},
+        ]
+        for item in items:
+            with self.subTest(kind=item["type"]):
+                self.channel._check_item(item)
+        self.use([[{"item": item} for item in items[:4]] + [{"text": "still running"}]])
+        self.assertEqual(assistant(self.channel.complete(body()))["content"], "still running")
+
+    def test_benign_item_allowlist_still_rejects_native_and_unknown_items(self):
+        for kind in ("commandExecution", "fileChange", "webSearch", "imageView",
+                     "imageGeneration", "collabAgentToolCall", "subAgentActivity",
+                     "hookPrompt", "enteredReviewMode", "exitedReviewMode", "mcpToolCall",
+                     "futureUnknownItem"):
+            with self.subTest(kind=kind):
+                with self.assertRaises(codex.CodexSecurity) as caught:
+                    self.channel._check_item({"type": kind, "text": "private message"})
+                self.assertEqual(caught.exception.reason, "Codex native item forbidden: " + kind)
+
+    def test_forbidden_item_reason_keeps_type_and_tool_with_stderr(self):
+        self.channel._stderr.extend(b"synthetic stderr")
+        with self.assertRaises(codex.CodexSecurity) as caught:
+            self.channel._check_item({"type": "mcpToolCall", "server": "codex", "tool": "exec",
+                                      "arguments": {"text": "private message"}})
+        self.assertEqual(caught.exception.reason,
+                         "Codex native item forbidden: mcpToolCall; tool: exec; stderr: synthetic stderr")
 
     def test_native_item_fails_closed(self):
         self.use([[{"item": {"type": "commandExecution"}}]], hang=True)

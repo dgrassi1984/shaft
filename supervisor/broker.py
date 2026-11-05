@@ -825,8 +825,14 @@ class Broker:
 
     def _codex_report(self, exc=None) -> None:
         from . import codexcli
-        from .core import SUP_DIR
+        from .core import SUP_DIR, log
         if exc is not None:
+            event = "Codex security event" if isinstance(exc, codexcli.CodexSecurity) else "Codex failure"
+            # Stderr can contain message content; log only the reason, on one line.
+            reason = exc.reason.split("; stderr:", 1)[0]
+            line = f"{self.name}: {event}: {reason!r}"
+            log(line)
+            self._log(line)
             if self.local_fallback:
                 self.codex_down = exc.reason
             codexcli.report_failure(exc, self._codex_notify)
