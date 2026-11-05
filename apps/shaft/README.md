@@ -69,7 +69,12 @@ python3 apps/shaft/DevServer/fixture_server.py act --dir /tmp/shaft-fixture --po
 
 `serve` prints a pairing link; type or paste it into the app. `act` (with the same `--dir`, `--port` and `--simctl`)
 makes an instance send a message or a question (with its push), change its state, write a document, or have a chat
-past the 80-turn window (`long`). A Debug build may load plain `http://` from this machine (`NSAllowsLocalNetworking`,
+past the 80-turn window (`long`). Settings writes stay in the fixture's own instance files. Service restarts change
+fake records only; no CLI or launchd runs. `act ... services busy "thelos replying"` makes the API refuse a restart
+and gives a scheduler drain that waiting line; `act ... services busy` clears it. `act ... services drain-end`
+finishes a pending drain with a new fake pid. Cancel is available in the app. Run
+`python3 apps/shaft/DevServer/test_fixture_settings.py` to check the settings and service routes without opening an app.
+A Debug build may load plain `http://` from this machine (`NSAllowsLocalNetworking`,
 added to the built Info.plist by a Debug-only build step in `project.yml`); a Release build keeps App Transport
 Security whole.
 

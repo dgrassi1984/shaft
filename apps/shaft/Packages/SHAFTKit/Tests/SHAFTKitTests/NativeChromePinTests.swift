@@ -176,4 +176,44 @@ struct NativeChromePinTests {
         let end = try #require(body.range(of: "\n}\n"))
         #expect(!body[..<end.lowerBound].contains(".frame(maxWidth: .infinity)"))
     }
+
+    @Test func theSettingsAreReachableFromTheChatMenuAndTheTitle() throws {
+        let source = try shared("Shared/Chat/ChatScreen.swift")
+        let menuStart = try #require(source.range(of: "        Menu {"))
+        let earlier = try #require(source.range(of: #"Button { screen.showEarlierChats = true }"#))
+        let menu = source[menuStart.lowerBound..<earlier.lowerBound]
+        #expect(menu.contains("if !screen.archived {"))
+        #expect(menu.contains(#"Label("Settings for \(chat.instance)", systemImage: "gearshape")"#))
+        #expect(menu.contains("screen.showInstanceSettings = true"))
+        let titleStart = try #require(source.range(of: "struct ChatTitle: View"))
+        let title = source[titleStart.lowerBound...]
+        #expect(title.contains("if !screen.archived {"))
+        #expect(title.contains(#"Button("Settings for \(instance)")"#))
+        #expect(title.contains("showNote = false\n                        screen.showInstanceSettings = true"))
+        #expect(source.contains(".sheet(isPresented: $screen.showInstanceSettings)"))
+        #expect(source.contains("|| screen.showInstanceSettings ||"))
+        #expect(try shared("Shared/Chat/ChatScreenModel.swift").contains("var showInstanceSettings = false"))
+    }
+
+    @Test func theServerSectionIsSharedByBothSettingsScreens() throws {
+        #expect(try shared("Shared/Root/SessionViews.swift").contains("ServerSection(store: store.services)"))
+        #expect(try shared("Shared/Settings/InstanceSettingsView.swift").contains("ServerSection(store: services)"))
+        let server = try shared("Shared/Settings/ServerSection.swift")
+        #expect(server.contains("let store: ServicesStore"))
+        #expect(server.contains("These restart a service for all instances."))
+        #expect(!server.contains(".stop()"))
+    }
+
+    @Test func aRestartAsksFirst() throws {
+        let source = try shared("Shared/Settings/ServerSection.swift")
+        #expect(source.contains(#"Button("Restart") { confirming = service.name }"#))
+        let dialogStart = try #require(source.range(of: ".confirmationDialog(confirmation"))
+        let dialogEnd = try #require(source.range(of: "private var confirmation"))
+        let dialog = source[dialogStart.lowerBound..<dialogEnd.lowerBound]
+        #expect(dialog.contains("Task { await store.restart(name) }"))
+        #expect(source.components(separatedBy: "store.restart(").count == 2)
+        #expect(source.contains("Restart the API? Running replies would be cut, so it refuses while one runs."))
+        #expect(source.contains("Restart the scheduler once its runs end? It starts nothing new until then, and cuts nothing."))
+    }
+
 }

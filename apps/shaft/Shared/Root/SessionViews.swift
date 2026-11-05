@@ -177,6 +177,9 @@ struct SettingsView: View {
                         if let error = model.pushError { Text(error).font(.footnote).foregroundStyle(Color.warning) }
                     }
                     .listRowBackground(Color.elevated)
+                    if let store = session.store {
+                        ServerSection(store: store.services)
+                    }
                     Section {
                         Button("Unpair this device", role: .destructive) { unpairing = true }
                             .foregroundStyle(Color.danger)
@@ -213,6 +216,10 @@ struct SettingsView: View {
                 } catch {
                     pushProblem = APIError.from(error).message
                 }
+            }
+            .onDisappear {
+                if let services = session.store?.services, services.restarting.contains("scheduler"),
+                   !services.restarting.contains("api") { services.stop() }
             }
             .confirmationDialog("Unpair this device?", isPresented: $unpairing, titleVisibility: .visible) {
                 Button("Unpair", role: .destructive) { Task { await session.unpair() } }
