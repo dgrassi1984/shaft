@@ -715,7 +715,7 @@ def cycles_page(name: str, plan: dict, days: dict, filt: str, names: list[str], 
     if days["next"]:
         done.append(link(f"/i/{q(name)}/transcripts?before={q(days['next'])}" + (f"&f={q(filt)}" if filt else ""),
                          "Earlier days"))
-    body = join([section("Next", h('<div data-poll="/fragment/i/{n}/cycles-next">{next}</div>',
+    body = join([section("Next", h('<div data-poll="/fragment/i/{n}/cycles-next" data-every="15000">{next}</div>',
                                    n=q(name), next=cycles_next(plan))),
                  section("Done", join([_cycle_filters(name, filt), *done]))])
     return instance_frame(name, "transcripts", "cycles", body, names, csrf)

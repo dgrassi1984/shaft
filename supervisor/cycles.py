@@ -248,9 +248,11 @@ def plan(name: str, live: dict, now: datetime | None = None) -> dict:
 
     next_step, unfinished = _next_step(name)
 
+    root = core.instance_root(name)
     commitments_error = ""
     try:
-        ledger = commitments.ledger(name, now)
+        ledger = panel.cached(f"cycles-commitments:{name}", [root / "memory/commitments.jsonl"],
+                              lambda: commitments.ledger(name, now), ttl=60)
     except Exception as e:
         ledger, commitments_error = {}, f"{type(e).__name__}: {e}"
     items = [{"id": it["id"], "promise": it["promise"], "due": it["due"], "status": it["status"]}
@@ -258,7 +260,6 @@ def plan(name: str, live: dict, now: datetime | None = None) -> dict:
              if it["status"] in ("open", "overdue") and it.get("made_to") not in ("self", "own", name)]
     items.sort(key=lambda it: it["due"])
 
-    root = core.instance_root(name)
     queue = _queue(root, now)
     try:
         goals = core.safe_read(root, "self/goals.md", errors="replace")
@@ -369,7 +370,7 @@ def _queue_row(r) -> dict:
         raise ValueError("a queue row needs an integer id and a string task")
     due = r.get("due_at")
     due = due if isinstance(due, str) and due.strip() else None
-    return {"id": rid, "task": task, "due_at": due, "done": bool(r.get("done"))}
+    return {"id": rid, "task": task, "due_at": due, "done": r.get("status", "open") != "open"}
 
 
 def _due(due: str | None, now: datetime) -> tuple[tuple, bool]:

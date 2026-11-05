@@ -341,14 +341,28 @@ class CyclesDaysTest(unittest.TestCase):
             {"id": 10, "task": "t10", "due_at": "2026-11-06T10:00:00"},
             {"id": 11, "task": "t11", "due_at": "2026-11-04T10:00:00"},
             {"id": 12, "task": "t12", "due_at": "2026-11-07T10:00:00"},
-            {"id": 13, "task": "t13", "due_at": "", "done": True},
-            {"id": 14, "task": "t14", "due_at": "", "done": True},
+            {"id": 13, "task": "t13", "due_at": "", "status": "done"},
+            {"id": 14, "task": "t14", "due_at": "", "status": "done"},
+            {"id": 15, "task": "t15", "due_at": "", "status": "cancelled"},
         ]
         self.write("notes/queue.json", json.dumps(rows))
         q = cycles.plan("wren", {}, now=now)["queue"]
         self.assertEqual((q["open"], len(q["rows"])), (12, 10))
         self.assertEqual(q["overdue"], 5)
         self.assertEqual([r["id"] for r in q["rows"]], [11, 9, 3, 1, 2, 5, 6, 7, 4, 10])
+
+    def test_queue_does_not_count_done_task_queue_plugin_rows_as_open(self):
+        rows = [
+            {"id": 1, "task": "send notes", "due_at": "2026-11-05T11:00:00", "notify": True,
+             "status": "open", "added": "2026-11-04T10:00:00", "done_at": None},
+            {"id": 2, "task": "sent notes", "due_at": "2026-11-05T10:00:00", "notify": False,
+             "status": "done", "added": "2026-11-04T09:00:00", "done_at": "2026-11-05T09:00:00"},
+        ]
+        self.write("notes/queue.json", json.dumps(rows))
+        queue = cycles.plan("wren", {}, now=datetime(2026, 11, 5, 12))["queue"]
+        self.assertEqual(queue["open"], 1)
+        self.assertEqual(queue["overdue"], 1)
+        self.assertEqual([row["id"] for row in queue["rows"]], [1])
 
     def test_a_long_queue_task_is_clipped_at_200(self):
         self.write("notes/queue.json", json.dumps([{"id": 1, "task": "x" * 250}]))
@@ -370,6 +384,27 @@ class CyclesDaysTest(unittest.TestCase):
             self.assertEqual(cycles.plan("wren", {})["commitments"],
                              [{"id": "c1", "promise": "send notes", "due": "2026-11-05T14:00:00",
                                "status": "open"}])
+
+    def test_two_plan_calls_read_the_commitments_ledger_once(self):
+        ledger = {"c1": {"id": "c1", "promise": "send notes", "due": "2026-11-05T11:00:00",
+                         "status": "overdue", "made_to": "operator"}}
+        with mock.patch.object(panel.time, "time", return_value=1000), \
+                mock.patch.object(commitments, "ledger", return_value=ledger) as read:
+            first = cycles.plan("wren", {})
+            second = cycles.plan("wren", {})
+        read.assert_called_once_with("wren", None)
+        expected = [{"id": "c1", "promise": "send notes", "due": "2026-11-05T11:00:00", "status": "overdue"}]
+        self.assertEqual(first["commitments"], expected)
+        self.assertEqual(second["commitments"], expected)
+
+    def test_a_failed_commitments_ledger_is_not_cached(self):
+        with mock.patch.object(commitments, "ledger", side_effect=[OSError("unreadable"), {}]) as read:
+            first = cycles.plan("wren", {})
+            second = cycles.plan("wren", {})
+        self.assertEqual(first["commitments"], [])
+        self.assertEqual(first["commitments_error"], "OSError: unreadable")
+        self.assertEqual(second["commitments_error"], "")
+        self.assertEqual(read.call_count, 2)
 
     def test_the_improvement_plan_stops_at_consolidation(self):
         self.journal("## 2026-11-05 04:00 — Sleep\n\nslept\n\n**How I will improve:** run less\n\n"

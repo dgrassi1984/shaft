@@ -354,6 +354,9 @@ class TranscriptsTest(PagesTest):
         self.has("/fragment/i/shaft/cycles-next", "Next check", "check notes")
         self.get("/fragment/i/absent/cycles-next", 404)
 
+    def test_the_next_fragment_polls_every_fifteen_seconds(self):
+        self.has("/i/shaft/transcripts", 'data-poll="/fragment/i/shaft/cycles-next" data-every="15000"')
+
     def test_next_panels_have_stable_poll_keys(self):
         for path in ("/i/shaft/transcripts", "/fragment/i/shaft/cycles-next"):
             self.has(path, '<details data-key="cycles-goals">', '<details data-key="cycles-improvement">')
