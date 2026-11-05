@@ -18,10 +18,13 @@ struct CycleDetailView: View {
                     Section(detail.kind.capitalized) {
                         if let content = detail.content { MarkdownText(source: content) }
                         else { Text("nothing recorded") }
+                        CycleLine(label: "Ended by", value: detail.did.endedBy)
+                        Text("Tool calls: \(detail.did.toolCalls)")
                     }
-                    did(detail.did)
                 }
-            } else if let error = cycles.error {
+            } else if cycles.detailLoading {
+                ProgressView()
+            } else if let error = cycles.detailError {
                 Text(error.message).foregroundStyle(Color.danger)
                 Button("Retry") { Task { await cycles.load(id) } }
             } else { ProgressView() }

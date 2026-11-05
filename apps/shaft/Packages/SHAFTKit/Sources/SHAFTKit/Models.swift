@@ -731,6 +731,7 @@ public struct CyclePlan: Codable, Sendable, Equatable {
             public var id: Int
             public var task: String
             public var dueAt: Date?
+            public var dueAtIsDate: Bool
             public var dueAtText: String?
             public var overdue: Bool
 
@@ -743,9 +744,9 @@ public struct CyclePlan: Codable, Sendable, Equatable {
                 dueAtText = try container.decodeIfPresent(String.self, forKey: .dueAtText)
                 overdue = try container.decode(Bool.self, forKey: .overdue)
                 if let text = try container.decodeIfPresent(String.self, forKey: .dueAt) {
+                    dueAtIsDate = text.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil
                     // A plain due date has no time zone. Represent it at midnight UTC, never in the device's zone.
-                    let stamp = text.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil
-                        ? text + "T00:00:00Z" : text
+                    let stamp = dueAtIsDate ? text + "T00:00:00Z" : text
                     guard let date = SHAFTJSON.parseStamp(stamp) else {
                         throw DecodingError.dataCorruptedError(
                             forKey: .dueAt, in: container, debugDescription: "Invalid queue due date: \(text)")
@@ -753,6 +754,7 @@ public struct CyclePlan: Codable, Sendable, Equatable {
                     dueAt = date
                 } else {
                     dueAt = nil
+                    dueAtIsDate = false
                 }
             }
         }

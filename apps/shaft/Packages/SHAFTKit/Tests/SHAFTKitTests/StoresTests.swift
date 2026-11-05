@@ -265,6 +265,133 @@ struct CyclesStoresTests {
         #expect(server.requests.suffix(2).map { $0.header("If-None-Match") } == ["\"plan\"", "\"page\""])
     }
 
+    @Test(arguments: [200, 500])
+    func aStaleEarlierPageCannotFinishTheFilterRefresh(_ status: Int) async throws {
+        let server = try server(next: "2026-11-02")
+        let store = CyclesStore(client: server.client, instance: "wren")
+        await store.refresh()
+        let failure = #"{"error":{"code":"internal","message":"List failed"}}"#
+        server.setAnswer { _ in .json(500, failure) }
+        await store.refresh()
+        #expect(store.error?.message == "List failed")
+
+        let earlierBegan = AsyncStream<Void>.makeStream()
+        let earlierRelease = AsyncStream<Void>.makeStream()
+        let refreshBegan = AsyncStream<Void>.makeStream()
+        let refreshRelease = AsyncStream<Void>.makeStream()
+        defer {
+            earlierBegan.continuation.finish(); earlierRelease.continuation.finish()
+            refreshBegan.continuation.finish(); refreshRelease.continuation.finish()
+        }
+        var earlierResponse = StubServer.Response.json(
+            status, status == 200 ? fixtureText(try DecodingTests.fixture("cycles"))
+                : #"{"error":{"code":"internal","message":"Earlier failed"}}"#)
+        earlierResponse.beforeReply = {
+            earlierBegan.continuation.yield(())
+            for await _ in earlierRelease.stream { break }
+        }
+        var refreshResponse = StubServer.Response.notModified
+        refreshResponse.beforeReply = {
+            refreshBegan.continuation.yield(())
+            for await _ in refreshRelease.stream { break }
+        }
+        let heldEarlier = earlierResponse
+        let heldRefresh = refreshResponse
+        server.setAnswer { request in
+            if request.query("before") != nil { return heldEarlier }
+            return request.path == "/app/v1/plan/wren" ? .notModified : heldRefresh
+        }
+        let earlier = Task { await store.loadEarlier() }
+        for await _ in earlierBegan.stream { break }
+        let refresh = Task { await store.setFilter("short") }
+        for await _ in refreshBegan.stream { break }
+        earlierRelease.continuation.yield(())
+        await earlier.value
+        #expect(store.loading)
+        #expect(store.error?.message == "List failed")
+        #expect(store.days.isEmpty)
+        #expect(store.next == nil)
+        refreshRelease.continuation.yield(())
+        await refresh.value
+        #expect(store.loading == false)
+        #expect(store.error == nil)
+    }
+
+    @Test func twoFilterChangesKeepOnlyTheNewestPage() async throws {
+        let server = try server()
+        let store = CyclesStore(client: server.client, instance: "wren")
+        let began = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        defer { began.continuation.finish(); release.continuation.finish() }
+        var oldResponse = StubServer.Response.json(200,
+            #"{"days":[],"next":"2026-11-01","judge_error":"old failure"}"#,
+            headers: ["ETag": "\"old\""])
+        oldResponse.beforeReply = {
+            began.continuation.yield(())
+            for await _ in release.stream { break }
+        }
+        let held = oldResponse
+        let newest = fixtureText(try DecodingTests.fixture("cycles"))
+        server.setAnswer { request in
+            if request.path == "/app/v1/plan/wren" { return .notModified }
+            if request.query("filter") == "short" { return held }
+            return .json(200, newest, headers: ["ETag": "\"newest\""])
+        }
+        let older = Task { await store.setFilter("short") }
+        for await _ in began.stream { break }
+        await store.setFilter("delivered")
+        release.continuation.yield(())
+        await older.value
+        #expect(store.filter == "delivered")
+        #expect(store.days.map(\.date) == ["2026-11-03"])
+        #expect(store.next == nil)
+        #expect(store.judgeError.isEmpty)
+        server.setAnswer { _ in .notModified }
+        await store.refresh()
+        #expect(server.requests.last?.header("If-None-Match") == "\"newest\"")
+    }
+
+    @Test func aFailedDetailLoadDoesNotChangeListState() async throws {
+        let server = try server()
+        let store = CyclesStore(client: server.client, instance: "wren")
+        let began = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        defer { began.continuation.finish(); release.continuation.finish() }
+        var response = StubServer.Response.json(500,
+            #"{"error":{"code":"internal","message":"Detail failed"}}"#)
+        response.beforeReply = {
+            began.continuation.yield(())
+            for await _ in release.stream { break }
+        }
+        let held = response
+        server.setAnswer { _ in held }
+        let load = Task { await store.load("2026-11-03T13:58:40") }
+        for await _ in began.stream { break }
+        #expect(store.detailLoading)
+        #expect(store.loading == false)
+        #expect(store.error == nil)
+        release.continuation.yield(())
+        await load.value
+        #expect(store.detailLoading == false)
+        #expect(store.detailError?.message == "Detail failed")
+        #expect(store.loading == false)
+        #expect(store.error == nil)
+    }
+
+    @Test func aSuccessfulDetailLoadKeepsAListFailure() async throws {
+        let server = try server()
+        let store = CyclesStore(client: server.client, instance: "wren")
+        server.setAnswer { _ in .json(500, #"{"error":{"code":"internal","message":"List failed"}}"#) }
+        await store.refresh()
+        let detail = fixtureText(try DecodingTests.fixture("cycle"))
+        server.setAnswer { _ in .json(200, detail) }
+        await store.load("2026-11-03T13:58:40")
+        #expect(store.open?.id == "2026-11-03T13:58:40")
+        #expect(store.detailError == nil)
+        #expect(store.error?.message == "List failed")
+        #expect(store.loading == false)
+    }
+
     @Test func loadEarlierAppendsAndAdvancesNext() async throws {
         let server = try server(next: "2026-11-02")
         let store = CyclesStore(client: server.client, instance: "wren")
@@ -322,6 +449,7 @@ struct CyclesStoresTests {
         #expect(store.error?.status == 500)
         await store.load("2026-11-03T14:00:00")
         #expect(store.open == open)
+        #expect(store.detailError?.status == 500)
         #expect(store.error?.status == 500)
         #expect(store.loading == false)
     }

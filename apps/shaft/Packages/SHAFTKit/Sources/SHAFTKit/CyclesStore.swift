@@ -12,12 +12,15 @@ public final class CyclesStore {
     public private(set) var open: CycleDetail?
     public private(set) var loading = false
     public private(set) var error: APIError?
+    public private(set) var detailLoading = false
+    public private(set) var detailError: APIError?
     public private(set) var filter = ""
     public private(set) var judgeError = ""
 
     @ObservationIgnored private let client: APIClient
     @ObservationIgnored private var planETag: String?
     @ObservationIgnored private var pageETag: String?
+    @ObservationIgnored private var generation = 0
 
     public init(client: APIClient, instance: String) {
         self.client = client
@@ -25,9 +28,14 @@ public final class CyclesStore {
     }
 
     public func refresh() async {
-        await run { [self] in
+        let requestedGeneration = generation
+        let requestedFilter = filter
+        let requestedPageETag = pageETag
+        await run(generation: requestedGeneration) { [self] in
             let newPlan = try await client.plan(instance, etag: planETag)
-            let page = try await client.cycles(instance, filter: filter, etag: pageETag)
+            guard generation == requestedGeneration else { return }
+            let page = try await client.cycles(instance, filter: requestedFilter, etag: requestedPageETag)
+            guard generation == requestedGeneration else { return }
             if case .value(let value, let etag) = newPlan {
                 plan = value
                 planETag = etag
@@ -43,10 +51,11 @@ public final class CyclesStore {
 
     public func loadEarlier() async {
         guard let next else { return }
+        let requestedGeneration = generation
         let requestedFilter = filter
-        await run { [self] in
+        await run(generation: requestedGeneration) { [self] in
             if case .value(let value, _) = try await client.cycles(instance, before: next, filter: requestedFilter) {
-                guard filter == requestedFilter else { return }
+                guard generation == requestedGeneration else { return }
                 judgeError = value.judgeError
                 days.append(contentsOf: value.days)
                 self.next = value.next
@@ -55,6 +64,7 @@ public final class CyclesStore {
     }
 
     public func setFilter(_ value: String) async {
+        generation += 1
         loading = true
         filter = value
         days = []
@@ -64,18 +74,29 @@ public final class CyclesStore {
     }
 
     public func load(_ ts: String) async {
-        await run { [self] in open = try await client.cycle(instance, ts: ts) }
+        detailLoading = true
+        defer { detailLoading = false }
+        do {
+            open = try await client.cycle(instance, ts: ts)
+            detailError = nil
+        } catch is CancellationError {
+            // Cancellation is not a failure to show on screen.
+        } catch {
+            detailError = APIError.from(error)
+        }
     }
 
-    private func run(_ action: @MainActor () async throws -> Void) async {
+    private func run(generation requestedGeneration: Int, _ action: @MainActor () async throws -> Void) async {
         loading = true
-        defer { loading = false }
+        defer { if generation == requestedGeneration { loading = false } }
         do {
             try await action()
+            guard generation == requestedGeneration else { return }
             error = nil
         } catch is CancellationError {
             // Cancellation is not a failure to show on screen.
         } catch {
+            guard generation == requestedGeneration else { return }
             self.error = APIError.from(error)
         }
     }

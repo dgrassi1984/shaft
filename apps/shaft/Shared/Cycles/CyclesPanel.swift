@@ -101,7 +101,7 @@ struct CyclesPanel: View {
             if let goal = plan.now.goal { Text(goal) }
             CycleLine(label: "Next check", value: plan.check.next)
             if plan.check.paused && plan.check.next != "paused" { Text("paused") }
-            if !plan.check.skipped.isEmpty { Text(plan.check.skipped) }
+            if !plan.check.skipped.isEmpty { CycleLine(label: "Last skipped check", value: plan.check.skipped) }
         }
         Section("Said it would do next") {
             if let step = plan.nextStep {
@@ -114,10 +114,11 @@ struct CyclesPanel: View {
         Section {
             if !plan.commitmentsError.isEmpty {
                 Text("could not read commitments: \(plan.commitmentsError)").foregroundStyle(Color.danger)
+            } else if plan.commitments.isEmpty {
+                Text("no open commitments")
             } else {
                 DisclosureGroup("Commitments · \(plan.commitments.count)"
                                 + (plan.commitments.contains { $0.status == "overdue" } ? " · overdue" : "")) {
-                    if plan.commitments.isEmpty { Text("no open commitments") }
                     ForEach(plan.commitments, id: \.id) { item in
                         VStack(alignment: .leading, spacing: Design.Space.s4) {
                             Text(item.promise)
@@ -158,7 +159,7 @@ struct CyclesPanel: View {
             }
             DisclosureGroup("Improvement plan") {
                 if let improvement = plan.improvement {
-                    CycleLine(label: "From", value: improvement.at.map { Stamp.short($0) })
+                    CycleLine(label: "From", value: improvement.at.map { Stamp.full($0) })
                     MarkdownText(source: improvement.text)
                 } else { Text("no improvement plan recorded") }
             }
@@ -168,12 +169,9 @@ struct CyclesPanel: View {
     private func queueDue(_ row: CyclePlan.Queue.Row) -> String {
         if let text = row.dueAtText { return text }
         guard let date = row.dueAt else { return "due now" }
-        var utc = Calendar(identifier: .gregorian)
-        utc.timeZone = TimeZone(secondsFromGMT: 0)!
-        if utc.component(.hour, from: date) == 0 && utc.component(.minute, from: date) == 0
-            && utc.component(.second, from: date) == 0 {
+        if row.dueAtIsDate {
             let formatter = DateFormatter()
-            formatter.timeZone = utc.timeZone
+            formatter.timeZone = TimeZone(secondsFromGMT: 0)
             formatter.dateStyle = .medium
             formatter.timeStyle = .none
             return formatter.string(from: date)
@@ -192,8 +190,10 @@ struct CyclesPanel: View {
             Text(row.at.map { Stamp.time($0) } ?? "unknown").font(Design.Text.metadata)
             Text(row.goal ?? row.kind.capitalized).lineLimit(2)
             if row.kind == "cycle" { Text(row.claim.map { "claimed \($0)" } ?? "no finish") }
-            if let verdict = row.verdict { CycleVerdict(verdict: verdict) }
-            else if row.kind == "cycle" { Text("Not judged").font(Design.Text.metadata) }
+            if cycles.judgeError.isEmpty {
+                if let verdict = row.verdict { CycleVerdict(verdict: verdict) }
+                else if row.kind == "cycle" { Text("Not judged").font(Design.Text.metadata) }
+            }
             if row.delivered { Label("Delivered", systemImage: "paperplane") }
         }
     }

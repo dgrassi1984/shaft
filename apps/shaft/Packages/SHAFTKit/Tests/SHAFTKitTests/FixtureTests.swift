@@ -47,8 +47,11 @@ struct FixtureTests {
             CyclePlan.self, from: JSONSerialization.data(withJSONObject: object))
         #expect(plan.now.since == "12:05")
         #expect(plan.queue.rows[0].dueAt == SHAFTJSON.parseStamp("2099-11-04T12:00:00+01:00"))
+        #expect(plan.queue.rows[0].dueAtIsDate == false)
         #expect(plan.queue.rows[1].dueAt == SHAFTJSON.parseStamp("2099-11-05T00:00:00Z"))
+        #expect(plan.queue.rows[1].dueAtIsDate)
         #expect(plan.queue.rows[2].dueAt == nil)
+        #expect(plan.queue.rows[2].dueAtIsDate == false)
         #expect(plan.queue.rows[2].dueAtText == "when ready")
         let page = try SHAFTJSON.decoder().decode(CycleDaysResponse.self, from: DecodingTests.fixture("cycles"))
         #expect(page.days[0].date == "2026-11-03")
@@ -62,6 +65,15 @@ struct FixtureTests {
         #expect(detail.result?.judge?.verdict == "partial")
         #expect(detail.result?.judge?.firstError == "The totals were not checked before sending.")
         #expect(detail.result?.doubts == ["step: 1; what: Check again"])
+    }
+
+    @Test(arguments: ["2099-11-05", "2099-11-05T00:00:00Z"])
+    func queueDueDatesKeepTheirWireFormat(_ due: String) throws {
+        let object: [String: Any] = ["id": 1, "task": "Check", "due_at": due, "overdue": false]
+        let row = try SHAFTJSON.decoder().decode(
+            CyclePlan.Queue.Row.self, from: JSONSerialization.data(withJSONObject: object))
+        #expect(row.dueAt == SHAFTJSON.parseStamp("2099-11-05T00:00:00Z"))
+        #expect(row.dueAtIsDate == (due == "2099-11-05"))
     }
 
     @Test(arguments: fixtureFiles())

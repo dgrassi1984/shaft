@@ -338,6 +338,12 @@ def _seed_cycles(base: Path, now: datetime) -> None:
         {"kind": "sleep", "ts": (end - timedelta(days=1, hours=1)).isoformat(),
          "content": "## Riposo\n\nHo rivisto il lavoro di ieri.", "ended_by": "sleep", "tools": []},
     ]
+    for days_ago in range(2, 8):
+        records.append({
+            "kind": "live", "ts": (end - timedelta(days=days_ago)).isoformat(),
+            "intent": {"goal": f"Verificare il registro, giorno {days_ago}"},
+            "ended_by": "limit", "tools": [],
+        })
     by_day = {}
     for record in records:
         by_day.setdefault(record["ts"][:10], []).append(record)
