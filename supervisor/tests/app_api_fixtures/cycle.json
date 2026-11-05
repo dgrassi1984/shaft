@@ -30,13 +30,13 @@
       "expected: ten; observed: eleven; so what: recount"
     ],
     "doubts": [
-      "Check again"
+      "step: 1; what: Check again"
     ],
     "judge_error": "",
     "judge": {
       "verdict": "partial",
       "claim_supported": null,
-      "first_error": null,
+      "first_error": "The totals were not checked before sending.",
       "reasoning": null,
       "model": "test",
       "error": ""

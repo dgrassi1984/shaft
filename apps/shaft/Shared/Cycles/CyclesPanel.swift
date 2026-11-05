@@ -111,31 +111,44 @@ struct CyclesPanel: View {
             } else { Text("no next action recorded") }
         }
         Section("Unfinished") { CycleLines(values: plan.unfinished, empty: "nothing recorded") }
-        Section("Commitments") {
+        Section {
             if !plan.commitmentsError.isEmpty {
                 Text("could not read commitments: \(plan.commitmentsError)").foregroundStyle(Color.danger)
-            } else if plan.commitments.isEmpty { Text("no open commitments") }
-            ForEach(plan.commitments, id: \.id) { item in
-                VStack(alignment: .leading, spacing: Design.Space.s4) {
-                    Text(item.promise)
-                    CycleLine(label: "Due", value: item.due)
-                    if item.status == "overdue" { Text("overdue").foregroundStyle(Color.danger) }
+            } else {
+                DisclosureGroup("Commitments · \(plan.commitments.count)"
+                                + (plan.commitments.contains { $0.status == "overdue" } ? " · overdue" : "")) {
+                    if plan.commitments.isEmpty { Text("no open commitments") }
+                    ForEach(plan.commitments, id: \.id) { item in
+                        VStack(alignment: .leading, spacing: Design.Space.s4) {
+                            Text(item.promise)
+                            CycleLine(label: "Due", value: item.due.map { due in
+                                SHAFTJSON.parseStamp(due).map { Stamp.short($0) } ?? due
+                            })
+                            if item.status == "overdue" { Text("overdue").foregroundStyle(Color.danger) }
+                        }
+                    }
                 }
             }
         }
-        Section("Task queue") {
+        Section {
             if plan.queue.state == "none" { Text("no task queue") }
             else if plan.queue.state == "unreadable" {
                 Text(plan.queue.error).foregroundStyle(Color.danger)
-            } else if plan.queue.rows.isEmpty { Text("no open tasks") }
-            ForEach(plan.queue.rows, id: \.id) { row in
-                VStack(alignment: .leading, spacing: Design.Space.s4) {
-                    Text(row.task)
-                    Text(queueDue(row))
-                    if row.overdue { Text("overdue").foregroundStyle(Color.danger) }
+            } else {
+                DisclosureGroup("Task queue · \(plan.queue.open) open · \(plan.queue.overdue) overdue") {
+                    if plan.queue.rows.isEmpty { Text("no open tasks") }
+                    ForEach(plan.queue.rows, id: \.id) { row in
+                        VStack(alignment: .leading, spacing: Design.Space.s4) {
+                            Text(row.task)
+                            Text(queueDue(row))
+                            if row.overdue { Text("overdue").foregroundStyle(Color.danger) }
+                        }
+                    }
+                    if plan.queue.open > plan.queue.rows.count {
+                        Text("\(plan.queue.open - plan.queue.rows.count) more")
+                    }
                 }
             }
-            if plan.queue.open > plan.queue.rows.count { Text("\(plan.queue.open - plan.queue.rows.count) more") }
         }
         Section {
             DisclosureGroup("Goals") {
@@ -169,7 +182,8 @@ struct CyclesPanel: View {
     }
 
     private func counts(_ c: CycleDay.Counts) -> String {
-        "\(c.cycles) cycles · \(c.yes) yes · \(c.partial) partial · \(c.no) no (claimed) · "
+        "\(c.cycles) \(c.cycles == 1 ? "cycle" : "cycles") · \(c.yes) yes · \(c.partial) partial · "
+            + "\(c.no) no (claimed) · "
             + "\(c.judged) judged · \(c.forYou) for you"
     }
 
@@ -177,7 +191,7 @@ struct CyclesPanel: View {
         VStack(alignment: .leading, spacing: Design.Space.s4) {
             Text(row.at.map { Stamp.time($0) } ?? "unknown").font(Design.Text.metadata)
             Text(row.goal ?? row.kind.capitalized).lineLimit(2)
-            if row.kind == "cycle" { Text("claimed \(row.claim ?? "unknown")") }
+            if row.kind == "cycle" { Text(row.claim.map { "claimed \($0)" } ?? "no finish") }
             if let verdict = row.verdict { CycleVerdict(verdict: verdict) }
             else if row.kind == "cycle" { Text("Not judged").font(Design.Text.metadata) }
             if row.delivered { Label("Delivered", systemImage: "paperplane") }

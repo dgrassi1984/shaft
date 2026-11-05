@@ -162,7 +162,8 @@ class CyclesDaysTest(unittest.TestCase):
     def test_duration_is_end_minus_run_started(self):
         ts = "2026-11-05T13:53:00"
         intent = {"goal": "a", "success_criterion": "done", "origin": "operator", "origin_ref": "m1",
-                  "confidence": 0.8, "predictions": ["b"], "attention": "c", "extra": "SECRET"}
+                  "confidence": 80, "predictions": ["b"],
+                  "attention": [{"source": "inbox", "why": "c"}], "extra": "SECRET"}
         self.ep("2026-11-05", kind="live", ts=ts, intent=intent, run_started="2026-11-05T13:25:13",
                 project_usage={"usd": 0.25}, ended_by="finish", wrapped_up="normal",
                 finish={"what_happened": "did a", "delivered_via": "message"})
@@ -206,17 +207,20 @@ class CyclesDaysTest(unittest.TestCase):
     def test_claim_and_verdict_are_kept_apart_and_a_second_judge_too(self):
         ts = "2026-11-05T09:00:00"
         self.ep("2026-11-05", kind="live", ts=ts,
-                finish={"criterion_met": "yes", "surprises": ["s"], "doubts": ["d"]})
-        second = {"criterion_met": "partial", "claim_supported": True, "first_error": 2,
+                finish={"criterion_met": "yes", "surprises": [{"expected": "quiet", "observed": "noise", "so_what": "s"}],
+                        "doubts": [{"step": 1, "what": "d"}]})
+        second = {"criterion_met": "partial", "claim_supported": True, "first_error": "The second check was skipped.",
                   "reasoning": "second reason", "judge": "second model"}
-        self.judge(episode_ts=ts, criterion_met="no", claim_supported=False, first_error=1,
+        self.judge(episode_ts=ts, criterion_met="no", claim_supported=False, first_error="The first check was skipped.",
                    reasoning="first reason", judge="first model", second=second)
         result = cycles.cycle("wren", ts)["result"]
-        self.assertEqual(result, {"claim": "yes", "surprises": ["s"], "doubts": ["d"], "judge_error": "",
-                                  "judge": {"verdict": "no", "claim_supported": False, "first_error": 1,
-                                            "reasoning": "first reason", "model": "first model", "error": ""},
-                                  "second": {"verdict": "partial", "claim_supported": True, "first_error": 2,
-                                             "reasoning": "second reason", "model": "second model", "error": ""}})
+        self.assertEqual(result, {
+            "claim": "yes", "surprises": [{"expected": "quiet", "observed": "noise", "so_what": "s"}],
+            "doubts": [{"step": 1, "what": "d"}], "judge_error": "",
+            "judge": {"verdict": "no", "claim_supported": False, "first_error": "The first check was skipped.",
+                      "reasoning": "first reason", "model": "first model", "error": ""},
+            "second": {"verdict": "partial", "claim_supported": True, "first_error": "The second check was skipped.",
+                       "reasoning": "second reason", "model": "second model", "error": ""}})
 
     def test_failed_second_judge_keeps_its_error(self):
         ts = "2026-11-05T09:00:00"

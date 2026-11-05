@@ -185,7 +185,7 @@ class AppTest(WebTest):
                         "predictions": ["It passes", 7], "attention": [{"source": "report", "why": "check totals"}]},
              "finish": {"criterion_met": "yes", "what_happened": "Sent report", "delivered_via": "message",
                         "surprises": [{"expected": "ten", "observed": "eleven", "so_what": "recount"}],
-                        "doubts": [{"text": "Check again"}], "unfinished": ["Review"],
+                        "doubts": [{"step": 1, "what": "Check again"}], "unfinished": ["Review"],
                         "next_action": {"action": "Review totals", "revise_if": "Already checked"}},
              "tools": [{"tool": "run", "args": "SECRET", "result": "SECRET"}]},
             {"kind": "live", "ts": "2026-11-03T14:00:00", "intent": {"goal": "Review"}},
@@ -194,7 +194,8 @@ class AppTest(WebTest):
         (eps / "2026-11-03.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records))
         (self.sup / "judgments").mkdir()
         (self.sup / "judgments/wren.jsonl").write_text(json.dumps(
-            {"episode_ts": "2026-11-03T13:58:40", "criterion_met": "partial", "judge": "test"}) + "\n")
+            {"episode_ts": "2026-11-03T13:58:40", "criterion_met": "partial", "judge": "test",
+             "first_error": "The totals were not checked before sending."}) + "\n")
         (root / "notes/queue.json").write_text(json.dumps([
             {"id": 1, "task": "Review report", "due_at": "2099-11-04T12:00:00"},
             {"id": 2, "task": "Ask operator", "due_at": "when ready"},
@@ -236,7 +237,10 @@ class CyclesTest(AppTest):
         self.assertEqual(detail["planned"]["predictions"], ["It passes"])
         self.assertEqual(detail["planned"]["attention"], ["source: report; why: check totals"])
         self.assertEqual(detail["result"]["surprises"], ["expected: ten; observed: eleven; so what: recount"])
-        self.assertEqual(detail["result"]["doubts"], ["Check again"])
+        self.assertEqual(detail["result"]["doubts"], ["step: 1; what: Check again"])
+        self.assertEqual(detail["result"]["judge"]["first_error"],
+                         "The totals were not checked before sending.")
+        self.assertNotIn("{'", " ".join(detail["result"]["doubts"]))
         unjudged = self.get("/app/v1/cycles/wren/2026-11-03T14:00:00")
         self.assertEqual(unjudged["result"]["surprises"], [])
         self.assertEqual(unjudged["planned"]["predictions"], [])

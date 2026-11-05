@@ -60,6 +60,8 @@ struct FixtureTests {
         #expect(detail.did.usd == nil)
         #expect(detail.result?.claim == "yes")
         #expect(detail.result?.judge?.verdict == "partial")
+        #expect(detail.result?.judge?.firstError == "The totals were not checked before sending.")
+        #expect(detail.result?.doubts == ["step: 1; what: Check again"])
     }
 
     @Test(arguments: fixtureFiles())

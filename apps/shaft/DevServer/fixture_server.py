@@ -323,9 +323,11 @@ def _seed_cycles(base: Path, now: datetime) -> None:
         {"kind": "live", "ts": end.isoformat(),
          "run_started": (end - timedelta(seconds=90)).isoformat(),
          "intent": {"goal": "Riconciliare il registro", "success_criterion": "I totali coincidono",
-                    "origin": "operator", "confidence": 0.8, "predictions": ["Nessuna differenza"]},
+                    "origin": "operator", "confidence": 80, "predictions": ["Nessuna differenza"]},
          "finish": {"criterion_met": "yes", "what_happened": "Ho corretto due arrotondamenti.",
-                    "delivered_via": "document", "unfinished": ["Pubblicare novembre"],
+                    "delivered_via": "web_document",
+                    "doubts": [{"step": 1, "what": "Manca la verifica di novembre."}],
+                    "unfinished": ["Pubblicare novembre"],
                     "next_action": {"action": "Controllare novembre", "revise_if": "Arrivano nuovi dati"}},
          "project_usage": {"usd": 0.04}, "ended_by": "finish_cycle", "tools": []},
         {"kind": "live", "ts": (end - timedelta(hours=1)).isoformat(),
@@ -360,7 +362,8 @@ def _seed_cycles(base: Path, now: datetime) -> None:
     judgments.mkdir(exist_ok=True)
     (judgments / "thelos.jsonl").write_text(json.dumps({
         "episode_ts": end.isoformat(), "criterion_met": "partial", "claim_supported": False,
-        "first_error": 1, "reasoning": "Manca la verifica di novembre.", "judge": "fixture judge",
+        "first_error": "Manca la verifica di novembre.",
+        "reasoning": "Manca la verifica di novembre.", "judge": "fixture judge",
     }) + "\n")
 
 

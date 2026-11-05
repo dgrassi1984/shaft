@@ -69,7 +69,7 @@ struct CycleDetailView: View {
     @ViewBuilder
     private func result(_ result: CycleDetail.Result?) -> some View {
         Section("Result") {
-            Text("claimed \(result?.claim ?? "unknown")")
+            Text(result?.claim.map { "claimed \($0)" } ?? "no finish")
             if let result {
                 if !result.judgeError.isEmpty {
                     Text("verdicts could not be read: \(result.judgeError)").foregroundStyle(Color.danger)
@@ -90,7 +90,7 @@ struct CycleDetailView: View {
         if let verdict = judge.verdict { CycleVerdict(verdict: verdict) }
         else if judge.error.isEmpty { Text("Not judged") }
         CycleLine(label: "Claim supported", value: judge.claimSupported.map { $0 ? "yes" : "no" })
-        CycleLine(label: "First error", value: judge.firstError.map { String($0) })
+        CycleLine(label: "First error", value: judge.firstError)
         CycleLine(label: "Reasoning", value: judge.reasoning)
         CycleLine(label: "Judge model", value: judge.model)
     }
@@ -103,7 +103,7 @@ struct CycleDetailView: View {
             if let action = left?.nextAction?.action, !action.isEmpty { Text(action) }
             else { Text("no next action recorded") }
             if let revise = left?.nextAction?.reviseIf { CycleLine(label: "Revise if", value: revise) }
-            CycleLine(label: "The next cycle's goal", value: left?.nextGoal)
+            CycleLine(label: "The next cycle's goal", value: left?.nextGoal ?? "no later cycle yet")
         }
     }
 }

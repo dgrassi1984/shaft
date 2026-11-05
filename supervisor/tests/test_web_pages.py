@@ -316,7 +316,7 @@ class TranscriptsTest(PagesTest):
 
     def test_next_and_done_render(self):
         self.has("/i/shaft/transcripts", "Next check", "Said it would do next", "tidy notes", "claimed yes",
-                 "notes change", "1 cycles · 1 yes · 0 partial · 0 no (claimed) · 0 judged · 0 for you")
+                 "notes change", "1 cycle · 1 yes · 0 partial · 0 no (claimed) · 0 judged · 0 for you")
 
     def test_cycles_lists_wrap_and_times_are_formatted(self):
         self.record["finish"]["unfinished"] = ["finish the remaining work in full"]
@@ -351,6 +351,13 @@ class TranscriptsTest(PagesTest):
     def test_a_claim_alone_says_not_judged_on_the_detail(self):
         self.has("/i/shaft/transcripts?ts=2026-10-19T09:00:00", "not judged", "Planned", "Did", "Result", "Left",
                  "unknown", "claimed yes", "/i/shaft/transcript?id=memory%2Fepisodes%2F2026-10-19.jsonl%3A1")
+
+    def test_no_finish_and_no_later_cycle_say_so(self):
+        self.record.pop("finish")
+        self.seed()
+        self.has("/i/shaft/transcripts", "no finish")
+        body = self.has("/i/shaft/transcripts?ts=" + self.record["ts"], "no finish", "no later cycle yet")
+        self.assertNotIn("claimed unknown", body)
 
     def test_the_filters(self):
         self.assertNotIn("tidy notes", self.get("/i/shaft/transcripts?f=yours"))
@@ -397,13 +404,16 @@ class TranscriptsTest(PagesTest):
         self.record["finish"].update(
             surprises=[{"expected": "quiet", "observed": "found <b>noise</b>", "so_what": "check again"},
                        {"expected": "clear", "observed": "rain", "so_what": "take cover"}],
-            doubts=[{"text": "needs <i>checking</i>"}, "another doubt"])
+            doubts=[{"step": 1, "what": "needs <i>checking</i>"}, {"step": 2, "what": "another doubt"}])
         self.record["intent"]["attention"] = [{"source": "inbox", "why": "read <b>this</b>"}]
         self.seed()
         body = self.has("/i/shaft/transcripts?ts=" + self.record["ts"],
                         "quiet", "found &lt;b&gt;noise&lt;/b&gt;", "check again", "rain", "take cover",
-                        "<li>needs &lt;i&gt;checking&lt;/i&gt;</li>", "<li>another doubt</li>",
+                        "<li>step: 1; what: needs &lt;i&gt;checking&lt;/i&gt;</li>",
+                        "<li>step: 2; what: another doubt</li>",
                         "inbox", "read &lt;b&gt;this&lt;/b&gt;")
+        self.assertNotIn("{'", body)
+        self.assertNotIn("{&#x27;", body)
         notes = body.split('>Surprises</span>', 1)[1].split('>Doubts</span>', 1)[0]
         self.assertNotIn("{", notes)
         self.assertNotIn("&quot;observed&quot;", notes)

@@ -841,7 +841,7 @@ public struct CycleDetail: Codable, Sendable, Equatable {
     public struct Judgment: Codable, Sendable, Equatable {
         public var verdict: String?
         public var claimSupported: Bool?
-        public var firstError: Int?
+        public var firstError: String?
         public var reasoning: String?
         public var model: String?
         public var error: String

@@ -302,7 +302,7 @@ def _cycle(req: Request, n: str, ts: str) -> Response:
         planned["attention"] = cycles.note_lines(planned["attention"], ("source", "why"))
     if (result := out["result"]) is not None:
         result["surprises"] = cycles.note_lines(result["surprises"], ("expected", "observed", "so_what"))
-        result["doubts"] = cycles.note_lines(result["doubts"], ("text",))
+        result["doubts"] = cycles.note_lines(result["doubts"], ("step", "what"))
     return _etagged(req, out)
 
 

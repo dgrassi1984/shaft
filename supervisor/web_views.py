@@ -697,7 +697,8 @@ def cycles_page(name: str, plan: dict, days: dict, filt: str, names: list[str], 
         done.append(h('<p class="warn">{e}</p>', e=days["judge_error"]))
     for day in days["days"]:
         counts = day["counts"]
-        count_text = (f"{counts['cycles']} cycles · {counts['yes']} yes · {counts['partial']} partial · "
+        count_text = (f"{counts['cycles']} {'cycle' if counts['cycles'] == 1 else 'cycles'} · "
+                      f"{counts['yes']} yes · {counts['partial']} partial · "
                       f"{counts['no']} no (claimed) · {counts['judged']} judged · {counts['for_you']} for you")
         done.append(h('<h3>{date}</h3><p>{counts}</p>', date=day["date"], counts=count_text))
         if day["skipped_lines"]:
@@ -766,14 +767,15 @@ def cycle_page(name: str, cycle: dict, names: list[str], csrf: str) -> Html:
                                    [("Claim supported", "claim_supported"), ("First error", "first_error"),
                                     ("Reasoning", "reasoning"), ("Model", "model")]]))
         judgments.append(rows([("Surprises", _cycle_notes(result["surprises"], ("expected", "observed", "so_what"))),
-                               ("Doubts", _cycle_notes(result["doubts"], ("text",)))]))
+                               ("Doubts", _cycle_notes(result["doubts"], ("step", "what")))]))
         body.append(section("Result", join(judgments)))
         left = cycle["left"]
         nxt = left["next_action"]
         remaining = [("Next action", _cycle_value(nxt.get("action") if nxt else None))]
         if nxt and nxt.get("revise_if"):
             remaining.append(("Revise if", nxt["revise_if"]))
-        remaining.append(("The next cycle's goal", _cycle_value(left["next_goal"])))
+        remaining.append(("The next cycle's goal",
+                          _cycle_value(left["next_goal"] if left["next_goal"] is not None else "no later cycle yet")))
         body.append(section("Left", join([h('<h3>Unfinished</h3>{items}',
                                             items=lines(left["unfinished"], "nothing recorded", cls="lines wrap")),
                                             rows(remaining)])))

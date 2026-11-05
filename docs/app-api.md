@@ -1110,9 +1110,10 @@ Missing predictions or notes are empty lists. Structured attention joins `source
 `result` contains `claim` (string or null), `surprises` and `doubts` (lists of strings), `judge_error`
 (string, empty when read), and `judge` and `second` (objects or null). Structured surprises join `expected`,
 `observed`, and `so_what` as `"expected: <expected>; observed: <observed>; so what: <so_what>"`.
-Structured doubts use their `text`. Other note shapes become strings, as on the web page.
+Structured doubts join `step` and `what` as `"step: <step>; what: <what>"`.
+Other note shapes become strings, as on the web page.
 Each judgment contains `verdict`, `claim_supported`, `first_error`, `reasoning`, `model`, and `error`.
-`claim_supported` is a bool or null, and `first_error` is an integer or null. The remaining fields are strings
+`claim_supported` is a bool or null, and `first_error` is a sentence string or null. The remaining fields are strings
 or null, except `error` is always a string.
 A failed judge can have a null verdict and a nonempty error. The instance's claim remains separate.
 
