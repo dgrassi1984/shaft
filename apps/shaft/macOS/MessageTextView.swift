@@ -28,6 +28,7 @@ struct MessageOperatorText: View {
 struct MessageTextView: NSViewRepresentable {
     let source: String
     let markdown: Bool
+    @AppStorage(ChatTextSize.storageKey) private var rawSize = ChatTextSize.system.rawValue
     @Environment(\.messageMenu) private var menu
     @Environment(ChatScreenModel.self) private var screen
 
@@ -41,7 +42,7 @@ struct MessageTextView: NSViewRepresentable {
     func updateNSView(_ view: MessageNSView, context: Context) {
         context.coordinator.screen = screen
         context.coordinator.menu = menu
-        context.coordinator.show(source, markdown: markdown)
+        context.coordinator.show(source, markdown: markdown, scale: ChatTextSize.stored(rawSize).scale)
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: MessageNSView, context: Context) -> CGSize? {
@@ -56,7 +57,7 @@ struct MessageTextView: NSViewRepresentable {
         var screen: ChatScreenModel
         var menu: MessageMenuContext?
         weak var view: MessageNSView?
-        private var shown: (source: String, markdown: Bool)?
+        private var shown: (source: String, markdown: Bool, scale: CGFloat)?
 
         init(screen: ChatScreenModel) { self.screen = screen }
 
@@ -65,13 +66,23 @@ struct MessageTextView: NSViewRepresentable {
         }
 
         /// Draw `source` unless it is what is shown: a refresh of the feed keeps a selection made meanwhile.
-        func show(_ source: String, markdown: Bool) {
-            guard shown?.source != source || shown?.markdown != markdown, let view else {
+        func show(_ source: String, markdown: Bool, scale: CGFloat) {
+            guard shown?.source != source || shown?.markdown != markdown || shown?.scale != scale, let view else {
                 view?.updateReplyButton()
                 return
             }
-            shown = (source, markdown)
-            view.show(markdown ? MarkdownAttributed.render(source) : MarkdownAttributed.operatorText(source))
+            shown = (source, markdown, scale)
+            view.effectiveAppearance.performAsCurrentDrawingAppearance {
+                view.show(markdown ? MarkdownAttributed.render(source, scale: scale)
+                                   : MarkdownAttributed.operatorText(source, scale: scale))
+            }
+        }
+
+        /// Text blocks and attributed syntax colours must be rebuilt under the new effective appearance.
+        func appearanceChanged() {
+            guard let previous = shown else { return }
+            shown = nil
+            show(previous.source, markdown: previous.markdown, scale: previous.scale)
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
@@ -172,6 +183,12 @@ final class MessageNSView: NSView {
 
     override var isFlipped: Bool { true }
 
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        coordinator?.appearanceChanged()
+        needsDisplay = true
+    }
+
     func size(fitting width: CGFloat) -> CGSize {
         measure.layout(width: width).size
     }
@@ -185,6 +202,8 @@ final class MessageNSView: NSView {
         measure = MarkdownAttributed.Measure(rendered, after: measure)
         reconcile(rendered.segments)
         for (index, (part, segment)) in zip(parts, rendered.segments).enumerated() {
+            part.text.needsDisplay = true
+            part.block?.needsDisplay = true
             part.container.end = index == parts.count - 1 ? .max : NSMaxRange(segment.range)
             part.block?.show(code: rendered.codeBlocks.first { $0.range == segment.range })
         }
@@ -395,6 +414,11 @@ final class MessageBlockView: NSView {
 
     override var isFlipped: Bool { true }
     override var wantsUpdateLayer: Bool { true }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+    }
 
     override func updateLayer() {
         effectiveAppearance.performAsCurrentDrawingAppearance {

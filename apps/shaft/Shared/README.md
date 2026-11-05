@@ -6,6 +6,7 @@ Everything here compiles for iOS and macOS; what differs per platform sits behin
 
 | Folder | What |
 |---|---|
+| `Design/` | tokens and `Appearance.swift`: per-device theme and reading text size, the Appearance settings section |
 | `Root/` | `SessionRoot` (startup error, pairing, or the paired app with the instances store in the environment), `PairingView`, `SettingsView`, `InstancesList` and its rows |
 | `Chat/` | `ChatScreen` (header, feed, composer, sheets; the long-poll only while visible and in front, `away`, seen, the new-reply announcement, drops), `ChatScreenModel` (sheets, focus requests, message actions, a send asked for by a menu), `ChatShell` (documents beside the chat), the sheets (Select text, a thumb's reason, earlier chats), `ArchivedChatView` (an earlier chat pushed over the current one) |
 | `Feed/` | `FeedView` (pinned to the bottom until scrolled up, Latest and New below in the bar above the composer, Show the N earlier messages), a view per item kind (§4.4) and per row after them (live reply, queued, pending feedback and edits, not sent) |
@@ -17,7 +18,7 @@ Everything here compiles for iOS and macOS; what differs per platform sits behin
 | `Support/` | times, the clipboard, announcements, small view helpers |
 
 If the initial chat list cannot load, the chat area shows the error, Retry and Settings on all three devices.
-The store keeps trying every few seconds while active; Retry restarts that loop immediately. Settings offers Unpair
+The store keeps trying every few seconds while active; Retry restarts that loop immediately. Settings offers Appearance before pairing, plus Unpair
 and "Forget the pairing here only" when the server cannot be reached.
 
 ## Platform seams
