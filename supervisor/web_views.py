@@ -10,6 +10,7 @@ import json
 import re
 import time
 import urllib.parse
+from datetime import datetime
 
 from .web_pages import Html, esc, etag, h, icon, join, nav, page, pagebar
 
@@ -627,8 +628,6 @@ STYLE_CLASS = {"bold": "b", "dim": "dim", "bold green": "b good", "bold yellow":
 def _cycle_value(value) -> str:
     if value is None or value == "" or value == [] or value == {}:
         return "unknown"
-    if isinstance(value, (dict, list)):
-        return json.dumps(value, ensure_ascii=False)
     return str(value)
 
 
@@ -647,6 +646,16 @@ def _cycle_filters(name: str, filt: str) -> Html:
     return h('<p>{tabs}</p>', tabs=join([
         link(f"/i/{q(name)}/transcripts" + (f"?f={k}" if k else ""), label) if k != filt
         else h("<b>{l}</b>", l=label) for k, label in TX_FILTERS.items()], " · "))
+
+
+def _cycle_due(value: str | None) -> str:
+    if not value:
+        return "due now"
+    try:
+        datetime.fromisoformat(value)
+    except ValueError:
+        return value
+    return value if len(value) == 10 else when(value)
 
 
 def cycles_next(plan: dict) -> Html:
@@ -671,7 +680,7 @@ def cycles_next(plan: dict) -> Html:
     elif queue["state"] == "none":
         tasks = h('<p class="dim">no task queue</p>')
     else:
-        tasks = lines([h('{t} · {d}{late}', t=it["task"], d=when(it["due_at"]) if it["due_at"] else "due now",
+        tasks = lines([h('{t} · {d}{late}', t=it["task"], d=_cycle_due(it["due_at"]),
                          late=" · overdue" if it["overdue"] else "") for it in queue["rows"]],
                       "no open tasks", cls="lines wrap")
         if queue["open"] > len(queue["rows"]):
@@ -681,6 +690,8 @@ def cycles_next(plan: dict) -> Html:
     improvement = plan["improvement"]
     improve = (join([h('<p>{ts}</p>', ts=when(improvement["ts"])), markdown(improvement["text"])]) if improvement else
                h('<p class="dim">no improvement plan recorded</p>'))
+    if plan["improvement_error"]:
+        improve = h('<p class="warn">{e}</p>', e=plan["improvement_error"])
     return join([h('<h3>Now</h3>{now}{check}<h3>Said it would do next</h3>{said}<h3>Unfinished</h3>{left}'
                    '<h3>Commitments</h3>{commitments}<h3>Task queue</h3>{tasks}',
                    now=current, check=checking, said=said,
@@ -741,9 +752,12 @@ def cycle_page(name: str, cycle: dict, names: list[str], csrf: str) -> Html:
     else:
         planned = cycle["planned"]
         planned_fields = [("Goal", "goal"), ("Success criterion", "success_criterion"), ("Origin", "origin"),
-                          ("Origin reference", "origin_ref"), ("Confidence", "confidence"),
-                          ("Predictions", "predictions")]
+                          ("Origin reference", "origin_ref"), ("Confidence", "confidence")]
         body.append(section("Planned", rows([(label, _cycle_value(planned[key])) for label, key in planned_fields] +
+                                            [("Predictions", lines([p for p in planned["predictions"]
+                                                                    if isinstance(p, str)]
+                                                                   if isinstance(planned["predictions"], list) else [],
+                                                                   "none recorded"))] +
                                             ([("Attention", _cycle_notes(planned["attention"], ("source", "why")))]
                                              if planned["attention"] is not None else [])) if planned else
                             h('<p class="dim">no intent recorded</p>')))
@@ -759,10 +773,11 @@ def cycle_page(name: str, cycle: dict, names: list[str], csrf: str) -> Html:
                 if key == "judge":
                     judgments.append(h('<p class="dim">not judged</p>'))
                 continue
-            judgments.append(h('<h3>{label}</h3><p>{verdict}</p>',
-                               label=label, verdict=_cycle_verdict(judge["verdict"])))
+            judgments.append(h('<h3>{label}</h3>', label=label))
             if judge["error"]:
                 judgments.append(h('<p class="warn">{e}</p>', e=judge["error"]))
+                continue
+            judgments.append(h('<p>{verdict}</p>', verdict=_cycle_verdict(judge["verdict"])))
             judgments.append(rows([(label, _cycle_value(judge[key])) for label, key in
                                    [("Claim supported", "claim_supported"), ("First error", "first_error"),
                                     ("Reasoning", "reasoning"), ("Model", "model")]]))

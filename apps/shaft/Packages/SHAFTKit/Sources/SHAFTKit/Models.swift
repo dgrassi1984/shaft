@@ -694,6 +694,7 @@ public struct CyclePlan: Codable, Sendable, Equatable {
     public var goals: String
     public var goalsError: String
     public var improvement: Improvement?
+    public var improvementError: String
 
     public struct Now: Codable, Sendable, Equatable {
         public var state: String?

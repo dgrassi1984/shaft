@@ -159,7 +159,8 @@ struct CyclesPanel: View {
                 else { MarkdownText(source: plan.goals) }
             }
             DisclosureGroup("Improvement plan") {
-                if let improvement = plan.improvement {
+                if !plan.improvementError.isEmpty { Text(plan.improvementError) }
+                else if let improvement = plan.improvement {
                     CycleLine(label: "From", value: improvement.at.map { Stamp.full($0) })
                     MarkdownText(source: improvement.text)
                 } else { Text("no improvement plan recorded") }

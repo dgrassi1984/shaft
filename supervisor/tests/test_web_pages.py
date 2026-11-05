@@ -333,6 +333,43 @@ class TranscriptsTest(PagesTest):
         self.has("/i/shaft/transcripts?ts=" + self.record["ts"], '<h2>cycle 10-19 09:00</h2>',
                  '<ul class="lines wrap">')
 
+    def test_queue_free_text_and_date_only_due_are_not_sliced_as_timestamps(self):
+        (self.root / "notes" / "queue.json").write_text(json.dumps([
+            {"id": 1, "task": "review", "due_at": "dopo la revisione"},
+            {"id": 2, "task": "date", "due_at": "2026-11-05"},
+            {"id": 3, "task": "time", "due_at": "18:06"}]))
+        self.has("/fragment/i/shaft/cycles-next", "dopo la revisione", "2026-11-05", "18:06")
+
+    def test_improvement_read_error_is_visible_instead_of_no_plan(self):
+        from supervisor import cycles
+        plan = cycles.plan("shaft", {})
+        plan["improvement_error"] = "could not read memory/journal.md: denied"
+        with mock.patch.object(cycles, "plan", return_value=plan):
+            body = self.has("/fragment/i/shaft/cycles-next", "could not read memory/journal.md: denied")
+        self.assertNotIn("no improvement plan recorded", body)
+
+    def test_all_malformed_lines_render_the_day_and_skipped_count(self):
+        (self.episodes / "2026-10-19.jsonl").write_text("broken\n[]\n")
+        self.has("/i/shaft/transcripts", "<h3>2026-10-19</h3>", "2 skipped lines", "0 cycles")
+
+    def test_predictions_render_as_escaped_lines_and_empty_predictions_say_none_recorded(self):
+        self.record["intent"]["predictions"] = ["first <b>check</b>", "second check"]
+        self.seed()
+        self.has("/i/shaft/transcripts?ts=" + self.record["ts"],
+                 "<li>first &lt;b&gt;check&lt;/b&gt;</li>", "<li>second check</li>")
+        self.record["intent"]["predictions"] = []
+        self.seed()
+        self.has("/i/shaft/transcripts?ts=" + self.record["ts"], "none recorded")
+
+    def test_failed_judge_does_not_render_an_unknown_verdict_badge(self):
+        judge = {"episode_ts": self.record["ts"], "error": "judge failed"}
+        with mock.patch.object(panel, "judgments", return_value=[judge]):
+            body = self.has("/i/shaft/transcripts?ts=" + self.record["ts"], "judge failed")
+        self.assertNotIn('class="badge ', body)
+        judge_section = body.split("<h3>Judge</h3>", 1)[1].split('>Surprises</span>', 1)[0]
+        self.assertNotIn("unknown", judge_section)
+        self.assertNotIn("Claim supported", judge_section)
+
     def test_now_since_time_of_day_is_not_blank_after_timestamp_formatting(self):
         from supervisor import cycles
         plan = cycles.plan("shaft", {"state": "in a cycle", "since": "18:06"})
@@ -455,11 +492,11 @@ class TranscriptsTest(PagesTest):
 
     def test_claim_and_verdict_are_distinct(self):
         judge = {"episode_ts": self.record["ts"], "criterion_met": "partial", "judge": "test model",
-                 "second": {"criterion_met": "no", "judge": "second model", "error": "second error"}}
+                 "second": {"criterion_met": "no", "judge": "second model"}}
         with mock.patch.object(panel, "judgments", return_value=[judge]):
             self.has("/i/shaft/transcripts", "claimed yes", 'class="badge warn">partial</span>')
             self.has("/i/shaft/transcripts?ts=" + self.record["ts"], "claimed yes", "test model", "Second judge",
-                     'class="badge bad">no</span>', "second error")
+                     'class="badge bad">no</span>', "second model")
 
     def test_reader_errors_and_skipped_lines_are_visible(self):
         with (self.episodes / "2026-10-19.jsonl").open("a") as f:

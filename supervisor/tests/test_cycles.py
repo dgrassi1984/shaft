@@ -275,6 +275,75 @@ class CyclesDaysTest(unittest.TestCase):
         self.assertEqual(cycles.cycle("wren", "2026-11-05T16:00:00")["left"],
                          {"unfinished": [], "next_action": {"action": "do b", "revise_if": "x"}, "next_goal": None})
 
+    def test_next_poll_parses_each_unchanged_day_once_without_caching_tool_logs(self):
+        self.ep("2026-11-04", kind="live", ts="2026-11-04T09:00:00",
+                tools=[{"result": "PRIVATE TOOL LOG"}],
+                finish={"next_action": {"action": "check"}, "unfinished": ["notes"]})
+        self.ep("2026-11-05", kind="sleep", ts="2026-11-05T04:00:00")
+        with mock.patch.object(cycles, "_lines", wraps=cycles._lines) as parse:
+            first = cycles.plan("wren", {})
+            second = cycles.plan("wren", {})
+        self.assertEqual(parse.call_count, 2)
+        self.assertEqual(first["next_step"], second["next_step"])
+        self.assertEqual(second["next_step"]["action"], "check")
+        self.assertNotIn("PRIVATE TOOL LOG", repr(panel._memo))
+        self.ep("2026-11-05", kind="live", ts="2026-11-05T10:00:00",
+                finish={"next_action": {"action": "new"}})
+        self.assertEqual(cycles.plan("wren", {})["next_step"]["action"], "new")
+
+    def test_next_poll_reads_unchanged_journal_once_and_invalidates_on_change(self):
+        self.journal("## 2026-11-05 04:00 — Sleep\n\nHow I will improve: check")
+        with mock.patch.object(core, "safe_read", wraps=core.safe_read) as read:
+            first = cycles.plan("wren", {})
+            second = cycles.plan("wren", {})
+        self.assertEqual(sum(c.args[1] == "memory/journal.md" for c in read.call_args_list), 1)
+        self.assertEqual(first["improvement"], second["improvement"])
+        self.journal("## 2026-11-05 04:00 — Sleep\n\nHow I will improve: check again")
+        self.assertEqual(cycles.plan("wren", {})["improvement"]["text"], "How I will improve: check again")
+
+    def test_unreadable_journal_is_an_improvement_error_not_no_plan_or_a_crash(self):
+        for error in (core.UnsafePath("link"), core.TooBig("large"), PermissionError("denied")):
+            with self.subTest(error=error):
+                read = core.safe_read
+                def fail(root, rel, *args, **kwargs):
+                    if rel == "memory/journal.md":
+                        raise error
+                    return read(root, rel, *args, **kwargs)
+                panel._memo.clear()
+                with mock.patch.object(core, "safe_read", side_effect=fail):
+                    plan = cycles.plan("wren", {})
+                self.assertIsNone(plan["improvement"])
+                self.assertEqual(plan["improvement_error"], f"could not read memory/journal.md: {error}")
+        self.assertEqual(cycles.plan("wren", {})["improvement_error"], "")
+
+    def test_link_and_oversized_journals_report_the_real_safe_read_error(self):
+        target = self.tmp / "journal-target.md"
+        target.write_text("private")
+        journal = self.root / "memory/journal.md"
+        journal.symlink_to(target)
+        plan = cycles.plan("wren", {})
+        self.assertIsNone(plan["improvement"])
+        self.assertTrue(plan["improvement_error"].startswith("could not read memory/journal.md:"))
+        journal.unlink()
+        self.journal("oversized")
+        with mock.patch.object(core, "FILE_READ_MAX_MB", 0):
+            plan = cycles.plan("wren", {})
+        self.assertEqual(plan["improvement_error"], "could not read memory/journal.md: 9 bytes, more than 0")
+
+    def test_all_malformed_lines_keep_the_day_and_its_skipped_count(self):
+        self.write("memory/episodes/2026-11-05.jsonl", "broken\n[]\n")
+        day = cycles.days("wren")["days"][0]
+        self.assertEqual((day["date"], day["rows"], day["skipped_lines"]), ("2026-11-05", [], 2))
+        self.assertEqual(day["counts"]["cycles"], 0)
+
+    def test_duplicate_judgments_keep_the_newest_verdict_on_list_and_detail(self):
+        ts = "2026-11-05T09:00:00"
+        self.ep("2026-11-05", kind="live", ts=ts)
+        self.judge(episode_ts=ts, criterion_met="no")
+        self.judge(episode_ts=ts, criterion_met="yes")
+        self.assertEqual(cycles.days("wren")["days"][0]["rows"][0]["verdict"], "yes")
+        self.assertEqual(cycles.cycle("wren", ts)["result"]["judge"]["verdict"], "yes")
+
     def test_now_never_carries_doing(self):
         p = cycles.plan("wren", {"state": "in a cycle", "since": "09:00", "goal": "g", "doing": "run SECRET"})
         self.assertEqual(p["now"], {"state": "in a cycle", "since": "09:00", "goal": "g"})

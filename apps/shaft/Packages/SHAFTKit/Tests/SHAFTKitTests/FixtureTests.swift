@@ -67,6 +67,29 @@ struct FixtureTests {
         #expect(detail.result?.doubts == ["step: 1; what: Check again"])
     }
 
+    @Test func unreadableImprovementIsNotDecodedAsNoPlan() throws {
+        var object = try #require(JSONSerialization.jsonObject(with: DecodingTests.fixture("plan")) as? [String: Any])
+        object["improvement"] = NSNull()
+        object["improvement_error"] = "could not read memory/journal.md: denied"
+        let plan = try SHAFTJSON.decoder().decode(
+            CyclePlan.self, from: JSONSerialization.data(withJSONObject: object))
+        #expect(plan.improvement == nil)
+        #expect(plan.improvementError == "could not read memory/journal.md: denied")
+    }
+
+    @Test func aDayWithOnlySkippedLinesStillDecodesForDisplay() throws {
+        var object = try #require(JSONSerialization.jsonObject(with: DecodingTests.fixture("cycles")) as? [String: Any])
+        var days = try #require(object["days"] as? [[String: Any]])
+        days[0]["rows"] = []
+        days[0]["skipped_lines"] = 2
+        object["days"] = days
+        let page = try SHAFTJSON.decoder().decode(
+            CycleDaysResponse.self, from: JSONSerialization.data(withJSONObject: object))
+        #expect(page.days.count == 1)
+        #expect(page.days[0].rows.isEmpty)
+        #expect(page.days[0].skippedLines == 2)
+    }
+
     @Test(arguments: ["2099-11-05", "2099-11-05T00:00:00Z"])
     func queueDueDatesKeepTheirWireFormat(_ due: String) throws {
         let object: [String: Any] = ["id": 1, "task": "Check", "due_at": due, "overdue": false]

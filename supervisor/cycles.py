@@ -88,7 +88,7 @@ def _records(name: str, date: str) -> tuple[list[dict], int]:
 def _verdicts(name: str) -> tuple[dict[str, dict], str]:
     """Judgments indexed by episode_ts, plus an error string ("" when fine)."""
     try:
-        return {j["episode_ts"]: j for j in panel.judgments(name)}, ""
+        return {j["episode_ts"]: j for j in reversed(panel.judgments(name))}, ""
     except (OSError, ValueError, KeyError) as e:
         return {}, f"{type(e).__name__}: {e}"
 
@@ -124,7 +124,7 @@ def days(name: str, before: str | None = None, limit: int = 7, filt: str = "") -
         rows = [{**r, "verdict": verdicts[r["ts"]].get("criterion_met")
                  if r["kind"] == "cycle" and r["ts"] in verdicts else None} for r in records]
         shown = sorted((r for r in rows if _matches(r, filt)), key=lambda r: r["ts"], reverse=True)
-        if not shown:
+        if not shown and not skipped:
             continue
         live = [r for r in rows if r["kind"] == "cycle"]
         counts = {
@@ -268,18 +268,31 @@ def plan(name: str, live: dict, now: datetime | None = None) -> dict:
         goals, goals_error = "", "no goals file"
     except (core.UnsafePath, core.TooBig, OSError) as e:
         goals, goals_error = "", f"could not read self/goals.md: {e}"
-    improvement = _improvement(core.journal_entries(root))
+
+    def read_improvement() -> dict | None:
+        text = core.safe_read(root, "memory/journal.md")
+        entries = [b.strip() for b in text.split("\n---\n") if b.strip().startswith("## ")]
+        return _improvement(entries)
+
+    improvement_error = ""
+    try:
+        improvement = panel.cached(f"cycles-improvement:{name}", [root / "memory/journal.md"], read_improvement)
+        improvement = dict(improvement) if improvement is not None else None
+    except FileNotFoundError:
+        improvement = None
+    except (core.UnsafePath, core.TooBig, OSError) as e:
+        improvement = None
+        improvement_error = f"could not read memory/journal.md: {e}"
 
     return {"now": now_block, "check": check, "next_step": next_step, "unfinished": unfinished,
             "commitments": items, "commitments_error": commitments_error, "queue": queue, "goals": goals,
-            "goals_error": goals_error, "improvement": improvement}
+            "goals_error": goals_error, "improvement": improvement, "improvement_error": improvement_error}
 
 
 def _next_step(name: str) -> tuple[dict | None, list[str]]:
     """The newest live cycle with a next action, walking back over at most the two newest day files, and what that
     cycle left unfinished. A next_action that is not an object, or with no action, is skipped."""
-    dates = sorted((f.stem for f in panel._episode_files(name)), reverse=True)[:2]
-    for date in dates:
+    def read(date: str) -> tuple[dict | None, list[str]]:
         for _, r in reversed(_lines(name, date)[0]):
             if r.get("kind") != "live":
                 continue
@@ -296,6 +309,13 @@ def _next_step(name: str) -> tuple[dict | None, list[str]]:
             raw = fin.get("unfinished")
             unfinished = [str(s) for s in raw if isinstance(s, str)] if isinstance(raw, list) else []
             return {"ts": r.get("ts") or "", "action": action, "revise_if": revise}, unfinished
+        return None, []
+
+    dates = sorted((f.stem for f in panel._episode_files(name)), reverse=True)[:2]
+    for date in dates:
+        step, unfinished = panel.cached(f"cycles-next:{name}:{date}", [_day_path(name, date)], lambda: read(date))
+        if step is not None:
+            return dict(step), list(unfinished)
     return None, []
 
 

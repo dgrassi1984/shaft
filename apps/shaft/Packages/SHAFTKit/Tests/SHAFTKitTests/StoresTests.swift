@@ -213,6 +213,73 @@ struct CyclesStoresTests {
         }
     }
 
+    @Test func overlappingEarlierLoadsDoNotAppendTheSameDateTwice() async throws {
+        let server = try server(next: "2026-11-02")
+        let store = CyclesStore(client: server.client, instance: "wren")
+        await store.refresh()
+        let began = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        defer { began.continuation.finish(); release.continuation.finish() }
+        var page = try #require(JSONSerialization.jsonObject(with: DecodingTests.fixture("cycles")) as? [String: Any])
+        var days = try #require(page["days"] as? [[String: Any]])
+        days[0]["date"] = "2026-11-02"
+        page["days"] = days
+        var response = StubServer.Response.json(200, fixtureText(try JSONSerialization.data(withJSONObject: page)))
+        response.beforeReply = {
+            began.continuation.yield(())
+            for await _ in release.stream { break }
+        }
+        let held = response
+        server.setAnswer { _ in held }
+        let first = Task { await store.loadEarlier() }
+        for await _ in began.stream { break }
+        let secondBegan = AsyncStream<Void>.makeStream()
+        defer { secondBegan.continuation.finish() }
+        let second = Task {
+            secondBegan.continuation.yield(())
+            await store.loadEarlier()
+        }
+        for await _ in secondBegan.stream { break }
+        // Let both requests finish if the bug sends the same cursor twice.
+        release.continuation.finish()
+        await first.value
+        await second.value
+        #expect(store.days.map(\.date) == ["2026-11-03", "2026-11-02"])
+        #expect(server.requests.filter { $0.query("before") != nil }.count == 1)
+        #expect(!store.loading)
+    }
+
+    @Test(arguments: [200, 500])
+    func refreshMakesAHeldEarlierPageStaleWithoutDuplicatingDates(_ status: Int) async throws {
+        let server = try server(next: "2026-11-02")
+        let store = CyclesStore(client: server.client, instance: "wren")
+        await store.refresh()
+        let original = store.days
+        let began = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        defer { began.continuation.finish(); release.continuation.finish() }
+        var response = StubServer.Response.json(status, status == 200
+            ? fixtureText(try DecodingTests.fixture("cycles"))
+            : #"{"error":{"code":"internal","message":"Earlier failed"}}"#)
+        response.beforeReply = {
+            began.continuation.yield(())
+            for await _ in release.stream { break }
+        }
+        let held = response
+        server.setAnswer { request in request.query("before") != nil ? held : .notModified }
+        let earlier = Task { await store.loadEarlier() }
+        for await _ in began.stream { break }
+        await store.refresh()
+        release.continuation.yield(())
+        await earlier.value
+        #expect(store.days == original)
+        #expect(store.error == nil)
+        #expect(!store.loading)
+        server.setAnswer { _ in .notModified }
+        await store.loadEarlier()
+        #expect(server.requests.filter { $0.query("before") != nil }.count == 2)
+    }
+
     @Test func changingFilterStartsLoadingBeforeClearingDays() async throws {
         let server = try server()
         let store = CyclesStore(client: server.client, instance: "wren")

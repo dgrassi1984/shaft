@@ -352,9 +352,9 @@ def _seed_cycles(base: Path, now: datetime) -> None:
     (root / "self").mkdir(exist_ok=True)
     (root / "self" / "goals.md").write_text("# Obiettivi\n\nConsegnare un registro verificabile.\n")
     (root / "notes" / "queue.json").write_text(json.dumps([
-        {"id": 1, "task": "Controllare novembre", "due_at": end.date().isoformat(), "done": False},
-        {"id": 2, "task": "Inviare il riepilogo", "due_at": "", "done": False},
-        {"id": 3, "task": "Rivedere le ricevute", "due_at": "dopo la revisione", "done": False},
+        {"id": 1, "task": "Controllare novembre", "due_at": end.date().isoformat(), "status": "open"},
+        {"id": 2, "task": "Inviare il riepilogo", "due_at": "", "status": "open"},
+        {"id": 3, "task": "Rivedere le ricevute", "due_at": "dopo la revisione", "status": "open"},
     ]))
     (root / "memory" / "commitments.jsonl").write_text(json.dumps({
         "event": "made", "id": "c1105-0900-1", "at": end.isoformat(), "source": "cycle",

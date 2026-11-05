@@ -1025,8 +1025,10 @@ Live `doing`, tool arguments, tool results, and the web-only `where` field do no
 | `goals` | str | The instance's goals Markdown |
 | `goals_error` | str | Empty when read, `"no goals file"` when missing, otherwise why it could not be read |
 | `improvement` | object or null | Latest Sleep or Reflection improvement plan: `{at, text}`, described below |
+| `improvement_error` | str | Empty when read or missing, otherwise `"could not read memory/journal.md: <reason>"` |
 
-`now.state`, `now.since`, and `now.goal` are strings or null. `since` follows §1.6.
+`now.state`, `now.since`, and `now.goal` are strings or null. `since` is the time-of-day text supplied by live state
+(for example, `"18:06"`), sent as given.
 `goal` is non-null only in state `"in a cycle"`. `check.next` is next check text, and `check.skipped` is last skip text.
 `check.paused` is a bool. Next can be `"paused"` or `"unknown"`, with a reason in skipped.
 

@@ -22,6 +22,7 @@ public final class CyclesStore {
     @ObservationIgnored private var pageETag: String?
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var detailGeneration = 0
+    @ObservationIgnored private var earlierLoading = false
 
     public init(client: APIClient, instance: String) {
         self.client = client
@@ -29,6 +30,7 @@ public final class CyclesStore {
     }
 
     public func refresh() async {
+        generation += 1
         let requestedGeneration = generation
         let requestedFilter = filter
         let requestedPageETag = pageETag
@@ -51,7 +53,9 @@ public final class CyclesStore {
     }
 
     public func loadEarlier() async {
-        guard let next else { return }
+        guard !earlierLoading, !loading, let next else { return }
+        earlierLoading = true
+        defer { earlierLoading = false }
         let requestedGeneration = generation
         let requestedFilter = filter
         await run(generation: requestedGeneration) { [self] in

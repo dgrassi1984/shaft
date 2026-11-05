@@ -5,6 +5,7 @@ decodes (supervisor/tests/app_api_fixtures/, SHAFT_UPDATE_FIXTURES=1 rewrites th
 from __future__ import annotations
 
 import json
+from datetime import datetime
 import os
 import re
 import shutil
@@ -211,6 +212,30 @@ class CyclesTest(AppTest):
     def setUp(self):
         super().setUp()
         self.cycles_scenario()
+
+    def test_repeated_plan_requests_keep_cached_next_step_and_improvement_timestamps(self):
+        (self.inst / "wren/memory/journal.md").write_text(
+            "## 2026-11-05 04:00 — Sleep\n\nHow I will improve: check")
+        first = self.get("/app/v1/plan/wren")
+        second = self.get("/app/v1/plan/wren")
+        self.assertEqual(first, second)
+        self.assertEqual(first["improvement_error"], "")
+        self.assertEqual(first["improvement"]["at"], app_api.stamp("2026-11-05T04:00:00"))
+
+    def test_now_since_is_time_of_day_sent_as_given_not_an_offset_timestamp(self):
+        with mock.patch.object(web, "_live", return_value={"state": "in a cycle", "since": "18:06"}):
+            self.assertEqual(self.get("/app/v1/plan/wren")["now"]["since"], "18:06")
+
+    def test_fixture_queue_rows_use_real_status_instead_of_done(self):
+        from apps.shaft.DevServer import fixture_server
+        base = self.sup / "fixture-queue"
+        (base / "sup").mkdir(parents=True)
+        root = base / "instances" / "thelos"
+        (root / "notes").mkdir(parents=True)
+        fixture_server._seed_cycles(base, datetime(2026, 11, 5, 12))
+        rows = json.loads(core.safe_read(root, "notes/queue.json"))
+        self.assertEqual([r["status"] for r in rows], ["open", "open", "open"])
+        self.assertTrue(all("done" not in r for r in rows))
 
     def test_the_plan_cycles_and_a_cycle(self):
         plan = self.get("/app/v1/plan/wren")

@@ -48,5 +48,6 @@
   },
   "goals": "",
   "goals_error": "no goals file",
-  "improvement": null
+  "improvement": null,
+  "improvement_error": ""
 }

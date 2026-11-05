@@ -47,7 +47,9 @@ struct CycleDetailView: View {
                 CycleLine(label: "Success criterion", value: planned.successCriterion)
                 CycleLine(label: "Origin", value: planned.origin)
                 CycleLine(label: "Origin reference", value: planned.originRef)
-                CycleLine(label: "Confidence", value: planned.confidence.map { String($0) })
+                CycleLine(label: "Confidence", value: planned.confidence.map {
+                    String($0).replacingOccurrences(of: #"\.0$"#, with: "", options: .regularExpression)
+                })
                 DisclosureGroup("Predictions") { CycleLines(values: planned.predictions) }
                 if !planned.attention.isEmpty {
                     DisclosureGroup("Attention") { CycleLines(values: planned.attention) }
