@@ -1,12 +1,13 @@
 import Foundation
+import SHAFTKit
 
 /// Markdown as plain text, as the rendered page reads (the document's text anchors live in, §10.2; what Select text
-/// shows). Block breaks become newlines.
+/// shows). Agent lists are normalized as in the page. Block breaks become newlines.
 enum RenderedText {
     static func plain(_ markdown: String) -> String {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .full,
                                                               failurePolicy: .returnPartiallyParsedIfPossible)
-        guard let parsed = try? AttributedString(markdown: markdown, options: options) else { return markdown }
+        guard let parsed = try? AttributedString(markdown: AgentMarkdown.normalized(markdown), options: options) else { return markdown }
         var out = ""
         var lastBlock: Int?
         for run in parsed.runs {

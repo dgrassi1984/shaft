@@ -19,9 +19,10 @@ enum CommentHighlight {
             .compactMap { String($0).removingPercentEncoding }
     }
 
-    /// `source` with its open threads' passages marked. `plain` is how the page's text reads.
+    /// The normalized drawing source with its open threads' passages marked. `plain` is how the page's text reads.
     static func marked(_ source: String, threads: [CommentThread],
                        plain: (String) -> String = RenderedText.plain) -> String {
+        let source = AgentMarkdown.normalized(source)
         let rendered = plain(source)
         let passages = threads.compactMap { thread -> Passage? in
             guard thread.state == "open", let anchor = thread.anchor,

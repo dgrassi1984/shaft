@@ -30,7 +30,7 @@ struct DocumentMarkdown: View {
             .task(id: marks) {
                 let (sha, text, threads) = (doc.sha, doc.text, doc.threads)
                 let source = await Task.detached(priority: .userInitiated) {
-                    CommentHighlight.marked(TableColumns.aligned(text), threads: threads)
+                    CommentHighlight.marked(TableColumns.aligned(AgentMarkdown.normalized(text)), threads: threads)
                 }.value
                 if !Task.isCancelled { marked = (sha, source) }
             }

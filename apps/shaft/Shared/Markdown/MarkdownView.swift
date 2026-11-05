@@ -5,6 +5,7 @@ import SwiftUI
 /// An answer, a message or a document, rendered: GFM on the feed's type and tokens (spec §2.2, §3), with tables that
 /// scroll sideways and keep their columns, task lists with a checkbox before the text, and code blocks with their
 /// language, syntax colours and a Copy in a header that stays put while the code scrolls.
+/// Agent bullets, lines of points and sequential numbered sections are normalized only for drawing.
 struct MarkdownText: View {
     let source: String
     var theme: Theme = .shaft
@@ -12,7 +13,7 @@ struct MarkdownText: View {
     @Environment(\.markdownStreaming) private var streaming
 
     var body: some View {
-        Markdown(streaming ? source : TableColumns.aligned(source))
+        Markdown(streaming ? AgentMarkdown.normalized(source) : TableColumns.aligned(AgentMarkdown.normalized(source)))
             .markdownTheme(theme)
             .markdownCodeSyntaxHighlighter(CodeColours(plain: streaming))
     }

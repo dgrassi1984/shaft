@@ -37,7 +37,7 @@ public enum PartialMarkdown {
     /// A blank line at the end, a list marker with nothing after it yet, or a heading's marks alone.
     private static func isEmptyBlock(_ line: String) -> Bool {
         let body = line.trimmingCharacters(in: .whitespaces)
-        if body.isEmpty || body == "-" || body == "*" || body == "+" { return true }
+        if body.isEmpty || body == "-" || body == "*" || body == "+" || body == "•" { return true }
         if body.allSatisfy({ $0 == "#" }) && body.count <= 6 { return true }
         if let tail = body.last, tail == "." || tail == ")" {
             let number = body.dropLast()

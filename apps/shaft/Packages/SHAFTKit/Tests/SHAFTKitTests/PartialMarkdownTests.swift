@@ -56,6 +56,11 @@ struct PartialMarkdownTests {
         #expect(PartialMarkdown.closed("1. one\n2.") == "1. one")
     }
 
+    @Test func anEmptyAgentBulletAtTheEndGoes() {
+        #expect(PartialMarkdown.closed("• one\n• ") == "• one")
+        #expect(PartialMarkdown.closed("•") == "")
+    }
+
     @Test func anOpenFenceIsAlreadyCode() {
         let text = "Look:\n\n```python\nprint('**')\n"
         #expect(PartialMarkdown.closed(text) == text)

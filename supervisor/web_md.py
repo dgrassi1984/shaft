@@ -8,7 +8,8 @@ links (the page's CSP loads no image from elsewhere); alignment is a class (the 
 
 Blocks: ATX headings (# is the page's h2: the page has its own h1), paragraphs with hard breaks (two trailing spaces
 or a backslash), bullet (-, *, + or •), numbered and task lists — nested, tight or loose —, block quotes (nested),
-fenced code (``` or ~~~, with its language), tables (with alignment), horizontal rules; a paragraph or a list item
+fenced code (``` or ~~~, with its language), tables (with alignment), horizontal rules. Numbered lines starting at 1
+or following the last numbered item outside code interrupt paragraphs. A paragraph or list item
 written as one line of points, "Lead: a · b · c", is its lead over a bullet list of the points. Inline: `code`, **bold** /
 __bold__, *em* / _em_, ~~strike~~, [links](https://…), <https://…> and bare https:// addresses, \\escapes.
 """
@@ -38,7 +39,7 @@ def esc(s: str) -> str:
 def render(text: str) -> Html:
     """The whole text, as the page shows it."""
     src = clean(str(text)).replace(OPEN, "").replace(CLOSE, "").replace("\r\n", "\n").replace("\r", "\n")
-    return Html(f'<div class="md">{_blocks(src.split(chr(10)))}</div>')
+    return Html(f'<div class="md">{_blocks(_numbered_sections(src.split(chr(10))))}</div>')
 
 
 # -- inline ----------------------------------------------------------------------------------------------------------
@@ -196,6 +197,81 @@ def _starts_block(line: str) -> bool:
     return bool(m and m[4].strip() and (not m[2][0].isdigit() or m[2][:-1] == "1"))
 
 
+def _fence_close(fence: str) -> re.Pattern:
+    return re.compile(r"^ {0,3}" + re.escape(fence[0]) + "{" + str(len(fence)) + r",}\s*$")
+
+
+def _numbered_sections(lines: list[str]) -> list[str]:
+    """Separate a sequential numbered section from its preceding paragraph, leaving tight lists tight."""
+    out = []
+    close = None
+    fence_depth = fence_base = 0
+    last = None
+    previous_plain = False
+    previous_quote = ""
+    list_indent = None
+    separated = True
+    in_table = False
+    for index, line in enumerate(lines):
+        if close is not None:
+            content, depth = line, 0
+            while depth < fence_depth and (m := _QUOTE.match(content)):
+                content = content[m.end():]
+                depth += 1
+            if depth == fence_depth:
+                relative = content[fence_base:] if content.startswith(" " * fence_base) else content
+                if close.match(relative):
+                    close = None
+                out.append(line)
+                previous_plain = False
+                continue
+            close = None
+        body, quote = line, ""
+        while m := _QUOTE.match(body):
+            quote += m[0]
+            body = body[m.end():]
+        if quote != previous_quote:
+            previous_plain, list_indent = False, None
+        previous_quote = quote
+        base = list_indent or 0
+        relative = body[base:] if body.startswith(" " * base) else body
+        if m := _FENCE.match(relative):
+            close = _fence_close(m[2])
+            fence_depth, fence_base = quote.count(">"), base
+            out.append(line)
+            previous_plain = False
+            continue
+        if not body.strip():
+            out.append(line)
+            previous_plain, separated, in_table = False, True, False
+            continue
+        next_body = lines[index + 1] if index + 1 < len(lines) else ""
+        while m := _QUOTE.match(next_body):
+            next_body = next_body[m.end():]
+        in_table = "|" in body and (in_table or bool(_TABLE_SEP.match(next_body)) and "-" in next_body)
+        indent = len(body) - len(body.lstrip(" "))
+        if indent >= base + 4 or in_table:
+            out.append(line)
+            previous_plain = False
+            continue
+        item = _ITEM.match(body)
+        number = int(item[2][:-1]) if item and item[2][0].isdigit() and item[4].strip() else None
+        interrupts = number == 1 or last is not None and number == last + 1
+        is_item = item and item[4].strip() and (number is None or not previous_plain or interrupts)
+        if number is not None and is_item:
+            if previous_plain and interrupts and number != 1:
+                out.append(quote)
+            last = number
+        if is_item:
+            list_indent = item.start(4)
+        elif list_indent is not None and indent < list_indent and separated:
+            list_indent = None
+        previous_plain = not is_item and not _starts_block(body) and list_indent is None
+        separated = False
+        out.append(line)
+    return out
+
+
 def fenced(lines: list[str], i: int) -> tuple[int, str] | None:
     """The fenced code block opening at lines[i] (``` or ~~~, with its language), to its closing fence or the end of
     the text: (the line after it, its html). None when lines[i] opens none. The operator's own turns show their code
@@ -203,7 +279,7 @@ def fenced(lines: list[str], i: int) -> tuple[int, str] | None:
     if not (m := _FENCE.match(lines[i])):
         return None
     indent, fence, lang = len(m[1]), m[2], m[3]
-    close = re.compile(r"^ {0,3}" + re.escape(fence[0]) + "{" + str(len(fence)) + r",}\s*$")
+    close = _fence_close(fence)
     body = []
     i += 1
     while i < len(lines) and not close.match(lines[i]):

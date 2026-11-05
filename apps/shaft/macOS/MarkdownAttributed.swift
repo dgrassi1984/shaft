@@ -32,6 +32,7 @@ extension NSAttributedString.Key {
 ///
 /// - Type is spec §2.2: `Design.Text`'s line and paragraph spacing, its heading scales, code at 0.88 em.
 /// - Headings step down by level and stay at least as large as a paragraph, with more space above than below.
+/// - Agent bullets and lines of points are normalized, and sequential numbers can interrupt a paragraph.
 /// - Lists indent by level, with their bullet or number; a task item's `[ ]` / `[x]` becomes a box before its text.
 /// - Code blocks are monospaced with their syntax colours; inline code is a pill; a quote has a bar at its left.
 /// - Tables keep their columns (an `NSTextTable`) at the width their text wants, in `.subheadline` with tabular
@@ -86,7 +87,7 @@ enum MarkdownAttributed {
     static func render(_ markdown: String, font: NSFont = .preferredFont(forTextStyle: .body)) -> Rendered {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .full,
                                                               failurePolicy: .returnPartiallyParsedIfPossible)
-        guard let parsed = try? AttributedString(markdown: TableColumns.aligned(markdown), options: options) else {
+        guard let parsed = try? AttributedString(markdown: TableColumns.aligned(AgentMarkdown.normalized(markdown)), options: options) else {
             let text = NSMutableAttributedString(string: markdown, attributes: [.font: font,
                                                                                 .foregroundColor: MacColor.textPrimary])
             return finish(text: text, codeBlocks: [], tables: [])
@@ -241,6 +242,7 @@ enum MarkdownAttributed {
         var codeBlocks: [CodeBlock] = []
         /// The leaf block the last run belonged to; a new one starts a new paragraph.
         var lastBlock: Int?
+        var blockStyle: Style?
         /// The list items whose marker is drawn (an item's later paragraphs have none).
         var markedItems = Set<Int>()
         var tables: [Int: TableBuild] = [:]
@@ -287,7 +289,8 @@ enum MarkdownAttributed {
                 closeList(unless: components.last(where: Self.isList)?.identity)
                 lastBlock = leaf
             }
-            let style = paragraphStyle(components)
+            if newBlock || blockStyle == nil { blockStyle = paragraphStyle(components) }
+            guard let style = blockStyle else { return }
             var attributes: [NSAttributedString.Key: Any] = [.paragraphStyle: style.paragraph,
                                                               .foregroundColor: style.color]
             attributes[.font] = runFont(base: style.font, inline: inline, code: style.code)

@@ -301,6 +301,11 @@ line, as the HTML sorts them).
 
 **`assistant`**: the instance's answer (key `a<k>`).
 
+Rendering accepts `•` bullets and expands a line of at least three points, `Lead: a · b · c`,
+into its lead and a bullet list. A numbered line interrupts a paragraph when it starts at 1
+or follows the last numbered item outside code. Written starting numbers are preserved.
+Native apps normalize this only for drawing; Copy and Reply keep the source.
+
 | Field | Type | |
 |---|---|---|
 | `k` | int | |

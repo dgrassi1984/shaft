@@ -106,6 +106,76 @@ class BlocksTest(unittest.TestCase):
         self.assertEqual(md("Steps:\n- a\n- b"), "<p>Steps:</p><ul><li>a</li><li>b</li></ul>")
         self.assertEqual(md("In 2026\n3. not a list"), "<p>In 2026 3. not a list</p>")   # only 1. interrupts
 
+    def test_numbered_sections_continue_after_the_previous_numbered_item(self):
+        source = ("NEWS\nSoftware\n1. Item one text.\nhttps://example.com/one\n\n"
+                  "Research\n2. Item two text.\nhttps://example.com/two\n\nTools\n3. Item three text.")
+        out = md(source)
+        self.assertIn('<ol><li>Item one text.', out)
+        self.assertIn('<p>Research</p><ol start="2"><li>Item two text.', out)
+        self.assertIn('<p>Tools</p><ol start="3"><li>Item three text.</li></ol>', out)
+
+    def test_numbered_section_normalization_keeps_contiguous_lists_tight(self):
+        for source in ("1. a\n2. b", "5. five\n6. six", "1. a\nlazy continuation\n2. b"):
+            self.assertEqual(web_md._numbered_sections(source.split("\n")), source.split("\n"))
+        self.assertEqual(md("5. five\n6. six"), '<ol start="5"><li>five</li><li>six</li></ol>')
+
+    def test_numbered_sections_ignore_fenced_and_indented_code_predecessors(self):
+        for fence in ("```", "~~~~"):
+            source = f"{fence}\n1. code\n{fence}\nResearch\n2. still text"
+            self.assertIn("<p>Research 2. still text</p>", md(source))
+            source = f"1. item\n\n{fence}\nResearch\n2. code"
+            self.assertIn("Research\n2. code</code></pre>", md(source))
+        source = "    1. code\n\nResearch\n2. still text"
+        self.assertEqual(web_md._numbered_sections(source.split("\n")), source.split("\n"))
+
+    def test_numbered_sections_keep_quote_prefixes_and_ignore_quoted_fences(self):
+        source = "> 1. one\n>\n> Research\n> 2. two"
+        self.assertIn('<p>Research</p><ol start="2"><li>two</li></ol>', md(source))
+        self.assertIn("<p>Research 2. text</p>", md("> ```\n> 1. code\n> ```\n> Research\n> 2. text"))
+
+    def test_numbered_sections_do_not_rewrite_table_rows(self):
+        source = "1. item\n\nHeading | Value\n---|---\n2. cell | value"
+        self.assertEqual(web_md._numbered_sections(source.split("\n")), source.split("\n"))
+        self.assertIn("<td data-label=", md(source))
+
+    def test_unrecognized_paragraph_numbers_do_not_seed_a_sequence(self):
+        source = "In 2026\n3. not a list\n\nResearch\n4. still text"
+        self.assertEqual(md(source), "<p>In 2026 3. not a list</p><p>Research 4. still text</p>")
+
+    def test_numbered_sections_code_indent_is_relative_to_the_list_content_column(self):
+        for source in (
+            "- text\n\n    ```\n    • a\n    ```",
+            "10. text\n    ```\n    • a\n    ```",
+            "1. item\n\n        • bullet in code",
+            "- item\n\n        Lead: a · b · c",
+            "10. text\n    ```\n    1. code\n    ```\n\nResearch\n2. still text",
+            "- item\n\n        1. this is code\n\nLater\n2. real",
+        ):
+            with self.subTest(source=source):
+                self.assertEqual(web_md._numbered_sections(source.split("\n")), source.split("\n"))
+
+    def test_numbered_sections_open_fences_use_the_opening_quote_depth(self):
+        for source in (
+            "```\n> ```\n• hidden\n```",
+            "1. before\n\n```\n> ```\nparagraph\n2. inside\n```",
+            "> ```\n> > ```\n> 1. hidden\n> ```\n\nLater\n2. text",
+        ):
+            with self.subTest(source=source):
+                self.assertEqual(web_md._numbered_sections(source.split("\n")), source.split("\n"))
+
+    def test_numbered_sections_a_fence_ends_when_its_quote_ends(self):
+        for prefix in ("> ", "> > "):
+            source = prefix + "```\n1. real\n\nLater\n2. real"
+            expected = prefix + "```\n1. real\n\nLater\n\n2. real"
+            self.assertEqual(web_md._numbered_sections(source.split("\n")), expected.split("\n"))
+        source = "> > ```\n> 1. real\n>\n> Later\n> 2. real"
+        expected = "> > ```\n> 1. real\n>\n> Later\n> \n> 2. real"
+        self.assertEqual(web_md._numbered_sections(source.split("\n")), expected.split("\n"))
+
+    def test_numbered_sections_one_needs_no_blank_to_interrupt_a_paragraph(self):
+        for source in ("<div>\n1. stays\n</div>", "Intro\n1. First"):
+            self.assertEqual(web_md._numbered_sections(source.split("\n")), source.split("\n"))
+
     def test_bullet_character_lists_render_as_lists_not_one_paragraph(self):
         out = md("Impegni:\n• 08:45 Valeriya\n• 09:00 Daniele/Martina")
         self.assertEqual(out, "<p>Impegni:</p><ul><li>08:45 Valeriya</li><li>09:00 Daniele/Martina</li></ul>")

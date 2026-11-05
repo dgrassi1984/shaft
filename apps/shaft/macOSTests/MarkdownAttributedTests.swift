@@ -48,6 +48,51 @@ struct MarkdownAttributedTests {
         #expect(render("1. one\n2. two").text.string == "1.\tone\n2.\ttwo")
     }
 
+    @Test @MainActor func aMultiRunListMarkerSharesTheFirstTextLineAtTheGutter() throws {
+        for marker in ["1.", "-"] {
+            let text = render("\(marker) one **bold** and a [link](https://example.com) plus enough words to wrap past the column " +
+                              String(repeating: "more words ", count: 20)).text
+            text.enumerateAttribute(.paragraphStyle, in: NSRange(location: 0, length: text.length)) { value, _, _ in
+                #expect((value as? NSParagraphStyle)?.firstLineHeadIndent == 0)
+            }
+            let storage = NSTextStorage(attributedString: text)
+            let layout = NSLayoutManager()
+            storage.addLayoutManager(layout)
+            let container = MessageTextContainer()
+            container.limit = 560
+            layout.addTextContainer(container)
+            layout.ensureLayout(for: container)
+            let markerGlyph = layout.glyphIndexForCharacter(at: 0)
+            let wordGlyph = layout.glyphIndexForCharacter(at: (text.string as NSString).range(of: "one").location)
+            var markerLine = NSRange()
+            var wordLine = NSRange()
+            let used = layout.lineFragmentUsedRect(forGlyphAt: markerGlyph, effectiveRange: &markerLine)
+            _ = layout.lineFragmentUsedRect(forGlyphAt: wordGlyph, effectiveRange: &wordLine)
+            #expect(markerLine == wordLine)
+            #expect(used.minX == 0)
+            var fragments = 0
+            layout.enumerateLineFragments(forGlyphRange: layout.glyphRange(for: container)) { _, _, _, _, _ in
+                fragments += 1
+            }
+            #expect(fragments > 1)
+        }
+    }
+
+    @Test func aNumberAfterExpandedPointsStartsAnOrderedList() {
+        let lines = render("1. first\n\nLead: a · b · c\n2. second").text.string.components(separatedBy: "\n")
+        #expect(lines.contains("2.\tsecond"))
+    }
+
+    @Test func agentSectionsRenderBulletsAndTheirWrittenOrdinals() {
+        let sample = "AGENDA\n• 08:45 first thing\n• 10:00 second thing\n\nNEWS\nSoftware\n1. Item one text.\nhttps://example.com/one\n\nResearch\n2. Item two text.\nhttps://example.com/two\n\nTools\n3. Item three text."
+        let lines = render(sample).text.string.components(separatedBy: "\n")
+        #expect(lines.contains("•\t08:45 first thing"))
+        #expect(lines.contains("•\t10:00 second thing"))
+        #expect(lines.contains(where: { $0.hasPrefix("1.\tItem one text.") }))
+        #expect(lines.contains(where: { $0.hasPrefix("2.\tItem two text.") }))
+        #expect(lines.contains("3.\tItem three text."))
+    }
+
     /// Regression (driven 2026-11-03): a task item drew its bullet and then its box ("• ☑ reconcile").
     @Test func aTaskItemShowsItsBoxInsteadOfTheBullet() {
         let string = render("- [x] reconcile October\n- [ ] reconcile November").text.string
@@ -71,6 +116,11 @@ struct MarkdownAttributedTests {
         }
         #expect(cells.map(\.row) == [0, 0, 1, 1, 2, 2])
         #expect(cells.map(\.column) == [0, 1, 0, 1, 0, 1])
+        let firstRun = (text.string as NSString).range(of: "Operating").location
+        let laterRun = (text.string as NSString).range(of: "cash").location
+        let firstCell = paragraphStyle(text, at: firstRun)?.textBlocks.last
+        let laterCell = paragraphStyle(text, at: laterRun)?.textBlocks.last
+        #expect(firstCell === laterCell)
         let header = text.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
         #expect(header?.fontDescriptor.symbolicTraits.contains(.bold) == true)
     }

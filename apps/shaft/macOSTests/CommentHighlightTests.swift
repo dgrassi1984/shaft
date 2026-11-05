@@ -59,6 +59,19 @@ struct CommentHighlightTests {
         #expect(numbered.contains("2. [~~second~~](shaft-comment:c1) thing"))
     }
 
+    @Test func anchorsAcrossNormalizedAgentBulletsAndPointsStillMarkTheirText() throws {
+        let bullets = try check("AGENDA\n• first\n• second", "first\nsecond")
+        #expect(bullets.contains("- [~~first~~](shaft-comment:c1)"))
+        #expect(bullets.contains("- [~~second~~](shaft-comment:c1)"))
+        let points = try check("Lead: a · b · c", "Lead:\na\nb\nc")
+        #expect(points.contains("[~~Lead:~~](shaft-comment:c1)"))
+        for point in ["a", "b", "c"] {
+            #expect(points.contains("- [~~\(point)~~](shaft-comment:c1)"))
+        }
+        let literal = try check("A literal • inside a sentence.", "literal • inside")
+        #expect(literal.contains("[~~literal • inside~~](shaft-comment:c1)"))
+    }
+
     @Test func aPassageAcrossBoldStaysBalanced() throws {
         let out = try check("A word **in bold** and after.\n", "word in bold and")
         #expect(out == "A [~~word&#32;~~](shaft-comment:c1)**[~~in bold~~](shaft-comment:c1)**[~~&#32;and~~](shaft-comment:c1) after.\n")
