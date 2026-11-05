@@ -8,9 +8,10 @@ import UIKit
 
 /// The composer (web-and-api.md, "The web UI"): one glass surface holding the ↩ Reply cards, each with its own answer,
 /// the files attached as chips, and the capsule of + (files, and the ways to send), the main field ("Anything else…"
-/// once a card waits) and the one button: Send, or Stop while a reply runs and nothing waits to be sent
-/// (`ComposerAction`). A long press on Send gives Queue after reply (only while replying) and Next cycle with when
-/// that is. The draft (text, cards, files) is the instance's and survives a quit.
+/// once a card waits) and Send, or Stop while a reply runs and nothing waits to be sent (`ComposerAction`). With
+/// something to send, a chevron beside Send opens "More ways to send", as on the web: Queue after reply (only while
+/// replying) and Next cycle with when that is. On iOS, a long press on Send also opens these choices.
+/// The draft (text, cards, files) is the instance's and survives a quit.
 struct ComposerView: View {
     /// The tallest the field grows before it scrolls: a third of the visible height.
     let maxHeight: CGFloat
@@ -81,8 +82,12 @@ struct ComposerView: View {
                 HStack(alignment: .bottom, spacing: 0) {
                     attachMenu.padding(.bottom, controlLift)
                     field($chat.draft.text)
+                    if !chat.draft.isEmpty {
+                        moreWaysToSend.padding(.bottom, controlLift)
+                    }
                     primaryButton.padding(.bottom, controlLift)
                 }
+                .motion(Design.Motion.spring, value: chat.draft.isEmpty, reduce: reduceMotion)
             }
             .motion(Design.Motion.spring, value: chat.draft.quotes.count, reduce: reduceMotion)
             // Behind the controls, not around them: a menu opens by morphing the glass it sits in, which took the
@@ -167,6 +172,23 @@ struct ComposerView: View {
         .accessibilityHint("Also Queue after reply and Next cycle")
     }
 
+    private var moreWaysToSend: some View {
+        Menu {
+            sendModes
+        } label: {
+            Image(systemName: "chevron.up")
+                .font(.body.weight(.medium))
+                .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+                .foregroundStyle(Color.textSecondary)
+                .frame(width: control, height: control)
+                .contentShape(Rectangle())
+        }
+        .iconMenu()
+        .disabled(sending)
+        .accessibilityLabel("More ways to send")
+        .help("More ways to send")
+    }
+
     @ViewBuilder
     private var primaryButton: some View {
         Group {
@@ -180,18 +202,33 @@ struct ComposerView: View {
     }
 
     private var sendButton: some View {
-        Menu {
-            sendModes
-        } label: {
-            buttonFace("arrow.up", on: !chat.draft.isEmpty)
-        } primaryAction: {
-            send(.now)
+        Group {
+            #if os(macOS)
+            Button {
+                send(.now)
+            } label: {
+                buttonFace("arrow.up", on: !chat.draft.isEmpty)
+            }
+            .buttonStyle(.plain)
+            #else
+            Menu {
+                sendModes
+            } label: {
+                buttonFace("arrow.up", on: !chat.draft.isEmpty)
+            } primaryAction: {
+                send(.now)
+            }
+            .iconMenu()
+            #endif
         }
-        .iconMenu()
         .disabled(chat.draft.isEmpty || sending)
         .help("Return sends · Shift-Return new line · ⌘-Return queues after the reply")
         .accessibilityLabel(replying ? "Send now, during its reply" : "Send")
+        #if os(macOS)
+        .accessibilityHint("Use More ways to send for Queue after reply and Next cycle")
+        #else
         .accessibilityHint("Touch and hold for Queue after reply and Next cycle")
+        #endif
     }
 
     private var stopButton: some View {

@@ -78,6 +78,29 @@ struct NativeChromePinTests {
         #expect(!source.contains("HardwareKeyboard"))
     }
 
+    /// Bug: Queue after reply and Next cycle were hidden behind a long press on Send and the + menu.
+    @Test func theWaysToSendAreVisibleBesideSendNotOnlyBehindALongPress() throws {
+        let source = try shared("Shared/Composer/ComposerView.swift")
+        #expect(source.contains("if !chat.draft.isEmpty {\n                        moreWaysToSend.padding(.bottom, controlLift)\n                    }\n                    primaryButton"))
+        let menuStart = try #require(source.range(of: "private var moreWaysToSend: some View {"))
+        let primaryStart = try #require(source.range(of: "private var primaryButton: some View {"))
+        let menu = source[menuStart.lowerBound..<primaryStart.lowerBound]
+        #expect(menu.contains("Menu {\n            sendModes\n        } label: {"))
+        #expect(menu.contains(#"Image(systemName: "chevron.up")"#))
+        #expect(menu.contains(#".accessibilityLabel("More ways to send")"#))
+        #expect(menu.contains(#".help("More ways to send")"#))
+        #expect(menu.contains(".disabled(sending)"))
+        let sendStart = try #require(source.range(of: "private var sendButton: some View {"))
+        let send = source[sendStart.lowerBound...]
+        let macStart = try #require(send.range(of: "#if os(macOS)"))
+        let macEnd = try #require(send.range(of: "#else"))
+        let mac = send[macStart.upperBound..<macEnd.lowerBound]
+        #expect(mac.contains("Button {\n                send(.now)\n            } label: {"))
+        #expect(mac.contains(#"buttonFace("arrow.up", on: !chat.draft.isEmpty)"#))
+        #expect(mac.contains(".buttonStyle(.plain)"))
+        #expect(!mac.contains("Menu {"))
+    }
+
     /// Bug: a change of text size with the keyboard up left an empty field's line at the old size: the capsule stayed tall,
     /// or the placeholder and the caret stood sliced at its top. Reproduced by the frames in the 2026-11-04 polish.
     @Test func anEmptyFieldFollowsTheTextSize() throws {
