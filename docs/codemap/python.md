@@ -92,7 +92,7 @@ private (`_`-prefixed) names are omitted. Empty does not mean unused.
 | `supervisor/tests/mindfix.py` | — | `commit_at`, `store_state` |
 | `supervisor/tests/test_actions.py` | `ClassificationTest`, `ActionTest` | — |
 | `supervisor/tests/test_anchoring.py` | `AnchoringTest` | `episode`, `judgment` |
-| `supervisor/tests/test_api.py` | `KeepingStringIO`, `FakeProc`, `ApiTest`, `InterjectTest`, `LongReplyTest`, `InboxDoorbellTest`, `ConversationIdTest`, `StreamHeardTest` | `fake_run_agent` |
+| `supervisor/tests/test_api.py` | `KeepingStringIO`, `FakeProc`, `ApiTest`, `InterjectTest`, `LongReplyTest`, `InboxDoorbellTest`, `ConversationIdTest`, `StreamHeardTest`, `OutsideTheGuiSessionTest` | `fake_run_agent` |
 | `supervisor/tests/test_apns.py` | `APNsTest` | `unb64`, `raw_to_der` |
 | `supervisor/tests/test_app_api.py` | `StubApns`, `AppTest`, `AuthTest`, `PairingTest`, `FeedTest`, `LongPollTest`, `SendTest`, `SeenTest`, `FeedbackTest`, `DocsTest`, `PushTest`, `FixturesTest` | `turn`, `html_keys`, `json_keys` |
 | `supervisor/tests/test_app_api_settings.py` | `SettingsTest` | — |
