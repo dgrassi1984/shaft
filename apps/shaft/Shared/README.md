@@ -7,10 +7,11 @@ Everything here compiles for iOS and macOS; what differs per platform sits behin
 | Folder | What |
 |---|---|
 | `Root/` | `SessionRoot` (startup error, pairing, or the paired app with the instances store in the environment), `PairingView`, `SettingsView`, `InstancesList` and its rows |
-| `Chat/` | `ChatScreen` (header, feed, composer, sheets; the long-poll only while visible and in front, `away`, seen, the new-reply announcement, drops), `ChatScreenModel` (sheets, focus requests, message actions, a send asked for by a menu), `ChatShell` (documents beside the chat), the sheets (Select text, a thumb's reason, earlier chats), `ArchivedChatView` (an earlier chat pushed over the current one) |
+| `Chat/` | `ChatScreen` (header, feed, composer, sheets; the long-poll only while visible and in front, `away`, seen, the new-reply announcement, drops), `ChatScreenModel` (sheets, focus requests, message actions, a send asked for by a menu), `ChatShell` (Documents and Cycles beside the chat), the sheets (Select text, a thumb's reason, earlier chats), `ArchivedChatView` (an earlier chat pushed over the current one) |
 | `Feed/` | `FeedView` (pinned to the bottom until scrolled up, Latest and New below in the bar above the composer, Show the N earlier messages), a view per item kind (§4.4) and per row after them (live reply, queued, pending feedback and edits, not sent) |
 | `Composer/` | quote cards with their answers, attachment chips, the field, Send or Stop, and a "More ways to send" chevron beside Send once there is text or other draft content (Queue after reply / Next cycle); these choices also stay in + and, on iOS, a long press on Send |
 | `Documents/` | the panel (folders, sort, new document), a document (rendered, threads, overwritten lines, Select text with Reply and Comment, Download, Delete), the editor with the stale-save choice, comments, `CommentHighlight.swift` and `DocumentMarkdown.swift` |
+| `Cycles/` | `SidePanel` selects Documents or Cycles with a system segmented picker; `CyclesPanel` shows Next, filtered server days and earlier pages; `CycleDetailView` separates plans, actions, claims, judge verdicts and what remains |
 | `Markdown/` | MarkdownUI with SHAFT's theme (tables that scroll, task lists, code with language, Copy and syntax colours), the operator's own text, Markdown as rendered text |
 | `Attachments/` | thumbnails and file chips through Quick Look (`FileViews.swift`); files coming in from Photos, a paste or a drop |
 | `Platform/` | the text seams: the composer's field and selectable text (`TextViews.swift`, iOS), a message's text (`MessageText.swift`) |
@@ -46,3 +47,15 @@ and "Forget the pairing here only" when the server cannot be reached.
 - **Size**: the shell's width rules (`horizontalSizeClass` is gone from `ChatScreen`),
   `sheetFrame()` (a sheet's size on the Mac), `iconMenu()` (a composer menu drawn as its icon on the Mac).
 - **Clipboard**: `Clipboard.copy`.
+
+## Cycles
+
+The header opens Documents or Cycles in the same inspector on iPad and Mac, or sheet on iPhone. Tapping the open
+panel's header button closes it; the other button switches panels. Document links select Documents, including when
+Cycles is open. The Mac Documents command uses the same selection behavior.
+
+Cycles creates its store per instance. It refreshes when opened, when the app returns to the foreground, and on
+pull-to-refresh, without a timer. Days retain the server's date strings; timestamps use `Stamp`. Queue due text
+stays as written, and UTC-midnight due dates display as dates in UTC. Claims are plain text; verdicts use the design
+system's pill. Missing, unreadable and loading states have separate lines. Goals, improvement plans, and sleep or
+reflection content use `MarkdownText`, the renderer in `Markdown/MarkdownView.swift`.

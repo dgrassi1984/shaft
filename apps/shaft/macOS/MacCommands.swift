@@ -41,7 +41,7 @@ struct MacCommands: Commands {
             Button("Send for the Next Cycle") { screen?.sendRequest = .background }
                 .disabled(!now.canSend)
             Divider()
-            Button("Documents") { state.screen?.showDocuments.toggle() }
+            Button("Documents") { state.screen?.togglePanel(.documents) }
                 .keyboardShortcut("d", modifiers: [.command, .option])
                 .disabled(!now.chat)
             Button("Earlier Chats…") { state.screen?.showEarlierChats = true }

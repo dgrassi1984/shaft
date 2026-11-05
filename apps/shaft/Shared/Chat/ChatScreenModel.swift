@@ -40,6 +40,7 @@ final class ChatScreenModel {
     var rating: RatingTarget?
     /// The documents sheet (or inspector) and what it should open.
     var showDocuments = false
+    var sidePanel: SidePanelKind = .documents
     var openDocument: String?
     /// The document on show in the panel: what opens again when the system reopens a panel it dropped in a turn of the
     /// device.
@@ -117,7 +118,17 @@ final class ChatScreenModel {
         selecting = Selecting(text: text, doc: doc)
     }
 
+    func togglePanel(_ kind: SidePanelKind) {
+        if showDocuments && sidePanel == kind {
+            showDocuments = false
+        } else {
+            sidePanel = kind
+            showDocuments = true
+        }
+    }
+
     func openDocument(_ path: String, thread: String? = nil) {
+        sidePanel = .documents
         openDocument = path
         openThread = thread
         showDocuments = true

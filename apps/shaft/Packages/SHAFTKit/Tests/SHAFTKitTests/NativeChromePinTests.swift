@@ -11,6 +11,14 @@ struct NativeChromePinTests {
         return try String(contentsOf: app.appending(path: path), encoding: .utf8)
     }
 
+    @Test func openingADocumentReturnsThePanelToDocuments() throws {
+        #expect(try shared("Shared/Chat/ChatScreenModel.swift").contains("sidePanel = .documents"))
+    }
+
+    @Test func theSidePanelUsesASystemSegmentedControl() throws {
+        #expect(try shared("Shared/Cycles/SidePanel.swift").contains(".pickerStyle(.segmented)"))
+    }
+
     /// A whole row taller than four screens never crossed the old visibility threshold.
     @Test func theDotClearsAtTheEndOfTheNewestRowHoweverLongItIs() throws {
         let source = try shared("Shared/Feed/FeedView.swift")

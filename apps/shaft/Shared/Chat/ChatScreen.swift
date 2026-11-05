@@ -96,7 +96,7 @@ struct ChatScreen: View {
         // Over the chat on a phone (a sheet); beside it where there is room, drawn by the shell (ChatShell): an
         // inspector inside the navigation stack took the chat's toolbar away.
         .sheet(isPresented: Binding(get: { screen.showDocuments && sheetsDocuments }, set: { screen.showDocuments = $0 })) {
-            DocumentsPanel(store: store, instance: chat.instance, cid: chat.cid)
+            SidePanel(store: store, instance: chat.instance, cid: chat.cid)
                 .environment(screen)
                 .environment(preview)
                 .environment(store)
@@ -142,7 +142,9 @@ struct ChatScreen: View {
             // The shell's documents follow the chat on display (an earlier chat's are read-only); open stays open.
             if let shell, shell.screen !== screen {
                 let open = shell.screen?.showDocuments ?? false
+                let panel = shell.screen?.sidePanel ?? .documents
                 shell.screen = screen
+                screen.sidePanel = panel
                 if open { screen.showDocuments = true }
             }
             follow()
@@ -254,7 +256,7 @@ struct ChatScreen: View {
         if reduceTransparency {
             // The system's fallback for its glass is pure white or black: the group draws its own solid `elevated`.
             ToolbarItem(placement: .primaryAction) {
-                HStack(spacing: 0) { headerButtons.frame(width: Design.Header.height) }
+                HStack(spacing: 0) { headerButtons }
                     .frame(height: Design.Header.height)
                     .glassSurface(in: Capsule())
             }
@@ -266,8 +268,10 @@ struct ChatScreen: View {
 
     @ViewBuilder
     private var headerButtons: some View {
-        Button { screen.showDocuments.toggle() } label: { Image(systemName: "doc.text") }
+        Button { screen.togglePanel(.documents) } label: { Image(systemName: "doc.text") }
             .accessibilityLabel("Documents")
+        Button { screen.togglePanel(.cycles) } label: { Image(systemName: "clock.arrow.circlepath") }
+            .accessibilityLabel("Cycles")
         if chat.cid == nil {
             Button { screen.confirmingNewChat = true } label: { Image(systemName: "square.and.pencil") }
                 .disabled(chat.content?.canClear != true)

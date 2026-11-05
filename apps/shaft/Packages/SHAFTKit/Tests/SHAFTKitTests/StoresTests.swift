@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import Testing
 @testable import SHAFTKit
 
@@ -210,6 +211,42 @@ struct CyclesStoresTests {
                 ? .json(200, plan, headers: ["ETag": "\"plan\""])
                 : .json(200, cycles, headers: ["ETag": "\"page\""])
         }
+    }
+
+    @Test func changingFilterStartsLoadingBeforeClearingDays() async throws {
+        let server = try server()
+        let store = CyclesStore(client: server.client, instance: "wren")
+        await store.refresh()
+        withObservationTracking {
+            _ = store.days
+        } onChange: {
+            MainActor.assumeIsolated { #expect(store.loading) }
+        }
+        await store.setFilter("short")
+    }
+
+    @Test func anEarlierPageForThePreviousFilterIsDiscarded() async throws {
+        let server = try server(next: "2026-11-02")
+        let store = CyclesStore(client: server.client, instance: "wren")
+        await store.refresh()
+        let began = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        defer { began.continuation.finish(); release.continuation.finish() }
+        var response = StubServer.Response.json(200, fixtureText(try DecodingTests.fixture("cycles")))
+        response.beforeReply = {
+            began.continuation.yield(())
+            for await _ in release.stream { break }
+        }
+        let held = response
+        server.setAnswer { request in request.query("before") != nil ? held : .notModified }
+        let earlier = Task { await store.loadEarlier() }
+        for await _ in began.stream { break }
+        await store.setFilter("short")
+        release.continuation.yield(())
+        await earlier.value
+        #expect(store.filter == "short")
+        #expect(store.days.isEmpty)
+        #expect(store.next == nil)
     }
 
     @Test func refreshKeepsTheListOnA304() async throws {

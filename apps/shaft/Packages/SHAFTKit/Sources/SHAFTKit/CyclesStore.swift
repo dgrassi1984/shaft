@@ -13,6 +13,7 @@ public final class CyclesStore {
     public private(set) var loading = false
     public private(set) var error: APIError?
     public private(set) var filter = ""
+    public private(set) var judgeError = ""
 
     @ObservationIgnored private let client: APIClient
     @ObservationIgnored private var planETag: String?
@@ -32,6 +33,7 @@ public final class CyclesStore {
                 planETag = etag
             }
             if case .value(let value, let etag) = page {
+                judgeError = value.judgeError
                 days = value.days
                 next = value.next
                 pageETag = etag
@@ -41,8 +43,11 @@ public final class CyclesStore {
 
     public func loadEarlier() async {
         guard let next else { return }
+        let requestedFilter = filter
         await run { [self] in
-            if case .value(let value, _) = try await client.cycles(instance, before: next, filter: filter) {
+            if case .value(let value, _) = try await client.cycles(instance, before: next, filter: requestedFilter) {
+                guard filter == requestedFilter else { return }
+                judgeError = value.judgeError
                 days.append(contentsOf: value.days)
                 self.next = value.next
             }
@@ -50,6 +55,7 @@ public final class CyclesStore {
     }
 
     public func setFilter(_ value: String) async {
+        loading = true
         filter = value
         days = []
         next = nil
