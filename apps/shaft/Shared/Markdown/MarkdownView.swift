@@ -9,6 +9,7 @@ import SwiftUI
 struct MarkdownText: View {
     let source: String
     var theme: Theme = .shaft
+    @AppStorage(ChatTextSize.storageKey) private var rawSize = ChatTextSize.system.rawValue
     /// A reply still arriving: nothing here may cost a frame per token, so its code stays plain and its tables as sent.
     @Environment(\.markdownStreaming) private var streaming
 
@@ -16,12 +17,18 @@ struct MarkdownText: View {
         Markdown(streaming ? AgentMarkdown.normalized(source) : TableColumns.aligned(AgentMarkdown.normalized(source)))
             .markdownTheme(theme)
             .markdownCodeSyntaxHighlighter(CodeColours(plain: streaming))
+            #if os(macOS)
+            .markdownTextStyle { FontSize(.em(ChatTextSize.stored(rawSize).scale)) }
+            .environment(\.markdownTextScale, ChatTextSize.stored(rawSize).scale)
+            #endif
     }
 }
 
 extension EnvironmentValues {
     /// The Markdown below is a reply as it streams, not a finished text.
     @Entry var markdownStreaming = false
+    /// The Mac reading scale also sizes the inline-code pill detector.
+    @Entry var markdownTextScale: CGFloat = 1
 }
 
 extension Theme {
@@ -103,6 +110,7 @@ private struct ShaftParagraph: View {
     let configuration: BlockConfiguration
     @Environment(\.markdownStreaming) private var streaming
     @ScaledMetric(relativeTo: .body) private var bodySize = FontProperties.defaultSize
+    @Environment(\.markdownTextScale) private var textScale
 
     var body: some View {
         let text = configuration.label
@@ -117,7 +125,7 @@ private struct ShaftParagraph: View {
                     FontFamilyVariant(.monospaced)
                     FontSize(.em(0.88))
                 }
-                .textRenderer(InlineCodePills(bodySize: bodySize))
+                .textRenderer(InlineCodePills(bodySize: bodySize * textScale))
         }
     }
 }

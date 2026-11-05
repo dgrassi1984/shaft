@@ -476,6 +476,10 @@ set by `SHAFT_APP_API_FIXTURES`.
 - **Unread and the badge.** The PWA keeps its unread marks in the browser. The apps need the server to know, for the
   icon's badge: `.supervisor/web/seen.json` holds, per app and instance, what the app last showed. An instance is
   unread when its own newest answer or message is newer than that; your own messages never make a chat unread.
+- **Settings and restarts.** `GET` and `POST /app/v1/settings/<name>` read or save one setting with `expect`;
+  `/pause` and `/resume` share the web action. `GET /app/v1/services` shows only API and scheduler status.
+  `POST /app/v1/services/api/restart` is guarded against active runs and replies. Scheduler `/restart` drains,
+  and `/cancel` withdraws that request. Other services cannot be restarted here. See [the contract](app-api.md#15-instance-settings-and-service-restarts).
 - Documents and comments, feedback, attachments and earlier chats are there too, each through the web UI's own
   logic. Push to the apps (APNs) is set up separately ([PLAN-native-apps.md](plans/PLAN-native-apps.md) §2.2).
 - **The iPhone and iPad app** ([apps/shaft/README.md](../apps/shaft/README.md)) is the PWA chat natively: the chat

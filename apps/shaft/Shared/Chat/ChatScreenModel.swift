@@ -33,7 +33,7 @@ final class ChatScreenModel {
 
     let chat: ChatStore
     let instance: String
-    /// Quick Look for the chat's files and the documents' downloads.
+    /// File preview for the chat's files and the documents' downloads.
     let preview = FilePreview()
 
     var selecting: Selecting?
@@ -50,6 +50,7 @@ final class ChatScreenModel {
     /// composer after ↩ Reply, and the chat is not watched while they are open (`watch=0`, §4).
     var documentsCover = false
     var showEarlierChats = false
+    var showInstanceSettings = false
     /// A Retry that asks first (`failure.retry.confirm`).
     var confirmRetry: FailureRetry?
     /// The composer's main field should take the keyboard.
@@ -81,6 +82,7 @@ final class ChatScreenModel {
         rating = nil
         showDocuments = false
         showEarlierChats = false
+        showInstanceSettings = false
         confirmRetry = nil
         confirmingNewChat = false
         confirmingEnd = false

@@ -14,12 +14,14 @@ struct SHAFTApp: App {
     var body: some Scene {
         Window("SHAFT", id: MacRoot.windowID) {
             MacRoot(model: delegate.model, state: delegate.state)
+                .modifier(MacAppearance())
         }
         .defaultSize(width: 1100, height: 760)
         .commands { MacCommands(state: delegate.state, menu: delegate.state.menu) }
 
         Settings {
             MacSettings(model: delegate.model)
+                .modifier(MacAppearance())
         }
     }
 }
@@ -29,6 +31,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     let model = MacDevSession.model() ?? AppModel()
     let state = MacState()
     private var keyMonitor: Any?
+    @AppStorage(AppTheme.storageKey) private var rawTheme = AppTheme.system.rawValue
+
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        AppTheme.stored(rawTheme).apply()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         #if DEBUG
@@ -112,7 +119,7 @@ struct MacSettings: View {
 
     var body: some View {
         Group {
-            if let session = model.session, session.isPaired {
+            if let session = model.session {
                 SettingsView(session: session)
             } else {
                 MarkMessage("Not paired", message: Text("Pair this Mac in the SHAFT window first."))
@@ -122,5 +129,23 @@ struct MacSettings: View {
         .frame(width: 480, height: 556)
         .scrollContentBackground(.hidden)
         .containerBackground(Color.canvas, for: .window)
+    }
+}
+
+private struct MacAppearance: ViewModifier {
+    @AppStorage(AppTheme.storageKey) private var rawTheme = AppTheme.system.rawValue
+
+    func body(content: Content) -> some View {
+        content.onChange(of: rawTheme, initial: true) { _, raw in AppTheme.stored(raw).apply() }
+    }
+}
+
+private extension AppTheme {
+    @MainActor func apply() {
+        switch self {
+        case .system: NSApp.appearance = nil
+        case .light: NSApp.appearance = NSAppearance(named: .aqua)
+        case .dark: NSApp.appearance = NSAppearance(named: .darkAqua)
+        }
     }
 }

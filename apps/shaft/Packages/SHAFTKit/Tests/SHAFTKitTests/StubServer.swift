@@ -9,6 +9,7 @@ final class StubServer: @unchecked Sendable {
         let url: URL
         let headers: [String: String]
         let body: Data
+        let timeout: TimeInterval
 
         var path: String { url.path }
 
@@ -113,7 +114,8 @@ final class StubProtocol: URLProtocol, @unchecked Sendable {
         }
         let body = request.httpBody ?? request.httpBodyStream.map(Self.read) ?? Data()
         let recorded = StubServer.Request(method: request.httpMethod ?? "GET", url: url,
-                                          headers: request.allHTTPHeaderFields ?? [:], body: body)
+                                          headers: request.allHTTPHeaderFields ?? [:], body: body,
+                                          timeout: request.timeoutInterval)
         do {
             let response = try server.handle(recorded)
             if let beforeReply = response.beforeReply {

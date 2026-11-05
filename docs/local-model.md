@@ -131,3 +131,20 @@ search. It uses the Bonsai environment and port 8782 by default.
 Sources: [service command](../supervisor/autonomy.py),
 [embedding port](../supervisor/core.py).
 See [configuration](configuration.md) for all related knobs.
+
+## Grok plan routing
+
+Run `bin/shaft grok login`, then
+`bin/shaft config <name> set LLM_MODEL=grok/grok-4.7`.
+`bin/shaft grok status` shows login, offered models and any outage. The broker keeps
+an ACP session per run and routes only SHAFT tools through a standalone MCP bridge.
+Grok models accept text and images; images smaller than 8×8 are refused.
+Changing tools or instructions rebuilds the session with a transcript; changing
+model or reasoning effort restarts the process.
+
+The weekly pool cannot be read programmatically. A failed live call switches the
+rest of the run to `SHAFT_GROK_FALLBACK_MODEL`; trials and bake-offs fail instead.
+Plan rows spend no API dollars (`usd=null`). Costs views show Grok's reported
+`costUsdTicks / 10^10` as **API equivalent**, not money spent; fallback calls are
+charged normally. Grok's own session files have best-effort 24-hour retention,
+at most once every ten minutes. See [configuration](configuration.md).

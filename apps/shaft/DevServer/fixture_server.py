@@ -11,7 +11,10 @@ fakes is what lies outside the web service, as supervisor/tests/test_app_api.py 
   "wide" answers with a 12-column table and a 400-character line of code;
 - APNs: a push is written to <dir>/pushes/ with the payload supervisor/apns.py would send, and with `--simctl`
   delivered to that simulator by `xcrun simctl push`;
-- the instances' live state (`web._live`) and Next cycle's hint: from <dir>/state.json.
+- the instances' live state (`web._live`) and Next cycle's hint: from <dir>/state.json;
+- settings: config and tool settings belong to the fixture's instances, and writes run in process;
+- services: fake records start with this process's live pid; restarts change only those records. No CLI or launchd
+  is called. Only docs, limits, channel, pause, resume, api on and autonomy restart are allowed by the command stub.
 
     python3 apps/shaft/DevServer/fixture_server.py serve --dir /tmp/shaft-fixture --port 8899 [--simctl <udid>]
     python3 apps/shaft/DevServer/fixture_server.py pair  --dir /tmp/shaft-fixture --port 8899 [--name iphone-app]
@@ -20,7 +23,8 @@ fakes is what lies outside the web service, as supervisor/tests/test_app_api.py 
 `act` (run while `serve` runs, on the same folder; pass the same --simctl): `message <instance> [text]` and
 `question <instance> [text]` (the instance sends you one, with a push), `state <instance> <state>` (its state in the
 rail), `doc <instance> <path> [text]` (it writes a document), `long <instance> [turns]` (a chat past the 80-turn
-window).
+window). `services busy <text>` sets the API refusal and the scheduler's waiting list (empty clears it);
+`services drain-end` finishes a pending scheduler drain and changes its fake pid.
 
 Run it from the repository root with the python the supervisor uses (3.12). Never point --dir at the real data.
 """
@@ -49,18 +53,29 @@ def setup(base: Path, port: int):
     """Import the supervisor over `base` and patch what lies outside the web service. Returns the modules."""
     base = base.resolve()
     real = (ROOT / ".supervisor").resolve()
-    if base == real or real in base.parents or base == (ROOT / "instances").resolve():
+    if base == ROOT or base in ROOT.parents or base == real or real in base.parents or base == (ROOT / "instances").resolve():
         raise SystemExit(f"refusing to use {base}: that is the real data")
     (base / "sup").mkdir(parents=True, exist_ok=True)
     os.environ["SHAFT_SUPERVISOR_DIR"] = str(base / "sup")       # before the supervisor is imported: SUP_DIR follows it
     sys.path.insert(0, str(ROOT))
     import supervisor
-    from supervisor import autonomy, commitments, core, docs, messages, metrics, web, web_chat, webpush
+    from supervisor import (actions, autonomy, channel, cloudllm, commitments, core, dashboard, docs, messages, metrics,
+                            opconfig, version, web, web_chat, webpush, web_settings)
 
     inst = base / "instances"
     for name in INSTANCES:
         for d in ("shaft", ".git", "notes/docs", "inbox"):
             (inst / name / d).mkdir(parents=True, exist_ok=True)
+        config = inst / name / "config.env"
+        if not config.exists():
+            config.write_text(f'LLM_MODEL="{cloudllm.CLOUD_MODELS[0]}"\nLLM_BASE_URL="broker"\n'
+                              'LLM_REASONING_EFFORT="medium"\nWAKE_INTERVAL_MINUTES="5"\nOPERATOR_NAME="Operator"\n')
+        choices = inst / name / "shaft" / "config.py"
+        if not choices.exists():
+            choices.write_text('CHOICES = {"LLM_REASONING_EFFORT": ("low", "medium", "high")}\n')
+    for name in ("api", "scheduler"):
+        if not (base / "sup" / "services" / f"{name}.json").exists():
+            _service_record(base, name, os.getpid())
     apns = _stub_apns(base)
     hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
     real_respond = web.respond
@@ -69,14 +84,82 @@ def setup(base: Path, port: int):
         req.headers = {**req.headers, "tailscale-user-login": ME}
         return real_respond(req)
 
-    def run_now(args, timeout=60, who="top"):           # the docs CLI verb, in this process
-        out = []
-        name, action, path = args[1:4]
-        with mock.patch("builtins.print", side_effect=lambda *a, **k: out.append(" ".join(map(str, a)))):
-            code = docs.command(name, action, path, args[5] if action == "set" else None, args[-1])
-        return code == 0, out[-1] if out else ""
+    def run_now(args, timeout=60, who="top"):
+        # Never fall through to actions' real subprocess runner, including for an unknown verb.
+        if not args:
+            raise ValueError("fixture command needs a verb")
+        verb = args[0]
+        if verb == "docs":
+            out = []
+            name, action, path = args[1:4]
+            with mock.patch("builtins.print", side_effect=lambda *a, **k: out.append(" ".join(map(str, a)))):
+                code = docs.command(name, action, path, args[5] if action == "set" else None, args[-1])
+            return code == 0, out[-1] if out else ""
+        if verb in ("limits", "channel", "pause", "resume"):
+            name = args[1]
+            if name not in INSTANCES:
+                raise ValueError(f"unknown fixture instance: {name}")
+            # HTML web_config actions still use these commands; app settings write in process.
+            if verb == "limits":
+                if len(args) != 4 or args[2] != "cloud-cap":
+                    raise ValueError(f"unsupported fixture limits: {args}")
+                try:
+                    amount = core.limit_value("cloud-cap", args[3])
+                except ValueError as e:
+                    return False, str(e)
+                core._update_tool_settings(name, cloud_daily_usd=amount)
+            elif verb == "channel":
+                try:
+                    channel.set_preference(name, args[2])
+                except ValueError as e:
+                    return False, str(e)
+            else:
+                core.set_paused(name, verb == "pause", reason=who)
+            return True, "saved in fixture"
+        if args == ["api", "on"]:
+            time.sleep(0.2)
+            _restart_service(base, "api")
+            return True, "fixture API restarted"
+        if args in (["autonomy", "restart"], ["autonomy", "restart", "--cancel"]):
+            request = base / "sup" / "scheduler-restart.json"
+            drain = base / "sup" / "scheduler-drain.json"
+            if "--cancel" in args:
+                previous = autonomy.restart_request() or autonomy.drain_status() or {}
+                request.unlink(missing_ok=True)
+                _write_json(drain, {**previous, "state": "cancelled", "waiting": []})
+            else:
+                rec = _read_json(base / "sup" / "services" / "scheduler.json")
+                now = time.time()
+                pending = {"pid": rec["pid"], "at": now, "deadline": now + 3600,
+                           "requested": datetime.now().isoformat(), "by": who}
+                _write_json(request, pending)
+                busy = _read_json(base / "services.json").get("busy", "")
+                _write_json(drain, {**pending, "state": "draining", "waiting": [busy] if busy else []})
+            return True, "fixture scheduler drain updated"
+        raise ValueError(f"unsupported fixture command: {args}")
 
-    for p in (mock.patch.object(web, "respond", respond),
+    def forbidden_launchctl(*args):
+        raise AssertionError(f"fixture must not query launchd: {args}")
+
+    real_alive = version._alive
+
+    def alive(pid):
+        # The initial pid really lives. Later fake pids model a replacement without spawning any process.
+        return real_alive(pid) or any(
+            (rec := _read_json(base / "sup" / "services" / f"{name}.json")).get("fixture")
+            and rec.get("pid") == pid for name in ("api", "scheduler"))
+
+    try:
+        run_now(["unknown-fixture-verb"])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("unknown fixture commands must raise")
+
+    for p in (mock.patch.object(dashboard, "_scheduler_running", return_value=True),
+              mock.patch.object(core, "secrets_env", return_value={}),
+              mock.patch.object(web_settings, "secrets_env", return_value={}),
+              mock.patch.object(web, "respond", respond),
               mock.patch.object(web, "allowed_logins", return_value={ME}),
               mock.patch.object(web, "allowed_hosts", return_value=hosts),
               mock.patch.object(web, "url", return_value=f"http://127.0.0.1:{port}"),
@@ -90,7 +173,16 @@ def setup(base: Path, port: int):
               mock.patch.object(core, "INSTANCES", inst), mock.patch.object(messages, "INSTANCES", inst),
               mock.patch.object(commitments, "INSTANCES", inst), mock.patch.object(metrics, "INSTANCES", inst),
               mock.patch.object(docs, "instance_root", lambda n: inst / n),
-              mock.patch("supervisor.actions.run_now", side_effect=run_now),
+              mock.patch.object(actions, "run_now", side_effect=run_now),
+              mock.patch.object(actions, "service_guard", side_effect=lambda name, action:
+                                _read_json(base / "services.json").get("busy", "") if name == "api" else ""),
+              mock.patch.object(autonomy, "_launchctl", side_effect=forbidden_launchctl),
+              mock.patch.object(autonomy, "launchd_pid", side_effect=lambda name:
+                                _read_json(base / "sup" / "services" / f"{name}.json").get("pid")),
+              mock.patch.object(autonomy, "running", side_effect=lambda name:
+                                bool(version.service(name, stale=False))),
+              mock.patch.object(version, "_alive", side_effect=alive),
+              mock.patch.object(opconfig, "_commit", return_value=False),
               mock.patch.object(web_chat, "_start", side_effect=lambda cid: _start(web_chat, cid)),
               mock.patch.object(web_chat, "_post", side_effect=lambda chat, route, body, timeout=15: (202, {})),
               mock.patch.object(web_chat, "_sync_copies", lambda *a, **k: None),
@@ -98,6 +190,31 @@ def setup(base: Path, port: int):
               mock.patch.object(supervisor, "apns", apns, create=True)):
         p.start()
     return web, web_chat, messages, webpush
+
+
+def _read_json(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_json(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    temporary.write_text(json.dumps(value, indent=1))
+    os.replace(temporary, path)
+
+
+def _service_record(base: Path, name: str, pid: int) -> None:
+    _write_json(base / "sup" / "services" / f"{name}.json",
+                {"pid": pid, "started": datetime.now().isoformat(), "commit": "fixture", "fixture": True,
+                 "settings": {"drain": True} if name == "scheduler" else {}})
+
+
+def _restart_service(base: Path, name: str) -> None:
+    previous = _read_json(base / "sup" / "services" / f"{name}.json")
+    _service_record(base, name, max(previous.get("pid", os.getpid()), os.getpid()) + 1)
 
 
 # -- the instances' state, Next cycle's hint ---------------------------------------------------------------------------
@@ -478,7 +595,22 @@ def act(base: Path, web, web_chat, messages, webpush, what: str, args: list[str]
     name = args[0] if args else "thelos"
     text = " ".join(args[1:])
     now = datetime.now().replace(microsecond=0).isoformat()
-    if what in ("message", "question"):
+    if what == "services":
+        if name == "busy":
+            _write_json(base / "services.json", {"busy": text})
+            drain = base / "sup" / "scheduler-drain.json"
+            if (record := _read_json(drain)).get("state") == "draining":
+                _write_json(drain, {**record, "waiting": [text] if text else []})
+        elif name == "drain-end":
+            request = base / "sup" / "scheduler-restart.json"
+            if request.exists():
+                _restart_service(base, "scheduler")
+                _write_json(base / "sup" / "scheduler-drain.json",
+                            {**_read_json(request), "state": "drained", "waiting": []})
+                request.unlink()
+        else:
+            raise SystemExit("services needs busy <text> or drain-end")
+    elif what in ("message", "question"):
         file = f"{datetime.now():%Y%m%d-%H%M%S-%f}-from-{name}.md"
         text = text or ("Should I archive the September notes?" if what == "question" else "The nightly report is ready.")
         row = {"ts": now, "from": name, "to": "operator", "kind": what, "file": file, "text": text}

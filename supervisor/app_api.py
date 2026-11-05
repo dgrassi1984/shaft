@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import time
 import urllib.parse
@@ -642,12 +643,175 @@ def _latest(req: Request) -> Response:
     return _json(200, {"events": events, "badge": web_seen.badge(req.device)})
 
 
+# -- instance settings and services (§15) -----------------------------------------------------------------------------
+CONFIG_FIELDS = {"model": "LLM_MODEL", "effort": "LLM_REASONING_EFFORT",
+                 "wake_interval": "WAKE_INTERVAL_MINUTES", "operator_name": "OPERATOR_NAME"}
+
+
+def _who(req: Request) -> str:
+    return f"app {web.devices()[req.device]['name']}"
+
+
+def _settings(n: str, cfg: dict | None = None) -> dict:
+    from . import autonomy, channel, cloudllm, core, opconfig
+    cfg = core.instance_config(n) if cfg is None else cfg
+    model = cfg.get("LLM_MODEL", "")
+    choices = [{"model": c["model"], "label": c["label"]} for c in opconfig.model_choices()]
+    if model not in [c["model"] for c in choices]:
+        choices.append({"model": model, "label": model})
+    efforts = opconfig.effort_choices(core.instance_root(n))
+    raw = cfg.get("WAKE_INTERVAL_MINUTES", "")
+    try:
+        minutes = int(raw) if raw else autonomy.WAKE_DEFAULT_MIN
+    except ValueError:
+        minutes = autonomy.WAKE_DEFAULT_MIN
+    interval = autonomy.wake_interval(n, cfg)
+    cap = core._tool_settings(n).get("cloud_daily_usd")
+    return {"instance": n, "paused": core.paused(n), "model": {"value": model, "choices": choices},
+            "effort": {"value": cfg.get("LLM_REASONING_EFFORT"), "choices": list(efforts) if efforts is not None else None},
+            "wake_interval": {"value": minutes, "floor": autonomy.wake_floor(n),
+                              "effective": int(interval.total_seconds() // 60) if interval else 0},
+            "cloud_cap": {"value": float(cap) if cap is not None else None, "spent_today": cloudllm.spent_today(n)},
+            "channel": {"value": channel.preference(n), "choices": ["auto", "web", "telegram"]},
+            "operator_name": {"value": cfg.get("OPERATOR_NAME", "")}}
+
+
+def _get_settings(req: Request, n: str) -> Response:
+    return _json(200, _settings(n))
+
+
+def _setting_shape(field: str, value) -> bool:
+    if field == "wake_interval":
+        return type(value) is int
+    if field == "cloud_cap":
+        return value is None or (type(value) in (int, float) and math.isfinite(value))
+    if field == "effort":
+        return value is None or isinstance(value, str)
+    return isinstance(value, str)
+
+
+def _stale(n: str, settings: dict) -> None:
+    raise Refusal(409, "stale", f"{n}'s settings changed: reload before saving.", settings=settings)
+
+
+def _set_settings(req: Request, n: str) -> Response:
+    from . import core, opconfig
+    data = _body(req)
+    field = data.get("field")
+    if (set(data) != {"field", "value", "expect"} or not isinstance(field, str)
+            or field not in (*CONFIG_FIELDS, "cloud_cap", "channel")
+            or not all(_setting_shape(field, data[k]) for k in ("value", "expect"))):
+        raise Refusal(400, "bad_request", "Send one field, its value and its expect value, with the setting's type.")
+    cfg = core.instance_config(n)
+    current = _settings(n, cfg)
+    if current[field]["value"] != data["expect"]:
+        _stale(n, current)
+    who = _who(req)
+    log(f"{who}: operator setting {field} for {n}")
+    try:
+        if field in CONFIG_FIELDS:
+            key = CONFIG_FIELDS[field]
+            value = data["value"]
+            opconfig.set_values(n, {key: str(value) if value is not None else None}, {key: cfg.get(key)})
+        elif field == "cloud_cap":
+            value = "off" if data["value"] is None else str(data["value"])
+            core._update_tool_settings(n, expect={"cloud_daily_usd": data["expect"]},
+                                       cloud_daily_usd=core.limit_value("cloud-cap", value))
+            log(f"{n}: cloud-cap set to {value} by the operator ({who})")
+        else:
+            from . import channel
+            channel.set_preference(n, data["value"], expect=data["expect"])
+            log(f"{n}: channel set to {data['value']} by the operator ({who})")
+    except core.StaleSetting:
+        _stale(n, _settings(n))
+    except opconfig.Refused as e:
+        fresh = _settings(n)
+        if fresh[field]["value"] != data["expect"]:
+            _stale(n, fresh)
+        raise Refusal(409, "refused", str(e)) from None
+    except ValueError as e:
+        raise Refusal(409, "refused", str(e)) from None
+    return _json(200, {"settings": _settings(n),
+                       "applies": "next run" if field in ("model", "effort", "operator_name") else "now"})
+
+
+def _pending_drain() -> dict | None:
+    from . import autonomy, version
+    pending = autonomy.restart_request()
+    scheduler = version.service("scheduler", stale=False)
+    return pending if pending and scheduler and pending.get("pid") == scheduler.get("pid") else None
+
+
+def _pause_resume(req: Request, n: str, act: str) -> Response:
+    from . import web_actions
+    who = _who(req)
+    log(f"{who}: operator {act} {n}")
+    status, said = web_actions.pause_resume(act, n, who=who)
+    if status != 200:
+        raise Refusal(409, "refused", said)
+    return _json(200, {"settings": _settings(n)})
+
+
+def _services() -> list[dict]:
+    from . import actions, autonomy, version
+    rows = []
+    for name in ("api", "scheduler"):
+        rec = version.service(name, stale=False)
+        row = {"name": name, "running": bool(rec), "pid": rec.get("pid") if rec else None,
+               "started": stamp(rec.get("started")) if rec else None, "commit": rec.get("commit") if rec else None,
+               "busy": actions.service_guard(name, "restart")}
+        if name == "scheduler":
+            drain = autonomy.drain_status()
+            # A request is pending even before the scheduler's next tick writes its drain record.
+            pending = _pending_drain()
+            if pending and (not drain or pending.get("at") != drain.get("at")):
+                drain = {**pending, "state": "draining", "waiting": []}
+            row["drain"] = ({"state": drain["state"], "waiting": drain.get("waiting") or [],
+                             "deadline": stamp(drain.get("deadline"))} if drain else None)
+        rows.append(row)
+    return rows
+
+
+def _get_services(req: Request) -> Response:
+    return _json(200, {"services": _services()})
+
+
+def _service_action(req: Request, service: str, act: str) -> Response:
+    from . import actions, autonomy
+    lock = actions.restart_lock(service)
+    if not lock.acquire(blocking=act == "cancel"):
+        raise Refusal(409, "restarting", f"{service} is already restarting.")
+    try:
+        who = _who(req)
+        log(f"{who}: operator {act} {service}")
+        if act == "restart" and service == "api":
+            if why := actions.service_guard("api", "restart"):
+                raise Refusal(409, "busy", why)
+            args, timeout = ["api", "on"], actions.SLOW_S
+        else:
+            if act == "restart" and (_pending_drain() or autonomy.draining_now()):
+                return _json(200, {"services": _services()})
+            args = ["autonomy", "restart"] + (["--cancel"] if act == "cancel" else [])
+            timeout = actions.RUN_NOW_S
+        ok, said = actions.run_now(args, timeout, who=who)
+    finally:
+        lock.release()
+    if not ok:
+        raise Refusal(409, "refused", said)
+    return _json(200, {"services": _services()})
+
+
 ROUTES: list[tuple[str, dict]] = [
     (r"/unpair", {"POST": _unpair}),
     (r"/instances", {"GET": _instances}),
     (rf"/plan/{N}", {"GET": _plan}),
     (rf"/cycles/{N}", {"GET": _cycles}),
     (rf"/cycles/{N}/(?P<ts>\d{{4}}-\d{{2}}-\d{{2}}T\d{{2}}:\d{{2}}:\d{{2}})", {"GET": _cycle}),
+    (rf"/settings/{N}", {"GET": _get_settings, "POST": _set_settings}),
+    (rf"/settings/{N}/(?P<act>pause|resume)", {"POST": _pause_resume}),
+    (r"/services", {"GET": _get_services}),
+    (r"/services/(?P<service>api|scheduler)/(?P<act>restart)", {"POST": _service_action}),
+    (r"/services/(?P<service>scheduler)/(?P<act>cancel)", {"POST": _service_action}),
     (rf"/chat/{N}", {"GET": _feed}),
     (rf"/chat/{N}/send", {"POST": _send}),
     (rf"/chat/{N}/(?P<act>unqueue|stop|end|clear|seen|away)", {"POST": _action}),

@@ -389,3 +389,27 @@ Secure deletion does not scrub historical slack bytes left before it was enabled
 remain until the database qualifies for VACUUM.
 Retention runs on channel startup, so an already running channel does not prune periodically.
 Source: [codexcli.py](../supervisor/codexcli.py).
+
+### Grok plan channel
+
+Instance models in `SHAFT_GROK_MODELS` use `LLM_BASE_URL="broker"`.
+Run `shaft grok login` first. These models are not accepted for supervisor cloud
+jobs (judging, describing images, consult or recap). Login and channel children
+receive an explicit environment, with imported skills, rules, hooks and MCPs disabled.
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `SHAFT_GROK_HOME` | `.supervisor/grok-home` | Private login and configuration directory, mode 700 |
+| `SHAFT_GROK_BIN` | `~/.grok/bin/grok` | Grok CLI executable |
+| `SHAFT_GROK_MODELS` | `grok/grok-4.7` | Offered instance models, comma separated |
+| `SHAFT_GROK_FALLBACK_MODEL` | `openrouter/deepseek/deepseek-v4.1-flash` | Cloud fallback for the remainder of a live run |
+| `SHAFT_GROK_TIMEOUT_S` | `900` | Model step timeout; held calls are exempt |
+| `SHAFT_GROK_SESSION_HOURS` | `24` | Hours of Grok session files to retain |
+
+Retention runs at channel start, at most once every ten minutes across processes.
+It removes only old regular files under `SHAFT_GROK_HOME/sessions/`, skips symlinks,
+and logs failures without failing a call. No weekly percentage is available.
+Usage rows keep token counts and API equivalent cost, with `usd=null`; message
+content and image data are not logged. A live failure uses the configured fallback;
+trial replays and bake-offs fail without fallback. Outages persist separately in
+`.supervisor/grok_outage.json`. Source: [grokcli.py](../supervisor/grokcli.py).

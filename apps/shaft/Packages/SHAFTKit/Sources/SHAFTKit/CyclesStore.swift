@@ -1,7 +1,7 @@
 import Foundation
 import Observation
 
-/// The read-only plan, day pages and selected cycle (§15).
+/// The read-only plan, day pages and selected cycle (§16).
 @MainActor
 @Observable
 public final class CyclesStore {

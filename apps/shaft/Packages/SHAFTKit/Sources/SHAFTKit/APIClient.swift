@@ -311,7 +311,7 @@ public final class APIClient: Sendable {
         try await get("/app/v1/push/latest", query: instance.map { [URLQueryItem(name: "instance", value: $0)] } ?? [])
     }
 
-    // MARK: Cycles (§15)
+    // MARK: Cycles (§16)
 
     public func plan(_ instance: String, etag: String? = nil) async throws -> Conditional<CyclePlan> {
         try await conditionalGet("/app/v1/plan/\(instance)", etag: etag)
@@ -326,6 +326,55 @@ public final class APIClient: Sendable {
 
     public func cycle(_ instance: String, ts: String) async throws -> CycleDetail {
         try await get("/app/v1/cycles/\(instance)/\(ts)")
+    }
+
+    // MARK: Settings and services (§15)
+
+    public func settings(_ instance: String) async throws -> InstanceSettings {
+        try await get("/app/v1/settings/\(instance)")
+    }
+
+    public func saveSetting(_ instance: String, field: SettingField, value: SettingValue,
+                            expect: SettingValue) async throws -> SettingSave {
+        try await post("/app/v1/settings/\(instance)",
+                       json: SettingWrite(field: field, value: value, expect: expect))
+    }
+
+    public func setPaused(_ instance: String, paused: Bool) async throws -> InstanceSettings {
+        let answer: SettingsResponse = try await post(
+            "/app/v1/settings/\(instance)/\(paused ? "pause" : "resume")", json: EmptyBody(), timeout: 70)
+        return answer.settings
+    }
+
+    public func services() async throws -> ServicesResponse {
+        try await get("/app/v1/services")
+    }
+
+    /// The API restart watcher must not let an individual poll outlast its confirmation deadline.
+    func services(timeout: TimeInterval) async throws -> ServicesResponse {
+        let path = "/app/v1/services"
+        var request = makeRequest("GET", path)
+        request.timeoutInterval = timeout
+        let (data, _) = try await send(request, path: path)
+        return try Self.decode(data, path: path)
+    }
+
+    public func restart(service: String) async throws -> ServicesResponse {
+        try await post("/app/v1/services/\(service)/restart", json: EmptyBody(), timeout: 100)
+    }
+
+    public func cancelSchedulerRestart() async throws -> ServicesResponse {
+        try await post("/app/v1/services/scheduler/cancel", json: EmptyBody())
+    }
+
+    private struct SettingWrite: Encodable {
+        var field: SettingField
+        var value: SettingValue
+        var expect: SettingValue
+    }
+
+    private struct SettingsResponse: Decodable {
+        var settings: InstanceSettings
     }
 
     // MARK: Plumbing
@@ -383,10 +432,12 @@ public final class APIClient: Sendable {
         return .value(try Self.decode(data, path: path), etag: response.value(forHTTPHeaderField: "ETag"))
     }
 
-    private func post<T: Decodable, Body: Encodable>(_ path: String, json body: Body) async throws -> T {
+    private func post<T: Decodable, Body: Encodable>(_ path: String, json body: Body,
+                                               timeout: TimeInterval? = nil) async throws -> T {
         var request = makeRequest("POST", path)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try Self.encode(body, path: path)
+        if let timeout { request.timeoutInterval = timeout }
         let (data, _) = try await send(request, path: path)
         return try Self.decode(data, path: path)
     }

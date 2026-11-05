@@ -59,6 +59,7 @@ struct FeedView: View {
             .padding(.bottom, metrics.fade - Design.Space.turn)
             .scrollTargetLayout()
         }
+        .readingTextSize()
         .foregroundStyle(Color.textPrimary)
         .background(Color.canvas)
         .scrollPosition($position)

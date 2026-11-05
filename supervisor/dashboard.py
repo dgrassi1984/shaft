@@ -150,8 +150,8 @@ def instance_state(name: str, now: float | None = None) -> dict:
     model = cfg.get("LLM_MODEL", "?")
     channel = ""
     if cfg.get("LLM_BASE_URL") == "broker":
-        from . import codexcli, selfhosted
-        channel = "Codex " if codexcli.serves(model) else "self-hosted " if selfhosted.serves(model) else "cloud "
+        from . import planchannel, selfhosted
+        channel = planchannel.label(model) + " " if planchannel.serves(model) else "self-hosted " if selfhosted.serves(model) else "cloud "
     interval = autonomy.wake_interval(name)
     next_wake = autonomy.next_wake(name, datetime.fromtimestamp(now), interval)
     calls, tokens = _today_usage(root)

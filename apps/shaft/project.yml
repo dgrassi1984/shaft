@@ -164,6 +164,7 @@ targets:
     sources:
       - path: macOSTests
       - path: Shared/Design/Design.swift
+      - path: Shared/Design/Appearance.swift
       - path: Shared/Markdown/RenderedText.swift
       - path: Shared/Markdown/TableColumns.swift
       - path: Shared/Documents/CommentHighlight.swift

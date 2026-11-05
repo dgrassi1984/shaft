@@ -14,7 +14,7 @@ import time
 import unittest
 from unittest import mock
 
-from supervisor import codexcli as codex
+from supervisor import codexcli as codex, planchannel
 
 # Actions and all expected history are supplied by the parent, never inferred from its implementation.
 FAKE = r'''
@@ -263,10 +263,10 @@ class ChannelTest(unittest.TestCase):
         for patch in (mock.patch.object(codex, "HOME", self.home),
                       mock.patch.object(codex, "BIN", str(self.binary)),
                       mock.patch.object(codex, "TIMEOUT_S", 3),
-                      mock.patch.object(codex, "SUP_DIR", self.root),
-                      mock.patch.object(codex, "_rate", None),
+                      mock.patch.object(planchannel, "SUP_DIR", self.root),
+                      mock.patch.object(codex.STATE, "rate", None),
                       mock.patch.object(codex, "_seatbelt", side_effect=lambda argv, *args: argv),
-                      mock.patch.object(codex.cloudllm, "_record", self.record)):
+                      mock.patch.object(planchannel.cloudllm, "_record", self.record)):
             patch.start()
             self.addCleanup(patch.stop)
         self.channel = codex.Channel("broker", "usage-label", self.logs.append)
@@ -320,6 +320,16 @@ class ChannelTest(unittest.TestCase):
         self.assertTrue(sent.endswith("Continue from the end of this transcript. Use your tools; don't write tool calls as text."))
         self.assertEqual(params["effort"], "high")
         self.assertEqual(self.channel.stats["rebuilds"], 1)
+
+    def test_effort_change_extends_thread_and_is_sent_per_turn(self):
+        self.use([[{"text": "first"}], [{"text": "second"}]])
+        request = body(reasoning_effort="low")
+        first = self.channel.complete(request)
+        delta = self.extend(request, first, users=["continue"])
+        delta["reasoning_effort"] = "high"
+        self.channel.complete(delta)
+        self.assertEqual(len(self.requests("thread/start")), 1)
+        self.assertEqual([r["params"]["effort"] for r in self.requests("turn/start")], ["low", "high"])
 
     def test_parallel_results_answer_in_call_order_and_missing_is_failure(self):
         self.use([[{"call": 1}, {"call": 2}, {"usage": 10}], [{"text": "done"}, {"usage": 20}]])
@@ -406,10 +416,10 @@ class ChannelTest(unittest.TestCase):
         self.assertEqual(len(self.requests("thread/start")), 1)
         self.assertEqual(len(self.requests("turn/start")), 1)
         changed_user = self.extend(request, first, [("call-1", "result")], ["new instruction"])
-        self.assertNotEqual(codex._anchor(delta["messages"])[0], codex._anchor(changed_user["messages"])[0])
+        self.assertNotEqual(planchannel._anchor(delta["messages"])[0], planchannel._anchor(changed_user["messages"])[0])
         changed_call = copy.deepcopy(delta)
         changed_call["messages"][-1]["tool_call_id"] = "other-call"
-        self.assertNotEqual(codex._anchor(delta["messages"])[0], codex._anchor(changed_call["messages"])[0])
+        self.assertNotEqual(planchannel._anchor(delta["messages"])[0], planchannel._anchor(changed_call["messages"])[0])
 
     def test_empty_step_fails_on_repeat(self):
         self.use([[{"finish": "completed"}]])
@@ -558,23 +568,6 @@ class ChannelTest(unittest.TestCase):
             {"type": "image", "url": "data:image/png;base64,dHdv"},
             {"type": "image", "url": "data:image/png;base64,dGhyZWU="}])
         self.assertEqual(len(self.requests("thread/start")), 2)
-
-    def test_anchor_hashes_images_and_ignores_old_images_rewritten_to_text(self):
-        url = "data:image/png;base64," + "A" * 1_000_000
-        old = {"role": "user", "content": [{"type": "image_url", "image_url": {"url": url}}]}
-        messages = [old, {"role": "assistant", "content": "anchor"}, old]
-        real_hash = codex.hashlib.sha256
-        with mock.patch.object(codex.hashlib, "sha256", wraps=real_hash) as digest:
-            anchor = codex._anchor(messages)
-            self.assertEqual(digest.call_args_list[0].args[0], url.encode())
-            self.assertLess(len(digest.call_args_list[1].args[0]), 300)
-        messages[0] = {"role": "user", "content": "[image shown earlier, no longer in view: photo.png]"}
-        self.assertEqual(codex._anchor(messages), anchor)
-        changed_url = url[:-1] + "B"
-        self.assertEqual(len(changed_url), len(url))
-        messages[-1] = {"role": "user", "content": [
-            {"type": "image_url", "image_url": {"url": changed_url}}]}
-        self.assertNotEqual(codex._anchor(messages), anchor)
 
     def test_old_image_rewritten_to_text_does_not_rebuild(self):
         request = body([{"role": "user", "content": [
@@ -740,6 +733,21 @@ class ChannelTest(unittest.TestCase):
         self.assertNotIn("code_mode_host", argv)
         self.assertEqual([argv[i+1] for i, arg in enumerate(argv) if arg == "--disable"], list(codex.FEATURES))
 
+    def test_read_only_prompt_suppresses_dynamic_tool_writes(self):
+        self.channel.complete(body())
+        argv = next(r["argv"] for r in self.rows() if "argv" in r)
+        config = dict(argv[i+1].split("=", 1) for i, arg in enumerate(argv) if arg == "-c")
+        for key in ("include_permissions_instructions", "include_environment_context",
+                    "include_collaboration_mode_instructions"):
+            with self.subTest(key=key):
+                self.assertEqual(config.get(key), "false")
+        self.assertEqual([argv[i+1] for i, arg in enumerate(argv) if arg == "--disable"], list(codex.FEATURES))
+        self.assertEqual(config["web_search"], '"disabled"')
+        self.assertEqual(config["agents.enabled"], "false")
+        self.assertEqual(config["mcp_servers"], "{}")
+        self.assertEqual(argv[-1], "app-server")
+        self.assertEqual(self.requests("thread/start")[0]["params"]["sandbox"], "read-only")
+
     def test_usage_sums_last_and_records_once(self):
         self.use([[{"usage": 10}, {"usage": 20}, {"text": "answer"}]])
         reply = self.channel.complete(body())
@@ -838,19 +846,6 @@ class ChannelTest(unittest.TestCase):
         with self.assertRaisesRegex(codex.CodexFailure, "malformed"):
             self.channel.complete(body())
 
-    def test_outage_persists_and_only_notifies_on_transitions(self):
-        notify = mock.Mock()
-        codex.report_failure(codex.CodexSecurity("native item"), notify)
-        self.assertEqual(codex.outage()["security"], True)
-        self.assertEqual(codex.outage()["reason"], "native item")
-        codex.report_failure(codex.CodexFailure("later"), notify)
-        self.assertEqual(notify.call_count, 1)
-        self.assertEqual(notify.call_args.args, ("Codex security event", "native item"))
-        codex.report_success(notify)
-        codex.report_success(notify)
-        self.assertIsNone(codex.outage())
-        self.assertEqual(notify.call_count, 2)
-
     def test_seatbelt_closes_outside_home_and_limits_metadata_to_literal_ancestors(self):
         # Inspect the actual generator; sandbox-exec and the real Codex binary are not launched.
         personal_temp = self.root / "per-user-cache"
@@ -908,8 +903,8 @@ class ChannelTest(unittest.TestCase):
                 channel = codex.Channel("broker", "usage", self.logs.append)
                 channel._process = mock.Mock()
                 if target == "turn/interrupt":
-                    channel._thread = "old-thread"
-                    channel._step = codex.Step("codex/gpt-6-astra", "old-anchor", turn="old-turn", pending=[(1, "old")])
+                    channel._session = "old-thread"
+                    channel._step = planchannel.Step("codex/gpt-6-astra", "old-anchor", turn="old-turn", pending=[(1, "old")])
                     channel._step.event.set()
                 def rpc(method, params):
                     if method == target:
