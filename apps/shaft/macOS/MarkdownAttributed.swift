@@ -14,6 +14,7 @@ enum MacColor {
     static let textSecondary = token("textSecondary", tests: .secondaryLabelColor)
     static let textTertiary = token("textTertiary", tests: .tertiaryLabelColor)
     static let brand = token("accent", tests: .linkColor)
+    static let onAccent = token("onAccent", tests: .white)
     static let codeKeyword = NSColor(Color.codeKeyword)
     static let codeString = NSColor(Color.codeString)
     static let codeComment = NSColor(Color.codeComment)

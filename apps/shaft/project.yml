@@ -168,6 +168,7 @@ targets:
       - path: Shared/Markdown/TableColumns.swift
       - path: Shared/Documents/CommentHighlight.swift
       - path: macOS/MarkdownAttributed.swift
+      - path: macOS/SelectionReplyButton.swift
       - path: macOS/MenuAction.swift
       - path: macOS/MacDevSession.swift
       - path: Shared/Attachments/AttachmentViews.swift

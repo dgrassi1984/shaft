@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 
 /// One chat on screen: the header (name, state, Documents, New chat, ⋯), the feed and the composer, with the
 /// documents beside it or over it. It long-polls while it is visible, says `away` when it
-/// leaves, marks the chat seen when the newest item is on screen, announces a new reply, and takes files dropped on it.
+/// leaves, marks the chat seen when the end of the newest item is on screen, announces a new reply, and takes files dropped on it.
 struct ChatScreen: View {
     let chat: ChatStore
     /// Open an earlier chat (§5).
@@ -26,6 +26,7 @@ struct ChatScreen: View {
     @State private var visible = false
     @State private var newestOnScreen = false
     @State private var seenVersion: String?
+    @State private var seenTask: Task<Void, Never>?
     @State private var dropTargeted = false
     #if os(macOS)
     @State private var columnWidth: CGFloat = 700
@@ -173,6 +174,7 @@ struct ChatScreen: View {
         if let feed = chat.feed {
             FeedView(feed: feed, rows: FeedRows.rows(feed, unsent: chat.cid == nil ? chat.unsent : [])) { visible in
                 newestOnScreen = visible
+                if !visible { stopMarkingSeen() }
                 markSeen()
             }
         } else if case .stopped(let error) = chat.connection {
@@ -312,8 +314,9 @@ struct ChatScreen: View {
         }
         if visible && scenePhase == .active {
             chat.start()
-            markSeen()
+            if watched && inFront { markSeen() } else { stopMarkingSeen() }
         } else {
+            stopMarkingSeen()
             let wasPolling = chat.isPolling
             chat.stop()
             if chat.cid == nil {
@@ -323,18 +326,27 @@ struct ChatScreen: View {
         }
     }
 
-    /// The newest item is on screen and the app (on the Mac: its window) in front: mark the version shown seen (§7.5).
-    /// A version the server no longer has (409) is tried again when the new one is drawn.
+    /// Cancelled, this version is free to be sent again at once: the task itself only notices later, and the end of the
+    /// newest item may be back on screen before it does.
+    private func stopMarkingSeen() {
+        seenTask?.cancel()
+        seenTask = nil
+        seenVersion = nil
+    }
+
+    /// The newest item's end is on screen and the app (on the Mac: its window) in front: mark the version shown seen (§7.5).
+    /// Retry failures with the current feed version until seen succeeds or the task is cancelled.
     private func markSeen() {
         guard chat.cid == nil, watched, inFront, newestOnScreen, let version = chat.feed?.version,
               version != seenVersion else { return }
         seenVersion = version
-        Task {
+        seenTask?.cancel()
+        seenTask = Task {
             guard watched, inFront, newestOnScreen else {
                 if seenVersion == version { seenVersion = nil }
                 return
             }
-            if !(await chat.markSeen()) && seenVersion == version { seenVersion = nil }
+            if !(await chat.markSeenUntilDone()) && seenVersion == version { seenVersion = nil }
         }
     }
 }

@@ -5,6 +5,25 @@ import SwiftUI
 /// The Mac's message text (macOS/MarkdownAttributed.swift): what a selection in a message reads and how its blocks are
 /// laid out. Each test names what it pins; the regressions are the bugs found driving the app.
 struct MarkdownAttributedTests {
+    @Test @MainActor func theSelectionReplyButtonIsOpaqueOverText() throws {
+        let button = SelectionReplyButton(title: "↩ Reply", target: nil, action: nil)
+        button.sizeToFit()
+        #expect(button.isBordered == false)
+        #expect(button.window == nil)
+        #expect(button.frame.size == button.intrinsicContentSize)
+        for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+            button.appearance = try #require(NSAppearance(named: appearance))
+            for pressed in [false, true] {
+                button.highlight(pressed)
+                let bitmap = try #require(button.bitmapImageRepForCachingDisplay(in: button.bounds))
+                button.cacheDisplay(in: button.bounds, to: bitmap)
+                let x = Int((Design.Space.s12 / 2) * CGFloat(bitmap.pixelsWide) / button.bounds.width)
+                let pixel = try #require(bitmap.colorAt(x: x, y: bitmap.pixelsHigh / 2))
+                #expect(pixel.alphaComponent == 1)
+            }
+        }
+    }
+
     @Test @MainActor func splitViewUpdateConstraintsCrashZeroProposalHasContentIndependentWidth() {
         let short = MarkdownAttributed.Measure(MarkdownAttributed.operatorText("OK"))
         let long = MarkdownAttributed.Measure(render(

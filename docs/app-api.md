@@ -602,13 +602,15 @@ more: reload it"), or while it replies.
 
 ### 7.5 `POST /app/v1/chat/<n>/seen`
 
-`{"version": str}`: this device has shown the current chat up to that version (the app sends it when the feed's end is
+`{"version": str}`: this device has shown the current chat up to that version (the app sends it when the newest item's end is
 on screen and the app is in the foreground).
 
 - **Response 200:** `{"unread": false, "badge": int}`: the badge to set now.
 - **`409 stale_version`**, with the current `version` in `error`, when `version` is not the feed's current one: the
   feed moved since the app drew it, so the app must not mark what it has not shown. Not an error to show: send `seen`
-  again once the new version is on screen.
+  again once the end of the newest item in the new version is on screen.
+- The native client retries failed requests after 2, 4, 8, 16, then 30 seconds, capped at 30 seconds, reading the current
+  feed version on each attempt. It cancels retries when the newest item's end leaves the screen, or the chat is covered or no longer in front.
 
 ### 7.6 `POST /app/v1/chat/<n>/away`
 
@@ -860,6 +862,8 @@ reaches it, so no other page can spend them.
 - An instance the device never marked counts from the device's pairing time: what came before it is not unread.
 - The badge is the number of unread instances (`web_seen.badge(device)`), sent with `/instances`, `seen`,
   `/push/latest` and every APNs push.
+- The native apps mark a chat seen when the newest item's end is on screen and the app is in front, retry failures
+  (§7.5), and discard list answers from polls that began before a successful seen request.
 - A device that unpairs loses its marks.
 
 ## 13. The Python side (server lane, M1)
