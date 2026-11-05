@@ -632,6 +632,16 @@ def _cycle_value(value) -> str:
     return str(value)
 
 
+def _cycle_notes(value, fields: tuple[str, ...]) -> Html:
+    if value is None or value == "" or value == [] or value == {}:
+        return h("{v}", v="unknown")
+    items = value if isinstance(value, list) else [value]
+    return lines([
+        "; ".join(f"{key.replace('_', ' ')}: {item[key]}" if len(fields) > 1 else str(item[key]) for key in fields)
+        if isinstance(item, dict) and all(key in item for key in fields) else str(item)
+        for item in items])
+
+
 def _cycle_verdict(verdict) -> Html:
     return h('<span class="badge {tone}">{v}</span>', tone=MARK.get(verdict, ("?", ""))[1],
              v=_cycle_value(verdict))
@@ -677,8 +687,9 @@ def cycles_next(plan: dict) -> Html:
                    '<h3>Commitments</h3>{commitments}<h3>Task queue</h3>{tasks}',
                    now=current, check=checking, said=said, left=lines(plan["unfinished"], "nothing recorded"),
                    commitments=commitments, tasks=tasks),
-                 h('<details><summary>Goals</summary>{goals}</details>'
-                   '<details><summary>Improvement plan</summary>{improve}</details>', goals=goals, improve=improve)])
+                 h('<details data-key="cycles-goals"><summary>Goals</summary>{goals}</details>'
+                   '<details data-key="cycles-improvement"><summary>Improvement plan</summary>{improve}</details>',
+                   goals=goals, improve=improve)])
 
 
 def cycles_page(name: str, plan: dict, days: dict, filt: str, names: list[str], csrf: str) -> Html:
@@ -703,7 +714,8 @@ def cycles_page(name: str, plan: dict, days: dict, filt: str, names: list[str], 
                          "delivered" if row["delivered"] else ""])
         done.append(table(["End time", "Kind", "Goal", "Claim", "Judge", "Delivery"], body))
     if not days["days"]:
-        done.append(h('<p class="dim">no cycles yet</p>'))
+        done.append(h('<p class="dim">{empty}</p>',
+                      empty="no cycles match this filter" if filt else "no cycles yet"))
     if days["next"]:
         done.append(link(f"/i/{q(name)}/transcripts?before={q(days['next'])}" + (f"&f={q(filt)}" if filt else ""),
                          "Earlier days"))
@@ -731,7 +743,7 @@ def cycle_page(name: str, cycle: dict, names: list[str], csrf: str) -> Html:
                           ("Origin reference", "origin_ref"), ("Confidence", "confidence"),
                           ("Predictions", "predictions")]
         body.append(section("Planned", rows([(label, _cycle_value(planned[key])) for label, key in planned_fields] +
-                                            ([("Attention", _cycle_value(planned["attention"]))]
+                                            ([("Attention", _cycle_notes(planned["attention"], ("source", "why")))]
                                              if planned["attention"] is not None else [])) if planned else
                             h('<p class="dim">no intent recorded</p>')))
         body.append(section("Did", rows([(label, _cycle_value(did[key])) for label, key in did_fields])))
@@ -753,8 +765,8 @@ def cycle_page(name: str, cycle: dict, names: list[str], csrf: str) -> Html:
             judgments.append(rows([(label, _cycle_value(judge[key])) for label, key in
                                    [("Claim supported", "claim_supported"), ("First error", "first_error"),
                                     ("Reasoning", "reasoning"), ("Model", "model")]]))
-        judgments.append(rows([("Surprises", _cycle_value(result["surprises"])),
-                               ("Doubts", _cycle_value(result["doubts"]))]))
+        judgments.append(rows([("Surprises", _cycle_notes(result["surprises"], ("expected", "observed", "so_what"))),
+                               ("Doubts", _cycle_notes(result["doubts"], ("text",)))]))
         body.append(section("Result", join(judgments)))
         left = cycle["left"]
         nxt = left["next_action"]

@@ -354,13 +354,46 @@ class TranscriptsTest(PagesTest):
         self.has("/fragment/i/shaft/cycles-next", "Next check", "check notes")
         self.get("/fragment/i/absent/cycles-next", 404)
 
+    def test_next_panels_have_stable_poll_keys(self):
+        for path in ("/i/shaft/transcripts", "/fragment/i/shaft/cycles-next"):
+            self.has(path, '<details data-key="cycles-goals">', '<details data-key="cycles-improvement">')
+
+    def test_empty_cycles_distinguish_all_from_a_filter(self):
+        self.has("/i/shaft/transcripts?f=short", "no cycles match this filter")
+        (self.episodes / "2026-10-19.jsonl").unlink()
+        self.has("/i/shaft/transcripts", "no cycles yet")
+
+    def test_cycle_notes_render_readable_escaped_lines(self):
+        self.record["finish"].update(
+            surprises=[{"expected": "quiet", "observed": "found <b>noise</b>", "so_what": "check again"},
+                       {"expected": "clear", "observed": "rain", "so_what": "take cover"}],
+            doubts=[{"text": "needs <i>checking</i>"}, "another doubt"])
+        self.record["intent"]["attention"] = [{"source": "inbox", "why": "read <b>this</b>"}]
+        self.seed()
+        body = self.has("/i/shaft/transcripts?ts=" + self.record["ts"],
+                        "quiet", "found &lt;b&gt;noise&lt;/b&gt;", "check again", "rain", "take cover",
+                        "<li>needs &lt;i&gt;checking&lt;/i&gt;</li>", "<li>another doubt</li>",
+                        "inbox", "read &lt;b&gt;this&lt;/b&gt;")
+        notes = body.split('>Surprises</span>', 1)[1].split('>Doubts</span>', 1)[0]
+        self.assertNotIn("{", notes)
+        self.assertNotIn("&quot;observed&quot;", notes)
+        self.assertNotIn('"observed"', notes)
+        self.assertNotIn("<b>noise</b>", body)
+
+    def test_unexpected_cycle_note_shapes_fall_back_to_text(self):
+        self.record["finish"].update(surprises=[7, {"other": "<odd>"}], doubts=False)
+        self.record["intent"]["attention"] = "<unexpected>"
+        self.seed()
+        self.has("/i/shaft/transcripts?ts=" + self.record["ts"], "7", "other", "&lt;odd&gt;", "False",
+                 "&lt;unexpected&gt;")
+
     def test_bad_dates_are_ignored_and_earlier_days_keep_the_filter(self):
         for date in ("bad", "20261019", "2026-02-30"):
             self.has("/i/shaft/transcripts?before=" + date, "tidy notes")
         for day in range(11, 19):
             record = {**self.record, "ts": f"2026-10-{day}T09:00:00"}
             (self.episodes / f"2026-10-{day}.jsonl").write_text(json.dumps(record))
-        self.has("/i/shaft/transcripts?f=short", "no cycles yet")
+        self.has("/i/shaft/transcripts?f=short", "no cycles match this filter")
         self.record["finish"]["criterion_met"] = "partial"
         for day in range(11, 20):
             record = {**self.record, "ts": f"2026-10-{day}T09:00:00"}
